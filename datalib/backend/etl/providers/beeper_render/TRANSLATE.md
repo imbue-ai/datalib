@@ -55,15 +55,23 @@ the kinds are `<Network> Chat`, `<Network> Message` and
 The markdown layout, `path_prefix`, orphan reactions and `LAYOUT_VERSION`
 are chat-common's ([`chat-common/README.md`](../../chat-common/README.md)).
 
-## Documents are room × period
+## Chats no document shows
 
-A document is one room's events in one period: `month` by default, or
-`day`, `year` or `all`, set by the render step's `period` param. A
-reaction is filed under its target's period however late it arrived;
-one whose target is not in the store at all is an orphan reaction. A
-reply is drawn as a quoted "in reply to" line naming the upstream id it
-points at. A `HIDDEN` event gets a one-line system note, so a room made
-only of those still renders.
+A room renders only on an account `network_for_account` knows. A chat holding
+messages on any other account is counted in a row per kind of account,
+`unlisted_bridges:<kind>`, with no login in it: `info` for Beeper's own
+(`hungryserv`, and `$space` and the like, which are not bridges), a warning for a
+bridge the list does not know. A thread with no messages is not reported.
+
+## A document is a room
+
+A document is one room's events, under the room's own uuid. A reaction
+is drawn under the message it targets; one whose target is not in the
+store at all is an orphan reaction. A reply (`inReplyToID`) is drawn as
+a quoted "in reply to" line naming the upstream id it points at, and is
+a reply edge to that message when the store holds it. A `HIDDEN` event
+gets a one-line system note, so a room made only of those still renders.
+The render step's old `period` param is read and ignored.
 
 Each document declares the `threads`, `participants`,
 `mx_room_messages` and `mx_reactions` rows it read, so a room whose

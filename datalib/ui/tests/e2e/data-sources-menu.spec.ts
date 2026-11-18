@@ -5,6 +5,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import {
+  fillConfigEditor,
   savedConfig,
   nameCell,
   MENU_DISABLED,
@@ -14,6 +15,7 @@ import {
   menuEntry,
   pipelineRow,
   MANAGE_WITH_CONFIG,
+  expectSyncEverything,
 } from "./grid-helpers";
 
 /// The menu's entries by their text — separators carry none.
@@ -21,14 +23,14 @@ const menuEntries = (page: Page) => page.locator(".slick-context-menu .slick-men
 
 async function openManager(page: Page) {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
 }
 
 test("a row's menu offers the actions for its kind, grouped, wherever the pointer is", async ({
   page,
 }) => {
   await openManager(page);
-  const row = groupRow(page, "unified_document_index");
+  const row = groupRow(page, "unified_grid_and_search_index");
   await expect(row).toBeVisible({ timeout: 10_000 });
 
   await row.locator('[col-id="status"]').click({ button: "right" });
@@ -50,7 +52,7 @@ test("a row's menu offers the actions for its kind, grouped, wherever the pointe
   await page.keyboard.press("Escape");
 
   // The Name cell offers the same menu as any other.
-  await nameCell(page, "group:unified_document_index").click({ button: "right" });
+  await nameCell(page, "group:unified_grid_and_search_index").click({ button: "right" });
   await expect(menuEntries(page)).toHaveCount(10);
   await page.keyboard.press("Escape");
 });
@@ -62,14 +64,14 @@ test("Show sync dashboard opens the group step by step, each with its row's acti
   page,
 }) => {
   await openManager(page);
-  const row = groupRow(page, "unified_document_index");
+  const row = groupRow(page, "unified_grid_and_search_index");
   await expect(row).toBeVisible({ timeout: 10_000 });
   await row.locator('[col-id="status"]').click({ button: "right" });
   await menuEntry(page, "Show sync dashboard").click();
 
   const section = (id: string) => page.locator(`.sd-section[data-step="${id}"]`);
-  await expect(section("unified_document_index")).toBeVisible();
-  const grid = section("unified_document_index/grid_index");
+  await expect(section("unified_grid_and_search_index")).toBeVisible();
+  const grid = section("unified_grid_and_search_index/unified_grid_and_search_index");
   await expect(grid.locator(".sd-btn", { hasText: "Show step log" })).toBeVisible();
   await expect(grid.locator(".sd-btn", { hasText: "Sync now" })).toBeVisible();
   await expect(page.locator(".sd-btn", { hasText: "Edit settings…" })).toHaveCount(0);
@@ -78,10 +80,12 @@ test("Show sync dashboard opens the group step by step, each with its row's acti
 /// The same card, from the row's own button rather than its menu.
 test("a row's chart button opens its group's sync dashboard", async ({ page }) => {
   await openManager(page);
-  const row = groupRow(page, "unified_document_index");
+  const row = groupRow(page, "unified_grid_and_search_index");
   await expect(row).toBeVisible({ timeout: 10_000 });
   await row.locator('[col-id="actions"] button[aria-label="Show sync dashboard"]').click();
-  await expect(page.locator('.sd-section[data-step="unified_document_index"]')).toBeVisible();
+  await expect(
+    page.locator('.sd-section[data-step="unified_grid_and_search_index"]'),
+  ).toBeVisible();
 });
 
 test("right-clicking inside a selection targets all of it; outside it, the one row", async ({
@@ -89,15 +93,18 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
 }) => {
   await openManager(page);
   await expandGroup(page, "slack");
-  await expandGroup(page, "unified_document_index");
+  await expandGroup(page, "unified_grid_and_search_index");
   const render = pipelineRow(page, "slack/render_markdown");
-  const qmd = pipelineRow(page, "unified_document_index/qmd_aggregator");
+  const gridIndexRow = pipelineRow(
+    page,
+    "unified_grid_and_search_index/unified_grid_and_search_index",
+  );
   await expect(render).toBeVisible();
   await render.locator('[col-id="status"]').click();
-  await qmd.locator('[col-id="status"]').click({ modifiers: ["ControlOrMeta"] });
+  await gridIndexRow.locator('[col-id="status"]').click({ modifiers: ["ControlOrMeta"] });
   await expect(page.locator(SELECTED_ROWS)).toHaveCount(2);
 
-  await qmd.locator('[col-id="status"]').click({ button: "right" });
+  await gridIndexRow.locator('[col-id="status"]').click({ button: "right" });
   await expect(menuEntries(page).last()).toHaveText("Remove 2 entries from config");
   // The one-row actions are left out, and an entry only some rows take
   // is disabled with a reason naming the row it came from.
@@ -106,13 +113,13 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   await expect(history).toHaveClass(MENU_DISABLED);
   await expect(history.locator(".slick-menu-content")).toHaveAttribute(
     "title",
-    /QMD aggregator: The QMD index keeps no doltlite store/,
+    /Grid and search index: The grid index is plain SQLite, with no commit history/,
   );
   await page.keyboard.press("Escape");
 
   // A row outside the selection is the one target, and the selection
   // is left exactly as it was — a right-click aims, it does not select.
-  const group = groupRow(page, "unified_document_index");
+  const group = groupRow(page, "unified_grid_and_search_index");
   await group.locator('[col-id="status"]').click({ button: "right" });
   await expect(menuEntries(page).last()).toHaveText("Remove from config, with everything under it");
   await expect(page.locator(SELECTED_ROWS)).toHaveCount(2);
@@ -127,10 +134,10 @@ test("Rename edits the group's name in the cell and writes it to the config", as
   await openManager(page);
   const editor = page.locator(".m2-editor");
   const original = await savedConfig(request);
-  const row = groupRow(page, "unified_document_index");
+  const row = groupRow(page, "unified_grid_and_search_index");
   await expect(row).toBeVisible({ timeout: 10_000 });
 
-  await nameCell(page, "group:unified_document_index").click({ button: "right" });
+  await nameCell(page, "group:unified_grid_and_search_index").click({ button: "right" });
   await menuEntry(page, "Rename…").click();
   const input = page.locator(".tg-grid input.editor-text");
   await expect(input).toBeVisible();
@@ -153,16 +160,16 @@ test("Rename edits the group's name in the cell and writes it to the config", as
   await input.press("Enter");
 
   await expect(
-    page.getByText("Renamed unified_document_index to Everything, indexed."),
+    page.getByText("Renamed unified_grid_and_search_index to Everything, indexed."),
   ).toBeVisible();
   // The group's Name is its chip, which shows the new name.
-  await expect(nameCell(page, "group:unified_document_index").locator("a.chip")).toHaveText(
+  await expect(nameCell(page, "group:unified_grid_and_search_index").locator("a.chip")).toHaveText(
     "Everything, indexed",
   );
   await expect(editor).toHaveValue(/name = "Everything, indexed"/);
 
   // Put the root back for the next spec on this sandbox.
-  await editor.fill(original);
+  await fillConfigEditor(page, original);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
 });

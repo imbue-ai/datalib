@@ -20,10 +20,11 @@ type = "chatgpt"
 group = "chatgpt"
 function = "ingest"
 [steps.params.api]
-since = "2025-01-01"   # only conversations updated at/after this; move it back to backfill
-max_pages = 20         # cap on listing pages (100 conversations each)
-limit = 100            # cap on detail fetches per run
-sleep_between = 0.5    # seconds between detail fetches
+since = "2025-01-01"              # only conversations updated at/after this; move it back to backfill
+max_listing_pages = 20            # cap on listing pages (100 conversations each)
+max_conversations_per_run = 100   # cap on conversation fetches per run
+refetch_newest_conversations = 3  # fetch the 3 newest again every run
+seconds_between_requests = 0.5    # wait between conversation fetches
 # conv_uuids = ["https://chatgpt.com/c/<id>"]   # fetch exactly these, skip the listing
 ```
 
@@ -106,7 +107,7 @@ request and requires the store an uninterrupted run leaves.
 1. **`/backend-api/me`** — always fetched; it pins the account the run
    reports under and is cheap.
 2. **List** `/backend-api/conversations?offset=&limit=100&order=updated`,
-   newest-updated first, until the pages run out, `max_pages` is hit,
+   newest-updated first, until the pages run out, `max_listing_pages` is hit,
    a page fails, or — with `since` set — a page ends past the cutoff.
    Then the same walk again with `&is_archived=true`: the plain listing
    leaves an archived conversation out, so without it archiving a chat
@@ -124,10 +125,16 @@ request and requires the store an uninterrupted run leaves.
    it is deleted here with its edges (its rows stay in doltlite
    history). An incomplete walk says nothing about the pages it never
    asked for, so it prunes nothing; with `since` configured, most runs
-   stop early and prune nothing.
+   stop early and prune nothing. With `when_deleted_upstream =
+   "keep_local_copy"` it deletes nothing either: the conversation stays
+   as last fetched, and the summary counts it as `kept_deleted_upstream`
+   ([`docs/dev/deleted_upstream.md`](../../../../../docs/dev/deleted_upstream.md)
+   says why someone wants that).
 4. **Conversations owed**, the never-fetched first, then the stale, so
-   a run cut short by a rate limit spent its budget on new work; at
-   most `limit` of them. Conversations older than `since` are never
+   a run cut short by a rate limit spent its budget on new work, then
+   the `refetch_newest_conversations` most recently updated, held or
+   not, as a check against the live copy; at most
+   `max_conversations_per_run` of them. Conversations older than `since` are never
    detail-fetched (`out_of_scope` in the summary), but rows already
    stored stay — moving `since` further back later lists the newly in
    scope ones as owed. Each is `/backend-api/conversation/{id}`,
@@ -136,7 +143,11 @@ request and requires the store an uninterrupted run leaves.
 
 `conv_uuids` replaces steps 2–4 with exactly the named conversations
 (bare ids or paste-able `https://chatgpt.com/c/<id>` URLs), each
-fetched every run since nothing lists them; nothing is pruned.
+fetched every run since nothing lists them; nothing is pruned. The
+listing's settings (`since`, `max_listing_pages`,
+`max_conversations_per_run`, `refetch_newest_conversations`) then do
+nothing, and each one set is a warning row (`ignored`) on the Manage
+screen. `seconds_between_requests` still applies.
 
 ### The version is the update time in whole seconds
 
@@ -245,6 +256,11 @@ file_<id>.dat                  # attached and generated files, no extension
 conversation_asset_file_names.json, library_files.json, chat.html, …
 ```
 
+An export can be made by anyone (`etl/files/README.md` § "An export can
+be made by anyone"). A zip that expands too far, or a symbolic link
+anywhere in the unzipped folder, fails the run before the store is
+touched, and the message says which.
+
 The root is the folder holding the shallowest `export_manifest.json`
 (`sites/` has one of its own), or, in an export without one,
 `conversations.json`; so a zip of the unzipped folder reads too
@@ -284,7 +300,8 @@ the API walk writes, and makes no request, so no rate limit applies:
   named it is not, so nothing names it and it is not stored.
 - **Deletions.** The export is a complete snapshot, so a stored
   conversation it does not list is deleted with its edges, in the
-  transaction that writes the rest. Entries none of which has an id are
+  transaction that writes the rest, unless `when_deleted_upstream =
+  "keep_local_copy"`, which keeps it. Entries none of which has an id are
   a shape this reader does not know, not an empty account: they delete
   nothing and are a `phase:conversations.json` row.
 

@@ -355,12 +355,15 @@ mod tests {
             mk("b/ingest", &[]),
             mk("b/render_markdown", &["b/ingest"]),
             mk(
-                "unified_document_index/grid_index",
+                "unified_grid_and_search_index/unified_grid_and_search_index",
                 &["a/render_markdown", "b/render_markdown"],
             ),
         ];
         assert_eq!(
-            sources_feeding(&steps, "unified_document_index/grid_index"),
+            sources_feeding(
+                &steps,
+                "unified_grid_and_search_index/unified_grid_and_search_index"
+            ),
             ["a/ingest", "b/ingest"]
         );
         assert_eq!(sources_feeding(&steps, "a/render_markdown"), ["a/ingest"]);

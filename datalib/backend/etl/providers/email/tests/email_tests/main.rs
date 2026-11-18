@@ -1,12 +1,16 @@
-//! Every hermetic email (JMAP, Gmail, mbox) test, one binary: each module is one
+//! Every hermetic email (JMAP, Gmail, mbox, Apple Mail) test, one binary: each module is one
 //! behaviour.
 
+mod apple_mail;
+mod apple_mail_tng;
 mod gmail_failed_fetch_is_owed;
+mod gmail_fetch_sections;
 mod gmail_filter_and_budget;
 mod gmail_history_replay;
 mod gmail_interrupt;
 mod gmail_label_lifecycle;
 mod gmail_label_union;
+mod gmail_preview_and_muted;
 mod gmail_run_problems;
 mod gmail_since_window;
 mod gmail_takeout_seed;

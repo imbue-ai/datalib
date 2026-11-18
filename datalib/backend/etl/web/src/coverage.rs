@@ -10,6 +10,10 @@
 //!
 //! A span's ends are strings that sort the way the range does: ISO
 //! dates, fixed-width timestamps. Both ends are inside the span.
+//!
+//! Where a walk's top is the newest thing it saw, the top says nothing
+//! about when anyone last looked. A provider whose scopes can fall behind
+//! one another records that apart, in `coverage_checked`.
 
 use anyhow::{Context, Result};
 use sqlx::{Sqlite, Transaction};
@@ -20,6 +24,41 @@ use sqlx::{Sqlite, Transaction};
 pub const DDL: &str = "CREATE TABLE IF NOT EXISTS coverage (\
     scope TEXT NOT NULL, lo TEXT NOT NULL, hi TEXT NOT NULL, \
     PRIMARY KEY (scope, lo))";
+
+/// When upstream last had nothing in a scope newer than what its spans
+/// hold. Narrow and on its own because it moves every run: a wider row
+/// would be rewritten whole each time (docs/dev/doltlite.md, "What a
+/// write costs").
+pub const CHECKED_DDL: &str = "CREATE TABLE IF NOT EXISTS coverage_checked (\
+    scope TEXT NOT NULL PRIMARY KEY, checked_at_utc TEXT NOT NULL, tz_offset TEXT)";
+
+/// Record that, at `at`, upstream had nothing newer in each of `scopes`.
+/// Call it in the transaction that stores the end of the walk that found
+/// that out, and with a time from before the walk began.
+pub async fn checked(
+    tx: &mut Transaction<'_, Sqlite>,
+    scopes: &[String],
+    at: &datalib_time::IsoOffsetTimestamp,
+) -> Result<()> {
+    if scopes.is_empty() {
+        return Ok(());
+    }
+    let (at_utc, tz_offset) = at.to_utc_and_offset();
+    let scopes = serde_json::to_string(scopes).context("serialize the scopes checked")?;
+    sqlx::query(
+        "INSERT INTO coverage_checked (scope, checked_at_utc, tz_offset) \
+         SELECT value, ?, ? FROM json_each(?) WHERE true \
+         ON CONFLICT(scope) DO UPDATE SET checked_at_utc = excluded.checked_at_utc, \
+            tz_offset = excluded.tz_offset",
+    )
+    .bind(&at_utc)
+    .bind(&tz_offset)
+    .bind(&scopes)
+    .execute(&mut **tx)
+    .await
+    .context("record when coverage was last checked")?;
+    Ok(())
+}
 
 /// A stretch of a range, both ends included.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

@@ -7,7 +7,9 @@
 use datalib_handle::Handle;
 use datalib_time::IsoOffsetTimestamp;
 
-use crate::html::{escape_attr, escape_md_inline, md_link_dest};
+use crate::html::{
+    escape_attr, escape_md_inline, escape_name_inline, md_link_dest, without_bidi_controls,
+};
 
 /// A chip: a markdown link naming a person, which datalib draws as a
 /// chip and every other viewer shows as a link with a tooltip
@@ -34,9 +36,9 @@ pub fn entity_link(text: &str, uri: &str, title: &str) -> String {
 fn link_with_title(text: &str, href: &str, title: &str) -> String {
     format!(
         "[{}]({} \"{}\")",
-        escape_md_inline(text),
+        escape_name_inline(text),
         md_link_dest(href),
-        md_link_title(title),
+        md_link_title(&without_bidi_controls(title)),
     )
 }
 
@@ -66,6 +68,11 @@ pub struct MessageHeader<'a> {
     /// When, in Unix milliseconds. `None` renders as "(no timestamp)"
     /// rather than as a stand-in instant.
     pub date_ms: Option<i64>,
+    /// The offset the source wrote that instant in, in seconds east of
+    /// UTC: an email's `Date`. `None` where the source names an instant
+    /// with no clock of its own (a Unix stamp), which is written with the
+    /// offset unknown (`Z`), for a viewer to show on its reader's clock.
+    pub offset_secs: Option<i32>,
     /// Public URL for this individual message (a Slack permalink, a
     /// GitHub comment anchor). Rendered as a trailing `↗`.
     pub source_url: Option<&'a str>,
@@ -74,11 +81,8 @@ pub struct MessageHeader<'a> {
 impl MessageHeader<'_> {
     /// The header line, without a trailing newline.
     ///
-    /// **It is a real `##`, and that is load-bearing.** qmd cuts a
-    /// chunk at the best break point near its size limit and scores an
-    /// `h2` far above the blank line it would otherwise settle for, so
-    /// the heading is what makes every message start a chunk boundary
-    /// it prefers. The frontend styles it down to a one-line
+    /// It is a real `##` heading in the file. The frontend styles it down
+    /// to a one-line
     /// "name, then a small grey time"; it is not a heading on screen.
     pub fn render(&self) -> String {
         let mut s = String::with_capacity(160);
@@ -91,12 +95,12 @@ impl MessageHeader<'_> {
                 Some(h) => s.push_str(&chip_link(self.author, h)),
                 None => s.push_str(&format!(
                     "<span class=\"msg-author\">{}</span>",
-                    escape_md_inline(self.author),
+                    escape_name_inline(self.author),
                 )),
             }
             s.push(' ');
         }
-        s.push_str(&timestamp_html(self.date_ms));
+        s.push_str(&timestamp_html(self.date_ms, self.offset_secs));
         if let Some(url) = self.source_url {
             s.push(' ');
             s.push_str(&source_link(url));
@@ -121,8 +125,13 @@ pub fn source_link(url: &str) -> String {
 /// for years. `datetime` carries the machine-readable value, so a UI
 /// that grows a per-user format setting can restyle every stamp without
 /// re-rendering anything.
-pub fn timestamp_html(date_ms: Option<i64>) -> String {
-    match date_ms.and_then(IsoOffsetTimestamp::from_unix_millis) {
+pub fn timestamp_html(date_ms: Option<i64>, offset_secs: Option<i32>) -> String {
+    match date_ms.and_then(|ms| IsoOffsetTimestamp::from_unix_millis_at(ms, offset_secs)) {
+        Some(t) if offset_secs.is_none() => time_element_at(
+            " class=\"msg-ts\"",
+            &t,
+            datalib_time::with_unknown_offset(t.to_rfc3339_secs()),
+        ),
         Some(t) => time_element(" class=\"msg-ts\"", &t),
         // Either no stamp at all or a number that is not an instant.
         // `display_ts` spells those two apart, and neither has an ISO
@@ -151,10 +160,30 @@ pub fn stamp_text_html(s: &str) -> String {
     }
 }
 
+/// A message's time kept as text, in a message header's form. A stamp
+/// whose source names no clock (`Z`, `-00:00`) stays `Z`, as
+/// [`timestamp_html`] writes one; anything else reads as
+/// [`stamp_text_html`].
+pub fn message_stamp_text_html(s: &str) -> String {
+    let Ok(t) = datalib_time::parse_strict(s) else {
+        return stamp_text_html(s);
+    };
+    let names_no_clock = s.ends_with(['Z', 'z']) || s.ends_with("-00:00");
+    let iso = if names_no_clock {
+        datalib_time::with_unknown_offset(t.to_rfc3339_secs())
+    } else {
+        t.to_rfc3339_secs()
+    };
+    time_element_at(" class=\"msg-ts\"", &t, iso)
+}
+
 fn time_element(class: &str, t: &IsoOffsetTimestamp) -> String {
+    time_element_at(class, t, t.to_rfc3339_secs())
+}
+
+fn time_element_at(class: &str, t: &IsoOffsetTimestamp, iso: String) -> String {
     format!(
         "<time{class} datetime=\"{iso}\" title=\"{full}\">{short}</time>",
-        iso = t.to_rfc3339_secs(),
         full = datalib_time::full_ts(t),
         short = datalib_time::short_ts(t),
     )
@@ -169,19 +198,39 @@ pub fn display_ts(date_ms: Option<i64>) -> String {
 mod tests {
     use super::*;
 
+    /// A header with no clock wrote `+00:00`, which a viewer read as the
+    /// sender's UTC; `Z` says the clock is unknown (RFC 9557).
     #[test]
     fn header_shape() {
         let h = MessageHeader {
             author: "Picard",
             date_ms: Some(12442118400000),
+            offset_secs: None,
             source_url: None,
             handle: None,
         };
         assert_eq!(
             h.render(),
             "## <span class=\"msg-author\">Picard</span> \
-             <time class=\"msg-ts\" datetime=\"2364-04-11T00:00:00+00:00\" \
+             <time class=\"msg-ts\" datetime=\"2364-04-11T00:00:00Z\" \
              title=\"2364-04-11 00:00:00 UTC\">Sat Apr 11th, 2364 at 00:00</time>",
+        );
+    }
+
+    /// The header was built from millis alone, so every email read as
+    /// UTC under "as written" though its `Date` said `+01:00`.
+    #[test]
+    fn a_header_keeps_the_offset_the_source_wrote() {
+        let h = MessageHeader {
+            author: "",
+            date_ms: Some(12442118400000),
+            offset_secs: Some(3600),
+            ..Default::default()
+        };
+        assert_eq!(
+            h.render(),
+            "## <time class=\"msg-ts\" datetime=\"2364-04-11T01:00:00+01:00\" \
+             title=\"2364-04-11 01:00:00 +01:00\">Sat Apr 11th, 2364 at 01:00</time>",
         );
     }
 
@@ -204,11 +253,42 @@ mod tests {
         assert_eq!(stamp_text_html("<b>soon</b>"), "&lt;b&gt;soon&lt;/b&gt;");
     }
 
+    /// A forge comment's `…Z` came out `+00:00`, claiming a UTC clock
+    /// the source never named.
+    #[test]
+    fn a_message_stamp_kept_as_text_keeps_an_unknown_clock() {
+        assert_eq!(
+            message_stamp_text_html("2369-04-15T10:05:00.000Z"),
+            "<time class=\"msg-ts\" datetime=\"2369-04-15T10:05:00Z\" \
+             title=\"2369-04-15 10:05:00 UTC\">Tue Apr 15th, 2369 at 10:05</time>",
+        );
+        assert_eq!(
+            message_stamp_text_html("2369-04-15T10:05:00-00:00"),
+            "<time class=\"msg-ts\" datetime=\"2369-04-15T10:05:00Z\" \
+             title=\"2369-04-15 10:05:00 UTC\">Tue Apr 15th, 2369 at 10:05</time>",
+        );
+        assert_eq!(
+            message_stamp_text_html("2369-04-15T10:05:00+00:00"),
+            "<time class=\"msg-ts\" datetime=\"2369-04-15T10:05:00+00:00\" \
+             title=\"2369-04-15 10:05:00 UTC\">Tue Apr 15th, 2369 at 10:05</time>",
+        );
+        assert_eq!(
+            message_stamp_text_html("2369-04-15T10:05:00-07:00"),
+            "<time class=\"msg-ts\" datetime=\"2369-04-15T10:05:00-07:00\" \
+             title=\"2369-04-15 10:05:00 -07:00\">Tue Apr 15th, 2369 at 10:05</time>",
+        );
+        assert_eq!(
+            message_stamp_text_html("2369-03-18"),
+            "<time datetime=\"2369-03-18\">Tue Mar 18th, 2369</time>",
+        );
+    }
+
     #[test]
     fn an_author_named_in_markup_cannot_break_out() {
         let h = MessageHeader {
             author: "<script>x</script> & co",
             date_ms: None,
+            offset_secs: None,
             source_url: None,
             handle: None,
         };
@@ -229,6 +309,7 @@ mod tests {
         let h = MessageHeader {
             author: "[x](https://e.test) ![](https://t.test/i.png) `a|b`",
             date_ms: None,
+            offset_secs: None,
             source_url: None,
             handle: None,
         };
@@ -247,6 +328,7 @@ mod tests {
         let h = MessageHeader {
             author: "Picard",
             date_ms: Some(12442118400000),
+            offset_secs: None,
             source_url: Some("https://example.invalid/m/1?a=b&c=d"),
             handle: None,
         };
@@ -268,6 +350,7 @@ mod tests {
             author: "Will Riker",
             handle: Some(&riker),
             date_ms: None,
+            offset_secs: None,
             source_url: None,
         };
         assert!(

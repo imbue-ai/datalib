@@ -1,5 +1,5 @@
-//! What the person has read, in the one shape every source with read
-//! state shares: a narrow `read_marks` table in its raw store. Narrow
+//! What the person has read or muted, in the one shape every source with
+//! read state shares: a narrow `read_marks` table in its raw store. Narrow
 //! because a mark changes often and on its own, and a row is stored whole
 //! (docs/dev/doltlite.md §"What a write costs"). A table of its own and
 //! not a sidecar, because a mark is something a reader must see: a change
@@ -19,7 +19,8 @@ pub const TABLE: &str = "read_marks";
 
 /// One mark: on a conversation or thread, the last item read
 /// (`read_through`); on one item, whether it was read (`read`). Exactly
-/// one of the two is set.
+/// one of the two is set. `muted` says whether the person muted the item,
+/// NULL where the source has not said.
 #[derive(Debug, Clone, PartialEq, Eq, RawTable)]
 #[raw_table(table = "read_marks")]
 pub struct ReadMarkRow {
@@ -27,6 +28,7 @@ pub struct ReadMarkRow {
     pub id: String,
     pub read_through: Option<String>,
     pub read: Option<i64>,
+    pub muted: Option<i64>,
 }
 
 impl ReadMarkRow {
@@ -35,6 +37,7 @@ impl ReadMarkRow {
             id: id.into(),
             read_through: Some(last_read.into()),
             read: None,
+            muted: None,
         }
     }
 
@@ -43,6 +46,14 @@ impl ReadMarkRow {
             id: id.into(),
             read_through: None,
             read: Some(i64::from(read)),
+            muted: None,
+        }
+    }
+
+    pub fn with_muted(self, muted: Option<bool>) -> Self {
+        Self {
+            muted: muted.map(i64::from),
+            ..self
         }
     }
 
@@ -104,6 +115,7 @@ pub async fn load(pool: &SqlitePool) -> Result<BTreeMap<String, ReadMark>> {
                 id: id.clone(),
                 read_through,
                 read,
+                muted: None,
             }
             .mark()
             .map(|m| (id, m))
@@ -120,10 +132,10 @@ pub struct MovedMark {
     pub is: Option<ReadMark>,
 }
 
-/// The marks that changed between `from` and `to`. Empty when either
-/// commit has no `read_marks` table: a render reading across the rung
-/// that created it treats the marks it starts from as unchanged, rather
-/// than every mark as new.
+/// The marks whose reading changed between `from` and `to`; a mute alone
+/// redraws nothing. Empty when either commit has no `read_marks` table: a
+/// render reading across the rung that created it treats the marks it
+/// starts from as unchanged, rather than every mark as new.
 pub async fn moved(pool: &SqlitePool, from: &str, to: &str) -> Result<Vec<MovedMark>> {
     if !crate::doltlite_raw::table_exists(pool, TABLE).await? {
         return Ok(Vec::new());
@@ -163,6 +175,7 @@ pub async fn moved(pool: &SqlitePool, from: &str, to: &str) -> Result<Vec<MovedM
             id: String::new(),
             read_through: through,
             read,
+            muted: None,
         }
         .mark()
     };
@@ -175,6 +188,7 @@ pub async fn moved(pool: &SqlitePool, from: &str, to: &str) -> Result<Vec<MovedM
                 is: mark(tt, tr),
             })
         })
+        .filter(|moved| moved.was != moved.is)
         .collect())
 }
 
@@ -253,6 +267,44 @@ mod tests {
         let all = load(&pool).await.unwrap();
         assert_eq!(all.len(), 2);
         assert_eq!(all["m1"], ReadMark::Read(true));
+        pool.close().await;
+    }
+
+    /// Filling in who is muted touches every mark of a store once. Each
+    /// mark moving would redraw every document, for a change no document
+    /// shows.
+    #[tokio::test]
+    async fn a_mute_alone_is_not_a_moved_mark() {
+        let td = tempfile::tempdir().unwrap();
+        let path = td.path().join("entities.doltlite_db");
+        let ddl = ReadMarkRow::all_ddl();
+        let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
+        let pool = open(&path, &ddl).await.unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        write(&mut tx, &[ReadMarkRow::read("m1", false)])
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        commit_run(&pool, "unread").await.unwrap();
+        let before = head_commit(&pool).await.unwrap().unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        write(
+            &mut tx,
+            &[ReadMarkRow::read("m1", false).with_muted(Some(true))],
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        commit_run(&pool, "muted").await.unwrap();
+        let after = head_commit(&pool).await.unwrap().unwrap();
+
+        assert_eq!(moved(&pool, &before, &after).await.unwrap(), vec![]);
+        let muted: Option<i64> = sqlx::query_scalar("SELECT muted FROM read_marks WHERE id = 'm1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(muted, Some(1));
         pool.close().await;
     }
 

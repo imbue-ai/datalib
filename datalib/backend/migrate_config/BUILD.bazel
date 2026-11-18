@@ -4,12 +4,11 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 # writes any more into the one the wizard writes.
 #
 # This package is the one place a retired config shape is *rewritten*.
-# The runner refuses most old shapes, naming this tool. Two rewrites are
-# safe to make unattended — the qmd steps and the document index's name,
-# text edits that keep the file as written — and `datalib-http` makes
-# them itself on seeing the old shape (`upgrade_qmd_steps`,
-# `upgrade_document_index`). It holds one rewrite at a time, "any
-# earlier shape → the current one"; the next shape change extends it.
+# The runner refuses most old shapes, naming this tool. The rewrites safe
+# to make unattended, text edits that keep the file as written, are
+# listed in `UNATTENDED`, and `datalib-http` makes them itself on seeing
+# an old shape. It holds one rewrite at a time, "any earlier shape → the
+# current one"; the next shape change extends it.
 rust_library(
     name = "datalib_migrate_config",
     srcs = glob(

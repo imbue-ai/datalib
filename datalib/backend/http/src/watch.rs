@@ -123,8 +123,8 @@ pub enum Table {
     #[strum(serialize = "disk")]
     Disk,
     /// What a person curated: a store under `datalib_curated/` (the
-    /// contacts app's) published a new commit. A draft's autosave is no
-    /// commit, so it sends none.
+    /// contacts app's, the problem mutes) published a new commit. A
+    /// draft's autosave is no commit, so it sends none.
     #[serde(rename = "curated")]
     #[strum(serialize = "curated")]
     Curated,
@@ -151,19 +151,21 @@ pub enum RootEvent {
     /// A component appeared, changed or vanished under
     /// `system/frontend/`.
     FrontendChanged,
-    /// The grid index (`unified_document_index/grid_index/db.sqlite`) has a
-    /// new generation. Under streaming that happens many times per sync --
-    /// a `grid_index` pass per checkpoint -- and it is how rows reach the
-    /// grid while the download that produced them is still running. The
-    /// generation, not the file: a write in a transaction that has not
-    /// committed is not something a reader can fetch yet.
+    /// The grid index
+    /// (`unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`)
+    /// has a new generation. Under streaming that happens many times per sync
+    /// -- a `unified_grid_and_search_index` pass per checkpoint -- and it is
+    /// how rows reach the grid while the download that produced them is still
+    /// running. The generation, not the file: a write in a transaction that has
+    /// not committed is not something a reader can fetch yet.
     IndexChanged,
     /// The time-series index
     /// (`unified_time_series_index/time_series_index/time_series.doltlite_db`)
     /// has a new HEAD: the time series, or their points, moved.
     TimeSeriesIndexChanged,
-    /// The launch's migrate pass moved: `/api/config`'s `upgrade` is new.
-    UpgradeChanged,
+    /// A pass over the steps moved — the launch's migrate pass, or freeing
+    /// disk space: `/api/config`'s `upgrade` or `free_space` is new.
+    PassChanged,
     /// Nothing changed; the stream is open. See [`HEARTBEAT`].
     Heartbeat,
 }
@@ -198,6 +200,9 @@ enum Moved {
     /// The loop's record and its mailbox, `system/supervisor.sqlite`:
     /// heard by [`watch_record`], not seen by the filesystem.
     Supervisor,
+    /// A wipe opened, closed, or moved on to its next step: heard by
+    /// [`watch_record`] in the announcement's words.
+    Wipe,
     RunStore,
     Frontend,
     GridIndex,
@@ -236,7 +241,7 @@ fn classify(root: &Path, path: &Path) -> Option<Moved> {
     {
         return Some(Moved::RunStore);
     }
-    if path.parent() == Some(datalib_core::layout::grid_index_dir(root).as_path())
+    if path.parent() == Some(datalib_core::layout::index_step_dir(root).as_path())
         && name.starts_with(datalib_core::layout::GRID_DB)
     {
         return Some(Moved::GridIndex);
@@ -538,6 +543,9 @@ async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet
                 out.insert(table(Table::ManageRows));
                 out.insert(table(Table::Requests));
             }
+            Moved::Wipe => {
+                out.insert(RootEvent::PassChanged);
+            }
             Moved::RunStore => {
                 for part in moved_parts(&datalib_runs::versions(root).await, &mut seen.runs) {
                     let into = if part == StorePart::ProcessLog {
@@ -555,6 +563,9 @@ async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet
                 Ok(head) if head != seen.index_head => {
                     seen.index_head = head;
                     out.insert(RootEvent::IndexChanged);
+                    // A row's count leaves out the muted problems the
+                    // index holds, which this may have changed.
+                    out.insert(table(Table::ManageRows));
                 }
                 Ok(_) => {}
                 Err(e) => tracing::debug!("watch: the grid index's head is unreadable now: {e:#}"),
@@ -572,6 +583,8 @@ async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet
             Moved::Curated => {
                 if curated_moved(curated_heads(root).await, &mut seen.curated_heads) {
                     out.insert(table(Table::Curated));
+                    // The mutes store is curated, and a mute moves a count.
+                    out.insert(table(Table::ManageRows));
                 }
             }
             Moved::Ready => {}
@@ -720,10 +733,10 @@ fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Optio
     let system = std::fs::canonicalize(&system).unwrap_or(system);
     let frontend = std::fs::canonicalize(&frontend).unwrap_or(frontend);
     let runs = std::fs::canonicalize(&runs).unwrap_or(runs);
-    // Not created here: `unified_document_index/` belongs to the steps and the
+    // Not created here: `unified_grid_and_search_index/` belongs to the steps and the
     // applet, and a root that has never synced has none. Watched once it
     // exists — see the debounce loop below.
-    let grid_index = datalib_core::layout::grid_index_dir(&root);
+    let index_step_dir = datalib_core::layout::index_step_dir(&root);
     let time_series_index = time_series_index_dir(&root);
     // Likewise `datalib_curated/`, which exists once an app made it; its
     // own watcher is recursive, since each app keeps a directory of its
@@ -781,7 +794,7 @@ fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Optio
                     tracing::warn!("watch: {} ({e})", dir.display());
                 }
             }
-            index_watcher = watch_dir(&grid_index, RecursiveMode::NonRecursive, &*make);
+            index_watcher = watch_dir(&index_step_dir, RecursiveMode::NonRecursive, &*make);
             time_series_watcher =
                 watch_dir(&time_series_index, RecursiveMode::NonRecursive, &*make);
             curated_watcher = watch_dir(&curated, RecursiveMode::Recursive, &*make);
@@ -859,7 +872,7 @@ fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Optio
             // does: on macOS every `watch` call restarts the watcher's
             // stream, and a restarted stream loses what lands meanwhile.
             if let (None, Some(make)) = (&index_watcher, &make_watcher) {
-                index_watcher = watch_dir(&grid_index, RecursiveMode::NonRecursive, &**make);
+                index_watcher = watch_dir(&index_step_dir, RecursiveMode::NonRecursive, &**make);
             }
             if let (None, Some(make)) = (&time_series_watcher, &make_watcher) {
                 time_series_watcher =
@@ -980,12 +993,38 @@ async fn watch_record(
         if record && moved.send(Moved::Supervisor).is_err() {
             return;
         }
+        if heard.iter().any(|line| is_wipe_line(line)) && moved.send(Moved::Wipe).is_err() {
+            return;
+        }
     }
+}
+
+/// Whether an announcement may be a wipe's: opened, closed, or moved on.
+/// A change the backstop found unannounced may be one too.
+fn is_wipe_line(line: &str) -> bool {
+    use datalib_dag::supervisor::announce::UNANNOUNCED;
+    use datalib_dag::supervisor::store::WIPE_MOVED;
+    line == UNANNOUNCED
+        || ["wipe opened ", "wipe closed ", WIPE_MOVED]
+            .iter()
+            .any(|p| line.starts_with(p))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wipes_announcements_are_told_from_the_rest() {
+        assert!(is_wipe_line("wipe opened 01a1"));
+        assert!(is_wipe_line("wipe closed 01a1"));
+        assert!(is_wipe_line(&format!(
+            "{} 01a1",
+            datalib_dag::supervisor::store::WIPE_MOVED
+        )));
+        assert!(is_wipe_line(datalib_dag::supervisor::announce::UNANNOUNCED));
+        assert!(!is_wipe_line("request opened 01a1"));
+    }
 
     #[test]
     fn the_config_and_the_runner_record_are_told_apart() {
@@ -1006,14 +1045,16 @@ mod tests {
         assert_eq!(
             classify(
                 root,
-                &root.join("unified_document_index/grid_index/db.sqlite-wal")
+                &root.join(
+                    "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite-wal"
+                )
             ),
             Some(Moved::GridIndex)
         );
         assert_eq!(
             classify(
                 root,
-                &root.join("unified_document_index/grid_index/db.sqlite")
+                &root.join("unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite")
             ),
             Some(Moved::GridIndex)
         );
@@ -1505,7 +1546,7 @@ mod tests {
         until(&mut rx, RootEvent::TableChanged { table: Table::Log }).await;
     }
 
-    /// A commit to the grid index, the way the `grid_index` step makes
+    /// A commit to the grid index, the way the `unified_grid_and_search_index` step makes
     /// one: its own process, opening and closing the store around it.
     async fn write_index(db: &Path, id: i64, commit: bool) {
         let writer = datalib_core::store::open_pool(db).await.unwrap();

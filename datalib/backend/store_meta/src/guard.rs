@@ -91,12 +91,12 @@ pub async fn read_at(store: &Path) -> Result<Option<Meta>> {
     meta
 }
 
-/// Every store under a data root: each `*.doltlite_db` up to three
-/// levels down (`system/`, `<group>/ingest/`, `<group>/render_markdown/`,
-/// `unified_document_index/grid_index/`), and the plain-SQLite stores that
-/// carry a meta row: the run store, disk stats and the grid index. A walk rather than a
-/// list of the layout's names, so a store this crate has not heard of is
-/// inspected too.
+/// Every store under a data root: each `*.doltlite_db` up to three levels down
+/// (`system/`, `<group>/ingest/`, `<group>/render_markdown/`,
+/// `unified_grid_and_search_index/unified_grid_and_search_index/`), and the
+/// plain-SQLite stores that carry a meta row: the run store, disk stats and the
+/// grid index. A walk rather than a list of the layout's names, so a store this
+/// crate has not heard of is inspected too.
 pub fn stores_under(root: &Path) -> Vec<PathBuf> {
     fn walk(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -198,9 +198,9 @@ mod tests {
             "slack/ingest/blobs.sqlite",
             "slack/render_markdown/indexed_markdown.doltlite_db",
             "slack/render_markdown/a/b/c.md",
-            "unified_document_index/grid_index/db.sqlite",
-            "unified_document_index/grid_index/db.sqlite-wal",
-            "unified_document_index/qmd_aggregator/qmd/index.sqlite",
+            "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite",
+            "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite-wal",
+            "unified_grid_and_search_index/qmd_aggregator/qmd/index.sqlite",
             "config.toml",
         ];
         for f in files {
@@ -220,7 +220,7 @@ mod tests {
                 "system/disk_stats.sqlite",
                 "system/feedback.doltlite_db",
                 "system/runs/runs.sqlite",
-                "unified_document_index/grid_index/db.sqlite",
+                "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite",
             ]
         );
     }

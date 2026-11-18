@@ -1,0 +1,727 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== claude-api 00000000-0000-8184-b70f-0aace9f02d6c Klingon Diplomatic Greeting Drafting
+--- chunk 0
+title: Klingon Diplomatic Greeting Drafting | text: Me — Mon 14 Apr 2369 10:00
+
+Look up the Klingon greeting "nuqneH" and propose a respectful opening line for a diplomatic dispatch to Chancellor K'mpec.
+
+
+--- chunk 1
+title: Klingon Diplomatic Greeting Drafting | text: claude-opus-4-7 — Mon 14 Apr 2369 10:00
+
+Thinking
+
+> "nuqneH" literally means "what do you want" — it's blunt by Federation standards but standard among Klingons. I should fetch a phrasebook to confirm register before recommending an opening.
+
+
+--- chunk 2
+title: Klingon Diplomatic Greeting Drafting | text: claude-opus-4-7 — Mon 14 Apr 2369 10:00
+
+Tool use: web_fetch — Fetching: Klingon language reference
+
+```json
+{
+  "url": "https://memory-alpha.test/wiki/Klingon_language"
+}
+```
+
+
+--- chunk 3
+title: Klingon Diplomatic Greeting Drafting | text: claude-opus-4-7 — Mon 14 Apr 2369 10:01
+
+For a dispatch to Chancellor K'mpec, open with "qaleghneS, Chancellor — nuqneH?" ("I am honored to see you — what do you want?"). The honorific softens the bluntness of nuqneH; together they read as warm-but-direct, which Klingons respect.
+
+
+--- chunk 4
+title: Klingon Diplomatic Greeting Drafting | text: claude-opus-4-7 — Mon 14 Apr 2369 10:01
+
+Tool result: web_fetch
+
+```json
+{
+  "is_missing": false,
+  "metadata": {
+    "site_domain": "memory-alpha.test"
+  },
+  "text": "nuqneH (lit. \"what do you want\") is the standard Klingon greeting. In formal diplomatic contexts it is paired with the honorific \"qaleghneS\" (\"I am honored to see you\").",
+  "title": "Klingon language — Memory Alpha (test mirror)",
+  "type": "knowledge",
+  "url": "https://memory-alpha.test/wiki/Klingon_language"
+}
+```
+
+
+--- chunk 5
+title: Klingon Diplomatic Greeting Drafting | text: Me — Mon 14 Apr 2369 10:02
+
+Perfect. Make it so.
+
+
+=== claude-api 00000000-0000-81ce-8161-7a771ae8bff5 Warp Field Recalibration
+--- chunk 0
+title: Warp Field Recalibration | text: Me — Fri 18 Apr 2369 09:00
+
+Geordi, how far can we push the warp field before the nacelles complain?
+
+
+--- chunk 1
+title: Warp Field Recalibration | text: claude-opus-4-7 — Fri 18 Apr 2369 09:00
+
+Tool use: web_search — Searching the web
+
+```json
+{
+  "query": "Galaxy class maximum sustainable warp"
+}
+```
+
+
+--- chunk 2
+title: Warp Field Recalibration | text: claude-opus-4-7 — Fri 18 Apr 2369 09:00
+
+Tool result: web_search
+
+- Warp factor — Memory Alpha
+- Galaxy class propulsion — Starfleet Technical Manual
+
+
+--- chunk 3
+title: Warp Field Recalibration | text: claude-opus-4-7 — Fri 18 Apr 2369 09:00
+
+Sustained warp 9.2 is the rated ceiling; the nacelles tolerate 9.6 for about twelve hours before the coils need a full recalibration.
+
+**Sources**
+
+1. Warp factor — Memory Alpha
+2. Galaxy class propulsion — Starfleet Technical Manual
+3. Warp coil — Memory Alpha
+
+
+--- chunk 4
+title: Warp Field Recalibration | text: Me — Fri 18 Apr 2369 09:01
+
+Give me the coil efficiencies as a table.
+
+
+--- chunk 5
+title: Warp Field Recalibration | text: claude-opus-4-7 — Fri 18 Apr 2369 09:01
+
+This answer was left behind when the question was edited.
+
+
+--- chunk 6
+title: Warp Field Recalibration | text: Me — Fri 18 Apr 2369 09:02
+
+Write me a script that checks these coil readings.
+
+**[attachment: Pasted text]**
+> Coil 1: 98.2%
+> Coil 2: 97.1%
+
+
+--- chunk 7
+title: Warp Field Recalibration | text: claude-opus-4-7 — Fri 18 Apr 2369 09:02
+
+Tool use: artifacts — Creating the coil check
+
+Create artifact: **Coil check** (`application/vnd.ant.code`)
+
+````python
+"""Coil check for the Enterprise-D."""
+REPORT = """
+```
+warp 9.6 for 12h
+```
+"""
+
+def ok(efficiency):
+    return efficiency >= 97.5
+````
+
+
+--- chunk 8
+title: Warp Field Recalibration | text: claude-opus-4-7 — Fri 18 Apr 2369 09:02
+
+Tool result: artifacts
+
+```
+OK
+```
+
+
+--- chunk 9
+title: Warp Field Recalibration | text: claude-opus-4-7 — Fri 18 Apr 2369 09:02
+
+Tool use: artifacts — Raising the threshold
+
+Update artifact: **coil_check**
+
+Replace:
+
+```
+97.5
+```
+
+with:
+
+```
+98.0
+```
+
+
+--- chunk 10
+title: Warp Field Recalibration | text: claude-opus-4-7 — Fri 18 Apr 2369 09:02
+
+Tool use: create_file — Writing the report
+
+Create `/mnt/user-data/outputs/coil_report.md` — Coil report for the chief engineer
+
+```markdown
+# Coil report
+
+Coil 2 is below threshold.
+```
+
+
+--- chunk 11
+title: Warp Field Recalibration | text: claude-opus-4-7 — Fri 18 Apr 2369 09:02
+
+Tool use: bash_tool — Running the check
+
+Check coil 2 against the threshold
+
+```bash
+python3 coil_check.py --coil 2
+```
+
+
+--- chunk 12
+title: Warp Field Recalibration | text: claude-opus-4-7 — Fri 18 Apr 2369 09:02
+
+Tool result: bash_tool
+
+```
+coil 2: 97.1% (below 98.0%)
+```
+
+
+--- chunk 13
+title: Warp Field Recalibration | text: claude-opus-4-7 — Fri 18 Apr 2369 09:02
+
+Coil 2 is under threshold; schedule it for recalibration.
+
+
+=== claude-api 00000000-0000-88a2-ab0d-6718dcb64052 Borg Encryption Signature Lookup
+--- chunk 0
+title: Borg Encryption Signature Lookup | text: Me — Wed 16 Apr 2369 09:00
+
+Look up the Borg adaptive-shield signature 7-of-9-alpha and tell me if we have a counter on file.
+
+
+--- chunk 1
+title: Borg Encryption Signature Lookup | text: claude-opus-4-7 — Wed 16 Apr 2369 09:00
+
+Tool use: starfleet_db_query — Querying Starfleet tactical DB
+
+```json
+{
+  "signature": "7-of-9-alpha",
+  "table": "borg_shield_signatures"
+}
+```
+
+
+--- chunk 2
+title: Borg Encryption Signature Lookup | text: claude-opus-4-7 — Wed 16 Apr 2369 09:00
+
+Tool use: starfleet_db_query — Retrying via backup relay
+
+```json
+{
+  "relay": "backup-2",
+  "signature": "7-of-9-alpha",
+  "table": "borg_shield_signatures"
+}
+```
+
+
+--- chunk 3
+title: Borg Encryption Signature Lookup | text: claude-opus-4-7 — Wed 16 Apr 2369 09:01
+
+Yes — we have a counter on file. Rotating phaser modulation at 257.4 MHz (±0.6) gives roughly two effective rounds before the Borg re-adapt. Recommend pre-loading the rotation pattern before engagement.
+
+
+--- chunk 4
+title: Borg Encryption Signature Lookup | text: claude-opus-4-7 — Wed 16 Apr 2369 09:01
+
+Tool result: starfleet_db_query (error)
+
+```
+ERROR: connection to tactical-db.sf.test refused (subspace relay 4 offline)
+```
+
+
+--- chunk 5
+title: Borg Encryption Signature Lookup | text: claude-opus-4-7 — Wed 16 Apr 2369 09:01
+
+Tool result: starfleet_db_query
+
+```
+Signature 7-of-9-alpha registered 2368-11-02. Counter: rotating phaser modulation 257.4 MHz ± 0.6. Effective rounds: 2 before re-adaptation.
+```
+
+
+=== claude-api 00000000-0000-89b3-8bed-0eecc97d45ce Tricorder Image Diagnostic
+--- chunk 0
+title: Tricorder Image Diagnostic | text: Me — Tue 15 Apr 2369 08:30
+
+What's wrong with this medical-tricorder readout?
+
+🖼 *[tricorder-readout.png (not yet fetched)]*
+
+
+--- chunk 1
+title: Tricorder Image Diagnostic | text: claude-opus-4-7 — Tue 15 Apr 2369 08:30
+
+The readout shows elevated isoboramine (62 ng/mL; reference 35–40) and depressed serotonin uptake. Consistent with early-stage Vulcan neuro-pressure deficit. Recommend mind-meld therapy at 24h intervals.
+
+
+=== claude-api 00000000-0000-8a01-8633-71325d50b8d7 Stellar Cartography
+--- chunk 0
+title: Stellar Cartography | text: Description
+
+Scratch project for charting questions. Carries no timestamps: the export omitted created_at and updated_at, which is the shape this fixture exists to pin.
+
+
+--- chunk 1
+title: Stellar Cartography | text: Custom instructions
+
+Answer as a stellar cartographer. Give coordinates in standard galactic form and say when a reading is extrapolated rather than measured.
+
+
+--- chunk 2
+title: Stellar Cartography | text: charting-conventions.md
+
+# Charting conventions
+
+Bearings are given from the ship's current heading, not from galactic north.
+
+- Sector designations use the Federation catalogue number, never the local name.
+- An extrapolated position is written in parentheses.
+
+
+=== claude-api 00000000-0000-8a0f-a11b-e4b95853f4f0 Senior staff roster
+--- chunk 0
+title: Senior staff roster | text: Me — Mon 14 Apr 2369 09:00
+
+Read crew.txt in my ready room folder and write roster.md listing each officer with their post on the Enterprise-D. The viewscreen capture is for the header.
+
+viewscreen.png
+
+
+--- chunk 1
+title: Senior staff roster | text: claude-opus-5-5 — Mon 14 Apr 2369 09:00
+
+I'll read the crew list first.
+
+
+--- chunk 2
+title: Senior staff roster | text: claude-opus-5-5 — Mon 14 Apr 2369 09:00
+
+Tool use: Read
+
+Read `/sessions/ready-room/crew.txt`
+
+
+--- chunk 3
+title: Senior staff roster | text: claude-opus-5-5 — Mon 14 Apr 2369 09:00
+
+Tool result: Read
+
+```
+Picard, Riker, Data, La Forge
+```
+
+
+--- chunk 4
+title: Senior staff roster | text: claude-opus-5-5 — Mon 14 Apr 2369 09:00
+
+Tool use: Write
+
+Create `/sessions/ready-room/roster.md`
+
+```markdown
+# Senior staff
+
+- Captain Jean-Luc Picard: commanding officer
+- Commander William Riker: first officer
+- Lieutenant Commander Data: second officer and operations
+- Lieutenant Commander Geordi La Forge: chief engineer
+```
+
+
+--- chunk 5
+title: Senior staff roster | text: claude-opus-5-5 — Mon 14 Apr 2369 09:00
+
+Tool result: Write
+
+```
+File written: roster.md
+```
+
+
+--- chunk 6
+title: Senior staff roster | text: claude-opus-5-5 — Mon 14 Apr 2369 09:00
+
+Done: roster.md lists the four officers in crew.txt, each with their post.
+
+
+--- chunk 7
+title: Senior staff roster | text: Me — Mon 14 Apr 2369 09:03
+
+Add Worf, chief of security.
+
+
+--- chunk 8
+title: Senior staff roster | text: claude-opus-5-5 — Mon 14 Apr 2369 09:03
+
+Tool use: Edit
+
+Edit `/sessions/ready-room/roster.md`
+
+Replace:
+
+```markdown
+- Lieutenant Commander Geordi La Forge: chief engineer
+
+```
+
+with:
+
+```markdown
+- Lieutenant Commander Geordi La Forge: chief engineer
+- Lieutenant Worf: chief of security
+
+```
+
+
+--- chunk 9
+title: Senior staff roster | text: claude-opus-5-5 — Mon 14 Apr 2369 09:03
+
+Tool result: Edit
+
+```
+Edited roster.md
+```
+
+
+--- chunk 10
+title: Senior staff roster | text: claude-opus-5-5 — Mon 14 Apr 2369 09:03
+
+Added Lieutenant Worf as chief of security. The roster now lists five officers.
+
+
+=== claude-api 00000000-0000-8bd9-b6c0-1c0e35f193d1 claude-api storage
+--- chunk 0
+title: claude-api storage | text: Source: claude-api
+
+# claude-api — storage
+
+Measured Tue Apr 15th, 2369 at 00:00.
+
+| Kind | Step | What | Size | Count | Id |
+| Source Size | ingest | `claude-api/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `claude-api/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `claude-api/ingest/blobs.sqlite#cas_objects` |  | 4 rows | `00000000` |
+| Store | ingest | `claude-api/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `claude-api/ingest/entities.doltlite_db#claude_attachments` |  | 6 rows | `00000000` |
+| Table | ingest | `claude-api/ingest/entities.doltlite_db#conversations` |  | 6 rows | `00000000` |
+| Table | ingest | `claude-api/ingest/entities.doltlite_db#cowork_events` |  | 16 rows | `00000000` |
+| Table | ingest | `claude-api/ingest/entities.doltlite_db#cowork_sessions` |  | 1 row | `00000000` |
+| Table | ingest | `claude-api/ingest/entities.doltlite_db#orgs` |  | 1 row | `00000000` |
+| Table | ingest | `claude-api/ingest/entities.doltlite_db#project_docs` |  | 3 rows | `00000000` |
+| Table | ingest | `claude-api/ingest/entities.doltlite_db#project_docs_listings` |  | 2 rows | `00000000` |
+| Table | ingest | `claude-api/ingest/entities.doltlite_db#projects` |  | 2 rows | `00000000` |
+| Table | ingest | `claude-api/ingest/entities.doltlite_db#users` |  | 1 row | `00000000` |
+
+=== claude-api 00000000-0000-8c06-8231-9340b6e3de70 Holodeck Malfunction Report
+--- chunk 0
+title: Holodeck Malfunction Report | text: Me — Fri 2 May 2369 10:00
+
+Look up the three most recent holodeck malfunctions aboard the Enterprise and cite your sources.
+
+
+--- chunk 1
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:00
+
+Thinking
+
+> Search the incident logs.
+
+
+--- chunk 2
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:00
+
+Tool use: web_search — Searching the web
+
+```json
+{
+  "query": "Enterprise holodeck malfunctions"
+}
+```
+
+
+--- chunk 3
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:00
+
+Tool result: web_search
+
+- Holodeck — Memory Alpha
+- Holodeck malfunctions — Starfleet
+
+
+--- chunk 4
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:00
+
+The three most recent were the Moriarty incident, the Fistful of Datas program and the Robin Hood program.
+
+**Sources**
+
+1. Holodeck malfunctions — Starfleet
+
+
+--- chunk 5
+title: Holodeck Malfunction Report | text: Me — Fri 2 May 2369 10:02
+
+Look up the four most recent holodeck malfunctions aboard the Enterprise and cite your sources.
+
+
+--- chunk 6
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:02
+
+Thinking
+
+> Search again for four.
+
+
+--- chunk 7
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:02
+
+Tool use: web_search — Searching the web
+
+```json
+{
+  "query": "Enterprise holodeck malfunctions four"
+}
+```
+
+
+--- chunk 8
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:02
+
+Tool result: web_search
+
+- Holodeck — Memory Alpha
+- Holodeck malfunctions — Starfleet
+
+
+--- chunk 9
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:02
+
+Four are on record; the most recent was the Moriarty incident.
+
+**Sources**
+
+1. Holodeck — Memory Alpha
+2. Holodeck malfunctions — Starfleet
+
+
+--- chunk 10
+title: Holodeck Malfunction Report | text: Me — Fri 2 May 2369 10:03
+
+Plot how long each malfunction lasted and send me the chart.
+
+
+--- chunk 11
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:03
+
+Thinking
+
+> Write a script, run it, send the chart.
+
+
+--- chunk 12
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:03
+
+Tool use: Write — Created a file
+
+Create `holodeck_chart.py`
+
+```python
+import matplotlib.pyplot as plt
+plt.bar(['Moriarty', 'Datas', 'Robin Hood', 'Fair Haven'], [3, 1, 1, 2])
+plt.savefig('holodeck_chart.png')
+```
+
+
+--- chunk 13
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:03
+
+Tool result: Write
+
+```
+File created successfully at: holodeck_chart.py
+```
+
+
+--- chunk 14
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:03
+
+Tool use: Bash — Ran a command
+
+Render the chart
+
+```bash
+python3 holodeck_chart.py
+```
+
+
+--- chunk 15
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:03
+
+Tool result: Bash
+
+```
+(no output)
+```
+
+
+--- chunk 16
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:03
+
+Tool use: SendUserFile — Shared files
+
+```json
+{
+  "caption": "Malfunction durations",
+  "files": [
+    "/home/claude/holodeck_chart.png"
+  ],
+  "status": "normal"
+}
+```
+
+
+--- chunk 17
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:03
+
+Tool result: SendUserFile
+
+```
+Sent 1 file.
+```
+
+
+--- chunk 18
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:03
+
+Here is the chart, and the script that drew it.
+
+📎 holodeck_chart.py — 139 B
+
+
+--- chunk 19
+title: Holodeck Malfunction Report | text: Me — Fri 2 May 2369 10:05
+
+Here is the away team report and two photos from the holodeck. What do they show?
+
+arch.png
+
+sherwood.png
+
+📎 Away Team Report.pdf — 400 B
+
+
+--- chunk 20
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:05
+
+Thinking
+
+> Read the report first.
+
+
+--- chunk 21
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:05
+
+Tool use: Read — Read a file
+
+Read `/mnt/user-data/uploads/Away Team Report.pdf`
+
+
+--- chunk 22
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:05
+
+Tool result: Read
+
+```
+All crew accounted for.
+```
+
+
+--- chunk 23
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:05
+
+The report says all crew are accounted for; the photos show the holodeck arch and Sherwood Forest.
+
+
+--- chunk 24
+title: Holodeck Malfunction Report | text: claude-opus-4-7 — Fri 2 May 2369 10:06
+
+A second look: the arch is the holodeck's exit, and the forest is the Robin Hood program.
+
+
+=== claude-api 00000000-0000-8c45-a404-118e0e422b6b Bridge Operations
+--- chunk 0
+title: Bridge Operations | text: Description — Sun 1 Mar 2364 09:00
+
+Standing context for bridge-watch questions: ship status conventions, who to escalate to, and how to phrase a hail.
+
+
+--- chunk 1
+title: Bridge Operations | text: Custom instructions — Sun 1 Mar 2364 09:00
+
+Answer as a Starfleet operations officer. Cite the relevant General Order when one applies, and never speculate about Borg activity without a sensor reading.
+
+
+--- chunk 2
+title: Bridge Operations | text: hailing-frequencies.md — Sun 1 Mar 2364 09:05
+
+# Hailing frequencies
+
+Open on subspace band 3 unless the target is cloaked.
+
+- Klingon vessels: lead with rank, then ship name.
+- Romulan vessels: do not open first.
+
+
+--- chunk 3
+title: Bridge Operations | text: escalation-ladder.txt — Mon 2 Mar 2364 11:30
+
+Ops -> Tactical (Worf) -> First Officer (Riker) -> Captain (Picard).
+Medical emergencies route directly to Sickbay (Crusher).
+
+
+=== claude-api 00000000-0000-8fda-8a1d-506771450366 Poisoned: a message with an unreadable stamp
+--- chunk 0
+title: Poisoned: a message with an unreadable stamp | text: Me — Thu 17 Apr 2369 10:00
+
+Computer, what stardate is it?
+
+
+--- chunk 1
+title: Poisoned: a message with an unreadable stamp | text: claude-opus-4-7 — Thu 17 Apr 2369 10:00
+
+Stardate 47988.1. The chronometer is on ship's time.

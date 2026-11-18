@@ -75,6 +75,9 @@ impl HttpMethod {
 )]
 #[strum(serialize_all = "snake_case")]
 pub enum HttpService {
+    /// The Baby Connect web app (`app.babyconnect.com`), signed in by the
+    /// session cookies latchkey captured.
+    BabyConnect,
     /// Calendars over CalDAV (Fastmail, iCloud, Nextcloud, …).
     Caldav,
     /// Calendly's REST API (`api.calendly.com`), the `calendar` source's
@@ -609,7 +612,7 @@ pub enum Retryability {
 /// Default response classifier: HTTP 429 and 502–504 are retryable (honoring
 /// `Retry-After`); everything else is accepted. Providers whose rate-limit
 /// signal isn't visible by status code — Slack's HTTP-200
-/// `error:"ratelimited"`, GitHub's `403 + x-ratelimit-remaining:0` — wrap this
+/// `error:"ratelimited"`, GitHub's `403`s — wrap this
 /// and call [`latchkey_curl_classified`].
 pub fn default_retryability(resp: &HttpResponse) -> Retryability {
     match resp.status {
@@ -638,8 +641,8 @@ pub fn parse_retry_after(value: Option<&str>) -> Option<Duration> {
 }
 
 /// The marker header the router curl routes on (`latchkey-curl-router`
-/// in github.com/imbue-ai/latchkey-curl-shims). The value `1` asks for
-/// the router's default profile; a profile name would select that one.
+/// in github.com/imbue-ai/latchkey-curl-shims). The pinned router ignores
+/// the value; on a gateway's later router, `1` means its default profile.
 pub const IMPERSONATE_MARKER_HEADER: &str = "X-Imbue-Impersonate: 1";
 
 /// URL prefix that makes a request leave from the user's own machine rather
@@ -953,10 +956,10 @@ mod live {
         // router curl's marker header. Only on the latchkey path -- a
         // bypass_latchkey request uses plain curl, which has no router
         // curl to act on the marker and would just send it upstream.
-        // The Chrome profile advertises compression and the router hands
-        // the reply on as the server sent it, so the decoding is this
-        // curl's: through a latchkey gateway, it is the curl at this end
-        // that decodes, with the header dump describing the wire body.
+        // The Chrome profile advertises compression. A gateway's router can
+        // hand the reply on as the server sent it, so the decoding is this
+        // curl's, with the header dump describing the wire body. The router
+        // we pin adds the flag itself, and giving it twice is harmless.
         if !req.bypass_latchkey && req.service.impersonates() {
             cmd.arg("--compressed");
             cmd.arg("-H").arg(IMPERSONATE_MARKER_HEADER);

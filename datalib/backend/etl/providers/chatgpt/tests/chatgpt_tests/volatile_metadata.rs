@@ -57,7 +57,7 @@ async fn sync(
     ChatgptSynth::new(api).synthesize(playback).unwrap();
     let db = RawDb::open(&db_path_for(out_db)).await.unwrap();
     let download = fetch(FetchOptions {
-        sleep_between: Duration::ZERO,
+        wait_between_requests: Duration::ZERO,
         conv_uuids: vec![CONV.to_string()],
         ..FetchOptions::new(db.clone())
     });

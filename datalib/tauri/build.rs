@@ -67,7 +67,7 @@ fn main() {
     }
 
     // `bundle.resources` also lists `runtime/` — the Node runtime +
-    // latchkey/qmd package trees — and `licenses/`, the third-party
+    // latchkey package tree — and `licenses/`, the third-party
     // notices, both staged by stage-runtime.sh, which (like the binaries
     // above) only runs under `tauri build`. Tauri validates the paths at
     // compile time, so make sure the directories exist for bare

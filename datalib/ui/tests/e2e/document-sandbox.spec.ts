@@ -22,7 +22,7 @@ import { readFileSync } from "node:fs";
 declare const process: { env: Record<string, string | undefined> };
 
 async function openADocument(page: Page): Promise<void> {
-  const resp = await page.request.get("/applet/unified_document_index/search?q=&limit=2000");
+  const resp = await page.request.get("/applet/unified_grid_and_search_index/search?q=&limit=2000");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as {
     rows: { markdown_uuid: string | null; provider: string }[];
@@ -229,7 +229,7 @@ function quarksHtml(): string {
 }
 
 async function quarksUuid(page: Page): Promise<string> {
-  const resp = await page.request.get("/applet/unified_document_index/search?q=&limit=2000");
+  const resp = await page.request.get("/applet/unified_grid_and_search_index/search?q=&limit=2000");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as {
     rows: { markdown_uuid: string | null; conversation_name: string }[];
@@ -363,6 +363,10 @@ async function whatIsInFrame(page: Page): Promise<Record<string, string | null>>
  *  windows of their own, in an order the engines do not agree on. */
 async function clickEverything(page: Page, context: BrowserContext): Promise<void> {
   const body = page.frameLocator("iframe.doc-frame").locator("body.chat-body");
+  const apiTab = context.waitForEvent(
+    "response",
+    (r) => new URL(r.url()).pathname === "/api/config" && r.request().isNavigationRequest(),
+  );
   for (const text of ["Unsubscribe", "Ask Quark", "Review your account"]) {
     await body.getByText(text).last().click();
   }
@@ -375,12 +379,15 @@ async function clickEverything(page: Page, context: BrowserContext): Promise<voi
   };
   await expect.poll(refused, { timeout: 10_000 }).toBe(true);
   // "Review your account" is a plain GET of the API, which the app opens in a tab of its
-  // own; nothing guards it but that a GET never writes.
+  // own. It is a same-origin link, so the rule against a link from another site lets it by.
   await expect
     .poll(() =>
       context.pages().some((p) => new URL(p.url(), "http://x").pathname === "/api/config"),
     )
     .toBe(true);
+  const opened = await apiTab;
+  expect((await opened.request().allHeaders())["sec-fetch-site"]).toBe("same-origin");
+  expect(opened.status()).toBe(200);
 }
 
 test.describe("Quark's prize email", () => {
@@ -417,7 +424,7 @@ test.describe("Quark's prize email", () => {
     const w = watch(context);
     const uuid = await quarksUuid(page);
     const asSent = quarksHtml();
-    await page.route(`**/applet/unified_document_index/chat/${uuid}`, async (route) => {
+    await page.route(`**/applet/unified_grid_and_search_index/chat/${uuid}`, async (route) => {
       const resp = await route.fetch();
       await route.fulfill({ response: resp, json: { ...(await resp.json()), body: asSent } });
     });
@@ -513,7 +520,7 @@ test.describe("Quark's prize email", () => {
 // the sandbox policy. Each test turns one more off.
 
 async function barTabHref(page: Page): Promise<string> {
-  const resp = await page.request.get("/applet/unified_document_index/search?q=&limit=2000");
+  const resp = await page.request.get("/applet/unified_grid_and_search_index/search?q=&limit=2000");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as {
     rows: { markdown_uuid: string | null; conversation_name: string }[];

@@ -2,6 +2,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod backend_output;
 mod launcher;
 mod library_capabilities;
 mod navigation;
@@ -109,6 +110,7 @@ fn launcher_state(app: AppHandle) -> serde_json::Value {
     let dir = libraries_dir(&app);
     let dirs = libraries_dirs(&app);
     let container = protected_container(&app);
+    let guarded = macos_guards_the_container();
     let home = home_dir(&app).unwrap_or_default();
     // TODO(after 2026-12-09): drop `legacy` and `move_from_documents`
     // with `launcher::move_from_documents`.
@@ -134,6 +136,7 @@ fn launcher_state(app: AppHandle) -> serde_json::Value {
                     "path": l.path.to_string_lossy(),
                     "shown_path": elsewhere.then(|| launcher::tilde(&l.path, &home)),
                     "protected": protected,
+                    "unguarded": protected && !guarded,
                     "forgettable": launcher::forgettable(&l.path, &dirs),
                     "deletable": launcher::deletable(&l.path, &dirs),
                     "found": l.found,
@@ -154,7 +157,8 @@ fn launcher_state(app: AppHandle) -> serde_json::Value {
         "libraries_dir": launcher::tilde(&dir, &home),
         "move_from_documents": move_from,
         "suggested_name": launcher::suggested_name(&dir),
-        "protected_available": container.is_some(),
+        "protected_available": container.is_some() && guarded,
+        "protected_needs_newer_macos": container.is_some() && !guarded,
     })
 }
 
@@ -339,16 +343,29 @@ async fn launcher_delete(app: AppHandle, path: String) -> Result<bool, String> {
     if let Some(refusal) = in_use() {
         return Err(refusal);
     }
-    let confirmed = app
-        .dialog()
-        .message(
+    let is_protected =
+        protected_container(&app).is_some_and(|c| protected::is_protected(&root, &c));
+    let (message, button) = if is_protected {
+        (
+            "The library's folder, with everything it has downloaded and its sign-ins, is \
+             deleted permanently. It does not go to the Trash and this cannot be undone. Data \
+             that a service has since deleted cannot be downloaded again.",
+            "Delete Permanently",
+        )
+    } else {
+        (
             "The library's folder, with everything it has downloaded, moves to the Trash. \
              Data that a service has since deleted cannot be downloaded again.",
+            "Move to Trash",
         )
+    };
+    let confirmed = app
+        .dialog()
+        .message(message)
         .title(format!("Delete the library “{name}”?"))
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom(
-            "Move to Trash".into(),
+            button.into(),
             "Cancel".into(),
         ))
         .blocking_show();
@@ -359,10 +376,39 @@ async fn launcher_delete(app: AppHandle, path: String) -> Result<bool, String> {
     if let Some(refusal) = in_use() {
         return Err(refusal);
     }
-    move_to_trash(&root).map_err(|e| format!("Could not move {name} to the Trash: {e}"))?;
     let home = home_dir(&app).ok_or("No home directory.")?;
-    launcher::forget_recent(&launcher::recents_file(&home), &root).map_err(|e| e.to_string())?;
+    let recents = launcher::recents_file(&home);
+    if is_protected {
+        let real_root = root
+            .canonicalize()
+            .map_err(|e| format!("Could not find {name}: {e}"))?;
+        std::fs::remove_dir_all(&real_root).map_err(|e| format!("Could not delete {name}: {e}"))?;
+        launcher::forget_recent(&recents, &root).map_err(|e| e.to_string())?;
+        delete_keychain_item(&real_root).map_err(|item_error| {
+            format!(
+                "{name} is deleted, but its keychain item could not be removed ({item_error}). \
+                 Remove “Datalib Latchkey - {name}” in Keychain Access."
+            )
+        })?;
+    } else {
+        move_to_trash(&root).map_err(|e| format!("Could not move {name} to the Trash: {e}"))?;
+        launcher::forget_recent(&recents, &root).map_err(|e| e.to_string())?;
+    }
     Ok(true)
+}
+
+fn delete_keychain_item(root: &Path) -> Result<(), String> {
+    let output = Command::new(protected::SECURITY_TOOL)
+        .args(protected::delete_keychain_item_args(root))
+        .env_clear()
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if protected::keychain_item_is_gone(output.status.code()) {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
 }
 
 // The `trash` crate's macOS default scripts Finder, which makes macOS ask
@@ -581,6 +627,23 @@ fn libraries_dirs(app: &AppHandle) -> Vec<PathBuf> {
     dirs
 }
 
+/// Before any web view opens, and only for someone who has protected
+/// libraries.
+fn clear_old_web_cache(app: &AppHandle) {
+    let (Some(container), Some(home)) = (protected_container(app), home_dir(app)) else {
+        return;
+    };
+    if !container.is_dir() {
+        return;
+    }
+    let cache = protected::web_cache(&home);
+    if let Err(e) = std::fs::remove_dir_all(&cache) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            eprintln!("could not clear the web cache {}: {e}", cache.display());
+        }
+    }
+}
+
 /// Where the protected folder is, whether or not it exists yet. `None`
 /// off macOS, which has no such folder.
 fn protected_container(app: &AppHandle) -> Option<PathBuf> {
@@ -590,10 +653,26 @@ fn protected_container(app: &AppHandle) -> Option<PathBuf> {
     Some(protected::container(&home_dir(app)?))
 }
 
+#[cfg(target_os = "macos")]
+fn macos_guards_the_container() -> bool {
+    let version = objc2_foundation::NSProcessInfo::processInfo().operatingSystemVersion();
+    protected::macos_guards_the_container(version.majorVersion)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_guards_the_container() -> bool {
+    false
+}
+
 /// Ask macOS for the protected folder, which it makes the first time.
 #[cfg(target_os = "macos")]
 fn make_protected_container() -> Result<PathBuf, String> {
     use objc2_foundation::{NSFileManager, NSString};
+    if !macos_guards_the_container() {
+        return Err("A protected library needs macOS 15 or later. On this version, \
+                    macOS does not keep other apps out of the folder."
+            .into());
+    }
     let url = NSFileManager::defaultManager()
         .containerURLForSecurityApplicationGroupIdentifier(&NSString::from_str(protected::GROUP_ID))
         .ok_or("macOS gave Datalib no protected folder. Only a copy of Datalib signed by Imbue has one.")?;
@@ -694,6 +773,7 @@ fn main() {
         })
         .setup(|app| {
             let handle = app.handle().clone();
+            clear_old_web_cache(&handle);
             if let Some(file) = zoom_file(&handle) {
                 *handle.state::<PageZoom>().0.lock().unwrap() = zoom::load(&file);
             }
@@ -735,7 +815,7 @@ fn main() {
 /// Apps launched from Finder/Dock inherit launchd's minimal PATH
 /// (`/usr/bin:/bin:/usr/sbin:/sbin`), which lacks the Homebrew / nvm
 /// directories where node and npx live. The backend normally runs
-/// latchkey/qmd via the bundled runtime under `Resources/runtime/`
+/// latchkey via the bundled runtime under `Resources/runtime/`
 /// (see `datalib_core::node_runtime`) and doesn't need host node —
 /// but its `npx` fallback (unstaged version pins, dev-ish setups) still
 /// does. Capture the user's login-shell PATH so that fallback keeps
@@ -1041,11 +1121,8 @@ fn app_origin(app: &AppHandle) -> Option<Url> {
 }
 
 /// Spawn the bundled `datalib-http` against `root` on an ephemeral
-/// localhost port and wait (≤15s) for it to announce its URL via
-/// `--url-file`. The child's output goes to a log file in the temp dir
-/// so startup failures can quote it in the error dialog (a
-/// Finder-launched app has no terminal). Blocking: run on a worker
-/// thread, not the event loop.
+/// localhost port and wait for it to announce its URL. Blocking: run on a
+/// worker thread, not the event loop.
 fn start_backend(app: &AppHandle, root: PathBuf, init: bool) -> anyhow::Result<String> {
     let http_bin = resolve_bundled(app, "datalib-http", "DATALIB_HTTP_BIN").ok_or_else(|| {
         anyhow::anyhow!(
@@ -1054,35 +1131,13 @@ fn start_backend(app: &AppHandle, root: PathBuf, init: bool) -> anyhow::Result<S
         )
     })?;
 
-    let tmp = std::env::temp_dir();
-    let pid = std::process::id();
-    let url_file = tmp.join(format!("datalib-http-{pid}.url"));
-    let log_file = tmp.join(format!("datalib-http-{pid}.log"));
-    // Remove a stale url-file from a recycled PID so we can't read a
-    // dead server's address.
-    let _ = std::fs::remove_file(&url_file);
-
-    let log = std::fs::File::create(&log_file)
-        .map_err(|e| anyhow::anyhow!("create backend log {}: {e}", log_file.display()))?;
-    // The backend announces its launch URL — which carries the API
-    // token — on stderr, and that lands in this file, in a temp dir
-    // that is shared between users on Linux. Owner-only. (The url-file
-    // itself is tightened by the backend for the same reason.)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&log_file, std::fs::Permissions::from_mode(0o600));
-    }
-    let log_err = log
-        .try_clone()
-        .map_err(|e| anyhow::anyhow!("clone backend log handle: {e}"))?;
-    let latchkey_dir = protected_latchkey_dir(app, &root)?;
+    backend_output::remove_left_behind(&std::env::temp_dir());
+    let protected_env = protected_server_env(app, &root)?;
 
     let mut child = Command::new(&http_bin)
         .arg(&root)
         .arg("--no-open")
-        .arg("--url-file")
-        .arg(&url_file)
+        .arg("--url-stdout")
         .args(init.then_some("--init"))
         .env("DATALIB_BIND", "127.0.0.1:0")
         // The backend exits when this pipe hits EOF, which the kernel
@@ -1090,73 +1145,40 @@ fn start_backend(app: &AppHandle, root: PathBuf, init: bool) -> anyhow::Result<S
         // the ways it can still run code, this is for the ones it
         // can't. `child` keeps the write end; never `take()` it.
         .env("DATALIB_PARENT_PIPE", "0")
-        .envs(latchkey_dir.map(|dir| ("LATCHKEY_DIRECTORY", dir)))
+        .envs(protected_env)
         .stdin(Stdio::piped())
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(log_err))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| anyhow::anyhow!("spawn {}: {e}", http_bin.display()))?;
 
-    // Poll for the URL announcement, watching for an early child death
-    // so a bad data root fails with the backend's own message instead
-    // of a timeout.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-    let url = loop {
-        if let Ok(url) = std::fs::read_to_string(&url_file) {
-            let url = url.trim().to_string();
-            if !url.is_empty() {
-                break url;
-            }
-        }
-        if let Ok(Some(status)) = child.try_wait() {
-            anyhow::bail!(
-                "datalib-http exited during startup ({status}):\n{}",
-                log_tail(&log_file)
-            );
-        }
-        if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            anyhow::bail!(
-                "datalib-http did not announce its URL within 15s \
-                 (log: {}):\n{}",
-                log_file.display(),
-                log_tail(&log_file)
-            );
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
-    };
-    let _ = std::fs::remove_file(&url_file);
+    let url = backend_output::await_url(&mut child, &root, std::time::Duration::from_secs(15))
+        .map_err(|e| anyhow::anyhow!(e))?;
 
     *app.state::<HttpChild>().0.lock().expect("http child lock") = Some(child);
     *app.state::<DataRoot>().0.lock().expect("data root lock") = Some(root);
     Ok(url)
 }
 
-/// For a protected library, latchkey's store in the protected folder,
-/// made from `~/.latchkey` the first time; `None` for any other library,
-/// which uses latchkey's own default.
-fn protected_latchkey_dir(app: &AppHandle, root: &Path) -> anyhow::Result<Option<PathBuf>> {
+/// What keeps a protected library's sign-ins and temp files in its folder;
+/// nothing for any other library, which uses latchkey's and the OS's defaults.
+fn protected_server_env(
+    app: &AppHandle,
+    root: &Path,
+) -> anyhow::Result<Vec<(&'static str, std::ffi::OsString)>> {
     let Some(container) = protected_container(app) else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
     if !protected::is_protected(root, &container) {
-        return Ok(None);
+        return Ok(Vec::new());
     }
-    let dir = protected::latchkey_dir(&container);
-    let home = home_dir(app).ok_or_else(|| anyhow::anyhow!("no home directory"))?;
-    protected::seed_latchkey(&home.join(".latchkey"), &dir)
-        .map_err(|e| anyhow::anyhow!("set up latchkey's store in {}: {e}", dir.display()))?;
-    Ok(Some(dir))
-}
-
-fn log_tail(path: &std::path::Path) -> String {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return String::from("(no backend log captured)");
-    };
-    let lines: Vec<&str> = content.lines().collect();
-    let start = lines.len().saturating_sub(20);
-    lines[start..].join("\n")
+    let real_root = root
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("follow {}: {e}", root.display()))?;
+    let temp_dir = protected::temp_dir(&real_root);
+    std::fs::create_dir_all(&temp_dir)
+        .map_err(|e| anyhow::anyhow!("create {}: {e}", temp_dir.display()))?;
+    Ok(protected::server_env(&real_root))
 }
 
 fn fatal(app: &AppHandle, msg: String) {

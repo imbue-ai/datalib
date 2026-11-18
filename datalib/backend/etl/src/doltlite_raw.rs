@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use datalib_flock::{FileLock, LockError};
+pub use datalib_store_meta::ladder::{run_statements, Statement};
 use datalib_store_meta::Ladder;
 pub use datalib_store_meta::{Migration, StoreKind};
 use serde_json::Value;
@@ -336,7 +337,7 @@ pub const CONTENT_BRANCH: &str = "datalib_content";
 /// every table `datalib_history::holds_records` counts, plus `problems`,
 /// so a new problem reaches the index, and `ingested_files`, which a
 /// render may read. The sidecars, the run log, the cursors and the
-/// coverage are the sync's own.
+/// coverage and when it was last checked are the sync's own.
 pub fn moves_version(table: &str) -> bool {
     datalib_history::holds_records(table) || table == "problems" || table == "ingested_files"
 }
@@ -578,8 +579,7 @@ async fn connect_pool(db_path: &Path, access: Access, on_branch: bool) -> Result
     }
     // No `journal_mode` pragma: doltlite has no journal and ignores it
     // (docs/dev/doltlite.md#plain-sqlite-files-and-sqlite-compatibility).
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
-        .with_context(|| format!("sqlite uri for {}", db_path.display()))?
+    let opts = datalib_sqlite_open::file(db_path)
         // A reader never conjures a store: an absent file is a real error for
         // it, where for the owner it is the first run.
         .create_if_missing(writable)
@@ -1017,7 +1017,13 @@ async fn open_inner(
                 .execute(&pool)
                 .await
                 .context("create _datalib_meta before migrating")?;
-            datalib_store_meta::ladder::apply(&pool, rung, which).await?;
+            let climb = datalib_store_meta::ladder::Climb {
+                ladder: which,
+                from: stored,
+                top,
+                store_bytes: std::fs::metadata(db_path).ok().map(|m| m.len()),
+            };
+            datalib_store_meta::ladder::apply(&pool, rung, &climb).await?;
             let label = match which {
                 Ladder::Shared => "migrate shared",
                 Ladder::Own => "migrate",
@@ -1799,6 +1805,73 @@ fn stamp_run_with(msg: &str, run_id: Option<&str>) -> String {
     }
 }
 
+/// Mint again, under `source`, the problems an older build wrote naming
+/// none, keeping their stamps: their ids become the ones the render's
+/// copies carried, so a mute made on a copy holds on the row. A no-op for
+/// an empty `source`. Uncommitted: the run's seal commits it.
+pub async fn adopt_sourceless_problems(pool: &SqlitePool, source: &str) -> Result<usize> {
+    use crate::bulk::BulkUpsertable as _;
+    use datalib_problems::{Problem, ProblemRow, Scope, ScopeKind};
+    if source.is_empty() {
+        return Ok(0);
+    }
+    let mut tx = pool.begin().await.context("begin adopting problems")?;
+    let rows: Vec<ProblemRow> = sqlx::query("SELECT * FROM problems WHERE source_id = ''")
+        .fetch_all(&mut *tx)
+        .await
+        .context("read the problems that name no source")?
+        .iter()
+        .map(ProblemRow::from_row)
+        .collect::<Result<_>>()?;
+    let insert = crate::bulk::insert_sql::<ProblemRow>();
+    for old in &rows {
+        let scope = match old.scope_kind {
+            ScopeKind::Markdown => Scope::Markdown(&old.scope_key),
+            ScopeKind::Entity => Scope::Entity(&old.scope_key),
+        };
+        let problem = Problem {
+            reason: old.reason,
+            field: old.field.clone(),
+            path: old.path.clone(),
+            rule: old.rule.clone(),
+            sample: old.sample.clone(),
+            severity: Some(old.severity),
+        };
+        let fresh = ProblemRow::new(
+            source,
+            old.stage,
+            scope,
+            old.item_uuid.as_deref(),
+            old.outcome,
+            problem,
+            old.render_version.and_then(|v| u32::try_from(v).ok()),
+        );
+        let adopted = ProblemRow {
+            first_seen_at_utc: old.first_seen_at_utc.clone(),
+            changed_at_utc: old.changed_at_utc.clone(),
+            tz_offset: old.tz_offset.clone(),
+            upstream_entity_kind: old.upstream_entity_kind.clone(),
+            upstream_id: old.upstream_id.clone(),
+            upstream_account: old.upstream_account.clone(),
+            ..fresh
+        };
+        sqlx::query("DELETE FROM problems WHERE problem_uuid = ?")
+            .bind(&old.problem_uuid)
+            .execute(&mut *tx)
+            .await
+            .context("drop a problem that names no source")?;
+        // Audited: `insert` is built from `ProblemRow`'s associated
+        // consts, never from row data; every value is bound.
+        adopted
+            .bind_into(sqlx::query(sqlx::AssertSqlSafe(insert.clone())))
+            .execute(&mut *tx)
+            .await
+            .context("record it under the source")?;
+    }
+    tx.commit().await.context("commit adopting problems")?;
+    Ok(rows.len())
+}
+
 pub async fn commit_run(pool: &SqlitePool, msg: &str) -> Result<Option<String>> {
     commit_run_dated(pool, msg, None).await
 }
@@ -2031,12 +2104,11 @@ async fn read_at_path(
     if !db_path.exists() {
         return Ok(None);
     }
-    let url = format!("sqlite://{}?mode=ro", db_path.display());
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
         .max_lifetime(None)
-        .connect(&url)
+        .connect_with(datalib_sqlite_open::file(db_path).read_only(true))
         .await
         .with_context(|| format!("open read-only {}", db_path.display()))?;
     let read = read(&pool).await;
@@ -2053,12 +2125,11 @@ pub async fn problem_counts_at_path(
     if !db_path.exists() {
         return Ok(HashMap::new());
     }
-    let url = format!("sqlite://{}?mode=ro", db_path.display());
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
         .max_lifetime(None)
-        .connect(&url)
+        .connect_with(datalib_sqlite_open::file(db_path).read_only(true))
         .await
         .with_context(|| format!("open read-only {}", db_path.display()))?;
     let rows = sqlx::query("SELECT severity, COUNT(*) FROM problems GROUP BY severity")
@@ -2498,7 +2569,7 @@ async fn record_fetch_problem(
     };
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     let row = ProblemRow::new(
-        "",
+        datalib_problems::step_source(),
         Stage::Fetch,
         Scope::Entity(&entity_id),
         None,
@@ -2738,8 +2809,8 @@ pub async fn merge_volatile_payloads_in_tx(
 #[derive(Debug, Clone, Default)]
 pub struct DiffScan {
     /// The buckets to load and render. `None` → every bucket: no cursor,
-    /// a cursor this store cannot resolve, a `global_fanout_tables` row
-    /// changed, or no doltlite extension.
+    /// a cursor this store cannot resolve, the `fanout_query` found a
+    /// change, or no doltlite extension.
     pub render: Option<std::collections::HashSet<String>>,
     /// The buckets the diff named as added, modified or removed since
     /// the cursor — the ones to probe for removal. `None` only when there
@@ -2754,11 +2825,12 @@ pub struct DiffScan {
 
 /// Spec for [`scan_buckets`].
 pub struct DiffScanSpec<'a> {
-    /// Bare entity-table names whose changes mean "render every bucket" —
-    /// typically tables that appear in every rendered doc's header
-    /// (`workspaces`, `users`, `channels`, `me`, …). Any non-`unchanged` row
-    /// in one of these short-circuits the scan.
-    pub global_fanout_tables: &'a [&'a str],
+    /// SQL that returns a row when the range changed something every
+    /// bucket depends on, so every bucket renders; refs bound as in
+    /// `bucket_query`. Name the columns that matter rather than a whole
+    /// table: a row that changed only in a key nothing reads would
+    /// otherwise re-render the whole source.
+    pub fanout_query: Option<&'a str>,
     /// SQL projecting bucket keys for changed rows, with `last_render_hash`
     /// bound at parameter index 1, the commit being scanned to at index 2,
     /// and the bucket key in column 0.
@@ -2776,8 +2848,8 @@ pub struct DiffScanSpec<'a> {
     pub bucket_query: &'a str,
 }
 
-/// Look up HEAD, short-circuit if any [`DiffScanSpec::global_fanout_tables`]
-/// changed, then project the per-bucket changed set.
+/// Look up HEAD, short-circuit if [`DiffScanSpec::fanout_query`] finds a
+/// change, then project the per-bucket changed set.
 ///
 /// Any failure short of "no last hash" falls back to cold start:
 /// render-everything is always safe, partial-render against a stale diff is
@@ -2802,26 +2874,6 @@ pub async fn scan_buckets(
             scan_elapsed: None,
         });
     };
-
-    let mut fanout_changed = false;
-    for table in spec.global_fanout_tables {
-        let sql = format!(
-            "SELECT 1 FROM dolt_diff_{table} \
-              WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged' LIMIT 1"
-        );
-        // Audited: `table` comes from a static list; both refs are bound.
-        let any: Option<i64> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
-            .bind(from_ref)
-            .bind(&to_ref)
-            .fetch_optional(pool)
-            .await
-            .ok()
-            .flatten();
-        if any.is_some() {
-            fanout_changed = true;
-            break;
-        }
-    }
 
     let started = std::time::Instant::now();
     // Audited: `bucket_query` is a fixed projection from provider source;
@@ -2874,6 +2926,21 @@ pub async fn scan_buckets(
             });
         }
     };
+    // After the bucket query, which has already cold-started on a cursor
+    // this store cannot resolve: an error here is a broken query.
+    let fanout_changed = match spec.fanout_query {
+        None => false,
+        // Audited: `fanout_query` is a fixed query from provider source;
+        // both refs are bound.
+        Some(sql) => sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql))
+            .bind(from_ref)
+            .bind(&to_ref)
+            .fetch_optional(pool)
+            .await
+            .context("the fan-out query")?
+            .is_some(),
+    };
+
     use sqlx::Row;
     let set: std::collections::HashSet<String> =
         rows.iter().map(|r| r.get::<String, _>(0)).collect();
@@ -2990,6 +3057,131 @@ pub async fn changed_keys(
         .collect()
 }
 
+/// Whether `table` held a row at `from` and holds none at `to`: every
+/// row it had left. Two one-row reads whatever the table's size, where
+/// [`changed_keys`] would read every row that left.
+pub async fn emptied_between(
+    pool: &SqlitePool,
+    table: &str,
+    from: &crate::pin::Pin,
+    to: &crate::pin::Pin,
+) -> Result<bool> {
+    let holds_a_row = |pin: &crate::pin::Pin| {
+        // Audited: `Pin::table` quotes the module name and checked the hash.
+        sqlx::query_scalar::<_, bool>(sqlx::AssertSqlSafe(format!(
+            "SELECT EXISTS (SELECT 1 FROM {})",
+            pin.table(table)
+        )))
+    };
+    let held = holds_a_row(from)
+        .fetch_one(pool)
+        .await
+        .with_context(|| format!("does {table} hold a row at {}", from.commit()))?;
+    if !held {
+        return Ok(false);
+    }
+    let holds = holds_a_row(to)
+        .fetch_one(pool)
+        .await
+        .with_context(|| format!("does {table} hold a row at {}", to.commit()))?;
+    Ok(!holds)
+}
+
+/// Asks whether a table held a row, by the key [`changed_keys`] names it
+/// with, at one commit: a primary-key equality, which `dolt_at_<table>`
+/// seeks rather than scans.
+pub struct KeyLookup<'p> {
+    pool: &'p SqlitePool,
+    columns: Vec<KeyColumn>,
+    sql: String,
+}
+
+/// How a key column compares with a bound value. SQLite converts a text
+/// value compared with a column of INTEGER, REAL or NUMERIC affinity, so
+/// `'007'` would find row 7; a REAL or NUMERIC key is not looked up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyColumn {
+    /// Bound as the integer its text renders, and only text that is
+    /// how `CAST(n AS TEXT)` renders one.
+    Integer,
+    /// TEXT or BLOB affinity: bound as text, compared exactly.
+    Exact,
+}
+
+impl KeyColumn {
+    /// SQLite's affinity rules, in their order, from the declared type.
+    fn of(declared: &str) -> Option<Self> {
+        let ty = declared.to_ascii_uppercase();
+        if ty.contains("INT") {
+            Some(Self::Integer)
+        } else if ["CHAR", "CLOB", "TEXT"].iter().any(|t| ty.contains(t))
+            || ty.is_empty()
+            || ty.contains("BLOB")
+        {
+            Some(Self::Exact)
+        } else {
+            None
+        }
+    }
+}
+
+impl<'p> KeyLookup<'p> {
+    pub async fn new(pool: &'p SqlitePool, table: &str, at: &crate::pin::Pin) -> Result<Self> {
+        let declared: Vec<(String, String)> =
+            sqlx::query_as("SELECT name, type FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk")
+                .bind(table)
+                .fetch_all(pool)
+                .await
+                .with_context(|| format!("pragma_table_info({table})"))?;
+        if declared.is_empty() {
+            bail!("{table} has no primary key to look a row up by");
+        }
+        let mut columns = Vec::new();
+        let mut equal = Vec::new();
+        for (i, (name, ty)) in declared.iter().enumerate() {
+            let Some(column) = KeyColumn::of(ty) else {
+                bail!("{table}.{name} is {ty}, which a text key cannot be looked up in exactly");
+            };
+            columns.push(column);
+            equal.push(format!("{} = ?{}", quote_ident(name), i + 1));
+        }
+        let sql = format!(
+            "SELECT EXISTS (SELECT 1 FROM {} WHERE {})",
+            at.table(table),
+            equal.join(" AND ")
+        );
+        Ok(Self { pool, columns, sql })
+    }
+
+    /// The first of `keys` the table held. A key that does not split
+    /// into the key's columns, or names an integer the way `CAST` never
+    /// renders one, is not found: a `Some` is always a row that held.
+    pub async fn first_held(&self, keys: &[String]) -> Result<Option<String>> {
+        'keys: for key in keys {
+            let parts: Vec<&str> = key.split('|').collect();
+            if parts.len() != self.columns.len() {
+                continue;
+            }
+            // Audited: every name is quoted and the hash checked by
+            // `Pin::table`; each key part is bound.
+            let mut q = sqlx::query_scalar::<_, bool>(sqlx::AssertSqlSafe(self.sql.clone()));
+            for (part, column) in parts.iter().zip(&self.columns) {
+                q = match column {
+                    KeyColumn::Exact => q.bind(*part),
+                    KeyColumn::Integer => match part.parse::<i64>() {
+                        Ok(n) if n.to_string() == *part => q.bind(n),
+                        _ => continue 'keys,
+                    },
+                };
+            }
+            if q.fetch_one(self.pool).await.context("look a key up")? {
+                return Ok(Some(key.clone()));
+            }
+        }
+        Ok(None)
+    }
+}
+
 pub async fn record_object_error(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     table: &str,
@@ -3103,8 +3295,49 @@ pub async fn upsert_scope_state<'e>(
 mod tests {
 
     use super::*;
+    use crate::pin::Pin;
     use serde_json::json;
     use tempfile::tempdir;
+
+    async fn write_then_read_back(db: &Path) -> Result<()> {
+        let writer = open(db, &["CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)"]).await?;
+        sqlx::query("INSERT INTO t VALUES (1, 'row')")
+            .execute(&writer)
+            .await?;
+        commit_run(&writer, "one row").await?;
+        writer.close().await;
+        let reader = open_reader(db, None).await?.context("a committed store")?;
+        let v: String = sqlx::query_scalar("SELECT v FROM t")
+            .fetch_one(reader.pool())
+            .await?;
+        reader.close().await;
+        anyhow::ensure!(v == "row", "read back {v:?}");
+        Ok(())
+    }
+
+    /// A path is a path, not a URL: sqlx's `sqlite://` parser decoded `%41`
+    /// and so wrote the store in a sibling directory, and took everything
+    /// after a `?` for parameters, so that no open worked at all.
+    #[tokio::test]
+    async fn a_store_opens_at_its_literal_path() {
+        for name in ["x%41y", "a?b", "c#d", "@e", "x%41y?z#w@v"] {
+            let root = tempdir().unwrap();
+            let db = root.path().join(name).join("store.doltlite_db");
+            let decoded = root.path().join("xAy");
+            std::fs::create_dir(&decoded).unwrap();
+
+            write_then_read_back(&db)
+                .await
+                .unwrap_or_else(|e| panic!("{name}: {e:#}"));
+
+            assert!(db.is_file(), "{name}: nothing at {}", db.display());
+            assert_eq!(
+                std::fs::read_dir(&decoded).unwrap().count(),
+                0,
+                "{name}: the store went to the decoded path instead"
+            );
+        }
+    }
 
     /// A row the loaders cannot read back fails the load rather than
     /// vanishing from it: a render built on the rest would lose that
@@ -3181,11 +3414,7 @@ mod tests {
             .max_connections(1)
             .idle_timeout(None)
             .max_lifetime(None)
-            .connect_with(
-                sqlx::sqlite::SqliteConnectOptions::from_str(&format!("sqlite://{}", p.display()))
-                    .unwrap()
-                    .create_if_missing(true),
-            )
+            .connect_with(datalib_sqlite_open::file(p).create_if_missing(true))
             .await
             .unwrap()
     }
@@ -3194,6 +3423,54 @@ mod tests {
         let owned = test_ddl();
         let slices: Vec<&str> = owned.iter().map(String::as_str).collect();
         open(p, &slices).await.unwrap()
+    }
+
+    /// A problem an older build wrote naming no source is minted again
+    /// under the step's source, stamps kept, so its id is the one a row
+    /// minted under the source today has, which is what a mute names; a
+    /// row naming a source is left alone, and an empty source adopts
+    /// nothing.
+    #[tokio::test]
+    async fn a_problem_naming_no_source_is_minted_again_under_the_steps() {
+        use crate::bulk::BulkUpsertable as _;
+        use datalib_problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
+        let dir = tempdir().unwrap();
+        let pool = open_test(&dir.path().join("s.doltlite_db")).await;
+        let mint = |source: &str, key: &str| {
+            ProblemRow::new(
+                source,
+                Stage::Fetch,
+                Scope::Entity(key),
+                None,
+                Outcome::Dropped,
+                Problem::record(Reason::FetchFailed, "404"),
+                None,
+            )
+            .stamped(None, "2370-01-01T00:00:00.000000+00:00", Some("+02:00"))
+        };
+        for row in [mint("", "messages:1"), mint("riker", "messages:2")] {
+            row.bind_into(sqlx::query(sqlx::AssertSqlSafe(crate::bulk::insert_sql::<
+                ProblemRow,
+            >())))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        assert_eq!(adopt_sourceless_problems(&pool, "").await.unwrap(), 0);
+        assert_eq!(adopt_sourceless_problems(&pool, "riker").await.unwrap(), 1);
+        let mut held: Vec<ProblemRow> = sqlx::query("SELECT * FROM problems")
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| ProblemRow::from_row(r).unwrap())
+            .collect();
+        held.sort_by(|a, b| a.scope_key.cmp(&b.scope_key));
+        assert_eq!(
+            held,
+            [mint("riker", "messages:1"), mint("riker", "messages:2")]
+        );
+        pool.close().await;
     }
 
     /// A second writer on a live store is refused at open, naming the
@@ -3482,7 +3759,7 @@ mod tests {
     /// a compaction will, and collects what only the old commits reached.
     async fn fold(pool: &SqlitePool) -> String {
         let first: String = sqlx::query_scalar(
-            "SELECT commit_hash FROM dolt_log() WHERE message = 'Initialize data repository'",
+            "SELECT commit_hash FROM dolt_log() WHERE message LIKE 'Initialize data repository%'",
         )
         .fetch_one(pool)
         .await
@@ -4279,6 +4556,77 @@ mod tests {
         pool.close().await;
     }
 
+    /// A reset store's tables read as emptied, and the keys `changed_keys`
+    /// named their rows by are found at the commit before — an integer
+    /// key and a composite one included, which a lookup by the key's
+    /// text alone would miss.
+    #[tokio::test]
+    async fn an_emptied_table_finds_the_keys_it_held() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("entities.doltlite_db");
+        let pool = open(
+            &p,
+            &[
+                "CREATE TABLE IF NOT EXISTS ints (n INTEGER PRIMARY KEY, v TEXT)",
+                "CREATE TABLE IF NOT EXISTS pairs (a TEXT, b INTEGER, v TEXT, PRIMARY KEY (a, b))",
+                "CREATE TABLE IF NOT EXISTS kept (id TEXT PRIMARY KEY)",
+                "CREATE TABLE IF NOT EXISTS never (id TEXT PRIMARY KEY)",
+            ],
+        )
+        .await
+        .unwrap();
+        assert!(
+            has_dolt_extensions(&pool).await,
+            "this build links doltlite"
+        );
+        for sql in [
+            "INSERT INTO ints (n, v) VALUES (7, 'x'), (12, 'y')",
+            "INSERT INTO pairs (a, b, v) VALUES ('p', 3, 'x')",
+            "INSERT INTO kept (id) VALUES ('k')",
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+        let from = Pin::at(commit_run(&pool, "rows").await.unwrap().unwrap()).unwrap();
+        for sql in ["DELETE FROM ints", "DELETE FROM pairs"] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+        let to = Pin::at(commit_run(&pool, "emptied").await.unwrap().unwrap()).unwrap();
+
+        for (table, emptied) in [
+            ("ints", true),
+            ("pairs", true),
+            ("kept", false),
+            ("never", false),
+        ] {
+            assert_eq!(
+                emptied_between(&pool, table, &from, &to).await.unwrap(),
+                emptied,
+                "{table}"
+            );
+        }
+        for (table, missing) in [("ints", ["8", "007"]), ("pairs", ["p|4", "p"])] {
+            let held: Vec<String> = changed_keys(&pool, table, from.commit(), to.commit())
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|k| k.key)
+                .collect();
+            assert!(!held.is_empty(), "{table}");
+            let lookup = KeyLookup::new(&pool, table, &from).await.unwrap();
+            let mut keys: Vec<String> = missing.iter().map(|k| k.to_string()).collect();
+            assert_eq!(lookup.first_held(&keys).await.unwrap(), None, "{table}");
+            keys.extend(held.iter().cloned());
+            assert_eq!(
+                lookup.first_held(&keys).await.unwrap().as_ref(),
+                held.first(),
+                "{table}"
+            );
+            let at_the_pin = KeyLookup::new(&pool, table, &to).await.unwrap();
+            assert_eq!(at_the_pin.first_held(&held).await.unwrap(), None);
+        }
+        pool.close().await;
+    }
+
     async fn count(pool: &SqlitePool, table: &str) -> i64 {
         sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT COUNT(*) FROM \"{table}\""
@@ -5030,9 +5378,7 @@ mod tests {
             // then re-open with a tunable pool size.
             let _ = open_test(&db_path).await;
 
-            let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
-                .unwrap()
-                .create_if_missing(true);
+            let opts = datalib_sqlite_open::file(&db_path).create_if_missing(true);
             let pool = SqlitePoolOptions::new()
                 .max_connections(max_conns)
                 .idle_timeout(None)
@@ -5225,7 +5571,10 @@ mod tests {
             .unwrap();
         let pin = crate::pin::Pin::at(&second).unwrap();
         let spec = DiffScanSpec {
-            global_fanout_tables: &["users"],
+            fanout_query: Some(
+                "SELECT 1 FROM dolt_diff_users \
+                  WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged' LIMIT 1",
+            ),
             bucket_query: "SELECT DISTINCT coalesce(to_bucket, from_bucket) FROM dolt_diff_notes \
                            WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
         };
@@ -5269,7 +5618,7 @@ mod tests {
         let pin = crate::pin::Pin::at(&commit).unwrap();
 
         let good = DiffScanSpec {
-            global_fanout_tables: &[],
+            fanout_query: None,
             bucket_query: "SELECT DISTINCT to_bucket FROM dolt_diff_notes                            WHERE from_ref = ?1 AND to_ref = ?2 AND to_bucket IS NOT NULL",
         };
         // A cursor this store never had: a reset, a rebuild, a replaced store.
@@ -5283,7 +5632,7 @@ mod tests {
         );
 
         let broken = DiffScanSpec {
-            global_fanout_tables: &[],
+            fanout_query: None,
             bucket_query: "SELECT DISTINCT to_bucket FROM dolt_diff_notes_renamed_away                            WHERE from_ref = ?1 AND to_ref = ?2",
         };
         let err = scan_buckets(&pool, Some(&commit), &pin, &broken)

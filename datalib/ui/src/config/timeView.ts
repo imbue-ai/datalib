@@ -27,14 +27,23 @@ export type Instant = { ms: number; offsetMin: number | null };
 
 const OFFSET = /(Z|([+-])(\d{2}):?(\d{2}))$/;
 
+/** Whether an offset says the instant's UTC is known and its local clock
+ *  is not: `Z` since RFC 9557, and RFC 3339's older `-00:00`. A render
+ *  writes `Z` for a source that names no clock (a Slack author with no
+ *  profile zone, a phone backup's milliseconds); `+00:00` is a clock
+ *  that really was UTC. */
+export function namesNoClock(offset: string): boolean {
+  return offset === "Z" || offset === "z" || offset === "-00:00";
+}
+
 /** The instant an ISO stamp names and its offset; null when it is not one. */
 export function parseInstant(iso: string): Instant | null {
   const s = iso.trim();
   const ms = Date.parse(s);
   if (Number.isNaN(ms)) return null;
   const m = /T\d/.test(s) ? OFFSET.exec(s) : null;
-  if (!m) return { ms, offsetMin: null };
-  const offsetMin = m[1] === "Z" ? 0 : (m[2] === "-" ? -1 : 1) * (+m[3]! * 60 + +m[4]!);
+  if (!m || namesNoClock(m[1]!)) return { ms, offsetMin: null };
+  const offsetMin = (m[2] === "-" ? -1 : 1) * (+m[3]! * 60 + +m[4]!);
   return { ms, offsetMin };
 }
 

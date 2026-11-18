@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
@@ -120,7 +120,7 @@ const K_ONLY_LABELS: &str = "only_extract_labels";
 
 /// The `ingested_files` scopes of the two ways an mbox is read: on its
 /// own, and as the Takeout a Gmail API sync starts from.
-const READ_SCOPE: &str = "email/mbox_read";
+pub(super) const READ_SCOPE: &str = "email/mbox_read";
 const SEED_SCOPE: &str = "email/takeout_seed";
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
@@ -704,6 +704,12 @@ impl Reading {
 /// Messages read ahead of the store's writes, per file.
 const READ_AHEAD: usize = 64;
 
+/// The most of one message read out of an archive. A message is held whole
+/// in memory, and one of no line breaks at all costs a compressed archive
+/// next to nothing. Gmail stops at 50 MB; a `.mbox` on disk has no limit,
+/// since it can hold no more than it takes up.
+const LARGEST_PACKED_MESSAGE: u64 = 1 << 30;
+
 /// Read every `.mbox` of `input` on a blocking thread, a file at a time,
 /// a few messages ahead of the caller. Dropping a file's receiver stops
 /// the read of that file, and dropping the outer one stops the read.
@@ -714,7 +720,7 @@ fn read_in_background(input: Input) -> (mpsc::Receiver<Opened>, Reading) {
         Input::Files(files) => {
             for file in files {
                 let handed = match open_mbox(&file.path) {
-                    Ok(reader) => hand_over(&tx, file, iter_mbox_messages(reader)),
+                    Ok(reader) => hand_over(&tx, file, iter_mbox_messages(reader, u64::MAX)),
                     Err(e) => hand_over(&tx, file, std::iter::once(Err(e))),
                 };
                 if !handed {
@@ -741,7 +747,11 @@ fn read_in_background(input: Input) -> (mpsc::Receiver<Opened>, Reading) {
                         size: e.size,
                     };
                     let reader = BufReader::with_capacity(1 << 16, e.bytes);
-                    if !hand_over(&tx, file, iter_mbox_messages(reader)) {
+                    if !hand_over(
+                        &tx,
+                        file,
+                        iter_mbox_messages(reader, LARGEST_PACKED_MESSAGE),
+                    ) {
                         gone = true;
                         anyhow::bail!("the read was dropped");
                     }
@@ -976,9 +986,14 @@ fn open_mbox(path: &Path) -> Result<BufReader<File>> {
 }
 
 /// Iterate `reader` yielding one RFC 5322 message at a time, ending after
-/// the first read error. Envelope `From ` lines are stripped and `>From `
-/// escapes unquoted. Streams, so peak RSS stays bounded.
-fn iter_mbox_messages<R: BufRead>(mut reader: R) -> impl Iterator<Item = Result<MboxMessage>> {
+/// the first read error or the first message over `largest` bytes. Envelope
+/// `From ` lines are stripped and `>From ` escapes unquoted. Streams, so peak
+/// RSS stays bounded by the largest message.
+fn iter_mbox_messages<R: BufRead>(
+    mut reader: R,
+    largest: u64,
+) -> impl Iterator<Item = Result<MboxMessage>> {
+    let too_large = move || anyhow::anyhow!("a message is larger than {largest} bytes");
     let mut pending: Option<(Vec<u8>, Option<GmailId>)> = None;
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
     let mut started = false;
@@ -988,7 +1003,11 @@ fn iter_mbox_messages<R: BufRead>(mut reader: R) -> impl Iterator<Item = Result<
     let mut bytes_since_yield: u64 = 0;
     let it = std::iter::from_fn(move || loop {
         buf.clear();
-        let n = match reader.read_until(b'\n', &mut buf) {
+        let n = match (&mut reader)
+            .take(largest.saturating_add(1))
+            .read_until(b'\n', &mut buf)
+        {
+            Ok(n) if n as u64 > largest => return Some(Err(too_large())),
             Ok(0) => {
                 // EOF; flush any pending message together with the
                 // remaining bytes counted on this last `read_until`
@@ -1034,6 +1053,9 @@ fn iter_mbox_messages<R: BufRead>(mut reader: R) -> impl Iterator<Item = Result<
         }
         let (target, _) = pending.as_mut().expect("started => Some");
         let unescaped = unescape_from_line(line);
+        if (target.len() + unescaped.len()) as u64 >= largest {
+            return Some(Err(too_large()));
+        }
         target.extend_from_slice(&unescaped);
         target.push(b'\n');
     });
@@ -1285,6 +1307,7 @@ impl Accumulator {
                 thread_id: thread_id.clone(),
                 mailbox_ids,
                 keywords,
+                preview: None,
             },
         );
 
@@ -1356,20 +1379,20 @@ impl Accumulator {
 /// transaction touched at each `COMMIT` (docs/dev/doltlite.md § "What a write
 /// costs").
 #[derive(Default)]
-struct PendingBatch {
-    emails: Vec<EmailRow>,
+pub(super) struct PendingBatch {
+    pub(super) emails: Vec<EmailRow>,
     /// One per email in `emails`.
-    marks: Vec<ReadMarkRow>,
+    pub(super) marks: Vec<ReadMarkRow>,
     /// `.eml` bytes + their `email_blobs` edges for this batch. The
     /// accumulator holds the bytes (in its [`BlobBundle`]) and resolves
     /// each edge's `blake3` off them at flush time — see
     /// [`datalib_etl::blob_cas::CasEdgeAccumulator`].
-    cas: CasEdgeAccumulator,
+    pub(super) cas: CasEdgeAccumulator,
     /// In-run dedupe of blob ref ids. For mbox the ref_id is the
     /// `.eml`'s blake3, so identical bodies collapse to one row and
     /// doltlite never sees a conflicting bind pair inside one multi-row
     /// statement.
-    seen_blob_ids: std::collections::HashSet<String>,
+    pub(super) seen_blob_ids: std::collections::HashSet<String>,
 }
 
 impl PendingBatch {
@@ -1392,8 +1415,14 @@ async fn flush_batch(
     batch: &mut PendingBatch,
     summary: &mut FetchSummary,
 ) -> Result<()> {
+    summary.emails_upserted += write_batch(db, batch).await?;
+    Ok(())
+}
+
+/// Write `batch` and empty it; how many emails it held.
+pub(super) async fn write_batch(db: &RawDb, batch: &mut PendingBatch) -> Result<usize> {
     if batch.emails.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
 
     let mut etx = db.pool().begin().await.context("begin entity tx")?;
@@ -1417,9 +1446,9 @@ async fn flush_batch(
         })
         .await?;
 
-    summary.emails_upserted += batch.emails.len();
+    let n = batch.emails.len();
     batch.clear();
-    Ok(())
+    Ok(n)
 }
 
 /// [`flush_batch`] for a seed: the email rows and their joins, and the
@@ -1620,7 +1649,7 @@ async fn bulk_insert_email_keywords(
     Ok(())
 }
 
-async fn bulk_insert_mailboxes(
+pub(super) async fn bulk_insert_mailboxes(
     tx: &mut Transaction<'_, Sqlite>,
     account_id: &str,
     specs: &[(String, String, Option<&'static str>, String)],
@@ -1658,7 +1687,7 @@ async fn bulk_insert_mailboxes(
     Ok(())
 }
 
-async fn bulk_insert_threads(
+pub(super) async fn bulk_insert_threads(
     tx: &mut Transaction<'_, Sqlite>,
     account_id: &str,
     specs: &[(String, i64, Option<i64>, String)],
@@ -1770,10 +1799,33 @@ mod tests {
         (d, path)
     }
 
+    /// A message is held whole in memory, so out of an archive one that
+    /// would not fit ends the read, whether it is one enormous line or many.
+    #[test]
+    fn a_message_past_the_limit_ends_the_read() {
+        let items = |body: String, largest: u64| -> Vec<Result<MboxMessage>> {
+            let (_d, path) = write_tmp_mbox(&body);
+            iter_mbox_messages(open_mbox(&path).unwrap(), largest).collect()
+        };
+        let from = "From 1@xxx Thu Jan 01 00:00:00 +0000 2026\n";
+        let line = format!("{from}{}\n", "x".repeat(99));
+        assert!(items(line.clone(), 100)[0].is_ok(), "exactly the limit");
+        for body in [
+            format!("{from}{}\n", "x".repeat(200)),
+            format!("{from}{}", "x\n".repeat(100)),
+        ] {
+            let got = items(body, 100);
+            assert_eq!(got.len(), 1);
+            let e = got[0].as_ref().err().expect("the read stops").to_string();
+            assert!(e.contains("larger than 100 bytes"), "{e}");
+        }
+        assert!(items(line, u64::MAX)[0].is_ok(), "no limit on a real file");
+    }
+
     #[test]
     fn streaming_iter_yields_each_message() {
         let (_d, path) = write_tmp_mbox(TWO_MSG_MBOX);
-        let msgs: Vec<MboxMessage> = iter_mbox_messages(open_mbox(&path).unwrap())
+        let msgs: Vec<MboxMessage> = iter_mbox_messages(open_mbox(&path).unwrap(), u64::MAX)
             .collect::<Result<Vec<_>>>()
             .unwrap();
         assert_eq!(msgs.len(), 2);
@@ -1810,7 +1862,7 @@ mod tests {
         let body =
             "From 1@x Wed Jun 03 22:30:48 +0000 2026\nSubject: t\n\n>From the desk of...\nbody\n";
         let (_d, path) = write_tmp_mbox(body);
-        let msgs: Vec<Vec<u8>> = iter_mbox_messages(open_mbox(&path).unwrap())
+        let msgs: Vec<Vec<u8>> = iter_mbox_messages(open_mbox(&path).unwrap(), u64::MAX)
             .collect::<Result<Vec<_>>>()
             .unwrap()
             .into_iter()
@@ -1885,6 +1937,49 @@ mod tests {
         let joins = db.load_email_joins().await.unwrap();
         assert_eq!(joins.keywords[&picard.id], ["$flagged"]);
         assert!(!joins.keywords.contains_key(&riker.id));
+        // An mbox has no snippet, so the row's line comes from the message.
+        let preview: Option<String> = sqlx::query_scalar("SELECT preview FROM emails WHERE id = ?")
+            .bind(&picard.id)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            preview.as_deref(),
+            Some("Number One, set a course for Risa.")
+        );
+    }
+
+    /// A Takeout says who is muted in a label, the one place a message
+    /// keeps it. It is a mark, not a keyword of the row.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_takeouts_muted_label_is_a_mark() {
+        let body = TWO_MSG_MBOX.replace("Inbox,Sent", "Inbox,Sent,Muted");
+        let (_d, path) = write_tmp_mbox(&body);
+        let work = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&work.path().join("e.doltlite_db"))
+            .await
+            .unwrap();
+        fetch(FetchOptions {
+            input_path: path,
+            ..FetchOptions::new(db.clone())
+        })
+        .await
+        .unwrap();
+        let muted: Vec<(String, i64)> =
+            sqlx::query_as("SELECT id, muted FROM read_marks ORDER BY id")
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(
+            muted,
+            [
+                ("0000000000000457".to_string(), 0),
+                ("00000000000008ae".to_string(), 1),
+            ]
+        );
+        let joins = db.load_email_joins().await.unwrap();
+        assert!(!joins.keywords.values().flatten().any(|k| k == "$muted"));
+        db.close().await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2306,9 +2401,10 @@ mod tests {
     fn a_read_error_ends_the_stream() {
         let d = tempfile::tempdir().unwrap();
         // Opening a directory works; reading it does not.
-        let items: Vec<Result<MboxMessage>> = iter_mbox_messages(open_mbox(d.path()).unwrap())
-            .take(3)
-            .collect();
+        let items: Vec<Result<MboxMessage>> =
+            iter_mbox_messages(open_mbox(d.path()).unwrap(), u64::MAX)
+                .take(3)
+                .collect();
         assert_eq!(items.len(), 1);
         assert!(items[0].is_err());
     }

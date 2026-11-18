@@ -1,7 +1,7 @@
 //! LinkedIn entity ids. A connection is its profile URL, unique across
-//! LinkedIn; a message, share or comment row is the id the ingest
-//! minted from its export row; a post thread is the post's link. All
-//! provider-global.
+//! LinkedIn; a message, share, comment or skill row is the id the ingest
+//! minted from its export row; a post thread is the post's link; the
+//! skills page is the one per source. All provider-global.
 
 use datalib_id::{composite_key, IdNamespace, Identity, Minter};
 use datalib_time::RecordStampPrecision;
@@ -16,6 +16,8 @@ pub const KIND_POST: &str = "post";
 pub const KIND_SHARE: &str = "share";
 pub const KIND_COMMENT: &str = "comment";
 pub const KIND_POST_ORIGIN: &str = "post_origin";
+pub const KIND_SKILLS: &str = "skills";
+pub const KIND_SKILL: &str = "skill";
 
 const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
@@ -75,6 +77,17 @@ pub fn post_origin(source_id: &str, key: &str, date_ms: Option<i64>) -> Identity
     IDS.mint(source_id, KIND_POST_ORIGIN, key.to_string(), date_ms)
 }
 
+/// The page of the owner's skills: one per source, so its key is the
+/// kind's own name.
+pub fn skills(source_id: &str) -> Identity {
+    IDS.mint(source_id, KIND_SKILLS, KIND_SKILLS.to_string(), None)
+}
+
+/// A skill has no time of its own in the export.
+pub fn skill(source_id: &str, row_id: &str) -> Identity {
+    IDS.mint(source_id, KIND_SKILL, row_id.to_string(), None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,6 +106,8 @@ mod tests {
             share("src", "r2", MS),
             comment("src", "r3", MS),
             post_origin("src", "k", MS),
+            skills("src"),
+            skill("src", "Diplomacy"),
         ] {
             assert_eq!(
                 got.uuid,

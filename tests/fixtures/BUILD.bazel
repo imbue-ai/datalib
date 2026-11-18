@@ -4,9 +4,7 @@ load("@py_pip//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
-# Surface this BUILD file as a data target so //tools:version_pins_test
-# can read the QMD_VERSION constant out of it at test time.
-# The two `make_*.py` generators are exported so the SQLite-mirror
+# The `make_*.py` generators are exported so the SQLite-mirror
 # fixture genrules (`//datalib/backend/etl/sqlite_mirror:tng_catalog`,
 # `//datalib/backend/etl/providers/apple_photos:tng_library`) can reach
 # them across the package boundary. They live here rather than beside
@@ -15,7 +13,7 @@ load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 # scopes Python in this repo to exactly this: fixture / test-pipeline
 # tooling.
 exports_files([
-    "BUILD.bazel",
+    "make_apple_mail_folder.py",
     "make_apple_messages_db.py",
     "make_apple_photos_library.py",
     "make_beeper_texts.py",
@@ -31,61 +29,32 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
-# qmd's three GGUF models, fetched by bazel (//third-party/qmd_models)
-# rather than downloaded by qmd at run time. Only `:materialize_tng_root`
-# takes all three: `:ingested_tng_qmd` embeds and nothing else, so it
-# names the embedding model alone rather than dragging 1.8 GB of inputs
-# it never opens through every action key.
-filegroup(
-    name = "qmd_models",
-    srcs = ["//third-party/qmd_models:all"],
+# Materialize a datalib data root from :ingested_tng and its search index
+# into a caller-provided directory. One script for `//datalib:dev_tng`
+# (interactive eyeballing) and the UI e2e suite (fixture setup), so the
+# two can't drift apart. It carries the embedding model, which a search
+# by meaning loads, and nothing else a root would fetch.
+sh_binary(
+    name = "materialize_tng_root",
+    srcs = ["materialize_tng_root.sh"],
+    data = [
+        ":ingested_tng",
+        ":ingested_tng_search_index",
+        ":ingested_tng_inference_cache",
+        # TNG-themed scan tree dropped into the root as `file_inventory_scan/` — a
+        # directory the `file_inventory` (Unison-style) scanner can index. It's not
+        # rendered (file_inventory is extract-only), so it just sits in the root.
+        "//datalib/backend/etl/providers/file_inventory:tng_fixture",
+        # The generated config declares the `unified_grid_and_search_index` applet, and
+        # the gateway spawns it by the command written there. Naming the
+        # binary's runfiles path keeps that resolvable without a
+        # `binary_dir` or a PATH assumption.
+        "//datalib/backend/applets:datalib_applet",
+        "//third-party/embedding_models:embeddinggemma",
+    ],
     visibility = ["//visibility:public"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
 )
-
-# Materialize a datalib data root from :ingested_tng + :ingested_tng_qmd
-# into a caller-provided directory. One script, two targets that differ
-# only in which models ride in the runfiles, so `//datalib:dev_tng`
-# (interactive eyeballing) and the UI e2e test (fixture setup) can't
-# drift apart:
-#
-#   materialize_tng_root             all three models — a root that
-#                                    holds what a real one does.
-#   materialize_tng_root_embed_only  the embedding model alone, for the
-#                                    e2e suite. The suite runs on the CI
-#                                    runner itself, so every runfile is
-#                                    downloaded from the remote cache
-#                                    before it starts, serially, after
-#                                    every other test has finished; the
-#                                    two models it never loads were
-#                                    1.8 GB of that. The suite sets
-#                                    DATALIB_QMD_MODELS_NO_FETCH so the
-#                                    applet reports them absent rather
-#                                    than fetching them.
-[
-    sh_binary(
-        name = name,
-        srcs = ["materialize_tng_root.sh"],
-        data = [
-            ":ingested_tng",
-            ":ingested_tng_qmd",
-            # TNG-themed scan tree dropped into the root as `file_inventory_scan/` — a
-            # directory the `file_inventory` (Unison-style) scanner can index. It's not
-            # rendered (file_inventory is extract-only), so it just sits in the root.
-            "//datalib/backend/etl/providers/file_inventory:tng_fixture",
-            # The generated config declares the `unified_document_index` applet, and
-            # the gateway spawns it by the command written there. Naming the
-            # binary's runfiles path keeps that resolvable without a
-            # `binary_dir` or a PATH assumption.
-            "//datalib/backend/applets:datalib_applet",
-        ] + models,
-        visibility = ["//visibility:public"],
-        deps = ["@bazel_tools//tools/bash/runfiles"],
-    )
-    for name, models in [
-        ("materialize_tng_root", [":qmd_models"]),
-        ("materialize_tng_root_embed_only", ["//third-party/qmd_models:embeddinggemma"]),
-    ]
-]
 
 # Cacheable, ingested-fixture artifact.
 #
@@ -95,12 +64,10 @@ filegroup(
 #
 #   * backend_index.sqlite -- the grid index the backend reads (plain SQLite),
 #                   its search terms included.
-#   * qmd.tar    -- the rendered conversation tree (markdown, each
+#   * rendered.tar -- the rendered conversation tree (markdown, each
 #                   source's indexed_markdown.doltlite_db, render
 #                   cursors, attachment blobs).
-#   * qmd_md.tar -- markdown alone, the sole input to :ingested_tng_qmd.
-#                   See tar_qmd.py for why the embedder gets its own
-#                   narrower archive.
+#   * rendered_md.tar -- markdown alone, for the UI's render preview.
 #   * config_body.toml -- every source as a render-only group plus the
 #                   two fan-ins, for materialize_tng_root.sh to declare
 #                   in the root it builds from the tars.
@@ -147,9 +114,9 @@ filegroup(
 # fixtures and the index fan-in stacks the resulting render stores into
 # `backend_index.sqlite` (doltlite is linked statically via
 # `//third-party/doltlite:sqlite3`, so no host `dolt` install is required). This rule then tars the render_markdown tree into
-# qmd.tar.
+# rendered.tar.
 # Tar packaging is *not* the pipeline binary's concern — it operates
-# at the layer of DB + qmd files.
+# at the layer of DB + rendered files.
 #
 # The pipeline binaries are `srcs`, not `tools`, on purpose. `tools` are
 # configured for the exec platform, which would build `datalib_step` — and
@@ -179,26 +146,32 @@ genrule(
         "//datalib/backend/etl/providers/yolink:yolink_make_fixture",
         # Reads the index back for check_ingested.py.
         "//third-party/doltlite:doltlite",
+        # The `unified_grid_and_search_index` step reads its tokenizer;
+        # run_sync_pipeline.py links it into the root
+        # (INGESTED_TNG_EMBED_MODEL).
+        "//third-party/embedding_models:embeddinggemma",
     ],
     outs = [
         "ingested/backend_index.sqlite",
-        "ingested/qmd.tar",
-        "ingested/qmd_md.tar",
+        "ingested/rendered.tar",
+        "ingested/rendered_md.tar",
         "ingested/time_series.tar",
         "ingested/config_body.toml",
     ],
     tools = [
         "check_ingested.py",
+        "grid_alone.py",
         "make_beeper_texts.py",
         "quiet.sh",
         "run_sync_pipeline.py",
         "sync_drivers.py",
-        "tar_qmd.py",
+        "tar_rendered.py",
     ],
     cmd = " && ".join([
         " ".join([
             # The sync's event stream goes to a log, printed only on
             # failure; see quiet.sh.
+            "INGESTED_TNG_EMBED_MODEL=$(execpath //third-party/embedding_models:embeddinggemma)",
             "$(execpath quiet.sh) $(RULEDIR)/sync.log",
             "python3 $(execpath run_sync_pipeline.py)",
             "$(execpath //datalib/backend/dag:datalib_dag_bin)",
@@ -237,7 +210,7 @@ genrule(
             # in the raw store.
             "datalib/backend/etl/providers/google_takeout/tests/fixtures/Takeout",
             # LinkedIn export dir (Connections + messages + Skills). The
-            # message feeds + connections render.
+            # message feeds, posts, connections and skills render.
             "datalib/backend/etl/providers/linkedin/tests/fixtures/linkedin_tng",
             # "SMS Backup & Restore" export dir (sms + calls XML with
             # inline base64 image/audio attachments). Texts + calls
@@ -269,9 +242,12 @@ genrule(
             "$(execpath //datalib/backend/http:datalib_http_bin)",
         ]),
         # Copy the grid index store out of the workspace.
-        # It lives under the `unified_document_index/` tree the index steps own
+        # It lives under the `unified_grid_and_search_index/` tree the index steps own
         # (see core::layout).
-        "cp $(RULEDIR)/sync_workspace/unified_document_index/grid_index/db.sqlite $(execpath ingested/backend_index.sqlite)",
+        "cp $(RULEDIR)/sync_workspace/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite $(execpath ingested/backend_index.sqlite)",
+        # The grid alone: the sync's `unified_grid_and_search_index` step wrote the search index's
+        # tables beside it, which `:ingested_tng_search_index` makes again.
+        "python3 $(execpath grid_alone.py) $(execpath ingested/backend_index.sqlite)",
         # The sources as render-only groups, for materialize_tng_root.sh
         # to splice into the root's config.toml.
         "cp $(RULEDIR)/sync_workspace/config_body.toml $(execpath ingested/config_body.toml)",
@@ -285,13 +261,13 @@ genrule(
             "$(RULEDIR)/sync_workspace/unified_time_series_index/time_series_index/time_series.doltlite_db",
         ]),
         # Tar the render_markdown tree hermetically: the whole tree into
-        # qmd.tar, and markdown alone into qmd_md.tar. See tar_qmd.py for
-        # why the embedding action gets its own narrower archive.
+        # rendered.tar, and markdown alone into rendered_md.tar. See
+        # tar_rendered.py for why markdown alone gets its own archive.
         " ".join([
-            "python3 $(execpath tar_qmd.py)",
+            "python3 $(execpath tar_rendered.py)",
             "$(RULEDIR)/sync_workspace",
-            "$(execpath ingested/qmd.tar)",
-            "$(execpath ingested/qmd_md.tar)",
+            "$(execpath ingested/rendered.tar)",
+            "$(execpath ingested/rendered_md.tar)",
             "$(execpath ingested/time_series.tar)",
         ]),
     ]),
@@ -358,6 +334,12 @@ py_test(
     ],
 )
 
+# Where run_sync_pipeline.py finds the model the
+# `unified_grid_and_search_index` step reads.
+_TNG_EMBED_MODEL_ENV = {
+    "INGESTED_TNG_EMBED_MODEL": "$(rootpath //third-party/embedding_models:embeddinggemma)",
+}
+
 # py_test that drives the same `run_sync_pipeline.py` invocation as
 # :ingested_tng. Three reasons it exists:
 #
@@ -399,7 +381,9 @@ py_test(
         "//datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture",
         "//datalib/backend/etl/providers/yolink:yolink_make_fixture",
         "//third-party/doltlite:doltlite",
+        "//third-party/embedding_models:embeddinggemma",
     ],
+    env = _TNG_EMBED_MODEL_ENV,
 )
 
 # The provider contract (one_mode.md, "Layer 2"): for every render
@@ -437,122 +421,90 @@ py_test(
         "//datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture",
         "//datalib/backend/etl/providers/yolink:yolink_make_fixture",
         "//third-party/doltlite:doltlite",
+        "//third-party/embedding_models:embeddinggemma",
     ],
+    env = _TNG_EMBED_MODEL_ENV,
     size = "large",
 )
 
-# Build a QMD (BM25 + embeddings) index over the rendered TNG markdown
-# tree (`:ingested_tng`'s qmd_md.tar) with `datalib_qmd_indexer`, the
-# library a sync's qmd steps call, and emit it as an overlay tar that
-# layers onto `:ingested_tng`'s qmd.tar.
-#
-# Output `qmd-index.tar` mirrors qmd.tar's layout: paths rooted at `qmd/`,
-# so extracting both archives into the same directory (e.g. with
-# `tar -x --strip-components=1`) yields a complete root data directory —
-# markdown tree plus `unified_document_index/qmd_aggregator/qmd/index.sqlite`.
-#
-# Caveats:
-#   * Needs NO host `node`, no npm registry access, and no network at
-#     all. Node and the qmd package tree are Bazel inputs (see
-#     //third-party/qmd/runtime), handed to the library as paths. The
-#     embedding model is a Bazel input too
-#     (`//third-party/qmd_models:embeddinggemma`), staged into
-#     a models dir inside the sandbox — so this action no longer reads
-#     the host's `~/.cache/qmd/models`, and no longer downloads it on a
-#     machine where that cache is cold (which is every CI run).
-#   * Embeds only. Nothing runs `qmd pull` any more (it re-downloads on
-#     any etag difference against HuggingFace `main`); an embed needs
-#     the embedding model already in its models dir, which is what the
-#     Bazel input above supplies.
-#   * SQLite output is NOT byte-stable across runs (timestamps, packing).
-#     This rule is correctness-only. That does not stop it from being
-#     CACHEABLE, though — bazel keys an action on its inputs, never on
-#     whether its outputs are reproducible, so serving a previously
-#     computed index for identical inputs is sound. See the `tags` note.
-QMD_VERSION = "2.8.3"
-
-# The fixture's qmd index, built with the library a sync uses; see
-# build_qmd_index.rs.
-rust_binary(
-    name = "build_qmd_index_bin",
-    srcs = ["build_qmd_index.rs"],
-    edition = "2021",
-    deps = [
-        "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
-        "@datalib_crates//:anyhow",
+# The search index over the TNG fixture, built as a sync builds it:
+# `unified_grid_and_search_index`'s keyword pass (the real `datalib-step`) over `:ingested_tng`'s
+# rendered tree, then every chunk embedded into an inference cache. Three
+# actions, because the first's inputs change on every run (wall-clock
+# stamps in the render stores, tar_rendered.py) and the second is the slow
+# one: it reads only the prompts and links only the embedder, so Bazel
+# embeds again only when a prompt, the embedder or the model changes. The
+# third writes the vectors into the cache the search index reads.
+genrule(
+    name = "ingested_tng_search_index",
+    srcs = [
+        "ingested/rendered.tar",
+        "ingested/backend_index.sqlite",
+        "//datalib/backend/datalib_step:datalib_step",
+        "//datalib/backend/search_index:search_prompts",
+        "//third-party/embedding_models:embeddinggemma",
     ],
+    outs = [
+        "ingested/search_index.sqlite",
+        "ingested/search_prompts.tsv",
+    ],
+    tools = [
+        "build_search_index.py",
+        "quiet.sh",
+    ],
+    cmd = " ".join([
+        "$(execpath quiet.sh) $(RULEDIR)/search_index.log",
+        "python3 $(execpath build_search_index.py)",
+        "$(execpath //datalib/backend/datalib_step:datalib_step)",
+        "$(execpath //datalib/backend/search_index:search_prompts)",
+        "$(execpath //third-party/embedding_models:embeddinggemma)",
+        "$(execpath ingested/rendered.tar)",
+        "$(execpath ingested/backend_index.sqlite)",
+        "$(execpath ingested/search_index.sqlite)",
+        "$(execpath ingested/search_prompts.tsv)",
+    ]),
+    visibility = ["//visibility:public"],
 )
 
 genrule(
-    name = "ingested_tng_qmd",
+    name = "ingested_tng_vectors",
     srcs = [
-        # Markdown ONLY (`:ingested_tng`'s narrow archive), never the full
-        # `qmd.tar`. Bazel keys this action on the content of its inputs,
-        # so every byte in here that the embedder does not read is a byte
-        # that can invalidate a ~90s CPU-only embed for no reason — and
-        # `qmd.tar` carries two kinds that change on every single run
-        # (wall-clock render cursors, and a `source_url` holding the
-        # absolute bazel sandbox path). tar_qmd.py has the measurements.
-        "ingested/qmd_md.tar",
-        # The embedding model `qmd embed` loads. See MODULE.bazel for why
-        # it is fetched by bazel rather than by qmd, and why its filename
-        # has to stay `hf_ggml-org_embeddinggemma-300M-Q8_0.gguf`.
-        "//third-party/qmd_models:embeddinggemma",
-        # Drives `datalib_qmd_indexer`, the library a sync's qmd steps
-        # call, and links little else, so only a change to it re-runs
-        # this embed.
-        ":build_qmd_index_bin",
+        "ingested/search_prompts.tsv",
+        "//datalib/backend/embedder:embed_prompts",
+        "//third-party/embedding_models:embeddinggemma",
     ],
-    outs = ["ingested/qmd-index.tar"],
-    tools = [
-        "build_qmd_index.py",
-        "quiet.sh",
-        # Node itself plus the Bazel-managed qmd package tree, which the
-        # library is handed as paths: no `npx`, no host Node.
-        "@nodejs_host//:node_bin",
-        "//third-party/qmd/runtime:qmd_tree",
-        "//third-party/qmd/runtime:qmd_package_dir",
-    ],
+    outs = ["ingested/vectors.tsv"],
+    tools = ["quiet.sh"],
     cmd = " ".join([
-        "$(execpath quiet.sh) $(RULEDIR)/qmd_index.log",
-        "python3 $(execpath build_qmd_index.py)",
-        "$(execpath :build_qmd_index_bin)",
-        "$(execpath ingested/qmd_md.tar)",
-        "$(execpath ingested/qmd-index.tar)",
-        "$(execpath @nodejs_host//:node_bin)",
-        "$(execpath //third-party/qmd/runtime:qmd_package_dir)",
-        "$(execpath //third-party/qmd_models:embeddinggemma)",
+        "$(execpath quiet.sh) $(RULEDIR)/vectors.log",
+        "$(execpath //datalib/backend/embedder:embed_prompts)",
+        "$(execpath ingested/search_prompts.tsv)",
+        "$(execpath //third-party/embedding_models:embeddinggemma)",
+        "$(execpath ingested/vectors.tsv)",
     ]),
-    tags = [
-        # No `requires-network`, deliberately. It was here for the model
-        # download, which is now `//third-party/qmd_models:embeddinggemma` — a
-        # input, fetched by the repository rule outside the action and
-        # kept in the repository cache. The other thing this tag used to
-        # cover, fetching qmd ITSELF, went away earlier: the package tree
-        # is Bazel-managed and integrity-pinned (see
-        # //third-party/qmd/runtime), so no npm registry traffic and no
-        # install scripts happen here either.
-        #
-        # `no-remote-exec`, NOT `no-remote`. `no-remote` is shorthand for
-        # no-remote-exec PLUS no-remote-cache, and that second half meant
-        # every CI run recomputed the index from scratch: CPU-only
-        # embedding of 80 chunks, 61-611s depending on how much else was
-        # competing for the runner's 4 vCPUs. With the cache half
-        # restored, a run whose rendered markdown is unchanged downloads
-        # a ~3MB tar instead. Measured: 91s -> 0s on the CI critical
-        # path.
-        #
-        # The exec half stays, and now for a measurable reason rather
-        # than the absence of an executor. `.bazelrc`'s `remote` config
-        # does configure RBE, so this rule *could* be sent there — but
-        # the free tier's binding limit is 100 GB/month of cache
-        # transfer, and this action's inputs are ~300 MB. A handful of
-        # cold runs a day would spend the monthly budget on one action,
-        # to parallelize work that is already a cache hit whenever the
-        # rendered markdown has not moved. Revisit it against the
-        # BuildBuddy usage graph, not against a hunch.
-        "no-remote-exec",
+    # Cached remotely, never run there: its inputs are ~300 MB, and
+    # remote execution's transfer budget is better spent elsewhere.
+    tags = ["no-remote-exec"],
+    visibility = ["//visibility:public"],
+)
+
+# The vectors as the search index reads them. Its own action, and a cheap
+# one, because it links the search index, which changes far more often
+# than the embedder.
+genrule(
+    name = "ingested_tng_inference_cache",
+    srcs = [
+        "ingested/vectors.tsv",
+        "//datalib/backend/search_index:cache_vectors",
     ],
+    outs = ["ingested/inference_cache.sqlite"],
+    tools = ["quiet.sh"],
+    cmd = " ".join([
+        "$(execpath quiet.sh) $(RULEDIR)/inference_cache.log",
+        "$(execpath //datalib/backend/search_index:cache_vectors)",
+        "$(execpath ingested/vectors.tsv)",
+        "$(execpath ingested/inference_cache.sqlite)",
+    ]),
     visibility = ["//visibility:public"],
 )
 
@@ -625,7 +577,9 @@ py_test(
         "//datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture",
         "//datalib/backend/etl/providers/yolink:yolink_make_fixture",
         "//third-party/doltlite:doltlite",
+        "//third-party/embedding_models:embeddinggemma",
     ],
+    env = _TNG_EMBED_MODEL_ENV,
     shard_count = 4,
 )
 

@@ -14,6 +14,7 @@
 use std::collections::HashSet;
 
 use anyhow::{Context, Result};
+use datalib_source_common::WhenDeletedUpstream;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 /// Delete the rows of `table` inside `scope` whose id is not in `keep`,
@@ -47,6 +48,51 @@ pub async fn prune_scope_in_tx(
     scope: &[(&str, &str)],
     keep: &HashSet<String>,
 ) -> Result<Vec<String>> {
+    let gone = unlisted_in_tx(tx, table, scope, keep).await?;
+    delete_ids_in_tx(tx, table, &gone).await?;
+    Ok(gone)
+}
+
+/// What a re-enumeration found missing upstream, and what became of it.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Unlisted {
+    /// Deleted here because upstream deleted them.
+    pub deleted: Vec<String>,
+    /// Upstream no longer has them; the source keeps its copy.
+    pub kept: Vec<String>,
+}
+
+/// [`prune_scope_in_tx`] for a source that lets a person keep what
+/// upstream deleted (`docs/dev/deleted_upstream.md`): with
+/// `KeepLocalCopy` the rows stay and come back as `kept`.
+pub async fn follow_deletions_in_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    when: WhenDeletedUpstream,
+    table: &str,
+    scope: &[(&str, &str)],
+    keep: &HashSet<String>,
+) -> Result<Unlisted> {
+    let gone = unlisted_in_tx(tx, table, scope, keep).await?;
+    if when.keeps() {
+        return Ok(Unlisted {
+            deleted: Vec::new(),
+            kept: gone,
+        });
+    }
+    delete_ids_in_tx(tx, table, &gone).await?;
+    Ok(Unlisted {
+        deleted: gone,
+        kept: Vec::new(),
+    })
+}
+
+/// The ids of `table` inside `scope` that are not in `keep`.
+async fn unlisted_in_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    table: &str,
+    scope: &[(&str, &str)],
+    keep: &HashSet<String>,
+) -> Result<Vec<String>> {
     let mut where_sql = String::new();
     for (i, (col, _)) in scope.iter().enumerate() {
         where_sql.push_str(if i == 0 { " WHERE " } else { " AND " });
@@ -66,11 +112,18 @@ pub async fn prune_scope_in_tx(
         .await
         .with_context(|| format!("list {table} ids in scope for prune"))?;
 
-    let gone: Vec<String> = present
+    Ok(present
         .into_iter()
         .filter(|id| !keep.contains(id))
-        .collect();
+        .collect())
+}
 
+/// Delete `table`'s rows by id, with their sidecars and fetch problems.
+async fn delete_ids_in_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    table: &str,
+    gone: &[String],
+) -> Result<()> {
     for chunk in gone.chunks(crate::bulk::SQL_CHUNK) {
         let mut placeholders = String::new();
         crate::bulk::push_placeholder_list(&mut placeholders, chunk.len());
@@ -90,7 +143,7 @@ pub async fn prune_scope_in_tx(
         }
         forget_problems_in_tx(tx, table, &placeholders, chunk).await?;
     }
-    Ok(gone)
+    Ok(())
 }
 
 /// One record's problems, for a record upstream no longer has.
@@ -235,10 +288,81 @@ pub fn record(collection: &str, held: usize, gone: usize) {
     }
 }
 
+/// Note the rows a source kept although upstream no longer has them.
+/// Counted every run, so the line says how many the copy holds that
+/// upstream does not, not how many went this time.
+pub fn record_kept(collection: &str, kept: usize) {
+    if kept == 0 {
+        return;
+    }
+    tracing::info!(
+        event = "kept_deleted_upstream",
+        collection,
+        kept,
+        "kept rows upstream no longer has, as when_deleted_upstream = \"keep_local_copy\" says"
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    /// With `keep_local_copy`, a re-enumeration that leaves rows out
+    /// names them and deletes nothing: not the row, its sidecar or its
+    /// problem.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn keep_local_copy_names_what_upstream_lost_and_deletes_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let pool = open_notes(&d.path().join("t.doltlite_db")).await;
+        for id in ["a", "b"] {
+            sqlx::query("INSERT INTO notes (id, owner, payload) VALUES (?, 'x', '{}')")
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            record_failed(&pool, id).await;
+        }
+        let keep: HashSet<String> = ["a".to_string()].into_iter().collect();
+        let mut tx = pool.begin().await.unwrap();
+        let kept = follow_deletions_in_tx(
+            &mut tx,
+            WhenDeletedUpstream::KeepLocalCopy,
+            "notes",
+            &[],
+            &keep,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(
+            kept,
+            Unlisted {
+                deleted: vec![],
+                kept: vec!["b".to_string()],
+            }
+        );
+        let sidecars: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM notes_bookkeeping")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(sidecars, 2);
+        assert_eq!(problem_keys(&pool).await, ["notes:a", "notes:b"]);
+
+        let mut tx = pool.begin().await.unwrap();
+        let deleted = follow_deletions_in_tx(
+            &mut tx,
+            WhenDeletedUpstream::DeleteLocalCopy,
+            "notes",
+            &[],
+            &keep,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(deleted.deleted, ["b".to_string()]);
+        assert_eq!(problem_keys(&pool).await, ["notes:a"]);
+    }
 
     // With its bookkeeping sidecar, because that is the shape every
     // caller has and `prune_scope` clears both. A table without one is

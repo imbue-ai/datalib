@@ -1,0 +1,50 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== slack-diff 00000000-0000-8209-b9a9-5e8e8a2f0239 #bridge
+--- chunk 0
+title: #bridge | text: Source: Slack
+
+## Jean-Luc Picard Wed May 28th, 2369 at 15:08
+
+Mr. Data, status report.
+
+23 replies
+
+--- chunk 1
+title: #bridge | text: Source: Slack
+
+Lt. Cmdr. Data — Wed 28 May 2369 15:10
+
+All systems nominal, Captain. Long-range sensors detect a Class M planet bearing 042 mark 7.
+
+
+--- chunk 2
+title: #bridge | text: Source: Slack
+
+William T. Riker — Wed 28 May 2369 15:11
+
+Set a course, Mr. Data. Warp factor five.
+
+## Worf Wed May 28th, 2369 at 15:25
+
+Long-range sensors confirm it, Captain: a Warbird, decloaking.
+
+=== slack-diff 00000000-0000-8827-877d-5fdc4dc4394b #bridge
+--- chunk 0
+title: #bridge | text: Source: Slack
+
+## Worf Wed May 28th, 2369 at 15:13
+
+I recommend raising shields,shields **now**, Captain.
+
+- 🛡️ Jean-Luc Picard
+
+=== slack-diff 00000000-0000-8c02-a5c8-c13c049e1e6d #bridge
+--- chunk 0
+title: #bridge | text: Source: Slack
+
+## William T. Riker Wed May 28th, 2369 at 15:26
+
+Shields up. Red alert.

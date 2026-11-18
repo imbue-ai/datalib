@@ -89,7 +89,8 @@ js_run_binary(
 
 # Playwright e2e suite, exposed two ways from the same wrapper script:
 #   bazelisk run  //datalib/ui:e2e        — interactive
-#   bazelisk test //datalib/ui:e2e_test   — picked up by `bazel test //...`
+#   bazelisk test //datalib/ui:e2e_test   — all three parts below; picked
+#                                           up by `bazel test //...`
 #
 # In `test` mode the wrapper runs Playwright from the runfiles tree,
 # using the bazel-linked `:node_modules` (materialized by rules_js from
@@ -131,11 +132,11 @@ copy_to_bin(
 
 _E2E_DATA = [
     "//datalib/backend/http:datalib_http_bin",
-    # The grid is served by the `unified_document_index` applet now, and the
+    # The grid is served by the `unified_grid_and_search_index` applet now, and the
     # fixture config names its binary by absolute path — so it has to be
     # in the runfiles or every grid spec sees an empty page.
     "//datalib/backend/applets:datalib_applet",
-    "//tests/fixtures:materialize_tng_root_embed_only",
+    "//tests/fixtures:materialize_tng_root",
     # The step host, for the spec that drives a real sync. The fixture
     # root is a temp dir with nothing on PATH and no `binary_dir`, so a
     # step's `command:` has to name an absolute path — which means the
@@ -174,37 +175,8 @@ _E2E_DATA = [
     # the host `pnpm install` for the `bazel test` path.
     ":node_modules",
     ":e2e_inputs",
-    # Node + the qmd package tree, which run_e2e.sh symlinks into a
-    # `DATALIB_RUNTIME_DIR` layout so the applet's qmd resolves through
-    # `bundled_command` instead of `npx -y @tobilu/qmd@<v>`.
-    #
-    # This is a correctness fix, not a speed one. npm keys the npx cache
-    # (`~/.npm/_npx/<hash>`) on the package spec ALONE — no Node version
-    # in it — so one directory is shared by every Node on the machine,
-    # while a native module inside it may be built for exactly one ABI.
-    # (When this was written the offender was named: better-sqlite3 12's
-    # `node-v127` prebuilt. qmd 2.8.3 moved to better-sqlite3 13, whose
-    # bindings are per-platform rather than per-ABI, so that particular
-    # trap is closed — the staging below is kept because it also removes
-    # the registry fetch, which was never only about the ABI.)
-    # This test is the one qmd
-    # consumer that reached npx, and it also `env_inherit`s PATH, so it
-    # ran under whatever `node` the developer had while every Bazel
-    # action uses the pinned PATH's Homebrew node. The two poisoned each
-    # other's cache in a loop: whoever installed first won, and everyone
-    # else died on NODE_MODULE_VERSION. Staging the same Bazel-managed
-    # Node the fixture genrule uses removes the second Node entirely.
-    "@nodejs_host//:node_bin",
-    "//third-party/qmd/runtime:qmd_tree",
-    "//third-party/qmd/runtime:package.json",
-    # The anchor `DATALIB_TEST_E2E_QMD_DIR_RLOC` resolves; `qmd_tree` above
-    # is what actually materializes the 277-package store.
-    "//third-party/qmd/runtime:qmd_package_dir",
 ]
 
-# Runfiles paths of the two staging inputs above, handed to run_e2e.sh
-# rather than hardcoded: bzlmod mangles `@nodejs_host`'s repo name, so
-# there is no stable string to write down.
 _E2E_ENV = {
     # Runfiles paths Bazel computes, rather than strings run_e2e.sh
     # spells out. A hand-written `_main/...` path is checked against
@@ -214,25 +186,13 @@ _E2E_ENV = {
     # error naming the label.
     "DATALIB_TEST_E2E_APPLET_BIN_RLOC": "$(rlocationpath //datalib/backend/applets:datalib_applet)",
     "DATALIB_TEST_E2E_HTTP_BIN_RLOC": "$(rlocationpath //datalib/backend/http:datalib_http_bin)",
-    "DATALIB_TEST_E2E_MATERIALIZE_RLOC": "$(rlocationpath //tests/fixtures:materialize_tng_root_embed_only)",
-    # The fixture root carries the embedding model alone (see that
-    # target); this keeps the applet from fetching the other two into
-    # it at start. Inherited by everything run_e2e.sh spawns.
-    "DATALIB_QMD_MODELS_NO_FETCH": "1",
+    "DATALIB_TEST_E2E_MATERIALIZE_RLOC": "$(rlocationpath //tests/fixtures:materialize_tng_root)",
+    # The fixture root carries the embedding model (see that target);
+    # this keeps anything from fetching a model the root lacks, so a
+    # missing one fails rather than downloads. Inherited by everything
+    # run_e2e.sh spawns.
+    "DATALIB_MODELS_NO_FETCH": "1",
     "DATALIB_TEST_E2E_STEP_BIN_RLOC": "$(rlocationpath //datalib/backend/datalib_step:datalib_step)",
-    "DATALIB_TEST_E2E_NODE_BIN_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
-    "DATALIB_TEST_E2E_QMD_PKG_RLOC": "$(rlocationpath //third-party/qmd/runtime:package.json)",
-    # The store's location has to be anchored on a GENERATED artifact,
-    # not derived from the source `package.json` above. In the runfiles
-    # tree that package.json is a symlink back into the source dir, so
-    # `dirname` of it lands in `third-party/qmd/runtime/` — where
-    # `node_modules/` does not exist, because pnpm materializes it under
-    # `bazel-bin/`. Under `bazel test` the resolution happened to stay
-    # inside the runfiles tree and the sibling was found; under
-    # `bazel run` it did not, and the documented
-    # `--update-snapshots` workflow failed with "qmd package store not
-    # in runfiles". `qmd_package_dir` exists precisely as this anchor.
-    "DATALIB_TEST_E2E_QMD_DIR_RLOC": "$(rlocationpath //third-party/qmd/runtime:qmd_package_dir)",
 }
 
 _E2E_DEPS = ["@bazel_tools//tools/bash/runfiles"]
@@ -245,73 +205,111 @@ sh_binary(
     deps = _E2E_DEPS,
 )
 
+# The suite is three tests, one per part of `playwright.config.ts`'s
+# projects (`DATALIB_TEST_E2E_PART`), and `:e2e_test` runs them all.
+# Whole it took 600-850 s on CI against the 900 s ceiling, and one run
+# timed out two-thirds of the way through; each part takes about a
+# third of that, under its own ceiling. On one four-core runner they run
+# one after another (each is `cpu:4`), so the split buys headroom, not
+# wall clock. docs/dev/testing.md § "The Playwright suite runs in two
+# engines" says which spec lands in which part.
+#
+# Each test's `tags`, `timeout` and `env_inherit`, said once:
+#
+# Needs network (Playwright fetches any missing browser binary —
+# chromium and webkit) and the host's pnpm / node / Playwright cache,
+# hence `no-sandbox` + `requires-network`. Do NOT add the `external`
+# tag: this is a routine UI integration test that must run on the
+# default `bazel test //...` path, which is what CI runs.
+# `requires-network` already gates it out of hermetic / offline runs;
+# `external` would over-exclude.
+#
+# `cpu:4` claims the whole CI runner (ubuntu-latest has four vCPUs):
+# the backend processes, a browser engine and Playwright's own worker
+# pool use all of it anyway, and without the tag bazel starts
+# `:unit_test` and `:typecheck_test` beside it and all of them run ~3x
+# slower than they do alone.
+#
+# `long` = 900 s. An `sh_test` with no `size` or `timeout` is `medium`,
+# 300 s, and a part has been seen to need more than a third of that on
+# a slow runner. There is no cost to the larger budget: bazel enforces
+# the ceiling, it does not wait for it.
+#
+# Bazel scrubs the test env, so anything the suite still needs from the
+# host is named in `env_inherit`. HOME is down to one job: Playwright
+# resolves its browser cache to `~/Library/Caches/ms-playwright`, and
+# the browsers are not Bazel inputs (measured: with HOME dropped and
+# `--test_env=PLAYWRIGHT_BROWSERS_PATH=...` supplied, the suite passes).
+# Whoever makes the browsers a Bazel input deletes HOME and
+# `requires-network` in one go. PATH is the `bazel run` half: that mode
+# uses the source tree and needs the host's pnpm / node; under `bazel
+# test` both come from Bazel. `E2E_BROWSERS` narrows which engines
+# run_e2e.sh provisions; unset means both, which every caller uses.
+_E2E_ENV_INHERIT = [
+    "PATH",
+    "HOME",
+    "E2E_BROWSERS",
+]
+
+# The search grid, the document pane and everything else that leaves
+# the config alone, in Chromium against the one shared fixture root.
 sh_test(
-    name = "e2e_test",
+    name = "e2e_chromium_test",
     srcs = ["run_e2e.sh"],
     data = _E2E_DATA,
-    env = _E2E_ENV,
-    deps = _E2E_DEPS,
-    # Needs network (Playwright fetches any missing browser binary —
-    # chromium and webkit) and the host's pnpm / node / Playwright
-    # cache, hence `no-sandbox` + `requires-network`. Do NOT add the
-    # `external` tag: this is a routine UI integration test that must
-    # run on the default `bazel test //...` path, which is what CI runs.
-    # `requires-network` already gates it out of hermetic / offline
-    # runs; `external` would over-exclude.
-    #
-    # `cpu:4` claims the whole CI runner (ubuntu-latest has four vCPUs):
-    # nine backend processes, two browser engines and Playwright's own
-    # worker pool use all of it anyway, and without the tag bazel starts
-    # `:unit_test` and `:typecheck_test` beside it and all three run ~3x
-    # slower than they do alone.
+    env = dict(_E2E_ENV, DATALIB_TEST_E2E_PART = "chromium"),
+    env_inherit = _E2E_ENV_INHERIT,
     tags = [
         "cpu:4",
         "no-remote-exec",
         "no-sandbox",
         "requires-network",
     ],
-    # `long` = 900s. NOT decoration: an `sh_test` with no `size` or
-    # `timeout` is `medium`, i.e. **300 seconds**, and this suite does
-    # not fit in that. It runs every spec file across two browser
-    # engines behind nine backend processes, and the `warmup`
-    # project alone — qmd's cold model load, paid once for the whole
-    # suite — grew to 1.2-1.5 min in qmd 2.8.3.
-    #
-    # Measured wall clock: ~40-70s warm, and 193-202s per run over
-    # `--runs_per_test=5` (avg 198s) on a 10-core laptop. A single
-    # uncached run right after the AG Grid 36 / Vite 8 bump took 207s,
-    # and it has been seen to blow the 300s ceiling outright with a
-    # bazel build competing for cores. 300s is not a budget, it is a
-    # coin flip — and a flaky merge gate teaches people to re-run
-    # rather than to read. 900s is ~4x the observed runtime: tight
-    # enough to bound a genuine hang, loose enough not to fail a slow
-    # runner. There is no cost to the larger budget — bazel enforces
-    # the ceiling, it does not wait for it.
     timeout = "long",
-    # Bazel scrubs the test env, so anything the suite still needs from
-    # the host has to be named here.
-    #
-    # HOME is down to ONE job: Playwright resolves its browser cache to
-    # `~/Library/Caches/ms-playwright`, and the browsers are not Bazel
-    # inputs. It used to have a second — the qmd GGUFs came from
-    # `~/.cache/qmd/models` — and #268 made those `http_file`s, so that
-    # reason is gone. Measured rather than assumed: with HOME dropped
-    # from this list and `--test_env=PLAYWRIGHT_BROWSERS_PATH=...`
-    # supplied, the suite passes. Whoever makes the browsers a Bazel
-    # input deletes this line and `requires-network` in one go.
-    #
-    # PATH is the `bazel run` half: that mode uses the source tree and
-    # needs the host's pnpm / node. Under `bazel test` both come from
-    # Bazel (`:node_modules`, `@nodejs_host`).
-    env_inherit = [
-        "PATH",
-        "HOME",
-        # Which browser engines run_e2e.sh provisions; unset means both,
-        # which is what every caller uses today — CI included, now that
-        # the Linux image bakes WebKit's OS libraries alongside
-        # Chromium's. Kept as an escape hatch for an environment that
-        # can only run one engine.
-        "E2E_BROWSERS",
+    deps = _E2E_DEPS,
+)
+
+# The specs that rewrite their config (`CONFIG_MUTATING`), each against
+# a root and backend of its own.
+sh_test(
+    name = "e2e_sandboxes_test",
+    srcs = ["run_e2e.sh"],
+    data = _E2E_DATA,
+    env = dict(_E2E_ENV, DATALIB_TEST_E2E_PART = "sandboxes"),
+    env_inherit = _E2E_ENV_INHERIT,
+    tags = [
+        "cpu:4",
+        "no-remote-exec",
+        "no-sandbox",
+        "requires-network",
+    ],
+    timeout = "long",
+    deps = _E2E_DEPS,
+)
+
+# What renders or scrolls, again in the desktop app's engine.
+sh_test(
+    name = "e2e_webkit_test",
+    srcs = ["run_e2e.sh"],
+    data = _E2E_DATA,
+    env = dict(_E2E_ENV, DATALIB_TEST_E2E_PART = "webkit"),
+    env_inherit = _E2E_ENV_INHERIT,
+    tags = [
+        "cpu:4",
+        "no-remote-exec",
+        "no-sandbox",
+        "requires-network",
+    ],
+    timeout = "long",
+    deps = _E2E_DEPS,
+)
+
+test_suite(
+    name = "e2e_test",
+    tests = [
+        ":e2e_chromium_test",
+        ":e2e_sandboxes_test",
+        ":e2e_webkit_test",
     ],
 )
 
@@ -490,6 +488,7 @@ copy_to_bin(
     name = "vitest_inputs",
     srcs = glob(
         [
+            "public/dactal/**",
             "src/**",
             "tests/**",
         ],
@@ -509,7 +508,9 @@ copy_to_bin(
 # ~7s suite took 85-96s whenever the e2e suite ran beside it.
 # What every shared renderer writes when its plain-text fields hold HTML
 # and markdown, for `tests/hostile_text.test.ts` to render through the
-# app's own markdown-it and sanitizer. It lands beside that test.
+# app's own markdown-it and sanitizer, and the text-edge library
+# (`//datalib/backend/etl/text_edges`) for `tests/text_edges.test.ts`.
+# It lands beside those tests.
 genrule(
     name = "hostile_samples",
     srcs = ["//datalib/backend/etl/hostile_samples:render_hostile_samples"],
@@ -556,20 +557,12 @@ copy_to_bin(
     srcs = ["tools/render_preview.mjs"],
 )
 
-# The card CSS and the decoration module the page is built from. Staged
-# rather than read from the source tree so `:render_preview_test` stays
-# sandboxable.
+# The card CSS, the decoration module and `renderDocument` with what it
+# imports, which the text-edge page bundles. Staged rather than read
+# from the source tree so `:render_preview_test` stays sandboxable.
 copy_to_bin(
     name = "render_preview_sources",
-    srcs = [
-        "src/theme.css",
-        "src/cards/ChatBody.ce.vue",
-        "src/cards/DocCard.ce.vue",
-        "src/cards/chatSections.js",
-        "src/cards/chip.css",
-        "src/cards/chipLinks.js",
-        "src/cards/documentBody.css",
-    ],
+    srcs = glob(["src/**"]),
 )
 
 _RENDER_PREVIEW_DATA = [
@@ -578,16 +571,20 @@ _RENDER_PREVIEW_DATA = [
     ":render_preview_sources",
     "tests/goldens/contact_preview.html",
     "tests/goldens/render_preview.html",
+    "tests/goldens/text_edges_preview.html",
+    ":hostile_samples",
     "//datalib/backend/etl/chat-common:render_chat_samples",
     "//datalib/backend/etl/contact-common:render_contact_samples",
-    "//tests/fixtures:ingested/qmd_md.tar",
+    "//tests/fixtures:ingested/rendered_md.tar",
     "@nodejs_host//:node_bin",
 ]
 
 _RENDER_PREVIEW_ENV = {
     "DATALIB_TEST_CONTACT_GOLDEN_RLOC": "$(rlocationpath tests/goldens/contact_preview.html)",
     "DATALIB_TEST_CONTACT_SAMPLES_BIN_RLOC": "$(rlocationpath //datalib/backend/etl/contact-common:render_contact_samples)",
-    "DATALIB_TEST_FIXTURE_MD_RLOC": "$(rlocationpath //tests/fixtures:ingested/qmd_md.tar)",
+    "DATALIB_TEST_EDGES_GOLDEN_RLOC": "$(rlocationpath tests/goldens/text_edges_preview.html)",
+    "DATALIB_TEST_EDGES_RLOC": "$(rlocationpath :hostile_samples)",
+    "DATALIB_TEST_FIXTURE_MD_RLOC": "$(rlocationpath //tests/fixtures:ingested/rendered_md.tar)",
     "DATALIB_TEST_GOLDEN_RLOC": "$(rlocationpath tests/goldens/render_preview.html)",
     "DATALIB_TEST_NODE_BIN_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
     "DATALIB_TEST_PREVIEW_JS_RLOC": "$(rlocationpath :render_preview_script)",

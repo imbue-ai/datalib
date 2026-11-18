@@ -1,0 +1,32 @@
+# Room for a docker build or pull on a hosted runner, which ships with about
+# 14 GB free. An image of ours is about 2.7 GB, and v0.5.0 and v0.5.1 both
+# filled the disk before docker-publish could finish. This reclaims about
+# 30 GB.
+#
+# Inlined shell doing what jlumbroso/free-disk-space@main used to do (an
+# individually-owned action pinned to a mutable branch; see macos-app-sign's
+# SUPPLY CHAIN note in release.yml). Tools on PATH that the callers use (gh,
+# docker, node) are left alone. Best-effort `|| true` throughout: runner images
+# shed packages over time, and a missing one shouldn't fail a release; the
+# docker build's own disk usage is the real check.
+name: Free runner disk
+description: Delete the runner's preinstalled SDKs and large packages.
+runs:
+  using: composite
+  steps:
+    - name: Free up runner disk
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "Free disk before:" && df -h /
+        sudo rm -rf /usr/local/lib/android /usr/share/dotnet \
+            /opt/ghc /usr/local/.ghcup || true
+        sudo apt-get remove -y --purge '^aspnetcore-.*' '^dotnet-.*' \
+            '^llvm-.*' 'php.*' '^mongodb-.*' '^mysql-.*' azure-cli \
+            google-chrome-stable firefox powershell mono-devel \
+            libgl1-mesa-dri >/dev/null || true
+        sudo apt-get autoremove -y >/dev/null || true
+        sudo apt-get clean || true
+        sudo swapoff -a || true
+        sudo rm -f /mnt/swapfile || true
+        echo "Free disk after:" && df -h /

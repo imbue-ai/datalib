@@ -28,6 +28,11 @@ pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
         toml: include_str!("../examples/complete_gmail.toml"),
     },
     datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Sections,
+        method: "gmail",
+        toml: include_str!("../examples/sections_gmail.toml"),
+    },
+    datalib_source_common::ConfigExample {
         kind: datalib_source_common::ExampleKind::Minimal,
         method: "mbox",
         toml: include_str!("../examples/minimal_mbox.toml"),
@@ -36,6 +41,16 @@ pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
         kind: datalib_source_common::ExampleKind::Complete,
         method: "mbox",
         toml: include_str!("../examples/complete_mbox.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
+        method: "apple_mail",
+        toml: include_str!("../examples/minimal_apple_mail.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "apple_mail",
+        toml: include_str!("../examples/complete_apple_mail.toml"),
     },
 ];
 
@@ -68,6 +83,10 @@ pub struct EmailConfig {
     /// signs in as.
     #[serde(default)]
     pub mbox: Option<MboxSync>,
+    /// The accounts of the Mail app on this Mac, read from its folder. A
+    /// mode of its own: excludes `jmap`, `gmail` and `mbox`.
+    #[serde(default)]
+    pub apple_mail: Option<AppleMailSync>,
     /// Retired here: `outlink_format` belongs on the render step's
     /// params now. Still read, so a config that sets it on the ingest step
     /// is refused with that fix rather than ignored.
@@ -165,6 +184,15 @@ impl EmailConfig {
             .validate()
             .map_err(anyhow::Error::msg)?;
         let live = self.live_mode()?;
+        if self.apple_mail.is_some() && (live.is_some() || self.mbox.is_some()) {
+            anyhow::bail!(
+                "email source sets `apple_mail` beside another download mode — pick one. \
+                 To mirror the same account two ways, declare two sources."
+            );
+        }
+        if let Some(apple_mail) = &self.apple_mail {
+            apple_mail.validate()?;
+        }
         match (&live, &self.mbox) {
             (Some(EmailLiveMode::Jmap(_)), Some(_)) => anyhow::bail!(
                 "email source sets `jmap` and `mbox` — pick one. Only a Gmail account can \
@@ -174,9 +202,58 @@ impl EmailConfig {
             _ => {}
         }
         match live {
-            Some(EmailLiveMode::GmailApi(gmail)) => gmail.validate(),
+            Some(EmailLiveMode::GmailApi(gmail)) => {
+                gmail.validate()?;
+                self.validate_gmail_fetch(gmail)
+            }
             _ => Ok(()),
         }
+    }
+
+    /// `gmail.fetch` says what the older keys say, so a config with both
+    /// would have to pick one without telling anyone.
+    fn validate_gmail_fetch(&self, gmail: &EmailGmailApi) -> anyhow::Result<()> {
+        let Some(sections) = &gmail.fetch else {
+            return Ok(());
+        };
+        if sections.is_empty() {
+            anyhow::bail!(
+                "email `gmail.fetch` names no sections; remove it to fetch the whole mailbox"
+            );
+        }
+        let mut superseded = Vec::new();
+        if !self.only_extract_labels.is_empty() {
+            superseded.push("only_extract_labels");
+        }
+        if self.whole_threads.is_some() {
+            superseded.push("whole_threads");
+        }
+        if gmail.since.is_some() {
+            superseded.push("gmail.since");
+        }
+        if !superseded.is_empty() {
+            anyhow::bail!(
+                "email `gmail.fetch` says what `{}` says; move it into a section and remove it \
+                 here",
+                superseded.join("`, `")
+            );
+        }
+        Ok(())
+    }
+
+    /// What a Gmail source fetches: its `fetch` sections, or the one
+    /// section the older keys describe.
+    pub fn gmail_fetch(&self) -> Vec<GmailFetch> {
+        let Some(gmail) = &self.gmail else {
+            return Vec::new();
+        };
+        gmail.fetch.clone().unwrap_or_else(|| {
+            vec![GmailFetch {
+                labels: self.only_extract_labels.clone(),
+                since: gmail.since.clone(),
+                whole_threads: self.whole_threads,
+            }]
+        })
     }
 
     pub fn whole_threads(&self) -> bool {
@@ -270,6 +347,74 @@ impl MboxSync {
     }
 }
 
+/// The Apple Mail download path: Mail's folder, and every account in it or
+/// the one `account` names, with that one's account row.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AppleMailSync {
+    /// Mail's folder. Defaults to `~/Library/Mail`; a copy of it, or the
+    /// `V10` folder inside it, works too.
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+    /// Copy only this one of Mail's accounts, named by Mail's id for it:
+    /// the name of its folder under `~/Library/Mail/V10`. Unset copies
+    /// every account that holds mail, each under its own account id.
+    #[serde(default)]
+    pub account: Option<String>,
+    /// Id of the account the mail is filed under; only beside `account`.
+    /// Defaults to `apple_mail_` and the start of Mail's id for it.
+    #[serde(default)]
+    pub account_id: Option<String>,
+    /// The account's display name; only beside `account`. Defaults to
+    /// `account_id`.
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// The account's email address; only beside `account`. Unset by
+    /// default.
+    #[serde(default)]
+    pub email_address: Option<String>,
+    /// Whether this is a personal (rather than work) account; only beside
+    /// `account`. Defaults to true.
+    #[serde(default)]
+    pub is_personal: Option<bool>,
+}
+
+impl AppleMailSync {
+    /// The account row's settings describe one account, so without
+    /// `account` naming it they would describe every account at once.
+    fn validate(&self) -> anyhow::Result<()> {
+        if self.account.is_some() {
+            return Ok(());
+        }
+        let set: Vec<&str> = [
+            ("account_id", self.account_id.is_some()),
+            ("display_name", self.display_name.is_some()),
+            ("email_address", self.email_address.is_some()),
+            ("is_personal", self.is_personal.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(key, is_set)| is_set.then_some(key))
+        .collect();
+        if set.is_empty() {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "email `apple_mail.{}` names one account's row, and without `apple_mail.account` \
+             this source copies every account in Mail. Set `account` to the account's folder \
+             under ~/Library/Mail/V10, or remove it.",
+            set.join("`, `apple_mail.")
+        )
+    }
+
+    pub fn path(&self) -> PathBuf {
+        expand_tilde(
+            self.path
+                .as_deref()
+                .unwrap_or_else(|| std::path::Path::new("~/Library/Mail")),
+        )
+    }
+}
+
 /// How to build the "open this email in webmail" outlink. The provider that
 /// owns the account picks the most robust scheme our download identifiers
 /// allow (Gmail → `rfc822msgid:` search; Fastmail → `app.fastmail.com` path).
@@ -316,8 +461,17 @@ pub struct EmailGmailApi {
     /// start backfills on the next run. Narrowing it does not cancel what
     /// a wider listing already owes; the fetch goes newest first. Gmail
     /// has no `until`: the mailbox is followed forward from the walk.
+    /// To give each label its own, use `fetch`.
     #[serde(default)]
     pub since: Option<String>,
+    /// What to fetch, as sections that add up, each with its own window:
+    /// all of Inbox, say, and only the last 90 days of Sent. A label two
+    /// sections name is fetched as far back as either asks. Replaces
+    /// `since`, and the step's `only_extract_labels` and `whole_threads`,
+    /// which say the same of one section. Unset, those decide. The Add
+    /// source form cannot write this: edit the config.
+    #[serde(default)]
+    pub fetch: Option<Vec<GmailFetch>>,
     /// Client-side ceiling on Gmail API quota units spent per minute.
     /// Google allows one user 6000 a minute and prices a `messages.get`
     /// that carries the message at 60 (its quota table), so the mail
@@ -337,6 +491,31 @@ pub struct EmailGmailApi {
     pub message_budget: Option<usize>,
 }
 
+/// One section of `gmail.fetch`: some of the mailbox, and how far back.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GmailFetch {
+    /// The labels this section takes, named as `only_extract_labels`
+    /// names them. Unset takes the whole mailbox.
+    #[serde(default)]
+    pub labels: Vec<String>,
+    /// Oldest mail this section takes, in the grammar of `gmail.since`.
+    /// Unset takes it all.
+    #[serde(default)]
+    pub since: Option<String>,
+    /// Also mirror the rest of the thread of a message this section's
+    /// labels keep, as `whole_threads` does. A thread reaches back past
+    /// `since`. Defaults to true.
+    #[serde(default)]
+    pub whole_threads: Option<bool>,
+}
+
+impl GmailFetch {
+    pub fn whole_threads(&self) -> bool {
+        self.whole_threads.unwrap_or(true)
+    }
+}
+
 /// Gmail's per-user quota is 6000 units/minute. Default below it so
 /// retries and a little clock skew don't push us into rate limits.
 pub const DEFAULT_QUOTA_UNITS_PER_MINUTE: u32 = 5_000;
@@ -354,6 +533,10 @@ impl EmailGmailApi {
     pub fn validate(&self) -> anyhow::Result<()> {
         datalib_time::TimeWindow::check("gmail", self.since.as_deref(), None)
             .map_err(anyhow::Error::msg)?;
+        for section in self.fetch.iter().flatten() {
+            datalib_time::TimeWindow::check("gmail.fetch", section.since.as_deref(), None)
+                .map_err(anyhow::Error::msg)?;
+        }
         if self.quota_units_per_minute.is_some_and(|q| q == 0) {
             anyhow::bail!(
                 "email `gmail.quota_units_per_minute` must be > 0 (omit it for the default \
@@ -377,12 +560,106 @@ impl datalib_source_common::IngestMethods for EmailConfig {
         datalib_source_common::IngestMethod::origin("jmap"),
         datalib_source_common::IngestMethod::origin("gmail"),
         datalib_source_common::IngestMethod::local("mbox"),
+        datalib_source_common::IngestMethod::local("apple_mail"),
     ];
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn with_fetch(fetch: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({ "gmail": { "fetch": fetch } })
+    }
+
+    fn parsed(v: serde_json::Value) -> EmailConfig {
+        serde_json::from_value(v).unwrap()
+    }
+
+    /// The older keys describe one section, so everything downstream reads
+    /// one shape.
+    #[test]
+    fn the_older_keys_are_one_section() {
+        let c = parsed(serde_json::json!({
+            "only_extract_labels": ["Inbox"],
+            "whole_threads": false,
+            "gmail": { "since": "-30d" },
+        }));
+        c.validate().unwrap();
+        assert_eq!(
+            c.gmail_fetch(),
+            [GmailFetch {
+                labels: vec!["Inbox".into()],
+                since: Some("-30d".into()),
+                whole_threads: Some(false),
+            }]
+        );
+        let bare = parsed(serde_json::json!({ "gmail": {} }));
+        assert_eq!(bare.gmail_fetch(), [GmailFetch::default()]);
+        assert!(bare.gmail_fetch()[0].whole_threads());
+    }
+
+    #[test]
+    fn fetch_sections_are_read_as_written() {
+        let c = parsed(with_fetch(serde_json::json!([
+            { "labels": ["Inbox"] },
+            { "labels": ["Sent"], "since": "-90d", "whole_threads": false },
+        ])));
+        c.validate().unwrap();
+        let sections = c.gmail_fetch();
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[1].since.as_deref(), Some("-90d"));
+        assert!(sections[0].whole_threads());
+        assert!(!sections[1].whole_threads());
+    }
+
+    /// Two places to say one thing would need a rule for which wins, and a
+    /// person would find out from what the mirror holds.
+    #[test]
+    fn fetch_beside_the_keys_it_replaces_is_refused_by_name() {
+        for (v, named) in [
+            (
+                serde_json::json!({ "only_extract_labels": ["Inbox"], "gmail": { "fetch": [{}] } }),
+                "only_extract_labels",
+            ),
+            (
+                serde_json::json!({ "whole_threads": false, "gmail": { "fetch": [{}] } }),
+                "whole_threads",
+            ),
+            (
+                serde_json::json!({ "gmail": { "since": "-1d", "fetch": [{}] } }),
+                "gmail.since",
+            ),
+        ] {
+            let err = parsed(v).validate().unwrap_err().to_string();
+            assert!(err.contains(named), "{named}: {err}");
+        }
+    }
+
+    /// Empty is not "everything": that is what leaving `fetch` out says.
+    #[test]
+    fn an_empty_fetch_is_refused() {
+        let err = parsed(with_fetch(serde_json::json!([])))
+            .validate()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no sections"), "{err}");
+    }
+
+    #[test]
+    fn a_sections_since_takes_the_window_grammar() {
+        let err = parsed(with_fetch(serde_json::json!([{ "since": "a month ago" }])))
+            .validate()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("`gmail.fetch.since`"), "{err}");
+    }
+
+    #[test]
+    fn a_section_refuses_a_key_it_does_not_have() {
+        let v = with_fetch(serde_json::json!([{ "label": ["Inbox"] }]));
+        assert!(serde_json::from_value::<EmailConfig>(v).is_err());
+    }
 
     /// The whole reason mode selection became explicit: with more than
     /// one mode, inferring from one table alone would silently pick one.
@@ -413,6 +690,43 @@ mod tests {
 
     /// A JMAP server's ids are its own, so a Takeout beside it would
     /// double every message rather than seed it.
+    #[test]
+    fn apple_mail_is_a_mode_of_its_own() {
+        let alone: EmailConfig = serde_json::from_value(serde_json::json!({
+            "apple_mail": {},
+        }))
+        .unwrap();
+        alone.validate().unwrap();
+        assert!(alone.apple_mail.unwrap().path().ends_with("Library/Mail"));
+        for other in [
+            serde_json::json!({"mbox": {"path": "/mail.mbox"}}),
+            serde_json::json!({"gmail": {}}),
+            serde_json::json!({"jmap": {"hostname": "api.fastmail.com"}}),
+        ] {
+            let mut both = other.as_object().unwrap().clone();
+            both.insert("apple_mail".into(), serde_json::json!({}));
+            let c: EmailConfig = serde_json::from_value(serde_json::Value::Object(both)).unwrap();
+            let err = c.validate().unwrap_err().to_string();
+            assert!(err.contains("apple_mail"), "{err}");
+        }
+    }
+
+    /// An account row's name describes one account, so it needs `account`.
+    #[test]
+    fn apple_mail_account_row_settings_need_an_account() {
+        let parse = |v: serde_json::Value| -> EmailConfig { serde_json::from_value(v).unwrap() };
+        let err = parse(serde_json::json!({"apple_mail": {"display_name": "Mail"}}))
+            .validate()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("apple_mail.display_name"), "{err}");
+        parse(serde_json::json!({
+            "apple_mail": {"account": "1F0B8A52-0000-4000-8000-00000000E1D0", "display_name": "Mail"}
+        }))
+        .validate()
+        .unwrap();
+    }
+
     #[test]
     fn rejects_jmap_beside_an_mbox() {
         let cfg: EmailConfig = serde_json::from_value(serde_json::json!({

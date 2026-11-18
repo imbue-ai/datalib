@@ -158,6 +158,14 @@ fn stops_at_a_channel_boundary_with_a_final_commit(signal: libc::c_int) {
     );
     let dirty = doltlite(&db, "SELECT count(*) FROM dolt_status");
     assert_eq!(dirty, vec!["0"], "everything the run kept is committed");
+    assert_eq!(
+        doltlite(
+            &db,
+            "SELECT status FROM sync_runs ORDER BY run_id DESC LIMIT 1"
+        ),
+        vec!["partial"],
+        "a run told to stop did not read everything, so its row must not say `ok`"
+    );
     let channels = doltlite(
         &db,
         "SELECT count(DISTINCT channel_id) FROM dolt_at_messages('HEAD')",

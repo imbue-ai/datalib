@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   The app's own executable only; the bundled binaries are signed without
-  it (tauri.conf.json's beforeBuildCommand). The one group is the
+  it (sign-staged.sh). The one group is the
   protected folder a library can live in (src/protected.rs, GROUP_ID).
 -->
 <plist version="1.0">

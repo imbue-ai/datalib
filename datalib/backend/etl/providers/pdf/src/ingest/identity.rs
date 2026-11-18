@@ -32,14 +32,14 @@ pub struct DocIdentity {
 /// know how to find. Never returns `Err`; an unparseable file yields
 /// `DocIdentity::default()`.
 pub fn extract(bytes: &[u8]) -> DocIdentity {
-    let Ok(doc) = Document::load_mem(bytes) else {
+    let Ok(doc) = super::expansion::load(bytes) else {
         return DocIdentity::default();
     };
     from_doc(&doc)
 }
 
 pub fn extract_with_content_hash(bytes: &[u8]) -> (DocIdentity, Option<String>) {
-    let Ok(doc) = Document::load_mem(bytes) else {
+    let Ok(doc) = super::expansion::load(bytes) else {
         return (DocIdentity::default(), None);
     };
     (from_doc(&doc), super::content_hash::from_doc(&doc))
@@ -113,7 +113,7 @@ fn xmp_bytes(doc: &Document) -> Option<Vec<u8>> {
     // Most XMP packets are stored uncompressed, but FlateDecode is
     // legal and common enough to matter.
     stream
-        .decompressed_content()
+        .decompressed_content_with_limit(super::expansion::LIMITS.stream_bytes)
         .ok()
         .or_else(|| Some(stream.content.clone()))
 }

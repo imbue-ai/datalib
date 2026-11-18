@@ -33,10 +33,9 @@ const SYSTEM: &[(&str, &str, LabelKind)] = &[
     ("opened", "Opened", LabelKind::Keyword("$seen")),
     ("read", "Opened", LabelKind::Keyword("$seen")),
     ("unread", "Unread", LabelKind::Unread),
-    // "Archived" in Takeout means *absence* of Inbox, not a label; Gmail's
-    // `\Muted` has no JMAP counterpart.
+    // "Archived" in Takeout means *absence* of Inbox, not a label.
     ("archived", "Archived", LabelKind::Drop),
-    ("muted", "Muted", LabelKind::Drop),
+    ("muted", "Muted", LabelKind::Keyword("$muted")),
     // Gmail's inbox categories. Takeout spells them "Category Promotions";
     // the API spells them CATEGORY_PROMOTIONS.
     (
@@ -281,7 +280,7 @@ mod tests {
         );
         assert_eq!(map_label("\\Starred"), LabelMap::Keyword("$flagged"));
         assert_eq!(map_label("UNREAD"), LabelMap::Unread);
-        assert_eq!(map_label("\\Muted"), LabelMap::Drop);
+        assert_eq!(map_label("\\Muted"), LabelMap::Keyword("$muted"));
         assert_eq!(map_label("Archived"), LabelMap::Drop);
     }
 

@@ -258,6 +258,47 @@ async fn a_wrapped_listing_with_no_array_does_not_prune() {
     );
 }
 
+/// A device or an item upstream listed with no id cannot be keyed on, so
+/// it is not stored. That was a line in the log and nothing else. It is a
+/// row until upstream lists it with an id, or no longer lists it.
+#[tokio::test]
+async fn a_listed_thing_with_no_id_is_a_row() {
+    let parts = |problems: BTreeMap<String, String>| -> Vec<String> {
+        problems
+            .into_keys()
+            .map(|key| key.rsplit_once(':').unwrap().0.to_string())
+            .collect()
+    };
+    let a = Account::tng();
+    a.run().await;
+    assert!(a.problems().await.is_empty());
+
+    let no_id = json!([{"productDisplayName": "Tricorder"}]).to_string();
+    a.answer(DEVICES, status(200, &no_id));
+    a.answer(BADGES, status(200, &no_id));
+    let s = a.run().await;
+    assert_eq!(s.errors, 0, "{}", s.line());
+    assert_eq!(
+        parts(a.problems().await),
+        ["skipped:badges", "skipped:devices"]
+    );
+
+    a.resynthesize();
+    a.run().await;
+    assert!(a.problems().await.is_empty());
+
+    // The listing starts a day back once the window is covered.
+    let mut a = Account::tng();
+    a.api.refresh_days = Some(1);
+    a.run().await;
+    a.answer(
+        "/activitylist-service/activities/search/activities?start=0&limit=100&startDate=2369-04-14",
+        status(200, &no_id),
+    );
+    a.run().await;
+    assert_eq!(parts(a.problems().await), ["skipped:activities"]);
+}
+
 /// 204, 404 and an empty 200 body all reach the walk as "nothing", and
 /// nothing is not an enumeration — for the account listings and for
 /// the device registration alike.

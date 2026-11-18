@@ -103,6 +103,12 @@ workspace = "Work"
     let (status, body) = get_json(&app, "/applet/slack_work/nope").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(body["error"].as_str().unwrap().contains("/nope"), "{body}");
+
+    // An applet's root answers with or without the slash, rather than the
+    // app's page saying 200 to a script that left the slash off.
+    let with_slash = get_json(&app, "/applet/slack_work/").await;
+    assert_eq!(with_slash.0, StatusCode::NOT_FOUND, "{}", with_slash.1);
+    assert_eq!(get_json(&app, "/applet/slack_work").await, with_slash);
 }
 
 /// Two instances of the reference binary over two trees: one module in

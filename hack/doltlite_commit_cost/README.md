@@ -13,7 +13,7 @@ bump.
 
 ```sh
 bazelisk build //third-party/doltlite:doltlite
-python3 scripts/doltlite_commit_cost.py
+uv run python scripts/doltlite_commit_cost.py
 ```
 
 ## Results — doltlite 0.50.13

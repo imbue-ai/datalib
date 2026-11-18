@@ -18,10 +18,6 @@ use super::schema_raw::{
     ConversationRow as ConversationRowSchema, ProjectDocRow, ProjectRow, UserRow,
 };
 
-/// Rows per `DELETE … WHERE id IN (…)` statement while pruning. Well
-/// under SQLite's parameter ceiling.
-const DELETE_CHUNK: usize = 400;
-
 #[derive(Debug, Clone)]
 pub struct IngestOptions {
     /// The store this run writes into, opened and closed by the caller.
@@ -34,6 +30,9 @@ pub struct IngestOptions {
     /// Run timestamp, shared by every `<table>_bookkeeping.fetched_at_utc`
     /// stamp this ingest writes.
     pub now: String,
+    /// Whether a row the export no longer names is deleted here too or
+    /// kept.
+    pub when_deleted_upstream: datalib_etl_claude_config::WhenDeletedUpstream,
     pub progress: datalib_etl::progress::Progress,
     pub control: datalib_etl::control::DownloadControl,
 }
@@ -46,6 +45,9 @@ pub struct IngestSummary {
     pub project_docs: usize,
     /// Rows dropped because the export no longer mentions them.
     pub pruned: usize,
+    /// Rows the export no longer mentions, kept because
+    /// `when_deleted_upstream = "keep_local_copy"`.
+    pub kept_deleted_upstream: usize,
     /// Conversations and projects the export holds with no `uuid`, so
     /// with nothing to store them under.
     pub without_uuid: usize,
@@ -92,7 +94,7 @@ async fn ingest_all(
     if let Some(users) = users.as_ref() {
         summary.users = upsert_users(&mut tx, users, &now).await?;
         if names_its_entries(found, "users.json", users) {
-            summary.pruned += prune_to(&mut tx, "users", &ids_of(users, "uuid")).await?;
+            prune_to(&mut tx, opts, summary, "users", &ids_of(users, "uuid")).await?;
         }
     } else {
         // Not fatal: every export conversation already names its own
@@ -111,8 +113,9 @@ async fn ingest_all(
         summary.project_docs = n_docs;
         if names_its_entries(found, "projects", projects) {
             let project_ids = ids_of(projects, "uuid");
-            summary.pruned += prune_to(&mut tx, "projects", &project_ids).await?;
-            summary.pruned += prune_to(&mut tx, "project_docs", &project_doc_ids(projects)).await?;
+            prune_to(&mut tx, opts, summary, "projects", &project_ids).await?;
+            let doc_ids = project_doc_ids(projects);
+            prune_to(&mut tx, opts, summary, "project_docs", &doc_ids).await?;
         }
     }
 
@@ -120,8 +123,8 @@ async fn ingest_all(
     summary.without_uuid = conversations.len() - summary.conversations
         + projects.as_ref().map_or(0, |p| p.len() - summary.projects);
     if names_its_entries(found, "conversations.json", &conversations) {
-        summary.pruned +=
-            prune_to(&mut tx, "conversations", &ids_of(&conversations, "uuid")).await?;
+        let ids = ids_of(&conversations, "uuid");
+        prune_to(&mut tx, opts, summary, "conversations", &ids).await?;
     }
     opts.progress.set_message(&format!(
         "{} conversations, {} projects, {} knowledge docs",
@@ -147,6 +150,19 @@ async fn ingest_all(
             "dropped rows the export no longer contains",
         );
     }
+    datalib_etl::prune::record_kept("claude export rows", summary.kept_deleted_upstream);
+    Ok(())
+}
+
+/// An error when `path` is a symbolic link. An export holds none, and
+/// following one could read any file on the machine as part of it.
+pub(super) fn refuse_link(path: &Path) -> Result<()> {
+    if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        bail!(
+            "{} is a symbolic link, which an export does not hold; it was not followed",
+            path.display()
+        );
+    }
     Ok(())
 }
 
@@ -154,6 +170,7 @@ async fn ingest_all(
 /// absent; an error when it is present but unreadable or not an array
 /// (a corrupt export should fail loudly, not ingest half of itself).
 fn read_json_array(path: &Path) -> Result<Option<Vec<Value>>> {
+    refuse_link(path)?;
     if !path.exists() {
         return Ok(None);
     }
@@ -172,6 +189,7 @@ fn read_json_array(path: &Path) -> Result<Option<Vec<Value>>> {
 /// because this export didn't include any.
 fn read_project_files(dir: &Path) -> Result<Option<Vec<Value>>> {
     let projects_dir = dir.join("projects");
+    refuse_link(&projects_dir)?;
     if !projects_dir.is_dir() {
         return Ok(None);
     }
@@ -184,6 +202,7 @@ fn read_project_files(dir: &Path) -> Result<Option<Vec<Value>>> {
     files.sort();
     let mut out = Vec::with_capacity(files.len());
     for f in files {
+        refuse_link(&f)?;
         let txt = std::fs::read_to_string(&f).with_context(|| format!("read {}", f.display()))?;
         let v: Value =
             serde_json::from_str(&txt).with_context(|| format!("parse {}", f.display()))?;
@@ -361,46 +380,26 @@ async fn upsert_projects(
     Ok((project_rows.len(), doc_rows.len()))
 }
 
-/// Delete every row of `table` (and its bookkeeping sidecar row) whose
-/// id is not in `keep`. Returns how many rows went.
+/// The rows of `table` whose id is not in `keep`: deleted with their
+/// sidecars and problems, or kept as `when_deleted_upstream` says.
 async fn prune_to(
     tx: &mut Transaction<'_, Sqlite>,
+    opts: &IngestOptions,
+    summary: &mut IngestSummary,
     table: &'static str,
     keep: &HashSet<String>,
-) -> Result<usize> {
-    // Audited: `table` is a `&'static str` at every callsite.
-    let existing: Vec<String> =
-        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT id FROM {table}")))
-            .fetch_all(&mut **tx)
-            .await
-            .with_context(|| format!("list {table} ids for prune"))?;
-    let gone: Vec<String> = existing
-        .into_iter()
-        .filter(|id| !keep.contains(id))
-        .collect();
-    if gone.is_empty() {
-        return Ok(0);
-    }
-    for chunk in gone.chunks(DELETE_CHUNK) {
-        let placeholders = std::iter::repeat_n("?", chunk.len())
-            .collect::<Vec<_>>()
-            .join(",");
-        for sql in [
-            format!("DELETE FROM {table} WHERE id IN ({placeholders})"),
-            format!("DELETE FROM {table}_bookkeeping WHERE id IN ({placeholders})"),
-        ] {
-            // Audited: `table` is a `&'static str`; `placeholders` is a
-            // `?,?,?` run sized from the chunk and every id is bound.
-            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
-            for id in chunk {
-                q = q.bind(id.clone());
-            }
-            q.execute(&mut **tx)
-                .await
-                .with_context(|| format!("prune {table}"))?;
-        }
-    }
-    Ok(gone.len())
+) -> Result<()> {
+    let unlisted = datalib_etl::prune::follow_deletions_in_tx(
+        tx,
+        opts.when_deleted_upstream,
+        table,
+        &[],
+        keep,
+    )
+    .await?;
+    summary.pruned += unlisted.deleted.len();
+    summary.kept_deleted_upstream += unlisted.kept.len();
+    Ok(())
 }
 
 #[cfg(test)]
@@ -441,6 +440,7 @@ mod tests {
             db: db.clone(),
             input_path: export.to_path_buf(),
             now: NOW.to_string(),
+            when_deleted_upstream: Default::default(),
             progress: Default::default(),
             control: Default::default(),
         }
@@ -457,6 +457,43 @@ mod tests {
                  "content": [{"type": "text", "text": "hi", "flags": null}]}
             ],
         })
+    }
+
+    /// A link could hand over any file on the machine as a part of the
+    /// export, so it fails the run before the store is touched.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_link_in_the_export_is_refused() {
+        let ex = tempfile::tempdir().unwrap();
+        let raw = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        write(outside.path(), "p.json", &json!({"uuid": "p1"}));
+        write(outside.path(), "c.json", &json!([conv("c1", "First")]));
+        let db = open_raw(raw.path()).await;
+        let link = |target: &Path, at: &str| {
+            std::os::unix::fs::symlink(target, ex.path().join(at)).unwrap();
+        };
+        let refused = |e: anyhow::Error| {
+            assert!(format!("{e:#}").contains("symbolic link"), "{e:#}");
+        };
+
+        link(&outside.path().join("c.json"), "conversations.json");
+        refused(ingest(opts(&db, ex.path())).await.unwrap_err());
+        std::fs::remove_file(ex.path().join("conversations.json")).unwrap();
+
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([conv("c1", "First")]),
+        );
+        link(outside.path(), "projects");
+        refused(ingest(opts(&db, ex.path())).await.unwrap_err());
+        std::fs::remove_file(ex.path().join("projects")).unwrap();
+
+        std::fs::create_dir(ex.path().join("projects")).unwrap();
+        link(&outside.path().join("p.json"), "projects/p.json");
+        refused(ingest(opts(&db, ex.path())).await.unwrap_err());
+        assert!(db.load_conversations().await.unwrap().is_empty());
     }
 
     /// The whole point of the ingest: an export directory becomes rows
@@ -610,6 +647,54 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(orphans, 0, "bookkeeping sidecar outlived its row");
+        db.close().await;
+    }
+
+    /// With `keep_local_copy`, what a newer export leaves out (deleted on
+    /// claude.ai) stays: the conversation and the project alike.
+    #[tokio::test]
+    async fn keep_local_copy_keeps_what_a_shrinking_export_dropped() {
+        let ex = tempfile::tempdir().unwrap();
+        let raw = tempfile::tempdir().unwrap();
+        let db = open_raw(raw.path()).await;
+        let keeping = || IngestOptions {
+            when_deleted_upstream: datalib_etl_claude_config::WhenDeletedUpstream::KeepLocalCopy,
+            ..opts(&db, ex.path())
+        };
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([conv("c1", "First"), conv("c2", "Second")]),
+        );
+        write(
+            ex.path(),
+            "projects/bridge.json",
+            &json!({"uuid": "p1", "name": "Bridge Ops"}),
+        );
+        ingest(keeping()).await.unwrap();
+
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([conv("c1", "First")]),
+        );
+        write(
+            ex.path(),
+            "projects/bridge.json",
+            &json!({"uuid": "p2", "name": "Engineering"}),
+        );
+        let s = ingest(keeping()).await.unwrap();
+        assert_eq!((s.pruned, s.kept_deleted_upstream), (0, 2));
+        let mut ids: Vec<String> = db
+            .load_conversations()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        ids.sort();
+        assert_eq!(ids, ["c1", "c2"]);
+        assert_eq!(dump(db.pool(), "projects").await.len(), 2);
         db.close().await;
     }
 

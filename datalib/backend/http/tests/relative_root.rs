@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 use server::start_in;
 
 /// Writes the root and `PATH` it was handed, under the root it was handed.
+/// `env` appears by rename, whole: a redirect would create it empty first,
+/// and the test reads it the moment it exists.
 const CONFIG: &str = r#"
 [[groups]]
 id = "g"
@@ -19,7 +21,7 @@ id = "g"
 [[steps]]
 group = "g"
 function = "out"
-command = '''sh -c 'mkdir -p "$DATALIB_DAG_DATA_ROOT/g/out" && printf "%s\n%s\n" "$DATALIB_DAG_DATA_ROOT" "$PATH" > "$DATALIB_DAG_DATA_ROOT/g/out/env"' '''
+command = '''sh -c 'out="$DATALIB_DAG_DATA_ROOT/g/out" && mkdir -p "$out" && printf "%s\n%s\n" "$DATALIB_DAG_DATA_ROOT" "$PATH" > "$out/env.tmp" && mv "$out/env.tmp" "$out/env"' '''
 "#;
 
 #[test]

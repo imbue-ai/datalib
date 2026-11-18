@@ -46,6 +46,14 @@ export const syncAllButton = (page: Page) =>
 /// One of its column headers.
 export const searchHeader = (page: Page, colId: string) =>
   page.locator(`.grid-box .slick-header-column[col-id="${colId}"]`);
+/// Group the search grid by a column the way a person does: its header
+/// dragged onto the row-group bar, with the browser's own drag-and-drop.
+export async function groupByDragging(page: Page, colId: string) {
+  await searchHeader(page, colId).dragTo(
+    page.locator(".grid-box .slick-preheader-panel .slick-dropzone"),
+  );
+  await expect(page.locator(".grid-box .slick-dropped-grouping")).toHaveCount(1);
+}
 /// The grid itself, for a "did it paint" check.
 export const searchGrid = (page: Page) => page.locator(".grid-box .slickgrid-container");
 /// The right-click menu the grid appends to <body>.
@@ -60,8 +68,6 @@ export type GridApi = {
   rowIndexOf: (uuid: string) => number | null;
   /// Load pages until the row is held; its index, or null.
   seek: (uuid: string) => Promise<number | null>;
-  /// What a header dropped on the search bar does.
-  dropOnSearch: (colId: string) => void;
   /// A search, a page, or a group's page on its way.
   busy: () => boolean;
   uuidAt: (row: number) => string | null;
@@ -73,7 +79,6 @@ export type GridApi = {
   activeUuid: () => string | null;
   hiddenColumns: () => string[];
   showColumns: (ids: string[]) => void;
-  groupBy: (ids: string[]) => void;
 };
 
 /// Wait until nothing the grid asked for is still on its way.
@@ -276,22 +281,13 @@ export const SEARCH_SETTLE = 90_000;
 
 // Type a query and wait until the grid has actually painted *its*
 // results.
-/// Open the answer tab `tab` of the free-text search on screen, and wait
-/// until the grid shows its rows.
-export async function pickAnswerTab(page: Page, tab: "best" | "fields" | "words" | "meaning") {
-  await page.locator(`.answer-tabs [data-tab="${tab}"]`).click();
-  await expect(page.locator(".grid-wrap")).toHaveAttribute("data-shown-tab", tab, {
-    timeout: SEARCH_SETTLE,
-  });
-}
-
 export async function searchAndSettle(
   page: Page,
   q: string,
   opts: { grid?: Locator; timeout?: number } = {},
 ) {
   const grid = opts.grid ?? page.locator(".grid-wrap");
-  await typeInto(page.getByTestId("search-input"), q);
+  await runSearch(page, q);
   await expect(grid).toHaveAttribute("data-shown-query", q, {
     timeout: opts.timeout ?? SEARCH_SETTLE,
   });
@@ -301,11 +297,8 @@ export async function searchAndSettle(
 
 /// The rows of any `TableGrid` on the page — the Manage tree, the
 /// commit history — scoped by a caller that has more than one open.
-/// A grid with pinned columns draws each row in two halves; this is the
-/// half that scrolls, which holds every cell but the pinned Name
-/// (`nameCell`), so a row is still one element.
-export const TABLE_ROWS = ".tg-grid .slick-row:not([data-pinned])";
-/// A row's Name cell, in whichever half of the row the grid draws it.
+export const TABLE_ROWS = ".tg-grid .slick-row";
+/// A row's Name cell.
 export const nameCell = (page: Page, key: string) =>
   page.locator(`.tg-grid .slick-row[data-key="${key}"] [col-id="name"]`);
 /// The right-click menu the grid appends to <body>, and its entries.
@@ -333,10 +326,80 @@ export async function savedConfig(request: APIRequestContext): Promise<string> {
   return text;
 }
 
+/// Put `text` in the config editor. A read landing just as `fill` has
+/// selected the old text drops the selection, and the fill then goes after
+/// that text. Once the editor holds an edit, reads leave it alone.
+export async function fillConfigEditor(page: Page, text: string) {
+  const editor = page.locator(".m2-editor");
+  await expect(async () => {
+    await editor.fill(text);
+    await expect(editor).toHaveValue(text, { timeout: 1_000 });
+  }).toPass();
+}
+
 /// The config editor (`.m2-editor`) open beside the sources card. `/data_sources` opens the sources card alone, which is
 /// what a person gets; a spec that reads or writes `config.toml`
 /// through the editor asks for both cards by their stack.
 export const MANAGE_WITH_CONFIG = "/sourcesView():1.6/configView()";
+
+/// How long the sources card may take to draw and load its rows after a
+/// navigation. Each sandboxed spec is a project of its own, so its first
+/// page is a cold browser's, and the first four start together on a
+/// four-core runner beside syncs that embed: on CI the card has drawn,
+/// and has shown "Loading the sources…", a second or more past the
+/// default five.
+export const CARD_DRAWN = 15_000;
+
+/// Wait for the sources card to have drawn and loaded its rows, with
+/// "Sync everything" showing, which it does only while nothing syncs.
+/// When it has not, fail with what the card and the server say instead,
+/// so the report names the state rather than "element(s) not found".
+export async function expectSyncEverything(page: Page, timeout = CARD_DRAWN): Promise<void> {
+  const started = Date.now();
+  try {
+    await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible({ timeout });
+    await expect(page.getByRole("status").filter({ hasText: "Loading the sources" })).toHaveCount(
+      0,
+      { timeout: Math.max(timeout - (Date.now() - started), 1) },
+    );
+    const waited = Date.now() - started;
+    if (waited > 5_000) console.log(`[e2e] the sources card took ${waited} ms to draw`);
+  } catch (err) {
+    const waited = Date.now() - started;
+    throw new Error(
+      `${(err as Error).message}\n\nAfter ${waited} ms, instead of a loaded card with "Sync everything":\n` +
+        (await describeManage(page)),
+    );
+  }
+}
+
+async function describeManage(page: Page): Promise<string> {
+  const head = page.locator(".sx-head");
+  const lines = [`page: ${page.url()}`];
+  if ((await head.count()) === 0) {
+    lines.push("the sources card has no header yet: it has not drawn");
+  } else {
+    lines.push(`header: ${JSON.stringify(await head.first().innerText())}`);
+    const buttons = await head.first().getByRole("button").allInnerTexts();
+    lines.push(`header buttons: ${JSON.stringify(buttons)}`);
+  }
+  try {
+    const config = await (await page.request.get("/api/config")).json();
+    lines.push(`launch pass settled: ${JSON.stringify(config.upgrade?.settled)}`);
+    const manage = await (await page.request.get("/api/manage/rows")).json();
+    const steps = (manage.rows ?? [])
+      .filter((r: { kind: string }) => r.kind === "step")
+      .map((r: { id: string; status: { label: string } }) => `${r.id}: ${r.status.label}`);
+    lines.push(
+      `sync paused: ${JSON.stringify(manage.sync_paused)}`,
+      `run open: ${manage.run !== null}`,
+      `steps:\n  ${steps.join("\n  ")}`,
+    );
+  } catch (err) {
+    lines.push(`the server did not answer: ${(err as Error).message}`);
+  }
+  return lines.join("\n");
+}
 
 /// A Pipeline row, by the key its record carries. A step under a
 /// group has a row only while the group is open — see `expandGroup`.
@@ -344,7 +407,7 @@ export const pipelineRow = (page: Page, id: string) =>
   page.locator(`${TABLE_ROWS}[data-key="${id}"]`);
 
 /// A group's row. Keyed `group:<id>` because an applet may share the
-/// group's id (`unified_document_index` does) and both are rows.
+/// group's id (`unified_grid_and_search_index` does) and both are rows.
 export const groupRow = (page: Page, id: string) => pipelineRow(page, `group:${id}`);
 
 /// Open a tree row so the rows under it exist. Idempotent, and the
@@ -748,6 +811,23 @@ export async function inDocFrame(page: Page, selector: string, timeout = 10_000)
   return hit!;
 }
 
+/// Serve the live stream as one frame per connection, reconnecting fast:
+/// heartbeats until `commit()`, an index commit after it.
+export async function stubStream(page: Page): Promise<() => void> {
+  let committed = false;
+  await page.route("**/api/sync/stream", (route) => {
+    const frame = committed ? { kind: "index_changed" } : { kind: "heartbeat" };
+    return route.fulfill({
+      status: 200,
+      headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+      body: `retry: 200\nevent: root\ndata: ${JSON.stringify(frame)}\n\n`,
+    });
+  });
+  return () => {
+    committed = true;
+  };
+}
+
 /// Puts `text` in a search field over what it held, as a person typing
 /// would. Playwright's `fill` leaves the field's CodeMirror editor as it
 /// was in WebKit, with no error, so a spec never fills one.
@@ -756,4 +836,18 @@ export async function typeInto(field: Locator, text: string) {
   await field.press("ControlOrMeta+a");
   if (text === "") await field.press("Backspace");
   else await field.page().keyboard.insertText(text);
+}
+
+/// Runs `text` from the toolbar's search box, which asks only on Enter.
+export async function runSearch(page: Page, text: string) {
+  const field = page.getByTestId("search-input");
+  // On a page that opens on a search card, wait until the box speaks for it:
+  // until then, Enter has no search to change and opens a new tab.
+  if (decodeURIComponent(page.url()).includes("searchView(")) {
+    await expect(page.locator(".command-box")).toHaveAttribute("data-on-search-card", "true", {
+      timeout: SEARCH_SETTLE,
+    });
+  }
+  await typeInto(field, text);
+  await field.press("Enter");
 }

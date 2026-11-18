@@ -12,8 +12,8 @@ use datalib_etl_calendar_common::{
 use datalib_etl_render::inputs::Input;
 use datalib_schema::problems::{Problem, Reason};
 
-use super::ids;
 use super::render::CalendarInfo;
+use super::{html, ids};
 
 pub fn normalize(
     source_id: &str,
@@ -125,6 +125,8 @@ fn event(
         shape,
         calendar_uuid: cal.uuid.clone(),
         calendar_label: cal.label.clone(),
+        calendar_entity_kind: ids::KIND_CALENDAR,
+        calendar_upstream_id: cal.upstream_id.clone(),
         calendar_time_zone: cal.time_zone.clone(),
         upstream_id: id.natural_key.clone(),
         upstream_entity_kind: id.entity_kind,
@@ -136,7 +138,16 @@ fn event(
             .prop("TRANSP")
             .map(|t| !t.value.trim().eq_ignore_ascii_case("TRANSPARENT")),
         location: v.text("LOCATION"),
-        description: v.text("DESCRIPTION"),
+        description: v
+            .text("DESCRIPTION")
+            .map(|d| {
+                if html::holds_html(&d) {
+                    html::html_to_text(&d)
+                } else {
+                    d
+                }
+            })
+            .filter(|d| !d.trim().is_empty()),
         organizer: v.prop("ORGANIZER").map(person),
         attendees: v.props_named("ATTENDEE").map(attendee).collect(),
         links: links(v),
@@ -289,6 +300,7 @@ mod tests {
     fn cal() -> CalendarInfo {
         CalendarInfo {
             uuid: "cal".into(),
+            upstream_id: "cal".into(),
             label: "Bridge".into(),
             time_zone: Some("America/Los_Angeles".into()),
         }
@@ -381,6 +393,26 @@ ATTACH;FILENAME=Menu.pdf:https://files.enterprise.test/menu.pdf\r\nATTACH;ENCODI
         assert!(e.attendees[1].resource);
         assert_eq!(e.links.len(), 1);
         assert_eq!(e.links[0].label, "Menu.pdf");
+    }
+
+    /// An event made in Google keeps Google's HTML in `DESCRIPTION` when
+    /// Fastmail serves it over CalDAV; its page showed the tags as text,
+    /// `&lt;a href="mailto:…"&gt;`, and every `&amp;` twice escaped.
+    #[test]
+    fn a_description_written_as_html_is_read_as_text() {
+        let ev = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:x@google.com\r\nDTSTART:20260713T170000Z\r\n\
+DESCRIPTION:Join: https://meet.test/j/1?a=1&amp;b=2\\n\\nHost: <a href=\"mailto:troi@\r\n enterprise.test\" target=\"_blank\">troi@enterprise.test</a><br /><br />Bring tea\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        let e = &normalize("s", &obj(ev), &cal())[0];
+        assert_eq!(
+            e.description.as_deref(),
+            Some("Join: https://meet.test/j/1?a=1&b=2\n\nHost: troi@enterprise.test\n\nBring tea")
+        );
+        let plain = ev.replace(
+            "DESCRIPTION:Join: https://meet.test/j/1?a=1&amp;b=2\\n\\nHost: <a href=\"mailto:troi@\r\n enterprise.test\" target=\"_blank\">troi@enterprise.test</a><br /><br />Bring tea",
+            "DESCRIPTION:Warp < 9 &amp; tea",
+        );
+        let e = &normalize("s", &obj(&plain), &cal())[0];
+        assert_eq!(e.description.as_deref(), Some("Warp < 9 &amp; tea"));
     }
 
     #[test]

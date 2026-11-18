@@ -12,6 +12,9 @@
 //! own private text paths (Facebook posts, Claude's tool results, a
 //! time-series page's facts) are not reached here and keep their own
 //! tests.
+//!
+//! It also renders the text-edge library, `etl/text_edges/cases.toml`
+//! (`edges.rs`), for `text_edges.test.ts` to judge the same way.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -39,6 +42,8 @@ use datalib_etl_render::title::Title;
 use datalib_etl_slack_render::render::mrkdwn::{to_commonmark, Labels};
 use datalib_schema::providers::Provider;
 use serde::Serialize;
+
+mod edges;
 
 /// HTML and markdown in one string, tagged so each field's copy can be
 /// told apart on the page: a tag, a link, an image, a table cell, a
@@ -69,6 +74,7 @@ fn slack_encoded(typed: &str) -> String {
 struct Corpus {
     documents: Vec<Document>,
     escapes: Vec<Escape>,
+    edges: edges::Edges,
 }
 
 #[derive(Serialize)]
@@ -147,6 +153,7 @@ fn main() -> Result<()> {
     let corpus = Corpus {
         documents,
         escapes: escapes(),
+        edges: edges::edges(scratch.path())?,
     };
     std::fs::write(&out, serde_json::to_string_pretty(&corpus)?)
         .with_context(|| format!("write {out}"))?;
@@ -161,6 +168,7 @@ fn header_and_title() -> Vec<Document> {
         author: &author,
         handle: None,
         date_ms: Some(12_602_794_200_000),
+        offset_secs: None,
         source_url: None,
     }
     .render();
@@ -212,11 +220,13 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         text_format: TextFormat::Plain,
     };
     let item = |uuid: &str, author: String, text: Option<String>| NormalizedChatItem {
+        reply_to: None,
         message_uuid: uuid.to_string(),
         author_handle: None,
         author_kind: AuthorKind::Named,
         author_display: author,
         date_ms: Some(12_602_794_200_000),
+        date_offset_secs: None,
         text,
         kind: ItemKind::Text,
         attachments: vec![],
@@ -287,6 +297,8 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         contacts: Vec::new(),
         inputs: Vec::new(),
         id: "hostile-chat".into(),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: "00000000-0000-8000-8000-0000000000c1".into(),
         display: f.hostile("chat display"),
         title: Some(f.hostile("chat title")),
@@ -299,7 +311,6 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {
-            period_key: "all".to_string(),
             markdown_uuid: "00000000-0000-8000-8000-0000000000d1".into(),
             source_ref: None,
             items: vec![said, system, files],
@@ -372,6 +383,8 @@ fn calendar(scratch: &Path) -> Result<Vec<Document>> {
         },
         calendar_uuid: "00000000-0000-8000-8000-0000000000e3".into(),
         calendar_label: f.hostile("calendar label"),
+        calendar_entity_kind: "calendar",
+        calendar_upstream_id: "bridge".into(),
         calendar_time_zone: Some("America/Los_Angeles".into()),
         upstream_id: f.hostile("event upstream id"),
         upstream_entity_kind: "event",
@@ -474,6 +487,7 @@ fn contacts(scratch: &Path) -> Result<Vec<Document>> {
         contact,
         doc_uuid: "00000000-0000-8000-8000-0000000000f1".into(),
         group_label: f.hostile("contact group"),
+        address_book: None,
         member_handles: Vec::new(),
         upstream_account: None,
         inputs: Vec::new(),
@@ -540,6 +554,7 @@ fn forge(scratch: &Path) -> Result<Vec<Document>> {
         uuid: "00000000-0000-8000-8000-000000000101".into(),
         row_id: "r".into(),
         container: "o/repo".into(),
+        container_node: None,
         number: 7,
         title: f.hostile("change request title"),
         // Authored markdown, shown as markdown.

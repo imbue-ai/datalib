@@ -33,6 +33,44 @@ pub struct Doc {
 
 pub const GETTING_YOUR_DATA: &str = "docs/user/getting_your_data.md";
 
+/// One applet, as `datalib-step help` lists it. `datalib-applet`'s tests
+/// hold this list to its subcommands.
+pub struct Applet {
+    pub name: &'static str,
+    pub does: &'static str,
+    /// The doc that says more, which `datalib-step help <name>` prints.
+    pub topic: &'static str,
+}
+
+pub const APPLETS: &[Applet] = &[
+    Applet {
+        name: "unified_grid_and_search_index",
+        does: "search, the grid and the documents, and what each source knows about a handle",
+        topic: "applets",
+    },
+    Applet {
+        name: "datalib_contacts",
+        does: "the contacts app: link handles to contacts, label people and senders, and \
+               review what an agent proposed",
+        topic: "contacts-app",
+    },
+    Applet {
+        name: "unified_time_series_index",
+        does: "the time series, and their points over a range",
+        topic: "applets",
+    },
+    Applet {
+        name: "photos",
+        does: "photos and videos: a page of them, one's details, its pictures",
+        topic: "applets",
+    },
+    Applet {
+        name: "slack",
+        does: "one Slack mirror's channels and their threads",
+        topic: "applets",
+    },
+];
+
 pub const DOCS: &[Doc] = &[
     Doc {
         topic: "agent",
@@ -77,11 +115,32 @@ pub const DOCS: &[Doc] = &[
         text: include_str!("../../../../docs/user/building_on_datalib.md"),
     },
     Doc {
+        topic: "documents",
+        path: "docs/user/rendered_documents.md",
+        kind: Kind::Guide,
+        about: "showing a rendered document in your app: people, times, attachments",
+        text: include_str!("../../../../docs/user/rendered_documents.md"),
+    },
+    Doc {
         topic: "search",
         path: "docs/user/searching.md",
         kind: Kind::Guide,
         about: "the search's query language: keys, people, `me`, free text",
         text: include_str!("../../../../docs/user/searching.md"),
+    },
+    Doc {
+        topic: "applets",
+        path: "docs/user/applets.md",
+        kind: Kind::Guide,
+        about: "the servers the app runs: what each serves, and how to call them",
+        text: include_str!("../../../../docs/user/applets.md"),
+    },
+    Doc {
+        topic: "contacts-app",
+        path: "docs/user/contacts_app.md",
+        kind: Kind::Guide,
+        about: "who a handle is: finding handles, proposing links and labels to a person",
+        text: include_str!("../../../../docs/user/contacts_app.md"),
     },
     Doc {
         topic: "step-protocol",
@@ -136,8 +195,23 @@ pub const DOCS: &[Doc] = &[
         topic: "people",
         path: "docs/dev/contacts.md",
         kind: Kind::Reference,
-        about: "who a handle is: contacts, and how an agent proposes them",
+        about: "how handles, source contacts and the contacts app fit together, every route \
+                and table",
         text: include_str!("../../../../docs/dev/contacts.md"),
+    },
+    Doc {
+        topic: "chips",
+        path: "docs/dev/chips.md",
+        kind: Kind::Reference,
+        about: "how datalib's viewer draws a person, a group, a step or a date, and its clicks",
+        text: include_str!("../../../../docs/dev/chips.md"),
+    },
+    Doc {
+        topic: "writing-applets",
+        path: "docs/dev/applets.md",
+        kind: Kind::Reference,
+        about: "writing an applet of your own: the contract its command honours",
+        text: include_str!("../../../../docs/dev/applets.md"),
     },
     Doc {
         topic: "dag-example",
@@ -184,8 +258,18 @@ pub fn by_path(path: &str) -> Option<&'static Doc> {
 pub fn page(doc: &Doc, git_ref: &str) -> String {
     match doc.kind {
         Kind::Config => doc.text.to_string(),
-        Kind::Guide | Kind::Reference => print_links(doc.text, doc.path, git_ref, true),
+        Kind::Guide | Kind::Reference => print_links(doc.text, doc.path, git_ref, Reader::WholeDoc),
     }
+}
+
+/// How much of a doc the reader has, which decides how a link inside it
+/// can point: a reader never gets sent to the page already in front of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reader<'a> {
+    /// All of the doc being printed.
+    WholeDoc,
+    /// One source type's sections of getting_your_data.md and no more.
+    SourcePage(&'a str),
 }
 
 /// Where a link in a doc leads, once resolved against the doc's path.
@@ -275,21 +359,21 @@ pub fn section_type(heading: &str) -> Option<&'static str> {
 
 /// Every link in `markdown` printed for a reader with no repo: one to an
 /// embedded doc as the command that prints it, one to anything else in
-/// the repo as its raw file at `git_ref`. `whole` says the reader has all
-/// of the doc at `doc_path`, so an anchor in it can name its heading alone.
-pub fn print_links(markdown: &str, doc_path: &str, git_ref: &str, whole: bool) -> String {
+/// the repo as its raw file at `git_ref`. An anchor to something `reader`
+/// already has names its heading alone.
+pub fn print_links(markdown: &str, doc_path: &str, git_ref: &str, reader: Reader) -> String {
     let mut out = String::with_capacity(markdown.len());
     let mut last = 0;
     for link in links(markdown) {
         out.push_str(&markdown[last..link.range.start]);
-        out.push_str(&print_link(&link, doc_path, git_ref, whole));
+        out.push_str(&print_link(&link, doc_path, git_ref, reader));
         last = link.range.end;
     }
     out.push_str(&markdown[last..]);
     out
 }
 
-fn print_link(link: &Link, doc_path: &str, git_ref: &str, whole: bool) -> String {
+fn print_link(link: &Link, doc_path: &str, git_ref: &str, reader: Reader) -> String {
     let text = link.text;
     let Target::Repo { path, fragment } = resolve(link.target, doc_path) else {
         return format!("[{text}]({})", link.target);
@@ -301,10 +385,13 @@ fn print_link(link: &Link, doc_path: &str, git_ref: &str, whole: bool) -> String
     if let Some(h) = heading {
         if target.path == GETTING_YOUR_DATA {
             if let Some(t) = section_type(h) {
+                if reader == Reader::SourcePage(t) {
+                    return format!("{text} (§ \"{h}\")");
+                }
                 return format!("{text} (`datalib-step help {t}`)");
             }
         }
-        if whole && target.path == doc_path {
+        if reader == Reader::WholeDoc && target.path == doc_path {
             return format!("{text} (§ \"{h}\")");
         }
         return format!("{text} (`datalib-step help {}`, § \"{h}\")", target.topic);

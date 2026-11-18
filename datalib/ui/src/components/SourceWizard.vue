@@ -57,11 +57,12 @@ import {
   type ConfiguredGroup,
   type FieldValues,
   type Layout,
-  type QmdIndexing,
+  type SearchIndexing,
   type Row,
   type SourceSteps,
 } from "@/config/sourceSteps";
 import { FailureError } from "@/apiError";
+import { appletToml, builtinApplet, filterApps, type BuiltinApplet } from "@/config/builtinApplets";
 import {
   type AccountNaming,
   type ConnectAttempt,
@@ -74,7 +75,7 @@ import {
   type ServiceRegistration,
   type StoredAccount,
 } from "@/api";
-import { type SignInWhere } from "@/config/issues";
+import { CANNOT_SIGN_IN_HERE, type SignInWhere } from "@/config/issues";
 import { countOf, loadingText } from "@/config/probeProgress";
 import { useApi } from "@/cards/cardApi";
 import AccountCombo, { type AccountOption } from "@/components/AccountCombo.vue";
@@ -107,6 +108,8 @@ import { refreshPackages } from "@/config/packages";
 import type { PackageLookup } from "@/api";
 
 const {
+  fetchHealth,
+  healthSnapshot,
   latchkeyService,
   runProbe,
   setLatchkeyCredential,
@@ -126,15 +129,18 @@ const props = defineProps<{
     group: ConfiguredGroup;
     entry: CatalogEntry;
     steps: SourceSteps;
-    /// Which of its own qmd steps this source has today — the config's
+    /// Which of its own search steps this source has today — the config's
     /// way of saying how free-text search reaches it.
-    qmdIndexing: QmdIndexing;
+    searchIndexing: SearchIndexing;
     /// The whole config as it was when the form opened.
     text: string;
   } | null;
   /// Adds a package to the library's config, once its build is here.
   /// Absent: the picker offers no link box.
   addPackage?: (source: string, lookup: PackageLookup) => Promise<void>;
+  /// The id of every `[[applets]]` entry in the config, so an app's tile
+  /// and a source's offer of one say whether it is on.
+  appletIds?: Set<string>;
 }>();
 
 const emit = defineEmits<{
@@ -162,15 +168,20 @@ const emit = defineEmits<{
       /// The render step's composed id, for the caller to wire into the
       /// fan-ins. Null when rendering is off.
       renderId: string | null;
-      /// Which of its `keyword_index` and `embed` steps the source gets.
-      /// `none` leaves the markdown out of free-text search; the grid
-      /// index is not a choice.
-      qmdIndexing: QmdIndexing;
+      /// How far into search the source goes: `none` lists it in the grid
+      /// step's `not_searched`, out of free-text search; the grid itself
+      /// is not a choice.
+      searchIndexing: SearchIndexing;
+      /// The built-in applet the source offers (`CatalogEntry.applet`),
+      /// and whether it is to be on. Null when the entry offers none.
+      applet: { id: string; on: boolean } | null;
     },
   ): void;
+  /// An app from the picker's Apps group turned on or off.
+  (e: "app", payload: { id: string; on: boolean }): void;
 }>();
 
-type Stage = "pick" | "configure";
+type Stage = "pick" | "configure" | "app";
 
 const mode = computed<"create" | "edit">(() => (props.editing ? "edit" : "create"));
 const isEdit = computed(() => mode.value === "edit");
@@ -214,16 +225,30 @@ const renders = computed(
 /// Whether this source's markdown gets a keyword index, and embeddings
 /// on top of it. Both on by default, for the same reason rendering is: a
 /// source nobody can search is a surprise, not a saving. Editing seeds
-/// them from the qmd steps the source has.
-const keywordWanted = ref(props.editing ? props.editing.qmdIndexing !== "none" : true);
-const embedWanted = ref(props.editing ? props.editing.qmdIndexing === "keyword_and_embed" : true);
+/// them from the search steps the source has.
+const keywordWanted = ref(props.editing ? props.editing.searchIndexing !== "none" : true);
+const embedWanted = ref(
+  props.editing ? props.editing.searchIndexing === "keyword_and_embed" : true,
+);
 
-/// How far into qmd this source goes: only as far as there is markdown to
+/// How far into the search index this source goes: only as far as there is markdown to
 /// index, and embeddings only on top of a keyword index.
-const qmdIndexing = computed<QmdIndexing>(() => {
+const searchIndexing = computed<SearchIndexing>(() => {
   if (!renders.value || !providerRenders.value || !keywordWanted.value) return "none";
   return embedWanted.value && embeds.value ? "keyword_and_embed" : "keyword";
 });
+
+/// The built-in applet this source's form offers, and whether the config
+/// has it. A new source offers it on; an edit starts from the config, so
+/// saving an edit that touched nothing writes nothing.
+const offeredApplet = computed<BuiltinApplet | null>(() =>
+  chosen.value?.applet ? (builtinApplet(chosen.value.applet) ?? null) : null,
+);
+const appletIsOn = (id: string) => props.appletIds?.has(id) ?? false;
+const appletWanted = ref(true);
+function seedApplet(entry: CatalogEntry) {
+  appletWanted.value = !entry.applet || !isEdit.value || appletIsOn(entry.applet);
+}
 
 /// Whether this source's type may be embedded at all (`embedAllowed`).
 const embeds = computed(() => embedAllowed(chosen.value?.type));
@@ -372,6 +397,15 @@ const groups = computed(() => {
     .filter((g) => g.entries.length > 0);
 });
 
+/// The picker's Apps group: built-in applets that are not a source but
+/// read every source's data, each turned on or off by itself.
+const apps = computed(() => filterApps(query.value));
+const chosenApp = ref<BuiltinApplet | null>(null);
+function chooseApp(app: BuiltinApplet) {
+  chosenApp.value = app;
+  stage.value = "app";
+}
+
 // Flat list in display order, for keyboard navigation.
 const flat = computed(() => groups.value.flatMap((g) => g.entries));
 const cursor = ref(0);
@@ -397,6 +431,7 @@ const byteUnits = ref<Record<string, ByteUnit>>({});
 
 function seed(entry: CatalogEntry, steps?: SourceSteps) {
   values.value = seedFieldValues(entry, steps);
+  seedApplet(entry);
   seedAnswers(entry);
   byteUnits.value = {};
   for (const f of entry.fields ?? []) {
@@ -480,7 +515,7 @@ function onPickKeydown(e: KeyboardEvent) {
 /// The id is a single path segment: the steps written under it are
 /// `<id>/ingest` and `<id>/render_markdown`, and the loader composes
 /// those itself.
-const RESERVED = new Set(["system", "unified_document_index"]);
+const RESERVED = new Set(["system", "unified_grid_and_search_index"]);
 const groupId = computed(() => id.value.trim());
 
 /// The example the Name help gives. The id would be the tempting thing
@@ -747,6 +782,12 @@ const serviceRegistered = ref(true);
 /// until the server says otherwise, so a command is never shown naming
 /// a binary that isn't there.
 const latchkeyCli = ref("latchkey");
+/// A latchkey run from a terminal signs in to `~/.latchkey`, not to a
+/// protected library, so this dialog offers no command to run.
+const protectedLibrary = ref(healthSnapshot()?.protected_library ?? false);
+void fetchHealth()
+  .then((health) => (protectedLibrary.value = health.protected_library))
+  .catch(() => {});
 /// The latchkey gateway the backend talks through, when there is one.
 /// Under a gateway the credentials and the browser that signs in to
 /// them are on the gateway's side, and latchkey refuses every command
@@ -1366,9 +1407,11 @@ function toFailure(e: unknown): Failure {
 
 /// Where this dialog can get a credential into latchkey from, which is
 /// what a failure's advice points at.
-const signInWhere = computed<SignInWhere>(() =>
-  gateway.value ? "gateway" : canConnect.value || canPaste.value ? "here" : "terminal",
-);
+const signInWhere = computed<SignInWhere>(() => {
+  if (gateway.value) return "gateway";
+  if (canConnect.value || canPaste.value) return "here";
+  return protectedLibrary.value ? "nowhere" : "terminal";
+});
 
 /// Which of a report's item kinds each `probe:` noun takes. A render
 /// filter matches only what emails are filed in, never a Gmail flag,
@@ -1498,7 +1541,8 @@ function submit() {
     groupBody: source.value.groupBody,
     stepsBody: source.value.stepsBody,
     renderId: source.value.renderId,
-    qmdIndexing: qmdIndexing.value,
+    searchIndexing: searchIndexing.value,
+    applet: offeredApplet.value ? { id: offeredApplet.value.id, on: appletWanted.value } : null,
   });
 }
 </script>
@@ -1517,7 +1561,7 @@ function submit() {
     >
       <header class="wiz-head dialog-head" :class="{ 'wiz-chosen': stage === 'configure' }">
         <button
-          v-if="mode === 'create' && stage === 'configure'"
+          v-if="mode === 'create' && stage !== 'pick'"
           class="btn ghost wiz-back"
           @click="stage = 'pick'"
         >
@@ -1529,13 +1573,21 @@ function submit() {
           alt=""
           class="wiz-icon"
         />
+        <img
+          v-if="stage === 'app' && chosenApp && iconUrl(chosenApp.icon)"
+          :src="iconUrl(chosenApp.icon)!"
+          alt=""
+          class="wiz-icon"
+        />
         <h2>
           {{
             isEdit
               ? `Edit ${name || id}`
               : stage === "configure" && chosen
                 ? `Add ${chosen.label}`
-                : "Add a data source"
+                : stage === "app" && chosenApp
+                  ? chosenApp.label
+                  : "Add a data source"
           }}
         </h2>
         <span v-if="isEdit && chosen" class="wiz-kind">{{ chosen.label }}</span>
@@ -1555,7 +1607,9 @@ function submit() {
           autofocus
           @keydown="onPickKeydown"
         />
-        <p v-if="flat.length === 0" class="wiz-empty">No source type matches “{{ query }}”.</p>
+        <p v-if="flat.length === 0 && apps.length === 0" class="wiz-empty">
+          No source type matches “{{ query }}”.
+        </p>
         <div v-for="g in groups" :key="g.kind" class="wiz-group">
           <h3>{{ g.label }}</h3>
           <div class="wiz-tiles">
@@ -1581,6 +1635,26 @@ function submit() {
             </button>
           </div>
         </div>
+        <div v-if="apps.length" class="wiz-group">
+          <h3>Apps that read every source</h3>
+          <div class="wiz-tiles">
+            <button
+              v-for="a in apps"
+              :key="a.id"
+              class="wiz-tile"
+              :title="a.blurb"
+              @click="chooseApp(a)"
+            >
+              <img v-if="iconUrl(a.icon)" :src="iconUrl(a.icon)!" alt="" class="wiz-icon" />
+              <span v-else class="wiz-icon wiz-icon-fallback" aria-hidden="true">◇</span>
+              <span class="wiz-tile-text">
+                <b>{{ a.label }}</b>
+                <small>{{ a.blurb }}</small>
+              </span>
+              <span v-if="appletIsOn(a.id)" class="wiz-soon">on</span>
+            </button>
+          </div>
+        </div>
         <div v-if="props.addPackage" class="wiz-pkg">
           <PackageReview
             :commit="props.addPackage"
@@ -1590,14 +1664,33 @@ function submit() {
         </div>
       </div>
 
+      <!-- An app: what it gives, and one switch. -->
+      <div v-else-if="stage === 'app' && chosenApp" class="wiz-body dialog-body wiz-form">
+        <p class="wiz-intro">{{ chosenApp.about }}</p>
+        <p class="wiz-help">
+          <template v-if="appletIsOn(chosenApp.id)">
+            It is on. Turning it off takes it out of the config; anything it stored stays on disk
+            and is there again when you turn it back on.
+          </template>
+          <template v-else>It is off. It takes effect a moment after you turn it on.</template>
+        </p>
+        <details class="wiz-review">
+          <summary>The config entry</summary>
+          <pre>{{ appletToml(chosenApp) }}</pre>
+        </details>
+      </div>
+
       <!-- Stage 2: configure. Name, the sign-in, the source's sections,
            then Advanced options. docs/dev/wizard_design.md. -->
       <div v-else-if="chosen" class="wiz-body dialog-body wiz-form">
         <p v-if="chosen.intro" class="wiz-intro">{{ chosen.intro }}</p>
         <div v-if="chosen.before && !isEdit" class="wiz-before">
           <b>Before you start</b>
-          <p>{{ chosen.before.text }}</p>
-          <ol>
+          <p v-if="chosen.before.terminalSignIn && protectedLibrary">
+            {{ CANNOT_SIGN_IN_HERE }}
+          </p>
+          <p v-else>{{ chosen.before.text }}</p>
+          <ol v-if="!chosen.before.terminalSignIn || !protectedLibrary">
             <li v-for="need in chosen.before.needs" :key="need">
               <template v-for="(part, i) in codeParts(need)" :key="i"
                 ><code v-if="part.code">{{ part.text }}</code
@@ -1615,8 +1708,8 @@ function submit() {
         </p>
         <p v-if="orphanRender" class="wiz-cred">
           Rendering is off under Advanced options, and this source has a render step,
-          <code>{{ orphanRender }}</code
-          >. Saving removes it, and takes it out of the index steps’ inputs.
+          <code>{{ orphanRender }}</code>. Saving removes it, and takes it out of the index steps’
+          inputs.
         </p>
         <p v-if="untouched.length" class="wiz-cred">
           This form has no field for
@@ -1637,8 +1730,7 @@ function submit() {
             <input v-model="name" class="wiz-input" :placeholder="nameHint" />
             <small class="wiz-help">
               Optional. What Datalib calls this source; left blank, it is shown as
-              <code>{{ groupId || "…" }}</code
-              >. You can rename it at any time.
+              <code>{{ groupId || "…" }}</code>. You can rename it at any time.
             </small>
           </span>
         </label>
@@ -1670,8 +1762,9 @@ function submit() {
               </svg>
               <span class="wiz-ok-text">
                 Connected as
-                <b>{{ reachedName(check.report) }}</b
-                ><!-- A message estimate is only shown when the provider gave
+                <b>{{
+                  reachedName(check.report)
+                }}</b><!-- A message estimate is only shown when the provider gave
                       one for free: Gmail's profile carries it, JMAP's
                       session does not. --><template v-if="check.report.account.message_estimate">
                   — about
@@ -1714,8 +1807,7 @@ function submit() {
               </p>
               <p v-if="installsPlugin && signInWays.length" class="wiz-help wiz-plugin-note">
                 Signing in to {{ chosen.label }} first installs a plugin into
-                <code>{{ installsPlugin }}</code
-                >.
+                <code>{{ installsPlugin }}</code>.
               </p>
               <!-- How a credential gets into latchkey under the name above. A
                    tab per way the service offers; a lone way is shown bare. -->
@@ -1827,10 +1919,9 @@ function submit() {
                     </div>
                     <p v-if="!signsInToSeveral" class="wiz-help">
                       A browser opens on the Google Cloud console. latchkey makes a project there
-                      named <code>{{ oauthClientProject }}</code
-                      >, turns on the APIs and creates the client, which takes a few minutes. Google
-                      asks you to accept its terms the first time, and wants 2-Step Verification on
-                      the account.
+                      named <code>{{ oauthClientProject }}</code>, turns on the APIs and creates the
+                      client, which takes a few minutes. Google asks you to accept its terms the
+                      first time, and wants 2-Step Verification on the account.
                     </p>
                     <label class="wiz-item">
                       <span class="wiz-sublabel">{{
@@ -1876,7 +1967,14 @@ function submit() {
                        login. Shown rather than done: latchkey refuses to
                        re-register a name it holds, so the only way to add one
                        destroys the credentials already stored under it. -->
-                  <div v-if="showConversion" class="wiz-conn-note wiz-convert">
+                  <p
+                    v-if="showConversion && protectedLibrary"
+                    class="wiz-help wiz-conn-note wiz-convert"
+                  >
+                    latchkey holds <code>{{ service }}</code> without a browser login, and won’t add
+                    one to a name it already has. Use the <b>Paste a key</b> tab instead.
+                  </p>
+                  <div v-else-if="showConversion" class="wiz-conn-note wiz-convert">
                     <p class="wiz-help wiz-convert-head">
                       latchkey holds <code>{{ service }}</code> without a browser login, and won’t
                       add one to a name it already has. Adding one means taking the service apart
@@ -1940,14 +2038,12 @@ function submit() {
                       stored under that name.
                     </template>
                     <template v-else-if="pasteLandsOn.kind === 'replaces'">
-                      Stored as <code>{{ pasteLandsOn.account }}</code
-                      >, replacing the <code>{{ service }}</code> credential already stored under
-                      that name — every source that uses it gets this one. Choose another name above
-                      to keep it.
+                      Stored as <code>{{ pasteLandsOn.account }}</code>, replacing the
+                      <code>{{ service }}</code> credential already stored under that name — every
+                      source that uses it gets this one. Choose another name above to keep it.
                     </template>
                     <template v-else>
-                      Stored as <code>{{ accountValue }}</code
-                      >.
+                      Stored as <code>{{ accountValue }}</code>.
                       <template v-if="pasteLandsOn.besideUnnamed">
                         An unnamed <code>{{ service }}</code> credential is stored too; with both, a
                         source that names no account cannot be given one, so name an account in
@@ -1999,7 +2095,11 @@ function submit() {
                 :where="signInWhere"
               />
               <p class="wiz-help wiz-conn-intro">
-                Your sign-in is kept outside this library’s folder; datalib never stores it itself.
+                {{
+                  protectedLibrary
+                    ? "Your sign-in is kept by latchkey, in this library’s protected folder."
+                    : "Your sign-in is kept outside this library’s folder; datalib never stores it itself."
+                }}
               </p>
               <details class="wiz-help wiz-conn-how">
                 <summary>How sign-ins are stored</summary>
@@ -2007,7 +2107,7 @@ function submit() {
                   latchkey keeps them, under its
                   <code>{{ signInServices.map((s) => s.service).join(", ") }}</code>
                   service{{ signsInToSeveral ? "s" : "" }}.
-                  <template v-if="signInWays.includes('paste')">
+                  <template v-if="signInWays.includes('paste') && !protectedLibrary">
                     To store one from a terminal instead: <code>{{ setCommand }}</code>
                   </template>
                 </p>
@@ -2394,6 +2494,22 @@ function submit() {
               </div>
             </section>
 
+            <section v-if="!zone.advanced && offeredApplet" class="wiz-field wiz-row wiz-section">
+              <span class="wiz-label wiz-section-head">{{ offeredApplet.label }}</span>
+              <div class="wiz-controls">
+                <label class="wiz-choice">
+                  <input v-model="appletWanted" type="checkbox" class="wiz-bool" />
+                  <span>
+                    Turn on the {{ offeredApplet.label }}
+                    <small class="wiz-help">
+                      {{ offeredApplet.blurb }} It shows every such source, not only this one, so
+                      turning it off here turns it off for all of them.
+                    </small>
+                  </span>
+                </label>
+              </div>
+            </section>
+
             <template v-if="zone.advanced">
               <section v-if="providerRenders" class="wiz-field wiz-row wiz-section">
                 <span class="wiz-label wiz-section-head">Rendering</span>
@@ -2403,9 +2519,10 @@ function submit() {
                     <span>
                       Render this source into markdown
                       <small class="wiz-help">
-                        Step <code>{{ stepIdFor(groupId || "…", "render") }}</code
-                        >. Off: the data is still copied, but it reaches neither the grid nor
-                        search.<template v-if="renderWanted && !hasRenderFields">
+                        Step <code>{{ stepIdFor(groupId || "…", "render") }}</code>. Off: the data
+                        is still copied, but it reaches neither the grid nor search.<template
+                          v-if="renderWanted && !hasRenderFields"
+                        >
                           It has no settings of its own.</template
                         >
                       </small>
@@ -2421,9 +2538,10 @@ function submit() {
                     <span>
                       Keyword-index the markdown
                       <small class="wiz-help">
-                        Step <code>{{ `${groupId || "…"}/keyword_index` }}</code
-                        >. Off: the source stays in the grid, but the search bar will not find
-                        it.<template v-if="!renderWanted">
+                        Done by <code>unified_grid_and_search_index</code>. Off: the source stays in
+                        the grid, but the search bar will not find it.<template
+                          v-if="!renderWanted"
+                        >
                           Nothing to index while rendering is off.</template
                         >
                       </small>
@@ -2439,9 +2557,10 @@ function submit() {
                     <span>
                       Embed it for search by meaning
                       <small class="wiz-help">
-                        Step <code>{{ `${groupId || "…"}/embed` }}</code
-                        >. Adds search by meaning and places the source on the map. The slow part of
-                        a sync.<template v-if="renderWanted && !keywordWanted">
+                        Step <code>{{ `${groupId || "…"}/embed` }}</code>. Adds search by meaning
+                        and places the source on the map. The slow part of a sync.<template
+                          v-if="renderWanted && !keywordWanted"
+                        >
                           It reads the keyword index, so it needs that on.</template
                         >
                       </small>
@@ -2497,6 +2616,13 @@ function submit() {
           @click="submit"
         >
           {{ isEdit ? "Save changes" : "Add source" }}
+        </button>
+        <button
+          v-if="stage === 'app' && chosenApp"
+          class="btn primary"
+          @click="emit('app', { id: chosenApp.id, on: !appletIsOn(chosenApp.id) })"
+        >
+          {{ appletIsOn(chosenApp.id) ? "Turn off" : "Turn on" }}
         </button>
       </footer>
     </div>

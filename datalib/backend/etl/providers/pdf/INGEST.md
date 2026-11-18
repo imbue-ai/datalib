@@ -28,7 +28,8 @@ rescan hashes nothing and still retries the corrupt fixture.
 A scan truncates `pdf_paths` once the walk is done and rebuilds it, so
 deletions fall out; content already in `pdf_documents` is not
 identified again. A file over `max_bytes` is there and not read, so it
-keeps the path row the last scan wrote. Once the paths are rebuilt
+keeps the path row the last scan wrote, if one did, and is a
+`record:files:<path>` warning until it is read. Once the paths are rebuilt
 after a clean walk, a document no path names goes with its bookkeeping
 (`documents_removed`); a file moved within the tree is named at its new
 path by then and keeps its document.
@@ -61,7 +62,16 @@ The scan goes on, and what it could not do is a `problems` row:
   scan that cannot see it (under an entry its walk could not read) keeps
   it.
   The fixture's `holodeck/corrupt.pdf` is one, on purpose. No grid row
-  carries it: a document that never identified never renders.
+  carries it: a document that never identified never renders. A file refused
+  for what it would cost to read is one too (§"A PDF can be made by anyone").
+- **A document that renders nothing** is identified and stored, and is not
+  searchable. Every such document in the tree shares one warning,
+  `skipped:documents_without_text:<hash>`, which gives the count and names one
+  of them. One row rather than one each, because a folder of scans is thousands
+  of documents, and what a person needs to know is that they are absent; the
+  query under §"Inspecting a scan" lists them. It goes the scan that finds none
+  left, and an unchanged tree rewrites nothing
+  (`documents_that_never_render_are_one_warning_with_a_count`).
 - **A file that changed after its hash was taken.** The scan's hash only
   decides whether to look; a document read is named by the hash of the
   bytes it was classified from
@@ -73,6 +83,77 @@ The scan goes on, and what it could not do is a `problems` row:
   A cold render produces the same stand-in, so nothing depends on what
   an earlier run left behind.
 
+## A PDF can be made by anyone
+
+A person may be handed a PDF, and two kilobytes of one can ask a parser for
+gigabytes. `max_bytes` says nothing about that: it caps the file on disk, and a
+stream inflates a thousand times, or a million behind two layers of Flate.
+`pdf-inspector` limits what it loads and a page's content, but it takes bytes
+and no limit and inflates fonts, CMaps and forms without one. So
+[`src/ingest/expansion.rs`](src/ingest/expansion.rs) measures a file before
+either parser reads it: `identify` here and `convert` in render, which also
+catches a document identified by an earlier build. Past a limit, the file is
+refused and is a `record:pdf_paths:<path>` problem saying why; the rest of the
+tree syncs. It is measured again each scan, like any file that did not identify.
+
+| what is measured | limit | why that much |
+|---|---|---|
+| one stream, decoded | 1 GiB | A stream is held once or twice while it is read. Page content and fonts are far smaller. |
+| every stream together | 64 GiB | Bounds the time measuring takes. |
+| the objects in the object streams a loader expands | 64,000,000 | About 70 bytes each in memory, and two bytes of stream can be one. |
+| an object stream's index | no entry overlaps the next | Otherwise a loader reads what they share again for each entry: 2 KiB of file, one 1 MiB array, gigabytes held. |
+
+Measured on a sync (`rss_peak_bytes`): the most a file inside these limits made
+a step hold was 2.1 GiB for a stream just under 1 GiB, and 3.6 GiB for 50 million
+objects.
+
+The measuring itself costs little: one layer of Flate is counted as it comes out
+and never held, so a real scan's big image costs what it did when nothing inflated
+it. Every other chain of filters is held once, up to the limit.
+
+**A Flate image past 1 GiB is refused too**, though neither parser would ever
+inflate it. Its dictionary calling it an image proves nothing: a stream that says
+`/Subtype /Image` and is named as a font's program gets inflated as one. Such an
+image is a colour sheet about 80 cm square at 600 dpi, with no text to index unless
+the document has another page; a JPEG of any size costs nothing, since nothing
+inflates it.
+
+**An object stream past 8 MiB is left out, not refused**, as `pdf-inspector`
+leaves it out: a tagged PDF's structure tree can reach hundreds of MB. Its
+`content_blake3` is then `None`, since a hash over part of a document could agree
+with a different one. This bound is `pdf-inspector`'s and it does not export it;
+`the_bound_on_object_streams_is_the_one_pdf_inspector_loads_with` fails if it moves.
+
+An object the cross-reference table lists and the loader cannot parse is measured
+from its raw bytes, because `pdf-inspector` may repair it and read it after all
+(`an_object_the_loader_drops_is_measured_from_its_bytes`).
+
+**A document missing part of itself says so.** An object stream left out, or an
+object no parser can read and `pdf-inspector` does not repair, is one warning on
+the document: a render `problems` row saying how many parts could not be read, so
+a person knows the document is short of what the file holds, though not exactly
+what is gone (`a_document_missing_part_of_itself_says_so`). A document that does
+not render, such as a fully scanned one, has no page for this row to sit on, and
+is counted in the warning under §"When part of a scan fails".
+
+### What this does not stop
+
+The check has to load the file, so what `lopdf` does while loading is out of its
+reach, and `lopdf` has no setting for these:
+
+- **A chain of cross-reference streams.** Each `/Prev` adds its entries to one
+  table, and `max_decompressed_size` caps each stream, not the sum. Measured: a
+  63 KiB file held 6.2 GiB, a 250 KiB one 24 GiB.
+- **An encrypted document's object streams**, which `lopdf` expands before any
+  filter runs. Read from its source, not staged.
+- **A file that is simply large.** Objects in the open cost tens of times what
+  they take on disk, up to `max_bytes`.
+
+Stopping the first two takes a cap in `lopdf`, or reading each new PDF in a child
+process that can be killed, which would also catch whatever nobody has thought of.
+Until then, a step the system kills for memory writes no `problems` row: the step
+shows as failed, the row does not say which file, and the next sync meets it again.
+
 ## Why no OCR yet
 
 A spike over a 21-PDF corpus (born-digital papers and forms, browser
@@ -81,9 +162,9 @@ this decision:
 
 - **Classification is reliable.** 21/21 correctly sorted; born-digital
   files came back `text_based` at confidence 1.0, scans at 0.95. That is
-  what makes "record it and skip it" a safe default — nothing is
-  silently dropped, and the work list for a future OCR pass is exactly
-  `SELECT … WHERE needs_ocr = 1`.
+  what makes "record it and skip it" a safe default: a document skipped
+  is counted in one warning (§"When part of a scan fails"), and the work
+  list for a future OCR pass is exactly `SELECT … WHERE needs_ocr = 1`.
 - **Conversion is effectively free.** 277 pages in ~3.4 s, single
   threaded (~6 ms/page).
 - **OCR's failure mode is silent, not loud.** With PP-OCRv6 Small (50
@@ -131,7 +212,7 @@ read stay counted in `ocr_page_count`, and the render step writes a
 visible to whoever opens the document rather than only to whoever
 queries the store. Those notes get no `grid_rows` row: the sentence is
 identical on every unreadable page, so rows would add nothing to the
-grid while costing a qmd embedding each.
+grid while costing an embedding each.
 
 `has_encoding_issues` is the one all-or-nothing case, and deliberately
 so. A page whose fonts do not decode produces mojibake, which *looks*
@@ -226,7 +307,7 @@ Two things follow, both deliberate:
 
 - **PDF grid rows are machine-specific.** The backend index is a derived
   artifact — rebuilt from the per-source render stores by
-  `grid_index` — so this does not corrupt anything shared. But it does
+  `unified_grid_and_search_index` — so this does not corrupt anything shared. But it does
   mean two machines indexing the same corpus produce different rows for
   the same document.
 - **Moving the corpus rewrites its rows.** The path is in every grid
@@ -235,7 +316,7 @@ Two things follow, both deliberate:
   but it is worth knowing before relocating a large tree.
 
 The same property makes the rows differ between machines, which is why
-`fixture_db_snapshot` (in `unified_document_index`'s tests) normalizes
+`fixture_db_snapshot` (in `unified_grid_and_search_index`'s tests) normalizes
 `source_url` through `stable_source_url`.
 
 ## Orphaned documents
@@ -301,7 +382,7 @@ $dl -readonly $db "SELECT blake3, title, doc_modified_at, xmp_instance_id
 `holodeck/scanned_blueprint_retitled.pdf` are the `content_blake3`
 pair: identical page content, different `/Title` and different trailer
 `/ID`. They are built on the *scanned* document on purpose — it is the
-one fixture that never renders, so the pair costs the qmd indexer
+one fixture that never renders, so the pair costs the search index
 nothing. A text-document pair would add a page to embed on every full
 fixture build.
 

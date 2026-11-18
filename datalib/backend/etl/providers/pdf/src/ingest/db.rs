@@ -7,9 +7,17 @@ use anyhow::{Context, Result};
 use sqlx::Row;
 
 use datalib_etl::bulk::bulk_upsert_first_seen_in_tx;
+use datalib_etl::download_problems::SkippedRecord;
+use datalib_problems::{Problem, Reason, Severity};
 use datalib_time::IsoOffsetTimestamp;
 
-use super::schema_raw::{full_ddl, PdfDocumentRow, PdfPathRow, PdfScanMetaRow, DATA_TABLES};
+use super::schema_raw::{
+    document_is_renderable, full_ddl, PdfDocumentRow, PdfPathRow, PdfScanMetaRow, DATA_TABLES,
+};
+
+/// The part of a scan's `skipped:` rows that says which documents never
+/// render.
+pub const DOCUMENTS_WITHOUT_TEXT: &str = "documents_without_text";
 
 pub fn db_path_for(raw_dir: &Path) -> PathBuf {
     datalib_etl::raw_layout::entities_db(raw_dir)
@@ -152,6 +160,52 @@ impl RawDb {
         Ok(())
     }
 
+    /// The one warning on every document the tree holds that never renders.
+    /// One, whatever the count: a folder of scans is thousands of them, and
+    /// what a person needs is that they are not searchable.
+    pub async fn documents_without_text(&self) -> Result<Option<SkippedRecord>> {
+        let rows = sqlx::query(
+            "SELECT d.page_count, d.ocr_page_count, d.has_encoding_issues, MIN(p.id) AS rel_path
+               FROM pdf_documents d
+               JOIN pdf_paths p ON p.blake3 = d.blake3
+              GROUP BY d.blake3
+              ORDER BY rel_path",
+        )
+        .fetch_all(self.pool())
+        .await
+        .context("select the documents that do not render")?;
+        let unrendered: Vec<String> = rows
+            .into_iter()
+            .filter(|r| {
+                !document_is_renderable(
+                    r.get("page_count"),
+                    r.get("ocr_page_count"),
+                    r.get("has_encoding_issues"),
+                )
+            })
+            .map(|r| r.get("rel_path"))
+            .collect();
+        let Some(first) = unrendered.first() else {
+            return Ok(None);
+        };
+        let count = match unrendered.len() {
+            1 => "1 PDF is".to_string(),
+            n => format!("{n} PDFs are"),
+        };
+        Ok(Some(SkippedRecord {
+            entry: DOCUMENTS_WITHOUT_TEXT.to_string(),
+            problem: Problem::explained(
+                Reason::DeliberateLoss,
+                None,
+                &format!(
+                    "{count} not searchable, with no text we can read (no OCR yet, or fonts \
+                     that do not decode). One is {first}"
+                ),
+            )
+            .severity(Severity::Warning),
+        }))
+    }
+
     pub async fn convertible_documents(&self, root: &Path) -> Result<Vec<RenderTarget>> {
         let rows = sqlx::query(
             "SELECT d.blake3      AS blake3,
@@ -222,7 +276,7 @@ pub struct RenderTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ingest::schema_raw::{document_is_renderable, PdfDocumentRow, PdfKind};
+    use crate::ingest::schema_raw::{PdfDocumentRow, PdfKind};
 
     const NOW: &str = "2364-04-13T08:45:00-07:00";
 
@@ -298,6 +352,37 @@ mod tests {
                 d.blake3
             );
         }
+
+        let said = db.documents_without_text().await?.unwrap().problem.sample;
+        assert!(said.starts_with("2 PDFs are "), "{said}");
+        assert!(said.ends_with("One is cc.pdf"), "{said}");
+        Ok(())
+    }
+
+    /// A document that renders, or that no path names, is no part of the
+    /// warning, and a tree where everything renders has none.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_warning_counts_what_the_tree_holds_and_will_not_render() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let db = RawDb::open(&tmp.path().join("entities.doltlite_db")).await?;
+        let now = NOW.parse().unwrap();
+
+        db.write_batch(&[doc("aa", 2, 0, false)], &[path_row("aa.pdf", "aa")], &now)
+            .await?;
+        assert!(db.documents_without_text().await?.is_none());
+
+        db.write_batch(&[doc("cc", 4, 4, false)], &[], &now).await?;
+        assert!(db.documents_without_text().await?.is_none(), "no path");
+
+        let scan = path_row("bridge/plans.pdf", "cc");
+        let copy = path_row("archive/plans.pdf", "cc");
+        db.write_batch(&[], &[scan, copy], &now).await?;
+        let said = db.documents_without_text().await?.unwrap().problem.sample;
+        assert!(
+            said.starts_with("1 PDF is "),
+            "two copies, one document: {said}"
+        );
+        assert!(said.ends_with("One is archive/plans.pdf"), "{said}");
         Ok(())
     }
 }

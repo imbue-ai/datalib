@@ -21,6 +21,8 @@ pub struct Email {
     pub thread: String,
     pub flagged: bool,
     pub seen: bool,
+    pub muted: bool,
+    pub preview: String,
 }
 
 #[derive(Clone)]
@@ -50,6 +52,8 @@ impl Account {
                         thread: format!("T{id}"),
                         flagged: false,
                         seen: true,
+                        muted: false,
+                        preview: format!("Preview of log {id}"),
                     };
                     (id.to_string(), email)
                 })
@@ -75,6 +79,9 @@ impl Account {
         if e.flagged {
             keywords["$flagged"] = json!(true);
         }
+        if e.muted {
+            keywords["$muted"] = json!(true);
+        }
         Some(json!({
             "id": id,
             "blobId": format!("B{id}"),
@@ -85,6 +92,7 @@ impl Account {
             "receivedAt": "2026-09-01T10:00:00Z",
             "size": 256,
             "hasAttachment": false,
+            "preview": e.preview,
         }))
     }
 }
@@ -124,8 +132,21 @@ pub struct Tape {
 }
 
 impl Tape {
+    /// A server whose session states no limits.
     pub fn new(out: &Path) -> Self {
-        let session_json = json!({
+        Self::with_session(out, json!({}))
+    }
+
+    /// A server whose session states `maxObjectsInGet`.
+    pub fn with_max_objects_in_get(out: &Path, max: usize) -> Self {
+        Self::with_session(
+            out,
+            json!({ "capabilities": { "urn:ietf:params:jmap:core": { "maxObjectsInGet": max } } }),
+        )
+    }
+
+    fn with_session(out: &Path, extra: Value) -> Self {
+        let mut session_json = json!({
             "apiUrl": "https://jmap.example.test/jmap/api/",
             "downloadUrl": "https://jmap.example.test/jmap/download/{accountId}/{blobId}/{name}?type={type}",
             "uploadUrl": "https://jmap.example.test/jmap/upload/{accountId}/",
@@ -133,6 +154,9 @@ impl Tape {
             "primaryAccounts": { "urn:ietf:params:jmap:mail": ACCOUNT },
             "accounts": { ACCOUNT: { "name": "t@example.test", "isPersonal": true } },
         });
+        for (key, value) in extra.as_object().expect("an object") {
+            session_json[key] = value.clone();
+        }
         write_fixture(
             out,
             &HttpRequest::get(
@@ -363,7 +387,7 @@ pub fn email_get_args(ids: &[&str]) -> Value {
         "properties": [
             "id", "blobId", "threadId", "mailboxIds", "keywords", "from",
             "subject", "sentAt", "receivedAt", "size", "messageId",
-            "hasAttachment", "attachments",
+            "hasAttachment", "attachments", "preview",
         ],
     })
 }

@@ -1,0 +1,365 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== codex 00000000-0000-86ab-b7b0-53153bf8d22e Data — sub-agent of The deflector dish drifts 0.3 degrees every hour. Find out why and fix it.
+--- chunk 0
+title: Data — sub-agent of The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: Me — Sat 11 Apr 2364 10:03
+
+Scan the aft sensor logs for drift and report the worst hour.
+
+
+--- chunk 1
+title: Data — sub-agent of The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: gpt-5.3-codex — Sat 11 Apr 2364 10:03
+
+Tool call: shell
+
+```
+bash -lc grep drift /var/log/aft-sensors.log | sort -k3 -n | sed -n '$p'
+```
+
+
+--- chunk 2
+title: Data — sub-agent of The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: Codex — Sat 11 Apr 2364 10:03
+
+Tool result: shell
+
+```
+2364-04-11T03:00 drift 0.44 deg
+```
+
+
+--- chunk 3
+title: Data — sub-agent of The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: gpt-5.3-codex — Sat 11 Apr 2364 10:03
+
+Worst hour: 03:00, at 0.44 degrees of drift.
+
+
+=== codex 00000000-0000-8791-bfaa-35b2f6b12135 The deflector dish drifts 0.3 degrees every hour. Find out why and fix it.
+--- chunk 0
+title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: Codex — Sat 11 Apr 2364 10:00
+
+<permissions instructions>
+Filesystem sandboxing: `workspace-write`. Network access is off.
+
+
+--- chunk 1
+title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: Codex — Sat 11 Apr 2364 10:00
+
+# AGENTS.md instructions for /Users/picard/src/enterprise
+
+<INSTRUCTIONS>
+# Agent Instructions
+
+Run `diag` before touching any deflector setting, and never lower a threshold below 0.2.
+</INSTRUCTIONS>
+
+<environment_context>
+  <cwd>/Users/picard/src/enterprise</cwd>
+  <shell>zsh</shell>
+</environment_context>
+
+
+--- chunk 2
+title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: Codex — Sat 11 Apr 2364 10:00
+
+<collaboration_mode># Collaboration Mode: Default
+
+You are now in Default mode.
+
+
+--- chunk 3
+title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: Me — Sat 11 Apr 2364 10:00
+
+The deflector dish drifts 0.3 degrees every hour. Find out why and fix it.
+
+
+--- chunk 4
+title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: gpt-5.3-codex — Sat 11 Apr 2364 10:01
+
+Thinking
+
+> **Checking the emitter alignment first**
+> 
+> The drift is periodic, so the phase variance log is the place to start.
+
+
+--- chunk 5
+title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: gpt-5.3-codex — Sat 11 Apr 2364 10:01
+
+Tool call: shell
+
+```json
+{
+  "command": [
+    "bash",
+    "-lc",
+    "diag emitter --phase"
+  ],
+  "workdir": "/Users/picard/src/enterprise"
+}
+```
+
+
+--- chunk 6
+title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: Codex — Sat 11 Apr 2364 10:01
+
+Tool result: shell
+
+```
+phase variance: 0.31 deg
+emitter temp: 41C
+realign threshold: 0.5 deg
+```
+
+
+--- chunk 7
+title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: gpt-5.3-codex — Sat 11 Apr 2364 10:01
+
+The emitter reports 0.31 degrees of variance, under the 0.5 realignment threshold, so the dish never corrects itself.
+
+
+--- chunk 8
+title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: gpt-5.3-codex — Sat 11 Apr 2364 10:01
+
+Tool call: apply_patch
+
+```
+*** Begin Patch
+*** Update File: deflector/dish.conf
+@@
+-realign_threshold = 0.5
++realign_threshold = 0.3
+*** End Patch
+```
+
+
+--- chunk 9
+title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: Codex — Sat 11 Apr 2364 10:02
+
+Tool result: apply_patch
+
+```
+Success. Updated the following files:
+M deflector/dish.conf
+```
+
+
+--- chunk 10
+title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: gpt-5.3-codex — Sat 11 Apr 2364 10:02
+
+Tool call: shell
+
+```json
+{
+  "command": [
+    "bash",
+    "-lc",
+    "diag emitter --phase"
+  ],
+  "workdir": "/Users/picard/src/enterprise"
+}
+```
+
+
+--- chunk 11
+title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: Codex — Sat 11 Apr 2364 10:02
+
+Tool result: shell
+
+```
+phase variance: 0.02 deg
+emitter temp: 41C
+realign threshold: 0.3 deg
+```
+
+
+--- chunk 12
+title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: gpt-5.3-codex — Sat 11 Apr 2364 10:02
+
+Lowered the realignment threshold from 0.5 to 0.3 degrees in `deflector/dish.conf`; the dish now corrects at 0.31 and the variance is down to 0.02.
+
+
+--- chunk 13
+title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: Me — Sat 11 Apr 2364 10:03
+
+Now do the same for the aft sensor array
+
+
+--- chunk 14
+title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: gpt-5.3-codex — Sat 11 Apr 2364 10:03
+
+Thinking
+
+> **Spawning a sub-agent to scan the aft logs**
+
+
+--- chunk 15
+title: The deflector dish drifts 0.3 degrees every hour. Find out why and fix it. | text: Codex — Sat 11 Apr 2364 10:03
+
+<turn_aborted>
+The user interrupted the previous turn on purpose.
+</turn_aborted>
+
+
+=== codex 00000000-0000-8a78-90c5-dbad27c044ff Why does the replicator return cold Earl Grey? Screenshot attached.
+--- chunk 0
+title: Why does the replicator return cold Earl Grey? Screenshot attached. | text: Me — Sun 12 Apr 2364 14:30
+
+Why does the replicator return cold Earl Grey? Screenshot attached.
+
+*[1 image(s) not shown]*
+
+
+--- chunk 1
+title: Why does the replicator return cold Earl Grey? Screenshot attached. | text: gpt-5.2-codex — Sun 12 Apr 2364 14:30
+
+Tool call: shell
+
+```json
+{
+  "command": [
+    "bash",
+    "-lc",
+    "replicator status --beverage 'tea, earl grey, hot'"
+  ],
+  "workdir": "/Users/picard/src/enterprise"
+}
+```
+
+
+--- chunk 2
+title: Why does the replicator return cold Earl Grey? Screenshot attached. | text: Codex — Sun 12 Apr 2364 14:30
+
+Tool result: shell (error)
+
+```
+error: pattern buffer 7 offline
+```
+
+
+--- chunk 3
+title: Why does the replicator return cold Earl Grey? Screenshot attached. | text: Codex — Sun 12 Apr 2364 14:31
+
+context compacted  Earlier in this thread: the replicator's pattern buffer 7 was found offline.
+
+
+--- chunk 4
+title: Why does the replicator return cold Earl Grey? Screenshot attached. | text: gpt-5.2-codex — Sun 12 Apr 2364 14:31
+
+Pattern buffer 7 is offline, so the replicator falls back to the cold profile. Bring it back with `replicator buffer 7 --online`.
+
+
+=== codex 00000000-0000-8bef-8ff5-58a96f311ccd Audit the warp core containment logs and tell me what you find.
+--- chunk 0
+title: Audit the warp core containment logs and tell me what you find. | text: Codex — Mon 13 Apr 2364 09:15
+
+<permissions instructions>
+Filesystem sandboxing: `workspace-write`.
+
+
+--- chunk 1
+title: Audit the warp core containment logs and tell me what you find. | text: Me — Mon 13 Apr 2364 09:15
+
+Audit the warp core containment logs and tell me what you find.
+
+
+--- chunk 2
+title: Audit the warp core containment logs and tell me what you find. | text: Codex — Mon 13 Apr 2364 09:15
+
+# AGENTS.md instructions for /Users/picard/src/enterprise
+
+<INSTRUCTIONS>
+# Agent Instructions
+
+Run `diag` before touching any deflector setting, and never lower a threshold below 0.2.
+</INSTRUCTIONS>
+
+
+--- chunk 3
+title: Audit the warp core containment logs and tell me what you find. | text: gpt-5.6-terra — Mon 13 Apr 2364 09:16
+
+Tool call: exec
+
+```
+const r = await tools.exec_command({"cmd":"grep containment /var/log/warp-core.log | wc -l"});
+```
+
+
+--- chunk 4
+title: Audit the warp core containment logs and tell me what you find. | text: Codex — Mon 13 Apr 2364 09:16
+
+Tool result: exec
+
+```
+Script completed
+Wall time 0.3 seconds
+Output:
+
+142
+```
+
+
+--- chunk 5
+title: Audit the warp core containment logs and tell me what you find. | text: gpt-5.6-terra — Mon 13 Apr 2364 09:16
+
+142 containment events in the log; I will check how many breached the 0.9 threshold.
+
+
+--- chunk 6
+title: Audit the warp core containment logs and tell me what you find. | text: gpt-5.6-terra — Mon 13 Apr 2364 09:16
+
+Tool call: exec
+
+```
+const r = await tools.exec_command({"cmd":"awk '$3 > 0.9' /var/log/warp-core.log"});
+```
+
+
+--- chunk 7
+title: Audit the warp core containment logs and tell me what you find. | text: Codex — Mon 13 Apr 2364 09:16
+
+Tool result: exec
+
+```
+Script completed
+Wall time 0.3 seconds
+Output:
+
+2364-04-13T02:14 containment 0.94
+2364-04-13T02:15 containment 0.97
+```
+
+
+--- chunk 8
+title: Audit the warp core containment logs and tell me what you find. | text: gpt-5.6-terra — Mon 13 Apr 2364 09:16
+
+Two events crossed 0.9, both at 02:14-02:15. That is the window to look at; everything else sits under 0.6.
+
+
+--- chunk 9
+title: Audit the warp core containment logs and tell me what you find. | text: Me — Mon 13 Apr 2364 09:17
+
+<containment> readings look wrong to me. Check the sensor calibration?
+
+
+--- chunk 10
+title: Audit the warp core containment logs and tell me what you find. | text: gpt-5.6-terra — Mon 13 Apr 2364 09:18
+
+The sensor last calibrated stardate 41153.7; that is overdue.
+
+
+=== codex 00000000-0000-8cc7-9f7d-ce77bdd13483 codex storage
+--- chunk 0
+title: codex storage | text: Source: codex
+
+# codex — storage
+
+Measured Tue Apr 15th, 2369 at 00:00.
+
+| Kind | Step | What | Size | Count | Id |
+| Source Size | ingest | `codex/ingest` | <size> | 2 files | `00000000` |
+| Store | ingest | `codex/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `codex/ingest/entities.doltlite_db#ingested_files` |  | 4 rows | `00000000` |
+| Table | ingest | `codex/ingest/entities.doltlite_db#records` |  | 88 rows | `00000000` |
+| Table | ingest | `codex/ingest/entities.doltlite_db#transcripts` |  | 4 rows | `00000000` |

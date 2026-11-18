@@ -71,7 +71,7 @@ pub fn saved_lists(source_id: &str, rows: &[FileRow]) -> Vec<NormalizedChat> {
                 inputs.read(MapsSavedListRow::TABLE, &r.row.id);
                 items.push(saved_list_item(source_id, &r.row));
             }
-            feeds::whole(source_id, &chat_id, &name, items, inputs)
+            feeds::feed_chat(source_id, &chat_id, &name, items, inputs)
         })
         .collect()
 }
@@ -162,7 +162,7 @@ pub fn my_maps(source_id: &str, rows: &[FileRow]) -> Vec<NormalizedChat> {
                 }
                 items.push(item);
             }
-            feeds::whole(source_id, &chat_id, &name, items, inputs)
+            feeds::feed_chat(source_id, &chat_id, &name, items, inputs)
         })
         .collect()
 }
@@ -309,7 +309,7 @@ pub fn play_books(source_id: &str, rows: &[FileRow]) -> Vec<NormalizedChat> {
                 }
                 items.push(item);
             }
-            let mut chat = feeds::whole(source_id, &chat_id, &title, items, inputs);
+            let mut chat = feeds::feed_chat(source_id, &chat_id, &title, items, inputs);
             chat.source_url = book
                 .get("links")
                 .and_then(Value::as_array)

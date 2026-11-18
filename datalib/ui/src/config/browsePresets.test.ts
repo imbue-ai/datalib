@@ -16,7 +16,8 @@ describe("browseColumns", () => {
   });
 
   /// The text column is the reason the grid is worth looking at. No
-  /// preset may drop it, and only what the row is and what it is called
+  /// preset may drop it but a photo library's, whose picture is what a
+  /// row says, and only what the row is and what it is called
   /// come before it, so it is on screen however narrow the card. An
   /// address book's row is a person, and who they are and how to reach
   /// them is what it is called; a photo's picture is what it is.
@@ -30,7 +31,8 @@ describe("browseColumns", () => {
       "email",
       "image",
     ];
-    for (const type of [...browsePresetTypes(), "some_type_we_never_heard_of", "diff"]) {
+    const types = browsePresetTypes().filter((t) => t !== "lightroom");
+    for (const type of [...types, "some_type_we_never_heard_of", "diff"]) {
       const cols = browseColumns(type)!;
       const before = cols.slice(0, cols.indexOf("snippet"));
       expect(cols).toContain("snippet");
@@ -61,6 +63,12 @@ describe("browseColumns", () => {
       "kind",
       "channel",
     ]);
+  });
+
+  /// A photo library opens on its pictures, not a column of captions.
+  it("leaves a photo library's captions out", () => {
+    expect(browseColumns("lightroom")).toContain("image");
+    expect(browseColumns("lightroom")).not.toContain("snippet");
   });
 
   it("repeats no column", () => {

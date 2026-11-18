@@ -11,16 +11,28 @@
                                                   a calendar's occurrences in a window of
                                                   days, one row each, replaced whole by each
                                                   run (`calendar_render/src/occurrences/`)
-<data_root>/unified_document_index/grid_index/db.sqlite   grid_rows / markdowns / edges / problems /
+<data_root>/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite   grid_rows / markdowns / edges / problems /
+                                                  data_nodes and filings (the tree the rows sit in) /
                                                   source_contacts (who each handle is, per source);
                                                   the search terms: every id, handle, title,
-                                                  label and name each row answers to, full-text
-                                                  indexed, and the names each handle went by
-                                                  (`etl/render/src/search_terms.rs`); plain
+                                                  label and name each row answers to, indexed
+                                                  by word and by every three characters (so
+                                                  `from:ike` is a lookup), and the names each
+                                                  handle went by (`etl/render/src/search_terms.rs`); plain
                                                   SQLite in WAL mode, its version the
-                                                  `store_generation` row
-<data_root>/unified_document_index/qmd_aggregator/           the qmd index (plain SQLite inside)
-<data_root>/unified_document_index/embedding_map/embedding_map.json
+                                                  `store_generation` row. Beside them the
+                                                  search index's `search_*` tables: each
+                                                  message's keyword postings and each
+                                                  chunk's place and prompt hash, no text
+                                                  (`datalib/backend/search_index`)
+<data_root>/unified_grid_and_search_index/search_index/inference_cache.sqlite
+                                                  each chunk's vector under its model and
+                                                  prompt hash (plain SQLite); a file of its
+                                                  own so a reset of the grid index keeps it
+<data_root>/unified_grid_and_search_index/qmd_aggregator/           nothing now: the retired aggregator's
+                                                  directory, where qmd's index was;
+                                                  the index step deletes it
+<data_root>/unified_grid_and_search_index/embedding_map/embedding_map.json
                                                   every embedded document's place on
                                                   the map card; replaced whole by
                                                   each run, deleted by a reset
@@ -33,6 +45,11 @@
                                                   linked to them and the photo they put
                                                   on one; written only by the
                                                   `datalib_contacts` applet
+<data_root>/datalib_curated/datalib_problem_mutes/mutes.doltlite_db
+                                                  the problem rows a person muted; written
+                                                  only by the `unified_grid_and_search_index`
+                                                  applet, read by `datalib-http`, which
+                                                  leaves them out of the Manage counts
 <data_root>/system/feedback.doltlite_db           filed feedback
 <data_root>/system/disk_stats.sqlite              bytes on disk, and free space on
                                                   the disk, over time (plain SQLite;
@@ -66,6 +83,13 @@
                                                   (`dag/README.md` § What wakes the loop)
 <data_root>/system/api-token, lock, runner-lock   the server's token and the two flocks
                                                   (the server holds both while it is up)
+<data_root>/system/applet-secret                  what the server's applets require of a
+                                                  request (`applets.md`)
+<data_root>/system/tmp/                           a protected library's temp files; the
+                                                  server empties it at start
+<data_root>/system/server-output.log               what the desktop app's server wrote to stdout
+                                                  and stderr; .previous.log is the run before.
+                                                  Only the desktop shell writes these
 <data_root>/system/ui-state/<name>.json            JSON the UI keeps in the library: the
                                                   containers layout's open tree
                                                   (`layout`) and saved composites
@@ -78,6 +102,8 @@
                                                   unpacked build each, by the first 16
                                                   hex digits of the manifest's sha256
                                                   (`packages.md`)
+<data_root>/system/latchkey/                      a protected library's sign-ins, latchkey's
+                                                  own files (`datalib/tauri/README.md`)
 <data_root>/system/library-summary.json           source count, bytes on disk and the last
                                                   sync's end, for the desktop app's list of
                                                   libraries; datalib-http rewrites it when
@@ -85,7 +111,7 @@
                                                   moved (`http/src/manage/summary.rs`)
 ```
 
-Every store above but qmd's index and the JSON files carries a
+Every store above but the JSON files carries a
 `_datalib_meta` table — which datalib and
 git commit wrote it, the doltlite it was written with, a hash of the
 DDL it was opened with, and its kind — written by the owner on open
@@ -101,22 +127,32 @@ per app, so each can be managed or deleted on its own. Nothing can
 rebuild it: no reset or source deletion touches it, and its store
 refuses a schema it cannot reach rather than rebuilding
 (`doltlite_raw::open_curated`). No group or step may claim the name
-(`datalib_dag::config::CURATED_DIR`).
+(`datalib_dag::config::CURATED_DIR`). An app built outside datalib may
+keep a directory of its own here too, so a store found here need not be
+ours.
 
 One writer per file ([`etl/README.md`](../../datalib/backend/etl/README.md)
 § "Connection pools" has the rule and why). The `ingest` step owns its group's
-two stores; `render_markdown` owns its render store; `grid_index` owns
-the index; `datalib-http` owns feedback, usage and remote media;
+two stores; `render_markdown` owns its render store; `unified_grid_and_search_index` owns
+the grid index's tables and the search index's `search_*` tables in the
+same file; `datalib-http` owns feedback, usage and remote media;
 the applet only reads, each request inside one read transaction on a
 read-only connection (`DoltRepo::pinned` in
-`unified_document_index/src/dolt_repo.rs`). The grid index is plain
+`unified_grid_and_search_index/src/dolt_repo.rs`). The grid index is plain
 SQLite in WAL mode, and its step writes one source per transaction, so
-that transaction reads one state of it and a `grid_index` pass in
+that transaction reads one state of it and a `unified_grid_and_search_index` pass in
 flight is never served; a request also reopens the file when a reset
 has replaced it. Doltlite never copies a plain file's WAL back by
 itself ([`doltlite.md`](doltlite.md) § "Plain SQLite files and SQLite
 compatibility"), so the step
-does it at the end of every pass (`grid_index::close_index`). `runs.sqlite` is the other exception to doltlite: plain
+does it at the end of every pass (`grid_index::close_index`). The grid's
+load and the search index's writes are two parts of the one step, each
+with its own connection; each write transaction starts with `BEGIN
+IMMEDIATE`, and the search index writes in batches of a few hundred
+documents, so a reader is never held long. When either part's shape
+changes it drops only its own tables. Deleting the file by hand deletes
+the search index's rows with it; `unified_grid_and_search_index` puts them back on its
+next run. `runs.sqlite` is the other exception to doltlite: plain
 SQLite in WAL mode, written by whoever runs the loop (its
 runs) and the server (its own log) — one process while the server is
 up, two while a `datalib-dag` runs the loop — which SQLite's own locking
@@ -189,7 +225,13 @@ document's references may load (`POST /api/remote_media/check`, with
 the document's `markdown_uuid` and source id, since a `document` or
 `source` row covers only what is loaded for it) and renders under the
 answer; and `GET /api/remote_media?url=…&document=…&source=…` refuses
-a URL no row covers before it fetches or serves anything. A covered
+a URL no row covers before it fetches or serves anything. The server
+cannot check which document a URL is in: it does not read render stores,
+and a document's references exist only once the page has parsed its
+markdown. So `document` and `source` are believed from the page's own
+loads and from a client with no fetch metadata, never from a link
+someone wrote, which a `url` or `host` row still covers. A link on
+another site reaches no part of this route (`http/src/auth.rs`). A covered
 URL is fetched once (no cookie or referrer, media types only, a size
 cap, redirects re-judged per hop, private and loopback targets
 refused), its bytes kept at `system/remote_media/<sha256>` and a

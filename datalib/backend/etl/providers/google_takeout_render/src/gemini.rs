@@ -66,7 +66,7 @@ pub fn build(source_id: &str, rows: &[Row]) -> Vec<NormalizedChat> {
             drawn,
         ));
     }
-    vec![feeds::yearly(
+    vec![feeds::timeline(
         source_id,
         feeds::GEMINI,
         "Gemini",
@@ -163,11 +163,13 @@ mod tests {
         let [chat] = chats.as_slice() else {
             panic!("one feed: {chats:?}")
         };
-        let years: Vec<&str> = chat.buckets.iter().map(|b| b.period_key.as_str()).collect();
-        assert_eq!(years, ["2364", "2365"]);
-
-        let [prompt, response] = chat.buckets[0].items.as_slice() else {
-            panic!("{:?}", chat.buckets[0].items)
+        // Two years, one document.
+        let [doc] = chat.buckets.as_slice() else {
+            panic!("one document: {:?}", chat.buckets)
+        };
+        assert_eq!(doc.markdown_uuid, chat.chat_uuid);
+        let [prompt, response, _, drawn] = doc.items.as_slice() else {
+            panic!("{:?}", doc.items)
         };
         assert_eq!(prompt.author_display, "Me");
         assert_eq!(prompt.author_kind, AuthorKind::Account);
@@ -188,9 +190,6 @@ mod tests {
         assert!(md.starts_with("It is **General Order 1**."), "{md}");
         assert!(md.contains("No interference."), "{md}");
 
-        let [_, drawn] = chat.buckets[1].items.as_slice() else {
-            panic!("{:?}", chat.buckets[1].items)
-        };
         assert_eq!(drawn.text, None, "the image is the response");
         assert_eq!(drawn.kind, ItemKind::Attachment);
         assert_eq!(

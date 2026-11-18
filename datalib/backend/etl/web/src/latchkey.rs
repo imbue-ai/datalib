@@ -118,8 +118,8 @@ fn which_on_path(bin: &str) -> Option<PathBuf> {
 /// Re-exports of the ONE canonical latchkey pin and the user-facing
 /// invocation hint (`datalib_runtime::node_runtime`) — re-exports
 /// rather than literals so this crate and the provider crates cannot
-/// drift from the hint text / staged tree (same discipline as the qmd
-/// pin).
+/// drift from the hint text / staged tree (same discipline as the model
+/// pins).
 pub use datalib_runtime::node_runtime::{latchkey_cli_hint, LATCHKEY_VERSION};
 
 /// `std::process::Command` for `latchkey` from the staged runtime tree
@@ -146,6 +146,28 @@ pub fn latchkey_curl_command(
     }
     cmd.arg("curl");
     Ok(cmd)
+}
+
+const GATEWAY_SIGN_IN: &str = "Sign in again where the latchkey gateway that holds the \
+                               credential is managed";
+
+/// What an error should tell a person to do about a refused credential:
+/// `local`, the commands for a latchkey on this machine, unless a gateway
+/// holds the credentials. It ends without a full stop, for the caller's own.
+pub fn sign_in_advice(local: &str) -> String {
+    advice_for(
+        is_gateway_mode(std::env::var_os(GATEWAY_ENV_VAR).as_deref()),
+        local,
+    )
+    .to_string()
+}
+
+fn advice_for(gateway: bool, local: &str) -> &str {
+    if gateway {
+        GATEWAY_SIGN_IN
+    } else {
+        local
+    }
 }
 
 /// Runs `latchkey auth browser <service>` for a service whose credential
@@ -286,6 +308,17 @@ mod tests {
             None,
             Some(os("http://127.0.0.1:9"))
         ));
+    }
+
+    /// An error named `latchkey auth browser` behind a gateway too, where
+    /// the credentials are not this machine's to change.
+    #[test]
+    fn the_sign_in_advice_follows_where_the_credential_lives() {
+        let local = "Sign in with `latchkey auth browser slack`";
+        assert_eq!(advice_for(false, local), local);
+        let behind = advice_for(true, local);
+        assert!(behind.contains("gateway"), "{behind}");
+        assert!(!behind.contains("latchkey auth"), "{behind}");
     }
 
     /// A replayed download must never open a real browser: a test that

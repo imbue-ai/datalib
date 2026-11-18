@@ -12,17 +12,18 @@
 #
 # This is a reference, not a turn-key config: running it would sync every
 # source at once, and most need credentials (through latchkey), a backup
-# pulled off a phone, or an export on disk. Copy the groups you want, and
-# the index groups' inputs that name them.
+# pulled off a phone, or an export on disk; `datalib-step help <type>` says
+# how to sign one in or where its data comes from. Copy the groups you want:
+# the index groups read every source by pattern (`*/render_markdown`).
 #
 # Shape: each source is a `[[groups]]` entry with a `type`, and steps under
 # it, each declared as `group` + `function`. `ingest` brings the data into
 # `<group>/ingest` (its `params` hold one method table, `[steps.params.api]`,
 # `[steps.params.export]`, …, and the options every method shares);
 # `render_markdown` turns that raw store into documents under
-# `<group>/render_markdown`; `keyword_index` and `embed` put them in the
-# search index; a source whose data is also numbers over time adds
-# `render_time_series`. Neither writes a `command`: a step without one is
+# `<group>/render_markdown`, which the grid index puts in the keyword
+# search; `embed` puts them in the search by meaning; a source whose data
+# is also numbers over time adds `render_time_series`. Neither writes a `command`: a step without one is
 # the built-in `datalib-step`. A step's id is `<group>/<function>`, never
 # written; it is what another step's `inputs` name.
 #
@@ -42,143 +43,31 @@ data_root = "~/datalib"
 
 # --- The indexes every source feeds -------------------------------------
 
-# The SQL index behind the grid and search reads every source's documents;
-# the search index's aggregator reads every source's keyword index and
-# embeddings, and keeps the search index to the sources it names.
+# The SQL index behind the grid and search reads every source's documents
+# into the grid and the keyword search; `params.not_searched` would keep a
+# source out of search.
 [[groups]]
-id = "unified_document_index"
-name = "Document Index"
+id = "unified_grid_and_search_index"
+name = "Grid and Search Index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
+group = "unified_grid_and_search_index"
+function = "unified_grid_and_search_index"
 command = "datalib-step"
-inputs = [
-  "airvisual/render_markdown",
-  "apple_messages/render_markdown",
-  "apple_photos/render_markdown",
-  "beeper/render_markdown",
-  "calendar-google/render_markdown",
-  "calendar-fastmail/render_markdown",
-  "calendar-caldav/render_markdown",
-  "calendar-calendly/render_markdown",
-  "calendar-ics/render_markdown",
-  "chatgpt-api/render_markdown",
-  "chatgpt-export/render_markdown",
-  "claude-api/render_markdown",
-  "claude-export/render_markdown",
-  "claude_code/render_markdown",
-  "codex/render_markdown",
-  "contacts-fastmail/render_markdown",
-  "contacts-carddav/render_markdown",
-  "contacts-vcf/render_markdown",
-  "email-jmap/render_markdown",
-  "email-gmail/render_markdown",
-  "email-mbox/render_markdown",
-  "facebook/render_markdown",
-  "file_inventory/render_markdown",
-  "garmin/render_markdown",
-  "github/render_markdown",
-  "gitlab/render_markdown",
-  "google_drive/render_markdown",
-  "google_takeout/render_markdown",
-  "lightroom-catalog/render_markdown",
-  "lightroom-backups/render_markdown",
-  "linear/render_markdown",
-  "linkedin/render_markdown",
-  "media/render_markdown",
-  "notion/render_markdown",
-  "pdf/render_markdown",
-  "perseus/render_markdown",
-  "signal/render_markdown",
-  "slack/render_markdown",
-  "sms_backup_restore/render_markdown",
-  "todoist/render_markdown",
-  "whatsapp/render_markdown",
-  "yolink/render_markdown",
-]
-
-[[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
-command = "datalib-step"
-inputs = [
-  "airvisual/keyword_index",
-  "apple_messages/keyword_index",
-  "apple_messages/embed",
-  "beeper/keyword_index",
-  "beeper/embed",
-  "calendar-google/keyword_index",
-  "calendar-google/embed",
-  "calendar-fastmail/keyword_index",
-  "calendar-fastmail/embed",
-  "calendar-caldav/keyword_index",
-  "calendar-caldav/embed",
-  "calendar-calendly/keyword_index",
-  "calendar-calendly/embed",
-  "calendar-ics/keyword_index",
-  "calendar-ics/embed",
-  "chatgpt-api/keyword_index",
-  "chatgpt-api/embed",
-  "chatgpt-export/keyword_index",
-  "chatgpt-export/embed",
-  "claude-api/keyword_index",
-  "claude-api/embed",
-  "claude-export/keyword_index",
-  "claude-export/embed",
-  "claude_code/keyword_index",
-  "claude_code/embed",
-  "codex/keyword_index",
-  "codex/embed",
-  "contacts-fastmail/keyword_index",
-  "contacts-fastmail/embed",
-  "contacts-carddav/keyword_index",
-  "contacts-carddav/embed",
-  "contacts-vcf/keyword_index",
-  "contacts-vcf/embed",
-  "email-jmap/keyword_index",
-  "email-jmap/embed",
-  "email-gmail/keyword_index",
-  "email-gmail/embed",
-  "email-mbox/keyword_index",
-  "email-mbox/embed",
-  "facebook/keyword_index",
-  "facebook/embed",
-  "garmin/keyword_index",
-  "github/keyword_index",
-  "github/embed",
-  "gitlab/keyword_index",
-  "gitlab/embed",
-  "google_drive/keyword_index",
-  "google_drive/embed",
-  "google_takeout/keyword_index",
-  "google_takeout/embed",
-  "linkedin/keyword_index",
-  "linkedin/embed",
-  "notion/keyword_index",
-  "notion/embed",
-  "pdf/keyword_index",
-  "pdf/embed",
-  "perseus/keyword_index",
-  "perseus/embed",
-  "signal/keyword_index",
-  "signal/embed",
-  "slack/keyword_index",
-  "slack/embed",
-  "sms_backup_restore/keyword_index",
-  "sms_backup_restore/embed",
-  "todoist/keyword_index",
-  "todoist/embed",
-  "whatsapp/keyword_index",
-  "whatsapp/embed",
-  "yolink/keyword_index",
-]
+inputs = ["*/render_markdown"]
 
 # The app's search, grid and document view.
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
+
+# The contacts app: your own record of who a handle is, which the person
+# chips and search read. `datalib-step help contacts-app`.
+[[applets]]
+group = "unified_grid_and_search_index"
+id = "datalib_contacts"
+command = "datalib-applet datalib_contacts"
 
 # The time-series index reads every source's time series, without copying
 # the points, for the charts.
@@ -190,11 +79,7 @@ name = "Time Series Index"
 group = "unified_time_series_index"
 function = "time_series_index"
 command = "datalib-step"
-inputs = [
-  "airvisual/render_time_series",
-  "garmin/render_time_series",
-  "yolink/render_time_series",
-]
+inputs = ["*/render_time_series"]
 
 [[applets]]
 group = "unified_time_series_index"
@@ -237,22 +122,12 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["airvisual/ingest"]
 
-# The readings as time series, for the charts. Add this step to
-# `unified_time_series_index/time_series_index`'s inputs.
+# The readings as time series, for the charts.
 [[steps]]
 group = "airvisual"
 function = "render_time_series"
 command = "datalib-step"
 inputs = ["airvisual/ingest"]
-
-# Keyword (BM25) search over the page. Add it to
-# `unified_document_index/qmd_aggregator`'s inputs. A time-series source
-# takes no `embed` step: its pages are summaries of numbers.
-[[steps]]
-group = "airvisual"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["airvisual/render_markdown"]
 
 # --- apple_messages by `messages` ---------------------------------------
 
@@ -295,19 +170,13 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["apple_messages/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "apple_messages"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["apple_messages/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "apple_messages"
 function = "embed"
 command = "datalib-step"
-inputs = ["apple_messages/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- apple_photos by `library` ------------------------------------------
 
@@ -358,6 +227,60 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["apple_photos/ingest"]
 
+# --- baby_connect by `api` ----------------------------------------------
+
+# Your Baby Connect history, signed in through latchkey (by browser), with
+# every option set.
+[[groups]]
+id = "baby_connect"
+name = "Baby Connect"
+type = "baby_connect"
+
+[[steps]]
+group = "baby_connect"
+function = "ingest"
+command = "datalib-step"
+
+# When to give up on failed requests. The download retries and backs off
+# on its own; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "beverly@enterprise.test"
+
+# Baby Connect answers one day at a time. `since` and `until` bound the
+# days read: a day ("2368-01-01"), an RFC 3339 instant, or an offset back
+# from each sync ("-90d"). Without them the read starts at the eldest
+# child's birthday and ends today.
+[steps.params.api]
+since = "2368-01-01"
+until = "2372-12-31"
+
+# One document per child: every entry, with its notes. Baby
+# Connect keeps a time as a clock reading with no zone; `time_zone` (an IANA
+# name) says where the clock was, daylight saving included. Unset reads the
+# times as UTC, and the Manage row says so.
+[[steps]]
+group = "baby_connect"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["baby_connect/ingest"]
+
+[steps.params]
+time_zone = "America/Los_Angeles"
+
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
+[[steps]]
+group = "baby_connect"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
 # --- beeper by `texts` --------------------------------------------------
 
 # The Beeper Texts desktop app's local data, with every option set, and
@@ -385,30 +308,21 @@ command = "datalib-step"
 inputs = ["beeper/ingest"]
 
 [steps.params]
-period = "month"                     # span of each page: month (default), day, year,
-                                     # or all (one page per chat)
 networks = ["signal", "googlechat"]  # which networks to render; omit for every one
                                      # (the ingest mirrors them all either way)
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "beeper"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["beeper/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "beeper"
 function = "embed"
 command = "datalib-step"
-inputs = ["beeper/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- calendar by `google` -----------------------------------------------
 
-# Google Calendar through Google's API, signed in through latchkey
-# (`latchkey auth browser google-calendar`), with every option set, and
-# searchable.
+# Google Calendar through Google's API, signed in through latchkey, with
+# every option set, and searchable.
 [[groups]]
 id = "calendar-google"
 name = "Google Calendar"
@@ -451,19 +365,13 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["calendar-google/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "calendar-google"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["calendar-google/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "calendar-google"
 function = "embed"
 command = "datalib-step"
-inputs = ["calendar-google/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # Every occurrence of every event in a window of days around now, one row
 # each, the way Google's `singleEvents=true` lists them, in
@@ -527,19 +435,13 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["calendar-fastmail/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "calendar-fastmail"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["calendar-fastmail/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "calendar-fastmail"
 function = "embed"
 command = "datalib-step"
-inputs = ["calendar-fastmail/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # Every occurrence of every event in a window of days around now, one row
 # each, the way Google's `singleEvents=true` lists them, in
@@ -603,19 +505,13 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["calendar-caldav/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "calendar-caldav"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["calendar-caldav/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "calendar-caldav"
 function = "embed"
 command = "datalib-step"
-inputs = ["calendar-caldav/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # Every occurrence of every event in a window of days around now, one row
 # each, the way Google's `singleEvents=true` lists them, in
@@ -635,8 +531,7 @@ days_ahead = 400  # the default
 
 # The meetings booked with you on Calendly, through Calendly's API,
 # signed in through latchkey's `calendly` service with a personal access
-# token (`latchkey auth set calendly -H "Authorization: Bearer <token>"`),
-# with every option set, and searchable.
+# token, with every option set, and searchable.
 [[groups]]
 id = "calendar-calendly"
 name = "Calendly"
@@ -676,19 +571,13 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["calendar-calendly/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "calendar-calendly"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["calendar-calendly/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "calendar-calendly"
 function = "embed"
 command = "datalib-step"
-inputs = ["calendar-calendly/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # Every meeting in a window of days around now, one row each, in
 # render_occurrences/occurrences.doltlite_db, the way the other calendar
@@ -732,19 +621,13 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["calendar-ics/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "calendar-ics"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["calendar-ics/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "calendar-ics"
 function = "embed"
 command = "datalib-step"
-inputs = ["calendar-ics/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # Every occurrence of every event in a window of days around now, one row
 # each, the way Google's `singleEvents=true` lists them, in
@@ -763,8 +646,7 @@ days_ahead = 400  # the default
 # --- chatgpt by `api` ---------------------------------------------------
 
 # ChatGPT conversations over chatgpt.com's web API, signed in through
-# latchkey (`latchkey auth browser chatgpt`), with every option set, and
-# searchable.
+# latchkey, with every option set, and searchable.
 [[groups]]
 id = "chatgpt-api"
 name = "ChatGPT"
@@ -774,6 +656,12 @@ type = "chatgpt"
 group = "chatgpt-api"
 function = "ingest"
 command = "datalib-step"
+
+[steps.params]
+# What becomes of the copy of a conversation you delete on chatgpt.com:
+# "delete_local_copy" (the default) deletes it here too; "keep_local_copy"
+# keeps it, so you can delete it upstream for privacy and still have it.
+when_deleted_upstream = "keep_local_copy"
 
 # When to give up on rate limits. The download always honours a 429's
 # Retry-After and backs off; these only decide when to stop.
@@ -787,15 +675,20 @@ maximum_sequential_failed_requests = 50        # the default
 account = "picard"
 
 [steps.params.api]
-since = "2025-01-01"   # only conversations updated at or after this (a day, RFC 3339,
-                       # or "-30d" from the sync); move it back later to backfill;
-                       # default: all
-max_pages = 20         # stop listing after this many pages (100 conversations each);
-                       # default: no cap
-limit = 100            # fetch at most this many conversations per run; default: no cap
-sleep_between = 0.5    # seconds to wait between requests (0 to 3600); default: none
-conv_uuids = ["https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789"]
-                       # only these conversations, by id or pasted link; omit for all
+since = "2025-01-01"              # only conversations updated at or after this (a day,
+                                  # RFC 3339, or "-30d" from the sync); move it back later
+                                  # to backfill; default: all
+max_listing_pages = 20            # stop listing after this many pages (100 conversations
+                                  # each); a listing cut short deletes nothing; default: all
+max_conversations_per_run = 100   # fetch at most this many per run, the never-fetched
+                                  # first; default: every one that changed
+refetch_newest_conversations = 3  # fetch the 3 most recently updated conversations
+                                  # again every run; unset fetches only what changed
+seconds_between_requests = 0.5    # wait between requests (0 to 3600); default: none
+conv_uuids = [                    # only these conversations, by id or pasted link, and
+  "https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789",  # no listing, so every
+]                                 # setting above but the wait is ignored, with a
+                                  # warning; omit for all
 
 # Start from a data export of this same account: the `.zip`, or the
 # folder it was unzipped into. It fills in every conversation the store
@@ -812,19 +705,13 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["chatgpt-api/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "chatgpt-api"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["chatgpt-api/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "chatgpt-api"
 function = "embed"
 command = "datalib-step"
-inputs = ["chatgpt-api/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- chatgpt by `export` ------------------------------------------------
 
@@ -844,6 +731,12 @@ group = "chatgpt-export"
 function = "ingest"
 command = "datalib-step"
 
+[steps.params]
+# What becomes of the copy of a conversation a newer export no longer holds:
+# "delete_local_copy" (the default) deletes it here too; "keep_local_copy"
+# keeps it, so you can delete it upstream for privacy and still have it.
+when_deleted_upstream = "keep_local_copy"
+
 [steps.params.export]
 path = "~/Downloads/chatgpt-export.zip"  # the .zip, or the folder it was unzipped into
 
@@ -853,19 +746,13 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["chatgpt-export/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "chatgpt-export"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["chatgpt-export/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "chatgpt-export"
 function = "embed"
 command = "datalib-step"
-inputs = ["chatgpt-export/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- claude by `api` ----------------------------------------------------
 
@@ -882,6 +769,12 @@ group = "claude-api"
 function = "ingest"
 command = "datalib-step"
 
+[steps.params]
+# What becomes of the copy of a conversation you delete on claude.ai:
+# "delete_local_copy" (the default) deletes it here too; "keep_local_copy"
+# keeps it, so you can delete it upstream for privacy and still have it.
+when_deleted_upstream = "keep_local_copy"
+
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
 [steps.params.common.download_params]
@@ -897,15 +790,24 @@ account = "enterprise"
 since = "2025-01-01"                  # only conversations updated on or after this (a day,
                                       # RFC 3339, or "-30d" from the sync); move it back to
                                       # backfill; unset is all
-refresh_most_recent_n_chat_count = 3  # fetch the 3 most recently updated conversations
+max_conversations_per_run = 100       # fetch at most this many per run, the never-fetched
+                                      # first; default: every one that changed
+refetch_newest_conversations = 3      # fetch each org's 3 most recently updated conversations
                                       # again every run; unset fetches only what changed
-conv_uuids = [                        # only these conversations, by id or pasted link;
-  "https://claude.ai/chat/550e8400-e29b-41d4-a716-446655440000",  # default [] is all
-]
+seconds_between_requests = 0.5        # wait between requests (0 to 3600); default: none
+conv_uuids = [                        # only these conversations, by id or pasted link, and
+  "https://claude.ai/chat/550e8400-e29b-41d4-a716-446655440000",  # no listing, so every
+]                                     # setting above but the wait is ignored, with a
+                                      # warning; default [] is all
 projects = true                       # also mirror Claude Projects: description, instructions
                                       # and knowledge documents; default true
 project_uuids = [                     # only these projects, by id or pasted link;
   "6ba7b810-9dad-11d1-80b4-00c04fd430c8",                         # default [] is all
+]
+cowork = true                         # also mirror Cowork tasks run in the cloud, each as a
+                                      # conversation; default true
+cowork_session_ids = [                # only these Cowork tasks, by id or pasted link;
+  "https://claude.ai/cowork/cse_01AbCdEfGhJkMnPqRsTuVw",          # default [] is all
 ]
 
 [[steps]]
@@ -918,19 +820,13 @@ inputs = ["claude-api/ingest"]
 max_project_doc_bytes = 131072  # cut a project knowledge document's text at this many
                                 # bytes on the project's page; default 131072 (128 KiB)
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "claude-api"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["claude-api/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "claude-api"
 function = "embed"
 command = "datalib-step"
-inputs = ["claude-api/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- claude by `export` -------------------------------------------------
 
@@ -947,6 +843,12 @@ group = "claude-export"
 function = "ingest"
 command = "datalib-step"
 
+[steps.params]
+# What becomes of the copy of a conversation a newer export no longer holds:
+# "delete_local_copy" (the default) deletes it here too; "keep_local_copy"
+# keeps it, so you can delete it upstream for privacy and still have it.
+when_deleted_upstream = "keep_local_copy"
+
 [steps.params.export]
 path = "~/Downloads/claude-export"  # the folder holding `conversations.json`
 
@@ -960,19 +862,13 @@ inputs = ["claude-export/ingest"]
 max_project_doc_bytes = 131072  # cut a project knowledge document's text at this many
                                 # bytes on the project's page; default 131072 (128 KiB)
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "claude-export"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["claude-export/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "claude-export"
 function = "embed"
 command = "datalib-step"
-inputs = ["claude-export/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- claude_code by `sessions` ------------------------------------------
 
@@ -1006,19 +902,13 @@ inputs = ["claude_code/ingest"]
 [steps.params]
 max_tool_result_bytes = 16384  # the default
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "claude_code"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["claude_code/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "claude_code"
 function = "embed"
 command = "datalib-step"
-inputs = ["claude_code/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- codex by `sessions` ------------------------------------------------
 
@@ -1052,19 +942,13 @@ inputs = ["codex/ingest"]
 [steps.params]
 max_tool_result_bytes = 16384  # the default
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "codex"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["codex/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "codex"
 function = "embed"
 command = "datalib-step"
-inputs = ["codex/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- contacts by `fastmail` ---------------------------------------------
 
@@ -1109,19 +993,13 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["contacts-fastmail/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "contacts-fastmail"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["contacts-fastmail/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "contacts-fastmail"
 function = "embed"
 command = "datalib-step"
-inputs = ["contacts-fastmail/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- contacts by `carddav` ----------------------------------------------
 
@@ -1166,19 +1044,13 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["contacts-carddav/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "contacts-carddav"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["contacts-carddav/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "contacts-carddav"
 function = "embed"
 command = "datalib-step"
-inputs = ["contacts-carddav/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- contacts by `vcf` --------------------------------------------------
 
@@ -1211,24 +1083,18 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["contacts-vcf/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "contacts-vcf"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["contacts-vcf/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "contacts-vcf"
 function = "embed"
 command = "datalib-step"
-inputs = ["contacts-vcf/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- email by `jmap` ----------------------------------------------------
 
-# Fastmail mail over JMAP, signed in through latchkey (`latchkey auth
-# browser fastmail`), with every option set, and searchable.
+# Fastmail mail over JMAP, signed in through latchkey, with every option set,
+# and searchable.
 [[groups]]
 id = "email-jmap"
 name = "Fastmail"
@@ -1277,24 +1143,18 @@ outlink_format = "fastmail"     # each message's `↗` link opens it in Fastmail
 only_render_labels = ["Inbox"]  # render only threads with a message under these labels
                                 # (exact paths, like `only_extract_labels`); default [] is all
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "email-jmap"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["email-jmap/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "email-jmap"
 function = "embed"
 command = "datalib-step"
-inputs = ["email-jmap/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- email by `gmail` ---------------------------------------------------
 
-# Gmail over the Gmail API, signed in through latchkey (`latchkey auth
-# browser google-gmail`), with every option set, and searchable.
+# Gmail over the Gmail API, signed in through latchkey, with every option set,
+# and searchable.
 [[groups]]
 id = "email-gmail"
 name = "Gmail"
@@ -1362,19 +1222,13 @@ outlink_format = "gmail"        # each message's `↗` link opens it in Gmail; o
 only_render_labels = ["Inbox"]  # render only threads with a message under these labels
                                 # (exact paths, like `only_extract_labels`); default [] is all
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "email-gmail"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["email-gmail/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "email-gmail"
 function = "embed"
 command = "datalib-step"
-inputs = ["email-gmail/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- email by `mbox` ----------------------------------------------------
 
@@ -1418,19 +1272,62 @@ outlink_format = "gmail"        # each message's `↗` link opens it in Gmail; o
 only_render_labels = ["Inbox"]  # render only threads with a message under these labels
                                 # (exact paths, like `only_extract_labels`); default [] is all
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "email-mbox"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["email-mbox/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "email-mbox"
 function = "embed"
 command = "datalib-step"
-inputs = ["email-mbox/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- email by `apple_mail` ----------------------------------------------
+
+# The Mail app on this Mac, with every option set, and searchable. No
+# sign-in. Mail's own index says what each account holds, so a message
+# deleted in Mail leaves the mirror on the next sync.
+[[groups]]
+id = "email-apple_mail"
+name = "Apple Mail"
+type = "email"
+
+[[steps]]
+group = "email-apple_mail"
+function = "ingest"
+command = "datalib-step"
+
+# Mirror only messages in these mailboxes, named as Mail shows them, with
+# a nested one as its full path. Several add up. The default, [], is all.
+[steps.params]
+only_extract_labels = ["Inbox", "Starfleet/Reports"]
+whole_threads = true  # also keep the rest of the thread of a message the mailboxes keep; default true
+
+# Without `account`, every account in Mail that holds mail is copied, each
+# under its own account id. `account` copies just that one, and the rest
+# name its account row (they need `account`).
+[steps.params.apple_mail]
+path = "~/Library/Mail"                          # Mail's folder (the default), or a copy of it
+account = "1F0B8A52-0000-4000-8000-00000000E1D0"  # copy only this account: its folder under ~/Library/Mail/V10; default every account
+account_id = "picard_mail"                       # the account's id; default made from Mail's
+display_name = "Picard's mail"                   # the account's name; default its account_id
+email_address = "picard@example.com"             # the account's address; unset by default
+is_personal = true                               # a personal (not work) account; default true
+
+[[steps]]
+group = "email-apple_mail"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["email-apple_mail/ingest"]
+
+[steps.params]
+only_render_labels = ["Inbox"]  # render only threads with a message in these mailboxes; default [] is all
+
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
+[[steps]]
+group = "email-apple_mail"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- facebook by `export` -----------------------------------------------
 
@@ -1456,19 +1353,13 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["facebook/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "facebook"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["facebook/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "facebook"
 function = "embed"
 command = "datalib-step"
-inputs = ["facebook/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- file_inventory by `fswalk` -----------------------------------------
 
@@ -1502,8 +1393,7 @@ inputs = ["file_inventory/ingest"]
 # --- garmin by `api` ----------------------------------------------------
 
 # Garmin Connect over the API the Connect phone app uses, signed in through
-# latchkey's Garmin plugin (`latchkey auth browser garmin`), with every
-# option set, and keyword-searchable.
+# latchkey's Garmin plugin, with every option set, and keyword-searchable.
 [[groups]]
 id = "garmin"
 name = "Garmin Connect"
@@ -1551,27 +1441,17 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["garmin/ingest"]
 
-# Its numbers as time series, for charts and the time-series index: add
-# `garmin/render_time_series` to `unified_time_series_index/time_series_index`'s inputs.
+# Its numbers as time series, for charts and the time-series index.
 [[steps]]
 group = "garmin"
 function = "render_time_series"
 command = "datalib-step"
 inputs = ["garmin/ingest"]
 
-# Free-text search by keyword (BM25). Add it to
-# `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "garmin"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["garmin/render_markdown"]
-
 # --- github by `api` ----------------------------------------------------
 
 # GitHub pull requests and their review threads, over GitHub's API, signed
-# in through latchkey (`latchkey auth browser github`), with every option
-# set, and searchable.
+# in through latchkey, with every option set, and searchable.
 [[groups]]
 id = "github"
 name = "GitHub"
@@ -1609,25 +1489,18 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["github/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "github"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["github/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "github"
 function = "embed"
 command = "datalib-step"
-inputs = ["github/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- gitlab by `api` ----------------------------------------------------
 
 # GitLab merge requests and their discussions, over GitLab's API, signed
-# in through latchkey with a personal access token you create
-# (`latchkey auth set gitlab -H "PRIVATE-TOKEN: <token>"`), with every
+# in through latchkey with a personal access token you create, with every
 # option set, and searchable.
 [[groups]]
 id = "gitlab"
@@ -1666,26 +1539,19 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["gitlab/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "gitlab"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["gitlab/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "gitlab"
 function = "embed"
 command = "datalib-step"
-inputs = ["gitlab/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- google_drive by `api` ----------------------------------------------
 
 # A backup of a Google account's Docs, Sheets and Slides, signed in through
-# four latchkey services as the same account (`latchkey auth browser
-# google-drive`, then google-docs, google-sheets and google-slides), with
-# every option set.
+# four latchkey services as the same account (google-drive, google-docs,
+# google-sheets and google-slides), with every option set.
 [[groups]]
 id = "google_drive"
 name = "Google Drive"
@@ -1732,19 +1598,13 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["google_drive/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "google_drive"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["google_drive/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "google_drive"
 function = "embed"
 command = "datalib-step"
-inputs = ["google_drive/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- google_takeout by `export` -----------------------------------------
 
@@ -1785,19 +1645,13 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["google_takeout/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "google_takeout"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["google_takeout/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "google_takeout"
 function = "embed"
 command = "datalib-step"
-inputs = ["google_takeout/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- lightroom by `catalog` ---------------------------------------------
 
@@ -1898,8 +1752,8 @@ inputs = ["lightroom-backups/ingest"]
 
 # --- linear by `api` ----------------------------------------------------
 
-# A Linear workspace over its GraphQL API, signed in through latchkey
-# (`latchkey auth browser linear`), with every option set.
+# A Linear workspace over its GraphQL API, signed in through latchkey, with
+# every option set.
 [[groups]]
 id = "linear"
 name = "Linear"
@@ -1960,19 +1814,13 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["linkedin/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "linkedin"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["linkedin/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "linkedin"
 function = "embed"
 command = "datalib-step"
-inputs = ["linkedin/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- media by `fswalk` --------------------------------------------------
 
@@ -1992,7 +1840,7 @@ command = "datalib-step"
 [steps.params]
 ignore = ["**/.Trash/**", "**/Thumbnails/**"]  # gitignore-style patterns left out of the
                                                # scan, on top of any .gitignore; default none
-max_bytes = "64 GB"            # skip a larger file entirely (no row); unset is no limit
+max_bytes = "64 GB"            # skip a larger file, with a warning naming it; unset is no limit
 payload_max_bytes = "8 GiB"    # above this, skip the tag-independent payload hash
                                # (`payload_blake3` stays NULL); default 8 GiB
 playlists = true               # index .m3u / .m3u8 playlists; default true
@@ -2013,9 +1861,9 @@ inputs = ["media/ingest"]
 
 # --- notion by `api` ----------------------------------------------------
 
-# Notion over its API, signed in through latchkey (`latchkey auth set notion
-# -H "Authorization: Bearer ntn_…" -H "Notion-Version: 2026-03-11"`), with
-# every option set, and searchable.
+# Notion over its API, signed in through latchkey with one stored credential
+# carrying both the token and the version header, with every option set, and
+# searchable.
 [[groups]]
 id = "notion"
 name = "Notion"
@@ -2058,25 +1906,19 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["notion/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "notion"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["notion/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "notion"
 function = "embed"
 command = "datalib-step"
-inputs = ["notion/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- pdf by `fswalk` ----------------------------------------------------
 
 # Every PDF under a folder on this machine, with every option set, and
 # searchable. No account and no credentials. A scanned, image-only PDF is
-# recorded but gives no text: there is no OCR yet.
+# recorded but gives no text, as there is no OCR yet; one warning counts them.
 [[groups]]
 id = "pdf"
 name = "PDFs"
@@ -2090,7 +1932,7 @@ command = "datalib-step"
 [steps.params]
 ignore = ["drafts/**", "**/.Trash/**"]  # gitignore-style patterns to skip, on top of any
                                         # .gitignore in the tree; default none
-max_bytes = "512 MiB"  # skip a file larger than this; the default
+max_bytes = "512 MiB"  # skip a larger file, with a warning naming it; the default
 ocr = false            # OCR for pages with no text: not supported yet, so it must stay false
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
@@ -2109,19 +1951,13 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["pdf/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "pdf"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["pdf/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "pdf"
 function = "embed"
 command = "datalib-step"
-inputs = ["pdf/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- perseus by `github` ------------------------------------------------
 
@@ -2168,19 +2004,13 @@ alignment_pairs = [["perseus-grc2", "perseus-eng4"]]
 # [steps.params.common]
 # input_path = "~/Downloads/perseus-tei"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "perseus"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["perseus/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "perseus"
 function = "embed"
 command = "datalib-step"
-inputs = ["perseus/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- signal by `backup` -------------------------------------------------
 
@@ -2214,27 +2044,18 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["signal/ingest"]
 
-[steps.params]
-period = "month"  # span of each rendered doc: month (default), day, year or all
-
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "signal"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["signal/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "signal"
 function = "embed"
 command = "datalib-step"
-inputs = ["signal/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- slack by `api` -----------------------------------------------------
 
-# Slack over its API, signed in through latchkey (`latchkey auth browser
-# slack`), with every option set, and searchable.
+# Slack over its API, signed in through latchkey, with every option set, and
+# searchable.
 [[groups]]
 id = "slack"
 name = "Slack"
@@ -2303,19 +2124,13 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["slack/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "slack"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["slack/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "slack"
 function = "embed"
 command = "datalib-step"
-inputs = ["slack/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- sms_backup_restore by `backup` -------------------------------------
 
@@ -2347,25 +2162,19 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["sms_backup_restore/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "sms_backup_restore"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["sms_backup_restore/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "sms_backup_restore"
 function = "embed"
 command = "datalib-step"
-inputs = ["sms_backup_restore/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- todoist by `api` ---------------------------------------------------
 
-# Your Todoist over its API, signed in through latchkey
-# (`latchkey auth browser todoist`, or paste the API token from
-# Settings → Integrations → Developer), with every option set.
+# Your Todoist over its API, signed in through latchkey (by browser, or with
+# the API token from Settings → Integrations → Developer), with every option
+# set.
 [[groups]]
 id = "todoist"
 name = "Todoist"
@@ -2403,19 +2212,13 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["todoist/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "todoist"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["todoist/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "todoist"
 function = "embed"
 command = "datalib-step"
-inputs = ["todoist/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- whatsapp by `backup` -----------------------------------------------
 
@@ -2453,19 +2256,13 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["whatsapp/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "whatsapp"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["whatsapp/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "whatsapp"
 function = "embed"
 command = "datalib-step"
-inputs = ["whatsapp/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # --- yolink by `api` ----------------------------------------------------
 
@@ -2521,19 +2318,9 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["yolink/ingest"]
 
-# Its numbers as time series, for charts and the time-series index: add
-# `yolink/render_time_series` to `unified_time_series_index/time_series_index`'s inputs.
+# Its numbers as time series, for charts and the time-series index.
 [[steps]]
 group = "yolink"
 function = "render_time_series"
 command = "datalib-step"
 inputs = ["yolink/ingest"]
-
-# Free-text search by keyword (BM25). Add it to
-# `unified_document_index/qmd_aggregator`'s inputs. A time-series source
-# takes no `embed` step: its pages are summaries of numbers.
-[[steps]]
-group = "yolink"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["yolink/render_markdown"]

@@ -71,11 +71,13 @@ pub fn write_samples(out_dir: &Path) -> Result<Vec<String>> {
 
 fn text(uuid: &str, author: &str, at: i64, body: &str) -> NormalizedChatItem {
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: uuid.to_string(),
         author_handle: None,
         author_kind: AuthorKind::Named,
         author_display: author.to_string(),
         date_ms: Some(at),
+        date_offset_secs: None,
         text: Some(body.to_string()),
         kind: ItemKind::Text,
         attachments: vec![],
@@ -110,6 +112,8 @@ fn chat(id: &str, display: &str, items: Vec<NormalizedChatItem>) -> NormalizedCh
         contacts: Vec::new(),
         inputs: Vec::new(),
         id: id.to_string(),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: id.to_string(),
         display: display.to_string(),
         title: Some(display.to_string()),
@@ -122,7 +126,6 @@ fn chat(id: &str, display: &str, items: Vec<NormalizedChatItem>) -> NormalizedCh
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {
-            period_key: "all".to_string(),
             markdown_uuid: id.to_string(),
             source_ref: None,
             items,

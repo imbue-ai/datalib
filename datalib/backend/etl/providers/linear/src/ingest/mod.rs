@@ -550,7 +550,7 @@ async fn download(api: &dyn Api, opts: FetchOptions, found: RunProblems) -> Resu
         }
     };
     s.requests = api.requests();
-    run.finish(&result, &s).await;
+    run.finish(found.ended_early(), &result, &s).await;
     result.map(|()| s)
 }
 
@@ -566,9 +566,11 @@ async fn phases(ctx: &mut Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
     if nothing_yet && matches!(ended.0, LinearError::Unauthorized(_)) {
         return Err(
             anyhow::Error::new(Upstream::CredentialRefused).context(format!(
-                "Linear refused the credential: {}. Sign in again with \
-             `latchkey auth browser linear`.",
-                ended.0
+                "Linear refused the credential: {}. {}.",
+                ended.0,
+                datalib_etl_web::latchkey::sign_in_advice(
+                    "Sign in again with `latchkey auth browser linear`"
+                )
             )),
         );
     }

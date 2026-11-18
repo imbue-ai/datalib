@@ -34,7 +34,7 @@ async function anAuthorChip(page: import("@playwright/test").Page) {
 
 test("an author with a handle is drawn as a chip link", async ({ page, request }) => {
   const resp = await request.get(
-    "/applet/unified_document_index/search?q=source_id%3Aslack&limit=200",
+    "/applet/unified_grid_and_search_index/search?q=source_id%3Aslack&limit=200",
   );
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as { rows: Row[] };
@@ -64,14 +64,14 @@ test("right-click on the chip offers its copies, and a double-click opens the pe
     .poll(() => page.evaluate(() => (window as unknown as { __copied?: string }).__copied))
     .toBe(value);
 
-  const bar = page.locator('[data-testid="search-input"]');
-  const query = (await bar.getAttribute("data-query")) ?? "";
+  const grid = page.locator(".grid-wrap").first();
+  const query = (await grid.getAttribute("data-shown-query")) ?? "";
   await chip.dblclick();
   const card = page.locator(".person");
   await expect(card.locator(".person-name")).not.toHaveText("", { timeout: 10_000 });
   await expect(card.locator(".person-section").first()).toHaveClass(/person-seen-here/);
   // The grid's own search is left as it was.
-  await expect(bar).toHaveAttribute("data-query", query);
+  await expect(grid).toHaveAttribute("data-shown-query", query);
 });
 
 /// The Source cell is a group chip (docs/dev/chips.md): datalib-http
@@ -113,7 +113,7 @@ test("a storage report's group and step are chips that open their cards", async 
   request,
 }) => {
   const resp = await request.get(
-    `/applet/unified_document_index/search?q=${encodeURIComponent("source:datalib")}&limit=500`,
+    `/applet/unified_grid_and_search_index/search?q=${encodeURIComponent("source:datalib")}&limit=500`,
   );
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as {

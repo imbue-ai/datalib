@@ -12,7 +12,7 @@
 // with the reason as its tooltip. On a selection that mixes kinds, an
 // entry some of the rows take is disabled, naming a row that does not.
 
-export type MenuKind = "group" | "step" | "applet" | "system";
+export type MenuKind = "group" | "step" | "applet" | "system" | "section";
 
 /// The slice of a Manage row the menu reads.
 export type MenuTarget = {
@@ -21,7 +21,7 @@ export type MenuTarget = {
   kind: MenuKind;
   /// The source type, or null for the index group and its steps.
   type: string | null;
-  /// The step's function (`ingest`, `qmd_aggregator`, …); null off a step.
+  /// The step's function (`ingest`, `unified_grid_and_search_index`, …); null off a step.
   func: string | null;
   runBlocked: string | null;
   editBlocked: string | null;
@@ -111,12 +111,11 @@ export function notComparableReason(t: MenuTarget): string | null {
 export function noStoreReason(t: MenuTarget): string | null {
   if (t.kind === "applet") return "An applet writes no store";
   if (t.kind === "system") return "The run log is plain SQLite, with no commit history";
-  if (t.func === "qmd_aggregator" || t.func === "keyword_index" || t.func === "embed") {
-    return "The QMD index keeps no doltlite store";
-  }
+  if (t.func === "embed") return "An embed writes vectors to a cache, with no commit history";
   if (t.func === "embedding_map") return "The embedding map keeps no doltlite store";
-  if (t.func === "grid_index") return "The grid index is plain SQLite, with no commit history";
-  if (t.kind === "group" && t.id === "unified_document_index") {
+  if (t.func === "unified_grid_and_search_index")
+    return "The grid index is plain SQLite, with no commit history";
+  if (t.kind === "group" && t.id === "unified_grid_and_search_index") {
     return "The document index keeps no doltlite store";
   }
   return null;
@@ -132,13 +131,7 @@ export function notResettableReason(t: MenuTarget): string | null {
   if (t.kind === "system") return NOT_IN_CONFIG;
   if (t.kind === "applet") return "An applet writes no store";
   if (t.kind === "step" && t.func === "embedding_map") return null;
-  if (
-    !t.type ||
-    t.func === "grid_index" ||
-    t.func === "qmd_aggregator" ||
-    t.func === "keyword_index" ||
-    t.func === "embed"
-  ) {
+  if (!t.type || t.func === "unified_grid_and_search_index" || t.func === "embed") {
     return "Reset a source; the index follows it";
   }
   return null;
@@ -186,7 +179,9 @@ function tidySeparators(entries: MenuEntry[]): MenuEntry[] {
   return out;
 }
 
-export function rowMenu(targets: MenuTarget[], opts: MenuOptions): MenuEntry[] {
+export function rowMenu(selected: MenuTarget[], opts: MenuOptions): MenuEntry[] {
+  // A heading holds rows and is nothing itself: no entry is about it.
+  const targets = selected.filter((t) => t.kind !== "section");
   if (targets.length === 0) return [];
   const one = targets.length === 1;
   const only = targets[0];

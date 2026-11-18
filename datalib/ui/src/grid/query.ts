@@ -2,11 +2,15 @@
 // wire: how a value is quoted into a `key:value` token, how a token is
 // added to a query, and the two right-click entries that add one. The
 // grammar itself is `datalib_query` on the backend; the unified grid's
-// search sends it to `/applet/unified_document_index`, the run log's to `/api/log`.
+// search sends it to `/applet/unified_grid_and_search_index`, the run log's to `/api/log`.
+// What the server splits a query at: Rust's `char::is_whitespace`, which
+// is Unicode's White_Space. JS `\s` is not the same set: it lacks U+0085.
+const SPLITS = /\p{White_Space}/u;
+
 /// `value` as one token: bare when it can be, double-quoted otherwise.
 /// Mirrors `datalib_query::quote` (`\"` and `\\` escape inside quotes).
 export function quoteValue(v: string): string {
-  return /[\s:"]/.test(v) || v === "" || v.startsWith("-") ? quoted(v) : v;
+  return SPLITS.test(v) || /[:"]/.test(v) || v === "" || v.startsWith("-") ? quoted(v) : v;
 }
 
 /// A term's value may hold a colon, since a term splits at its first one
@@ -14,7 +18,8 @@ export function quoteValue(v: string): string {
 /// `datalib_query::exact_term`: always quoted, which a key that matches
 /// a bare value in part reads as the whole value.
 export function filterToken(key: string, value: string, exclude: boolean, whole = false): string {
-  const bare = !whole && !(/[\s"]/.test(value) || value === "" || value.startsWith("-"));
+  const bare =
+    !whole && !(SPLITS.test(value) || value.includes('"') || value === "" || value.startsWith("-"));
   return `${exclude ? "-" : ""}${key}:${bare ? value : quoted(value)}`;
 }
 
@@ -93,7 +98,7 @@ export function plainWords(query: string): string {
 }
 
 /// How long to wait after a keystroke before searching. A change to the
-/// free text is a qmd search when `ranked`: up to seconds long, and its
+/// free text is a ranked search when `ranked`: up to seconds long, and its
 /// embedding is finished even once the page has moved on. So it waits
 /// for a real pause; a filter is a quick read and keeps up.
 export function searchDelay(before: string, after: string, ranked: boolean): number {

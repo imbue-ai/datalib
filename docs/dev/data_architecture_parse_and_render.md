@@ -70,8 +70,8 @@ precisely because being wrong here is cheap to correct.
 ### The render-store contract
 
 After download, we run transformations for display and indexing —
-render to markdown with YAML frontmatter, index the markdown with qmd,
-derive `grid_rows` for the UI.
+render to markdown with YAML frontmatter, index the documents for
+search, derive `grid_rows` for the UI.
 
 The cross-provider contract is the **render store**: one doltlite
 database per source, at
@@ -81,7 +81,12 @@ database per source, at
     (the primary key for the `.md`), its `renderer_version`, its
     `md_path` and the `bucket_key` it was rendered from. Nothing on it
     is stamped per run — a re-render of an unchanged document writes
-    an identical row.
+    an identical row. Its `front` is the document's front
+    matter as its renderer handed it: facts in order
+    (`etl/render/src/front_matter.rs`'s `Front`), which one function
+    draws as the YAML block the document opens with. Every renderer
+    hands its front matter this way and its document as sections, and
+    the fixture test refuses a provider that does not.
   - `grid_rows` — the document's projected rows. Each carries, in its
     `supplied_terms` column, what it answers to in search beyond its
     other columns: an email's To, Cc and Bcc by handle, the people a
@@ -89,14 +94,37 @@ database per source, at
     took part in it. chat-common and contact-common supply them; the
     index melts them into its search terms, one indexed row per
     term (`etl/render/src/search_terms.rs`).
-  - `edges` — its outgoing links.
+  - `edges` — its outgoing links: a `Link` the page draws, or a
+    `ReplyTo` from an item to the one it answers.
+  - `data_nodes` and `filings` — the containers its rows live in, from its
+    own up to the top of the source, and what they are filed under
+    besides (`docs/dev/grid_rows.md` § "`parent_uuid`, …"). Like edges
+    they belong to the document.
+  - `sections` — what each piece of the document says, in order, kept
+    apart from how it is drawn. An item a renderer has split (chat-common
+    does) keeps its body alone, with no header or wrapper, who it was
+    addressed to (name and handle) and its labels; the store draws its header again from its row.
+    Any other piece is kept whole and marked `framed`, so whatever reads
+    it draws nothing around it; a piece that is layout alone (front
+    matter, a `<details>` opener) the renderer marks as frame, and it is
+    not kept. A renderer that keeps its whole page as one piece keeps
+    its front matter at the start of it. The search index draws its text
+    from it (`search_index/src/text.rs`): each item as an envelope line
+    (who, to whom, when), its labels and its body; a page, a document
+    whose first piece is framed, as a line of the facts worth searching
+    for from its front matter (`markdowns.front`: the source, the kind,
+    the calendar, the repository …), then each framed piece as the words
+    a person reads, without its front matter, tags, link targets or
+    escapes. The grid index does not copy it
+    ([`documents_to_blocks.md`](plans/documents_to_blocks.md)
+    §"Store the body, format on read").
   - `source_contacts` and `source_contact_handles` — the people it
     describes or mentions, each as its source describes them (a
     `NormalizedContact`, `contact_schema/`), and the handles that reach
     them. chat-common adds one per author handle with no provider code;
     contact-common adds a card's own. Like edges they belong to the
     document, and the index answers "who is this handle" from them
-    (`unified_document_index`'s `POST /people`).
+    (`unified_grid_and_search_index`'s `POST /people`).
   - `problems` — what render could not do getting there (§4).
   - `render_inputs` and `render_cursor` — what each bucket was rendered
     from, and how far into the raw store the last run got (§5).
@@ -170,15 +198,13 @@ row, no `.md` file — and its problem rows are the whole record of it.
 
 ### What is still a file: the markdown
 
-The rendered `.md` lives on disk rather than in a table, and moving it
-is gated on something specific: **qmd consumes a markdown tree.** The
-semantic index shells out to `@tobilu/qmd` over `render_markdown/`, so
-the tree cannot simply stop existing — it would have to be materialized
-for the indexer, or qmd's role taken over by something that reads from
-the database (a direction
-[`multimodal_retrieval.md`](plans/multimodal_retrieval.md) already
-proposes for other reasons). A smaller thing points the same way: the
-markdown is deliberately human-readable and greppable on disk.
+The rendered `.md` lives on disk rather than in a table. Search does
+not read it: `unified_grid_and_search_index`'s keyword pass and each source's `embed`
+(`datalib/backend/datalib_step/src/search_index.rs`) draw a document's
+text from the render store (`IndexedMarkdownStore::index_docs`), and
+`embed` runs the embedding model in process. What keeps the file is
+the document view, which serves it (below), and that the markdown is
+deliberately human-readable and greppable on disk.
 Moving the markdown into the store saves space only if the file tree
 then goes away; `plans/multimodal_retrieval.md` §4 measured the same
 text already stored five times on a real data root.
@@ -186,9 +212,16 @@ text already stored five times on a real data root.
 Whatever the medium, the *contract* holds: render emits a human
 artifact and a separate machine-readable projection, and the index
 reads the projection — **it never re-parses markdown** (AGENTS.md's
-"QMDs are write-only"), whatever database the markdown sits in.
+"Rendered markdown is write-only"), whatever database the markdown sits in.
 
 ### Upstream text is escaped where it becomes markup
+
+Every way upstream text has gone wrong on its way to the page or to
+search is a case in the text-edge library,
+[`etl/text_edges/`](../../datalib/backend/etl/text_edges/README.md),
+and a change to how text is escaped is checked against it;
+`datalib/ui/tests/goldens/text_edges_preview.html` shows each case as
+the app draws it.
 
 The UI renders every document with markdown-it and `html: true`
 (`ui/src/cards/renderDocument.ts`), because the section wrappers are
@@ -202,13 +235,25 @@ The rule: **a string that is plain text upstream is escaped at the
 point it becomes markup**, by the helper for where it lands —
 `datalib_etl_render::html` lists them (between tags, in an attribute,
 on one markdown line, a multi-line body, a link target, a code span or
-block). A string the source itself authored as markup goes in as it
-is: a Notion page's markdown, a GitHub PR's description, an email's
-HTML part after htmd, an assistant's reply. Escaping never drops a
-character; the grid's search text keeps the text as typed, and
-`plain_text` (the Contents cell) reads the escapes back. A renderer's
-test of this feeds a field `<script>x</script> & co` and checks it
-renders escaped.
+block). **Markup a source authored goes in as written**, HTML
+included: a prompt, an assistant's reply or a project's instructions
+in Claude, ChatGPT, Codex or Claude Code; a GitHub or GitLab
+description, review or comment; a Todoist task, description or
+comment; an email's `text/html` part and Google Takeout's Gemini answers and
+My Maps descriptions after htmd; a PDF's pages as pdf-inspector wrote
+them; a Notion page. Its formatting (`<details>`, `<img>`, `<br>`,
+`<kbd>`, a table) is what its author meant, and escaping it also
+turned its code into entities that search could not read. What keeps a
+tag in it from reaching past its own message is the page, not the
+renderer: the sanitizer and the frame's policy stop scripts, and each
+message is rendered as a fragment of its own (§"One section cannot
+reach the next"), so a renderer whose text goes in as written declares
+its sections. chat-common closes a fence or an HTML block a message
+leaves open (`close_open_blocks`), so the message's own `</div>` is not
+read as code. Escaping never drops a character, and `plain_text` (the
+Contents cell) reads the escapes back, an escaped `<tag>` as text. A
+renderer's test of a plain-text field feeds it `<script>x</script> &
+co` and checks it renders escaped.
 
 The trap is text between tags on a markdown line — the message
 header's `## <span class="msg-author">…</span>`: markdown-it parses it
@@ -229,11 +274,118 @@ hundred generated strings. A provider's private text paths (Facebook
 posts, Claude's tool results, the time-series facts) are not reached
 by it and keep their own tests.
 
+**Text is HTML only when its declared type says so**, never because of
+where it came from. An email's parts are read by their own
+Content-Type: mail-parser's HTML body list follows RFC 8621 and holds a
+`text/plain` part that has no HTML alternative, and sending that
+through htmd lost every `<…>` in a plain-text patch and ran its lines
+together.
+
+**A name a person reads to tell what something is — a title, an author
+or recipient, a reactor, a filename, a label — loses its Unicode bidi
+controls** (`datalib_etl_render::html::without_bidi_controls`: the
+overrides and embeddings U+202A–U+202E and the isolates U+2066–U+2069).
+A right-to-left override shows `evil.exe` as `exe.live`. The marks
+U+200E, U+200F and U+061C stay: they reorder no letters, and
+right-to-left names carry them. A message's body keeps them. The
+shared writers apply it for every source:
+
+- on the page: `Title` (every `<h1>`), `message::chip_link` and
+  `entity_link` (every chip, its text and its hover), `MessageHeader`'s
+  author, `front_matter::yaml_name` (the `title:` key), and
+  `html::escape_name_inline` / `escape_name_text` for a name with no
+  handle, a filename or a label, which each renderer calls where it
+  writes one (calendar-common, contact-common, forge-render-common,
+  Notion, Todoist, Google Drive, PDF, Lightroom; chat-common settles
+  its chat and items first);
+- in the store: `grid_index::apply_one`, which every write of a
+  document into a render store or the grid index goes through
+  (`IndexedMarkdownStore::put_document` included), takes it through
+  `names::settled`. That strips the rows' kind, source label, author,
+  contact, email, phone, account, project, org, channel, subject and
+  supplied search terms; each edge's label; each source contact's
+  names, org, title, groups and members; and each photo's title,
+  headline, copyright, creator, camera, lens, color label, keywords,
+  people, albums, place names, file name and folder. A row's preview
+  and a photo's caption are prose and keep their controls. A
+  `GridRow` string column is either settled there or listed as an
+  id, path, stamp or body in `every_grid_row_string_is_settled_or_kept`,
+  which fails on a new column that is in neither list.
+
+A change to what these write bumps
+`datalib_etl_render::SHARED_RULES_VERSION`, which rides in every
+source's render params, so every source renders again; a provider
+bumps its own version only for its own change.
+
 Front matter is YAML, and a value from upstream goes through
 `datalib_etl_render::front_matter::yaml_scalar`, which JSON-quotes it,
 so a line break, a quote or a `---` inside cannot end the line or the
 block. The applet strips front matter at the first line that is `---`
 by itself.
+
+### One section cannot reach the next
+
+Escaping covers only text that was plain upstream: markup a source
+authored goes in as it is, and a renderer can miss a field. Rendered as
+one string, a tag one message leaves open would run
+on through every message after it: an unclosed
+`<div style="display:none">` would hide the rest of the conversation,
+and a copied `<div id="m-…" data-section-uuid="…" class="msg">` could
+pose as a later message, so that a click on that message's grid row
+landed on the copy. Markdown has no "close everything here" marker.
+
+So **the UI renders and sanitizes each message as a fragment of its
+own.** The HTML parser closes whatever a fragment leaves open at the
+fragment's end, so nothing in one message can wrap or replace the next.
+
+**Where the messages begin comes from the projection, never from the
+text.** Upstream text can contain any bytes, the wrapper's included,
+but it cannot move a length the renderer recorded. A renderer hands
+its document over as `Section`s (`etl/render/src/section.rs`): keyed
+pieces, one per message, each keyed by its `data-section-uuid`, and
+unkeyed ones (the front matter and title, the `<details>` opener and
+closer around a run of tool steps). Joined in order they are the `.md`.
+The render store keeps their layout, each piece's uuid or none and its
+length in bytes, in the document's `markdowns.section_layout`; the grid
+index copies it; and the document route returns it beside the body as
+`sections`, each length counted in UTF-16 code units, the way
+JavaScript indexes a string. The route checks the layout against the
+file it read and sends none if they disagree, which only happens while
+a render is rewriting that file.
+
+How the UI draws a body with a layout (`ui/src/cards/renderDocument.ts`):
+
+- **The unkeyed pieces are the page's frame.** They are rendered
+  together, as one markdown string with a placeholder where each
+  message goes, so a `<details>` opened in one still closes in a later
+  one. They hold only what the renderer writes itself; the title in
+  them is escaped.
+- **Each keyed piece is rendered and sanitized alone.** One that opens
+  with the renderer's wrapper line (`<div id="m-{uuid}"
+  data-section-uuid="{uuid}" …>`, its uuid the piece's key) and ends
+  with `</div>` is drawn as that wrapper with the inside rendered as a
+  fragment of its own, so a `</div>` in a message cannot close the
+  wrapper early either.
+- **Only the renderer's wrapper answers to a message's id.** Inside a
+  piece, an `id="m-…"` or a `data-section-uuid` that names any message
+  of the document is taken off.
+- **A message draws only inside its own box.** `documentBody.css`
+  gives every wrapper `contain: paint`, so `position: fixed`, a
+  negative margin or a transform in one message cannot cover another.
+
+A renderer that declares no sections stores no layout, and its body is
+drawn as one fragment, as every body was before; its wrappers still get
+`contain: paint`. Garmin, Perseus, Notion, Google Takeout's My Maps
+pages and the time-series pages declare none. `grep -rln 'Section::keyed' datalib/backend/etl`
+lists the renderers that declare them. Teaching another one is filling
+`RenderedMarkdown::sections`, and the next render stores its layout.
+
+The cost is a sanitizer pass per message: in the unit tests' jsdom, a
+2,000-message conversation took about 0.7 s piece by piece against
+0.4 s whole. `ui/tests/section_isolation.test.ts` holds the rule, and
+`ui/tests/e2e/section-isolation.spec.ts` checks it in a browser on a
+real document, with a control that shows the same text does hide the
+next message once the layout is taken away.
 
 ## 3. The projection
 
@@ -515,7 +667,7 @@ in principle and not built. The sink is the `problems` table
 starts in the source's raw store, everything else in its render
 store, and the render store carries the raw store's rows forward so
 one store holds the source's whole list. From there it is copied into
-the unified document index, counted on the Manage row and shown on the
+the unified grid and search index, counted on the Manage row and shown on the
 document. How it is wired at each stage:
 
 | stage | how a problem gets in | swept by |
@@ -523,7 +675,6 @@ document. How it is wired at each stage:
 | fetch, one record | `record_object_attempt`'s failure arm (`record_object_error`), in the raw store, `Reason::FetchFailed` | the next attempt on that record, success or failure |
 | fetch, a configured entry upstream does not have | `RunProblems::config`, in the raw store, keyed `config:<setting>:<value>` | the next run that looked every entry up, whose set replaces the last one's whole |
 | fetch, a listing or phase the run could not do | `RunProblems::listing` / `phase`, in the raw store, keyed `listing:<name>` / `phase:<name>` | the next run that reached every listing and phase; one that was stopped or cut short clears none (`data_architecture_ingestion.md` §"Error handling") |
-| fetch, carried into render | the render step reads the raw store's rows at the commit it rendered from and replaces its own fetch-stage rows with them, re-minted under the source's id, with `item_uuid` set where the provider's `item_of_entity` names a row the store holds (`render.rs`, `carry_fetch_problems`) | every render |
 | grid row | `GridRowBuilder::build_or_record` | the document, when re-rendered |
 | parse, in a document | `NormalizedChatItem::problems` (`own_stamp_ms` for a stamp) | the document |
 | parse, no document yet | `RenderCtx::report_unparsed` with a `ReadScope` | the tables the parse read whole |
@@ -531,7 +682,7 @@ document. How it is wired at each stage:
 
 The fetch-stage rows are the download side's; the rule for writing
 one is in [`data_architecture_ingestion.md` §"Error handling"](data_architecture_ingestion.md#error-handling),
-and how they travel is [`etl/README.md` §"Problems flow downstream with the data"](/datalib/backend/etl/README.md#problems-flow-downstream-with-the-data).
+and where they are read is [`etl/README.md` §"Problems stay in the step that found them"](/datalib/backend/etl/README.md#problems-stay-in-the-step-that-found-them).
 
 The audit that produced them is
 [`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md).
@@ -570,7 +721,7 @@ what to change, the sink is wrong.
 [`step_protocol.md`](step_protocol.md) draws one line — absent vs
 malformed — and classifies a record that will not deserialize as a
 `data` failure, which fails the step and poisons its entire downstream
-subtree, including the `grid_index` fan-in that depends on *every*
+subtree, including the `unified_grid_and_search_index` fan-in that depends on *every*
 source. Right for "the store will not open," wrong for "one of forty
 thousand Slack messages has a field we did not expect."
 
@@ -689,7 +840,7 @@ Two tables in the render store, both written by the driver
 (`datalib_step/src/render.rs`):
 
 - **`render_cursor`** — one row: the raw store's commit the last run
-  consumed, and the render params (a period, a label filter — whatever
+  consumed, and the render params (a label filter, a size cap — whatever
   each processor declares through `RenderProcessor::render_params`)
   the documents were rendered with. Beside the processors' own, the
   driver adds two of every source's: the render store's DDL hash and
@@ -706,9 +857,10 @@ Two tables in the render store, both written by the driver
   per raw row a bucket's render **asked for, found or not**. A thread
   rendered while its author's `users` row had not been fetched yet
   records `(users, U123)` anyway, so the row's arrival names the
-  thread. Keyed on the bucket rather than the document because a
-  periodizing renderer (slack, signal, beeper) turns one conversation
-  into several documents, and the inputs belong to the conversation.
+  thread. Keyed on the bucket rather than the document because one
+  conversation can render as several documents (a session and each of
+  its sub-agents' transcripts), and the inputs belong to the
+  conversation.
   `markdowns.bucket_key` is the link back: the bucket each document
   came from.
 
@@ -745,7 +897,17 @@ With a cursor, a raw doltlite store and something declared, the driver
 runs the **reverse lookup** (`reverse_lookup`): it pins the raw store's
 HEAD, asks `dolt_diff` for every changed key in every table
 `render_inputs` mentions between the cursor and the pin, and reads back
-the buckets that declared any of those rows. The provider is handed the
+the buckets that declared any of those rows. A table that held rows at
+the cursor and holds none at the pin — every table of a store `--reset`
+emptied — is answered without its diff, which would read every row that
+left: for each bucket that named rows of it, the bucket's keys are
+looked up at the cursor until one is found (a primary-key seek in
+`dolt_at_<table>`). That row left, so the bucket is stale and has lost
+a row; a bucket that read the table whole is stale too. A bucket that
+only ever looked up keys the table did not have read nothing that
+changed, and telling it apart needs the diff, so then the table is
+diffed after all, as it is when a key cannot be sought exactly. The
+answer is the diff's either way. The provider is handed the
 pin and that stale set (`RenderCtx::raw_pin`, `RenderCtx::stale_buckets`,
 together `RawRange`), reads at the pin and never at HEAD, so what it
 loads is what the set was computed against. A table the driver cannot
@@ -758,9 +920,11 @@ and modified rows of its primary tables, or `changed_rows` mapped
 through the rows it loads anyway where the key lives inside the payload.
 `RawRange::narrow` joins the two; `narrow_by` also hands back the stale
 keys whose raw row no longer exists, for the processor to declare with
-nothing. `global_fanout_tables` — a table whose change re-renders the
-whole source — is empty everywhere but email under a label filter,
-where the mailbox tree decides which threads render at all.
+nothing. `fanout_query` — a change that re-renders the whole source —
+is unset everywhere but email under a label filter, where a mailbox
+added, removed, renamed or moved can change which threads render at
+all. It names those columns, not the table: a mailbox row that changed
+only in a key the filter does not read must not re-render every thread.
 
 **Every emitted document is written.** There is no fingerprint deciding
 whether a write is needed: a row identical to the stored one is no
@@ -789,8 +953,8 @@ in the same transaction as the storage report and the cursor
 
   | the processor said | the bucket's documents |
   |---|---|
-  | `declare_bucket` with the rows it read | replaced by what it emitted; any other document under the key is removed, rows and `.md` file (a periodized bucket that re-rendered to fewer documents drops the extra ones) |
-  | `declare_bucket` with no rows, and emitted nothing | removed **only when its rows left it**: the raw diff reports `removed` for a row the bucket was last built from (its `render_inputs` as they stood before the run), or every one of those rows is now read by a bucket that is new this run (it had no `render_inputs` before) — the key the bucket is minted from changed (a renamed address book re-keys its cards), and its rows build that bucket instead. A bucket that already read those rows is no evidence: a calendar series reads every row of its changed occurrences, and a Claude project page's rows are all read by its conversations. Otherwise they stay as they were, each with a `no_document` warning, and the bucket keeps its old `render_inputs` |
+  | `declare_bucket` with the rows it read | replaced by what it emitted; any other document under the key is removed, rows and `.md` file (a bucket that re-rendered to fewer documents drops the extra ones) |
+  | `declare_bucket` with no rows, and emitted nothing | removed **only when its rows left it**: a row the bucket was last built from (its `render_inputs` as they stood before the run) left — the raw diff reports it `removed`, or its table, emptied since, held it at the cursor — or every one of those rows is now read by a bucket that is new this run (it had no `render_inputs` before) — the key the bucket is minted from changed (a renamed address book re-keys its cards), and its rows build that bucket instead. A bucket that already read those rows is no evidence: a calendar series reads every row of its changed occurrences, and a Claude project page's rows are all read by its conversations. Otherwise they stay as they were, each with a `no_document` warning, and the bucket keeps its old `render_inputs` |
   | `exclude_bucket` — left out on purpose (email's label filter), or known gone (a calendar reads every event row each run, so a key no event mints is gone though its row is still there: a "this and following" edit moves an occurrence to a new UID) | removed, on the renderer's word |
   | `fail_bucket(why)` — its build failed | kept, each with a `render_failed` error carrying `why`, even on a full walk |
 
@@ -809,8 +973,7 @@ in the same transaction as the storage report and the cursor
   rendered everything (version or params changed) **and** in which
   every processor reported the raw commit it read
   (`RenderCtx::consumed`). Then a document the walk did not produce —
-  a chat re-bucketed under a different period, a uuid minted by the old
-  recipe — is gone, except the documents of a bucket the table above
+  a uuid minted by the old recipe — is gone, except the documents of a bucket the table above
   keeps. A first run with no cursor is not a full walk, and
   neither is one in which a processor read no store (none on disk,
   nothing committed): it said nothing about what should exist, and
@@ -823,14 +986,14 @@ problem, so one bucket that will not build neither fails the step nor
 makes every later run a full walk.
 
 The `.md` file matters as much as the rows: `md_path` is what
-`/applet/unified_document_index/chat/{uuid}` serves and what qmd indexed, so a
+`/applet/unified_grid_and_search_index/chat/{uuid}` serves, so a
 document deleted from the store but left on disk is a deletion the user
 can still read. A document that comes back at a different path loses
-the file at its old one (`put_document`). `grid_index` needs no part in
+the file at its old one (`put_document`). `unified_grid_and_search_index` needs no part in
 any of this — it learns of a removal from the render store's own diff.
 
 Across a version bump or a params change the store is **kept**: its
-history, the commit `grid_index` last consumed, and the cursor. "Render
+history, the commit `unified_grid_and_search_index` last consumed, and the cursor. "Render
 every bucket again" and "forget where I was" are different requests,
 and only the first is ever wanted — a re-keyed document then reaches the
 index as a deletion plus an addition rather than as an old row nobody
@@ -984,9 +1147,10 @@ If [object identity](data_architecture_ingestion.md#object-identity-ship-of-thes
 
 The principle: **every event-shaped `GridRow` carries an ISO-8601 timestamp with explicit offset.** What `created_at`, `modified_at` and `touched_at` each mean, for a document row and for a row inside one, is in [`grid_rows.md`](grid_rows.md#created_at-modified_at-and-touched_at). For any of them:
 
-- **Real upstream timestamp when one exists.** Preserved with the explicit offset upstream gave us (typically `+00:00` for APIs that hand back UTC).
+- **Real upstream timestamp when one exists**, on the clock it was written on: an email's `Date:` offset, a calendar event's zone.
 - **Microsecond-bump for synthesized timestamps.** Blocks and sub-items that lack their own timestamp (chat blocks within a message, ChatGPT messages within a conversation that only has a create_time) get a synthesized one by bumping microseconds off the parent's stamp. This keeps within-parent order stable across re-runs and guarantees no collision with real stamps (real timestamps don't carry per-row µs precision from upstream).
-- **Strict ISO-8601 with offset, not bare `Z` or naive.** A naive timestamp can't be globally sorted alongside a `+02:00` one without a hidden timezone assumption.
+- **Strict RFC 3339 with an offset, never naive.** A naive timestamp can't be globally sorted alongside a `+02:00` one without a hidden timezone assumption.
+- **`Z` means the clock is unknown, `+00:00` that it was UTC** ([RFC 9557](https://www.rfc-editor.org/rfc/rfc9557.html) §2, which updated RFC 3339; its older `-00:00` for "unknown" is read but never written, since ISO 8601 refuses it). A message whose source records only an instant (epoch milliseconds, a service's own `Z`, a Slack author with no profile zone) is written `Z`, in its header and its rows' `created_at`, so the viewer can show it on its reader's clock rather than claim the sender was on UTC. Every parser reads `Z` and `+00:00` as the same instant, so sorting and `before:` / `after:` are unaffected.
 
 The crate that enforces all of this —
 `IsoOffsetTimestamp::now_local()`, `parse_strict`,
@@ -1011,12 +1175,20 @@ machine-readable value, which the viewer reads to draw the stamp; the
 `timestamp_html` (class `msg-ts`); anywhere else, `stamp_html` for an
 instant, or `stamp_text_html` for a stamp a record keeps as text: an
 RFC 3339 instant, a `YYYY-MM-DD` day, or else the text as written. A
-stamp keeps the offset the source gave it. A grid row's text is not
-markdown and keeps plain words (`datalib_time::short_ts`). Not
-`<time>`s yet: a calendar event's "When", which is a range in the
-event's own zone; a contact's details ("Friends since"); and Garmin's
-record lines and a device's last sync, which Garmin writes without an
-offset.
+stamp keeps the offset the source gave it: a message header takes it
+beside the instant (`MessageHeader::offset_secs`, which chat-common fills
+from `NormalizedChatItem::date_offset_secs`), and the message's grid row
+keeps the same offset in `created_at`. A message whose source names no
+clock (epoch milliseconds, a service's own `Z`, a Slack `ts`: a profile's
+`tz` is where its author is now, not where they were) is written in `Z`, which RFC 9557 defines as "local offset unknown"
+(`datalib_time::with_unknown_offset`), in the header and in
+`created_at`, and the viewer reads it on its reader's clock. A real UTC
+clock (an email dated `+0000`) stays `+00:00`. A grid
+row's text is not markdown and keeps plain words
+(`datalib_time::short_ts`). Not `<time>`s yet: a contact's details
+("Friends since"), and a Garmin device's last sync, which Garmin writes
+without an offset. What a viewer may rely on is
+[the document contract](../user/rendered_documents.md#a-time).
 
 ### No fabricated timestamps
 A corollary of "[don't make up data](data_architecture_ingestion.md#wire-fidelity-of-the-raw-store)", called out because timestamps are the easiest place to violate it:

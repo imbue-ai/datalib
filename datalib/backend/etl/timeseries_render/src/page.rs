@@ -10,12 +10,14 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{escape_md_inline, md_code_span};
 use datalib_etl_render::processor::RenderCtx;
+use datalib_etl_render::section::{self, Section};
 use datalib_etl_render::title::Title;
 use datalib_id::{entity_id_str, IdNamespace};
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
@@ -24,6 +26,7 @@ use crate::series::{by_device, earliest_ts_ms, latest_ts_ms, Series};
 use crate::text::{human_gap, iso, median_gap, stamp, thousands};
 use crate::time_series::time_series_chart;
 use crate::units::{series_label, spec_in, Axis, MetricSpec, Quantity};
+use datalib_etl_render::section::Pieces;
 
 const KIND_PAGE: &str = "timeseries";
 const KIND_DEVICE: &str = "device";
@@ -212,14 +215,17 @@ pub fn render_all(
     }
 
     let m_uuid = profile.document_uuid(source_id);
-    let body = render_markdown(profile, page, source_id, &m_uuid, &rendered_plots);
+    let (front, sections) = render_markdown(profile, page, source_id, &m_uuid, &rendered_plots);
+    let node = page_node(profile, source_id, &m_uuid);
 
     write_page(
         root,
         source_id,
         &m_uuid,
-        body,
+        front,
+        sections,
         profile.render_version,
+        vec![node],
         |md_rel, problems| build_grid_rows(profile, page, source_id, &m_uuid, md_rel, problems),
         on_doc_complete,
     )?;
@@ -236,12 +242,15 @@ pub fn render_all(
     Ok(summary)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn write_page(
     root: &Path,
     source_id: &str,
     m_uuid: &str,
-    body: String,
+    front: Front,
+    sections: Vec<Section>,
     render_version: u32,
+    data_nodes: Vec<DataNodeRow>,
     build_rows: impl FnOnce(&str, &mut Vec<ProblemRow>) -> Vec<GridRow>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
@@ -251,7 +260,8 @@ pub fn write_page(
     );
     let dir = md_path.parent().expect("a document's file has a folder");
     fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
-    fs::write(&md_path, body).with_context(|| format!("write {}", md_path.display()))?;
+    fs::write(&md_path, section::join(&sections))
+        .with_context(|| format!("write {}", md_path.display()))?;
 
     let md_rel = md_path
         .strip_prefix(root)
@@ -262,6 +272,8 @@ pub fn write_page(
     let rows = build_rows(&md_rel, &mut problems);
 
     on_doc_complete(RenderedMarkdown {
+        section_layout: None,
+        content_hash: None,
         markdown_uuid: m_uuid.to_string(),
         source_id: source_id.to_string(),
         // Not the raw HEAD: it moves on every ingest, and a row whose
@@ -271,9 +283,12 @@ pub fn write_page(
         md_path,
         render_version,
         rows,
-        sections: Vec::new(),
+        sections,
+        front,
         edges: Vec::new(),
         contacts: Vec::new(),
+        data_nodes,
+        filings: Vec::new(),
         photos: Vec::new(),
         problems,
     })
@@ -359,24 +374,20 @@ fn render_markdown(
     source_id: &str,
     m_uuid: &str,
     plots: &[(&Quantity, PlotFacts)],
-) -> String {
-    let mut out = String::with_capacity(8 * 1024);
+) -> (Front, Vec<Section>) {
+    let mut out = Pieces::new();
     let earliest = earliest_ts_ms(page.series);
     let latest = latest_ts_ms(page.series);
     let title = profile.page_title(source_id);
 
-    out.push_str("---\n");
-    let _ = writeln!(out, "markdown_uuid: {m_uuid}");
-    let _ = writeln!(out, "source_id: {source_id}");
-    let _ = writeln!(out, "provider: {}", profile.tag);
-    let _ = writeln!(out, "title: {}", yaml_scalar(&title));
-    if let Some(ts) = earliest.and_then(iso) {
-        let _ = writeln!(out, "created_at: {}", yaml_scalar(&ts));
-    }
-    if let Some(ts) = latest.and_then(iso) {
-        let _ = writeln!(out, "modified_at: {}", yaml_scalar(&ts));
-    }
-    out.push_str("---\n\n");
+    let front = Front::new()
+        .plain("markdown_uuid", m_uuid)
+        .plain("source_id", source_id)
+        .plain("provider", profile.tag)
+        .name("title", &title)
+        .text_if("created_at", earliest.and_then(iso).as_deref())
+        .text_if("modified_at", latest.and_then(iso).as_deref());
+    out.push_str(&front.draw());
 
     out.push_str(
         &Title {
@@ -406,10 +417,10 @@ fn render_markdown(
     render_plot_sections(&mut out, profile, plots);
     render_device_sections(&mut out, profile, page, source_id);
     out.push_str(&page.store_section);
-    out
+    (front, out.into_sections())
 }
 
-fn render_plot_sections(out: &mut String, profile: &PageProfile, plots: &[(&Quantity, PlotFacts)]) {
+fn render_plot_sections(out: &mut Pieces, profile: &PageProfile, plots: &[(&Quantity, PlotFacts)]) {
     if plots.is_empty() {
         let _ = write!(
             out,
@@ -441,7 +452,7 @@ fn render_plot_sections(out: &mut String, profile: &PageProfile, plots: &[(&Quan
 }
 
 fn render_device_sections(
-    out: &mut String,
+    out: &mut Pieces,
     profile: &PageProfile,
     page: &Page<'_>,
     source_id: &str,
@@ -458,20 +469,8 @@ fn render_device_sections(
     let by_device = by_device(page.series);
     for dev in &page.devices {
         let uuid = profile.device_uuid(source_id, &dev.key);
-        let _ = writeln!(
-            out,
-            "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--{}\">\n",
-            profile.tag
-        );
-        let _ = writeln!(out, "### {}\n", escape_md_inline(&dev.name));
-        let _ = writeln!(out, "*{}*\n", dev.facts);
-        match by_device.get(dev.key.as_str()) {
-            Some(list) if !list.is_empty() => render_metric_table(out, profile, list),
-            _ => {
-                let _ = write!(out, "*(no {})*\n\n", profile.noun);
-            }
-        }
-        out.push_str("</div>\n\n");
+        let series = by_device.get(dev.key.as_str()).map(Vec::as_slice);
+        out.keyed(&uuid, device_section(profile, &uuid, dev, series));
     }
 
     // Values can exist for a device the store no longer names. Say so
@@ -498,6 +497,30 @@ fn render_device_sections(
             profile.orphan_hint,
         );
     }
+}
+
+fn device_section(
+    profile: &PageProfile,
+    uuid: &str,
+    dev: &Device,
+    series: Option<&[&Series]>,
+) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--{}\">\n",
+        profile.tag
+    );
+    let _ = writeln!(out, "### {}\n", escape_md_inline(&dev.name));
+    let _ = writeln!(out, "*{}*\n", dev.facts);
+    match series {
+        Some(list) if !list.is_empty() => render_metric_table(&mut out, profile, list),
+        _ => {
+            let _ = write!(out, "*(no {})*\n\n", profile.noun);
+        }
+    }
+    out.push_str("</div>\n\n");
+    out
 }
 
 fn render_metric_table(out: &mut String, profile: &PageProfile, series: &[&Series]) {
@@ -557,6 +580,15 @@ fn capitalize(word: &str) -> String {
 /// summary, not an index of every device. A row that will not validate
 /// is dropped and recorded on `problems` rather than failing the
 /// source's render.
+/// The page, read together, at the top of its source: its devices are
+/// rows in it, and it is the source's one document.
+fn page_node(profile: &PageProfile, source_id: &str, m_uuid: &str) -> DataNodeRow {
+    DataNodeRow::new(m_uuid, m_uuid, source_id, "Sensor Timeseries")
+        .named(Some(profile.page_title(source_id)))
+        .upstream(KIND_PAGE, source_id, None)
+        .read_together()
+}
+
 fn build_grid_rows(
     profile: &PageProfile,
     page: &Page<'_>,
@@ -568,6 +600,7 @@ fn build_grid_rows(
     let title = profile.page_title(source_id);
     let by_device = by_device(page.series);
     let version = profile.render_version;
+    let in_page = Lineage::top().below(&page_node(profile, source_id, m_uuid));
 
     let mut doc_text = format!(
         "{title}\n{} devices, {} {}",
@@ -634,6 +667,7 @@ fn build_grid_rows(
                 .upstream_id(Some(dev.key.clone()))
                 .upstream_entity_kind(Some(KIND_DEVICE.to_string()))
                 .markdown_uuid(Some(m_uuid.to_string()))
+                .lineage(&in_page)
                 .build_or_record(source_id, m_uuid, version, problems),
         );
     }
@@ -683,13 +717,44 @@ mod tests {
             sample_count: 0,
             store_section: String::new(),
         };
-        let mut out = String::new();
-        render_device_sections(&mut out, &PROFILE, &page, "s");
+        let mut pieces = Pieces::new();
+        render_device_sections(&mut pieces, &PROFILE, &page, "s");
+        let sections = pieces.into_sections();
+        assert_eq!(
+            sections[1].uuid.as_deref(),
+            Some(PROFILE.device_uuid("s", "k1").as_str())
+        );
+        let out = section::join(&sections);
         assert!(
             out.contains("### &lt;script&gt;x&lt;/script&gt; &amp; co\n"),
             "{out}"
         );
         assert!(!out.contains("<script>"), "{out}");
         assert!(out.contains("row:** `` a`b ``."), "{out}");
+    }
+
+    /// The page is read together, and each device's row sits in it.
+    #[test]
+    fn a_device_sits_in_its_page() {
+        let page = Page {
+            head: None,
+            devices: vec![Device {
+                key: "k1".into(),
+                name: "Engineering".into(),
+                facts: String::new(),
+                grid_text: "Engineering".into(),
+                last_ts_ms: None,
+            }],
+            series: &[],
+            sample_count: 0,
+            store_section: String::new(),
+        };
+        let m_uuid = PROFILE.document_uuid("s");
+        let node = page_node(&PROFILE, "s", &m_uuid);
+        assert!(node.read_together && node.parent_uuid.is_none());
+        let rows = build_grid_rows(&PROFILE, &page, "s", &m_uuid, "x.md", &mut Vec::new());
+        assert_eq!(rows[0].parent_uuid, None);
+        assert_eq!(rows[1].parent_uuid.as_deref(), Some(m_uuid.as_str()));
+        assert_eq!(rows[1].read_uuid.as_deref(), Some(m_uuid.as_str()));
     }
 }

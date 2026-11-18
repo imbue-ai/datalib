@@ -7,7 +7,9 @@ use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
 use datalib_etl_web::http::LatchkeySettings;
 
-use datalib_etl_email_config::{EmailConfig, EmailGmailApi, EmailLiveMode, EmailSync, MboxSync};
+use datalib_etl_email_config::{
+    AppleMailSync, EmailConfig, EmailGmailApi, EmailLiveMode, EmailSync, GmailFetch, MboxSync,
+};
 use std::path::PathBuf;
 
 use crate::ingest;
@@ -20,7 +22,7 @@ pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
 
 /// Ingest wave: a live table (`jmap`, `gmail`) selects a server
 /// mode; `mbox` reads the `.mbox` at its `path`, or beside `gmail` is
-/// the Takeout that mode starts from.
+/// the Takeout that mode starts from; `apple_mail` reads Mail's folder.
 pub fn plan_ingest(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     if config.outlink_format.is_some() || !config.only_render_labels.is_empty() {
@@ -40,14 +42,18 @@ pub fn plan_ingest(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn 
         Some(EmailLiveMode::GmailApi(gmail)) => Some(ExtractMode::GmailApi {
             gmail: gmail.clone(),
             takeout: config.takeout(),
+            fetch: config.gmail_fetch(),
         }),
         // Planning never touches the filesystem — `datalib-dag --check`
         // and the schema tests run where the data is not — so whether the
         // path really is an mbox is checked when the download runs.
-        None => config.mbox.clone().map(|mbox| ExtractMode::Mbox {
-            input_path: mbox.path(),
-            account_config: mbox,
-        }),
+        None => match (&config.apple_mail, &config.mbox) {
+            (Some(apple_mail), _) => Some(ExtractMode::AppleMail(apple_mail.clone())),
+            (None, mbox) => mbox.clone().map(|mbox| ExtractMode::Mbox {
+                input_path: mbox.path(),
+                account_config: mbox,
+            }),
+        },
     };
 
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
@@ -74,12 +80,15 @@ enum ExtractMode {
     GmailApi {
         gmail: EmailGmailApi,
         takeout: Option<PathBuf>,
+        fetch: Vec<GmailFetch>,
     },
     /// File-backed `.mbox` ingest (e.g. a Google Takeout export).
     Mbox {
         input_path: PathBuf,
         account_config: MboxSync,
     },
+    /// The accounts of the Mail app on this Mac.
+    AppleMail(AppleMailSync),
 }
 
 /// Email's download processor. Owns its raw doltlite store end to end.
@@ -148,7 +157,11 @@ impl DataProcessor for EmailIngest {
                         s.blobs_errored,
                     )
                 }
-                ExtractMode::GmailApi { gmail, takeout } => {
+                ExtractMode::GmailApi {
+                    gmail,
+                    takeout,
+                    fetch,
+                } => {
                     if let Some(path) = takeout
                         .as_ref()
                         .filter(|p| !ingest::mbox::is_mbox_input(p))
@@ -159,13 +172,24 @@ impl DataProcessor for EmailIngest {
                             path.display()
                         ));
                     }
-                    let since = match gmail.since.as_deref() {
-                        Some(s) => Some(
-                            datalib_time::TimeBound::parse(s)?
-                                .instant(&datalib_time::parse_strict(ctx.now)?),
-                        ),
-                        None => None,
-                    };
+                    let now = datalib_time::parse_strict(ctx.now)?;
+                    let sections = fetch
+                        .iter()
+                        .map(|section| {
+                            let since = section
+                                .since
+                                .as_deref()
+                                .map(|s| Ok::<_, anyhow::Error>(
+                                    datalib_time::TimeBound::parse(s)?.instant(&now),
+                                ))
+                                .transpose()?;
+                            Ok(ingest::gmail_api::Section {
+                                labels: section.labels.clone(),
+                                whole_threads: section.whole_threads(),
+                                since,
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
                     let cache = match takeout {
                         Some(_) => Some(host_fingerprints().await?),
                         None => None,
@@ -177,9 +201,12 @@ impl DataProcessor for EmailIngest {
                         latchkey: self.latchkey.clone(),
                         takeout: takeout.clone(),
                         cache,
-                        only_labels: self.only_extract_labels.clone(),
-                        whole_threads: self.whole_threads,
-                        since,
+                        sections,
+                        labels_setting: if gmail.fetch.is_some() {
+                            ingest::gmail_api::K_FETCH_LABELS
+                        } else {
+                            ingest::K_ONLY_EXTRACT_LABELS
+                        },
                         blob_size_limit_bytes: self.blob_size_limit_bytes,
                         flush_batch: None,
                         progress: ctx.progress.clone(),
@@ -246,6 +273,37 @@ impl DataProcessor for EmailIngest {
                         s.blobs_stored,
                         s.blobs_skipped,
                         s.parse_errors,
+                    )
+                }
+                ExtractMode::AppleMail(sync) => {
+                    let s = ingest::apple_mail::fetch(ingest::apple_mail::FetchOptions {
+                        db,
+                        path: sync.path(),
+                        account: ingest::apple_mail::AppleMailAccountConfig {
+                            account: sync.account.clone(),
+                            account_id: sync.account_id.clone(),
+                            display_name: sync.display_name.clone(),
+                            email_address: sync.email_address.clone(),
+                            is_personal: sync.is_personal,
+                        },
+                        only_labels: self.only_extract_labels.clone(),
+                        whole_threads: self.whole_threads,
+                        cache: host_fingerprints().await?,
+                        progress: ctx.progress.clone(),
+                        control: ctx.control.clone(),
+                    })
+                    .await?;
+                    format!(
+                        "mailboxes={} threads={} emails={} unchanged={} without_file={} \
+                         missing_attachments={} removed={} read_errors={}",
+                        s.mailboxes_upserted,
+                        s.threads_upserted,
+                        s.emails_upserted,
+                        s.emails_unchanged,
+                        s.emails_without_file,
+                        s.emails_missing_attachments,
+                        s.emails_removed,
+                        s.read_errors,
                     )
                 }
             })

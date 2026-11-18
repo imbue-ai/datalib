@@ -67,11 +67,13 @@ rust_test(
     ],
     deps = [
         "//datalib/backend/etl/forge-ingest-common:datalib_etl_forge_ingest_common",
+        "//datalib/backend/etl/providers/gitlab_config:datalib_etl_gitlab_config",
         "//datalib/backend/etl/providers/gitlab_render:datalib_etl_gitlab_render",
         "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/web:datalib_etl_web",
         ":datalib_etl_gitlab",
+        "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",

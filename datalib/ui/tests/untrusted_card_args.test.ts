@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { agentSeedView } from "../src/cards/libs/agentSeedView";
 import { logLineView } from "../src/cards/libs/logLineView";
+import { tableView } from "../src/cards/libs/tableView";
+import { GRID_TABLES, listedTable } from "../src/cards/tableUrls";
 import type { CardCtx, CardRender } from "../src/cards/types";
 
 /// A card's arguments come from whoever wrote its source, which may be a
@@ -209,5 +211,51 @@ describe("the agent seed card", () => {
     await Promise.resolve();
     expect(copied).toHaveLength(1);
     expect(copied[0]).toContain("`card_1x2y3z`");
+  });
+});
+
+describe("a grid or table card", () => {
+  /// `gridView({url})` and `tableView({url})` fetched any path a link
+  /// named, and drew its answer as columns, rows and an "Open source"
+  /// link: a blob a stranger sent, served under `/data/`, became a table
+  /// the link chose.
+  const hostile = [
+    "/data/0123abcd",
+    "/applet/unified_grid_and_search_index/chat/x",
+    "/applet/unified_grid_and_search_index/problems/../../../data/x",
+    "/applet/unified_grid_and_search_index/problems?q=x",
+    "/api/manage/rows/../../data/x",
+    "/api/remote_media?url=https://attacker.example/x.json",
+    "//attacker.example/api/manage/rows",
+    "https://attacker.example/api/manage/rows",
+    "",
+    7,
+  ];
+
+  it("refuses a table it does not know, and asks for nothing", async () => {
+    for (const url of hostile) {
+      // `gridView` itself asks this; GridCard does not load under jsdom.
+      expect(() => listedTable("gridView", url, GRID_TABLES), String(url)).toThrow(/gridView/);
+      expect(() => loose(tableView)({ url }), String(url)).toThrow(/tableView/);
+      const seen = await requestsDuring(() => openCard(() => loose(tableView)({ url })));
+      expect(seen, String(url)).toEqual([]);
+    }
+  });
+
+  it("still opens each table the app itself opens", () => {
+    for (const url of [
+      "/applet/unified_grid_and_search_index/problems",
+      "/applet/unified_grid_and_search_index/search",
+    ]) {
+      expect(listedTable("gridView", url, GRID_TABLES), url).toBe(url);
+    }
+    for (const url of [
+      "/api/manage/rows",
+      "/api/remote_media/allow",
+      "/api/remote_media/fetched",
+      "/applet/unified_grid_and_search_index/problems",
+    ]) {
+      expect(() => tableView({ url }), url).not.toThrow();
+    }
   });
 });

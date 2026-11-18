@@ -16,9 +16,16 @@
 //
 // Usage: node render_preview.mjs --md <dir-of-md> --out <file.html> [--ui <ui-root>]
 //          [--only <text>] [--title <title>]
+//        node render_preview.mjs --edges <hostile_samples.json> --out <file.html> [--ui <ui-root>]
 //
 // `--only` keeps the documents whose markdown holds that text: the
 // contact preview is every page contact-common wrote.
+//
+// `--edges` draws the text-edge library (datalib/backend/etl/text_edges)
+// instead, each case through the app's own `renderDocument` (sanitizer
+// and per-message fragments included), bundled by Vite and run in jsdom.
+// The markdown pages draw with markdown-it alone, because the fixture's
+// files come without the section layout the app renders by.
 
 import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname, extname, resolve } from "node:path";
@@ -33,7 +40,8 @@ function arg(name, fallback) {
   throw new Error(`missing --${name}`);
 }
 
-const mdDir = resolve(arg("md"));
+const edgesFile = arg("edges", "");
+const mdDir = edgesFile ? "" : resolve(arg("md"));
 const outFile = resolve(arg("out"));
 // Two roots, deliberately. `--ui` is the *source* tree, so editing a
 // .vue and re-running shows the new CSS with no rebuild. Packages come
@@ -41,7 +49,7 @@ const outFile = resolve(arg("out"));
 // the rules_js-linked node_modules rather than a host `pnpm install`.
 const uiRoot = resolve(arg("ui", join(import.meta.dirname, "..")));
 const only = arg("only", "");
-const pageTitle = arg("title", "Render preview");
+const pageTitle = arg("title", edgesFile ? "Text edges" : "Render preview");
 const pkgRoot = resolve(import.meta.dirname, "..");
 
 /** Every `<style>` block of a .vue file, concatenated. */
@@ -95,6 +103,11 @@ const css = [
   .preview-source-name { font-size: 1.1rem; margin: 2.5rem 0 0; scroll-margin-top: .5rem;
     border-top: 2px solid var(--datalib-accent); padding-top: .75rem; }
   .preview-count { font-size: .75rem; font-weight: 400; color: var(--datalib-muted); }
+  .preview-edge { font-size: .85rem; color: var(--datalib-muted); margin: 0 0 .4rem; }
+  .preview-failing { font-size: .8rem; margin: 0 0 .4rem; padding: .2rem .5rem;
+    border-left: 3px solid #d97706; background: color-mix(in srgb, #d97706 12%, transparent); }
+  .preview-typed { font-size: .75rem; margin: 0 0 .5rem; padding: .4rem .6rem; white-space: pre-wrap;
+    border: 1px dashed var(--datalib-border); border-radius: 4px; }
   .preview-jump { flex: none; display: flex; flex-wrap: wrap; gap: .5rem; padding: .4rem 1rem;
     font-size: .8rem; border-bottom: 1px solid var(--datalib-border);
     background: var(--datalib-card-bg); }
@@ -242,6 +255,9 @@ function redactVolatileSizes(raw, text) {
   return text.replace(/\b\d+(\.\d+)? (B|KiB|MiB|GiB)\b/g, "‹size›");
 }
 
+const slug = (s) => s.replace(/[^a-zA-Z0-9]+/g, "-");
+
+function markdownPages() {
 const mdFiles = readdirSync(mdDir, { recursive: true })
   .filter((f) => typeof f === "string" && f.endsWith(".md"))
   .filter((f) => !only || readFileSync(join(mdDir, f), "utf8").includes(only))
@@ -255,8 +271,6 @@ for (const rel of mdFiles) {
   if (!bySource.has(source)) bySource.set(source, []);
   bySource.get(source).push(rel);
 }
-
-const slug = (s) => s.replace(/[^a-zA-Z0-9]+/g, "-");
 
 const docs = [...bySource]
   .map(
@@ -278,10 +292,79 @@ ${rels
 </section>`,
   )
   .join("\n");
+  return { docs, jump: [...bySource.keys()] };
+}
 
-const jumpList = [...bySource.keys()]
-  .map((s) => `<a href="#src-${slug(s)}">${s}</a>`)
-  .join("");
+const escapeHtml = (s) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/** The app's `renderDocument`, bundled by Vite from the `--ui` tree and
+ *  run against a jsdom window, so DOMPurify sanitizes as in a page. */
+async function appRenderDocument() {
+  const { JSDOM } = await import("jsdom");
+  const { build } = await import("vite");
+  const dom = new JSDOM("<!doctype html><html><body></body></html>");
+  globalThis.window = dom.window;
+  globalThis.document = dom.window.document;
+  const built = await build({
+    configFile: false,
+    logLevel: "silent",
+    root: uiRoot,
+    resolve: { alias: { "@": join(uiRoot, "src") } },
+    build: {
+      write: false,
+      minify: false,
+      lib: {
+        entry: join(uiRoot, "src/cards/renderDocument.ts"),
+        formats: ["es"],
+        fileName: "renderDocument",
+      },
+    },
+  });
+  const chunk = [built].flat()[0].output.find((o) => o.type === "chunk" && o.isEntry);
+  const url = `data:text/javascript;base64,${Buffer.from(chunk.code).toString("base64")}`;
+  return (await import(url)).renderDocument;
+}
+
+/** Each case of the text-edge library as the app draws it, grouped by
+ *  how its text arrives, under what it is about and the text as typed. */
+async function edgePages() {
+  const renderDocument = await appRenderDocument();
+  const { cases } = JSON.parse(readFileSync(resolve(edgesFile), "utf8")).edges;
+  const byEnters = new Map();
+  for (const c of cases) {
+    if (!byEnters.has(c.enters)) byEnters.set(c.enters, []);
+    byEnters.get(c.enters).push(c);
+  }
+  const docs = [...byEnters]
+    .map(
+      ([enters, list]) => `<section class="preview-source" id="src-${slug(enters)}">
+<h2 class="preview-source-name">${enters} <span class="preview-count">${list.length} case${
+        list.length === 1 ? "" : "s"
+      }</span></h2>
+${list
+  .map((c) => {
+    const r = c.rendered;
+    const sections = r.sections?.map((s) => ({ uuid: s.uuid, len: s.md.length })) ?? null;
+    const failing = c.fails_today
+      ? `<p class="preview-failing">Fails today: ${escapeHtml(c.fails_today)}</p>\n`
+      : "";
+    return `<div class="preview-doc" id="case-${slug(c.id)}">
+<h3 class="preview-name">${escapeHtml(c.id)}</h3>
+<p class="preview-edge">${escapeHtml(c.edge)}</p>
+${failing}<pre class="preview-typed">${escapeHtml(c.text.trim())}</pre>
+<div class="chat-body markdown-body">${renderDocument(r.body, { sections }).html}</div>
+</div>`;
+  })
+  .join("\n")}
+</section>`,
+    )
+    .join("\n");
+  return { docs, jump: [...byEnters.keys()] };
+}
+
+const { docs, jump } = edgesFile ? await edgePages() : markdownPages();
+const jumpList = jump.map((s) => `<a href="#src-${slug(s)}">${s}</a>`).join("");
 
 const html = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${pageTitle}</title>

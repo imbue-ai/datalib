@@ -231,8 +231,9 @@ export type CatalogEntry = {
   intro?: string;
   /// "Before you start": what the person has to have in hand, for a
   /// source that cannot be set up from this dialog alone. A `needs`
-  /// item may hold `code` in backticks.
-  before?: { text: string; needs: string[] };
+  /// item may hold `code` in backticks. `terminalSignIn` says the steps
+  /// are latchkey commands, which cannot reach a protected library.
+  before?: { text: string; needs: string[]; terminalSignIn?: boolean };
   /// The form, top to bottom. A field no section names is an advanced
   /// one, drawn under its own label in Advanced options.
   sections?: Section[];
@@ -240,6 +241,9 @@ export type CatalogEntry = {
   /// Set on an entry a package added (docs/dev/packages.md): its steps
   /// run the package's programs instead of `datalib-step`.
   package?: PackageOrigin;
+  /// The id of the built-in applet that shows this source's data
+  /// (`builtinApplets.ts`), which the form offers to turn on.
+  applet?: string;
 };
 
 /// Which package an entry came from, where it is unpacked relative to the
@@ -510,16 +514,12 @@ export const CATALOG: CatalogEntry[] = [
             help: "Useful for a first sync of a large account.",
             fields: ["api.conv_uuids"],
           },
-        ],
-      },
-      {
-        heading: "How far back?",
-        answers: [
-          { label: "Everything" },
           { label: "Only conversations updated since a date I choose", fields: ["api.since"] },
         ],
       },
       { heading: "Projects", fields: ["api.projects"] },
+      { heading: "Cowork", fields: ["api.cowork"] },
+      { heading: "Deleted chats", fields: ["when_deleted_upstream"] },
     ],
     fields: [
       {
@@ -542,10 +542,29 @@ export const CATALOG: CatalogEntry[] = [
         help: "Each project's description, custom instructions and knowledge documents.",
       },
       {
+        kind: "bool",
+        target: "api.cowork",
+        label: "Also copy Cowork tasks",
+        default: true,
+        help: "Each task that ran in the cloud, as a conversation: your prompts, Claude's steps and its answers.",
+      },
+      {
         kind: "int",
-        target: "api.refresh_most_recent_n_chat_count",
-        label: "Force-refresh the N most recent chats each sync",
-        help: "Empty relies on updated_at alone.",
+        target: "api.max_conversations_per_run",
+        label: "Most conversations to fetch per sync",
+        help: "The ones never fetched come first; the next sync fetches the rest. Empty is no limit.",
+      },
+      {
+        kind: "int",
+        target: "api.refetch_newest_conversations",
+        label: "Fetch the N newest again each sync",
+        help: "Even when updated_at says they have not changed, in each org. Empty fetches only what changed.",
+      },
+      {
+        kind: "int",
+        target: "api.seconds_between_requests",
+        label: "Seconds between requests",
+        help: "Empty waits none; a rate limit is still waited out.",
       },
       {
         kind: "string_list",
@@ -553,6 +572,19 @@ export const CATALOG: CatalogEntry[] = [
         target: "api.conv_uuids",
         label: "Conversations",
         help: "Chat links work too: paste one in the box.",
+      },
+      {
+        kind: "select",
+        target: "when_deleted_upstream",
+        label: "When a chat is deleted on claude.ai",
+        default: "delete_local_copy",
+        options: [
+          { value: "delete_local_copy", label: "Delete my copy too" },
+          { value: "keep_local_copy", label: "Keep my copy" },
+        ],
+        help:
+          "Keep your copy if you mean to delete chats there for privacy and still have them " +
+          "here. Check the copy before you delete anything: it can't be downloaded again.",
       },
     ],
   },
@@ -595,12 +627,6 @@ export const CATALOG: CatalogEntry[] = [
             help: "Useful for a first sync of a large account.",
             fields: ["api.conv_uuids"],
           },
-        ],
-      },
-      {
-        heading: "How far back?",
-        answers: [
-          { label: "Everything" },
           { label: "Only conversations updated since a date I choose", fields: ["api.since"] },
         ],
       },
@@ -618,6 +644,7 @@ export const CATALOG: CatalogEntry[] = [
           },
         ],
       },
+      { heading: "Deleted chats", fields: ["when_deleted_upstream"] },
     ],
     fields: [
       {
@@ -649,6 +676,43 @@ export const CATALOG: CatalogEntry[] = [
         target: "api.conv_uuids",
         label: "Conversations",
         help: "Chat links work too: paste one in the box.",
+      },
+      {
+        kind: "int",
+        target: "api.max_conversations_per_run",
+        label: "Most conversations to fetch per sync",
+        help: "The ones never fetched come first; the next sync fetches the rest. Empty is no limit.",
+      },
+      {
+        kind: "int",
+        target: "api.refetch_newest_conversations",
+        label: "Fetch the N newest again each sync",
+        help: "Even when update_time says they have not changed. Empty fetches only what changed.",
+      },
+      {
+        kind: "int",
+        target: "api.seconds_between_requests",
+        label: "Seconds between requests",
+        help: "Empty waits none; a rate limit is still waited out.",
+      },
+      {
+        kind: "int",
+        target: "api.max_listing_pages",
+        label: "Stop listing after (pages of 100)",
+        help: "A listing cut short deletes nothing here. Empty lists them all.",
+      },
+      {
+        kind: "select",
+        target: "when_deleted_upstream",
+        label: "When a chat is deleted on chatgpt.com",
+        default: "delete_local_copy",
+        options: [
+          { value: "delete_local_copy", label: "Delete my copy too" },
+          { value: "keep_local_copy", label: "Keep my copy" },
+        ],
+        help:
+          "Keep your copy if you mean to delete chats there for privacy and still have them " +
+          "here. Check the copy before you delete anything: it can't be downloaded again.",
       },
     ],
   },
@@ -895,6 +959,56 @@ export const CATALOG: CatalogEntry[] = [
     ],
   },
 
+  {
+    type: "baby_connect",
+    method: "api",
+    label: "Baby Connect",
+    blurb: "Copy everything you logged for your children: feeds, sleeps, diapers and notes.",
+    keywords: ["baby connect", "baby", "babyconnect", "tracker", "feeding", "sleep", "diaper"],
+    kind: "api",
+    icon: "baby_connect",
+    defaultName: "baby_connect",
+    nameHint: "Baby Connect",
+    wizard: true,
+    intro:
+      "Each child's month becomes a document you can read and search: every entry, with " +
+      "who logged it and the notes you typed. The first sync asks for one day at a time, " +
+      "from your eldest child's birthday.",
+    credentialService: "babyconnect",
+    // A session is two cookies: `seacloud1`, set at sign-in, and `srf`,
+    // which the home page's token must match.
+    credentialRegister: {
+      base_api_url: "https://app.babyconnect.com/",
+      login_url: "https://app.babyconnect.com/login",
+      login_flow: "cookie-capture",
+      login_flow_params: { cookieKeys: ["seacloud1", "srf"] },
+    },
+    fields: [
+      {
+        kind: "text",
+        phase: "render",
+        target: "time_zone",
+        label: "Time zone",
+        help:
+          "Where you were when you logged, as a zone name such as America/Los_Angeles. " +
+          "Baby Connect keeps times without one; empty reads them as UTC. Changing it " +
+          "re-renders; it never re-downloads.",
+      },
+      {
+        kind: "date",
+        target: "api.since",
+        label: "From",
+        help: "The first day to copy. Empty starts at your eldest child's birthday.",
+      },
+      {
+        kind: "date",
+        target: "api.until",
+        label: "Until",
+        help: "The last day to copy. Empty copies up to today.",
+      },
+    ],
+  },
+
   // ── the two `email` variants ──────────────────────────────────────
   //
   // Gmail must come before the JMAP entry: `variantKey` matching takes
@@ -1093,9 +1207,75 @@ export const CATALOG: CatalogEntry[] = [
       },
     ],
   },
+  {
+    type: "email",
+    variantKey: "apple_mail",
+    label: "Apple Mail",
+    blurb: "Copy the accounts of the Mail app on this Mac, from its own files.",
+    keywords: ["apple", "mail", "email", "mac", "emlx", "inbox", "icloud"],
+    kind: "local",
+    icon: "apple_mail",
+    defaultName: "apple-mail",
+    nameHint: "Mail on this Mac",
+    wizard: true,
+    intro:
+      "Copies the mail of every account in the Mail app on this Mac, with its mailboxes " +
+      "and read state. " +
+      "A message Mail has not downloaded yet is copied once Mail has it.",
+    sections: [
+      { heading: "Mail folder", fields: ["apple_mail.path"] },
+      {
+        heading: "Which mail?",
+        answers: [
+          { label: "Every mailbox" },
+          { label: "Only the mailboxes I choose", fields: ["only_extract_labels"] },
+        ],
+      },
+    ],
+    fields: [
+      {
+        kind: "path",
+        // Choosing the folder is what grants the app access to it on macOS
+        // (docs/dev/wizard_file_pickers.md), as for ~/Library/Messages.
+        picks: "dir",
+        pickTitle: "Choose your Mail folder",
+        startIn: "~/Library/Mail",
+        required: true,
+        target: "apple_mail.path",
+        label: "Mail folder",
+        guarded: "Let Datalib read your Mail folder",
+        help: "The folder the Mail app keeps its mail in, ~/Library/Mail. A copy of it works too.",
+      },
+      {
+        kind: "string_list",
+        target: "only_extract_labels",
+        label: "Mailboxes",
+        help:
+          "Named as Mail shows them. A mailbox inside another is named in full " +
+          "([Gmail]/Sent Mail), and choosing a parent does not include its children.",
+      },
+      {
+        kind: "text",
+        target: "apple_mail.account",
+        label: "Only this Mail account",
+        help:
+          "apple_mail.account: copy just this account, by the name of its folder under " +
+          "~/Library/Mail/V10. Empty copies every account in Mail, each under its own id.",
+      },
+      {
+        kind: "string_list",
+        phase: "render",
+        target: "only_render_labels",
+        label: "Render only these mailboxes",
+        help:
+          "A narrower filter applied at render. Empty renders everything copied. Changing it " +
+          "re-renders; it never copies again.",
+      },
+    ],
+  },
   // The catch-all `email` entry, and deliberately last: it has no
-  // `variantKey`, so it is what an email step matches when neither of
-  // the two above does — an mbox source, or a JMAP server that is not
+  // `variantKey`, so it is what an email step matches when none of
+  // the three above does — an mbox source, or a JMAP server that is not
   // Fastmail. No form, because the thing it stands for is "some other
   // way of getting mail", which is not one form.
   {
@@ -1268,6 +1448,7 @@ export const CATALOG: CatalogEntry[] = [
     // the Connect flow cannot do. The help text says how.
     canProbe: true,
     before: {
+      terminalSignIn: true,
       text: "The sign-in for this server is set up in a terminal, with latchkey:",
       needs: [
         "`latchkey services register` a service for this host.",
@@ -1564,6 +1745,7 @@ export const CATALOG: CatalogEntry[] = [
     // app password, which the Connect flow cannot do.
     canProbe: true,
     before: {
+      terminalSignIn: true,
       text: "The sign-in for this server is set up in a terminal, with latchkey:",
       needs: [
         "`latchkey services register` a service for this host.",
@@ -1723,7 +1905,10 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "claude-export",
     nameHint: "Claude export",
     wizard: true,
-    sections: [{ heading: "Export folder", fields: ["export.path"] }],
+    sections: [
+      { heading: "Export folder", fields: ["export.path"] },
+      { heading: "Deleted chats", fields: ["when_deleted_upstream"] },
+    ],
     fields: [
       {
         kind: "path",
@@ -1735,7 +1920,20 @@ export const CATALOG: CatalogEntry[] = [
         help:
           "The folder you unpacked the Claude export into: the one holding conversations.json, ~/Downloads/claude-export say. " +
           "The export is a complete snapshot: a conversation it no longer mentions is dropped " +
-          "from the copy.",
+          "from the copy, unless you keep it below.",
+      },
+      {
+        kind: "select",
+        target: "when_deleted_upstream",
+        label: "When a newer export leaves a chat out",
+        default: "delete_local_copy",
+        options: [
+          { value: "delete_local_copy", label: "Delete my copy too" },
+          { value: "keep_local_copy", label: "Keep my copy" },
+        ],
+        help:
+          "Keep your copy if you mean to delete chats there for privacy and still have them " +
+          "here. Check the copy before you delete anything: it can't be downloaded again.",
       },
     ],
   },
@@ -1750,7 +1948,10 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "chatgpt-export",
     nameHint: "ChatGPT export",
     wizard: true,
-    sections: [{ heading: "Export file", fields: ["export.path"] }],
+    sections: [
+      { heading: "Export file", fields: ["export.path"] },
+      { heading: "Deleted chats", fields: ["when_deleted_upstream"] },
+    ],
     fields: [
       {
         kind: "path",
@@ -1764,7 +1965,20 @@ export const CATALOG: CatalogEntry[] = [
           "The .zip ChatGPT emailed you a link to, as it downloaded: ~/Downloads/chatgpt-export.zip " +
           "say. Ask for one in ChatGPT's Settings → Data controls → Export data. The folder you " +
           "unzipped it into works too; type its path. The export is a complete snapshot: a " +
-          "conversation it no longer mentions is dropped from the copy.",
+          "conversation it no longer mentions is dropped from the copy, unless you keep it below.",
+      },
+      {
+        kind: "select",
+        target: "when_deleted_upstream",
+        label: "When a newer export leaves a chat out",
+        default: "delete_local_copy",
+        options: [
+          { value: "delete_local_copy", label: "Delete my copy too" },
+          { value: "keep_local_copy", label: "Keep my copy" },
+        ],
+        help:
+          "Keep your copy if you mean to delete chats there for privacy and still have them " +
+          "here. Check the copy before you delete anything: it can't be downloaded again.",
       },
     ],
   },
@@ -2059,20 +2273,6 @@ export const CATALOG: CatalogEntry[] = [
         envVar: { default: "SIGNAL_BACKUP_PASSPHRASE", holds: "passphrase" },
         help: "Name of the environment variable holding the passphrase, not the passphrase itself.",
       },
-      {
-        kind: "select",
-        target: "period",
-        phase: "render",
-        label: "Document span",
-        default: "month",
-        options: [
-          { value: "day", label: "A day" },
-          { value: "month", label: "A month" },
-          { value: "year", label: "A year" },
-          { value: "all", label: "The whole conversation" },
-        ],
-        help: "How much of a conversation goes in one rendered page.",
-      },
     ],
   },
   {
@@ -2200,20 +2400,6 @@ export const CATALOG: CatalogEntry[] = [
         label: "Copy photos and files",
         default: true,
         help: "Only the ones Beeper has downloaded. Off, a message still says what was attached.",
-      },
-      {
-        kind: "select",
-        target: "period",
-        phase: "render",
-        label: "Document span",
-        default: "month",
-        options: [
-          { value: "day", label: "A day" },
-          { value: "month", label: "A month" },
-          { value: "year", label: "A year" },
-          { value: "all", label: "The whole conversation" },
-        ],
-        help: "How much of a conversation goes in one rendered page.",
       },
     ],
   },
@@ -2370,6 +2556,7 @@ export const CATALOG: CatalogEntry[] = [
     defaultName: "lightroom",
     nameHint: "Lightroom catalog",
     wizard: true,
+    applet: "photos",
     // Download-only: a photo catalog isn't chat-shaped, so nothing is
     // rendered and no render step is declared.
     rendersDocuments: false,

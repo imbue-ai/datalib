@@ -231,7 +231,9 @@ fn put_labels(playback: &Path, user: &[(&str, &str)]) {
 async fn run_gmail(m: &Mirror, labels: &[&str]) -> FetchSummary {
     m.run(|db| {
         let mut opts = FetchOptions::new(db);
-        opts.only_labels = labels.iter().map(|s| s.to_string()).collect();
+        opts.sections = vec![gmail_api::Section::labels(
+            labels.iter().map(|s| s.to_string()).collect(),
+        )];
         gmail_api::fetch(opts)
     })
     .await

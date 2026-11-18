@@ -36,13 +36,14 @@ pub async fn get_data(
 }
 
 /// Whether `<group>/<function>` is a tree under one of the config's
-/// groups. The group is looked up, never taken as given, so the path
-/// cannot reach `system/` or anything else that is not a group's. The
-/// step itself need not be declared: a source can be render-only, its
-/// render reading an `ingest` tree no step of this config writes.
+/// groups. The group is looked up, never taken as given, and the function
+/// must be one folder name (the router decodes `%2F`, so it can arrive
+/// holding a `/`), so the path cannot reach `system/` or anything else
+/// that is not a group's. The step itself need not be declared: a source
+/// can be render-only, its render reading an `ingest` tree no step of
+/// this config writes.
 fn is_a_groups_tree(s: &AppState, group: &str, function: &str) -> bool {
-    let plain = |seg: &str| !seg.is_empty() && !seg.starts_with('.');
-    plain(function)
+    datalib_dag::config::usable_function(function)
         && crate::supervisor::load_config(&s.root)
             .is_ok_and(|c| c.cfg.groups.iter().any(|g| g.id == group))
 }

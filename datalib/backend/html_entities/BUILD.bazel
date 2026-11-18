@@ -1,0 +1,21 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Character references (`&amp;`, `&#39;`, `&hellip;`) read back to the
+# text they stand for: the one decoder every crate uses. No first-party
+# deps, so an ingest crate, a render crate and the search index can all
+# take it. Bazel-only.
+rust_library(
+    name = "datalib_html_entities",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_html_entities",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = ["@datalib_crates//:quick-xml"],
+)
+
+rust_test(
+    name = "html_entities_unittests",
+    size = "small",
+    crate = ":datalib_html_entities",
+    edition = "2021",
+)

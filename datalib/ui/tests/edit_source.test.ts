@@ -229,3 +229,70 @@ describe("untouchedSettings", () => {
     ]);
   });
 });
+
+// `gmail.fetch` has no field on any form, so the form only has to leave it be.
+describe("a Gmail source with fetch sections", () => {
+  const GMAIL = catalogFor("email")!;
+  const SECTIONS = `[[steps.params.gmail.fetch]]
+labels = ["Inbox"]
+
+[[steps.params.gmail.fetch]]
+labels = ["Sent"]
+since = "-90d"
+whole_threads = false
+`;
+  const source = (method: string, render: string) => `[[groups]]
+id = "gmail"
+type = "email"
+
+[[steps]]
+group = "gmail"
+function = "ingest"
+command = "datalib-step"
+
+${method}${SECTIONS}
+[[steps]]
+group = "gmail"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["gmail/ingest"]
+${render}`;
+  // What the form wrote, with sections then added to it by hand.
+  const FROM_THE_FORM = source(
+    `[steps.params.gmail]\nuser_id = "me"\n\n`,
+    `\n[steps.params]\noutlink_format = "gmail"\n`,
+  );
+  const BY_HAND = source("", "");
+  const saved = (text: string) =>
+    patchSource(text, {
+      entry: GMAIL,
+      group: "gmail",
+      values: seedFieldValues(GMAIL, sourceStepsOf("gmail", listSteps(text))),
+    });
+
+  it("is the Gmail form's", () => {
+    expect(GMAIL.label).toBe("Gmail");
+  });
+
+  it("names the sections among the settings it keeps", () => {
+    const kept = untouchedSettings(FROM_THE_FORM, "gmail", GMAIL).flatMap((step) => step.keys);
+    expect(kept).toContain("params.gmail.fetch");
+  });
+
+  it("saving the form unchanged leaves a source it made exactly as written", () => {
+    expect(saved(FROM_THE_FORM)).toBe(FROM_THE_FORM);
+  });
+
+  it("adds its presets to one written by hand, and keeps the sections", () => {
+    const after = saved(BY_HAND);
+    expect(after).toContain(SECTIONS);
+    const ingest = sourceStepsOf("gmail", listSteps(after)).ingest!;
+    expect(ingest.params).toMatchObject({
+      gmail: {
+        user_id: "me",
+        fetch: [{ labels: ["Inbox"] }, { labels: ["Sent"], since: "-90d", whole_threads: false }],
+      },
+    });
+    expect(saved(after)).toBe(after);
+  });
+});

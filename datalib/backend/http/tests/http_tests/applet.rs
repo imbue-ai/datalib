@@ -65,6 +65,8 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
         .put_document(
             tree,
             &RenderedMarkdown {
+                section_layout: None,
+                content_hash: None,
                 markdown_uuid: md.to_string(),
                 source_id: "slack".into(),
                 upstream_cursor: None,
@@ -73,8 +75,11 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
                 render_version: 1,
                 rows,
                 sections: Vec::new(),
+                front: Default::default(),
                 edges: Vec::new(),
                 contacts: Vec::new(),
+                data_nodes: Vec::new(),
+                filings: Vec::new(),
                 photos: Vec::new(),
                 problems: Vec::new(),
             },

@@ -4,12 +4,12 @@ import { EVERY_ROW, openRowByUuid, docBody, inDocFrame } from "./grid-helpers";
 // The focused message in the document pane gets a visible
 // "highlight window" — an accent-colored outline on all four
 // sides — so the user can tell at a glance which message they
-// clicked. This styling was lost once before (QMD rewrite) and
+// clicked. This styling was lost once before (the markdown rewrite) and
 // restored; this test pins the outline so it doesn't silently
 // regress again.
 
 test("selected message has a visible accent-colored outline", async ({ page, request }) => {
-  const resp = await request.get("/applet/unified_document_index/search?q=&limit=1000");
+  const resp = await request.get("/applet/unified_grid_and_search_index/search?q=&limit=1000");
   expect(resp.ok()).toBeTruthy();
   const data = (await resp.json()) as {
     rows: {

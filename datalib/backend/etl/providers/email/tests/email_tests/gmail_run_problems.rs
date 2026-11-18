@@ -51,8 +51,8 @@ async fn a_message_that_would_not_store_stays_owed() {
     );
     let second = run(&m, |_| {}).await.expect("second run");
     assert_eq!(
-        second.quota_units_spent, 64,
-        "profile, labels, history and the one message, whole: {second:?}"
+        second.quota_units_spent, 69,
+        "profile, labels, history, the muted search and the one message, whole: {second:?}"
     );
     assert_eq!(problems(&m).await, [format!("listed_messages:{RIKER}")]);
 
@@ -232,7 +232,10 @@ async fn a_label_walk_that_fails_costs_only_that_label() {
     }
     put_gmail_all_mail(&m.playback, &messages);
     let labels = |o: &mut FetchOptions| {
-        o.only_labels = vec!["away team".into(), "holodeck".into()];
+        o.sections = vec![gmail_api::Section::labels(vec![
+            "away team".into(),
+            "holodeck".into(),
+        ])];
     };
     run(&m, labels)
         .await

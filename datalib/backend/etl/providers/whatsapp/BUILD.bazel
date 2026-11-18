@@ -29,6 +29,7 @@ rust_library(
         "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/etl/providers/whatsapp_config:datalib_etl_whatsapp_config",
         "//datalib/backend/etl/sqlite_mirror:datalib_etl_sqlite_mirror",
+        "//datalib/backend/sqlite_open:datalib_sqlite_open",
         "//datalib/backend/whatsapp-backup:datalib_whatsapp_backup",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",
@@ -45,6 +46,7 @@ rust_binary(
     # tree; mirrors signal_make_fixture's visibility.
     visibility = ["//visibility:public"],
     deps = [
+        "//datalib/backend/sqlite_open:datalib_sqlite_open",
         "//datalib/backend/whatsapp-backup:datalib_whatsapp_backup",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",
@@ -74,6 +76,7 @@ rust_binary(
     srcs = ["src/bin/whatsapp_msgstore_probe.rs"],
     edition = "2021",
     deps = [
+        "//datalib/backend/sqlite_open:datalib_sqlite_open",
         "//datalib/backend/whatsapp-backup:datalib_whatsapp_backup",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",

@@ -29,8 +29,8 @@ that shape is written down. The download side writes through it
   `; charset=utf-8` on text. A row is an email when it is stored as
   `message/rfc822`, or stored with no type and reads as a message with
   headers; a row typed as anything else is never taken apart. Only the
-  email's own parts are looked at, not those of an email attached to it
-  ([`part_of`](src/lib.rs)). So a step that keeps whole emails gets each
+  email's own parts are looked at, not those of an email attached to it,
+  which is itself one such part ([`part_of`](src/lib.rs)). So a step that keeps whole emails gets each
   attachment served without storing it twice. Reading MIME is knowledge
   of a format, not of a source.
 

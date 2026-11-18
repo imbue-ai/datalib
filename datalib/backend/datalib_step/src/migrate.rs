@@ -26,9 +26,9 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
             ask_for_a_rerun_if(env, emitter, &store, &shape).await?;
             Ok(Vec::new())
         }
-        Function::GridIndex => {
+        Function::UnifiedGridAndSearchIndex => {
             let store = datalib_core::layout::grid_index_db(data_root);
-            let retired = datalib_core::layout::grid_index_dir(data_root)
+            let retired = datalib_core::layout::index_step_dir(data_root)
                 .join(datalib_core::layout::RETIRED_GRID_DB);
             if retired.exists() {
                 tracing::info!(
@@ -40,6 +40,14 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
             }
             let shape = datalib_etl_render::grid_index::schema_hash();
             ask_for_a_rerun_if(env, emitter, &store, &shape).await?;
+            if search_index_is_stale(env, data_root).await? {
+                tracing::info!(
+                    step = %env.step,
+                    "migrate: the search index is in another shape or was drawn by another \
+                     version; it needs a rerun"
+                );
+                emitter.needs_rerun();
+            }
             Ok(Vec::new())
         }
         Function::RenderTimeSeries | Function::TimeSeriesIndex => {
@@ -59,15 +67,38 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
             ask_for_a_rerun_if(env, emitter, &store, &shape).await?;
             Ok(Vec::new())
         }
-        // The qmd index is qmd's, and the map is redrawn from it.
-        Function::QmdAggregator
-        | Function::KeywordIndex
-        | Function::Embed
-        | Function::EmbeddingMap => {
+        Function::Embed | Function::EmbeddingMap => {
             tracing::info!(step = %env.step, "migrate: nothing of ours to bring up to date");
             Ok(Vec::new())
         }
     }
+}
+
+/// Whether the search index's keyword tables are in another shape, or a
+/// source the step reads was drawn by another version of the index text:
+/// a build that draws or chunks otherwise asks for the keyword pass,
+/// whose renders did not move.
+async fn search_index_is_stale(env: &StepEnv, data_root: &Path) -> Result<bool> {
+    let index = datalib_core::layout::grid_index_db(data_root);
+    let cache = datalib_core::layout::inference_cache_db(data_root);
+    let Some(reader) = datalib_search_index::Reader::open(&index, &cache).await? else {
+        return Ok(false);
+    };
+    let stale = stale_in(&reader, env).await;
+    reader.close().await;
+    stale
+}
+
+async fn stale_in(reader: &datalib_search_index::Reader, env: &StepEnv) -> Result<bool> {
+    if !reader.in_this_shape().await? {
+        return Ok(true);
+    }
+    for source in crate::index_steps::groups_from_inputs(&env.inputs) {
+        if reader.drawn_by_another_version(&source).await? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 async fn migrate_raw_store(
@@ -87,6 +118,7 @@ async fn migrate_raw_store(
     tracing::info!(step = %env.step, "migrate: {UPDATING}");
     emitter.progress().set_message(UPDATING);
     crate::dispatch::migrate(env.source_type()?, tree).await?;
+    adopt_sourceless_problems(env, tree).await?;
     tracing::info!(step = %env.step, "migrate: the raw store is in this build's shape");
     Ok(crate::ingest::raw_store_version(tree)
         .await?
@@ -97,6 +129,31 @@ async fn migrate_raw_store(
         })
         .into_iter()
         .collect())
+}
+
+/// Name the source on the problems an older build wrote naming none, so
+/// they count on the source's row from launch rather than from its next
+/// sync. Committed only when there was one to name.
+async fn adopt_sourceless_problems(env: &StepEnv, tree: &Path) -> Result<()> {
+    let pool = datalib_etl::doltlite_raw::open(&entities_db(tree), &[]).await?;
+    let adopted = async {
+        let n = datalib_etl::doltlite_raw::adopt_sourceless_problems(&pool, &env.group).await?;
+        if n > 0 {
+            datalib_etl::doltlite_raw::commit_run(
+                &pool,
+                &format!("migrate {}: name the source on {n} problems", env.group),
+            )
+            .await?;
+        }
+        anyhow::Ok(n)
+    }
+    .await;
+    pool.close().await;
+    let n = adopted.with_context(|| format!("name {}'s source on its problems", env.step))?;
+    if n > 0 {
+        tracing::info!(step = %env.step, problems = n, "migrate: named the source on older problems");
+    }
+    Ok(())
 }
 
 /// Answer `needs_rerun` when `store` exists and its `_datalib_meta` names
@@ -571,7 +628,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_grid_index_in_another_shape_asks_for_a_rerun() {
         let root = tempfile::tempdir().unwrap();
-        let env = env_of("unified_document_index/grid_index", Function::GridIndex);
+        let env = env_of(
+            "unified_grid_and_search_index/unified_grid_and_search_index",
+            Function::UnifiedGridAndSearchIndex,
+        );
         let ask = || async {
             let emitter = Emitter::new(env.step.clone());
             run(&env, root.path(), &emitter).await.unwrap();
@@ -599,6 +659,82 @@ mod tests {
 
         written_by_an_older_build(&db).await;
         assert!(ask().await, "an older build's shape");
+    }
+
+    /// A new version of the index's drawing or chunking moves nothing the
+    /// `unified_grid_and_search_index` step's keyword pass reads, so the migrate pass asks for it:
+    /// when a source it reads was drawn by another version, and not before
+    /// there is an index or once it is this build's; and when the index's
+    /// tables are in another shape, which its next writer empties.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_search_index_drawn_by_another_version_asks_for_the_keyword_pass() {
+        let root = tempfile::tempdir().unwrap();
+        let env = StepEnv {
+            inputs: vec!["mail/render_markdown".into()],
+            ..env_of(
+                "unified_grid_and_search_index/unified_grid_and_search_index",
+                Function::UnifiedGridAndSearchIndex,
+            )
+        };
+        let ask = || async {
+            let emitter = Emitter::new(env.step.clone());
+            run(&env, root.path(), &emitter).await.unwrap();
+            emitter.asked_for_a_rerun()
+        };
+        assert!(!ask().await, "no index yet");
+        let grid = datalib_core::layout::grid_index_db(root.path());
+        let pool = datalib_etl_render::grid_index::open_index(&grid)
+            .await
+            .unwrap();
+        datalib_etl_render::grid_index::close_index(pool)
+            .await
+            .unwrap();
+        assert!(
+            !ask().await,
+            "a grid in this build's shape, nothing searched yet"
+        );
+        let put = |key: String| async {
+            let path = datalib_core::layout::grid_index_db(root.path());
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let index = datalib_search_index::Index::open(&path).await.unwrap();
+            index
+                .put(
+                    &[datalib_search_index::IndexDoc {
+                        source_id: "mail".into(),
+                        markdown_uuid: "d".into(),
+                        content_hash: key,
+                        title: "Ten Forward".into(),
+                        head: None,
+                        sections: Vec::new(),
+                    }],
+                    &datalib_search_index::chunk::four_bytes_a_token,
+                )
+                .await
+                .unwrap();
+            index.close().await;
+        };
+        put("h.t0".to_string()).await;
+        assert!(ask().await, "drawn by an older version");
+        put(format!("h{}", datalib_search_index::text::key_suffix())).await;
+        assert!(!ask().await, "this build's version");
+        let path = datalib_core::layout::grid_index_db(root.path());
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(&path))
+            .await
+            .unwrap();
+        let moved = sqlx::query("UPDATE _datalib_meta SET value = 'an older shape' WHERE key = ?")
+            .bind(datalib_store_meta::part_key(
+                datalib_store_meta::StoreKind::SearchIndex,
+            ))
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        assert_eq!(moved.rows_affected(), 1, "the index records its shape");
+        assert!(ask().await, "tables in an older shape");
     }
 
     /// A source that has never downloaded gets no store from a migrate:

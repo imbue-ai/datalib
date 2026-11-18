@@ -44,6 +44,7 @@ fn doc(n: u8, contact: NormalizedContact, group_label: &str) -> ContactDoc {
         contact,
         doc_uuid: format!("00000000-0000-4000-8000-0000000000{n:02}"),
         group_label: group_label.to_string(),
+        address_book: None,
         member_handles: Vec::new(),
         upstream_account: None,
         inputs: Vec::new(),

@@ -1,0 +1,22 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# What keeps SQL a caller wrote to reading a store: the search applet's
+# `/sql` route runs every query through it, and the doltlite two-process
+# helper reads through it beside a live writer. Bazel-only.
+rust_library(
+    name = "datalib_sql_guard",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_sql_guard",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "@datalib_crates//:sqlx",
+    ],
+)
+
+rust_test(
+    name = "sql_guard_unittests",
+    size = "small",
+    crate = ":datalib_sql_guard",
+    edition = "2021",
+)

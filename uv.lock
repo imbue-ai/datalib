@@ -19,7 +19,7 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "doltlite", specifier = "==0.51.3" },
+    { name = "doltlite", specifier = "==0.51.13" },
     { name = "prometheus-client", specifier = ">=0.21.0" },
     { name = "pyright", specifier = ">=1.1.400" },
     { name = "ruff", specifier = ">=0.14.0" },
@@ -27,13 +27,13 @@ dev = [
 
 [[package]]
 name = "doltlite"
-version = "0.51.3"
+version = "0.51.13"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/59/f7/5389a1f5cde9997e0aaa55b5215acb22db838d265f730078cc9d17e850b5/doltlite-0.51.3.tar.gz", hash = "sha256:30562979f0b35a9d97ad6026d568c5befb661832b9b7dd8be2e1eaa5a334bc8b", size = 13094, upload-time = "2026-10-26T00:07:56.357Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bf/56/127f16d5486b7679ba0db6949ced4caa8795abf7fc2b736378955e9dc505/doltlite-0.51.13.tar.gz", hash = "sha256:53edc9ad67ae467c0c26bf845ed0650d46f3f5ca7f26e3326b081eee87a4dea1", size = 15025, upload-time = "2026-11-17T00:04:10.79Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a0/7b/7de945360d846be1c6c5a9b2219b28371f8153277f62a4573938694d6a9c/doltlite-0.51.3-py3-none-macosx_11_0_arm64.whl", hash = "sha256:69fc98143be84578d187d95ea89aea40adc937f73f0dd3de1ab763267b3c49e9", size = 1928764, upload-time = "2026-10-26T00:07:50.786Z" },
-    { url = "https://files.pythonhosted.org/packages/c7/69/afa4f518a764ce04a12e6d5f8fb6af8cd52ab0756e0a10a41601dd2c908c/doltlite-0.51.3-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:3fbd4da3447defcaa1b7f8eccbcbc7d8f8f6845ac5d297ea0f92f727f0d6edab", size = 9121978, upload-time = "2026-10-26T00:07:52.613Z" },
-    { url = "https://files.pythonhosted.org/packages/d2/80/78484510459d497b337406daaeedd16fd2070a2b2c89d87f4c30c5a9b77f/doltlite-0.51.3-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5ef67a2a77f35db4acbd3ba2226cfd33044ec39af150251c81e9c9fdde8737e6", size = 9725252, upload-time = "2026-10-26T00:07:54.569Z" },
+    { url = "https://files.pythonhosted.org/packages/27/45/9732c4872d445b12bfd28686b3628dfc94ef53360d6b80960283e66ddac7/doltlite-0.51.13-py3-none-macosx_11_0_arm64.whl", hash = "sha256:28bd1f493f1b7cc656aa3e38a43ac6c3ebb374d1e0525658c339401431b27e39", size = 2035702, upload-time = "2026-11-17T00:04:04.904Z" },
+    { url = "https://files.pythonhosted.org/packages/83/a1/3af547bed32838e9c35c8d1b596c100efd04f6dd9ff2ec5f89e98a117fd4/doltlite-0.51.13-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:33c06dc9e9780d226b1c22462d4982a40110e022d0b0b7989023b84a9e8ccd8b", size = 9647909, upload-time = "2026-11-17T00:04:06.824Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/3f/0c13132ab88c82465a5196f9cfb436dca2e5fcc1a8781124a83fb4ac0e78/doltlite-0.51.13-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:661d5584b37e8a2b9e5d25ed1aa0a02166120ead06260c18e9c95a2217bfd1dd", size = 10259357, upload-time = "2026-11-17T00:04:09.076Z" },
 ]
 
 [[package]]

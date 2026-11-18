@@ -622,7 +622,7 @@ mod tests {
 
     #[test]
     fn a_zone_or_rule_it_cannot_read_is_said_not_guessed() {
-        let start = ical("20261001T090000", Some("Pacific Standard Time"));
+        let start = ical("20261001T090000", Some("Customized Time Zone"));
         let rules = ["FREQ=DAILY".to_string()];
         let s = Series {
             start: &start,
@@ -634,7 +634,7 @@ mod tests {
         let w = window("2026-10-01T00:00:00Z", "2026-11-01T00:00:00Z");
         assert_eq!(
             expand(&s, &w, None),
-            Err(Unexpandable::Zone("Pacific Standard Time".into()))
+            Err(Unexpandable::Zone("Customized Time Zone".into()))
         );
         let start = ical("20261001T090000", Some(LA));
         let rules = ["FREQ=FORTNIGHTLY".to_string()];

@@ -12,12 +12,15 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use datalib_etl::download_problems::{RecordProblem, SkippedRecord};
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
 use datalib_etl_files::file_changes_scan;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_files::fswalk;
+
+use datalib_problems::{Problem, Reason, Severity};
 
 pub use db::{db_path_for, RawDb, WriteBatch};
 use kind::{Container, MediaClass};
@@ -167,7 +170,7 @@ async fn scan_tree(
         |walked| {
             if opts.skip_dataless && is_dataless(walked) {
                 tracing::info!(path = %walked.path.display(), "media_skipped_dataless");
-                dataless.lock().unwrap().push(walked.path.clone());
+                dataless.lock().unwrap().push(walked.rel.clone());
                 return false;
             }
             true
@@ -176,7 +179,9 @@ async fn scan_tree(
     .await?;
     summary.errors += scan.errors.len();
     scan.report_problems(&found, "files");
-    summary.dataless_skipped = dataless.into_inner().unwrap().len();
+    let dataless = dataless.into_inner().unwrap();
+    summary.dataless_skipped = dataless.len();
+    found.skipped("cloud_placeholders", cloud_placeholders(&dataless));
     // A file the scan found and did not read — evicted to the cloud, or
     // over `max_bytes` — is still there, so its rows stay.
     let declined = scan.present_unread.clone();
@@ -185,7 +190,7 @@ async fn scan_tree(
         prev.playlists.remove(rel);
     }
     summary.entries_scanned = scan.files.len();
-    summary.too_large = scan.stats.too_large;
+    summary.too_large = scan.over_max_bytes.len();
     summary.hashed = scan.stats.hashed;
     summary.reused = scan.stats.reused;
     opts.progress.set_length(Some(scan.files.len() as u64));
@@ -310,6 +315,26 @@ async fn scan_tree(
 /// A heuristic: a filesystem reporting no block counts at all looks entirely
 /// evicted, which is why `skip_dataless` can be turned off. iCloud's `.icloud`
 /// markers need no handling — `kind::accept` never visits them.
+/// The one warning on every file the scan left in the cloud. One, because a
+/// library evicted to iCloud is most of a library. The file it names is the
+/// first by path, so an unchanged tree says the same thing and writes nothing.
+fn cloud_placeholders(dataless: &[String]) -> Option<SkippedRecord> {
+    let first = dataless.iter().min()?;
+    let count = match dataless.len() {
+        1 => "1 file is".to_string(),
+        n => format!("{n} files are"),
+    };
+    Some(SkippedRecord {
+        entry: "cloud_placeholders".to_string(),
+        problem: Problem::explained(
+            Reason::DeliberateLoss,
+            None,
+            &format!("{count} in the cloud and not on this computer, so not read. One is {first}"),
+        )
+        .severity(Severity::Warning),
+    })
+}
+
 fn is_dataless(walked: &datalib_etl_files::fswalk::WalkedFile) -> bool {
     walked.no_blocks && walked.stat.size > 0
 }
@@ -390,7 +415,16 @@ async fn scan_playlists(
 
     for f in files {
         let size = f.size as u64;
-        if size == 0 || size > MAX_PLAYLIST_BYTES {
+        if size == 0 {
+            continue;
+        }
+        if size > MAX_PLAYLIST_BYTES {
+            prev.playlists.remove(&f.rel);
+            found.records_failed([RecordProblem::over_size_limit(
+                "media_playlists",
+                &f.rel,
+                format!("over {MAX_PLAYLIST_BYTES} bytes, so it was not read as a playlist"),
+            )]);
             continue;
         }
         // Seen, whatever we decide about it below — an HLS manifest we

@@ -10,20 +10,25 @@ pub const SYSTEM_DIR: &str = "system";
 
 /// A folder under a source's `render_markdown/`: a document filed here is
 /// in the grid and opens like any other, and free-text search skips it,
-/// because each source's qmd collection ignores this folder.
+/// because each source's part of the search index ignores this folder.
 pub const UNINDEXED_DIR: &str = "unindexed";
 
-/// The top-level tree holding every search index. Owned end to end by
-/// the `unified_document_index` applet and the two steps that write it; nothing
-/// in `datalib-http` or `datalib-dag` reads what is under here.
-pub const UNIFIED_DOCUMENT_INDEX_DIR: &str = "unified_document_index";
-/// What [`UNIFIED_DOCUMENT_INDEX_DIR`] was called before the index was
-/// named for what it indexes. A launch moves it to the new name.
-pub const RETIRED_UNIFIED_INDEX_DIR: &str = "unified_index";
-/// The `grid_index` step's tree (grid_rows + markdowns + edges), relative
-/// to [`UNIFIED_DOCUMENT_INDEX_DIR`]. Named after the step's function, like every
-/// tree a step writes.
-pub const GRID_DIR: &str = "grid_index";
+/// The top-level tree holding the grid index and the search index. Owned
+/// end to end by the `unified_grid_and_search_index` applet and the steps
+/// that write it; nothing in `datalib-http` or `datalib-dag` reads what is
+/// under here.
+pub const UNIFIED_GRID_AND_SEARCH_INDEX_DIR: &str = "unified_grid_and_search_index";
+/// What [`UNIFIED_GRID_AND_SEARCH_INDEX_DIR`] was called before, newest
+/// first. A launch moves the one it finds to the current name.
+pub const RETIRED_INDEX_DIRS: [&str; 2] = ["unified_document_index", "unified_index"];
+/// The `unified_grid_and_search_index` step's tree (the grid index's
+/// file), relative to [`UNIFIED_GRID_AND_SEARCH_INDEX_DIR`]. Named after the
+/// step's function, like every tree a step writes, and so the group's name
+/// twice.
+pub const INDEX_STEP_DIR: &str = "unified_grid_and_search_index";
+/// What [`INDEX_STEP_DIR`] was called while the step's function was
+/// `grid_index`. A launch moves it to the current name.
+pub const RETIRED_INDEX_STEP_DIR: &str = "grid_index";
 /// The top-level tree holding the time-series index, beside the
 /// document indexes. Owned by the `time_series_index` step that writes
 /// it and the time-series applet that reads it.
@@ -38,19 +43,23 @@ pub const TIME_SERIES_DB: &str = "time_series.doltlite_db";
 /// directory per app (`datalib_contacts/`). Nothing can rebuild it, and no
 /// reset or removal of a source touches it.
 pub const CURATED_DIR: &str = "datalib_curated";
-/// The grid index inside [`GRID_DIR`]: plain SQLite, in WAL mode.
+/// The grid index inside [`INDEX_STEP_DIR`]: plain SQLite, in WAL mode.
 pub const GRID_DB: &str = "db.sqlite";
 /// What [`GRID_DB`] was named while it was a doltlite store. The
-/// `grid_index` step deletes it, and its lock files, when it opens the index.
+/// `unified_grid_and_search_index` step deletes it, and its lock files, when it opens the index.
 pub const RETIRED_GRID_DB: &str = "db.doltlite_db";
 /// The file the grid's search terms were kept in before the index held
-/// them. The `grid_index` step deletes it when it opens the index.
+/// them. The `unified_grid_and_search_index` step deletes it when it opens the index.
 pub const RETIRED_TERMS_DB: &str = "search_terms.sqlite";
-/// The qmd index's directory, relative to [`UNIFIED_DOCUMENT_INDEX_DIR`]: the
-/// `qmd_aggregator` step's tree, so its size is counted against that
-/// step. Every qmd step writes the one index under it, which qmd lays
-/// out as `qmd/index.sqlite` — see `crate::qmd::qmd_cache_home`.
+/// The retired `qmd_aggregator` step's tree, relative to
+/// [`UNIFIED_GRID_AND_SEARCH_INDEX_DIR`], where qmd kept its index as
+/// `qmd/index.sqlite`. Nothing writes it now; `unified_grid_and_search_index` deletes it.
 pub const QMD_DIR: &str = "qmd_aggregator";
+/// The inference cache's directory, relative to
+/// [`UNIFIED_GRID_AND_SEARCH_INDEX_DIR`]: every source's `embed` writes it,
+/// `unified_grid_and_search_index` sweeps it. The search index's tables are in the grid
+/// index's file.
+pub const SEARCH_INDEX_DIR: &str = "search_index";
 
 /// A download step's raw store, inside its tree: entity tables,
 /// per-provider CAS edge tables and the shared sync bookkeeping.
@@ -129,20 +138,20 @@ pub fn curated_dir(data_root: &Path) -> PathBuf {
     data_root.join(CURATED_DIR)
 }
 
-pub fn unified_document_index_dir(data_root: &Path) -> PathBuf {
-    data_root.join(UNIFIED_DOCUMENT_INDEX_DIR)
+pub fn unified_grid_and_search_index_dir(data_root: &Path) -> PathBuf {
+    data_root.join(UNIFIED_GRID_AND_SEARCH_INDEX_DIR)
 }
 
-pub fn grid_index_dir(data_root: &Path) -> PathBuf {
-    unified_document_index_dir(data_root).join(GRID_DIR)
+pub fn index_step_dir(data_root: &Path) -> PathBuf {
+    unified_grid_and_search_index_dir(data_root).join(INDEX_STEP_DIR)
 }
 
-/// `data_root/unified_document_index/grid_index/db.sqlite` — the
+/// `data_root/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`: the
 /// grid_rows/markdowns/edges index. Resolved from `data_root` alone by
 /// both the step that writes it and the applet that reads it, so this
 /// helper is the contract between them.
 pub fn grid_index_db(data_root: &Path) -> PathBuf {
-    grid_index_dir(data_root).join(GRID_DB)
+    index_step_dir(data_root).join(GRID_DB)
 }
 
 pub fn unified_time_series_index_dir(data_root: &Path) -> PathBuf {
@@ -159,7 +168,24 @@ pub fn time_series_index_db(data_root: &Path) -> PathBuf {
 }
 
 pub fn qmd_dir(data_root: &Path) -> PathBuf {
-    unified_document_index_dir(data_root).join(QMD_DIR)
+    unified_grid_and_search_index_dir(data_root).join(QMD_DIR)
+}
+
+/// Where the search index was a file of its own, before its tables moved
+/// into the grid index's file ([`grid_index_db`]). Deleted on sight: every
+/// row in it is made again from the render stores.
+pub fn retired_search_index_db(data_root: &Path) -> PathBuf {
+    unified_grid_and_search_index_dir(data_root)
+        .join(SEARCH_INDEX_DIR)
+        .join("index.sqlite")
+}
+
+/// The inference cache: each chunk's vector, in a file of its own so it
+/// outlives the search index and the grid index it shares a file with.
+pub fn inference_cache_db(data_root: &Path) -> PathBuf {
+    unified_grid_and_search_index_dir(data_root)
+        .join(SEARCH_INDEX_DIR)
+        .join("inference_cache.sqlite")
 }
 
 pub fn feedback_db(data_root: &Path) -> PathBuf {

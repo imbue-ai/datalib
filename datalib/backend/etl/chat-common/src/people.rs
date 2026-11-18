@@ -190,11 +190,13 @@ mod tests {
 
     fn by(handle: Option<&Handle>, name: &str, ms: i64) -> NormalizedChatItem {
         NormalizedChatItem {
+            reply_to: None,
             message_uuid: format!("m{ms}"),
             author_handle: handle.cloned(),
             author_kind: AuthorKind::Named,
             author_display: name.to_string(),
             date_ms: Some(ms),
+            date_offset_secs: None,
             text: Some("hi".to_string()),
             kind: ItemKind::Text,
             attachments: vec![],

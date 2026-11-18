@@ -359,7 +359,10 @@ async fn check_subject(conn: &mut sqlx::SqliteConnection, subject: &str) -> Resu
     }
     match Handle::parse(subject) {
         Some(h) => Ok(h.as_str().to_string()),
-        None => bail!("{subject:?} is not a handle or a contact"),
+        None => bail!(
+            "{subject:?} is not a handle or a contact: {}; a contact is contact:<id>",
+            datalib_handle::SPELLING
+        ),
     }
 }
 
@@ -602,7 +605,7 @@ impl Store {
                     Some(h) => handles.push(h),
                     None => out.skipped.push(Skipped {
                         what: h.clone(),
-                        why: "not a handle".to_string(),
+                        why: format!("not a handle: {}", datalib_handle::SPELLING),
                     }),
                 }
             }
@@ -692,7 +695,7 @@ impl Store {
             let Some(h) = Handle::parse(&v.handle) else {
                 out.skipped.push(Skipped {
                     what: v.handle.clone(),
-                    why: "not a handle".to_string(),
+                    why: format!("not a handle: {}", datalib_handle::SPELLING),
                 });
                 continue;
             };

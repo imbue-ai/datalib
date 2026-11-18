@@ -113,9 +113,11 @@ async fn index(root: &Path, photos: &[NormalizedPhoto]) {
 
 fn start(root: &Path) -> (Child, u16) {
     let bin = std::fs::canonicalize(std::env::var("APPLET_BIN").unwrap()).unwrap();
+    let secret_file = root.join("system/applet-secret");
+    datalib_env::secret_file::write(&secret_file, SECRET).unwrap();
     let mut child = Command::new(bin)
         .args(["photos", "-p", "0"])
-        .env("DATALIB_APPLET_SECRET", SECRET)
+        .env(datalib_env::DATALIB_APPLET_SECRET_FILE, &secret_file)
         .env("DATALIB_DAG_DATA_ROOT", root)
         .env("DATALIB_PARENT_PIPE", "0")
         .current_dir(root)

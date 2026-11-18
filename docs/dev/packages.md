@@ -157,22 +157,25 @@ A package source's `render_markdown` and `render_time_series` programs
 write what datalib's own render steps write, in the same place:
 
 - **`<group>/render_markdown/indexed_markdown.doltlite_db`** and the
-  `.md` files beside it. `grid_index` reads the store into the grid,
-  and the source's `keyword_index` and `embed` read the files for
-  search. The step reports the store's tree hash as its version.
+  `.md` files beside it. `unified_grid_and_search_index` reads the store into the grid,
+  and its keyword pass and the source's `embed` draw what search sees
+  from its `sections` table alone: a document whose pieces it does not
+  keep there is found by its title and nothing else. The viewer serves
+  the files. The step reports the store's tree hash as its version.
 - **`<group>/render_time_series/time_series.doltlite_db`**, which
   `time_series_index` lists and the Time series card charts. The step
   reports the store's commit hash as its version.
 
-The wizard adds these steps to the inputs of `grid_index`, the search
-aggregator and `time_series_index` (`setTimeSeriesStep` in
-`config/sourceSteps.ts`), as it does for a built-in source. Nothing in
+`unified_grid_and_search_index`, `embedding_map` and `time_series_index` read these
+steps by pattern (`*/render_markdown` and the like), as they read a
+built-in source's; where a config names its inputs one by one, the
+wizard adds them (`setTimeSeriesStep` in `config/sourceSteps.ts`). Nothing in
 the indexes asks a store which type or provider wrote it.
 
 These stores are datalib's own formats, not a published interface. A
 writer has to match them exactly:
 
-1. **The tables, byte for byte.** `grid_index` reads a render store only
+1. **The tables, byte for byte.** `unified_grid_and_search_index` reads a render store only
    when its `_datalib_meta.schema_hash` (blake3 over the `CREATE`
    statements) equals the one this build computes
    (`datalib/backend/etl/render/src/indexed_markdown.rs`, `schema_hash`). A release

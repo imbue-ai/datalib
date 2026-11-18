@@ -47,6 +47,29 @@ pub fn filter_at(level: &str) -> String {
     format!("{libraries},{ours},{LIBRARY_CAPS}")
 }
 
+/// The directives in `directives` that can match a target outside our
+/// own crates, rejoined; `None` when one names a span or a field, whose
+/// reach this does not try to read. A directive reaches a target that
+/// starts with its own, so one whose target starts with ours reaches
+/// only ours. The process uses this to stop the `log` crate's calls
+/// before they reach the filter: none of our crates logs through `log`,
+/// so its level can be the libraries' alone.
+pub fn library_directives(directives: &str) -> Option<String> {
+    if directives.contains('[') {
+        return None;
+    }
+    let theirs = directives
+        .split(',')
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .filter(|d| {
+            let target = d.split_once('=').map_or(*d, |(t, _)| t);
+            !OUR_TARGETS.iter().any(|ours| target.starts_with(ours))
+        })
+        .collect::<Vec<_>>();
+    Some(theirs.join(","))
+}
+
 /// [`filter_at`] the default level.
 pub fn default_filter() -> String {
     filter_at(DEFAULT_LEVEL)
@@ -54,7 +77,7 @@ pub fn default_filter() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_filter, filter_at};
+    use super::{default_filter, filter_at, library_directives};
 
     #[test]
     fn our_crates_take_the_level_and_libraries_stop_at_info() {
@@ -66,5 +89,22 @@ mod tests {
         assert!(filter_at("debug").starts_with("info,datalib=debug,"));
         assert!(filter_at("warn").starts_with("warn,datalib=warn,"));
         assert_eq!(default_filter(), filter_at("trace"));
+    }
+
+    #[test]
+    fn library_directives_drop_only_what_reaches_only_ours() {
+        assert_eq!(
+            library_directives(&filter_at("trace")).as_deref(),
+            Some("info,sqlx=warn,hyper=warn,h2=warn,rustls=warn,notify=warn,html5ever=error,axum=info")
+        );
+        assert_eq!(
+            library_directives("datalib_step=debug,http.loop").as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            library_directives("trace, data=debug ").as_deref(),
+            Some("trace,data=debug")
+        );
+        assert_eq!(library_directives("info,html5ever[span]=trace"), None);
     }
 }

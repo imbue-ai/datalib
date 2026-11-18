@@ -3,13 +3,39 @@
 //! disk usage sampler — in one place, so every packaging boots
 //! identically.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use datalib_core::app_store::AppStore;
 use datalib_core::repo::DynAppRepo;
 
 use crate::{auth::ApiToken, embed::FrameAncestors, supervisor, usage, AppState};
+
+/// Empties `system/tmp`, where the desktop app points a protected library's
+/// `TMPDIR` (`datalib/tauri/src/protected.rs`). Call it holding the root's
+/// lock, so no other server is using the folder. Nothing else would clear
+/// it: macOS only clears its own temp dir. In any other library a
+/// `system/tmp` is not ours.
+pub fn clear_protected_temp(root: &Path) {
+    if std::env::var_os(datalib_env::DATALIB_PROTECTED_LIBRARY).is_none() {
+        return;
+    }
+    let temp = datalib_core::layout::system_dir(root).join("tmp");
+    let Ok(entries) = std::fs::read_dir(&temp) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let removed = if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        if let Err(e) = removed {
+            tracing::warn!("could not clear {}: {e}", path.display());
+        }
+    }
+}
 
 /// Open the data root (creating it if absent) and assemble the served
 /// [`AppState`]: the stores it owns, `<root>/config.toml`, and the
@@ -19,7 +45,7 @@ use crate::{auth::ApiToken, embed::FrameAncestors, supervisor, usage, AppState};
 /// own `binary_dir`; `now`, when given, stands in for the clock in every
 /// sync the loop runs (`--now`); `frame_ancestors` names who may frame the
 /// app page (`crate::embed`). Presentation
-/// concerns (browser opening, the `--url-file` handshake) live in the
+/// concerns (browser opening, telling a parent the URL) live in the
 /// binary's main, not here.
 pub async fn build_state(
     root: PathBuf,
@@ -60,7 +86,7 @@ pub async fn build_state(
             app: Arc::new(NewerRootRepo(newer_root.clone())),
             sync: supervisor::SyncControl::new(root.clone()),
             root_tx,
-            // No entries: nothing starts, and the unified_document_index applet
+            // No entries: nothing starts, and the unified_grid_and_search_index applet
             // never opens the index this build must not read as its own.
             applets: Arc::new(crate::applets::AppletRegistry::build(
                 Vec::new(),
@@ -111,6 +137,7 @@ pub async fn build_state(
     })
     .await?;
     crate::config_upgrade::move_index_dir(&root).await;
+    crate::config_upgrade::move_index_step_dir(&root).await;
     crate::config_upgrade::move_case_folders(&root).await;
     crate::config_upgrade::watch((*root).clone(), root_tx.subscribe());
 
@@ -338,9 +365,9 @@ mod tests {
         .await
         .unwrap();
         assert!(
-            !layout::unified_document_index_dir(root.path()).exists(),
+            !layout::unified_grid_and_search_index_dir(root.path()).exists(),
             "booting the server created {}, which belongs to the applet",
-            layout::unified_document_index_dir(root.path()).display()
+            layout::unified_grid_and_search_index_dir(root.path()).display()
         );
     }
 
@@ -363,7 +390,7 @@ mod tests {
         .unwrap();
 
         let feedback = layout::feedback_db(root.path());
-        let derived = layout::unified_document_index_dir(root.path());
+        let derived = layout::unified_grid_and_search_index_dir(root.path());
         assert!(!feedback.starts_with(&derived), "{}", feedback.display());
     }
 

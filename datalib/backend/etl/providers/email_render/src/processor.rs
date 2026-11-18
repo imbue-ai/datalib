@@ -69,13 +69,7 @@ impl SourceRender for EmailRender {
             return Ok("skipped (no raw db)".into());
         }
 
-        let Some(store) = open(
-            &db,
-            ctx.name,
-            ctx.raw_range(),
-            !self.only_render_labels.is_empty(),
-        )?
-        else {
+        let Some(store) = open(&db, ctx.name, ctx.raw_range(), &self.only_render_labels)? else {
             return Ok("rendered".into());
         };
         // `threads` is read by no render, so a stale parse problem on
@@ -112,7 +106,6 @@ impl SourceRender for EmailRender {
             ctx.root,
             ctx.name,
             self.outlink,
-            &self.only_render_labels,
             ctx.page_size,
             ctx.progress,
             &mut |md| ctx.emit_doc(md),
@@ -141,6 +134,8 @@ mod tests {
     use datalib_etl::doltlite_raw::commit_run;
     use datalib_etl::progress::Progress;
     use datalib_etl_email::ingest::db::RawDb;
+    use datalib_etl_render::grid_index::RenderedMarkdown;
+    use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
     use datalib_etl_render::processor::BucketEnd;
     use datalib_schema::problems::ProblemRow;
 
@@ -196,5 +191,94 @@ mod tests {
         let corrected = reports(dir.path(), &[]).await;
         let rows = &corrected.iter().find(|(s, _)| *s == config).unwrap().1;
         assert_eq!(rows, &Vec::<ProblemRow>::new());
+    }
+
+    const FORGED: &str = "From 1@xxx Mon Jan 05 09:00:00 +0000 2026\n\
+        X-GM-THRID: 1\n\
+        X-Gmail-Labels: Spam\n\
+        Message-Id: <forged-1@continuum.test>\n\
+        From: \"picard@enterprise.org\" <q@continuum.test>\n\
+        To: Will Riker <riker@enterprise.org>\n\
+        Subject: Orders\n\
+        Date: Mon, 5 Jan 2026 09:00:00 +0000\n\
+        Content-Type: text/plain; charset=utf-8\n\
+        \n\
+        Surrender the ship.\n\
+        \n\
+        From 2@xxx Mon Jan 05 10:00:00 +0000 2026\n\
+        X-GM-THRID: 1\n\
+        X-Gmail-Labels: Spam\n\
+        Message-Id: <forged-2@continuum.test>\n\
+        In-Reply-To: <forged-1@continuum.test>\n\
+        From: Q <q@continuum.test>\n\
+        To: Will Riker <riker@enterprise.org>\n\
+        Subject: Re: Orders\n\
+        Date: Mon, 5 Jan 2026 10:00:00 +0000\n\
+        Content-Type: text/plain; charset=utf-8\n\
+        \n\
+        Well?\n";
+
+    /// A forged `From: "picard@enterprise.org" <q@continuum.test>` gave
+    /// Q's record of the thread Picard's address as a name, and the
+    /// search then found Q under it. The name Q gave stays.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_sender_shown_as_another_address_is_not_named_by_it() {
+        use datalib_etl_email::ingest::mbox;
+        let dir = tempfile::tempdir().unwrap();
+        let mbox_path = dir.path().join("in.mbox");
+        std::fs::write(&mbox_path, FORGED).unwrap();
+        let db = RawDb::open(&ingest::db_path_for(dir.path())).await.unwrap();
+        mbox::fetch(mbox::FetchOptions {
+            input_path: mbox_path,
+            ..mbox::FetchOptions::new(db.clone())
+        })
+        .await
+        .unwrap();
+        commit_run(db.pool(), "sync").await.unwrap();
+        db.close().await;
+
+        let render = EmailRender {
+            outlink: None,
+            only_render_labels: Vec::new(),
+        };
+        let out = tempfile::tempdir().unwrap();
+        let progress = Progress::noop();
+        // The names are settled as the store takes the document, so the
+        // test reads back what the store holds.
+        let store = IndexedMarkdownStore::open(out.path()).unwrap();
+        let mut on_doc = |md: RenderedMarkdown| store.put_document(out.path(), &md);
+        let mut on_declare = |_: &str, _: BucketEnd<'_>| Ok(());
+        let mut on_problems = |_: &ReadScope, _: &[ProblemRow]| Ok(());
+        let ctx = RenderCtx::new(
+            "mail",
+            out.path(),
+            "2364-01-01T00:00:00+00:00",
+            &progress,
+            None,
+            None,
+            None,
+            &mut on_doc,
+            &mut on_declare,
+            &mut on_problems,
+        );
+        render.run(dir.path(), &ctx).await.unwrap();
+        drop(ctx);
+        store.commit("render").unwrap();
+        store.close();
+        let reader = IndexedMarkdownStore::open_for_reading(out.path(), None)
+            .unwrap()
+            .expect("a committed store is readable");
+        let pin = reader.pin().unwrap().clone();
+        let docs = reader.documents_matching(out.path(), None, &pin).unwrap();
+        reader.close();
+
+        let q = datalib_handle::Handle::email("q@continuum.test").unwrap();
+        let names: Vec<&str> = docs
+            .iter()
+            .flat_map(|d| &d.contacts)
+            .filter(|c| c.holds(&q))
+            .flat_map(|c| c.names.iter().map(String::as_str))
+            .collect();
+        assert_eq!(names, ["Q"]);
     }
 }

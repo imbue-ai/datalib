@@ -57,7 +57,7 @@ bazel_dep(name = "platforms", version = "1.1.0")
 # what the root module can *see*, not what the build uses.
 bazel_dep(name = "bazel_skylib", version = "1.9.2")
 
-# doltlite v0.51.3: the amalgamation, a single-file `doltlite.c` with the
+# doltlite v0.51.13: the amalgamation, a single-file `doltlite.c` with the
 # SQLite core, the prolly-tree engine and the `dolt_*` SQL surface, built
 # by `//third-party/doltlite:sqlite3` into every binary.
 #
@@ -66,10 +66,74 @@ bazel_dep(name = "bazel_skylib", version = "1.9.2")
 http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 http_archive(
     name = "doltlite_amalgamation",
-    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.51.3/doltlite-amalgamation-0.51.3.zip"],
-    sha256 = "c4f6f5eedb322bcccc06a15618dcb9fb95da1a90fe842fe46b1e0403e71b03d6",
-    strip_prefix = "doltlite-amalgamation-0.51.3",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.51.13/doltlite-amalgamation-0.51.13.zip"],
+    sha256 = "5fc1cec33198b93214c54f8c16ca0d4d048677b6951a6be2a3db982fafc6e824",
+    strip_prefix = "doltlite-amalgamation-0.51.13",
     build_file = "//third-party/doltlite:amalgamation.BUILD",
+)
+
+# BLAKE3's source, at the version the amalgamation embeds, for its header
+# and test vectors alone: `//third-party/doltlite:blake3_kernels_test`
+# checks doltlite's hashing against them, and fails if this and the
+# embedded copy part ways.
+http_archive(
+    name = "blake3_c",
+    urls = ["https://github.com/BLAKE3-team/BLAKE3/archive/refs/tags/1.8.5.tar.gz"],
+    sha256 = "220bd81286e2a0585beac66d41ac3f4c2c33ae8a4e339fc88cf22d5e00514fe9",
+    strip_prefix = "BLAKE3-1.8.5",
+    build_file = "//third-party/doltlite:blake3.BUILD",
+)
+
+# llama.cpp at the release node-llama-cpp 3.20.0 (qmd 2.8.3's) is built on,
+# so the search index's embedder runs the model the way qmd did:
+# third-party/llama_cpp/README.md.
+http_archive(
+    name = "llama_cpp",
+    urls = ["https://github.com/ggml-org/llama.cpp/archive/refs/tags/b10361.tar.gz"],
+    sha256 = "56d729e7820da0f23d1ad2b2198884150f35363bbc531e5cc2ce13ab31e870d3",
+    strip_prefix = "llama.cpp-b10361",
+    build_file = "//third-party/llama_cpp:llama_cpp.BUILD",
+)
+
+# NVIDIA's CUDA toolkit for llama.cpp's CUDA backend on Linux x86_64
+# (docs/dev/plans/embed_on_modal.md). NVIDIA's redistributable manifest,
+# pinned by its sha256, names every component's archive and hash; only
+# the four ggml-cuda needs are fetched, and only when a CUDA target builds.
+bazel_dep(name = "rules_cuda", version = "0.4.0")
+
+cuda = use_extension("@rules_cuda//cuda:extensions.bzl", "toolchain")
+cuda.redist_json(
+    name = "cuda_redist",
+    components = [
+        "cccl",
+        "cublas",
+        "cudart",
+        "nvcc",
+    ],
+    platforms = ["linux-x86_64"],
+    sha256 = "8335301010b0023ee1ff61eb11e2600ca62002d76780de4089011ad77e0c7630",
+    version = "12.9.1",
+)
+cuda.toolkit(name = "cuda")
+
+# The two components a release redistributes, by the names rules_cuda
+# gives them (which carry the version), for the LICENSE in each archive:
+# `@llama_cpp//:nvidia_licenses`.
+use_repo(
+    cuda,
+    "cuda",
+    "cuda_cublas_linux_x86_64_12_9_1",
+    "cuda_cudart_linux_x86_64_12_9_1",
+)
+
+# cuobjdump, from the same manifest but unknown to rules_cuda, reports
+# what GPU code the module holds (.github/workflows/cuda.yml).
+http_archive(
+    name = "cuda_cuobjdump",
+    build_file_content = 'exports_files(["bin/cuobjdump"])',
+    sha256 = "ee0de40e8c18068bfcc53e73510e7e7a1a80555205347940df67fa525d24452f",
+    strip_prefix = "cuda_cuobjdump-linux-x86_64-12.9.82-archive",
+    urls = ["https://developer.download.nvidia.com/compute/cuda/redist/cuda_cuobjdump/linux-x86_64/cuda_cuobjdump-linux-x86_64-12.9.82-archive.tar.xz"],
 )
 
 # The autoconf source tarball, for its pre-generated `shell.c` — the
@@ -87,9 +151,9 @@ http_archive(
 # `//tools:version_pins_test` fails if the two pins drift.
 http_archive(
     name = "doltlite_autoconf",
-    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.51.3/doltlite-autoconf-0.51.3.tar.gz"],
-    sha256 = "80e63f3d0f4cc2bcea774e29f5541a752630ab1a465d9ae91bad9c52fd360dca",
-    strip_prefix = "doltlite-autoconf-0.51.3",
+    urls = ["https://github.com/dolthub/doltlite/releases/download/v0.51.13/doltlite-autoconf-0.51.13.tar.gz"],
+    sha256 = "fe14167bbf61035f4111e676c7cc4f150c2cab7daade82bba8064703dd79009b",
+    strip_prefix = "doltlite-autoconf-0.51.13",
     build_file = "//third-party/doltlite:autoconf.BUILD",
 )
 
@@ -246,9 +310,9 @@ filegroup(
     urls = ["https://github.com/thadd3us/lightroom_db_diff/archive/d8d1364926a3e0acb08af57951df94b0f8ef361d.tar.gz"],
 )
 
-# qmd's GGUF models are fetched by a build action, not a repository
-# rule: see //third-party/qmd_models. As `http_file` repositories they were
-# downloaded whenever `//...` was analysed, needed or not.
+# The embedding model is fetched by a build action, not a repository
+# rule (//third-party/embedding_models): a repository is downloaded
+# whenever `//...` is analysed, needed or not.
 
 # Rules Python — pinned to a recent stable. uv.lock ingestion via pip.parse.
 bazel_dep(name = "rules_python", version = "2.4.5")
@@ -427,8 +491,8 @@ register_toolchains("@rust_toolchains//:all")
 #
 # `extra_target_compatible_with` stamps the same `//platforms:musl`
 # constraint the rust musl toolchains use onto the cc toolchains, so
-# only an explicit `--config=musl-*` build resolves them; host builds
-# keep the autodetected host cc toolchain.
+# only an explicit `--config=musl-*` build resolves them; every other
+# Linux build gets the LLVM toolchain registered below.
 bazel_dep(name = "toolchains_musl", version = "0.1.29")
 
 toolchains_musl = use_extension("@toolchains_musl//:toolchains_musl.bzl", "toolchains_musl")
@@ -437,20 +501,38 @@ toolchains_musl.config(
 )
 use_repo(toolchains_musl, "musl_toolchains_hub")
 
-# Register the musl cc toolchains from the ROOT module, not just via
-# toolchains_musl's own MODULE.bazel. Root-module registrations take
-# precedence in toolchain resolution; relying on the dependency
-# module's registration let Bazel's auto-configured host cc toolchain
-# (registered by an earlier module in the graph, and constraint-wise a
-# match for any `linux + <cpu>` platform — it carries no linker
-# constraint) win the musl platforms on Linux hosts. Symptom: the
-# release leg linked the (since-removed) wreq-based impersonating curl
-# with `/usr/bin/gcc` against glibc-compiled BoringSSL objects and
-# died on `__memcpy_chk` / `fopen64`. Harmless for every other build: these toolchains require
-# `//platforms:musl`, which only the musl platforms carry. (macOS
-# hosts never hit the ambiguity — a darwin host cc toolchain can't
-# target linux at all.)
+# Register the musl cc toolchains from the ROOT module, and ahead of the
+# LLVM one below. Resolution takes the first registered toolchain that
+# matches, and a toolchain that only asks for `linux + <cpu>` matches
+# the musl platforms too: a glibc toolchain winning them links musl
+# objects against glibc and dies on `__memcpy_chk` / `fopen64`.
+# Harmless for every other build: these toolchains require
+# `//platforms:musl`, which only the musl platforms carry.
 register_toolchains("@musl_toolchains_hub//:all")
+
+# The C/C++ toolchain every Linux build uses, gnu legs and build tools
+# alike: a prebuilt clang with its own glibc headers and stubs, libc++
+# and compiler-rt, all fetched by hash (hermeticbuild/hermetic-llvm).
+# Bazel's autodetected toolchain linked with whatever gcc the machine
+# had, so a proc-macro or build script built on a CI runner and one
+# built in a cloud VM differed, and so did the cache key of everything
+# built on them. Registered after the musl toolchains: these match any
+# Linux platform of their CPU, the musl ones included.
+bazel_dep(name = "llvm", version = "0.8.26")
+
+llvm_toolchain = use_extension("@llvm//extensions:toolchain.bzl", "toolchain")
+llvm_toolchain.exec(arch = "x86_64", os = "linux")
+llvm_toolchain.exec(arch = "aarch64", os = "linux")
+llvm_toolchain.target(arch = "x86_64", os = "linux")
+llvm_toolchain.target(arch = "aarch64", os = "linux")
+use_repo(llvm_toolchain, "llvm_toolchains")
+
+register_toolchains("@llvm_toolchains//:all")
+
+# The machine's own gcc, for `--config=cuda` alone: CUDA 12.9's nvcc
+# refuses a host clang from 20 on, and the LLVM toolchain's is newer.
+cc_configure = use_extension("@rules_cc//cc:extensions.bzl", "cc_configure_extension")
+use_repo(cc_configure, "local_config_cc_toolchains")
 
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 
@@ -557,10 +639,8 @@ bazel_dep(name = "bazel_lib", version = "3.7.2")
 
 # rules_nodejs is already in the graph transitively (via aspect_rules_js);
 # declared explicitly so we can `use_repo` the host Node toolchain repo.
-# `//tests/fixtures:ingested_tng_qmd` needs the node BINARY as a label —
-# it stages a `DATALIB_RUNTIME_DIR` tree (`node/bin/node` + the qmd
-# package tree) so `datalib_core::node_runtime::bundled_command` resolves,
-# which is what takes `npx` out of the build.
+# The runtime staging, the render preview and the runtime's own tests need
+# the node BINARY as a label.
 bazel_dep(name = "rules_nodejs", version = "6.7.7")
 
 # NODE_VERSION is the one Node pin in the repo, and it is read by
@@ -578,7 +658,7 @@ bazel_dep(name = "rules_nodejs", version = "6.7.7")
 # runs, fetched once by Bazel against rules_nodejs's own integrity
 # hashes. Bumping it is this one line.
 #
-# Must stay >= 22: qmd requires it (latchkey needs only >= 20).
+# Must stay >= 20: latchkey requires it.
 NODE_VERSION = "22.23.4"
 
 node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
@@ -612,22 +692,9 @@ npm.npm_translate_lock(
 )
 use_repo(npm, "npm_lint")
 
-# The qmd CLI and its 277-package transitive tree, replacing the
-# `npx -y @tobilu/qmd@<v>` fetch that `//tests/fixtures:ingested_tng_qmd`
-# used to perform on every cache miss. `npx -y` resolves that tree from
-# the live registry with no lockfile and no integrity checking, and runs
-# every package's install scripts while doing it; this gets the identical
-# tree from a checked-in lockfile where every tarball carries a sha512,
-# with lifecycle hooks disabled outright.
-npm.npm_translate_lock(
-    name = "npm_qmd",
-    pnpm_lock = "//third-party/qmd/runtime:pnpm-lock.yaml",
-    verify_node_modules_ignored = "//:.bazelignore",
-)
-use_repo(npm, "npm_qmd")
-
-# The latchkey CLI's 7-package tree, and the sibling of `npm_qmd` above.
-# Same reason, different consumer: this one replaces the `npm install
+# The latchkey CLI's 7-package tree, from a checked-in lockfile where
+# every tarball carries a sha512, with lifecycle hooks disabled. It
+# replaces the `npm install
 # latchkey@<v>` that `datalib/tauri/stage-runtime.sh` ran against the
 # live registry — with no lockfile, no integrity checking, and
 # `--ignore-scripts` as the only thing standing between us and
@@ -641,26 +708,16 @@ npm.npm_translate_lock(
 )
 use_repo(npm, "npm_latchkey")
 
-# better-sqlite3 needs no special handling here, and that is new as of
-# qmd 2.8.3. Until then it was the ONE package in the qmd tree the
-# lockfile could not deliver: 12.x published a tarball with `src/` +
-# `binding.gyp` and no `.node`, and got its binary from a
-# `prebuild-install` postinstall that downloaded a GitHub release asset
-# appearing in no lockfile and carrying no integrity hash. Closing that
-# hole cost an `npm_replace_package`, a re-packaged `better_sqlite3_src`,
-# four sha256-pinned `better_sqlite3_prebuilt_*` archives, and a
-# `node_abi_test` to catch the day a rules_nodejs bump silently
-# invalidated the `node-v<abi>` in their URLs.
-#
-# better-sqlite3 13 ships `prebuilds/<os>-<arch>.node` inside the npm
-# tarball for all eight platforms (including linuxmusl) and declares no
-# install script at all, so the lockfile's sha512 now covers the native
-# binary like everything else. All of the above is deleted, and the Node
-# ABI stops being a pin we have to track: prebuildify-style bindings are
-# selected by platform at require-time, not by NODE_MODULE_VERSION.
-#
-# `onlyBuiltDependencies: []` in third-party/qmd/runtime/package.json is
-# unchanged and still means what it said.
+# Modal's JavaScript SDK, which `datalib-step embed` runs on the bundled
+# Node (third-party/modal/README.md): the same lockfile discipline as
+# latchkey's, and no native addon.
+npm.npm_translate_lock(
+    name = "npm_modal",
+    pnpm_lock = "//third-party/modal/runtime:pnpm-lock.yaml",
+    verify_node_modules_ignored = "//:.bazelignore",
+)
+use_repo(npm, "npm_modal")
+
 # Exposes the lockfile's pinned pnpm so `bazel run -- @pnpm --dir
 # datalib/ui install` works without a host install — useful for
 # refreshing the lockfile after editing datalib/ui/package.json.

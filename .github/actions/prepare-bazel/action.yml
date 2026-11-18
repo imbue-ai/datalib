@@ -1,7 +1,6 @@
 # Setup every bazel job in this repo needs, in one place: room on the
-# runner's disk, and bazel pointed at the BuildBuddy cache. Both `test.yml` jobs use it; `release.yml`'s matrix legs
-# do their own thing because they run on bare runners rather than in the
-# devcontainer.
+# runner's disk, and bazel pointed at the BuildBuddy cache. Both `test.yml`
+# jobs use it. `release.yml` does not: it reads no cache.
 #
 # Callers must run `actions/checkout` first — a local composite action is
 # loaded from the checked-out workspace, so it cannot check itself out.
@@ -34,16 +33,34 @@ runs:
     # syncs would wait out its timeout (docs/dev/ci.md § "What runs
     # where"). The job mounts the runner's unused preinstalls under
     # /runner-unused; a mount point cannot be removed, only emptied.
+    # Emptying them takes one to two minutes, so a runner that already
+    # has room keeps them.
     - name: Free the runner's disk
       shell: bash
       run: |
         set -euo pipefail
         shopt -s nullglob
         df -h /
+        enough_gb=40
+        free_gb="$(df --output=avail -BG / | tail -n 1 | tr -dc '0-9')"
+        if (( free_gb >= enough_gb )); then
+          echo "${free_gb} GB free, at least ${enough_gb} GB: the preinstalls stay."
+          exit 0
+        fi
         for dir in /runner-unused/*; do
           find "$dir" -mindepth 1 -delete || true
         done
         df -h /
+
+    # The lowest free space the job reaches, for `disk-low-point` to
+    # report at its end: the number the threshold above is judged by.
+    - name: Watch the disk's free space
+      shell: bash
+      run: |
+        log="${RUNNER_TEMP}/disk-free-mb.log"
+        nohup setsid bash -c \
+          'while :; do df --output=avail -BM / | tail -n 1 | tr -dc "0-9"; echo; sleep 10; done' \
+          >> "${log}" 2>/dev/null < /dev/null &
     # The devcontainer image carries a pre-fetched output base at these
     # paths (`PREFETCH_OUTPUT_BASE` in `.devcontainer/Dockerfile`): every
     # external repository already downloaded and extracted. Pointing

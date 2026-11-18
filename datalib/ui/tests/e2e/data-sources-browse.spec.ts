@@ -8,6 +8,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import {
+  fillConfigEditor,
   cardOf,
   expandGroup,
   type GridApi,
@@ -18,6 +19,7 @@ import {
   searchAndSettle,
   searchHeader,
   TABLE_ROWS,
+  expectSyncEverything,
 } from "./grid-helpers";
 
 const ROWS = TABLE_ROWS;
@@ -52,13 +54,13 @@ function columnValues(page: Page, colId: string) {
 
 async function openManage(page: Page) {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
   await page.locator(ROWS).first().waitFor({ timeout: 10_000 });
 }
 
 async function writeConfig(page: Page, text: string): Promise<void> {
   await openManage(page);
-  await page.locator(".m2-editor").fill(text);
+  await fillConfigEditor(page, text);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
 }
@@ -148,7 +150,7 @@ test("a source's row opens that source, with its type's columns", async ({ page 
       return kinds.length > 0 && kinds.every((k) => /^Slack /.test(k.trim()));
     })
     .toBe(true);
-  expect(await columnValues(page, "kind")).toContain("Slack Message");
+  await expect.poll(() => columnValues(page, "kind")).toContain("Slack Message");
   await expect(name).toHaveText(/ documents$/);
 
   // Slack's preset: the subject (a channel or DM) and an author, and no
@@ -182,7 +184,7 @@ test("the index group browses every source", async ({ page }) => {
   await openManage(page);
   // No source filter: the index group's browse is every source's
   // documents at once, the grid the app opens on.
-  await browse(page, "unified_document_index", "is:document");
+  await browse(page, "unified_grid_and_search_index", "is:document");
 
   // The column that separates sources is the one that earns its place
   // here — the opposite of a per-source browse: the rows come from more

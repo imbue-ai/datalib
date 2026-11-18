@@ -123,10 +123,9 @@ MAX_STAMP_MS = (1 << 48) - 1
 # saved place with no date; the files no feed reads; and what the
 # account's Chat membership says of a space.
 #
-# A fetch row about an attachment names the grid row of what owns it,
-# so the screen can open it: the conversation for claude (minted from
-# the raw key), the message for Takeout (looked up by its upstream id,
-# since the message's uuid carries a date the raw key does not).
+# A fetch row names only the raw record its download held, in the
+# download's own store; render says which grid row that record belongs
+# to (`entity_items`), and the reader links the two when it reads them.
 POISONED_PROBLEM = (
     "6df47df9-b6ad-5372-942e-5db5e4d068bb"  # problem_uuid
     "|warning|parse|markdown"
@@ -142,8 +141,7 @@ CLAUDE_ATTACHMENT_WITHOUT_BYTES = (
     "|error|fetch|entity"
     "|claude_attachments:c0000004-1701-4d00-8000-00000000c004"
     "#f0000001-1701-4d00-8000-0000000f0001"
-    "|00000000-0000-89b3-8bed-0eecc97d45ce"  # conversation c0000004's row
-    "||fetch_failed|no recorded response: GET https://claude.ai/api/organizations"
+    "|||fetch_failed|no recorded response: GET https://claude.ai/api/organizations"
     "/0aa00000-1701-4d00-8000-0000000000aa/files/f0000001-1701-4d00-8000-0000000f0001/contents"
 )
 FACEBOOK_VIDEO_NOT_IN_EXPORT = (
@@ -151,28 +149,28 @@ FACEBOOK_VIDEO_NOT_IN_EXPORT = (
     "|warning|fetch|entity"
     "|media_blobs:459de207-00ca-5ade-a05e-095a6835da4d"
     "#your_facebook_activity/posts/media/videos/600000000000001.mp4"
-    "|||not_found|media file not in the export: No such file or directory (os error 2)"
+    "|||not_found|media file not in the export"
 )
 # Facebook's render reports every field it leaves unread, by its shape
 # alone, on the document and at the item's section, so a run over a real
 # export says what it left out (INGEST.md §"What render reports").
 FACEBOOK_CALL_DURATION_UNREAD = (
-    "01212325-894c-5374-87de-1d1815eeceb2"
+    "7bda7474-935d-53d5-8ee0-9202b4093c5c"
     "|warning|parse|markdown"
-    "|00000000-0000-83cd-81f6-03463a36a7ff"  # Riker's conversation, 2369
+    "|00000000-0000-8c82-8a32-5b80abc87553"  # Riker's conversation
     "|0b75aa8d-8300-8a42-b652-9507008d5441"  # the video-chat message
     "|call_duration|uncovered_type|int"
 )
-FACEBOOK_TEN_FORWARD = "00000000-0000-8c0a-a597-b3f178ded27c"  # its 2369 document
+FACEBOOK_TEN_FORWARD = "00000000-0000-8ef0-a5ad-33a9d1bb3c0b"  # its document
 FACEBOOK_SENDER_WHO_LEFT = (
-    "bc107a95-a158-587e-85e2-16d746246397"
+    "4351998a-60ae-52f5-a8d4-3721f9bb495c"
     f"|info|parse|markdown|{FACEBOOK_TEN_FORWARD}"
     "|0b75aab9-7500-8649-a7c9-bcf2a91acd15"  # Wesley's message
     "|sender_name|noted|a sender the conversation's participants do not list "
     "(left the conversation?)"
 )
 FACEBOOK_DELETED_ACCOUNTS_TOGETHER = (
-    "cf96cab7-5e94-5468-8b3f-5b53932267da"
+    "0cee67d6-5f70-5431-b534-070a8a93ecec"
     f"|info|parse|markdown|{FACEBOOK_TEN_FORWARD}"
     "|0b75aab3-f6c0-82ed-9976-ca875cebaeb6"  # the conversation's first message
     "|participants|noted|3 deleted accounts among 7 participants; "
@@ -193,6 +191,27 @@ FACEBOOK_GROUP_LEFT_SINCE = (
     "|0b754b28-2000-83b2-9916-69a95bb3c612"
     "|title|noted|a group post whose group the membership file does not name"
 )
+# Tables each export holds that no feed reads, one row a source.
+FACEBOOK_TABLES_NOT_READ = (
+    "0062f189-273d-5e65-99f6-8209086dad23|info|render|entity|unrendered_tables:all|||"
+    "deliberate_loss|Stored and not searchable, 3 rows in table(s): "
+    "ads_information_story_views_in_past_7_days, "
+    "logged_information_search_your_search_history, "
+    "your_facebook_activity_posts_your_videos"
+)
+# The TNG ride's activity file is not a FIT file, so `render_time_series`
+# leaves its time series out and keeps a warning in its own store, which
+# `unified_grid_and_search_index` copies into the index under the step's own stage.
+GARMIN_RIDE_WITH_NO_FIT = (
+    "5692ad7c-fce5-54e6-96af-eb91974cbf89|warning|time_series|entity|17010414002"
+    "|||render_failed|no .FIT signature"
+)
+PDFS_WITH_NO_TEXT = (
+    "367437b3-10b1-5533-b0b8-4e053e6b1f50|warning|fetch|entity|"
+    "skipped:documents_without_text:d87ed6ee29c701a9|||deliberate_loss|"
+    "2 PDFs are not searchable, with no text we can read (no OCR yet, or fonts "
+    "that do not decode). One is holodeck/scanned_blueprint.pdf"
+)
 PDF_THAT_WILL_NOT_IDENTIFY = (
     "7b765789-41e7-536c-9392-2facf510901a"
     "|error|fetch|entity"
@@ -202,9 +221,9 @@ PDF_THAT_WILL_NOT_IDENTIFY = (
 # The TNG backup keeps the message row of a photo deleted off the phone;
 # the other attachments resolve and say nothing.
 WHATSAPP_PHOTO_NOT_IN_BACKUP = (
-    "75ba5daf-7447-52d6-9873-7e01a563a8f5"
+    "4a7fcf9d-734b-5848-8e07-f0cd6bcd7491"
     "|warning|parse|markdown"
-    "|00000000-0000-8cd7-b2e8-b8443ce69b19"
+    "|00000000-0000-8d08-85b0-d2533cc3a460"
     "|0b50e817-2480-8dbf-8855-78fecef33dc9"  # message TNG0013
     "|attachment|fetch_failed|Media/WhatsApp Images/holodeck-poker-night.jpg"
     " is not among the media files the backup holds"
@@ -219,8 +238,7 @@ TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT = (
     "c662c0a8-aa0a-5a9c-a618-a9f36e2d47d5"
     "|warning|fetch|entity"
     "|chat_attachments:TNG-BRIDGE/T2/T2#risa-shore-leave.png"
-    "|0195683a-d140-87f9-bdf6-234da6d6880c"  # Riker's message
-    "||not_found|<name>.png is not in the export"
+    "|||not_found|<name>.png is not in the export"
 )
 # Every kind of file no feed reads is a row, named by the shape of its
 # path: a warning where nothing reads it, a note where it is left out on
@@ -269,14 +287,14 @@ TAKEOUT_UNREAD_FILES = [
 # `Comment`: a note on the review and on the saved place, not text.
 TAKEOUT_NO_LOCATION_NOTES = [
     (
-        "46f72732-7bb5-57ca-abfc-f0926e0cea9a|info|parse|markdown"
-        "|00000000-0000-8274-a762-150808777b86"
+        "42bdbe92-e618-52c7-b981-842c32d5c701|info|parse|markdown"
+        "|00000000-0000-84b4-80af-50ab120b27f4"
         "|019d7bfb-e900-8689-b06f-03ee09f0819c"
         "|Comment|noted|Google has no location for this place"
     ),
     (
-        "53e76917-0f9b-58fc-838c-8561c5681fda|info|parse|markdown"
-        "|00000000-0000-8274-a762-150808777b86"
+        "6c79e982-d90c-5ced-b21c-6f1af19ff4f6|info|parse|markdown"
+        "|00000000-0000-84b4-80af-50ab120b27f4"
         "|019ca869-5000-8c1e-8c4a-e9f5104df6a9"
         "|Comment|noted|Google has no location for this place"
     ),
@@ -285,15 +303,15 @@ TAKEOUT_NO_LOCATION_NOTES = [
 # noted on its first message.
 TAKEOUT_CHAT_SPACE_NOTES = [
     (
-        "d745bedd-c4b4-5df8-b5ec-0df96f05d97c|info|parse|markdown"
-        "|00000000-0000-82fb-8e25-f16025ef745f"
+        "51769ff0-5881-5d20-ab49-fc6aa76b8e52|info|parse|markdown"
+        "|00000000-0000-8e5f-8eb1-967f63ffb4eb"
         "|019573e8-ee00-8ccc-bca0-7b369a4046d2"
         "|membership_state|noted"
         "|the account's membership of this conversation is MEMBER_NOT_A_MEMBER"
     ),
     (
-        "e19f9822-c282-5fdf-a54d-8592f38d60e6|info|parse|markdown"
-        "|00000000-0000-82fb-8e25-f16025ef745f"
+        "46197332-6763-5662-989b-93a88c804f68|info|parse|markdown"
+        "|00000000-0000-8e5f-8eb1-967f63ffb4eb"
         "|019573e8-ee00-8ccc-bca0-7b369a4046d2"
         "|starred_group_id|noted|the account starred this conversation"
     ),
@@ -306,8 +324,10 @@ TAKEOUT_SAVED_PLACE_WITHOUT_KEY = (
 )
 EXPECTED_PROBLEMS = {
     "claude-api": [POISONED_PROBLEM, CLAUDE_ATTACHMENT_WITHOUT_BYTES],
+    "garmin": [GARMIN_RIDE_WITH_NO_FIT],
     "facebook": sorted(
         [
+            FACEBOOK_TABLES_NOT_READ,
             FACEBOOK_VIDEO_NOT_IN_EXPORT,
             FACEBOOK_CALL_DURATION_UNREAD,
             FACEBOOK_SENDER_WHO_LEFT,
@@ -316,7 +336,7 @@ EXPECTED_PROBLEMS = {
             FACEBOOK_GROUP_LEFT_SINCE,
         ]
     ),
-    "tng_pdfs": [PDF_THAT_WILL_NOT_IDENTIFY],
+    "tng_pdfs": [PDFS_WITH_NO_TEXT, PDF_THAT_WILL_NOT_IDENTIFY],
     "whatsapp": [WHATSAPP_PHOTO_NOT_IN_BACKUP],
     "google-takeout": sorted(
         [
@@ -533,21 +553,40 @@ class IngestedTngPipelineTest(unittest.TestCase):
             if s.get("function") == "ingest"
         )
 
-    def _grid_index_inputs(self) -> tuple[str, ...]:
-        """What the config's `grid_index` reads: every source's render.
+    def _index_step_inputs(self) -> tuple[str, ...]:
+        """What the config's `unified_grid_and_search_index` reads: every source's render.
         The runner always hands a fan-in all of these, and a source
         missing from them is one the config dropped, which leaves the
         index."""
         config = tomllib.loads((self.workspace / "dag.toml").read_text())
+        steps = config.get("steps", [])
         (step,) = [
-            s for s in config.get("steps", []) if s.get("function") == "grid_index"
+            s for s in steps if s.get("function") == "unified_grid_and_search_index"
         ]
-        return tuple(step["inputs"])
+        ids = [
+            f"{s['group']}/{s['function']}" if "group" in s else s["id"] for s in steps
+        ]
+        # A pattern (`*/render_markdown`) stands for every step of its
+        # function, as the loader expands it before the step sees it.
+        out: list[str] = []
+        for written in step["inputs"]:
+            named = (
+                [i for i in ids if i.split("/", 1)[-1] == written[2:] and "/" in i]
+                if written.startswith("*/")
+                else [written]
+            )
+            out.extend(i for i in named if i not in out)
+        return tuple(out)
 
     @property
     def _index_db(self) -> Path:
-        """The grid index the `grid_index` fan-in step writes."""
-        return self.workspace / "unified_document_index" / "grid_index" / "db.sqlite"
+        """The grid index the `unified_grid_and_search_index` fan-in step writes."""
+        return (
+            self.workspace
+            / "unified_grid_and_search_index"
+            / "unified_grid_and_search_index"
+            / "db.sqlite"
+        )
 
     @property
     def _signal_entities_db(self) -> Path:
@@ -721,7 +760,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """The `pdf` source's contribution, by grid_rows kind.
 
         Pinned rather than merely non-empty because this source is the
-        one whose output feeds the qmd index by *page*: silent growth
+        one whose output feeds the search index by *page*: silent growth
         here shows up as a slower fixture build for everyone, and a
         silent drop to zero would mean PDFs stopped being searchable
         without any test going red.
@@ -741,14 +780,13 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """Rows whose `qmd_path` disagrees with their markdown's path.
 
         The two columns name the same file and must name it the same
-        way: `GridIndex` (unified_document_index/src/qmd/mapping.rs) keys grid
-        rows by `norm_path(qmd_path)` and looks each qmd hit up by the
-        hit's own data-root-relative path — the same spelling
-        `apply_one` stores in `markdowns.md_path`. A provider that
-        stamps any other form still renders correct markdown and still
-        gets indexed by qmd, so nothing else goes red; its documents
-        just vanish from free-text search, because every hit in them
-        resolves to zero grid rows and is dropped. `pdf` shipped that
+        way: a search hit names its document's file, the spelling
+        `apply_one` stores in `markdowns.md_path`, while search reads a
+        row by its `qmd_path`, whose first segment is the row's
+        `source_id`. A provider that stamps any other form still renders
+        correct markdown and still gets indexed, so nothing else goes
+        red; its documents just vanish from free-text search, because
+        their hits land on no row search reads. `pdf` shipped that
         way — it wrote the out-dir-relative `docs/<blake3>.md` while
         every other provider wrote `<stanza>/render_markdown/...`.
 
@@ -930,7 +968,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
 
         Each source's render step writes
         `<source>/render_markdown/indexed_markdown.doltlite_db` holding the
-        same rows that stack into the unified document index — same derived DDL,
+        same rows that stack into the unified grid and search index — same derived DDL,
         same writer (`grid_index::apply_one`). Asserted from the outside
         with the doltlite CLI, so a store that exists but is empty, or
         holds a shape the CLI cannot read, fails here rather than
@@ -999,9 +1037,15 @@ class IngestedTngPipelineTest(unittest.TestCase):
         can be pinned across runs.
         """
         out: dict[str, list[str]] = {}
-        for store in sorted(
-            self.workspace.glob("*/render_markdown/indexed_markdown.doltlite_db")
-        ):
+        # Every store a step keeps problems in: the download's, the
+        # render's, and the time-series and occurrences steps' own.
+        stores = [
+            *self.workspace.glob("*/ingest/entities.doltlite_db"),
+            *self.workspace.glob("*/render_markdown/indexed_markdown.doltlite_db"),
+            *self.workspace.glob("*/render_time_series/time_series.doltlite_db"),
+            *self.workspace.glob("*/render_occurrences/occurrences.doltlite_db"),
+        ]
+        for store in sorted(stores):
             rows = self._query(
                 store,
                 "SELECT problem_uuid, severity, stage, scope_kind, scope_key, "
@@ -1009,11 +1053,40 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "FROM problems ORDER BY problem_uuid;",
             )
             if rows:
-                out[store.parent.parent.name] = rows
+                source = store.parent.parent.name
+                out[source] = sorted(out.get(source, []) + rows)
+        return out
+
+    def _linked_fetch_problems(self) -> dict[str, str]:
+        """`problem_uuid -> item_uuid` for each download problem its
+        source's render links to a grid row: the raw store's fetch rows
+        joined, by the record they name, to the render store's
+        `entity_items`, as the problems reader joins them."""
+        out: dict[str, str] = {}
+        for raw in sorted(self.workspace.glob("*/ingest/entities.doltlite_db")):
+            render = (
+                raw.parent.parent / "render_markdown" / "indexed_markdown.doltlite_db"
+            )
+            if not render.exists():
+                continue
+            items = dict(
+                line.split("|", 1)
+                for line in self._query(
+                    render, "SELECT entity_key, item_uuid FROM entity_items;"
+                )
+            )
+            for line in self._query(
+                raw,
+                "SELECT problem_uuid, scope_key FROM problems "
+                "WHERE stage = 'fetch' AND scope_kind = 'entity';",
+            ):
+                problem, scope_key = line.split("|", 1)
+                if scope_key in items:
+                    out[problem] = items[scope_key]
         return out
 
     def _index_problems(self) -> list[str]:
-        """The index's copy of every source's problems, same columns."""
+        """The index's own problems, same columns: none of a source's."""
         return self._query(
             self._index_db,
             "SELECT problem_uuid, severity, stage, scope_kind, scope_key, "
@@ -1047,17 +1120,17 @@ class IngestedTngPipelineTest(unittest.TestCase):
 
     # The step's tracing event, as it reaches stderr: JSON nested inside
     # the NDJSON envelope, so the inner quotes arrive backslash-escaped.
-    _GRID_INDEX_READ = re.compile(r'the index is built.*?\\?"read\\?":\s*(\d+)')
+    _INDEX_STEP_READ = re.compile(r'the index is built.*?\\?"read\\?":\s*(\d+)')
 
-    def _grid_index_reads(self, stderr: str) -> list[int]:
-        """How many documents each grid_index step in a run READ.
+    def _index_step_reads(self, stderr: str) -> list[int]:
+        """How many documents each `unified_grid_and_search_index` step in a run READ.
 
         Not `loaded`: that was already 0 on a steady-state run before
         the index kept cursors, because the fingerprint compare happened
         after paying to read every document out of every source's store.
         `read` is the number the cursors actually move.
         """
-        return [int(n) for n in self._GRID_INDEX_READ.findall(stderr)]
+        return [int(n) for n in self._INDEX_STEP_READ.findall(stderr)]
 
     def _run_pipeline(
         self, *, reset: bool, now: str | None = None
@@ -1548,6 +1621,22 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ],
             "a LinkedIn connection and a message sender by their profile",
         )
+        # The skills on a LinkedIn profile are one page, a row per skill,
+        # where they were once stored and never shown.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT kind || '|' || preview FROM grid_rows "
+                "WHERE provider = 'linkedin' AND kind LIKE 'LinkedIn Skill%' ORDER BY 1;",
+            ),
+            [
+                "LinkedIn Skills|Diplomacy Starship Command Tactical Analysis",
+                "LinkedIn Skill|Diplomacy",
+                "LinkedIn Skill|Starship Command",
+                "LinkedIn Skill|Tactical Analysis",
+            ],
+            "a LinkedIn export's skills are searchable",
+        )
         # Drive names a comment's author and nothing else, so a comment
         # author is a `google:name/` handle; the account's own comments
         # are its address, which the file's owner entry gives.
@@ -1741,8 +1830,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # of the four and contributes one page, not two — its image-only
         # second page becomes a note in the markdown rather than a row.
         # Every page row must carry a `qmd_path`, since that column is
-        # what lets a qmd hit resolve back to a grid row — a page indexed
-        # without one is findable by search but unreachable from the UI.
+        # what lets a search hit land on a grid row — a page indexed
+        # without one is in the search index but never shown from it.
         self.assertEqual(
             self._pdf_shape(),
             {"PDF Document": 4, "PDF Page": 5},
@@ -1760,7 +1849,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # Cross-provider: `grid_rows.qmd_path` must be byte-equal to
         # its markdown's `markdowns.md_path`. Asserted over the whole
         # index rather than per-provider so a new source inherits the
-        # check for free — this is the invariant the qmd hit→row
+        # check for free — this is the invariant the search hit→row
         # mapping is built on.
         self.assertEqual(
             self._qmd_path_mismatches(),
@@ -1785,7 +1874,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # ── the per-source render stores ────────────────────────
         # Each source's render step writes its rows into
         # `<source>/render_markdown/indexed_markdown.doltlite_db` — the same
-        # rows, same derived DDL and same writer as the unified document index,
+        # rows, same derived DDL and same writer as the unified grid and search index,
         # so "what stacks into the index" needs no second projection to
         # keep in step.
         #
@@ -1846,15 +1935,15 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # sink: the one built to fail, and the ones its downloads cannot
         # fetch or skip. Every renderer drops-and-records a row
         # it cannot build instead of failing the step, which is what
-        # stops one bad record from poisoning `grid_index` for every
+        # stops one bad record from poisoning `unified_grid_and_search_index` for every
         # other source — but the same change means a projection that
         # quietly started dropping rows would no longer show up as a
         # failure anywhere. Here it does: any row outside the expected
         # rows is a regression and the message names it. The poisoned
         # row is what proves the sink works end to end — through the
-        # real render, into the source's store, and copied into the
-        # index — and every id is pinned so a later run mints the same
-        # one (asserted after run 2 and run 4).
+        # real render, into the source's store, where a reader finds it
+        # — and every id is pinned so a later run mints the same one
+        # (asserted after run 2 and run 4).
         problems1 = self._problems()
         self.assertEqual(
             problems1,
@@ -1865,8 +1954,25 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         self.assertEqual(
             self._index_problems(),
-            sorted(row for rows in EXPECTED_PROBLEMS.values() for row in rows),
-            "grid_index copies every source's problems into the index",
+            [],
+            "the index step copies no source's problems; each is read in its own store",
+        )
+        # A download names only its raw record; render says which grid row
+        # that record belongs to, and the reader links the two. These are
+        # the rows a person opens from the problem: the claude
+        # conversation (its uuid minted from the raw key) and Riker's
+        # Takeout message (found by its upstream id).
+        self.assertEqual(
+            self._linked_fetch_problems(),
+            {
+                CLAUDE_ATTACHMENT_WITHOUT_BYTES.split("|")[0]: (
+                    "00000000-0000-89b3-8bed-0eecc97d45ce"
+                ),
+                TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT.split("|")[0]: (
+                    "0195683a-d140-87f9-bdf6-234da6d6880c"
+                ),
+            },
+            "each download problem whose record has a row links to it",
         )
         self._assert_problems_reach_the_log(EXPECTED_PROBLEMS)
 
@@ -1897,6 +2003,20 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ),
             self._scalar(self._index_db, "SELECT COUNT(*) FROM markdowns;"),
             "the document rows and the markdowns are the same set",
+        )
+        # Every renderer hands a document the one way: as sections, the
+        # first opening with its front matter, which it hands as facts the
+        # render store keeps (`etl/render/src/front_matter.rs`). Without
+        # sections the store keeps none of what the document says.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT provider, COUNT(*) FROM markdowns "
+                "WHERE front IS NULL OR section_layout IS NULL "
+                "GROUP BY provider ORDER BY provider;",
+            ),
+            [],
+            "these providers hand documents without front matter or sections",
         )
         # A document's stamps are the document row's, on every provider:
         # created no later than modified, and `markdowns` a copy of them.
@@ -1970,7 +2090,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 self._scalar(self._index_db, "SELECT generation FROM store_generation;")
             ),
             0,
-            "grid_index must seal, raising the index's generation",
+            "the index step must seal, raising the index's generation",
         )
         # Signal recorded both phones' snapshots in its resume cursor.
         cursor1 = self._signal_cursor()
@@ -2055,17 +2175,17 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # store. Asserting on it would pass either way and prove
         # nothing.
         # Every pass, not one pass: since `render` streams, a producer
-        # finishing can dispatch `grid_index` before its siblings are done,
+        # finishing can dispatch `unified_grid_and_search_index` before its siblings are done,
         # so a run has one pass per source whose version moved plus the
         # final one. What must hold either way is that each of them reads
         # nothing — that is the claim, and it does not depend on how many
         # times the step was dispatched.
-        reads2 = self._grid_index_reads(run2.stderr)
-        self.assertTrue(reads2, "run 2 recorded no grid_index pass at all")
+        reads2 = self._index_step_reads(run2.stderr)
+        self.assertTrue(reads2, "run 2 recorded no index step pass at all")
         self.assertEqual(
             set(reads2),
             {0},
-            "every one of run 2's grid_index passes must read 0 documents: "
+            "every one of run 2's index step passes must read 0 documents: "
             "nothing changed, so every source's dolt_diff should have come "
             f"back empty (got {reads2})",
         )
@@ -2255,9 +2375,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # The fan-in reads every source, as the runner hands them over;
         # only this one has moved.
         self._run_step(
-            "unified_document_index",
-            "grid_index",
-            inputs=self._grid_index_inputs(),
+            "unified_grid_and_search_index",
+            "unified_grid_and_search_index",
+            inputs=self._index_step_inputs(),
         )
 
         self.assertEqual(
@@ -2282,9 +2402,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self.assertFalse(
                 f.is_file(),
                 f"{f} outlived the conversation it renders. The grid no "
-                "longer lists it, but /applet/unified_document_index/chat/{uuid} "
-                "still resolves and qmd still finds it — a deletion the "
-                "user can read",
+                "longer lists it, but /applet/unified_grid_and_search_index/chat/{uuid} "
+                "still resolves — a deletion the user can read",
             )
         # Nothing else moved. A sweep that takes the neighbours with it is
         # worse than one that never fires.
@@ -2338,7 +2457,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         self._run_step("github", "render_markdown", "github", inputs=("github/ingest",))
         self._run_step(
-            "unified_document_index", "grid_index", inputs=self._grid_index_inputs()
+            "unified_grid_and_search_index",
+            "unified_grid_and_search_index",
+            inputs=self._index_step_inputs(),
         )
 
         github_docs_after = set(

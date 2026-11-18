@@ -18,7 +18,8 @@ use datalib_etl_notion::ingest::db::TreeRow;
 use datalib_etl_notion::ingest::format_uuid;
 use datalib_etl_notion::ingest::schema_raw::TreeKind;
 use datalib_etl_render::html::{
-    code_span_parts, escape_attr, escape_md_inline, escape_text, md_link_dest,
+    code_span_parts, escape_attr, escape_md_inline, escape_name_inline, escape_name_text,
+    escape_text, md_link_dest,
 };
 use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::message::{chip_link, stamp_text_html};
@@ -61,7 +62,7 @@ impl Context<'_> {
         let name = self.users.get(uid).map(String::as_str).unwrap_or("");
         match user_handle(uid, self.emails) {
             Some(h) => chip_link(name, &h),
-            None => format!("@{}", escape_text(name)),
+            None => format!("@{}", escape_name_text(name)),
         }
     }
 }
@@ -331,7 +332,7 @@ fn leaf(text: &str, cx: &Context<'_>) -> Option<String> {
             let (href, title) = cx.target(&url);
             let text = if inner.is_empty() {
                 title
-                    .map(|t| escape_md_inline(&t))
+                    .map(|t| escape_name_inline(&t))
                     .unwrap_or_else(|| "Untitled".into())
             } else {
                 inline(inner, cx)
@@ -656,6 +657,31 @@ mod tests {
         );
         assert!(
             md.contains("<strong>Stardate</strong> <code>log</code></summary>\n\n- Docked at Starbase 74\n\n</details>\n\nAfter\n"),
+            "{md}"
+        );
+    }
+
+    /// A tag a person typed into Notion comes back escaped, `\\<div\\>`
+    /// (Notion's enhanced-markdown spec escapes `<` and `>` outside code),
+    /// and is passed through as markdown that shows it as typed; in code
+    /// it is literal. Nothing here escapes a bare `<`, so this rests on
+    /// Notion's escaping: a test with that shape, made-up content.
+    #[test]
+    fn a_tag_typed_into_notion_shows_as_typed() {
+        let md = render(
+            "Engage \\<div style=\"display:none\"\\> and `<b>`\n\
+             <details>\n\
+             <summary>\\<i\\> `<u>`</summary>\n\
+             \t- Docked\n\
+             </details>\n\
+             After",
+        );
+        assert!(
+            md.contains("Engage \\<div style=\"display:none\"\\> and `<b>`\n"),
+            "{md}"
+        );
+        assert!(
+            md.contains("<summary>&#60;i&#62; <code>&lt;u&gt;</code></summary>"),
             "{md}"
         );
     }

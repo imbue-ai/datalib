@@ -2,7 +2,7 @@
 //! their Matrix ids, which are unique across Matrix, so the natural key
 //! is the raw key and the scope is provider-global.
 
-use datalib_id::{composite_key, IdNamespace, Identity, Minter};
+use datalib_id::{IdNamespace, Identity, Minter};
 use datalib_time::RecordStampPrecision;
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Beeper;
@@ -10,7 +10,6 @@ pub const ID_NAMESPACE: IdNamespace = IdNamespace::Beeper;
 pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Millis;
 
 pub const KIND_ROOM: &str = "room";
-pub const KIND_PERIOD: &str = "room_period";
 pub const KIND_USER: &str = "user";
 pub const KIND_EVENT: &str = "event";
 
@@ -18,15 +17,6 @@ const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
 pub fn room(source_id: &str, native_room_id: &str) -> Identity {
     IDS.mint(source_id, KIND_ROOM, native_room_id.to_string(), None)
-}
-
-pub fn period(source_id: &str, native_room_id: &str, period_key: &str) -> Identity {
-    IDS.mint(
-        source_id,
-        KIND_PERIOD,
-        composite_key(&[native_room_id, period_key]),
-        None,
-    )
 }
 
 pub fn user(source_id: &str, native_user_id: &str) -> Identity {
@@ -55,7 +45,6 @@ mod tests {
     fn natural_key_regenerates_the_uuid() {
         for got in [
             room("src", "!r:beeper.local"),
-            period("src", "!r:beeper.local", "2024-03"),
             user("src", "@u:beeper.local"),
             event("src", "$e", 1_700_000_000_123),
         ] {

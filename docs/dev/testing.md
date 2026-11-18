@@ -22,7 +22,11 @@ bypass (and never warm) the cache and can disagree with CI.
 
 The complete local gate is `bazelisk run //:precommit` (the hygiene lint,
 `//:lint`, a `build //...` for the fmt and clippy aspects, and every
-hermetic test). Never put `--test_tag_filters=-manual,-external` on the
+hermetic test). On x86_64 Linux with a BuildBuddy key it passes CI's
+pull-request flags to every one of those, so it can reuse the entries CI
+wrote and CI can reuse its; elsewhere it builds in fastbuild, and so
+does a plain `bazelisk test //...`. Which flags and why:
+[`ci.md`](ci.md) §"The local gate and CI's cache". Never put `--test_tag_filters=-manual,-external` on the
 full run: `-external` silently drops `//datalib/ui:e2e_test`. Coverage:
 [`/docs/dev/coverage.md`](/docs/dev/coverage.md); why a run was slow:
 [`/docs/dev/ci.md`](/docs/dev/ci.md).
@@ -32,10 +36,12 @@ full run: `-external` silently drops `//datalib/ui:e2e_test`. Coverage:
 `bazel test` runs in a sandbox, so `INSTA_UPDATE=always` would write new
 `*.snap`s where you can't review them. Every insta-using `rust_test` has a
 sibling `.update` target (via the `insta_update` macro in
-[`/tools/insta.bzl`](/tools/insta.bzl)) that you invoke with `bazel run`:
+[`/tools/insta.bzl`](/tools/insta.bzl)) that you invoke with `bazel run`.
+It runs the test with the test's own `env` and `data`, so nothing is
+listed twice:
 
 ```bash
-bazel run //datalib/backend/unified_document_index:unified_document_index_tests.update
+bazel run //datalib/backend/unified_grid_and_search_index:unified_grid_and_search_index_tests.update
 bazel run //datalib/backend/etl/providers/slack:slack_tests.update
 ```
 
@@ -56,6 +62,12 @@ goldens come from the network, so the two are separate runs:
 `<p>_tests.update` carries `test_args = ["--skip", "live::"]` and
 `<p>_live.update` carries `test_args = ["live::"]`.
 
+One golden watches what search sees: `datalib_step`'s
+`index_text.update` rewrites `tests/step_tests/snapshots/*index_text*`,
+the text the index draws of every fixture document, one file per source
+(`datalib-step index-text`). A diff there is a change to what is indexed
+and embedded; read it as one, since it re-embeds what it touches.
+
 When adding an insta-using test, declare a sibling `.update`:
 
 ```python
@@ -72,10 +84,6 @@ insta_update(
     name = "my_render_test.update",
     test = ":my_render_test",
     test_args = ["--ignored"],  # only if the test is #[ignore]'d
-    # `data` and `env` on rust_test do NOT propagate through the sibling
-    # sh_binary wrapper — mirror every fixture / env-var dep here.
-    extra_data = [":tng_fixture"],
-    extra_env = {"MY_FIXTURE_DIR": "datalib/.../fixtures/my_api"},
 )
 ```
 
@@ -93,8 +101,7 @@ Two things follow from sharing a process:
 * **Anything process-global is now shared.** An environment variable
   one test sets is every test's. A binary whose tests need one runs
   them one at a time (`RUST_TEST_THREADS = "1"`, with the variable named
-  beside it: `DATALIB_RUNTIME_DIR` in `unified_document_index_tests` and
-  `applet_unittests`). Playback is not one: a test points the future it
+  beside it); none does today. Playback is not one: a test points the future it
   runs at its own tape with `datalib_etl_web::playback::scope`, which is
   task-local, and `DATALIB_HTTP_PLAYBACK` is for a step run as a
   process. A tracing subscriber is the same story from the other side:
@@ -175,8 +182,17 @@ one binary would be indistinguishable.
   `data-sources-*` specs and a few more), each against a backend and
   root of its own, so no two specs ever share a queue.
 * **`webkit`** — the grid-bearing specs only, listed by `testMatch`.
-* **`warmup`** — qmd's cold model load, paid once before `chromium`
+* **`warmup`** — the search model's cold load, paid once before `chromium`
   and `webkit` start.
+
+Bazel runs them as three tests, each with its own timeout, and
+`//datalib/ui:e2e_test` is the `test_suite` of all three:
+`e2e_chromium_test` runs `warmup` and `chromium`, `e2e_sandboxes_test`
+the `chromium-<spec>` projects, and `e2e_webkit_test` `warmup` and
+`webkit`. `DATALIB_TEST_E2E_PART` tells `playwright.config.ts` which
+part it is, and it starts only that part's backends; unset, as under
+`bazel run //datalib/ui:e2e`, it runs everything. A new spec lands in a
+part by the project it lands in, with nothing to choose.
 
 The `webkit` project exists because the Tauri desktop app renders in a
 **WKWebView**, not Chromium, and the two engines disagree about layout in a
@@ -236,15 +252,15 @@ the spec's own, not as a collision.
 suite gates merges like everything else. Two things make it work in the
 CI image:
 
-* **The qmd GGUFs are bazel inputs.** A build action
-  (`//third-party/qmd_models`) fetches them into the remote cache, and
-  they reach the materializer and the fixture's index genrule as
+* **The embedding model is a bazel input.** A build action
+  (`//third-party/embedding_models`) fetches it into the remote cache, and
+  it reaches the materializer and the fixture's index genrules as
   runfiles; the image has no `/root/.cache/qmd/models`. The e2e suite
   runs on the runner itself, so its runfiles *are* downloaded before it
-  starts — which is why it uses `materialize_tng_root_embed_only`: the
-  embedding model is all it loads, and the other two are 1.8 GB. The
-  suite sets `DATALIB_QMD_MODELS_NO_FETCH` so the applet reports them
-  absent instead of fetching them into the fixture root.
+  starts — which is why `materialize_tng_root` carries the embedding
+  model alone: it is all a search loads, and the other two pins are
+  1.8 GB. The suite sets `DATALIB_MODELS_NO_FETCH` so the applet reports
+  a missing model absent instead of fetching it into the fixture root.
 * **`--test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright`.**
   GitHub forces `HOME=/github/home` for container steps, while the image
   bakes its browsers under `/root`; without the flag `run_e2e.sh`'s
@@ -263,7 +279,7 @@ reporting "UI bundle not embedded in this binary").
 The target sets `timeout = "long"` (900s). Bazel's default for a test
 with no `size` or `timeout` is `medium` — **300s** — and this suite does
 not fit in that: the suite runs across two engines behind nine backend
-processes, plus a qmd cold model load of 1.2-1.5 min (qmd 2.8.3).
+processes, plus the search model's cold load.
 Measured wall clock is ~70s warm and 200-270s on a loaded machine,
 so the default budget made `bazelisk test //...` flaky in a way that
 pointed at nothing. Bazel enforces the ceiling but does not wait for it,
@@ -305,7 +321,9 @@ Playwright's `fill` leaves it as it was and reports no error, so a
 spec that fills one waits on a search that never starts.
 `typeInto` in [`grid-helpers.ts`](/datalib/ui/tests/e2e/grid-helpers.ts)
 selects what is there and types over it, and the field's
-`data-query` attribute is what to assert on.
+`data-query` attribute is what to assert on. The toolbar's box then waits
+for Enter: `runSearch` does both, and `typeInto` alone is for a spec about
+what is offered while typing.
 
 **Take related values from one drawing.** Two separate reads can
 straddle a redraw. For example, the status from before a sync can sit
@@ -364,11 +382,27 @@ spec that rewrites responses adds
 as `problems-grid.spec.ts` does. A handler that only fulfills or aborts
 never waits, so it needs none.
 
+**Fill the config editor with `fillConfigEditor`.** A read of the config
+landing just as `fill` has selected the old text drops the selection, and
+the fill then goes after that text.
+
+**To find what a spec takes for granted, slow every answer down.** Repeating
+a spec on a quiet machine rarely shows a race. A temporary fixture that delays
+each backend answer by a random 0–400 ms shows many at once: export a `test`
+from a scratch file with `base.extend`, give it an `auto` fixture that does
+`context.route(/\/(api|applet|data)\//, …)` with the delay and then
+`route.fallback()`, and point the specs' imports at that file. Leave
+`search-warmup.setup.ts` as it is, or its timeout stops the run. A routed
+request loses its `sec-fetch-*` headers, so `links-from-elsewhere` and
+`document-sandbox` fail for that reason alone. This found a real bug as well
+as loose specs: Add source writing a config that held nothing but the new
+source.
+
 The suite runs with no retries (`playwright.config.ts` sets none), on
 purpose: a flake turns the run red and gets fixed rather than hidden. To
 hunt one, repeat the spec (§"Running one spec, and running it several
-times") or `bazelisk test //datalib/ui:e2e_test --runs_per_test=N
---local_test_jobs=1`. `scripts/flaky_tests.py` lists the targets that
+times") or `bazelisk test //datalib/ui:e2e_<part>_test --runs_per_test=N
+--local_test_jobs=1` for the part that holds it. `scripts/flaky_tests.py` lists the targets that
 went red and then green on the same commit.
 
 ## The sign-in suite
@@ -448,7 +482,7 @@ with `[checkpoint_cadence] at_most_every_secs = 2` at the top of that
 config and a `chatgpt` group whose ingest step's params are
 `[steps.params.api]`. The NDJSON on stderr shows the chain: a
 `checkpoint` from the ingest, a `step_start` for its render within
-milliseconds, and one for `unified_document_index/grid_index` right after.
+milliseconds, and one for `unified_grid_and_search_index/unified_grid_and_search_index` right after.
 
 ## Bazel-fetched test data (`lightroom`)
 
@@ -511,6 +545,13 @@ Read the bake with `git diff` in `$DATALIB_MANUAL_E2E_DIR` — it is a git
 repo, and the commit message is where the triage goes (deliberate /
 accidental / noise, per cluster).
 
+Both start by upgrading `dag.toml` as `datalib-http` would
+(`datalib_migrate_config::upgrade_unattended`): the bake runs
+`datalib-dag`, which loads a config but never upgrades one, so a rename
+the app makes on sight would otherwise fail the bake. The bake writes the
+upgraded text back over `dag.toml`, so the rename shows in the data repo's
+diff; a rewrite that refuses fails it by name.
+
 Start with `--config`. It parses the config, builds the graph, and round-trips
 every step's params against the provider schemas in seconds, without touching
 the network. Every provider's config schema is `deny_unknown_fields`, so a
@@ -518,8 +559,12 @@ misplaced knob fails here rather than during the live run.
 
 The test makes three pipeline runs, each asserting something different:
 
-1. **Cold** — snapshots the produced data tree, one `.snap` per file, plus a
-   manifest and the layout invariants. Then it makes the contacts listed in
+1. **Cold** — snapshots the produced data tree, one `.snap` per file
+   (each group's `ingest/`, `render_markdown/` and, for a time-series
+   source, `render_time_series/`, plus the time-series index), a
+   manifest and the layout invariants. A snapshot of a file the bake no
+   longer writes is deleted, and so is the folder of a group that is no
+   longer in the root, which is what renaming a group leaves. Then it makes the contacts listed in
    `contacts.toml` (beside the config) in the contacts app, asserts every
    handle they link is an author in the index, and snapshots the contacts
    store with each minted `contact_id` replaced by the contact's name.
@@ -555,7 +600,7 @@ commit (`logging.md` § "Every line has an author").
 The three runs' NDJSON event streams sit beside it in `run-<millis>/`.
 Free-text search works there: the golden config keyword-indexes every
 source and embeds two small ones (whatsapp, google_calendar_window), so
-semantic search reaches those two alone. The qmd index is not
+semantic search reaches those two alone. The search index is not
 snapshotted.
 
 The normalization machinery — the volatile keys the snapshots redact, each
@@ -567,37 +612,55 @@ commented with why — is in the test's source.
 `scripts/search_eval.py` scores the search box against an eval set: target
 rows of a library, each with queries a person might type to find it (a
 few remembered words, search keys like `from:` and `after:`, or a
-description in other words). It asks every query once per answer (the
-Fields, Words and Meaning tabs, and the fused answer a search with no
-tab gets), records where the target ranked and how long
+description in other words). It asks every query once per setting (`on`,
+the search as it opens, `off`, with `semantic:off`, and any cutoff named in
+`--modes`, such as `0.3`), records where the target ranked and how long
 each answer took, and prints hit rates at 1, 3 and 10, the mean
 reciprocal rank and latency percentiles, by query style and by source.
 A row counts as the target when it is in the same document. For a
 target that is one message of a page, it also says where the hit on that
 page lands, read from the row's `link`: on the message, how many
-messages off, and whether the snippet shown came from it.
+messages off, and whether the snippet shown came from it. A target may
+also name a `region`, a passage copied from its page, for a page that is
+one long section (a Notion page of weekly notes): the report then says
+whether the words shown came from within about a screen of that passage,
+and how far off they were. A target's `at`, where it sits in its page as a
+fraction, splits the scores by the page's first, middle and last third, so
+a search that finds the start of a long page but not its end shows up.
 
 `--modes app` asks each query the way the search card does, and is the
-number to quote for how long a search takes. The card sends six requests
-at once: the rows of the list (`limit=50`), one row of each answer for its
-count, and the groups behind the source chips. `ms` is how long until the
+number to quote for how long a search takes. The card sends two requests
+at once: the rows of the list (`limit=50`) and the groups behind the source
+chips. `ms` is how long until the
 rows arrive; the report also gives each request's time and how long until
 all of them answered. Run it on its own, with `--http`: each answer leaves
 work cached for the next, so a time taken after another answer of the
-same query says little, and the fused time in a plain run is too low.
+same query says little, and the time in a plain run is too low.
 
 What these times leave out, measured against the real card in a browser:
-the card waits 600 ms after the last keystroke before it asks, unless the
-search was opened with Enter in the top box, and it then loads the first
-row's document into the preview. A run asks one query straight after
+the card then loads the first row's document into the preview. A run asks one query straight after
 another, which came out about 20% faster than the same requests three
 seconds apart, the gap a person leaves. On a server just started, the
 query `run` warms up with is the first search after a launch, and the
 report keeps its time apart.
 
+`first-pages` asks a different question: how long a person waits for the first
+page of a search that sorts many rows with no index to help, by size, author or
+title, say. It asks each of the eval set's `orderings` from a freshly started
+applet, times its first page, its next page and the first page again, checks
+the rows come in that order with blanks last and no row repeated, and exits 1
+when one is wrong or takes over a second. It uses no search by meaning, so it
+takes a minute, not half an hour, and needs no models. Build with `-c opt` first:
+a plain build's SQLite sorts far slower than a release's.
+Times on a busy machine move several times over between runs, so compare
+repeated runs, and read a wrong order as a failure and a slow page as a question.
+
 Every query searches the whole library, as the search box does, unless
 it names a source itself; `--scope source` asks each one again narrowed
-to its target's source. A run records how many rows the library held,
+to its target's source. `--leave-out-source <id>`, repeatable, asks every
+query whose target is in another source with `-source:<id>`: for a source
+that quotes the eval set itself, such as the coding sessions that wrote
+it, whose copy of a query would otherwise outrank its target. A run records how many rows the library held,
 since a larger library is a bigger haystack: compare scores only
 between runs on the same clone. A bare date in a query is read in the
 applet's zone, so an eval set names one (`"tz": "America/New_York"`) and the
@@ -611,13 +674,12 @@ sync does not move the answers between two runs:
 
 ```bash
 bazelisk build //datalib/backend:bin
-export DATALIB_RUNTIME_DIR=…            # a staged runtime, for qmd
 DATALIB_BIND=127.0.0.1:0 bazel-bin/datalib/backend/bin/datalib-http <clone> --no-open --url-file url &
-python3 scripts/search_eval.py run --root <clone> --evals <evals.json> --http <base url> --out before.json
-python3 scripts/search_eval.py run --root <clone> --evals <evals.json> --http <base url> --modes app --out app.json
-python3 scripts/search_eval.py compare before.json after.json   # what moved
-python3 scripts/search_eval.py show after.json --missed words   # what a query found
-python3 scripts/search_eval.py audit-me --root <clone> --name "<owner>"  # where `me` is tagged
+uv run python scripts/search_eval.py run --root <clone> --evals <evals.json> --http <base url> --out before.json
+uv run python scripts/search_eval.py run --root <clone> --evals <evals.json> --http <base url> --modes app --out app.json
+uv run python scripts/search_eval.py compare before.json after.json   # what moved
+uv run python scripts/search_eval.py show after.json --missed words   # what a query found
+uv run python scripts/search_eval.py audit-me --root <clone> --name "<owner>"  # where `me` is tagged
 ```
 
 A run is worth keeping when it measures a change or a new baseline.
@@ -633,11 +695,11 @@ build the applet from that same checkout, or the commit says nothing.
 Thad's history is beside his eval set, in `search_eval/history/`:
 
 ```bash
-python3 scripts/search_eval.py keep after.json --history <dir> --note "what this measured"
-python3 scripts/search_eval.py history <dir>
+uv run python scripts/search_eval.py keep after.json --history <dir> --note "what this measured"
+uv run python scripts/search_eval.py history <dir>
 ```
 
-Without `--http` it starts its own `datalib-applet unified_document_index`
+Without `--http` it starts its own `datalib-applet unified_grid_and_search_index`
 and asks it directly, which skips the gateway. Either way it times the
 answers warm, after one query of each kind. A plain `bazelisk build`
 compiles Rust unoptimized; time what ships with binaries built `-c opt`.
@@ -645,7 +707,7 @@ A root last synced by an older build may have no index this build can
 read; `run` refuses a root with no rows rather than score an empty one.
 
 **Across languages.** Measured 2026-11-04 on a real library of 450,000 rows,
-with the embedding model pinned in `runtime/src/qmd.rs` (EmbeddingGemma,
+with the embedding model pinned in `runtime/src/models.rs` (EmbeddingGemma,
 which is multilingual). German and Italian wordings of English
 descriptions the Meaning tab already found: 28 of 28 in its top 10 and 27
 in its top 3, against 14 of 14 at top 3 for the English. Two-to-four-word
@@ -674,10 +736,9 @@ suite. Write what you find as a dated audit under `audits/`
 is one). Write counts and timings only, never what the records say
 (AGENTS.md §"Real data stays out of the repo").
 
-Everything is plain SQLite. Open it with `sqlite3 -readonly`. qmd's
-`index.sqlite` needs `file:<path>?immutable=1`, and the grid index
-needs `datalib-doltlite -readonly`. Run ids are in `runs`. What to look
-at, and where:
+Everything is plain SQLite. Open it with `sqlite3 -readonly`, the
+grid index (with the search index's `search_*` tables) included. Run
+ids are in `runs`. What to look at, and where:
 
 | question | where it shows |
 |---|---|
@@ -692,7 +753,7 @@ at, and where:
 | would the ETA have been right | `event = 'eta_shown'` (debug): what a running step's Manage row showed, once a minute. `metric_samples` for `queued` and `done_total` say why: a flat `queued` while `done_total` climbs never converges, and a jump in `done_total` is free work inflating the pace. |
 | is a migration repeating | `msg = 'migrated'` per store, across runs |
 | what is slow to read | `msg LIKE '%slow statement%took %'`, one line per attempt (`top_statement`, `total_ms`), and `msg LIKE 'slow statement%'` at `debug` for each (`db.statement`, `elapsed`); `GET /api/manage/rows` request times; the size of each `-wal` beside its file |
-| what was left behind | files under each `render_markdown/` against its documents; qmd's `documents` with `active = 0`; a directory under the root that no `[[groups]]` names |
+| what was left behind | files under each `render_markdown/` against its documents; a directory under the root that no `[[groups]]` names |
 
 ## macOS permissions in the desktop app (by hand)
 
@@ -704,7 +765,7 @@ what grants access, and what has been measured:
 [`wizard_file_pickers.md`](wizard_file_pickers.md) §"What the picker
 buys us in macOS permissions".
 
-1. **Build and launch through `datalib/tauri/run.sh`**, which starts
+1. **Build and launch through `./run-app.sh`** at the repo root, which starts
    the `.app` with `open`. Launched that way the app answers for its
    own permissions. Run the binary from a terminal instead and macOS
    applies the terminal's permissions — if the terminal has Full Disk
@@ -720,7 +781,7 @@ buys us in macOS permissions".
    tccutil reset All com.imbue.datalib
    ```
 
-   The `run.sh` build is signed differently from a release, which may
+   The `run-app.sh` build is signed differently from a release, which may
    already keep it apart from the installed app's grants; that has not
    been confirmed, so reset rather than rely on it.
 3. **Watch it fail first.** Type the protected path into the wizard

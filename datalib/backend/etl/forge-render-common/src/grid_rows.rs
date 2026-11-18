@@ -7,6 +7,7 @@ use datalib_id::composite_key;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 
+use crate::tree::Tree;
 use crate::{ordered, ChangeRequest, Comment, ForgeProfile};
 
 pub(crate) fn rows_for(
@@ -14,7 +15,8 @@ pub(crate) fn rows_for(
     cr: &ChangeRequest,
     comments: &[&Comment],
     stanza: &str,
-    qmd: &str,
+    md_rel: &str,
+    tree: &Tree,
     problems: &mut Vec<ProblemRow>,
 ) -> Vec<GridRow> {
     let entire_chat = format!("/chat/{}", cr.uuid);
@@ -43,7 +45,7 @@ pub(crate) fn rows_for(
             } else {
                 format!("{}\n\n{}", cr.title, cr.body)
             })
-            .qmd_path(Some(qmd.to_string()))
+            .qmd_path(Some(md_rel.to_string()))
             .source_url(cr.url.clone())
             .git_sha(cr.head_sha.clone())
             .upstream_id(Some(composite_key(&[
@@ -52,6 +54,7 @@ pub(crate) fn rows_for(
             ])))
             .upstream_entity_kind(Some(profile.doc_entity_kind.to_string()))
             .markdown_uuid(Some(cr.uuid.clone()))
+            .lineage(&tree.change_request)
             .build_or_record(stanza, &cr.uuid, version, problems),
     );
 
@@ -76,7 +79,7 @@ pub(crate) fn rows_for(
                 .message_index(Some(idx as i64))
                 .entire_chat(entire_chat.clone())
                 .body(c.body.clone())
-                .qmd_path(Some(qmd.to_string()))
+                .qmd_path(Some(md_rel.to_string()))
                 .source_url(c.url.clone())
                 .git_sha(c.commit_sha.clone())
                 .upstream_id(Some(composite_key(&[
@@ -85,6 +88,7 @@ pub(crate) fn rows_for(
                 ])))
                 .upstream_entity_kind(Some(c.entity_kind.to_string()))
                 .markdown_uuid(Some(cr.uuid.clone()))
+                .lineage(&tree.inside)
                 .build_or_record(stanza, &cr.uuid, version, problems),
         );
     }

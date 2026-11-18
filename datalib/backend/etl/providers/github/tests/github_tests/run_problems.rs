@@ -315,6 +315,34 @@ async fn a_search_that_gives_up_ends_the_step_incomplete() {
     assert_eq!(problems(&out).await, [row("phase:search", "error")]);
 }
 
+/// GitHub's secondary rate limit can be a plain 403. It is a wait, like
+/// any other limit, and not the credential being refused: read as a
+/// refusal it was a warning that says to ask for access, the scope's
+/// stretch stayed unlisted, and the searches after it carried on into the
+/// same limit. Waited out past the budget, it ends the searches.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_search_over_githubs_secondary_limit_is_a_wait_not_a_refusal() {
+    let d = tempdir().unwrap();
+    let out = d.path().join("out");
+    let pb = tape(&d.path().join("one"), &[1]);
+    let url = search_url(DEFAULT_SCOPES[0], &Bounds::default());
+    tape_of(&pb, &url);
+    let mut limited = json_response(&json!({
+        "message": "You have exceeded a secondary rate limit. Please wait a few minutes."
+    }));
+    limited.status = 403;
+    write_fixture(&pb, &HttpRequest::get(HttpService::Github, &url), &limited).unwrap();
+
+    let (ran, gave_up) = noting_give_up(datalib_etl_web::retry::scope(
+        give_up_at_once(),
+        run(&out, &pb, |o| o),
+    ))
+    .await;
+    ran.expect("a give-up keeps what the run got");
+    assert!(gave_up.is_some(), "a limit spends the retry budget");
+    assert_eq!(problems(&out).await, [row("phase:search", "error")]);
+}
+
 /// A PR that fails every run is tried again, but the ones never tried
 /// go before it, so under `max_prs` the rest still get through, one
 /// capped run at a time.

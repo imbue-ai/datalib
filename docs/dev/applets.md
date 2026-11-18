@@ -1,5 +1,8 @@
 # Writing an applet
 
+What the applets datalib ships serve, and how to call them, is
+[`docs/user/applets.md`](../user/applets.md). This page is how to write one.
+
 An **applet** is a config-declared program that contributes a piece of
 the app: card components for the frontend, and the HTTP endpoints
 those components read. It is an `[[applets]]` entry in `config.toml`,
@@ -7,9 +10,9 @@ beside `[[groups]]` and `[[steps]]`.
 
 | | step | applet |
 | --- | --- | --- |
-| Lifetime | runs to completion during a sync | long-lived server, spawned on demand |
+| Lifetime | runs to completion during a sync | long-lived server, started with `datalib-http` |
 | Produces | artifacts on disk | HTTP responses and card components |
-| Scheduled by | `datalib-dag`, from artifact dependencies | the http gateway, from an incoming request |
+| Scheduled by | `datalib-dag`, from artifact dependencies | the http gateway, one for each entry in the config |
 | Declares | `group` + `function` (or `id`), `command`, `inputs`, `params` | `id`, `command`, `params`, and optionally the `group` its Manage row is filed under |
 
 An applet declares no `inputs` because it is never scheduled and owns
@@ -55,7 +58,21 @@ The child also gets four variables:
 | `DATALIB_DAG_DATA_ROOT` | absolute path of the data root (also the cwd) — the step protocol's spelling, reused deliberately |
 | `DATALIB_APPLET_ID` | this instance's config id |
 | `DATALIB_APPLET_BASE` | `/applet/<id>/`, the prefix the gateway proxies here. An applet that emits absolute URLs must build them from this rather than assuming the mount layout |
-| `DATALIB_APPLET_SECRET` | a secret the gateway minted for this process. **Every request the gateway forwards carries it in an `X-Datalib-Applet-Secret` header, and an applet must refuse a request without it**, and any request whose `Host` is not `127.0.0.1:<its own port>`. The port is loopback, but loopback is not private: any process of the same user can connect, and so can a web page whose hostname resolves to 127.0.0.1. The gateway keeps its routes behind the API token; this is what keeps the applet's port from being a second door to the same data. To run an applet by hand, set the variable to any value and send it. |
+| `DATALIB_APPLET_SECRET_FILE` | the path of an owner-only file holding a secret the gateway minted for this process (`<root>/system/applet-secret`). **Read the file when you start. Every request the gateway forwards carries the secret in an `X-Datalib-Applet-Secret` header, and an applet must refuse a request without it**, and any request whose `Host` is not `127.0.0.1:<its own port>`. If you cannot read the file, exit rather than answer. The port is loopback, but loopback is not private: any process of the same user can connect, and so can a web page whose hostname resolves to 127.0.0.1. The gateway keeps its routes behind the API token; this is what keeps the applet's port from being a second door to the same data. To run an applet by hand, put any value in a file, name the file in the variable and send the value. |
+
+**Don't pass the secret on in an environment variable or an argument**, to a
+program your applet starts or anywhere else: `ps eww` shows both to every
+process of the same user, and the file is what keeps a protected library's
+secret behind its folder. A built-in applet reads the file through
+`datalib_applet`'s `Gate::from_env`, over `datalib_env::secret_file`. In any
+other language it is one line:
+
+```python
+secret = open(os.environ["DATALIB_APPLET_SECRET_FILE"]).read().strip()
+```
+
+An applet written against `DATALIB_APPLET_SECRET`, the variable that used to
+hold the secret itself, finds it unset and has to change to this.
 
 `id` must be a valid JavaScript identifier. It is both the mount
 prefix (`/applet/<id>/`) and a namespace in card source
@@ -218,6 +235,12 @@ exactly like ones a user dropped in by hand. Writing the two files
 yourself into `system/frontend/user/` defines a component with no
 applet and no config entry involved.
 
+**A component's card writes a date as `<time datetime="…">`** and the
+app draws it as the date chip a document draws, with its clicks
+(`chips.md` §"A date"; `ui/src/cards/appletDates.ts`). A component
+has none of the app's code, so this is how its dates follow the status
+bar's clock. A `datetime` the chip cannot read stays as written.
+
 ### Why the name is a hash and the metadata is separate
 
 Addressing code by content buys two things. The browser keeps one
@@ -273,11 +296,13 @@ a same-origin cookie, which it attaches to the component's own
 it. An applet author therefore writes no auth code — but the corollary
 is that a component may only reach the gateway from the page's own
 origin. Fetching a `/applet/` URL from an iframe on another origin, or from
-outside the browser without a token, gets a `401`.
+outside the browser without a token, gets a `401`, and a link to one from
+another site gets a `403` (`only_from_this_site` in `auth.rs`), so an applet's
+routes are the page's to call and never a page a link can open.
 
 The applet's own server needs no token logic either. It binds loopback
 and is reached only through the gateway, which is already past the
-gate; the `DATALIB_APPLET_SECRET` it receives is a separate, much
+gate; the secret in `DATALIB_APPLET_SECRET_FILE` is a separate, much
 weaker guard against a stray local process (see the table above).
 
 ## Two instances of one command
@@ -362,12 +387,13 @@ A request to an applet that is configured but not running answers
 `502` with a JSON `error` naming it — a different message from one
 that is not configured at all, since the two want different fixes.
 One that is running but sends nothing for 30 seconds answers `504`,
-`applet "<id>" did not answer within 30s`. The `unified_document_index` applet
+`applet "<id>" did not answer within 30s`. The `unified_grid_and_search_index` applet
 builds a search's whole answer before sending any of it, so a big
-search on a machine short of memory is the usual cause there. A hung
-qmd is not: a search waits at most 20 seconds on qmd to embed its text
-(`EMBED_DEADLINE`), then stops it and answers with a `qmd_error`. The
-next search starts a fresh qmd.
+search on a machine short of memory is the usual cause there. The
+embedding model is not: a search by meaning waits at most 20 seconds for
+the model to be verified (`EMBED_DEADLINE`), and a model still on its
+way answers with a `search_error` naming it. Once loaded, the model
+stays loaded in the applet for every later search.
 
 A read the caller gives up on is hung up on: when the browser cancels
 a `GET` (a search the person has typed past), the gateway closes its
@@ -390,7 +416,7 @@ seconds for the same grandchild reason.
 
 ## An applet that contributes no components
 
-`unified_document_index` is the other shape the contract allows: a server that
+`unified_grid_and_search_index` is the other shape the contract allows: a server that
 contributes **endpoints only**. The
 grid, the document view and the document picker are builtins in the app
 bundle, so there is nothing to write into a namespace — the gateway
@@ -400,17 +426,17 @@ It is also the applet the app cannot run without. A data root whose
 config does not declare it has no search, which is why the scaffold and
 the config examples all write it and `datalib-migrate-config` carries it
 through. The
-UI calls it directly at `/applet/unified_document_index/…`; there is no `/api/`
-alias, and `datalib-http` does not know those routes exist. The one
-alias the gateway keeps is the prefix from before the rename:
-`/applet/unified_index/…` reaches the same applet, for card scripts
-written against it.
+UI calls it directly at `/applet/unified_grid_and_search_index/…`; there is no `/api/`
+alias, and `datalib-http` does not know those routes exist. The
+aliases the gateway keeps are the prefixes from before the renames:
+`/applet/unified_index/…` and `/applet/unified_document_index/…` reach
+the same applet, for card scripts and agents written against them.
 
 That is what makes the separation checkable rather than aspirational:
 
 ```sh
 bazel query 'somepath(//datalib/backend/http:datalib_http, \
-                      //datalib/backend/unified_document_index:datalib_unified_document_index)'
+                      //datalib/backend/unified_grid_and_search_index:datalib_unified_grid_and_search_index)'
 ```
 
 comes back empty. The index crate is linked by `datalib-step`, which
@@ -419,7 +445,7 @@ writes the indexes, and by `datalib-applet`, which serves them.
 ## Reference implementation
 
 `datalib/backend/applets` — `datalib-applet`, one subcommand per
-applet (`slack`, `unified_document_index`, `unified_time_series_index`,
+applet (`slack`, `unified_grid_and_search_index`, `unified_time_series_index`,
 `datalib_contacts` and `photos`), the same shape as `datalib-step`.
 `photos` draws a photo or video by the uuid of its grid row, from the
 `NormalizedPhoto` its render stored in the grid index: `/photos` a page
@@ -441,10 +467,12 @@ past `budget` points, that many buckets of min, max and mean
 source's own store, at the commit the index recorded for it
 (`docs/dev/time_series.md` §"The index"). `datalib_contacts` is the one that writes: it is the
 only writer of the contacts store under `datalib_curated/`
-(`app_stores.md`), and like `unified_document_index` it contributes endpoints
+(`app_stores.md`), and like `unified_grid_and_search_index` it contributes endpoints
 only, which the document view calls; one of them,
 `/photo/<contact_id>`, serves the photo a person put on a contact (and
-takes one with `PUT`, drops it with `DELETE`). One
+takes one with `PUT`, drops it with `DELETE`). Its routes are registered
+together with what each says about itself (`datalib_contacts/api.rs`), and
+`GET /` and `--help` list them. One
 binary rather than one per applet keeps the shared machinery in one
 place and ships one file instead of a growing list; adding an applet is
 a subcommand plus a module, not a new crate and five packaging edits.

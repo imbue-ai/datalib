@@ -81,6 +81,7 @@ rust_test(
         "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/etl/web:datalib_etl_web",
         ":datalib_etl_chatgpt",
+        "//datalib/backend/etl/providers/chatgpt_config:datalib_etl_chatgpt_config",
         "//datalib/backend/problems:datalib_problems",
         "@datalib_crates//:chrono",
         "@datalib_crates//:insta",
@@ -114,14 +115,6 @@ insta_update(
     name = "chatgpt_tests.update",
     test = ":chatgpt_tests",
     test_args = ["--skip", "live::"],
-    extra_data = [
-        ":tng_export_fixture",
-        ":tng_fixture",
-    ],
-    extra_env = {
-        "CHATGPT_EXPORT_FIXTURE_DIR": "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_export",
-        "CHATGPT_FIXTURE_DIR": "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
-    },
 )
 
 insta_update(

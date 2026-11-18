@@ -1,6 +1,6 @@
 //! One side of a two-process doltlite concurrency test: a writer that
 //! commits, a reader that pins, a reader that keeps re-opening and pinning
-//! the way `grid_index` does, a reader that holds a transaction as its
+//! the way `unified_grid_and_search_index` does, a reader that holds a transaction as its
 //! snapshot, or a probe that reports a store's committed state. Driven by
 //! `tests/doltlite_two_process.rs`, which is where the scenarios and the
 //! assertions live; `seal-existing` also drives a full-size measurement
@@ -199,7 +199,7 @@ async fn read(args: &Args) -> Result<Value> {
     }))
 }
 
-/// What `grid_index` does to a render store on every streaming pass, in a
+/// What `unified_grid_and_search_index` does to a render store on every streaming pass, in a
 /// loop: open read-only at HEAD, diff, read, close. Every step is a read, so none of it should cost a writer
 /// anything -- this is the role that finds out. `--dolt-status` adds a
 /// `SELECT * FROM dolt_status` to every round.
@@ -211,7 +211,7 @@ async fn churn(args: &Args) -> Result<Value> {
     let mut samples: Vec<Value> = Vec::new();
     let mut opened = 0usize;
     let mut pinned = 0usize;
-    // The commit the previous round read to, as `grid_index` keeps a cursor.
+    // The commit the previous round read to, as `unified_grid_and_search_index` keeps a cursor.
     let mut cursor: Option<String> = None;
     for round in 0..rounds {
         if until.as_deref().is_some_and(Path::exists) {
@@ -295,7 +295,7 @@ async fn history(args: &Args) -> Result<Value> {
 async fn one_pinned_pass(reader: &doltlite_raw::Reader, cursor: Option<&str>) -> Result<String> {
     let pool = reader.pool();
     let pin = reader.pin();
-    // `grid_index` asks a render store's shape before it reads anything.
+    // `unified_grid_and_search_index` asks a render store's shape before it reads anything.
     anyhow::ensure!(
         datalib_store_meta::read(pool).await?.is_some(),
         "no _datalib_meta at {}",
@@ -469,7 +469,7 @@ async fn probe(args: &Args) -> Result<Value> {
     Ok(json!({ "role": "probe", "head": head, "committed_rows": committed }))
 }
 
-/// What `grid_index` does to the index on every pass, one step at a time:
+/// What `unified_grid_and_search_index` does to the index on every pass, one step at a time:
 /// seed and commit, then inside one SQL transaction delete every row and
 /// load a different number back, then `COMMIT`, then `dolt_commit`. Each
 /// step waits for a go-file from the test and announces itself with an
@@ -997,6 +997,19 @@ async fn rev_read(args: &Args) -> Result<Value> {
             }
         };
         opens.push(json!({ "txn": txn, "ms": started.elapsed().as_millis() as u64 }));
+        let mut guarded = match args.flag("guarded") {
+            true => match datalib_sql_guard::Reader::open(
+                Path::new(&format!("{}@{tip}", db.display())),
+                Instant::now() + Duration::from_secs(60),
+            ) {
+                Ok(reader) => Some(reader),
+                Err(e) => {
+                    errors.push(format!("guarded open in window {txn}: {e}"));
+                    None
+                }
+            },
+            false => None,
+        };
         let opened = Instant::now();
         while opened.elapsed() < hold && !until.exists() {
             match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM entities")
@@ -1018,12 +1031,60 @@ async fn rev_read(args: &Args) -> Result<Value> {
                     errors.push(format!("range in window {txn}: {e:#}"));
                 }
             }
+            if let Some(reader) = guarded.as_mut() {
+                if let Err(e) = guarded_reads(reader) {
+                    errors.push(format!("guarded reads in window {txn}: {e:#}"));
+                }
+            }
             tokio::time::sleep(interval).await;
         }
+        drop(guarded);
         pool.close().await;
         txn += 1;
     }
     Ok(json!({ "role": "rev-read", "samples": samples, "opens": opens, "errors": errors }))
+}
+
+/// What the search applet's `/sql` route sends a store, read through
+/// `datalib_sql_guard`'s reader as the route reads it, beside the window's
+/// own connection.
+/// Doltlite's history functions, a temporary table (`DISTINCT`, `IN`), a
+/// group and a pragma table.
+const GUARDED_READS: [(&str, Option<&str>); 6] = [
+    (
+        "SELECT DISTINCT substr(id, 1, 2) FROM entities ORDER BY 1",
+        None,
+    ),
+    (
+        "SELECT id FROM entities WHERE id IN (SELECT value FROM json_each(?1)) ORDER BY id",
+        Some(r#"["a", "b"]"#),
+    ),
+    (
+        "SELECT substr(id, 1, 1), count(*), max(length(body)) FROM entities GROUP BY 1",
+        None,
+    ),
+    (
+        "SELECT commit_hash FROM dolt_log() ORDER BY date DESC",
+        None,
+    ),
+    ("SELECT name FROM pragma_table_info('entities')", None),
+    ("SELECT dolt_hashof('HEAD')", None),
+];
+
+fn guarded_reads(reader: &mut datalib_sql_guard::Reader) -> Result<()> {
+    use datalib_sql_guard::{Params, Value, Window};
+    let window = Window {
+        offset: 0,
+        limit: 100,
+        max_bytes: 1 << 20,
+    };
+    for (sql, param) in GUARDED_READS {
+        let params = Params::ByPosition(param.map(|p| Value::Text(p.into())).into_iter().collect());
+        reader
+            .read(sql, &params, window)
+            .map_err(|r| anyhow!("{sql}: {r:?}"))?;
+    }
+    Ok(())
 }
 
 async fn main_tip(db: &Path) -> Result<String> {
@@ -1118,7 +1179,7 @@ async fn commit_a_chunk(pool: &sqlx::SqlitePool, chunk: usize) -> Result<String>
         .ok_or_else(|| anyhow!("chunk {chunk} committed nothing"))
 }
 
-/// A render store's checkpoint or a `grid_index` pass: the rows go in one
+/// A render store's checkpoint or a `unified_grid_and_search_index` pass: the rows go in one
 /// SQL transaction that stays open for `hold`, then the seal.
 async fn commit_a_chunk_in_a_held_transaction(
     pool: &sqlx::SqlitePool,

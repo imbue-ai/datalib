@@ -13,7 +13,8 @@ config and picks the code that runs — and where the data comes from.
 *Where* is one table on the source's ingest step, named under the type:
 `api` is the product's own API, `export` an unpacked export, `backup` a
 phone backup, `fswalk` a folder to scan. A type that is not one product
-spells its sources out — email's are `jmap`, `gmail` and `mbox`. A table
+spells its sources out — email's are `jmap`, `gmail`, `mbox` and
+`apple_mail`. A table
 that reads files carries its own `path`.
 
 Conventions: exports land under `~/backups/`, and `latchkey` is the
@@ -28,6 +29,37 @@ The credentials `latchkey` stores are the same session your browser
 has. Anything that can run commands as you can use them to act as you
 on that service — see the warning in the first-time guide before
 storing any.
+
+The `latchkey auth` commands here sign in on the machine you run them
+on. If `LATCHKEY_GATEWAY` is set in your environment, a latchkey gateway
+holds the credentials instead, and those commands may be refused or sign
+in somewhere else: sign in, or ask for access, wherever that gateway is
+managed. Either way, `datalib-step probe <type>` says whether the
+sign-in works; for a type reached more than one way, name the way with
+`--method` (`datalib-step probe calendar --method google`).
+
+## Apple Mail
+
+`type = "email"` with an `apple_mail` table — every account of the Mail
+app on a Mac, read from Mail's own folder, `~/Library/Mail`. Copies
+every message Mail has downloaded, with its mailboxes (a Gmail account's
+labels among them), whether it was read, flagged or answered, and its
+attachments. No sign-in, and nothing is fetched from the mail server: a
+message or attachment Mail has not downloaded yet is copied by the sync
+after Mail has it, and until then the source shows a warning counting
+them.
+
+macOS protects Mail's folder. In the app, choose it with the picker in
+the "Apple Mail" form — that is what grants Datalib access (Cmd-Shift-G
+in the dialog reaches `~/Library/Mail`). A terminal running
+`datalib-dag` needs Full Disk Access instead (System Settings → Privacy
+& Security).
+
+Each account is copied under its own id, made from the name of its folder
+under `~/Library/Mail/V10`; a message sent to two of your accounts is
+copied once for each. To copy just one account, set `apple_mail.account`
+to its folder's name. Mail keeps no Gmail ids, so a Gmail account copied
+through Mail and through [Gmail](#gmail) is two separate copies.
 
 ## Apple Messages
 
@@ -48,7 +80,7 @@ reports "Operation not permitted" is missing that, not the file.
 
 The whole database is mirrored table for table with its history, so a
 message deleted on the Mac is still in an earlier commit of the store.
-Every chat renders as a page a month.
+Every chat renders as one page, however long it runs.
 
 ## Apple Photos
 
@@ -68,6 +100,47 @@ Photos' own schema, table for table, with only changed rows stored on
 each run. The originals sit beside it at
 `<library>/originals/<X>/<UUID>.<ext>`; a [local media](#local-media) source pointed
 at that folder gives you their EXIF and content hashes.
+
+## Baby Connect
+
+`type = "baby_connect"` — the [Baby Connect](https://www.baby-connect.com)
+web app through latchkey (`api`). Copies every entry logged for each of
+your children: feeds, sleeps, diapers, medicine, growth, milestones,
+diary entries, and the notes typed with any of them. Each child's month
+becomes one document, its days in order.
+
+Baby Connect has no API, so the download makes the two requests its own
+web page makes, signed in with the page's session cookies. Register the
+service once, then sign in in the browser that opens; latchkey keeps the
+two cookies the session is made of:
+
+```sh
+latchkey services register babyconnect \
+  --base-api-url="https://app.babyconnect.com/" \
+  --login-url="https://app.babyconnect.com/login" \
+  --login-flow=cookie-capture \
+  --login-flow-params='{"cookieKeys": ["seacloud1", "srf"]}'
+latchkey auth browser babyconnect
+```
+
+Baby Connect answers one day at a time, so the first sync asks once for
+every day from your eldest child's birthday to today: about 365 requests
+a year of use. Set `since` and `until` on the `api` table (a day, an RFC
+3339 instant, or an offset such as `"-90d"`) to read less. Later syncs
+read only the days not yet read, and the last two again.
+
+Baby Connect keeps each entry's time as a clock reading with no zone.
+Name the zone you logged in on the render step, and daylight saving is
+applied for each date:
+
+```toml fragment
+[steps.params]
+time_zone = "America/Los_Angeles"
+```
+
+Without it the times are read as UTC, and the source's Manage row says
+so. Changing it re-renders; it never downloads again.
+[The provider's INGEST.md](../../datalib/backend/etl/providers/baby_connect/INGEST.md) has the details.
 
 ## Beeper
 
@@ -118,6 +191,14 @@ that fall in it. Each is a day (`"2026-09-01"`) or an offset from the
 day of the sync (`since = "-2d"`, `until = "+21d"`), which moves with
 it. A windowed calendar is listed whole every run, and an event the
 window no longer reaches leaves the mirror.
+
+**To sync a calendar often, leave the window out.** Neither Google nor
+CalDAV can pick a listing up where the last one stopped once it is
+bounded by dates, so a window costs the whole listing every run; a
+busy calendar takes seconds and several requests each time. Without
+`since` and `until`, a run after the first asks only for what changed.
+To see just the days around now, read the `render_occurrences` step's
+table, which is windowed already, rather than windowing the download.
 
 ## Calendly
 
@@ -295,7 +376,9 @@ mirror.
 `type = "contacts"` — any CardDAV server, such as iCloud or Nextcloud,
 through latchkey (`carddav`), **or** local `.vcf` files (`vcf`).
 Mirrors your address book. Fastmail has a section of its own:
-[Fastmail Contacts](#fastmail-contacts).
+[Fastmail Contacts](#fastmail-contacts). This source is a copy of what
+the address book says; saying that several handles are one person is
+[the contacts app](contacts_app.md), which needs no source.
 
 - **A `.vcf` export.** Most address books export vCards; point
   `vcf.path` at a directory of them. No credentials. Each file is an
@@ -315,9 +398,10 @@ connection** lists them to pick from.
 
 `type = "email"` — a Google Takeout `.mbox` on disk (`mbox`), **or** a
 JMAP server other than Fastmail through latchkey (`jmap`). Mirrors mail
-messages and their attachments. [Gmail](#gmail) and
-[Fastmail](#fastmail) have sections of their own; this one is the
+messages and their attachments. [Gmail](#gmail), [Fastmail](#fastmail)
+and [Apple Mail](#apple-mail) have sections of their own; this one is the
 other two routes into the same source.
+
 
 **A Takeout `.mbox`.** Google Takeout's **Mail** product is a single
 `.mbox` file; see [Google Takeout](#google-takeout) for requesting one.
@@ -418,6 +502,8 @@ nothing else; `calendars` narrows it to the calendars you name.
 
 `type = "contacts"` — Fastmail's address books over CardDAV, through
 latchkey (`fastmail`). Rendered the way [Contacts (CardDAV)](#contacts-carddav) says.
+Saying that several handles are one person is [the contacts
+app](contacts_app.md), which needs no source.
 
 The same `fastmail-dav` login as [Fastmail Calendar](#fastmail-calendar):
 an app password (Settings → Privacy & Security → Integrations → App
@@ -550,6 +636,67 @@ then lists only the mail after it, which takes minutes where a whole
 mailbox takes hours. Mail older than a sliding `since` stays mirrored,
 and an earlier `since` brings the older mail in on the next sync.
 
+### Different labels to different depths
+
+One `since` has to suit the whole source. To fetch each part of the
+mailbox as far back as it is useful, say all of the Inbox but only 90 days
+of Sent, write `fetch` sections in the config. **The Add source form cannot
+write these; see below.**
+
+```toml fragment
+[[steps.params.gmail.fetch]]
+labels = ["Inbox"]
+
+[[steps.params.gmail.fetch]]
+labels = ["Sent"]
+since = "-90d"
+whole_threads = false
+```
+
+Each section takes three settings, all optional:
+
+| setting | what it means | unset |
+|---|---|---|
+| `labels` | the labels this section takes, named as `only_extract_labels` names them | the whole mailbox |
+| `since` | the oldest mail this section takes, written as `since` above | all of it |
+| `whole_threads` | whether a message under these labels brings the rest of its thread, however old | true |
+
+What is fetched is the **union** of the sections:
+
+- **They only add.** Their order does not matter, and adding one never
+  loses mail another reaches.
+- **A label in two sections goes as far back as either asks**, and a section
+  with no `since` goes furthest. A message that carries labels from two
+  sections comes in if either section reaches it.
+- **A label that does not exist takes nothing.** It shows as a problem on the
+  source, and the other sections still run. If no label in any section
+  exists, the sync fails rather than mirror the whole mailbox.
+- **`since` bounds the listing, not what happens later.** New mail under a
+  label always comes in. So does an older message that is relabeled, whatever
+  its age, and mail a sliding `since` moves past stays mirrored.
+- **An earlier `since` in one section walks only that section's labels on the
+  next sync**, and fetches only the mail it newly reaches.
+
+`fetch` replaces `only_extract_labels`, `whole_threads` and `since` in the
+`gmail` table, which say the same thing for one section. A source that sets
+`fetch` beside any of them does not load, and the error names the keys to
+move. Moving them into a section fetches nothing again.
+
+**The Add source form does not support sections.** Add them by editing the
+config, either in the Manage tab's config editor or in the file. Reopening
+such a source in the form is safe with care:
+
+- The form lists `fetch` among the settings it has no field for, and saving
+  keeps your sections exactly as written.
+- It has no way to show them, so its "Which mail?" and "How far back?" answers
+  read "The whole account" and "Everything" whatever your sections say.
+- **Do not choose labels or a start date there.** That writes the older keys
+  beside `fetch`, and the source stops loading until you remove one or the
+  other.
+
+Only Gmail has sections. Fastmail and other JMAP mail, and an `.mbox` on its
+own, take `only_extract_labels` and `whole_threads` for the whole source.
+
 ### Your own Google OAuth client
 
 Every Google source signs in through an OAuth client in a Google Cloud
@@ -596,7 +743,8 @@ The first time, latchkey needs an OAuth client to sign in with:
 [your own Google OAuth client](#your-own-google-oauth-client).
 
 The `google` table needs nothing else; `calendars` narrows it to the
-calendars you name. Behind a latchkey gateway, its permissions have to
+calendars you name, and `since` and `until` to a stretch of days, at
+the cost [Calendar (CalDAV)](#calendar-caldav) describes. Behind a latchkey gateway, its permissions have to
 allow reading the calendar list (`/users/me/calendarList`) as well as
 the events: every sync reads the list first.
 
@@ -671,8 +819,8 @@ file with a long history then fetches every revision.
 places and photos; YouTube watch history and subscriptions; and Gemini
 Apps activity, each prompt with Gemini's response and the files and
 images either one carried. Everything is rendered to markdown: a
-conversation as a page per month, and Gemini, YouTube and Maps as a
-page per year (subscriptions are one list). Voice bills and greetings
+conversation, and each of Gemini, YouTube and Maps, as one page
+(subscriptions are one list). Voice bills and greetings
 are kept in the raw store only.
 
 Self-service export at <https://takeout.google.com>. Deselect all, then
@@ -794,7 +942,10 @@ what changed since, and for a quiet workspace that takes seconds.
 ## LinkedIn
 
 `type = "linkedin"` — LinkedIn's "Get a copy of your data" export
-(`export`). Mirrors messages, and connections as contacts.
+(`export`). Mirrors messages, your posts and comments, the skills on
+your profile, and connections as contacts. The rest of the export is
+stored but not searchable, and a note on the source's Manage row
+names those tables.
 
 **Settings & Privacy** → **Data privacy** → **Get a copy of your
 data**, request the full archive, and unzip it when the email arrives

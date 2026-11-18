@@ -1,0 +1,25 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Naming the file a connection opens. Its own crate, third-party deps only,
+# so that anything which opens a store can link it.
+rust_library(
+    name = "datalib_sqlite_open",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_sqlite_open",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = ["@datalib_crates//:sqlx"],
+)
+
+rust_test(
+    name = "literal_path_test",
+    size = "small",
+    srcs = ["tests/literal_path.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_sqlite_open",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

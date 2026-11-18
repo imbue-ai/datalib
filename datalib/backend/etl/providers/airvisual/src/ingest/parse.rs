@@ -85,6 +85,8 @@ pub struct Parsed {
     pub lines_dropped: usize,
     /// The first bad line, said the way a reader can find it.
     pub first_bad: Option<String>,
+    /// Columns of the file that nothing stores.
+    pub unknown_columns: Vec<String>,
 }
 
 pub fn parse(body: &str, file_label: &str) -> Result<Parsed> {
@@ -100,16 +102,12 @@ pub fn parse(body: &str, file_label: &str) -> Result<Parsed> {
         .ok_or_else(|| anyhow!("no Timestamp column in header {header_line:?}"))?;
 
     let mut columns: Vec<(usize, Setter)> = Vec::new();
+    let mut unknown_columns = Vec::new();
     for (i, h) in headers.iter().enumerate() {
         if let Some((_, set)) = COLUMNS.iter().find(|(name, _)| name == h) {
             columns.push((i, *set));
         } else if !IGNORED_HEADERS.contains(h) {
-            warn!(
-                event = "airvisual_unknown_column",
-                file = file_label,
-                column = *h,
-                "column not stored; add it to COLUMNS to keep it",
-            );
+            unknown_columns.push(h.to_string());
         }
     }
     if columns.is_empty() {
@@ -195,6 +193,7 @@ pub fn parse(body: &str, file_label: &str) -> Result<Parsed> {
         stats,
         lines_dropped,
         first_bad,
+        unknown_columns,
     })
 }
 

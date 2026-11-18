@@ -1,0 +1,105 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== signal 00000000-0000-8039-8a5b-241873b9eef9 Will Riker
+--- chunk 0
+title: Will Riker | text: Me — Sat 11 Apr 2364 00:00
+
+Status report.
+
+
+--- chunk 1
+title: Will Riker | text: Will Riker <+17015550101> — Sat 11 Apr 2364 00:01
+
+All decks at green status, Captain.
+
+
+--- chunk 2
+title: Will Riker | text: Me — Sat 11 Apr 2364 00:09
+
+Make it so.
+
+delta-shield.png
+
+
+=== signal 00000000-0000-8364-9834-5ee3a255888f signal storage
+--- chunk 0
+title: signal storage | text: Source: signal
+
+# signal — storage
+
+Measured Tue Apr 15th, 2369 at 00:00.
+
+| Kind | Step | What | Size | Count | Id |
+| Source Size | ingest | `signal/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `signal/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `signal/ingest/blobs.sqlite#cas_objects` |  | 1 row | `00000000` |
+| Store | ingest | `signal/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `signal/ingest/entities.doltlite_db#account` |  | 0 rows | `00000000` |
+| Table | ingest | `signal/ingest/entities.doltlite_db#chat_item_attachments` |  | 1 row | `00000000` |
+| Table | ingest | `signal/ingest/entities.doltlite_db#chat_items` |  | 13 rows | `00000000` |
+| Table | ingest | `signal/ingest/entities.doltlite_db#chats` |  | 2 rows | `00000000` |
+| Table | ingest | `signal/ingest/entities.doltlite_db#ingested_backups` |  | 2 rows | `00000000` |
+| Table | ingest | `signal/ingest/entities.doltlite_db#read_marks` |  | 10 rows | `00000000` |
+| Table | ingest | `signal/ingest/entities.doltlite_db#recipients` |  | 11 rows | `00000000` |
+
+=== signal 00000000-0000-8dcb-b58e-bf4dc9fb57a8 Bridge Crew
+--- chunk 0
+title: Bridge Crew | text: Data Soong <+17015550102> — Sat 11 Apr 2364 00:02
+
+Sensors detect an unidentified vessel.
+
+
+--- chunk 1
+title: Bridge Crew | text: Geordi La Forge <+17015550103> — Sat 11 Apr 2364 00:03
+
+Warp engines online. Ready for your order.
+
+
+--- chunk 2
+title: Bridge Crew | text: Worf Rozhenko <+17015550104> — Sat 11 Apr 2364 00:04
+
+Shields at maximum, Captain.
+
+
+--- chunk 3
+title: Bridge Crew | text: Deanna Troi <+17015550105> — Sat 11 Apr 2364 00:05
+
+I'm sensing a deep curiosity from them.
+
+
+--- chunk 4
+title: Bridge Crew | text: Beverly Crusher <+17015550106> — Sat 11 Apr 2364 00:06
+
+Sickbay reports no casualties.
+
+
+--- chunk 5
+title: Bridge Crew | text: Me — Sat 11 Apr 2364 00:07
+
+Mr. Data, open hailing frequencies.
+
+
+--- chunk 6
+title: Bridge Crew | text: Data Soong <+17015550102> — Sat 11 Apr 2364 00:08
+
+Hailing frequencies open, sir.
+
+
+--- chunk 7
+title: Bridge Crew | text: Q — Sat 11 Apr 2364 00:10
+
+Mon capitaine, you are so predictable.
+
+
+--- chunk 8
+title: Bridge Crew | text: Guinan — Sat 11 Apr 2364 00:11
+
+@Will Riker, Ten Forward is open, if you need it.
+
+
+--- chunk 9
+title: Bridge Crew | text: Will Riker <+17015550101> — Sat 11 Apr 2364 23:46
+
+Captain, the new console is online.

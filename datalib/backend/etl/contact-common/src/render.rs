@@ -8,13 +8,16 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
-use datalib_etl_render::html::{escape_attr, escape_md_inline, escape_text};
+use datalib_etl_render::html::{
+    escape_attr, escape_name_inline, escape_name_text, escape_text, without_bidi_controls,
+};
 use datalib_etl_render::inputs::{Bucket, Buckets};
 use datalib_etl_render::message::chip_link;
 use datalib_etl_render::photo::{photo_address, with_photo_url};
 use datalib_etl_render::section::{join, Section};
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
 use datalib_schema::providers::Provider;
@@ -160,14 +163,20 @@ fn render_one(
             )
         })
         .collect();
+    let (data_nodes, at) = tree(profile, doc, source_id);
     let mut row = build_grid_row(profile, doc, source_id, &md_rel, &mut problems);
     if let Some(row) = &mut row {
         row.set_supplied_terms(about_terms(contact));
+        row.parent_uuid = at.parent_uuid;
+        row.read_uuid = at.read_uuid;
+        row.place_uuid = at.place_uuid;
     }
 
     // `row` reaches the index through `on_doc_complete` below; the
     // renderer writes no projection of its own any more.
     on_doc_complete(RenderedMarkdown {
+        section_layout: None,
+        content_hash: None,
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: contact
@@ -184,12 +193,47 @@ fn render_one(
         // can then say who any of their handles is, and where their
         // photo is served from.
         contacts: vec![with_photo_url(contact)],
+        data_nodes,
+        filings: Vec::new(),
         photos: Vec::new(),
         problems,
+        front: front(profile, doc, source_id),
     })
     .with_context(|| format!("on_doc_complete {m_uuid}"))?;
 
     Ok(())
+}
+
+/// The address book, then the card in it, read on its own; and where the
+/// card's row sits.
+fn tree(
+    profile: &ContactRenderProfile,
+    doc: &ContactDoc,
+    source_id: &str,
+) -> (Vec<DataNodeRow>, Lineage) {
+    let md = &doc.doc_uuid;
+    let mut data_nodes = Vec::with_capacity(2);
+    let mut at = Lineage::top();
+    if let Some(book) = &doc.address_book {
+        let book = DataNodeRow {
+            markdown_uuid: md.clone(),
+            ..book.clone()
+        }
+        .under(&at);
+        at = at.below(&book);
+        data_nodes.push(book);
+    }
+    let own = DataNodeRow::new(md, md, source_id, &profile.contact_kind)
+        .named(Some(display_or_id(doc).to_string()))
+        .upstream(
+            profile.contact_entity_kind,
+            doc.contact.key.clone(),
+            doc.upstream_account.clone(),
+        )
+        .read_together()
+        .under(&at);
+    data_nodes.push(own);
+    (data_nodes, at)
 }
 
 fn display_or_id(doc: &ContactDoc) -> &str {
@@ -351,6 +395,26 @@ fn summary(contact: &NormalizedContact) -> String {
     lines.join("\n")
 }
 
+/// The document's front matter. A stamp we don't have is omitted, never
+/// written empty; the grid row is `None` to match.
+fn front(profile: &ContactRenderProfile, doc: &ContactDoc, source_id: &str) -> Front {
+    let contact = &doc.contact;
+    let mut front = Front::new()
+        .plain("markdown_uuid", &doc.doc_uuid)
+        .plain("source_id", source_id)
+        .plain("provider", profile.provider)
+        .text("group", &doc.group_label);
+    if !contact.key.is_empty() {
+        front = front.text("external_id", &contact.key);
+    }
+    if let Some(dn) = contact.name() {
+        front = front.name("title", dn);
+    }
+    front
+        .text_if("created_at", contact.created_at.as_deref())
+        .text_if("modified_at", contact.modified_at.as_deref())
+}
+
 fn render_markdown(
     profile: &ContactRenderProfile,
     doc: &ContactDoc,
@@ -359,29 +423,7 @@ fn render_markdown(
 ) -> Vec<Section> {
     let m_uuid = &doc.doc_uuid;
     let contact = &doc.contact;
-    let mut out = String::with_capacity(512);
-
-    out.push_str("---\n");
-    out.push_str(&format!("markdown_uuid: {m_uuid}\n"));
-    out.push_str(&format!("source_id: {source_id}\n"));
-    out.push_str(&format!("provider: {}\n", profile.provider));
-    out.push_str(&format!("group: {}\n", yaml_scalar(&doc.group_label)));
-    if !contact.key.is_empty() {
-        out.push_str(&format!("external_id: {}\n", yaml_scalar(&contact.key)));
-    }
-    if let Some(dn) = contact.name() {
-        out.push_str(&format!("title: {}\n", yaml_scalar(dn)));
-    }
-    // A stamp we don't have is omitted, never written empty; the grid
-    // row is `None` to match.
-    if let Some(ts) = &contact.created_at {
-        out.push_str(&format!("created_at: {}\n", yaml_scalar(ts)));
-    }
-    if let Some(ts) = &contact.modified_at {
-        out.push_str(&format!("modified_at: {}\n", yaml_scalar(ts)));
-    }
-    out.push_str("---\n\n");
-    let frontmatter = Section::unkeyed(out);
+    let frontmatter = Section::unkeyed(front(profile, doc, source_id).draw());
 
     // The page body — the head, the fields, a group's members — is the
     // one section the contact's grid row names.
@@ -407,13 +449,13 @@ fn head(doc: &ContactDoc, photo: Option<&str>) -> String {
     if let Some(src) = photo {
         out.push_str(&format!(
             "<div class=\"contact-photo\">\n\n![{}]({src})\n\n</div>\n\n",
-            escape_md_inline(name)
+            escape_name_inline(name)
         ));
     }
     out.push_str("<div class=\"contact-who\">\n\n");
     let heading = match head_handle(contact) {
         Some(handle) => chip_link(name, &handle),
-        None => escape_md_inline(name),
+        None => escape_name_inline(name),
     };
     out.push_str(&format!("# {heading}"));
     if let Some(url) = &contact.source_url {
@@ -432,14 +474,19 @@ fn head(doc: &ContactDoc, photo: Option<&str>) -> String {
     if !role.is_empty() {
         out.push_str(&format!(
             "<p class=\"contact-role\">{}</p>\n\n",
-            lines_html(&role.join(" · "))
+            lines_html(&without_bidi_controls(&role.join(" · ")))
         ));
     }
     if !contact.groups.is_empty() {
         let pills: Vec<String> = contact
             .groups
             .iter()
-            .map(|g| format!("<span class=\"contact-group\">{}</span>", escape_text(g)))
+            .map(|g| {
+                format!(
+                    "<span class=\"contact-group\">{}</span>",
+                    escape_name_text(g)
+                )
+            })
             .collect();
         out.push_str(&format!(
             "<p class=\"contact-groups\">{}</p>\n\n",
@@ -481,11 +528,11 @@ fn fields(contact: &NormalizedContact) -> String {
             .map(|q| {
                 format!(
                     " <span class=\"contact-qualifier\">{}</span>",
-                    escape_text(q)
+                    escape_name_text(q)
                 )
             })
             .unwrap_or_default();
-        let dt = format!("<dt>{}{qualifier}</dt>", escape_text(&row.label));
+        let dt = format!("<dt>{}{qualifier}</dt>", escape_name_text(&row.label));
         let line = match (&row.handle, &row.href) {
             (Some(handle), _) => format!(
                 "{dt}<dd class=\"chip-identifiers\">\n\n{}\n\n</dd>\n",
@@ -513,7 +560,7 @@ fn members(doc: &ContactDoc) -> String {
     for (i, name) in doc.contact.members.iter().enumerate() {
         let line = match doc.member_handles.get(i).and_then(Option::as_ref) {
             Some(handle) => chip_link(name, handle),
-            None => escape_md_inline(name),
+            None => escape_name_inline(name),
         };
         out.push_str(&format!("- {line}\n"));
     }
@@ -592,6 +639,7 @@ mod tests {
             contact,
             doc_uuid: "11111111-1111-1111-1111-111111111111".to_string(),
             group_label: "LinkedIn Connections".to_string(),
+            address_book: None,
             member_handles: Vec::new(),
             upstream_account: None,
             inputs: Vec::new(),
@@ -648,6 +696,58 @@ mod tests {
             account: Some("jlp@enterprise.test".to_string()),
             render_version: 1,
         }
+    }
+
+    /// A card is read on its own inside its address book, a place, and
+    /// its row sits where the card does.
+    #[test]
+    fn a_card_sits_in_its_address_book() {
+        let mut doc = mk_contact();
+        doc.address_book = Some(
+            DataNodeRow::new("", "book", "linkedin", "Address book")
+                .upstream("addressbook", "acct!/books/bridge/", None)
+                .place(),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let mut docs = Vec::new();
+        render_all(
+            &mk_profile(),
+            &[doc.clone()],
+            dir.path(),
+            "linkedin",
+            &Progress::noop(),
+            &mut |d| {
+                docs.push(d);
+                Ok(())
+            },
+        )
+        .unwrap();
+        let rendered = &docs[0];
+        let md = doc.doc_uuid.as_str();
+        let data_nodes: Vec<(&str, &str, Option<&str>, bool, bool)> = rendered
+            .data_nodes
+            .iter()
+            .map(|n| {
+                (
+                    n.markdown_uuid.as_str(),
+                    n.uuid.as_str(),
+                    n.parent_uuid.as_deref(),
+                    n.is_place,
+                    n.read_together,
+                )
+            })
+            .collect();
+        assert_eq!(
+            data_nodes,
+            vec![
+                (md, "book", None, true, false),
+                (md, md, Some("book"), false, true),
+            ]
+        );
+        let row = &rendered.rows[0];
+        assert_eq!(row.parent_uuid.as_deref(), Some("book"));
+        assert_eq!(row.place_uuid.as_deref(), Some("book"));
+        assert_eq!(row.read_uuid, None);
     }
 
     #[test]
@@ -997,6 +1097,52 @@ mod tests {
             ),
             "{md}"
         );
+    }
+
+    /// A right-to-left override in a card's name, role, group, field
+    /// label or member reordered the page around it (`Orders exe.live`
+    /// for `Orders evil.exe`). The page shows none of them; a note, the
+    /// card's body, keeps its own.
+    #[test]
+    fn a_cards_names_lose_their_bidi_controls() {
+        const RLO: &str = "\u{202E}";
+        let mut doc = mk_contact();
+        doc.contact.names = vec![format!("Jean-Luc {RLO}Picard")];
+        doc.contact.org = Some(format!("Star{RLO}fleet"));
+        doc.contact.groups = vec![format!("Bridge {RLO}werC")];
+        doc.contact.details = vec![Detail::new(format!("Ship{RLO}"), "Enterprise")];
+        doc.contact.members = vec![format!("Will {RLO}Riker"), format!("Q{RLO}")];
+        doc.member_handles = vec![Handle::email("riker@enterprise.org"), None];
+        doc.contact.note = Some(format!("Orders {RLO}exe.live"));
+        let dir = tempfile::tempdir().unwrap();
+        let mut docs = Vec::new();
+        render_all(
+            &mk_profile(),
+            &[doc],
+            dir.path(),
+            "linkedin",
+            &Progress::default(),
+            &mut |d| {
+                docs.push(d);
+                Ok(())
+            },
+        )
+        .unwrap();
+        let md = std::fs::read_to_string(&docs[0].md_path).unwrap();
+        let note = format!("<dt>Note</dt><dd>Orders {RLO}exe.live</dd>");
+        assert!(md.contains(&note), "the note is the card's own: {md}");
+        let rest = md.replace(&note, "");
+        assert!(!rest.contains(RLO), "{rest}");
+        for name in [
+            "Jean-Luc Picard",
+            "Starfleet",
+            "Bridge werC",
+            "<dt>Ship</dt>",
+            "[Will Riker](mailto:riker@enterprise.org \"Will Riker <riker@enterprise.org>\")",
+            "- Q\n",
+        ] {
+            assert!(md.contains(name), "{name:?} is missing: {md}");
+        }
     }
 
     /// The sink's answer is the run's answer: a document it refuses fails

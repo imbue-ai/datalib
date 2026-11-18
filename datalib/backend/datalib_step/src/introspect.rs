@@ -27,7 +27,7 @@
 //! bytes, in a different direction each time — so bytes stay out of
 //! the comparison (`counts_unchanged`) and out of `grid_rows.preview`.
 //! Otherwise every run rewrites a report nothing asked for and
-//! `grid_index` never gets to skip a source.
+//! `unified_grid_and_search_index` never gets to skip a source.
 
 use std::path::{Path, PathBuf};
 
@@ -35,9 +35,12 @@ use anyhow::{Context, Result};
 use sqlx::{Row, SqlitePool};
 
 use datalib_columns::Entity;
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::message::{entity_link, stamp_text_html};
+use datalib_etl_render::section::{self, Section};
 use datalib_id::{entity_id_str, IdNamespace};
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::measurements::{MeasurementKind, SourceMeasurementRow};
 use datalib_schema::providers::Provider;
@@ -168,7 +171,7 @@ const BOOKKEEPING_SUFFIX: &str = "_bookkeeping";
 ///
 /// The load-bearing half is `sync_runs`: it gains a row on every run,
 /// so counting it would change the report on a pipeline where nothing
-/// changed and hand `grid_index` work forever.
+/// changed and hand `unified_grid_and_search_index` work forever.
 fn is_datalib_bookkeeping(table: &str) -> bool {
     table.ends_with(BOOKKEEPING_SUFFIX) || datalib_etl::doltlite_raw::SHARED_TABLES.contains(&table)
 }
@@ -306,29 +309,35 @@ pub async fn scan(data_root: &Path, raw_rel: &str) -> Result<Vec<Subject>> {
 }
 
 /// Everything one measured source contributes: the document to store,
-/// the samples to append to its series, and the report body that has
-/// to reach disk before the document is stored.
+/// whose sections are the report that has to reach disk before it is
+/// stored, and the samples to append to its series.
 pub struct Measured {
     pub doc: RenderedMarkdown,
     pub samples: Vec<SourceMeasurementRow>,
-    /// Written by [`Measured::write_report`], never by [`plan`]. The
-    /// split is load-bearing: the caller skips a source whose numbers
-    /// have not moved, and writing the file before that check would
-    /// restamp `measured_at_utc` on every run — churning the rendered tree,
-    /// whose content hash is what the scheduler uses to decide that
-    /// `grid_index` has nothing to do.
-    body: String,
 }
 
 impl Measured {
+    /// Never called by [`plan`]. The split is load-bearing: the caller
+    /// skips a source whose numbers have not moved, and writing the file
+    /// before that check would restamp `measured_at_utc` on every run —
+    /// churning the rendered tree, whose content hash is what the
+    /// scheduler uses to decide that `unified_grid_and_search_index` has nothing to do.
     pub fn write_report(&self) -> Result<()> {
         let path = &self.doc.md_path;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("mkdir -p {}", parent.display()))?;
         }
-        std::fs::write(path, &self.body).with_context(|| format!("write {}", path.display()))
+        std::fs::write(path, section::join(&self.doc.sections))
+            .with_context(|| format!("write {}", path.display()))
     }
+}
+
+fn report_front(source_id: &str, now: &str) -> Front {
+    Front::new()
+        .plain("title", format!("{source_id} storage"))
+        .plain("source", source_id)
+        .plain("measured_at", now)
 }
 
 fn report_body(source_id: &str, subjects: &[Subject], now: &str) -> String {
@@ -337,8 +346,8 @@ fn report_body(source_id: &str, subjects: &[Subject], now: &str) -> String {
     let group = entity_link(source_id, &Entity::Group(source_id).uri(), source_id);
     let measured = stamp_text_html(now);
     let mut out = format!(
-        "---\ntitle: {source_id} storage\nsource: {source_id}\nmeasured_at: {now}\n---\n\n\
-         # {group} — storage\n\nMeasured {measured}.\n\n"
+        "{}# {group} — storage\n\nMeasured {measured}.\n\n",
+        report_front(source_id, now).draw()
     );
     // One table, not one wrapped `<div>` per measurement. A source with
     // a dozen stores and tables used to render a dozen bordered cards
@@ -373,6 +382,18 @@ fn step_link(step: &str) -> String {
     entity_link(function, &Entity::Step(step).uri(), step)
 }
 
+/// The report, read together at the top of its source, as the subject
+/// that is its document describes it: every other measurement sits in it.
+fn report_node(source_id: &str, markdown_uuid: &str, subjects: &[Subject]) -> DataNodeRow {
+    let mut node = DataNodeRow::new(markdown_uuid, markdown_uuid, source_id, "Storage report")
+        .named(Some(format!("{source_id} storage")))
+        .read_together();
+    if let Some(s) = subjects.iter().find(|s| s.uuid(source_id) == markdown_uuid) {
+        node = node.upstream(s.kind.as_str(), s.path.clone(), None);
+    }
+    node
+}
+
 /// Turn a scan into the document and samples to store. Writes nothing:
 /// see [`Measured::write_report`]. `None` when the source has nothing
 /// to measure. `rendered_rel` is the render step's own tree, where the
@@ -401,7 +422,7 @@ pub fn plan(
         .uuid(source_id);
 
     let md_path = doc_md_path(&data_root.join(rendered_rel), &markdown_uuid);
-    let qmd_rel = md_path
+    let md_rel = md_path
         .strip_prefix(data_root)
         .unwrap_or(&md_path)
         .to_string_lossy()
@@ -432,7 +453,7 @@ pub fn plan(
                 .conversation_uuid(markdown_uuid.clone())
                 .entire_chat(format!("/chat/{markdown_uuid}"))
                 .body(s.summary())
-                .qmd_path(Some(qmd_rel.clone()))
+                .qmd_path(Some(md_rel.clone()))
                 .markdown_uuid(Some(markdown_uuid.clone()))
                 // The machine-parsable half: `upstream_id` is the
                 // measured path verbatim and `upstream_entity_kind` the
@@ -456,9 +477,19 @@ pub fn plan(
             items: s.items,
         });
     }
+    let node = report_node(source_id, &markdown_uuid, &subjects);
+    let inside = Lineage::top().below(&node);
+    for row in rows.iter_mut().filter(|r| r.uuid != markdown_uuid) {
+        row.parent_uuid = inside.parent_uuid.clone();
+        row.read_uuid = inside.read_uuid.clone();
+    }
 
+    let front = report_front(source_id, now);
+    let body = report_body(source_id, &subjects, now);
     Ok(Some(Measured {
         doc: RenderedMarkdown {
+            section_layout: None,
+            content_hash: None,
             markdown_uuid,
             source_id: source_id.to_string(),
             upstream_cursor: None,
@@ -466,14 +497,16 @@ pub fn plan(
             md_path,
             render_version: RENDER_VERSION,
             rows,
-            sections: Vec::new(),
+            sections: vec![Section::unkeyed(body)],
+            front,
             edges: Vec::new(),
             contacts: Vec::new(),
+            data_nodes: vec![node],
+            filings: Vec::new(),
             photos: Vec::new(),
             problems: Vec::new(),
         },
         samples,
-        body: report_body(source_id, &subjects, now),
     }))
 }
 
@@ -483,7 +516,7 @@ pub fn plan(
 ///
 /// **Counts, never bytes**, for the reason in the module header: a store's
 /// size moves when no row did. Comparing bytes would rewrite a report
-/// nothing asked for on every run, and hand `grid_index` a diff to read
+/// nothing asked for on every run, and hand `unified_grid_and_search_index` a diff to read
 /// forever.
 pub fn counts_unchanged(
     previous: &std::collections::HashMap<String, Option<i64>>,
@@ -596,6 +629,44 @@ mod tests {
         assert_eq!(recomputed, row.uuid);
     }
 
+    /// The report is read together, and each measurement other than the
+    /// tree its document is sits in it.
+    #[test]
+    fn each_measurement_sits_in_the_report() {
+        let td = tempfile::tempdir().unwrap();
+        let subjects = vec![
+            subject("s/ingest", MeasurementKind::Tree, Some(64), Some(2)),
+            subject(
+                "s/ingest/e.doltlite_db#t",
+                MeasurementKind::Table,
+                None,
+                Some(7),
+            ),
+        ];
+        let m = plan(
+            td.path(),
+            "s",
+            "s/render_markdown",
+            subjects,
+            "2026-09-07T10:00:00-07:00",
+        )
+        .unwrap()
+        .expect("a measured source");
+        let doc = &m.doc;
+        assert_eq!(doc.data_nodes.len(), 1);
+        assert_eq!(doc.data_nodes[0].uuid, doc.markdown_uuid);
+        assert!(doc.data_nodes[0].read_together);
+        assert_eq!(doc.data_nodes[0].upstream_id.as_deref(), Some("s/ingest"));
+        let tree = doc.rows.iter().find(|r| r.is_document).unwrap();
+        let table = doc.rows.iter().find(|r| !r.is_document).unwrap();
+        assert_eq!(tree.parent_uuid, None);
+        assert_eq!(
+            table.parent_uuid.as_deref(),
+            Some(doc.markdown_uuid.as_str())
+        );
+        assert_eq!(table.read_uuid.as_deref(), Some(doc.markdown_uuid.as_str()));
+    }
+
     fn previous(subjects: &[Subject]) -> std::collections::HashMap<String, Option<i64>> {
         subjects.iter().map(|s| (s.path.clone(), s.items)).collect()
     }
@@ -640,7 +711,7 @@ mod tests {
     /// documents" assertion caught: a doltlite store grows on any run
     /// that touches it — a bookkeeping `last_attempt_at_utc` mutation
     /// rewrites chunks with no row added — so a comparison over bytes
-    /// never settles, and `grid_index` gets work to do forever on a
+    /// never settles, and `unified_grid_and_search_index` gets work to do forever on a
     /// pipeline where nothing changed.
     #[test]
     fn a_store_that_only_grew_does_not_re_render_the_report() {

@@ -20,11 +20,18 @@ use datalib_etl_chat_common::types::{
 use datalib_etl_chat_common::unread::{is_unread, Marks};
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_email::ingest::db::{LoadedAttachment, LoadedEmail};
+use datalib_etl_email::ingest::labels;
+use datalib_etl_email::mailbox_labels::MailboxNode;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::html::{escape_md_block, escape_md_inline};
+use datalib_etl_render::html::{
+    code_span_parts, escape_md_block, escape_md_inline, escape_text, md_code_block,
+    without_bidi_controls,
+};
 use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::pages::{batches, PageSize};
 use datalib_handle::Handle;
+use datalib_schema::data_nodes::DataNodeRow;
+use datalib_schema::plain_text::plain_text;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Severity, Stage};
 use datalib_schema::providers::Provider;
 use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
@@ -57,7 +64,20 @@ use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
 ///     RFC 8621's body lists, and a `Fr om:` line is no longer From.
 /// v18: whether an email is unread comes from its read mark, and every
 ///     thread declares the marks it reads.
-pub const RENDER_VERSION: u32 = 18;
+/// v19: an email attached to an email is listed among the attachments.
+/// v20: an email's stamp keeps the offset its `Date` was written in.
+/// v21: a quote's attribution line is plain text, and an HTML body's
+///     `<pre>` and `&amp;lt;` read as the sender wrote them.
+/// v22: a body part is HTML only when its Content-Type says so: a
+///     plain-text email went through the HTML converter, losing every
+///     `<…>` and running its lines together.
+/// v23: a thread sits in its account and is filed under its emails'
+///     labels; an email's `In-Reply-To` is a reply edge.
+/// v24: a sender's hover title names their address once, not twice.
+/// v25: a body loses its preheader padding, runs of characters that show
+///     nothing; a link around blocks or around another link is written
+///     on one line.
+pub const RENDER_VERSION: u32 = 25;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
 /// `datalib_core::config::EmailOutlink`; the orchestrator maps the
@@ -178,29 +198,33 @@ pub struct PageEnd {
     pub rendered: Rendered,
 }
 
-/// What every thread's render looks up: mailbox and account names, and
-/// the mailboxes the label filter lets through.
+/// What every thread's render looks up: mailbox and account names.
 struct Lookups {
     mailbox_name: HashMap<String, String>,
     account_label: HashMap<String, String>,
-    /// `None` renders every thread.
-    label_allow: Option<HashSet<String>>,
+    mailboxes: Mailboxes,
 }
 
-/// The configured label paths against the mailbox tree the chips use.
-/// Resolution and exact-match semantics are shared with the download
-/// filter via [`datalib_etl_email::mailbox_labels`], so a given label
-/// means the same thing at both phases and across JMAP / mbox sources.
-fn resolve_labels(
-    shared: &Shared,
-    only_labels: &[String],
-) -> datalib_etl_email::mailbox_labels::Resolved {
-    let nodes: Vec<datalib_etl_email::mailbox_labels::MailboxNode> = shared
-        .mailboxes
-        .iter()
-        .filter_map(datalib_etl_email::mailbox_labels::MailboxNode::from_payload)
-        .collect();
-    datalib_etl_email::mailbox_labels::resolve(&nodes, only_labels)
+/// The mailbox rows, as the tree of labels needs them.
+#[derive(Default)]
+struct Mailboxes {
+    by_id: HashMap<String, MailboxNode>,
+    /// Name → the ids of every mailbox of that name, across accounts.
+    by_name: HashMap<String, Vec<String>>,
+}
+
+impl Mailboxes {
+    fn new(payloads: &[serde_json::Value]) -> Self {
+        let mut out = Mailboxes::default();
+        for node in payloads.iter().filter_map(MailboxNode::from_payload) {
+            out.by_name
+                .entry(node.name.clone())
+                .or_default()
+                .push(node.id.clone());
+            out.by_id.insert(node.id.clone(), node);
+        }
+        out
+    }
 }
 
 /// Each configured label no mailbox has. It selects no thread, and if
@@ -214,7 +238,7 @@ pub fn unmatched_label_rows(
     only_labels: &[String],
     render_version: u32,
 ) -> Vec<ProblemRow> {
-    resolve_labels(shared, only_labels)
+    super::parse::resolve_labels(&shared.mailboxes, only_labels)
         .unmatched
         .iter()
         .map(|label| {
@@ -240,7 +264,7 @@ pub fn unmatched_label_rows(
 }
 
 impl Lookups {
-    fn new(shared: &Shared, only_labels: &[String]) -> Self {
+    fn new(shared: &Shared) -> Self {
         // mailbox id → the name its label chip shows, empty for none.
         let mailbox_name = shared
             .mailboxes
@@ -255,40 +279,24 @@ impl Lookups {
             .iter()
             .filter_map(|(id, a)| Some((id.clone(), account_label_from_payload(id, a)?)))
             .collect();
-        let label_allow =
-            (!only_labels.is_empty()).then(|| resolve_labels(shared, only_labels).ids);
         Lookups {
             mailbox_name,
             account_label,
-            label_allow,
+            mailboxes: Mailboxes::new(&shared.mailboxes),
         }
-    }
-
-    /// Thread-level inclusion: keep the whole thread if ANY of its
-    /// emails is filed under an allowed mailbox, so conversations
-    /// aren't fragmented across the filter boundary.
-    fn allows(&self, bucket: &EmailThreadBucket) -> bool {
-        self.label_allow.as_ref().is_none_or(|allow| {
-            bucket.emails.iter().any(|em| {
-                bucket
-                    .joins
-                    .mailboxes
-                    .get(&em.id)
-                    .is_some_and(|ids| ids.iter().any(|m| allow.contains(m)))
-            })
-        })
     }
 }
 
 /// Renders every thread `store` hands out, a page at a time; `on_page`
-/// hears how each page ended before the next is read.
+/// hears how each page ended before the next is read. On a full walk
+/// under a label filter, a first page names the threads the filter
+/// keeps out, which were never loaded.
 #[allow(clippy::too_many_arguments)]
 pub fn render_store(
     store: &EmailStore,
     root: &std::path::Path,
     source_id: &str,
     outlink: Option<OutlinkFormat>,
-    only_labels: &[String],
     size: PageSize,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -302,7 +310,22 @@ pub fn render_store(
         cold_start = store.scan.render.is_none(),
         "[render] email dolt_diff scan"
     );
-    let lookups = Lookups::new(&store.shared, only_labels);
+    let uuids = |pairs: &[(String, String)]| -> Vec<String> {
+        pairs
+            .iter()
+            .map(|(a, t)| ids::thread(source_id, a, t).uuid)
+            .collect()
+    };
+    if !store.left_out.is_empty() {
+        on_page(PageEnd {
+            looked_at: Vec::new(),
+            rendered: Rendered {
+                buckets: Vec::new(),
+                excluded: uuids(&store.left_out),
+            },
+        })?;
+    }
+    let lookups = Lookups::new(&store.shared);
     let profile = profile();
     let mut renderer = ChatRenderer::new(
         &profile,
@@ -314,7 +337,7 @@ pub fn render_store(
     );
     let mut pages = store.pages(size.buckets);
     while let Some(page) = store.next_page(&mut pages)? {
-        let excluded = render_page(
+        render_page(
             &lookups,
             &page.docs,
             Some(store),
@@ -323,12 +346,9 @@ pub fn render_store(
             outlink,
             &mut renderer,
         )?;
+        let excluded = uuids(&page.left_out);
         progress.inc(excluded.len() as u64);
-        let looked_at = page
-            .looked_at
-            .iter()
-            .map(|(a, t)| ids::thread(source_id, a, t).uuid)
-            .collect();
+        let looked_at = uuids(&page.looked_at);
         on_page(PageEnd {
             looked_at,
             rendered: Rendered {
@@ -348,11 +368,10 @@ pub fn render_all(
     root: &std::path::Path,
     source_id: &str,
     outlink: Option<OutlinkFormat>,
-    only_labels: &[String],
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<Rendered> {
-    let lookups = Lookups::new(shared, only_labels);
+    let lookups = Lookups::new(shared);
     let profile = profile();
     let mut renderer = ChatRenderer::new(
         &profile,
@@ -362,7 +381,7 @@ pub fn render_all(
         progress,
         on_doc_complete,
     );
-    let excluded = render_page(
+    render_page(
         &lookups,
         docs,
         None,
@@ -373,12 +392,11 @@ pub fn render_all(
     )?;
     Ok(Rendered {
         buckets: renderer.finish().buckets,
-        excluded,
+        excluded: Vec::new(),
     })
 }
 
-/// One document per thread the label filter lets through; the bucket
-/// keys of the ones it keeps out. Each thread's `.eml`s are read from
+/// One document per thread with an email. Each thread's `.eml`s are read from
 /// `emls` a batch of at most `eml_bytes` ahead of its render: reading,
 /// parsing and hashing them is most of the work.
 fn render_page(
@@ -389,14 +407,10 @@ fn render_page(
     source_id: &str,
     outlink: Option<OutlinkFormat>,
     renderer: &mut ChatRenderer<'_>,
-) -> Result<Vec<String>> {
-    let (threads, filtered): (Vec<&EmailThreadBucket>, Vec<_>) = docs
+) -> Result<()> {
+    let threads: Vec<&EmailThreadBucket> = docs
         .iter()
         .filter(|bucket| !bucket.emails.is_empty())
-        .partition(|bucket| lookups.allows(bucket));
-    let excluded = filtered
-        .iter()
-        .map(|b| ids::thread(source_id, &b.account_id, &b.thread_id).uuid)
         .collect();
     let weights: Vec<u64> = threads.iter().map(|b| b.eml_bytes()).collect();
     for range in batches(&weights, eml_bytes) {
@@ -410,19 +424,13 @@ fn render_page(
             None => batch.to_vec(),
         };
         for bucket in batch {
-            let (chat, bundle) = build_chat(
-                source_id,
-                bucket,
-                &lookups.mailbox_name,
-                &lookups.account_label,
-                outlink,
-            );
+            let (chat, bundle) = build_chat(source_id, bucket, lookups, outlink);
             renderer
                 .render_chat(&chat, &bundle)
                 .context("email chat-common render")?;
         }
     }
-    Ok(excluded)
+    Ok(())
 }
 
 /// The `accounts` row is a JMAP `Account` object, a Gmail stand-in
@@ -444,8 +452,7 @@ fn account_contact(source_id: &str, label: Option<&String>) -> Option<Normalized
 fn build_chat(
     source_id: &str,
     bucket: &EmailThreadBucket,
-    mailbox_name: &HashMap<String, String>,
-    account_label: &HashMap<String, String>,
+    lookups: &Lookups,
     outlink: Option<OutlinkFormat>,
 ) -> (NormalizedChat, BlobBundle) {
     let account_id = &bucket.account_id;
@@ -453,8 +460,8 @@ fn build_chat(
     let tuid = thread_id.uuid.clone();
     // The account row and each mailbox row are looked up per thread,
     // and declared as they are.
-    let mailbox_name = bucket.inputs.lookup("mailboxes", mailbox_name);
-    let account_label = bucket.inputs.lookup("accounts", account_label);
+    let mailbox_name = bucket.inputs.lookup("mailboxes", &lookups.mailbox_name);
+    let account_label = bucket.inputs.lookup("accounts", &lookups.account_label);
     let subject = bucket
         .emails
         .first()
@@ -499,7 +506,8 @@ fn build_chat(
                     byte_len: a.size.unwrap_or(0).max(0) as u64,
                     content_type: a.content_type.clone(),
                 };
-                render_bundle.add_part(a.blob_id.clone(), eml, part, a.name.clone());
+                let name = a.name.as_deref().map(without_bidi_controls);
+                render_bundle.add_part(a.blob_id.clone(), eml, part, name);
             }
         }
 
@@ -599,7 +607,8 @@ fn build_chat(
         if !trailing.is_empty() {
             text.push_str("\n\n### Attachments\n");
             for a in trailing {
-                let label = escape_md_inline(a.name.as_deref().unwrap_or(&a.part_id));
+                let name = without_bidi_controls(a.name.as_deref().unwrap_or(&a.part_id));
+                let label = escape_md_inline(&name);
                 match linked.get(&a.blob_id) {
                     Some(href) => text.push_str(&format!("\n- [{label}]({href})")),
                     None => text.push_str(&format!("\n- {label} _(blob not materialized)_")),
@@ -632,6 +641,7 @@ fn build_chat(
             |_, _| None,
         );
         items.push(NormalizedChatItem {
+            reply_to: None,
             message_uuid: email_id.uuid.clone(),
             author_handle: parsed_eml.from_handle.clone(),
             author_kind: AuthorKind::Named,
@@ -641,6 +651,12 @@ fn build_chat(
                 parsed_eml.from_display.clone()
             },
             date_ms,
+            // The sender's clock: Fastmail's `receivedAt` is the server's
+            // UTC, and its `sentAt` keeps the `Date:` header's offset.
+            date_offset_secs: [em.sent_at.as_deref(), em.received_at.as_deref()]
+                .into_iter()
+                .flatten()
+                .find_map(datalib_time::written_offset_secs),
             text: (!text.trim().is_empty()).then_some(text),
             kind: ItemKind::Text,
             attachments: Vec::new(),
@@ -661,6 +677,23 @@ fn build_chat(
         });
     }
 
+    let replies = reply_targets(&bucket.emails, &items);
+    for (item, to) in items.iter_mut().zip(replies) {
+        item.reply_to = to;
+    }
+    let account = account_node(
+        source_id,
+        account_id,
+        account_label.get(account_id).cloned(),
+    );
+    let filed_under = label_paths(
+        source_id,
+        bucket,
+        &account,
+        &lookups.mailboxes.by_name,
+        bucket.inputs.lookup("mailboxes", &lookups.mailboxes.by_id),
+    );
+
     // The thread's title `↗` points at the root (first) email's outlink.
     let thread_source_url = items.first().and_then(|i| i.source_url.clone());
     let mut chat = NormalizedChat {
@@ -670,6 +703,8 @@ fn build_chat(
             .collect(),
         inputs: Vec::new(),
         id: tuid.clone(),
+        containers: vec![account],
+        filed_under,
         chat_uuid: tuid.clone(),
         display: subject.clone(),
         title: Some(subject),
@@ -688,7 +723,6 @@ fn build_chat(
         org_name: None,
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
-            period_key: "all".to_string(),
             markdown_uuid: tuid,
             source_ref: None,
             items,
@@ -697,6 +731,166 @@ fn build_chat(
     // After the account lookup above, so it is declared too.
     chat.inputs = bucket.inputs.declared();
     (chat, render_bundle)
+}
+
+/// What each email answers: the email in the thread whose `Message-ID`
+/// its `In-Reply-To` names, as that email's item uuid. `items` are the
+/// emails' items, in the same order.
+fn reply_targets(emails: &[LoadedEmail], items: &[NormalizedChatItem]) -> Vec<Option<String>> {
+    let mut by_message_id: HashMap<&str, &str> = HashMap::new();
+    for (em, item) in emails.iter().zip(items) {
+        if let Some(id) = em.message_id.as_deref().and_then(message_id_key) {
+            by_message_id.entry(id).or_insert(&item.message_uuid);
+        }
+    }
+    emails
+        .iter()
+        .zip(items)
+        .map(|(em, item)| {
+            let to = *by_message_id.get(em.in_reply_to.as_deref().and_then(message_id_key)?)?;
+            (to != item.message_uuid).then(|| to.to_string())
+        })
+        .collect()
+}
+
+/// A `Message-ID` as a key: the first id in the header, without its
+/// angle brackets, which JMAP leaves off and a header keeps.
+fn message_id_key(header: &str) -> Option<&str> {
+    let id = header.split_whitespace().next()?.trim_matches(['<', '>']);
+    (!id.is_empty()).then_some(id)
+}
+
+const LABEL_KIND: &str = "Email Label";
+
+/// The account a thread is in, and the place its labels hang from.
+fn account_node(source_id: &str, account_id: &str, label: Option<String>) -> DataNodeRow {
+    let id = ids::account(source_id, account_id);
+    DataNodeRow::new("", id.uuid, source_id, "Email Account")
+        .named(label)
+        .upstream(id.entity_kind, id.natural_key, account_id.to_string())
+        .place()
+}
+
+/// One path for each mailbox any of the thread's emails is in, from the
+/// account down to it: the thread is filed under a label when any of its
+/// emails carries it. System mailboxes (Inbox, Sent) are labels upstream
+/// and are kept; Starred and Important are keywords, not mailboxes, and
+/// file nothing.
+fn label_paths(
+    source_id: &str,
+    bucket: &EmailThreadBucket,
+    account: &DataNodeRow,
+    by_name: &HashMap<String, Vec<String>>,
+    mailboxes: Lookup<'_, HashMap<String, MailboxNode>>,
+) -> Vec<Vec<DataNodeRow>> {
+    let held: BTreeSet<&str> = bucket
+        .joins
+        .mailboxes
+        .values()
+        .flatten()
+        .map(String::as_str)
+        .collect();
+    held.into_iter()
+        .map(|mailbox_id| {
+            let mut path = vec![account.clone()];
+            path.extend(label_path(
+                source_id,
+                &bucket.account_id,
+                mailbox_id,
+                by_name,
+                mailboxes,
+            ));
+            path
+        })
+        .collect()
+}
+
+/// A guard against a cyclic `parentId` chain.
+const MAX_LABEL_DEPTH: usize = 64;
+
+/// The labels from the top down to `mailbox_id`. A JMAP mailbox nests by
+/// `parentId`. A Gmail label, an mbox's or Apple Mail's nests by the `/`
+/// in its name (`Work/Clients/Acme`); a parent is the mailbox of that
+/// name where the account has one, and otherwise a node keyed by its
+/// path, which a rename replaces.
+fn label_path(
+    source_id: &str,
+    account_id: &str,
+    mailbox_id: &str,
+    by_name: &HashMap<String, Vec<String>>,
+    mailboxes: Lookup<'_, HashMap<String, MailboxNode>>,
+) -> Vec<DataNodeRow> {
+    let node = |id: &str, name: &str| {
+        let i = ids::mailbox(source_id, account_id, id);
+        DataNodeRow::new("", i.uuid, source_id, LABEL_KIND)
+            .named((!name.is_empty()).then(|| name.to_string()))
+            .upstream(i.entity_kind, i.natural_key, account_id.to_string())
+            .place()
+    };
+    let Some(leaf) = mailboxes.get(mailbox_id) else {
+        return vec![node(mailbox_id, "")];
+    };
+    if nests_by_slash(account_id, mailbox_id) {
+        let segments: Vec<&str> = leaf.name.split('/').collect();
+        let mut out = Vec::with_capacity(segments.len());
+        for depth in 1..segments.len() {
+            let prefix = segments[..depth].join("/");
+            let name = segments[depth - 1];
+            out.push(match mailbox_named(account_id, &prefix, by_name) {
+                Some(id) => {
+                    mailboxes.get(id);
+                    node(id, name)
+                }
+                None => {
+                    let i = ids::label_path(source_id, account_id, &prefix);
+                    DataNodeRow::new("", i.uuid, source_id, LABEL_KIND)
+                        .named(Some(name.to_string()))
+                        .place()
+                }
+            });
+        }
+        out.push(node(mailbox_id, segments[segments.len() - 1]));
+        return out;
+    }
+    let mut chain = vec![(mailbox_id, leaf)];
+    while let Some(parent) = chain[chain.len() - 1].1.parent_id.as_deref() {
+        if chain.len() >= MAX_LABEL_DEPTH || chain.iter().any(|(id, _)| *id == parent) {
+            break;
+        }
+        let Some(row) = mailboxes.get(parent) else {
+            break;
+        };
+        chain.push((parent, row));
+    }
+    chain
+        .into_iter()
+        .rev()
+        .map(|(id, row)| node(id, &row.name))
+        .collect()
+}
+
+/// Whether a mailbox's `/` means nesting: Gmail's labels and the
+/// name-keyed ones of an mbox or Apple Mail. A JMAP mailbox nests by
+/// `parentId`, and a `/` in its name is just a character.
+fn nests_by_slash(account_id: &str, mailbox_id: &str) -> bool {
+    mailbox_id.starts_with(&labels::gmail_mailbox_prefix(account_id))
+        || mailbox_id.starts_with(labels::NAME_KEYED_PREFIX)
+}
+
+/// This account's mailbox named `name`: a Gmail label of that name, or
+/// the name-keyed row an mbox or Apple Mail would have made for it.
+fn mailbox_named<'a>(
+    account_id: &str,
+    name: &str,
+    by_name: &'a HashMap<String, Vec<String>>,
+) -> Option<&'a str> {
+    let gmail = labels::gmail_mailbox_prefix(account_id);
+    let keyed = labels::mailbox_id(account_id, name);
+    by_name
+        .get(name)?
+        .iter()
+        .find(|id| id.starts_with(&gmail) || **id == keyed)
+        .map(String::as_str)
 }
 
 /// The name a mailbox's label chip shows; empty for one that says
@@ -799,11 +993,13 @@ fn split_quoted(body: &str) -> (String, Option<String>) {
         return (body.to_string(), None);
     }
     let quoted_body = lines[cut..].join("\n");
-    let summary = lines[cut].trim().trim_start_matches('>').trim();
+    // The attribution line is markdown; `<summary>` is raw HTML, where
+    // markdown is not read, so it goes in as the text it shows.
+    let summary = plain_text(lines[cut].trim().trim_start_matches('>'), usize::MAX);
     let summary = if summary.is_empty() || summary.len() > 120 {
         "Quoted text".to_string()
     } else {
-        summary.to_string()
+        escape_text(&summary)
     };
     let details = format!("<details><summary>{summary}</summary>\n\n{quoted_body}\n\n</details>");
     (fresh, Some(details))
@@ -827,9 +1023,31 @@ struct ParsedEml {
     from_display: String,
     from_handle: Option<Handle>,
     recipients: Vec<Recipient>,
-    text_body: String,
-    html_body: String,
+    text_body: Vec<BodyPart>,
+    html_body: Vec<BodyPart>,
     inline_parts: Vec<InlinePart>,
+}
+
+/// One text part of a body list, as its Content-Type says it is.
+/// mail-parser's lists follow RFC 8621, where a `text/plain` part with
+/// no HTML alternative is in the HTML list too: a list is not one kind.
+enum BodyPart {
+    Plain(String),
+    Html(String),
+}
+
+/// The text parts of a body list. An inline image in the list is not
+/// text: its bytes go to the blob CAS, not into the body string.
+fn body_parts<'m>(parts: impl Iterator<Item = MessagePart<'m>>) -> Vec<BodyPart> {
+    parts
+        .filter_map(|part| {
+            let text = part.text()?.into_owned();
+            match part.kind() {
+                PartKind::Html => Some(BodyPart::Html(text)),
+                _ => Some(BodyPart::Plain(text)),
+            }
+        })
+        .collect()
 }
 
 impl ParsedEml {
@@ -866,16 +1084,8 @@ impl ParsedEml {
                 })
         })
         .collect();
-        let mut text_body = String::new();
-        for part in msg.text_body() {
-            text_body.push_str(&part_text(part));
-            text_body.push('\n');
-        }
-        let mut html_body = String::new();
-        for part in msg.html_body() {
-            html_body.push_str(&part_text(part));
-            html_body.push('\n');
-        }
+        let text_body = body_parts(msg.text_body());
+        let html_body = body_parts(msg.html_body());
         // RFC 8621 lists an image shown in the body there and not again
         // among the attachments, so all three lists are read.
         let mut seen = HashSet::new();
@@ -913,12 +1123,6 @@ impl ParsedEml {
     }
 }
 
-/// Inline image bytes belong in the blob CAS, not lossy-decoded into the
-/// body string, so a part that is not text reads as nothing.
-fn part_text(part: MessagePart<'_>) -> String {
-    part.text().map(String::from).unwrap_or_default()
-}
-
 fn format_address(addr: Option<AddressList<'_>>) -> String {
     let Some(addr) = addr else {
         return "(unknown sender)".to_string();
@@ -944,9 +1148,8 @@ fn is_inline_attachment(a: &LoadedAttachment) -> bool {
     a.disposition.as_deref() == Some("inline") || a.cid.is_some()
 }
 
-/// Render one email's body to markdown. Prefers the HTML part (htmd
-/// after rewriting `cid:` srcs to the parts' addresses); falls back to
-/// the plain-text part, escaped.
+/// Render one email's body to markdown. Prefers the HTML body list when
+/// it holds a real `text/html` part; falls back to the plain-text list.
 fn email_body_markdown(
     parsed: &ParsedEml,
     attachments: &[LoadedAttachment],
@@ -961,25 +1164,178 @@ fn email_body_markdown(
         cid_to_blob.insert(cid.to_string(), href.clone());
     }
 
-    if !parsed.html_body.trim().is_empty() {
-        let md = html_markdown(&rewrite_cid_srcs(&parsed.html_body, &cid_to_blob));
+    let has_html = parsed
+        .html_body
+        .iter()
+        .any(|p| matches!(p, BodyPart::Html(_)));
+    if has_html {
+        let md = body_list_markdown(&parsed.html_body, &cid_to_blob);
         if !md.trim().is_empty() {
             return Some(md);
         }
     }
-    if parsed.text_body.trim().is_empty() {
-        return None;
-    }
-    Some(plain_body_markdown(&parsed.text_body))
+    let md = body_list_markdown(&parsed.text_body, &cid_to_blob);
+    (!md.trim().is_empty()).then_some(md)
 }
 
-/// An HTML body as markdown.
-pub(crate) fn html_markdown(html: &str) -> String {
-    htmd::HtmlToMarkdown::builder()
+/// Each part as markdown by its own kind: HTML through htmd after its
+/// `cid:` srcs point at the parts' addresses, plain text escaped; either
+/// without its preheader padding.
+fn body_list_markdown(parts: &[BodyPart], cid_to_blob: &HashMap<String, String>) -> String {
+    parts
+        .iter()
+        .map(|part| match part {
+            BodyPart::Html(html) => html_markdown(&rewrite_cid_srcs(html, cid_to_blob)),
+            BodyPart::Plain(text) => plain_body_markdown(text),
+        })
+        .map(|md| super::padding::without_padding(&md))
+        .filter(|md| !md.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// An HTML body as markdown, its text reading as the sender wrote it.
+/// Three of htmd's outputs need help: a link around blocks (see
+/// [`link_on_one_line`]); a `<pre>` with no `<code>` comes out
+/// as its decoded text, so a `&lt;div&gt;` in it became a tag, and text
+/// holding `&amp;lt;` comes out as `&lt;`, which markdown reads as `<`.
+pub fn html_markdown(html: &str) -> String {
+    let md = htmd::HtmlToMarkdown::builder()
         .skip_tags(vec!["script", "style", "head"])
+        .add_handler(vec!["pre"], pre_as_code_block)
+        .add_handler(vec!["a"], link_on_one_line)
         .build()
         .convert(html)
-        .unwrap_or_default()
+        .unwrap_or_default();
+    entity_ampersands_escaped(&md)
+}
+
+thread_local! {
+    /// Whether the `<a>` being walked has written a link inside it.
+    static LINK_INSIDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A mail's button is often a table or paragraphs inside an `<a>`, some
+/// inside a tracking `<a>` too. htmd writes such a link across several
+/// lines, and markdown ends a link's text at a blank line, so the page
+/// showed the brackets and both addresses. A link around another link
+/// gives way to it; a link around blocks is written on one line.
+fn link_on_one_line(
+    handlers: &dyn htmd::element_handler::Handlers,
+    element: htmd::Element,
+) -> Option<htmd::element_handler::HandlerResult> {
+    let is_link = element.attrs.iter().any(|a| &*a.name.local == "href");
+    let outer = LINK_INSIDE.replace(false);
+    let children = handlers.walk_children(element.node);
+    let wraps_a_link = LINK_INSIDE.get();
+    LINK_INSIDE.set(outer || wraps_a_link || is_link);
+    if wraps_a_link {
+        return Some(children);
+    }
+    let mut link = handlers.fallback(element)?;
+    let body = link.content.trim();
+    if body.contains('\n') {
+        let start = link.content.len() - link.content.trim_start().len();
+        let on_one_line = newline_runs_as_spaces(body);
+        link.content = format!(
+            "{}{on_one_line}{}",
+            &link.content[..start],
+            &link.content[start + body.len()..]
+        );
+    }
+    Some(link)
+}
+
+/// Each run of whitespace holding a line break as one space.
+fn newline_runs_as_spaces(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut run = String::new();
+    for c in text.chars() {
+        if c.is_whitespace() {
+            run.push(c);
+            continue;
+        }
+        if run.contains('\n') {
+            out.push(' ');
+        } else {
+            out.push_str(&run);
+        }
+        run.clear();
+        out.push(c);
+    }
+    out.push_str(&run);
+    out
+}
+
+/// A `<pre>` as a code block. One holding a `<code>` already comes out
+/// fenced; one without is fenced here. htmd's one escape inside, a `\`
+/// before a leading backtick or tilde, is taken off: a code block would
+/// show it.
+fn pre_as_code_block(
+    handlers: &dyn htmd::element_handler::Handlers,
+    element: htmd::Element,
+) -> Option<htmd::element_handler::HandlerResult> {
+    let inner = handlers.walk_children(element.node).content;
+    let inner = inner.trim_matches('\n');
+    if inner.starts_with("```") || inner.starts_with("~~~") {
+        return Some(format!("\n\n{inner}\n\n").into());
+    }
+    let text = inner
+        .strip_prefix('\\')
+        .filter(|t| t.starts_with(['`', '~']))
+        .unwrap_or(inner);
+    Some(format!("\n\n{}\n\n", md_code_block("", text)).into())
+}
+
+/// htmd writes no character reference of its own, so one in its output
+/// outside code is text the sender wrote (`&amp;lt;` in the HTML). Its
+/// `&` is escaped, or markdown would read the reference as the character.
+fn entity_ampersands_escaped(md: &str) -> String {
+    let mut out = String::with_capacity(md.len());
+    let mut fence: Option<(char, usize)> = None;
+    for line in md.split_inclusive('\n') {
+        let trimmed = line.trim();
+        let marker = ['`', '~']
+            .into_iter()
+            .map(|c| (c, trimmed.chars().take_while(|&x| x == c).count()))
+            .find(|&(_, n)| n >= 3);
+        match (fence, marker) {
+            (Some((c, n)), Some((m, k))) if m == c && k >= n && trimmed.len() == k => {
+                fence = None;
+                out.push_str(line);
+            }
+            (Some(_), _) => out.push_str(line),
+            (None, Some(open)) => {
+                fence = Some(open);
+                out.push_str(line);
+            }
+            (None, None) => {
+                for (part, is_code) in code_span_parts(line) {
+                    if is_code {
+                        out.push_str(part);
+                    } else {
+                        push_entity_ampersands_escaped(&mut out, part);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn push_entity_ampersands_escaped(out: &mut String, text: &str) {
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        let name_len = after
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '#'))
+            .unwrap_or(after.len());
+        let is_reference = name_len > 0 && after[name_len..].starts_with(';');
+        out.push_str(if is_reference { "&amp;" } else { "&" });
+        rest = after;
+    }
+    out.push_str(rest);
 }
 
 /// A `text/plain` body as markdown that reads as the sender typed it:
@@ -1171,6 +1527,70 @@ Content-Transfer-Encoding: base64\r\n\r\niVBORw0KGgo=\r\n\
         assert!(q.contains("The warp core is at 99.7%."));
     }
 
+    /// The attribution line becomes the fold's `<summary>`, raw HTML: a
+    /// tag in it hid everything after it on the page. It shows as the
+    /// text it reads as, less the tag.
+    #[test]
+    fn a_tag_in_the_attribution_line_shows_as_typed() {
+        let body = "ok\n\nOn Tue, \\*Q\\* <div style=\"display:none\"> wrote:\n> a\n> b";
+        let (_, quoted) = split_quoted(body);
+        let quoted = quoted.expect("quoted folded");
+        assert!(
+            quoted.starts_with("<details><summary>On Tue, *Q* wrote:</summary>"),
+            "{quoted}"
+        );
+        let typed = plain_body_markdown("ok\n\nOn Tue, Data <data@e.invalid> wrote:\n> a\n> b");
+        let (_, quoted) = split_quoted(&typed);
+        assert!(quoted
+            .expect("quoted folded")
+            .starts_with("<details><summary>On Tue, Data &lt;data@e.invalid&gt; wrote:</summary>"),);
+    }
+
+    /// htmd wrote a `<pre>` without a `<code>` as its decoded text, so an
+    /// escaped tag in it became a tag, and `&amp;lt;` as `&lt;`, which the
+    /// page shows as `<`.
+    #[test]
+    fn an_html_body_reads_as_the_sender_wrote_it() {
+        assert_eq!(
+            html_markdown(
+                "<p>Hi</p><a href=\"https://risa.tourism/t?u=1\"><table><tr><td><a href=\"https://risa.tourism/follow\"><p>Risa</p><p>Follow</p></a></td></tr></table></a><p>Bye</p>"
+            ),
+            "Hi\n\n[Risa Follow](https://risa.tourism/follow)\n\nBye",
+            "a button: a tracking link around a link around paragraphs"
+        );
+        assert_eq!(
+            html_markdown(
+                "<p>See <a href=\"https://e.invalid/a\" title=\"A\">the  <b>log</b></a>.</p>"
+            ),
+            "See [the **log**](https://e.invalid/a \"A\").",
+            "a link on one line is htmd's"
+        );
+        assert_eq!(
+            html_markdown("<a name=\"top\"><p>Top</p></a>"),
+            "Top",
+            "an anchor with no href is its text"
+        );
+        assert_eq!(
+            html_markdown(
+                "<p>The console printed:</p><pre>&lt;div style=&quot;display:none&quot;&gt;phaser&lt;/div&gt;</pre>"
+            ),
+            "The console printed:\n\n```\n<div style=\"display:none\">phaser</div>\n```"
+        );
+        assert_eq!(
+            html_markdown("<pre><code class=\"language-rust\">a &lt; b</code></pre>"),
+            "```rust\na < b\n```"
+        );
+        assert_eq!(
+            html_markdown("<p>Type &amp;lt; or &amp;#60; for it. Tea &amp; biscuits.</p>"),
+            "Type &amp;lt; or &amp;#60; for it. Tea & biscuits."
+        );
+        assert_eq!(
+            html_markdown("<p><code>&amp;lt;</code></p>"),
+            "`&lt;`",
+            "code keeps its text"
+        );
+    }
+
     #[test]
     fn split_quoted_no_marker_leaves_body_whole() {
         let body = "Just a plain message with no quoting.";
@@ -1335,5 +1755,236 @@ mod account_label_tests {
             account_label_from_payload("acct-1", &json!({})).as_deref(),
             Some("acct-1")
         );
+    }
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+    use datalib_schema::edges::EdgeKind;
+    use serde_json::json;
+
+    const ACCT: &str = "picard@enterprise.example";
+
+    fn email(id: &str, message_id: &str, in_reply_to: Option<&str>) -> LoadedEmail {
+        LoadedEmail {
+            id: id.into(),
+            account_id: ACCT.into(),
+            thread_id: "T1".into(),
+            blob_id: format!("B{id}"),
+            message_id: Some(message_id.into()),
+            in_reply_to: in_reply_to.map(str::to_string),
+            references: None,
+            received_at: Some("2364-03-01T09:00:00+00:00".into()),
+            sent_at: None,
+            size: None,
+            subject: Some("Away team".into()),
+            from_json: None,
+            to_json: None,
+            cc_json: None,
+            has_attachment: false,
+        }
+    }
+
+    /// The thread's one document, rendered from `emails` filed as
+    /// `filed` (email id, mailbox ids) against `mailboxes`.
+    fn render(
+        mailboxes: Vec<serde_json::Value>,
+        emails: Vec<LoadedEmail>,
+        filed: &[(&str, &[&str])],
+    ) -> RenderedMarkdown {
+        let mut bucket = EmailThreadBucket {
+            account_id: ACCT.into(),
+            thread_id: "T1".into(),
+            emails,
+            ..Default::default()
+        };
+        for (email, in_mailboxes) in filed {
+            bucket.joins.mailboxes.insert(
+                email.to_string(),
+                in_mailboxes.iter().map(|m| m.to_string()).collect(),
+            );
+        }
+        let shared = Shared {
+            accounts: vec![(ACCT.into(), json!({"name": ACCT}))],
+            mailboxes,
+        };
+        let out = tempfile::tempdir().unwrap();
+        let mut docs = Vec::new();
+        render_all(
+            &shared,
+            &[bucket],
+            out.path(),
+            "mail",
+            None,
+            &Progress::noop(),
+            &mut |d| {
+                docs.push(d);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(docs.len(), 1);
+        docs.pop().unwrap()
+    }
+
+    fn mailbox(id: &str) -> String {
+        ids::mailbox("mail", ACCT, id).uuid
+    }
+
+    /// Each node's (uuid, parent, name), for the data_nodes of `kind`.
+    fn of_kind<'a>(
+        doc: &'a RenderedMarkdown,
+        kind: &str,
+    ) -> Vec<(&'a str, Option<&'a str>, Option<&'a str>)> {
+        doc.data_nodes
+            .iter()
+            .filter(|n| n.kind == kind)
+            .map(|n| (n.uuid.as_str(), n.parent_uuid.as_deref(), n.name.as_deref()))
+            .collect()
+    }
+
+    /// A thread sits in its account, the place; it is filed under every
+    /// label any of its emails carries, and a Gmail label nests by the `/`
+    /// in its name. `Work/Clients` has no label of its own, so it is a node
+    /// keyed by its path; `Work` is Google's label.
+    #[test]
+    fn a_thread_is_in_its_account_and_filed_under_its_emails_nested_labels() {
+        let gmail = |label: &str| labels::gmail_mailbox_id(ACCT, label);
+        let doc = render(
+            vec![
+                json!({"id": gmail("INBOX"), "name": "Inbox", "role": "inbox"}),
+                json!({"id": gmail("Label_1"), "name": "Work"}),
+                json!({"id": gmail("Label_3"), "name": "Work/Clients/Acme"}),
+            ],
+            vec![email("E1", "one@x", None), email("E2", "two@x", None)],
+            &[
+                ("E1", &[gmail("INBOX").as_str()]),
+                ("E2", &[gmail("Label_3").as_str(), gmail("INBOX").as_str()]),
+            ],
+        );
+        let account = ids::account("mail", ACCT).uuid;
+        let thread = ids::thread("mail", ACCT, "T1").uuid;
+        assert_eq!(
+            of_kind(&doc, "Email Account"),
+            [(account.as_str(), None, Some(ACCT))]
+        );
+        let chat = doc.data_nodes.iter().find(|n| n.uuid == thread).unwrap();
+        assert_eq!(chat.parent_uuid.as_deref(), Some(account.as_str()));
+        assert!(chat.read_together && !chat.is_place, "{chat:?}");
+        let implied = ids::label_path("mail", ACCT, "Work/Clients").uuid;
+        let (inbox, work, acme) = (
+            mailbox(&gmail("INBOX")),
+            mailbox(&gmail("Label_1")),
+            mailbox(&gmail("Label_3")),
+        );
+        let mut labels = of_kind(&doc, "Email Label");
+        labels.sort();
+        let mut want = vec![
+            (inbox.as_str(), Some(account.as_str()), Some("Inbox")),
+            (work.as_str(), Some(account.as_str()), Some("Work")),
+            (implied.as_str(), Some(work.as_str()), Some("Clients")),
+            (acme.as_str(), Some(implied.as_str()), Some("Acme")),
+        ];
+        want.sort();
+        assert_eq!(labels, want);
+        assert!(doc
+            .data_nodes
+            .iter()
+            .filter(|n| n.kind == "Email Label")
+            .all(|n| n.is_place));
+        let mut filed: Vec<(&str, &str)> = doc
+            .filings
+            .iter()
+            .map(|f| (f.node_uuid.as_str(), f.under_uuid.as_str()))
+            .collect();
+        filed.sort();
+        let mut want = vec![
+            (thread.as_str(), inbox.as_str()),
+            (thread.as_str(), acme.as_str()),
+        ];
+        want.sort();
+        assert_eq!(filed, want);
+        for row in doc.rows.iter().filter(|r| r.uuid != thread) {
+            assert_eq!(row.parent_uuid.as_deref(), Some(thread.as_str()));
+            assert_eq!(row.read_uuid.as_deref(), Some(thread.as_str()));
+            assert_eq!(row.place_uuid.as_deref(), Some(account.as_str()));
+        }
+    }
+
+    /// A JMAP mailbox nests by `parentId`, keyed on the server's ids; a
+    /// `/` in its name is just a character.
+    #[test]
+    fn a_jmap_mailbox_nests_by_its_parent_id() {
+        let doc = render(
+            vec![
+                json!({"id": "M0", "name": "Work"}),
+                json!({"id": "M1", "name": "Clients", "parentId": "M0"}),
+                json!({"id": "M2", "name": "Q1/Q2"}),
+            ],
+            vec![email("E1", "one@x", None)],
+            &[("E1", &["M1", "M2"])],
+        );
+        let account = ids::account("mail", ACCT).uuid;
+        let (work, clients, quarters) = (mailbox("M0"), mailbox("M1"), mailbox("M2"));
+        let mut labels = of_kind(&doc, "Email Label");
+        labels.sort();
+        let mut want = vec![
+            (work.as_str(), Some(account.as_str()), Some("Work")),
+            (clients.as_str(), Some(work.as_str()), Some("Clients")),
+            (quarters.as_str(), Some(account.as_str()), Some("Q1/Q2")),
+        ];
+        want.sort();
+        assert_eq!(labels, want);
+        let clients_node = doc.data_nodes.iter().find(|n| n.uuid == clients).unwrap();
+        assert_eq!(
+            (
+                clients_node.upstream_entity_kind.as_deref(),
+                clients_node.upstream_id.as_deref()
+            ),
+            (Some("mailbox"), Some("M1"))
+        );
+    }
+
+    /// An email's `In-Reply-To` names the `Message-ID` of the email it
+    /// answers; in the same thread that is a reply edge between the two,
+    /// whether or not either header keeps its angle brackets. One that
+    /// answers an email not in the thread draws none.
+    #[test]
+    fn in_reply_to_is_a_reply_edge_to_the_email_it_names() {
+        let doc = render(
+            Vec::new(),
+            vec![
+                email("E1", "one@x", None),
+                email("E2", "<two@x>", Some("<one@x>")),
+                email("E3", "three@x", Some("elsewhere@x")),
+            ],
+            &[],
+        );
+        let at =
+            |id: &str| ids::email("mail", ACCT, id, iso_to_ms("2364-03-01T09:00:00+00:00")).uuid;
+        let edges: Vec<_> = doc
+            .edges
+            .iter()
+            .map(|e| {
+                (
+                    EdgeKind::parse(e.kind),
+                    e.src_anchor_uuid.clone(),
+                    e.dst_anchor_uuid.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            edges,
+            [(Some(EdgeKind::ReplyTo), Some(at("E2")), Some(at("E1")))]
+        );
+    }
+
+    #[test]
+    fn a_message_id_key_drops_its_brackets_and_anything_after_the_first() {
+        assert_eq!(message_id_key(" <a@x> <b@x>"), Some("a@x"));
+        assert_eq!(message_id_key("a@x"), Some("a@x"));
+        assert_eq!(message_id_key("<>"), None);
+        assert_eq!(message_id_key(""), None);
     }
 }

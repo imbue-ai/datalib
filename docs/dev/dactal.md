@@ -7,16 +7,23 @@ DACTAL's tabular UI. It sits in the card registry alongside
 in any card, e.g. in an empty card's header type:
 
 ```
-dactalView()                                      # explore recent rows
-dactalView({ load: "provider:slack", q: "rows/channel" })
+dactalView()                                      # load recent rows, list the datasets
+dactalView({ load: "source:slack", q: "rows/conversation_name" })
 ```
 
 `opts.load` is a Datalib search that seeds the working set; `opts.q` is the
 initial DACTAL query. Both reach the page in the host's `dactal:init`
 message, never in its URL.
 
+With no query — `opts.q` left out, or the query box cleared and run —
+the page lists the datasets a query can start from, as DACTAL's own
+query page does: the working set's (`rows` first, each with its item
+count), then the engine's own (`annotators`, `query history`), faded. A
+click on one of ours runs `<name>???sample:@<=10`, ten of its items; on
+one of the engine's, the bare name.
+
 It is **data-agnostic**: there is no per-provider code. The page takes
-whatever `/applet/unified_document_index/search` returns — fetched by the host card,
+whatever `/applet/unified_grid_and_search_index/search` returns — fetched by the host card,
 handed over by message — and converts it to DACTAL datasets on the fly
 (`bridge.js`), so it works over any corpus — Slack, GitHub, Notion,
 Perseus, all of it.
@@ -91,9 +98,13 @@ dactalView() card ──► <iframe sandbox="allow-scripts"> ──► /dactal/i
     over it. Reuses DACTAL's engine + renderer but not its host page (no
     saved-query store / AI assist / adapters). Also carries the CSP — see
     caveat 5.
-  - `main.js` — that page's own logic (query bar, render loop, the globals
-    the vendored renderer expects). Split out of `index.html` so the CSP
+  - `main.js` — that page's own logic (query bar, dataset list, render
+    loop, the globals the vendored renderer expects: `dactal`, `dactaldb`,
+    `runQuery`, `audioshown`, `query_results`). Split out of `index.html` so the CSP
     can forbid inline script.
+  - `calc.js` — the query language's inline math (`rows.[=score/total]`):
+    a small parser for arithmetic, in place of the `eval` the engine shipped
+    with. See caveat 5.
   - `vendor/` — the two pinned DACTAL scripts.
 
 `public/**` is already in `datalib/ui/BUILD.bazel`'s `vite_inputs`, so the
@@ -136,8 +147,9 @@ fallback.
 all (the frame could remove its own attribute); do not add the second.
 What the sandbox does not stop: a script that has already taken over the
 frame can still navigate the frame itself to an outside URL with whatever
-it holds in the query string — the working set, at most. That is the
-residual, down from "the whole API with the session attached".
+it holds in the query string, and it can ask the host for any search first.
+That is the residual, down from "the whole API with the session attached",
+and why no query may run as code (caveat 5).
 
 The iframe `src` is the explicit `/dactal/index.html`, not the bare
 `/dactal/` — a directory request misses the static file and hits the SPA
@@ -146,12 +158,12 @@ fallback, which serves the main app instead.
 ## Caveats
 
 1. **Client-side, in-memory — no query pushdown.** DACTAL loads the working set
-   into browser memory and queries it locally; it does not translate to SQL/qmd.
-   You pull a bounded slice via `/applet/unified_document_index/search`, then explore it. It does **not**
+   into browser memory and queries it locally; it does not translate to SQL or to the search index.
+   You pull a bounded slice via `/applet/unified_grid_and_search_index/search`, then explore it. It does **not**
    scale to the full corpus — frame it as a power-tool over a working set, not a
    replacement for the main grid.
 2. **No ingestion.** DACTAL's loaders + IndexedDB store compete with the ETL
-   pipeline; we use none of it and treat DACTAL as read-only over `/applet/unified_document_index/search`.
+   pipeline; we use none of it and treat DACTAL as read-only over `/applet/unified_grid_and_search_index/search`.
 3. **Two query languages coexist** — Datalib's Gmail-style search vs.
    DACTAL's `.`/`:`/`/`/`#`. A learning curve; scoped as an optional view.
 4. **Drill-down stays inside DACTAL** — clicking a row re-runs a DACTAL query, it
@@ -175,18 +187,24 @@ fallback, which serves the main app instead.
    quietly defeats the point of pinning: you would get whatever
    dactal.org serves *today*, with no SRI and no version pin.
 
-   So `public/dactal/index.html` carries a CSP — `script-src 'self'
-   'unsafe-eval'; connect-src 'none'` — which makes all three fail closed
-   permanently (`'none'` rather than `'self'` because the page makes no
-   request of its own: its rows arrive by message). It lives in
-   the host page rather than in `vendor/`, which keeps the "unmodified
-   pinned copies" property `vendor/PROVENANCE.md` depends on.
-   `'unsafe-eval'` has to stay: the query language evaluates expressions
-   through `eval` (in `dactal.js`) and `new Function`. The page's own
-   script is in `main.js`, not inline, precisely so that `script-src` need
-   not allow `'unsafe-inline'` — **do not move it inline.** With the
-   sandbox in place, `eval` over row data is what this policy guards; a
-   bypass gets the frame, not the app.
+   So `public/dactal/index.html` carries a CSP — `script-src 'self';
+   connect-src 'none'` — which makes all three fail closed permanently
+   (`'none'` rather than `'self'` because the page makes no request of its
+   own: its rows arrive by message). It lives in the host page rather than
+   in `vendor/`. The page's own script is in `main.js`, not inline,
+   precisely so that `script-src` need not allow `'unsafe-inline'` — **do
+   not move it inline.**
+
+   **No query runs as code, and there is no `'unsafe-eval'`.** Inline math
+   used to go through a regular-expression filter and then `eval`, and a
+   query could be written that passed the filter and reached `Function`.
+   A card's arguments can come from a link, and a script in the frame can
+   ask the host for search results and then navigate the frame to an
+   outside URL with them. So `calc.js` parses the arithmetic the language
+   can write (numbers, strings, arrays, the operators, `Math.*`, an index by
+   number, `.split`), the one vendored line that called `eval` calls it
+   instead (`vendor/PROVENANCE.md`), and the CSP refuses `eval` and
+   `new Function` outright, should a refresh of the snapshot bring one back.
 
 6. **Licensing.** The files carry no license header and dactal.org
    states none. DACTAL is Imbue's own work, and `vendor/PROVENANCE.md`

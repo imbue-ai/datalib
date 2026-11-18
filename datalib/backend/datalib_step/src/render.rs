@@ -10,7 +10,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::pages::PageSize;
 use datalib_etl_render::processor::{BucketEnd, Input, ReadScope, RenderCtx, RenderProcessor};
-use datalib_schema::problems::{ProblemRow, ScopeKind, Severity, Stage, METRIC};
+use datalib_schema::problems::{ProblemRow, Severity, Stage, METRIC};
 use datalib_schema::render_cursor::RenderCursorRow;
 
 use crate::dispatch::{PlannedSource, Wave};
@@ -30,7 +30,7 @@ pub async fn run(
 ) -> Result<Vec<OutputClaim>> {
     // A render store is a doltlite store, and a consumer that pins a commit
     // reads a stable view of it while this step keeps writing. That is P2 of
-    // the sink contract, and it is what lets `grid_index` start before this
+    // the sink contract, and it is what lets `unified_grid_and_search_index` start before this
     // finishes. Said before any work, so the runner knows by the time the
     // first checkpoint arrives.
     emitter.declare_streams_output(true);
@@ -273,7 +273,7 @@ pub fn render_source(
     // Everything again, in place: a renderer version or a param change
     // means every document is rendered fresh and the ones the walk did
     // not produce are swept at the end. The store — its history, and
-    // the commit `grid_index` last consumed — is kept, so a re-keyed
+    // the commit `unified_grid_and_search_index` last consumed — is kept, so a re-keyed
     // document reaches the index as a deletion plus an addition rather
     // than as an old row nobody ever removes.
     let plan = RenderPlan::decide(
@@ -458,12 +458,11 @@ pub fn render_source(
     }
     store.commit_batch()?;
     let raw_commit = one_consumed_commit(&name, &consumed);
-    // What the download could not do, carried into this store so it
-    // travels on with the documents: the raw store's `problems` at the
-    // commit this run rendered from, re-minted under this source's id.
-    let fetch_problems = raw_db
+    // The records the download could not fetch, at the commit this run
+    // rendered from, whose grid rows are looked up after the sweep.
+    let fetch_entities = raw_db
         .as_deref()
-        .map(|raw_db| fetch_problems_of(raw_db, raw_commit.as_deref(), &name))
+        .map(|raw_db| fetch_problem_entities(raw_db, raw_commit.as_deref()))
         .transpose()
         .with_context(|| format!("read the download's problems for {name}"))?;
 
@@ -580,11 +579,20 @@ pub fn render_source(
              (see `problems` in its indexed_markdown.doltlite_db)"
         );
     }
-    // After the sweep, so an item a problem names is a row the store
-    // still holds.
-    if let Some(rows) = fetch_problems {
-        carry_fetch_problems(&store, processors, &name, rows)
-            .with_context(|| format!("carry the download's problems into {name}'s store"))?;
+    // The download's problems are read in its own store; a copy an
+    // older build carried in here goes. After the sweep, the grid row
+    // each of them is about, where this store still holds it, so a
+    // reader can link a problem the download could only name by its raw
+    // record.
+    store
+        .replace_stage_problems(Stage::Fetch, &[])
+        .with_context(|| format!("drop the download's problems from {name}'s store"))?;
+    if let Some(entities) = fetch_entities {
+        let items = entity_items(&store, processors, &name, &entities)
+            .with_context(|| format!("find the rows {name}'s download problems are about"))?;
+        store
+            .replace_entity_items(&items)
+            .with_context(|| format!("record the rows {name}'s download problems are about"))?;
     }
     if !endings.is_empty() {
         tracing::info!(
@@ -835,17 +843,19 @@ pub(crate) fn seal_run(
         let kept_documents: BTreeSet<&str> =
             held_by_kept.iter().map(|(_, uuid)| uuid.as_str()).collect();
         if end.sweep {
-            for uuid in store.all_document_uuids()? {
-                if end.keep.contains(&uuid) || kept_documents.contains(uuid.as_str()) {
-                    continue;
-                }
-                store
-                    .remove_document(data_root, &uuid)
-                    .with_context(|| format!("remove document {uuid}"))?;
-                sealed.removed += 1;
+            let gone: Vec<String> = store
+                .all_document_uuids()?
+                .into_iter()
+                .filter(|uuid| !end.keep.contains(uuid) && !kept_documents.contains(uuid.as_str()))
+                .collect();
+            store
+                .remove_documents(data_root, &gone)
+                .context("remove the documents this source no longer produces")?;
+            sealed.removed += gone.len();
+            if !gone.is_empty() {
                 tracing::info!(
-                    document = %uuid,
-                    "this source no longer produces this document; dropped it",
+                    documents = gone.len(),
+                    "this source no longer produces these documents; dropped them",
                 );
             }
         }
@@ -869,19 +879,29 @@ pub(crate) fn seal_run(
                 .put_inputs(bucket, &[])
                 .with_context(|| format!("clear inputs of bucket {bucket}"))?;
         }
+        let mut gone_by_bucket: BTreeMap<String, usize> = BTreeMap::new();
+        let mut gone: Vec<String> = Vec::new();
         for (bucket, uuid) in store.documents_for_buckets(&swept)? {
-            if end.keep.contains(&uuid) {
-                continue;
+            if !end.keep.contains(&uuid) {
+                *gone_by_bucket.entry(bucket).or_default() += 1;
+                gone.push(uuid);
             }
-            store
-                .remove_document(data_root, &uuid)
-                .with_context(|| format!("remove document {uuid}"))?;
-            sealed.removed += 1;
+        }
+        store
+            .remove_documents(data_root, &gone)
+            .context("remove the documents swept buckets no longer produce")?;
+        sealed.removed += gone.len();
+        // One line for the sweep, not one per document: a source that
+        // emptied drops every document it had.
+        if !gone.is_empty() {
             tracing::info!(
-                document = %uuid,
-                bucket,
-                "this bucket no longer produces this document; dropped it",
+                documents = gone.len(),
+                buckets = gone_by_bucket.len(),
+                "swept buckets no longer produce these documents; dropped them",
             );
+        }
+        for (bucket, documents) in &gone_by_bucket {
+            tracing::debug!(bucket, documents, "dropped this bucket's documents");
         }
         // The report is skipped whole when no count moved: its byte
         // sizes wobble from run to run, so a rewrite would be a diff for
@@ -915,24 +935,33 @@ pub(crate) fn seal_run(
 
 /// The driver's half of the scan.
 #[derive(Debug, Default)]
-struct ReverseLookup {
+pub(crate) struct ReverseLookup {
     /// The raw store's HEAD, for the provider to pin.
-    pin: Option<String>,
+    pub(crate) pin: Option<String>,
     /// The buckets whose declared inputs changed between the cursor and
     /// the pin.
-    stale: Option<HashSet<String>>,
-    /// The declared inputs the diff reports removed: the only evidence a
-    /// bucket declared with nothing is gone.
-    removed: Option<HashSet<Input>>,
+    pub(crate) stale: Option<HashSet<String>>,
+    /// Declared inputs that left: every one the diff reports, and from
+    /// a table emptied since the cursor, one per bucket that named its
+    /// rows — enough for `rows_left`, which asks whether any did. The
+    /// only evidence a bucket declared with nothing is gone.
+    pub(crate) removed: Option<HashSet<Input>>,
     /// Between the cursor and the pin only bookkeeping moved: `sync_runs`,
     /// the sidecars, the other shared tables. Every download commits a
     /// `sync_runs` row, so this is a sync that fetched nothing new.
-    bookkeeping_only: bool,
+    pub(crate) bookkeeping_only: bool,
 }
+
+/// One table's changed keys between two commits: `changed_keys`, or a
+/// test's wrapper around it that records which tables were diffed.
+pub(crate) type DiffTable<'a> = dyn FnMut(&sqlx::SqlitePool, &str, &str, &str) -> Result<Vec<datalib_etl::doltlite_raw::ChangedKey>>
+    + 'a;
 
 /// The buckets whose declared inputs changed between the cursor and the
 /// raw store's HEAD, from `dolt_diff` over every table `render_inputs`
-/// mentions and a reverse lookup, and which of those rows left. Nothing
+/// mentions and a reverse lookup, and which of those rows left. A table
+/// emptied in that range is answered without its diff where it can be
+/// (`emptied_table_evidence`). Nothing
 /// to say — no cursor, no raw doltlite store, nothing declared yet, or a
 /// range this store cannot resolve — leaves the provider's own scan to
 /// decide alone, as it did before `render_inputs`, and no bucket gone.
@@ -940,6 +969,19 @@ fn reverse_lookup(
     store: &IndexedMarkdownStore,
     raw_db: Option<&Path>,
     raw_cursor: Option<&str>,
+) -> Result<ReverseLookup> {
+    reverse_lookup_with(store, raw_db, raw_cursor, &mut |pool, table, from, to| {
+        blocking(datalib_etl::doltlite_raw::changed_keys(
+            pool, table, from, to,
+        ))
+    })
+}
+
+pub(crate) fn reverse_lookup_with(
+    store: &IndexedMarkdownStore,
+    raw_db: Option<&Path>,
+    raw_cursor: Option<&str>,
+    diff_table: &mut DiffTable<'_>,
 ) -> Result<ReverseLookup> {
     let (Some(from), Some(raw_db)) = (raw_cursor, raw_db) else {
         return Ok(ReverseLookup::default());
@@ -961,10 +1003,17 @@ fn reverse_lookup(
         let to = reader.pin().commit().to_string();
         let mut changed: Vec<Input> = Vec::new();
         let mut removed: HashSet<Input> = HashSet::new();
+        let mut stale: HashSet<String> = HashSet::new();
+        let mut emptied: Vec<&str> = Vec::new();
         for table in &tables {
-            match blocking(datalib_etl::doltlite_raw::changed_keys(
-                &pool, table, from, &to,
-            )) {
+            if let Some(evidence) = emptied_table_evidence(store, &pool, table, from, reader.pin())?
+            {
+                stale.extend(evidence.stale);
+                removed.extend(evidence.left);
+                emptied.push(table);
+                continue;
+            }
+            match diff_table(&pool, table, from, &to) {
                 Ok(keys) => {
                     for k in keys {
                         let input = Input::new(table.clone(), k.key);
@@ -991,7 +1040,7 @@ fn reverse_lookup(
                 }
             }
         }
-        let stale = store.buckets_reading(&changed)?;
+        stale.extend(store.buckets_reading(&changed)?);
         let bookkeeping_only = blocking(datalib_etl::doltlite_raw::content_tables_changed(
             &pool, from, &to,
         ))?
@@ -999,6 +1048,7 @@ fn reverse_lookup(
         tracing::info!(
             changed_rows = changed.len(),
             removed_rows = removed.len(),
+            emptied_tables = ?emptied,
             stale_buckets = stale.len(),
             "reverse lookup from the changed rows to the buckets"
         );
@@ -1013,16 +1063,119 @@ fn reverse_lookup(
     result
 }
 
-/// Replace the store's fetch problems with `rows`, each naming the grid
-/// row its raw entity is where the store holds one.
-fn carry_fetch_problems(
+/// What a table emptied since the cursor says without its diff.
+struct EmptiedTable {
+    /// Every bucket that declared an input from it.
+    stale: HashSet<String>,
+    /// For each bucket that named rows of it, one that held at the cursor.
+    left: Vec<Input>,
+}
+
+/// The answer the diff would give for a table that held rows at the
+/// cursor and holds none at the pin, as after a reset, at the cost of a
+/// few key lookups rather than a read of every row that left. Each
+/// bucket that named rows of the table needs one that held at the
+/// cursor: that row left, so the bucket is stale and has lost a row. A
+/// bucket that only ever looked up keys the table did not have read
+/// nothing that changed, and a key that cannot be sought proves nothing,
+/// so either sends the table to the diff (`None`), as does a table that
+/// cannot be read at both commits.
+fn emptied_table_evidence(
+    store: &IndexedMarkdownStore,
+    pool: &sqlx::SqlitePool,
+    table: &str,
+    from: &str,
+    to: &datalib_etl::pin::Pin,
+) -> Result<Option<EmptiedTable>> {
+    use datalib_etl::doltlite_raw::{emptied_between, KeyLookup};
+    let Ok(from) = datalib_etl::pin::Pin::at(from) else {
+        return Ok(None);
+    };
+    let ready = blocking(async {
+        if !emptied_between(pool, table, &from, to).await? {
+            return Ok(None);
+        }
+        KeyLookup::new(pool, table, &from).await.map(Some)
+    });
+    let lookup = match ready {
+        Ok(Some(lookup)) => lookup,
+        Ok(None) => return Ok(None),
+        Err(e) => {
+            tracing::debug!(table, error = %format!("{e:#}"), "leaving this table to the diff");
+            return Ok(None);
+        }
+    };
+    let stale = store.buckets_reading_table(table)?;
+    let mut left = Vec::new();
+    for bucket in &stale {
+        let mut named_any = false;
+        let mut witness = None;
+        let mut after: Option<String> = None;
+        while witness.is_none() {
+            let ids = store.ids_read_from(bucket, table, after.as_deref(), KEYS_PER_PAGE)?;
+            let Some(last) = ids.last() else {
+                break;
+            };
+            named_any = true;
+            after = Some(last.clone());
+            witness = match blocking(lookup.first_held(&ids)) {
+                Ok(found) => found,
+                Err(e) => {
+                    tracing::debug!(table, error = %format!("{e:#}"), "leaving this table to the diff");
+                    return Ok(None);
+                }
+            };
+        }
+        match witness {
+            Some(id) => left.push(Input::new(table, id)),
+            None if named_any => {
+                tracing::debug!(
+                    table,
+                    bucket,
+                    "a bucket named no row this table held; leaving it to the diff"
+                );
+                return Ok(None);
+            }
+            None => {}
+        }
+    }
+    Ok(Some(EmptiedTable { stale, left }))
+}
+
+/// `(entity_key, item_uuid)` for each of `entities` (a download's
+/// problem scopes, `<table>:<id>`) whose grid row this store holds: the
+/// uuid the first processor that knows the raw table mints for it
+/// (`item_of_entity`), else the row whose upstream key the processor
+/// names (`upstream_of_entity`).
+fn entity_items(
     store: &IndexedMarkdownStore,
     processors: &[Box<dyn RenderProcessor>],
     source_id: &str,
-    rows: Vec<ProblemRow>,
-) -> Result<()> {
-    let mut items = items_of_entities(processors, source_id, &rows);
-    let upstream = upstream_of_entities(processors, &rows, &items);
+    entities: &[String],
+) -> Result<Vec<(String, String)>> {
+    let raw: Vec<Option<(&str, &str)>> = entities.iter().map(|e| raw_entity(e)).collect();
+    let mut items: Vec<Option<String>> = raw
+        .iter()
+        .map(|r| {
+            let (table, id) = (*r)?;
+            processors
+                .iter()
+                .find_map(|p| p.item_of_entity(source_id, table, id))
+        })
+        .collect();
+    let upstream: Vec<Option<(&'static str, String)>> = raw
+        .iter()
+        .zip(&items)
+        .map(|(r, item)| {
+            let (table, id) = (*r)?;
+            if item.is_some() {
+                return None;
+            }
+            processors
+                .iter()
+                .find_map(|p| p.upstream_of_entity(table, id))
+        })
+        .collect();
     let keys: Vec<(&str, String)> = upstream.iter().flatten().cloned().collect();
     let found = store.grid_rows_by_upstream(&keys)?;
     for (item, key) in items.iter_mut().zip(upstream) {
@@ -1032,57 +1185,18 @@ fn carry_fetch_problems(
     }
     let wanted: Vec<String> = items.iter().flatten().cloned().collect();
     let held = store.grid_rows_among(&wanted)?;
-    store.replace_stage_problems(Stage::Fetch, &with_items(rows, items, &held))
-}
-
-/// The grid row each problem is about, by the first processor that
-/// knows its raw entity. The download knows only the raw key: the uuid
-/// is minted under the source's id, which it never sees.
-fn items_of_entities(
-    processors: &[Box<dyn RenderProcessor>],
-    source_id: &str,
-    rows: &[ProblemRow],
-) -> Vec<Option<String>> {
-    rows.iter()
-        .map(|row| {
-            if row.item_uuid.is_some() {
-                return row.item_uuid.clone();
-            }
-            if row.scope_kind != ScopeKind::Entity {
-                return None;
-            }
-            let (table, id) = raw_entity(&row.scope_key)?;
-            processors
-                .iter()
-                .find_map(|p| p.item_of_entity(source_id, table, id))
-        })
-        .collect()
-}
-
-/// For each problem no processor could mint a uuid for, the upstream
-/// key of its row, by the first processor that knows one.
-fn upstream_of_entities(
-    processors: &[Box<dyn RenderProcessor>],
-    rows: &[ProblemRow],
-    items: &[Option<String>],
-) -> Vec<Option<(&'static str, String)>> {
-    rows.iter()
+    Ok(entities
+        .iter()
         .zip(items)
-        .map(|(row, item)| {
-            if item.is_some() || row.scope_kind != ScopeKind::Entity {
-                return None;
-            }
-            let (table, id) = raw_entity(&row.scope_key)?;
-            processors
-                .iter()
-                .find_map(|p| p.upstream_of_entity(table, id))
+        .filter_map(|(entity, item)| {
+            item.filter(|uuid| held.contains(uuid))
+                .map(|uuid| (entity.clone(), uuid))
         })
-        .collect()
+        .collect())
 }
 
-/// The raw `(table, id)` an entity-scoped fetch problem names:
-/// `table:id` from a fetch attempt, `record:table:id` from a record the
-/// download could not reach at all.
+/// The raw `(table, id)` a download's problem names: `table:id` from a
+/// fetch attempt, `record:table:id` from a record it could not reach.
 fn raw_entity(scope_key: &str) -> Option<(&str, &str)> {
     scope_key
         .strip_prefix(datalib_etl::download_problems::RECORD_PREFIX)
@@ -1090,33 +1204,10 @@ fn raw_entity(scope_key: &str) -> Option<(&str, &str)> {
         .split_once(':')
 }
 
-/// Each row with its item, where the store holds that row: a filled
-/// `item_uuid` always opens something. The problem's id was minted
-/// before this lookup, so it does not move with whether the row exists.
-fn with_items(
-    rows: Vec<ProblemRow>,
-    items: Vec<Option<String>>,
-    held: &HashSet<String>,
-) -> Vec<ProblemRow> {
-    rows.into_iter()
-        .zip(items)
-        .map(|(row, item)| ProblemRow {
-            item_uuid: item.filter(|uuid| held.contains(uuid)),
-            ..row
-        })
-        .collect()
-}
-
-/// The raw store's `problems` at `commit` (HEAD when the run consumed
-/// none), each minted again under `source_id` — the download did not
-/// know it — with the stamps the download gave them. Empty when there
-/// is no store, nothing committed, or a store from before the table.
-fn fetch_problems_of(
-    raw_db: &Path,
-    commit: Option<&str>,
-    source_id: &str,
-) -> Result<Vec<ProblemRow>> {
-    use datalib_schema::problems::{Problem, Scope};
+/// The entity scopes of the raw store's fetch problems at `commit` (HEAD
+/// when the run consumed none). None when there is no store, nothing
+/// committed, or a store from before the table.
+fn fetch_problem_entities(raw_db: &Path, commit: Option<&str>) -> Result<Vec<String>> {
     if !raw_db.exists() {
         return Ok(Vec::new());
     }
@@ -1127,45 +1218,27 @@ fn fetch_problems_of(
     };
     let pool = reader.pool().clone();
     let result = blocking(async {
-        let rows = match sqlx::query("SELECT * FROM problems WHERE stage = ?")
-            .bind(Stage::Fetch.as_str())
-            .fetch_all(&pool)
-            .await
+        match sqlx::query_scalar::<_, String>(
+            "SELECT DISTINCT scope_key FROM problems WHERE stage = ? AND scope_kind = ? \
+             ORDER BY scope_key",
+        )
+        .bind(Stage::Fetch.as_str())
+        .bind(datalib_schema::problems::ScopeKind::Entity.as_str())
+        .fetch_all(&pool)
+        .await
         {
-            Ok(rows) => rows,
-            Err(e) if datalib_etl::pin::is_missing_table(&e, "problems") => Vec::new(),
-            Err(e) => return Err(e).context("read the raw store's problems"),
-        };
-        rows.iter()
-            .map(|r| {
-                let raw = ProblemRow::from_row(r)?;
-                Ok(ProblemRow {
-                    first_seen_at_utc: raw.first_seen_at_utc.clone(),
-                    changed_at_utc: raw.changed_at_utc.clone(),
-                    tz_offset: raw.tz_offset.clone(),
-                    ..ProblemRow::new(
-                        source_id,
-                        raw.stage,
-                        Scope::Entity(&raw.scope_key),
-                        raw.item_uuid.as_deref(),
-                        raw.outcome,
-                        Problem {
-                            reason: raw.reason,
-                            field: raw.field.clone(),
-                            path: raw.path.clone(),
-                            rule: raw.rule.clone(),
-                            sample: raw.sample.clone(),
-                            severity: Some(raw.severity),
-                        },
-                        None,
-                    )
-                })
-            })
-            .collect::<Result<Vec<_>>>()
+            Ok(keys) => Ok(keys),
+            Err(e) if datalib_etl::pin::is_missing_table(&e, "problems") => Ok(Vec::new()),
+            Err(e) => Err(e).context("read the raw store's problems"),
+        }
     });
     blocking(pool.close());
     result
 }
+
+/// How many of a bucket's keys one lookup at the cursor tries: the first
+/// usually held, and a page bounds what a bucket of a million rows loads.
+const KEYS_PER_PAGE: usize = 64;
 
 /// Whether this run diffs from the stored cursor or renders every bucket.
 #[derive(Debug, PartialEq, Eq)]
@@ -1177,7 +1250,7 @@ enum RenderPlan {
     /// Render everything, for the reason given. The stored cursor is
     /// kept: the sweep at the end of the run is what removes documents
     /// the new version or params no longer produce, and the range is
-    /// still the one `grid_index` diffs the store over.
+    /// still the one `unified_grid_and_search_index` diffs the store over.
     Everything(&'static str),
 }
 
@@ -1237,11 +1310,16 @@ const HANDLE_RULES_PARAM: &str = "_handle_rules";
 /// documents are filed moved, so every source writes its files again.
 const DOC_LAYOUT_PARAM: &str = "_doc_layout";
 
+/// The key `datalib_etl_render::SHARED_RULES_VERSION` sits under: what
+/// the shared writers put on every source's pages changed.
+const SHARED_RULES_PARAM: &str = "_shared_render_rules";
+
 /// Every processor's params under its id, plus the render store's DDL
-/// hash, the handle rules and the document layout, so one source's
-/// cursor carries all of them and a change to any one — a processor's
-/// knob, the shape of the store, what a handle normalizes to, where a
-/// document is filed — re-renders the source.
+/// hash, the handle rules, the document layout and the shared render
+/// rules, so one source's cursor carries all of them and a change to any
+/// one — a processor's knob, the shape of the store, what a handle
+/// normalizes to, where a document is filed, what every page's shared
+/// parts say — re-renders the source.
 pub(crate) fn declared_render_params(processors: &[Box<dyn RenderProcessor>]) -> serde_json::Value {
     processors
         .iter()
@@ -1258,6 +1336,10 @@ pub(crate) fn declared_render_params(processors: &[Box<dyn RenderProcessor>]) ->
             (
                 DOC_LAYOUT_PARAM.to_string(),
                 serde_json::Value::from(datalib_etl_render::grid_index::DOC_LAYOUT),
+            ),
+            (
+                SHARED_RULES_PARAM.to_string(),
+                serde_json::Value::from(datalib_etl_render::SHARED_RULES_VERSION),
             ),
         ])
         .collect::<serde_json::Map<String, serde_json::Value>>()
@@ -1453,6 +1535,8 @@ mod plan_tests {
             .put_document(
                 root,
                 &RenderedMarkdown {
+                    section_layout: None,
+                    content_hash: None,
                     markdown_uuid: uuid.to_string(),
                     source_id: "src".into(),
                     upstream_cursor: None,
@@ -1461,8 +1545,11 @@ mod plan_tests {
                     render_version: 5,
                     rows: vec![row],
                     sections: Vec::new(),
+                    front: Default::default(),
                     edges: Vec::new(),
                     contacts: Vec::new(),
+                    data_nodes: Vec::new(),
+                    filings: Vec::new(),
                     photos: Vec::new(),
                     problems: Vec::new(),
                 },
@@ -1488,24 +1575,12 @@ mod plan_tests {
         }
     }
 
-    fn fetch_problem(scope_key: &str) -> ProblemRow {
-        use datalib_schema::problems::{Outcome, Problem, Reason, Scope};
-        ProblemRow::new(
-            "src",
-            Stage::Fetch,
-            Scope::Entity(scope_key),
-            None,
-            Outcome::Ok,
-            Problem::record(Reason::FetchFailed, "curl: (22) 403"),
-            None,
-        )
-    }
-
-    /// A fetch problem names its grid row only when the store holds
-    /// that row after the sweep: a filled `item_uuid` always opens
-    /// something. Its id does not move with the lookup.
+    /// A download's problem is linked to the grid row its raw record
+    /// belongs to only when the store holds that row after the sweep, so
+    /// a link always opens something; a record no processor knows, a
+    /// listing, and a row swept away are left unlinked.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_fetch_problem_names_its_row_only_when_the_store_holds_it() {
+    async fn a_download_problem_is_linked_only_to_a_row_the_store_holds() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path().join("src/render_markdown");
         write_doc(&root, "kept");
@@ -1526,46 +1601,27 @@ mod plan_tests {
             },
         )
         .unwrap();
-        let rows = vec![
-            fetch_problem("things:kept"),
-            fetch_problem("record:things:kept"),
-            fetch_problem("things:swept"),
-            fetch_problem("things:never-rendered"),
-            fetch_problem("others:kept"),
-            fetch_problem("listing:things"),
-        ];
-        let ids: Vec<String> = rows.iter().map(|r| r.problem_uuid.clone()).collect();
+        let entities: Vec<String> = [
+            "things:kept",
+            "record:things:kept",
+            "things:swept",
+            "things:never-rendered",
+            "others:kept",
+            "listing:things",
+        ]
+        .map(String::from)
+        .to_vec();
         let processors: Vec<Box<dyn RenderProcessor>> =
             vec![Box::new(Resolves("users")), Box::new(Resolves("things"))];
-        carry_fetch_problems(&store, &processors, "src", rows).unwrap();
-        store.commit("carry").unwrap();
+        let items = entity_items(&store, &processors, "src", &entities).unwrap();
         store.close();
-
-        let reader = IndexedMarkdownStore::open_for_reading(&root, None)
-            .unwrap()
-            .expect("the store has a commit");
-        let stored = reader.problems_at_pin().unwrap();
-        let item_of = |id: &str| {
-            stored
-                .iter()
-                .find(|r| r.problem_uuid == id)
-                .unwrap_or_else(|| panic!("problem {id} was not carried"))
-                .item_uuid
-                .clone()
-        };
-        let items: Vec<Option<String>> = ids.iter().map(|id| item_of(id)).collect();
         assert_eq!(
             items,
             [
-                Some("kept".into()),
-                Some("kept".into()),
-                None,
-                None,
-                None,
-                None
+                ("things:kept".to_string(), "kept".to_string()),
+                ("record:things:kept".to_string(), "kept".to_string()),
             ]
         );
-        reader.close();
     }
 
     /// A full render sweeps what the walk did not produce and records
@@ -1759,7 +1815,7 @@ mod stale_tree_tests {
     use super::{
         declared_render_params, declared_render_versions, every_stored_version_must_be_declared,
         tree_is_from_an_older_renderer, RenderCursorRow, RenderPlan, HANDLE_RULES_PARAM,
-        STORE_SCHEMA_PARAM,
+        SHARED_RULES_PARAM, STORE_SCHEMA_PARAM,
     };
     use datalib_schema::providers::Provider;
 
@@ -1784,6 +1840,8 @@ mod stale_tree_tests {
             .put_document(
                 root,
                 &RenderedMarkdown {
+                    section_layout: None,
+                    content_hash: None,
                     markdown_uuid: chat_uuid.to_string(),
                     source_id: "claude_web".into(),
                     upstream_cursor: None,
@@ -1792,8 +1850,11 @@ mod stale_tree_tests {
                     render_version: version,
                     rows: vec![row],
                     sections: Vec::new(),
+                    front: Default::default(),
                     edges: Vec::new(),
                     contacts: Vec::new(),
+                    data_nodes: Vec::new(),
+                    filings: Vec::new(),
                     photos: Vec::new(),
                     problems: Vec::new(),
                 },
@@ -1822,7 +1883,7 @@ mod stale_tree_tests {
     }
 
     /// A tree at an older version is rendered again in full. The store
-    /// itself is kept — its history is what `grid_index` diffs over, so
+    /// itself is kept — its history is what `unified_grid_and_search_index` diffs over, so
     /// a re-keyed document reaches the index as a deletion plus an
     /// addition rather than as an old row nobody removes.
     #[tokio::test(flavor = "multi_thread")]
@@ -1990,7 +2051,7 @@ mod stale_tree_tests {
             serde_json::Value::String(datalib_etl_render::indexed_markdown::schema_hash())
         );
         assert!(params["stub"].is_object() || params["stub"].is_null());
-        assert_eq!(params.as_object().unwrap().len(), 4);
+        assert_eq!(params.as_object().unwrap().len(), 5);
     }
 
     /// A stored handle is only as current as the rules that minted it
@@ -2006,6 +2067,33 @@ mod stale_tree_tests {
         );
         let mut older = params.clone();
         older[HANDLE_RULES_PARAM] = serde_json::Value::from(datalib_handle::RULES_VERSION - 1);
+        let stored = RenderCursorRow {
+            source_id: "src".into(),
+            raw_commit: "commit-a".into(),
+            params: older.to_string(),
+            rendered_at_utc: "2026-01-01T00:00:00.000000Z".into(),
+            tz_offset: Some("+00:00".into()),
+        };
+        assert_eq!(
+            RenderPlan::decide(Some(&stored), &params, false),
+            RenderPlan::Everything("render params changed")
+        );
+    }
+
+    /// What the shared writers put on every page — a title, a chip, a
+    /// name without its bidi controls — changed for every source, and
+    /// only the chat sources' layout version moved, so the rest kept
+    /// their old pages. The shared rules ride in every source's params.
+    #[test]
+    fn a_shared_render_rules_change_renders_everything() {
+        let procs: Vec<Box<dyn RenderProcessor>> = vec![Box::new(Stub(Some(1)))];
+        let params = declared_render_params(&procs);
+        assert_eq!(
+            params[SHARED_RULES_PARAM],
+            serde_json::Value::from(datalib_etl_render::SHARED_RULES_VERSION)
+        );
+        let mut older = params.clone();
+        older.as_object_mut().unwrap().remove(SHARED_RULES_PARAM);
         let stored = RenderCursorRow {
             source_id: "src".into(),
             raw_commit: "commit-a".into(),

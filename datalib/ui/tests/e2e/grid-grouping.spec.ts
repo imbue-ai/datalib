@@ -4,21 +4,14 @@
 // page, so the counts cannot come from the rows the grid holds.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
-import { GRID, gridSettled, SEARCH_ROWS, type GridApi } from "./grid-helpers";
+import { GRID, gridSettled, groupByDragging, SEARCH_ROWS, type GridApi } from "./grid-helpers";
 
 type Group = { values: (string | null)[]; count: number };
 
 async function groupsOf(request: APIRequestContext, by: string): Promise<Group[]> {
-  const r = await request.get(`/applet/unified_document_index/search/groups?q=&by=${by}`);
+  const r = await request.get(`/applet/unified_grid_and_search_index/search/groups?q=&by=${by}`);
   expect(r.ok()).toBe(true);
   return ((await r.json()) as { groups: Group[] }).groups;
-}
-
-async function groupBy(page: Page, ids: string[]) {
-  await page.evaluate(
-    (ids) => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.groupBy(ids),
-    ids,
-  );
 }
 
 /// The group rows the grid draws, as "Type: Chat (12)" → ["Chat", 12].
@@ -40,7 +33,13 @@ test("every group is there with its true count before its rows are read", async 
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
   // No group's rows arrive: every request for them is held.
   await page.route(/\/search\?.*within=/, () => {});
-  await groupBy(page, ["kind"]);
+  await groupByDragging(page, "kind");
+
+  // Until the server's groups land, the grid groups the rows it already
+  // holds, and on this small fixture those counts are right too.
+  const held = () =>
+    page.evaluate(() => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows().length);
+  await expect.poll(held, { message: "the counts came from rows the grid had read" }).toBe(0);
 
   const count = new Map(byKind.map((g) => [g.values[0] ?? "—", g.count]));
   await expect.poll(async () => (await titles(page)).length).toBeGreaterThan(1);
@@ -49,10 +48,6 @@ test("every group is there with its true count before its rows are read", async 
     const [value, n] = t as [string, number];
     expect(n, `the group ${value}`).toBe(count.get(value));
   }
-  const held = await page.evaluate(
-    () => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows().length,
-  );
-  expect(held, "the counts came from rows the grid had read").toBe(0);
 });
 
 /// Opening a group reads its rows, and only its: the rows under it all
@@ -62,7 +57,7 @@ test("every group is there with its true count before its rows are read", async 
 test("opening a group reads its rows", async ({ page }) => {
   await page.goto(GRID);
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
-  await groupBy(page, ["kind"]);
+  await groupByDragging(page, "kind");
   await gridSettled(page);
   await page.locator(".grid-box .slick-group-toggle-all").click();
 

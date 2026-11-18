@@ -1,0 +1,636 @@
+//! Every row of the TNG fixture, searched for by what it holds, is found:
+//! by each search key's value (exactly the rows holding that value), by
+//! each key that reads the search terms (`from:`, `to:`, `with:`, …), by
+//! each of its search terms on the fields, and each document by its
+//! rarest word on the words and, nearly always, by its opening words
+//! on the meaning. Which source each search reached is a snapshot, so
+//! a fixture change that leaves a source unchecked by a search shows in
+//! review. A new key or term kind is checked with no change here.
+
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
+
+use datalib_query::table::SearchTable;
+use datalib_schema::grid_rows::GridRow;
+use datalib_schema::search_terms::SearchTermKind;
+use datalib_unified_grid_and_search_index::terms_keys::{self, TermsValue, TERMS_KEYS};
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::{ConnectOptions, Connection, SqliteConnection};
+
+use super::search_tests::fixture_root;
+use super::tests::{index_over, search, search_part, Part};
+use super::*;
+
+/// Which sources each search was checked on, and with how many rows.
+#[derive(Default)]
+struct Coverage(BTreeMap<String, BTreeMap<String, usize>>);
+
+impl Coverage {
+    fn extend(&mut self, other: Coverage) {
+        for (search, by_source) in other.0 {
+            let mine = self.0.entry(search).or_default();
+            for (source, n) in by_source {
+                *mine.entry(source).or_default() += n;
+            }
+        }
+    }
+
+    fn checked(&mut self, search: &str, source: &str) {
+        *self
+            .0
+            .entry(search.to_string())
+            .or_default()
+            .entry(source.to_string())
+            .or_default() += 1;
+    }
+
+    /// One line per search: the sources it reached, then the ones it never
+    /// did.
+    fn render(&self, sources: &BTreeSet<String>) -> String {
+        let mut out = String::new();
+        for (search, by_source) in &self.0 {
+            let reached: Vec<String> = by_source
+                .iter()
+                .map(|(source, n)| format!("{source} {n}"))
+                .collect();
+            let missed: Vec<&str> = sources
+                .iter()
+                .filter(|s| !by_source.contains_key(*s))
+                .map(String::as_str)
+                .collect();
+            out.push_str(&format!("{search}\n  checked: {}\n", reached.join(", ")));
+            if !missed.is_empty() {
+                out.push_str(&format!("  never: {}\n", missed.join(", ")));
+            }
+        }
+        out
+    }
+}
+
+/// Every row a search holds, reading every page.
+async fn every_uuid(s: &Index, q: &str, part: Option<Part>) -> Vec<SearchRow> {
+    let mut rows = Vec::new();
+    let mut offset = 0;
+    loop {
+        let page = match part {
+            Some(part) => search_part(s, q, part, offset, results::MAX_PAGE).await,
+            None => search(s, q, Some(offset), results::MAX_PAGE, None).await,
+        };
+        assert!(page.errors.is_empty(), "{q}: {:?}", page.errors);
+        assert!(page.refused.is_empty(), "{q}: {:?}", page.refused);
+        rows.extend(page.rows);
+        match page.next_offset {
+            Some(next) => offset = next,
+            None => return rows,
+        }
+    }
+}
+
+async fn open_read_only(path: &std::path::Path) -> SqliteConnection {
+    SqliteConnectOptions::new()
+        .filename(path)
+        .read_only(true)
+        .connect()
+        .await
+        .unwrap_or_else(|e| panic!("open {}: {e}", path.display()))
+}
+
+/// A grid row's source and document.
+struct Row {
+    source_id: String,
+    markdown_uuid: Option<String>,
+}
+
+/// Whether a document is filed for the grid alone, so the search index has no text of it.
+fn is_unindexed(qmd_path: &str) -> bool {
+    qmd_path
+        .split('/')
+        .any(|part| part == datalib_runtime::layout::UNINDEXED_DIR)
+}
+
+/// Every grid row, and each document's text: what the search index draws
+/// of it from its render store, the same call the keyword pass makes.
+async fn read_rows(root: &std::path::Path) -> (HashMap<String, Row>, HashMap<String, String>) {
+    let mut grid = open_read_only(&datalib_runtime::layout::grid_index_db(root)).await;
+    #[derive(sqlx::FromRow)]
+    struct Read {
+        uuid: String,
+        source_id: String,
+        markdown_uuid: Option<String>,
+        is_document: bool,
+        qmd_path: Option<String>,
+    }
+    let read: Vec<Read> = sqlx::query_as(
+        "SELECT uuid, source_id, markdown_uuid, is_document, qmd_path FROM grid_rows",
+    )
+    .fetch_all(&mut grid)
+    .await
+    .unwrap();
+    grid.close().await.unwrap();
+    let mut rows = HashMap::new();
+    let mut searched: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for r in read {
+        if let (true, Some(md), Some(path)) = (r.is_document, &r.markdown_uuid, &r.qmd_path) {
+            if !is_unindexed(path) {
+                // The group whose store holds it, which for a storage
+                // report is not the source its row is filed under.
+                let group = path.split('/').next().unwrap_or_default().to_string();
+                searched.entry(group).or_default().push(md.clone());
+            }
+        }
+        rows.insert(
+            r.uuid,
+            Row {
+                source_id: r.source_id,
+                markdown_uuid: r.markdown_uuid,
+            },
+        );
+    }
+    let root = root.to_path_buf();
+    let texts = tokio::task::spawn_blocking(move || drawn_texts(&root, &searched))
+        .await
+        .unwrap();
+    (rows, texts)
+}
+
+fn drawn_texts(
+    root: &std::path::Path,
+    searched: &BTreeMap<String, Vec<String>>,
+) -> HashMap<String, String> {
+    let mut texts = HashMap::new();
+    for (source, uuids) in searched {
+        let render_root = datalib_etl::layout::render_markdown_root(root, source);
+        let store = datalib_etl_render::indexed_markdown::IndexedMarkdownStore::open_for_reading(
+            &render_root,
+            None,
+        )
+        .unwrap()
+        .unwrap_or_else(|| panic!("{source}'s render store has a commit"));
+        for doc in store.index_docs(source, uuids).unwrap() {
+            let text: String = doc.sections.iter().map(|s| s.text.as_str()).collect();
+            texts.insert(doc.markdown_uuid, text);
+        }
+        store.close();
+    }
+    texts
+}
+
+/// Each value a key's column holds, with the rows holding it.
+async fn values_of(root: &std::path::Path, column: &str) -> BTreeMap<String, BTreeSet<String>> {
+    let mut grid = open_read_only(&datalib_runtime::layout::grid_index_db(root)).await;
+    // Audited: `column` is a `GridRowColumn`'s name.
+    let pairs: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT uuid, CAST({column} AS TEXT) FROM grid_rows \
+         WHERE {column} IS NOT NULL AND CAST({column} AS TEXT) != ''"
+    )))
+    .fetch_all(&mut grid)
+    .await
+    .unwrap();
+    grid.close().await.unwrap();
+    let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (uuid, value) in pairs {
+        out.entry(value).or_default().insert(uuid);
+    }
+    out
+}
+
+/// Each `(kind, value)` in the search terms, with the rows holding it.
+async fn terms_of(root: &std::path::Path) -> BTreeMap<(String, String), BTreeSet<String>> {
+    let path = datalib_runtime::layout::grid_index_db(root);
+    let mut terms = SqliteConnectOptions::new()
+        .filename(datalib_runtime::plain_sqlite::uri(&path))
+        .read_only(true)
+        .connect()
+        .await
+        .unwrap();
+    let read: Vec<(String, i64, String)> = sqlx::query_as(
+        "SELECT r.uuid, t.kind, v.value FROM terms t \
+         JOIN vals v ON v.val_id = t.val_id JOIN rows r ON r.row_id = t.row_id",
+    )
+    .fetch_all(&mut terms)
+    .await
+    .unwrap();
+    terms.close().await.unwrap();
+    let mut out: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    for (uuid, code, value) in read {
+        let kind = SearchTermKind::from_code(code).expect("a kind this build knows");
+        out.entry((kind.as_str().to_string(), value))
+            .or_default()
+            .insert(uuid);
+    }
+    out
+}
+
+/// Each handle with the names it was seen under, from the search terms.
+async fn names_of(root: &std::path::Path) -> HashMap<String, Vec<String>> {
+    let path = datalib_runtime::layout::grid_index_db(root);
+    let mut terms = SqliteConnectOptions::new()
+        .filename(datalib_runtime::plain_sqlite::uri(&path))
+        .read_only(true)
+        .connect()
+        .await
+        .unwrap();
+    let read: Vec<(String, String)> = sqlx::query_as("SELECT handle, name FROM names")
+        .fetch_all(&mut terms)
+        .await
+        .unwrap();
+    terms.close().await.unwrap();
+    let mut out: HashMap<String, Vec<String>> = HashMap::new();
+    for (handle, name) in read {
+        out.entry(handle).or_default().push(name);
+    }
+    out
+}
+
+/// The words a document's text holds, cut where the keyword index's tokenizer cuts
+/// them (at anything not a letter or digit), keeping the ones of four or
+/// more letters and nothing else, lowercased.
+fn words(text: &str) -> BTreeSet<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 4 && w.chars().all(|c| c.is_ascii_alphabetic()))
+        .map(str::to_lowercase)
+        .collect()
+}
+
+/// For each document, the word of its text the fewest documents hold
+/// (ties to the first alphabetically): the one most likely to find it.
+fn rarest_words(texts: &HashMap<String, String>) -> BTreeMap<String, String> {
+    let by_doc: BTreeMap<&String, BTreeSet<String>> =
+        texts.iter().map(|(md, text)| (md, words(text))).collect();
+    let mut documents_with: HashMap<&str, usize> = HashMap::new();
+    for ws in by_doc.values() {
+        for w in ws {
+            *documents_with.entry(w.as_str()).or_default() += 1;
+        }
+    }
+    by_doc
+        .iter()
+        .filter_map(|(md, ws)| {
+            ws.iter()
+                .min_by_key(|w| (documents_with[w.as_str()], w.as_str()))
+                .map(|w| ((*md).clone(), w.clone()))
+        })
+        .collect()
+}
+
+/// A term's words as the search terms' full-text index cuts them:
+/// letters and digits, and `@ . - _ + : /` inside a word.
+fn tokens(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !(c.is_alphanumeric() || "@.-_+:/".contains(c)))
+        .filter(|w| !w.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+fn holds_in_order(words: &[String], wanted: &[String]) -> bool {
+    !wanted.is_empty() && words.windows(wanted.len()).any(|w| w == wanted)
+}
+
+fn listed(uuids: &BTreeSet<&str>) -> String {
+    let shown: Vec<&str> = uuids.iter().take(5).copied().collect();
+    let more = uuids.len().saturating_sub(shown.len());
+    if more > 0 {
+        format!("{} and {more} more", shown.join(", "))
+    } else {
+        shown.join(", ")
+    }
+}
+
+/// What every part of the check reads: the fixture's root, its grid rows
+/// and its documents' texts.
+struct Fixture {
+    root: std::path::PathBuf,
+    rows: HashMap<String, Row>,
+    texts: HashMap<String, String>,
+}
+
+impl Fixture {
+    fn source_of(&self, uuid: &str) -> String {
+        self.rows[uuid].source_id.clone()
+    }
+
+    fn source_of_document(&self, md: &str) -> String {
+        self.rows
+            .values()
+            .find(|r| r.markdown_uuid.as_deref() == Some(md))
+            .map(|r| r.source_id.clone())
+            .expect("a document has rows")
+    }
+}
+
+/// What one part of the check found wrong, and which sources it reached.
+#[derive(Default)]
+struct Findings {
+    failures: Vec<String>,
+    coverage: Coverage,
+}
+
+/// The parts run at once, each on an index of its own: an index reads the
+/// grid through one connection, so searches sharing one would wait their
+/// turn. Their findings are joined in this order, so the failures and the
+/// snapshot read the same however the parts were scheduled.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_row_is_found_by_what_it_holds() {
+    let root = fixture_root();
+    let (rows, texts) = read_rows(root.path()).await;
+    let sources: BTreeSet<String> = rows.values().map(|r| r.source_id.clone()).collect();
+    let f = Arc::new(Fixture {
+        root: root.path().to_path_buf(),
+        rows,
+        texts,
+    });
+    let parts = [
+        tokio::spawn(by_each_key(f.clone())),
+        tokio::spawn(by_each_terms_key(f.clone())),
+        tokio::spawn(by_each_term_on_the_fields(f.clone())),
+        tokio::spawn(by_the_rarest_word_on_the_words(f.clone())),
+        tokio::spawn(the_table_of_contents_on_the_fields_alone(f.clone())),
+        tokio::spawn(by_the_opening_words_on_the_meaning(f.clone())),
+    ];
+    let mut failures: Vec<String> = Vec::new();
+    let mut coverage = Coverage::default();
+    for part in futures::future::join_all(parts).await {
+        let found = part.expect("a part of the check panicked");
+        failures.extend(found.failures);
+        coverage.extend(found.coverage);
+    }
+
+    assert!(
+        failures.is_empty(),
+        "{} searches did not find what they hold:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+    insta::assert_snapshot!("search_finds_itself_coverage", coverage.render(&sources));
+}
+
+/// A key compares its column exactly, so it finds exactly the rows
+/// holding the value: none missing, none extra.
+async fn by_each_key(f: Arc<Fixture>) -> Findings {
+    let s = index_over(&f.root).await;
+    let mut found = Findings::default();
+    for key in GridRow::KEYS {
+        for (value, holding) in values_of(&f.root, key.column.as_str()).await {
+            let q = datalib_query::term(key.key, &value, false);
+            let got: BTreeSet<String> = every_uuid(&s, &q, None)
+                .await
+                .into_iter()
+                .map(|r| r.uuid)
+                .collect();
+            let missing: BTreeSet<&str> = holding.difference(&got).map(String::as_str).collect();
+            let extra: BTreeSet<&str> = got.difference(&holding).map(String::as_str).collect();
+            if !missing.is_empty() || !extra.is_empty() {
+                found.failures.push(format!(
+                    "`{q}` missed [{}] and found [{}]",
+                    listed(&missing),
+                    listed(&extra)
+                ));
+            }
+            for uuid in &holding {
+                found
+                    .coverage
+                    .checked(&format!("{}:", key.key), &f.source_of(uuid));
+            }
+        }
+    }
+    found
+}
+
+/// A key that reads the search terms, given a value quoted, finds
+/// exactly the rows holding its words in order in one of its kinds,
+/// case-blind; a handle-shaped value its handle's rows (`+1701…` shown
+/// as a name is the `tel:` handle), and a name the rows of every handle
+/// seen under exactly it. A bare value matches in part, which the
+/// applet's own tests pin down.
+async fn by_each_terms_key(f: Arc<Fixture>) -> Findings {
+    let s = index_over(&f.root).await;
+    let mut found = Findings::default();
+    let terms = terms_of(&f.root).await;
+    let names = names_of(&f.root).await;
+    for key in TERMS_KEYS {
+        let kinds: Vec<&str> = key.kinds().iter().map(|k| k.as_str()).collect();
+        let mut by_value: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+        for ((kind, value), holding) in &terms {
+            if kinds.contains(&kind.as_str()) {
+                by_value
+                    .entry(value.as_str())
+                    .or_default()
+                    .extend(holding.iter().cloned());
+            }
+        }
+        for (value, holding) in &by_value {
+            let q = datalib_query::exact_term(key.key, value, false);
+            let got: BTreeSet<String> = every_uuid(&s, &q, None)
+                .await
+                .into_iter()
+                .map(|r| r.uuid)
+                .collect();
+            let how = terms_keys::value_of(key, value, true, "*");
+            let (wanted, by_name) = match &how {
+                TermsValue::Exact { by_name, .. } => (Vec::new(), by_name.as_deref()),
+                TermsValue::Words { text, by_name } => {
+                    (tokens(text), by_name.then_some(text.as_str()))
+                }
+                other => panic!("a quoted value is matched whole or by its words: {q} {other:?}"),
+            };
+            let matches = |v: &str| match &how {
+                TermsValue::Exact { values, .. } => {
+                    values.iter().any(|w| w.eq_ignore_ascii_case(v))
+                }
+                _ => holds_in_order(&tokens(v), &wanted),
+            };
+            // A name also reaches the handles seen under it.
+            let seen_under = |handle: &str| {
+                by_name.is_some_and(|name| {
+                    names
+                        .get(handle)
+                        .is_some_and(|ns| ns.iter().any(|n| n.eq_ignore_ascii_case(name)))
+                })
+            };
+            let expected: BTreeSet<String> = by_value
+                .iter()
+                .filter(|(v, _)| matches(v) || seen_under(v))
+                .flat_map(|(_, rows)| rows.iter().cloned())
+                .collect();
+            let missing: BTreeSet<&str> = expected.difference(&got).map(String::as_str).collect();
+            let extra: BTreeSet<&str> = got.difference(&expected).map(String::as_str).collect();
+            if !missing.is_empty() || !extra.is_empty() {
+                found.failures.push(format!(
+                    "`{q}` missed [{}] and found [{}]",
+                    listed(&missing),
+                    listed(&extra)
+                ));
+            }
+            for uuid in holding {
+                found
+                    .coverage
+                    .checked(&format!("terms: {}:", key.key), &f.source_of(uuid));
+            }
+        }
+    }
+    found
+}
+
+/// A term is found by its value on the fields, among whatever else
+/// answers to the same words.
+async fn by_each_term_on_the_fields(f: Arc<Fixture>) -> Findings {
+    let s = index_over(&f.root).await;
+    let mut found = Findings::default();
+    for ((kind, value), holding) in terms_of(&f.root).await {
+        let q = format!("\"{value}\"");
+        let got: HashSet<String> = every_uuid(&s, &q, Some(Part::Fields))
+            .await
+            .into_iter()
+            .map(|r| r.uuid)
+            .collect();
+        let missing: BTreeSet<&str> = holding
+            .iter()
+            .filter(|u| !got.contains(*u))
+            .map(String::as_str)
+            .collect();
+        if !missing.is_empty() {
+            found.failures.push(format!(
+                "the fields's `{q}` ({kind}) missed [{}]",
+                listed(&missing)
+            ));
+        }
+        for uuid in &holding {
+            found
+                .coverage
+                .checked(&format!("fields: {kind}"), &f.source_of(uuid));
+        }
+    }
+    found
+}
+
+/// A document is found on the words by the word of its text the fewest
+/// documents hold.
+async fn by_the_rarest_word_on_the_words(f: Arc<Fixture>) -> Findings {
+    let s = index_over(&f.root).await;
+    let mut found = Findings::default();
+    for (md, word) in rarest_words(&f.texts) {
+        let got = every_uuid(&s, &word, Some(Part::Words)).await;
+        if !got
+            .iter()
+            .any(|r| r.markdown_uuid.as_deref() == Some(md.as_str()))
+        {
+            found
+                .failures
+                .push(format!("the words's `{word}` missed document {md}"));
+        }
+        found
+            .coverage
+            .checked("words: its rarest word", &f.source_of_document(&md));
+    }
+    found
+}
+
+/// Notion's table of contents is filed for the grid alone: its title
+/// finds its row on the fields, and the words, which reads the search
+/// index, does not return it.
+async fn the_table_of_contents_on_the_fields_alone(f: Arc<Fixture>) -> Findings {
+    let s = index_over(&f.root).await;
+    let mut found = Findings::default();
+    let contents_rows = |got: Vec<SearchRow>| {
+        got.iter()
+            .filter(|r| r.kind == "Notion Table of Contents")
+            .count()
+    };
+    let by_title = every_uuid(&s, "Table-of-Contents", Some(Part::Fields)).await;
+    if contents_rows(by_title) != 1 {
+        found
+            .failures
+            .push("the fields missed the table of contents by its title".to_string());
+    }
+    let by_words = every_uuid(&s, "Table-of-Contents", Some(Part::Words)).await;
+    if contents_rows(by_words) != 0 {
+        found
+            .failures
+            .push("the words returned the table of contents".to_string());
+    }
+    found
+}
+
+/// A document is among the ten nearest its own opening words on the
+/// meaning. Vectors are near, not exact: a document with a twin (two
+/// chats between the same people) may lose its place to it, so this asks
+/// for nearly every document and some of every source's.
+async fn by_the_opening_words_on_the_meaning(f: Arc<Fixture>) -> Findings {
+    let s = index_over(&f.root).await;
+    let mut found = Findings::default();
+    let mut meaning: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    let mut lost: Vec<String> = Vec::new();
+    for (md, text) in &f.texts {
+        let q = opening(text, 30);
+        if q.is_empty() {
+            continue;
+        }
+        let got = search_part(&s, &q, Part::Meaning, 0, 10).await;
+        assert!(got.errors.is_empty(), "{q}: {:?}", got.errors);
+        let hit = got
+            .rows
+            .iter()
+            .any(|r| r.markdown_uuid.as_deref() == Some(md.as_str()));
+        let source = f.source_of_document(md);
+        let tally = meaning.entry(source.clone()).or_default();
+        tally.0 += usize::from(hit);
+        tally.1 += 1;
+        if !hit {
+            lost.push(format!("{md} ({source}) by {q:?}"));
+        }
+        found
+            .coverage
+            .checked("meaning: its opening words", &source);
+    }
+    let (hits, asked) = meaning
+        .values()
+        .fold((0, 0), |(h, a), (hit, asked)| (h + hit, a + asked));
+    if hits * 10 < asked * 9 {
+        found.failures.push(format!(
+            "the meaning found {hits} of {asked} documents by their opening words; \
+             lost {lost:?}"
+        ));
+    }
+    for (source, (hits, asked)) in &meaning {
+        if hits * 2 < *asked {
+            let lost: Vec<&String> = lost
+                .iter()
+                .filter(|l| l.contains(&format!("({source})")))
+                .collect();
+            found.failures.push(format!(
+                "the meaning found {hits} of {source}'s {asked} documents \
+                 by their opening words; lost {lost:?}"
+            ));
+        }
+    }
+    found
+}
+
+/// The opening of a document's text, as words a person might paste: the
+/// frontmatter and markup dropped.
+fn opening(text: &str, n: usize) -> String {
+    let body = match text
+        .strip_prefix("---\n")
+        .and_then(|t| t.split_once("\n---\n"))
+    {
+        Some((_, rest)) => rest,
+        None => text,
+    };
+    let mut plain = String::new();
+    let mut in_tag = false;
+    for c in body.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            c if !in_tag => plain.push(c),
+            _ => {}
+        }
+    }
+    plain
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() >= 3 && w.chars().all(char::is_alphabetic))
+        .take(n)
+        .collect::<Vec<_>>()
+        .join(" ")
+}

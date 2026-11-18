@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run python
 """Repo-hygiene lints that cannot run as Bazel tests.
 
 These checks need to look at the repo as a whole — every tracked file,
@@ -22,11 +22,11 @@ instead from `bazel run //:precommit` and as a plain step in
      grid within each tier's table).
  10. No workflow step initializes an empty bash array: expanding one
      is "unbound variable" on the macOS runners' bash 3.2.
- 11. No doc, config or script tells anyone to run latchkey or
-     `@tobilu/qmd` through a package runner (`npx`, `npm exec`,
-     `pnpm dlx`, `yarn dlx`, `bunx`) without an exact version: a runner
-     resolves anything else at run time, and those two commands are the
-     ones a person pastes a live session cookie into.
+ 11. No doc, config or script tells anyone to run latchkey through a
+     package runner (`npx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `bunx`)
+     without an exact version: a runner resolves anything else at run
+     time, and latchkey is what a person pastes a live session cookie
+     into.
  12. Every sqlx SQLite pool turns off `idle_timeout` and `max_lifetime`,
      and none is built by a shortcut that takes sqlx's defaults: either
      setting gives the pool a maintenance task, and sqlx 0.9's can spin
@@ -39,6 +39,12 @@ instead from `bazel run //:precommit` and as a plain step in
      by hand: `datalib_runtime::atomic` is the one write-then-rename.
  15. Every crate datalib/backend/Cargo.toml lists is named by some
      BUILD.bazel, so the list cannot keep a crate nothing links.
+
+ 21. A build cannot reach a write token or the signing key: every
+     `actions/checkout` says what it does with the token, each write
+     grant in release.yml sits on the one job allowed it, none of which
+     runs a build, and what a build made reaches those jobs only outside
+     the checkout, unpacked by the script that checks it.
 
 Checks 4, 5 and 6 — a render read must be pinned, a reader must not
 open writably, a download takes its store rather than opening one —
@@ -107,7 +113,13 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     # Wrappers that intentionally run against the source tree, not the
     # sandbox, so they can reuse .venv / node_modules / target / the
     # ms-playwright browser cache.
-    "datalib/ui:e2e_test": (
+    "datalib/ui:e2e_chromium_test": (
+        "shells out to host pnpm + reuses ~/Library/Caches/ms-playwright"
+    ),
+    "datalib/ui:e2e_sandboxes_test": (
+        "shells out to host pnpm + reuses ~/Library/Caches/ms-playwright"
+    ),
+    "datalib/ui:e2e_webkit_test": (
         "shells out to host pnpm + reuses ~/Library/Caches/ms-playwright"
     ),
     "datalib/ui:e2e_auth_test": (
@@ -244,6 +256,9 @@ def _scan(root: Path) -> set[str]:
 # all three; this check is what makes forgetting one an error.
 PYTHON_LINT_ROOTS: tuple[str, ...] = (
     "datalib/backend/doltlite_facts",
+    "datalib/backend/etl/providers/lightroom/tests/capture_time",
+    "datalib/backend/lightroom_retime/tests",
+    "datalib/reader",
     "scripts",
     "tests/fixtures",
     "tools",
@@ -315,7 +330,7 @@ def _repo_root() -> Path:
     `git ls-files` would find nothing. Bazel sets
     `BUILD_WORKSPACE_DIRECTORY` to the real workspace for exactly this
     case; prefer it, and fall back to the `__file__` walk so a direct
-    `python3 scripts/lint_repo.py` still works.
+    `uv run python scripts/lint_repo.py` still works.
     """
     if ws := os.environ.get("BUILD_WORKSPACE_DIRECTORY"):
         return Path(ws)
@@ -330,6 +345,7 @@ def main() -> int:
     rc |= _check_manual_targets_still_build(root)
     rc |= _check_source_grid(root)
     rc |= _check_workflows_no_empty_arrays(root)
+    rc |= _check_workflow_tokens(root)
     rc |= _check_no_floating_npx(root)
     rc |= _check_pools_never_recycle(root)
     rc |= _check_icons(root)
@@ -339,6 +355,8 @@ def main() -> int:
     rc |= _check_try_get_ok_is_flattened(root)
     rc |= _check_no_playback_set_var(root)
     rc |= _check_no_ui_code_sinks(root)
+    rc |= _check_card_children_carry_styles(root)
+    rc |= _check_stores_open_by_literal_path(root)
     return rc
 
 
@@ -368,6 +386,270 @@ def _check_workflows_no_empty_arrays(root: Path) -> int:
         + "\n".join(hits)
         + "\n\n  Expanding it (\"${arr[@]}\") is 'unbound variable' under `set -u`\n"
         "  on the macOS runners' bash 3.2. Write two branches, or a scalar.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 21: a build cannot reach a write token or the signing key ----
+#
+# GitHub grants a token's permissions per job, never per step, and a hosted
+# runner's passwordless sudo lets a job's processes read the runner's
+# memory, so the only boundary is the job. docs/dev/release_steps.md
+# §"Who holds what" has the table this holds the workflow to. A release
+# also reads no cache anything on `main` can write: bazel verifies no entry,
+# so a cache would decide what ships (docs/dev/security_posture.md).
+_CHECKOUTS_THAT_PUSH = {".github/workflows/cargo-update.yml"}
+_RELEASE_WRITE_GRANTS = {
+    "publish-release": {"contents"},
+    "macos-app-sign": {"id-token"},
+    "docker-image": {"packages"},
+    "docker-image-cuda": {"packages"},
+    "docker-publish": {"packages"},
+    "docker-publish-cuda": {"packages"},
+    "attest": {"id-token", "attestations", "packages"},
+}
+# Publishes on a tag, so what holds for a release holds for it.
+_READER_WORKFLOW = ".github/workflows/reader-wheels.yml"
+_READER_WRITE_GRANTS = {"publish": {"id-token"}}
+_CHECKOUT = re.compile(r"^(\s*)- uses: actions/checkout@")
+_PERSIST = re.compile(r"^\s*persist-credentials:\s*(true|false)\b")
+_JOB = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(#.*)?$")
+_PERMISSIONS = re.compile(r"^(\s*)permissions:\s*([^\s#]*)")
+_WRITE_GRANT = re.compile(r"^\s*([a-z-]+):\s*write\b")
+_BUILD_COMMAND = re.compile(
+    r"\bbazel\b|setup-bazel|cargo build|tauri build|build-signed-app\.sh compile"
+)
+_CACHE_USE = re.compile(
+    r"build.?buddy|bazelrc\.user|remote_cache|remote_header|actions/cache"
+    r"|--cache-from|--cache-to|type=gha",
+    re.IGNORECASE,
+)
+_DOWNLOAD_ARTIFACT = re.compile(r"^(\s*)- uses: actions/download-artifact@")
+_DOWNLOAD_PATH = re.compile(r"^\s*path:\s*\$\{\{\s*runner\.temp\s*\}\}/")
+_UNPACKS_WITH_TAR = re.compile(r"\btar\b.*(\s-?[a-zA-Z]*x[a-zA-Z]*\b|--extract)")
+_CHECKED_UNPACK = "scripts/release/unpack_compiled_app.py"
+_MIRRORED_IMAGE = re.compile(r"\bimage[:=]\s*[\"']?(mirror\.gcr\.io/[^\s\"']+)")
+_ACTION_CACHE_INPUTS = {
+    "setup-bazel": [
+        "bazelisk-cache",
+        "disk-cache",
+        "repository-cache",
+        "external-cache",
+    ],
+    "setup-qemu-action": ["cache-image"],
+    "setup-buildx-action": ["cache-binary"],
+    "setup-uv": ["enable-cache"],
+}
+
+
+def checkout_token_settings(text: str) -> list[tuple[int, str | None]]:
+    """Each checkout's line number and its `persist-credentials`, if it has one."""
+    lines = text.splitlines()
+    found: list[tuple[int, str | None]] = []
+    for index, line in enumerate(lines):
+        checkout = _CHECKOUT.match(line)
+        if not checkout:
+            continue
+        setting = None
+        for following in lines[index + 1 :]:
+            indent = len(following) - len(following.lstrip())
+            if following.strip() and indent <= len(checkout.group(1)):
+                break
+            persist = _PERSIST.match(following)
+            if persist:
+                setting = persist.group(1)
+        found.append((index + 1, setting))
+    return found
+
+
+def workflow_write_grants(
+    text: str,
+) -> tuple[dict[str | None, set[str]], dict[str, list[str]]]:
+    """What each job is granted (None: the workflow's default), and each job's lines."""
+    grants: dict[str | None, set[str]] = {}
+    bodies: dict[str, list[str]] = {}
+    job: str | None = None
+    in_jobs = False
+    permissions_indent: int | None = None
+    for line in text.splitlines():
+        if line.startswith("jobs:"):
+            in_jobs = True
+            continue
+        job_header = _JOB.match(line) if in_jobs else None
+        if job_header:
+            name: str = job_header.group(1)
+            job = name
+            bodies[name] = []
+            permissions_indent = None
+            continue
+        if job is not None and not line.lstrip().startswith("#"):
+            bodies[job].append(line)
+        indent = len(line) - len(line.lstrip())
+        if permissions_indent is not None:
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            if indent <= permissions_indent:
+                permissions_indent = None
+            else:
+                write = _WRITE_GRANT.match(line)
+                if write:
+                    grants.setdefault(job, set()).add(write.group(1))
+                continue
+        permissions = _PERMISSIONS.match(line)
+        if permissions:
+            if permissions.group(2) == "write-all":
+                grants.setdefault(job, set()).add("write-all")
+            permissions_indent = len(permissions.group(1))
+    return grants, bodies
+
+
+def artifact_download_problems(text: str) -> list[str]:
+    """An artifact lands on top of the checkout unless it is sent somewhere else.
+
+    A download replaces whatever is at the same path, and a build's scripts can
+    reach the token that uploads artifacts, so one could replace the script a
+    later step runs.
+    """
+    lines = text.splitlines()
+    problems: list[str] = []
+    for index, line in enumerate(lines):
+        download = _DOWNLOAD_ARTIFACT.match(line)
+        if not download:
+            continue
+        step: list[str] = []
+        for following in lines[index + 1 :]:
+            indent = len(following) - len(following.lstrip())
+            if following.strip() and indent <= len(download.group(1)):
+                break
+            step.append(following)
+        if not any(_DOWNLOAD_PATH.match(entry) for entry in step):
+            problems.append(
+                f"line {index + 1}: a download-artifact whose `path:` is not under runner.temp"
+            )
+    return problems
+
+
+def signing_unpack_problems(text: str) -> list[str]:
+    """The signing job runs scripts from its checkout, so tar never unpacks a build's archive there."""
+    _, bodies = workflow_write_grants(text)
+    body = bodies.get("macos-app-sign", [])
+    problems = [
+        f"job macos-app-sign unpacks with tar: {line.strip()}"
+        for line in body
+        if _UNPACKS_WITH_TAR.search(line)
+    ]
+    if not any(_CHECKED_UNPACK in line for line in body):
+        problems.append(f"job macos-app-sign must unpack through {_CHECKED_UNPACK}")
+    return problems
+
+
+def release_grant_problems(text: str) -> list[str]:
+    return signing_unpack_problems(text) + publishing_problems(
+        text, _RELEASE_WRITE_GRANTS
+    )
+
+
+def reader_grant_problems(text: str) -> list[str]:
+    return publishing_problems(text, _READER_WRITE_GRANTS)
+
+
+def publishing_problems(text: str, write_grants: dict[str, set[str]]) -> list[str]:
+    """A workflow that publishes: each write grant on the job meant to hold it, no
+    build in such a job, and no cache anywhere."""
+    grants, bodies = workflow_write_grants(text)
+    problems: list[str] = artifact_download_problems(text)
+    for job, granted in grants.items():
+        allowed = write_grants.get(job, set()) if job else set()
+        for permission in sorted(granted - allowed):
+            where = f"job {job}" if job else "the workflow's default"
+            problems.append(f"{where} grants {permission}: write")
+    for job, allowed in write_grants.items():
+        for permission in sorted(allowed - grants.get(job, set())):
+            problems.append(f"job {job} needs {permission}: write to do its work")
+        for line in bodies.get(job, []):
+            if _BUILD_COMMAND.search(line):
+                problems.append(
+                    f"job {job} holds a write grant and runs a build: {line.strip()}"
+                )
+    code = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+    for line in code:
+        if _CACHE_USE.search(line):
+            problems.append(f"a release reads no cache, but: {line.strip()}")
+    for action, inputs in _ACTION_CACHE_INPUTS.items():
+        uses = sum(f"/{action}@" in line for line in code)
+        for name in inputs:
+            turned_off = sum(line.strip() == f"{name}: false" for line in code)
+            if turned_off < uses:
+                problems.append(
+                    f"a release reads no cache: {action} needs {name}: false"
+                )
+    return problems
+
+
+_RELEASE_KEY_ENVIRONMENT = (
+    "environment: ${{ github.event_name == 'push' && 'main-ci' || '' }}"
+)
+
+
+def release_key_problems(text: str) -> list[str]:
+    """Jobs naming the release org's key outside the environment only `main` may use."""
+    _, bodies = workflow_write_grants(text)
+    return [
+        f"job {job} names BUILD_BUDDY_RELEASE_API_KEY outside the main-ci environment"
+        for job, lines in bodies.items()
+        if any("BUILD_BUDDY_RELEASE_API_KEY" in line for line in lines)
+        and not any(line.strip() == _RELEASE_KEY_ENVIRONMENT for line in lines)
+    ]
+
+
+def floating_images(text: str) -> list[str]:
+    """Third-party images a workflow names by a tag someone else can move."""
+    return [
+        image.group(1)
+        for line in text.splitlines()
+        if not line.lstrip().startswith("#")
+        and (image := _MIRRORED_IMAGE.search(line))
+        and "@sha256:" not in image.group(1)
+    ]
+
+
+def _check_workflow_tokens(root: Path) -> int:
+    problems: list[str] = []
+    for rel in _git_ls_files(root, ".github/workflows/*.yml"):
+        problems += [
+            f"{rel}: {image} is not pinned by digest"
+            for image in floating_images((root / rel).read_text())
+        ]
+        for lineno, setting in checkout_token_settings((root / rel).read_text()):
+            if setting is None:
+                problems.append(
+                    f"{rel}:{lineno}: a checkout without `persist-credentials: false`"
+                )
+            elif setting == "true" and rel not in _CHECKOUTS_THAT_PUSH:
+                problems.append(
+                    f"{rel}:{lineno}: `persist-credentials: true` in a workflow that does not push"
+                )
+        problems += [
+            f"{rel}: {p}" for p in release_key_problems((root / rel).read_text())
+        ]
+    release = ".github/workflows/release.yml"
+    problems += [
+        f"{release}: {p}" for p in release_grant_problems((root / release).read_text())
+    ]
+    problems += [
+        f"{_READER_WORKFLOW}: {p}"
+        for p in reader_grant_problems((root / _READER_WORKFLOW).read_text())
+    ]
+    if not problems:
+        print(
+            "OK: no build can reach a write token or the signing key, and a release reads no cache."
+        )
+        return 0
+    print(
+        "ERROR: a workflow leaves a token or a grant where a build can reach it:\n\n"
+        + "\n".join(f"  {p}" for p in problems)
+        + '\n\n  See docs/dev/release_steps.md, "Who holds what".',
         file=sys.stderr,
     )
     return 1
@@ -685,10 +967,10 @@ def _check_manual_targets_still_build(root: Path) -> int:
     return 1
 
 
-# --- Check 11: no floating `npx -y latchkey` / `npx -y @tobilu/qmd` ----
+# --- Check 11: no floating `npx -y latchkey` --------------------------
 #
-# The code pins both (`LATCHKEY_VERSION`, `DEFAULT_QMD_VERSION` in
-# datalib/backend/runtime), the installer puts a `latchkey` launcher on
+# The code pins it (`LATCHKEY_VERSION` in
+# datalib/backend/runtime/src/node_runtime.rs), the installer puts a `latchkey` launcher on
 # the PATH, and the app renders the pinned form in every hint it shows.
 # The docs were the one place the version floated (#140): `npx -y
 # latchkey auth set … $(pbpaste)` hands a session cookie to whatever npm
@@ -705,7 +987,7 @@ def _check_manual_targets_still_build(root: Path) -> int:
 _PACKAGE_RUNNER = re.compile(
     r"(?<![\w-])(?:npx|bunx|bun\s+x|npm\s+exec|npm\s+x|pnpm\s+dlx|yarn\s+dlx)\b"
 )
-_PINNED_PACKAGES = ("latchkey", "@tobilu/qmd")
+_PINNED_PACKAGES = ("latchkey",)
 _EXACT_VERSION = re.compile(
     r"\d+\.\d+\.\d+|<[A-Za-z_]+>|\{[A-Za-z_]+\}|\$\{?[A-Za-z_]+\}?"
 )
@@ -747,7 +1029,7 @@ def _unpinned(package: str) -> bool:
 
 
 def floating_npx(line: str) -> bool:
-    """Whether `line` runs latchkey or qmd through a runner at no exact version."""
+    """Whether `line` runs latchkey through a runner at no exact version."""
     for runner in _PACKAGE_RUNNER.finditer(line):
         rest = line[runner.end() :]
         end = _COMMAND_ENDS.search(rest)
@@ -788,14 +1070,14 @@ def _check_no_floating_npx(root: Path) -> int:
             if floating_npx(line):
                 hits.append(f"  {rel}:{lineno}: {line.strip()}")
     if not hits:
-        print("OK: no floating `npx -y latchkey` / `npx -y @tobilu/qmd`.")
+        print("OK: no floating `npx -y latchkey`.")
         return 0
     print(
         "ERROR: a command that resolves `latest` from npm at run time:\n\n"
         + "\n".join(hits)
         + "\n\n  Write `latchkey …` (the launcher the installer puts on the PATH)\n"
-        "  or pin it exactly: `npx -y latchkey@<LATCHKEY_VERSION>`. The pins live in\n"
-        "  datalib/backend/runtime/src/node_runtime.rs and runtime/src/qmd.rs.",
+        "  or pin it exactly: `npx -y latchkey@<LATCHKEY_VERSION>`. The pin lives in\n"
+        "  datalib/backend/runtime/src/node_runtime.rs.",
         file=sys.stderr,
     )
     return 1
@@ -1135,7 +1417,7 @@ _PLACEHOLDER_RUN = re.compile(
 # `?` runs sized by something that is not data, with the reason.
 _RUN_ALLOWED: dict[tuple[str, str], str] = {
     (
-        "datalib/backend/applets/src/unified_document_index/problems.rs",
+        "datalib/backend/applets/src/unified_grid_and_search_index/problems.rs",
         "columns.len()",
     ): ("one row's VALUES, one `?` per column of a table the code declares"),
     ("datalib/backend/etl/render/src/search_terms.rs", "per_row"): (
@@ -1281,8 +1563,10 @@ def _check_no_playback_set_var(root: Path) -> int:
 # HTML — set as markup, parsed into a document or a fragment, or made a
 # frame's document — or a module imported from a computed URL, is
 # allowed only where the entry below says why the string is not data
-# someone else wrote. And every SlickGrid says `enableHtmlRendering:
-# false`, or a cell's formatter output is drawn as HTML.
+# someone else wrote. And every SlickGrid spreads `TEXT_ONLY_GRID`
+# (datalib/ui/src/grid/textOnly.ts), or a cell's formatter output is
+# drawn as HTML; nothing else turns HTML rendering on or swaps the
+# grid's sanitizer.
 _UI_EVAL = re.compile(
     r"(?<![\w$.])Function\s*\(|\bnew\s+Function\b|\beval\s*\("
     r"|\bset(?:Timeout|Interval)\s*\(\s*[\"'`]"
@@ -1297,7 +1581,9 @@ _UI_HTML_OR_IMPORT = re.compile(
     re.IGNORECASE,
 )
 _UI_SLICKGRID = re.compile(r"\bnew\s+SlickVanillaGridBundle\b")
-_UI_SLICKGRID_TEXT_ONLY = re.compile(r"\benableHtmlRendering\s*:\s*false\b")
+_UI_SLICKGRID_TEXT_ONLY = re.compile(r"\.\.\.TEXT_ONLY_GRID\b")
+_UI_SLICKGRID_TEXT_ONLY_HOME = "datalib/ui/src/grid/textOnly.ts"
+_UI_SLICKGRID_HTML_OPTION = re.compile(r"\benableHtmlRendering\s*:|\bsanitizer\s*:")
 _UI_SINK_ALLOWED = {
     "datalib/ui/src/cards/ChatBody.ce.vue": "a document body, through the "
     "sanitizer, into the document frame, whose CSP has script-src 'none'",
@@ -1320,15 +1606,20 @@ def _check_no_ui_code_sinks(root: Path) -> int:
         for lineno, line in enumerate(text.splitlines(), 1):
             if line.strip().startswith(("//", "*", "/*")):
                 continue
-            sink = _UI_EVAL.search(line) or (
-                rel not in _UI_SINK_ALLOWED and _UI_HTML_OR_IMPORT.search(line)
+            sink = (
+                _UI_EVAL.search(line)
+                or (rel not in _UI_SINK_ALLOWED and _UI_HTML_OR_IMPORT.search(line))
+                or (
+                    rel != _UI_SLICKGRID_TEXT_ONLY_HOME
+                    and _UI_SLICKGRID_HTML_OPTION.search(line)
+                )
             )
             if sink:
                 hits.append(f"  {rel}:{lineno}: {line.strip()}")
         grids = len(_UI_SLICKGRID.findall(text))
         if grids > len(_UI_SLICKGRID_TEXT_ONLY.findall(text)):
             hits.append(
-                f"  {rel}: {grids} SlickGrid(s), not each with `enableHtmlRendering: false`"
+                f"  {rel}: {grids} SlickGrid(s), not each spreading `TEXT_ONLY_GRID`"
             )
     if not hits:
         print(
@@ -1344,6 +1635,82 @@ def _check_no_ui_code_sinks(root: Path) -> int:
         "  really is the app's own markup, add the file to _UI_SINK_ALLOWED in\n"
         "  scripts/lint_repo.py with the reason it is not someone else's data.",
         file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 20: a store opens by its literal path ------------------------
+#
+# sqlx's `SqliteConnectOptions::from_str` reads a URL: it percent-decodes
+# the path and cuts it at the first `?`. A data root under `x%41y` wrote
+# its stores under a sibling `xAy` if there was one, and one holding a `?`
+# could not open anything. `datalib_sqlite_open` is the one way to name a
+# file, and `plain_sqlite::uri` the one URI, for the one thing that needs
+# it: a new plain SQLite file. Tests may spell an open by hand.
+_SQLITE_URL = re.compile(r'"sqlite:(?!:memory:")')
+_FILENAME_NOT_URI = re.compile(r"\.filename\((?!\s*(?:\w+::)*plain_sqlite::uri\()")
+_SQLITE_OPEN_HOME = "datalib/backend/sqlite_open/src/lib.rs"
+_RUST_TEST_FILE = re.compile(r"(?:^|/)tests/|_tests?\.rs$|/doltlite_facts/")
+
+
+def unliteral_opens(text: str) -> list[int]:
+    """The 1-based lines of `text` that open a store by anything but its path."""
+    hits = [*_SQLITE_URL.finditer(text), *_FILENAME_NOT_URI.finditer(text)]
+    return sorted(text.count("\n", 0, m.start()) + 1 for m in hits)
+
+
+def _check_stores_open_by_literal_path(root: Path) -> int:
+    hits: list[str] = []
+    for rel in _git_ls_files(root, "datalib/*.rs"):
+        if _RUST_TEST_FILE.search(rel) or rel == _SQLITE_OPEN_HOME:
+            continue
+        text = _without_test_module((root / rel).read_text(encoding="utf-8"))
+        lines = text.splitlines()
+        for lineno in unliteral_opens(text):
+            hits.append(f"  {rel}:{lineno}: {lines[lineno - 1].strip()}")
+    if not hits:
+        print("OK: every store opens by its literal path.")
+        return 0
+    print(
+        "ERROR: a store opened by something other than its path:\n\n"
+        + "\n".join(hits)
+        + "\n\n  Use `datalib_sqlite_open::file(path)`, or `::revision(path, rev)`.\n"
+        "  A `sqlite://` URL is percent-decoded and cut at the first `?`.\n"
+        "  See lint_repo.py check 20.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 22: a card's child component brings its styles into the card --
+#
+# A card is drawn in its own shadow root, which document-head styles do
+# not reach. A plain `.vue` file's `<style>` block goes to the document
+# head, so under `cards/` it styles nothing: the time-window box shipped
+# as a bare list that way. A child with styles is `.ce.vue` and listed
+# in its card's `styleSources`, or keeps them in a `.css` file the card
+# includes (docs/dev/cards.md § "CardRender: the rendering contract").
+def _check_card_children_carry_styles(root: Path) -> int:
+    hits = [
+        f"  {rel}"
+        for rel in _git_ls_files(root, "datalib/ui/src/cards")
+        if rel.endswith(".vue")
+        and not rel.endswith(".ce.vue")
+        and (root / rel).is_file()
+        and re.search(
+            r"^<style\b", (root / rel).read_text(encoding="utf-8"), re.MULTILINE
+        )
+    ]
+    if not hits:
+        print("OK: no plain .vue file under datalib/ui/src/cards has a <style> block.")
+        return 0
+    print(
+        "ERROR: a plain .vue file under datalib/ui/src/cards has a <style> block:\n\n"
+        + "\n".join(hits)
+        + "\n\n  A card is drawn in a shadow root, and a plain .vue file's styles go to\n"
+        "  the document head, which does not reach it. Rename the file to .ce.vue\n"
+        "  and add it to its card's `styleSources`, or move the styles to a .css\n"
+        "  file the card includes (docs/dev/cards.md)."
     )
     return 1
 

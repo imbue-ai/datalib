@@ -81,6 +81,70 @@ async fn marking_an_email_unread_upstream_moves_only_its_read_mark() {
     assert_ne!(content_commit(&m).await, version);
 }
 
+/// `$muted` is a mark, as `$seen` is: muting moves the mark and leaves the
+/// row and its keywords as they were.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn muting_upstream_moves_only_the_read_mark() {
+    let m = Mirror::new();
+    let tape = Tape::new(&m.playback);
+    let mut a = Account::new(&[("MB1", "Inbox")], &[("M1", &["MB1"]), ("M2", &["MB1"])]);
+    tape.serve(&a);
+    run(&m, &[]).await.expect("first run");
+    let rows = email_rows(&m).await;
+    assert_eq!(muted(&m).await, [0, 0]);
+
+    a.email_state = "email-2".into();
+    a.emails.get_mut("M1").unwrap().muted = true;
+    tape.serve(&a);
+    tape.email_changes("email-1", &[], &["M1"], &[], "email-2", false);
+    tape.gets(&a, &["M1"]);
+    run(&m, &[]).await.expect("second run");
+
+    assert_eq!(muted(&m).await, [1, 0]);
+    assert_eq!(email_rows(&m).await, rows);
+    assert!(strings(&m, "SELECT keyword FROM email_keywords")
+        .await
+        .is_empty());
+}
+
+/// The server's preview is the row's, empty or not, and stays out of the
+/// envelope. A row from before the column gets one from its `.eml`, with no
+/// `Email/get` for it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_servers_preview_is_kept_and_an_old_row_gets_one_from_its_bytes() {
+    let m = Mirror::new();
+    let tape = Tape::new(&m.playback);
+    let mut a = Account::new(&[("MB1", "Inbox")], &[("M1", &["MB1"]), ("M2", &["MB1"])]);
+    a.emails.get_mut("M2").unwrap().preview = String::new();
+    tape.serve(&a);
+    run(&m, &[]).await.expect("first run");
+    assert_eq!(
+        strings(&m, "SELECT preview FROM emails ORDER BY id").await,
+        ["Preview of log M1", ""]
+    );
+    assert!(strings(
+        &m,
+        "SELECT id FROM emails WHERE payload -> '$.preview' NOT NULL"
+    )
+    .await
+    .is_empty());
+
+    m.read(|db: RawDb| async move {
+        sqlx::query("UPDATE emails SET preview = NULL WHERE id = 'M1'")
+            .execute(db.pool())
+            .await
+            .unwrap();
+    })
+    .await;
+    tape.refuse("Email/get", email_get_args(&["M1"]), 400);
+    let second = run(&m, &[]).await.expect("second run");
+    assert_eq!(second.emails_upserted, 0, "{second:?}");
+    assert_eq!(
+        strings(&m, "SELECT preview FROM emails ORDER BY id").await,
+        ["body of M1", ""]
+    );
+}
+
 /// An `Email/changes` that fails is a row, and what is stored stands;
 /// one the server cannot calculate lists and fetches the account again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -317,6 +381,16 @@ async fn keywords(m: &Mirror, email_id: &'static str) -> Vec<String> {
 async fn threads(m: &Mirror) -> Vec<(String, i64)> {
     m.read(|db: RawDb| async move {
         sqlx::query_as("SELECT id, email_count FROM threads ORDER BY id")
+            .fetch_all(db.pool())
+            .await
+            .unwrap()
+    })
+    .await
+}
+
+async fn muted(m: &Mirror) -> Vec<i64> {
+    m.read(|db: RawDb| async move {
+        sqlx::query_scalar("SELECT muted FROM read_marks ORDER BY id")
             .fetch_all(db.pool())
             .await
             .unwrap()

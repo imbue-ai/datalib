@@ -60,7 +60,8 @@ pub struct TableState {
 
 /// The tables every raw store has that are datalib's, not the source's:
 /// `datalib_etl::doltlite_raw::SHARED_TABLES`, the file-scan cursor
-/// `ingested_files`, the walked ranges of `datalib_etl_web::coverage`,
+/// `ingested_files`, the walked ranges of `datalib_etl_web::coverage` and
+/// when they were last checked,
 /// plus `sync_scope_config`, which no build writes but older commits
 /// still hold. Listed here because this crate cannot link
 /// the ingest framework; a test there keeps the two in step.
@@ -72,6 +73,7 @@ const DATALIB_TABLES: &[&str] = &[
     "problems",
     "ingested_files",
     "coverage",
+    "coverage_checked",
 ];
 
 /// Whether a table holds the source's records: every table but
@@ -372,14 +374,11 @@ mod tests {
         let h = read(&path, 100).await.unwrap();
         assert!(!h.truncated);
         let messages: Vec<&str> = h.commits.iter().map(|c| c.message.as_str()).collect();
-        assert_eq!(
-            messages,
-            [
-                "churn run=job-9",
-                "first load",
-                "schema",
-                "Initialize data repository"
-            ]
+        assert_eq!(messages[..3], ["churn run=job-9", "first load", "schema"]);
+        assert_eq!(messages.len(), 4, "{messages:?}");
+        assert!(
+            messages[3].starts_with("Initialize data repository"),
+            "{messages:?}"
         );
         assert_eq!(h.commits[0].run.as_deref(), Some("job-9"));
         assert_eq!(h.commits[1].run, None);
@@ -584,6 +583,7 @@ mod tests {
             "problems",
             "ingested_files",
             "coverage",
+            "coverage_checked",
             "sqlite_sequence",
         ] {
             assert!(!holds_records(t), "{t}");

@@ -104,26 +104,42 @@ impl RawDb {
         .context("look a file up in the attachment edges")
     }
 
-    /// Delete every conversation not in `keep`, its attachment edges, and
-    /// the fetch problems of both.
+    /// Every conversation not in `keep`: deleted with its attachment
+    /// edges and the fetch problems of both, or, with `keep_local_copy`,
+    /// kept and counted. Answers `(deleted, kept)`.
     ///
     /// Only for a caller holding a **complete** listing — see the gate at
     /// the callsite. That gate is the whole safety story: nothing here
     /// second-guesses how much it deletes, because the rows stay in
     /// doltlite history either way.
-    pub async fn prune_conversations(&self, keep: &HashSet<String>) -> Result<usize> {
+    pub async fn prune_conversations(
+        &self,
+        keep: &HashSet<String>,
+        when: datalib_etl_chatgpt_config::WhenDeletedUpstream,
+    ) -> Result<(usize, usize)> {
         let held: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations")
             .fetch_one(self.pool())
             .await
             .context("count conversations for prune")?;
         let mut tx = self.pool().begin().await.context("begin prune tx")?;
-        let gone =
-            datalib_etl::prune::prune_scope_in_tx(&mut tx, "conversations", &[], keep).await?;
-        datalib_etl::prune::delete_owned_in_tx(&mut tx, ATTACHMENTS, "conversation_id", &gone)
-            .await?;
+        let unlisted =
+            datalib_etl::prune::follow_deletions_in_tx(&mut tx, when, "conversations", &[], keep)
+                .await?;
+        datalib_etl::prune::delete_owned_in_tx(
+            &mut tx,
+            ATTACHMENTS,
+            "conversation_id",
+            &unlisted.deleted,
+        )
+        .await?;
         tx.commit().await.context("commit prune tx")?;
-        datalib_etl::prune::record("chatgpt conversations", held as usize, gone.len());
-        Ok(gone.len())
+        datalib_etl::prune::record(
+            "chatgpt conversations",
+            held as usize,
+            unlisted.deleted.len(),
+        );
+        datalib_etl::prune::record_kept("chatgpt conversations", unlisted.kept.len());
+        Ok((unlisted.deleted.len(), unlisted.kept.len()))
     }
 
     pub async fn has_any_conversation(&self) -> Result<bool> {

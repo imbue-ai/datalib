@@ -46,12 +46,15 @@ pub struct Graph {
 }
 
 impl Graph {
-    /// Ids of the source steps — those with no declared inputs. Their
-    /// real input is outside the graph (a remote service for a
-    /// download, the `path` of a file-backed method table for an
-    /// import), so the scheduler cannot version it and
-    /// always runs them. These are the valid targets for the runner's
-    /// subset-sync mode.
+    /// Ids of the steps that read nothing: what a sync of everything
+    /// starts from. Most are sources, whose real input is outside the
+    /// graph (a remote service for a download, the `path` of a
+    /// file-backed method table for an import), so the scheduler cannot
+    /// version it and runs them on every request
+    /// ([`StepSpec::is_source`](crate::step::StepSpec::is_source)). The
+    /// rest are fan-ins whose patterns match nothing yet; they run only
+    /// when out of date, and are here so that a fan-in whose last input
+    /// went still runs once over nothing.
     pub fn fringe_ids(&self) -> Vec<&str> {
         self.steps
             .iter()
@@ -371,7 +374,7 @@ mod tests {
             spec("email/raw", &[]),
             spec("email/rendered_md", &["email/raw"]),
             spec(
-                "unified_document_index/grid",
+                "unified_grid_and_search_index/grid",
                 &["slack/rendered_md", "email/rendered_md"],
             ),
         ])
@@ -382,7 +385,7 @@ mod tests {
             BTreeSet::from([idx_in(&g, "slack/raw")])
         );
         assert_eq!(
-            g.deps[idx_in(&g, "unified_document_index/grid")],
+            g.deps[idx_in(&g, "unified_grid_and_search_index/grid")],
             BTreeSet::from([
                 idx_in(&g, "slack/rendered_md"),
                 idx_in(&g, "email/rendered_md")
@@ -397,7 +400,8 @@ mod tests {
         let pos: HashMap<usize, usize> = g.topo.iter().enumerate().map(|(p, &i)| (i, p)).collect();
         assert!(pos[&idx_in(&g, "slack/raw")] < pos[&idx_in(&g, "slack/rendered_md")]);
         assert!(
-            pos[&idx_in(&g, "slack/rendered_md")] < pos[&idx_in(&g, "unified_document_index/grid")]
+            pos[&idx_in(&g, "slack/rendered_md")]
+                < pos[&idx_in(&g, "unified_grid_and_search_index/grid")]
         );
     }
 

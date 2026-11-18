@@ -170,8 +170,8 @@ async fn probe_jmap(
 
     // Paths come from the same walk the filters use, so what the
     // picker offers is what `resolve` will match.
-    let nodes: Vec<MailboxNode> = list.iter().filter_map(MailboxNode::from_payload).collect();
-    let paths = mailbox_labels::paths_by_id(&nodes);
+    let data_nodes: Vec<MailboxNode> = list.iter().filter_map(MailboxNode::from_payload).collect();
+    let paths = mailbox_labels::paths_by_id(&data_nodes);
     let mut items: Vec<ProbeItem> = list
         .iter()
         .filter_map(|mailbox| {

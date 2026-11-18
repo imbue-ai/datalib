@@ -7,11 +7,12 @@
 use std::ops::Range;
 use std::path::Path;
 
-use datalib_dag::config::{DagConfig, TIME_SERIES_INDEX_GROUP};
+use datalib_dag::config::{DagConfig, FAN_INS, TIME_SERIES_INDEX_GROUP};
 use datalib_dag::config_array::edit_string_array;
 use datalib_dag::config_order::entry_ranges;
+use datalib_dag::input_pattern::names;
 use datalib_obs::status_line;
-use datalib_runtime::layout::UNIFIED_DOCUMENT_INDEX_DIR;
+use datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR;
 use datalib_source_common::ExampleKind;
 use serde::Deserialize;
 
@@ -19,24 +20,11 @@ use crate::methods::ingest_methods;
 use crate::source_docs::{source_docs, with_group_id};
 use crate::source_type::SourceType;
 
-/// Which index step reads a source step of each function, as
-/// `(source function, index group, index function)`.
-const FAN_INS: &[(&str, &str, &str)] = &[
-    ("render_markdown", UNIFIED_DOCUMENT_INDEX_DIR, "grid_index"),
-    (
-        "keyword_index",
-        UNIFIED_DOCUMENT_INDEX_DIR,
-        "qmd_aggregator",
-    ),
-    ("embed", UNIFIED_DOCUMENT_INDEX_DIR, "qmd_aggregator"),
-    (
-        "render_time_series",
-        TIME_SERIES_INDEX_GROUP,
-        "time_series_index",
-    ),
-];
+fn index_step_id() -> String {
+    format!("{UNIFIED_GRID_AND_SEARCH_INDEX_DIR}/{UNIFIED_GRID_AND_SEARCH_INDEX_DIR}")
+}
 
-const INDEX_GROUPS: &[&str] = &[UNIFIED_DOCUMENT_INDEX_DIR, TIME_SERIES_INDEX_GROUP];
+const INDEX_GROUPS: &[&str] = &[UNIFIED_GRID_AND_SEARCH_INDEX_DIR, TIME_SERIES_INDEX_GROUP];
 
 #[derive(Deserialize)]
 struct View {
@@ -95,10 +83,13 @@ pub struct Appended {
     /// `(source step, index step)` for each input added.
     pub wired: Vec<(String, String)>,
     /// Source steps no index step in the config reads, with the one that
-    /// would have: a config with search turned off has no `qmd_aggregator`.
+    /// would have: a config with no map has no `embedding_map`.
     pub unread: Vec<(String, String)>,
     /// The time-series index was added, since the config had none.
     pub added_time_series_index: bool,
+    /// The config has the `unified_grid_and_search_index` step an `embed` reads, and the stanza has
+    /// none, so the source is found by its words alone until one is added.
+    pub found_by_words_alone: bool,
 }
 
 /// The minimal stanza for `t` by `method` (needed only when `t` has more
@@ -163,6 +154,18 @@ pub fn append(config: &str, stanza: &str) -> Result<Appended, String> {
         ));
     }
 
+    let config_has_search = have
+        .steps
+        .iter()
+        .any(|s| s.step_id().as_deref() == Some(index_step_id().as_str()));
+    let has = |function: &str| {
+        adding
+            .steps
+            .iter()
+            .any(|s| s.function.as_deref() == Some(function))
+    };
+    let found_by_words_alone = config_has_search && has("render_markdown") && !has("embed");
+
     let mut edits: Vec<(Range<usize>, String)> = Vec::new();
     let mut wired = Vec::new();
     let mut unread = Vec::new();
@@ -188,12 +191,21 @@ pub fn append(config: &str, stanza: &str) -> Result<Appended, String> {
             .find(|s| s.step_id().as_deref() == Some(index_id.as_str()));
         match index.and_then(|s| s.inputs.as_ref()) {
             Some(inputs) => {
-                let mut after = inputs.get_ref().clone();
-                after.extend(reads.iter().cloned());
-                edits.push((
-                    inputs.span(),
-                    edit_string_array(&config[inputs.span()], &after)?,
-                ));
+                // A pattern already there (`*/render_markdown`) reads the
+                // new step without an edit.
+                let unnamed: Vec<String> = reads
+                    .iter()
+                    .filter(|r| !inputs.get_ref().iter().any(|i| names(i, r)))
+                    .cloned()
+                    .collect();
+                if !unnamed.is_empty() {
+                    let mut after = inputs.get_ref().clone();
+                    after.extend(unnamed);
+                    edits.push((
+                        inputs.span(),
+                        edit_string_array(&config[inputs.span()], &after)?,
+                    ));
+                }
                 wired.extend(reads.into_iter().map(|r| (r, index_id.clone())));
             }
             None if index_group == TIME_SERIES_INDEX_GROUP
@@ -258,6 +270,7 @@ pub fn append(config: &str, stanza: &str) -> Result<Appended, String> {
         wired,
         unread,
         added_time_series_index,
+        found_by_words_alone,
     })
 }
 
@@ -381,6 +394,13 @@ pub fn run_cli(word: &str, path: &Path, method: Option<&str>, id: Option<&str>) 
             "  nothing reads {step}: the config has no {index}, so it is not indexed there"
         );
     }
+    if appended.found_by_words_alone {
+        status_line!(
+            "  search finds it by its words, not yet by its meaning: the minimal stanza has \
+             no `{group}/embed` step. Copy it from the complete stanza \
+             (`datalib-step examples {t} --method {method}`)."
+        );
+    }
     status_line!(
         "Next: set its params (`datalib-step help {t} {method}`), sign it in if it needs \
          it (`datalib-step help {t}`), then `datalib-dag --check {shown}` and \
@@ -444,7 +464,7 @@ mod tests {
     }
 
     /// The case the command exists for: a source added to a new root
-    /// reaches the grid, which a hand-edit that forgets `grid_index`'s
+    /// reaches the grid, which a hand-edit that forgets `unified_grid_and_search_index`'s
     /// inputs silently does not.
     #[test]
     fn a_source_on_the_starter_config_is_wired_into_the_grid() {
@@ -454,31 +474,32 @@ mod tests {
         let appended = append(starter, &stanza).unwrap();
         checks_clean(&appended.text);
         assert_eq!(
-            inputs_of(&appended.text, "unified_document_index/grid_index"),
+            inputs_of(
+                &appended.text,
+                "unified_grid_and_search_index/unified_grid_and_search_index"
+            ),
             ["slack/render_markdown"]
+        );
+        assert!(
+            appended.found_by_words_alone,
+            "the starter searches by meaning and the minimal stanza has no embed"
         );
         assert_eq!(
             appended.wired,
             [(
                 "slack/render_markdown".to_string(),
-                "unified_document_index/grid_index".to_string()
+                "unified_grid_and_search_index/unified_grid_and_search_index".to_string()
             )]
         );
         // Above the index block, whose comments stay with it, and the
-        // block itself untouched but for the one array.
+        // block itself untouched: its patterns read the new source.
         let source_at = appended.text.find("[[groups]]\nid = \"slack\"").unwrap();
         let index_at = appended
             .text
-            .find("# ── the unified document index")
+            .find("# ── the unified grid and search index")
             .unwrap();
         assert!(source_at < index_at, "{}", appended.text);
-        assert_eq!(
-            appended.text.replace(
-                "inputs = [\"slack/render_markdown\"]\n\n[[steps]]\ngroup = \"unified_document_index\"",
-                "inputs = []\n\n[[steps]]\ngroup = \"unified_document_index\""
-            )[index_at..],
-            *starter
-        );
+        assert_eq!(appended.text[index_at..], *starter);
     }
 
     #[test]
@@ -501,11 +522,11 @@ function = \"render_markdown\"
 inputs = [\"slack/ingest\"]
 
 [[groups]]
-id = \"unified_document_index\"
+id = \"unified_grid_and_search_index\"
 
 [[steps]]
-group = \"unified_document_index\"
-function = \"grid_index\"
+group = \"unified_grid_and_search_index\"
+function = \"unified_grid_and_search_index\"
 inputs = [
   \"slack/render_markdown\", # the work one
 ]
@@ -522,9 +543,10 @@ inputs = [
             appended.text
         );
         assert_eq!(appended.group, "work-mail");
-        // No qmd_aggregator here, and the minimal stanza has no search
-        // steps for one to read.
+        // No embedding_map here, and the minimal stanza has no embed for
+        // one to read; the `unified_grid_and_search_index` step searches it by its words.
         assert!(appended.unread.is_empty());
+        assert!(appended.found_by_words_alone);
     }
 
     #[test]

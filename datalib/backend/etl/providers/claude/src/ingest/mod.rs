@@ -11,6 +11,7 @@
 //! (docs/dev/data_architecture_ingestion.md, "What is left to fetch").
 
 pub mod api;
+pub mod cowork;
 pub mod db;
 pub mod export;
 mod fetchers;
@@ -29,7 +30,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
-use datalib_etl::download_problems::{DownloadProblem, RunProblem};
+use datalib_etl::download_problems::{ignored_beside, DownloadProblem, RunProblem};
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::progress::RunBar;
 use datalib_etl::run_problems::{self, RunProblems};
@@ -46,8 +47,10 @@ use tracing::{info, info_span, instrument, warn, Instrument};
 pub use api::{ClaudeClient, ClaudeError};
 use db::ProjectUpsert;
 pub use db::{db_path_for, Conversation, LoadedConversation, LoadedRaw, RawDb};
-use fetchers::{Conversations, Docs, Files, ProjectListed};
-use schema_raw::{OrgRow, UserRow, ATTACHMENTS, CONVERSATIONS, PROJECTS, PROJECT_DOCS_LISTINGS};
+use fetchers::{Conversations, CoworkListed, CoworkSessions, Docs, Files, ProjectListed};
+use schema_raw::{
+    OrgRow, UserRow, ATTACHMENTS, CONVERSATIONS, COWORK_SESSIONS, PROJECTS, PROJECT_DOCS_LISTINGS,
+};
 
 /// Between one org's listings and the next's.
 pub const SLEEP_BETWEEN: Duration = Duration::from_millis(400);
@@ -95,9 +98,13 @@ pub struct FetchOptions {
     pub export_dir: Option<PathBuf>,
     /// The N most recently updated conversations of each org are
     /// fetched every run, held or not: a check against the live copy.
-    pub overlap: usize,
-    /// Between detail fetches.
-    pub sleep_between: Duration,
+    /// Ignored in `conv_uuids` mode.
+    pub refetch_newest_conversations: Option<usize>,
+    /// Conversations fetched per run, at most. Ignored in `conv_uuids`
+    /// mode.
+    pub max_conversations_per_run: Option<usize>,
+    /// Between conversation fetches, named or listed.
+    pub wait_between_requests: Duration,
     /// Only sync conversations whose listing `updated_at` is at or
     /// after this instant (RFC 3339 or `YYYY-MM-DD`, assumed UTC).
     /// Older conversations are never detail-fetched — the listing walk
@@ -112,6 +119,14 @@ pub struct FetchOptions {
     /// When non-empty, mirror only these project UUIDs. The per-org
     /// listing still runs; everything outside the set is skipped.
     pub project_uuids: Vec<String>,
+    /// Also mirror Cowork tasks run in the cloud that are not chats.
+    pub cowork: bool,
+    /// When non-empty, fetch only these Cowork tasks (`cse_…`,
+    /// `session_…` or a claude.ai URL), whatever `cowork` says.
+    pub cowork_session_ids: Vec<String>,
+    /// Whether a conversation a complete listing no longer names is
+    /// deleted here too or kept.
+    pub when_deleted_upstream: datalib_etl_claude_config::WhenDeletedUpstream,
     pub progress: datalib_etl::progress::Progress,
     /// Cross-provider knobs (the checkpoint cadence, the stop flag).
     pub control: datalib_etl::control::DownloadControl,
@@ -131,12 +146,16 @@ impl FetchOptions {
             latchkey: LatchkeySettings::default(),
             db,
             export_dir: None,
-            overlap: 0,
-            sleep_between: Duration::ZERO,
+            refetch_newest_conversations: None,
+            max_conversations_per_run: None,
+            wait_between_requests: Duration::ZERO,
             since: None,
             conv_uuids: Vec::new(),
             projects: true,
             project_uuids: Vec::new(),
+            cowork: true,
+            cowork_session_ids: Vec::new(),
+            when_deleted_upstream: Default::default(),
             sealer: None,
             progress: Default::default(),
             control: Default::default(),
@@ -167,6 +186,9 @@ pub struct FetchSummary {
     /// claude.ai. Never counts rows a `claude_export` ingest wrote (those
     /// carry a NULL `org_uuid` and are out of an API sync's scope).
     pub pruned: usize,
+    /// Conversations a complete listing did not name, kept because
+    /// `when_deleted_upstream = "keep_local_copy"`. Counted every run.
+    pub kept_deleted_upstream: usize,
     /// Fetch failures across every loop — conversations, docs listings.
     pub errors: usize,
     pub total: usize,
@@ -178,6 +200,15 @@ pub struct FetchSummary {
     pub project_docs_fetched: usize,
     /// Projects whose docs listing was held and under a day old.
     pub project_docs_skipped: usize,
+    /// Cowork tasks whose log was written this run.
+    pub cowork_fetched: usize,
+    /// Cowork tasks listed and already held at their version.
+    pub cowork_skipped: usize,
+    /// Cowork tasks the session listing names that are also chats in an
+    /// org's conversation listing, mirrored as those chats.
+    pub cowork_as_chats: usize,
+    /// Cowork tasks a complete listing no longer names, deleted here.
+    pub cowork_pruned: usize,
     pub new_blobs: usize,
     /// Edges satisfied from bytes the CAS already held.
     pub skipped_blobs: usize,
@@ -207,9 +238,12 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     let _ = datalib_etl_web::latchkey::ensure_curl_router();
     let db = opts.db.clone();
     let run_config = json!({
-        "overlap": opts.overlap,
+        "refetch_newest_conversations": opts.refetch_newest_conversations,
+        "max_conversations_per_run": opts.max_conversations_per_run,
         "since": opts.since,
         "conv_uuids": opts.conv_uuids,
+        "cowork": opts.cowork,
+        "cowork_session_ids": opts.cowork_session_ids,
     });
     let run = DownloadRun::start(db.pool(), &run_config).await?;
     let client = ClaudeClient::with_latchkey(opts.latchkey.clone());
@@ -235,6 +269,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         files: Mutex::new(HashMap::new()),
         forbidden_orgs: Mutex::new(BTreeMap::new()),
         config_problems: Mutex::new(Vec::new()),
+        chat_sessions: Mutex::new(HashSet::new()),
         counts: Counts::default(),
     };
     let mut summary = FetchSummary::default();
@@ -254,7 +289,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         .counts
         .forbidden_retry_recoveries
         .load(Ordering::Relaxed) as u64;
-    run.finish(&result, &summary).await;
+    run.finish(found.ended_early(), &result, &summary).await;
     result?;
     Ok(summary)
 }
@@ -291,6 +326,10 @@ pub(crate) struct Ctx<'a> {
     pub forbidden_orgs: Mutex<BTreeMap<String, String>>,
     /// The configured entries upstream has not got.
     pub config_problems: Mutex<Vec<DownloadProblem>>,
+    /// The Cowork tasks this run's conversation listings name as chats
+    /// (`workspace_session_id`), as `cse_…` ids: mirrored as those chats,
+    /// so the Cowork walk leaves them alone.
+    pub chat_sessions: Mutex<HashSet<String>>,
     pub counts: Counts,
 }
 
@@ -305,11 +344,8 @@ impl Ctx<'_> {
         }
     }
 
-    pub fn remember_files(&self, c: &Conversation) {
-        self.files
-            .lock()
-            .unwrap()
-            .insert(c.uuid.clone(), c.files.clone());
+    pub fn remember_files(&self, owner: &str, files: Vec<Value>) {
+        self.files.lock().unwrap().insert(owner.to_string(), files);
     }
 
     /// The conversation's file object for one of its files: from this
@@ -325,10 +361,11 @@ impl Ctx<'_> {
         if let Some(found) = known {
             return Ok(found);
         }
-        let Some(payload) = self.db.load_conversation_payload(conv_uuid).await? else {
-            return Ok(None);
+        let files = match self.db.load_conversation_payload(conv_uuid).await? {
+            Some(payload) => db::files_of(&payload),
+            None => self.db.cowork_files(conv_uuid).await?,
         };
-        Ok(fetchers::find_file(&db::files_of(&payload), file_uuid).cloned())
+        Ok(fetchers::find_file(&files, file_uuid).cloned())
     }
 
     /// The give-up guard tripped: every further request would be refused
@@ -664,7 +701,10 @@ impl Ctx<'_> {
     async fn named(&self, orgs: &[Value], s: &mut FetchSummary) -> Result<bool> {
         let named = &self.opts.conv_uuids;
         self.bar.expect(named.len() as u64);
-        for raw in named {
+        for (i, raw) in named.iter().enumerate() {
+            if i > 0 && self.opts.wait_between_requests > Duration::ZERO {
+                sleep(self.opts.wait_between_requests).await;
+            }
             if self.stop().requested() {
                 break;
             }
@@ -741,7 +781,7 @@ impl Ctx<'_> {
                     self.db.store_conversation(&mut tx, &c).await?;
                     owed::hold(&mut tx, CONVERSATIONS, conv_uuid, c.updated_at.as_deref()).await?;
                     tx.commit().await?;
-                    self.remember_files(&c);
+                    self.remember_files(&c.uuid, c.files.clone());
                     s.fetched += 1;
                     self.wrote(1).await;
                     info!(
@@ -861,6 +901,12 @@ impl Ctx<'_> {
                 count = listing.len(),
                 "listed one org's conversations"
             );
+            self.chat_sessions.lock().unwrap().extend(
+                listing
+                    .iter()
+                    .filter_map(|c| c.get("workspace_session_id").and_then(Value::as_str))
+                    .filter_map(cowork::session_id),
+            );
             sleep(SLEEP_BETWEEN).await;
             listings_by_org.push((org_uuid.to_string(), org_name, listing));
         }
@@ -884,12 +930,12 @@ impl Ctx<'_> {
         }
 
         let mut listed: Vec<Listed> = Vec::new();
-        let mut overlap: HashSet<String> = HashSet::new();
+        let mut newest: HashSet<String> = HashSet::new();
         let mut org_of: HashMap<String, (String, String)> = HashMap::new();
         for (org_uuid, org_name, listing) in &listings_by_org {
             // `since` gates fetching only: rows already stored stay, so
             // moving it further back later lists the older conversations
-            // as owed. Out-of-scope items are invisible to the overlap too.
+            // as owed. Out-of-scope items are never among the newest either.
             let mut in_scope: Vec<&Value> = Vec::new();
             for c in listing {
                 if updated_at_in_scope(c.get("updated_at").and_then(Value::as_str), since) {
@@ -904,9 +950,12 @@ impl Ctx<'_> {
                 let kb = b.get("updated_at").and_then(Value::as_str).unwrap_or("");
                 kb.cmp(ka)
             });
-            for c in sorted.iter().take(self.opts.overlap) {
+            for c in sorted
+                .iter()
+                .take(self.opts.refetch_newest_conversations.unwrap_or(0))
+            {
                 if let Some(u) = c.get("uuid").and_then(Value::as_str) {
-                    overlap.insert(u.into());
+                    newest.insert(u.into());
                 }
             }
             for item in &in_scope {
@@ -932,7 +981,12 @@ impl Ctx<'_> {
                 .filter_map(|c| c.get("uuid").and_then(Value::as_str))
                 .map(String::from)
                 .collect();
-            s.pruned += self.db.prune_org_conversations(org_uuid, &keep).await?;
+            let (deleted, kept) = self
+                .db
+                .prune_org_conversations(org_uuid, &keep, self.opts.when_deleted_upstream)
+                .await?;
+            s.pruned += deleted;
+            s.kept_deleted_upstream += kept;
         }
         if every_org_listed {
             let keep: HashSet<String> = listings_by_org
@@ -946,13 +1000,16 @@ impl Ctx<'_> {
 
         let in_scope = listed.len();
         let mut owed = owed_missing_first(self.db.pool(), CONVERSATIONS, listed.clone()).await?;
-        // The overlap is looked at every run, held or not.
+        // The newest are looked at every run, held or not.
         for l in listed {
-            if overlap.contains(&l.key) && !owed.iter().any(|o| o.key == l.key) {
+            if newest.contains(&l.key) && !owed.iter().any(|o| o.key == l.key) {
                 owed.push(l);
             }
         }
         s.skipped = in_scope - owed.len();
+        if let Some(cap) = self.opts.max_conversations_per_run {
+            owed.truncate(cap);
+        }
         info!(
             event = "claude_priority_split",
             owed = owed.len(),
@@ -976,6 +1033,203 @@ impl Ctx<'_> {
             )
             .await?;
         s.fetched = drained.got;
+        s.errors += drained.failed;
+        Ok(drained.terminal.is_some())
+    }
+
+    /// Every org's Cowork tasks that are sessions only, pruned to what a
+    /// complete listing names, then the log of each not held at its
+    /// version. A task an org's conversation listing names as a chat is
+    /// left to that chat. Whether a rate limit ended it.
+    async fn cowork(
+        &self,
+        orgs: &[Value],
+        since: Option<&DateTime<Utc>>,
+        s: &mut FetchSummary,
+    ) -> Result<bool> {
+        let chats = self.chat_sessions.lock().unwrap().clone();
+        let mut listed: Vec<Listed> = Vec::new();
+        let mut by_id: HashMap<String, CoworkListed> = HashMap::new();
+        for org in orgs {
+            let Some((org_uuid, org_name)) = org_identity(org) else {
+                continue;
+            };
+            if self.forbidden_orgs.lock().unwrap().contains_key(org_uuid) {
+                continue;
+            }
+            let listing = match self.client.list_cowork_sessions(org_uuid).await {
+                Ok(l) => l,
+                Err(_) if self.stop().requested() => return Ok(false),
+                Err(ClaudeError::RateLimited(reason, _)) => {
+                    self.give_up("cowork", &reason);
+                    return Ok(true);
+                }
+                // Not pruned: nothing of this org was listed.
+                Err(e) => {
+                    self.found.listing(
+                        &format!("cowork org:{org_uuid}"),
+                        format!("org {org_name:?}: {e}"),
+                    );
+                    s.errors += 1;
+                    continue;
+                }
+            };
+            info!(
+                event = "claude_cowork_listing_count",
+                org = %org_name,
+                count = listing.len(),
+                "listed one org's Cowork tasks"
+            );
+            let mut keep: HashSet<String> = HashSet::new();
+            for session in &listing {
+                let Some(id) = session
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .and_then(cowork::session_id)
+                else {
+                    continue;
+                };
+                if chats.contains(&id) {
+                    s.cowork_as_chats += 1;
+                    continue;
+                }
+                keep.insert(id.clone());
+                let last = session.get("last_event_at").and_then(Value::as_str);
+                if !updated_at_in_scope(last, since) {
+                    s.out_of_scope += 1;
+                    continue;
+                }
+                listed.push(Listed::new(&id, cowork::version_of(session)));
+                by_id.insert(
+                    id,
+                    CoworkListed {
+                        org_uuid: org_uuid.to_string(),
+                        org_name: org_name.clone(),
+                        session: session.clone(),
+                    },
+                );
+            }
+            let (deleted, kept) = self
+                .db
+                .prune_org_cowork(org_uuid, &keep, self.opts.when_deleted_upstream)
+                .await?;
+            s.cowork_pruned += deleted;
+            s.kept_deleted_upstream += kept;
+        }
+        self.drain_cowork(listed, by_id, s).await
+    }
+
+    /// `cowork_session_ids`: exactly the named tasks, each looked up in
+    /// every org in turn. One no org has is a `config:` problem.
+    async fn named_cowork(&self, orgs: &[Value], s: &mut FetchSummary) -> Result<bool> {
+        let mut listed: Vec<Listed> = Vec::new();
+        let mut by_id: HashMap<String, CoworkListed> = HashMap::new();
+        for raw in &self.opts.cowork_session_ids {
+            if self.stop().requested() {
+                return Ok(false);
+            }
+            let Some(id) = cowork::session_id(raw) else {
+                self.config_problems
+                    .lock()
+                    .unwrap()
+                    .push(DownloadProblem::not_found(
+                        "cowork_session_ids",
+                        raw,
+                        "not a Cowork task id (`cse_…`, `session_…`) or a \
+                         https://claude.ai/cowork/… link"
+                            .to_string(),
+                    ));
+                continue;
+            };
+            let mut found = false;
+            let mut refused = false;
+            for org in orgs {
+                let Some((org_uuid, org_name)) = org_identity(org) else {
+                    continue;
+                };
+                match self.client.get_cowork_session(org_uuid, &id).await {
+                    Ok(session) => {
+                        listed.push(Listed::new(&id, cowork::version_of(&session)));
+                        by_id.insert(
+                            id.clone(),
+                            CoworkListed {
+                                org_uuid: org_uuid.to_string(),
+                                org_name: org_name.clone(),
+                                session,
+                            },
+                        );
+                        found = true;
+                        break;
+                    }
+                    Err(_) if self.stop().requested() => return Ok(false),
+                    Err(ClaudeError::RateLimited(reason, _)) => {
+                        self.give_up("cowork", &reason);
+                        return Ok(true);
+                    }
+                    // Another org's task answers 404, or 403 from an org
+                    // whose sessions this credential may not read.
+                    Err(ClaudeError::Forbidden(..)) => continue,
+                    Err(ClaudeError::Permanent(msg, _)) if msg.contains("HTTP 404") => continue,
+                    // claude.ai refuses the id's shape, so every org would.
+                    Err(ClaudeError::Permanent(msg, _)) if msg.contains("HTTP 400") => {
+                        refused = true;
+                        break;
+                    }
+                    Err(e) => {
+                        self.found
+                            .phase("cowork", format!("looking up {id} in {org_name:?}: {e}"));
+                        s.errors += 1;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if !found {
+                let detail = if refused {
+                    "claude.ai does not accept this as a Cowork task id (HTTP 400)".to_string()
+                } else {
+                    format!(
+                        "no Cowork task with this id in any of {} org(s)",
+                        orgs.len()
+                    )
+                };
+                self.config_problems
+                    .lock()
+                    .unwrap()
+                    .push(DownloadProblem::not_found(
+                        "cowork_session_ids",
+                        raw,
+                        detail,
+                    ));
+            }
+        }
+        self.drain_cowork(listed, by_id, s).await
+    }
+
+    async fn drain_cowork(
+        &self,
+        listed: Vec<Listed>,
+        by_id: HashMap<String, CoworkListed>,
+        s: &mut FetchSummary,
+    ) -> Result<bool> {
+        let in_scope = listed.len();
+        let owed = owed_missing_first(self.db.pool(), COWORK_SESSIONS, listed).await?;
+        s.cowork_skipped = in_scope - owed.len();
+        // Announcing nothing would publish the total again after the
+        // count reached zero.
+        if !owed.is_empty() {
+            self.bar.expect(owed.len() as u64);
+        }
+        let drained = self
+            .drain(
+                COWORK_SESSIONS,
+                "cowork",
+                owed,
+                &CoworkSessions { ctx: self, by_id },
+                1,
+            )
+            .await?;
+        s.cowork_fetched = drained.got;
         s.errors += drained.failed;
         Ok(drained.terminal.is_some())
     }
@@ -1016,12 +1270,35 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
     if ctx.opts.projects {
         rate_limited = ctx.projects(&orgs, s).await?;
     }
+    if !ctx.opts.conv_uuids.is_empty() {
+        ctx.config_problems.lock().unwrap().extend(ignored_beside(
+            "conv_uuids",
+            &[
+                ("since", ctx.opts.since.clone()),
+                (
+                    "max_conversations_per_run",
+                    ctx.opts.max_conversations_per_run.map(|n| n.to_string()),
+                ),
+                (
+                    "refetch_newest_conversations",
+                    ctx.opts.refetch_newest_conversations.map(|n| n.to_string()),
+                ),
+            ],
+        ));
+    }
     if !rate_limited {
         rate_limited = if ctx.opts.conv_uuids.is_empty() {
             ctx.listed(&orgs, since.as_ref(), s).await?
         } else {
             ctx.named(&orgs, s).await?
         };
+    }
+    if !rate_limited && !ctx.stop().requested() {
+        if !ctx.opts.cowork_session_ids.is_empty() {
+            rate_limited = ctx.named_cowork(&orgs, s).await?;
+        } else if ctx.opts.cowork {
+            rate_limited = ctx.cowork(&orgs, since.as_ref(), s).await?;
+        }
     }
     if !rate_limited && !ctx.stop().requested() {
         rate_limited = ctx.attachments(s).await?;
@@ -1339,6 +1616,7 @@ async fn upsert_users(db: &RawDb, payloads: &[Value], now: &IsoOffsetTimestamp) 
 /// The export's `users.json`, `None` when there is none.
 fn read_export_users(export_dir: &Path) -> Result<Option<Vec<Value>>> {
     let path = export_dir.join("users.json");
+    export::refuse_link(&path)?;
     if !path.exists() {
         return Ok(None);
     }

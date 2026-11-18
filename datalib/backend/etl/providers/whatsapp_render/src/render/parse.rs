@@ -14,7 +14,6 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
 use datalib_etl::doltlite_raw::table_exists;
-use datalib_etl::periodize::Period;
 use datalib_etl_chat_common::types::{AuthorKind, NamedPerson, Recipient, UpstreamRef};
 use datalib_etl_chat_common::unread::{integer_order, is_unread, Marks, ReadMark};
 use datalib_etl_chat_common::{
@@ -77,7 +76,6 @@ pub struct MsgKey {
 /// committed, or a store the download opened but never filled.
 pub fn parse(
     raw_dir: &Path,
-    period: Period,
     source_id: &str,
     range: RawRange<'_>,
 ) -> Result<Option<ParsedWhatsApp>> {
@@ -91,16 +89,16 @@ pub fn parse(
     tokio::task::block_in_place(|| {
         let rt = tokio::runtime::Handle::try_current();
         match rt {
-            Ok(handle) => handle.block_on(parse_async(&db_path, period, source_id, range)),
-            Err(_) => tokio::runtime::Runtime::new()?
-                .block_on(parse_async(&db_path, period, source_id, range)),
+            Ok(handle) => handle.block_on(parse_async(&db_path, source_id, range)),
+            Err(_) => {
+                tokio::runtime::Runtime::new()?.block_on(parse_async(&db_path, source_id, range))
+            }
         }
     })
 }
 
 async fn parse_async(
     db_path: &Path,
-    period: Period,
     source_id: &str,
     range: RawRange<'_>,
 ) -> Result<Option<ParsedWhatsApp>> {
@@ -191,7 +189,7 @@ async fn parse_async(
             read_mark: r
                 .get::<Option<i64>, _>("last_read_message_row_id")
                 .map(|rowid| ReadMark::Through(rowid.to_string())),
-            items_by_period: HashMap::new(),
+            items: Vec::new(),
             person_jids: Vec::new(),
             inputs,
         });
@@ -397,7 +395,7 @@ async fn parse_async(
         }
     }
 
-    // 5) Walk messages, bucket by period, attach media + reactions.
+    // 5) Walk messages, attach media + reactions.
     for r in &msg_rows {
         let Some(key) = msg_key_by_rowid.get(&r.get::<i64, _>("_id")) else {
             continue;
@@ -443,42 +441,21 @@ async fn parse_async(
                 .flatten()
                 .map(|path| unresolved_media(&path)),
         );
-        let period_key = match r.get::<Option<i64>, _>("timestamp") {
-            Some(ts) => period.key_for_ms(ts),
-            // An undated message still has to be filed somewhere;
-            // `key_for_undated` documents why that is the epoch
-            // bucket and not a new `"undated"` key. Its `created_at`
-            // is null regardless — bucketing and `created_at` answer
-            // different questions.
-            None => period.key_for_undated(),
-        };
-        chats[idx]
-            .items_by_period
-            .entry(period_key)
-            .or_default()
-            .push(item);
+        chats[idx].items.push(item);
     }
 
     // 6) Materialize into NormalizedChat.
     let mut out: Vec<NormalizedChat> = Vec::with_capacity(chats.len());
-    for ch in chats.into_iter().filter(|c| !c.items_by_period.is_empty()) {
+    for ch in chats.into_iter().filter(|c| !c.items.is_empty()) {
         let chat_id = ids::chat(source_id, &ch.chat_jid);
-        let mut keys: Vec<String> = ch.items_by_period.keys().cloned().collect();
-        keys.sort();
-        let mut buckets: Vec<NormalizedDoc> = Vec::with_capacity(keys.len());
-        let mut items_by_period = ch.items_by_period;
-        for k in keys {
-            let mut items = items_by_period.remove(&k).unwrap_or_default();
-            items.sort_by_key(|i| i.date_ms);
-            let period = ids::period(source_id, &ch.chat_jid, &k);
-            buckets.push(NormalizedDoc {
-                orphan_reactions: Vec::new(),
-                period_key: k.clone(),
-                markdown_uuid: period.uuid,
-                source_ref: Some(UpstreamRef::new(period.entity_kind, period.natural_key)),
-                items,
-            });
-        }
+        let mut items = ch.items;
+        items.sort_by_key(|i| i.date_ms);
+        let whole = NormalizedDoc {
+            markdown_uuid: chat_id.uuid.clone(),
+            source_ref: None,
+            items,
+            orphan_reactions: Vec::new(),
+        };
         out.push(NormalizedChat {
             // Each author's address-book entry, read the way their label was.
             contacts: ch
@@ -488,6 +465,8 @@ async fn parse_async(
                 .collect(),
             inputs: ch.inputs.declared(),
             id: ch.chat_jid.clone(),
+            containers: Vec::new(),
+            filed_under: Vec::new(),
             chat_uuid: chat_id.uuid,
             display: ch.display,
             named_after: ch.named_after,
@@ -500,7 +479,7 @@ async fn parse_async(
             title: None,
             org_uuid: None,
             org_name: None,
-            buckets,
+            buckets: vec![whole],
         });
     }
 
@@ -589,6 +568,7 @@ fn build_item(
         timestamp,
     );
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: id.uuid,
         author_handle,
         author_kind,
@@ -597,6 +577,7 @@ fn build_item(
         // null `created_at` — not 1970. See
         // `docs/dev/data_architecture_parse_and_render.md` §6.
         date_ms: timestamp,
+        date_offset_secs: None,
         text: text_data,
         kind,
         attachments,
@@ -624,7 +605,7 @@ struct ChatHeader {
     display: String,
     named_after: Vec<NamedPerson>,
     read_mark: Option<ReadMark>,
-    items_by_period: HashMap<String, Vec<NormalizedChatItem>>,
+    items: Vec<NormalizedChatItem>,
     /// Who wrote or reacted in the chat, in the order they first did;
     /// the account itself is not among them.
     person_jids: Vec<String>,

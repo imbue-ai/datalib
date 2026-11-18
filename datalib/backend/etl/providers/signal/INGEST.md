@@ -77,6 +77,10 @@ and `src/ingest/mod.rs`:
 - **A frame that would not decode** means its snapshot was not read
   whole: it deletes nothing, and the `phase:frames` problem describes
   the last snapshot read, which is what HEAD holds.
+- **What no page shows** (stickers, chat updates, reactions, quotes, link
+  previews, the rest of a long message) is stored and only counted: one
+  `skipped:not_shown:<hash>` warning, by kind, for the last snapshot read. It is
+  one row because a real backup holds thousands.
 - **A stop is honoured between snapshots**; one begun is read whole.
 
 Attachments are decrypted into the blob CAS once: one an earlier

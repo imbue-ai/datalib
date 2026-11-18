@@ -4,11 +4,18 @@
 import TimeSeriesCard from "../TimeSeriesCard.ce.vue";
 import ChipMenu from "../ChipMenu.ce.vue";
 import EntityChip from "../EntityChip.ce.vue";
+import TimeWindowPicker from "../TimeWindowPicker.ce.vue";
 import chipCss from "../chip.css?inline";
 import { PLOT_CSS } from "../plot/plotCss";
 import { vueCard } from "../vueCard";
 import type { CardRender } from "../types";
 
 export function timeSeriesView(): CardRender {
-  return vueCard(TimeSeriesCard, {}, { styleSources: [EntityChip, ChipMenu, chipCss, PLOT_CSS] });
+  return vueCard(
+    TimeSeriesCard,
+    {},
+    {
+      styleSources: [EntityChip, ChipMenu, TimeWindowPicker, chipCss, PLOT_CSS],
+    },
+  );
 }

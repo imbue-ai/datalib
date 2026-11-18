@@ -5,7 +5,7 @@
 // be migrated is the toolbar's upgrade pill's to report, not this.
 import { computed, onMounted, ref } from "vue";
 import type { Upgrade } from "@/api";
-import { keepsItsName, rerenderSources } from "@/upgrade";
+import { keepsItsName, rerenderSources } from "@/pass";
 import { showCard } from "@/surface";
 import { uriFromEntity } from "@/cards/chipLinks";
 import ChipMenu from "@/cards/ChipMenu.ce.vue";

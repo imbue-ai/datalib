@@ -39,7 +39,7 @@ for f in Backup.proto LocalArchive.proto; do
     -o "$work/$(echo $f | sed 's/Backup/backup/; s/LocalArchive/local_archive/')"
 done
 protoc -I "$work" --descriptor_set_out="$work/upstream.pb" "$work"/*.proto
-python3 tools/proto_from_descriptor.py "$work/upstream.pb" datalib/backend/signal-backup/proto \
+uv run python tools/proto_from_descriptor.py "$work/upstream.pb" datalib/backend/signal-backup/proto \
   signal.backup.BackupInfo signal.backup.Frame \
   signal.backup.local.Metadata signal.backup.local.FilesFrame
 ```

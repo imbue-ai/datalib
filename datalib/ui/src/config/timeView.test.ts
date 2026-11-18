@@ -33,12 +33,20 @@ describe("an instant and the offset it was written in", () => {
       ms: Date.parse("2026-04-15T10:05:00Z"),
       offsetMin: -240,
     });
-    expect(parseInstant("2026-04-15T10:05:00.123Z")).toMatchObject({ offsetMin: 0 });
+    expect(parseInstant("2026-04-15T10:05:00.123+00:00")).toMatchObject({ offsetMin: 0 });
     expect(parseInstant("2026-04-15T10:05:00+0530")).toMatchObject({ offsetMin: 330 });
   });
 
   it("has no offset for a stamp that names none, and no instant for text", () => {
     expect(parseInstant("2026-04-15")).toMatchObject({ offsetMin: null });
+    // RFC 9557: `Z` is a known instant on an unknown clock, as RFC
+    // 3339's `-00:00` was.
+    for (const unknown of ["2026-04-15T10:05:00Z", "2026-04-15T10:05:00-00:00"]) {
+      expect(parseInstant(unknown)).toEqual({
+        ms: Date.parse("2026-04-15T10:05:00+00:00"),
+        offsetMin: null,
+      });
+    }
     expect(parseInstant("never")).toBeNull();
   });
 });

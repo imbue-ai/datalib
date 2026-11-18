@@ -140,4 +140,131 @@ describe("Resolver", () => {
     expect(r.get("b")).toBeUndefined();
     expect(told).toEqual([["a"], ["b"]]);
   });
+
+  /** A contact's photo changed while a question about it was out. That
+   *  question's answer may be from before the change, so skipping it left
+   *  the old photo on screen until something else moved. */
+  it("asks again after a question out when revalidate was called", async () => {
+    const { r, calls, pending } = fake();
+    const first = r.ask(["a"]);
+    await tick();
+    pending[0].resolve(new Map([["a", "first photo"]]));
+    await first;
+
+    r.revalidate();
+    await tick();
+    expect(calls).toHaveLength(2);
+
+    // The edit lands while that question is out, and asks for a look.
+    r.revalidate();
+    await tick();
+    expect(calls).toHaveLength(2);
+
+    pending[1].resolve(new Map([["a", "first photo"]]));
+    await tick();
+    await tick();
+    expect(calls).toEqual([["a"], ["a"], ["a"]]);
+    expect(r.get("a")).toBe("first photo");
+
+    pending[2].resolve(new Map([["a", "second photo"]]));
+    await tick();
+    expect(r.get("a")).toBe("second photo");
+  });
+
+  /** Asked again once, however many times it was asked for meanwhile: a
+   *  sync's frames arrive in bursts. */
+  it("folds revalidates made during one question into one more question", async () => {
+    const { r, calls, pending } = fake();
+    const first = r.ask(["a"]);
+    await tick();
+    pending[0].resolve(new Map([["a", "x"]]));
+    await first;
+
+    r.revalidate();
+    await tick();
+    r.revalidate();
+    r.revalidate();
+    r.revalidate();
+    pending[1].resolve(new Map([["a", "x"]]));
+    await tick();
+    await tick();
+    expect(calls).toHaveLength(3);
+
+    pending[2].resolve(new Map([["a", "x"]]));
+    await tick();
+    await tick();
+    expect(calls).toHaveLength(3);
+  });
+
+  /** `ask` waits for the answer it can rely on, not one already known to
+   *  be possibly out of date. */
+  it("an ask during a revalidated question waits for the newest answer", async () => {
+    const { r, pending } = fake();
+    const first = r.ask(["a"]);
+    await tick();
+    pending[0].resolve(new Map([["a", "old"]]));
+    await first;
+
+    r.revalidate();
+    await tick();
+    r.revalidate();
+    let waited = false;
+    const asked = r.ask(["a"]).then(() => (waited = true));
+    pending[1].resolve(new Map([["a", "old"]]));
+    await tick();
+    await tick();
+    expect(waited).toBe(false);
+    pending[2].resolve(new Map([["a", "new"]]));
+    await asked;
+    expect(r.get("a")).toBe("new");
+  });
+
+  /** The first question about a key can predate an edit as well. */
+  it("asks again after a first question that was out when revalidate was called", async () => {
+    const { r, calls, pending } = fake();
+    r.lookup("a");
+    await tick();
+    r.revalidate();
+    pending[0].resolve(new Map([["a", "from before"]]));
+    await tick();
+    await tick();
+    expect(calls).toEqual([["a"], ["a"]]);
+    pending[1].resolve(new Map([["a", "now"]]));
+    await tick();
+    expect(r.get("a")).toBe("now");
+  });
+
+  /** A question still waiting for its draw pass to end has not gone out,
+   *  so what it hears cannot predate anything. */
+  it("does not ask twice for a question that has not gone out yet", async () => {
+    const { r, calls, pending } = fake();
+    r.lookup("a");
+    r.revalidate();
+    await tick();
+    expect(calls).toEqual([["a"]]);
+    pending[0].resolve(new Map([["a", "x"]]));
+    await tick();
+    await tick();
+    expect(calls).toEqual([["a"]]);
+  });
+
+  /** An edit forgets the key: a look wanted before it is not owed any more,
+   *  since the next draw asks afresh. */
+  it("forget cancels a look owed for that key", async () => {
+    const { r, calls, pending } = fake();
+    const first = r.ask(["a"]);
+    await tick();
+    pending[0].resolve(new Map([["a", "x"]]));
+    await first;
+
+    r.revalidate();
+    await tick();
+    r.revalidate();
+    r.forget(["a"]);
+    pending[1].resolve(new Map([["a", "stale"]]));
+    await tick();
+    await tick();
+    expect(calls).toHaveLength(2);
+    expect(r.get("a")).toBeUndefined();
+  });
 });

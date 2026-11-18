@@ -3,20 +3,23 @@ load("//tools:insta.bzl", "insta_update")
 
 # `datalib-step` — the built-in step program for the DAG runner
 # (//datalib/backend/dag:datalib_dag_bin). Reads its function (ingest /
-# render_markdown / grid_index / qmd_aggregator / embedding_map) and its
-# group's type from the environment the runner sets, and honors the DAG
-# step contract (NDJSON events on stdout, final outcome line).
+# render_markdown / unified_grid_and_search_index / embed / embedding_map)
+# and its group's type from the environment the runner sets, and honors the
+# DAG step contract (NDJSON events on stdout, final outcome line).
 #
 # Bazel-only: it links the provider crates, which have no cargo
 # counterpart.
 rust_binary(
     name = "datalib_step",
     srcs = glob(["src/**/*.rs"]),
+    # The Modal driver, run by the bundled Node (src/modal.rs).
+    compile_data = ["src/modal/embed_on_modal.mjs"],
     crate_name = "datalib_step",
     crate_root = "src/main.rs",
     edition = "2021",
     visibility = ["//visibility:public"],
     deps = [
+        "//datalib/backend/step_problems:datalib_step_problems",
         "//datalib/backend/agent_docs:datalib_agent_docs",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
@@ -40,6 +43,9 @@ rust_binary(
         "//datalib/backend/etl/providers/airvisual:datalib_etl_airvisual",
         "//datalib/backend/etl/providers/airvisual_render:datalib_etl_airvisual_render",
         "//datalib/backend/etl/providers/airvisual_config:datalib_etl_airvisual_config",
+        "//datalib/backend/etl/providers/baby_connect:datalib_etl_baby_connect",
+        "//datalib/backend/etl/providers/baby_connect_config:datalib_etl_baby_connect_config",
+        "//datalib/backend/etl/providers/baby_connect_render:datalib_etl_baby_connect_render",
         "//datalib/backend/etl/providers/apple_messages:datalib_etl_apple_messages",
         "//datalib/backend/etl/providers/apple_messages_render:datalib_etl_apple_messages_render",
         "//datalib/backend/etl/providers/apple_messages_config:datalib_etl_apple_messages_config",
@@ -127,14 +133,15 @@ rust_binary(
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/env:datalib_env",
         "//datalib/backend/probe:datalib_probe",
-        "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
         "//datalib/backend/fetch:datalib_fetch",
-        "//datalib/backend/qmd_models:datalib_qmd_models",
+        "//datalib/backend/embedding_models:datalib_embedding_models",
+        "//datalib/backend/search_index:datalib_search_index",
+        "//datalib/backend/embedder:datalib_embedder",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/source_common:datalib_source_common",
         "//datalib/backend/time:datalib_time",
-        "//datalib/backend/unified_document_index:datalib_unified_document_index",
+        "//datalib/backend/unified_grid_and_search_index:datalib_unified_grid_and_search_index",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
         "@datalib_crates//:chrono",
@@ -170,17 +177,32 @@ rust_test(
         "//docs/user/config_examples:claude_only.toml",
         "//docs/user/config_examples:sample_config.toml",
         "//datalib/backend/http:src/agent_config_guide.md",
+        # The TNG Garmin account, for the time-series step's problem rows.
+        "//datalib/backend/etl/providers/garmin:tng_fixture",
         # The UI's copy of the ingest-method declarations, which
         # `methods.rs` checks is generated from the config crates.
         "//datalib/ui:src/config/ingestMethods.json",
+        # The Modal driver's tests run it on the pinned Node against a
+        # stand-in for Modal's SDK (search_index.rs).
+        "@nodejs_host//:node_bin",
+        "src/modal/testdata/fake_embed_prompts.mjs",
+        "src/modal/testdata/fake_sdk.mjs",
     ] + glob(["raw_shapes/*.json"]),
     edition = "2021",
+    env = {"NODE_RLOC": "$(rlocationpath @nodejs_host//:node_bin)"},
     # Stub `DataProcessor`s for the render-version staleness tests.
     proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
         "@datalib_crates//:runfiles",
         "@datalib_crates//:tempfile",
     ],
+)
+
+# Rewrites the fixture's index-text goldens (tests/step_tests/snapshots/).
+insta_update(
+    name = "index_text.update",
+    test = ":step_tests",
+    test_args = ["every_sources_index_text_is_this"],
 )
 
 # Rewrites raw_shapes/current.json: the raw-store shape every source type
@@ -214,13 +236,17 @@ rust_test(
     name = "step_tests",
     srcs = glob(["tests/step_tests/*.rs"]),
     crate_root = "tests/step_tests/main.rs",
-    data = [
+    data = glob(["tests/step_tests/snapshots/*.snap"], allow_empty = True) + [
         ":datalib_step",
         "//datalib/backend/dag:datalib_dag_bin",
         "//datalib/backend/etl/providers/calendar:split_fixture",
         "//datalib/backend/etl/providers/sms_backup_restore:tng_fixture",
-        "//tests/fixtures:ingested/qmd-index.tar",
+        "//tests/fixtures:ingested/inference_cache.sqlite",
+        "//tests/fixtures:ingested/rendered.tar",
+        "//tests/fixtures:ingested/search_index.sqlite",
+        "//tests/fixtures:ingested/search_prompts.tsv",
         "//third-party/doltlite:doltlite",
+        "//third-party/embedding_models:embeddinggemma",
     ],
     edition = "2021",
     env = {
@@ -228,15 +254,22 @@ rust_test(
         "DATALIB_DAG_BIN": "$(rootpath //datalib/backend/dag:datalib_dag_bin)",
         "DATALIB_STEP_BIN": "$(rootpath :datalib_step)",
         "DOLTLITE_BIN": "$(rootpath //third-party/doltlite:doltlite)",
-        "QMD_INDEX_TAR": "$(rootpath //tests/fixtures:ingested/qmd-index.tar)",
+        "EMBED_MODEL": "$(rootpath //third-party/embedding_models:embeddinggemma)",
+        "INGESTED_RENDERED_TAR": "$(rootpath //tests/fixtures:ingested/rendered.tar)",
+        "INSTA_WORKSPACE_ROOT": ".",
+        "SEARCH_INDEX_CACHE": "$(rootpath //tests/fixtures:ingested/inference_cache.sqlite)",
+        "SEARCH_INDEX_GRID": "$(rootpath //tests/fixtures:ingested/search_index.sqlite)",
+        "SEARCH_PROMPTS": "$(rootpath //tests/fixtures:ingested/search_prompts.tsv)",
         "SMS_FIXTURE_DIR": "datalib/backend/etl/providers/sms_backup_restore/tests/fixtures/sms_backup_restore_tng",
     },
     deps = [
+        "//datalib/backend/embedder:datalib_embedder",
         "//datalib/backend/etl/providers/slack:datalib_etl_slack",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:flate2",
+        "@datalib_crates//:insta",
         "@datalib_crates//:libc",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sha2",

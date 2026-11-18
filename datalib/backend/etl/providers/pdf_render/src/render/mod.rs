@@ -11,11 +11,11 @@ use anyhow::{Context, Result};
 
 use datalib_etl::blob_cas::blake3_hex;
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
-use datalib_etl_render::html::{escape_html_outside_code, escape_md_inline};
+use datalib_etl_render::html::{close_open_blocks, escape_name_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets, Input, RawRange};
-use datalib_etl_render::section::{msg_div_open, MSG_DIV_CLOSE};
+use datalib_etl_render::section::{join, msg_div_open, Section, MSG_DIV_CLOSE};
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 
 pub use convert::RENDER_VERSION;
@@ -215,7 +215,7 @@ fn read_document(t: &RenderTarget) -> Result<Option<Vec<u8>>> {
 
 /// What a document's page holds.
 enum Content {
-    Pages(Vec<convert::Page>),
+    Pages(convert::Converted),
     /// Its file no longer holds the bytes it is named by, so there is
     /// nothing to convert. The page says so, and so does a problem row,
     /// until the next sync reads the file as it is now.
@@ -224,6 +224,24 @@ enum Content {
 
 const FILE_CHANGED: &str = "This file has changed since the last sync read it, so its pages \
      are not shown. The next sync reads it as it is now.";
+
+/// The document's front matter.
+fn front(t: &RenderTarget, title: &str) -> Front {
+    let mut front = Front::new()
+        .plain("provider", grid_rows::PROVIDER)
+        .text("blake3", &t.blake3)
+        .name("title", title)
+        .text_if("author", t.author.as_deref())
+        .plain("page_count", t.page_count)
+        .text("pdf_type", &t.pdf_type)
+        .text("source_path", &t.rel_path);
+    if t.copy_count > 1 {
+        front = front.plain("copies", t.copy_count);
+    }
+    front
+        .text_if("created_at", t.doc_created_at.as_deref())
+        .text_if("modified_at", t.doc_modified_at.as_deref())
+}
 
 fn render_one(
     t: &RenderTarget,
@@ -235,41 +253,41 @@ fn render_one(
 ) -> Result<RenderedMarkdown> {
     let title = grid_rows::display_title(t.title.as_deref(), &t.rel_path);
 
-    let qmd_rel = md_path
+    let md_rel = md_path
         .strip_prefix(data_root)
         .unwrap_or(md_path)
         .to_string_lossy()
         .into_owned();
 
-    let mut body = String::new();
-    body.push_str("---\n");
-    body.push_str(&format!("provider: {}\n", grid_rows::PROVIDER));
-    body.push_str(&format!("blake3: {}\n", yaml_scalar(&t.blake3)));
-    body.push_str(&format!("title: {}\n", yaml_scalar(&title)));
-    if let Some(a) = &t.author {
-        body.push_str(&format!("author: {}\n", yaml_scalar(a)));
-    }
-    body.push_str(&format!("page_count: {}\n", t.page_count));
-    body.push_str(&format!("pdf_type: {}\n", yaml_scalar(&t.pdf_type)));
-    body.push_str(&format!("source_path: {}\n", yaml_scalar(&t.rel_path)));
-    if t.copy_count > 1 {
-        body.push_str(&format!("copies: {}\n", t.copy_count));
-    }
-    if let Some(c) = &t.doc_created_at {
-        body.push_str(&format!("created_at: {}\n", yaml_scalar(c)));
-    }
-    if let Some(m) = &t.doc_modified_at {
-        body.push_str(&format!("modified_at: {}\n", yaml_scalar(m)));
-    }
-    body.push_str("---\n\n");
+    let front = front(t, &title);
+    let mut body = front.draw();
     let doc_stamp =
         grid_rows::document_stamp(t.doc_created_at.as_deref(), t.doc_modified_at.as_deref());
     let page_uuid = |number| grid_rows::page(source_id, &t.blake3, number, doc_stamp).uuid;
+    let mut sections = Vec::new();
     let (page_rows, problems) = match content {
-        Content::Pages(pages) => {
-            let (pages_md, page_rows) = pages_markdown(&title, &pages, page_uuid);
-            body.push_str(&pages_md);
-            (page_rows, Vec::new())
+        Content::Pages(converted) => {
+            let (pages, page_rows) = pages_markdown(&title, &converted.pages, page_uuid);
+            sections.push(Section::unkeyed(std::mem::take(&mut body)));
+            sections.extend(pages);
+            body = join(&sections);
+            // A warning: the document is here, and short of what the file holds.
+            let problems = converted.absent.map(|said| {
+                ProblemRow::new(
+                    source_id,
+                    Stage::Render,
+                    Scope::Markdown(doc_uuid),
+                    Some(doc_uuid),
+                    Outcome::Nulled,
+                    Problem::explained(
+                        Reason::DeliberateLoss,
+                        None,
+                        &format!("{}: {said}", t.rel_path),
+                    ),
+                    Some(RENDER_VERSION),
+                )
+            });
+            (page_rows, problems.into_iter().collect())
         }
         Content::FileChanged => {
             body.push_str(&format!(
@@ -277,7 +295,7 @@ fn render_one(
 
 *{FILE_CHANGED}*
 ",
-                escape_md_inline(&title)
+                escape_name_inline(&title)
             ));
             let problem = ProblemRow::new(
                 source_id,
@@ -309,11 +327,14 @@ fn render_one(
         copy_count: t.copy_count,
         created_at: t.doc_created_at.as_deref(),
         modified_at: t.doc_modified_at.as_deref(),
-        qmd_path: Some(&qmd_rel),
+        qmd_path: Some(&md_rel),
     };
     let rows = grid_rows::rows_for_document(source_id, &meta, &page_rows);
+    let node = grid_rows::document_node(source_id, &meta);
 
     Ok(RenderedMarkdown {
+        section_layout: None,
+        content_hash: None,
         markdown_uuid: doc_uuid.to_string(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
@@ -323,23 +344,27 @@ fn render_one(
         md_path: md_path.to_path_buf(),
         render_version: RENDER_VERSION,
         rows,
-        sections: Vec::new(),
+        sections,
         edges: Vec::new(),
         contacts: Vec::new(),
+        data_nodes: vec![node],
+        filings: Vec::new(),
         photos: Vec::new(),
         problems,
+        front,
     })
 }
 
 /// The document under its title: one section per readable page, and the
-/// note for a page that could not be read. Returns the markdown and each
+/// note for a page that could not be read. Returns the sections and each
 /// readable page's number and text, for its grid row.
 fn pages_markdown(
     title: &str,
     pages: &[convert::Page],
     page_uuid: impl Fn(u32) -> String,
-) -> (String, Vec<(u32, String)>) {
-    let mut body = format!("# {}\n\n", escape_md_inline(title));
+) -> (Vec<Section>, Vec<(u32, String)>) {
+    let mut sections = Vec::new();
+    let mut body = format!("# {}\n\n", escape_name_inline(title));
     let mut page_rows: Vec<(u32, String)> = Vec::with_capacity(pages.len());
     for p in pages {
         if p.non_textual {
@@ -352,48 +377,75 @@ fn pages_markdown(
             body.push_str("\n\n");
             continue;
         }
-        // Per-page section wrapper. The `data-section-uuid` must be
+        // Per-page section wrapper, and a section of its own, so the page
+        // renders each page alone. The `data-section-uuid` must be
         // byte-equal to the page grid row's `uuid` or row→preview
         // navigation silently fails (see `etl::section` docs).
-        body.push_str(&msg_div_open(&page_uuid(p.number), grid_rows::PROVIDER));
-        body.push('\n');
-        // pdf-inspector writes the page as markdown but leaves the
-        // words in it as the PDF had them.
-        body.push_str(&escape_html_outside_code(&p.text));
-        body.push('\n');
-        body.push_str(MSG_DIV_CLOSE);
-        body.push_str("\n\n");
+        // The blank line ends the wrapper's HTML block, so the page's
+        // first paragraph is read as markdown.
+        if !body.is_empty() {
+            sections.push(Section::unkeyed(std::mem::take(&mut body)));
+        }
+        let uuid = page_uuid(p.number);
+        let mut page = msg_div_open(&uuid, grid_rows::PROVIDER);
+        page.push_str("\n\n");
+        // pdf-inspector writes the page as markdown, the words in it as
+        // the PDF had them.
+        page.push_str(&close_open_blocks(&p.text));
+        page.push('\n');
+        page.push_str(MSG_DIV_CLOSE);
+        page.push_str("\n\n");
+        sections.push(Section::keyed(&uuid, page));
         page_rows.push((p.number, p.text.clone()));
     }
-    (body, page_rows)
+    if !body.is_empty() {
+        sections.push(Section::unkeyed(body));
+    }
+    (sections, page_rows)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// A PDF's title and its words are text: a `<` in a technical manual
-    /// shows as one, and only code keeps its characters as they are.
+    /// A PDF's title is text; each page is markdown pdf-inspector wrote,
+    /// in a wrapper and a section of its own, so the page renders each
+    /// alone and a tag one page leaves open cannot reach the next.
     #[test]
-    fn a_document_in_markup_renders_escaped() {
-        let pages = [convert::Page {
-            number: 1,
-            text: "<script>x</script> & co\n\n`<kbd>`".to_string(),
-            non_textual: false,
-        }];
-        let (md, rows) = pages_markdown("<script>x</script> & co", &pages, |n| format!("p{n}"));
+    fn each_page_is_a_section_of_its_own_and_the_title_is_text() {
+        let pages = [
+            convert::Page {
+                number: 1,
+                text: "## Warp core\n\n<div style=\"display:none\">\n\n```\nphase += 0.5"
+                    .to_string(),
+                non_textual: false,
+            },
+            convert::Page {
+                number: 2,
+                text: "Make it so.".to_string(),
+                non_textual: false,
+            },
+        ];
+        let (sections, rows) =
+            pages_markdown("<script>x</script> & co", &pages, |n| format!("p{n}"));
+        let keys: Vec<Option<&str>> = sections.iter().map(|s| s.uuid.as_deref()).collect();
+        assert_eq!(keys, [None, Some("p1"), Some("p2")], "{sections:#?}");
+        assert_eq!(
+            sections[0].md,
+            "# &lt;script&gt;x&lt;/script&gt; &amp; co\n\n"
+        );
+        let first = &sections[1].md;
         assert!(
-            md.starts_with("# &lt;script&gt;x&lt;/script&gt; &amp; co\n\n"),
-            "{md}"
+            first.contains("\n\n## Warp core\n\n<div style=\"display:none\">\n"),
+            "{first}"
         );
         assert!(
-            md.contains("\n&lt;script&gt;x&lt;/script&gt; &amp; co\n\n`<kbd>`\n"),
-            "{md}"
+            first.contains("phase += 0.5\n```\n</div>"),
+            "the fence is closed: {first}"
         );
-        assert!(!md.contains("<script>"), "{md}");
         assert_eq!(
             rows,
-            [(1, pages[0].text.clone())],
+            [(1, pages[0].text.clone()), (2, pages[1].text.clone())],
             "the grid keeps the words"
         );
     }
@@ -430,7 +482,7 @@ async fn scan_changed(db: &RawDb, range: RawRange<'_>) -> Result<PdfScan> {
         range.cursor,
         &pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
-            global_fanout_tables: &[],
+            fanout_query: None,
             bucket_query: "
                 SELECT DISTINCT blake3 FROM (
                     SELECT coalesce(to_blake3, from_blake3) AS blake3

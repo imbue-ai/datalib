@@ -11,6 +11,7 @@ use datalib_schema::diff_status::{DiffStatus, CHANGED_COLUMNS_SEPARATOR};
 use datalib_schema::grid_rows::GridRow;
 use similar::{capture_diff_slices, Algorithm, DiffOp};
 
+use crate::html::{closes_fence, opens_fence};
 use crate::section::Section;
 
 /// One document's two sides subtracted.
@@ -244,9 +245,37 @@ fn removed(s: &Section) -> Option<Section> {
 /// never contains an HTML tag, and leaves a line's markdown prefix
 /// (`## `, `- `, `> `) and a table's delimiter row alone, so a diff of a
 /// heading is still a heading and a diff of a table is still a table.
+///
+/// Code is left as `to` has it: a marker on a fence line would end the
+/// fence, and the code after it — a `<div>` someone pasted — would be
+/// read as HTML. A deleted line from `from`'s code goes back with its
+/// tags escaped, and one that would land inside `to`'s code is left out.
 pub fn inline_diff(from: &str, to: &str) -> String {
     let from_lines: Vec<&str> = from.split_inclusive('\n').collect();
     let to_lines: Vec<&str> = to.split_inclusive('\n').collect();
+    let from_code = code_lines(&from_lines);
+    let to_code = code_lines(&to_lines);
+    // Whether a line put back before `to`'s line `i` would sit in code.
+    let inside_code_at = |i: usize| i > 0 && to_code[i - 1].open_after;
+    let push_deleted = |out: &mut String, from_at: usize, to_at: usize| {
+        if inside_code_at(to_at) {
+            return;
+        }
+        let line = from_lines[from_at];
+        if from_code[from_at].is_code {
+            mark_line(out, "del", &escape_tags(line));
+        } else {
+            mark_line(out, "del", line);
+        }
+    };
+    let push_inserted = |out: &mut String, to_at: usize| {
+        let line = to_lines[to_at];
+        if to_code[to_at].is_code {
+            out.push_str(line);
+        } else {
+            mark_line(out, "ins", line);
+        }
+    };
     let mut out = String::with_capacity(to.len() + from.len() / 4);
     for op in capture_diff_slices(Algorithm::Myers, &from_lines, &to_lines) {
         match op {
@@ -256,15 +285,17 @@ pub fn inline_diff(from: &str, to: &str) -> String {
             DiffOp::Insert {
                 new_index, new_len, ..
             } => {
-                for line in &to_lines[new_index..new_index + new_len] {
-                    mark_line(&mut out, "ins", line);
+                for i in new_index..new_index + new_len {
+                    push_inserted(&mut out, i);
                 }
             }
             DiffOp::Delete {
-                old_index, old_len, ..
+                old_index,
+                old_len,
+                new_index,
             } => {
-                for line in &from_lines[old_index..old_index + old_len] {
-                    mark_line(&mut out, "del", line);
+                for i in old_index..old_index + old_len {
+                    push_deleted(&mut out, i, new_index);
                 }
             }
             DiffOp::Replace {
@@ -273,22 +304,62 @@ pub fn inline_diff(from: &str, to: &str) -> String {
                 new_index,
                 new_len,
             } => {
-                let old = &from_lines[old_index..old_index + old_len];
-                let new = &to_lines[new_index..new_index + new_len];
-                let paired = old.len().min(new.len());
-                for i in 0..paired {
-                    word_diff(&mut out, old[i], new[i]);
+                let paired = old_len.min(new_len);
+                for k in 0..paired {
+                    let (o, n) = (old_index + k, new_index + k);
+                    if from_code[o].is_code || to_code[n].is_code {
+                        push_inserted(&mut out, n);
+                    } else {
+                        word_diff(&mut out, from_lines[o], to_lines[n]);
+                    }
                 }
-                for line in &old[paired..] {
-                    mark_line(&mut out, "del", line);
+                for i in old_index + paired..old_index + old_len {
+                    push_deleted(&mut out, i, new_index + paired);
                 }
-                for line in &new[paired..] {
-                    mark_line(&mut out, "ins", line);
+                for i in new_index + paired..new_index + new_len {
+                    push_inserted(&mut out, i);
                 }
             }
         }
     }
     out
+}
+
+/// Where a line stands with markdown's fenced code: `is_code` for a
+/// fence line or one inside a fence, `open_after` while a fence is open
+/// after it.
+#[derive(Clone, Copy)]
+struct CodeLine {
+    is_code: bool,
+    open_after: bool,
+}
+
+fn code_lines(lines: &[&str]) -> Vec<CodeLine> {
+    let mut open: Option<String> = None;
+    lines
+        .iter()
+        .map(|line| {
+            let line = line.trim_end_matches(['\n', '\r']);
+            let indent = line.len() - line.trim_start_matches(' ').len();
+            let trimmed = &line[indent..];
+            let was_open = open.is_some();
+            open = match open.take() {
+                Some(fence) => (!(indent <= 3 && closes_fence(trimmed, &fence))).then_some(fence),
+                None if indent <= 3 => opens_fence(trimmed),
+                None => None,
+            };
+            CodeLine {
+                is_code: was_open || open.is_some(),
+                open_after: open.is_some(),
+            }
+        })
+        .collect()
+}
+
+fn escape_tags(line: &str) -> String {
+    line.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// One line, its every cell's content marked.
@@ -609,6 +680,25 @@ mod tests {
         // A delimiter row that appears whole is left as it is.
         let fresh = inline_diff("x\n", "x\n| A |\n| --- |\n| b |\n");
         assert_eq!(fresh, "x\n| <ins>A</ins> |\n| --- |\n| <ins>b</ins> |\n");
+    }
+
+    /// A marker on a fence line ended the fence, and a tag in the code
+    /// after it reached the page live.
+    #[test]
+    fn code_stays_code_and_its_tags_stay_text() {
+        let code = "```\n<div style=\"display:none\">\n```\n";
+        let added = inline_diff("a\n", &format!("a\n{code}b\n"));
+        assert_eq!(added, format!("a\n{code}<ins>b</ins>\n"));
+        let changed = inline_diff("```\nx\n```\n", code);
+        assert_eq!(changed, code);
+        let gone = inline_diff(&format!("a\n{code}b\n"), "a\nb\n");
+        assert!(!gone.contains("<div"), "{gone}");
+        assert!(
+            gone.contains("<del>&lt;div style=\"display:none\"&gt;</del>"),
+            "{gone}"
+        );
+        let into_code = inline_diff("```\nx\n<b>\n```\n", "```\nx\n```\n");
+        assert_eq!(into_code, "```\nx\n```\n", "nothing put back inside code");
     }
 
     #[test]

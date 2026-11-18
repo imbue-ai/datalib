@@ -4,7 +4,12 @@
 // Read from endpoints other cards already use (the manage rows and the
 // search), so it adds no backend of its own.
 import { computed, onBeforeUnmount, onMounted, reactive, ref, type Ref } from "vue";
-import { UNIFIED_DOCUMENT_INDEX, type ManageResponse, type ManageRow, type SearchRow } from "@/api";
+import {
+  UNIFIED_GRID_AND_SEARCH_INDEX,
+  type ManageResponse,
+  type ManageRow,
+  type SearchRow,
+} from "@/api";
 import { useApi } from "@/cards/cardApi";
 import { changed, oneAtATime, subscribeLive } from "@/live";
 import { formatRelative } from "@/config/timeFormat";
@@ -14,6 +19,7 @@ import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop"
 import { copyToClipboard } from "@/clipboard";
 import { pushToast } from "@/toasts";
 import { logSource } from "./libs/logView";
+import { problemsSource } from "./cardSources";
 import { statusTone, needsYou, type Tone } from "./dashboard";
 import type { CardCtx } from "./types";
 
@@ -132,13 +138,12 @@ export function useDashboard(
   }
 
   function openProblems(row: ManageRow) {
-    const everything = row.id === "unified_document_index";
-    const q = {
-      url: `${UNIFIED_DOCUMENT_INDEX}/problems`,
-      q: everything ? "" : `source:${row.id}`,
-      name: everything ? "Problems" : `Problems: ${row.name.label}`,
-    };
-    open(`gridView(${JSON.stringify(q)})`);
+    if (!row.problems_query) return;
+    const name =
+      row.id === "unified_grid_and_search_index"
+        ? "Problems: the index"
+        : `Problems: ${row.name.label}`;
+    open(problemsSource(`${UNIFIED_GRID_AND_SEARCH_INDEX}/problems`, row.problems_query, name));
   }
 
   function openDocument(row: SearchRow) {

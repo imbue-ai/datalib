@@ -312,9 +312,22 @@ impl IgnoreRules {
     }
 }
 
+/// What a walk does with a symbolic link it meets.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Links {
+    /// A person's own folder, where a link is one they made: a link to a
+    /// file is that file, and a link to a folder is passed over.
+    #[default]
+    ToFilesOnly,
+    /// An export, which anyone can make, and where a link could read
+    /// anything on the machine: every link is a [`WalkError`].
+    Refused,
+}
+
 struct Walker<'a, F> {
     root: &'a Path,
     max_depth: Option<usize>,
+    links: Links,
     overrides: Override,
     accept: F,
 }
@@ -386,6 +399,17 @@ impl<F: Fn(&Path) -> bool + Sync> Walker<'_, F> {
         if self.skips(&path, false, rules) || !(self.accept)(&path) {
             return;
         }
+        if self.links == Links::Refused
+            && entry.kind != EntryKind::File
+            && std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink())
+        {
+            found.errors.push(WalkError {
+                path,
+                error: "a symbolic link, which an export does not hold; it was not followed"
+                    .to_string(),
+            });
+            return;
+        }
         // Not traversing the link would hand over the link's own stat, so a
         // symlink is resolved here. A dangling link, or one pointing at a
         // directory, is not a file we can hash.
@@ -441,6 +465,20 @@ pub fn walk_files<F>(
 where
     F: Fn(&Path) -> bool + Sync,
 {
+    walk_files_with(root, extra_ignores, max_depth, Links::default(), accept)
+}
+
+/// [`walk_files`], saying what to do with a symlink.
+pub fn walk_files_with<F>(
+    root: &Path,
+    extra_ignores: &[String],
+    max_depth: Option<usize>,
+    links: Links,
+    accept: F,
+) -> Result<(Vec<WalkedFile>, Vec<WalkError>)>
+where
+    F: Fn(&Path) -> bool + Sync,
+{
     let mut overrides = OverrideBuilder::new(root);
     for pat in extra_ignores {
         // Override syntax is inverted relative to gitignore: a bare glob
@@ -453,6 +491,7 @@ where
     let walker = Walker {
         root,
         max_depth,
+        links,
         overrides: overrides.build().context("build ignore overrides")?,
         accept,
     };
@@ -817,6 +856,31 @@ mod tests {
         assert!(errs.is_empty());
         let rels: Vec<&str> = files.iter().map(|f| f.rel.as_str()).collect();
         assert_eq!(rels, vec!["a.pdf", "sub/b.pdf"]);
+    }
+
+    /// An export can be made by anyone: there a link to a file is no more
+    /// that file than a link to a folder is that folder, and both are said.
+    #[cfg(unix)]
+    #[test]
+    fn a_walk_that_refuses_links_lists_none_and_says_which() {
+        let d = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.pdf"), b"x").unwrap();
+        std::fs::write(d.path().join("real.pdf"), b"x").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.pdf"), d.path().join("file.pdf"))
+            .unwrap();
+        std::os::unix::fs::symlink(outside.path(), d.path().join("folder")).unwrap();
+        let (files, errors) =
+            walk_files_with(d.path(), &[], None, Links::Refused, |_| true).unwrap();
+        let rels: Vec<&str> = files.iter().map(|f| f.rel.as_str()).collect();
+        assert_eq!(rels, ["real.pdf"]);
+        let mut refused: Vec<_> = errors.iter().map(|e| e.path.clone()).collect();
+        refused.sort();
+        assert_eq!(
+            refused,
+            [d.path().join("file.pdf"), d.path().join("folder")]
+        );
+        assert!(errors.iter().all(|e| e.error.contains("symbolic link")));
     }
 
     #[test]

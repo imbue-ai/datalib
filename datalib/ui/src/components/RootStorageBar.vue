@@ -8,8 +8,9 @@
 // request. The free space is `GET /api/pipeline/disk`, looked at every
 // ten seconds; while the config's `[disk_space]` floor holds the steps it
 // turns red and a toast says syncs are paused. A right-click on the size
-// offers to free up disk space (`FreeSpaceDialog.vue`); the size drops
-// when the walk at the end of that busy period says so.
+// offers to free up disk space (`FreeSpaceDialog.vue`); the toolbar's
+// free-space pill says how it goes, and the size drops when the walk at
+// the end of that busy period says so.
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import ChipMenu from "@/cards/ChipMenu.ce.vue";
 import FreeSpaceDialog from "@/components/FreeSpaceDialog.vue";
@@ -136,14 +137,10 @@ function openDialog() {
 async function onAnswer(a: { ok: boolean; dropOldVersions: boolean }) {
   asking.value = false;
   if (!a.ok) return;
+  // How far it has got, and what it gave back, is the toolbar's
+  // free-space pill's to say (`pass.ts`); only a refusal is said here.
   try {
-    const done = await freeDiskSpace(a.dropOldVersions);
-    pushToast(
-      done === "done"
-        ? "Freed up disk space."
-        : "Freeing up disk space. The size here drops when it is done.",
-      "info",
-    );
+    await freeDiskSpace(a.dropOldVersions);
   } catch (e) {
     pushToast(`Could not free up disk space: ${e instanceof Error ? e.message : e}`, "error");
   }

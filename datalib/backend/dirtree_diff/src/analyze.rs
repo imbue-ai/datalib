@@ -547,13 +547,13 @@ fn build_nodes(
     full: Option<&Vec<Entry>>,
     dups: &BTreeMap<String, DupInfo>,
 ) -> Vec<Node> {
-    let mut nodes: BTreeMap<String, Node> = BTreeMap::new();
+    let mut data_nodes: BTreeMap<String, Node> = BTreeMap::new();
 
     for finding in findings {
         if finding.entry.path.is_empty() {
             continue;
         }
-        nodes.insert(
+        data_nodes.insert(
             finding.entry.path.clone(),
             Node {
                 path: finding.entry.path.clone(),
@@ -572,10 +572,10 @@ fn build_nodes(
 
     if let Some(entries) = full {
         for entry in entries {
-            if entry.path.is_empty() || nodes.contains_key(&entry.path) {
+            if entry.path.is_empty() || data_nodes.contains_key(&entry.path) {
                 continue;
             }
-            nodes.insert(
+            data_nodes.insert(
                 entry.path.clone(),
                 Node::plain(&entry.path, &entry.kind, entry.size, Status::Unchanged),
             );
@@ -583,7 +583,7 @@ fn build_nodes(
     }
 
     for (path, info) in dups {
-        let node = nodes.entry(path.clone()).or_insert_with(|| {
+        let node = data_nodes.entry(path.clone()).or_insert_with(|| {
             // A duplicate the diff never mentioned — unchanged between
             // the two trees, but repeated inside this one. It still has
             // to appear, or the finding has nowhere to land.
@@ -592,24 +592,24 @@ fn build_nodes(
         node.dup = Some(info.clone());
     }
 
-    let present: BTreeSet<String> = nodes.keys().cloned().collect();
+    let present: BTreeSet<String> = data_nodes.keys().cloned().collect();
     for path in with_ancestors(&present) {
         if !path.is_empty() {
-            nodes
+            data_nodes
                 .entry(path.clone())
                 .or_insert_with(|| Node::plain(&path, "dir", 0, Status::Structure));
         }
     }
 
-    let mut out: Vec<Node> = nodes.into_values().collect();
+    let mut out: Vec<Node> = data_nodes.into_values().collect();
     attach_diff_weights(&mut out);
     out
 }
 
 /// Roll each subtree's diff weight up to the directories above it, so a
 /// reader can sort by "where is the action" rather than by name.
-fn attach_diff_weights(nodes: &mut [Node]) {
-    let findings: BTreeSet<String> = nodes
+fn attach_diff_weights(data_nodes: &mut [Node]) {
+    let findings: BTreeSet<String> = data_nodes
         .iter()
         .filter(|n| n.status.is_finding())
         .map(|n| n.path.clone())
@@ -632,8 +632,8 @@ fn attach_diff_weights(nodes: &mut [Node]) {
     }
 
     // (entries, bytes) contributed at each path.
-    let mut own: Vec<(u32, i64)> = Vec::with_capacity(nodes.len());
-    for node in nodes.iter() {
+    let mut own: Vec<(u32, i64)> = Vec::with_capacity(data_nodes.len());
+    for node in data_nodes.iter() {
         if !node.status.is_finding() {
             own.push((0, 0));
             continue;
@@ -648,13 +648,13 @@ fn attach_diff_weights(nodes: &mut [Node]) {
     }
 
     // Index by path so ancestors can be credited without a second scan.
-    let index: BTreeMap<&str, usize> = nodes
+    let index: BTreeMap<&str, usize> = data_nodes
         .iter()
         .enumerate()
         .map(|(i, n)| (n.path.as_str(), i))
         .collect();
-    let mut totals: Vec<(u32, i64)> = vec![(0, 0); nodes.len()];
-    for (i, node) in nodes.iter().enumerate() {
+    let mut totals: Vec<(u32, i64)> = vec![(0, 0); data_nodes.len()];
+    for (i, node) in data_nodes.iter().enumerate() {
         let (entries, bytes) = own[i];
         if entries == 0 && bytes == 0 {
             continue;
@@ -671,7 +671,7 @@ fn attach_diff_weights(nodes: &mut [Node]) {
         }
     }
 
-    for (node, (entries, bytes)) in nodes.iter_mut().zip(totals) {
+    for (node, (entries, bytes)) in data_nodes.iter_mut().zip(totals) {
         node.diff_entries = entries;
         node.diff_bytes = bytes;
     }
@@ -712,7 +712,7 @@ pub fn analyze(inputs: &Inputs) -> DiffResult {
             commit: inputs.left.commit.clone(),
             dup_wasted: left_dups.iter().map(|g| g.wasted()).sum(),
             dup_groups: left_dups,
-            nodes: left_nodes,
+            data_nodes: left_nodes,
         },
         right: SideResult {
             db: inputs.right.db.clone(),
@@ -720,7 +720,7 @@ pub fn analyze(inputs: &Inputs) -> DiffResult {
             commit: inputs.right.commit.clone(),
             dup_wasted: right_dups.iter().map(|g| g.wasted()).sum(),
             dup_groups: right_dups,
-            nodes: right_nodes,
+            data_nodes: right_nodes,
         },
         summary,
     }

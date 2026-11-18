@@ -6,11 +6,11 @@
 //! text, kept exactly as typed — quotes and leading `-` included — so a
 //! consumer that forwards it to a search engine can keep its meaning.
 //!
-//! What a key names, and what free text matches, belongs to whoever
-//! serves the rows: the unified grid maps keys to `grid_rows` columns and
-//! sends free text to qmd; the run log maps them to `log` columns and
-//! reads free text as a substring. A table can say so in its schema:
-//! `table` is the shape of that description.
+//! What a key names, and what free text matches, belongs to whoever serves the
+//! rows: the unified grid maps keys to `grid_rows` columns and sends free text
+//! to the search index; the run log maps them to `log` columns and reads free
+//! text as a substring. A table can say so in its schema: `table` is the shape
+//! of that description.
 
 pub mod table;
 
@@ -289,6 +289,8 @@ mod tests {
             "a:b",
             "-leading",
             "say \"hi\" \\ done",
+            // U+0085 is whitespace to the tokenizer; JS `\s` lacks it.
+            "a\u{85}-source:gmail",
         ] {
             let tok = term("k", value, true);
             let quoted = if tok.ends_with('"') { tq } else { t };

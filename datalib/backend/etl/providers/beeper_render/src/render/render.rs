@@ -40,7 +40,10 @@ use super::parse::{DocBucket, ParsedBeeper};
 /// v7: an avatar is linked where the blob store holds it.
 /// v8: the account's own person is marked as the account, so search
 ///     reads their handles as `me`.
-pub const RENDER_VERSION: u32 = 8;
+/// v9: chats on an account no bridge here reads are on record.
+/// v10: a room is one document, under the room's own uuid; a reply is a
+///      reply edge to the message it answers.
+pub const RENDER_VERSION: u32 = 10;
 
 #[derive(Debug, Default, Clone)]
 pub struct RenderSummary {
@@ -53,7 +56,7 @@ pub struct RenderSummary {
     pub unrendered: Vec<Unrendered>,
 }
 
-/// Entry point. Renders every `(room, period)` bucket the parser
+/// Entry point. Renders every room the parser
 /// produced, calling `on_doc_complete` once per document, its
 /// attachment bytes read a batch of at most `blob_bytes` at a time.
 pub fn render_all(

@@ -29,7 +29,7 @@ export type RootEvent = (
   | { kind: "frontend_changed" }
   | { kind: "index_changed" }
   | { kind: "time_series_index_changed" }
-  | { kind: "upgrade_changed" }
+  | { kind: "pass_changed" }
   | { kind: "heartbeat" }
 ) & { chain?: number };
 

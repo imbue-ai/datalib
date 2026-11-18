@@ -5,8 +5,11 @@ Source: https://dactal.org (`dactal.js`, `dactal_utils.js`), fetched
 not vendored: the page runs sandboxed, where IndexedDB does not exist,
 and `main.js` supplies an in-memory store in its place.
 
-These are pinned, unmodified copies. To update, re-fetch from dactal.org and
-diff — the files are dependency-free browser scripts with no build step.
+These are pinned copies with one change: in `dactal.js`, inline math calls
+`dactalCalc` (`../calc.js`) where upstream calls `eval`, because a query can
+arrive in a link. To update, re-fetch from dactal.org, diff, and make that
+change again; without it the page's CSP refuses the `eval` and math shows as
+text. The files are dependency-free browser scripts with no build step.
 
 ## License
 

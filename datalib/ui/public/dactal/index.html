@@ -25,10 +25,12 @@
   here rather than by editing vendor/ keeps the "unmodified pinned copies"
   property vendor/PROVENANCE.md depends on.
 
+  No 'unsafe-eval': a query can come from a link, so nothing that came from
+  a query may run as code. calc.js does the query language's arithmetic
+  without `eval`, and `new Function` in dactal_utils.js fails here. Do not
+  add it back.
+
   Why each escape hatch is present:
-    'unsafe-eval'  — load-bearing. The query language evaluates
-                     expressions through `eval` (dactal.js:2052) and
-                     `new Function`; without it the engine cannot run.
     style-src      — 'unsafe-inline' is needed for the <style> block
                      below, for the `dactal_css` <style> that main.js
                      injects, and for the inline style= attributes the
@@ -44,7 +46,7 @@
 -->
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'none';
-  script-src 'self' 'unsafe-eval';
+  script-src 'self';
   connect-src 'none';
   style-src 'self' 'unsafe-inline';
   img-src 'self' data:;
@@ -55,6 +57,7 @@
 " />
 <!--
   DACTAL ships as classic (non-module) scripts that attach to globals:
+    - calc.js                   -> `dactalCalc`, the engine's inline math
     - dactal.js                 -> `window.DACTAL` (the engine: parse/execute/load)
     - dactal_utils.js           -> the table UI: buildView/arrayToTable/render,
                                    the `renderers` registry, and `dactal_css`.
@@ -63,8 +66,9 @@
   IndexedDB store (an opaque origin has none; main.js supplies an
   in-memory `dactaldb`). Instead we wire a tiny query bar to
   `dactal.executeq()` + `buildView()` ourselves, and take the working set
-  from the host card, which fetches `/applet/unified_document_index/search`.
+  from the host card, which fetches `/applet/unified_grid_and_search_index/search`.
 -->
+<script src="./calc.js"></script>
 <script src="./vendor/dactal.js"></script>
 <script src="./vendor/dactal_utils.js"></script>
 <style>
@@ -84,6 +88,10 @@
   #crumbs { margin: 8px 14px 0; font-family: ui-monospace, monospace; font-size: 12px; color: #888; }
   #crumbs a { color: #36c; cursor: pointer; text-decoration: none; }
   #queryoutput { padding: 6px 14px 40px; }
+  .datasets { display: flex; flex-wrap: wrap; gap: 4px 18px; padding: 8px 0; }
+  .dataset { font: inherit; font-size: 15px; background: none; border: 0; padding: 0; color: #1a7a7a; cursor: pointer; }
+  .dataset:hover { text-decoration: underline; }
+  .dataset.internal { color: #aaa; }
   .err { color: #b00; white-space: pre-wrap; font-family: ui-monospace, monospace; }
 </style>
 </head>
@@ -92,7 +100,7 @@
   <h1>DACTAL × Datalib — query your <code>grid_rows</code> with DACTAL</h1>
   <div class="bar">
     <label for="datalib">Load (Datalib)</label>
-    <input id="datalib" placeholder="Datalib search, e.g. provider:slack after:2025-01 — pulls a working set into the browser" />
+    <input id="datalib" placeholder="Datalib search, e.g. source:slack after:2025-01 — pulls a working set into the browser" />
     <button id="datalibgo">Load</button>
   </div>
   <div class="bar">

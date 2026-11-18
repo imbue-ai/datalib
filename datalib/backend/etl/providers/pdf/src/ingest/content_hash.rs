@@ -25,7 +25,7 @@ const MAX_DEPTH: u32 = 64;
 /// cannot read honestly: unparseable bytes, an encrypted document, or a
 /// file with no reachable catalog.
 pub fn compute(bytes: &[u8]) -> Option<String> {
-    let doc = Document::load_mem(bytes).ok()?;
+    let doc = super::expansion::load(bytes).ok()?;
     from_doc(&doc)
 }
 
@@ -214,7 +214,7 @@ fn push_bytes(out: &mut Vec<u8>, b: &[u8]) {
 pub(super) mod tests {
     use super::*;
 
-    fn build(objects: &[Vec<u8>], trailer_extra: &str) -> Vec<u8> {
+    pub(crate) fn build(objects: &[Vec<u8>], trailer_extra: &str) -> Vec<u8> {
         let mut out: Vec<u8> = b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n".to_vec();
         let mut offsets = Vec::new();
         for (i, body) in objects.iter().enumerate() {

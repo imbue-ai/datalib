@@ -110,6 +110,12 @@ it — so where an `fbid` names records that differ, each is keyed by
 its content instead, and neither overwrites the other. `schema_raw.rs`
 names the tables render reads and pins each to the path it comes from.
 
+An export can be made by anyone (`etl/files/README.md` § "An export can
+be made by anyone"). A symbolic link under `export.path` is not followed:
+it is a `listing:files` problem naming it, and nothing is deleted that
+run. A `uri` is read only if the walk found that file, so one that
+reaches past a link is a media file "not in the export".
+
 Messenger is the exception (`ingest/messenger.rs`): every conversation
 lands in two tables, not a table each. `messenger_threads` has a row
 per conversation, keyed by the digits its directory ends in, holding
@@ -194,12 +200,12 @@ them against the render cursor, then six feeds:
 |---|---|---|
 | posts | `…posts_your_posts_check_ins_photos_and_videos` + `…posts_on_other_pages_and_profiles` + `…groups_group_posts_and_comments` | post: the text, its media as attachments, a `📍 Place — address` line per check-in (the export lists a place twice, with and without its page URL; the one with the URL wins), a life event as a bold title and description, and `— with A, B` for tags |
 | albums | `…posts_album` | album: the description first, then every photo in creation order, captioned where the photo has one of its own |
-| comments | `…comments_and_reactions_comments` + `…groups_your_comments_in_groups` | year: the comment, with Facebook's sentence about it in italics beneath, any photo attached and any link |
-| reactions | `…comments_and_reactions_likes_and_reactions` | year: `👍 X liked Y's post.`, the URL as the header's `↗` |
+| comments | `…comments_and_reactions_comments` + `…groups_your_comments_in_groups` | the whole feed: the comment, with Facebook's sentence about it in italics beneath, any photo attached and any link |
+| reactions | `…comments_and_reactions_likes_and_reactions` | the whole feed: `👍 X liked Y's post.`, the URL as the header's `↗` |
 | friends | `connections_friends_your_friends` | friend, as a contact in one "Friends" group with a "Friends since" field, and their name as their handle |
-| Messenger | `messenger_threads` + `messenger_messages` | year of a conversation: each message with its photos, sticker, shared link (`🔗`) and reactions; an unsent one as a note. The project says which folder (`Messenger`, `Messenger · requests`, …) |
+| Messenger | `messenger_threads` + `messenger_messages` | conversation: each message with its photos, sticker, shared link (`🔗`) and reactions; an unsent one as a note. The project says which folder (`Messenger`, `Messenger · requests`, …) |
 
-Comments and reactions are bucketed by year because the export does not
+Comments and reactions are each one feed, oldest first, because the export does not
 say which post they were left on in any form we can resolve: a comment
 record has a `title` sentence and no link, a reaction has a URL to a post
 that is usually somebody else's. LinkedIn's export names the post, so it
@@ -282,7 +288,7 @@ is read. Beside those:
 Counting them over a real export says what to build next:
 
 ```sh
-datalib-doltlite -readonly <root>/unified_document_index/grid_index/db.sqlite \
+datalib-doltlite -readonly <root>/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
   "SELECT severity, field, sample, count(*) FROM problems
    WHERE source_id = '<the source id>' GROUP BY 1,2,3 ORDER BY 4 DESC"
 ```
@@ -306,6 +312,7 @@ and joins the comments feed.
 
 - Photos and videos outside posts and albums
   (`your_uncategorized_photos.json`, `your_videos.json`), places, search
-  history: in the raw store, not rendered.
+  history: in the raw store, not rendered. Render counts every table no
+  feed reads in one `unrendered_tables:all` warning, naming a few.
 - A `uri` is stored when a record points at it. Media files the export
   ships but no JSON record names are not mirrored.

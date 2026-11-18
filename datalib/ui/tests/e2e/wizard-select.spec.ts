@@ -2,7 +2,13 @@
 // box — `kind: "select"` in `ui/src/config/catalog.ts`.
 import { test, expect, type Page } from "@playwright/test";
 import { openAdvanced, reviewToml } from "./wizard-helpers";
-import { expandGroup, MANAGE_WITH_CONFIG, savedConfig } from "./grid-helpers";
+import {
+  fillConfigEditor,
+  expandGroup,
+  MANAGE_WITH_CONFIG,
+  savedConfig,
+  expectSyncEverything,
+} from "./grid-helpers";
 
 const wizard = (page: Page) => page.getByRole("dialog");
 // Structural, matching data-sources-name.spec.ts: each field's <label>
@@ -12,7 +18,7 @@ const field = (page: Page, caption: string) =>
 
 async function openManager(page: Page) {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
 }
 
 let original = "";
@@ -25,48 +31,43 @@ test.beforeEach(async ({ page, request }) => {
 test.afterEach(async ({ page }) => {
   if (!original) return;
   await openManager(page);
-  await page.locator(".m2-editor").fill(original);
+  await fillConfigEditor(page, original);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
 });
 
 test("an enum-backed field is a dropdown of its values", async ({ page }) => {
   await page.getByRole("button", { name: "Add source" }).click();
-  await page.locator(".wiz-filter").fill("signal");
+  await page.locator(".wiz-filter").fill("claude");
   await wizard(page)
-    .locator(".wiz-tile", { hasText: "Decrypt and copy an Android Signal backup" })
+    .locator(".wiz-tile", { hasText: "Ingest an unpacked Claude data export already on disk." })
     .click();
-  await field(page, "Name").fill("Phone Signal");
-  await wizard(page).locator("input.wiz-path").fill("/Users/x/backups/SignalBackups");
+  await field(page, "Name").fill("Personal Claude");
+  await wizard(page).locator("input.wiz-path").fill("/Users/x/Downloads/claude-export");
 
-  // Signal's render step has the option; it sits in Advanced options
-  // of the same form.
-  await openAdvanced(page);
-  const span = field(page, "Document span");
+  // Under its section's heading, found by the value only it offers.
+  const kept = wizard(page).locator(".wiz-input:has(option[value='keep_local_copy'])");
   // A <select>, not an <input>: the whole point is that there is no
   // free text to get wrong.
-  await expect(span).toHaveJSProperty("tagName", "SELECT");
-  await expect(span.locator("option")).toHaveText([
-    "A day",
-    "A month",
-    "A year",
-    "The whole conversation",
-  ]);
-  // Seeded to the backend's own default (`Period::from_config(None)`),
-  // so what the form shows and what an omitted key would do agree.
-  await expect(span).toHaveValue("month");
+  await expect(kept).toHaveJSProperty("tagName", "SELECT");
+  await expect(kept.locator("option")).toHaveText(["Delete my copy too", "Keep my copy"]);
+  // Seeded to the backend's own default, so what the form shows and
+  // what an omitted key would do agree.
+  await expect(kept).toHaveValue("delete_local_copy");
 
-  await span.selectOption("year");
+  await kept.selectOption("keep_local_copy");
   await reviewToml(page);
-  await expect(wizard(page).locator(".wiz-review pre")).toContainText('period = "year"');
+  await expect(wizard(page).locator(".wiz-review pre")).toContainText(
+    'when_deleted_upstream = "keep_local_copy"',
+  );
 
   const submit = wizard(page).getByRole("button", { name: "Add source" });
   await expect(submit).toBeEnabled();
   await submit.click();
-  await expect(page.getByText("Added Phone Signal.")).toBeVisible();
-  await expandGroup(page, "phone-signal");
+  await expect(page.getByText("Added Personal Claude.")).toBeVisible();
+  await expandGroup(page, "personal-claude");
   await expect(
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="phone-signal/render_markdown"]'),
+    page.locator('.tg-grid .slick-row[data-key="personal-claude/ingest"]'),
   ).toBeVisible();
-  await expect(page.locator(".m2-editor")).toHaveValue(/period = "year"/);
+  await expect(page.locator(".m2-editor")).toHaveValue(/when_deleted_upstream = "keep_local_copy"/);
 });

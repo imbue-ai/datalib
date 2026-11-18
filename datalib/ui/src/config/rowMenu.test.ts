@@ -65,9 +65,7 @@ describe("rowMenu", () => {
     expect(
       has(rowMenu([target({ kind: "applet", dashboardGroup: null })], opts), "dashboard"),
     ).toBe(false);
-    expect(has(rowMenu([target({ kind: "step", func: "qmd_aggregator" })], opts), "history")).toBe(
-      false,
-    );
+    expect(has(rowMenu([target({ kind: "step", func: "embed" })], opts), "history")).toBe(false);
     expect(
       entry(rowMenu([target({ runBlocked: "Not in the pipeline" })], opts), "sync").disabled,
     ).toBe("Not in the pipeline");
@@ -102,7 +100,7 @@ describe("rowMenu", () => {
   });
 
   it("offers Reset on a source and its steps, and nowhere else", () => {
-    const index = target({ id: "unified_document_index", type: null, statusFrom: null });
+    const index = target({ id: "unified_grid_and_search_index", type: null, statusFrom: null });
     expect(has(rowMenu([index], opts), "reset")).toBe(false);
     const busy = target({ stopRequestIds: ["req-1"] });
     expect(entry(rowMenu([busy], opts), "reset").disabled).toBe("Busy — stop the sync first");
@@ -116,19 +114,19 @@ describe("rowMenu", () => {
 
   it("offers Reset on the embedding map, the one index step a person resets", () => {
     const map = target({
-      id: "unified_document_index/embedding_map",
+      id: "unified_grid_and_search_index/embedding_map",
       kind: "step",
       type: null,
       func: "embedding_map",
     });
     expect(entry(rowMenu([map], opts), "reset").disabled).toBeNull();
-    const qmd = target({
-      id: "unified_document_index/qmd_aggregator",
+    const gridIndexStep = target({
+      id: "unified_grid_and_search_index/unified_grid_and_search_index",
       kind: "step",
       type: null,
-      func: "qmd_aggregator",
+      func: "unified_grid_and_search_index",
     });
-    expect(has(rowMenu([qmd], opts), "reset")).toBe(false);
+    expect(has(rowMenu([gridIndexStep], opts), "reset")).toBe(false);
   });
 
   it("offers the system row its log and its path, and nothing that edits the config", () => {
@@ -159,6 +157,12 @@ describe("rowMenu", () => {
       opts,
     );
     expect(entry(mixed, "remove").disabled).toBe("System: Not a config entry");
+  });
+
+  it("offers the Applets heading nothing, and leaves it out of a selection", () => {
+    const applets = target({ id: "section:applets", name: "Applets", kind: "section", type: null });
+    expect(rowMenu([applets], opts)).toEqual([]);
+    expect(rowMenu([target(), applets], opts)).toEqual(rowMenu([target()], opts));
   });
 
   it("names Browse for what it opens on a download step with a raw store", () => {
@@ -223,12 +227,12 @@ describe("rowMenu", () => {
 
   it("names the trees that keep no store", () => {
     expect(noStoreReason(target({ kind: "step", func: "ingest" }))).toBeNull();
-    expect(noStoreReason(target({ kind: "step", func: "grid_index" }))).toBe(
+    expect(noStoreReason(target({ kind: "step", func: "unified_grid_and_search_index" }))).toBe(
       "The grid index is plain SQLite, with no commit history",
     );
-    expect(noStoreReason(target({ kind: "group", id: "unified_document_index", func: null }))).toBe(
-      "The document index keeps no doltlite store",
-    );
+    expect(
+      noStoreReason(target({ kind: "group", id: "unified_grid_and_search_index", func: null })),
+    ).toBe("The document index keeps no doltlite store");
     expect(
       noStoreReason(target({ kind: "group", id: "unified_time_series_index", func: null })),
     ).toBeNull();

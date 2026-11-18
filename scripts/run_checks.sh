@@ -43,6 +43,25 @@ cd "$WORKSPACE"
 
 echo "Running pre-commit checks (read-only) in $WORKSPACE"
 
+# CI's pull-request flags, on a host whose actions can share CI's cache
+# entries: an action's key holds its flags, so a fastbuild gate never hits
+# what CI wrote, and CI builds only on x86_64 Linux. Elsewhere, or with no
+# BuildBuddy key in `.bazelrc.user`, there is nothing of CI's to reuse and
+# fastbuild compiles faster. `--test_env` is in every test's key, which is
+# why CI passes it although only the e2e suite reads it.
+# `--remote_download_minimal` keeps a hit's outputs remote unless a local
+# action needs them. docs/dev/ci.md §"The local gate and CI's cache".
+GATE_FLAGS=()  # expanded as ${X[@]+"${X[@]}"}: bash 3.2 calls an empty array unbound under set -u
+if [[ "$(uname -s)/$(uname -m)" == "Linux/x86_64" ]] \
+    && grep -qs 'x-buildbuddy-api-key=' .bazelrc.user; then
+  GATE_FLAGS=(-c opt --config=release --nostamp --config=pr-tests
+    --test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright
+    --remote_download_minimal)
+  echo "BuildBuddy key on x86_64 Linux: building with CI's pull-request flags"
+else
+  echo "Building in fastbuild: no BuildBuddy key, or not x86_64 Linux"
+fi
+
 # --- Repo hygiene (not sandboxable: reads the whole repo via git) ---
 # Checks the `no-sandbox` allowlist and that no first-party Python file
 # has escaped the Bazel lint roots. See scripts/lint_repo.py.
@@ -56,7 +75,7 @@ if [[ -n "$LINT_REPO" && -x "$LINT_REPO" ]]; then
   "$LINT_REPO"
 else
   # Direct invocation outside `bazel run` (or a layout without runfiles).
-  python3 scripts/lint_repo.py
+  uv run python scripts/lint_repo.py
 fi
 
 # --- Lint + typecheck, via bazel ---
@@ -64,7 +83,7 @@ fi
 # hermetic bazel tests now, so this is just a convenience alias — a plain
 # `bazelisk test //...` runs exactly the same targets.
 echo "[lint] bazelisk test //:lint"
-bazelisk test //:lint
+bazelisk test ${GATE_FLAGS[@]+"${GATE_FLAGS[@]}"} //:lint
 
 # --- Rust (datalib/backend) ---
 #
@@ -94,7 +113,7 @@ bazelisk test //:lint
 # the test line and failed this one).
 if [ -d datalib/backend ]; then
     echo "[rust] bazelisk build //... (rustfmt + clippy aspects are always-on)"
-    bazelisk build //...
+    bazelisk build ${GATE_FLAGS[@]+"${GATE_FLAGS[@]}"} //...
 fi
 
 # --- Every hermetic test ---
@@ -102,7 +121,7 @@ fi
 # (a browser, the network, the keychain). Those tag filters belong on
 # this line and nowhere else — see AGENTS.md, "Running tests".
 echo "[test] every hermetic test"
-bazelisk test //... --build_tests_only \
+bazelisk test ${GATE_FLAGS[@]+"${GATE_FLAGS[@]}"} //... --build_tests_only \
   --test_tag_filters=-no-sandbox,-requires-network,-external,-manual
 
 echo "All pre-commit checks passed."

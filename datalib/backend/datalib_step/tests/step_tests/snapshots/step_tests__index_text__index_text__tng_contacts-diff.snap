@@ -1,0 +1,99 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== tng_contacts-diff 00000000-0000-8195-8ee2-d14cb601f004 Worf
+--- chunk 0
+title: Worf | text: Source: Contacts
+Group: Bridge
+
+Worf
+
+# Worf <worf@enterprise.starfleet>
+
+Chief of Security · Starfleet — USS Enterprise NCC-1701-D — Security
+
+Email work:
+
+worf@enterprise.starfleet
+
+Phone cell:
+
++1-202-555-0102 <+12025550102>
+
+Note: Son of Mogh. Prefers prune juice.
+
+=== tng_contacts-diff 00000000-0000-819d-aad9-cb628fc3bec0 Kalita
+--- chunk 0
+title: Kalita | text: Source: Contacts
+Group: Maquis
+
+# Kalita
+
+Maquis pilot
+
+Phone work: +1-555-BADLANDS
+
+=== tng_contacts-diff 00000000-0000-825c-a3c4-1fb84e9bfce6 Jean-Luc Picard
+--- chunk 0
+title: Jean-Luc Picard | text: Source: Contacts
+Group: Bridge
+
+Jean-Luc Picard
+
+# Jean-Luc Picard <jlpicard@enterprise.starfleet>
+
+Captain · Starfleet — USS Enterprise NCC-1701-DNCC-1701-E
+
+Senior Staff
+
+Email work:
+
+jlpicard@enterprise.starfleet
+
+Email work:
+
+picard@enterprise.starfleet
+
+Phone work: +1-555-NCC-1701
+Phone cell:
+
++1-202-555-0101 <+12025550101>
+
+Phone home: +33-555-LABARRE
+Address work: Ready Room, Deck 1, Saucer Section
+Note: Make it so.
+
+=== tng_contacts-diff 00000000-0000-8429-b938-7d1e51384182 Ro Laren
+--- chunk 0
+title: Ro Laren | text: Source: Contacts
+Group: Maquis
+
+Ro Laren
+
+# Ro Laren <ro.laren@maquis.badlands>
+
+Maquis cell leader
+
+Email work:
+
+ro.laren@maquis.badlands
+
+Note: Resigned her commission. Last seen in the Badlands.
+
+=== tng_contacts-diff 00000000-0000-86be-a0a0-341fa48bbc80 Data
+--- chunk 0
+title: Data | text: Source: Contacts
+Group: Bridge
+
+Data
+
+# Data <data@enterprise.starfleet>
+
+Operations Officer · Starfleet — USS Enterprise NCC-1701-D — Operations
+
+Email work:
+
+data@enterprise.starfleet
+
+Note: Soong-type android. Positronic. Probability of friendship: 1.0.

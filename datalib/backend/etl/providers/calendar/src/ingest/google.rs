@@ -24,7 +24,7 @@ use tracing::warn;
 
 use super::db::RawDb;
 use super::schema_raw::{AccountRow, CalendarRow, GoogleEventRow, GOOGLE_EVENT_VOLATILE_PATHS};
-use super::{select_calendars, FetchSummary, Window};
+use super::{noting_how_it_ended, select_calendars, FetchSummary, Window};
 
 pub const HTTP_SERVICE: HttpService = HttpService::GoogleCalendar;
 pub const BASE: &str = "https://www.googleapis.com/calendar/v3";
@@ -47,7 +47,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
     let sealer = opts.sealer.clone();
     run_problems::collecting_sealed(&pool, &stop, sealer.as_ref(), |found| {
-        sync_account(opts, found)
+        noting_how_it_ended(found.clone(), sync_account(opts, found))
     })
     .await
 }
@@ -435,9 +435,12 @@ fn api_error(url: &str, resp: &HttpResponse) -> anyhow::Error {
     match resp.status {
         410 => Gone(format!("GET {url}: 410: {message}")).into(),
         401 | 403 => anyhow::Error::new(Upstream::CredentialRefused).context(format!(
-            "GET {url}: {}: {message}. Log in with `latchkey auth browser google-calendar` \
-             and approve every scope it asks for.",
-            resp.status
+            "GET {url}: {}: {message}. {}.",
+            resp.status,
+            datalib_etl_web::latchkey::sign_in_advice(
+                "Log in with `latchkey auth browser google-calendar` and approve every scope \
+                 it asks for"
+            )
         )),
         s => Upstream::error(Upstream::of_status(s), format!("GET {url}: {s}: {message}")),
     }

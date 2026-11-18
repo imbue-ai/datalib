@@ -673,7 +673,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             s.failed_pages
         ));
     }
-    run.finish(&result, &s).await;
+    run.finish(found.ended_early(), &result, &s).await;
     result?;
     Ok(s)
 }

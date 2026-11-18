@@ -7,7 +7,7 @@ mod gate;
 mod hangup_tests;
 mod photos;
 mod slack;
-mod unified_document_index;
+mod unified_grid_and_search_index;
 mod unified_time_series_index;
 
 use std::path::PathBuf;
@@ -19,7 +19,7 @@ use datalib_cli_help::Example;
 const EXAMPLES: &[Example] = &[
     Example {
         what: "serve the search applet on a port the OS picks, as the gateway does",
-        command: "datalib-applet unified_document_index --port 0 --params-file params.json",
+        command: "datalib-applet unified_grid_and_search_index --port 0 --params-file params.json",
     },
     Example {
         what: "search a data root as the app's search box does, and print the answer as JSON",
@@ -27,7 +27,7 @@ const EXAMPLES: &[Example] = &[
     },
     Example {
         what: "the same search's next page, by the words of the documents",
-        command: "datalib-applet search ~/datalib 'warp core' --tab words --offset 20",
+        command: "datalib-applet search ~/datalib 'warp core semantic:off' --offset 20",
     },
 ];
 
@@ -42,8 +42,10 @@ const EXAMPLES: &[Example] = &[
                   search box does, as JSON, with no server; `datalib-step help search` \
                   has its query language. The other commands are \
                   applets: datalib-http's gateway starts one for each [[applets]] entry \
-                  in the config and reads the port it prints, and you run one yourself \
-                  only to work on it (docs/dev/applets.md).",
+                  in the config and reads the port it prints, and you reach each through \
+                  it, at /applet/<id>/. `datalib-step help applets` says what each serves; \
+                  you run one yourself only to work on it (`datalib-step help \
+                  writing-applets`).",
     after_help = datalib_cli_help::render(EXAMPLES)
 )]
 struct Cli {
@@ -72,18 +74,21 @@ enum Which {
     /// Browse a Slack mirror: channels, then one channel's threads,
     /// then a whole thread.
     Slack,
-    /// Serve the grid index and the qmd index: search, columns, the
+    /// Serve the grid index and the search index: search, columns, the
     /// document list, one document, and the files beside it.
-    // The old name stays for a config the server has not rewritten yet.
-    #[command(name = "unified_document_index", alias = "unified_index")]
-    UnifiedDocumentIndex,
+    // The old names stay for a config the server has not rewritten yet.
+    #[command(
+        name = "unified_grid_and_search_index",
+        aliases = ["unified_document_index", "unified_index"]
+    )]
+    UnifiedGridAndSearchIndex,
     /// Serve the time-series index: the time series, and their points over
     /// a range, downsampled to a budget.
     #[command(name = "unified_time_series_index")]
     UnifiedTimeSeriesIndex,
-    /// The contacts app: create contacts and link handles to them, and
-    /// resolve a document's handles for its chips.
-    #[command(name = "datalib_contacts")]
+    /// The contacts app: who a handle is. Link handles to contacts, label
+    /// people and senders, and review what an agent proposed.
+    #[command(name = "datalib_contacts", after_help = datalib_contacts::routes_help())]
     DatalibContacts,
     /// Photos and videos: a contact sheet, one photo's details, and its
     /// pictures from the source's own previews.
@@ -101,11 +106,10 @@ struct SearchArgs {
     /// What you would type in the search box: `field:value` terms and
     /// free text (`datalib-step help search`). `''` lists every row.
     query: String,
-    /// Which answer to free text: `fields`, `words` or `meaning`. None is
-    /// the search box's own: identifiers from the search terms, the rest
-    /// from qmd's hybrid query.
-    #[arg(long, value_parser = parse_tab)]
-    tab: Option<unified_document_index::tabs::SearchTab>,
+    /// Gone: a search has one answer. Taken so a script still naming a tab
+    /// hears why, as `refused`, rather than a usage error.
+    #[arg(long, hide = true)]
+    tab: Option<String>,
     /// Rows in this page.
     #[arg(long)]
     limit: Option<usize>,
@@ -118,17 +122,6 @@ struct SearchArgs {
     /// One group's rows, as `[[column, value], …]`.
     #[arg(long)]
     within: Option<String>,
-}
-
-fn parse_tab(s: &str) -> Result<unified_document_index::tabs::SearchTab, String> {
-    use strum::VariantArray;
-    s.parse().map_err(|_| {
-        let tabs: Vec<&str> = unified_document_index::tabs::SearchTab::VARIANTS
-            .iter()
-            .map(|t| t.as_str())
-            .collect();
-        format!("one of {}", tabs.join(", "))
-    })
 }
 
 pub fn announce_port(port: u16) {
@@ -166,9 +159,6 @@ fn main() {
             None
         }
     };
-    // The unified_document_index applet runs qmd; from a release tarball that
-    // ships no `runtime/`, the first search fetches the manifest's.
-    datalib_fetch::enable_runtime_fetch();
     if let Err(e) = run(cli) {
         tracing::error!(error = %format!("{e:#}"), "the applet stopped");
         std::process::exit(1);
@@ -199,9 +189,9 @@ fn run(cli: Cli) -> Result<()> {
         // Contributes no components, so there is nothing to write
         // first: the app's grid and document views are builtins, and
         // this applet only serves the endpoints behind them.
-        Which::UnifiedDocumentIndex => {
+        Which::UnifiedGridAndSearchIndex => {
             let port = cli.port.context("-p <port> is required")?;
-            unified_document_index::serve(port)
+            unified_grid_and_search_index::serve(port)
         }
         // The app's chart is a builtin; nothing to write first.
         Which::UnifiedTimeSeriesIndex => {
@@ -229,21 +219,22 @@ fn run(cli: Cli) -> Result<()> {
 /// empty answer for "nothing matched".
 fn search(args: SearchArgs) -> Result<()> {
     use std::io::Write;
-    let params = unified_document_index::SearchParams {
+    let params = unified_grid_and_search_index::SearchParams {
         q: Some(args.query),
         limit: args.limit,
         offset: args.offset,
         sort: args.sort,
         through: None,
+        among: None,
         within: args.within,
         tab: args.tab,
     };
-    let unanswered = match unified_document_index::search_once(args.data_root, params) {
+    let unanswered = match unified_grid_and_search_index::search_once(args.data_root, params) {
         Ok(answer) => {
             let mut out = std::io::stdout().lock();
             serde_json::to_writer(&mut out, &answer).context("write the answer")?;
             writeln!(out).context("write the answer")?;
-            unified_document_index::unanswered(&answer)
+            unified_grid_and_search_index::unanswered(&answer)
         }
         Err(e) => vec![format!("{e:#}")],
     };
@@ -271,6 +262,39 @@ mod cli_tests {
         let commands = datalib_agent_docs::commands_running("datalib-applet");
         assert!(!commands.is_empty(), "no doc runs datalib-applet");
         datalib_cli_help::assert_argvs_parse(super::Cli::command(), &commands);
+    }
+
+    /// `help applets` and the overview list the applets from
+    /// `datalib_agent_docs::APPLETS`, so one added here has to be added there.
+    #[test]
+    fn every_applet_is_in_the_list_the_help_prints() {
+        let mut commands: Vec<String> = super::Cli::command()
+            .get_subcommands()
+            .map(|c| c.get_name().to_string())
+            .filter(|name| name != "search" && name != "help")
+            .collect();
+        let mut listed: Vec<String> = datalib_agent_docs::APPLETS
+            .iter()
+            .map(|a| a.name.to_string())
+            .collect();
+        commands.sort();
+        listed.sort();
+        assert_eq!(commands, listed);
+    }
+
+    /// With no server to ask, `--help` lists what the contacts app serves.
+    #[test]
+    fn the_contacts_apps_help_lists_its_routes_and_who_each_is_for() {
+        let mut cli = super::Cli::command();
+        let help = cli
+            .find_subcommand_mut("datalib_contacts")
+            .expect("the applet")
+            .render_help()
+            .to_string();
+        for line in ["POST /proposals", "POST /link", "GET /review/items"] {
+            assert!(help.contains(line), "{line} is not in:\n{help}");
+        }
+        assert!(help.contains("Routes that are `person`"), "{help}");
     }
 
     #[test]

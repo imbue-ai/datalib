@@ -301,7 +301,7 @@ back by render as the natural key.
 | garmin | none — the page keyed on the source id, a device on Garmin's id | none |
 | github, gitlab | none — the repository / project leads the key: `{repo}#{number}` | PRs, MRs, comments, reviews, notes — the record's own `created_at` |
 | google_takeout | none — a Chat message id names its space, a Voice row id is the ingest's | messages, a Chat message's earlier versions |
-| linkedin | none — keyed on the profile URL, the post link, the raw row id | messages, shares, comments |
+| linkedin | none — keyed on the profile URL, the post link, the raw row id; the one skills page on its kind | messages, shares, comments |
 | notion | none — page, discussion and comment ids are Notion UUIDs, the backpointer rather than the key; `notion_page_uuid` holds the page's datalib id; the table of contents is keyed `toc`, an anchor in it on the Notion id of what it lists | pages, comments — Notion's `created_time` |
 | pdf | none — keyed on the blake3, so two copies within a source are one row | documents and pages, when the Info dictionary dates the file |
 | perseus | none — keyed on the CTS locator and edition | none — a classical text has no stamp of its own |
@@ -336,8 +336,8 @@ backup, and expect a re-key when you do:
    `RenderProfile::chat_entity_kind`, `source_ref` on every item
    **and every reaction** (reactions get their own grid_rows and are
    easy to miss), and `NormalizedDoc::source_ref`
-   on every bucket whose id is not the chat's own — a period of a chat,
-   a subagent's transcript. For contact-common providers,
+   on every document whose id is not the chat's own, such as a
+   subagent's transcript. For contact-common providers,
    `ContactRenderProfile::contact_entity_kind` and
    `ContactDoc::upstream_account` (the external id is the contact's `key`).
 3. Thread `source_id` — the render's `ctx.name` — to wherever the ids

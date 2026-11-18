@@ -185,6 +185,15 @@ What a conversation `client.counts` does not name depends on what it is:
   lists hundreds of DMs, and `client.counts` names only the ones open
   in the sidebar.
 
+A run records what this comes to in `coverage_checked` (`present` in
+`ingest/mod.rs`): a conversation `client.counts` shows with nothing newer
+than what is covered, or an archived one already read, at planning; one
+walked up to its open top, when that walk ends, in the transaction that
+stores its last page. Each is stamped with the run's `now`, from before
+any of it was asked. A closed DM between checks, a walk that failed or
+never ended, and a stretch with a top of its own (`context_after`) keep
+whatever stamp they had.
+
 Checked against the live API:
 
 - `client.counts` named all 126 channels an account was a member of,

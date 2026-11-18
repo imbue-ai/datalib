@@ -2,11 +2,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnection, SqlitePool, SqlitePoolOptions};
 use sqlx::{Connection, Row};
 
 use datalib_etl::progress::Progress;
@@ -238,8 +237,7 @@ pub async fn snapshot(source: &Path) -> Result<Snapshot> {
 }
 
 async fn vacuum_into(source: &Path, dest: &Path) -> Result<()> {
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", source.display()))
-        .with_context(|| format!("sqlite uri for {}", source.display()))?
+    let opts = datalib_sqlite_open::file(source)
         .read_only(true)
         .create_if_missing(false);
     let mut conn = SqliteConnection::connect_with(&opts)
@@ -267,9 +265,7 @@ pub async fn open_mirror(db_path: &Path) -> Result<SqlitePool> {
 }
 
 pub async fn open_sqlite(path: &Path, create: bool) -> Result<SqlitePool> {
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
-        .with_context(|| format!("sqlite uri for {}", path.display()))?
-        .create_if_missing(create);
+    let opts = datalib_sqlite_open::file(path).create_if_missing(create);
     SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)

@@ -5,7 +5,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
 use crate::analyze::Explained;
@@ -23,9 +23,7 @@ pub async fn open_reader(path: &Path) -> Result<SqlitePool> {
 /// its own tempdir — and nothing that belongs to anyone else: those are
 /// opened by [`open_reader`], which cannot write them.
 pub async fn open_scratch(path: &Path) -> Result<SqlitePool> {
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
-        .with_context(|| format!("sqlite uri for {}", path.display()))?
-        .create_if_missing(true);
+    let opts = datalib_sqlite_open::file(path).create_if_missing(true);
     SqlitePoolOptions::new()
         .max_connections(1)
         // Same reason `doltlite_raw::open` disables these: retiring the

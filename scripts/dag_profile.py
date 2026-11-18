@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run python
 """Profile a `datalib-dag` NDJSON event stream: per-step durations + stalls.
 
 The runner writes one JSON object per line to stderr, each stamped with a

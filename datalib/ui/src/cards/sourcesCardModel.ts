@@ -4,13 +4,14 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { TOPIC_CONFIG_WRITTEN, type CardCtx } from "./types";
 import {
-  UNIFIED_DOCUMENT_INDEX,
+  UNIFIED_GRID_AND_SEARCH_INDEX,
   installPackage,
   type ManageResponse,
   type ManageRow,
   type PackageLookup,
   type PackageView,
 } from "@/api";
+import { builtinApplet, setApplet } from "@/config/builtinApplets";
 import {
   addPackage,
   addSourceApplets,
@@ -33,11 +34,11 @@ import {
   patchSource,
   sourceStepsOf,
   removedWith,
-  setQmdSteps,
+  setSearchSteps,
   setTimeSeriesStep,
   setOccurrencesStep,
-  qmdIndexingOf,
-  type QmdIndexing,
+  searchIndexingOf,
+  type SearchIndexing,
   unwireFromFanIns,
   wireIntoFanIns,
   entryForStep,
@@ -63,7 +64,7 @@ import { confirmAction, isDesktopApp, revealActionLabel } from "@/desktop";
 
 export const SOURCES_HELP = `
 <p>Every top-level row is a <b>group</b> <code>config.toml</code> declares: a source
-(Work Slack, Personal mail), or the unified document index that makes them searchable. Open
+(Work Slack, Personal mail), or the unified grid and search index that makes them searchable. Open
 its chevron for the <b>steps</b> that do the work — fetch, render, index — and the
 <b>applets</b> the app spawns to serve it. Actions that don’t apply to a kind are
 disabled and say why.</p>
@@ -94,7 +95,9 @@ running if any step is, else waiting, failed, queued, off or stopped if any is, 
 the last step’s in pipeline order. <b>Last synced</b> and
 <b>Last success</b> are the fetch step’s. <b>Remove</b> takes the steps and applets
 with it.</p>
-<p>Rows come in the order <code>config.toml</code> lists them. Click a header to sort by
+<p>Rows come in the order <code>config.toml</code> lists them, with <b>Applets</b> — the
+applets filed under no group, such as the Photos card — and then <b>System</b> after
+every group. Click a header to sort by
 that column; a third click puts the config's order back. <b>Drag a group</b> by the grip
 at its left to move it: the move is written to <code>config.toml</code>, with everything
 under the group kept beside it. Groups move only while the table is in the config's
@@ -270,7 +273,7 @@ export function useSourcesCard(ctx: CardCtx) {
     group: ConfiguredGroup;
     entry: CatalogEntry;
     steps: SourceSteps;
-    qmdIndexing: QmdIndexing;
+    searchIndexing: SearchIndexing;
     /// The config as it was when the form opened, for the form to show
     /// what saving would change and what it would keep.
     text: string;
@@ -295,6 +298,11 @@ export function useSourcesCard(ctx: CardCtx) {
   /// id — the cost is that the group's measured folder then counts the
   /// custom tree too. An applet id lives in another namespace and may
   /// coincide.
+  /// Every `[[applets]]` entry's id, for the wizard's apps and offers.
+  const appletIds = computed(
+    () => new Set(sources.value.filter((s) => s.kind === "applet").map((s) => s.id)),
+  );
+
   const takenIds = computed(
     () =>
       new Set([
@@ -335,8 +343,8 @@ export function useSourcesCard(ctx: CardCtx) {
 
   function decorate(r: ManageRow, groups: Map<string, ManageRow>): Row {
     const browsing = withBrowse(r, groups, canReveal);
-    // `system/` is not a config entry: nothing to edit.
-    if (r.kind === "system") {
+    // `system/` and the Applets heading are not config entries: nothing to edit.
+    if (r.kind === "system" || r.kind === "section") {
       return { ...browsing, editBlocked: "Not a config entry.", editGroup: null };
     }
     if (r.kind === "group") {
@@ -454,12 +462,14 @@ export function useSourcesCard(ctx: CardCtx) {
   }
 
   /// Double-clicking a status opens the log it came from; a problems count,
-  /// the problems, or on System, whose count is the config's warnings, the
-  /// config.
+  /// exactly the problems it counts, or on System, whose count is the
+  /// config's warnings, the config. A count of only what the log holds
+  /// opens the log.
   function onCellDoubleClicked(data: Row, field: string) {
     if (field === "problems" && data.kind === "system") openConfig();
-    else if (field === "problems") actions.openProblems(data, `${UNIFIED_DOCUMENT_INDEX}/problems`);
-    else if (field === "status") void actions.openStepLog(data);
+    else if (field === "problems" && data.problems_query)
+      actions.openProblems(data, `${UNIFIED_GRID_AND_SEARCH_INDEX}/problems`);
+    else if (field === "problems" || field === "status") void actions.openStepLog(data);
   }
 
   /// The row whose name the menu's Rename is opening, the one edit a
@@ -525,8 +535,10 @@ export function useSourcesCard(ctx: CardCtx) {
   /// the id again — `renameGroup` treats both as "no name".
   async function renameRow(row: Row, name: string) {
     if (row.kind !== "group") return;
-    const next = renameGroup(configText.value, row.id, name);
-    if (next === configText.value) return;
+    const text = await configToEdit();
+    if (text === null) return;
+    const next = renameGroup(text, row.id, name);
+    if (next === text) return;
     await writeConfig(
       next,
       name ? `Renamed ${row.id} to ${name}.` : `Cleared the name of ${row.id}.`,
@@ -544,10 +556,15 @@ export function useSourcesCard(ctx: CardCtx) {
   /// over an editor save that has not reached this card yet.
   async function onRowMove(row: Row, before: Row | null) {
     if (row.kind !== "group") return;
-    await loadConfig();
+    const text = await configToEdit();
+    if (text === null) return;
     const name = (id: string) =>
       rows.value.find((r) => r.kind === "group" && r.id === id)?.name.label ?? id;
-    const against = moveAgainstDataFlow(configText.value, row.id, before?.id ?? null);
+    // Below the last group come rows no group can be put before — an
+    // entry outside any group, the Applets heading, System: dropping there
+    // is dropping at the bottom.
+    const beforeId = before?.kind === "group" ? before.id : null;
+    const against = moveAgainstDataFlow(text, row.id, beforeId);
     if (against) {
       say(
         false,
@@ -559,13 +576,13 @@ export function useSourcesCard(ctx: CardCtx) {
     }
     let next: string;
     try {
-      next = moveGroup(configText.value, row.id, before?.id ?? null);
+      next = moveGroup(text, row.id, beforeId);
     } catch (e) {
       say(false, (e as Error).message);
       return;
     }
-    if (next === configText.value) return;
-    const where = before ? `above ${before.name.label}` : "to the bottom";
+    if (next === text) return;
+    const where = beforeId && before ? `above ${before.name.label}` : "to the bottom";
     await writeConfig(next, `Moved ${row.name.label} ${where}.`);
   }
 
@@ -646,6 +663,19 @@ export function useSourcesCard(ctx: CardCtx) {
     }
   }
 
+  /// The config as the server has it now, for an edit to build on, or null
+  /// (and a banner) when it cannot be read. An edit built on the text this
+  /// card last read, or on none yet, would write the file without what it
+  /// did not know about.
+  async function configToEdit(): Promise<string | null> {
+    await loadConfig();
+    if (loadError.value) {
+      say(false, `The config could not be read, so nothing was changed: ${loadError.value}`);
+      return null;
+    }
+    return configText.value;
+  }
+
   /// The rows the loader dropped, for the banner above the table.
   const droppedRows = computed(() => rows.value.filter((r) => r.dropped));
 
@@ -705,7 +735,10 @@ export function useSourcesCard(ctx: CardCtx) {
     editing.value = null;
   }
 
-  function openAdd() {
+  /// The form reads the config first: what it suggests has to be free, and
+  /// it opens the moment the card does on the Dashboard's Add source.
+  async function openAdd() {
+    if ((await configToEdit()) === null) return;
     editing.value = null;
     wizardKey.value++;
     wizardOpen.value = true;
@@ -717,14 +750,16 @@ export function useSourcesCard(ctx: CardCtx) {
   /// editor reaches this card by a pushed frame, and an Edit clicked before
   /// that lands would open on the text from before it.
   async function openEdit(groupId: string) {
-    await loadConfig();
+    if ((await configToEdit()) === null) return;
     const group = configGroups.value.find((g) => g.id === groupId);
     if (!group) return;
     const steps = sourceStepsOf(group.id, sources.value);
     const entry = groupEntry(group, steps);
     if (!entry) return;
-    const qmdIndexing = steps.render ? qmdIndexingOf(sources.value, group.id) : "keyword_and_embed";
-    editing.value = { group, entry, steps, qmdIndexing, text: configText.value };
+    const searchIndexing = steps.render
+      ? searchIndexingOf(sources.value, group.id)
+      : "keyword_and_embed";
+    editing.value = { group, entry, steps, searchIndexing, text: configText.value };
     wizardKey.value++;
     wizardOpen.value = true;
   }
@@ -738,8 +773,11 @@ export function useSourcesCard(ctx: CardCtx) {
     groupBody: string | null;
     stepsBody: string;
     renderId: string | null;
-    qmdIndexing: QmdIndexing;
+    searchIndexing: SearchIndexing;
+    applet: { id: string; on: boolean } | null;
   }) {
+    const text = await configToEdit();
+    if (text === null) return;
     const current = editing.value;
     let next: string;
     if (current) {
@@ -747,7 +785,7 @@ export function useSourcesCard(ctx: CardCtx) {
       // source's entries hold stays. The name and the description live on
       // the group, which is edited in place.
       try {
-        next = patchSource(configText.value, {
+        next = patchSource(text, {
           entry: payload.entry,
           group: current.group.id,
           values: payload.values,
@@ -768,7 +806,7 @@ export function useSourcesCard(ctx: CardCtx) {
       }
     } else {
       next = insertEntries(
-        configText.value,
+        text,
         payload.groupBody ? `${payload.groupBody}\n\n${payload.stepsBody}` : payload.stepsBody,
       );
     }
@@ -776,18 +814,23 @@ export function useSourcesCard(ctx: CardCtx) {
     // The fan-ins name their inputs, so a render step added without this
     // renders happily and is never indexed. Idempotent, so re-saving an
     // edit doesn't duplicate the entry. Free-text search is the one index
-    // the wizard asks about: the source's own qmd steps, added or taken out.
+    // the wizard asks about: the source in or out of the `unified_grid_and_search_index` step's
+    // `not_searched`, and its `embed`, added or taken out.
     if (payload.renderId) {
       next = wireIntoFanIns(next, payload.renderId);
-      next = setQmdSteps(next, payload.id, payload.qmdIndexing);
+      next = setSearchSteps(next, payload.id, payload.searchIndexing);
     } else {
-      next = setQmdSteps(next, payload.id, "none");
+      next = setSearchSteps(next, payload.id, "none");
     }
     next = setTimeSeriesStep(next, payload.id, payload.entry.type, payload.entry.package);
     next = setOccurrencesStep(next, payload.id, payload.entry.type);
     // A package source's applets come with it, and leave with its group.
     const pkg = payload.entry.package;
     if (!current && pkg) next = addSourceApplets(next, payload.id, pkg.dir, pkg.applets);
+    if (payload.applet) {
+      const offered = builtinApplet(payload.applet.id);
+      if (offered) next = setApplet(next, offered, payload.applet.on);
+    }
 
     // Banners are for a person, so they say the name; the id is what the
     // config and the disk use.
@@ -797,9 +840,25 @@ export function useSourcesCard(ctx: CardCtx) {
     closeWizard();
   }
 
+  /// An app from the picker turned on or off: its one `[[applets]]`
+  /// entry, added or taken out.
+  async function onWizardApp(payload: { id: string; on: boolean }) {
+    const app = builtinApplet(payload.id);
+    const text = await configToEdit();
+    if (!app || text === null) return;
+    const what = `${payload.on ? "Turned on" : "Turned off"} the ${app.label}.`;
+    if (await writeConfig(setApplet(text, app, payload.on), what)) closeWizard();
+  }
+
   // ── Packages (docs/dev/packages.md). The build is fetched before the
   // config names it, so the steps that run it can start at once.
   const packagesOpen = ref(false);
+
+  async function configToEditOrThrow(): Promise<string> {
+    const text = await configToEdit();
+    if (text === null) throw new Error(banner.value?.text ?? "The config could not be read.");
+    return text;
+  }
 
   async function writeOrThrow(text: string, what: string) {
     if (!(await writeConfig(text, what))) {
@@ -809,10 +868,10 @@ export function useSourcesCard(ctx: CardCtx) {
 
   async function addPackageEntry(source: string, lookup: PackageLookup) {
     await installPackage(lookup.url, lookup.sha256);
-    await loadConfig();
-    const id = packageIdFor(configText.value, lookup.manifest);
+    const text = await configToEditOrThrow();
+    const id = packageIdFor(text, lookup.manifest);
     await writeOrThrow(
-      addPackage(configText.value, { id, source, lookup }),
+      addPackage(text, { id, source, lookup }),
       `Added the ${lookup.manifest.name} package.`,
     );
     await refreshPackages();
@@ -820,17 +879,16 @@ export function useSourcesCard(ctx: CardCtx) {
 
   async function updatePackageEntry(id: string, lookup: PackageLookup) {
     await installPackage(lookup.url, lookup.sha256);
-    await loadConfig();
     await writeOrThrow(
-      updatePackage(configText.value, id, lookup),
+      updatePackage(await configToEditOrThrow(), id, lookup),
       `Updated ${lookup.manifest.name} to ${lookup.manifest.version}.`,
     );
     await refreshPackages();
   }
 
   async function removePackageEntry(id: string) {
-    await loadConfig();
-    await writeOrThrow(removePackage(configText.value, id), `Removed the ${id} package.`);
+    const text = await configToEditOrThrow();
+    await writeOrThrow(removePackage(text, id), `Removed the ${id} package.`);
   }
 
   async function retryPackage(p: PackageView) {
@@ -1123,9 +1181,11 @@ export function useSourcesCard(ctx: CardCtx) {
     wizardOpen,
     wizardKey,
     takenIds,
+    appletIds,
     editing,
     closeWizard,
     onWizardSubmit,
+    onWizardApp,
     asking,
     packagesOpen,
     addPackageEntry,

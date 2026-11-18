@@ -12,9 +12,11 @@ checks every single-process fact below in well under a second, one
 test each, in a module named for its section here;
 `//datalib/backend/etl:doltlite_two_process_test` checks the ones about
 a writer and a reader in two processes, and
-`//datalib/backend/doltlite_facts:python_package_test` the ones in
-[Reading a store from Python](#reading-a-store-from-python). After a
-doltlite bump, run all three. A fact that moved fails by name: fix it here, then the test,
+`//datalib/backend/doltlite_facts:python_package_test` and
+`:python_reader_test` the ones in
+[Reading a store from Python](#reading-a-store-from-python), and
+`:vec1_facts_test` the ones in [Vector search: vec1](#vector-search-vec1).
+After a doltlite bump, run all five. A fact that moved fails by name: fix it here, then the test,
 then whatever in the tree leaned on it.
 
 > **GUI option:** For a macOS sqlite-browser build patched to load
@@ -118,12 +120,87 @@ Two variants worth knowing:
 ## Reading a store from Python
 
 A program that runs many small queries should not start the shell for
-each one. Dolthub's **`doltlite`** package on PyPI makes Python's own
-`sqlite3` module run on doltlite, so a store opens once and stays open:
+each one. There are two ways to keep a store open from Python:
+
+- **`imbue-datalib-reader`, which calls the library directly.** Reach for this
+  one. It works under
+  every Python we have tried, the ones `uv python install` fetches
+  included, and it restarts nothing, changes no environment variable and
+  leaves no temp file.
+- **`import doltlite`**, which makes Python's own `sqlite3` module run on
+  doltlite. It is for code that needs that module itself, or SQLAlchemy,
+  and it does not work under uv's Python
+  ([below](#making-the-sqlite3-module-run-on-doltlite)).
+
+### Calling the library directly
+
+The engine is also a library, `libdoltlite`, with SQLite's C API, so
+`ctypes` can call it and no module has to be replaced. The
+**`imbue-datalib-reader`** package carries the library and a short module that
+calls it:
 
 ```sh
-pip install doltlite==<version>   # the DoltLite version `doltlite --version` prints
+uv add imbue-datalib-reader==<version>   # or pip install; the version `datalib-dag --version` prints
 ```
+
+Wheels exist for Apple-silicon Macs on macOS 11 or later (`macosx_11_0`), and
+for Linux on x86_64 and aarch64: `manylinux_2_17` for any glibc from glibc 2.17
+on, and `musllinux_1_2` for Alpine. `pip` and `uv` pick the right one. Each
+version carries the library that release's binaries were built from. There is
+no source distribution, so anywhere else (an Intel Mac, say) use the shell:
+`datalib-doltlite -readonly -json`.
+
+```python
+from datalib_reader import Store
+
+with Store(f"{root}/gmail/ingest/entities.doltlite_db") as store:  # main
+    rows = store.query("SELECT subject FROM emails WHERE id = ?", email_id)
+
+with Store(path, commit) as store:  # one commit, however far main moves on
+    changed = store.query("SELECT to_id FROM dolt_diff_emails(?, ?)", cursor, commit)
+```
+
+`query` returns a list of rows, each a tuple that also answers by column name; each kind of failure has its own `OSError` subclass (`datalib/reader/README.md`). The second form is the
+[detached open](#opening-a-revision-by-path) our own readers use.
+
+What to know about it:
+
+- **It only reads.** Both kinds of open refuse writes with `attempt to
+  write a readonly database`, and the store comes out byte-identical.
+- **A JSONB column comes back as `bytes`**, which `json.loads` refuses
+  with a `UnicodeDecodeError`. Every `payload` is JSONB, so select
+  `json(payload)` to get text.
+- **A connection kept open sees later seals**, and the one opened on a
+  commit stays on that commit. Give each thread its own `Store`.
+- **The `sqlite3` module stays as it was**, stock, beside it, whichever
+  was imported first. So `sqlite3` still cannot read a store, and a child
+  process inherits nothing. The library opens plain SQLite files too,
+  such as a source's `blobs.sqlite`.
+- **A program that stays up across an upgrade keeps the old library.**
+  If that upgrade changed the storage format, the store is refused until
+  the program restarts.
+
+**From another language**, call the library a release install carries, at
+`lib/libdoltlite.so` (`.dylib` on a mac) beside `datalib-doltlite` in the unpacked
+tree, and in the docker image. The musl tarballs and the desktop app do not carry
+it. [`datalib_reader.py`](/datalib/reader/datalib_reader.py) shows which calls a
+reader needs.
+
+`//datalib/backend/doltlite_facts:python_reader_test` runs the package under the
+Python build uv fetches (python-build-standalone, which `rules_python` brings
+too), on CI's Linux x86_64 and on a mac. `python_package_test` runs it under the
+host's `python3`, which loads SQLite as a shared library.
+`scripts/release/check_reader_wheels.sh` installs the wheels themselves on glibc
+2.17, a current Debian, Alpine and a Mac, with `pip` and with `uv`
+([`release_steps.md`](release_steps.md) §"The reader wheels").
+
+Measured on a mac against real stores: a lookup by primary key on an open
+connection took about 0.01 ms. The same lookup cost about 15 ms when each
+one ran in a new `doltlite -readonly -json` process.
+
+### Making the `sqlite3` module run on doltlite
+
+This route always needs the wheel, at the version your shell prints.
 
 ```python
 import doltlite  # first, before anything imports sqlite3
@@ -133,37 +210,37 @@ conn = sqlite3.connect(f"file:{store}?mode=ro", uri=True)    # main, read-only
 conn = sqlite3.connect(f"file:{store}@{commit}?mode=ro", uri=True)  # one commit
 ```
 
-The second form is the [detached open](#opening-a-revision-by-path) our
-own readers use, and it is read-only even without `?mode=ro`. Install
-the wheel whose version matches your shell's: a release that changes
-the storage format refuses our stores.
-
-Measured on a mac against a 212 MB store, with the 0.50.16 wheel: the
-open and first query took ~11 ms, and a lookup by primary key on the open
-connection ~0.01 ms. The same lookup cost ~15 ms when each one ran in a
-new `doltlite -readonly -json` process. Writes are refused on both kinds
-of open, and the store came out byte-identical.
-
-What the package needs:
+The second form is read-only even without `?mode=ro`. What the package
+needs, and what it leaves behind:
 
 - **A Python that loads SQLite as a shared library**: Homebrew, the
   system Python, pyenv or Conda. The python-build-standalone builds that
   `uv python install`, mise and Rye fetch compile SQLite in, and the
-  package cannot replace it there. With uv, name the interpreter:
-  `uv venv --python /opt/homebrew/bin/python3.13`.
+  package cannot replace it there. It does not say so clearly. On macOS
+  the import fails with `AttributeError: module '_sqlite3' has no
+  attribute '__file__'`. On Linux the import succeeds and the first read
+  fails with `file is not a database`. To use it with uv, name the
+  interpreter: `uv venv --python /opt/homebrew/bin/python3.13`.
 - **On macOS, a script to restart.** The import restarts the interpreter
-  with doltlite preloaded, so it works for `python script.py` and
-  `python -m pkg`, and fails under `python -c`, the REPL and Jupyter.
-  Each start copies a 3.9 MB library into `$TMPDIR/doltlite-shim-*`, and
-  the pinned wheel never reuses the copy (dolthub/doltlite-python#2,
-  closed upstream after 0.51.3), so a
-  long-lived machine wants those cleared now and then. On Linux the
-  import loads doltlite in place, so `python -c` works there.
+  with doltlite preloaded, so whatever ran before it runs twice. It works
+  for `python script.py` and `python -m pkg`, and fails under `python
+  -c`, the REPL and Jupyter.
+  The first start copies a 3.9 MB library into
+  `$TMPDIR/doltlite-shim-*`, and later starts reuse it
+  (dolthub/doltlite-python#2). On Linux the import loads doltlite in
+  place, so `python -c` works there.
+- **Clean up before starting a child process.** The import leaves
+  `_DOLTLITE_BOOTSTRAPPED` in the environment, and on macOS
+  `DYLD_INSERT_LIBRARIES` too, so every child process inherits them. A
+  child `python` that has the first without the preload skips its own
+  bootstrap and cannot read a store. Remove both from the child's
+  environment.
 
 `//datalib/backend/doltlite_facts:python_package_test` holds each of
 these, with the pinned wheel against a store the pinned CLI wrote. It
 runs under the host's `python3`: CI's Ubuntu one, and on a mac the
 `/usr/bin/python3` that Xcode's command line tools install.
+`python_reader_test` holds the two failures under python-build-standalone.
 
 ## Recipes
 
@@ -421,7 +498,7 @@ The common-use subset:
 
 ## How doltlite behaves
 
-The facts our rules rest on, checked on the pinned doltlite (0.51.3)
+The facts our rules rest on, checked on the pinned doltlite (0.51.13)
 by the tests below; a number measured on an older release names it. A fact in one process is a test in
 `doltlite_facts_test`, in the module named for its section. Anything
 about a writer and a reader in two processes is measured with
@@ -568,7 +645,10 @@ came out byte-identical to the writer's alone.
 ### Opening a revision by path
 
 `sqlite3_open` — and so sqlx — takes a revision after the file name:
-`<file>@<rev>` or `<file>/<rev>`.
+`<file>@<rev>` or `<file>/<rev>`. A name that does not begin `file:` is
+otherwise literal: a `%`, a `?`, a `#` or an `@` in a directory is that
+character on disk.
+`revision_by_path::a_name_without_file_is_literal_and_still_takes_a_revision`.
 
 - **A branch** opens that branch, working set and all; opened read-only,
   it refuses writes.
@@ -623,10 +703,12 @@ name itself and then switches branches in SQL, so `doltlite -readonly
   same schema — leaves `dolt_status` clean and the next `dolt_commit`
   fails with `nothing to commit, working tree clean`. So does the first
   `dolt_commit` of a new store with nothing in it.
-- **The diff goes by table name.** Rename a table to a new name and
-  that name's diff shows every row as added; swap a staging table in
-  (`DROP TABLE t` and `ALTER TABLE t_staging RENAME TO t` in one
-  transaction) and `t`'s diff shows only the rows that differ.
+- **The diff follows a rename.** Rename `t` to `u` and `u`'s diff
+  from before the rename shows no rows: none of them changed. Swap a
+  staging table in (`DROP TABLE t` and `ALTER TABLE t_staging RENAME TO
+  t` in one transaction) and `t`'s diff shows only the rows that
+  differ. (0.51.3 diffed by name, so a renamed table's rows all read as
+  added.)
 - **A diff reads only the main database.** A commit hash from an
   `ATTACH`ed store is `ref not found`; `datalib/backend/dirtree_diff/README.md`
   has the fetch-into-scratch way to compare two files.
@@ -680,17 +762,18 @@ is the recipe in code.
 - **A branch name may hold a slash** (`draft/riker`).
 - **A merge commit and a squash both revert** with `dolt_revert`.
 - **`dolt_branch('-d', b)` refuses a branch with unmerged commits**
-  (`branch is not fully merged`) **or uncommitted rows** (`branch has
-  uncommitted changes`); `-D` drops either, uncommitted rows included,
-  so a branch made again under the same name starts clean. A draft is
-  thrown away with `-D`.
+  (`branch is not fully merged`) **but drops one whose only change is
+  uncommitted rows**, rows and all (0.51.3 refused it with `branch has
+  uncommitted changes`). `-D` drops either, so a branch made again
+  under the same name starts clean. A draft is thrown away with `-D`.
 
 ### Reverting a commit
 
 - **`dolt_revert('<hash>')` makes a new commit that undoes the named
   one, on the active branch, and returns its hash.** The commit need
   not be HEAD; the ones after it stay. The message is
-  `Revert "<original message>"`, and the working set is clean after it.
+  `Revert "<original message>"`, a blank line, and `This reverts commit
+  <hash>.`; the working set is clean after it.
 - **It is a merge, and is refused with `conflicts detected` when a
   later commit changed a row the commit touched.** Nothing is
   committed or changed then. A row still exactly as the commit left it
@@ -705,7 +788,10 @@ is the recipe in code.
 ### Query plans and indexes
 
 - **Plain tables plan as in SQLite**: on a read-only connection, inside
-  a read transaction and on a detached open alike.
+  a read transaction and on a detached open alike. No store runs
+  `ANALYZE`, so between two one-column indexes the planner may take the
+  unselective one; how we pin and test a plan instead is in
+  [`etl/README.md`](../../datalib/backend/etl/README.md#indexes-the-planner-has-no-statistics-so-test-the-plan).
 - **`dolt_at_<table>` seeks only a primary-key equality** (text keys
   included, 0.50.12 and later). It never uses a secondary index, a
   primary-key range on a text key, or an `ORDER BY`: those scan the
@@ -831,9 +917,10 @@ message. `dolt_hashof_db(<rev>)` answers the tree's hash, and
   one reads the folded `main`.
 - **A fold must not drop a commit a reader is open on.** A detached
   `<file>@<commit>` reader in another process, whose commit a fold and
-  gc dropped, gets "database disk image is malformed" on its next read
-  of history; a table scan may still answer from pages it already had.
-  A tag on the commit keeps the reader whole. Render and `grid_index`
+  gc dropped, gets `revision '<hash>' is no longer available` on its
+  next read of history; a table scan may still answer from pages it
+  already had.
+  A tag on the commit keeps the reader whole. Render and `unified_grid_and_search_index`
   read this way, so a fold tags what they are pinned to, or waits.
 - **Doltlite has no verb that drops history**: no `dolt_squash_history`,
   no orphan branch, no shallow history, and `dolt_gc` takes no options.
@@ -881,6 +968,64 @@ pinning the index pages it rewrote) and the plain file 0.7 MB.
 0.3 ms in the store and 0.1 ms in the plain file; a prefix with the
 join back, 27 ms and 6 ms.
 
+### Vector search: vec1
+
+The amalgamation carries SQLite's `vec1` extension (version 0.8,
+<https://sqlite.org/vec1>), compiled only with `-DDOLTLITE_VEC1=1`.
+**Nothing we ship has it**; the test-only
+`//third-party/doltlite:doltlite_vec1` shell does, and the tests are
+`vec1_facts_test`, mostly on a plain SQLite file. It builds on an arm64
+mac (NEON).
+
+A table is `CREATE VIRTUAL TABLE v USING vec1(embedding, source_id, …)`:
+a vector column (a float32 blob, `vec1_from_json('[…]')`) and up to
+256 more columns. A query passes the query vector as the hidden column
+`cmd` and K as `arg`, either a number or JSON such as
+`'{"K":10,"nprobe":8}'`, or else a `LIMIT`. With neither, it is refused.
+`rowid` and the hidden `distance` come back nearest first.
+`vec1_l2_distance` is the *squared* distance.
+
+A table answers one of three ways. It starts **untrained**: a scan of
+every row, exact. `INSERT INTO v(cmd, arg) VALUES ('rebuild',
+'{"index":"flat"}')` makes it **flat**: still every row, still exact.
+A model from the aggregate `vec1_train(embedding, '{"nbucket":…,
+"codesize":…}')`, passed to `rebuild`, makes it **trained**: vectors
+split among `nbucket` buckets (IVF), stored as product-quantization
+codes, and a query reads only the `nprobe` buckets nearest it (default
+5% of them, at least one).
+
+- **A filter on one of the vec1 table's own columns runs before the K
+  nearest are chosen.** `=`, `IN`, `<`, `>`, `IS NULL` and the like
+  are handed to vec1 (the plan shows `INDEX 5:PA00`), so K rows from
+  source `b` come back even when every nearer row is source `a`. Same
+  in a doltlite store.
+- **A filter on `rowid`, or a join to another table, runs after.**
+  vec1 takes no `rowid` constraint into the search, so `rowid IN
+  (SELECT doc_id FROM docs WHERE source_id = ?)` and a join on `rowid`
+  both filter the K nearest overall, and return nothing in that case.
+  A filter that is to cut the search has to be a column of the vec1
+  table.
+- **Exact ranking over a set found by an ordinary index works**, by
+  ordering on the distance instead of asking vec1 for neighbours:
+  `SELECT … FROM docs d JOIN v ON v.rowid = d.doc_id WHERE d.source_id
+  = ? ORDER BY vec1_l2_distance(?, v.embedding) LIMIT k` searches
+  `docs` by its index and reads each vector by rowid. It costs one
+  vector read per row of the set.
+- **Untrained and flat tables rank by exact distance.**
+- **A trained table ranks by the approximate distance and never
+  re-ranks**: `distance` is the code's distance, not the vector's, and
+  the order can differ from the exact one. The raw vector is still kept,
+  so a query can re-rank its candidates itself with `vec1_l2_distance`.
+- **A trained table filters only within the buckets it probes.** If the
+  rows that pass sit in other buckets, fewer than K come back, none at
+  the default `nprobe` in the test. `"nprobe"` set to every bucket
+  finds them all; so does `"streaming":1`, which keeps opening the next
+  nearest bucket until the `LIMIT` is met.
+- **A row inserted after training is indexed with the existing model**
+  and found at once, without retraining.
+- **Product quantization needs 512 training vectors; buckets alone
+  need 4 each.**
+
 ### Plain SQLite files and SQLite compatibility
 
 - **Stock `sqlite3` cannot open a `.doltlite_db`**: `file is not a
@@ -908,19 +1053,28 @@ join back, 27 ms and 6 ms.
   idle one open. `synchronous`
   at anything above `OFF` syncs every commit (upstream
   `doc/doltlite/pragmas.md`).
-- **Doltlite never checkpoints a plain file's WAL by itself.** Stock
-  SQLite copies the WAL back into the file once a commit leaves it past
-  `wal_autocheckpoint` pages. Doltlite reports the same setting (1000)
-  and never acts on it, so the `-wal` keeps every page ever written. A
-  live root's run store reached 4 GB that way in eight days, and every
-  read of the log slowed with it. An explicit `PRAGMA
-  wal_checkpoint(PASSIVE)` works, and with `journal_size_limit` set,
-  the next write restarts the WAL and cuts the file back. The run
-  store's writer does both every 30 seconds.
+- **A plain file's WAL is checkpointed by itself**, as stock SQLite
+  does, once a commit leaves it past `wal_autocheckpoint` pages (1000).
+  The checkpoint runs in the process that commits, so another process
+  that holds the file open between reads does not stop it (one inside a
+  read holds back the frames it may still read, as in stock SQLite). The `-wal` file keeps its
+  largest size, though, which one large transaction sets, until a write
+  after a checkpoint finds `journal_size_limit` set, or a `wal_checkpoint
+  (TRUNCATE)`; our plain stores in WAL mode (the run store, the grid
+  index's file for both its writers, and the inference cache) set it to
+  `plain_sqlite::WAL_SIZE_LIMIT_BYTES`, 64 MB. Doltlite 0.51.3 never
+  checkpointed by itself
+  (dolthub/doltlite#4402): a live root's run store reached 4 GB in eight
+  days, and a grid index's `-wal` 4 GB in one re-index.
+- **A writer waiting on a plain WAL file gets in between another
+  process's transactions**, as with stock SQLite, after about one of
+  them. Under 0.51.3 it waited until the other process stopped writing
+  altogether, so the grid index's step could not open its file while a
+  `keyword_index` ran for minutes, and failed after 30 seconds.
 - **Doltlite reads a WAL another program wrote.** A plain SQLite
-  file another program keeps in WAL mode, as qmd keeps its index, reads
-  through doltlite with the rows only its `-wal` holds, so a reader
-  sees what qmd wrote before any checkpoint. The test reads a pair
+  file another program keeps in WAL mode reads through doltlite with
+  the rows only its `-wal` holds, so a reader sees what that program
+  wrote before any checkpoint. The test reads a pair
   stock SQLite wrote (`scripts/make_doltlite_wal_fixture.py`). A
   shell probe saw a row written while the reader ran, too.
 - **`:memory:` works**, commits and diffs included, which is what unit
@@ -932,8 +1086,9 @@ join back, 27 ms and 6 ms.
   primary key is still a rowid alias.
 - **FTS3/4/5 and R-tree are compiled in**; foreign keys are off unless
   a connection turns them on.
-- **Every new file starts with an "Initialize data repository" commit**
-  stamped with the wall clock, so two fresh stores differ;
+- **Every new file starts with an `Initialize data repository (<id>)`
+  commit**, the id 32 hex digits of its own, stamped with the wall
+  clock, so two fresh stores differ; match it by prefix;
   `dolt_commit('--date', …)` pins a commit's date. `dolt_log().date`
   has one-second resolution.
 - **`dolt_reset('--hard')` restores tracked tables and keeps an untracked
@@ -960,6 +1115,8 @@ What each pin was taken for, newest first:
 
 | version | what it brought us |
 |---|---|
+| 0.51.13 | the amalgamation compiles BLAKE3's SIMD kernels itself, under `doltlite_*` names (dolthub/doltlite#4956), so our own kernel build, its symbol renames and the reader wheels' kernel compile are gone; `@blake3_c` stays for `blake3_kernels_test`'s header and test vectors. No fact moved. |
+| 0.51.12 | a plain SQLite file in WAL mode is checkpointed by itself (dolthub/doltlite#4402), and a writer waiting on one gets in between another process's transactions; under 0.51.3 the grid index's `-wal` reached 4 GB and its step failed to open the file while a `keyword_index` wrote. The amalgamation now guards the lines that turn BLAKE3's kernels off with `DOLTLITE_BLAKE3_SIMD_OBJECTS`, which we define in place of a patch. Seven facts moved: the first commit's message carries an id, a diff follows a table rename, `dolt_branch('-d')` drops a branch whose only change is uncommitted, a revert's message names the commit, a reader whose commit was folded away reads `is no longer available`, vec1 is 0.8, and the Python wheel reuses its library copy on macOS. |
 | 0.51.3 | upstream fixes to concurrent writes, merges and recovery. A `<store>@<commit>` open that finds the store busy now waits under the busy timeout, so the 0.50.17 failure is gone. 0.51.0 also put back the 0.50.14 encoding of a number just before a `DESC` field in a primary key or an index, with no migration; none of our tables has a `DESC` key, so no store of ours was written in the other encoding. Five facts moved: `dolt_commit` inside `BEGIN` leaves the transaction open, `dolt_branch('-d')` refuses uncommitted rows, a scalar sees another connection's commit at once, a hard reset works at the initialization commit, and a busy `dolt_branch` says `database is busy`. |
 | 0.50.16 | upstream fixes to concurrent writes and to recovery after an interrupted `VACUUM` or `dolt_gc()`. Three facts moved: a plain SQLite file honours `journal_mode` (dolthub/doltlite#3740), a `from_commit` / `to_commit` filter matches only adjacent pairs again, and a new empty store's first commit is `nothing to commit`. Like 0.50.15, it does not reuse the chunks 0.50.14 or earlier wrote: refilling such a table with the same rows appends about a copy of it that no commit reaches, once, and `datalib-dag --free-disk-space` takes it back. Later bumps reuse each other's chunks (dolthub/doltlite#4552; measured by hand, not held by a test). (0.50.17 was passed over: its read lock on a `<store>@<commit>` open gives up after about 100 ms, and readers here open that way.) |
 | 0.50.14 | a detached open runs `IN` and `DISTINCT` (dolthub/doltlite#3392), so readers open `<store>@<commit>` directly |
@@ -1031,8 +1188,8 @@ cause (network timeout, panic, OOM, etc.).
   pools"). The CLI takes no such lock, so a writable CLI session is
   exactly the second writer that rule exists to keep out.
 - **For routine reads from app code.** Open the file via `sqlx` like
-  everything else in the backend, or from Python with the `doltlite`
-  package ([Reading a store from Python](#reading-a-store-from-python));
+  everything else in the backend, or from Python through
+  `imbue-datalib-reader` ([Reading a store from Python](#reading-a-store-from-python));
   the CLI is for ad-hoc inspection.
 - **To "fix" a wedged DB.** The next writer's `open` discards the
   uncommitted state itself. Only reach for `dolt_reset` /

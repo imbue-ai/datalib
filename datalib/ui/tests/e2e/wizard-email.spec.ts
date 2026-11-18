@@ -2,7 +2,14 @@
 // account row's check, and each label picker's own list.
 import { test, expect, type Page } from "@playwright/test";
 import { openAdvanced, reviewToml, row, showSignIn } from "./wizard-helpers";
-import { expandGroup, pickRowMenu, MANAGE_WITH_CONFIG, savedConfig } from "./grid-helpers";
+import {
+  fillConfigEditor,
+  expandGroup,
+  pickRowMenu,
+  MANAGE_WITH_CONFIG,
+  savedConfig,
+  expectSyncEverything,
+} from "./grid-helpers";
 import { probeAsk, probeDone, reportFor, type ProbeAsk } from "./probe-stub";
 
 const wizard = (page: Page) => page.getByRole("dialog");
@@ -150,7 +157,7 @@ async function stubBackend(page: Page) {
 
 async function openManager(page: Page) {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
 }
 
 /// Opens the account box's list and picks a stored name from it.
@@ -184,7 +191,7 @@ test.beforeEach(async ({ page, request }) => {
 test.afterEach(async ({ page }) => {
   if (!original) return;
   await openManager(page);
-  await page.locator(".m2-editor").fill(original);
+  await fillConfigEditor(page, original);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
 });
@@ -316,7 +323,7 @@ test("the render filter is offered folders, never flags", async ({ page }) => {
   await expect(page.getByText("Added Bridge mail.")).toBeVisible();
   await expandGroup(page, "bridge-mail");
   await expect(
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="bridge-mail/render_markdown"]'),
+    page.locator('.tg-grid .slick-row[data-key="bridge-mail/render_markdown"]'),
   ).toBeVisible();
   // The outlink is a preset: a Gmail source's webmail links are
   // Gmail's, and there is no second answer to ask about.
@@ -404,9 +411,7 @@ test("an existing source reopens on the form that wrote it", async ({ page }) =>
   await expandGroup(page, "personal-mail");
   await pickRowMenu(
     page,
-    page.locator(
-      '.tg-grid .slick-row:not([data-pinned])[data-key="personal-mail/render_markdown"]',
-    ),
+    page.locator('.tg-grid .slick-row[data-key="personal-mail/render_markdown"]'),
     "Edit settings…",
     wizard(page),
   );

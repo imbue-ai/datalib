@@ -42,14 +42,14 @@ type Row = {
 async function openMessageBy(page: Page, request: APIRequestContext, handle: string) {
   const q = `author_handle:"${handle}"`;
   const resp = await request.get(
-    `/applet/unified_document_index/search?q=${encodeURIComponent(q)}&limit=50`,
+    `/applet/unified_grid_and_search_index/search?q=${encodeURIComponent(q)}&limit=50`,
   );
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as { rows: Row[] };
   const message = rows.find((r) => r.markdown_uuid && r.message_index != null);
   expect(message, `the fixture must have a message by ${handle}`).toBeTruthy();
   await page.goto(EVERY_ROW);
-  await searchAndSettle(page, `convo:${message!.conversation_uuid}`);
+  await searchAndSettle(page, `datalib_document_id:${message!.conversation_uuid}`);
   await gridSettled(page);
   await openRowByUuid(page, message!.uuid);
 }
@@ -151,7 +151,7 @@ test("a contact picked with @ finds everything that reached its handles", async 
 
   const total = async (q: string) => {
     const r = await request.get(
-      `/applet/unified_document_index/search?q=${encodeURIComponent(q)}&limit=1`,
+      `/applet/unified_grid_and_search_index/search?q=${encodeURIComponent(q)}&limit=1`,
     );
     expect(r.ok()).toBeTruthy();
     const body = (await r.json()) as { total: number; refused?: string[] };
@@ -162,9 +162,9 @@ test("a contact picked with @ finds everything that reached its handles", async 
   expect(byHandle, "the fixture names Picard's address").toBeGreaterThan(0);
 
   await page.goto(GRID);
-  const field = shownCards(page).getByTestId("search-input");
+  const field = page.getByTestId("search-input");
   await typeInto(field, "@jean");
-  const offered = shownCards(page).locator(`.cm-tooltip-autocomplete a.chip[data-contact="${id}"]`);
+  const offered = page.locator(`.cm-tooltip-autocomplete a.chip[data-contact="${id}"]`);
   await expect(offered).toBeVisible();
   await expect(offered).toContainText("Jean-Luc");
   await field.press("Tab");
@@ -186,7 +186,7 @@ test("a contact marked as me on its card is who from:me finds", async ({ page, r
   const { contact_id: id } = (await made.json()) as { contact_id: string };
   const total = async (q: string) => {
     const r = await request.get(
-      `/applet/unified_document_index/search?q=${encodeURIComponent(q)}&limit=1`,
+      `/applet/unified_grid_and_search_index/search?q=${encodeURIComponent(q)}&limit=1`,
     );
     expect(r.ok()).toBeTruthy();
     const body = (await r.json()) as { total: number; refused?: string[] };
@@ -404,6 +404,15 @@ test("a source's values copy into the contact, and a copied address links in one
   const card = page.locator(".person");
   await expect(card.locator(".person-name")).toHaveText(/Geordi$/, { timeout: 15_000 });
 
+  // Opening the draft takes a moment, and the next click can come first:
+  // that second copy must not start the form over and lose the first.
+  let letDraftOpen!: () => void;
+  const draftMayOpen = new Promise<void>((open) => (letDraftOpen = open));
+  await page.route("**/applet/datalib_contacts/contact/*/draft", async (r) => {
+    if (r.request().method() === "POST") await draftMayOpen;
+    await r.fallback();
+  });
+
   // The address book's record holds his second address too.
   const book = card.locator(".person-section", { hasText: "laforge@enterprise.starfleet" }).last();
   await book.locator(".person-copy summary").click();
@@ -411,6 +420,7 @@ test("a source's values copy into the contact, and a copied address links in one
   await book
     .getByRole("button", { name: "Copy Email (work) “laforge@enterprise.starfleet”" })
     .click();
+  letDraftOpen();
   await expect(card.getByLabel("Title", { exact: true })).toHaveValue("Chief Engineer");
   await expect(book.locator(".person-copy-values")).toContainText(
     "Title “Chief Engineer”in your contact",

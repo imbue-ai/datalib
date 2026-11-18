@@ -117,7 +117,7 @@ async fn walk(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let run = DownloadRun::start(opts.db.pool(), &serde_json::to_value(&opts.api)?).await?;
     let mut summary = FetchSummary::default();
     let result = walk_files(&opts, &found, &mut summary).await;
-    run.finish(&result, &summary).await;
+    run.finish(found.ended_early(), &result, &summary).await;
     result.map(|()| summary)
 }
 

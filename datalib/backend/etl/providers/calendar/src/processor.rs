@@ -175,7 +175,7 @@ impl DataProcessor for CalendarIngest {
                 }
             };
             let summary = result.as_ref().cloned().unwrap_or_default();
-            run.finish(&result, &summary).await;
+            run.finish(summary.ended_early, &result, &summary).await;
             Ok(result?.line())
         })
         .await

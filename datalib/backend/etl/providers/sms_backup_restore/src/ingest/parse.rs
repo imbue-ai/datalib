@@ -63,6 +63,8 @@ pub struct MmsRecord {
     pub blobs: Vec<MmsBlob>,
     /// Parts whose bytes did not decode, as `(name, why)`.
     pub failed_blobs: Vec<(String, String)>,
+    /// Parts that hold nothing to store, as in a backup taken without media.
+    pub parts_without_data: usize,
     /// Everyone the message went between, as the phone listed them.
     pub addrs: Vec<MmsAddr>,
 }
@@ -224,6 +226,8 @@ fn parse_mms_body(reader: &mut Reader<&[u8]>, head: Attrs) -> Result<MmsRecord> 
                             rec.failed_blobs.push((name, format!("{e:#}")))
                         }
                     }
+                } else {
+                    rec.parts_without_data += 1;
                 }
             }
             Event::Empty(e) | Event::Start(e) if e.name().as_ref() == "addr" => {
@@ -280,6 +284,7 @@ fn mms_from_attrs(a: &Attrs) -> MmsRecord {
         text: String::new(),
         blobs: Vec::new(),
         failed_blobs: Vec::new(),
+        parts_without_data: 0,
         addrs: Vec::new(),
     }
 }

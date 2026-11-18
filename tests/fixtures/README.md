@@ -158,7 +158,7 @@ without re-running the pipeline:
 ```
 bazelisk build //tests/fixtures:ingested_tng
 # bazel-bin/tests/fixtures/ingested/backend_index.sqlite
-# bazel-bin/tests/fixtures/ingested/qmd.tar
+# bazel-bin/tests/fixtures/ingested/rendered.tar
 # bazel-bin/tests/fixtures/ingested/time_series.tar
 ```
 
@@ -174,12 +174,12 @@ inside the same second can agree by luck:
 |---|---|
 | `grid_rows` / `markdowns` / `edges` **contents** | **yes** |
 | `backend_index.sqlite` **file** | no |
-| the render stores in `qmd.tar` | no |
+| the render stores in `rendered.tar` | no |
 | rendered `.md` trees | yes, except yolink's `index.md` (below) |
 
 **The table contents are the property worth relying on, and they hold.**
 Dump them (`.mode json`, `SELECT * … ORDER BY 1`) and two independent
-runs agree byte for byte. `//datalib/backend/unified_document_index:fixture_db_snapshot_test`
+runs agree byte for byte. `//datalib/backend/unified_grid_and_search_index:fixture_db_snapshot_test`
 is an insta snapshot of exactly that, which is why it can exist at all.
 
 The **files** cannot be byte-stable, and no amount of `--now` pinning
@@ -214,9 +214,7 @@ works, read-only; a consumer that speaks only stock SQLite wants the
 export in [`docs/dev/doltlite.md`](/docs/dev/doltlite.md#getting-the-data-out-export-to-plain-sqlite).
 
 ```rust
-let pool = sqlx::sqlite::SqlitePool::connect(
-    &format!("sqlite://{}?mode=ro", db_path.display())
-).await?;
+let pool = datalib_pin::open_reader(&db_path).await?;
 let n: i64 = sqlx::query_scalar("SELECT count(*) FROM grid_rows")
     .fetch_one(&pool).await?;
 ```

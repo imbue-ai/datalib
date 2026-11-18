@@ -3,12 +3,14 @@
 //! (`listed`), then the `.eml` of every email that has none.
 
 pub mod api;
+pub mod apple_mail;
 pub mod db;
 pub mod envelope;
 pub mod gmail_api;
 pub mod labels;
 pub mod listed;
 pub mod mbox;
+mod preview;
 pub mod schema_raw;
 pub mod session;
 
@@ -102,14 +104,16 @@ pub(crate) async fn refile_mailboxes(
         let mut after = String::new();
         loop {
             let batch = db.emails_filed_under(from, &after, REFILE_BATCH).await?;
-            let Some((last, _, _)) = batch.last() else {
+            let Some((last, ..)) = batch.last() else {
                 break;
             };
             after = last.clone();
             let rows: Vec<EmailRow> = batch
                 .into_iter()
-                .filter_map(|(_, account, payload)| {
-                    EmailRow::from_jmap_envelope(&account, &refiled(payload, from, to.as_deref()))
+                .filter_map(|(_, account, payload, preview)| {
+                    let refiled = refiled(payload, from, to.as_deref());
+                    let row = EmailRow::from_jmap_envelope(&account, &refiled)?;
+                    Some(EmailRow { preview, ..row })
                 })
                 .collect();
             upsert_emails(db, now, &rows).await?;
@@ -168,10 +172,19 @@ async fn upsert_emails(db: &RawDb, now: &IsoOffsetTimestamp, rows: &[EmailRow]) 
 }
 use session::Session;
 
-/// Batch size for `Email/get` detail fetches. JMAP servers typically
-/// cap a single `Email/get` at ~500 ids; we stay well below to keep
-/// per-call latency bounded.
-const EMAIL_GET_BATCH: usize = 50;
+/// Ids per `Email/get` of whole envelopes, at most: the least RFC 8620
+/// suggests a server allow (`maxObjectsInGet`). A request's time is mostly
+/// the server's wait, not its bytes (INGEST.md §"Incrementality").
+const EMAIL_GET_MAX: usize = 500;
+/// Ids per `Email/get` for a server that states no `maxObjectsInGet`,
+/// which RFC 8620 requires it to.
+const EMAIL_GET_UNSTATED: usize = 50;
+
+/// Ids per `Email/get`: what the server allows, up to [`EMAIL_GET_MAX`].
+fn email_get_batch(max_objects_in_get: Option<usize>) -> usize {
+    max_objects_in_get.map_or(EMAIL_GET_UNSTATED, |n| n.clamp(1, EMAIL_GET_MAX))
+}
+
 /// Ids asked of `Email/query` per page of an enumeration.
 const EMAIL_QUERY_PAGE: usize = 500;
 /// `Email/changes` `maxChanges` ceiling — large enough to drain a
@@ -188,11 +201,11 @@ const BLOB_TIMEOUT: Duration = Duration::from_secs(180);
 /// block; set `1` to restore strictly-serial fetching.
 const DEFAULT_BLOB_CONCURRENCY: usize = 8;
 
-/// Envelope-only `Email/get` properties. Body parts (`bodyValues`,
-/// `textBody`, `htmlBody`, `preview`) are deliberately omitted: the
-/// canonical body source is the `.eml` blob in the shared CAS, and
-/// render `mail-parse`s it on demand so the JMAP and mbox sources
-/// feed identical inputs into the renderer.
+/// Envelope-only `Email/get` properties, and the server's `preview` for
+/// the row's column. Body parts (`bodyValues`, `textBody`, `htmlBody`) are
+/// deliberately omitted: the canonical body source is the `.eml` blob in
+/// the shared CAS, and render `mail-parse`s it on demand so the JMAP and
+/// mbox sources feed identical inputs into the renderer.
 const EMAIL_GET_PROPERTIES: &[&str] = &[
     "id",
     "blobId",
@@ -207,6 +220,7 @@ const EMAIL_GET_PROPERTIES: &[&str] = &[
     "messageId",
     "hasAttachment",
     "attachments",
+    "preview",
 ];
 
 #[derive(Debug, Clone)]
@@ -299,7 +313,7 @@ pub struct FetchSummary {
 
 /// The config key a [`datalib_etl::download_problems::DownloadProblem`]
 /// about the label filter names.
-pub(crate) const K_ONLY_EXTRACT_LABELS: &str = "only_extract_labels";
+pub const K_ONLY_EXTRACT_LABELS: &str = "only_extract_labels";
 
 /// Session, mailboxes, emails, blobs: the four ticks the outer bar
 /// makes whatever the run turns out to hold.
@@ -380,7 +394,8 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     // type is the same on both paths; on error its fields will simply
     // be the defaults populated up to the failure point.
     let summary_for_bookkeeping = result.as_ref().cloned().unwrap_or_default();
-    run.finish(&result, &summary_for_bookkeeping).await;
+    run.finish(found.ended_early(), &result, &summary_for_bookkeeping)
+        .await;
     result
 }
 
@@ -438,13 +453,13 @@ async fn run_sync(
     let mailbox_filter: Option<BTreeSet<String>> = if opts.only_mailbox_labels.is_empty() {
         None
     } else {
-        let nodes: Vec<crate::mailbox_labels::MailboxNode> = db
+        let data_nodes: Vec<crate::mailbox_labels::MailboxNode> = db
             .load_mailboxes()
             .await?
             .iter()
             .filter_map(crate::mailbox_labels::MailboxNode::from_payload)
             .collect();
-        let resolved = crate::mailbox_labels::resolve(&nodes, &opts.only_mailbox_labels);
+        let resolved = crate::mailbox_labels::resolve(&data_nodes, &opts.only_mailbox_labels);
         for spec in &resolved.unmatched {
             summary
                 .problems
@@ -537,6 +552,9 @@ async fn run_sync(
     let blobs = sync_blobs(db, session, account_id, opts, bar, found, &mut summary).await;
     bar.did(1);
     blobs?;
+    if !opts.control.stop.requested() {
+        preview::fill_from_held_bytes(db, opts.sealer.as_ref(), &opts.control.stop).await?;
+    }
 
     info!(
         event = "jmap_download_complete",
@@ -985,9 +1003,10 @@ impl EmailListing<'_> {
     }
 
     /// Fetch, with `Email/get`, every listed email the store does not
-    /// hold at its listed stamp: `owed::drain`, fifty to a batch. An
-    /// email the server no longer has, or that a label filter keeps out,
-    /// is gone: its listing, its row and whatever was held for it go.
+    /// hold at its listed stamp: `owed::drain`, [`email_get_batch`] to a
+    /// batch. An email the server no longer has, or that a label filter
+    /// keeps out, is gone: its listing, its row and whatever was held for
+    /// it go.
     /// Under `whole_threads` the filter keeps every email of a thread
     /// one it admits is in.
     async fn fetch_owed(
@@ -1005,6 +1024,15 @@ impl EmailListing<'_> {
         }
         bar.expect(owed.len() as u64);
         bar.doing("fetching emails");
+        let stated = self.session.core_limit("maxObjectsInGet");
+        if stated.is_none() {
+            warn!(
+                event = "jmap_no_max_objects_in_get",
+                batch = EMAIL_GET_UNSTATED,
+                "the JMAP server states no maxObjectsInGet; asking for a few emails at a time"
+            );
+        }
+        let batch = email_get_batch(stated);
         let kept_threads = match whole_threads {
             Some(keeps) => Some(Mutex::new(
                 listed::kept_threads(pool, self.account_id, Keeps::Mailboxes(keeps)).await?,
@@ -1030,9 +1058,9 @@ impl EmailListing<'_> {
             stop: &self.opts.control.stop,
             found,
             sealer: self.opts.sealer.as_ref(),
-            batch: EMAIL_GET_BATCH,
+            batch,
             concurrency: 1,
-            flush: EMAIL_GET_BATCH,
+            flush: batch,
             flush_bytes: 0,
             failures_in_a_row: GET_FAILURE_BUDGET,
         };
@@ -1427,6 +1455,17 @@ fn string_array(v: &Value, key: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
+    /// Guards the batch that made re-listing a 277k-email Fastmail
+    /// account an hour of 50-id requests: the server's stated limit is
+    /// used, up to 500.
+    #[test]
+    fn email_get_batch_takes_the_servers_limit_up_to_500() {
+        assert_eq!(email_get_batch(Some(4096)), 500);
+        assert_eq!(email_get_batch(Some(200)), 200);
+        assert_eq!(email_get_batch(Some(0)), 1);
+        assert_eq!(email_get_batch(None), 50);
+    }
+
     async fn tmp_db() -> (tempfile::TempDir, RawDb) {
         let d = tempfile::tempdir().unwrap();
         let db = RawDb::open(&d.path().join("j.doltlite_db")).await.unwrap();
@@ -1558,6 +1597,33 @@ mod tests {
     }
 
     /// A row re-keyed onto a new id carries its emails with it.
+    /// A refile rebuilds the row from its payload, which leaves the preview
+    /// out, and the row has to keep it.
+    #[tokio::test]
+    async fn refiling_keeps_the_preview() {
+        let (_d, db) = tmp_db().await;
+        let row = EmailRow::from_jmap_envelope(
+            "A",
+            &json!({
+                "id": "E1", "blobId": "B1", "threadId": "T1",
+                "mailboxIds": {"M1": true}, "preview": "Make it so.",
+            }),
+        )
+        .unwrap();
+        let now = IsoOffsetTimestamp::now_local();
+        upsert_emails(&db, &now, &[row]).await.unwrap();
+        refile_mailboxes(&db, &now, &[("M1".to_string(), Some("M2".to_string()))])
+            .await
+            .unwrap();
+        let preview: Option<String> = sqlx::query_scalar("SELECT preview FROM emails")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(preview.as_deref(), Some("Make it so."));
+        assert_eq!(joined_mailboxes(&db, "E1").await, ["M2"]);
+        db.close().await;
+    }
+
     #[tokio::test]
     async fn refiling_onto_a_new_id_moves_every_email() {
         let (_d, db) = tmp_db().await;

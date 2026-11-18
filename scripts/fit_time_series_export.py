@@ -1,9 +1,9 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run python
 """Export every FIT `record` field of a Garmin source's activity files as
 one time series per activity and field, one JSON object a line, for
 `measure` to encode.
 
-    python3 -I scripts/fit_time_series_export.py <garmin>/ingest/blobs.sqlite > series.jsonl
+    uv run python -I scripts/fit_time_series_export.py <garmin>/ingest/blobs.sqlite > series.jsonl
 
 Each line: {"field": n, "t": [unix ms], "raw": [int], "scale": s,
 "offset": o, "semicircles": bool}. A value in its unit is raw / scale -

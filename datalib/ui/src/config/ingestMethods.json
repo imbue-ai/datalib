@@ -17,6 +17,12 @@
       "reach": "local"
     }
   ],
+  "baby_connect": [
+    {
+      "path": "api",
+      "reach": "origin"
+    }
+  ],
   "beeper": [
     {
       "path": "texts",
@@ -102,6 +108,10 @@
     },
     {
       "path": "mbox",
+      "reach": "local"
+    },
+    {
+      "path": "apple_mail",
       "reach": "local"
     }
   ],

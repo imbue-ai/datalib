@@ -28,9 +28,10 @@ async fn chatgpt_live_single_conv_snapshot() {
 
     let db = chatgpt::RawDb::open(&db_path_for(&tmp)).await.unwrap();
     let opts = chatgpt::FetchOptions {
-        max_pages: None,
-        limit: None,
-        sleep_between: Duration::ZERO,
+        max_listing_pages: None,
+        max_conversations_per_run: None,
+        refetch_newest_conversations: None,
+        wait_between_requests: Duration::ZERO,
         conv_uuids: vec![TARGET_ID.to_string()],
         ..chatgpt::FetchOptions::new(db.clone())
     };

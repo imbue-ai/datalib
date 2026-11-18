@@ -36,7 +36,11 @@ use serde_json::Value;
 /// v11: a post's "Edited" is a `<time>` stamp.
 /// v12: the owner is marked as the account's own, by their name and the
 ///     profile's address, so search reads both as `me`.
-pub const RENDER_VERSION: u32 = 12;
+/// v13: the tables no feed reads are counted on record.
+/// v14: a Messenger conversation and the comments and reactions feeds are
+///     one document each, under the chat's own uuid, not one per year.
+/// v15: the tables no feed reads are a note, not a warning.
+pub const RENDER_VERSION: u32 = 15;
 
 pub const SOURCE_LABEL: &str = "Facebook";
 
@@ -173,11 +177,13 @@ pub fn chat_item(
     attachments: Vec<NormalizedAttachment>,
 ) -> NormalizedChatItem {
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: item_id.uuid,
         author_handle,
         author_kind,
         author_display,
         date_ms,
+        date_offset_secs: None,
         text,
         kind: if attachments.is_empty() {
             ItemKind::Text

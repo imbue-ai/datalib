@@ -1,0 +1,480 @@
+# Security posture
+
+Who we are guarding against, what they would want, how they could get
+it, what stops them and what does not. A guard makes sense only next to
+the attack it answers, and the code shows the guard but not the attack.
+
+Each threat says what is still open. An open item with a reason is
+useful here; a threat written as if it were solved is not. Say whether a
+claim was measured, read from source, or only reasoned about. A dated
+review of the tree goes in [`audits/`](audits/), not here.
+
+## What is worth taking
+
+datalib holds a person's email, messages, documents and health data, and
+the sign-ins that fetch more of it. So there are two prizes:
+
+- **One person's library**, reached through something that person
+  received or a page they visited.
+- **Everyone's library**, reached through what we ship. A release runs on
+  each person's machine with access to all of the above, and a signed Mac
+  app is trusted by macOS as coming from us. This is why the build gets
+  more attention below than its size suggests.
+
+## Who we guard against
+
+| who | what they can already do |
+|---|---|
+| A stranger | Send email or a message with any content and any attachment, which a sync then mirrors. |
+| A website | Run script in a browser that is also open on the app's local port. |
+| Whoever controls a third-party package | Publish a new version. Compromised maintainer accounts are the usual route. |
+| Someone holding a write-access account | Push branches and run workflows here, and merge a PR whose CI is green. Reviews are deliberately not required, and about 30 accounts have write access. |
+| Another program running as you | Read any file you can, see your other programs' environment and arguments, and connect to any local port. |
+
+Not written up yet, and not yet decided whether we defend against them:
+a stolen laptop, and code a person chose to install as a package or applet.
+
+## Bad code reaches a release through the build
+
+This is the threat behind the job split in `release.yml`
+([`release_steps.md`](release_steps.md) §"Who holds what") and behind a
+release reading no cache ([`ci.md`](ci.md) §"Two caches").
+
+Two facts make it possible:
+
+- **Compiling runs other people's code.** A crate's `build.rs` is a
+  program that runs while the crate compiles, as the same user as the
+  build, and so do proc macros and any tool a Bazel rule runs. Nothing
+  there is a security boundary. On `test.yml`'s and the release's Linux
+  jobs, actions run under `processwrapper-sandbox`, which in Bazel's
+  source is a symlink tree with no mounts and no network isolation. On a
+  Mac, a Bazel action under `darwin-sandbox` read a stand-in
+  `.bazelrc.user` and got an answer from BuildBuddy's host (measured);
+  `cargo`, which builds the desktop app, has no sandbox at all.
+- **Bazel trusts a cache.** The action cache maps a hash of an action's
+  command and inputs to its recorded outputs, and on a hit Bazel uses
+  those outputs without running anything and without checking them. The
+  repository cache behaves the same way for source trees: with a file
+  under its `contents/` directory edited and the download's server shut
+  down, a Bazel 9.3.1 build succeeded with the edited bytes in its output
+  (measured, on a one-file repository). So whoever can write a cache
+  chooses what a later build that reads it gets.
+
+### How the code gets there
+
+```
+crates.io                a new version of a crate someone took over
+    │  7-day wait        only for the backend's weekly lockfile PR
+    ▼
+PR run                   build script runs, holding the contributor key
+    │  CI green          no review required
+    ▼
+push to main             build script runs, holding main's BuildBuddy write key
+    │
+    ▼
+tag → release build      compiles the crate itself, reads no cache:
+                         signed Mac app, tarballs, Docker image
+```
+
+The second way in skips the first two boxes. Someone holding a
+write-access account needs no crate: a test in their own PR runs with the
+write key once it reaches `main`.
+
+### What a build script can do with that position
+
+From smallest reach to largest:
+
+1. **Change what this build produces.** It needs neither a cache nor a
+   key. The crate's own output is the obvious target, and because nothing
+   isolates one action from another, anything else the same job builds is
+   in reach too (reasoned from the sandbox's design, not tried). It ends
+   when the crate is gone and the job is rebuilt. A release that compiles
+   from scratch is exposed to this, and `macos-app-sign` would sign the
+   result.
+2. **Write a cache entry for some other action.** A dependency only tests
+   use can replace the output of a crate `main` builds, and the entry
+   outlives the crate: revert the bump and it stays, because the victim
+   action's hash has not changed. This reaches `main`'s CI, not a
+   release: it can make a failing test look green on `main`, or run code
+   in those jobs by replacing a tool the build runs. Those jobs hold the
+   write key and a read-only token. No workflow takes what they produce,
+   though one artifact is a built tarball a person could download by hand.
+3. **Take the key.** Send it elsewhere, then write entries from anywhere
+   at any time until someone mints a new one. The repository shows no
+   trace, and removing the bad crate changes nothing. The reach is the
+   same as item 2. The gate on a PR uses the contributor org, so this key
+   cannot fake a required check.
+
+The first comes with using a dependency at all, and a release reading no
+cache does nothing about it. What it removes is the reach of the other
+two: a crate no release builds, or one already reverted, has no way left
+into a release's output.
+
+**The `v*` tag ruleset limits who starts a release, not what runs in
+one.** Only the `datalib-release` team, two people, can create a tag.
+That does nothing about the build scripts that run once one starts.
+
+### What guards it
+
+| guard | what it stops | what it does not stop |
+|---|---|---|
+| Lockfiles; `cargo deny` allows only the crates.io registry and fails on a known advisory; required to merge | An unpinned version, an unknown source, a bad version once it has an advisory | A bad version nobody has reported yet |
+| 7-day burn-in in `cargo-update.yml` | A bad backend crate noticed within the week | One nobody notices. Dependabot's PRs have no `cooldown`, so the desktop app's crates and the npm trees do not wait |
+| A release reads no cache: no BuildBuddy key, no restored repository cache, no Docker layer cache (check 21) | An entry written on `main`, or with a stolen key, reaching what a release ships. On the mac legs this was the repository cache: v0.49.0's restored an entry saved on `main` by `latchkey-auth.yml`'s daily run, while BuildBuddy gave them no hits | Bad code a release compiles itself (item 1) |
+| Two BuildBuddy orgs | A laptop or a PR run writing what `main`'s CI replays | Anything that runs on `main` |
+| The write key is a secret of the `main-ci` environment, which only `main` may use (check 21, and a setting below) | A PR's code, or a workflow edited on a branch, getting the key before it merges | Anything that runs on `main` |
+| BuildKit pinned by digest, and each image built on its own architecture, so no emulator image runs (check 21) | Whoever controls a tag on Docker Hub running code in a job that can push the image, or changing what assembles it | A bad version someone pins deliberately, and the runner image itself |
+| Publish, sign and attest jobs build nothing (`release_steps.md`; check 21) | A build taking the signing key or a write token, signing an attestation as `release.yml`, or rewriting a published release | Bad code in what it builds |
+| What a build made reaches those jobs outside the checkout, and the sign job's archive passes `unpack_compiled_app.py` (check 21) | A build replacing a script or the Tauri CLI that the sign job then runs with the key in reach, by an archive entry or a planted artifact | A bad binary inside the allowed paths, which gets signed. Nothing in the sign job runs it (`sign-staged.sh`), and `macos-app-verify` runs it with no key |
+| The `v*` tag ruleset | Anyone outside the team starting or moving a release | What a release does once started |
+
+### What is still open
+
+- **Bad code a release compiles itself** (item 1 above). The burn-in and
+  `cargo deny` are all that stand in front of it.
+- **The write key sits where crates compile.** `test.yml`'s three jobs
+  that run on a push to `main` hold it, and it cannot be hidden from
+  build scripts on those runners. Its reach is `main`'s CI.
+- **Nothing can tell a bad entry from a good one.** If a compromise is
+  found, mint a new write key; that leaves any planted entries in place
+  for `main`'s CI, and no release reads them.
+
+### What has not been shown
+
+Nobody has run these attacks. These are the links that rest on reading
+rather than on a run:
+
+- Reading the real key from an action in `test.yml`'s job, suspected in
+  the 2026-11-03 audit. The evidence is Bazel's source, the job's log
+  naming `processwrapper-sandbox`, and the Mac measurement above.
+- A build script editing the repository cache in `latchkey-auth.yml`'s
+  job before `setup-bazel` saves it, and a tag then building from that.
+  Measured separately: a tag's mac legs restore an entry saved on `main`,
+  and Bazel uses an edited tree unchecked. Nobody has opened a saved entry
+  to see `contents/` in it; that it is saved follows from `setup-bazel`
+  saving the whole directory.
+- Working out the hash of a real action and planting an entry that a
+  later `main` build replays.
+
+## A release is swapped after it is built
+
+Someone holding a write-access account could replace a published tarball and
+the `.sha256` beside it, or publish a release of their own and mark it latest.
+Anyone following `releases/latest` would then install what they chose. The `v*`
+tag ruleset says nothing about this: no tag moves.
+
+| guard | what it stops | what it does not stop |
+|---|---|---|
+| `install.sh` pins a version and each tarball's hash, written by `pin_release.py` after a release publishes | All of the below for `curl \| sh`: it follows no `latest`, and a hash cannot be swapped from outside the repository | A merge to `main`, which is where the script is read from. A tag someone names with `DATALIB_VERSION`, checked only against the checksum beside it |
+| `pin_release.py` pins only a release whose tag's commit has a successful `release.yml` run on a tag push | A writer's own release, on a new tag or an old one, being written into `install.sh` and the Docker page. A branch named like the tag does not pass: its run is on another commit. None of the 28 `v*` tags with no release has a successful run (measured) | Anyone reading the release page or naming the tag themselves |
+| `pin_release.py` downloads each tarball it pins and refuses it, and the image, unless `gh attestation verify` passes for `release.yml` at that tag and commit (`pin_release_test`) | An asset nobody attested reaching `curl \| sh` or the Docker page, so those install only bytes `release.yml` built, with no `gh` on the person's machine. v0.54.1, which has no attestations, was refused (measured) | Whoever pins skipping the script, and a merge to `main` that changes it. The runtime assets are checked only through the hashes in an attested tarball's `runtime.manifest` |
+| `docs/user/docker.md` names the image by digest, and a release carries that digest as an asset | A moved image tag reaching someone following the page | Someone who names a tag themselves |
+| `test.yml` and `cargo-update.yml` name the devcontainer image by digest, moved by `pin_release.py` (`pin_release_test`) | A moved `datalib_devcontainer` tag running in `main`'s CI, which holds the write key | Reading `:X.Y.Z` when pinning, so a tag moved between the build and the pin is pinned; that PR's CI runs in the image first, which holds no write key. `--config=remote`, which names `:latest` and only a dispatch of `test.yml` uses, with no write key |
+| Immutable releases (a setting below), from v0.51.0 on | Replacing or removing an asset of a published release, or moving its tag | Any release published before the setting went on, which is all 49 through v0.50.0 (`gh api` reports `immutable: false` on each) |
+| One job creates, uploads, reads back and publishes (`release_steps.md` §"Attest, then draft, then publish") | An asset swapped or added while a draft stands open, and a build's artifact carrying another job's file | A swap in the seconds between the read and the publish: the read after it reports that, but the release is locked by then |
+| The tag ruleset covers every tag, not only `v*` (a setting below) | Publishing under a new tag name | A release on a tag that already exists, and marking an older release latest, which GitHub allows even on an immutable one |
+| The Mac app's signature and notarization | A swapped dmg passing Gatekeeper, for someone who clicks through `releases/latest` | Bad code we signed ourselves |
+| Build provenance: `release.yml`'s `attest` job signs that this workflow, at this tag and commit, made each asset but the `.sha256` sidecars, and the image by digest. `publish-release` uploads only the bytes `attest` signed, and `attest` runs a person's check on them before anything publishes | A writer's own release, or an image pushed by another workflow or from a branch, passing `gh attestation verify --signer-workflow imbue-ai/datalib/.github/workflows/release.yml --source-ref refs/tags/<tag>`. Those flags refused another workflow, tag and commit, measured on a `latchkey-curl-shims` release the same action signed | Anyone who does not run the check, and `install.sh` does not (below). A workflow changed on `main` and then tagged, which signs as `release.yml`. Releases up to v0.54.1, which carry none |
+
+### What is still open
+
+- **`releases/latest` can still be moved by anyone with write access.** This
+  no longer reaches `curl | sh` or the Docker page. It reaches a person following
+  the README's link to the dmg, where the signature is the guard. Two ways remain
+  to move it: mark an older release latest, or publish a new release on one of the
+  28 old `v*` tags that have none. The second comes from GitHub's docs, which do
+  not rule it out, and has not been tried.
+- **A writer can take a new tag while its release builds.** No release exists
+  during the run, about 50 minutes, so a writer could publish an immutable one of
+  their own on the tag. `publish_release.py` finds it and fails the run, and
+  `pin_release.py` then refuses that tag, but the version number is lost: cut the
+  next one. Reasoned from the code and GitHub's docs, not tried.
+- **Old releases stay replaceable.** GitHub's docs say immutability "will only
+  apply to future releases". They do not say whether publishing a release again
+  locks it, and nobody has tried. Doing so would lock whatever bytes are there
+  now, not show that they are ours.
+- **Deleting old releases would not help, and would break things.** Their tags
+  remain, so a writer could publish a new release on one, and an installed build
+  fetches its Node runtime from its own release on first use. Keep them.
+- **A moved image tag: an accepted risk.** A workflow on any branch can ask for
+  `packages: write`, so it can probably move any tag of `ghcr.io/imbue-ai/datalib`,
+  which reaches someone who pulls `:latest` or a version by name. This has not
+  been tried, and the packages' Actions access settings cannot be read through
+  the API. The fix is a push token in an environment only `v*` tags may use, with
+  the repository's access to the packages cut to Read and inheritance turned off.
+  We decided against it (#1642): it needs a machine account and hand-kept package
+  settings no test can see, for people who chose to leave the digest our page
+  gives them. Revisit it if the image gets real use by tag.
+- **`install.sh` is read from `main`, so it is as trusted as a merge,** and
+  merging takes a green CI and no review. A PR's run uses that PR's own workflow
+  files, so a writer can edit a required check to pass. Binding the checks to
+  GitHub Actions stops a status posted by hand and nothing more. An unreviewed
+  merge is the easiest way into a signed release, and immutability then locks that
+  release in.
+- **A build attestation is GitHub's word, logged in public.** It is signed
+  with a certificate Sigstore issues for the job's GitHub OIDC token, so it
+  says what GitHub says ran, and it is entered in Sigstore's public
+  transparency log, `rekor.sigstore.dev`, which GitHub cannot quietly edit
+  (measured on a `latchkey-curl-shims` attestation; datalib's first one comes
+  with the next tag). GitHub also attests each immutable release
+  (`gh release verify v0.51.0` passes). As we read it, that says what a release
+  held when it locked, not who built it, so a writer's own release on an old
+  tag would likely get one too (not tried); the build attestation is the one
+  that names the workflow and commit.
+- **`curl | sh` does not check the attestation, on purpose.** `install.sh`
+  checks each tarball against a hash pinned in the script, which names exact
+  bytes and is as trusted as the script: whoever can change the script can also
+  remove a check from it. `gh attestation verify` needs `gh` signed in, so a
+  check run "when `gh` is present" would run on few machines and pass by not
+  running on the rest. The check runs before the pin instead: `pin_release.py`
+  writes no hash it has not verified (the row on it above). A tarball named with
+  `DATALIB_VERSION` is checked only against its sidecar, unless the person
+  runs the check in [`first_time_user.md`](../user/first_time_user.md)
+  §"Checking who built what you downloaded" by hand.
+
+### What has not been shown
+
+`publish_release.py` has run only against a stand-in for GitHub's API, so its
+real calls are first tried by a tag's run. So is the `attest` job: its place in
+the job graph and its hand-off to `publish-release` ran on a branch with steps
+that only echo, and its `gh attestation verify` flags against another
+repository's attestation, but the attest action reading the subjects file and
+pushing the image's attestation to ghcr.io first run on a tag. Whether the settings below hold is
+something only those commands can say.
+
+## A bad wheel reaches PyPI
+
+`imbue-datalib-reader` runs inside the programs that read a person's library, and
+anyone can install it by name, so it is worth the same care as a tarball.
+
+| guard | what it stops | what it does not stop |
+|---|---|---|
+| Trusted publishing: no PyPI token exists, and PyPI takes an upload only from `reader-wheels.yml` in the `pypi` environment | A leaked token, or a workflow on a branch uploading | A merge to `main` that changes the workflow, which a later tag then runs |
+| The `pypi` environment takes only `v*` tags (a setting below), and only `datalib-release` may create one | Anyone else starting an upload | What a tag's run does once started |
+| The wheels build in a workflow of their own, with no cache, and the Linux ones in images named by digest, compiling with no network | Anything `release.yml` compiles planting a wheel, and whoever controls an image's tag choosing the compiler | A bad image someone pins deliberately, and the mac leg, which compiles on GitHub's runner image |
+| PyPI never lets a file be replaced, and the upload carries attestations of the workflow that built it | Swapping a published version | A new version from a compromised run, and a person who does not check attestations |
+
+Still open: who owns the project on PyPI. An owner's account can add a publisher
+or a maintainer, and nothing in this repository can see that. A person's own
+lockfile pins a wheel's hash; a bare `pip install` follows whatever is latest.
+
+## The settings this rests on
+
+Each of these lives in GitHub, not in the tree, so no test or lint can see it.
+Each line is a command that shows it.
+
+| setting | check |
+|---|---|
+| Immutable releases on | `gh api repos/imbue-ai/datalib/immutable-releases` says `"enabled":true` |
+| `main` takes changes only through a PR | `gh api repos/imbue-ai/datalib/rulesets/22904358 --jq '.rules[].type'` includes `pull_request` |
+| `main`'s required checks can come only from GitHub Actions | `gh api repos/imbue-ai/datalib/rulesets/22904358 --jq '.rules[] \| select(.type=="required_status_checks") \| .parameters.required_status_checks[].integration_id'` says `15368` for each |
+| A workflow that names no permissions gets a read-only token | `gh api repos/imbue-ai/datalib/actions/permissions/workflow --jq .default_workflow_permissions` says `read`. `can_approve_pull_request_reviews` stays `true` because `cargo-update.yml` opens its PR with the workflow's token, and the one setting covers both |
+| A workflow can run an action only by its full commit hash, so whoever controls an action's tag cannot change what runs. This covers actions nested in other actions; local ones are exempt | `gh api repos/imbue-ai/datalib/actions/permissions --jq .sha_pinning_required` says `true` |
+| Private vulnerability reporting on, which `SECURITY.md` sends people to | `gh api repos/imbue-ai/datalib/private-vulnerability-reporting` says `"enabled":true` |
+| Only `datalib-release` may create, move or delete any tag | `gh api repos/imbue-ai/datalib/rulesets/26439103 --jq .conditions` includes `~ALL` |
+| `main-ci` may deploy only from `main` | `gh api repos/imbue-ai/datalib/environments/main-ci/deployment-branch-policies --jq '.branch_policies[] \| [.name, .type]'` says `main`, `branch`, and nothing else |
+| `pypi` may deploy only from a `v*` tag | `gh api repos/imbue-ai/datalib/environments/pypi/deployment-branch-policies --jq '.branch_policies[] \| [.name, .type]'` says `v*`, `tag`, and nothing else |
+| The release org's key is only in `main-ci` | `gh secret list --repo imbue-ai/datalib` does not name `BUILD_BUDDY_RELEASE_API_KEY`; `gh secret list --env main-ci --repo imbue-ai/datalib` does |
+
+## Another program running as you
+
+An AI agent's shell, a tool that agent installed, a script you ran. It has
+your user id, so it can do whatever you can unless macOS itself says no:
+
+- **Read any file you can.** A file's mode does not separate it from you:
+  0600 means "only this user", and it is this user.
+- **See your other programs' environment and arguments** with `ps eww`.
+  Measured on macOS 26 with a program of our own, both plain and with the
+  hardened runtime under an ad-hoc signature. An Apple binary (`/bin/sleep`)
+  did not show its environment, so test with your own.
+- **Connect to any port on 127.0.0.1**, the app's and every applet's.
+
+### What we defend
+
+**An ordinary library: nothing.** It is files in your home folder, and any
+such program can read them directly. A guard on the server would not change
+that.
+
+**A library in the protected folder**, on macOS 15 or later
+([`tauri/README.md`](../../datalib/tauri/README.md) §"A protected library").
+macOS keeps other programs out of the folder until you say yes, and that is
+the only guard there is. It is meant to stop an agent running shell commands
+as you from reading the library or using its sign-ins, not a program set on
+stealing from you.
+
+### The rule for a secret
+
+**A secret that opens a library may be in a file only inside that library,
+and never in an environment variable, an argument or a log.**
+
+A file inside is acceptable because of where it is. A program that can read
+`system/api-token` or `system/applet-secret` is already in the library, and
+can read the data and the sign-ins without them, so the secret gives it
+nothing new. The same file anywhere else is a way around the folder: a program
+that macOS keeps out of the library could read it and ask the server instead.
+That is what the backend's log in `$TMPDIR` was, and what `DATALIB_APPLET_SECRET`
+was in `ps`.
+
+We looked at handing the applet secret over a pipe, so that it was in no file.
+That would add little. A copy of a running library would hold no working
+secret, but the copy already holds the data. The API token stays in a file
+either way, because scripts and Imbue Studio read it, and every published
+applet would have to read a pipe instead of a file. Studio sets `DATALIB_TOKEN`
+in the environment, where `ps` shows it; that is fine in its workspace, which
+is not what this section defends, and the desktop app does not use it.
+
+### What guards each way in
+
+| way in | what guards it | what it does not stop | how we know |
+|---|---|---|---|
+| The library's files | macOS's guard on a group container, from macOS 15. Before that the app does not offer the folder | A program you said Allow to, and one with Full Disk Access | Full Disk Access measured on macOS 26.7.2. The version comes from Apple's documentation |
+| The sign-ins | Only the folder. The keychain item lets in the app's Node, which any program can run | The same | Read from source; `tauri/README.md` has the detail |
+| The server, with the API token | The token is in `system/api-token`. The launch URL reaches the desktop app over a pipe and is printed only to a terminal | A path a script gives `--url-file`, which is that script's choice | Measured on a scratch library: the token was in no other file and not in `ps`. `launch_url_test` |
+| Any store, read with SQL the caller writes (`POST /applet/unified_grid_and_search_index/sql`) | The API token, as every route. The store opens read-only and pinned to one commit; `datalib_sql_guard`'s authorizer lets a statement read tables and call SQLite's functions and doltlite's answering ones, and nothing else, and the statement it checked is the one that runs, refused again if SQLite does not call it read-only; under `system/`, only the stores it names | Reading: the token's holder reads every store a step wrote, the raw stores and the log among them. A program that can read the token could read those files anyway | `sql::tests::nothing_a_caller_sends_writes` and `a_guarded_connection_refuses_attach_and_writes_at_prepare`, both seen failing with the authorizer off; `detached_readers_running_guarded_sql_never_make_the_writers_commit_fail`. Measured with the doltlite shell: a read-only open, detached or not, still let `dolt_creds_new()` write a key under `~/.doltlite` |
+| Temp files, which hold web responses, decrypted databases, unpacked archives and a sign-in browser's state | `TMPDIR` names `<library>/system/tmp` for the server and everything it runs; the server empties it at start | A program that ignores `TMPDIR`, which macOS's own tools do (below). Anything written there by earlier builds, until macOS clears it | `protected_temp_test`, on the real server with a real step. One launch of the real desktop app at the protected path, with a scratch home: the server and its applets had this `TMPDIR`, and what a crash left was gone |
+| The web view's disk cache, which would hold documents and search results | The server of a protected library answers everything but `/assets/`, the app's own code, `Cache-Control: no-store` (`keep_off_disk`), and the shell empties `~/Library/Caches/com.imbue.datalib/WebKit/NetworkCache` at launch for anyone with a protected folder, which clears what earlier builds stored | A library's pages in the web view's memory while it runs | The cache's files opened from a shell with no prompt (measured, 2,142 files). `disk_cache` tests, and the header read off a real server. That WKWebView obeys it follows from the standard and has not been measured |
+| An applet's own port | Each applet requires the secret in `system/applet-secret` (`datalib_env::secret_file`) | A published applet that skips the check or hands the secret on | Measured on two real applets: `401` with what `ps` shows, `200` through the gateway. `applet_tests` |
+
+**`TMPDIR` only moves what follows it.** Rust's `temp_dir()` and Node's
+`os.tmpdir()` do, and they are what datalib's code and latchkey use. macOS's own
+`mktemp` does not, with or without `-t`, even when it is run outside the app
+(measured on macOS 26), so a custom step's shell script that calls it writes
+outside the folder. Name the path instead: `mktemp "$TMPDIR/x.XXXXXX"`. A
+visible Chromium keeps its `SingletonSocket` in macOS's temp dir at any `TMPDIR`
+length (measured up to 94 bytes), which holds no library content.
+
+**One Allow opens every app's data.** macOS's dialog names only the app asking,
+not the folder. A freshly opened Terminal asked for Docker's group container and
+was allowed. It then listed Datalib's protected container with no second dialog
+(macOS 26.7.2). People click Allow for routine reasons (an agent's `docker`
+command has brought the dialog up inside Claude), and each time the app asking,
+and everything running inside it, can read a protected library until it quits.
+An Apple-owned container was refused with no dialog at all. So the guard is only
+as good as every Allow a person has given that app since it started.
+
+### What is still open
+
+These all put something from a protected library outside its folder:
+
+- **The web view's other storage.** `~/Library/WebKit/com.imbue.datalib` holds
+  what the UI puts in `localStorage`: display settings and which source groups
+  are expanded, so some source ids. Not read, only named from the UI's source.
+- **The names of its files, perhaps, through `mdfind`.** Spotlight's index holds
+  nothing from the folder: a machine-wide `mdfind 'kMDItemFSName ==
+  "*.doltlite_db"'` listed none of a real container's stores, and all 74 in a real
+  `~/Datalib` (macOS 26.7.2). But `mdfind -onlyin <container>`, run from an agent's
+  shell, listed 1,438 file names, so a scoped query does not only read the index.
+  How it gets them is not known, nor whether it would for a program never let
+  into the folder: that shell's app may have been allowed. The same query found
+  files in a folder named `*.noindex`, so that name is not expected to stop it. To
+  learn what Spotlight holds, query machine-wide, never with `-onlyin`.
+- **A credential pasted into the wizard** is on `latchkey`'s command line for
+  the second that runs. It needs a change upstream
+  ([`latchkey.md`](latchkey.md)).
+- **The fingerprint cache** is in `~/Library/Caches/datalib` on a Mac, shared by
+  every library on the machine. It says which local files a source read. Read
+  from source.
+
+### What has not been shown
+
+- All of this on a signed release. The measurements used dev builds, and the
+  `ps` one an ad-hoc signature rather than a Developer ID.
+- macOS's guard on `system/applet-secret` and `system/api-token` themselves.
+  The scratch library was not in the group container, so the measurements above
+  show where the secrets are and not that macOS keeps a program from them. The
+  checks to run are in `tauri/README.md`, and they do not name these files yet.
+- A real sign-in with `TMPDIR` in the folder. A visible Chromium launched by
+  hand ran at that path length, but latchkey's Playwright did not run there.
+- The Mac before version 15. The launcher page was drawn with stubbed state
+  and only the version comparison has a test.
+
+## What leaves the machine for Modal
+
+An `embed` step whose params set `embed_on_modal_from_n_chunks` sends
+the text of a source's chunks to the person's own [Modal](https://modal.com)
+account to be embedded on rented GPUs
+([`plans/embed_on_modal.md`](plans/embed_on_modal.md)). This is the one
+place datalib hands a person's content to a service other than the one
+it came from, so it gets its own section.
+
+### What goes, and to whom
+
+- **The text of every chunk the run owes, and nothing else**: the
+  prompt for each chunk (its document's title and the chunk's text) and
+  the prompt's hash. No file, path, store or credential of the library.
+  What comes back is one vector per chunk, which goes into the inference
+  cache as a local embed's would. Read from source:
+  `embed_on_modal` in `datalib_step/src/search_index.rs` writes
+  `modal::request_line(hash, prompt)` and nothing else to the driver.
+- **Only for a source that names a threshold, and only on a run that owes
+  at least that many chunks.** Absent, nothing of the source leaves; a
+  run under the threshold embeds here. The parameter is per source
+  because that is where a person decides what may leave: a work Slack,
+  maybe; their health data, never.
+- **To Modal, as the person's processor**, under the person's own
+  account and sign-in (`~/.modal.toml`, or `MODAL_TOKEN_ID` and
+  `MODAL_TOKEN_SECRET`). datalib never reads the token's value, copies
+  it or stores it. The text crosses Modal's TLS connection into a
+  Sandbox that runs our own published `-cuda` image and lives for one
+  slice of the run.
+
+### What guards it
+
+- **Off by default, per source, in the config the person writes.** Nothing
+  in the wizard or the app turns it on; `check-params` refuses a value
+  that is not a whole number, so a typo fails the check rather than
+  sending everything (a misspelled name is refused too).
+- **The driver is handed a named environment**
+  (`datalib_env::Child::Modal`): what every child gets plus Modal's own
+  variables, and no other secret the step holds. A step itself is not
+  handed `MODAL_*` by a sync's runner unless `DATALIB_CHILD_ENV` names
+  them, so a custom step or a package's never sees a Modal token.
+- **The driver prints no prompt.** Its stderr, which goes to the step's
+  log, says which slice ran where and how long it took. Read from
+  source; no test greps the log for prompt text.
+- **Nothing about the remote work is stored**, so a stopped run leaves no
+  record of what went where beyond the vectors and the step's log.
+- **The SDK is pinned** by a lockfile with integrity hashes and no
+  install scripts (`third-party/modal/runtime/`), like latchkey's.
+
+### What is still open
+
+- **What Modal keeps.** Whether Modal retains a Sandbox's stdin, stdout or
+  logs after it ends, and for how long, has not been read from Modal's
+  terms or measured. Until it is, treat anything sent as possibly kept
+  by Modal under the person's account.
+- **A driver killed outright leaves its Sandboxes running** until their
+  15-minute limit; one stopped the ordinary way ends them first. Their
+  input was already sent, so this costs GPU time, not privacy.
+- **The image is pulled by tag**, `ghcr.io/imbue-ai/datalib:<version>-cuda`,
+  not by digest: whoever can push that tag decides what code reads the
+  text. The release attests the image, but the driver does not check the
+  attestation.
+
+### What has not been shown
+
+- None of this has run against Modal: the tests stand a fake in for the
+  SDK whose Sandboxes run locally. The live checks are listed in the
+  plan's _to check_ items.
+
+## Other threats, briefly
+
+These have guards in the tree and deserve the same treatment as the one
+above. What was open when last checked is in
+[`audits/2026-11-03_security.md`](audits/2026-11-03_security.md); read the
+code before repeating it as current.
+
+| threat | who | what guards it | start reading at |
+|---|---|---|---|
+| Something a person received runs script in the app. From there it could rewrite the config, whose step `command` runs any program | a stranger | Every served file gets the sandbox policy and keeps its type only if that type is on a short list; message bodies go through a sanitizer | `set_data_headers` in `http/src/embed.rs`, `ui/tests/e2e/document-sandbox.spec.ts`, [`chat-common/README.md`](../../datalib/backend/etl/chat-common/README.md) |
+| A website drives the local server | a website | A per-process API token; a cross-site request is refused unless it is a navigation, and named routes refuse those too | `fetch_policy` and `only_from_this_site` in `http/src/auth.rs` |
+| A link in a message tells its sender where you read it | a stranger | Every response the server sends carries `Referrer-Policy: no-referrer`, and a link the UI opens in a new window asks for `noreferrer` | `send_no_referrer` in `http/src/lib.rs`, `http_tests::referrer_policy` |
+| A message's remote image tells its sender you read it | a stranger | Remote media is fetched only for an allowed sender or document, through the server | `http/src/remote_media.rs` |
+| A crafted file or export breaks a sync or reaches SQL | a stranger | Values are bound and names quoted; where a parser's work is wrapped in `catching_panics`, a panic costs that one record, not the step | AGENTS.md §"Dynamic SQL needs `AssertSqlSafe` and a reason", `etl/src/run_problems.rs` |
+| A crafted mail or PDF takes over the parser that reads it, in the docker image | a stranger | Nothing in the image runs as root: everything runs as uid 1000, which owns only the data root, the credential store and the demo, and cannot write the binaries. Reasoned, not measured: no exploit was tried | [`docker.md`](docker.md) § "Permissions and signals" |
+| A secret reaches a log, an error or a child process | any of the above, or an accident | A child process gets a named environment, and an error carries only a safe form of a URL | `datalib/backend/env/src/lib.rs` |
+| A link makes a card run code | a website, or a stranger who sent the link | A card's source is data, opening a card never writes, and nothing a query says runs as code: the DACTAL frame has no `eval` and no `'unsafe-eval'` | [`cards.md`](cards.md) § "Card source", [`dactal.md`](dactal.md) caveat 5 |
+| datalib reports on you without saying so | us, or a dependency | Nothing we ship sends telemetry: every `latchkey` we start, or that a person runs from our launcher, has its usage count off. A check of the real package, not a scan for others | `latchkey_counting_test`, `README.md` §"Read this before you point an agent at it" |
+| A source's text goes to Modal without the person choosing it | us, by a bug | Only an `embed` step with `embed_on_modal_from_n_chunks` set sends anything, and only what it owes | § "What leaves the machine for Modal" above |
+| A downloaded runtime or model is swapped | whoever controls the host | Every Bazel download, the runtime and CUDA module fetches and the embedding models are pinned by sha256; the docker image fetches nothing at run time (`DATALIB_NO_FETCH`) | [`runtime_fetch.md`](runtime_fetch.md) |
+| A person's data lands in this public repo | us, by accident | A rule, not a check | AGENTS.md §"Real data stays out of the repo" |

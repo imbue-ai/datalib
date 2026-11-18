@@ -137,7 +137,9 @@ impl Harness {
         self.0
             .run(|db| {
                 let mut opts = FetchOptions::new(db);
-                opts.only_labels = labels.iter().map(|s| s.to_string()).collect();
+                opts.sections = vec![gmail_api::Section::labels(
+                    labels.iter().map(|s| s.to_string()).collect(),
+                )];
                 opts.config.message_budget = budget;
                 gmail_api::fetch(opts)
             })

@@ -1,6 +1,6 @@
-# Notion over its API, signed in through latchkey (`latchkey auth set notion
-# -H "Authorization: Bearer ntn_…" -H "Notion-Version: 2026-03-11"`), with
-# every option set, and searchable.
+# Notion over its API, signed in through latchkey with one stored credential
+# carrying both the token and the version header, with every option set, and
+# searchable.
 [[groups]]
 id = "notion"
 name = "Notion"
@@ -43,16 +43,10 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["notion/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "notion"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["notion/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "notion"
 function = "embed"
 command = "datalib-step"
-inputs = ["notion/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]

@@ -3,6 +3,7 @@
 mod interrupt;
 mod live;
 mod playback_roundtrip;
+mod streaming;
 mod support;
 mod upgrade;
 

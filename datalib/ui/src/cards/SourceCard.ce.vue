@@ -8,7 +8,12 @@
 // and their actions are the Sources table's (`GET /api/manage/rows`,
 // `rowActions.ts`); the series are `GET /api/manage/groups/{id}/dashboard`.
 import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Directive } from "vue";
-import { UNIFIED_DOCUMENT_INDEX, type Dashboard, type ManageResponse, type ManageRow } from "@/api";
+import {
+  UNIFIED_GRID_AND_SEARCH_INDEX,
+  type Dashboard,
+  type ManageResponse,
+  type ManageRow,
+} from "@/api";
 import { useApi } from "./cardApi";
 import { rowMenu, type MenuAction } from "@/config/rowMenu";
 import { isDesktopApp, revealActionLabel } from "@/desktop";
@@ -388,8 +393,7 @@ onUnmounted(() => {
     </p>
 
     <p v-if="manage && !groupRow" class="sd-msg bad">
-      The config has no group <code>{{ group }}</code
-      >.
+      The config has no group <code>{{ group }}</code>.
     </p>
 
     <!-- The group: its row, read across its steps. -->
@@ -405,8 +409,16 @@ onUnmounted(() => {
           <span
             v-if="groupRow.problems.length"
             v-cell="renderBadges('problems', groupRow.problems)"
-            title="Double-click the counts for the problems"
-            @dblclick="actions.openProblems(groupRow, `${UNIFIED_DOCUMENT_INDEX}/problems`)"
+            :title="
+              groupRow.problems_query
+                ? 'Double-click the counts for the problems'
+                : 'Double-click the counts for the log'
+            "
+            @dblclick="
+              groupRow.problems_query
+                ? actions.openProblems(groupRow, `${UNIFIED_GRID_AND_SEARCH_INDEX}/problems`)
+                : actions.openStepLog(groupRow)
+            "
           />
         </span>
         <span v-cell="renderStatus(groupRow.status)" class="sd-status" />

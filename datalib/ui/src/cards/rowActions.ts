@@ -23,7 +23,13 @@ import {
 import { confirmAction, openRawStore, pickPath, revealInFileManager } from "@/desktop";
 import { pushToast } from "@/toasts";
 import type { Api } from "./cardApi";
-import { appletBrowseSource, historySource, logSource, syncDashboardSource } from "./cardSources";
+import {
+  appletBrowseSource,
+  historySource,
+  logSource,
+  problemsSource,
+  syncDashboardSource,
+} from "./cardSources";
 import type { HostCommands } from "./types";
 import type { SearchOpts } from "./libs/gridView";
 
@@ -88,6 +94,7 @@ export function withBrowse<R extends ManageRow>(
   if (r.kind === "system") {
     return { ...r, browseSource: browseAction(r)?.enabled ? "logView()" : null, rawStore: null };
   }
+  if (r.kind === "section") return { ...r, browseSource: null, rawStore: null };
   if (r.kind === "group") {
     // Which step's path the group's button re-picks is settled on click.
     const actions = canReveal ? r.actions : r.actions.filter((a) => a.id !== CHOOSE_AGAIN);
@@ -216,39 +223,18 @@ export function rowActions<R extends ActionRow>(h: RowActionHost<R>) {
     }
   }
 
-  /// The problems behind a row's count, as a grid over the index's
-  /// `problems` table, its search bar holding what the row counts. The
-  /// index holds every step's, so a step row narrows to the stage it
-  /// counts: the download's are fetch-stage, render's the rest. The
-  /// index counts only the render stores it could not read
-  /// (`grid_index::UNREADABLE_STORE_KEY`).
+  /// The problems behind a row's count: exactly the rows it counted.
+  /// A row whose number counts none has nothing to open.
   function openProblems(row: R, problemsUrl: string) {
+    if (!row.problems_query) return;
     const sourceId = row.kind === "group" ? row.id : (row.group ?? row.id);
-    const stage =
-      row.kind !== "step"
-        ? ""
-        : row.phase === "ingest"
-          ? " stage:fetch"
-          : row.phase === "render"
-            ? " -stage:fetch"
-            : "";
-    const q =
-      sourceId === "unified_document_index"
-        ? "scope_key:render_store"
-        : `source:${sourceId}${stage}`;
     const source =
       row.kind === "group" ? row : h.rows().find((r) => r.kind === "group" && r.id === sourceId);
     const name =
-      sourceId === "unified_document_index"
+      sourceId === "unified_grid_and_search_index"
         ? "Problems: the index"
         : `Problems: ${source?.name.label ?? sourceId}`;
-    const opts = {
-      url: problemsUrl,
-      q,
-      name,
-      placeholder: "search problems…  (try: severity:error, -stage:fetch, after:2026-01-01)",
-    };
-    h.host.openCards(`gridView(${JSON.stringify(opts)})`);
+    h.host.openCards(problemsSource(problemsUrl, row.problems_query, name));
   }
 
   /// Rows' commit history, as a card beside this one. On one source it is

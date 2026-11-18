@@ -1,7 +1,6 @@
 # The meetings booked with you on Calendly, through Calendly's API,
 # signed in through latchkey's `calendly` service with a personal access
-# token (`latchkey auth set calendly -H "Authorization: Bearer <token>"`),
-# with every option set, and searchable.
+# token, with every option set, and searchable.
 [[groups]]
 id = "calendar"
 name = "Calendly"
@@ -41,19 +40,13 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["calendar/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "calendar"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["calendar/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "calendar"
 function = "embed"
 command = "datalib-step"
-inputs = ["calendar/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # Every meeting in a window of days around now, one row each, in
 # render_occurrences/occurrences.doltlite_db, the way the other calendar

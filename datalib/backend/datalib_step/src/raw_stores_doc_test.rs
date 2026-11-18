@@ -235,3 +235,123 @@ fn a_column_missing_from_the_doc_or_extra_in_it_is_named() {
         ]
     );
 }
+
+/// The statements of the first ```sql block after `after` in the doc,
+/// comments dropped.
+fn sql_after(doc: &str, after: &str) -> Vec<String> {
+    let from = doc
+        .find(after)
+        .unwrap_or_else(|| panic!("no {after:?} in the doc"));
+    let block = doc[from..]
+        .split_once("```sql\n")
+        .and_then(|(_, rest)| rest.split_once("```"))
+        .map(|(block, _)| block)
+        .expect("a ```sql block after it");
+    let code: String = block
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("--"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    code.split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+async fn memory_db(setup: &[&'static str]) -> sqlx::SqliteConnection {
+    use sqlx::Connection;
+    let mut db = sqlx::SqliteConnection::connect("sqlite::memory:")
+        .await
+        .unwrap();
+    for statement in setup {
+        sqlx::query(*statement).execute(&mut db).await.unwrap();
+    }
+    db
+}
+
+fn raw_stores_doc() -> &'static str {
+    datalib_agent_docs::doc("raw-stores")
+        .expect("compiled in")
+        .text
+}
+
+/// An app converted Gmail ids both ways by hand; the doc's SQL is the
+/// recipe, and it agrees with what the API writes: the id's hex, unpadded.
+#[tokio::test]
+async fn the_docs_gmail_id_sql_turns_a_mirror_id_into_the_apis_and_back() {
+    let [to_api, from_api] = sql_after(raw_stores_doc(), "From the mirror's spelling")
+        .try_into()
+        .expect("two statements");
+    let mut db = memory_db(&[
+        "CREATE TABLE emails(id TEXT, thread_id TEXT)",
+        // An id from Gmail's first months, which the API writes in 15
+        // digits, and a later one.
+        "INSERT INTO emails VALUES ('0f2a3b4c5d6e7f80', '0f2a3b4c5d6e7f80'), \
+         ('18f2a3b4c5d6e7f8', '18f2a3b4c5d6e7f0')",
+    ])
+    .await;
+    // Safe: the statements are the doc's own, compiled into this binary.
+    let rows: Vec<(String, String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(to_api.clone()))
+        .fetch_all(&mut db)
+        .await
+        .unwrap();
+    for (id, api_id, api_thread_id) in &rows {
+        let api = |padded: &str| format!("{:x}", u64::from_str_radix(padded, 16).unwrap());
+        assert_eq!(*api_id, api(id), "{to_api}");
+        let thread = if id.starts_with('0') {
+            id
+        } else {
+            "18f2a3b4c5d6e7f0"
+        };
+        assert_eq!(*api_thread_id, api(thread), "{to_api}");
+        let found: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(from_api.clone()))
+            .bind(api_id.to_uppercase())
+            .fetch_all(&mut db)
+            .await
+            .unwrap();
+        assert_eq!(found.len(), 1, "{from_api} with {api_id}");
+        assert_eq!(found[0].0, *id);
+    }
+    assert_eq!(rows[0].1, "f2a3b4c5d6e7f80", "the early id loses its zero");
+}
+
+/// `messages` has no permalink column, and an app built one by hand; the
+/// doc's SQL is the recipe, and it builds the link the render does.
+#[tokio::test]
+async fn the_docs_slack_permalink_sql_builds_the_renders_link() {
+    let [permalink] = sql_after(raw_stores_doc(), "A message's permalink")
+        .try_into()
+        .expect("one statement");
+    let mut db = memory_db(&[
+        "CREATE TABLE workspaces(id TEXT, team_url TEXT)",
+        "CREATE TABLE messages(id TEXT, team_id TEXT, channel_id TEXT, ts TEXT, thread_ts TEXT)",
+        "INSERT INTO workspaces VALUES ('T1', 'https://enterprise-d.slack.com/')",
+        "INSERT INTO messages VALUES \
+         ('alone', 'T1', 'C1', '1735693200.000100', NULL), \
+         ('root', 'T1', 'C1', '1735693300.000200', '1735693300.000200'), \
+         ('reply', 'T1', 'C1', '1735693400.000300', '1735693300.000200')",
+    ])
+    .await;
+    // Safe: the statement is the doc's own, compiled into this binary.
+    let rows: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(permalink.clone()))
+        .fetch_all(&mut db)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 3);
+    for (id, link) in rows {
+        let (ts, thread_ts) = match id.as_str() {
+            "alone" => ("1735693200.000100", None),
+            "root" => ("1735693300.000200", Some("1735693300.000200")),
+            _ => ("1735693400.000300", Some("1735693300.000200")),
+        };
+        let want = datalib_etl_slack_render::render::slack_link(
+            Some("https://enterprise-d.slack.com/"),
+            "T1",
+            "C1",
+            ts,
+            thread_ts,
+        );
+        assert_eq!(link, want, "{id}");
+    }
+}

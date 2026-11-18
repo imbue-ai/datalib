@@ -1,0 +1,595 @@
+//! Searches answered from the grid index's search terms rather than the ranked search:
+//! the Fields tab, and a search made only of identifiers (a uuid, an email
+//! address, a handle) whichever tab asks. The rows that answer to each
+//! word, best match first, as deep as the other tabs rank. The terms and
+//! what they hold: `datalib_etl_render::search_terms`.
+
+use std::path::Path;
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use datalib_schema::search_terms::SearchTermKind;
+use datalib_unified_grid_and_search_index::query::is_uuid_shape;
+use datalib_unified_grid_and_search_index::terms_keys::handle_of;
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::{ConnectOptions, Connection};
+use strum::VariantArray;
+
+/// What a search asks the search terms: FTS5 expressions over the terms'
+/// values, each of which a row must answer to, and those it must not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Match {
+    pub include: Vec<String>,
+    pub exclude: Vec<String>,
+}
+
+/// The free text as terms to look up, when every word of it is an
+/// identifier; `None` when any word is not.
+pub fn identifiers(free_text: &str) -> Option<Match> {
+    let words = datalib_query::tokenize(free_text);
+    if words.is_empty() {
+        return None;
+    }
+    let include = words
+        .iter()
+        .map(|w| identifier(w).map(|id| phrase(&id)))
+        .collect::<Option<Vec<String>>>()?;
+    Some(Match {
+        include,
+        exclude: Vec::new(),
+    })
+}
+
+/// The free text as the Fields tab looks it up: an identifier whole, a
+/// quoted phrase as typed, any other word as the start of one (so a row
+/// shows while its word is still being typed), and a `-` one excluded.
+/// `None` when nothing is required.
+pub fn fields(free_text: &str) -> Option<Match> {
+    let mut m = Match {
+        include: Vec::new(),
+        exclude: Vec::new(),
+    };
+    for word in datalib_query::tokenize(free_text) {
+        let (bucket, word) = match word.strip_prefix('-').filter(|w| !w.is_empty()) {
+            Some(w) => (&mut m.exclude, w.to_string()),
+            None => (&mut m.include, word),
+        };
+        bucket.push(match identifier(&word) {
+            Some(id) => phrase(&id),
+            None if word.len() >= 2 && word.starts_with('"') && word.ends_with('"') => {
+                phrase(&word[1..word.len() - 1])
+            }
+            None if word.chars().count() < MIN_PREFIX_CHARS => phrase(&word),
+            None => format!("{}*", phrase(&word)),
+        });
+    }
+    (!m.include.is_empty()).then_some(m)
+}
+
+/// The fewest characters a word needs before the Fields tab takes it as the
+/// start of a term; a shorter one starts too many to look up, so it is
+/// matched whole.
+const MIN_PREFIX_CHARS: usize = 3;
+
+/// `s` as one FTS5 string, a quote inside it doubled so it cannot end it.
+fn phrase(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\"\""))
+}
+
+fn identifier(word: &str) -> Option<String> {
+    // A quoted word is a phrase for the keyword index, and a quote would end the
+    // search terms' own phrase early.
+    if word.contains('"') {
+        return None;
+    }
+    uuid_at_end(word).or_else(|| handle_of(word))
+}
+
+/// The uuid a word ends in, dashed and lowercase: a bare one, dashed or
+/// not, or the last part of a slug or a link (`Shift-Roster-<id>`,
+/// `https://…/p/<id>?pvs=4`, `…/chat/<id>`). Notion writes its ids
+/// without dashes; the search terms hold them dashed.
+fn uuid_at_end(word: &str) -> Option<String> {
+    let word = word.split(['?', '#']).next().unwrap_or(word);
+    let word = word.strip_suffix('/').unwrap_or(word);
+    let ends_in = |len: usize| {
+        let at = word.len().checked_sub(len)?;
+        let cut = at.checked_sub(1).map(|b| word.as_bytes()[b]);
+        matches!(cut, None | Some(b'-' | b'/'))
+            .then(|| word.get(at..))
+            .flatten()
+    };
+    if let Some(id) = ends_in(36).filter(|id| is_uuid_shape(id)) {
+        return Some(id.to_lowercase());
+    }
+    let hex = ends_in(32).filter(|h| h.bytes().all(|c| c.is_ascii_hexdigit()))?;
+    let hex = hex.to_lowercase();
+    Some(format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    ))
+}
+
+/// One term an identifier matched.
+#[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
+pub struct Hit {
+    pub uuid: String,
+    /// A [`SearchTermKind`] code.
+    pub kind: i64,
+    pub value: String,
+    pub touched_at_utc: Option<String>,
+}
+
+/// Each row [`lookup`] found, best first, scored by the affinity of its
+/// best match; the words shown are the kind and the value matched. A
+/// title match shows nothing, so the row keeps its own opening words: the
+/// title is already what the result is called.
+pub fn rank(found: &Found) -> Vec<(String, (f64, String))> {
+    found
+        .hits
+        .iter()
+        .map(|h| {
+            let kind = SearchTermKind::from_code(h.kind);
+            let affinity = kind.map_or(0, SearchTermKind::affinity);
+            let words = match kind {
+                Some(SearchTermKind::Title) => String::new(),
+                Some(k) => format!("{}: {}", k.as_str(), h.value),
+                None => format!("term: {}", h.value),
+            };
+            (h.uuid.clone(), (f64::from(affinity), words))
+        })
+        .collect()
+}
+
+/// What the search terms say about a [`Match`], read in one transaction.
+#[derive(Debug, Default)]
+pub struct Found {
+    /// The rows every included expression matched and no excluded one did,
+    /// each at its best match: the most telling kind first
+    /// (`SearchTermKind::affinity`), then newest.
+    pub hits: Vec<Hit>,
+    /// The grid generation the terms were read at. A ranking whose rows
+    /// were read at another may be a pass out, so it is not kept.
+    pub grid_generation: Option<String>,
+}
+
+/// The rows of [`Found::hits`], at most `depth` of them. The index holds a
+/// term per row and value, so a short prefix matches a large share of it:
+/// the intersecting, ranking and cut happen in SQLite, never in a list here.
+const HITS_SQL: &str = "\
+    WITH inc AS (SELECT key AS n, value AS expr FROM json_each(?1)), \
+    exc AS (SELECT value AS expr FROM json_each(?2)), \
+    aff AS (SELECT value ->> 0 AS kind, value ->> 1 AS affinity FROM json_each(?3)), \
+    matched AS ( \
+        SELECT inc.n, t.row_id, t.kind, v.value FROM inc \
+        JOIN vals_fts ON vals_fts MATCH inc.expr \
+        JOIN vals v ON v.val_id = vals_fts.rowid \
+        JOIN terms t ON t.val_id = v.val_id), \
+    kept AS ( \
+        SELECT row_id FROM matched GROUP BY row_id \
+        HAVING COUNT(DISTINCT n) = (SELECT COUNT(*) FROM inc) \
+        EXCEPT \
+        SELECT t.row_id FROM exc \
+        JOIN vals_fts ON vals_fts MATCH exc.expr \
+        JOIN terms t ON t.val_id = vals_fts.rowid), \
+    best AS ( \
+        SELECT m.row_id, m.kind, m.value, MAX(COALESCE(a.affinity, 0)) AS affinity \
+        FROM matched m JOIN kept USING (row_id) LEFT JOIN aff a ON a.kind = m.kind \
+        GROUP BY m.row_id) \
+    SELECT r.uuid, b.kind, b.value, r.touched_at_utc FROM best b \
+    JOIN rows r ON r.row_id = b.row_id \
+    ORDER BY b.affinity DESC, r.touched_at_utc DESC, r.uuid \
+    LIMIT ?4";
+
+/// `None` when the root has no grid index yet.
+pub async fn lookup(root: &Path, m: &Match, depth: usize) -> Result<Option<Found>> {
+    let path = datalib_runtime::layout::grid_index_db(root);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let affinities: Vec<(u8, u8)> = SearchTermKind::VARIANTS
+        .iter()
+        .map(|k| (k.code(), k.affinity()))
+        .collect();
+    let mut conn = SqliteConnectOptions::new()
+        .filename(datalib_runtime::plain_sqlite::uri(&path))
+        .read_only(true)
+        .create_if_missing(false)
+        .busy_timeout(Duration::from_secs(5))
+        .connect()
+        .await
+        .with_context(|| format!("open {}", path.display()))?;
+    let read = async {
+        sqlx::query("BEGIN").execute(&mut conn).await?;
+        let grid_generation = datalib_etl::pin::generation(&mut conn).await?;
+        let hits: Vec<Hit> = sqlx::query_as(HITS_SQL)
+            .bind(serde_json::to_string(&m.include)?)
+            .bind(serde_json::to_string(&m.exclude)?)
+            .bind(serde_json::to_string(&affinities)?)
+            .bind(i64::try_from(depth).unwrap_or(i64::MAX))
+            .fetch_all(&mut conn)
+            .await?;
+        sqlx::query("COMMIT").execute(&mut conn).await?;
+        anyhow::Ok(Found {
+            hits,
+            grid_generation,
+        })
+    }
+    .await
+    .context("read the search terms");
+    conn.close().await.ok();
+    read.map(Some)
+}
+
+/// Every handle a source says is its account's own, each once. `None`
+/// when the root has no grid index yet, or one written before it held
+/// them.
+pub async fn account_handles(root: &Path) -> Result<Option<Vec<String>>> {
+    let path = datalib_runtime::layout::grid_index_db(root);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let mut conn = SqliteConnectOptions::new()
+        .filename(datalib_runtime::plain_sqlite::uri(&path))
+        .read_only(true)
+        .create_if_missing(false)
+        .busy_timeout(Duration::from_secs(5))
+        .connect()
+        .await
+        .with_context(|| format!("open {}", path.display()))?;
+    let read = async {
+        let held: bool = sqlx::query_scalar(
+            "SELECT COUNT(*) > 0 FROM sqlite_master \
+             WHERE type = 'table' AND name = 'account_handles'",
+        )
+        .fetch_one(&mut conn)
+        .await?;
+        if !held {
+            return anyhow::Ok(None);
+        }
+        let handles: Vec<String> =
+            sqlx::query_scalar("SELECT DISTINCT handle FROM account_handles ORDER BY handle")
+                .fetch_all(&mut conn)
+                .await?;
+        anyhow::Ok(Some(handles))
+    }
+    .await
+    .context("read the account handles");
+    conn.close().await.ok();
+    read
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn includes(m: Option<Match>) -> Option<Vec<String>> {
+        m.map(|m| m.include)
+    }
+
+    #[test]
+    fn identifiers_are_uuids_and_handles_and_nothing_else() {
+        assert_eq!(
+            includes(identifiers("00000000-0000-8B8A-896D-63addc7b31ad")),
+            Some(vec!["\"00000000-0000-8b8a-896d-63addc7b31ad\"".to_string()])
+        );
+        assert_eq!(
+            includes(identifiers(
+                "away-team-00000000-0000-4000-8000-000000000001"
+            )),
+            Some(vec!["\"00000000-0000-4000-8000-000000000001\"".to_string()])
+        );
+        assert_eq!(
+            identifiers("Ann@Example.com +1 555 0100"),
+            None,
+            "a phone number in several words is not one identifier"
+        );
+        assert_eq!(
+            includes(identifiers("Ann@Example.com slack:T1/U2")),
+            Some(vec![
+                "\"email:ann@example.com\"".to_string(),
+                "\"slack:T1/U2\"".to_string()
+            ])
+        );
+        assert_eq!(identifiers("ann@example.com budget"), None);
+        assert_eq!(
+            identifiers("xxx00000000-0000-4000-8000-000000000001"),
+            None,
+            "a uuid run into the word before it is not one"
+        );
+        assert_eq!(identifiers("\"ann@example.com\""), None);
+        assert_eq!(identifiers(""), None);
+    }
+
+    /// Notion's id for a page, and the link a person copies from Notion,
+    /// carry no dashes; they found nothing.
+    #[test]
+    fn an_id_without_dashes_or_inside_a_link_is_an_identifier() {
+        let page = Some(vec!["\"1701d00a-b0a1-4e5f-8c3a-9d2e4f6b7c81\"".to_string()]);
+        for word in [
+            "1701d00ab0a14e5f8c3a9d2e4f6b7c81",
+            "1701D00AB0A14E5F8C3A9D2E4F6B7C81",
+            "https://app.notion.com/p/bridge/Project-Away-Team-1701d00ab0a14e5f8c3a9d2e4f6b7c81",
+            "https://www.notion.so/1701d00ab0a14e5f8c3a9d2e4f6b7c81?pvs=4",
+            "https://www.notion.so/Away-Team-1701d00ab0a14e5f8c3a9d2e4f6b7c81#b10c0001",
+            "https://claude.test/chat/1701d00a-b0a1-4e5f-8c3a-9d2e4f6b7c81/",
+        ] {
+            assert_eq!(includes(identifiers(word)), page, "{word}");
+        }
+        assert_eq!(
+            identifiers("x1701d00ab0a14e5f8c3a9d2e4f6b7c81"),
+            None,
+            "32 hex digits run into the word before them are not an id"
+        );
+        assert_eq!(identifiers("1701d00ab0a14e5f8c3a9d2e4f6b7c8"), None);
+    }
+
+    #[test]
+    fn fields_take_identifiers_whole_phrases_as_typed_and_words_as_prefixes() {
+        assert_eq!(
+            fields("Ann@Example.com budg \"deck twelve\" -spam"),
+            Some(Match {
+                include: vec![
+                    "\"email:ann@example.com\"".into(),
+                    "\"budg\"*".into(),
+                    "\"deck twelve\"".into(),
+                ],
+                exclude: vec!["\"spam\"*".into()],
+            })
+        );
+        assert_eq!(
+            fields("o\"brien").map(|m| m.include),
+            Some(vec!["\"o\"\"brien\"*".into()])
+        );
+        assert_eq!(fields("-spam"), None);
+    }
+
+    /// A grid index at `root` whose search terms hold `(row, kind, value,
+    /// touched)`, and nothing else.
+    async fn terms_file(root: &Path, terms: &[(&str, &str, &str, &str)]) {
+        let path = datalib_runtime::layout::grid_index_db(root);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut conn = SqliteConnectOptions::new()
+            .filename(datalib_runtime::plain_sqlite::uri(&path))
+            .create_if_missing(true)
+            .connect()
+            .await
+            .unwrap();
+        for ddl in datalib_schema::search_terms::TERMS_DDL {
+            sqlx::query(sqlx::AssertSqlSafe(*ddl))
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+        for (uuid, kind, value, touched) in terms {
+            sqlx::query("INSERT OR IGNORE INTO rows (uuid, touched_at_utc) VALUES (?, ?)")
+                .bind(uuid)
+                .bind(touched)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            sqlx::query("INSERT OR IGNORE INTO vals (value) VALUES (?)")
+                .bind(value)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            for index in ["vals_fts", "vals_tri"] {
+                // Audited: the table names are literals.
+                sqlx::query(sqlx::AssertSqlSafe(format!(
+                    "INSERT INTO {index} (rowid, value) SELECT val_id, value FROM vals \
+                     WHERE value = ? AND val_id NOT IN (SELECT rowid FROM {index})"
+                )))
+                .bind(value)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+            }
+            sqlx::query(
+                "INSERT INTO terms (val_id, kind, row_id) SELECT v.val_id, ?, r.row_id \
+                 FROM vals v, rows r WHERE v.value = ? AND r.uuid = ?",
+            )
+            .bind(i64::from(
+                SearchTermKind::parse(kind).expect("a kind").code(),
+            ))
+            .bind(value)
+            .bind(uuid)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        }
+        conn.close().await.unwrap();
+    }
+
+    async fn ranked(root: &Path, q: &str, depth: usize) -> Vec<(String, (f64, String))> {
+        let found = lookup(root, &fields(q).expect("a word to look up"), depth)
+            .await
+            .unwrap()
+            .expect("a grid index");
+        rank(&found)
+    }
+
+    fn order(ranked: &[(String, (f64, String))]) -> Vec<&str> {
+        ranked.iter().map(|(u, _)| u.as_str()).collect()
+    }
+
+    /// An index from a build before `account_handles` has none to give,
+    /// so `me` is refused rather than failing on a missing table.
+    #[tokio::test]
+    async fn the_accounts_handles_are_read_only_from_an_index_that_holds_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(account_handles(tmp.path()).await.unwrap(), None);
+
+        terms_file(tmp.path(), &[]).await;
+        let path = datalib_runtime::layout::grid_index_db(tmp.path());
+        let mut conn = SqliteConnectOptions::new()
+            .filename(datalib_runtime::plain_sqlite::uri(&path))
+            .connect()
+            .await
+            .unwrap();
+        for (handle, source) in [("slack:T/U1", "slack"), ("slack:T/U1", "beeper")] {
+            sqlx::query("INSERT INTO account_handles (handle, source_id) VALUES (?, ?)")
+                .bind(handle)
+                .bind(source)
+                .execute(&mut conn)
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            account_handles(tmp.path()).await.unwrap(),
+            Some(vec!["slack:T/U1".to_string()])
+        );
+
+        sqlx::query("DROP TABLE account_handles")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        conn.close().await.unwrap();
+        assert_eq!(account_handles(tmp.path()).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn rows_rank_by_their_best_kind_then_newest() {
+        let tmp = tempfile::tempdir().unwrap();
+        terms_file(
+            tmp.path(),
+            &[
+                ("r-name", "name", "warp", "2026-03"),
+                ("r-old", "from", "warp", "2026-01"),
+                ("r-new", "from", "warp", "2026-02"),
+                ("r-id", "id", "warp", "2025-01"),
+                ("r-id", "name", "warp", "2025-01"),
+            ],
+        )
+        .await;
+        let ranked = ranked(tmp.path(), "warp", 10).await;
+        assert_eq!(order(&ranked), ["r-id", "r-new", "r-old", "r-name"]);
+        assert_eq!(ranked[0].1, (5.0, "id: warp".to_string()));
+    }
+
+    /// Five threads of one channel each showed "title: #bridge", the name
+    /// the result already wears; their own opening words tell them apart.
+    #[tokio::test]
+    async fn a_title_match_shows_the_rows_own_words() {
+        let tmp = tempfile::tempdir().unwrap();
+        terms_file(
+            tmp.path(),
+            &[("a", "title", "#bridge", "2"), ("b", "from", "bridge", "1")],
+        )
+        .await;
+        let shown: std::collections::HashMap<String, String> = ranked(tmp.path(), "bridge", 10)
+            .await
+            .into_iter()
+            .map(|(uuid, (_, words))| (uuid, words))
+            .collect();
+        assert_eq!(shown["a"], "");
+        assert_eq!(shown["b"], "from: bridge");
+    }
+
+    #[tokio::test]
+    async fn rows_must_match_every_included_word_and_no_excluded_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        terms_file(
+            tmp.path(),
+            &[
+                ("a", "from", "warp", "1"),
+                ("b", "from", "warp", "1"),
+                ("c", "from", "warp", "1"),
+                ("b", "container", "core", "1"),
+                ("c", "title", "core", "1"),
+                ("c", "name", "breach", "1"),
+            ],
+        )
+        .await;
+        assert_eq!(
+            order(&ranked(tmp.path(), "warp core -breach", 10).await),
+            ["b"]
+        );
+    }
+
+    /// The cut is taken after the rows are ranked and intersected, so the
+    /// rows kept are the best of those that match every word.
+    #[tokio::test]
+    async fn a_search_keeps_its_best_rows_up_to_the_depth() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rows: Vec<String> = (0..20).map(|i| format!("r-{i:02}")).collect();
+        let mut terms: Vec<(&str, &str, &str, &str)> = rows
+            .iter()
+            .map(|r| (r.as_str(), "name", "warp", "1"))
+            .collect();
+        terms.push(("r-19", "id", "warpcore", "1"));
+        terms.push(("r-07", "from", "warp", "1"));
+        terms.push(("r-19", "title", "deck", "1"));
+        terms.push(("r-07", "title", "deck", "1"));
+        terms.push(("r-03", "title", "deck", "1"));
+        terms_file(tmp.path(), &terms).await;
+        assert_eq!(
+            order(&ranked(tmp.path(), "warp", 3).await),
+            ["r-19", "r-07", "r-00"]
+        );
+        assert_eq!(
+            order(&ranked(tmp.path(), "warp deck", 2).await),
+            ["r-19", "r-07"]
+        );
+    }
+
+    /// A word is looked up through the full-text index and a row by its
+    /// key. A plan that scans `terms`, `vals` or `rows`, or reads
+    /// `vals_fts` without its MATCH, reads every term for every word:
+    /// on a 300k-row index that is the difference between milliseconds and
+    /// seconds a keystroke.
+    #[tokio::test]
+    async fn the_lookup_reads_by_index_never_by_scan() {
+        let tmp = tempfile::tempdir().unwrap();
+        terms_file(tmp.path(), &[("a", "from", "warp", "1")]).await;
+        let mut conn = SqliteConnectOptions::new()
+            .filename(datalib_runtime::plain_sqlite::uri(
+                &datalib_runtime::layout::grid_index_db(tmp.path()),
+            ))
+            .read_only(true)
+            .connect()
+            .await
+            .unwrap();
+        // A constant statement with a constant prefix.
+        let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN QUERY PLAN {HITS_SQL}"
+        )))
+        .bind(r#"["\"warp\"*", "\"core\"*"]"#)
+        .bind(r#"["\"deck\"*"]"#)
+        .bind("[[1, 5]]")
+        .bind(10_i64)
+        .fetch_all(&mut conn)
+        .await
+        .unwrap();
+        conn.close().await.unwrap();
+        let steps: Vec<&str> = plan.iter().map(|(.., step)| step.as_str()).collect();
+        let fts: Vec<&&str> = steps.iter().filter(|s| s.contains("vals_fts")).collect();
+        assert!(!fts.is_empty(), "{steps:#?}");
+        assert!(fts.iter().all(|s| s.contains(":M")), "{steps:#?}");
+        let scanned: Vec<&str> = steps
+            .iter()
+            .filter_map(|s| s.strip_prefix("SCAN "))
+            .map(|rest| rest.trim_start_matches("TABLE "))
+            .filter_map(|rest| rest.split_whitespace().next())
+            .collect();
+        for table in ["t", "v", "r", "terms", "vals", "rows"] {
+            assert!(!scanned.contains(&table), "scans {table}: {steps:#?}");
+        }
+    }
+
+    #[test]
+    fn a_word_too_short_to_start_many_is_matched_whole() {
+        assert_eq!(
+            fields("ri x rik é").map(|m| m.include),
+            Some(vec![
+                "\"ri\"".into(),
+                "\"x\"".into(),
+                "\"rik\"*".into(),
+                "\"é\"".into(),
+            ])
+        );
+    }
+}

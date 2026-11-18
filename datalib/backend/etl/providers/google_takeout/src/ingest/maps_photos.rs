@@ -11,6 +11,7 @@ use datalib_etl::download_problems::SkippedRecord;
 use datalib_etl::progress::Progress;
 use datalib_etl::prune;
 use datalib_etl::run_problems::RunProblems;
+use datalib_etl_files::export_files::is_regular_file;
 use datalib_etl_files::file_changes_scan;
 use datalib_etl_files::file_checkpoint;
 use datalib_problems::{Problem, Reason};
@@ -244,7 +245,7 @@ fn ingest_one(json_path: &Path, bytes: &[u8]) -> Result<Option<Photo>> {
 /// `2026-06-04-tenfwd.jpg.json` describes `2026-06-04-tenfwd.jpg`.
 fn media_beside(json_path: &Path) -> Option<PathBuf> {
     let media = json_path.with_extension("");
-    media.is_file().then_some(media)
+    is_regular_file(&media).then_some(media)
 }
 
 fn content_type_for(path: &Path) -> Option<String> {

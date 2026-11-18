@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run python
 """Find prose that appears in more than one place in the docs.
 
     scripts/find_repeats.py [--min 14] [--paths docs AGENTS.md] [--top N]

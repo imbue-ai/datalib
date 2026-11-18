@@ -81,7 +81,7 @@ has the one-pipe export.
 | `Mailbox/changes`  | Incremental: created / updated / destroyed mailbox ids  |
 | `Email/changes`    | The delta: created / updated / destroyed email ids      |
 | `Email/query`      | Enumeration of a mailbox, or the account, not yet listed whole |
-| `Email/get`        | Envelope of every email owed (no body: see below); with no ids, the account's state before an enumeration |
+| `Email/get`        | Envelope and `preview` of every email owed (no body: see below); with no ids, the account's state before an enumeration |
 | `downloadUrl`      | Each email's `.eml` bytes                               |
 
 `Thread/get` is not called. A `threads` row is the ids of the emails
@@ -123,6 +123,15 @@ A run does three things with emails, in this order:
    scopes were listed whole, and lists every email again so that all of
    them are owed. No other error does this: an `Email/changes` that
    fails is a `problems` row, and the run goes on with what is stored.
+   Listing again costs an `Email/get` of every email's envelope, but no
+   `.eml` the store already holds is downloaded again.
+
+   **Fastmail keeps less than two weeks of changes.** On a
+   277k-email account, a state token 14 days old was refused with
+   `cannotCalculateChanges`, so an account not synced for two weeks is
+   listed again on its next run. At 50 emails to an `Email/get`, that
+   was an hour of requests, nearly all of it spent waiting on Fastmail's
+   answers (about a second each, ~40 KB): hence the batch size in step 3.
 2. **Enumerates what is not listed whole.** The scopes wanted are the
    mailboxes `only_extract_labels` admits, or `*`. `Email/query` walks
    the ones with no `listed_whole` row, listing each page's ids; an
@@ -133,8 +142,10 @@ A run does three things with emails, in this order:
    `only_extract_labels` is therefore an admitted mailbox with no row,
    and it is enumerated until an enumeration of it finishes. A label
    path that matches no mailbox is a `problems` row.
-3. **Fetches what is owed** with `owed::drain`, fifty to an
-   `Email/get`, one transaction per batch: the email rows, their thread
+3. **Fetches what is owed** with `owed::drain`, one `Email/get` at a
+   time, each naming as many emails as the session's `maxObjectsInGet`
+   allows, up to 500 (50 for a server that states none, which RFC 8620
+   requires it to); one transaction per batch: the email rows, their thread
    rows and the stamp they satisfy. An email the server answers
    `notFound` for, or that a label filter keeps out, is gone: its
    listing, its row and whatever was held for it go.
@@ -207,6 +218,9 @@ messages the input holds for it. `whole_threads` is one of the settings
 the "unchanged since the last read" stamp covers, so changing it reads
 the input again. An mbox with no `X-GM-THRID` has a thread per message,
 so nothing changes.
+
+Under `gmail.fetch`, `whole_threads` belongs to a section: only a message
+carrying that section's labels brings its thread.
 
 Turning `whole_threads` off keeps what it mirrored until those messages
 change (JMAP, Gmail) or for good (mbox, which never deletes for the
@@ -282,6 +296,8 @@ with nothing listed to go on with.
   up ends the fetch with one `phase:messages.get` row, and the run
   still succeeds, so what it fetched is kept; the next run fetches what
   is still owed. With nothing mirrored at all, the run fails instead.
+- The search for muted messages is a `listing:messages.list muted` row
+  when it fails. No mark moves, and the next run asks again.
 - The walk of the whole account that fills `thread_members` is a
   `listing:messages.list threads` row when it fails (JMAP's is a
   `listing:Email/query threads` row). The run goes on,
@@ -364,11 +380,17 @@ mbox mode end to end over `tests/fixtures/mbox/star_trek.mbox`.
 `gmail_takeout_seed.rs` starts a Gmail mirror from a Takeout: no seeded
 message is fetched whole, a message Gmail no longer has goes and stays
 gone, and a relabel asks for labels alone.
+`gmail_preview_and_muted.rs` holds the snippet through a relabel, fills a
+missing preview from the bytes at no quota, and follows the muted search
+both ways and through a failure.
 `gmail_whole_threads.rs` and `jmap_whole_threads.rs` keep the start
 of a thread whose newest message the filter keeps, drop a thread the
 filter no longer keeps, and count a message the filter drops toward
 its thread; `jmap_mbox.rs` and `mbox.rs`'s own tests do the same for an
 mbox.
+`jmap_start_over_prunes.rs` lists an account again: what upstream
+destroyed meanwhile goes, and each `Email/get` names as many emails as
+the session's `maxObjectsInGet` allows.
 
 **Most tests call a download function directly**, with options they
 build by hand, so they do not see how a config becomes those options
@@ -423,6 +445,48 @@ row. It is content, so a read upstream moves the store's version and
 the render redraws the thread holding that email (`read_marks::moved`).
 Rung 8 of the ladder moves the `$seen` an older build kept into marks.
 
+Whether its thread is muted sits beside `read`, in `muted`, for the same
+reason. JMAP's is the keyword `$muted`, and an mbox's a `Muted` entry in
+`X-Gmail-Labels`, each kept nowhere else. Fastmail lets a person mute a
+conversation, but no account we have tried held one, so that it answers with
+`$muted` is what the draft standard says rather than what we have seen.
+Gmail's API has no such label: it is absent from `labels.list`, and
+`labelIds=MUTED` is refused. So each Gmail run asks one search (`is:muted`,
+5 quota units a page), hands the answer to what it fetches, and at the end
+writes the marks that differ. A search that fails is a
+`listing:messages.list muted` row and moves no mark, since a list that
+stopped short would read as messages being unmuted; a message fetched in
+that run has `muted` NULL until the next answer. A mute moves the store's
+version but is not a moved mark (`read_marks::moved`), since no document
+shows it. Rung 9 adds the column, moves a `$muted` the store already holds,
+and clears the mbox's read stamp so its labels are read again.
+
+### `emails.preview` is a line of the body
+
+A list of mail should not have to open every `.eml`, so the row keeps one
+line of the body as plain text. It comes from the first of these that has
+something to say:
+
+1. **Upstream.** Gmail's `snippet`, on every `messages.get` format we use,
+   with its HTML entities decoded (a real snippet says `it&#39;s`), or a
+   JMAP server's `preview`.
+2. **The row's own**, when a Gmail relabel comes from the label walks, which
+   name no snippet.
+3. **The bytes** (`envelope::preview`): for an mbox and a Takeout, which have
+   no snippet, and at the end of a Gmail or JMAP run for any row whose
+   `preview` is NULL with its `.eml` held
+   (`preview::fill_from_held_bytes`). That covers what a store held before
+   the column existed, at no quota.
+
+An empty string means the message has no text, and it is not asked again. On
+one Fastmail account a third of the mail had an empty `preview`, and each
+message had no text in its body: the server's answer stands.
+
+It is a column and not part of the payload, as the body is not, and RFC 8621
+lets a server's change between two fetches of one email. A refile rebuilds
+the row from its payload and keeps the column. An email whose `.eml` is
+over the size limit has what upstream said or, with nothing said, NULL.
+
 ### Gmail's own ids and labels
 
 For Gmail, `id` and `thread_id` are Gmail's message and thread ids,
@@ -447,6 +511,29 @@ every other provider's attachment edge. That keeps `emails` single-writer, so
 re-upserting a changed envelope (flag or move churn) never clobbers a stored
 hash.
 
+### The render's label filter
+
+When the render step sets `only_render_labels`, a thread renders if any
+of its emails is filed under one of those mailboxes, and the whole
+thread renders. The filter is decided in SQL (`KEPT_THREADS` in
+`email_render/src/render/parse.rs`): a run loads the rows of the
+threads it keeps and nothing of the others. On a full walk the threads
+it keeps out are listed by key alone, so that any documents they still
+have go.
+
+A run renders every thread the filter keeps, not just the changed ones,
+only when the mailbox tree changes in a way that can move a thread
+into or out of the filter: a mailbox added or removed, or its name or
+parent changed (`MAILBOX_TREE_MOVED`). Any other change to a mailbox
+row re-renders only the threads that looked that mailbox up. This
+matters because only a mailbox's counts are kept out of `payload`
+(they go in the sidecar's `volatile_payload`); every other key the
+server returns is stored as it came. Fastmail adds keys of its own to a
+mailbox (`autoLearn`, `hidden`, `splits`, `purgeOlderThanDays` and
+others), and it has been seen to drop them from one mailbox between two
+syncs; fanning out on that would re-render every thread the filter
+keeps for a change no document shows.
+
 ### Tables
 
 | table | shape |
@@ -456,6 +543,6 @@ hash.
 | `listed_whole` | JMAP and Gmail API modes: the mailboxes or labels (or `*`) an enumeration has listed to its end, and `#threads` for a whole `thread_members` |
 | `thread_members` | JMAP and Gmail API modes under a label filter: a row per message in the account, keyed by upstream's id, naming its `threads` row; see "Whole threads" |
 | `email_mailboxes`, `email_keywords` | N:M join tables with a synthesized `id` PK, refreshed delete-then-insert per email upsert; no sidecars. Indexed on `email_id`, which that delete and render's load both look up by, and on the other side (`mailbox_id`, `keyword`). `email_keywords` never holds `$seen` |
-| `read_marks` | one row per email: whether it was read (`read`), keyed by the email's id; written with the email, gone with it |
+| `read_marks` | one row per email: whether it was read (`read`) and whether its thread is muted (`muted`), keyed by the email's id; written with the email, gone with it |
 | `email_blobs` | CAS edge carrying the `.eml` `blake3`, NULL until the bytes land |
 | `ingested_files` | unused: the shared per-file cursor table, declared but written by no mode |

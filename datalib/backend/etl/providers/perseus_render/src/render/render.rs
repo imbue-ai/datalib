@@ -9,9 +9,10 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 
 use datalib_etl::layout::render_markdown_root;
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::html::{escape_md_block, escape_md_inline};
+use datalib_etl_render::section::{join, Section as DocSection};
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
@@ -19,6 +20,7 @@ use datalib_schema::providers::Provider;
 
 use super::align::{split, PerseusAlignments, Sentence};
 use super::parse::{Book, Chapter, Edition, ParsedPerseus, Section};
+use super::tree;
 use super::RENDER_VERSION;
 use crate::ids;
 use datalib_etl_perseus::{WORK_SHORT, WORK_TITLE, WORK_URN};
@@ -34,7 +36,9 @@ fn ts_base() -> DateTime<Utc> {
 }
 
 fn render_synth_ts(ts: DateTime<Utc>) -> String {
-    datalib_time::IsoOffsetTimestamp::from(ts).to_rfc3339()
+    datalib_time::IsoOffsetTimestamp::try_from(ts)
+        .expect("a reading-order stamp is in 2026")
+        .to_rfc3339()
 }
 
 #[derive(Debug, Default, Clone)]
@@ -123,16 +127,21 @@ fn render_book(
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
     let m_uuid = ids::book(source_id, &book.n).uuid;
-    let (md_path, md_rel) = write_doc(out_dir, source_id, &m_uuid, &render_book_md(book))?;
+    let (front, md) = render_book_md(book);
+    let (md_path, md_rel) = write_doc(out_dir, source_id, &m_uuid, &md)?;
 
     let mut problems: Vec<ProblemRow> = Vec::new();
-    let rows: Vec<GridRow> = book_grid_row(source_id, book, &m_uuid, &md_rel, &mut problems)
+    let mut rows: Vec<GridRow> = book_grid_row(source_id, book, &m_uuid, &md_rel, &mut problems)
         .into_iter()
         .collect();
+    let data_nodes = tree::book(source_id, &book.n, &m_uuid, &book_title(&book.n));
+    tree::place(&mut rows, &data_nodes);
     let edges: Vec<EdgeRow> = Vec::new();
 
     summary.rows_emitted += rows.len();
     on_doc_complete(RenderedMarkdown {
+        section_layout: None,
+        content_hash: None,
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
@@ -140,9 +149,12 @@ fn render_book(
         md_path,
         render_version: RENDER_VERSION,
         rows,
-        sections: Vec::new(),
+        front,
+        sections: vec![DocSection::unkeyed(md)],
         edges,
         contacts: Vec::new(),
+        data_nodes,
+        filings: Vec::new(),
         photos: Vec::new(),
         problems,
     })
@@ -164,8 +176,8 @@ fn render_chapter(
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
     let m_uuid = ids::chapter(source_id, &book.n, &chapter.n, &edition.id).uuid;
-    let md = render_chapter_md(source_id, chapter, edition, alignments);
-    let (md_path, rel) = write_doc(out_dir, source_id, &m_uuid, &md)?;
+    let (front, sections) = render_chapter_sections(source_id, chapter, edition, alignments);
+    let (md_path, rel) = write_doc(out_dir, source_id, &m_uuid, &join(&sections))?;
 
     let mut problems: Vec<ProblemRow> = Vec::new();
     let mut rows: Vec<GridRow> = Vec::with_capacity(1 + chapter.sections.len());
@@ -200,10 +212,19 @@ fn render_chapter(
         ));
         idx += 1;
     }
+    let data_nodes = tree::chapter(
+        source_id,
+        edition,
+        ids::chapter(source_id, &book.n, &chapter.n, &edition.id),
+        &conversation_name(&book.n, &chapter.n, edition),
+    );
+    tree::place(&mut rows, &data_nodes);
     let edges = chapter_edges(source_id, book, chapter, edition, &m_uuid, alignments);
 
     summary.rows_emitted += rows.len();
     on_doc_complete(RenderedMarkdown {
+        section_layout: None,
+        content_hash: None,
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
@@ -211,9 +232,12 @@ fn render_chapter(
         md_path,
         render_version: RENDER_VERSION,
         rows,
-        sections: Vec::new(),
+        front,
+        sections,
         edges,
         contacts: Vec::new(),
+        data_nodes,
+        filings: Vec::new(),
         photos: Vec::new(),
         problems,
     })
@@ -266,52 +290,38 @@ fn section_div_open(section_uuid: &str) -> String {
 
 const SECTION_DIV_CLOSE: &str = "</div>";
 
-fn render_book_md(book: &Book) -> String {
+fn render_book_md(book: &Book) -> (Front, String) {
     let title = book_title(&book.n);
-    format!(
-        "---\n\
-         provider: perseus\n\
-         work: {WORK_TITLE}\n\
-         work_urn: {WORK_URN}\n\
-         book: {book_n}\n\
-         title: {quoted_title}\n\
-         ---\n\
-         \n\
-         # {title}\n\
-         \n",
-        book_n = yaml_scalar(&book.n),
-        quoted_title = yaml_scalar(&title),
-    )
+    let front = Front::new()
+        .plain("provider", "perseus")
+        .plain("work", WORK_TITLE)
+        .plain("work_urn", WORK_URN)
+        .text("book", &book.n)
+        .text("title", &title);
+    let md = format!("{}# {title}\n\n", front.draw());
+    (front, md)
 }
 
-fn render_chapter_md(
+/// A chapter's front matter, and its sections: the head, then one per
+/// section of the text.
+fn render_chapter_sections(
     source_id: &str,
     chapter: &Chapter,
     edition: &Edition,
     alignments: &PerseusAlignments,
-) -> String {
+) -> (Front, Vec<DocSection>) {
     let locator = chapter_locator(&chapter.book_n, &chapter.n);
     let title = format!("{WORK_SHORT} {locator} — {}", edition.title);
-    let mut out = format!(
-        "---\n\
-         provider: perseus\n\
-         work: {WORK_TITLE}\n\
-         edition: {edition_id}\n\
-         book: {book_n}\n\
-         chapter: {ch_n}\n\
-         title: {quoted_title}\n\
-         language: {lang}\n\
-         ---\n\
-         \n\
-         # {heading}\n\
-         \n",
-        heading = escape_md_inline(&title),
-        quoted_title = yaml_scalar(&title),
-        edition_id = yaml_scalar(&edition.id),
-        book_n = yaml_scalar(&chapter.book_n),
-        ch_n = yaml_scalar(&chapter.n),
-        lang = yaml_scalar(&edition.lang),
-    );
+    let front = Front::new()
+        .plain("provider", "perseus")
+        .plain("work", WORK_TITLE)
+        .text("edition", &edition.id)
+        .text("book", &chapter.book_n)
+        .text("chapter", &chapter.n)
+        .text("title", &title)
+        .text("language", &edition.lang);
+    let head = format!("{}# {}\n\n", front.draw(), escape_md_inline(&title));
+    let mut sections = vec![DocSection::unkeyed(head)];
     let aligned = alignments.is_aligned(&edition.id);
     for sec in &chapter.sections {
         let text = sec.text(&edition.id);
@@ -335,16 +345,17 @@ fn render_chapter_md(
         } else {
             escape_md_block(text)
         };
-        out.push_str(&section_div_open(&s_uuid));
-        out.push_str("\n\n");
-        out.push_str(&format!(
-            "### {}.{}.{}\n\n{}\n\n",
-            chapter.book_n, chapter.n, sec.n, body
-        ));
-        out.push_str(SECTION_DIV_CLOSE);
-        out.push_str("\n\n");
+        let md = format!(
+            "{}\n\n### {}.{}.{}\n\n{}\n\n{SECTION_DIV_CLOSE}\n\n",
+            section_div_open(&s_uuid),
+            chapter.book_n,
+            chapter.n,
+            sec.n,
+            body
+        );
+        sections.push(DocSection::keyed(&s_uuid, md));
     }
-    out
+    (front, sections)
 }
 
 fn wrap_sentences(
@@ -567,6 +578,7 @@ fn chapter_edges(
             if doc_level_seen.insert(other_id.to_string()) {
                 let label = Some(other_id);
                 edges.push(EdgeRow {
+                    kind: datalib_schema::edges::EdgeKind::Link.as_i64(),
                     edge_uuid: edge_id(m_uuid, None, &other_md, None, label),
                     src_markdown_uuid: m_uuid.to_string(),
                     src_anchor_uuid: None,
@@ -590,6 +602,7 @@ fn chapter_edges(
                             ids::sentence(source_id, &book.n, &chapter.n, &sec.n, other_id, di)
                                 .uuid;
                         edges.push(EdgeRow {
+                            kind: datalib_schema::edges::EdgeKind::Link.as_i64(),
                             edge_uuid: edge_id(
                                 m_uuid,
                                 Some(&src_anchor),
@@ -617,6 +630,15 @@ mod tests {
     use crate::render::parse::{Book, Chapter, Edition, Section};
     use std::collections::BTreeMap;
 
+    fn render_chapter_md(
+        source_id: &str,
+        chapter: &Chapter,
+        edition: &Edition,
+        alignments: &PerseusAlignments,
+    ) -> String {
+        join(&render_chapter_sections(source_id, chapter, edition, alignments).1)
+    }
+
     fn edition(id: &str, lang: &str, title: &str) -> Edition {
         Edition {
             id: id.to_string(),
@@ -634,6 +656,75 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect::<BTreeMap<_, _>>(),
         }
+    }
+
+    /// A chapter is read together inside its edition, which is a place
+    /// inside the work; its sections sit in the chapter. A book's index
+    /// sits in the work, which no edition owns.
+    #[test]
+    fn a_chapter_sits_in_its_edition_in_the_work() {
+        let ed = edition("perseus-grc2", "grc", "Ἱστορίαι — Jones");
+        let book = Book {
+            n: "1".into(),
+            chapters: vec![Chapter {
+                book_n: "1".into(),
+                n: "1".into(),
+                sections: vec![section("1", &[("perseus-grc2", "Θουκυδίδης ξυνέγραψε.")])],
+            }],
+        };
+        let parsed = ParsedPerseus {
+            books: vec![book],
+            editions: vec![ed],
+            ..ParsedPerseus::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut docs = Vec::new();
+        render_all(
+            &parsed,
+            &PerseusAlignments::default(),
+            dir.path(),
+            "perseus",
+            &Progress::noop(),
+            &mut |d| {
+                docs.push(d);
+                Ok(())
+            },
+        )
+        .unwrap();
+        let work = ids::work("perseus").uuid;
+        let edition = ids::edition("perseus", "perseus-grc2").uuid;
+        let chapter = ids::chapter("perseus", "1", "1", "perseus-grc2").uuid;
+        let section = ids::section("perseus", "1", "1", "1", "perseus-grc2").uuid;
+        let book_doc = &docs[0];
+        assert_eq!(book_doc.data_nodes[0].uuid, work);
+        assert!(book_doc.data_nodes[0].is_place);
+        assert_eq!(book_doc.rows[0].parent_uuid.as_deref(), Some(work.as_str()));
+        let ch = &docs[1];
+        let data_nodes: Vec<(&str, Option<&str>, bool, bool)> = ch
+            .data_nodes
+            .iter()
+            .map(|n| {
+                (
+                    n.uuid.as_str(),
+                    n.parent_uuid.as_deref(),
+                    n.is_place,
+                    n.read_together,
+                )
+            })
+            .collect();
+        assert_eq!(
+            data_nodes,
+            vec![
+                (work.as_str(), None, true, false),
+                (edition.as_str(), Some(work.as_str()), true, false),
+                (chapter.as_str(), Some(edition.as_str()), false, true),
+            ]
+        );
+        let row = |uuid: &str| ch.rows.iter().find(|r| r.uuid == uuid).unwrap();
+        assert_eq!(row(&chapter).parent_uuid.as_deref(), Some(edition.as_str()));
+        assert_eq!(row(&section).parent_uuid.as_deref(), Some(chapter.as_str()));
+        assert_eq!(row(&section).read_uuid.as_deref(), Some(chapter.as_str()));
+        assert_eq!(row(&section).place_uuid.as_deref(), Some(edition.as_str()));
     }
 
     #[test]

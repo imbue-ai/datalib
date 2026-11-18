@@ -1,10 +1,15 @@
-load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+load("@bazel_skylib//rules:write_file.bzl", "write_file")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 # Public patches consumed by crate_universe annotations in MODULE.bazel.
 exports_files(
     # DOLTLITE_VERSION below is read by //tools:version_pins_test.
-    glob(["*.patch"]) + ["BUILD.bazel"],
+    glob(["*.patch"]) + [
+        "APACHE_LICENSE",
+        "BUILD.bazel",
+        "LICENSE.md",
+    ],
     visibility = ["//visibility:public"],
 )
 
@@ -29,7 +34,7 @@ filegroup(
 # This must match the version in the `doltlite_amalgamation` /
 # `doltlite_autoconf` URLs in MODULE.bazel; `//tools:version_pins_test`
 # enforces that.
-DOLTLITE_VERSION = "0.51.3"
+DOLTLITE_VERSION = "0.51.13"
 
 # Feature defines shared by the library and the CLI. Both compile
 # against the same amalgamation, so they must agree: `shell.c` has 12
@@ -79,6 +84,36 @@ DOLTLITE_WARNING_SUPPRESSIONS = [
     "-Wno-sign-compare",
     "-Wno-deprecated-non-prototype",
 ]
+
+DOLTLITE_LIBRARY_COPTS = DOLTLITE_DEFINES + DOLTLITE_WARNING_SUPPRESSIONS + [
+    # Force `-O2` regardless of bazel's compilation_mode: doltlite's
+    # open path is loop-bound C, and at fastbuild's `-O0` a multi-GB
+    # store took ~60s to open (docs/dev/doltlite.md § Operational
+    # notes; hack/slack_open_debug). We never step-debug it.
+    "-O2",
+    # Position-independent even in the non-PIC archive. rustc bundles
+    # this archive into the libsqlite3-sys rlib (the build script's
+    # `rustc-link-lib=static=sqlite3`), and every Rust binary on Linux
+    # links as PIE, so a non-PIC `sqlite3.o` fails the x86_64 link with
+    # "relocation R_X86_64_32S ... can not be used when making a PIE
+    # object". The amalgamation the crate used to compile itself was
+    # built -fPIC by the `cc` crate; this keeps ours the same.
+    "-fPIC",
+]
+
+DOLTLITE_LINKOPTS = select({
+    # POSIX threads for SQLITE_THREADSAFE=1; dl is needed if anyone
+    # ever calls sqlite3_load_extension at runtime (we don't, but
+    # the symbol references dlopen so the linker complains
+    # otherwise on Linux).
+    "@platforms//os:linux": [
+        "-lpthread",
+        "-ldl",
+        "-lm",
+    ],
+    "@platforms//os:macos": [],
+    "//conditions:default": [],
+})
 
 # `sqlite3` — a from-source doltlite build, compiled once by Bazel and
 # statically linked into every Rust binary that pulls in sqlx-sqlite
@@ -130,33 +165,75 @@ cc_library(
     srcs = ["sqlite3.c"],
     hdrs = ["sqlite3.h"],
     includes = ["."],
-    copts = DOLTLITE_DEFINES + DOLTLITE_WARNING_SUPPRESSIONS + [
-        # Force `-O2` regardless of bazel's compilation_mode: doltlite's
-        # open path is loop-bound C, and at fastbuild's `-O0` a multi-GB
-        # store took ~60s to open (docs/dev/doltlite.md § Operational
-        # notes; hack/slack_open_debug). We never step-debug it.
-        "-O2",
-        # Position-independent even in the non-PIC archive. rustc bundles
-        # this archive into the libsqlite3-sys rlib (the build script's
-        # `rustc-link-lib=static=sqlite3`), and every Rust binary on Linux
-        # links as PIE, so a non-PIC `sqlite3.o` fails the x86_64 link with
-        # "relocation R_X86_64_32S ... can not be used when making a PIE
-        # object". The amalgamation the crate used to compile itself was
-        # built -fPIC by the `cc` crate; this keeps ours the same.
-        "-fPIC",
+    copts = DOLTLITE_LIBRARY_COPTS,
+    linkopts = DOLTLITE_LINKOPTS,
+    visibility = ["//visibility:public"],
+)
+
+# `libdoltlite` — the same amalgamation as a shared library, for a program
+# outside the Rust build to call: docs/dev/doltlite.md § "Calling the library
+# directly". Compiled again rather than linked from `:sqlite3`, because
+# a shared library takes from an archive only what it references, and
+# here that is nothing.
+#
+# Not on the musl platforms. Those binaries are fully static, and a static
+# toolchain's shared library is one nothing we have tested can load. The musl
+# reader wheel compiles in a musllinux image instead (`:library_copts`).
+config_setting(
+    name = "musl",
+    constraint_values = [
+        "//platforms:musl",
+        "@platforms//os:linux",
     ],
-    linkopts = select({
-        # POSIX threads for SQLITE_THREADSAFE=1; dl is needed if anyone
-        # ever calls sqlite3_load_extension at runtime (we don't, but
-        # the symbol references dlopen so the linker complains
-        # otherwise on Linux).
-        "@platforms//os:linux": [
-            "-lpthread",
-            "-ldl",
-            "-lm",
-        ],
-        "@platforms//os:macos": [],
-        "//conditions:default": [],
+)
+
+cc_binary(
+    name = "libdoltlite.so",
+    srcs = [
+        "sqlite3.c",
+        "sqlite3.h",
+    ],
+    copts = DOLTLITE_LIBRARY_COPTS,
+    linkopts = DOLTLITE_LINKOPTS,
+    linkshared = True,
+    target_compatible_with = select({
+        ":musl": ["@platforms//:incompatible"],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
+
+cc_binary(
+    name = "libdoltlite.dylib",
+    srcs = [
+        "sqlite3.c",
+        "sqlite3.h",
+    ],
+    copts = DOLTLITE_LIBRARY_COPTS,
+    linkopts = DOLTLITE_LINKOPTS,
+    linkshared = True,
+    target_compatible_with = ["@platforms//os:macos"],
+)
+
+# The flags above for a compile outside Bazel, one per line as the compiler
+# sees them, so Bazel's own escaping of the version's quotes comes off. The
+# reader wheels compile in images whose libc sets what they can run on
+# (scripts/release/stage_reader_wheels.sh), and take these rather than a copy.
+write_file(
+    name = "library_copts",
+    out = "library_copts.txt",
+    content = [copt.replace('\\"', '"') for copt in DOLTLITE_LIBRARY_COPTS],
+    visibility = ["//datalib/reader:__pkg__"],
+)
+
+# What this platform ships: `//datalib/backend:dist` takes it, so the
+# tarball holds it at `lib/`.
+filegroup(
+    name = "shipped_library",
+    srcs = select({
+        ":musl": [],
+        "@platforms//os:linux": [":libdoltlite.so"],
+        "@platforms//os:macos": [":libdoltlite.dylib"],
     }),
     visibility = ["//visibility:public"],
 )
@@ -185,6 +262,29 @@ cc_binary(
     deps = [":sqlite3"],
 )
 
+# The same shell with SQLite's `vec1` vector-search extension compiled in
+# (`-DDOLTLITE_VEC1=1`), for the facts tests that pin what vec1 does
+# (docs/dev/doltlite.md § "Vector search: vec1"). Test-only: nothing we
+# ship has vec1, and `:sqlite3` and `:doltlite` above stay as they are.
+cc_library(
+    name = "sqlite3_vec1",
+    testonly = True,
+    srcs = ["sqlite3.c"],
+    hdrs = ["sqlite3.h"],
+    copts = DOLTLITE_LIBRARY_COPTS + ["-DDOLTLITE_VEC1=1"],
+    includes = ["."],
+    linkopts = DOLTLITE_LINKOPTS,
+)
+
+cc_binary(
+    name = "doltlite_vec1",
+    testonly = True,
+    srcs = ["@doltlite_autoconf//:ext/wasm/bld/doltlite-build/shell.c"],
+    copts = DOLTLITE_DEFINES + DOLTLITE_WARNING_SUPPRESSIONS + ["-DDOLTLITE_VEC1=1"],
+    visibility = ["//datalib/backend/doltlite_facts:__pkg__"],
+    deps = [":sqlite3_vec1"],
+)
+
 # That the CLI links, runs, and has a real dolt-SQL surface (a shell
 # linked against stock SQLite fails on `dolt_commit`). Its `--version`
 # check compares DOLTLITE_VERSION with itself; pin drift between the two
@@ -198,4 +298,22 @@ sh_test(
         DOLTLITE_VERSION,
     ],
     data = [":doltlite"],
+)
+
+# What doltlite's chunk hashing computes, through the dispatcher as a store
+# write reaches it: BLAKE3's own test vectors, hashed whole and in pieces;
+# that the dispatcher has a SIMD kernel to pick (the amalgamation compiles
+# them itself); and that `@blake3_c`,
+# whose header and vectors the test takes, is the BLAKE3 the amalgamation
+# embeds. On x86 it covers the widest kernel this CPU has.
+cc_test(
+    name = "blake3_kernels_test",
+    size = "small",
+    srcs = ["blake3_kernels_test.c"],
+    args = ["$(rootpath @blake3_c//:test_vectors/test_vectors.json)"],
+    data = ["@blake3_c//:test_vectors/test_vectors.json"],
+    deps = [
+        ":sqlite3",
+        "@blake3_c//:headers",
+    ],
 )

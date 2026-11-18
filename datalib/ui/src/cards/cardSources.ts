@@ -123,3 +123,23 @@ export function appletBrowseSource(appletId: string): string | null {
 export function searchSource(q: string): string {
   return `searchView(${JSON.stringify({ q })})`;
 }
+
+/// The source of a document's card, at `section` when it is one of its
+/// messages.
+export function documentSource(page: string, section: string | null = null): string {
+  const args = section === null ? [page] : [page, section];
+  return `documentView(${args.map((a) => JSON.stringify(a)).join(", ")})`;
+}
+
+/// The problems grid listing exactly the rows a Manage row's red and
+/// yellow numbers count: `query` is the one the server sent with the row
+/// (`problems_query`, `http/src/manage/problems.rs`), so the list is the
+/// number. `problemsUrl` is the applet's `/problems`.
+export function problemsSource(problemsUrl: string, query: string, name: string): string {
+  return `gridView(${JSON.stringify({
+    url: problemsUrl,
+    q: query,
+    name,
+    placeholder: "search problems…  (try: severity:error, -stage:fetch, muted:yes)",
+  })})`;
+}

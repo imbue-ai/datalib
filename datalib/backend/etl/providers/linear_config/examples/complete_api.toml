@@ -1,5 +1,5 @@
-# A Linear workspace over its GraphQL API, signed in through latchkey
-# (`latchkey auth browser linear`), with every option set.
+# A Linear workspace over its GraphQL API, signed in through latchkey, with
+# every option set.
 [[groups]]
 id = "linear"
 name = "Linear"

@@ -1,6 +1,5 @@
 # GitHub pull requests and their review threads, over GitHub's API, signed
-# in through latchkey (`latchkey auth browser github`), with every option
-# set, and searchable.
+# in through latchkey, with every option set, and searchable.
 [[groups]]
 id = "github"
 name = "GitHub"
@@ -38,16 +37,10 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["github/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "github"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["github/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "github"
 function = "embed"
 command = "datalib-step"
-inputs = ["github/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]

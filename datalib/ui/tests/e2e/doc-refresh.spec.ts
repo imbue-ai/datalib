@@ -5,8 +5,8 @@
 // The live stream is stubbed here: nothing in the fixture commits to
 // the index on cue, and the frame is all the card listens for.
 
-import { test, expect, type Page } from "@playwright/test";
-import { docBody, EVERY_ROW, SEARCH_ROWS, openRowByUuid } from "./grid-helpers";
+import { test, expect } from "@playwright/test";
+import { docBody, EVERY_ROW, SEARCH_ROWS, openRowByUuid, stubStream } from "./grid-helpers";
 
 const PROBLEM = {
   problem_uuid: "00000000-0000-4000-8000-00000000d0c5",
@@ -21,27 +21,10 @@ const PROBLEM = {
   first_seen_at_utc: "2026-01-01T00:00:00Z",
 };
 
-/// Serve the live stream as one frame per connection, reconnecting fast:
-/// heartbeats until `commit()`, an index commit after it.
-async function stubStream(page: Page): Promise<() => void> {
-  let committed = false;
-  await page.route("**/api/sync/stream", (route) => {
-    const frame = committed ? { kind: "index_changed" } : { kind: "heartbeat" };
-    return route.fulfill({
-      status: 200,
-      headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
-      body: `retry: 200\nevent: root\ndata: ${JSON.stringify(frame)}\n\n`,
-    });
-  });
-  return () => {
-    committed = true;
-  };
-}
-
 test.afterEach(({ page }) => page.unrouteAll({ behavior: "ignoreErrors" }));
 
 test("an index commit clears a problem the open document no longer has", async ({ page }) => {
-  const resp = await page.request.get("/applet/unified_document_index/search?q=&limit=1000");
+  const resp = await page.request.get("/applet/unified_grid_and_search_index/search?q=&limit=1000");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as {
     rows: { uuid: string; markdown_uuid: string | null; message_index: number | null }[];
@@ -52,7 +35,7 @@ test("an index commit clears a problem the open document no longer has", async (
   const commit = await stubStream(page);
   let stale = true;
   await page.route(
-    `**/applet/unified_document_index/chat/${pick!.markdown_uuid}`,
+    `**/applet/unified_grid_and_search_index/chat/${pick!.markdown_uuid}`,
     async (route) => {
       const response = await route.fetch();
       const body = (await response.json()) as { problems?: unknown[] };

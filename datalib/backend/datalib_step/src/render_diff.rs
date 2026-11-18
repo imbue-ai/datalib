@@ -306,6 +306,8 @@ pub fn render_diff_source(
             // own row keeps its uuid. `upstream_id` is the backpointer to
             // the real thing, which is what a person copying it wants.
             let doc = RenderedMarkdown {
+                section_layout: None,
+                content_hash: None,
                 markdown_uuid: uuid.to_string(),
                 source_id: name.clone(),
                 upstream_cursor: base.md.upstream_cursor.clone(),
@@ -314,9 +316,12 @@ pub fn render_diff_source(
                 render_version: base.md.render_version,
                 rows: diff.rows,
                 sections: diff.sections,
+                front: base.md.front.clone(),
                 edges: base.md.edges.clone(),
                 // The people are the source's; a diff row only compares.
                 contacts: Vec::new(),
+                data_nodes: Vec::new(),
+                filings: Vec::new(),
                 photos: Vec::new(),
                 problems: base.md.problems.clone(),
             };
@@ -599,6 +604,8 @@ mod tests {
             async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
                 for i in 0..self.0 {
                     let emitted = ctx.emit_doc(RenderedMarkdown {
+                        section_layout: None,
+                        content_hash: None,
                         markdown_uuid: format!("d{i}"),
                         source_id: "s".into(),
                         upstream_cursor: None,
@@ -607,8 +614,11 @@ mod tests {
                         render_version: 1,
                         rows: vec![],
                         sections: vec![Section::keyed(&format!("d{i}"), "x\n".into())],
+                        front: Default::default(),
                         edges: vec![],
                         contacts: Vec::new(),
+                        data_nodes: Vec::new(),
+                        filings: Vec::new(),
                         photos: Vec::new(),
                         problems: vec![],
                     });
@@ -679,6 +689,8 @@ mod tests {
         let path = dir.path().join("d.md");
         fs::write(&path, "---\ntitle: t\n---\n\n# T\n\nbody\n").unwrap();
         let md = RenderedMarkdown {
+            section_layout: None,
+            content_hash: None,
             markdown_uuid: "d".into(),
             source_id: "s".into(),
             upstream_cursor: None,
@@ -687,8 +699,11 @@ mod tests {
             render_version: 1,
             rows: vec![],
             sections: vec![],
+            front: Default::default(),
             edges: vec![],
             contacts: Vec::new(),
+            data_nodes: Vec::new(),
+            filings: Vec::new(),
             photos: Vec::new(),
             problems: vec![],
         };

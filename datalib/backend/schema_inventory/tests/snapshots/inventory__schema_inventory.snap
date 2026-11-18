@@ -28,6 +28,9 @@ problems
     changed_at_utc
     tz_offset
     render_version
+    upstream_entity_kind
+    upstream_id
+    upstream_account
 sync_runs
     run_id
     started_at_utc
@@ -121,6 +124,36 @@ conversations
     name
     updated_at
 conversations_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
+cowork_events
+    id
+    payload
+    session_id
+    sequence_num
+cowork_events_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
+cowork_sessions
+    id
+    payload
+    org_uuid
+    org_name
+    title
+    last_event_at
+cowork_sessions_bookkeeping
     id
     fetched_at_utc
     attempt_count
@@ -461,6 +494,7 @@ emails
     cc_json
     has_attachment
     label_ids
+    preview
 emails_bookkeeping
     id
     fetched_at_utc
@@ -512,6 +546,7 @@ read_marks
     id
     read_through
     read
+    muted
 thread_members
     id
     thread_id
@@ -1336,6 +1371,7 @@ read_marks
     id
     read_through
     read
+    muted
 recipients
     id
     payload
@@ -1444,6 +1480,10 @@ coverage
     scope
     lo
     hi
+coverage_checked
+    scope
+    checked_at_utc
+    tz_offset
 involving
     id
     payload
@@ -1483,6 +1523,7 @@ read_marks
     id
     read_through
     read
+    muted
 saved_items
     id
     payload
@@ -1567,6 +1608,7 @@ read_marks
     id
     read_through
     read
+    muted
 sms_attachments
     id
     message_id
@@ -1862,7 +1904,7 @@ media_blobs_bookkeeping
     tz_offset
     held_version
 
-== unified_document_index/grid ==
+== unified_grid_and_search_index/grid ==
 edges
     edge_uuid
     src_markdown_uuid
@@ -1870,6 +1912,7 @@ edges
     dst_markdown_uuid
     dst_anchor_uuid
     label
+    kind
 grid_rows
     uuid
     provider
@@ -1897,6 +1940,10 @@ grid_rows
     channel
     conversation_name
     conversation_uuid
+    parent_uuid
+    sort_key
+    read_uuid
+    place_uuid
     message_index
     entire_chat
     preview
@@ -1933,6 +1980,9 @@ markdowns
     upstream_cursor
     renderer_version
     bucket_key
+    section_layout
+    content_hash
+    front
 problems
     problem_uuid
     source_id
@@ -1951,6 +2001,9 @@ problems
     changed_at_utc
     tz_offset
     render_version
+    upstream_entity_kind
+    upstream_id
+    upstream_account
 render_cursor
     source_id
     raw_commit

@@ -1,9 +1,11 @@
 // The sources card: one row per group with its steps under it, and the one
 // dialog that creates and edits them.
-import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Page, type Route } from "@playwright/test";
 import { openAdvanced, reviewToml } from "./wizard-helpers";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import {
+  fillConfigEditor,
+  GRID,
   savedConfig,
   nameCell,
   expandGroup,
@@ -12,11 +14,12 @@ import {
   pipelineRow as row,
   MANAGE_WITH_CONFIG,
   TABLE_ROWS,
+  expectSyncEverything,
 } from "./grid-helpers";
 
 async function openManager(page: Page) {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
 }
 
 const wizard = (page: Page) => page.getByRole("dialog");
@@ -38,13 +41,29 @@ const embedToggle = (page: Page) => toggle(page, "Embed it for search by meaning
 /// The `inputs` one fan-in declares, read out of the config text.
 function fanInInputs(config: string, fn: string): string[] {
   const table = new RegExp(
-    `\\[\\[steps\\]\\]\\ngroup = "unified_document_index"\\nfunction = "${fn}"\\n(?:command = "[^"]*"\\n)?inputs = \\[([^\\]]*)\\]`,
+    `\\[\\[steps\\]\\]\\ngroup = "unified_grid_and_search_index"\\nfunction = "${fn}"\\n(?:command = "[^"]*"\\n)?inputs = \\[([^\\]]*)\\]`,
   ).exec(config);
-  if (!table) throw new Error(`no unified_document_index/${fn} step in the config`);
+  if (!table) throw new Error(`no unified_grid_and_search_index/${fn} step in the config`);
   return table[1]
     .split(",")
     .map((t) => t.trim().replace(/^"|"$/g, ""))
     .filter(Boolean);
+}
+/// Whether the fan-in reads `id`, by its id or by a pattern
+/// (`*/render_markdown`) that names it.
+function fanInReads(config: string, fn: string, id: string): boolean {
+  const own = id.split("/")[1];
+  return fanInInputs(config, fn).some((i) => i === id || i === `*/${own}`);
+}
+/// The sources the `unified_grid_and_search_index` step keeps out of search.
+function notSearched(config: string): string[] {
+  const listed = /not_searched = \[([^\]]*)\]/.exec(config);
+  return listed
+    ? listed[1]
+        .split(",")
+        .map((t) => t.trim().replace(/^"|"$/g, ""))
+        .filter(Boolean)
+    : [];
 }
 /// A step's own table in the config text. Its id is never written — it is
 /// composed from these two keys — so the id alone appears only where
@@ -73,9 +92,10 @@ test.beforeEach(async ({ page, request }) => {
 });
 
 test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: "ignoreErrors" });
   if (!original) return;
   await openManager(page);
-  await page.locator(".m2-editor").fill(original);
+  await fillConfigEditor(page, original);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
 });
@@ -197,7 +217,7 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
 
   // Take the render step out by hand, the way a config edited in an
   // editor might lack one — including the reference to it that adding
-  // the source put on `grid_index`. Both halves, because a step id that
+  // the source put on `unified_grid_and_search_index`. Both halves, because a step id that
   // names nothing is an invalid config and the save would be refused:
   // the index fans in from every source's render step, so removing one
   // means removing it from two places. That is the edit a person doing
@@ -212,14 +232,14 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
     .replace(/"fetch-only\/render_markdown"(,\s*)?/g, "");
   expect(without).not.toBe(text);
   expect(without).not.toContain("fetch-only/render_markdown");
-  await editor.fill(without);
+  await fillConfigEditor(page, without);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
 
   await expandGroup(page, "fetch-only");
   await expect(row(page, "fetch-only/ingest")).toBeVisible();
   await expect(
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="fetch-only/render_markdown"]'),
+    page.locator('.tg-grid .slick-row[data-key="fetch-only/render_markdown"]'),
   ).toHaveCount(0);
 
   // A step under a group edits its source: the step row's button opens
@@ -259,7 +279,7 @@ test("editing a source keeps what the form has no field for", async ({ page }) =
     'group = "hand-tuned"\nfunction = "ingest"\n# pinned by hand\ncode_version = "7"\n',
   );
   expect(tuned).not.toBe(text);
-  await editor.fill(tuned);
+  await fillConfigEditor(page, tuned);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
 
@@ -293,7 +313,7 @@ test("clearing Rendering removes the render step and its index edge", async ({ p
   await expect(page.getByText("Saved No Render.")).toBeVisible();
 
   await expect(
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="no-render/render_markdown"]'),
+    page.locator('.tg-grid .slick-row[data-key="no-render/render_markdown"]'),
   ).toHaveCount(0);
   // The fan-ins must lose it too: an input naming a step that no longer
   // exists is a config the loader refuses outright.
@@ -303,7 +323,7 @@ test("clearing Rendering removes the render step and its index edge", async ({ p
   expect(after).toContain('group = "no-render"');
 });
 
-test("free-text search is a choice, and only the qmd steps feel it", async ({ page }) => {
+test("free-text search is a choice, and only the search feels it", async ({ page }) => {
   // Embedding is the slow part of a sync, so a source can be rendered
   // and gridded without being embedded. The grid index is not a
   // choice — a source missing from it is missing from the table.
@@ -314,24 +334,27 @@ test("free-text search is a choice, and only the qmd steps feel it", async ({ pa
   await expect(embedToggle(page)).toBeChecked();
   await openAdvanced(page);
   await keywordToggle(page).uncheck();
-  // The embeddings read the keyword index, so they cannot be kept alone.
+  // The embeddings are of what the keyword pass cut, so they cannot be
+  // kept alone.
   await expect(embedToggle(page)).toBeDisabled();
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Rows Only.")).toBeVisible();
 
-  await expect(editor).toHaveValue(/rows-only\/render_markdown/);
+  await expect(editor).toHaveValue(/rows-only\/render_markdown|group = "rows-only"/);
+  await expect(editor).toHaveValue(/not_searched = \[[^\]]*"rows-only"/);
   const added = await editor.inputValue();
-  expect(fanInInputs(added, "grid_index")).toContain("rows-only/render_markdown");
-  expect(fanInInputs(added, "qmd_aggregator")).not.toContain("rows-only/keyword_index");
-  expect(added).not.toMatch(stepBlock("rows-only", "keyword_index"));
+  expect(fanInReads(added, "unified_grid_and_search_index", "rows-only/render_markdown")).toBe(
+    true,
+  );
+  expect(notSearched(added)).toContain("rows-only");
+  expect(added).not.toMatch(stepBlock("rows-only", "embed"));
 
   // Reopening reads the answer back off the config, not off a default.
   await expandGroup(page, "rows-only");
   await pickRowMenu(page, row(page, "rows-only/ingest"), "Edit settings…", wizard(page));
   await expect(keywordToggle(page)).not.toBeChecked();
   // Rendering off leaves nothing to index, so the question cannot be
-  // answered — and answering it would write an input naming a step
-  // that no longer exists.
+  // answered.
   await openAdvanced(page);
   await renderToggle(page).uncheck();
   await expect(keywordToggle(page)).toBeDisabled();
@@ -339,18 +362,17 @@ test("free-text search is a choice, and only the qmd steps feel it", async ({ pa
   await openAdvanced(page);
   await renderToggle(page).check();
 
-  // Keyword search alone: the keyword index, and no embed step.
+  // Keyword search alone: off the not-searched list, and no embed step.
   await openAdvanced(page);
   await keywordToggle(page).check();
   await openAdvanced(page);
   await embedToggle(page).uncheck();
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
   await expect(page.getByText("Saved Rows Only.")).toBeVisible();
-  await expect(editor).toHaveValue(stepBlock("rows-only", "keyword_index"));
+  await expect(editor).not.toHaveValue(/not_searched = \[[^\]]*"rows-only"/);
   const keywordOnly = await editor.inputValue();
+  expect(notSearched(keywordOnly)).not.toContain("rows-only");
   expect(keywordOnly).not.toMatch(stepBlock("rows-only", "embed"));
-  expect(fanInInputs(keywordOnly, "qmd_aggregator")).toContain("rows-only/keyword_index");
-  expect(fanInInputs(keywordOnly, "qmd_aggregator")).not.toContain("rows-only/embed");
 
   await expandGroup(page, "rows-only");
   await pickRowMenu(page, row(page, "rows-only/ingest"), "Edit settings…", wizard(page));
@@ -362,83 +384,155 @@ test("free-text search is a choice, and only the qmd steps feel it", async ({ pa
   // Not the toast: the first save's may still be on screen.
   await expect(editor).toHaveValue(stepBlock("rows-only", "embed"));
   const saved = await editor.inputValue();
-  expect(fanInInputs(saved, "qmd_aggregator")).toEqual(
-    expect.arrayContaining(["rows-only/keyword_index", "rows-only/embed"]),
-  );
   expect(saved).toContain(
-    'group = "rows-only"\nfunction = "keyword_index"\ncommand = "datalib-step"\ninputs = ["rows-only/render_markdown"]',
+    'group = "rows-only"\nfunction = "embed"\ncommand = "datalib-step"\ninputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]',
   );
-  expect(saved).toContain(
-    'group = "rows-only"\nfunction = "embed"\ncommand = "datalib-step"\ninputs = ["rows-only/keyword_index"]',
-  );
-  // Added once, however many times the source is saved: in the grid
-  // index and as the keyword index's input.
-  expect(saved.match(/"rows-only\/render_markdown"/g)).toHaveLength(2);
+  // Added once, however many times the source is saved.
+  expect(saved.match(/group = "rows-only"\nfunction = "embed"\n/g)).toHaveLength(1);
 });
 
 test("a provider with render options writes them on the render step, from the one form", async ({
   page,
 }) => {
-  // Signal's render step has a `period` option. Before the one-dialog
-  // wizard it came as a second dialog, and the remount between the two
-  // once wrote the render step under the group's id instead of its own
-  // — a config `datalib-dag` refuses with "a step writes only the tree
-  // its id names". One dialog has no second mount to get wrong; the
-  // assertion on the composed id stays because that is the config bug
-  // it would catch.
+  // Apple Mail's render step has an option, the mailboxes it renders.
+  // Before the one-dialog wizard it came as a second dialog, and the
+  // remount between the two once wrote the render step under the
+  // group's id instead of its own — a config `datalib-dag` refuses with
+  // "a step writes only the tree its id names". One dialog has no second
+  // mount to get wrong; the assertion on the composed id stays because
+  // that is the config bug it would catch.
   const editor = page.locator(".m2-editor");
   await page.getByRole("button", { name: "Add source" }).click();
   await wizard(page)
-    .locator(".wiz-tile", { hasText: "Decrypt and copy an Android Signal backup" })
+    .locator(".wiz-tile", {
+      hasText: "Copy the accounts of the Mail app on this Mac, from its own files.",
+    })
     .click();
-  await nameField(page).fill("Signal Work");
-  await wizard(page).locator("input.wiz-path").fill("/tmp/SignalBackups");
-  await expect(idField(page)).toHaveValue("signal-work");
+  await nameField(page).fill("Mac Mail");
+  await wizard(page).locator("input.wiz-path").fill("/tmp/Library/Mail");
+  await expect(idField(page)).toHaveValue("mac-mail");
 
-  // The render option sits under the Rendering heading, in this form.
-  const section = wizard(page).locator(".wiz-section");
-  await expect(section).toContainText("signal-work/render_markdown");
-  await expect(field(page, "Document span")).toHaveValue("month");
+  await openAdvanced(page);
+  await wizard(page)
+    .locator(
+      '.wiz-field:has(> .wiz-label:text-is("Render only these mailboxes")) .wiz-listfield > .wiz-input',
+    )
+    .fill("Inbox");
   await wizard(page).getByRole("button", { name: "Add source" }).click();
-  await expect(page.getByText("Added Signal Work.")).toBeVisible();
+  await expect(page.getByText("Added Mac Mail.")).toBeVisible();
 
-  await expandGroup(page, "signal-work");
-  await expect(row(page, "signal-work/render_markdown")).toBeVisible();
-  await expect(stepChip(page, "signal-work/render_markdown")).toHaveAttribute(
+  await expandGroup(page, "mac-mail");
+  await expect(row(page, "mac-mail/render_markdown")).toBeVisible();
+  await expect(stepChip(page, "mac-mail/render_markdown")).toHaveAttribute(
     "aria-label",
     /, Render step/,
   );
 
-  await expect(editor).toHaveValue(/group = "signal-work"/);
+  await expect(editor).toHaveValue(/group = "mac-mail"/);
   const text = await editor.inputValue();
-  expect(text).toContain('group = "signal-work"\nfunction = "render_markdown"');
-  expect(text).toContain('inputs = ["signal-work/ingest"]');
-  expect(text).toContain('period = "month"');
+  expect(text).toContain('group = "mac-mail"\nfunction = "render_markdown"');
+  expect(text).toContain('inputs = ["mac-mail/ingest"]');
+  expect(text).toContain('only_render_labels = ["Inbox"]');
+  expect(text.indexOf("only_render_labels")).toBeGreaterThan(
+    text.indexOf('function = "render_markdown"'),
+  );
   // One group, written once.
-  expect(text.match(/id = "signal-work"/g)).toHaveLength(1);
+  expect(text.match(/id = "mac-mail"/g)).toHaveLength(1);
 });
 
 test("a download-only source gets its render step, and no Rendering section", async ({ page }) => {
   // Lightroom renders no documents, but its render step is what carries
   // the storage report and the download's problems into the index, so
   // the form writes it without asking — and offers none of the render
-  // or search choices.
+  // or search choices. It does offer the Photos card, on for a new source.
   const editor = page.locator(".m2-editor");
   await page.getByRole("button", { name: "Add source" }).click();
   await wizard(page).locator(".wiz-tile", { hasText: "Copy a Lightroom Classic catalog" }).click();
   await nameField(page).fill("Photos");
   // The catalog; the backups folder below it stays empty.
   await wizard(page).locator("input.wiz-path").first().fill("/tmp/cat.lrcat");
-  await expect(wizard(page).locator(".wiz-section-head")).toHaveCount(0);
+  await expect(wizard(page).locator(".wiz-section-head", { hasText: "Rendering" })).toHaveCount(0);
+  await expect(
+    wizard(page).getByRole("checkbox", { name: /Turn on the Photos card/ }),
+  ).toBeChecked();
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Photos.")).toBeVisible();
 
   await expect(editor).toHaveValue(/group = "photos"\nfunction = "render_markdown"/);
   const text = await editor.inputValue();
   expect(text).toContain('group = "photos"\nfunction = "ingest"');
-  expect(text).not.toContain('group = "photos"\nfunction = "keyword_index"');
+  expect(text).not.toContain('group = "photos"\nfunction = "embed"');
+  expect(text).toContain('[[applets]]\nid = "photos"\ncommand = "datalib-applet photos"');
   await expandGroup(page, "photos");
   await expect(row(page, "photos/render_markdown")).toBeVisible();
+});
+
+/// The Sources tab, with `answer` deciding what every read of the config
+/// gets from then on. The tab is opened from the search so that the app's
+/// own first read has already passed.
+async function openSourcesWhileReading(page: Page, answer: (route: Route) => Promise<void>) {
+  await page.goto(GRID);
+  await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 15_000 });
+  await page.route("**/api/config", async (r) => {
+    if (r.request().method() === "GET") await answer(r);
+    else await r.fallback();
+  });
+  await page.getByRole("treeitem", { name: "Sources", exact: true }).click();
+}
+
+async function fillInPhotos(page: Page) {
+  await wizard(page).locator(".wiz-tile", { hasText: "Copy a Lightroom Classic catalog" }).click();
+  await nameField(page).fill("Photos");
+  await wizard(page).locator("input.wiz-path").first().fill("/tmp/cat.lrcat");
+}
+
+/// The form opened before the card had read the config: added to the text
+/// it held then, which was none, the new source became the whole file, and
+/// the id it suggested could turn out to be taken once the read landed.
+test("Add source waits for the config, and what it adds keeps the rest", async ({
+  page,
+  request,
+}) => {
+  let letReadLand!: () => void;
+  const readMayLand = new Promise<void>((land) => (letReadLand = land));
+  await openSourcesWhileReading(page, async (r) => {
+    await readMayLand;
+    await r.fallback();
+  });
+  await page.getByRole("button", { name: "Add source" }).click();
+  await expect(wizard(page)).toHaveCount(0);
+  letReadLand();
+  await fillInPhotos(page);
+  await wizard(page).getByRole("button", { name: "Add source" }).click();
+  await expect(page.getByText("Added Photos.")).toBeVisible();
+  const saved = await savedConfig(request);
+  expect(saved).toContain('group = "photos"\nfunction = "ingest"');
+  for (const [entry] of original.matchAll(/^id = "[^"]+"$/gm)) expect(saved).toContain(entry);
+});
+
+test("Add source says so when the config cannot be read, and opens nothing", async ({
+  page,
+  request,
+}) => {
+  await openSourcesWhileReading(page, (r) => r.fulfill({ status: 500, body: "disk trouble" }));
+  await page.getByRole("button", { name: "Add source" }).click();
+  await expect(page.getByText(/could not be read, so nothing was changed/)).toBeVisible();
+  await expect(wizard(page)).toHaveCount(0);
+  expect(await savedConfig(request)).toBe(original);
+});
+
+test("a source submitted while the config cannot be read changes nothing", async ({
+  page,
+  request,
+}) => {
+  let reads = (r: Route) => r.fallback();
+  await openSourcesWhileReading(page, (r) => reads(r));
+  await page.getByRole("button", { name: "Add source" }).click();
+  await fillInPhotos(page);
+  reads = (r) => r.fulfill({ status: 500, body: "disk trouble" });
+  await wizard(page).getByRole("button", { name: "Add source" }).click();
+  await expect(page.getByText(/could not be read, so nothing was changed/)).toBeVisible();
+  expect(await savedConfig(request)).toBe(original);
 });
 
 test("deleting a fetch step takes its render step with it", async ({ page }) => {
@@ -465,12 +559,10 @@ test("deleting a fetch step takes its render step with it", async ({ page }) => 
   );
 
   // The group went with its last step, so its row is gone too.
-  await expect(
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="doomed/ingest"]'),
-  ).toHaveCount(0);
-  await expect(
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="doomed/render_markdown"]'),
-  ).toHaveCount(0);
+  await expect(page.locator('.tg-grid .slick-row[data-key="doomed/ingest"]')).toHaveCount(0);
+  await expect(page.locator('.tg-grid .slick-row[data-key="doomed/render_markdown"]')).toHaveCount(
+    0,
+  );
   await expect(groupRow(page, "doomed")).toHaveCount(0);
   // Including the fan-in references, or the config would not load.
   await expect(editor).not.toHaveValue(/doomed/);
@@ -484,11 +576,11 @@ test("deleting the group takes every step under it", async ({ page }) => {
   await expect(groupRow(page, "whole-group")).toBeVisible();
   await expect(editor).toHaveValue(/group = "whole-group"\nfunction = "render_markdown"/);
 
-  // The confirm says what goes: the group and the four steps under it —
-  // ingest, render, and the source's keyword index and embeddings.
+  // The confirm says what goes: the group and the three steps under it —
+  // ingest, render, and the source's embeddings.
   page.on("dialog", (d) => {
     expect(d.message()).toContain("Whole Group");
-    expect(d.message()).toContain("4 steps");
+    expect(d.message()).toContain("3 steps");
     void d.accept();
   });
   await pickRowMenu(
@@ -499,9 +591,7 @@ test("deleting the group takes every step under it", async ({ page }) => {
   );
 
   await expect(groupRow(page, "whole-group")).toHaveCount(0);
-  await expect(
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key^="whole-group/"]'),
-  ).toHaveCount(0);
+  await expect(page.locator('.tg-grid .slick-row[data-key^="whole-group/"]')).toHaveCount(0);
   // The `[[groups]]` entry, its `[[steps]]`, and any fan-in reference:
   // nothing of it is left in the file.
   await expect(editor).not.toHaveValue(/whole-group/);

@@ -3,7 +3,6 @@
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use datalib_etl::periodize::Period;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_beeper_config::BeeperRenderConfig;
 use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
@@ -13,21 +12,18 @@ pub fn plan_render(
     ctx: PlanContext,
     config: BeeperRenderConfig,
 ) -> Result<Vec<Box<dyn RenderProcessor>>> {
-    let period = Period::from_config(config.period.as_deref()).context("parse beeper period")?;
     Ok(plan_source_render(
         ctx,
         config.common.raw_path(),
         BeeperRender {
-            period,
             networks: config.networks,
         },
     ))
 }
 
 /// Beeper's render processor — reads the raw store and emits one rendered
-/// markdown per `(room, period)` through the fused-Load callback.
+/// markdown per room through the fused-Load callback.
 struct BeeperRender {
-    period: Period,
     /// The networks whose rooms render; `None` is every network.
     networks: Option<Vec<String>>,
 }
@@ -42,7 +38,6 @@ impl SourceRender for BeeperRender {
 
     fn render_params(&self) -> serde_json::Value {
         datalib_etl_chat_common::render::layout_params_with(serde_json::json!({
-            "period": self.period.as_config_str(),
             "networks": self.networks,
         }))
     }
@@ -52,7 +47,6 @@ impl SourceRender for BeeperRender {
         let parsed = parse(
             raw_path,
             ctx.name,
-            self.period,
             self.networks.as_deref(),
             ctx.raw_range(),
         )
@@ -69,6 +63,16 @@ impl SourceRender for BeeperRender {
             ctx.page_size.bytes,
         )
         .context("beeper render_all")?;
+        ctx.report_entity_problems(
+            &datalib_etl_render::processor::ReadScope::Whole(vec![
+                crate::render::parse::UNLISTED_BRIDGES,
+            ]),
+            &crate::render::parse::unlisted_chat_rows(
+                &parsed.unlisted_chats,
+                ctx.name,
+                self.render_version(),
+            ),
+        )?;
         for u in &summary.unrendered {
             ctx.report_document_failed(&u.markdown_uuid, &u.why, Some(self.render_version()))?;
         }

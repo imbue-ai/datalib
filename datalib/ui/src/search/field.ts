@@ -614,6 +614,8 @@ export type FieldHooks = {
   base: () => string;
   /** Enter with no suggestion chosen. */
   onSubmit: () => void;
+  /** ⌘Enter (Ctrl+Enter elsewhere): the same, in a card of its own. */
+  onSubmitNew?: () => void;
   /** Escape with no menu open. */
   onEscape: () => void;
 };
@@ -652,6 +654,10 @@ export function fieldExtensions(hooks: FieldHooks): Extension[] {
     Prec.high(
       keymap.of([
         { key: "Enter", run: (view) => (closeCompletion(view), hooks.onSubmit(), true) },
+        {
+          key: "Mod-Enter",
+          run: (view) => (closeCompletion(view), (hooks.onSubmitNew ?? hooks.onSubmit)(), true),
+        },
         // Told, and passed on: a dialog the field is in still closes.
         { key: "Escape", run: () => (hooks.onEscape(), false) },
       ]),

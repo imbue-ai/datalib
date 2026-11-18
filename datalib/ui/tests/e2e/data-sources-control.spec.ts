@@ -19,6 +19,7 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import {
+  fillConfigEditor,
   savedConfig,
   nameCell,
   expandGroup,
@@ -64,7 +65,7 @@ const PDFS: Source = {
   type: "pdf",
   params: `[steps.params.fswalk]\npath = "${PDF_DIR}"`,
 };
-const INDEX = "unified_document_index/grid_index";
+const INDEX = "unified_grid_and_search_index/unified_grid_and_search_index";
 const ingestOf = (s: Source) => `${s.id}/ingest`;
 const renderOf = (s: Source) => `${s.id}/render_markdown`;
 
@@ -90,7 +91,7 @@ async function openManager(page: Page) {
 
 async function writeConfig(page: Page, text: string) {
   await openManager(page);
-  await page.locator(".m2-editor").fill(text);
+  await fillConfigEditor(page, text);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
   // Remount, so the rows are painted from the config and the runner's
@@ -302,12 +303,12 @@ const config = (sources: Source[], names: Record<string, string> = {}) => `data_
 at_most_every_secs = 2
 
 [[groups]]
-id = "unified_document_index"
-name = "Document Index"
+id = "unified_grid_and_search_index"
+name = "Grid and Search Index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
+group = "unified_grid_and_search_index"
+function = "unified_grid_and_search_index"
 command = "'${STEP_BIN}'"
 inputs = [${sources.map((s) => `"${renderOf(s)}"`).join(", ")}]
 ${sources.map((s) => stanza(s, names[s.id])).join("")}${applets()}`;
@@ -315,7 +316,7 @@ ${sources.map((s) => stanza(s, names[s.id])).join("")}${applets()}`;
 async function writeConfigAndOpen(page: Page, sources: Source[], names?: Record<string, string>) {
   await writeConfig(page, config(sources, names));
   for (const s of sources) await expandGroup(page, s.id);
-  await expandGroup(page, "unified_document_index");
+  await expandGroup(page, "unified_grid_and_search_index");
 }
 
 test.describe("sources run independently", () => {

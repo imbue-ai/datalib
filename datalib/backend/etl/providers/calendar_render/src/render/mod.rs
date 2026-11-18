@@ -2,6 +2,7 @@
 
 pub mod calendly;
 pub mod google;
+pub mod html;
 pub mod ics;
 pub mod ids;
 pub mod parse;

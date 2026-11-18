@@ -42,11 +42,20 @@ function runQuery(query) {
   if (query == null) query = dqInput.value;
   dqInput.value = query;
   out.textContent = "";
+  if (!query.trim()) {
+    showDatasets();
+    setStatus("Pick a dataset to start from, or type a query.");
+    return;
+  }
   // DACTAL's render() reads a global `audioshown` counter that its own
   // runQuery seeds before each render; reading it undeclared would throw.
   window.audioshown = 0;
   try {
     const results = dactal.executeq(query);     // synchronous engine path
+    // …and a global `query_results` its own runQuery sets to what it
+    // renders: a sampled query (`rows???sample:@<=10`) and the column
+    // hide handlers read it.
+    window.query_results = results;
     const view = buildView(results, query, out); // DACTAL's table UI (global fn)
     out.appendChild(view);
     if (history[history.length - 1] !== query) history.push(query);
@@ -62,6 +71,31 @@ function runQuery(query) {
 }
 window.runQuery = runQuery; // override DACTAL's so drill-down routes here
 
+// With no query, list the datasets a query can start from, as DACTAL's
+// own query page does: the working set's, `rows` first, then the
+// engine's own, faded. One of ours opens on ten of its items.
+function showDatasets() {
+  out.textContent = "";
+  const internal = (k) => dactal.internal_datasets.includes(k);
+  const order = (a, b) => (a === "rows" ? -1 : b === "rows" ? 1 : a.localeCompare(b));
+  const names = Object.keys(dactal.data);
+  const ours = names.filter((k) => !internal(k)).sort(order);
+  const engine = names.filter(internal).sort(order);
+  const list = document.createElement("div");
+  list.className = "datasets";
+  for (const k of [...ours, ...engine]) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = internal(k) ? "dataset internal" : "dataset";
+    b.textContent = internal(k) ? k : `${k} (${dactal.data[k].length})`;
+    const q = internal(k) ? dactal.bracket(k) : `${dactal.bracket(k)}???sample:@<=10`;
+    b.title = q;
+    b.onclick = () => runQuery(q);
+    list.appendChild(b);
+  }
+  out.appendChild(list);
+}
+
 function renderCrumbs() {
   crumbs.textContent = "";
   history.slice(-8).forEach((q, i, arr) => {
@@ -76,8 +110,6 @@ function renderCrumbs() {
 function setStatus(prefix, query) {
   statusEl.textContent = prefix + (query ? `“${query}”` : "");
 }
-
-const DEFAULT_DQ = "rows/source";
 
 // Provider-agnostic examples (work over any Datalib corpus). The last
 // one shows bracketing a value that contains spaces/parens — DACTAL treats
@@ -114,8 +146,12 @@ async function load(datalibQuery, initialDq) {
       .map(([k, n]) => `${k}:${n}`)
       .join("  ");
     statusEl.textContent =
-      `loaded ${summary.rows} rows → datasets: rows + ${ents}.  Try a DACTAL query.`;
-    runQuery(initialDq || DEFAULT_DQ);
+      `loaded ${summary.rows} rows → datasets: rows + ${ents}.  Pick one, or type a DACTAL query.`;
+    if (initialDq) runQuery(initialDq);
+    else {
+      dqInput.value = "";
+      showDatasets();
+    }
   } catch (e) {
     statusEl.textContent = "";
     const err = document.createElement("span");
@@ -137,7 +173,7 @@ datalibInput.addEventListener("keydown", (e) => { if (e.key === "Enter") load(e.
 if (hosted) {
   awaitInit().then(({ load: initialLoad, dq }) => {
     datalibInput.value = initialLoad;
-    load(initialLoad, dq || DEFAULT_DQ);
+    load(initialLoad, dq);
   });
 } else {
   setStatus("This page runs inside a Datalib card — open it with dactalView().");

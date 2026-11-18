@@ -111,26 +111,37 @@ function show(view: DraftView, mine: ContactEdit | null) {
   editing.value = true;
 }
 
-async function load() {
-  error.value = null;
-  try {
-    await loadPublished();
-    const view = await draftOf(props.contactId);
-    if (view) show(view, null);
-  } catch (e) {
-    error.value = (e as Error).message;
-  }
+// The answers that replace the form, one at a time. A click that changes
+// the form waits for them, or the next answer would throw its change away.
+let opening: Promise<void> = Promise.resolve();
+
+function load(): Promise<void> {
+  opening = opening.then(async () => {
+    error.value = null;
+    try {
+      await loadPublished();
+      const view = await draftOf(props.contactId);
+      if (view) show(view, null);
+    } catch (e) {
+      error.value = (e as Error).message;
+    }
+  });
+  return opening;
 }
 
-async function startEditing() {
-  error.value = null;
-  stale.value = false;
-  try {
-    status.value = "";
-    show(await openDraft(props.contactId), null);
-  } catch (e) {
-    error.value = (e as Error).message;
-  }
+function startEditing(): Promise<void> {
+  opening = opening.then(async () => {
+    if (editing.value) return;
+    error.value = null;
+    stale.value = false;
+    try {
+      status.value = "";
+      show(await openDraft(props.contactId), null);
+    } catch (e) {
+      error.value = (e as Error).message;
+    }
+  });
+  return opening;
 }
 
 // ── Autosave ──────────────────────────────────────────────────────────

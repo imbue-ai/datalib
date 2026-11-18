@@ -1,6 +1,6 @@
 # A backup of a Google account's Docs, Sheets and Slides, signed in through
-# four latchkey services as the same account: `latchkey auth browser
-# google-drive`, then the same for google-docs, google-sheets and google-slides.
+# four latchkey services as the same account: google-drive, google-docs,
+# google-sheets and google-slides.
 [[groups]]
 id = "google_drive"
 name = "Google Drive"

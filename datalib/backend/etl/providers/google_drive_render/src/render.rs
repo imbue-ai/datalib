@@ -8,12 +8,13 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
-use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
 use datalib_etl_render::inputs::Inputs;
 use datalib_etl_render::section::{join, Section};
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 use datalib_schema::providers::Provider;
@@ -29,7 +30,11 @@ use crate::unsupported;
 /// v2: a Doc's images link the blob store rather than a copy beside it.
 /// v3: the account's own comments mark its address as the account's, so
 ///     search reads it as `me`.
-pub const RENDER_VERSION: u32 = 3;
+/// v4: the files that are not Docs are counted on record.
+/// v5: a comment's time, which Drive stamps in its own UTC, says it
+///     names no one's clock (`Z`).
+/// v6: the files that are not Docs are a note, not a warning.
+pub const RENDER_VERSION: u32 = 6;
 
 const SOURCE_LABEL: &str = "Google Drive";
 const KIND_DOC: &str = "Google Doc";
@@ -96,7 +101,8 @@ pub fn render_doc(
     let threads = comments::threads(source_id, comment_rows, file.me.as_ref());
     let placed = comments::place(&threads, &body.blocks);
 
-    let mut sections = vec![Section::unkeyed(file.head())];
+    let front = file.front();
+    let mut sections = vec![Section::unkeyed(file.head(&front))];
     sections.extend(interleave(&body.blocks, &threads, &placed));
     let md_path = doc_md_path(
         &datalib_etl::layout::render_markdown_root(root, source_id),
@@ -120,9 +126,20 @@ pub fn render_doc(
         .filter(|t| !t.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
-    rows.extend(file.row(&md_rel, &text, &mut problems));
+    let tree = file.tree();
+    rows.extend(file.row(&md_rel, &text, &tree.file, &mut problems));
+    let mut data_nodes = tree.data_nodes;
     for t in &threads {
-        rows.extend(comment_rows_of(&file, t, &md_rel, &mut problems));
+        let thread = file.thread_node(t, &tree.inside);
+        rows.extend(comment_rows_of(
+            &file,
+            t,
+            &md_rel,
+            &tree.inside,
+            &tree.inside.below(&thread),
+            &mut problems,
+        ));
+        data_nodes.push(thread);
     }
 
     let problem_row = |item: Option<&str>, outcome, problem| {
@@ -148,6 +165,8 @@ pub fn render_doc(
     }
 
     Ok(RenderedMarkdown {
+        section_layout: None,
+        content_hash: None,
         markdown_uuid: file.id.uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
@@ -155,9 +174,12 @@ pub fn render_doc(
         md_path,
         render_version: RENDER_VERSION,
         rows,
+        front,
         sections,
         edges: Vec::new(),
         contacts: comments::authors(source_id, &threads, file.me.as_ref()),
+        data_nodes,
+        filings: Vec::new(),
         photos: Vec::new(),
         problems,
     })
@@ -214,6 +236,15 @@ fn interleave(blocks: &[Block], threads: &[Thread], placed: &[Option<usize>]) ->
     out
 }
 
+/// The containers one Doc carries, and where its rows sit.
+struct FileTree {
+    data_nodes: Vec<DataNodeRow>,
+    /// Where the file's own row sits.
+    file: Lineage,
+    /// Inside the file: where a thread's first comment sits.
+    inside: Lineage,
+}
+
 /// What the rows and the head of one Doc share.
 struct FileFacts {
     source_id: String,
@@ -224,6 +255,10 @@ struct FileFacts {
     created: Option<String>,
     modified: Option<String>,
     owner: Option<(String, Option<Handle>)>,
+    /// The folder the file is in. Drive names it by id alone in the
+    /// listing, and the download lists no folders, so its name and the
+    /// folders above it are not known.
+    folder: Option<String>,
     /// The account, where this file names it: an owner, the last editor
     /// or whoever shared it, marked `me`.
     me: Option<Handle>,
@@ -264,27 +299,81 @@ impl FileFacts {
             created: s(entry, "createdTime"),
             modified: s(entry, "modifiedTime"),
             owner,
+            folder: entry
+                .get("parents")
+                .and_then(|p| p.get(0))
+                .and_then(Value::as_str)
+                .map(str::to_string),
             me,
         }
     }
 
-    fn head(&self) -> String {
-        let mut s = String::from("---\n");
-        s.push_str(&format!("title: {}\n", yaml_scalar(&self.title)));
-        s.push_str(&format!("provider: {}\n", Provider::GoogleDrive));
-        s.push_str(&format!("source_label: {}\n", yaml_scalar(SOURCE_LABEL)));
-        s.push_str(&format!("markdown_uuid: {}\n", self.id.uuid));
-        s.push_str(&format!("file_id: {}\n", yaml_scalar(&self.file_id)));
-        for (k, v) in [
-            ("created_at", &self.created),
-            ("modified_at", &self.modified),
-            ("source_url", &self.url),
-        ] {
-            if let Some(v) = v {
-                s.push_str(&format!("{k}: {}\n", yaml_scalar(v)));
-            }
+    /// The file, read together, in its folder where the listing names
+    /// one.
+    fn tree(&self) -> FileTree {
+        let md = &self.id.uuid;
+        let mut data_nodes = Vec::with_capacity(2);
+        let mut at = Lineage::top();
+        if let Some(folder) = &self.folder {
+            let node = DataNodeRow::new(
+                md,
+                ids::folder(&self.source_id, folder).uuid,
+                &self.source_id,
+                "Google Drive folder",
+            )
+            .upstream(ids::KIND_FOLDER, folder.clone(), self.account())
+            .place();
+            at = at.below(&node);
+            data_nodes.push(node);
         }
-        s.push_str("---\n\n");
+        let file = DataNodeRow::new(md, md, &self.source_id, KIND_DOC)
+            .named(Some(self.title.clone()))
+            .upstream(
+                self.id.entity_kind,
+                self.id.natural_key.clone(),
+                self.account(),
+            )
+            .read_together()
+            .under(&at);
+        let inside = at.below(&file);
+        data_nodes.push(file);
+        FileTree {
+            data_nodes,
+            file: at,
+            inside,
+        }
+    }
+
+    /// A comment thread inside the file, read together. It is its first
+    /// comment, as a document is its own row, and its replies sit in it.
+    fn thread_node(&self, t: &Thread, in_file: &Lineage) -> DataNodeRow {
+        let first = &t.messages[0].id;
+        DataNodeRow::new(
+            &self.id.uuid,
+            &first.uuid,
+            &self.source_id,
+            "Google Doc comment thread",
+        )
+        .named(t.quote.clone())
+        .upstream(first.entity_kind, first.natural_key.clone(), self.account())
+        .read_together()
+        .under(in_file)
+    }
+
+    fn front(&self) -> Front {
+        Front::new()
+            .name("title", &self.title)
+            .plain("provider", Provider::GoogleDrive)
+            .text("source_label", SOURCE_LABEL)
+            .plain("markdown_uuid", &self.id.uuid)
+            .text("file_id", &self.file_id)
+            .text_if("created_at", self.created.as_deref())
+            .text_if("modified_at", self.modified.as_deref())
+            .text_if("source_url", self.url.as_deref())
+    }
+
+    fn head(&self, front: &Front) -> String {
+        let mut s = front.draw();
         s.push_str(
             &Title {
                 text: &self.title,
@@ -301,7 +390,13 @@ impl FileFacts {
         self.me.as_ref().map(|h| h.value().to_string())
     }
 
-    fn row(&self, md_rel: &str, text: &str, problems: &mut Vec<ProblemRow>) -> Option<GridRow> {
+    fn row(
+        &self,
+        md_rel: &str,
+        text: &str,
+        at: &Lineage,
+        problems: &mut Vec<ProblemRow>,
+    ) -> Option<GridRow> {
         let (author, handle) = match &self.owner {
             Some((name, handle)) => (
                 Some(name.clone()),
@@ -330,6 +425,7 @@ impl FileFacts {
             .upstream_id(Some(self.id.natural_key.clone()))
             .upstream_entity_kind(Some(self.id.entity_kind.to_string()))
             .markdown_uuid(Some(self.id.uuid.clone()))
+            .lineage(at)
             .build_or_record(&self.source_id, &self.file_id, RENDER_VERSION, problems)
     }
 }
@@ -338,6 +434,8 @@ fn comment_rows_of(
     file: &FileFacts,
     t: &Thread,
     md_rel: &str,
+    in_file: &Lineage,
+    in_thread: &Lineage,
     problems: &mut Vec<ProblemRow>,
 ) -> Vec<GridRow> {
     let url = file.url.as_deref().map(|u| {
@@ -376,6 +474,7 @@ fn comment_rows_of(
                 .upstream_id(Some(m.id.natural_key.clone()))
                 .upstream_entity_kind(Some(m.id.entity_kind.to_string()))
                 .markdown_uuid(Some(file.id.uuid.clone()))
+                .lineage(if i == 0 { in_file } else { in_thread })
                 .build_or_record(&file.source_id, &t.key, RENDER_VERSION, problems)
         })
         .collect()

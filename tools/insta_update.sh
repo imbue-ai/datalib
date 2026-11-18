@@ -17,7 +17,7 @@
 # part itself.
 #
 # Required env (populated by the bazel rule):
-#   INSTA_TEST_BIN     absolute path to the compiled test binary
+#   INSTA_TEST_BIN     the test binary, relative to the runfiles workspace
 # Optional env:
 #   INSTA_TEST_ARGS    extra args (e.g. `--ignored`) passed verbatim
 #                      to the test binary. Space-separated.
@@ -39,8 +39,8 @@ echo "[insta-update] INSTA_WORKSPACE_ROOT=${INSTA_WORKSPACE_ROOT}" >&2
 # runfiles owner, so there is no `<binary>.runfiles` beside it either,
 # and `Runfiles::create()` fails with `RunfilesDirNotFound`.
 #
-# The tree it wants is this wrapper's, which is where `extra_data`
-# staged the deps. Derive it by cutting `$PWD` at `.runfiles/` rather
+# The tree it wants is this wrapper's, which holds the test's own
+# runfiles. Derive it by cutting `$PWD` at `.runfiles/` rather
 # than assuming the workspace directory is named `_main`.
 if [[ -z "${RUNFILES_DIR:-}" && "$PWD" == *.runfiles/* ]]; then
     export RUNFILES_DIR="${PWD%%.runfiles/*}.runfiles"

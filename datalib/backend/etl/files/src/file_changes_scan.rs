@@ -128,6 +128,8 @@ pub struct ScanOptions {
     /// How deep to walk. `Some(1)` is the root's own files, and no
     /// folder beneath it is opened.
     pub max_depth: Option<usize>,
+    /// What to do with a symlink: [`fswalk::Links::Refused`] for an export.
+    pub links: fswalk::Links,
     /// Where to say what the walk and the hashing are on and how much is left.
     /// Only ever a message, never a bar: a step has one bar, and the
     /// caller's rows are not bytes (`dag/README.md` § "One bar per step").
@@ -144,8 +146,6 @@ pub struct ScanStats {
     pub bytes_hashed: u64,
     /// Bytes not read because the cache vouched for them.
     pub bytes_reused: u64,
-    /// Files skipped for exceeding [`ScanOptions::max_bytes`].
-    pub too_large: usize,
     /// Entries this host had already cached under the root.
     pub cache_read: usize,
     /// Fingerprints written back.
@@ -174,10 +174,13 @@ pub struct Scan<F = ScannedFile> {
     pub given_resolved: PathBuf,
     pub files: Vec<F>,
     /// Root-relative paths the walk found and did not read: refused by the
-    /// caller's admit hook, over [`ScanOptions::max_bytes`], or
+    /// caller's admit hook, [`Self::over_max_bytes`], or
     /// [`Self::unreadable`]. They are there, so a caller keyed by path
     /// keeps their rows.
     pub present_unread: Vec<String>,
+    /// Files larger than [`ScanOptions::max_bytes`]. Each is a warning of
+    /// its own ([`Self::report_problems`]).
+    pub over_max_bytes: Vec<OverMaxBytes>,
     /// Files the walk found and could not open to hash. Each is a problem
     /// of its own ([`Self::report_problems`]), not a walk error: the walk
     /// saw it, so it says nothing about what else is gone.
@@ -192,6 +195,14 @@ pub struct UnreadableFile {
     pub rel: String,
     /// Why, without the path, which names this machine.
     pub error: String,
+}
+
+/// A file the walk found and did not read because of its size.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverMaxBytes {
+    pub rel: String,
+    pub size: u64,
+    pub max_bytes: u64,
 }
 
 /// A file that is at a new path but whose bytes the caller already has.
@@ -416,12 +427,24 @@ impl<F: AtRel> Scan<F> {
 
     /// Everything this walk could not do, into the run's problems: the
     /// listing row of [`Self::walk_problems_as`], and a
-    /// `record:<name>:<path>` row per file it found and could not open. A
-    /// file that opens again loses its row; one under an entry the walk
-    /// could not read keeps it.
+    /// `record:<name>:<path>` row per file it found and did not read: one it
+    /// could not open is an error, one over `max_bytes` a warning. A file
+    /// read again loses its row; one under an entry the walk could not read
+    /// keeps it.
     pub fn report_problems(&self, found: &datalib_etl::run_problems::RunProblems, name: &str) {
         found.extend(self.walk_problems_as(name));
         self.report_unreadable(found, name);
+        found.records_failed(self.over_max_bytes.iter().map(|f| {
+            datalib_etl::download_problems::RecordProblem::over_size_limit(
+                name,
+                &f.rel,
+                format!(
+                    "{} is over this source's max_bytes of {}, so it was not read",
+                    human_bytes(f.size),
+                    human_bytes(f.max_bytes)
+                ),
+            )
+        }));
         found.records_tried_all_but(name, self.unseen());
     }
 
@@ -565,20 +588,22 @@ where
     };
 
     let listing_progress = ListProgress::new(&opts.progress, &root);
-    let (walked, errors) = fswalk::walk_files(&root, &opts.ignore, max_depth, |p| {
-        let accepted = only
-            .as_ref()
-            .is_none_or(|name| p.file_name() == Some(name.as_os_str()))
-            && accept(p);
-        if accepted {
-            listing_progress.found_one();
-        }
-        accepted
-    })
-    .with_context(|| format!("walk {}", root.display()))?;
+    let (walked, errors) =
+        fswalk::walk_files_with(&root, &opts.ignore, max_depth, opts.links, |p| {
+            let accepted = only
+                .as_ref()
+                .is_none_or(|name| p.file_name() == Some(name.as_os_str()))
+                && accept(p);
+            if accepted {
+                listing_progress.found_one();
+            }
+            accepted
+        })
+        .with_context(|| format!("walk {}", root.display()))?;
 
     let mut files = Vec::with_capacity(walked.len());
     let mut present_unread = Vec::new();
+    let mut over_max_bytes = Vec::new();
     for entry in walked {
         if !admit(&entry) {
             present_unread.push(entry.rel);
@@ -587,7 +612,11 @@ where
         let stat = entry.stat;
         if let Some(max) = opts.max_bytes {
             if stat.size as u64 > max {
-                stats.too_large += 1;
+                over_max_bytes.push(OverMaxBytes {
+                    rel: entry.rel.clone(),
+                    size: stat.size as u64,
+                    max_bytes: max,
+                });
                 present_unread.push(entry.rel);
                 continue;
             }
@@ -628,6 +657,7 @@ where
             given_resolved: resolved,
             files,
             present_unread,
+            over_max_bytes,
             unreadable: Vec::new(),
             errors,
             stats,
@@ -827,6 +857,7 @@ impl Listing {
             given_resolved: self.given_resolved.clone(),
             files: out,
             present_unread,
+            over_max_bytes: self.over_max_bytes.clone(),
             unreadable,
             errors: self.errors.clone(),
             stats,
@@ -1339,7 +1370,14 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(s.files.len(), 1);
-        assert_eq!(s.stats.too_large, 1);
+        assert_eq!(
+            s.over_max_bytes,
+            [OverMaxBytes {
+                rel: "big.bin".to_string(),
+                size: 4096,
+                max_bytes: 100,
+            }]
+        );
         assert_eq!(s.stats.hashed, 1);
         assert_eq!(s.present_unread, vec!["big.bin".to_string()]);
     }

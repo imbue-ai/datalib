@@ -35,6 +35,8 @@ pub const TABLES: &[&str] = &[
     "AgLibraryKeywordFace",
     "AgLibraryCollection",
     "AgLibraryCollectionImage",
+    "AgLibraryPublishedCollection",
+    "AgLibraryPublishedCollectionImage",
     "AgVideoInfo",
 ];
 
@@ -46,6 +48,16 @@ pub struct Catalog {
     pub xmp_mirrored: bool,
     /// By `id_local`, in catalog order.
     pub images: BTreeMap<i64, ImageRow>,
+}
+
+/// A keyword or a collection a photo is filed under, with the keywords or
+/// sets above it, top first: each its table's `id_local` and its name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Filed {
+    /// The table the ids are in: `AgLibraryKeyword`, `AgLibraryCollection`
+    /// or `AgLibraryPublishedCollection`.
+    pub table: &'static str,
+    pub path: Vec<(i64, String)>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -83,7 +95,12 @@ pub struct ImageRow {
     pub creator: Option<String>,
     pub keywords: Vec<Vec<String>>,
     pub people: Vec<Person>,
-    pub albums: Vec<String>,
+    /// Each collection it is in, as its path from the top: the sets
+    /// above it, then its own name.
+    pub albums: Vec<Vec<String>>,
+    /// Each keyword and collection it is filed under, by the catalog's
+    /// ids, which a rename keeps.
+    pub filed: Vec<Filed>,
     pub xmp: Option<Vec<u8>>,
     pub duration: Option<String>,
 }
@@ -113,8 +130,18 @@ pub async fn load(pool: &SqlitePool) -> Result<Catalog> {
         )
         .await?;
     }
-    if has("AgLibraryCollectionImage") {
-        load_albums(pool, &mut images).await?;
+    for tables in [COLLECTIONS, PUBLISHED] {
+        if has(tables.collections) && has(tables.members) {
+            load_albums(pool, &mut images, tables).await?;
+        }
+    }
+    for image in images.values_mut() {
+        image.albums.sort();
+        image.albums.dedup();
+        image
+            .filed
+            .sort_by(|a, b| (a.table, &a.path).cmp(&(b.table, &b.path)));
+        image.filed.dedup();
     }
     if xmp_mirrored {
         load_xmp(pool, &mut images).await?;
@@ -324,23 +351,10 @@ async fn load_keywords(
         )
     })
     .collect();
-    let path = |mut id: i64| {
-        let mut out = Vec::new();
-        let mut seen = HashSet::new();
-        while let Some(k) = tree.get(&id) {
-            if !seen.insert(id) {
-                break;
-            }
-            if let Some(name) = &k.name {
-                out.push(name.clone());
-            }
-            match k.parent {
-                Some(p) => id = p,
-                None => break,
-            }
-        }
-        out.reverse();
-        out
+    let path = |id: i64| {
+        named_path(id, |id| {
+            tree.get(&id).map(|k| (k.name.as_deref(), k.parent))
+        })
     };
 
     if faces {
@@ -409,7 +423,16 @@ async fn load_keywords(
                     });
                 }
             }
-            (Some(_), false) => image.keywords.push(path(tag)),
+            (Some(_), false) => {
+                let path = path(tag);
+                image
+                    .keywords
+                    .push(path.iter().map(|(_, n)| n.clone()).collect());
+                image.filed.push(Filed {
+                    table: "AgLibraryKeyword",
+                    path,
+                });
+            }
             (None, _) => {}
         }
     }
@@ -420,31 +443,133 @@ async fn load_keywords(
     Ok(())
 }
 
-/// Collections a person made: not smart collections, which are saved
-/// searches with no members, and not the quick collection.
-async fn load_albums(pool: &SqlitePool, images: &mut BTreeMap<i64, ImageRow>) -> Result<()> {
-    let rows = sqlx::query(
-        "SELECT CAST(ci.image AS INTEGER) AS image, CAST(c.name AS TEXT) AS name \
-           FROM AgLibraryCollectionImage ci \
-           JOIN AgLibraryCollection c ON c.id_local = ci.collection \
-          WHERE c.creationId = 'com.adobe.ag.library.collection' \
-            AND COALESCE(CAST(c.systemOnly AS REAL), 0) = 0 \
-          ORDER BY ci.image, c.name",
-    )
+/// A tree of collections and the table of their members. Lightroom keeps
+/// two with the same shape: the library's collections (with their sets,
+/// the quick collection and saved books, slideshows, prints and web
+/// galleries) and the publish services' (Flickr, Hard Drive, …).
+#[derive(Clone, Copy)]
+struct CollectionTables {
+    collections: &'static str,
+    members: &'static str,
+}
+
+const COLLECTIONS: CollectionTables = CollectionTables {
+    collections: "AgLibraryCollection",
+    members: "AgLibraryCollectionImage",
+};
+
+const PUBLISHED: CollectionTables = CollectionTables {
+    collections: "AgLibraryPublishedCollection",
+    members: "AgLibraryPublishedCollectionImage",
+};
+
+/// What Lightroom names the quick collection, a system collection; it
+/// shows it as "Quick Collection".
+const QUICK_COLLECTION: &str = "quick collection";
+
+struct Collection {
+    name: Option<String>,
+    parent: Option<i64>,
+}
+
+/// Every collection an image is a member of, by its path. A smart
+/// collection is a saved search with no members, so it never appears.
+async fn load_albums(
+    pool: &SqlitePool,
+    images: &mut BTreeMap<i64, ImageRow>,
+    tables: CollectionTables,
+) -> Result<()> {
+    // Both table names are the constants above.
+    let tree: HashMap<i64, Collection> = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT CAST(id_local AS INTEGER) AS id, CAST(name AS TEXT) AS name, \
+                CAST(parent AS INTEGER) AS parent, \
+                COALESCE(CAST(systemOnly AS REAL), 0.0) AS system \
+           FROM {}",
+        tables.collections
+    )))
     .fetch_all(pool)
     .await
-    .context("read AgLibraryCollectionImage")?;
+    .with_context(|| format!("read {}", tables.collections))?
+    .into_iter()
+    .filter_map(|r| {
+        let name = non_empty(r.get("name"));
+        let name = if r.get::<f64, _>("system") == 0.0 {
+            name
+        } else if name.as_deref() == Some(QUICK_COLLECTION) {
+            Some("Quick Collection".to_string())
+        } else {
+            return None;
+        };
+        Some((
+            r.get::<i64, _>("id"),
+            Collection {
+                name,
+                parent: r.get("parent"),
+            },
+        ))
+    })
+    .collect();
+    let path = |id: i64| {
+        named_path(id, |id| {
+            tree.get(&id).map(|c| (c.name.as_deref(), c.parent))
+        })
+    };
+    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SELECT DISTINCT CAST(image AS INTEGER) AS image, \
+                CAST(collection AS INTEGER) AS collection FROM {}",
+        tables.members
+    )))
+    .fetch_all(pool)
+    .await
+    .with_context(|| format!("read {}", tables.members))?;
     for r in rows {
-        if let (Some(image), Some(name)) = (
-            images.get_mut(&r.get::<i64, _>("image")),
-            non_empty(r.get("name")),
-        ) {
-            if !image.albums.contains(&name) {
-                image.albums.push(name);
+        let collection: i64 = r.get("collection");
+        if !tree.contains_key(&collection) {
+            continue;
+        }
+        let path = path(collection);
+        if let (Some(image), false) = (images.get_mut(&r.get::<i64, _>("image")), path.is_empty()) {
+            image
+                .albums
+                .push(path.iter().map(|(_, n)| n.clone()).collect());
+            if !image
+                .filed
+                .iter()
+                .any(|f| f.table == tables.collections && f.path == path)
+            {
+                image.filed.push(Filed {
+                    table: tables.collections,
+                    path,
+                });
             }
         }
     }
     Ok(())
+}
+
+/// The named entries from the top of a tree down to `id`, by following
+/// each entry's parent. One with no name (Lightroom's hidden root
+/// keyword) is walked through; a loop stops the walk.
+fn named_path<'t>(
+    mut id: i64,
+    entry: impl Fn(i64) -> Option<(Option<&'t str>, Option<i64>)>,
+) -> Vec<(i64, String)> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    while let Some((name, parent)) = entry(id) {
+        if !seen.insert(id) {
+            break;
+        }
+        if let Some(name) = name {
+            out.push((id, name.to_string()));
+        }
+        match parent {
+            Some(p) => id = p,
+            None => break,
+        }
+    }
+    out.reverse();
+    out
 }
 
 async fn load_xmp(pool: &SqlitePool, images: &mut BTreeMap<i64, ImageRow>) -> Result<()> {
@@ -483,4 +608,83 @@ async fn load_video(pool: &SqlitePool, images: &mut BTreeMap<i64, ImageRow>) -> 
 
 fn non_empty(s: Option<String>) -> Option<String> {
     s.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A collection inside a set is named by its path; the quick
+    /// collection is one; a smart collection, with no members, and any
+    /// other system collection are not; a publish service's collections
+    /// are read the same way from their own tables.
+    #[tokio::test]
+    async fn every_collection_with_members_is_an_album_by_its_path() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for table in ["AgLibraryCollection", "AgLibraryPublishedCollection"] {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "CREATE TABLE {table} (id_local INTEGER PRIMARY KEY, creationId, \
+                 name, parent INTEGER, systemOnly)"
+            )))
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "CREATE TABLE {table}Image (id_local INTEGER PRIMARY KEY, \
+                 collection INTEGER, image INTEGER)"
+            )))
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO AgLibraryCollection VALUES \
+               (1, 'com.adobe.ag.library.group', 'Shore leave', NULL, '0.0'), \
+               (2, 'com.adobe.ag.library.collection', 'Risa', 1, '0.0'), \
+               (3, 'com.adobe.ag.library.collection', 'quick collection', NULL, '1.0'), \
+               (4, 'com.adobe.ag.library.smart_collection', 'Five Stars', NULL, '0.0'), \
+               (5, 'com.adobe.ag.library.collection', 'hidden', NULL, '1.0'); \
+             INSERT INTO AgLibraryCollectionImage VALUES (1, 2, 10), (2, 3, 10), (3, 5, 10); \
+             INSERT INTO AgLibraryPublishedCollection VALUES \
+               (1, 'com.adobe.ag.library.group', 'Flickr', NULL, '0.0'), \
+               (2, 'com.adobe.ag.library.collection', 'Photostream', 1, '0.0'); \
+             INSERT INTO AgLibraryPublishedCollectionImage VALUES (1, 2, 10), (2, 2, 10);",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut images: BTreeMap<i64, ImageRow> = [(10, ImageRow::default())].into();
+        load_albums(&pool, &mut images, COLLECTIONS).await.unwrap();
+        load_albums(&pool, &mut images, PUBLISHED).await.unwrap();
+        let filed: Vec<(&str, Vec<i64>)> = images[&10]
+            .filed
+            .iter()
+            .map(|f| (f.table, f.path.iter().map(|(id, _)| *id).collect()))
+            .collect();
+        assert_eq!(
+            filed,
+            [
+                ("AgLibraryCollection", vec![1, 2]),
+                ("AgLibraryCollection", vec![3]),
+                ("AgLibraryPublishedCollection", vec![1, 2]),
+            ],
+            "each collection by its ids, the set above it first"
+        );
+        let mut albums = images[&10].albums.clone();
+        albums.sort();
+        assert_eq!(
+            albums,
+            [
+                vec!["Flickr".to_string(), "Photostream".to_string()],
+                vec!["Quick Collection".to_string()],
+                vec!["Shore leave".to_string(), "Risa".to_string()],
+            ]
+        );
+    }
 }

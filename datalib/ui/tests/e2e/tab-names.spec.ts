@@ -2,7 +2,7 @@
 // requests say which card made them.
 
 import { test, expect, type Page } from "@playwright/test";
-import { GRID, tabLabels, typeInto } from "./grid-helpers";
+import { GRID, SEARCH_SETTLE, tabLabels, runSearch } from "./grid-helpers";
 
 // The tab GRID opens, after the three pinned ones.
 const gridTab = (page: Page) => tabLabels(page).nth(3);
@@ -10,8 +10,10 @@ const nameBox = (page: Page) => page.getByLabel("Name", { exact: true });
 
 async function search(page: Page, q: string) {
   const card = page.locator(".ct-main");
-  await typeInto(card.getByTestId("search-input"), q);
-  await expect(card.locator(".grid-wrap")).toHaveAttribute("data-shown-query", q);
+  await runSearch(card.page(), q);
+  await expect(card.locator(".grid-wrap")).toHaveAttribute("data-shown-query", q, {
+    timeout: SEARCH_SETTLE,
+  });
 }
 
 async function renameFromMenu(page: Page) {
@@ -24,7 +26,7 @@ test("a card's requests name the card and its type", async ({ page }) => {
   // The search itself: the field's `/search/keys` asks for the page, not
   // for a card.
   const search = page.waitForRequest((r) =>
-    r.url().includes("/applet/unified_document_index/search?"),
+    r.url().includes("/applet/unified_grid_and_search_index/search?"),
   );
   await page.goto(GRID);
   const headers = (await search).headers();

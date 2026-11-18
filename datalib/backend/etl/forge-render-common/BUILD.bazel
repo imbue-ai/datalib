@@ -29,4 +29,5 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_forge_render_common",
     edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
 )

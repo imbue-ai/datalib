@@ -11,14 +11,14 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use datalib_etl::doltlite_raw as dr;
-use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
 use datalib_etl_apple_messages::processor::mirror_options;
 use datalib_etl_apple_messages_config::AppleMessagesConfig;
-use datalib_etl_apple_messages_render::render::{chat_uuid, render, RenderOutcome};
+use datalib_etl_apple_messages_render::render::{chat_uuid, render, Dropped, Rendered};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
 use datalib_etl_sqlite_mirror::mirror;
+use datalib_schema::edges::EdgeKind;
 use datalib_source_common::LocalPath;
 
 const RIKER: &str = "iMessage;-;+14155550142";
@@ -78,11 +78,8 @@ impl Fixture {
     }
 
     /// One render pass: the documents it emitted, the chats it named
-    /// with nothing (gone), and the commit it consumed.
-    async fn render(
-        &self,
-        cursor: Option<&str>,
-    ) -> (Vec<RenderedMarkdown>, Vec<String>, RenderOutcome) {
+    /// with nothing (gone), and what it consumed and dropped.
+    async fn render(&self, cursor: Option<&str>) -> (Vec<RenderedMarkdown>, Vec<String>, Rendered) {
         let (raw, out, cursor) = (
             self.raw.clone(),
             self.out.clone(),
@@ -100,29 +97,30 @@ impl Fixture {
                 docs.push(md);
                 Ok(())
             };
-            let outcome = render(
+            let rendered = render(
                 &raw,
                 &out,
                 "messages",
-                Period::Month,
                 &Progress::noop(),
                 range,
                 &mut on_doc,
             )
             .expect("render");
-            let rendered: HashSet<&str> = outcome
+            let written: HashSet<&str> = rendered
+                .outcome
                 .buckets
                 .iter()
                 .filter(|b| !b.inputs.is_empty())
                 .map(|b| b.key.as_str())
                 .collect();
-            let gone: Vec<String> = outcome
+            let gone: Vec<String> = rendered
+                .outcome
                 .buckets
                 .iter()
-                .filter(|b| b.inputs.is_empty() && !rendered.contains(b.key.as_str()))
+                .filter(|b| b.inputs.is_empty() && !written.contains(b.key.as_str()))
                 .map(|b| b.key.clone())
                 .collect();
-            (docs, gone, outcome)
+            (docs, gone, rendered)
         })
         .await
         .expect("render joined")
@@ -172,13 +170,18 @@ async fn bodies_tapbacks_and_attachments_render() -> Result<()> {
     let fx = Fixture::new();
     let first = fx.ingest().await?.expect("first ingest commits");
 
-    let (docs, gone, outcome) = fx.render(None).await;
+    let (docs, gone, rendered) = fx.render(None).await;
     assert!(gone.is_empty());
-    assert_eq!(outcome.new_head.as_deref(), Some(first.as_str()));
-    // Riker's chat spans two months; the bridge crew's is one.
+    assert_eq!(rendered.outcome.new_head.as_deref(), Some(first.as_str()));
+    assert_eq!(
+        rendered.dropped,
+        vec![],
+        "every fixture message is in a chat"
+    );
+    // One document a chat.
     assert_eq!(
         docs.len(),
-        3,
+        2,
         "{:?}",
         docs.iter().map(|d| &d.md_path).collect::<Vec<_>>()
     );
@@ -189,12 +192,16 @@ async fn bodies_tapbacks_and_attachments_render() -> Result<()> {
         "Make it so.",                      // from the legacy `text` column
         "IMG_1701.jpeg",                    // the attachment, by name
         "❤️",                               // Picard's tapback on it
+        "Number One, you have the bridge.", // a mutable attributedBody
+        "👍",                               // Riker's tapback on it
     ] {
         assert!(
             riker.contains(body),
             "Riker's page lacks {body:?}:\n{riker}"
         );
     }
+    let problems: Vec<_> = docs.iter().flat_map(|d| &d.problems).collect();
+    assert!(problems.is_empty(), "{problems:?}");
     let bridge = pages(&docs, BRIDGE);
     assert!(bridge.contains("Named the group “Bridge crew”"), "{bridge}");
     // Troi's tapback is all she sends here: she is in the bridge crew's
@@ -217,7 +224,7 @@ async fn bodies_tapbacks_and_attachments_render() -> Result<()> {
         .flat_map(|d| d.rows.iter())
         .filter(|r| r.kind == "Messages Message")
         .collect();
-    assert_eq!(items.len(), 8, "eight messages, no tapback rows among them");
+    assert_eq!(items.len(), 9, "nine messages, no tapback rows among them");
     let picture = items
         .iter()
         .find(|r| r.upstream_id.as_deref() == Some("A1B2C3D4-0003-4000-8000-000000000003"))
@@ -314,7 +321,7 @@ async fn a_second_run_renders_only_what_moved() -> Result<()> {
     let fx = Fixture::new();
     let first = fx.ingest().await?.expect("first ingest commits");
     let (docs, _, _) = fx.render(None).await;
-    assert_eq!(docs.len(), 3);
+    assert_eq!(docs.len(), 2);
 
     // Nothing happened, and the daemons' bookkeeping does not count.
     fx.edit(&[
@@ -326,7 +333,7 @@ async fn a_second_run_renders_only_what_moved() -> Result<()> {
     let (docs, gone, _) = fx.render(Some(&first)).await;
     assert!(docs.is_empty() && gone.is_empty(), "{docs:?} {gone:?}");
 
-    // Data answers his own question: one chat moves, one month of it.
+    // Data answers his own question: one chat moves.
     fx.edit(&[
         "INSERT INTO message (ROWID, guid, text, handle_id, date, is_from_me) \
          VALUES (11, 'A1B2C3D4-0011-4000-8000-000000000011', 'Recalibrating now.', 2, \
@@ -336,8 +343,8 @@ async fn a_second_run_renders_only_what_moved() -> Result<()> {
     ])
     .await?;
     let second = fx.ingest().await?.expect("a new message commits");
-    let (docs, gone, outcome) = fx.render(Some(&first)).await;
-    assert_eq!(outcome.new_head.as_deref(), Some(second.as_str()));
+    let (docs, gone, rendered) = fx.render(Some(&first)).await;
+    assert_eq!(rendered.outcome.new_head.as_deref(), Some(second.as_str()));
     assert!(gone.is_empty());
     assert_eq!(
         docs.len(),
@@ -385,12 +392,126 @@ async fn a_store_the_mirror_never_filled_renders_nothing() -> Result<()> {
     let fx = Fixture::new();
     datalib_etl_apple_messages::processor::migrate(&fx.raw).await?;
 
-    let (docs, gone, outcome) = fx.render(None).await;
+    let (docs, gone, rendered) = fx.render(None).await;
     assert!(docs.is_empty() && gone.is_empty(), "{docs:?} {gone:?}");
-    assert_eq!(outcome.new_head, None);
+    assert_eq!(rendered.outcome.new_head, None);
 
     fx.ingest().await?.expect("first ingest commits");
     let (docs, _, _) = fx.render(None).await;
-    assert_eq!(docs.len(), 3);
+    assert_eq!(docs.len(), 2);
+    Ok(())
+}
+
+/// A message no chat holds used to be dropped with only a debug log
+/// line; it is reported, and says which of the two ways it got there.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_message_in_no_chat_is_reported() -> Result<()> {
+    let fx = Fixture::new();
+    let ids = |sql: &'static str| {
+        let db = fx.db.clone();
+        async move {
+            let pool = mirror::open_sqlite(&db, false).await?;
+            let rows: Vec<i64> = sqlx::query_scalar(sql).fetch_all(&pool).await?;
+            pool.close().await;
+            anyhow::Ok(rows)
+        }
+    };
+    let joins = ids("SELECT message_id FROM chat_message_join ORDER BY message_id").await?;
+    let (unjoined, misjoined) = (joins[0], joins[1]);
+    let no_such_chat = ids("SELECT max(ROWID) + 100 FROM chat").await?[0];
+    fx.edit(&[
+        // chat.db declares the join's foreign key; only a damaged copy
+        // gets past it.
+        "PRAGMA foreign_keys = OFF",
+        &format!("DELETE FROM chat_message_join WHERE message_id = {unjoined}"),
+        &format!(
+            "UPDATE chat_message_join SET chat_id = {no_such_chat} WHERE message_id = {misjoined}"
+        ),
+    ])
+    .await?;
+    fx.ingest().await?.expect("ingest commits");
+
+    let (_, _, mut rendered) = fx.render(None).await;
+    rendered.dropped.sort_by_key(|d| d.rowid);
+    assert_eq!(
+        rendered.dropped,
+        vec![
+            Dropped {
+                rowid: unjoined,
+                missing_chat: None,
+            },
+            Dropped {
+                rowid: misjoined,
+                missing_chat: Some(no_such_chat),
+            },
+        ]
+    );
+    assert_eq!(
+        rendered.dropped[0].entity_id(),
+        format!("message:{unjoined}")
+    );
+    Ok(())
+}
+
+/// Riker's chat spans two months, and was one document a month, each
+/// minted from its month. It is one document, keyed on the chat itself.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_chat_spanning_two_months_is_one_document() -> Result<()> {
+    let fx = Fixture::new();
+    fx.ingest().await?.expect("first ingest commits");
+    let (docs, _, _) = fx.render(None).await;
+    let riker = chat_uuid("messages", RIKER);
+    let riker_docs: Vec<_> = docs
+        .iter()
+        .filter(|d| d.bucket_key.as_deref() == Some(riker.as_str()))
+        .collect();
+    assert_eq!(riker_docs.len(), 1);
+    assert_eq!(riker_docs[0].markdown_uuid, riker);
+    let page = std::fs::read_to_string(&riker_docs[0].md_path)?;
+    assert!(page.contains("Make it so."), "April's message: {page}");
+    assert!(
+        page.contains("Captain's log, supplemental."),
+        "May's: {page}"
+    );
+    Ok(())
+}
+
+/// An inline reply names the first message of its thread in
+/// `thread_originator_guid`; that is a reply edge between the two.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_inline_reply_is_a_reply_edge_to_its_threads_first_message() -> Result<()> {
+    const READY: &str = "A1B2C3D4-0001-4000-8000-000000000001";
+    const MAKE_IT_SO: &str = "A1B2C3D4-0002-4000-8000-000000000002";
+    let fx = Fixture::new();
+    fx.edit(&[&format!(
+        "UPDATE message SET thread_originator_guid = '{READY}' WHERE guid = '{MAKE_IT_SO}'"
+    )])
+    .await?;
+    fx.ingest().await?.expect("first ingest commits");
+    let (docs, _, _) = fx.render(None).await;
+    let riker = chat_uuid("messages", RIKER);
+    let doc = docs
+        .iter()
+        .find(|d| d.markdown_uuid == riker)
+        .expect("Riker's chat");
+    let uuid_of = |guid: &str| {
+        doc.rows
+            .iter()
+            .find(|r| r.upstream_id.as_deref() == Some(guid))
+            .map(|r| r.uuid.clone())
+            .unwrap_or_else(|| panic!("no row for {guid}"))
+    };
+    let replies: Vec<_> = doc
+        .edges
+        .iter()
+        .filter(|e| e.kind == EdgeKind::ReplyTo.as_i64())
+        .map(|e| (e.src_anchor_uuid.clone(), e.dst_anchor_uuid.clone()))
+        .collect();
+    assert_eq!(
+        replies,
+        [(Some(uuid_of(MAKE_IT_SO)), Some(uuid_of(READY)))],
+        "{:?}",
+        doc.edges
+    );
     Ok(())
 }

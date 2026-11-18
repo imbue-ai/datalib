@@ -1,0 +1,5 @@
+# The text-edge library: README.md says what it is and how to add a case.
+exports_files(
+    ["cases.toml"],
+    visibility = ["//datalib/backend/etl/hostile_samples:__pkg__"],
+)

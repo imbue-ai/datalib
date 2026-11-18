@@ -217,6 +217,51 @@ impl Reach {
     }
 }
 
+/// What a sync does to its copy of a record once upstream no longer has
+/// it: the `when_deleted_upstream` key of a source that offers the
+/// choice. Why someone keeps the copy, and which sources offer it:
+/// `docs/dev/deleted_upstream.md`.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum WhenDeletedUpstream {
+    /// The copy follows upstream: a record deleted there is deleted
+    /// here too (it stays in the store's history).
+    #[default]
+    DeleteLocalCopy,
+    /// The copy stays here, as it was last fetched, after upstream
+    /// deletes it.
+    KeepLocalCopy,
+}
+
+impl WhenDeletedUpstream {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+
+    pub fn keeps(self) -> bool {
+        self == Self::KeepLocalCopy
+    }
+}
+
 /// One way an ingest step's params can say where its data comes from:
 /// a dotted path into the params (`api`, `gmail`, `export`) and
 /// what holding it means. A method is *held* when the path is written
@@ -263,6 +308,23 @@ pub fn not_negative(key: &str, value: Option<i64>) -> Result<(), String> {
     }
 }
 
+/// A wait between requests a config gives in seconds, held to 0 to 3600;
+/// unset waits none.
+pub fn seconds_between_requests(
+    key: &str,
+    seconds: Option<f64>,
+) -> Result<std::time::Duration, String> {
+    match seconds {
+        None => Ok(std::time::Duration::ZERO),
+        Some(s) if s.is_finite() && (0.0..=3600.0).contains(&s) => {
+            Ok(std::time::Duration::from_secs_f64(s))
+        }
+        Some(s) => Err(format!(
+            "`{key}` is {s}; it is seconds between requests, from 0 to 3600"
+        )),
+    }
+}
+
 /// A config stanza a source shows in `datalib-step help <type>`: its
 /// `[[groups]]` entry and its steps, the group's id the source type's own
 /// name. Each provider's config crate exports its own as `EXAMPLES`, a
@@ -287,6 +349,10 @@ pub enum ExampleKind {
     Minimal,
     /// Every option the params take, each with a comment.
     Complete,
+    /// The method written as `fetch` sections, which cannot sit beside the
+    /// keys they replace in [`Self::Complete`]. Only a method with `fetch`
+    /// has one.
+    Sections,
 }
 
 impl ExampleKind {
@@ -399,6 +465,30 @@ mod tests {
             assert_eq!(Reach::parse(r.as_str()), Some(r));
         }
         assert_eq!(Reach::parse("remote"), None);
+    }
+
+    #[test]
+    fn when_deleted_upstream_spellings_agree_between_strum_and_serde() {
+        for &w in WhenDeletedUpstream::VARIANTS {
+            let via_serde = serde_json::to_value(w).unwrap();
+            assert_eq!(via_serde.as_str(), Some(w.as_str()));
+            assert_eq!(WhenDeletedUpstream::parse(w.as_str()), Some(w));
+        }
+        assert_eq!(WhenDeletedUpstream::parse("keep"), None);
+    }
+
+    /// Omitting the key keeps today's behaviour: the copy follows
+    /// upstream.
+    #[test]
+    fn when_deleted_upstream_defaults_to_deleting_the_copy() {
+        #[derive(serde::Deserialize)]
+        struct P {
+            #[serde(default)]
+            w: WhenDeletedUpstream,
+        }
+        let p: P = serde_json::from_str("{}").unwrap();
+        assert_eq!(p.w, WhenDeletedUpstream::DeleteLocalCopy);
+        assert!(!p.w.keeps());
     }
 
     #[test]

@@ -4,7 +4,7 @@
 Generates the DAG config `datalib-dag` needs, runs the synth phase
 (per-source `datalib-step synthesize`) and then the pipeline
 (download → render → index) hermetically against playback fixtures,
-and leaves the staged outputs where `tar_qmd.py` can pick them up.
+and leaves the staged outputs where `tar_rendered.py` can pick them up.
 Beside them it writes `config_body.toml`: the same sources as
 render-only groups, for `materialize_tng_root.sh` to declare in the
 root it builds from the tars.
@@ -73,7 +73,7 @@ Args (positional):
                       manual, a scanned blueprint). File-backed; the
                       scanner walks its `path` directly. Unlike
                       file_inventory this source RENDERS, so its markdown
-                      reaches grid_index and the qmd index like any
+                      reaches the index step and the search like any
                       chat source — which is the whole point of
                       including it here.
     24: garmin_tng    JSON spec for the TNG Garmin account (the path is
@@ -114,6 +114,15 @@ duplicated across two `tests/fixtures/BUILD.bazel` call sites (the
 renumbering that lands in only one of them misaligns every argument
 after it. Appending can't disturb what already works. See the FIXME on
 the py_test's arg list.
+
+Environment:
+    INGESTED_TNG_EMBED_MODEL  the embedding model's GGUF, a Bazel input
+                      (`//third-party/embedding_models:embeddinggemma`).
+                      The `unified_grid_and_search_index` step reads
+                      its tokenizer to cut the search chunks; it is linked into the root's own
+                      `unified_grid_and_search_index/models/` and
+                      fetching is turned off, so no step reads `$HOME`
+                      or reaches HuggingFace.
 """
 
 from __future__ import annotations
@@ -175,6 +184,18 @@ PRESEEDED_RAW = {"yolink"}
 TIME_SERIES_TYPES = {"garmin", "yolink", "airvisual"}
 
 
+def _with_step_commands(text: str) -> str:
+    """Names `datalib-step` as every step's program, as the wizard writes
+    it. A step without one is a shape `datalib-http` rewrites on sight,
+    leaving a `config.toml.bak` in the materialized root."""
+    return re.sub(
+        r'^(function = "[^"]*")$',
+        r'\1\ncommand = "datalib-step"',
+        text,
+        flags=re.MULTILINE,
+    )
+
+
 @dataclass
 class Prepared:
     """A workspace ready to sync, and what a driver needs to sync it."""
@@ -194,6 +215,17 @@ class Prepared:
     carddav_v2: Path
     playback_live: Path
     playback_v2: Path
+
+
+def _stage_embed_model(workspace: Path) -> None:
+    model = Path(os.environ["INGESTED_TNG_EMBED_MODEL"]).resolve()
+    if not model.is_file():
+        raise SystemExit(f"INGESTED_TNG_EMBED_MODEL is not a file: {model}")
+    models = workspace / "unified_grid_and_search_index" / "models"
+    models.mkdir(parents=True, exist_ok=True)
+    link = models / model.name
+    link.unlink(missing_ok=True)
+    link.symlink_to(model)
 
 
 def prepare(argv: list[str]) -> Prepared:
@@ -251,7 +283,9 @@ def prepare(argv: list[str]) -> Prepared:
     own_cache_env = {
         **os.environ,
         "DATALIB_CACHE_DIR": str(workspace / "fingerprint_cache"),
+        "DATALIB_MODELS_NO_FETCH": "1",
     }
+    _stage_embed_model(workspace)
 
     # Contacts are ingested twice: once from the checked-in address
     # books, once after `carddav_tng_v2/` is copied over them, so the
@@ -338,6 +372,15 @@ def prepare(argv: list[str]) -> Prepared:
             ]
         )
 
+    # An export's reader follows no link, and the sandbox's inputs are all
+    # links: a person's export is real files, so these are too. A second run
+    # over this workspace finds them as the first left them, as a re-sync would.
+    def unpacked(name: str, fixture: Path) -> Path:
+        dest = workspace / "exports" / name / fixture.name
+        if not dest.exists():
+            shutil.copytree(fixture, dest)
+        return dest
+
     # Every source: name → (source type, synth input fixture dir, the
     # file-backed method's `path`). The synth input is the checked-in
     # fixture tree the synthesizer reads; the path is what a file-backed
@@ -356,8 +399,12 @@ def prepare(argv: list[str]) -> Prepared:
         "signal": ("signal", signal_snapshot_root, raw_root / "signal"),
         "whatsapp": ("whatsapp", whatsapp_dir, raw_root / "whatsapp"),
         "tng_email": ("email", email_mbox, email_mbox),
-        "google-takeout": ("google_takeout", gtk_fx, gtk_fx),
-        "linkedin": ("linkedin", linkedin_fx, linkedin_fx),
+        "google-takeout": (
+            "google_takeout",
+            gtk_fx,
+            unpacked("google-takeout", gtk_fx),
+        ),
+        "linkedin": ("linkedin", linkedin_fx, unpacked("linkedin", linkedin_fx)),
         "sms-backup-restore": ("sms_backup_restore", sms_fx, sms_fx),
         # Render-only; its raw store was seeded above. The path is
         # unused by yolink, but every entry in this table declares one,
@@ -374,7 +421,7 @@ def prepare(argv: list[str]) -> Prepared:
         "ship-air": ("airvisual", airvisual_fx, airvisual_fx),
         # File-backed and rendering: the export's posts, album, comments,
         # reactions and friends become markdown + grid_rows.
-        "facebook": ("facebook", facebook_fx, facebook_fx),
+        "facebook": ("facebook", facebook_fx, unpacked("facebook", facebook_fx)),
         # The transcripts root, as Claude Code lays it out.
         "claude-code": ("claude_code", claude_code_fx, claude_code_fx),
         # The Codex home, as Codex lays it out.
@@ -440,8 +487,8 @@ def prepare(argv: list[str]) -> Prepared:
     )
 
     # ── DAG config: a download+render pair per source, plus the index
-    # fan-in. qmd is skipped here (the old configs set `qmd.skip`);
-    # `:ingested_tng_qmd` builds the search index separately.
+    # fan-in. The `embed` steps are left out here:
+    # `:ingested_tng_search_index` builds the search index separately.
     notion_seed = _first_notion_page_id(notion_fx)
     steps: list[str] = []
     root_entries: list[str] = []
@@ -467,9 +514,9 @@ def prepare(argv: list[str]) -> Prepared:
             f"\nparams = {_toml_value(render_params)}" if render_params else ""
         )
         # One group per source; each step is `group` + `function`, and its
-        # id — the tree it writes — is composed from the two. No
-        # `command`: a built-in step is `datalib-step`, which reads the
-        # function and the group's type from the environment.
+        # id — the tree it writes — is composed from the two. Every step
+        # gets `command = "datalib-step"` in `config_texts`
+        # (`_with_step_commands`).
         group_block = f"""[[groups]]
 id = "{name}"
 type = "{type_str}"
@@ -542,35 +589,32 @@ params = {params}
             )
             root_blocks.append(f"{group_block}\n{params_line}")
             rendered.append(f'"{group}/render_markdown"')
-        # The fan-in names its inputs; there is no glob to stand in for
-        # "every render step".
-        rendered_list = ", ".join(rendered)
+        # The fan-ins read every source by pattern, as the starter config
+        # and the app's config upgrade write them.
         groups = [r.strip('"').split("/")[0] for r in rendered]
-        qmd_list = ", ".join(
-            f'"{g}/{f}"' for g in groups for f in ("keyword_index", "embed")
-        )
+        series = [g for g in groups if g in time_series_groups]
+        grid_list = '"*/render_markdown"'
         blocks.append(
             f"""[[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
-inputs = [{rendered_list}]"""
+group = "unified_grid_and_search_index"
+function = "unified_grid_and_search_index"
+inputs = [{grid_list}]"""
         )
         # The time-series index reads every source's `render_time_series`.
         # Declared here, so the app's config upgrade (which adds it to a
         # config without one) leaves this config as written.
-        series = [g for g in groups if g in time_series_groups]
         series_index = (
-            f"""[[groups]]
+            """[[groups]]
 id = "unified_time_series_index"
 name = "Time Series Index"
 
 [[steps]]
 group = "unified_time_series_index"
 function = "time_series_index"
-inputs = [{", ".join(f'"{g}/render_time_series"' for g in series)}]"""
+inputs = ["*/render_time_series"]"""
             if series
             else ""
         )
@@ -578,37 +622,31 @@ inputs = [{", ".join(f'"{g}/render_time_series"' for g in series)}]"""
             blocks.append(series_index)
         dag_text = "\n\n".join(blocks) + "\n"
         # Everything a materialized root's config needs but `data_root`
-        # and the applet, which only the materializer knows. Both
-        # fan-ins are declared and wired the way a real root's are; the
-        # index arrives pre-built, so neither has to run for the root to
-        # be browsable.
+        # and the applet, which only the materializer knows. The fan-in
+        # is declared and wired the way a real root's is; the index
+        # arrives pre-built, so it need not run for the root to be
+        # browsable.
         root_blocks.append(
             f"""[[groups]]
-id = "unified_document_index"
-name = "Document Index"
+id = "unified_grid_and_search_index"
+name = "Grid and Search Index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
-inputs = [{rendered_list}]
-
-[[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
-inputs = [{qmd_list}]"""
+group = "unified_grid_and_search_index"
+function = "unified_grid_and_search_index"
+inputs = [{grid_list}]"""
         )
-        # Each source fills its own qmd collection: a keyword index and
-        # its embeddings. The index arrives pre-built here too.
+        # Each source embeds what the `unified_grid_and_search_index` step's keyword pass cut of it.
+        # The index arrives pre-built here too.
         if series_index:
             root_blocks.append(series_index)
         for group in groups:
             root_blocks.append(
-                f'[[steps]]\ngroup = "{group}"\nfunction = "keyword_index"\n'
-                f'inputs = ["{group}/render_markdown"]\n\n'
                 f'[[steps]]\ngroup = "{group}"\nfunction = "embed"\n'
-                f'inputs = ["{group}/keyword_index"]'
+                f'inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]'
             )
-        return dag_text, "\n\n".join(root_blocks) + "\n"
+        root_text = "\n\n".join(root_blocks) + "\n"
+        return _with_step_commands(dag_text), _with_step_commands(root_text)
 
     # Step commands resolve `datalib-step` via PATH; bazel names the
     # binary `datalib_step`, so stage a dash-named symlink dir and hand

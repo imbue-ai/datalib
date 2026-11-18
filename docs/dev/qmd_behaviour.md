@@ -1,27 +1,24 @@
 # How qmd behaves when driven from a step
 
-Measured facts about `qmd` 2.8.3, which is also the version pinned now
-(`DEFAULT_QMD_VERSION` in `datalib/backend/runtime/src/qmd.rs`, and
-`third-party/qmd/package.json`). Eleven facts, each measured on a mac
-against the TNG fixture's rendered tree (one qmd collection per group,
-exactly as the shipped qmd steps register them), with the recipe at
-the end so they can be re-measured after a qmd bump, and a twelfth read
-from qmd's code and not measured. Findings 2–9 were measured on a
-fixture of 16 groups and 79 documents; findings 1 (its SDK half), 10
-and 11 on one of 22 groups and 111 documents. File references are into
-`third-party/qmd/src`, the vendored reference snapshot
-([`qmd_vendored.md`](qmd_vendored.md)); function names are given so a
-line number that drifts is still findable.
+Measured facts about `qmd` 2.8.3, the last version datalib ran. Eleven
+facts, each measured on a mac against the TNG fixture's rendered tree
+(one qmd collection per group, exactly as the qmd steps registered
+them), with the recipe at the end so they can be re-measured, and a
+twelfth read from qmd's code and not measured. Findings 2–9 were
+measured on a fixture of 16 groups and 79 documents; findings 1 (its
+SDK half), 10 and 11 on one of 22 groups and 111 documents. File
+references are into qmd's own `src/` at that version
+([`github.com/tobi/qmd`](https://github.com/tobi/qmd), tag `v2.8.3`,
+commit `facd35e0`), not a tree in this repo; function names are given
+so a line number that drifts is still findable.
 
-Read this before touching `qmd_indexer/src/lib.rs`,
-`qmd_indexer/src/js/qmd_sdk.mjs` or anything that drives `qmd embed`.
-Finding 6 is why the embed step calls past `store.embed()`. Findings 1
-and 3 are held by `//datalib/backend/qmd_indexer:qmd_indexer_tests`,
-which drives the real qmd through `Index`. Search reads qmd's index
-itself (its keyword table and stored vectors) and asks qmd only to
-embed a query, so nothing here is about qmd's own search. The search
-applet reads the vectors into memory at launch and again after a sync
-moves them (`applets/src/unified_document_index/warm.rs`).
+No sync drives qmd now: search keeps its own index
+(`datalib/backend/search_index`), built in process. These facts stay as
+the record behind what still bears qmd's mark — the one-slot
+`embedder` lock, once `qmd_embed` (findings 5 and 12), and the shared
+model cache's path — until those are revisited. Its other lock,
+`qmd_keyword` (finding 4), is gone: only the index step writes the file it
+guarded.
 
 **The CLI and the SDK are not the same program.** `@tobilu/qmd` ships
 both a CLI (`dist/cli/qmd.js`) and a library entry (`dist/index.js`,
@@ -251,7 +248,10 @@ does not carry over to `createStore()` without being re-measured.
     and may well gain from more contexts, which is what `embed_contexts`
     in `config.toml` is for.
 
-## What the shipped steps do with these
+## What the qmd-driven steps did with these
+
+This section is the record of the steps that drove qmd. The code it
+names (`qmd_indexer`, `qmd_sdk.mjs`) is deleted; git has it.
 
 `qmd_aggregator` keeps the collection set to the sources it reads and
 indexes nothing. Each source has a `keyword_index` step (registers its
@@ -289,7 +289,7 @@ Finding 15 is closed in `qmd_sdk.mjs`'s `pinModels`, before any verb
 runs: `resolveModel` answers only the files its caller names, by the
 name qmd asks for each (`PinnedModel::qmd_uri`), and fails on
 anything else; and `setLlamaDirWritableForTest(false)` turns the
-source build off. The files named are ones `datalib_qmd_models` has
+source build off. The files named are ones `datalib_embedding_models` has
 verified, and the search applet's query embedder asks for them before
 it starts qmd at all (`VerifiedModels`), so a search during the first
 download says the model is not in place yet. Both hooks are qmd
@@ -320,16 +320,20 @@ wrong and `collection add` writes the fixture's collections into your
 own `~/.config/qmd/index.yml` (it merges, so nothing there is lost, but
 they have to be taken back out by hand).
 
+This tree does not build qmd, so install qmd 2.8.3 by hand first
+(`npm install @tobilu/qmd@2.8.3` in a scratch directory, with Node ≥22)
+and point `qmd()` below at its `dist/cli/qmd.js`.
+
 ```sh
 S=/tmp/qmd-exp; mkdir -p $S/root
 tar -xf bazel-bin/tests/fixtures/ingested/qmd_md.tar -C $S/root --strip-components=1
-export XDG_CACHE_HOME=$S/root/unified_document_index/qmd_index
+export XDG_CACHE_HOME=$S/root/unified_grid_and_search_index/qmd_index
 export XDG_CONFIG_HOME=$XDG_CACHE_HOME
 export QMD_CONFIG_DIR=$XDG_CACHE_HOME/qmd
 export NO_COLOR=1
 mkdir -p $XDG_CACHE_HOME/qmd && ln -sfn ~/.cache/qmd/models $XDG_CACHE_HOME/qmd/models
-qmd() { node bazel-bin/third-party/qmd/runtime/node_modules/@tobilu/qmd/dist/cli/qmd.js "$@"; }
-for g in $(ls $S/root | grep -v unified_document_index); do
+qmd() { node <scratch>/node_modules/@tobilu/qmd/dist/cli/qmd.js "$@"; }
+for g in $(ls $S/root | grep -v unified_grid_and_search_index); do
   qmd collection add $S/root --name $g --mask "$g/render_markdown/**/*.md"; done
 qmd update
 qmd embed -c slack                       # finding 3

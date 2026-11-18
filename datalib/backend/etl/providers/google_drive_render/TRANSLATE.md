@@ -3,7 +3,7 @@
 The raw store keeps each file in Google's own JSON at every version a
 sync saw ([`../google_drive/INGEST.md`](../google_drive/INGEST.md)).
 This crate turns each **Google Doc** into one markdown document, from its
-newest capture. Sheets and Slides do not render yet; they stay in the
+newest capture. Sheets and Slides do not render yet (one warning counts them by kind); they stay in the
 raw store.
 
 ## What becomes what
@@ -109,3 +109,10 @@ file id alone, so a fetch problem keyed `files:<id>` lands on it.
 row, that capture's `capture_parts` and its `comments`. Every key in
 those tables starts with the file id, which is how the forward scan maps
 a changed row to the Doc to render again.
+
+**Where a row sits** (`grid_rows.md` §"`parent_uuid`…"). The Doc is read
+together, inside its folder: the first of the listing's `parents`,
+keyed by Drive's folder id. The download lists no folders, so the
+folder has no name and the folders above it are not known. Each comment
+thread is read together inside the Doc; the thread is its first
+comment's row, and its replies sit in it.

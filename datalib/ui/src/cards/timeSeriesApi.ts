@@ -3,7 +3,9 @@
 import { appletAbsent } from "@/api";
 import {
   TIME_SERIES_APPLET,
+  alignedAnswer,
   fromMs,
+  unalignedSpan,
   type Answered,
   type Listed,
   type TimeKind,
@@ -51,5 +53,26 @@ export async function fetchPoints(
   return {
     answered: new Map(answers.flatMap((a) => a.time_series).map((a) => [a.time_series_id, a])),
     unreadable: answers.flatMap((a) => a.unreadable ?? []),
+  };
+}
+
+/// As [`fetchPoints`], for a chart that aligns starts: `span` is time
+/// since each one's first point, so each time series is asked for its own
+/// stretch, and answers with its points moved to start at 0.
+export async function fetchAlignedPoints(
+  picked: Listed[],
+  span: { fromMs: number; toMs: number },
+  budget: number,
+): Promise<{ answered: Map<string, Answered>; unreadable: Unreadable[] }> {
+  const each = await Promise.all(
+    picked.map((p) => fetchPoints([p], unalignedSpan(p, span), budget)),
+  );
+  return {
+    answered: new Map(
+      each
+        .flatMap((e) => [...e.answered.values()])
+        .map((a) => [a.time_series_id, alignedAnswer(a)]),
+    ),
+    unreadable: each.flatMap((e) => e.unreadable),
   };
 }

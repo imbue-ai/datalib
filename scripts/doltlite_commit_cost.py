@@ -1,11 +1,11 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run python
 """What a doltlite write costs on disk, by key shape, transaction shape and
 commit cadence — the same rows in every variant. The dated results are in
 `hack/doltlite_commit_cost/README.md`; the write-up is
 `docs/dev/doltlite.md` § "What a write costs".
 
     bazelisk build //third-party/doltlite:doltlite
-    python3 scripts/doltlite_commit_cost.py [scratch_dir]
+    uv run python scripts/doltlite_commit_cost.py [scratch_dir]
 
 Each variant builds a 100k-row table, reports the file size before and
 after `dolt_gc()`, and the last one squashes its commits to show what gc

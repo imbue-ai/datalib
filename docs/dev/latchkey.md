@@ -28,10 +28,18 @@ sign-in, the wizard's account row, or a provider's HTTP client.
 - **One store, `~/.latchkey`**, shared by every library and by the
   `latchkey` command a person runs. The exception is a protected
   library in the desktop app: its server starts with
-  `LATCHKEY_DIRECTORY` naming a store inside the protected folder, a
-  copy of `~/.latchkey` made the first time one opens, and every
-  latchkey it runs inherits that (`datalib/tauri/README.md`, "A
-  protected library").
+  `LATCHKEY_DIRECTORY` naming a store inside the library, which starts
+  empty, and `LATCHKEY_KEYRING_SERVICE_NAME` naming a keychain item of
+  that library's own. Every latchkey it runs inherits both
+  (`datalib/tauri/README.md`, "A protected library"). **That keychain
+  item protects nothing by itself:** any program running as you can get
+  the key by running the app's Node. Only the protected folder keeps the
+  sign-ins from it.
+- **Its usage count is off.** Left alone, latchkey pings
+  `latchkey.goatcounter.com` once a day from any run, and the README says a
+  sync sends no telemetry. `latchkey_command` and the wrapper we ship both set
+  `LATCHKEY_DISABLE_COUNTING=1`; `latchkey_counting_test` runs the pinned
+  package to show that it holds.
 - **Node starts with `--disable-sigusr1`**, from `bundled_command` and
   from the `latchkey` wrapper we ship (`scripts/latchkey-wrapper.sh`).
   Without it, any program running as the same user can send Node the
@@ -47,7 +55,19 @@ latchkey keeps its encryption key in the system keychain, and every
 invocation reads it, even `--version`, unless `LATCHKEY_ENCRYPTION_KEY`
 or `LATCHKEY_GATEWAY` is set. On a Mac the first read can put up a
 password prompt. So the wizard runs latchkey only after a person picks
-a source that needs it, never on page load. Tests always set a key of
+a source that needs it, never on page load. A protected library's item
+puts up no prompt: the app's Node made it, so the Node is on its list.
+
+The log says what a prompt would otherwise leave no trace of. At launch
+the server writes one line, "where this library's latchkey keeps its
+sign-ins and finds their key", with `store`, `keychain_item`,
+`key_in_environment`, `gateway` and `protected_library`; it never holds
+the key. A wizard lookup that takes five seconds or more writes "latchkey
+was slow to answer about a service", with `service` and `ms`. Both are
+`info` lines, so the log card shows them. A log cannot record a dialog
+itself, so a slow answer may also be a service validating a credential.
+
+Tests always set a key of
 their own (below). The container has no keychain and keeps the key in
 its bind mount instead ([`docker.md`](docker.md)).
 
@@ -60,7 +80,7 @@ plus the URLs its credential is good for and how to get one.
 |---|---|---|
 | **built-in** | `slack`, `google-gmail`, `google-calendar`, `github`, `fastmail`, `fastmail-dav`, `linear`, `notion`, `todoist` | ships inside latchkey |
 | **plugin** | `garmin` | a package under `<latchkey dir>/plugins/<name>/`. datalib vendors the ones it needs (`third-party/latchkey-garmin/`) and installs them on the first sign-in (`http/src/plugins.rs`); a copy without datalib's stamp is the person's own and is never touched. |
-| **registered** | `claude-ai`, `chatgpt` | `latchkey services register`, run by the wizard on the first sign-in from the catalog entry's `credentialRegister`. latchkey refuses to re-register a name it already holds, so a registration someone made by hand stays theirs. |
+| **registered** | `claude-ai`, `chatgpt`, `babyconnect` | `latchkey services register`, run by the wizard on the first sign-in from the catalog entry's `credentialRegister`. latchkey refuses to re-register a name it already holds, so a registration someone made by hand stays theirs. |
 
 `latchkey services info <name>` reports a plugin as `built-in` and a
 registered service as `user-registered`. When two services cover the
@@ -203,6 +223,15 @@ running elsewhere. It refuses every command that changes local state:
 The wizard therefore offers no sign-in of its own there and says where
 to sign in instead, and no plugin is installed.
 
+Whether a forwarded `auth browser` works is up to the gateway, so
+nothing datalib says may assume either way. What is printed at run time
+asks: a step's hint and a provider's error
+(`datalib_etl_web::latchkey::sign_in_advice`) read `LATCHKEY_GATEWAY`.
+What is written down once for everyone says both: a source's help page
+and `getting_your_data.md` give the local commands and what to do
+instead with that variable set, and a stanza's comment, which ends up in
+someone's config with no room for that, names no command at all.
+
 ## The browser
 
 `auth browser` needs a browser configured. The wizard first runs
@@ -237,10 +266,12 @@ With no service name it deletes `credentials.json.enc` and
 unless `LATCHKEY_DIRECTORY` says otherwise). Every data root on the
 machine shares that directory, and under Minds the gateway's store is
 the host's, so this signs out everywhere. The one exception is the
-desktop app's protected libraries, which share a store of their own in
-the protected folder (`datalib/tauri/README.md`, "A protected
-library"). To clear that one, point `LATCHKEY_DIRECTORY` at it; macOS
-first asks whether your terminal may open the protected folder. Latchkey's browser keeps no
+desktop app's protected libraries, which each have a store of their own
+(`datalib/tauri/README.md`, "A protected library"). To clear one, point
+`LATCHKEY_DIRECTORY` at its `system/latchkey` and
+`LATCHKEY_KEYRING_SERVICE_NAME` at its keychain item; macOS first asks
+whether your terminal may open the protected folder, unless the terminal
+has Full Disk Access. Latchkey's browser keeps no
 profile of its own, so the cookies go with that file. It leaves
 `config.json` (the browser path and the services the wizard
 registered), `plugins/` and the keychain key; to test those first-run

@@ -57,19 +57,39 @@ datalib-doltlite -readonly -json gmail/ingest/entities.doltlite_db \
   "SELECT id, subject, received_at FROM emails LIMIT 5"
 ```
 
-From a program, the simplest route is to run `datalib-doltlite
--readonly -json` as a subprocess and parse its output. That costs a
-process start and a store open per query, so a Python program that runs
-many can keep the store open instead: dolthub's `doltlite` package
-(`pip install doltlite==<version>`, the DoltLite version
-`datalib-doltlite --version` prints) makes the standard `sqlite3`
-module run on doltlite. `import doltlite` before anything imports
-`sqlite3`, then open with
-`sqlite3.connect(f"file:{path}?mode=ro", uri=True)`. It needs a Python
-that loads SQLite as a shared library (Homebrew, the system Python,
-pyenv or Conda; not the builds `uv python install` fetches), and on
-macOS a script file, since it restarts the interpreter: `python -c`
-and the REPL fail.
+**From Python**, under any version from 3.9 on, uv's builds included, install
+the reader at the version `datalib-dag --version` prints, and keep the store
+open:
+
+```sh
+uv add imbue-datalib-reader==<version>   # or pip install
+```
+
+```python
+from datalib_reader import Store
+
+with Store("gmail/ingest/entities.doltlite_db") as store:
+    rows = store.query("SELECT id, subject FROM emails WHERE subject LIKE ?", "%invoice%")
+```
+
+`query` returns a list of rows, each a tuple that also answers by column name (`row["subject"]`), and a write fails. **Select a payload as
+`json(payload)`**: a bare `payload` comes back as JSONB `bytes`, which
+`json.loads` refuses with a `UnicodeDecodeError` ([below](#payload-is-json-stored-as-jsonb)).
+
+```python
+import json
+payload = json.loads(store.query("SELECT json(payload) FROM emails LIMIT 1")[0][0])
+```
+
+It has wheels for
+Apple-silicon Macs and for Linux on x86_64 and aarch64, glibc and musl.
+[Reading a store from Python](../dev/doltlite.md#reading-a-store-from-python)
+has the rest, and says when to `import doltlite` instead, which makes the
+standard `sqlite3` module run on doltlite: only for code that needs that module
+or SQLAlchemy, and not under the builds `uv python install` fetches.
+
+**From anything else**, run `datalib-doltlite -readonly -json` as a subprocess
+and parse its output. That costs a process start and a store open per query.
 
 For a tool that
 speaks only SQLite, one pipe writes a plain SQLite copy with the same
@@ -110,7 +130,8 @@ fresh is the mirror?").
 
 Most tables keep the record as the service sent it in a `payload`
 column. It is stored as SQLite's binary JSON (JSONB), so selecting it
-bare prints bytes. Ask for `json(payload)` to see the text, and use
+bare prints bytes, and from Python returns `bytes` that `json.loads`
+cannot decode. Ask for `json(payload)` to get the text, and use
 SQLite's JSON functions on it directly:
 
 ```sql
@@ -232,10 +253,17 @@ document.
 | `changed_at_utc` | when it last changed, in UTC |
 | `tz_offset` | the offset for the two stamps |
 | `render_version` | empty here; set on rows a render records |
+| `upstream_entity_kind` | the kind of upstream record the problem is about, as a grid row names it, where the download said; empty otherwise |
+| `upstream_id` | that record's upstream id, likewise |
+| `upstream_account` | the upstream account it is in, likewise |
 
 ### `sync_runs`
 
-One row per download run.
+One row per download run, for the sources that reach a service over the
+network (not Garmin, YoLink or contacts), and for few that read local
+files. The start of the newest `ok` row is how recent the source
+is as a whole: [building on datalib](building_on_datalib.md) § "How
+fresh is the mirror?".
 
 | column | what it holds |
 |---|---|
@@ -244,8 +272,8 @@ One row per download run.
 | `finished_at_utc` | when it ended; NULL while it runs, or if it was killed |
 | `tz_offset` | the offset for the two stamps |
 | `config` | the step's params as that run saw them, JSON |
-| `status` | `running`, `ok` or `error`; `interrupted` for a run killed before it could finish, set when the next run starts |
-| `summary` | what it did, JSON (counts, and why it stopped early if it did) |
+| `status` | `running`, then how it ended: `ok` if it read everything it set out to; `partial` if it ended early, told to stop, giving up on a service that stopped answering, or over a budget such as `message_budget`; `error` if it failed; `interrupted` if it was killed before it could say, set when the next run starts. Rows written before `partial` existed say `ok` for a run that ended early |
+| `summary` | what it did, JSON (counts, and why it stopped early if it did). `cursors` lists each sync position the run moved, before and after; where more than five of one kind moved (a first Slack run checks every closed DM), they are one entry in `cursors_by_kind` instead: the kind, how many moved, how many are new, and three examples |
 
 ### `sync_scope_state`
 
@@ -283,9 +311,10 @@ the files and settings match the stamp, the run skips the read.
 All three ways into mail write one schema. Fastmail and other JMAP
 servers send JMAP's own objects; the Gmail API and mbox files are made
 to look like them, so `payload` is a JMAP-shaped **envelope**: who,
-when, subject, labels. **There is no body in the envelope and no
-snippet.** The message itself, headers, body and attachments, is the
-original RFC 5322 `.eml`, stored whole in `blobs.sqlite`.
+when, subject, labels. **There is no body in the envelope.** The message
+itself, headers, body and attachments, is the original RFC 5322 `.eml`,
+stored whole in `blobs.sqlite`. To show a line of a message without
+opening that, read `emails.preview`.
 
 **Which id is which, for Gmail:**
 
@@ -305,6 +334,23 @@ only on a message the Gmail API has answered for, so it is NULL for
 Fastmail, for an mbox, and for a message a Takeout seeded until the
 next sync asks Gmail for its labels.
 
+**From the mirror's spelling to the API's, and back.** The Gmail API and
+Gmail's URLs write an id without leading zeros; the mirror pads it to
+16 digits. In SQL:
+
+```sql
+-- the API's spelling of each message's id and thread id
+SELECT id, ltrim(id, '0') AS api_id, ltrim(thread_id, '0') AS api_thread_id
+  FROM emails;
+-- a message by the id the API gave, bound to the ?
+SELECT * FROM emails WHERE id = substr('0000000000000000' || lower(?), -16);
+```
+
+To open a message in Gmail, link to
+`https://mail.google.com/mail/u/0/#search/rfc822msgid:` followed by its
+`message_id`, percent-encoded: the link the app's own ↗ uses. `u/0` is
+the first Google account the browser is signed in to.
+
 **Getting the message.** Join `email_blobs` on the email, then
 `cas_objects` in `blobs.sqlite` on its `blake3`. The row's
 `content_type` is `message/rfc822` and `bytes` is the message as the
@@ -319,7 +365,8 @@ files mail (Inbox, Sent, a label you made, the inbox categories) is a
 row in `mailboxes`, and an email's labels are its `email_mailboxes`
 rows (also `payload -> '$.mailboxIds'`). A label that is a flag is a
 keyword in `email_keywords` (also `payload -> '$.keywords'`). Whether
-a message was read is its row in `read_marks`:
+a message was read, and whether its thread is muted, is its row in
+`read_marks`:
 
 | Gmail | in the mirror |
 |---|---|
@@ -328,7 +375,7 @@ a message was read is its row in `read_marks`:
 | `IMPORTANT` | keyword `$important` |
 | `INBOX`, `SENT`, `DRAFT`, `TRASH`, `SPAM` | a mailbox with `role` `inbox`, `sent`, `drafts`, `trash`, `junk` |
 | `CATEGORY_*`, your own labels | a mailbox with no role |
-| muted | not kept |
+| muted (no label: the search `is:muted`) | `read_marks.muted` = 1 (and 0 without it) |
 
 For Gmail, `emails.label_ids` puts them back together: every label id
 the message carries, as the API spells them, `STARRED` and `IMPORTANT`
@@ -356,6 +403,15 @@ asks whether a message is in the inbox.
   thread held in part.
 - **`emails.blob_id` is not the CAS key for JMAP** (it is JMAP's own
   blob id). Always go through `email_blobs.blake3`.
+- **`emails.preview` is for showing, not for searching or quoting.**
+  Gmail's snippet and a JMAP server's preview are cut where the service
+  chose and may skip part of the message, and it is NULL for a message
+  whose `.eml` is not held yet. For the text itself, read the `.eml`.
+- **A muted thread is any of its messages being muted.** Muting belongs
+  to a thread, and the mark is on each email: ask
+  `EXISTS (SELECT 1 FROM read_marks r JOIN emails e ON e.id = r.id
+  WHERE e.thread_id = ? AND r.muted = 1)`. On Gmail a mute shows after
+  the next sync, which asks every time.
 
 ### `accounts`
 
@@ -419,6 +475,7 @@ One row per message.
 | `cc_json` | the `Cc:` addresses, the same way (there is no Bcc column) |
 | `has_attachment` | 1 if the message has an attachment |
 | `label_ids` | Gmail only: its label ids as a sorted JSON array (see "Labels") |
+| `preview` | a line of the body as plain text, at most about 256 characters: Gmail's snippet with its HTML entities decoded, a JMAP server's `preview`, or, where those give none, made from the `.eml`. Empty for a message with no text, NULL until the `.eml` is held or if it will not parse. Not in `payload` |
 
 ### `email_mailboxes`
 
@@ -439,19 +496,21 @@ Which keywords (flags) each email has, rewritten with it the same way.
 |---|---|
 | `id` | `<email id>#<keyword>` |
 | `email_id` | the `emails.id` |
-| `keyword` | `$flagged`, `$important`, or another keyword the server or the mbox file names; never `$seen`, which is in `read_marks` |
+| `keyword` | `$flagged`, `$important`, or another keyword the server or the mbox file names; never `$seen` or `$muted`, which are in `read_marks` |
 
 ### `read_marks`
 
-Whether each email was read, one row per email, rewritten with it and
-gone with it. JMAP's `$seen`, Gmail's `UNREAD` and an mbox's `Unread`
-label all land here and nowhere else.
+Whether each email was read and whether its thread is muted, one row per
+email, rewritten with it and gone with it. JMAP's `$seen`, Gmail's
+`UNREAD` and an mbox's `Unread` label land here and nowhere else, and so
+do JMAP's `$muted`, an mbox's `Muted` label and Gmail's `is:muted` search.
 
 | column | what it holds |
 |---|---|
 | `id` | the `emails.id` |
 | `read` | 1 if it was read, 0 if not |
 | `read_through` | NULL for email (another source's mark on a whole conversation) |
+| `muted` | 1 if it is in a muted thread, 0 if not; NULL where nothing has said yet (Gmail, when the search failed) |
 
 ### `email_blobs`
 
@@ -519,6 +578,19 @@ user, channel or message JSON from `users.list`,
 | a thread (its root's `ts`) | `messages.thread_root_uuid`, equal to the root's `messages.id` |
 | a file id `F…` | `slack_attachments.file_id` |
 
+**A message's permalink**, as Slack's `chat.getPermalink` builds it: on
+the workspace's own host, and for a reply, with the thread it is in.
+
+```sql
+SELECT m.id,
+       rtrim(w.team_url, '/') || '/archives/' || m.channel_id
+         || '/p' || replace(m.ts, '.', '')
+         || CASE WHEN m.thread_ts IS NOT NULL AND m.thread_ts != m.ts
+                 THEN '?thread_ts=' || m.thread_ts || '&cid=' || m.channel_id
+                 ELSE '' END AS permalink
+  FROM messages m JOIN workspaces w ON w.id = m.team_id;
+```
+
 `workspaces.self_user_id` is the account the mirror signs in as, which
 is how to tell "me" from everyone else. A direct message is a
 `channels` row with `is_dm = 1`; `dm_user_ids` lists who is in it.
@@ -554,19 +626,44 @@ Slack listed in it is stored.
   ends are inside the stretch.
 
 A conversation's history reaches back to the source's `since` (to its
-first message when the config sets none) and up to the newest message the
-last walk saw. With `scope = "involves_me"`, a channel's reaches back
+first message when the config sets none) and up to the newest top-level
+message the last walk saw. With `scope = "involves_me"`, a channel's reaches back
 only to `context_before` ahead of the oldest message that involves the
 account, and a channel where nothing does is not walked at all. A conversation walked and found empty has one row with
-`lo = hi`, the point the walk began. A `ts` inside a `history:` span is
-mirrored; one outside every span is not, and you should ask Slack.
+`lo = hi`, the point the walk began.
+
+**`hi` is not a time, and a stored message can lie past it.** It stays
+put through any number of walks that find nothing new, and a reply newer
+than the channel's last top-level message is stored above it. When the
+download last looked is in `coverage_checked`: at `checked_at_utc`, Slack
+had no top-level message in that conversation newer than its spans,
+because a walk reached the top or `client.counts` showed nothing newer
+(`client.counts` skips a join or leave notice, which the next walk picks
+up). The time is this machine's clock as the sync began, so it errs early. A
+conversation that fell behind keeps its older time: a DM closed in the
+sidebar between its daily checks, a walk that failed, a sync stopped
+before reaching it. With `context_after` set, a stretch has a top of its
+own and says nothing about the present, so there is usually no row.
+
+So, for what `conversations.history` would list: a `ts` inside a
+`history:` span is mirrored. One past every span and no later than
+`checked_at_utc` is mirrored too, there being no top-level message there.
+Anything else, ask Slack.
 
 ```sql
-SELECT 1 FROM coverage
- WHERE scope = 'history:' || :channel
-   AND lo <= substr('0000000000000000000' || :ts, -19)
-   AND substr('0000000000000000000' || :ts, -19) <= hi;
+WITH q(scope, ts, key) AS (
+  SELECT 'history:' || :channel, :ts, substr('0000000000000000000' || :ts, -19))
+SELECT EXISTS (SELECT 1 FROM coverage c, q
+                WHERE c.scope = q.scope AND c.lo <= q.key AND q.key <= c.hi)
+    OR EXISTS (SELECT 1 FROM coverage_checked k, q
+                WHERE k.scope = q.scope
+                  AND CAST(q.ts AS REAL) <= unixepoch(k.checked_at_utc)
+                  AND q.key > COALESCE(
+                        (SELECT max(hi) FROM coverage WHERE scope = q.scope), ''));
 ```
+
+This does not say a thread's replies are held; that is the root's
+`threads_bookkeeping.held_version` against its `latest_reply` (above).
 
 **What is not mirrored**: anything before `since`; direct messages,
 unless the source sets `dms = true`; for up to a day, the newest
@@ -689,6 +786,7 @@ thread it follows.
 | `id` | the conversation id, or a thread's `{team}#{channel}#{ts}` |
 | `read_through` | the `ts` of the last message read |
 | `read` | NULL; Slack marks nothing message by message |
+| `muted` | NULL; the download does not ask |
 
 ### `bookmarks`
 
@@ -738,6 +836,17 @@ The stretches of each conversation the download has walked (above).
 | `scope` | `history:<channel id>`, `replies:<channel id>` or `involving:<search>` |
 | `lo` | the oldest `ts` in the stretch, zero-padded to 19 characters |
 | `hi` | the newest `ts` in the stretch, the same way |
+
+### `coverage_checked`
+
+When each conversation's history was last known to hold everything
+Slack listed (above). No row means it never has been.
+
+| column | what it holds |
+|---|---|
+| `scope` | `history:<channel id>` |
+| `checked_at_utc` | when, in UTC |
+| `tz_offset` | the offset for that stamp |
 
 ## Calendars (`calendar`)
 
@@ -931,8 +1040,11 @@ The days the rows cover. One row.
 
 An event whose occurrences could not be worked out, and why: a `TZID`
 the zone database does not know, a rule part this build does not follow
-(`BYWEEKNO`, a sub-daily `FREQ`), no start. Nothing is guessed; the
-Manage row counts them as warnings.
+(`BYWEEKNO`, a sub-daily `FREQ`), no start. Nothing is guessed. Each
+event here is also a warning in the store's `problems`, with the
+columns a raw store's has (§ "What every raw store has"), `stage`
+`occurrences` and the raw row as `scope_key`; that is the row the
+problems list shows and the Manage row counts.
 
 | column | what it holds |
 |---|---|

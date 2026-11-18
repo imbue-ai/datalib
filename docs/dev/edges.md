@@ -5,28 +5,40 @@ inside documents. The schema is the `EdgeRow` struct in
 `datalib/backend/schema/src/edges.rs` (DDL via
 `#[derive(PortableTable)]`). A renderer returns a document's outgoing
 edges on `RenderedMarkdown::edges`; they are stored in the source's
-render store beside its rows, and the `grid_index` step copies them into
-`<root>/unified_document_index/grid_index/db.sqlite` beside `grid_rows` and
+render store beside its rows, and the `unified_grid_and_search_index` step copies them into
+`<root>/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite` beside `grid_rows` and
 `markdowns` (`init_schema` in
 `datalib/backend/etl/render/src/grid_index.rs` creates the table).
 
 ## Data model
 
 One row =
-`(src_markdown_uuid, src_anchor_uuid?, dst_markdown_uuid, dst_anchor_uuid?, label?)`.
+`(src_markdown_uuid, src_anchor_uuid?, dst_markdown_uuid, dst_anchor_uuid?, label?, kind)`.
 The src and dst sides are symmetric: each can be a whole document
 (anchor is NULL) or a span inside one (anchor is the value the renderer
 baked into the body as `data-section-uuid`). The primary key
 (`edge_uuid`) is `datalib_id::edge_id` over that tuple, so re-rendering
 is idempotent. A document owns the edges whose `src_markdown_uuid` is
-its own: the `grid_index` step deletes them and inserts the new set
+its own: the `unified_grid_and_search_index` step deletes them and inserts the new set
 each time it loads that document. The id carries the stamp of its
 source end; see [`entity_ids.md` § "The layout"](entity_ids.md#the-layout-the-stamp-first-then-the-hash).
 
+`kind` says what the edge means, an `EdgeKind` stored as its number
+(`schema/src/edges.rs`): `Link` (0), a link the page draws, or
+`ReplyTo` (1), an item that answers another. A number is never reused.
+
 ## Producers
 
-Only **Perseus** (`datalib/backend/etl/providers/perseus_render/`,
-`chapter_edges`) writes edges, and only for an edition named in an
+**chat-common** writes a `ReplyTo` edge from each message that answers
+another in the same document (`NormalizedChatItem::reply_to`): a
+quote-reply, an email's `In-Reply-To`. Both anchors are messages.
+
+**calendar-common** links a recurring series to each changed
+occurrence, and the occurrence back to its series (`Link`, labelled
+with the occurrence's or series' title).
+
+**Perseus** (`datalib/backend/etl/providers/perseus_render/`,
+`chapter_edges`) writes `Link` edges for an edition named in an
 `alignment_pairs` entry. Per chapter document it emits:
 
 - one doc-level edge to the same chapter in each counterpart edition.
@@ -35,7 +47,6 @@ Only **Perseus** (`datalib/backend/etl/providers/perseus_render/`,
 - one `bilingual-alignment` edge per aligned sentence pair, from the
   sentence span on this side to the sentence span on the other.
 
-Every other provider leaves the table empty.
 
 ### Label conventions
 
@@ -52,9 +63,9 @@ clickable spans in the body, so their `label` can be metadata
 
 ## Consumers
 
-- `GET /applet/unified_document_index/chat/{markdown_uuid}` returns
-  `outgoing_edges`, each joined with the destination's title
-  (`dst_title`).
+- `GET /applet/unified_grid_and_search_index/chat/{markdown_uuid}` returns
+  the `Link` edges as `outgoing_edges`, each joined with the
+  destination's title (`dst_title`). A reply is not drawn as a link.
 - `DocCard.ce.vue` lists the whole-doc outgoing edges at the top of the
   preview.
 - `ChatBody.ce.vue` marks every `[data-section-uuid]` that matches an

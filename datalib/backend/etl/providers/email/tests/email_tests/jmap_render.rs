@@ -88,7 +88,6 @@ fn render(
         tmp.path(),
         source,
         Some(outlink),
-        &[],
         &Progress::noop(),
         &mut |doc| {
             docs.push(doc);
@@ -454,4 +453,181 @@ fn an_email_marked_unread_renders_unread() {
         wrappers[1].ends_with("class=\"msg msg--email unread first-unread\">"),
         "{md}"
     );
+}
+
+/// One email, `eml`, alone in thread `T5` of the Inbox, listing `atts`.
+fn one_email(eml: &str, subject: &str, atts: Vec<LoadedAttachment>) -> ParsedEmail {
+    let emails = vec![LoadedEmail {
+        id: "E5".into(),
+        account_id: "A1".into(),
+        thread_id: "T5".into(),
+        blob_id: "B-eml-5".into(),
+        message_id: None,
+        in_reply_to: None,
+        references: None,
+        received_at: Some("2026-01-05T00:00:00Z".into()),
+        sent_at: None,
+        size: Some(eml.len() as i64),
+        subject: Some(subject.into()),
+        from_json: None,
+        to_json: None,
+        cc_json: None,
+        has_attachment: !atts.is_empty(),
+    }];
+    let mut joins = EmailJoins::default();
+    joins.mailboxes.insert("E5".into(), vec!["M-inbox".into()]);
+    joins.attachments.insert("E5".into(), atts);
+    let mut bundle = BlobBundle::new();
+    insert_eml(&mut bundle, "B-eml-5", eml.as_bytes());
+    one_thread("T5", emails, joins, bundle)
+}
+
+fn rendered_page(parsed: &ParsedEmail) -> (String, Vec<RenderedMarkdown>) {
+    let (tmp, docs) = render(parsed, "fastmail", OutlinkFormat::Fastmail);
+    let md = std::fs::read_to_string(find_one(tmp.path(), ".md")).unwrap();
+    (md, docs)
+}
+
+const PATCH_EML: &str = "From: Geordi La Forge <geordi@enterprise.example>\r\n\
+To: Data <data@enterprise.example>\r\n\
+Subject: [PATCH] warp: check the field before the coil\r\n\
+Date: Mon, 5 Jan 2026 00:00:00 +0000\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n\
+The coil check ran first; swap them.\r\n\
+\r\n\
+--- a/warp.c\r\n\
++++ b/warp.c\r\n\
+@@ -1,3 +1,4 @@\r\n\
+ #include <stdio.h>\r\n\
++#include <warp/field.h>\r\n\
+ if (a<b && c>d)\r\n\
+\r\n\
+Strip any <script> tags before sending.\r\n\
+-- \r\n\
+Geordi La Forge\r\n\
+<address>Engineering, Deck 12</address>\r\n";
+
+/// mail-parser lists a `text/plain`-only message's one part in its HTML
+/// body list too (RFC 8621), and the render sent it through the HTML
+/// converter: `#include <stdio.h>` lost its header, `a<b && c>d` became
+/// `a**d`, `<address>` and `<script>` vanished, and the patch ran onto
+/// one line.
+#[test]
+fn a_plain_text_email_renders_as_typed() {
+    let (md, _) = rendered_page(&one_email(
+        PATCH_EML,
+        "[PATCH] warp: check the field before the coil",
+        Vec::new(),
+    ));
+    for typed in [
+        "#include &lt;stdio.h&gt;",
+        "#include &lt;warp/field.h&gt;",
+        "if (a&lt;b &amp;&amp; c&gt;d)",
+        "Strip any &lt;script&gt; tags before sending.",
+        "&lt;address&gt;Engineering, Deck 12&lt;/address&gt;",
+    ] {
+        assert!(md.contains(typed), "{typed:?} is missing: {md}");
+    }
+    let line_of = |needle: &str| md.lines().position(|l| l.contains(needle));
+    let lines = [
+        line_of("--- a/warp.c"),
+        line_of("+++ b/warp.c"),
+        line_of("stdio.h"),
+        line_of("warp/field.h"),
+        line_of("if (a"),
+    ];
+    assert!(lines.iter().all(Option::is_some), "{lines:?}: {md}");
+    assert!(
+        lines.windows(2).all(|w| w[0] < w[1]),
+        "each line of the patch keeps its own line: {lines:?}: {md}"
+    );
+}
+
+/// A `multipart/mixed` message with a plain part and then an HTML part
+/// has both in each of RFC 8621's body lists; each reads as its own kind.
+#[test]
+fn a_mixed_email_reads_each_part_as_its_own_kind() {
+    let eml = "From: Data <data@enterprise.example>\r\n\
+Subject: Readings\r\n\
+Date: Mon, 5 Jan 2026 00:00:00 +0000\r\n\
+Content-Type: multipart/mixed; boundary=\"b\"\r\n\
+\r\n\
+--b\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n\
+Field strength x<y && y>z.\r\n\
+--b\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+\r\n\
+<p><b>Bold</b> summary</p>\r\n\
+--b--\r\n";
+    let (md, _) = rendered_page(&one_email(eml, "Readings", Vec::new()));
+    assert!(
+        md.contains("Field strength x&lt;y &amp;&amp; y&gt;z."),
+        "the plain part reads as typed: {md}"
+    );
+    assert!(
+        md.contains("**Bold** summary"),
+        "the HTML part is HTML: {md}"
+    );
+}
+
+/// A `multipart/alternative` email still shows its HTML alternative.
+#[test]
+fn an_alternative_email_shows_its_html() {
+    let eml = "From: Data <data@enterprise.example>\r\n\
+Subject: Readings\r\n\
+Date: Mon, 5 Jan 2026 00:00:00 +0000\r\n\
+Content-Type: multipart/alternative; boundary=\"b\"\r\n\
+\r\n\
+--b\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n\
+plain alternative\r\n\
+--b\r\n\
+Content-Type: text/html; charset=utf-8\r\n\
+\r\n\
+<p><b>html alternative</b></p>\r\n\
+--b--\r\n";
+    let (md, _) = rendered_page(&one_email(eml, "Readings", Vec::new()));
+    assert!(md.contains("**html alternative**"), "{md}");
+    assert!(!md.contains("plain alternative"), "{md}");
+}
+
+/// A right-to-left override in a subject showed `evil.exe` as
+/// `exe.live`. Bidi overrides, embeddings and isolates are taken out of
+/// the subject, the names and an attachment's filename; the marks
+/// (U+200E, U+200F, U+061C), which reorder nothing, stay.
+#[test]
+fn bidi_controls_are_dropped_from_subjects_names_and_filenames() {
+    let eml = "From: Q \u{202E}Continuum <q@continuum.example>\r\n\
+To: \u{2067}Worf\u{2069} <worf@enterprise.example>, Deanna\u{200F} <troi@enterprise.example>\r\n\
+Subject: Orders \u{202E}exe.live\r\n\
+Date: Mon, 5 Jan 2026 00:00:00 +0000\r\n\
+Content-Type: text/plain; charset=utf-8\r\n\
+\r\n\
+See attached.\r\n";
+    let att = LoadedAttachment {
+        part_id: "2".into(),
+        blob_id: blake3_hex(PDF),
+        name: Some("orders\u{202E}fdp.exe".into()),
+        content_type: Some("application/pdf".into()),
+        size: Some(PDF.len() as i64),
+        disposition: Some("attachment".into()),
+        cid: None,
+    };
+    let (md, docs) = rendered_page(&one_email(eml, "Orders \u{202E}exe.live", vec![att]));
+    let rows = serde_json::to_string(&docs[0].rows).unwrap();
+    for (what, text) in [("page", &md), ("rows", &rows)] {
+        assert!(
+            !text.contains(['\u{202A}', '\u{202B}', '\u{202C}', '\u{202D}', '\u{202E}'])
+                && !text.contains(['\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}']),
+            "a bidi control is left in the {what}: {text:?}"
+        );
+    }
+    for shown in ["Orders exe.live", "Q Continuum", "Worf", "ordersfdp.exe"] {
+        assert!(md.contains(shown), "{shown:?} is missing: {md}");
+    }
+    assert!(md.contains("Deanna\u{200F}"), "a mark stays: {md}");
 }

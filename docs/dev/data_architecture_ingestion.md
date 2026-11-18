@@ -22,7 +22,7 @@ The **parse and render stage** — deserializing a stored payload, projecting it
 The pipeline has three stages, each running as a **subprocess step under the `datalib-dag` DAG runner** ([`datalib/backend/dag`](/datalib/backend/dag)) — one process per step, each step an invocation of the `datalib-step` binary ([`datalib/backend/datalib_step`](/datalib/backend/datalib_step)); see [`datalib/backend/dag/README.md`](/datalib/backend/dag/README.md) for the runner's rules and [`step_protocol.md`](step_protocol.md) for the step contract:
 
 1. **Download** — pull from upstream, UPSERT into `<data_root>/<group>/ingest/entities.doltlite_db` (entities) and `<data_root>/<group>/ingest/blobs.sqlite` (a single `cas_objects` table keyed by blake3 hash).
-2. **Render** — derive `.md` files under `<group>/render_markdown/` plus that source's render store (`render_markdown/indexed_markdown.doltlite_db`) from the raw store, deterministically. Indexing with qmd is the source's separate `keyword_index` and `embed` steps.
+2. **Render** — derive `.md` files under `<group>/render_markdown/` plus that source's render store (`render_markdown/indexed_markdown.doltlite_db`) from the raw store, deterministically. The source's `embed` step embeds it for search by meaning.
 3. **Grid index** — read every source's render store into the one `grid_rows` table the UI's grid reads.
 
 Each provider (data source) is **three** crates at [`datalib/backend/etl/providers/`](/datalib/backend/etl/providers): `datalib_etl_<name>_config` is the config schema (serde structs, nothing else), `datalib_etl_<name>` downloads, and `datalib_etl_<name>_render` renders. The download crate owns its bins, its integration tests, and the sample fixtures the tests run against — keeping sample data next to the code under test serves as documentation of "what this provider's wire format looks like." The split is what keeps the render schema off the download side; see AGENTS.md §"Ingest and render are separate crates".
@@ -31,12 +31,12 @@ Each provider (data source) is **three** crates at [`datalib/backend/etl/provide
 The per-stage modules within a provider crate form a strict layer with a single allowed dependency direction:
 
 ```
-upstream → download → render → grid_index
+upstream → download → render → unified_grid_and_search_index
 ```
 
-- **`download`** owns the bytes-at-rest. It fetches from upstream and persists into `<data_root>/<group>/ingest/entities.doltlite_db`, and nothing else. It must NOT depend on `render`, `datalib_schema::grid_rows::GridRow`, the render store, or the qmd index. The per-provider `schema_raw.rs` rustdoc deliberately avoids describing how render consumes the tables.
+- **`download`** owns the bytes-at-rest. It fetches from upstream and persists into `<data_root>/<group>/ingest/entities.doltlite_db`, and nothing else. It must NOT depend on `render`, `datalib_schema::grid_rows::GridRow`, the render store, or the search index. The per-provider `schema_raw.rs` rustdoc deliberately avoids describing how render consumes the tables.
 - **`render`** depends on `download` (it reads the raw store and projects to the normalized POD + `GridRow` shape). `ingest::schema_raw` is part of the contract render consumes. **Render reads only the raw store, never the original source.** Its sole input is `<data_root>/<group>/ingest/` (`RenderCommon::raw_path`); it must never reach back into upstream (the API) or into a file-backed method's `path` (the `.mbox`, the Takeout export, …). Render shows us **what we have captured and internalized**, not what is currently live at the source.
-- **`grid_index`** is provider-agnostic; it lives at [`render/src/grid_index.rs`](/datalib/backend/etl/render/src/grid_index.rs) (`build_grid_index`) and depends on no provider's download or render. Its input contract is the per-source render store, so a new provider needs no grid_index-side change.
+- **`unified_grid_and_search_index`** is provider-agnostic; it lives at [`render/src/grid_index.rs`](/datalib/backend/etl/render/src/grid_index.rs) (`build_grid_index`) and depends on no provider's download or render. Its input contract is the per-source render store, so a new provider needs no grid_index-side change.
 
 Why the discipline matters: download is its own deliverable — a user can run it, stop, inspect the raw store, and have something useful (a backup, or mirror, at the very least) even if render has bugs or hasn't been written yet. Render can then be re-implemented or extended without touching download, and disabling a render path for one provider doesn't disturb that provider's download.
 
@@ -196,7 +196,7 @@ Each line is a small JSON object:
 
 Rules:
 
-- **The pipeline never reads it.** Render, grid_index, resume, retry — all of those go through doltlite. Deleting the `events/` directory does not break anything.
+- **The pipeline never reads it.** Render, the index step, resume, retry — all of those go through doltlite. Deleting the `events/` directory does not break anything.
 - **Same bytes as the upsert.** The tape is written next to the `ON CONFLICT(id) DO UPDATE`, after its commit, so it carries the same wire-fidelity payload that the doltlite row gets. No second parse, no second normalize. A tape write that fails is logged and does not fail the upsert.
 
 # Operational principles
@@ -222,7 +222,7 @@ Any subsequent sync should pick up as close as possible to where the last one le
 Two layers do the work:
 
 - **Provider-side dedup**: every UPSERT uses the upstream identifier as PK with `ON CONFLICT(id) DO UPDATE`; unchanged rows are no-op writes, and the run's closing commit finds nothing to commit.
-- **Render-side dedup**: render diffs the raw store from the commit its `render_cursor` row names and renders only the buckets that moved; every document it renders is written, and an unchanged one writes an identical row, which doltlite's content-addressed tables store as no change. The grid_index step reaches a document at all only when that store's `dolt_diff` surfaced it (see `source_cursors`).
+- **Render-side dedup**: render diffs the raw store from the commit its `render_cursor` row names and renders only the buckets that moved; every document it renders is written, and an unchanged one writes an identical row, which doltlite's content-addressed tables store as no change. The `unified_grid_and_search_index` step reaches a document at all only when that store's `dolt_diff` surfaced it (see `source_cursors`).
 
 Different upstreams expose different surfaces for "what changed since X": a delta token, an enumeration, a search over a range. Each becomes a listing, and what is owed is the same query over it (see [What is left to fetch](#what-is-left-to-fetch-listed-minus-held)).
 
@@ -246,9 +246,9 @@ Two rules follow:
 - **Normalize at render time, not download time.** Decoding a binary wire encoding to JSON of the **same** semantic content is **not normalization** — every field upstream sent us is still present, with the same values. Normalization means pre-shaping into our internal model (renaming fields, collapsing shapes, dropping subtrees, projecting), which we defer to render.
 - **Don't pollute payloads with downloader-synthesized keys.** `_fetched_at`, `_listing_update_time` etc. are bookkeeping, not upstream data; promote them to real columns on the entity table (or its `_bookkeeping` sidecar), not into the JSON.
 
-One upstream field moves out of the payload rather than staying in it: whether the person has read something. It changes often and on its own, so it lives in the store's narrow `read_marks` table (`datalib_etl::read_marks`), still in the same store, and the payload leaves it out (SMS's `read`, Signal's `IncomingMessageDetails.read`).
+One upstream field moves out of the payload rather than staying in it: whether the person has read something, and on mail whether its thread is muted. It changes often and on its own, so it lives in the store's narrow `read_marks` table (`datalib_etl::read_marks`), still in the same store, and the payload leaves it out (SMS's `read`, Signal's `IncomingMessageDetails.read`).
 
-Corollary: **the raw store is the source of truth; downstream stages are rebakeable.** Anything we render, project to `grid_rows`, or index into qmd can be recomputed from raw without re-touching the network. A provider's `RENDER_VERSION` is the explicit lever for "force a rebake of every document even when payloads are unchanged."
+Corollary: **the raw store is the source of truth; downstream stages are rebakeable.** Anything we render, project to `grid_rows`, or put in the search index can be recomputed from raw without re-touching the network. A provider's `RENDER_VERSION` is the explicit lever for "force a rebake of every document even when payloads are unchanged."
 
 ## Verifiable via a reset
 A long chain of incremental syncs can in principle silently drop data (an upstream that doesn't surface a deletion, a cursor that skipped a page on a 5xx, a bug in our delta logic). One check is to empty the store, refetch from scratch, and **let dolt's diff tell you what was missing**.
@@ -517,6 +517,7 @@ Mint every `now` and parse every inbound RFC 3339 string through the `datalib-ti
 - `parse_strict(s)` — accepts only strings that already carry an explicit offset. Most parse callsites should use this.
 - `parse_with_assumed_utc(s)` — **the single function in the whole repo** where "the upstream string lacked an offset, assume UTC" is allowed. Reach for it only after auditing an upstream feed and confirming naive-means-UTC. Any other fallback (local time, midnight, run start, epoch) is fabrication.
 - `IsoOffsetTimestamp::bump_micros(n)` — the canonical sub-item synthesized-stamp recipe.
+- `IsoOffsetTimestamp::known_offset_secs()` — the clock the stamp was written on, `None` for one in `Z` or `-00:00` and for one made from Unix millis. The type holds instants up to 9999-12-30T22:00Z (jiff's range, which it is built on): a stamp past that does not parse, and `IsoOffsetTimestamp::try_from` refuses a chrono `DateTime` past it.
 
 ## Commit lifecycle
 **Providers do not call `dolt_commit` or `commit_run` themselves.** `RawStoreSession` ([`raw_store.rs`](/datalib/backend/etl/src/raw_store.rs)) commits for them: a `checkpoint <name>: entities` seal on the `Checkpointer`'s cadence, and `finish` at the end (`download <name>: <stats>`). The blob CAS is plain SQLite and has no seal: each `put_many` commits itself before the edge rows naming its bytes are written. A run that touches N upstream pages / windows / items produces one `download` entry in `dolt_log()`, plus its checkpoints, not N. A `finish` whose commit fails fails the step: the next `open` discards what was never committed, so "logged and returned Ok" would have been work done for nothing.
@@ -562,7 +563,7 @@ The `ON CONFLICT` clause is **the same shape on every table**; only the column l
 ## dolt_diff supersedes per-bucket fingerprints
 Render decides what changed with **`dolt_diff_<table>` virtual tables driven by a per-source render cursor**, not with fingerprints of its own: doltlite's prolly-tree diff answers "what changed since last render?" directly.
 
-Mechanism: on render success, the render step records the doltlite HEAD the provider pinned in the render store's `render_cursor` row, in the same transaction as the run's last document. On the next render, the provider is handed that hash (`RenderCtx::raw_cursor`) and `parse` runs `doltlite_raw::scan_buckets(pool, last_hash, &DiffScanSpec { global_fanout_tables, bucket_query })`, which cold-starts if any `dolt_diff_<global_fanout_table>` row is non-`unchanged` (those fan out to "render everything"), otherwise runs the per-bucket `bucket_query` across the relevant `dolt_diff_*` vtabs. Parse then loads payloads only for the surviving bucket keys.
+Mechanism: on render success, the render step records the doltlite HEAD the provider pinned in the render store's `render_cursor` row, in the same transaction as the run's last document. On the next render, the provider is handed that hash (`RenderCtx::raw_cursor`) and `parse` runs `doltlite_raw::scan_buckets(pool, last_hash, &DiffScanSpec { fanout_query, bucket_query })`, which cold-starts if the `fanout_query` returns a row (a change that fans out to "render everything"), otherwise runs the per-bucket `bucket_query` across the relevant `dolt_diff_*` vtabs. Parse then loads payloads only for the surviving bucket keys.
 
 There is no fingerprint compare beside it: rewriting an identical row to a content-addressed table is no change, so nothing downstream ever sees it.
 
@@ -638,6 +639,19 @@ user list, claude's orgs and project docs).
 Local sources (files on disk) are read whole each run in one seal and
 need none of this.
 
+**A span's top may not be a time.** On slack, linear and notion it is the
+newest stamp the walk saw, deliberately, so that what appears late below
+"now" is still asked for; it says nothing about when the walk was. On the
+forges, todoist and yolink it is the run's own now, and on garmin the
+run's last day. What a reader wants to know, "as of when is there nothing
+newer", is the start of the newest `sync_runs` row that says `ok`. Slack's
+conversations can fall behind one another, so each also has its row in
+`coverage_checked`, written when a walk reaches the open top or
+`client.counts` shows nothing newer
+([`building_on_datalib.md`](../user/building_on_datalib.md) § "How fresh
+is the mirror?"). It is its own narrow table because it moves every run: in
+`sync_scope_state` each move would also land in the run's `summary`.
+
 ### A claim of completeness is written only by a walk that completed
 
 Two things a download writes are not data but **claims about how far
@@ -646,7 +660,9 @@ authority a prune needs ("this enumeration was complete, so absence
 means deletion"). Each is read by the *next*
 run as permission to skip work. A claim written by a walk that did
 not finish is therefore a silent data loss: the next run believes it,
-does less, and nothing anywhere reports the gap.
+does less, and nothing anywhere reports the gap. `sync_runs.status = 'ok'`
+and `coverage_checked` are claims of the same kind, made to whoever reads
+the store rather than to the next run.
 
 The trap is that a walk ends early far more often than it fails.
 Every one of these is an `Ok` return with the marker's write still
@@ -741,7 +757,7 @@ We want enough transient error handling that syncs "usually" work. The goals are
 Distinctions every provider should try to follow.
 
 - **Per-item failures are tolerated.** A transient failure on one window / page / blob — 5xx, network blip, timeout, parse error, transient permission denied, rate-limit response — should not kill the run. Log a `warn!`, increment an error counter, **leave durable evidence in the row** (next bullet), advance the cursor, keep going. The run's `FetchSummary` reports the count.
-- **A failure about a record is a `problems` row, not only a `warn!`.** Record a per-record fetch failure through `record_object_error` / `record_object_attempt` in [`doltlite_raw.rs`](/datalib/backend/etl/src/doltlite_raw.rs): besides the sidecar's `last_error`, it writes the entity's `problems` row (`Reason::FetchFailed`), in the transaction that writes the record, which render carries forward and the Manage row counts. How the rows travel: [`etl/README.md` §"Problems flow downstream with the data"](/datalib/backend/etl/README.md#problems-flow-downstream-with-the-data).
+- **A failure about a record is a `problems` row, not only a `warn!`.** Record a per-record fetch failure through `record_object_error` / `record_object_attempt` in [`doltlite_raw.rs`](/datalib/backend/etl/src/doltlite_raw.rs): besides the sidecar's `last_error`, it writes the entity's `problems` row (`Reason::FetchFailed`), in the transaction that writes the record, which render carries forward and the Manage row counts. How the rows travel: [`etl/README.md` §"Problems stay in the step that found them"](/datalib/backend/etl/README.md#problems-stay-in-the-step-that-found-them).
 - **Everything else a run could not do goes into its collector.** A download's `fetch` runs inside [`run_problems::collecting`](/datalib/backend/etl/src/run_problems.rs), which hands it one `RunProblems` and writes it when `fetch` returns, whichever way it returns. Nothing else writes these rows, so there is no report call to forget, to make twice, or to make after a stop. A listing, a phase, or one container's walk (a channel, a mailbox) that fails while the rest can still be fetched is `.listing(..)` / `.phase(..)`, and the step succeeds; `.run_phase(name, fut)` runs one phase so that its error or panic costs only that phase. A local file's parse goes through `run_problems::catching_panics(|| ..)`, so a parser that panics on one malformed file fails that file, through its usual error arm, and not the step; the file is tried again next run. A configured entry upstream does not have (a label, a channel, a conversation id) is `.config(..)`. A record that failed before there was a row to pin it to is `.record_failed(..)`. When the failed part is one record's (a thread, a file), record it on that record (above) instead, so it reaches its document.
 - **A row clears only when the same thing was tried again and worked, so every report says what the run covered.** Adding a row needs no coverage; clearing one does, and the collector clears exactly what the run vouches for:
 
@@ -754,8 +770,9 @@ Distinctions every provider should try to follow.
   | silent | `silent:<name>` | the run called `.silent(set)`. |
 
   Two reports on one key are one row. Anything the cursor moves past still needs a retry: read the failed ids back (`doltlite_raw::failed_ids`, the sidecar's `last_error`) and ask for them next run, or hold the cursor. What a stamped file held that could not be used (a record that would not parse, one with no key) goes on the file's stamp through `file_checkpoint::record_file_with_problem`: the file is not read again until it changes, so its row stands until the next stamp of it or `forget_file`. A pruned record takes its row with it (`prune.rs`).
+- **What a run leaves out on purpose is a row too**, so a person can tell it is absent. A warning per record where there are few (a file over `max_bytes`); where a single folder could hold thousands, one row with the count and one example, through `.skipped(part, set)` with a set of one or none (the PDFs with no text, media's cloud placeholders). Name the example by a stable order, or an unchanged tree rewrites the row and commits. When each dropped thing belongs to a document that does render, the row goes on that document at `info`, where its banner shows it, rather than as thousands of warnings on the Manage row (Slack's cards).
 - **A checkpoint carries the problems found so far.** A download that seals as it goes uses `run_problems::collecting_sealed` with its `Sealer`: each seal first writes the collector as it stands, then publishes the store's `problems` metric, so a consumer reading a checkpoint, and the Manage row, see what could not be fetched for the rows that checkpoint publishes. Only the clearing of listing and phase rows waits for the end of the run, because only then is it known that every one of them ran.
-- **Part of a walk that failed deletes nothing.** A walk or listing with errors cannot tell "gone" from "not seen": hold back the prune for what it could not read, and say so (`file_changes_scan::Scan::deletions_held_back`). A file the walk found and could not open is not such an error: it is there (`Scan::present_unread`), keeps its rows, and is a row of its own (`Scan::report_problems`); a source that deletes only after reading every file still holds back while one is unread.
+- **Part of a walk that failed deletes nothing.** A walk or listing with errors cannot tell "gone" from "not seen": hold back the prune for what it could not read, and say so (`file_changes_scan::Scan::deletions_held_back`). A file the walk found and could not open is not such an error: it is there (`Scan::present_unread`), keeps its rows, and is a row of its own (`Scan::report_problems`); a source that deletes only after reading every file still holds back while one is unread. A file over `max_bytes` is the same, and its row is a warning.
 - **A store that will not take a write fails the step.** Swallowing it (`warn!`, `.ok()`, `unwrap_or_default()`) commits a run that says it wrote what it did not.
 - **Fail the step only when the run can do nothing useful.** A workspace-wide 401 / 403 from the auth provider before anything was fetched, or a listing with nothing stored from an earlier run to fall back on, should return `Err` from `fetch(...)`, which fails the step. The final commit does not happen ([`RawStoreSession::run`](/datalib/backend/etl/src/raw_store.rs) closes the store uncommitted): what the run sealed at its last checkpoint, a point it called consistent, stands, and the rest is discarded at the next `open`. Sealing at the error instead would make durable a state nothing vouched for, such as a conversation stamped current before its attachments were stored, which the next run would skip.
 - **A give-up keeps what the run fetched.** When the shared retry loop gives up, a rate limit holds, or N back-to-back per-item failures trip a budget, stop asking, record one `phase:` row, call `.gave_up(said)`, hold the cursor, and return `Ok`, so the commit at the end of the run keeps what landed and the next run resumes. `owed::drain` does all of this when it gives up. `.gave_up` cuts the run short and tells the step, which ends `incomplete` once the store is committed: the Manage row says the download is not done, and its dependents still read what it got. A run that covers less on purpose (one page, one conversation) calls only `.cut_short()`, and succeeds. Returning `Err` instead discards everything since the last seal — for a provider that never seals mid-run, the whole run. A test's helper must commit only when `fetch` returns `Ok`, as the processor does, or it cannot see the loss.

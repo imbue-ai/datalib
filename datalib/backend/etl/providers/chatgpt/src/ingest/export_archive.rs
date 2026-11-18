@@ -6,14 +6,21 @@
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::BufReader;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use datalib_etl::expansion::Allowance;
+use datalib_etl_files::export_files::ExportFiles;
 use serde_json::Value;
 
 const MANIFEST: &str = "export_manifest.json";
 const CONVERSATIONS: &str = "conversations.json";
+
+/// The most of one file a read holds in memory. ChatGPT takes an upload of
+/// up to 512 MB, and the one `conversations.json` of an older export can
+/// run to a few GB.
+const LARGEST_FILE: u64 = 4 << 30;
 
 pub struct ExportArchive {
     source: Source,
@@ -27,7 +34,7 @@ pub struct ExportArchive {
 
 enum Source {
     Dir,
-    Zip(Box<zip::ZipArchive<BufReader<File>>>),
+    Zip(Box<zip::ZipArchive<BufReader<File>>>, Allowance),
 }
 
 impl ExportArchive {
@@ -38,13 +45,15 @@ impl ExportArchive {
             let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
             let zip = zip::ZipArchive::new(BufReader::new(file))
                 .with_context(|| format!("{} is not a folder or a readable zip", path.display()))?;
+            let allowance = Allowance::of_file(path)?;
+            allowance.spend_entries(zip.len() as u64)?;
             let names: Vec<String> = zip
                 .file_names()
                 .map(|n| n.map(|n| n.into_owned()))
                 .collect::<Result<_, _>>()
                 .with_context(|| format!("read the names in {}", path.display()))?;
             let files = names.into_iter().filter(|n| !n.ends_with('/')).collect();
-            (Source::Zip(Box::new(zip)), files)
+            (Source::Zip(Box::new(zip), allowance), files)
         } else {
             bail!("`export.path` {} does not exist", path.display());
         };
@@ -70,19 +79,18 @@ impl ExportArchive {
         if self.names.binary_search(&full).is_err() {
             return Ok(None);
         }
-        let mut bytes = Vec::new();
-        match &mut self.source {
-            Source::Dir => {
-                bytes = std::fs::read(self.path.join(&full))
-                    .with_context(|| format!("read {full} in {}", self.path.display()))?;
+        let bytes = match &mut self.source {
+            Source::Dir => std::fs::read(self.path.join(&full))
+                .with_context(|| format!("read {full} in {}", self.path.display()))?,
+            Source::Zip(zip, allowance) => {
+                let entry = zip
+                    .by_name(&full)
+                    .with_context(|| format!("find {full} in {}", self.path.display()))?;
+                allowance
+                    .read_all(entry, LARGEST_FILE)
+                    .with_context(|| format!("unzip {full} from {}", self.path.display()))?
             }
-            Source::Zip(zip) => {
-                zip.by_name(&full)
-                    .with_context(|| format!("find {full} in {}", self.path.display()))?
-                    .read_to_end(&mut bytes)
-                    .with_context(|| format!("unzip {full} from {}", self.path.display()))?;
-            }
-        }
+        };
         Ok(Some(bytes))
     }
 
@@ -136,25 +144,21 @@ fn root_of(names: &[String]) -> Option<String> {
 }
 
 fn names_under(dir: &Path) -> Result<Vec<String>> {
+    let walk = ExportFiles::walk_whole(dir)?;
     let mut out = Vec::new();
-    let mut todo = vec![dir.to_path_buf()];
-    while let Some(d) = todo.pop() {
-        for entry in std::fs::read_dir(&d).with_context(|| format!("read {}", d.display()))? {
-            let path = entry?.path();
-            if path.is_dir() {
-                todo.push(path);
-            } else if let Ok(rel) = path.strip_prefix(dir) {
-                let parts: Option<Vec<&str>> = rel
-                    .components()
-                    .map(|c| match c {
-                        Component::Normal(s) => s.to_str(),
-                        _ => None,
-                    })
-                    .collect();
-                if let Some(parts) = parts {
-                    out.push(parts.join("/"));
-                }
-            }
+    for path in walk.files() {
+        let Ok(rel) = path.strip_prefix(dir) else {
+            continue;
+        };
+        let parts: Option<Vec<&str>> = rel
+            .components()
+            .map(|c| match c {
+                Component::Normal(s) => s.to_str(),
+                _ => None,
+            })
+            .collect();
+        if let Some(parts) = parts {
+            out.push(parts.join("/"));
         }
     }
     Ok(out)
@@ -252,6 +256,52 @@ mod tests {
             a.read("user-x/file-AbC1-notes.txt").unwrap().as_deref(),
             Some(&b"hello"[..])
         );
+    }
+
+    /// A link in an unzipped export could hand over any file on the machine
+    /// as a part of the export, so the export is refused and names it.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_in_an_unzipped_export_is_refused() {
+        let top = tempfile::tempdir().unwrap();
+        let export = top.path().join("export");
+        std::fs::create_dir_all(&export).unwrap();
+        std::fs::write(export.join("conversations.json"), "[]").unwrap();
+        std::fs::write(top.path().join("secret"), "x").unwrap();
+        std::os::unix::fs::symlink(top.path().join("secret"), export.join("file_00ab12.dat"))
+            .unwrap();
+        let err = format!("{:#}", ExportArchive::open(&export).err().unwrap());
+        assert!(err.contains("file_00ab12.dat"), "{err}");
+        assert!(err.contains("symbolic link"), "{err}");
+
+        std::fs::remove_file(export.join("file_00ab12.dat")).unwrap();
+        std::os::unix::fs::symlink(top.path(), export.join("up")).unwrap();
+        let err = format!("{:#}", ExportArchive::open(&export).err().unwrap());
+        assert!(err.contains("symbolic link"), "{err}");
+    }
+
+    /// With the limits production runs under: a zip of a few hundred
+    /// kilobytes whose one entry would come out at over 256 MiB in memory.
+    #[test]
+    fn a_zip_that_expands_too_far_is_refused() {
+        let d = tempfile::tempdir().unwrap();
+        let z = d.path().join("bomb.zip");
+        let mut w = zip::ZipWriter::new(File::create(&z).unwrap());
+        w.start_file(
+            "conversations.json",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        let chunk = vec![b' '; 1 << 20];
+        for _ in 0..=(datalib_etl::expansion::MIN_BYTES >> 20) {
+            w.write_all(&chunk).unwrap();
+        }
+        w.finish().unwrap();
+        assert!(std::fs::metadata(&z).unwrap().len() < 2 << 20);
+
+        let mut a = ExportArchive::open(&z).unwrap();
+        let err = format!("{:#}", a.read(CONVERSATIONS).err().unwrap());
+        assert!(err.contains("too far for a real archive"), "{err}");
     }
 
     /// Pointing the source at the wrong file says what it wanted.

@@ -545,7 +545,7 @@ async fn write_one(
         read_ms,
         parse_ms,
     } = read;
-    let problem = bad_lines_problem(&parsed);
+    let problem = file_problem(&parsed);
     let rows: Vec<AirvisualSampleRow> = parsed
         .samples
         .into_iter()
@@ -579,10 +579,20 @@ async fn write_one(
     ))
 }
 
-/// The file's one problem row, when some of its lines could not be
-/// used: it stands until the file changes and is read again.
-fn bad_lines_problem(parsed: &parse::Parsed) -> Option<(Outcome, Problem)> {
-    let first = parsed.first_bad.as_deref()?;
+/// The file's one problem row, when some of its lines could not be used or
+/// a column of it is not stored: it stands until the file changes and is read
+/// again.
+fn file_problem(parsed: &parse::Parsed) -> Option<(Outcome, Problem)> {
+    let columns = (!parsed.unknown_columns.is_empty())
+        .then(|| format!("columns not stored: {}", parsed.unknown_columns.join(", ")));
+    let Some(first) = parsed.first_bad.as_deref() else {
+        return columns.map(|said| {
+            (
+                Outcome::Nulled,
+                Problem::explained(Reason::UncoveredType, None, &said),
+            )
+        });
+    };
     let (bad, dropped) = (parsed.stats.bad_lines, parsed.lines_dropped);
     let outcome = if dropped > 0 {
         Outcome::Dropped
@@ -958,6 +968,39 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(id, "KITCHEN01#archive1/197001_AirVisual_values.txt#2");
+        e.db.close().await;
+    }
+
+    /// A column the parser does not know is lost from every line of the
+    /// file, which only the log said. It is the file's row, and it goes
+    /// when a file without the column is read.
+    #[tokio::test]
+    async fn a_column_we_do_not_store_is_the_files_row() {
+        let e = env().await;
+        let file = e.root.join("202609_AirVisual_values.txt");
+        let serial = Some("KITCHEN01");
+        std::fs::write(
+            &file,
+            format!(
+                "{}Radon(Bq/m3);\n{}7;\n",
+                HEADER.trim_end(),
+                line(1788220836, "1.0", "425").trim_end()
+            ),
+        )
+        .unwrap();
+        let s = fetch(opts(&e, vec![device(&e.root, serial, None)]))
+            .await
+            .unwrap();
+        assert_eq!((s.errors, s.samples), (0, 1), "the line is still read");
+        let rows = problems(e.db.pool()).await;
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows[0].1.contains("Radon(Bq/m3)"), "{rows:?}");
+
+        std::fs::write(&file, format!("{HEADER}{}", line(1788220836, "1.0", "425"))).unwrap();
+        fetch(opts(&e, vec![device(&e.root, serial, None)]))
+            .await
+            .unwrap();
+        assert!(problems(e.db.pool()).await.is_empty());
         e.db.close().await;
     }
 

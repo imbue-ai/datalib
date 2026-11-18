@@ -119,10 +119,12 @@ pub fn part_of(stored: &Stored, part: &str) -> Option<Stored> {
             None => ct.ctype().to_string(),
         });
         let (bytes, content_type) = match p.kind() {
-            PartKind::Binary | PartKind::InlineBinary => (p.decoded(), declared),
+            PartKind::Binary | PartKind::InlineBinary | PartKind::Message(_) => {
+                (p.decoded(), declared)
+            }
             PartKind::Text => (text_bytes(p.text()?), Some(utf8(declared, "text/plain"))),
             PartKind::Html => (text_bytes(p.text()?), Some(utf8(declared, "text/html"))),
-            PartKind::Message(_) | PartKind::Multipart => return None,
+            PartKind::Multipart => return None,
         };
         (blake3::hash(&bytes).to_hex().as_str() == part).then(|| Stored {
             content_type,
@@ -289,6 +291,31 @@ VGVhLCBFYXJsIEdyZXksIGhvdA\r\n\
             &blake3::hash(order).to_hex(),
         );
         assert_eq!(part, Some(message(Some("application/octet-stream"), order)));
+    }
+
+    /// A link to an email attached to an email found nothing to serve.
+    #[test]
+    fn an_attached_email_is_a_part_of_its_message() {
+        let inner = "From: Data <data@enterprise.ufp>\r\n\r\nAll nominal.\r\n";
+        let eml = format!(
+            "From: Picard <picard@enterprise.ufp>\r\nMIME-Version: 1.0\r\n\
+             Content-Type: multipart/mixed; boundary=\"b\"\r\n\r\n\
+             --b\r\nContent-Type: text/plain\r\n\r\nSee attached.\r\n\
+             --b\r\nContent-Type: message/rfc822\r\n\r\n{inner}\r\n--b--\r\n"
+        );
+        let stored = message(Some("message/rfc822"), eml.as_bytes());
+        let parsed = MessageParser::default().parse(&stored.bytes).unwrap();
+        let attached = parsed
+            .root()
+            .parts()
+            .find(|p| p.is_message())
+            .unwrap()
+            .decoded()
+            .into_owned();
+        let part = blake3::hash(&attached).to_hex().to_string();
+        let got = part_of(&stored, &part).unwrap();
+        assert_eq!(got.content_type.as_deref(), Some("message/rfc822"));
+        assert_eq!(got.bytes, attached);
     }
 
     /// Only a row that is a message is taken apart: one stored as

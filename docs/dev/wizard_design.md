@@ -18,6 +18,12 @@ of those beside this before adding or changing an entry.
 4. **Advanced options**, closed. It holds the ID first, then the
    entry's advanced fields, then Rendering, Description and the TOML.
 
+A source whose data a built-in applet shows (Lightroom's photos) names
+it in `applet`, and the basic part ends with a box that turns it on:
+checked for a new source, as the config has it for an edit. The applets
+that are not a source at all are listed in the picker's own group,
+"Apps that read every source" (`builtinApplets.ts`).
+
 `SourceWizard.vue` draws all of it from the entry. An entry declares
 `fields` (what is written) and `sections` (how it is asked); a field no
 section names is drawn in Advanced options under its own label.
@@ -86,3 +92,9 @@ when they are important.
   knows they are there. Saving a form with no changes leaves the file
   byte-for-byte as it was, and `tests/edit_source.test.ts` checks that
   for every wizard.
+- **A setting a form cannot ask stays out of it, and the docs say so.**
+  A repeated table such as `gmail.fetch` has no kind of field. It is written
+  in the config editor, kept through an edit like any other key the form does
+  not own, and its reader's guide says the form does not support it. Its
+  answers then read as though it were not there, which is the one exception to
+  the rule that an answer is recognizable from what it wrote.

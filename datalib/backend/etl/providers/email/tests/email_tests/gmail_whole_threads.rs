@@ -42,7 +42,7 @@ async fn the_rest_of_a_kept_messages_thread_is_mirrored() {
     let again = h.run(json!({})).await;
     assert!(again.get("walked").is_none(), "{again}");
     assert_eq!(again["emails_upserted"], 0, "{again}");
-    assert_eq!(again["quota_units_spent"], 4, "{again}");
+    assert_eq!(again["quota_units_spent"], 9, "{again}");
 }
 
 /// `since` narrows the inbox's walk, not a kept reply's thread: the

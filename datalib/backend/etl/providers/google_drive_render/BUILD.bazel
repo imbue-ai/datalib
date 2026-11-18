@@ -13,6 +13,7 @@ rust_library(
     ],
     visibility = ["//datalib:__subpackages__"],
     deps = [
+        "//datalib/backend/html_entities:datalib_html_entities",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/contact_schema:datalib_contact_schema",
         "//datalib/backend/etl/providers/google_drive:datalib_etl_google_drive",

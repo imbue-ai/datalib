@@ -11,6 +11,7 @@ use datalib_etl_chat_common::normalize::json_pretty_sorted;
 use datalib_etl_chat_common::types::{AuthorKind, ItemKind, NormalizedChatItem, UpstreamRef};
 use datalib_etl_render::html::{escape_text, md_code_block};
 use datalib_id::Identity;
+use datalib_schema::data_nodes::DataNodeRow;
 use serde_json::Value;
 
 /// The `bucket_query` of an agent-session render's diff scan: the
@@ -39,11 +40,13 @@ pub fn item(
     is_aside: bool,
 ) -> NormalizedChatItem {
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: id.uuid,
         author_handle: None,
         author_kind: AuthorKind::Named,
         author_display,
         date_ms,
+        date_offset_secs: None,
         text: (!text.trim().is_empty()).then_some(text),
         kind: ItemKind::Text,
         attachments: Vec::new(),
@@ -107,6 +110,31 @@ pub fn project_of(cwd: &str) -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or(cwd)
         .to_string()
+}
+
+/// The project a session ran in: its working directory, a place. Upstream
+/// keeps no record of a project, so the directory is its key, and a
+/// project moved or renamed on disk is a new node.
+pub fn project_node(source_id: &str, kind: &str, id: Identity) -> DataNodeRow {
+    let name = project_of(&id.natural_key);
+    DataNodeRow::new("", id.uuid, source_id, kind)
+        .named(Some(name))
+        .upstream(id.entity_kind, id.natural_key, None)
+        .place()
+}
+
+/// The session a sub-agent's transcript ran in, as that session's own
+/// document describes itself: read together, under the same project.
+pub fn parent_session_node(
+    source_id: &str,
+    kind: &str,
+    id: Identity,
+    name: Option<&str>,
+) -> DataNodeRow {
+    DataNodeRow::new("", id.uuid, source_id, kind)
+        .named(name.map(str::to_string))
+        .upstream(id.entity_kind, id.natural_key, None)
+        .read_together()
 }
 
 pub fn str_of<'a>(v: &'a Value, key: &str) -> Option<&'a str> {

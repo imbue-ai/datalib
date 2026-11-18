@@ -1,5 +1,5 @@
 //! The column-type vocabulary. A table's producer — `GET /api/manage/rows`,
-//! the `unified_document_index` applet's search — declares a [`ColumnSpec`] per
+//! the `unified_grid_and_search_index` applet's search — declares a [`ColumnSpec`] per
 //! column, and the one typed viewer in the UI draws each cell by its
 //! type rather than by comparing field names. The value shapes below
 //! are what a cell of each type holds on the wire. Add a member when a
@@ -69,8 +69,6 @@ pub enum ColumnType {
     /// A row of [`Action`]s, drawn as buttons; the viewer maps a known
     /// id to code it already holds and draws nothing for one it doesn't.
     Actions,
-    /// A `markdowns.uuid`, shown as its title; opens the document on click.
-    MarkdownUuid,
     /// A picture, by its name (`datalib:photo/<id>`): drawn small, by
     /// whichever applet says it serves that kind of name; empty where none
     /// does.
@@ -117,6 +115,21 @@ pub struct ColumnSpec {
     /// them reaches the viewer as a double-click on that field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub badges: Option<String>,
+    /// Pixels the column starts at, where its type's usual width is
+    /// wrong for what it holds: one short chip, or the column a person
+    /// reads. Absent, the viewer sizes it by its type.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u16>,
+    /// The viewer hides the column while every row it holds has the same
+    /// value in it, and shows it again when they differ: a column that
+    /// would repeat one word down the page, such as the source of a
+    /// source's own problems.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hide_when_uniform: bool,
+    /// The producer cannot order its rows by this column, so the viewer
+    /// offers no sort on it: a value kept beside the table, not in it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub unsorted: bool,
 }
 
 /// The key a term on this column starts with (`author:`), and the row
@@ -203,14 +216,18 @@ pub struct DocumentLink {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FreeTextMatch {
-    /// qmd ranks the rows: they come in its order, best first.
-    Qmd,
+    /// The search index ranks the rows: they come in its order, best first.
+    Ranked,
     /// A substring of some of the columns; the rows keep their order.
     Like,
 }
 
 fn yes() -> bool {
     true
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl ColumnSpec {
@@ -224,6 +241,9 @@ impl ColumnSpec {
             editable: false,
             search: None,
             badges: None,
+            width: None,
+            hide_when_uniform: false,
+            unsorted: false,
         }
     }
     pub fn describe(mut self, description: &str) -> Self {
@@ -240,6 +260,18 @@ impl ColumnSpec {
     }
     pub fn badges(mut self, field: &str) -> Self {
         self.badges = Some(field.into());
+        self
+    }
+    pub fn width(mut self, px: u16) -> Self {
+        self.width = Some(px);
+        self
+    }
+    pub fn hide_when_uniform(mut self) -> Self {
+        self.hide_when_uniform = true;
+        self
+    }
+    pub fn unsorted(mut self) -> Self {
+        self.unsorted = true;
         self
     }
 }

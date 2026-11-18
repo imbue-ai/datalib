@@ -35,7 +35,12 @@ Three sources do:
 - **`render_time_series`** (`datalib/backend/datalib_step/src/time_series.rs`)
   reads the source's raw store, builds every time series in memory and
   hands them to `datalib_etl_time_series::apply`, which writes only what
-  differs.
+  differs. A file whose time series could not be read (a FIT file that
+  will not parse, or one the blob store no longer holds) costs only its
+  own time series: it is a warning row in the store's `problems`, stage
+  `time_series` (`datalib_etl_time_series::unreadable_problems`), read
+  there, where the step's Manage row counts it
+  (`etl/README.md` §"Problems stay in the step that found them").
 - **`time_series_index`** (same file) reads each source store named in
   its `inputs` at that store's newest commit. It copies the store's
   rows and records the store's path and that commit. It copies no
@@ -46,7 +51,8 @@ Three sources do:
 
 ## A source's store
 
-Two tables (`datalib/backend/time_series_schema/src/`).
+Two tables (`datalib/backend/time_series_schema/src/`), and the
+`problems` every store a step owns holds (§"The path").
 
 **`time_series`**, one row per time series:
 
@@ -219,7 +225,10 @@ chart's width in pixels, and asks again at the plot's width for the
 range a zoom picks, so the applet's buckets are never wider than a
 pixel. It converts every value to SI units with
 `unit_factor` and `unit_offset`, gives each quantity its own axis (two
-at most), and prints each axis in a unit that suits it.
+at most), and prints each axis in a unit that suits it. With starts
+aligned it moves each time series back by its own `first_t`, so lines
+recorded on different days start together at 0 (`alignedAnswer` in
+`datalib/ui/src/cards/timeSeries.ts`).
 
 ## Charts in documents
 
@@ -232,7 +241,7 @@ A render that wants a chart on a page writes
 naming the time series to draw (`time_series_chart` in
 `datalib/backend/etl/timeseries_render/src/time_series.rs`). The page
 stays markdown with an inert element in it; the backend never parses it
-back (AGENTS.md §"QMDs are write-only").
+back (AGENTS.md §"Rendered markdown is write-only").
 
 The document view draws it. After each paint of a document's body,
 `mountTimeSeries` (`datalib/ui/src/cards/timeSeriesEmbed.ts`) mounts a

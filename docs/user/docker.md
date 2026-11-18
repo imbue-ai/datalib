@@ -16,9 +16,9 @@ Generate a token, start the demo, open it — on macOS, in one go:
 
 ```sh
 export DATALIB_TOKEN=$(openssl rand -hex 16)
-docker run -d --rm --pull=always --name datalib-demo \
+docker run -d --rm --name datalib-demo \
   -p 127.0.0.1:8731:8731 -e DATALIB_TOKEN \
-  ghcr.io/imbue-ai/datalib datalib-http /opt/datalib/demo &&
+  ghcr.io/imbue-ai/datalib@sha256:e94e6c501516756125f90be69a302bfbc3dba7f38dc531b865f352245328cf00 datalib-http /opt/datalib/demo &&
   sleep 3 && open "http://127.0.0.1:8731/?token=$DATALIB_TOKEN"
 ```
 
@@ -41,10 +41,10 @@ Four details are worth carrying into anything you write yourself:
   data; without it Docker publishes on every interface. And a bare
   `-p 8731` is different again — it picks a random host port, so the
   URL above would point at nothing.
-- **`--pull=always`.** Without it, `docker run` uses whatever
-  `ghcr.io/imbue-ai/datalib` you already have and never checks for a
-  newer one, so a second try weeks later silently runs an old release
-  against this page's newer instructions.
+- **`@sha256:…`, not `:latest`.** A digest names one exact build, the
+  one this page was checked against. A tag such as `:latest` or a version
+  is only a label, which someone with access to the registry could point
+  at something else. This page moves to the new digest after each release.
 
 Everything below is that same command unpacked, plus how to point
 datalib at data of your own. Every shell block in sections 1 and 2 is
@@ -58,7 +58,7 @@ page:
 
 <!-- doc-test: setup -->
 ```sh
-IMG=ghcr.io/imbue-ai/datalib:latest
+IMG=ghcr.io/imbue-ai/datalib@sha256:e94e6c501516756125f90be69a302bfbc3dba7f38dc531b865f352245328cf00
 PORT=8731                        # host port the web UI will be on
 TOKEN="$(openssl rand -hex 16)"  # the API token; the URL below carries it
 DATA_ROOT="$HOME/datalib-docker" # where your own data will go (step 2)
@@ -109,7 +109,7 @@ the container or from any other one with the folder mounted:
 <!-- doc-test: run demo-sql -->
 ```sh
 docker exec datalib-demo datalib-doltlite -readonly \
-  /opt/datalib/demo/unified_document_index/grid_index/db.sqlite \
+  /opt/datalib/demo/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
   "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
 ```
 
@@ -145,6 +145,7 @@ type = "email"
 [[steps]]
 group = "gmail"
 function = "ingest"
+command = "datalib-step"
 [steps.params.mbox]
 path = "/import/$(basename "$MBOX")"
 account_id = "you@gmail.com"
@@ -155,39 +156,41 @@ is_personal = true
 [[steps]]
 group = "gmail"
 function = "render_markdown"
+command = "datalib-step"
 inputs = ["gmail/ingest"]
 [steps.params]
 outlink_format = "gmail"
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
-inputs = ["gmail/render_markdown"]
-
-[[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
-inputs = ["gmail/keyword_index", "gmail/embed"]
-
-[[steps]]
-group = "gmail"
-function = "keyword_index"
-inputs = ["gmail/render_markdown"]
+group = "unified_grid_and_search_index"
+function = "unified_grid_and_search_index"
+command = "datalib-step"
+inputs = ["*/render_markdown"]
 
 [[steps]]
 group = "gmail"
 function = "embed"
-inputs = ["gmail/keyword_index"]
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 EOF
+if [ "$(uname)" = Linux ] && [ "$(id -u)" != 1000 ]; then
+  docker run --rm --user 0 --entrypoint chown -v "$DATA_ROOT:/data" "$IMG" -R 1000:1000 /data
+fi
 ```
+
+The container runs as uid 1000, not as root, so the folder has to be
+writable by uid 1000. On macOS, Docker Desktop takes care of that, and
+so does being the first user on a Linux machine, which is uid 1000.
+Anywhere else the last three lines hand the folder over, using the image
+itself, so no `sudo` is needed.
 
 There is no `data_root` line: it defaults to the folder the config is
 in, which inside the container is `/data`. Ingest, render and index:
@@ -224,7 +227,7 @@ describes. Query it without the server running at all:
 <!-- doc-test: run own-sql -->
 ```sh
 docker run --rm -v "$DATA_ROOT:/data" "$IMG" datalib-doltlite -readonly \
-  /data/unified_document_index/grid_index/db.sqlite \
+  /data/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
   "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
 ```
 
@@ -233,9 +236,11 @@ docker run --rm -v "$DATA_ROOT:/data" "$IMG" datalib-doltlite -readonly \
 docker rm -f datalib
 ```
 
-On a Linux host the files the container writes are owned by root, so
-edit `config.toml` with `sudo` or `chown` the folder afterwards. Docker
-Desktop on macOS maps them to your user.
+On a Linux host the files the container writes are owned by uid 1000,
+which is you if you are the machine's first user; otherwise edit
+`config.toml` with `sudo`. Docker Desktop on macOS maps them to your
+user. A data root an earlier image wrote as root works again after the
+same `chown` as above, and the container says so when it starts.
 
 ## 3. Live sources: credentials inside the container (no one's tested this)
 
@@ -250,7 +255,13 @@ file of passwords, because that is what it is.
 ```sh
 LATCHKEY_DIR="$HOME/.datalib-docker/latchkey"
 mkdir -p "$LATCHKEY_DIR" && chmod 700 "$LATCHKEY_DIR"
+if [ "$(uname)" = Linux ] && [ "$(id -u)" != 1000 ]; then
+  docker run --rm --user 0 --entrypoint chown -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" -R 1000:1000 /root/.latchkey
+fi
 ```
+
+On Linux, unless you are uid 1000, the key the container writes there
+is then readable only with `sudo`, which the `re-encrypt` below needs.
 
 Credentials you paste go in directly. For Claude.ai, copy the
 `sessionKey` cookie as described in
@@ -297,6 +308,56 @@ Add the same `-v "$LATCHKEY_DIR:/root/.latchkey:ro"` to the
 `datalib-http` command in step 2 and **Sync everything** in the app
 works too.
 
+## With an NVIDIA GPU
+
+Search by meaning embeds every chunk of your data once, which takes
+hours on a CPU. On a Linux machine with an NVIDIA GPU, run the `-cuda`
+variant of the image instead: the same image plus NVIDIA's cuBLAS and
+datalib's CUDA module, x86_64 only. It needs NVIDIA's driver and the
+NVIDIA Container Toolkit on the host, and `--gpus all` on every `docker
+run`. Each release publishes its digest beside the plain image's:
+
+```sh
+IMG=ghcr.io/imbue-ai/datalib@$(curl -fsSL https://github.com/imbue-ai/datalib/releases/latest/download/docker-image-cuda.digest)
+echo '{"hash": "h", "prompt": "hello"}' \
+  | docker run --rm -i --gpus all "$IMG" datalib-step embed-prompts > /dev/null
+```
+
+The second command embeds one line and says on stderr what it ran on:
+`embedding on CUDA0` on a GPU. Without one it says why the module did
+not load and runs on the CPU, as the plain image does. Everything else
+on this page works the same with this `$IMG` and `--gpus all` added.
+No release machine has a GPU, so unlike sections 1 and 2 this is not
+run against each release. Releases after v0.54.1 publish the variant.
+
+The CUDA pieces are NVIDIA's, and their use is governed by NVIDIA's CUDA
+Toolkit license rather than datalib's MIT license; the image carries the
+notice beside them (`/opt/datalib/licenses/CUDA-NOTICE.md`), with
+NVIDIA's own license text for each.
+
+## Checking who built the image
+
+The digest says which image you run, and this page names the one the
+release made. To see for yourself that an image was built by datalib's
+release workflow from a release's own commit, ask for its *build
+provenance attestation*, a statement that workflow signed when it
+pushed the image. You need GitHub's CLI, `gh`, signed in to any
+account, and the release tag (its version):
+
+```sh
+tag=v0.55.0
+gh attestation verify "oci://$IMG" -R imbue-ai/datalib \
+  --signer-workflow imbue-ai/datalib/.github/workflows/release.yml \
+  --source-ref "refs/tags/$tag"
+```
+
+The attestation is also stored next to the image on ghcr.io, so adding
+`--bundle-from-oci` reads it from there rather than from GitHub. Check
+the digest you run, as `$IMG` does: given a tag, `gh` checks whatever
+image the tag points at when you ask. Images up to v0.54.1 carry no
+attestation. The check says where the image came from, not that the
+code in it is good.
+
 ## What the container can see
 
 | Host path | In the container | Mode | Holds |
@@ -309,6 +370,7 @@ Nothing else. In particular, don't mount your home directory, and don't
 run the container with `--privileged`; the point of the container is
 that the blast radius of a bad day is the folders in this table.
 
-The image bundles the three qmd models, so semantic search never
-downloads anything (the `-slim` tag leaves them out). Building the image yourself, and what is in it, is
-in [`docs/dev/docker.md`](../dev/docker.md).
+The image bundles the search model, so search by meaning never
+downloads anything; the image fetches nothing at run time at all.
+Building the image yourself, and what is in it, is in
+[`docs/dev/docker.md`](../dev/docker.md).

@@ -43,7 +43,7 @@ use status::{StatusView, StepEdges};
 
 pub use dashboard::get_dashboard;
 pub use items::{by_step as items_by_step, WINDOW as ITEMS_WINDOW};
-pub use problems::{counts_by_step, ProblemCounts};
+pub use problems::{counts_by_step, IndexCounts, ProblemCounts};
 pub use queue::{owed_by_step, queue_drain, Owed, QueueDrain};
 pub use status::dropped_detail;
 
@@ -57,7 +57,14 @@ pub enum RowKind {
     /// entry — nothing syncs, edits or removes it — but it takes disk
     /// and its log is browsable.
     System,
+    /// A heading the config never wrote: Applets, over the applets filed
+    /// under no group. It holds rows and does nothing itself.
+    Section,
 }
+
+/// The Applets heading's row key and id. Not a path-safe group id, so no
+/// group or entry can share it.
+const APPLETS_SECTION_KEY: &str = "section:applets";
 
 /// The built-in functions by what they do. Mirrors
 /// `datalib_step::function::Function`; a step outside any group has no
@@ -78,10 +85,8 @@ impl Phase {
             Some("render_markdown") | Some("render_time_series") | Some("render_occurrences") => {
                 Phase::Render
             }
-            Some("grid_index")
+            Some("unified_grid_and_search_index")
             | Some("time_series_index")
-            | Some("qmd_aggregator")
-            | Some("keyword_index")
             | Some("embed")
             | Some("embedding_map") => Phase::Index,
             _ => Phase::Other,
@@ -111,7 +116,7 @@ impl Phase {
 pub fn columns() -> Vec<ColumnSpec> {
     vec![
         ColumnSpec::new("name", "Name", ColumnType::Identity)
-            .describe("What the config calls it, led by the mark of the service a source mirrors or the glyph of what a step does; its id — for a group, the folder under the data root — is on hover. After it, in red and yellow, the errors (records dropped) and warnings (records kept with something lost) its store holds as of its last run, plus a warning for each pass of that run that failed and was run again; double-click them for the list. On System, the yellow number is the config's warnings; double-click it for the config.")
+            .describe("What the config calls it, led by the mark of the service a source mirrors or the glyph of what a step does; its id — for a group, the folder under the data root — is on hover. After it, in red and yellow, the errors (records dropped) and warnings (records kept with something lost) in its problems list, leaving out the ones you muted; double-click them for exactly those rows. In grey, what only its log holds: each pass of its last run that failed and was run again, and what a step that keeps no problems list counted. On System, the yellow number is the config's warnings; double-click it for the config.")
             .editable()
             .badges("problems"),
         ColumnSpec::new("actions", "Actions", ColumnType::Actions)
@@ -138,7 +143,7 @@ pub struct ManageRow {
     /// keyed on.
     pub id: String,
     /// The grid's row id. The entry id for a step or an applet; for a
-    /// group, `group:<id>`, because the `unified_document_index` applet shares
+    /// group, `group:<id>`, because the `unified_grid_and_search_index` applet shares
     /// its group's id and both are rows.
     pub key: String,
     /// Where the row sits in the tree: `[key]` at the top level, or
@@ -186,6 +191,9 @@ pub struct ManageRow {
     /// see `manage::problems`. A group shows the sum of its steps'; the
     /// System row, the config's warnings.
     pub problems: Vec<Chip>,
+    /// The problems grid's query for exactly the rows the red and yellow
+    /// numbers count; `None` when they count none.
+    pub problems_query: Option<String>,
     /// The items its store holds, as of the run it last counted in,
     /// with the series behind the number — see `manage::items`. No
     /// value, drawn blank, for a row that has never counted, which is
@@ -570,10 +578,11 @@ impl Child for Entry<'_> {
 /// the name in the grid.
 fn default_name(id: &str) -> String {
     match id {
-        "unified_document_index/grid_index" => "Document Index (table)",
-        "unified_document_index/qmd_aggregator" => "Document Index (QMD)",
-        "unified_document_index/embedding_map" => "Document Index (map)",
-        "unified_document_index" => "Document Index (Applet)",
+        "unified_grid_and_search_index/unified_grid_and_search_index" => {
+            "Grid and Search Index (table)"
+        }
+        "unified_grid_and_search_index/embedding_map" => "Grid and Search Index (map)",
+        "unified_grid_and_search_index" => "Grid and Search Index (Applet)",
         "unified_time_series_index/time_series_index" => "Time Series Index",
         "unified_time_series_index" => "Time Series Index (Applet)",
         other => other,
@@ -582,7 +591,7 @@ fn default_name(id: &str) -> String {
 }
 
 /// A group's Name cell leads with its source's mark, the type's label
-/// on hover. A group that mirrors nothing — the unified document index — is the
+/// on hover. A group that mirrors nothing — the unified grid and search index — is the
 /// search over every source, and is marked as that.
 fn group_name(g: &WrittenGroup, r#type: Option<&Identity>) -> Identity {
     let (icon, detail) = match r#type {
@@ -608,10 +617,8 @@ fn child_label(step: &WrittenStep) -> String {
         Some("render_time_series") => "Render time series",
         Some("render_occurrences") => "Render occurrences",
         Some("time_series_index") => "Time series index",
-        Some("grid_index") => "Grid index",
-        Some("qmd_aggregator") => "QMD aggregator",
-        Some("keyword_index") => "QMD keyword index",
-        Some("embed") => "QMD embedding index",
+        Some("unified_grid_and_search_index") => "Grid and search index",
+        Some("embed") => "Semantic indexing",
         Some("embedding_map") => "Embedding map",
         Some(other) => other,
         None => "Step",
@@ -726,8 +733,19 @@ impl Snapshot<'_> {
                 }
             }
         }
+        let (mut applets, rest): (Vec<ManageRow>, Vec<ManageRow>) = entry_rows
+            .drain(..)
+            .map(|(_, r)| r)
+            .partition(|r| r.kind == RowKind::Applet && r.written_group.is_none());
         let mut rows = groups;
-        rows.extend(entry_rows.drain(..).map(|(_, r)| r));
+        rows.extend(rest);
+        if !applets.is_empty() {
+            for applet in &mut applets {
+                applet.path.insert(0, APPLETS_SECTION_KEY.to_string());
+            }
+            rows.push(applets_section_row());
+            rows.extend(applets);
+        }
         rows.extend(self.system_rows());
         rows
     }
@@ -778,6 +796,7 @@ impl Snapshot<'_> {
             eta: Quantity::default(),
             owed: Quantity::default(),
             problems: vec![],
+            problems_query: None,
             items: Timeseries::default(),
             last_synced: None,
             last_success: None,
@@ -854,6 +873,53 @@ impl Snapshot<'_> {
         );
         group.problems = problems::config_warning_chips(self.diagnostics);
         [group, logs]
+    }
+}
+
+/// The Applets heading: after every group, so an applet filed under none
+/// is not drawn as if it trailed the last one.
+fn applets_section_row() -> ManageRow {
+    let key = APPLETS_SECTION_KEY.to_string();
+    ManageRow {
+        id: key.clone(),
+        key: key.clone(),
+        path: vec![key],
+        kind: RowKind::Section,
+        group: None,
+        written_group: None,
+        inputs: vec![],
+        phase: Phase::Other,
+        function: None,
+        params: serde_json::Value::Object(Default::default()),
+        name: Identity {
+            id: APPLETS_SECTION_KEY.to_string(),
+            label: "Applets".into(),
+            icon: Some("applet".into()),
+            detail: Some("The applets the config files under no group".into()),
+            entity: None,
+        },
+        r#type: None,
+        dropped: None,
+        status: StatusView::default(),
+        status_from: None,
+        queue: Quantity::default(),
+        eta: Quantity::default(),
+        owed: Quantity::default(),
+        problems: vec![],
+        problems_query: None,
+        items: Timeseries::default(),
+        last_synced: None,
+        last_success: None,
+        disk: Timeseries::default(),
+        actions: vec![],
+        seeds: vec![],
+        reveal_blocked: Some("A heading, not a folder.".to_string()),
+        stop_request_ids: Vec::new(),
+        turned_off_by: None,
+        last_run_id: String::new(),
+        live_run_id: None,
+        reveal_path: None,
+        raw_store_path: None,
     }
 }
 
@@ -959,6 +1025,14 @@ impl RowCtx<'_> {
 
     fn step(&self, id: &str) -> Option<&StepRecord> {
         self.snap.record.steps.get(id)
+    }
+
+    fn step_problems(&self, id: &str) -> problems::StepProblems {
+        problems::StepProblems::of(
+            id,
+            self.snap.record.problems.get(id),
+            &self.snap.record.problem_rows,
+        )
     }
 
     fn step_status(&self, id: &str, dropped: Option<&Diagnostic>) -> StatusView {
@@ -1229,9 +1303,12 @@ impl RowCtx<'_> {
             Entry::Step(_) => queue::owed_cell(self.snap.record.owed.get(&id), activity),
             Entry::Applet(_) => queue::owed_cell(None, activity),
         };
-        let problems = match e {
-            Entry::Step(_) => problems::chips(self.snap.record.problems.get(&id)),
-            Entry::Applet(_) => vec![],
+        let (problems, problems_query) = match e {
+            Entry::Step(_) => {
+                let p = self.step_problems(&id);
+                (problems::chips(&p), problems::query(&p))
+            }
+            Entry::Applet(_) => (vec![], None),
         };
         let items = match e {
             Entry::Step(_) => self.snap.record.items.get(&id).cloned(),
@@ -1315,6 +1392,7 @@ impl RowCtx<'_> {
             eta: cells.eta,
             owed,
             problems,
+            problems_query,
             items,
             disk,
             actions: [browse, sync]
@@ -1552,12 +1630,10 @@ impl RowCtx<'_> {
                 .map(|r| (r.name.label.as_str(), &r.owed))
                 .collect::<Vec<_>>(),
         );
-        let problems = problems::group_chips(
-            &steps
-                .iter()
-                .map(|c| self.snap.record.problems.get(c.id()))
-                .collect::<Vec<_>>(),
-        );
+        let step_problems: Vec<problems::StepProblems> =
+            steps.iter().map(|c| self.step_problems(c.id())).collect();
+        let problems = problems::group_chips(&step_problems);
+        let problems_query = problems::group_query(&step_problems);
         // Only the render step counts items, so the group shows that one
         // child's cell rather than a sum over children that would double
         // it the day a second step reported one.
@@ -1608,6 +1684,7 @@ impl RowCtx<'_> {
             eta: cells.eta,
             owed,
             problems,
+            problems_query,
             items,
             last_synced,
             last_success,

@@ -1,7 +1,6 @@
-# Your Todoist over its API, signed in through latchkey
-# (`latchkey auth browser todoist`). An empty `api` table copies every
-# project, section, label, open task and comment, and every task you have
-# completed since you joined; later syncs read only what changed.
+# Your Todoist over its API, signed in through latchkey. An empty `api` table
+# copies every project, section, label, open task and comment, and every task
+# you have completed since you joined; later syncs read only what changed.
 [[groups]]
 id = "todoist"
 name = "Todoist"

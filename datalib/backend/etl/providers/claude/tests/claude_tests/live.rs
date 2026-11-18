@@ -31,8 +31,8 @@ async fn claude_live_single_conv_snapshot() {
         .unwrap();
     let opts = claude::FetchOptions {
         export_dir: None,
-        overlap: 0,
-        sleep_between: Duration::ZERO,
+        refetch_newest_conversations: None,
+        wait_between_requests: Duration::ZERO,
         conv_uuids: vec![TARGET_UUID.to_string()],
         ..claude::FetchOptions::new(db.clone())
     };

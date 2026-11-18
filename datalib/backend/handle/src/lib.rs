@@ -28,6 +28,10 @@ use strum::{EnumString, IntoStaticStr, VariantArray};
 /// differently, so it moves nothing.
 pub const RULES_VERSION: u32 = 2;
 
+/// How a handle is written, for a refusal to say.
+pub const SPELLING: &str = "a handle is <kind>:<value>, such as email:riker@enterprise.org, \
+                            tel:+12025550101 or slack:T01/U02";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, IntoStaticStr, VariantArray)]
 #[strum(serialize_all = "snake_case")]
 pub enum HandleKind {
@@ -432,15 +436,44 @@ impl Handle {
         Self::slack(team?, user?)
     }
 
+    /// The handle a display name spells out, when it is one rather than
+    /// a name: an address, a number in international form, a handle's
+    /// URI or its stored form. A name that spells someone's identifier
+    /// draws whoever it labels as that someone (`"picard@enterprise.org"
+    /// <q@continuum.test>`).
+    pub fn spelled_by(name: &str) -> Option<Self> {
+        let name = name.trim();
+        // The stored form first: `email:x@y` is an address too, of the
+        // local part `email:x`.
+        Self::parse(name)
+            .or_else(|| Self::from_uri(name))
+            .or_else(|| Self::email(name))
+            .or_else(|| Self::tel(name))
+    }
+
     /// The handle beside the name a source showed, as a person writes
     /// one: `Will Riker <riker@enterprise.org>`, `Will Riker
     /// (+15550123456)`, `Data (slack:T01/U02)`. The identifier alone when
-    /// the name is empty or is the identifier. A chip link's title and
+    /// the name is empty or is the identifier, and the name as it is when
+    /// it already ends with the identifier in that form (an email's
+    /// `From: Will Riker <riker@enterprise.org>`). A chip link's title and
     /// its copied text; `copyText` in `ui/src/cards/contacts.ts` mirrors it.
     pub fn describe(&self, shown: &str) -> String {
         let shown = shown.trim();
         if shown.is_empty() || shown == self.value() || shown == self.as_str() {
             return self.value().to_string();
+        }
+        let beside = match self.kind() {
+            HandleKind::Email => format!("<{}>", self.value()),
+            HandleKind::Tel => format!("({})", self.value()),
+            _ => format!("({})", self.as_str()),
+        };
+        let tail = shown
+            .len()
+            .checked_sub(beside.len())
+            .and_then(|at| shown.get(at..));
+        if tail.is_some_and(|t| t.eq_ignore_ascii_case(&beside)) {
+            return shown.to_string();
         }
         match self.kind() {
             HandleKind::Email => format!("{shown} <{}>", self.value()),
@@ -600,6 +633,34 @@ impl fmt::Display for Handle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_spells_a_handle_only_when_it_is_one() {
+        let email = Handle::email("picard@enterprise.org");
+        for spelled in [
+            " picard@enterprise.org ",
+            "mailto:picard@enterprise.org",
+            "email:picard@enterprise.org",
+        ] {
+            assert_eq!(Handle::spelled_by(spelled), email, "{spelled:?}");
+        }
+        assert_eq!(
+            Handle::spelled_by("+1 202 555 0101"),
+            Handle::tel("+12025550101")
+        );
+        assert_eq!(
+            Handle::spelled_by("slack:T01/U02"),
+            Handle::slack("T01", "U02")
+        );
+        for name in [
+            "Jean-Luc Picard",
+            "Q",
+            "2025550101",
+            "Picard <picard@enterprise.org>",
+        ] {
+            assert_eq!(Handle::spelled_by(name), None, "{name:?}");
+        }
+    }
 
     #[test]
     fn email_is_lowercased_and_trimmed() {
@@ -1002,6 +1063,11 @@ mod tests {
             "riker@enterprise.org"
         );
         assert_eq!(email.describe("  "), "riker@enterprise.org");
+        // An email's sender is shown as its `From:` reads, address and all.
+        assert_eq!(
+            email.describe("Will Riker <Riker@Enterprise.org>"),
+            "Will Riker <Riker@Enterprise.org>"
+        );
         let tel = Handle::tel("+15550123456").unwrap();
         assert_eq!(tel.describe("Will Riker"), "Will Riker (+15550123456)");
         let slack = Handle::slack("T01", "U02").unwrap();

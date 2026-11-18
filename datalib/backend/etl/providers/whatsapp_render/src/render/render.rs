@@ -32,7 +32,9 @@ use datalib_schema::providers::Provider;
 ///      nobody; an empty sender is the chat's person), and a reactor gets
 ///      their address-book account.
 /// v15: a message someone else sent is to the account (`to:me`).
-pub const RENDER_VERSION: u32 = 15;
+/// v16: a chat is one document, keyed on the chat's own uuid, rather
+///      than one per month.
+pub const RENDER_VERSION: u32 = 16;
 
 const SOURCE_LABEL: &str = "WhatsApp";
 
@@ -377,7 +379,6 @@ mod tests {
     use super::*;
     use crate::render::parse::parse;
     use datalib_etl::doltlite_raw::{commit_run, has_dolt_extensions, open as open_doltlite};
-    use datalib_etl::periodize::Period;
     use sqlx::sqlite::SqlitePool;
 
     /// The slice of msgstore's schema render reads, as the mirror engine
@@ -472,9 +473,7 @@ mod tests {
             sqlx::query(q).execute(&pool).await.expect("dolt_config");
         }
 
-        // Two chats, one message each. Period::All puts every message
-        // into a single bucket per chat so the rendered-doc count is
-        // exactly the chat count — easier to assert against.
+        // Two chats, one message each.
         seed_chat(&pool, 1, "alice@s.whatsapp.net", "k_a1", "hi from alice").await;
         seed_chat(&pool, 2, "bob@s.whatsapp.net", "k_b1", "hi from bob").await;
         let _hash1 = commit_run(&pool, "seed two chats")
@@ -525,7 +524,7 @@ mod tests {
             "after modifying one chat, render should emit exactly one doc, got {docs3:?}"
         );
         assert!(gone3.is_empty(), "nothing was deleted, got {gone3:?}");
-        let expected = super::super::ids::period("test", "alice@s.whatsapp.net", "all").uuid;
+        let expected = super::super::ids::chat("test", "alice@s.whatsapp.net").uuid;
         assert_eq!(
             docs3[0], expected,
             "rendered doc should belong to alice's chat"
@@ -674,7 +673,7 @@ mod tests {
                 pin: None,
                 stale: None,
             };
-            parse(&raw_dir, Period::All, "test", range)
+            parse(&raw_dir, "test", range)
                 .expect("parse")
                 .expect("a mirrored store")
         })
@@ -706,6 +705,44 @@ mod tests {
         assert_eq!(items[0].reactions.len(), 1, "the reaction that lands");
         assert!(items[1].problems.is_empty(), "{:?}", items[1].problems);
         assert!(items[1].attachments[0].ref_id.is_some());
+    }
+
+    /// A chat was one document a month, each minted from the month; a
+    /// chat spanning two months is one document, keyed on the chat.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_chat_spanning_two_months_is_one_document() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let raw_dir = td.path().join("raw");
+        std::fs::create_dir_all(&raw_dir).expect("mkdir raw");
+        let db_path = datalib_etl::doltlite_raw::db_path_for(&raw_dir);
+        let pool = open_doltlite(&db_path, MSGSTORE_DDL)
+            .await
+            .expect("open doltlite");
+        if !has_dolt_extensions(&pool).await {
+            return;
+        }
+        for q in [
+            "SELECT dolt_config('user.name', 'datalib-test')",
+            "SELECT dolt_config('user.email', 'test@datalib.local')",
+        ] {
+            sqlx::query(q).execute(&pool).await.expect("dolt_config");
+        }
+        // 2023-11-14, then 2023-12-14.
+        seed_chat(&pool, 1, "picard@s.whatsapp.net", "k_nov", "Engage.").await;
+        sqlx::query(
+            "INSERT INTO message (_id, chat_row_id, key_id, from_me, timestamp, message_type, \
+                text_data, sort_id) VALUES (2, 1, 'k_dec', 1, 1702592000000, 0, 'Aye.', 2)",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed");
+        commit_run(&pool, "seed").await.expect("commit_run");
+        pool.close().await;
+
+        let out_dir = td.path().join("out");
+        let (docs, _, _) = render_capture(&raw_dir, &out_dir, None).await;
+        let chat = super::super::ids::chat("test", "picard@s.whatsapp.net").uuid;
+        assert_eq!(docs, [chat], "one document, the chat's own");
     }
 
     /// One jid, chat and message, all sharing `rowid` — the shape the
@@ -761,7 +798,7 @@ mod tests {
                 pin: None,
                 stale: Some(&stale),
             };
-            let Some(parsed) = parse(&raw_dir, Period::All, "test", range).expect("parse") else {
+            let Some(parsed) = parse(&raw_dir, "test", range).expect("parse") else {
                 return (Vec::new(), Vec::new(), None);
             };
             let mut emitted: Vec<String> = Vec::new();

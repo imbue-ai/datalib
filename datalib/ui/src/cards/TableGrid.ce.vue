@@ -32,11 +32,11 @@ import { clockFaces, movedCells, type ClockFaces } from "@/grid/clockFaces";
 import { keepActiveOnRecord } from "@/grid/activeCell";
 import { menuSlots, type MenuEntry } from "@/grid/menu";
 import { stampRowKeys } from "@/grid/rowKeys";
-import { hoverWholeRow } from "@/grid/rowHover";
 import { treeColumnField, typedColumns, type SlickColumnOptions } from "./typedColumns";
 import type { TableGridApi } from "./tableGridApi";
 import { fieldsOfType } from "./cellRenderers";
 import { chipCardSource, chipElAt, chipOf } from "./chipActions";
+import { TEXT_ONLY_GRID } from "@/grid/textOnly";
 
 const props = withDefaults(
   defineProps<{
@@ -98,8 +98,6 @@ const emit = defineEmits<{
   /// An in-place edit of an `editable` cell was committed. The card
   /// decides what it means; the value never lands in the row.
   edit: [row: T, field: string, value: string];
-  /// A `markdown_uuid` cell was clicked.
-  openDocument: [uuid: string];
   /// A tree row was opened or closed.
   rowGroupOpened: [row: T, expanded: boolean];
   /// A movable row was dropped above `before`, a sibling of it, or
@@ -250,15 +248,13 @@ function buildColumns(): Column<T>[] {
     tree: props.tree,
     actions: props.actions,
     onMembership: props.membership,
-    onOpenDocument: (uuid) => emit("openDocument", uuid),
     overrides: props.columnOverrides,
     chips: props.chips,
-  }).map((c, i) =>
-    // A pinned column hidden would unpin the one after it.
-    i < props.pinnedColumns ? { ...c, excludeFromColumnPicker: true, reorderable: false } : c,
-  );
+  }).map((c, i) => (i < props.pinnedColumns ? pinned(c) : c));
+  const grip = props.movable ? [gripColumn()] : [];
   return [
-    ...(props.movable ? [gripColumn()] : []),
+    // The grip, when there is one, is pinned with them.
+    ...(props.pinnedColumns > 0 ? grip.map(pinned) : grip),
     ...typed,
     {
       id: ORDER,
@@ -271,6 +267,12 @@ function buildColumns(): Column<T>[] {
       excludeFromColumnPicker: true,
     },
   ];
+}
+
+/// Held at the left edge while the rest scrolls, and always shown: the
+/// columns a person finds a row by.
+function pinned(c: Column<T>): Column<T> {
+  return { ...c, pinned: "left", excludeFromColumnPicker: true, reorderable: false };
 }
 
 /// The handle a movable row is dragged by. The drag is ours
@@ -422,7 +424,7 @@ function options(): GridOption {
   const treeField = treeColumnField(props.columns);
   return {
     datasetIdPropertyName: props.rowKey,
-    enableHtmlRendering: false,
+    ...TEXT_ONLY_GRID,
     enableEmptyDataWarningMessage: false,
     darkMode: isDarkTheme(),
     ...KEEP_COLUMN_WIDTHS,
@@ -448,12 +450,6 @@ function options(): GridOption {
     // declare some hidden until asked for.
     enableColumnPicker: true,
     columnPicker: { hideForceFitButton: true, hideSyncResizeButton: true },
-    // The grip, when there is one, is pinned with them.
-    frozenColumn: props.pinnedColumns > 0 ? props.pinnedColumns - (props.movable ? 0 : 1) : -1,
-    // A box narrower than the pinned columns scrolls them with the rest;
-    // the grid's own answer to that is an alert().
-    invalidColumnFreezeWidthCallback: () =>
-      console.warn("TableGrid: too narrow to pin columns; they scroll with the rest"),
     // Folding a tree row goes through the grid's filters, so filtering
     // is on; nothing here is filterable, and the filter row stays hidden.
     enableFiltering: true,
@@ -483,7 +479,6 @@ function options(): GridOption {
       // The menu stays put while the grid scrolls: the scroll that
       // brought a row into view can report after the click on it.
       hideMenuOnScroll: false,
-      hideCopyCellValueCommand: true,
       hideCommands: ["copy", "clear-grouping", "collapse-all-groups", "expand-all-groups"],
       ...menuSlots(24, entriesFor),
     },
@@ -528,8 +523,13 @@ function readPath(item: unknown, field: string): unknown {
     .reduce<unknown>((v, k) => (v as Record<string, unknown> | undefined)?.[k], item);
 }
 
+/// A field names the row's own data. One that walks into what every
+/// object inherits would let an edit change them all.
+const INHERITED = new Set(["__proto__", "constructor", "prototype"]);
+
 function writePath(item: unknown, field: string, value: unknown) {
   const parts = field.split(".");
+  if (parts.some((p) => INHERITED.has(p))) return;
   const last = parts.pop()!;
   const target = parts.reduce<unknown>(
     (v, k) => (v as Record<string, unknown> | undefined)?.[k],
@@ -541,10 +541,10 @@ function writePath(item: unknown, field: string, value: unknown) {
 /// A chip is a link whose href names something in this app, never to be
 /// followed. In the desktop app, following one dropped every request in
 /// flight: the loads of the card a double-click on the chip had opened.
-function onClick(e: SlickEventData) {
-  if (chipElAt(e.getNativeEvent<MouseEvent>()?.target)) {
-    e.getNativeEvent<MouseEvent>()?.preventDefault();
-  }
+/// Prevented once the click reaches the box, after the grid has selected
+/// the row: a click the grid sees already prevented selects nothing.
+function followNoChipLink(e: MouseEvent) {
+  if (chipElAt(e.target)) e.preventDefault();
 }
 
 /// A part of a cell that names a field of its own (`data-field`, as the
@@ -633,10 +633,8 @@ function createGrid() {
   for (const r of props.rows) painted.set(keyOf(r), JSON.stringify(r));
   handed = props.rows.map(keyOf);
   stampRowKeys(b.slickGrid, b.dataView, (item) => keyOf(item as T));
-  hoverWholeRow(b.slickGrid);
   b.slickGrid.onBeforeEditCell.subscribe(onBeforeEditCell);
   b.slickGrid.onCellChange.subscribe(onCellChange);
-  b.slickGrid.onClick.subscribe(onClick);
   b.slickGrid.onDblClick.subscribe(onDblClick);
   b.slickGrid.onSort.subscribe(onSort);
   b.instances?.eventPubSubService?.subscribe<TreeToggleStateChange>(
@@ -695,8 +693,7 @@ watch(
     const next = JSON.stringify(columns);
     if (next === declared) return;
     declared = next;
-    if (bundle)
-      bundle.columnDefinitions = carryLayout(buildColumns(), bundle.slickGrid.getColumns());
+    if (bundle) bundle.columns = carryLayout(buildColumns(), bundle.slickGrid.getColumns());
     else createGrid();
   },
 );
@@ -704,6 +701,6 @@ watch(
 
 <template>
   <div ref="rootEl" class="tg-root" @pointerdown="onGripDown">
-    <div ref="boxEl" class="tg-grid" />
+    <div ref="boxEl" class="tg-grid" @click="followNoChipLink" />
   </div>
 </template>

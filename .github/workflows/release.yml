@@ -2,27 +2,46 @@
 # host platform — plus fully-static `*-unknown-linux-musl` variants
 # cross-libc-compiled on the same gnu runners — and attaches a
 # per-triple tarball to a GitHub Release.
-# The `runtime` job publishes the Node runtime the binaries run `qmd`
-# and `latchkey` from as its own asset per platform
+# The `runtime` job stages the Node runtime the binaries run `latchkey`
+# from as its own asset per platform
 # (`runtime-<triple>.tar.gz`), which the binaries fetch on first use
 # from the `runtime.manifest` the `build` job writes beside them — see
 # docs/dev/runtime_fetch.md.
-# The `macos-app` job additionally builds, signs, and notarizes the
-# Datalib desktop app and attaches its dmg to the same release.
+# The `macos-app-*` jobs additionally build, sign, and notarize the
+# Datalib desktop app and attach its dmg to the same release.
 # Triggered by pushing a `v*` tag (e.g. `git tag v0.1.0 && git push
-# origin v0.1.0`). Each tarball is published with a stable,
-# un-versioned filename so the install script's
-# `releases/latest/download/<name>` URL stays valid.
+# origin v0.1.0`). Each tarball has a stable, un-versioned filename.
 #
-# Bazel action cache is served by BuildBuddy (see the "Configure
-# BuildBuddy remote cache" step below); there's no GHA-side bazel
-# cache and no main-branch warmup run. Tag pushes read the RELEASE
-# group's cache — populated only by `test.yml` runs of commits on
-# main, never by contributor laptops or PR runs — and write nothing.
+# No release exists until every job has succeeded. Then `attest` signs a build
+# provenance attestation for every asset and for the image, and
+# `publish-release`, the one job that can write to a release, creates a draft,
+# uploads what `attest` signed, checks what GitHub holds against what the jobs
+# made, and publishes. The repository's
+# immutable-releases setting locks its assets and tag from that moment, so
+# nothing can be added afterwards: a failed job holds the release back
+# until a re-run finishes it (docs/dev/release_steps.md §"Attest, then draft, then publish").
+#
+# Every artifact is downloaded under `runner.temp`, never into the checkout,
+# where it would replace whatever is at the same path. A job's build scripts
+# can reach the token that uploads artifacts, so an artifact is not trusted to
+# hold what its name says (`lint_repo.py` check 21).
+#
+# A release builds from scratch and reads no cache: no BuildBuddy and no
+# repository cache. Bazel verifies no cache entry, so a cache that anything
+# running on `main` can write would decide what this workflow ships
+# (docs/dev/security_posture.md). `lint_repo.py` check 21 holds it to that.
 #
 # Read docs/dev/release_steps.md before changing this file: the steps
 # that assemble a release are scripts under `scripts/release/`, tested on
 # every `bazel test //...`, and a new one goes there rather than inline.
+#
+# A job that builds holds nothing worth stealing. GitHub grants a token's
+# permissions per job, never per step, and a hosted runner's passwordless
+# sudo lets any process read the runner's memory, so only a separate job
+# on its own machine keeps a write token or the signing key from a crate's
+# build script. Every build job here is read-only and hands what it made
+# to a publish job through an artifact; §"Who holds what" in that doc is
+# the table, and `scripts/lint_repo.py` holds each grant to its job.
 name: release
 
 on:
@@ -31,8 +50,7 @@ on:
       - "v*"
 
 permissions:
-  contents: write  # needed to create the GitHub Release
-  packages: write  # needed for the docker-publish job to push to ghcr.io
+  contents: read
 
 # Don't cancel in progress — tag runs publish a release and must
 # complete. (No main-branch races to serialize anymore now that the
@@ -42,17 +60,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # The Node runtime — the pinned Node plus the lockfile-pinned `qmd`
-  # and `latchkey` trees, only this platform's CPU binding of
-  # node-llama-cpp — as `runtime-<triple>.tar.gz`, one per host
+  # The Node runtime — the pinned Node plus the lockfile-pinned
+  # `latchkey` tree — as `runtime-<triple>.tar.gz`, one per host
   # platform. Its own job rather than a step of `build` so that the
   # musl legs (whose glibc host runs the same runtime as their gnu
   # sibling) can name an asset that already exists, with its sha256:
-  # the `build` legs read the `.sha256` sidecars published here when
-  # they write `runtime.manifest`. The tarball no longer carries the
+  # the `build` legs read this job's artifact when they write
+  # `runtime.manifest`. The tarball no longer carries the
   # runtime, which is what took v0.34.1's x86_64 tarball to 507 MB.
   #
-  # `stage_runtime.sh` is a `bazel build` of four fetch-and-extract
+  # `stage_runtime.sh` is a `bazel build` of three fetch-and-extract
   # targets and an rsync: a few minutes, most of it runner setup.
   runtime:
     name: runtime (${{ matrix.triple }})
@@ -60,101 +77,82 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # `cuda`: also publish `runtime-<triple>-cuda.tar.gz`, the two
-        # CUDA packages the resolver overlays where an NVIDIA driver is
-        # present. Only Linux x86_64 has prebuilt CUDA bindings.
         include:
           - triple: aarch64-apple-darwin
-            runs-on: macos-14  # Apple Silicon
-            cuda: false
+            runs-on: macos-26  # Apple Silicon; docs/dev/release_steps.md §"The mac legs' runner image"
+          # Every Linux leg here and below runs on the oldest supported
+          # Ubuntu, never `ubuntu-latest`: a build links against its
+          # runner's glibc (release_steps.md §"The Linux floor").
           - triple: x86_64-unknown-linux-gnu
-            runs-on: ubuntu-latest
-            cuda: true
+            runs-on: ubuntu-24.04
           - triple: aarch64-unknown-linux-gnu
             runs-on: ubuntu-24.04-arm
-            cuda: false
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      # Same cache layering as the build job below; see its comment.
-      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+      # No cache, as in the build job below; see its comment.
+      - uses: bazel-contrib/setup-bazel@f34d6a05eae3c24acab7fa54587492daeaeffdab # 0.19.2
         with:
           bazelisk-cache: false
           disk-cache: false
-          repository-cache: true
+          repository-cache: false
           external-cache: false
 
-      # See the build job's identically-named step for the full story:
-      # the release group's key, and no uploads.
-      - name: Configure BuildBuddy remote cache
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_RELEASE_API_KEY }}
-        run: |
-          set -euo pipefail
-          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
-              cat > .bazelrc.user <<EOF
-          common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
-          build --config=buildbuddy-release-readonly
-          EOF
-              echo "BuildBuddy release cache enabled for this job (read-only)."
-          else
-              echo "BUILD_BUDDY_RELEASE_API_KEY not available — running without remote cache."
-          fi
-
       # The step is a script so //tools:stage_runtime_test runs the same
-      # lines before a tag does (docs/dev/release_steps.md). The trees
-      # come out of Bazel; the script prunes the bindings this platform
-      # cannot use, proves the one it keeps loads, and tars the tree
-      # with its contents at the top (`node/`, `qmd/`, `latchkey/`),
+      # lines before a tag does (docs/dev/release_steps.md). The tree
+      # comes out of Bazel; the script proves its node runs and latchkey
+      # resolves playwright, and tars the tree with its contents at the
+      # top (`node/`, `latchkey/`),
       # which is how the resolver unpacks it into
       # `~/.cache/datalib/runtime/<sha12>/`.
       - name: Stage the runtime
         id: stage
         env:
           TRIPLE: ${{ matrix.triple }}
-          CUDA: ${{ matrix.cuda }}
         run: |
           set -euo pipefail
-          files="$(scripts/release/stage_runtime_asset.sh "${TRIPLE}" "${CUDA}" | tr '\n' ' ')"
-          echo "files=${files}" >> "$GITHUB_OUTPUT"
+          {
+              echo "files<<FILES"
+              scripts/release/stage_runtime_asset.sh "${TRIPLE}"
+              echo "FILES"
+          } >> "$GITHUB_OUTPUT"
 
-      # Plain `gh`, create-if-missing, retry once: see the build job's
-      # publish step.
-      - name: Publish release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REF_NAME: ${{ github.ref_name }}
-          FILES: ${{ steps.stage.outputs.files }}
-        run: |
-          set -euo pipefail
-          if ! gh release view "$REF_NAME" >/dev/null 2>&1; then
-              gh release create "$REF_NAME" --verify-tag --notes "" || true
-          fi
-          # shellcheck disable=SC2086
-          for attempt in 1 2; do
-              if gh release upload "$REF_NAME" --clobber $FILES; then
-                  break
-              fi
-              [[ "$attempt" == 2 ]] && exit 1
-              sleep 30
-          done
+      # Node and its npm prebuilds arrive built by someone else, so their glibc
+      # is not the runner's: read every ELF file in each asset against the
+      # floor (release_steps.md §"The Linux floor").
+      - name: Assert the runtime needs no glibc above the floor
+        if: runner.os == 'Linux'
+        run: scripts/release/check_glibc_floor.sh runtime-*.tar.gz
+
+      # compression-level 0: every file is a gzip or a checksum already.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: runtime-${{ matrix.triple }}
+          path: ${{ steps.stage.outputs.files }}
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
 
   build:
     name: build (${{ matrix.triple }})
     runs-on: ${{ matrix.runs-on }}
-    # After the runtime assets, whose sha256s the manifest below
-    # carries. `!cancelled()` rather than the default `success()`: a
-    # runtime leg that failed costs the tarballs that name it (their
+    # After the runtime artifacts and the CUDA module exist, whose sha256s
+    # the manifest below carries (the module's in the x86_64 gnu tarball's
+    # alone). `!cancelled()` rather than the default `success()`: a runtime
+    # leg or a `cuda` job that failed costs the tarballs that name it (their
     # manifest step fails), not every tarball.
-    needs: runtime
+    needs: [runtime, cuda]
     if: ${{ !cancelled() }}
     strategy:
-      # One platform failing shouldn't cancel the others: a successful
-      # build's tarball can still be published to the release while we
-      # investigate the broken one.
+      # One platform failing shouldn't cancel the others: a re-run of the
+      # broken one then finishes the release without rebuilding them.
       fail-fast: false
       matrix:
+        # `runtime-triple`: the runtime asset this leg's manifest names. A
+        # musl leg names its gnu sibling's (stage_tarball.sh says why).
         # `bazel-config`: extra config appended to the dist build only.
         # The musl legs run on the same gnu runners as their gnu
         # siblings (same arch, cross-libc): `--config=musl-*` selects
@@ -176,19 +174,24 @@ jobs:
         # github.com/imbue-ai/latchkey-curl-shims.
         include:
           - triple: aarch64-apple-darwin
-            runs-on: macos-14  # Apple Silicon
+            runs-on: macos-26  # Apple Silicon
+            runtime-triple: aarch64-apple-darwin
             bazel-config: ""
           - triple: x86_64-unknown-linux-gnu
-            runs-on: ubuntu-latest
+            runs-on: ubuntu-24.04  # release_steps.md §"The Linux floor"
+            runtime-triple: x86_64-unknown-linux-gnu
             bazel-config: ""
           - triple: aarch64-unknown-linux-gnu
             runs-on: ubuntu-24.04-arm  # GitHub-hosted native ARM Linux
+            runtime-triple: aarch64-unknown-linux-gnu
             bazel-config: ""
           - triple: x86_64-unknown-linux-musl
-            runs-on: ubuntu-latest
+            runs-on: ubuntu-24.04
+            runtime-triple: x86_64-unknown-linux-gnu
             bazel-config: "--config=musl-x86_64"
           - triple: aarch64-unknown-linux-musl
             runs-on: ubuntu-24.04-arm
+            runtime-triple: aarch64-unknown-linux-gnu
             bazel-config: "--config=musl-aarch64"
 
     steps:
@@ -198,64 +201,24 @@ jobs:
           # default shallow clone has no tag history, so describe would
           # always fall back to a bare sha.
           fetch-depth: 0
+          persist-credentials: false
 
-      # BuildBuddy serves the remote action cache (the big win — skips
-      # the multi-minute tokio / sqlx / doltlite compiles), but
-      # BuildBuddy is action-cache-only: it doesn't cover the
-      # bazelisk binary download, the `http_archive` tarball downloads
-      # (rules_rust source, protobuf, etc.), or crate_universe's
-      # external-repo resolution. Those are local-to-runner concerns.
-      #
-      # We keep `repository-cache` on so the crate_universe + rules
-      # tarballs persist across runs (saves the ~1–3 min network-bound
-      # fetch on a cold runner). The other three layers stay off:
-      #   * disk-cache duplicates BuildBuddy's action cache and
-      #     previously caused "Lost inputs no longer available
-      #     remotely" failures against rules_rust's
-      #     ExtractCargoTomlEnvVars actions (see test.yml header).
-      #   * external-cache caches the materialized `external/`
-      #     workspaces — small win and historically the flakiest layer.
-      #   * bazelisk-cache saves a ~20s binary download, not worth
-      #     a slot in the 10 GB-per-repo actions/cache quota.
-      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+      # Every cache this action offers stays off, `repository-cache` above
+      # all. A tag restores what a run on `main` saved under the same key,
+      # and bazel uses the extracted trees in a repository cache without
+      # checking them. Downloads come from their origin, each pinned by
+      # sha256. docs/dev/security_posture.md has the measurement.
+      - uses: bazel-contrib/setup-bazel@f34d6a05eae3c24acab7fa54587492daeaeffdab # 0.19.2
         with:
           bazelisk-cache: false
           disk-cache: false
-          repository-cache: true
+          repository-cache: false
           external-cache: false
 
       - name: Show toolchain versions
         run: |
           bazel version
           rustc --version || true
-
-      # Wire the BuildBuddy remote cache for this build. `.bazelrc.user`
-      # is gitignored so we can drop the API key into it from a repo
-      # secret without polluting the source tree; the `try-import` at
-      # the bottom of `.bazelrc` picks it up automatically.
-      #
-      # SUPPLY CHAIN: a release build replays action-cache hits into
-      # what it ships, and bazel verifies none of them. So this is the
-      # RELEASE group's key — a cache only `test.yml` runs of commits on
-      # `main` write to, which is what makes a hit here "what main just
-      # built" — and `--config=buildbuddy-release-readonly`, which
-      # reads and never writes. Never the contributor key: every laptop and every
-      # PR run writes that cache. Without the secret this leg runs cold
-      # (~20 min), which is the right failure mode.
-      - name: Configure BuildBuddy remote cache
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_RELEASE_API_KEY }}
-        run: |
-          set -euo pipefail
-          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
-              cat > .bazelrc.user <<EOF
-          common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
-          build --config=buildbuddy-release-readonly
-          EOF
-              echo "BuildBuddy release cache enabled for this job (read-only)."
-          else
-              echo "BUILD_BUDDY_RELEASE_API_KEY not available — running without remote cache."
-          fi
 
       # Defense in depth against "tagged the wrong version" or "forgot
       # to bump Cargo.toml before tagging". The bazel test below already
@@ -331,7 +294,7 @@ jobs:
       # or do not report exactly the tag (`dev`, a `-dirty` suffix, a
       # different tag). The matrix runner is the artifact's own triple,
       # so the binary runs here. The same script checks the app's
-      # bundled binaries in the macos-app job.
+      # bundled binaries in the macos-app-verify job.
       - name: Assert release binaries are optimized and report the tag
         env:
           REF_NAME: ${{ github.ref_name }}
@@ -344,13 +307,24 @@ jobs:
       # The step is a script so //tools:stage_tarball_test runs the same
       # lines before a tag does (docs/dev/release_steps.md): the binaries
       # `:bin` laid out above, the `latchkey` launcher, the commit, the
-      # manifest of the runtime asset the `runtime` job published (read
-      # back through `gh`, with its sha256 and size), and the third-party
-      # notices — then the tarball and its sha256.
+      # manifest of the assets the `runtime` and `cuda` jobs staged (with
+      # their sha256s and sizes), and the third-party notices — then the tarball
+      # and its sha256.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: runtime-${{ matrix.runtime-triple }}
+          path: ${{ runner.temp }}/runtime-assets
+      # The CUDA module, which only the x86_64 gnu manifest names.
+      - if: matrix.triple == 'x86_64-unknown-linux-gnu'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cuda-x86_64-unknown-linux-gnu
+          path: ${{ runner.temp }}/runtime-assets
+
       - name: Stage tarball
         id: stage
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ASSETS_DIR: ${{ runner.temp }}/runtime-assets
           REF_NAME: ${{ github.ref_name }}
           TRIPLE: ${{ matrix.triple }}
         run: |
@@ -359,125 +333,154 @@ jobs:
           echo "tarball=${tarball}" >> "$GITHUB_OUTPUT"
           echo "sha256=${tarball}.sha256" >> "$GITHUB_OUTPUT"
 
-      # Plain `gh` instead of softprops/action-gh-release (an
-      # individually-owned action; see the macos-app job's SUPPLY CHAIN
-      # note). The matrix legs — and the macos-app job — race to create
-      # the tag's release; create-if-missing with `|| true` lets the
-      # losers fall through to the upload, which targets the same
-      # release either way. `gh release upload` fails on a missing file,
-      # preserving the old fail_on_unmatched_files behavior.
-      - name: Publish release
+      # The Linux floor, held twice before anything is published
+      # (release_steps.md §"The Linux floor"): no ELF file in the tarball
+      # names a glibc version above it, and on the oldest supported Ubuntu
+      # the loader finds everything each ELF file in the tarball and its
+      # runtime needs and the binaries start. The image is the floor's
+      # distro, pinned by digest; a musl leg runs it too, which shows its
+      # binaries need nothing from the host.
+      - name: Assert the tarball needs no glibc above the floor
+        if: runner.os == 'Linux'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REF_NAME: ${{ github.ref_name }}
           TARBALL: ${{ steps.stage.outputs.tarball }}
-          SHA256: ${{ steps.stage.outputs.sha256 }}
+        run: scripts/release/check_glibc_floor.sh "${TARBALL}"
+
+      - name: Run the tarball on the oldest supported Linux
+        if: runner.os == 'Linux'
+        env:
+          TARBALL: ${{ steps.stage.outputs.tarball }}
+          RUNTIME: ${{ runner.temp }}/runtime-assets/runtime-${{ matrix.runtime-triple }}.tar.gz
         run: |
           set -euo pipefail
-          if ! gh release view "$REF_NAME" >/dev/null 2>&1; then
-              gh release create "$REF_NAME" --verify-tag --notes "" || true
-          fi
-          files=("$TARBALL" "$SHA256")
-          # Once more on failure — see the macos-app job's publish step.
-          for attempt in 1 2; do
-              if gh release upload "$REF_NAME" --clobber "${files[@]}"; then
-                  break
-              fi
-              [[ "$attempt" == 2 ]] && exit 1
-              sleep 30
-          done
+          image=mirror.gcr.io/library/ubuntu:24.04@sha256:2198e4c65076e9cb0b3d695219df667c0e3b0072da64ca3c2648aca17dcecaf5
+          docker run --rm --network none \
+              -v "$(realpath "${TARBALL}"):/in/datalib.tar.gz:ro" \
+              -v "${RUNTIME}:/in/runtime.tar.gz:ro" \
+              -v "${PWD}/scripts/release:/scripts:ro" \
+              "${image}" bash /scripts/smoke_linux_assets.sh /in/datalib.tar.gz /in/runtime.tar.gz
 
-  # Build, sign, and notarize the Datalib desktop app (Tauri) and
-  # attach the dmg to the GitHub Release. Deliberately NOT gated on the
-  # `build` matrix job: the tauri crate is a standalone cargo workspace
-  # (not owned by bazel — see datalib/tauri/README.md), so a dist
-  # failure shouldn't block shipping the app, and vice versa.
-  #
-  # The signing certs + notarization key live under
-  # restricted/datalib-release/* in Vault, read via the
-  # `datalib_release_gh` role (vault repo: terraform/github_actions.tf).
-  # The role binds on this repository plus a glob on the OIDC ref claim
-  # (refs/tags/v*), so only tag-triggered runs can mint it — branch and
-  # PR workflows are denied, and no GitHub Environment setup is needed.
-  # The gate is therefore "who can push a v* tag"; see the vault repo's
-  # module comment for the residual exposure and how to tighten further.
-  #
-  # All signing/notarization mechanics live in
-  # datalib/tauri/build-signed-app.sh, which is the same script you
-  # run locally — CI only differs in where the secrets come from.
-  #
-  # SUPPLY CHAIN: this job holds the org's Developer ID signing key, and
-  # use-vault-secrets exports it via $GITHUB_ENV — meaning every later
-  # step can read it. So the job uses no individually-owned third-party
-  # actions (only GitHub/pnpm/bazel-contrib org actions + our own), and
-  # every step after the secrets export is plain `run:` shell — no
-  # third-party action code executes with the certs in scope. Keep it
-  # that way: rustup replaces dtolnay/rust-toolchain, `gh release`
-  # replaces softprops/action-gh-release, and there's deliberately no
-  # cargo cache (Swatinem/rust-cache) — a cold compile only costs a few
-  # minutes on a rare tag build and doesn't eat the 10 GB cache quota.
-  #
-  # The same rule for what the build FETCHES: everything that talks to
-  # a registry or a cache — the pinned Tauri CLI from pnpm-lock.yaml,
-  # the cargo crates, the Bazel actions the beforeBuildCommand and the
-  # runtime staging run — is fetched or built in the steps BEFORE the
-  # secrets export, so the signing step itself is a cache hit that
-  # downloads nothing. The export is the last setup step, on purpose.
-  macos-app:
-    name: macos-app (signed + notarized)
-    runs-on: macos-14  # Apple Silicon
-    timeout-minutes: 90
-    permissions:
-      id-token: write  # OIDC token for Vault (signing certs + notary key)
-      contents: write  # attach the dmg to the GitHub Release
-    env:
-      VAULT_AUTH_ROLE: datalib_release_gh
+      # `overwrite`: a re-run repeats this upload when a `runtime` leg failed,
+      # and without it a later download can get the earlier attempt's
+      # (release_steps.md §"What a re-run does").
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tarball-${{ matrix.triple }}
+          overwrite: true
+          path: |
+            ${{ steps.stage.outputs.tarball }}
+            ${{ steps.stage.outputs.sha256 }}
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  # What CUDA adds, x86_64 gnu Linux only (docs/dev/plans/embed_on_modal.md):
+  # the module `libggml-cuda.so` as a release asset, and the cuBLAS the
+  # `-cuda` image carries, which is not published. One script stages both
+  # and checks them (scripts/release/build_cuda.sh), the one
+  # `.github/workflows/cuda.yml` runs on every change that could move them.
+  # Its own job: NVIDIA's toolkit is a ~1 GB fetch and the GPU code a long
+  # compile that no other leg needs, and the plain image does not wait for it.
+  cuda:
+    name: cuda (x86_64-unknown-linux-gnu)
+    # The gnu legs' runner: its gcc 13 is one CUDA 12.9's nvcc accepts, and
+    # its glibc is the floor (release_steps.md §"The Linux floor").
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # datalib-step is stamped, as in `build`.
+          fetch-depth: 0
+          persist-credentials: false
 
-      # The tauri beforeBuildCommand bazel-builds the bundled
-      # datalib-http / datalib-dag / datalib-step binaries; same cache layering
-      # rationale as the build job above (BuildBuddy serves actions,
-      # repository-cache keeps the crate_universe / rules tarballs).
-      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+      - uses: ./.github/actions/free-runner-disk
+
+      # No cache of any kind, as in `build`.
+      - uses: bazel-contrib/setup-bazel@f34d6a05eae3c24acab7fa54587492daeaeffdab # 0.19.2
         with:
           bazelisk-cache: false
           disk-cache: false
-          repository-cache: true
+          repository-cache: false
           external-cache: false
 
-      # See the build job's identically-named step for the full story:
-      # the release group's key, and no uploads.
-      - name: Configure BuildBuddy remote cache
-        env:
-          BUILDBUDDY_API_KEY: ${{ secrets.BUILD_BUDDY_RELEASE_API_KEY }}
+      - name: Build and stage
         run: |
           set -euo pipefail
-          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
-              cat > .bazelrc.user <<EOF
-          common --remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}
-          build --config=buildbuddy-release-readonly
-          EOF
-              echo "BuildBuddy release cache enabled for this job (read-only)."
-          else
-              echo "BUILD_BUDDY_RELEASE_API_KEY not available — running without remote cache."
-          fi
+          mkdir -p "$RUNNER_TEMP/cuda" && cd "$RUNNER_TEMP/cuda"
+          BAZEL=bazel "$GITHUB_WORKSPACE/scripts/release/build_cuda.sh" \
+              -c opt --config=release --build_metadata=ROLE=CI
+          mkdir -p asset image
+          mv ggml-cuda-x86_64-unknown-linux-gnu.tar.gz* asset/
+          mv cuda-libs-x86_64-unknown-linux-gnu.tar.gz* image/
+
+      - name: Assert the module needs no glibc above the floor
+        run: scripts/release/check_glibc_floor.sh "$RUNNER_TEMP/cuda/asset/ggml-cuda-x86_64-unknown-linux-gnu.tar.gz"
+
+      # `overwrite`, as on the tarballs (release_steps.md §"What a re-run does").
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cuda-x86_64-unknown-linux-gnu
+          overwrite: true
+          path: ${{ runner.temp }}/cuda/asset/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cuda-image-x86_64-unknown-linux-gnu
+          overwrite: true
+          path: ${{ runner.temp }}/cuda/image/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  # Build, sign, and notarize the Datalib desktop app (Tauri) and attach
+  # the dmg to the GitHub Release: four jobs, four machines, so that the
+  # job holding the signing key runs no build and the jobs running a build
+  # cannot ask for the key. Deliberately NOT gated on the `build` matrix
+  # job: the tauri crate is a standalone cargo workspace (not owned by
+  # bazel — see datalib/tauri/README.md), so a dist failure shouldn't block
+  # shipping the app, and vice versa.
+  #
+  # All the mechanics are the phases of datalib/tauri/build-signed-app.sh,
+  # which is what you run locally too — CI differs in where the secrets
+  # come from and in running each phase on its own machine.
+  #
+  # macos-app-compile runs every crate's build script and proc macro, the
+  # beforeBuildCommand's bazel build and cargo-about. No `id-token` here:
+  # that permission puts the means to mint the Vault token in every step's
+  # environment, so a build script could read the certs without waiting
+  # for them to be exported.
+  macos-app-compile:
+    name: macos-app (compile)
+    runs-on: macos-26  # Apple Silicon
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The tauri beforeBuildCommand bazel-builds the bundled
+      # datalib-http / datalib-dag / datalib-step binaries; no cache, as in
+      # the build job above.
+      - uses: bazel-contrib/setup-bazel@f34d6a05eae3c24acab7fa54587492daeaeffdab # 0.19.2
+        with:
+          bazelisk-cache: false
+          disk-cache: false
+          repository-cache: false
+          external-cache: false
 
       # The tauri crate is built by cargo (not bazel's hermetic rust
       # toolchain), so make sure a current stable toolchain is default
       # instead of trusting whatever the runner image ships (Cargo.toml
-      # says rust-version = "1.83"). Plain rustup, no third-party action;
-      # the runner image carries rustup, with the official installer as
-      # fallback in case a future image drops it.
+      # says rust-version = "1.83"). Plain rustup, no third-party action.
+      # GitHub's macOS images carry rustup; if a future one drops it this
+      # fails here, and the fix is a change of image, not an installer
+      # piped into a shell.
       - name: Install Rust (1.99.1, the version Bazel builds with)
         run: |
           set -euo pipefail
-          if ! command -v rustup >/dev/null 2>&1; then
-              curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-                  | sh -s -- -y --profile minimal --default-toolchain none
-              echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-              export PATH="$HOME/.cargo/bin:$PATH"
-          fi
           rustup toolchain install 1.99.1 --profile minimal --no-self-update
           rustup default 1.99.1
           rustc --version
@@ -486,15 +489,91 @@ jobs:
       # is being removed from newer Node distributions — install the
       # pinned pnpm (packageManager in datalib/ui/package.json)
       # directly so the runner image's Node choices can't break us.
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: datalib/ui/package.json
+
+      # DATALIB_APP_VERSION stamps the tag's version into the shell, as
+      # the sign and verify jobs do into the bundle (tauri.conf.json's
+      # checked-in version is not kept in sync with the backend Cargo.toml
+      # version the tag asserts on). The tag goes through env, never
+      # ${{ }}-interpolated into run: (see verify-version in sculptor's
+      # build-desktop.yml for why).
+      - name: Compile the app and stage what it bundles
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          export DATALIB_APP_VERSION="${REF_NAME#v}"
+          ./datalib/tauri/build-signed-app.sh compile
+
+      # A tar, since an artifact keeps no file modes and these are programs.
+      # COPYFILE_DISABLE: no `._name` entries for extended attributes, which
+      # the sign job's unpacker would refuse.
+      - name: Pack what the sign job needs
+        env:
+          COPYFILE_DISABLE: "1"
+        run: |
+          tar -C datalib/tauri -czf macos-app-compiled.tar.gz \
+              binaries runtime licenses target/release/datalib-tauri
+          ls -la macos-app-compiled.tar.gz
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-app-compiled
+          path: macos-app-compiled.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  # Holds the org's Developer ID signing key. The certs + notarization key
+  # live under restricted/datalib-release/* in Vault, read via the
+  # `datalib_release_gh` role (vault repo: terraform/github_actions.tf).
+  # The role binds on this repository plus a glob on the OIDC ref claim
+  # (refs/tags/v*), so only tag-triggered runs can mint it — branch and
+  # PR workflows are denied, and no GitHub Environment setup is needed.
+  # The gate is therefore "who can push a v* tag"; see the vault repo's
+  # module comment for the residual exposure and how to tighten further.
+  #
+  # SUPPLY CHAIN: `tauri bundle` cannot compile, and nothing else here
+  # builds: no bazel, no cargo beyond `cargo metadata`, no cache restored.
+  # use-vault-secrets exports through $GITHUB_ENV, so
+  # every later step can read the certs. So the job uses no
+  # individually-owned third-party actions (only GitHub/pnpm org actions +
+  # our own), everything is fetched BEFORE the export, which is the last
+  # setup step on purpose, and each step until the certs are blanked is
+  # plain `run:` shell. Third-party code that still runs with the certs in
+  # reach: the Tauri CLI at the version pnpm-lock.yaml names.
+  macos-app-sign:
+    name: macos-app (sign + notarize)
+    needs: macos-app-compile
+    runs-on: macos-26  # Apple Silicon
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write  # OIDC token for Vault (signing certs + notary key)
+    env:
+      VAULT_AUTH_ROLE: datalib_release_gh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # `tauri bundle` asks `cargo metadata` where the target directory is,
+      # and rust-toolchain.toml would have rustup fetch this toolchain then.
+      - name: Install Rust (1.99.1, the version Bazel builds with)
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.99.1 --profile minimal --no-self-update
+          rustup default 1.99.1
+          rustc --version
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           package_json_file: datalib/ui/package.json
 
       # The Tauri CLI at the version pnpm-lock.yaml names, from the
-      # tarballs it names, install scripts off. build-signed-app.sh runs
-      # the same install (a no-op here) and then `pnpm exec tauri`, never
-      # `pnpm dlx`, which resolved whatever 2.x was current at signing
-      # time.
+      # tarballs it names, install scripts off.
       - name: Install the pinned Tauri CLI
         run: |
           set -euo pipefail
@@ -502,44 +581,26 @@ jobs:
           pnpm install --frozen-lockfile --ignore-scripts
           pnpm exec tauri --version
 
-      # Every fetch the build will make, made now: the shell's crates
-      # and the backend's (`cargo fetch` against the committed
-      # Cargo.locks — cargo-about reads license files out of the
-      # backend's crate sources), and the Bazel targets the
-      # beforeBuildCommand copies out and stage-runtime.sh rsyncs — so
-      # the signing step's bazel invocations are analysis + cache hits
-      # with no network, and no crate lands after the certs are in
-      # scope. Each list mirrors its caller, flags included: the
-      # binaries are tauri.conf.json's beforeBuildCommand as
-      # build-signed-app.sh runs it (`-c opt`, stamped, as the tarballs
-      # are); the rest is scripts/stage_runtime.sh and
-      # scripts/third_party_notices.sh, which build in the default mode.
-      - name: Prebuild the bundled binaries and runtime
-        run: |
-          set -euo pipefail
-          (cd datalib/tauri && cargo fetch --locked)
-          (cd datalib/backend && cargo fetch --locked)
-          bazel build -c opt --config=release --build_metadata=ROLE=CI \
-              //datalib/backend/http:datalib_http_bin \
-              //datalib/backend/dag:datalib_dag_bin \
-              //datalib/backend/datalib_step:datalib_step \
-              //datalib/backend/applets:datalib_applet \
-              //datalib/backend/migrate_config:datalib_migrate_config_bin \
-              //third-party/latchkey-curl-shims \
-              //third-party/doltlite:doltlite
-          bazel build --build_metadata=ROLE=CI \
-              //datalib/tauri:bundled_node \
-              //datalib/ui:dist \
-              //third-party:bundled_licenses \
-              //third-party/qmd/runtime:qmd_tree \
-              //third-party/latchkey/runtime:latchkey_tree
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-app-compiled
+          path: ${{ runner.temp }}/macos-app-compiled
+
+      # Build scripts ran on the machine that made this archive, and the next
+      # steps run scripts from this checkout with the certs in reach. So it is
+      # never unpacked with tar: this takes only the paths the bundle needs, as
+      # plain files and directories, or nothing at all.
+      - name: Unpack what the compile job made
+        env:
+          COMPILED: ${{ runner.temp }}/macos-app-compiled/macos-app-compiled.tar.gz
+        run: python3 -I scripts/release/unpack_compiled_app.py "$COMPILED" datalib/tauri
 
       - name: Export signing credentials
         # CERTS_TAR_GZ is the base64 certs tarball; APPLE_API_KEY_ID /
         # APPLE_API_ISSUER identify the notarization key inside it. The
-        # action leaves all three in $GITHUB_ENV for the build step,
-        # where build-signed-app.sh picks them up. LAST of the setup
-        # steps — see the SUPPLY CHAIN note on the job.
+        # action leaves all three in $GITHUB_ENV for the next step, where
+        # build-signed-app.sh picks them up. LAST of the setup steps — see
+        # the SUPPLY CHAIN note on the job.
         uses: imbue-ai/use-vault-secrets@38aac6d2f537009c6e58849f8fdd34ea16084103 # main, 2026-09-17
         with:
           role: ${{ env.VAULT_AUTH_ROLE }}
@@ -548,18 +609,21 @@ jobs:
             restricted/datalib-release/APPLE_API_KEY_ID
             restricted/datalib-release/APPLE_API_ISSUER
 
-      - name: Build, sign, notarize
-        # DATALIB_APP_VERSION stamps the tag's version into the
-        # bundle (tauri.conf.json's checked-in version is not kept in
-        # sync with the backend Cargo.toml version the tag asserts on).
-        # The tag goes through env, never ${{ }}-interpolated into run:
-        # (see verify-version in sculptor's build-desktop.yml for why).
+      - name: Sign, bundle, notarize
         env:
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           export DATALIB_APP_VERSION="${REF_NAME#v}"
-          ./datalib/tauri/build-signed-app.sh
+          ./datalib/tauri/build-signed-app.sh sign
+
+      # Before the upload action and every post-step, on failure too.
+      - name: Blank the signing credentials
+        if: always()
+        run: |
+          for name in CERTS_TAR_GZ APPLE_API_KEY_ID APPLE_API_ISSUER; do
+              echo "${name}=" >> "$GITHUB_ENV"
+          done
 
       - name: Stage dmg
         env:
@@ -574,244 +638,336 @@ jobs:
           cp "$dmg" "$out"
           shasum -a 256 "$out" > "$out.sha256"
 
-      # Plain `gh` instead of softprops/action-gh-release: no third-party
-      # action code runs after the signing secrets land in $GITHUB_ENV
-      # (see the SUPPLY CHAIN note in the job comment). Create-if-missing
-      # tolerates the race with the build matrix's publish step — if the
-      # create loses the race, the upload still targets the same release.
-      - name: Publish release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-app-dmg
+          path: |
+            Datalib-aarch64-apple-darwin.dmg
+            Datalib-aarch64-apple-darwin.dmg.sha256
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  # Runs the signed app, and with it the node and JS trees it bundles, on a
+  # machine that never held the key. Checks the dmg a person downloads, and
+  # names it by hash so `publish-release` publishes this dmg and no other: an
+  # artifact can be replaced by a later upload, and a job's output cannot.
+  macos-app-verify:
+    name: macos-app (verify)
+    needs: macos-app-sign
+    runs-on: macos-26  # Apple Silicon
+    timeout-minutes: 20
+    outputs:
+      dmg_sha256: ${{ steps.check.outputs.dmg_sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-app-dmg
+          path: ${{ runner.temp }}/macos-app-dmg
+
+      - name: Check the dmg
+        id: check
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DMG: ${{ runner.temp }}/macos-app-dmg/Datalib-aarch64-apple-darwin.dmg
           REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if ! gh release view "$REF_NAME" >/dev/null 2>&1; then
-              gh release create "$REF_NAME" --verify-tag --notes "" || true
-          fi
-          # Once more on failure. The dmg is 175 MB, and a slow upload
-          # that succeeded server-side can still come back as a client
-          # error; the retry's `--clobber` replaces what landed
-          # (v0.34.0: HTTP 422 "ReleaseAsset.name already exists", with
-          # the asset sitting on the release).
-          for attempt in 1 2; do
-              if gh release upload "$REF_NAME" --clobber \
-                  Datalib-aarch64-apple-darwin.dmg \
-                  Datalib-aarch64-apple-darwin.dmg.sha256; then
-                  break
-              fi
-              [[ "$attempt" == 2 ]] && exit 1
-              sleep 30
-          done
+          export DATALIB_APP_VERSION="${REF_NAME#v}"
+          sha256="$(shasum -a 256 "$DMG" | cut -d' ' -f1)"
+          ./datalib/tauri/build-signed-app.sh verify "$DMG"
+          echo "dmg_sha256=${sha256}" >> "$GITHUB_OUTPUT"
 
-  # Build and push the multi-arch runtime image to ghcr.io. Runs after
-  # the matrix `build` job has uploaded both Linux tarballs to the
-  # GitHub Release so we can fetch them by their stable
-  # `releases/download/<tag>/...` URLs from inside the docker build
-  # context.
+  # Build the runtime image for one architecture and push it to ghcr.io by
+  # digest, with no tag yet; `docker-publish` joins the two. The docker build
+  # context is staged from the artifacts of the jobs it needs.
+  #
+  # Each leg builds on a runner of its own architecture, so nothing is
+  # emulated and the job runs no emulator image.
   #
   # This image is the user-facing way to run datalib on Linux
   # without trusting the bare binaries to your host shell — see
-  # docs/dev/docker.md for the bind-mount + security model. The build is
-  # NOT gated on the macOS matrix entry: a darwin-only build failure
-  # shouldn't block publishing the Linux image.
-  docker-publish:
-    name: docker-publish (ghcr.io)
+  # docs/dev/docker.md for the bind-mount + security model.
+  #
+  # `!cancelled()`, so a failed mac or musl leg of `runtime` or `build` costs
+  # no image. A leg can't be named in `needs`, so a failed gnu leg shows up
+  # at this job's download of that leg's artifact, which fails.
+  docker-image:
+    name: docker-image (${{ matrix.arch }})
     needs: [runtime, build]
-    runs-on: ubuntu-latest
+    if: ${{ !cancelled() }}
+    runs-on: ${{ matrix.runs-on }}
+    permissions:
+      contents: read
+      packages: write  # push this architecture's image to ghcr.io
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            triple: x86_64-unknown-linux-gnu
+            runs-on: ubuntu-24.04
+          - arch: arm64
+            triple: aarch64-unknown-linux-gnu
+            runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      # GHA `ubuntu-latest` ships with ~14 GB free disk, which doesn't
-      # fit a buildx run of our ~2.7 GB image × two architectures plus
-      # the `type=gha,mode=max` cache export. v0.5.0 / v0.5.1 both
-      # filled the runner's disk before docker-publish could finish.
-      # Deleting the preinstalled Android SDK, .NET runtimes, Haskell
-      # GHC, large apt packages we don't use, and swap reclaims ~30 GB —
-      # from ~14 GB to ~44 GB free, comfortable headroom for the build.
-      # PATH-installed tools (gh, docker, node, etc.) that the rest of
-      # this job uses are left alone.
-      #
-      # Inlined shell doing what jlumbroso/free-disk-space@main used to
-      # do here (an individually-owned action pinned to a mutable
-      # branch; see the macos-app job's SUPPLY CHAIN note). Best-effort
-      # `|| true` throughout: runner images shed packages over time, and
-      # a missing one shouldn't fail a release — the docker build's own
-      # disk usage is the real check.
-      - name: Free up runner disk
-        run: |
-          set -euo pipefail
-          echo "Free disk before:" && df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet \
-              /opt/ghc /usr/local/.ghcup || true
-          sudo apt-get remove -y --purge '^aspnetcore-.*' '^dotnet-.*' \
-              '^llvm-.*' 'php.*' '^mongodb-.*' '^mysql-.*' azure-cli \
-              google-chrome-stable firefox powershell mono-devel \
-              libgl1-mesa-dri >/dev/null || true
-          sudo apt-get autoremove -y >/dev/null || true
-          sudo apt-get clean || true
-          sudo swapoff -a || true
-          sudo rm -f /mnt/swapfile || true
-          echo "Free disk after:" && df -h /
+      - uses: ./.github/actions/free-runner-disk
 
-      # Pull the just-published tarballs from the GitHub Release into
-      # the build context at the layout datalib/docker/Dockerfile
-      # expects (`dist/<arch>/<tarball>`), via `gh release download`
-      # with the workflow's GITHUB_TOKEN: the binaries, and the CPU
-      # runtime asset with its `.sha256` sidecar, which the Dockerfile
-      # checks before unpacking it beside the binaries — an image is a
-      # bundle, so it does not fetch at run time. The demo library's
-      # inputs come from the checkout (datalib/docker/stage_demo.sh).
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tarball-${{ matrix.triple }}
+          path: ${{ runner.temp }}/image-assets
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: runtime-${{ matrix.triple }}
+          path: ${{ runner.temp }}/image-assets
+
+      # Lay this run's tarball out in the build context as
+      # datalib/docker/Dockerfile expects (`dist/<arch>/<tarball>`): the
+      # binaries, and the CPU runtime asset with its `.sha256` sidecar,
+      # which the Dockerfile checks before unpacking it beside the binaries
+      # — an image is a bundle, so it does not fetch at run time. The demo
+      # library's inputs come from the checkout (datalib/docker/stage_demo.sh).
       - name: Stage tarballs and the demo into docker build context
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          mkdir -p ctx/dist/amd64 ctx/dist/arm64
-          cp datalib/docker/Dockerfile ctx/Dockerfile
-          cp datalib/docker/entrypoint.sh ctx/entrypoint.sh
-          datalib/docker/stage_demo.sh ctx
-          for pattern in 'datalib-x86_64-unknown-linux-gnu.tar.gz' \
-                         'runtime-x86_64-unknown-linux-gnu.tar.gz*'; do
-              gh release download "${REF_NAME}" \
-                  --repo "${GITHUB_REPOSITORY}" \
-                  --pattern "${pattern}" \
-                  --clobber --dir ctx/dist/amd64
-          done
-          for pattern in 'datalib-aarch64-unknown-linux-gnu.tar.gz' \
-                         'runtime-aarch64-unknown-linux-gnu.tar.gz*'; do
-              gh release download "${REF_NAME}" \
-                  --repo "${GITHUB_REPOSITORY}" \
-                  --pattern "${pattern}" \
-                  --clobber --dir ctx/dist/arm64
-          done
-          ls -la ctx/dist/amd64 ctx/dist/arm64
+          ARCH: ${{ matrix.arch }}
+          ASSETS: ${{ runner.temp }}/image-assets
+          TRIPLE: ${{ matrix.triple }}
+        run: scripts/release/stage_docker_context.sh ctx "${ARCH}" "${TRIPLE}" "${ASSETS}"
 
-      # Every Docker Hub image this job needs — binfmt, BuildKit, and the
+      # Every Docker Hub image this job needs — BuildKit and the
       # Dockerfile's `FROM`s — comes through Google's pull-through mirror
       # instead. Anonymous Docker Hub pulls are rate-limited per IP, and
       # a hosted runner shares its IP with strangers' jobs, so the quota
       # can be gone before we start (`toomanyrequests` at this step).
-      # The first two name the mirror; the build's
-      # `FROM`s reach it through `buildkitd-config-inline`, which falls
-      # back to Docker Hub only for an image the mirror cannot serve.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-        with:
-          image: mirror.gcr.io/tonistiigi/binfmt:latest
-
-      # Pin a recent BuildKit explicitly. The `buildx-stable-1` tag that
-      # `setup-buildx-action` defaults to was on a BuildKit old enough to
-      # still use the deprecated GHA Cache Service v1 API — which GitHub
-      # turned off on 2025-06-30 — so `--cache-to type=gha` silently
-      # no-op'd: tag pushes never imported a manifest and never exported
-      # one (see runs 27184867988 / 27254340228 — no "importing cache
-      # manifest" or "exporting cache layers" lines, and every layer
-      # including the 2.25 GB `qmd pull` rebuilt from scratch). BuildKit
-      # ≥ 0.18 speaks the v2 API; `moby/buildkit:latest` keeps us on
-      # whatever's current.
+      # BuildKit names the mirror, and the build's `FROM`s reach it through
+      # `buildkitd-config-inline`, which falls back to Docker Hub only for
+      # an image the mirror cannot serve.
+      #
+      # BuildKit assembles what ships, so it is pinned by digest (check 21).
+      # To move it, take a version and its digest from Docker Hub's tags page
+      # and change devcontainer.yml with it.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
         with:
-          driver-opts: image=mirror.gcr.io/moby/buildkit:latest
+          driver-opts: image=mirror.gcr.io/moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+          cache-binary: false
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
 
       - name: Log in to GHCR
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Build and push the multi-arch image in one go. We previously had
-      # a separate `--load` amd64 build that ran a latchkey
+      # We previously had a separate `--load` amd64 build that ran a latchkey
       # services-register / auth-set / auth-list roundtrip against the
-      # loaded image before this step pushed; that doubled cold-cache
-      # wall time (the amd64 build was effectively done twice — once
-      # for smoke, once for publish, with the latter cache-hitting via
-      # GHA but still re-exporting layers) and the only thing it
+      # loaded image before this step pushed; that doubled wall time
+      # (the amd64 build was effectively done twice — once for smoke,
+      # once for publish) and the only thing it
       # uniquely caught was a regression in the entrypoint's
       # `LATCHKEY_ENCRYPTION_KEY` bootstrap. The other smoke checks
       # (`datalib-dag --version`, `datalib-http --help`)
-      # duplicate `qmd --version` + binary-presence checks the
+      # duplicate the binary-presence checks the
       # Dockerfile already runs inline. If the latchkey bootstrap ever
       # regresses, ghcr.io will briefly have a broken `:latest` until
       # someone notices — acceptable while the user base is small;
       # revisit if we ever get pulls from real users.
       #
-      # `type=gha` cache means consecutive tag pushes within ~7 days
-      # cache-hit both arches (the eviction window) — only the first
-      # tag in a long while pays a full cold build. `mode=max` writes
-      # ALL intermediate layers (not just the final image) so the
-      # 2.25 GB qmd model layer is the dominant cache hit.
-      - name: Build and push multi-arch image
+      # No layer cache, as in the build job: each tag builds these layers
+      # itself, so nothing another run wrote ships in the image.
+      - name: Build this architecture and push it by digest
         env:
-          REF_NAME: ${{ github.ref_name }}
-          # Plain-text progress so cache-import/export lines are
-          # actually readable in the log — the TTY-style default hid
-          # whether `type=gha` was working at all in earlier runs.
+          ARCH: ${{ matrix.arch }}
+          # Plain-text progress, so each step is readable in the log.
           BUILDKIT_PROGRESS: plain
         run: |
           set -euo pipefail
-          version="${REF_NAME#v}"
           # ghcr.io image refs must be lowercase; GITHUB_REPOSITORY
           # preserves case from the org/repo slug. `${var,,}` lowercases.
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
-          # `scope=docker-publish` makes the cache persist across
-          # tag pushes. Without an explicit scope, type=gha defaults
-          # to the workflow ref, so a tag push (refs/tags/v0.6.x)
-          # gets a per-tag scope — i.e. every release starts cold and
-          # re-runs the 2.25 GB `qmd pull` plus all the apt / node /
-          # latchkey / doltlite-CLI layers from scratch. Mirrors the
-          # devcontainer block below (which already does this right).
-          #
-          # `version=2` pins the GHA Cache Service v2 API. v1 was
-          # turned off on 2025-06-30; without this, older BuildKit
-          # builds silently no-op the cache (no import, no export).
           docker buildx build \
-              --platform linux/amd64,linux/arm64 \
-              --tag "${image}:${version}" \
-              --tag "${image}:latest" \
+              --platform "linux/${ARCH}" \
               --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
-              --cache-from type=gha,scope=docker-publish,version=2 \
-              --cache-to type=gha,mode=max,scope=docker-publish,version=2 \
-              --push \
+              --output "type=image,name=${image},push-by-digest=true,name-canonical=true,push=true" \
+              --metadata-file "${RUNNER_TEMP}/metadata.json" \
               ctx
+          mkdir -p "${RUNNER_TEMP}/digests"
+          jq --exit-status --raw-output '."containerimage.digest"' "${RUNNER_TEMP}/metadata.json" \
+              > "${RUNNER_TEMP}/digests/${ARCH}"
 
-          # The same image without qmd's 2.2 GB of GGUFs, for the
-          # devcontainer below to build on. Only CI pulls the
-          # devcontainer image, and CI's one consumer of those models
-          # (`//tests/fixtures:ingested_tng_qmd`) is a remote cache hit
-          # on almost every run, so it was downloading them for nothing:
-          # measured 6.45 GB -> 3.78 GB, cold pull 80s -> 37s, and the
-          # whole CI job 218s -> 133s.
-          #
-          # Deliberately NOT tagged `:latest` and deliberately amd64
-          # only: this is a build input for the devcontainer, not a
-          # product image, and the only thing that consumes it runs on
-          # x86_64 runners. Every layer up to the qmd step is identical
-          # to the build above and comes from the same `type=gha` cache,
-          # so this costs one extra qmd/npm layer, not a second image.
-          #
-          # Reads the full build's cache (every layer up to the qmd step
-          # is identical) but writes to its OWN scope. BuildKit keeps one
-          # mutable index per scope, so exporting both builds to
-          # `docker-publish` would leave the amd64-only slim index as the
-          # survivor and cost the multi-arch build its cache on the next
-          # tag — the exact cold-start this job's cache config exists to
-          # avoid.
+      # `overwrite`, as on the tarball: a re-run after any failed `build` leg
+      # repeats this upload, and one tag must not join two attempts' images.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docker-digest-${{ matrix.arch }}
+          overwrite: true
+          path: ${{ runner.temp }}/digests/${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
+
+  # The CUDA variant, `<version>-cuda`, amd64 only: the same build with
+  # cuBLAS and the module in layers below the release's
+  # (docs/dev/docker.md § "The CUDA variant"). A job of its own, so the
+  # plain image neither waits for the `cuda` job nor fails with it.
+  docker-image-cuda:
+    name: docker-image (amd64-cuda)
+    needs: [runtime, build, cuda]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write  # push the image to ghcr.io
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/free-runner-disk
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tarball-x86_64-unknown-linux-gnu
+          path: ${{ runner.temp }}/image-assets
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: runtime-x86_64-unknown-linux-gnu
+          path: ${{ runner.temp }}/image-assets
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cuda-x86_64-unknown-linux-gnu
+          path: ${{ runner.temp }}/cuda-assets
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cuda-image-x86_64-unknown-linux-gnu
+          path: ${{ runner.temp }}/cuda-assets
+
+      - name: Stage tarballs, CUDA and the demo into docker build context
+        env:
+          ASSETS: ${{ runner.temp }}/image-assets
+          CUDA: ${{ runner.temp }}/cuda-assets
+        run: scripts/release/stage_docker_context.sh ctx amd64 x86_64-unknown-linux-gnu "${ASSETS}" "${CUDA}"
+
+      # As in docker-image.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+        with:
+          driver-opts: image=mirror.gcr.io/moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+          cache-binary: false
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build it and push it by digest
+        env:
+          BUILDKIT_PROGRESS: plain
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
           docker buildx build \
               --platform linux/amd64 \
-              --build-arg QMD_PREFETCH_MODELS=false \
-              --tag "${image}:${version}-slim" \
+              --build-arg CUDA=12 \
               --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
-              --cache-from type=gha,scope=docker-publish,version=2 \
-              --cache-from type=gha,scope=docker-publish-slim,version=2 \
-              --cache-to type=gha,mode=max,scope=docker-publish-slim,version=2 \
-              --push \
+              --output "type=image,name=${image},push-by-digest=true,name-canonical=true,push=true" \
+              --metadata-file "${RUNNER_TEMP}/metadata.json" \
               ctx
+          mkdir -p "${RUNNER_TEMP}/digests"
+          jq --exit-status --raw-output '."containerimage.digest"' "${RUNNER_TEMP}/metadata.json" \
+              > "${RUNNER_TEMP}/digests/amd64-cuda"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docker-digest-amd64-cuda
+          overwrite: true
+          path: ${{ runner.temp }}/digests/amd64-cuda
+          if-no-files-found: error
+          retention-days: 7
+
+  # Give the two architectures' images one tag, and check the result. Builds
+  # nothing. An architecture that failed leaves the version and `:latest`
+  # untouched.
+  #
+  # The `if` has to be spelled out: a job with none is skipped when anything
+  # up its chain failed, not only what it names, so a failed mac `build` leg
+  # would skip this with `docker-image` green. The tag does not wait for the
+  # release (release_steps.md §"What one failed job costs").
+  docker-publish:
+    name: docker-publish (ghcr.io)
+    needs: docker-image
+    if: ${{ !cancelled() && needs.docker-image.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # tag the image on ghcr.io
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/free-runner-disk
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docker-digest-amd64
+          path: ${{ runner.temp }}/digests
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docker-digest-arm64
+          path: ${{ runner.temp }}/digests
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag the multi-arch image
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${REF_NAME#v}"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          amd64="$(cat "${RUNNER_TEMP}/digests/amd64")"
+          arm64="$(cat "${RUNNER_TEMP}/digests/arm64")"
+          docker buildx imagetools create \
+              --tag "${image}:${version}" \
+              --tag "${image}:latest" \
+              "${image}@${amd64}" \
+              "${image}@${arm64}"
+          digest="$(docker buildx imagetools inspect "${image}:${version}" --format '{{json .Manifest}}' \
+              | jq --exit-status --raw-output .digest)"
+          mkdir -p "${RUNNER_TEMP}/image-digest"
+          echo "${digest}" > "${RUNNER_TEMP}/image-digest/docker-image.digest"
+
+      # What a person's page names the image by: anyone who can run a workflow
+      # here may be able to move a tag, and nobody can move a digest. The
+      # release carries it, where it is locked (docs/dev/security_posture.md).
+      # `overwrite`, as on the digests above: a re-run makes a new image.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docker-image-digest
+          overwrite: true
+          path: ${{ runner.temp }}/image-digest/docker-image.digest
+          if-no-files-found: error
+          retention-days: 7
 
       # Run the user-facing Docker walkthrough (docs/user/docker.md)
       # against the image just pushed: pull it back, serve the baked
@@ -822,13 +978,252 @@ jobs:
       # of leaving it for a user to find.
       - name: Check docs/user/docker.md against the pushed image
         env:
-          REF_NAME: ${{ github.ref_name }}
           # The runner's /tmp has about 8 GB free, under the pipeline's
           # 10 GB free-disk floor, so a data root there never starts a
           # step. RUNNER_TEMP is on the main disk.
           TMPDIR: ${{ runner.temp }}
         run: |
           set -euo pipefail
-          version="${REF_NAME#v}"
-          DATALIB_DOCKER_IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}:${version}" \
+          digest="$(cat "${RUNNER_TEMP}/image-digest/docker-image.digest")"
+          DATALIB_DOCKER_IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}@${digest}" \
               datalib/docker/doc_test.sh
+
+  # Tag the CUDA variant `<version>-cuda` and `latest-cuda`, and check it as
+  # docker-publish checks the plain one: a runner has no GPU, so this is the
+  # variant on the CPU, which is what it does wherever there is none.
+  docker-publish-cuda:
+    name: docker-publish (ghcr.io, -cuda)
+    needs: docker-image-cuda
+    if: ${{ !cancelled() && needs.docker-image-cuda.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # tag the image on ghcr.io
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/free-runner-disk
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docker-digest-amd64-cuda
+          path: ${{ runner.temp }}/digests
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag the CUDA image
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${REF_NAME#v}"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker buildx imagetools create \
+              --tag "${image}:${version}-cuda" \
+              --tag "${image}:latest-cuda" \
+              "${image}@$(cat "${RUNNER_TEMP}/digests/amd64-cuda")"
+          digest="$(docker buildx imagetools inspect "${image}:${version}-cuda" --format '{{json .Manifest}}' \
+              | jq --exit-status --raw-output .digest)"
+          mkdir -p "${RUNNER_TEMP}/image-digest"
+          echo "${digest}" > "${RUNNER_TEMP}/image-digest/docker-image-cuda.digest"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docker-image-cuda-digest
+          overwrite: true
+          path: ${{ runner.temp }}/image-digest/docker-image-cuda.digest
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Check docs/user/docker.md against the pushed image
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          digest="$(cat "${RUNNER_TEMP}/image-digest/docker-image-cuda.digest")"
+          DATALIB_DOCKER_IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}@${digest}" \
+              datalib/docker/doc_test.sh
+
+  # Signs a build provenance attestation (a SLSA statement, signed through
+  # Sigstore with this job's OIDC identity) for every asset the release will
+  # hold and for the image by digest: that this workflow, at this tag and
+  # commit, in this run, made those bytes. GitHub keeps them with the
+  # repository, and the image's also goes beside it on ghcr.io, so
+  # `gh attestation verify` checks any download.
+  #
+  # Builds nothing and runs nothing it downloaded. `id-token: write` lets any
+  # process in a job sign as this workflow, so a build script in a job that
+  # held it could attest bytes of its own; that is why no build job does. It signs what
+  # publish_release.py's checks pass, chosen by the same code
+  # `publish-release` runs, and hands that job the hash of the list as an
+  # output, which a later artifact upload cannot change. No `if`, as on
+  # `publish-release`: nothing is attested unless everything is published.
+  attest:
+    name: attest the release
+    needs:
+      - runtime
+      - build
+      - macos-app-verify
+      - docker-publish
+      - cuda
+      - docker-publish-cuda
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write      # the Sigstore signing identity
+      attestations: write  # store the attestations with the repository
+      packages: write      # push the image's attestation beside it on ghcr.io
+    outputs:
+      subjects_sha256: ${{ steps.subjects.outputs.subjects_sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: runtime-*
+          path: ${{ runner.temp }}/release-artifacts
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: tarball-*
+          path: ${{ runner.temp }}/release-artifacts
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-app-dmg
+          path: ${{ runner.temp }}/release-artifacts/macos-app-dmg
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docker-image-digest
+          path: ${{ runner.temp }}/release-artifacts/docker-image-digest
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cuda-x86_64-unknown-linux-gnu
+          path: ${{ runner.temp }}/release-artifacts/cuda-x86_64-unknown-linux-gnu
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docker-image-cuda-digest
+          path: ${{ runner.temp }}/release-artifacts/docker-image-cuda-digest
+
+      - name: Check the assets and list them
+        id: subjects
+        env:
+          ARTIFACTS: ${{ runner.temp }}/release-artifacts
+          DMG_SHA256: ${{ needs.macos-app-verify.outputs.dmg_sha256 }}
+        run: |
+          set -euo pipefail
+          subjects="${RUNNER_TEMP}/subjects.sha256"
+          python3 -I scripts/release/publish_release.py subjects "$ARTIFACTS" "$DMG_SHA256" > "$subjects"
+          cat "$subjects"
+          {
+              echo "subjects=${subjects}"
+              echo "subjects_sha256=$(sha256sum "$subjects" | cut -d' ' -f1)"
+              echo "image=ghcr.io/${GITHUB_REPOSITORY,,}"
+              echo "image_digest=$(cat "${ARTIFACTS}/docker-image-digest/docker-image.digest")"
+              echo "image_cuda_digest=$(cat "${ARTIFACTS}/docker-image-cuda-digest/docker-image-cuda.digest")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Attest the assets
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: ${{ steps.subjects.outputs.subjects }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # No storage record: that would take `artifact-metadata: write` too, for
+      # an entry on the organization's Linked Artifacts page.
+      - name: Attest the image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.subjects.outputs.image }}
+          subject-digest: ${{ steps.subjects.outputs.image_digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Attest the CUDA image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.subjects.outputs.image }}
+          subject-digest: ${{ steps.subjects.outputs.image_cuda_digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      # The check a person runs, with this run's tag and commit, so a release
+      # never publishes with an attestation nobody can verify.
+      - name: Verify what was attested
+        env:
+          ARTIFACTS: ${{ runner.temp }}/release-artifacts
+          DMG_SHA256: ${{ needs.macos-app-verify.outputs.dmg_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.subjects.outputs.image }}
+        run: python3 -I scripts/release/publish_release.py verify "$ARTIFACTS" "$DMG_SHA256" "$IMAGE"
+
+  # The only job that can write to a release, and the last. Immutable from the
+  # end of its one step: it becomes `releases/latest`, and its assets and tag
+  # are locked. No `if`, so anything failing up the chain skips it and no
+  # release exists; re-running the failed jobs finishes it. The script says what
+  # it refuses, and `//:publish_release_test` runs it against a stand-in GitHub.
+  # It uploads only the bytes `attest` signed.
+  publish-release:
+    name: publish the release
+    needs:
+      - runtime
+      - build
+      - macos-app-verify
+      - docker-publish
+      - cuda
+      - docker-publish-cuda
+      - attest
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write  # create, upload to and publish the release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: runtime-*
+          path: ${{ runner.temp }}/release-artifacts
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: tarball-*
+          path: ${{ runner.temp }}/release-artifacts
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-app-dmg
+          path: ${{ runner.temp }}/release-artifacts/macos-app-dmg
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docker-image-digest
+          path: ${{ runner.temp }}/release-artifacts/docker-image-digest
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cuda-x86_64-unknown-linux-gnu
+          path: ${{ runner.temp }}/release-artifacts/cuda-x86_64-unknown-linux-gnu
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docker-image-cuda-digest
+          path: ${{ runner.temp }}/release-artifacts/docker-image-cuda-digest
+      - name: Create, upload, check and publish
+        env:
+          ARTIFACTS: ${{ runner.temp }}/release-artifacts
+          DMG_SHA256: ${{ needs.macos-app-verify.outputs.dmg_sha256 }}
+          SUBJECTS_SHA256: ${{ needs.attest.outputs.subjects_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+        run: python3 -I scripts/release/publish_release.py publish "$REF_NAME" "$ARTIFACTS" "$DMG_SHA256" "$SUBJECTS_SHA256"

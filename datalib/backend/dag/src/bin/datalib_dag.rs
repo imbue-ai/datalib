@@ -152,6 +152,9 @@ async fn main() -> Result<()> {
                     n => format!(", {n} step(s) whose params a sync would refuse"),
                 }
             );
+            for line in config::expansion_lines(&checked.expansions) {
+                println!("{line}");
+            }
         }
         // Same door as `PUT /api/config`: a warning drops nothing, so it
         // is printed above and does not fail the check.
@@ -372,6 +375,7 @@ async fn main() -> Result<()> {
         let build = datalib_dag::supervisor::upgrade::this_build();
         if !store.launch_pass_done(&build).await? {
             let asked = datalib_dag::supervisor::upgrade::steps_to_ask(&graph);
+            runner.plan(&graph, &asked);
             #[allow(clippy::disallowed_macros)]
             for m in runner.migrate(&graph, &asked).await? {
                 match &m.answer {

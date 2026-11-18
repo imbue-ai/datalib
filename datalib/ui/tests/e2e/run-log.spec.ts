@@ -419,26 +419,15 @@ test("a cell's right-click copies the cell as it reads", async ({ page }) => {
   await expect.poll(readClipboard, { message: "clipboard after Copy Source" }).toBe(shown);
 });
 
-// Grouping goes through the panel's `__fwRunLogApi.groupBy`, which
-// calls the plugin's own `setDroppedGroups` — the same thing its drop
-// handler calls, and how the Explore grid's spec groups too. The drag
-// itself is SortableJS's native drag-and-drop, and a drag dispatched by
-// hand died inside it on CI's loaded runners at more than one point
-// (the header never entering the bar; the drop never ending the drag),
-// through three rewrites. What is ours — the columns declared
-// groupable, the placeholder, the group row's text, the toggle — is
-// what this checks.
+/// The Level header dragged onto the row-group bar, with the browser's
+/// own drag-and-drop, folds the lines under group rows.
 test("grouped by a column, the lines fold under group rows", async ({ page }) => {
   const dialog = await openServerLog(page);
   const bar = dialog.locator(".slick-preheader-panel .slick-dropzone");
   await expect(bar).toContainText("Drag a column here");
   await expect(dialog.locator(".slick-group-toggle-all")).toBeHidden();
 
-  await page.evaluate(() =>
-    (
-      window as unknown as { __fwRunLogApi: { groupBy: (ids: string[]) => void } }
-    ).__fwRunLogApi.groupBy(["level"]),
-  );
+  await dialog.locator('.rl-grid .slick-header-column[col-id="level"]').dragTo(bar);
 
   // A chip for the column takes the placeholder's place in the bar…
   await expect(bar.locator(".slick-dropped-grouping")).toContainText("Level");

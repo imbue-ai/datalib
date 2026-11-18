@@ -2,12 +2,17 @@
 # The `build` job's "Stage tarball" step of release.yml, minus the
 # upload: lay out `datalib-<version>-<triple>/` from the binaries bazel
 # built, with the `latchkey` launcher, the commit hash, the manifest of
-# the runtime asset the binaries fetch on first use, every doc
+# the assets the binaries fetch on first use, every doc
 # `datalib-step help` prints and the third-party notices;
 # then tar it. Writes `datalib-<triple>.tar.gz` and its `.sha256` sidecar
 # into the current directory and prints the tarball's name.
 #
-#   scripts/release/stage_tarball.sh <ref-name> <triple>
+#   RELEASE_ASSETS_DIR=<dir> scripts/release/stage_tarball.sh <ref-name> <triple>
+#
+# RELEASE_ASSETS_DIR holds the assets the manifest names, with their
+# .sha256 sidecars: the `runtime` job's artifact in release.yml (and, for
+# x86_64 gnu, the `cuda` job's), since the release is still a draft a
+# read-only token cannot see.
 #
 # The binaries are read from `bazel-bin` as `//datalib/backend:bin` laid
 # them out — one list of shipped names, kept there — so the caller has
@@ -20,9 +25,6 @@
 # through these variables:
 #
 #   RELEASE_BAZEL_BIN    a tree laid out like bazel-bin (the test's runfiles)
-#   RELEASE_ASSETS_DIR   the runtime assets and their .sha256 sidecars as
-#                        local files, in place of `gh release` on the
-#                        published release
 #   GITHUB_SHA           the commit, in place of `git rev-parse HEAD`
 #   GITHUB_REPOSITORY    where the manifest's URLs point (default
 #                        imbue-ai/datalib)
@@ -35,6 +37,7 @@ fi
 ref_name="$1"
 triple="$2"
 version="${ref_name#v}"
+: "${RELEASE_ASSETS_DIR:?names the directory holding the runtime assets}"
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "$script_dir/../.." && pwd -P)"
@@ -68,10 +71,20 @@ mkdir -p "$stage"
 [[ -d "$bin/datalib/backend/bin" ]] || fail "no $bin/datalib/backend/bin — build //datalib/backend:bin first"
 log "copying the binaries from $bin/datalib/backend/bin"
 cp -RL "$bin/datalib/backend/bin/." "$stage/"
+# A bazel output directory is read-only and `cp -R` keeps that, and the next
+# install's `rm -rf` of the old tree could not empty it.
+chmod -R u+w "$stage"
 chmod +x "$stage"/*
 for required in datalib-dag datalib-step datalib-http datalib-doltlite latchkey-curl-router curl-impersonate; do
     [[ -x "$stage/$required" ]] || fail "$required missing from //datalib/backend:bin"
 done
+# The engine as a library, for a program of someone else's to call. Static
+# musl builds have none: //third-party/doltlite:shipped_library.
+case "$triple" in
+    *-musl) ;;
+    *) [[ -f "$stage/lib/libdoltlite.so" || -f "$stage/lib/libdoltlite.dylib" ]] \
+        || fail "lib/libdoltlite missing from //datalib/backend:bin" ;;
+esac
 
 # The `latchkey` launcher: runs the bundled latchkey with the router
 # curl beside it, from `runtime/` when one is staged beside it (the
@@ -106,9 +119,11 @@ while read -r topic path; do
 done < "$stage/.docs"
 rm -f "$stage/.docs"
 
-# `runtime.manifest`: which runtime asset of THIS release the binaries
-# fetch on first use, with its sha256 and size read back from what the
-# `runtime` job published. The musl legs name their gnu sibling's
+# `runtime.manifest`: which assets of THIS release the binaries fetch on
+# first use, with each one's sha256 and size read back from what the
+# `runtime` and `cuda` jobs staged: the Node runtime, and for x86_64 gnu
+# alone the CUDA module, which the embedder fetches only where there is
+# an NVIDIA driver (docs/dev/runtime_fetch.md § "The CUDA module"). The musl legs name their gnu sibling's
 # asset: the Node in it is a glibc build (nodejs.org ships no musl
 # one), and a musl datalib on a glibc host — the common case — runs it
 # fine; a musl host is refused by the resolver with the reason named.
@@ -117,17 +132,10 @@ runtime_triple="${triple/-musl/-gnu}"
 base_url="https://github.com/${repository}/releases/download/${ref_name}"
 asset_sha_and_bytes() { # asset name -> "<sha> <bytes>"
     local name="$1" sha bytes
-    if [[ -n "${RELEASE_ASSETS_DIR:-}" ]]; then
-        sha="$(cut -d' ' -f1 "$RELEASE_ASSETS_DIR/$name.sha256")"
-        bytes="$(wc -c < "$RELEASE_ASSETS_DIR/$name" | tr -d ' ')"
-    else
-        gh release download "$ref_name" --pattern "$name.sha256" --clobber --dir manifest-src
-        sha="$(cut -d' ' -f1 "manifest-src/$name.sha256")"
-        bytes="$(gh release view "$ref_name" --json assets \
-            --jq ".assets[] | select(.name == \"$name\") | .size")"
-    fi
+    sha="$(cut -d' ' -f1 "$RELEASE_ASSETS_DIR/$name.sha256")"
+    bytes="$(wc -c < "$RELEASE_ASSETS_DIR/$name" | tr -d ' ')"
     [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || fail "bad sha256 for $name: '$sha'"
-    [[ "$bytes" =~ ^[0-9]+$ ]] || fail "no size for $name on the release"
+    [[ "$bytes" =~ ^[0-9]+$ ]] || fail "no size for $name in $RELEASE_ASSETS_DIR"
     echo "$sha $bytes"
 }
 manifest_line() { # kind, asset name
@@ -137,10 +145,10 @@ manifest_line() { # kind, asset name
 }
 log "writing runtime.manifest for runtime-${runtime_triple}"
 {
-    echo "# The Node runtime these binaries fetch on first use — docs/dev/runtime_fetch.md"
+    echo "# What these binaries fetch on first use — docs/dev/runtime_fetch.md"
     manifest_line cpu "runtime-${runtime_triple}.tar.gz"
-    if [[ "$runtime_triple" == "x86_64-unknown-linux-gnu" ]]; then
-        manifest_line cuda "runtime-${runtime_triple}-cuda.tar.gz"
+    if [[ "$triple" == x86_64-unknown-linux-gnu ]]; then
+        manifest_line cuda "ggml-cuda-${triple}.tar.gz"
     fi
 } > "$stage/runtime.manifest"
 cat "$stage/runtime.manifest" >&2

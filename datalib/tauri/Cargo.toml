@@ -51,7 +51,7 @@ url = "2"
 # `NSBundle` and `NSFileManager`.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWorkspace"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSURL", "NSString", "NSBundle", "NSFileManager"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSURL", "NSString", "NSBundle", "NSFileManager", "NSProcessInfo"] }
 
 [dev-dependencies]
 # `src/launcher.rs`'s unit tests. Also already in the lock.

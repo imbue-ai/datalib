@@ -14,13 +14,13 @@ reference behind them.
 
 **`test.yml`** is the merge gate. Every job runs on `ubuntu-latest`
 (4 vCPU); the bazel ones run inside
-`ghcr.io/imbue-ai/datalib_devcontainer:latest`:
+`ghcr.io/imbue-ai/datalib_devcontainer`, named by digest:
 
 - `cargo deny` — a RustSec and license scan of both Cargo lockfiles
   (`datalib/backend/deny.toml`, `datalib/tauri/deny.toml`), on the bare
   runner, with no bazel in it.
-- `pnpm audit` — `pnpm audit --prod --audit-level high` over the three
-  npm trees a release ships (`datalib/ui`, `third-party/qmd/runtime`,
+- `pnpm audit` — `pnpm audit --prod --audit-level high` over the two
+  npm trees a release ships (`datalib/ui` and
   `third-party/latchkey/runtime`), also on the bare runner. An advisory
   is fixed by a bump or a pnpm `overrides` entry in that tree's
   `pnpm-workspace.yaml`, held to the 7-day burn-in
@@ -33,9 +33,15 @@ reference behind them.
   builds our own crates at opt-level 1 and leaves third-party crates and
   doltlite's C at 3 (see "Every `rust_test` is a whole test binary"
   below); so a PR's tarball is not what a release ships.
-- `bazel test //datalib/ui:e2e_test` — the Playwright suite, alone. It
-  is tagged `cpu:4`, the whole runner, and takes about six minutes, so
-  in the job above every other test waited behind it. The two jobs'
+- `bazel test //datalib/ui:e2e_test` — the Playwright suite, alone: a
+  `test_suite` of three tests, `e2e_chromium_test`, `e2e_sandboxes_test`
+  and `e2e_webkit_test`, one per group of Playwright projects
+  ([`testing.md`](testing.md) § "The Playwright suite runs in two
+  engines"). Each is tagged `cpu:4`, the whole runner, so they run one
+  after another, about eleven minutes in all; in the job above every
+  other test would wait behind them. They are three tests rather than
+  one so each has its own 900 s timeout: whole, the suite took 600 to
+  850 s, and a slow runner timed it out two-thirds of the way through. The two jobs'
   patterns are complements (`//...` less one label, and that label), so
   a new test lands in the first without anyone choosing. On a run where
   the binaries the suite drives are not cached yet, both jobs compile
@@ -48,13 +54,20 @@ reference behind them.
 - `warm the contributor cache` — on a `main` push only; see "Two caches"
   below.
 
-Each bazel job first deletes the runner's unused preinstalls (Android
-SDK, .NET, GHC), which the job mounts into its container for the
-purpose (`prepare-bazel`'s "Free the runner's disk"). A runner starts
-with about 14 GB free, and the image and the build have left as little
-as 2.6 GB of it: under the pipeline's 10 GB `[disk_space]` floor, so
-every test that syncs waited on `waiting for disk space` until it timed
-out. The step prints `df -h /` before and after.
+Each bazel job mounts the runner's unused preinstalls (Android SDK,
+.NET, GHC) into its container, and `prepare-bazel`'s "Free the runner's
+disk" deletes them when the runner starts with under 40 GB free. Some
+runners have started with about 14 GB, and the image and the build have
+left as little as 2.6 GB of it: under the pipeline's 10 GB
+`[disk_space]` floor, so every test that syncs waited on `waiting for
+disk space` until it timed out (2026-11-02). Every job measured from
+2026-11-03 to 2026-11-17 started with about 80 GB free of 145 GB
+instead, and deleting the preinstalls, which frees about 17 GB, took 50
+to 130 s there; so a runner with room keeps them. The step prints
+`df -h /` first. `prepare-bazel` also samples the free space every 10 s
+for the rest of the job, and each bazel job ends with
+`.github/actions/disk-low-point`, which prints the lowest it saw: the
+number to judge the 40 GB threshold by.
 
 A `pull_request` run builds **the merge of the PR into `main` as it
 is at that moment** (`HEAD is now at … Merge <pr> into <main>` in the
@@ -64,7 +77,7 @@ what `main` changed, even though the PR did not. A `workflow_dispatch`
 run builds the bare branch head; compare like with like before calling
 a cache key unstable (#484's comments are the worked example).
 `test.yml` also takes two dispatch inputs: `devcontainer_tag`, to run
-against an image that is not yet `latest`, and `remote_execution`, to
+against an image CI is not pinned to yet, and `remote_execution`, to
 run the test job on BuildBuddy's executors (`--config=remote`).
 
 **`devcontainer.yml`** builds and publishes that image
@@ -73,26 +86,27 @@ and on demand — not on pushes or PRs, since a build is ~8 min and
 ~2.5 GB and a release's worth of drift costs seconds. To try a
 Dockerfile change early, dispatch it on the branch and then `test.yml`
 with the `sha-` tag it prints. Every build is tagged `sha-<commit>`,
-a tag build also `:X.Y.Z`. `latest` moves on a tag build, or on a
-dispatch on `main` with `publish_latest` set — a dispatch on any other
-branch that sets it fails at once, because every `main` run of
-`test.yml` runs in `latest` holding the release cache's write key — and
-only after
+a tag build also `:X.Y.Z` and `latest`, once
 `.devcontainer/smoke_test.sh` has analysed `//...` from the image
 under a different path and HOME than it was built with, with zero
-downloads. The newest six `sha-` versions are kept and older ones
+downloads. CI follows none of these tags, because a push to `main`
+runs in this image holding the release org's write key: `test.yml` and
+`cargo-update.yml` name it by digest, and `pin_release.py` moves them
+to each release's image in the PR it prepares
+(`release_steps.md` §"Pinning what people get by default"). To move CI
+between releases, write the digest of a `sha-` tag into both. The newest six `sha-` versions are kept and older ones
 pruned. It is a workflow of its own so that nothing in a release can
 keep it from publishing (#500).
 
 **`release.yml`** runs on a `v*` tag: the runtime assets first
-(the Node runtime `qmd` and `latchkey` run from, which the binaries
-fetch on first use — `runtime_fetch.md`; one per host platform, plus a
-CUDA overlay for Linux x86_64), then the five tarballs (macOS arm64,
+(the Node runtime `latchkey` runs from, which the binaries
+fetch on first use — `runtime_fetch.md`; one per host platform), then the five tarballs (macOS arm64,
 Linux gnu and musl on x86_64 and aarch64), the notarized macOS app, and
 the prod docker image with its doc test (`datalib/docker/doc_test.sh`,
 #469). It does not build the CI image. The steps that
 assemble the assets are scripts under `scripts/release/`, run by
-`bazel test //...` before any tag runs them — `release_steps.md`.
+`bazel test //...` before any tag runs them, and no job that builds
+holds a write token or the signing key: `release_steps.md`.
 
 **`cargo-update.yml`** keeps `datalib/backend/Cargo.lock` current,
 which Dependabot cannot (`.github/dependabot.yml` says why). Every
@@ -112,7 +126,8 @@ pulls are rate-limited per IP, and a GitHub-hosted runner shares its IP
 with other people's jobs, so the quota can be spent before a run starts
 (v0.42.0's `docker-publish` failed on `toomanyrequests`). Both
 workflows take Docker Hub images through Google's pull-through mirror,
-`mirror.gcr.io`: the QEMU and BuildKit images by name, and the
+`mirror.gcr.io`: the BuildKit image by name and digest (`lint_repo.py`
+check 21 refuses a tag alone), and the
 Dockerfiles' `FROM` lines through a registry mirror in
 `setup-buildx-action`'s `buildkitd-config-inline`, so the Dockerfiles
 themselves still name Docker Hub and build the same way on a laptop. A
@@ -132,24 +147,60 @@ the image bakes is public archives verified by sha256.
 ## Two caches: contributor and release
 
 Bazel does not verify an action-cache hit, so whoever can write a
-cache decides what a build reading it ships. Two BuildBuddy *groups*
-(a group is BuildBuddy's isolation unit: its own cache, its own keys)
-keep a release from replaying anything a laptop or a PR run wrote:
+cache decides what a build reading it ships. So **a release reads no
+cache** (`lint_repo.py` check 21), and two BuildBuddy *groups* (a group
+is BuildBuddy's isolation unit: its own cache, its own keys) keep
+`main`'s CI from replaying anything a laptop or a PR run wrote:
 
 | group | key (GitHub secret) | writes | reads |
 |---|---|---|---|
 | contributor | `BUILD_BUDDY_API_KEY` | every laptop with the key, PR and dispatch runs of `test.yml` | the same |
-| release | `BUILD_BUDDY_RELEASE_API_KEY` | `test.yml` on a `push` to `main` — PR-gated code only (`--config=buildbuddy-release`) | `release.yml`, read-only (`--config=buildbuddy-release-readonly`) |
+| release | `BUILD_BUDDY_RELEASE_API_KEY`, in the `main-ci` environment | `test.yml` on a `push` to `main` — code that came through a PR (`--config=buildbuddy-release`; the rule is in [`security_posture.md`](security_posture.md) §"The settings this rests on") | the same |
 
 Two BuildBuddy *organizations*, each on its own subdomain
 (`imbue.buildbuddy.io`, `imbue-release.buildbuddy.io`): a key only
 works against its own org's host, so `prepare-bazel` takes the key and
-the config together. A tag builds a commit that is already on `main`,
-so the release build hits exactly what the `main` run of that commit
-produced; the `-readonly` config is what keeps it from writing, not the
-key. Without the release secret a tag build runs cold (~20 min a leg)
-rather than falling back to the contributor cache — that is the
-intended failure mode.
+the config together. "Release" is only the org's name; nothing in
+`release.yml` reaches it.
+
+**A tag runs cold, and it costs little.** While a release read this
+cache, `main`'s builds gave it little to hit: `main` builds only on
+x86_64 Linux, so the aarch64 and mac legs got no hits at all. The two
+x86_64 legs hit about 600 of their 2,100-odd actions (v0.46.0 to v0.49.0;
+a leg's `INFO: N processes` line has the count) and took no less time
+than the aarch64 Linux legs, 20 to 25 minutes, though those run on
+different machines. A mac leg takes 25 to 30 minutes.
+
+**A tag restores no repository cache either.** v0.49.0's mac legs
+restored `setup-bazel`'s repository cache from an entry saved on `main`
+by `latchkey-auth.yml`'s daily run, whose job compiles crates, and
+bazel uses the extracted trees under that cache's `contents/` without
+checking them ([`security_posture.md`](security_posture.md)). A release's
+downloads come from their origins, each pinned by sha256, so a download
+an origin refuses fails the leg rather than being served from a copy.
+
+**`docker-image` keeps no layer cache.** Its two builds share only what
+the job's own builder holds. `setup-buildx-action`, which would cache by
+default, is told not to.
+
+**What holds the write key.** `test.yml`'s three jobs that run on a push
+to `main` compile with it in `.bazelrc.user`. Their actions run under
+bazel's `processwrapper-sandbox`, which hides no file and blocks no
+network, so a build script in a crate that reached `main` can read the
+key or write any entry. That reaches `main`'s CI and nothing that ships:
+an entry can make a failing test look green on `main`, or run code in
+those jobs by replacing a tool the build runs. The jobs hold that key
+and a read-only token, and no workflow takes their artifacts, though one
+of them is a built tarball a person could download by hand. The gate on
+a PR uses the contributor org, so the key cannot fake a required check.
+
+**Only `main` can name the key.** It is a secret of the `main-ci`
+environment, whose deployment branch policy allows `main` and nothing else,
+so a workflow edited on a branch gets no such secret. `test.yml`'s three jobs
+ask for the environment on a push and for none otherwise, and `lint_repo.py`
+check 21 refuses a job that names the key without it. The environment itself
+is a repository setting: [`security_posture.md`](security_posture.md)
+§"The settings this rests on".
 
 **The two orgs are write-disjoint, so a third writer was needed.** A
 main push writes the release org and a PR run writes the contributor
@@ -164,19 +215,66 @@ only product is cache entries. It does not help a PR that edits a
 widely-linked crate — that one rebuilds its own `rdeps` either way —
 it removes the runs that were cold for no reason.
 
-The release org exists and its read-write key is the repository
+The release org exists and its read-write key is the environment's
 secret; a second org means creating it from BuildBuddy's org switcher,
 minting a key under its Settings → API keys, and `gh secret set
-BUILD_BUDDY_RELEASE_API_KEY --repo imbue-ai/datalib`.
+BUILD_BUDDY_RELEASE_API_KEY --env main-ci --repo imbue-ai/datalib`.
+
+### The local gate and CI's cache
+
+A laptop or cloud session with the contributor key reads and writes the
+same org as a PR run, but it only gets CI's entries when its action
+keys are CI's. A key holds the action's command line, its environment
+and the digest of every input, so two things have to agree.
+
+**The flags.** `bazelisk run //:precommit` (`scripts/run_checks.sh`)
+passes CI's pull-request flags to each of its bazel calls when it runs
+on x86_64 Linux and `.bazelrc.user` holds a BuildBuddy key:
+
+| flag | why |
+|---|---|
+| `-c opt --config=release --nostamp --config=pr-tests` | the build mode of `test.yml`'s PR run and of `warm-contributor-cache`; any other mode is a different key for every action |
+| `--test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright` | in every test's key, so a test CI passed is not run again |
+| `--remote_download_minimal` | a hit's outputs stay remote unless a local action needs them (the same reason as in `build:ci`, below) |
+
+It takes nothing else from `--config=ci`. `--lockfile_mode=error` is
+left out because `//:lint_repo`, the gate's first step, already refuses
+a `MODULE.bazel.lock` that bazel had to rewrite. `--disk_cache=` is left
+out because a laptop's disk cache outlives the run; a cloud session's
+`.bazelrc.user` turns it off itself. On a mac, or with no key, the gate
+stays in fastbuild: there is nothing of CI's to reuse, and fastbuild
+compiles faster. The cost on Linux: on a miss, opt compiles slower, and
+the gate's outputs live in `bazel-out/k8-opt`, apart from the fastbuild
+tree a plain `bazelisk test` uses, so a crate you just tested is
+compiled again for the gate.
+
+**The toolchains and the environment.** On Linux the C/C++ toolchain is
+the hermetic LLVM one `MODULE.bazel` registers and Rust's is pinned
+too, so neither depends on the machine's compiler (§"The caches, and
+what each is for"). Nor does an action's environment carry the caller's
+`HOME`, on any host, which every C compile, genrule and test would
+otherwise hold in its key (`/root` in a cloud session, `/github/home`
+on CI, `/Users/<name>` on a mac); a test runs with `HOME` set to its
+own `TEST_TMPDIR` (`.bazelrc`). So a cloud session, a Linux laptop and
+CI's runner build the same keys from the same flags, and so do two
+macs whatever their users are called. A mac uses Apple's toolchain,
+never shares CI's entries, and is why the gate leaves it in fastbuild.
 
 ## The caches, and what each is for
 
 **The BuildBuddy action cache** is the one that matters: on a warm run
 of `main` every compile and test is a cache hit and the run executes
-nothing. An action's key covers its toolchain, so a darwin-arm64 rustc
-action and CI's linux-x86_64 one never share an entry — locally the
-remote cache buys sharing with your own other worktrees and machines,
-not a replay of CI's work.
+nothing. An action's key covers its toolchain and every input it
+reads. On Linux the C/C++ toolchain is the hermetic LLVM one
+`MODULE.bazel` registers, not the machine's gcc, so the proc-macros and
+build scripts every Rust compile reads come out byte for byte the same
+on CI's runner, in a cloud VM and on a Linux laptop, and those share
+CI's entries when they build with CI's flags (`-c opt --config=release
+--nostamp --config=pr-tests` for a PR's; the local gate passes them,
+§"The local gate and CI's cache"). A mac builds with Apple's
+toolchain, so a darwin-arm64 rustc action and CI's linux-x86_64 one
+never share an entry: there the remote cache buys sharing with your own
+other worktrees and machines, not a replay of CI's work.
 
 **`--remote_download_minimal`** (`build:ci`, #497). A warm run has
 ~4400 cache hits; without this each hit's outputs were downloaded to
@@ -221,8 +319,8 @@ what a run uses.
 `buildbuddy` configs, with a local fallback) serves repository
 downloads from BuildBuddy instead of the origin, so a repository added
 after the image was built never reaches crates.io or GitHub from a
-runner. The qmd GGUF models are build actions rather than repositories
-(`//third-party/qmd_models`, #499): fetched once per pin into the
+runner. The embedding model GGUFs are build actions rather than repositories
+(`//third-party/embedding_models`, #499): fetched once per pin into the
 action cache, with retries on HuggingFace's 429, and never moved on a
 warm run.
 
@@ -268,7 +366,8 @@ evicts the one already waiting — `cancel-in-progress: false` protects
 only the run that is executing. So only PR runs share a group (one per
 ref) and supersede one another; a push and a dispatch each get a group
 of their own (`github.run_id`), because a `main` run evicted before it
-starts is a commit whose actions never reach the release cache (#674).
+starts is a commit whose actions never reach the cache `main`'s next run
+reads (#674).
 
 **Runs are bimodal.** A warm run executes 0 tests; a cold one, after a
 change to a shared crate, rebuilds hundreds of opt-mode Rust actions
@@ -304,7 +403,7 @@ binary" has the layout.
 copy** — the crate built in the exec configuration as well as the
 target one, nothing shared. A `genrule` puts its `tools` there, so a
 Rust binary a genrule runs goes in `srcs` (`:ingested_tng` and
-`:ingested_tng_qmd` are the examples). Proc-macros and build scripts
+`:ingested_tng_search_index` are the examples). Proc-macros and build scripts
 run at build time by nature, so the crates they reach are the one
 legitimate exec-config set. CI's "No crate built a second time for a
 tool" step fails on anything else (`tools/check_tool_crates.py`, which
@@ -455,6 +554,6 @@ done
 Not in `$HOME/.bazelrc`: the `buildbuddy` config exists only in this
 repo's `.bazelrc`, and every other workspace on the machine would fail
 with "Config value 'buildbuddy' is not defined". `--config=remote` is
-CI-only for the same reason the cache shares nothing with a mac: the
-autodetected cc toolchain is generated from the client host, so
-driving Linux executors from a mac hands them a darwin toolchain.
+CI-only for the same reason the cache shares nothing with a mac:
+toolchains are resolved on the client, so driving Linux executors from
+a mac hands them a darwin toolchain.

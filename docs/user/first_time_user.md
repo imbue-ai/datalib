@@ -45,13 +45,12 @@ The sections on credentials (step 2) and on getting your data back out
 ## 0. Prerequisites
 
 None. The release tarball carries the binaries, and the first sync
-fetches the one other thing a sync runs: a Node runtime with the two
-Node programs the tools shell out to — `latchkey`, which holds your
-credentials, and `qmd`, which builds the semantic search index — at
-the exact versions datalib was built and tested with, published beside
-the tarball on the same release and checked against the sha256 the
-tarball carries for it. It lands in `~/.cache/datalib/runtime`, a
-download of about 100 MB, once per release. You do not need `node`,
+fetches the one other thing a sync runs: a Node runtime with the
+Node program the tools shell out to — `latchkey`, which holds your
+credentials — at the exact versions datalib was built and tested with,
+published beside the tarball on the same release and checked against
+the sha256 the tarball carries for it. It lands in
+`~/.cache/datalib/runtime`, one download per release. You do not need `node`,
 `npm` or `npx` installed. The `latchkey` command does not fetch it
 itself, so step 1 fetches it by hand with `datalib-step pull-runtime`;
 that is also how to fetch it ahead of time for an offline laptop.
@@ -70,15 +69,15 @@ One command installs the binaries from the GitHub Releases page — no
 curl -LsSf https://raw.githubusercontent.com/imbue-ai/datalib/main/scripts/install.sh | sh
 ```
 
-This downloads the latest release tarball, verifies its checksum,
-unpacks it into `~/.local/lib/datalib` and links the tools into
+This downloads the release the script names, verifies its hash, unpacks
+it into `~/.local/lib/datalib` and links the tools into
 `~/.local/bin`. The ones you will meet in this guide:
 
 - `datalib-http` — the app: a local web server with the UI built in.
 - `datalib-dag` and `datalib-step` — the sync pipeline, which the app
   runs for you and which you can also run from the terminal.
-- `datalib-applet` — serves the search grid inside the app, and
-  searches from the terminal with no app running:
+- `datalib-applet` — serves the search grid and your contacts inside
+  the app, and searches from the terminal with no app running:
   `datalib-applet search ~/datalib 'from:picard warp core'` prints what
   the search box would find, as JSON. [Searching your
   mirror](searching.md) is the query language both take.
@@ -99,18 +98,49 @@ Three optional knobs:
 - `DATALIB_INSTALL_DIR` — link the tools somewhere else, e.g.
   `DATALIB_INSTALL_DIR=~/bin curl -LsSf …/install.sh | sh`
   (`DATALIB_LIB_DIR` moves the unpacked tarball).
-- `DATALIB_VERSION` — pin a release tag instead of `latest`, e.g.
-  `DATALIB_VERSION=v0.30.1 curl -LsSf …/install.sh | sh`.
-- `DATALIB_LIBC` — Linux only: `gnu` or `musl`. Auto-detected (musl
-  distros like Alpine get the fully-static musl build); set
-  `DATALIB_LIBC=musl` to force the static build on a glibc distro —
-  it runs on any Linux of the right architecture.
+- `DATALIB_VERSION` — install another release tag, e.g.
+  `DATALIB_VERSION=v0.30.1 curl -LsSf …/install.sh | sh`. By default the
+  script installs the release it names, which moves to each new release
+  shortly after it publishes.
+- `DATALIB_LIBC` — Linux only: `gnu` or `musl`. Auto-detected: musl
+  distros like Alpine, and glibc older than 2.39 (Ubuntu 24.04's), get
+  the fully-static musl build. If a binary fails with
+  ``version `GLIBC_2.xx' not found``, install again with
+  `DATALIB_LIBC=musl`: the static build runs on any Linux of the right
+  architecture.
 
 > The install script supports macOS on Apple Silicon and Linux
-> (x86_64 / arm64, glibc or musl); it auto-detects your platform and
+> (x86_64 / arm64; glibc 2.39 or newer, or any Linux through the static
+> musl build); it auto-detects your platform and
 > pulls the matching tarball. The rest of this guide is written
 > macOS-first (Homebrew, `pbpaste`) — on Linux, substitute your package
 > manager and clipboard tool.
+
+### Checking who built what you downloaded
+
+The script checks the tarball against a hash written into the script
+itself, so it installs exactly what the script names, and the script
+comes from datalib's `main` branch. To see for yourself that a download
+was built by datalib's release workflow from the release's own commit,
+and not uploaded by hand, ask for its *build
+provenance attestation*: a statement that workflow signed when it built
+the file. You need GitHub's CLI, `gh`, signed in to any account. Set
+`tag` to the release you installed:
+
+```sh
+tag=v0.55.0
+gh release download "$tag" -R imbue-ai/datalib -p datalib-aarch64-apple-darwin.tar.gz
+gh attestation verify datalib-aarch64-apple-darwin.tar.gz -R imbue-ai/datalib \
+  --signer-workflow imbue-ai/datalib/.github/workflows/release.yml \
+  --source-ref "refs/tags/$tag"
+```
+
+The same check works on every file of a release except the `.sha256`
+files: the other tarballs, the Node runtime (`runtime-*.tar.gz`) and the
+desktop app's `Datalib-aarch64-apple-darwin.dmg`. It fails on a file
+whose bytes differ by one bit, and on one built by any other workflow,
+tag or commit. Releases up to v0.54.1 carry no attestation. The check
+says where a file came from, not that the code in it is good.
 
 Next, make the data root — the folder everything gets written into —
 and work from there:
@@ -187,19 +217,36 @@ switch on your everyday profile.
 
 What that means for datalib today:
 
-- **latchkey's encryption key is in your keychain**, and the Node that
-  latchkey runs on is allowed to read it without asking. So any program
-  running as you can use your sign-ins.
+- **latchkey's encryption key is in your keychain**, and a Node you
+  have allowed can read it without asking. If macOS asks whether `node`
+  may use your confidential information stored in "latchkey", that is a
+  Node not on the list yet. Once one is on it, any program running as
+  you can use your sign-ins.
 - **The desktop app can keep a library in a protected folder
-  (experimental).** When you make a new library, tick **Keep it in a
-  protected folder**. The library then lives in a folder macOS guards
+  (experimental), on macOS 15 or later.** When you make a new library,
+  tick **Keep it in a protected folder**. The library then lives in a folder macOS guards
   for the Datalib app, signed by Imbue, so that permission lasts
   through upgrades: Terminal, an AI agent's shell, Finder or any other
-  app that reaches in makes macOS ask you first. Your latchkey
-  sign-ins are copied in with it, so `latchkey curl` run anywhere else
-  no longer finds them once you sign out of the originals
-  (`latchkey auth clear <service>`). Saying **Allow** lets that app in
-  for as long as it keeps running, so say no unless you mean it. What
+  app that reaches in makes macOS ask you first. The exception is an
+  app with Full Disk Access: a Terminal holding it got in with no
+  prompt. It starts with no
+  sign-ins, in a latchkey store of its own inside the library, whose key
+  is a keychain item named `Datalib Latchkey - <folder name>`. macOS
+  does not ask for your password to use that item, because Datalib made
+  it. You sign
+  in to its sources in Datalib, and `latchkey curl` run anywhere else
+  cannot find those sign-ins. What you already signed in to in
+  `~/.latchkey` stays there, as reachable as it was. **Only the folder
+  protects these sign-ins, not the keychain:** any program running as
+  you can get the key, by running the Node inside the Datalib app. So
+  anything that lets a program reach the library's files gives it the
+  sign-ins too. Saying **Allow** lets that app in for as long as it
+  keeps running, so say no unless you mean it. Deleting the library is
+  permanent, after a confirmation: it skips the Trash, where its
+  sign-ins would sit outside the folder, and removes its keychain item.
+  CalDAV and CardDAV on a server of your own cannot sign in in a
+  protected library yet, because that sign-in is made in a terminal.
+  What
   is still unknown: whether an agent could get in by running one of
   Datalib's own programs directly, and whether the Datalib app gets in
   without asking at all; the first release with this option is what
@@ -210,6 +257,84 @@ What that means for datalib today:
   service offers it ([Fastmail](getting_your_data.md#fastmail) does,
   for example). Sign out of a service you stop syncing:
   `latchkey auth clear <service>`.
+
+Spotlight indexes an ordinary library, as it does the rest of your home
+folder, and not one in the protected folder. To keep your libraries out of
+its results, add `~/Datalib` to the Search Privacy list in Spotlight's page
+of System Settings.
+
+#### When macOS asks to "access data from other apps"
+
+This dialog is what guards a protected folder, and it tells you very little.
+macOS writes it, not Datalib, so Datalib cannot make it clearer. It names the
+app asking, which is the app an agent or a command runs inside, such as Claude
+or Terminal. It does not name the folder, the file or the command.
+
+So the same dialog can come from something routine: an AI agent running `docker`
+inside Claude has brought it up. And saying **Allow** to it lets that app into
+your protected libraries too: one Allow, given when Terminal asked for Docker's
+data, let Terminal list Datalib's protected folder with no second dialog. The
+dialog gives no sign that it does this.
+
+- **If you did not expect it, say no** and see what breaks.
+- **If you said Allow, quit that app when you are done.** The permission is meant
+  to last until the app quits, and everything running inside the app shares it,
+  including every agent.
+- **Run what keeps asking from a different app.** Docker commands you run in
+  Terminal make Terminal the one asking, not the app your agent runs in. An
+  agent running inside that Terminal still shares its permission.
+
+#### Which apps have you let in? (macOS)
+
+A protected folder is only as closed as the permissions you've handed
+out. macOS makes it easy to leave a door unlocked and hard to remember
+that you did: most file permissions never expire, nothing shows when
+an app last used one, and the list is spread across several panes of
+System Settings → Privacy & Security (**Full Disk Access**, **Files &
+Folders**, **App Management**, **Automation**).
+
+To see them all in one place, run this in a terminal that has Full
+Disk Access, because the lists it reads are themselves protected. It
+prints the file permissions from both of the lists macOS keeps, one for
+your account and one for the whole computer, and changes nothing:
+
+```sh
+for db in "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "/Library/Application Support/com.apple.TCC/TCC.db"; do
+  echo "== $db"
+  sqlite3 -readonly -header -column "$db" "
+    SELECT replace(service,'kTCCService','') AS service, client,
+           CASE auth_value WHEN 0 THEN 'denied' WHEN 2 THEN 'allowed' WHEN 3 THEN 'limited' ELSE auth_value END AS auth,
+           datetime(last_modified,'unixepoch','localtime') AS changed
+    FROM access
+    WHERE service LIKE 'kTCCServiceSystemPolicy%' OR service LIKE 'kTCCServiceFileProvider%'
+    ORDER BY service, client;"
+done
+```
+
+Reading the result:
+
+- **`SystemPolicyAllFiles` with `allowed` is the row to check first.**
+  That app has Full Disk Access, so a protected folder won't stop it: a
+  Terminal holding that permission got in with no prompt.
+- **A terminal on that list passes its access on.** Everything you run
+  from that terminal gets it too, including an AI agent and any script
+  a build happens to run, so assume they can reach a protected folder
+  as well. Once you've read the list, consider switching the terminal
+  off again.
+- **`SystemPolicyAppData` is the permission that guards a protected
+  folder.** A row there records how macOS last answered that app. The
+  `auth` column can show a plain number here: Apple doesn't document
+  these values, and we haven't confirmed what `5` means.
+- **`denied` is a door that is shut.** The app asked and was refused,
+  or you switched it off.
+- **A `client` that is a path rather than an app id** is a program with
+  no app id of its own: a command-line tool, or a build of your own.
+  Its permission stays on the list after the program is gone.
+
+The list doesn't show everything an app can read. macOS guards only
+some places, and an app that isn't sandboxed can read the rest of your
+home folder, such as `~/.ssh`, without ever asking, so it has no row
+for them. A short list doesn't mean your files are locked down.
 
 ### Option 1: A Google Takeout export (no credentials needed)
 
@@ -301,9 +426,9 @@ these steps for whichever source failed.
 
 The config lives at `config.toml` in your data root. Each source is a
 **group** with an `ingest` step (bring the data in) and a
-`render_markdown` step (turn it into readable markdown), plus two shared
-index steps that fan in over everything rendered. None of them names a
-command: a step without one is datalib's own, and the group's `type`
+`render_markdown` step (turn it into readable markdown), plus a shared
+index step that fans in over everything rendered. The steps name their
+program, `datalib-step`, and the group's `type`
 says which source it is. A one-source config looks like this:
 
 ```toml
@@ -329,35 +454,23 @@ inputs = ["claude/ingest"]
 
 [[steps]]
 group = "claude"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["claude/render_markdown"]
-
-[[steps]]
-group = "claude"
 function = "embed"
 command = "datalib-step"
-inputs = ["claude/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
+group = "unified_grid_and_search_index"
+function = "unified_grid_and_search_index"
 command = "datalib-step"
-inputs = ["claude/render_markdown"]
-
-[[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
-command = "datalib-step"
-inputs = ["claude/keyword_index", "claude/embed"]
+inputs = ["*/render_markdown"]
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 ```
 
 Each step says which group it belongs to and what it does there, and
@@ -369,7 +482,8 @@ you write after a `[…]` header belongs to that header's table until the
 next one.
 
 You normally don't write this by hand. The app's first-run screen
-writes the index steps and the applet for an empty folder, and the
+writes the index steps and the applets (search, and your contacts)
+for an empty folder, and the
 **Data sources** card's **Add source** button fills in a source (next
 step). From a terminal, two commands do the same:
 
@@ -419,9 +533,10 @@ from the old file don't carry over, so review the result. A config whose
 search is still one shared `qmd_index` step needs none of this: the app
 gives each source its own search steps the first time it reads the
 file, and keeps the old one as `config.toml.bak`. The same is true of a
-config whose index is still called `unified_index`: the app renames it
-`unified_document_index`, and moves the index's folder to match rather
-than rebuilding it. A much older root with
+config whose index is still called `unified_index` or
+`unified_document_index`: the app renames it
+`unified_grid_and_search_index`, and moves the index's folder to match
+rather than rebuilding it. A much older root with
 only a `config.yaml` is not convertible any more: set it up again from
 the app.
 
@@ -451,7 +566,8 @@ token for a session cookie on that first load and drops it from the
 address bar. If you want to open the app in a *different* browser (or
 you closed the tab and lost the URL), the line the server printed is
 still in your terminal, and the token is on disk at
-`<data_root>/system/api-token`.
+`<data_root>/system/api-token`. The server prints that line only to a
+terminal, so the token stays out of any log that keeps its output.
 
 Prefer the terminal? Run the pipeline directly on your config:
 
@@ -480,11 +596,12 @@ faster.
   first.
 - A `render_markdown` step per source: each conversation or document
   rendered into readable markdown, attachments included.
-- The `grid_index` step: one row per message or document written into
-  the SQL store at `<data_root>/unified_document_index/grid_index/db.sqlite`.
-- A `keyword_index` and an `embed` step per source: that source's part
-  of free-text search — its words, then its embeddings, which let a
-  search match on meaning. The first `embed` downloads its model once.
+- The `unified_grid_and_search_index` step: one row per message or document written into
+  the SQL store at `<data_root>/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`,
+  then each source's words into the keyword search beside them.
+- An `embed` step per source: the embeddings of that source's part of
+  search, which let a search match on meaning. The first `embed`
+  downloads its model once.
   **The first embed is slow** — roughly 5–10
   minutes per thousand chunks on CPU. It's resumable, so Ctrl-C and
   re-run is safe, and one source's `embed` can be turned off on the
@@ -492,9 +609,6 @@ faster.
   drains take seconds. A Garmin, YoLink or AirVisual source has no
   `embed` step: its markdown is daily summaries of numbers, which the
   keyword index already finds. The app takes out one a config already has.
-- The `qmd_aggregator` step, once every source's search steps are
-  done: it drops any source no longer in the config from the search
-  index and reports what the index holds.
 
 **On disk afterwards** (with `data_root = "~/datalib"`):
 
@@ -512,9 +626,9 @@ faster.
 │   └── render_markdown/
 ├── gmail-takeout/
 │   └── …
-├── unified_document_index/                  # the shared indexes, rebuildable
-│   ├── grid_index/db.sqlite        #   grid rows + markdowns + edges
-│   └── qmd_aggregator/qmd/index.sqlite  #   the semantic search index
+├── unified_grid_and_search_index/                  # the shared indexes, rebuildable
+│   ├── unified_grid_and_search_index/db.sqlite  #   grid rows + markdowns + edges + the search index
+│   └── search_index/inference_cache.sqlite  #   each passage's vector, for search by meaning
 └── system/                         # everything that isn't a source
     ├── supervisor.sqlite           # syncs asked for, and which steps are up to date
     ├── api-token                   # the running server's bearer token
@@ -527,7 +641,7 @@ faster.
 ```
 
 > **Backups:** the bulky **derived** trees — each `<group>/render_markdown/`,
-> and `unified_document_index/` — are rebuilt from your raw
+> and `unified_grid_and_search_index/` — are rebuilt from your raw
 > stores by re-running the pipeline, and each carries a `CACHEDIR.TAG`,
 > so cache-aware backup tools skip them automatically:
 >
@@ -593,20 +707,16 @@ whenever you want to pull in what's new. Downloads are incremental and
 the semantic index is content-hashed, so a re-run over an unchanged
 corpus is a fast no-op.
 
-## 7. Querying the search index directly with qmd
+## 7. Searching from the command line
 
-You can also query the semantic index from the command line, by
-pointing the fetched `qmd` at the sqlite file under your data root via
-the `INDEX_PATH` env var:
+`datalib-applet search` answers a search exactly as the app's search box
+does, by words and by meaning, with no server running:
 
 ```sh
-rt=$(echo ~/.cache/datalib/runtime/*/)
-INDEX_PATH=~/datalib/unified_document_index/qmd_aggregator/qmd/index.sqlite \
-    "$rt/node/bin/node" "$rt"/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js query "hello"
+datalib-applet search ~/datalib "hello"
 ```
 
-`qmd status` against the same `INDEX_PATH` shows collections and
-document counts.
+[Searching your mirror](searching.md) has the query language.
 
 ## 8. Getting your data back out
 
@@ -642,7 +752,7 @@ are already in open formats you can read with no datalib at all:
   Attachments are not in those: their bytes live beside them in
   `<group>/ingest/blobs.sqlite`, which is plain SQLite already and
   opens as it is. So is the grid's table,
-  `unified_document_index/grid_index/db.sqlite`, which is rebuilt from
+  `unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`, which is rebuilt from
   the stores and keeps no history; the same pipe makes a copy of it
   that opens anywhere.
 
@@ -657,6 +767,9 @@ just explore in place — `datalib-doltlite -readonly <file>` drops you
 in a REPL. Pass `-readonly` whenever you are only looking: anything a
 writable session commits is overwritten by your next sync, and a
 transaction it leaves open stalls that sync. 
+
+From Python, `uv add imbue-datalib-reader` reads a store in place, with no
+export: see [Reading the raw stores](raw_stores.md).
 
 If you prefer a GUI, you have two options:
 

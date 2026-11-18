@@ -323,7 +323,6 @@ export const WIDTH: Record<ColumnType, number> = {
   status: 150,
   chips: 260,
   actions: 116,
-  markdown_uuid: 200,
   membership: 72,
   image: 80,
 };

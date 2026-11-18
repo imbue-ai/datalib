@@ -18,7 +18,7 @@ use datalib_etl_slack::recorded::{
 };
 use serde_json::{json, Value};
 
-use crate::support::{channels_with_messages, fetch_into, msg, serve, stored_ts};
+use crate::support::{channels_with_messages, checked_at, fetch_into, msg, serve, stored_ts};
 
 const DM_TYPES: &str = "public_channel,private_channel,im,mpim";
 
@@ -156,8 +156,16 @@ async fn a_closed_dm_is_checked_again_a_day_after_its_last_walk() {
         0,
         "six hours on, the closed DM is not walked again"
     );
+    let checked = checked_at(&out).await;
+    assert_eq!(
+        checked["D1"],
+        at(6),
+        "an open quiet DM is known to be current"
+    );
+    assert_eq!(checked["D2"], at(0), "the closed DM is as of its last walk");
 
     sync(&api, &out, |o| FetchOptions { now: at(25), ..o }).await;
+    assert_eq!(checked_at(&out).await["D2"], at(25));
     let raw = datalib_etl_slack::ingest::block_on_load_all(&db_path_for(&out)).unwrap();
     let later: BTreeSet<&str> = raw
         .messages

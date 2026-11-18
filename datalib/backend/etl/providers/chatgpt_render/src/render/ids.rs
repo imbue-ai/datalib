@@ -8,6 +8,7 @@ pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 
 pub const KIND_CONVERSATION: &str = "conversation";
 pub const KIND_MESSAGE: &str = "message";
+pub const KIND_GIZMO: &str = "gizmo";
 
 const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
@@ -24,6 +25,11 @@ pub fn conversation(source_id: &str, conversation_id: &str) -> Identity {
 /// chat carries the original's messages under their original ids.
 /// `date_ms` is the item's `date_ms` after the fallback to the previous
 /// item's stamp, so it is what the row stores.
+/// A conversation's `gizmo_id`: the project or custom GPT it was held in.
+pub fn gizmo(source_id: &str, gizmo_id: &str) -> Identity {
+    IDS.mint(source_id, KIND_GIZMO, gizmo_id.to_string(), None)
+}
+
 pub fn message(
     source_id: &str,
     conversation_id: &str,
@@ -66,7 +72,11 @@ mod tests {
     /// test in the claude ids module.
     #[test]
     fn natural_key_regenerates_the_uuid() {
-        for got in [conversation("src", "c1"), message("src", "c1", "m1", MS)] {
+        for got in [
+            conversation("src", "c1"),
+            gizmo("src", "g-p-1"),
+            message("src", "c1", "m1", MS),
+        ] {
             assert_eq!(
                 got.uuid,
                 entity_id_str(

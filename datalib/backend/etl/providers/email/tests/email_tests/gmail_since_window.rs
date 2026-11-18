@@ -34,7 +34,8 @@ async fn a_window_lists_its_stretch_and_an_earlier_start_backfills() {
 
     let again = h.run(Some(SEPTEMBER)).await;
     assert!(again.walked.is_empty(), "{again:?}");
-    assert_eq!(again.quota_units_spent, 4, "{again:?}");
+    // profile + labels + history.list + the muted search.
+    assert_eq!(again.quota_units_spent, 9, "{again:?}");
 
     let widened = h.run(Some(AUGUST)).await;
     assert_eq!(widened.walked, vec!["*".to_string()], "{widened:?}");
@@ -93,7 +94,10 @@ impl Harness {
         self.0
             .run(|db| {
                 let mut opts = FetchOptions::new(db);
-                opts.since = since;
+                opts.sections = vec![gmail_api::Section {
+                    since,
+                    ..gmail_api::Section::labels(Vec::new())
+                }];
                 gmail_api::fetch(opts)
             })
             .await

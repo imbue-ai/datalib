@@ -4,7 +4,7 @@ pub mod parse;
 pub mod schema_raw;
 
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -118,6 +118,7 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     // XML that is not an export: stamped with its problem the same way.
     let mut foreign: Vec<&file_changes_scan::ScannedFile> = Vec::new();
 
+    let mut parts_without_data: HashMap<&str, usize> = HashMap::new();
     for f in to_read {
         let path = &f.path;
         let xml = match std::fs::read_to_string(path) {
@@ -143,6 +144,8 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
                         summary.sms += 1;
                     }
                     for m in mmses {
+                        *parts_without_data.entry(f.rel.as_str()).or_default() +=
+                            m.parts_without_data;
                         ingest_mms(
                             &m,
                             &mut message_rows,
@@ -228,7 +231,28 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         .iter()
         .filter(|f| deletes || !rewritten.contains(f.rel.as_str()))
     {
-        file_checkpoint::record_file(&mut tx, SCOPE, f).await?;
+        // One row a file: a backup taken without media is missing every part.
+        match parts_without_data.get(f.rel.as_str()) {
+            Some(&n) if n > 0 => {
+                let problem = Problem::explained(
+                    Reason::DeliberateLoss,
+                    None,
+                    &format!(
+                        "{n} MMS part(s) hold no data, as in a backup taken without media, so \
+                         they are not in the mirror"
+                    ),
+                )
+                .severity(Severity::Warning);
+                file_checkpoint::record_file_with_problem(
+                    &mut tx,
+                    SCOPE,
+                    f,
+                    Some((Outcome::Nulled, problem)),
+                )
+                .await?;
+            }
+            _ => file_checkpoint::record_file(&mut tx, SCOPE, f).await?,
+        }
     }
     for (f, why) in &unparsed {
         let problem = Problem::record(

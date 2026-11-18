@@ -37,6 +37,12 @@ read again until its part changes, which for the same bytes would fail
 the same way. A rung that has feeds read their files again
 (`read_again`, below) also clears this cursor.
 
+An export can be made by anyone (`etl/files/README.md` § "An export can be
+made by anyone"). A part that expands too far is refused, and the run fails
+before any feed reads it. A link in an unpacked export is not read, as a
+feed's file or as an attachment. It is a `listing:files` problem naming it,
+and like any walk error it keeps the cursor from being written.
+
 ## A config turns each feed on; the form ticks them all
 
 `SyncFlags` (`src/ingest/mod.rs`) is one boolean per feed, mirrored by
@@ -167,7 +173,8 @@ or stamped with its problem. Each kind is a `problems` row:
   a `cid`, or for a pin dropped on an address, its `q=` query), a
   subscription row short of columns or with no channel id, a
   watch-history entry that is not a video, a Gemini entry with no date
-  line — is a `skipped:<feed>:<hash>` row (`RunProblems::skipped`).
+  line — is a `skipped:<feed>:<hash>` row (`RunProblems::skipped`). Watch-history
+  entries with no link, as for a video since removed, share one row with a count.
   A feed replaces only its own rows, and only when it read its file, so
   an unchanged file keeps last run's rows. A Maps file with no
   `features` list is one `file:google_takeout/<feed>:<path>` row,
@@ -255,15 +262,17 @@ whole. `tests/fixture_walk.rs`'s `rung_1_…` is the test to copy.
 ## What renders
 
 `datalib_etl_google_takeout_render` draws every feed through
-chat-common. A Google Chat space or a Voice conversation is a page per
-month; a Saved list, a My Maps map and a Play Books book are a page
+chat-common. A Google Chat space or a Voice conversation is one page,
+under the conversation's own uuid; a Saved list, a My Maps map and a Play Books book are a page
 each (`google_takeout_render/src/pages.rs`), every key a row holds that
 the render does not read a warning on its entry. A Maps review draws
 the questions Maps asked after it, with the answers; a review's or
 saved place's `Comment` is the sentence Google writes where it has no
 location for the place, and is a note, not text. A named Chat space is titled by its `group_info.json` name, a DM
 by its members. A Chat message (`google_takeout_render/src/chat.rs`)
-draws its text, the message it quotes, whose thread it answers, the
+draws its text, the message it quotes (as a quote only: the export
+names the quoted message by its author and text, never its id, so no
+reply edge can point at it), whose thread it answers, the
 links, Drive files, videos and Meet links its annotations name that its
 text does not show, a call, its attachments, its reactions, its labels
 and the account's star, and says when it was edited. Its earlier
@@ -271,8 +280,8 @@ versions fold in above it. Every key of a message, `group_info.json` or
 `user_info.json` the render does not read is a warning on the message
 (or the conversation's first one), by the value's shape; a message with
 nothing to show is a note. Gemini, YouTube history and Google Maps are each one activity
-feed (`google_takeout_render/src/feeds.rs`), a page per year, and YouTube
-subscriptions, which have no dates, one page. A Gemini entry is two
+feed (`google_takeout_render/src/feeds.rs`), one page each, oldest
+first, and YouTube subscriptions, which have no dates, one page. A Gemini entry is two
 items, the prompt by the account and the response by Gemini, its HTML
 turned to markdown; attached files ride on the prompt and generated
 images on the response. Voice bills and greetings are not rendered.

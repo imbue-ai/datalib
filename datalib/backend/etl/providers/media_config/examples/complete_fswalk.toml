@@ -14,7 +14,7 @@ command = "datalib-step"
 [steps.params]
 ignore = ["**/.Trash/**", "**/Thumbnails/**"]  # gitignore-style patterns left out of the
                                                # scan, on top of any .gitignore; default none
-max_bytes = "64 GB"            # skip a larger file entirely (no row); unset is no limit
+max_bytes = "64 GB"            # skip a larger file, with a warning naming it; unset is no limit
 payload_max_bytes = "8 GiB"    # above this, skip the tag-independent payload hash
                                # (`payload_blake3` stays NULL); default 8 GiB
 playlists = true               # index .m3u / .m3u8 playlists; default true

@@ -27,7 +27,8 @@ use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::pages::{batches, PageSize};
 use datalib_etl_render::processor::Unparsed;
 use datalib_etl_slack::ingest::schema_raw::split_key;
-use datalib_schema::problems::{Problem, Reason};
+use datalib_schema::data_nodes::DataNodeRow;
+use datalib_schema::problems::{Problem, Reason, Severity};
 use datalib_schema::providers::Provider;
 
 /// Bump when the on-disk render layout changes in a way that must
@@ -66,7 +67,15 @@ use datalib_schema::providers::Provider;
 ///     same, but the first render across the rung that made the table
 ///     cannot tell which marks moved in that range (`read_marks::moved`),
 ///     so every thread renders once.
-pub const RENDER_VERSION: u32 = 17;
+/// v18: a document says when its messages hold cards, link previews or
+///     forwards that are not shown.
+/// v19: a message's time is on its author's profile clock (`tz`).
+/// v20: a ``` block with code on its fence lines is closed, so it no
+///     longer turns the messages after it into code.
+/// v21: a thread sits in its channel, in its workspace.
+/// v22: a message's time names no clock (`Z`): a profile's zone is where
+///     its author is now, not where they were when they wrote it.
+pub const RENDER_VERSION: u32 = 22;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -303,6 +312,14 @@ fn build_chat(
         .get(&root.channel_id)
         .map(|c| c.named_after(labels.users, self_user_id, &root.team_id))
         .unwrap_or_default();
+    let is_dm = channels.get(&root.channel_id).is_some_and(|c| c.is_dm);
+    let containers = containers_of(
+        source_id,
+        root,
+        lookups.org_name.clone(),
+        cname.clone(),
+        is_dm,
+    );
     let thread = ids::thread(source_id, &root.team_id, &root.channel_id, &root.ts);
     let thread_uuid = thread.uuid.clone();
 
@@ -327,7 +344,7 @@ fn build_chat(
     };
     // What the page shows under the root, a broadcast reply among them.
     let held_replies = bucket.messages.iter().filter(|m| !m.is_thread_root).count() as u64;
-    let items: Vec<NormalizedChatItem> = bucket
+    let mut items: Vec<NormalizedChatItem> = bucket
         .messages
         .iter()
         .map(|m| {
@@ -336,6 +353,7 @@ fn build_chat(
             item
         })
         .collect();
+    note_what_is_not_shown(&bucket.messages, &mut items);
 
     // "#channel: <root snippet>" preserves the old scannable H1; the
     // bare "#channel" remains the conversation_name (via `display`).
@@ -344,6 +362,8 @@ fn build_chat(
     NormalizedChat {
         named_after,
         id: thread_uuid.clone(),
+        containers,
+        filed_under: Vec::new(),
         chat_uuid: thread_uuid.clone(),
         display: cname,
         title: Some(title),
@@ -372,7 +392,6 @@ fn build_chat(
         org_name: lookups.org_name.clone(),
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
-            period_key: "all".to_string(),
             markdown_uuid: thread_uuid,
             source_ref: None,
             items,
@@ -390,6 +409,38 @@ fn build_chat(
     }
 }
 
+/// The workspace, then the channel or direct message: both places a
+/// person browses, each keyed on Slack's own id.
+fn containers_of(
+    source_id: &str,
+    root: &Message,
+    workspace_name: Option<String>,
+    channel_name: String,
+    is_dm: bool,
+) -> Vec<DataNodeRow> {
+    let workspace = ids::workspace(source_id, &root.team_id);
+    let channel = ids::channel(source_id, &root.team_id, &root.channel_id);
+    let channel_kind = if is_dm { "Slack DM" } else { "Slack Channel" };
+    vec![
+        DataNodeRow::new("", workspace.uuid, source_id, "Slack Workspace")
+            .named(workspace_name)
+            .upstream(
+                workspace.entity_kind,
+                workspace.natural_key,
+                root.team_id.clone(),
+            )
+            .place(),
+        DataNodeRow::new("", channel.uuid, source_id, channel_kind)
+            .named(Some(channel_name))
+            .upstream(
+                channel.entity_kind,
+                channel.natural_key,
+                root.team_id.clone(),
+            )
+            .place(),
+    ]
+}
+
 /// Each user who wrote in the thread, once, in the order they first did.
 fn authors_of(bucket: &SlackThreadBucket) -> impl Iterator<Item = &str> {
     let mut seen = std::collections::HashSet::new();
@@ -398,6 +449,49 @@ fn authors_of(bucket: &SlackThreadBucket) -> impl Iterator<Item = &str> {
         .iter()
         .filter_map(|m| m.user_id.as_deref())
         .filter(move |u| seen.insert(*u))
+}
+
+/// Whether a message holds something its `text` and `files` do not: a card, a
+/// link preview or a forwarded message. Nearly every message's `blocks` are
+/// `rich_text` repeating its `text`, and a divider or a row of buttons says
+/// nothing, so those do not count.
+fn holds_what_is_not_shown(raw: &Value) -> bool {
+    let list = |key| raw.get(key).and_then(Value::as_array);
+    list("attachments").is_some_and(|a| !a.is_empty())
+        || list("blocks").is_some_and(|blocks| {
+            blocks.iter().any(|b| {
+                !matches!(
+                    b.get("type").and_then(Value::as_str),
+                    Some("rich_text" | "divider" | "actions")
+                )
+            })
+        })
+}
+
+/// One row a document, on the first message it is about. At `info`: it shows on
+/// the page, and a workspace with bots has it on a quarter of its documents,
+/// which as warnings would be thousands on the Manage row.
+fn note_what_is_not_shown(messages: &[Message], items: &mut [NormalizedChatItem]) {
+    let holding: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| holds_what_is_not_shown(&m.raw_json))
+        .map(|(i, _)| i)
+        .collect();
+    let (Some(first), count) = (holding.first(), holding.len()) else {
+        return;
+    };
+    let many = if count == 1 { "message" } else { "messages" };
+    items[*first].problems.push(
+        Problem::explained(
+            Reason::UncoveredType,
+            Some("attachments".to_string()),
+            &format!(
+                "{count} {many} here hold cards, link previews or forwards that are not shown"
+            ),
+        )
+        .severity(Severity::Info),
+    );
 }
 
 fn build_item(
@@ -427,6 +521,7 @@ fn build_item(
     let mut problems = Vec::new();
     let date_ms = own_stamp_ms(Some(&m.ts), "ts", ts_to_ms, &mut problems);
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: msg_id.uuid.clone(),
         author_handle: m
             .user_id
@@ -435,6 +530,9 @@ fn build_item(
         author_kind: AuthorKind::Named,
         author_display,
         date_ms,
+        // A `ts` names no clock, and a profile's `tz` is where its
+        // author is now, not where they were when they wrote this.
+        date_offset_secs: None,
         text: (!body.trim().is_empty()).then_some(body),
         kind,
         attachments,
@@ -481,7 +579,8 @@ fn replies_of(m: &Message, held: u64, problems: &mut Vec<Problem>) -> Option<Rep
 }
 
 fn thread_title(root_text: &str, labels: Labels<'_>) -> String {
-    let resolved = resolve_mentions(root_text, labels);
+    // A ``` ends the line it is on, as the body draws it.
+    let resolved = resolve_mentions(root_text, labels).replace("```", "\n");
     let first = resolved
         .lines()
         .map(str::trim)
@@ -616,6 +715,7 @@ fn build_reactions(
 
 #[cfg(test)]
 mod reaction_tests {
+    use super::super::User;
     use super::*;
     use datalib_etl_render::inputs::Inputs;
     use serde_json::json;
@@ -654,6 +754,106 @@ mod reaction_tests {
         assert_eq!(shown, ["👍🏻", "🤔", ":ferengi-dance:"]);
     }
 
+    /// A forward, a preview or a bot's card once left a message blank with
+    /// nothing to say so. Rich text repeats the message's `text`, so it is no
+    /// loss, and it is on nearly every message.
+    #[test]
+    fn a_document_says_when_a_message_holds_what_is_not_shown() {
+        let holding = |raw: Value| holds_what_is_not_shown(&raw);
+        assert!(holding(
+            json!({"attachments": [{"from_url": "https://memory-alpha.example"}]})
+        ));
+        assert!(holding(json!({"blocks": [{"type": "section"}]})));
+        assert!(!holding(json!({"attachments": []})));
+        assert!(!holding(
+            json!({"blocks": [{"type": "rich_text"}, {"type": "divider"}]})
+        ));
+        assert!(!holding(json!({"text": "Engage."})));
+
+        let with = |raw: Value| Message {
+            raw_json: raw,
+            ..reacted(json!([]))
+        };
+        let messages = [
+            with(json!({"text": "Engage."})),
+            with(json!({"attachments": [{"is_share": true}]})),
+            with(json!({"blocks": [{"type": "section"}]})),
+        ];
+        let shared = Shared::default();
+        let lookups = Lookups {
+            shared: &shared,
+            user_labels: BTreeMap::new(),
+            channel_labels: BTreeMap::new(),
+            account: None,
+            org_name: None,
+        };
+        let bucket = SlackThreadBucket {
+            thread_key: "T1#C1#12604000100.000100".to_string(),
+            messages: messages.to_vec(),
+            blobs: Default::default(),
+            inputs: Inputs::default(),
+        };
+        let chat = build_chat(&lookups, &bucket, "src");
+        let problems: Vec<_> = chat.buckets[0]
+            .items
+            .iter()
+            .map(|item| item.problems.as_slice())
+            .collect();
+        assert!(problems[0].is_empty());
+        assert_eq!(problems[1].len(), 1, "one row a document");
+        assert_eq!(problems[1][0].severity, Some(Severity::Info));
+        assert!(problems[1][0].sample.starts_with("2 messages here "));
+        assert!(problems[2].is_empty());
+    }
+
+    /// A message was put on its author's profile clock, which is where
+    /// they are now: one from before a move read at the wrong hour.
+    #[test]
+    fn a_message_names_no_clock_whatever_its_authors_profile_says() {
+        let user = |id: &str, tz: Option<&str>| User {
+            user_id: id.into(),
+            team_id: "T1".into(),
+            name: None,
+            real_name: None,
+            display_name: None,
+            email: None,
+            title: None,
+            avatar_url: None,
+            tz: tz.map(str::to_string),
+        };
+        let mut shared = Shared::default();
+        for u in [
+            user("U1", Some("Europe/Paris")),
+            user("U2", None),
+            user("U3", Some("Not/A_Zone")),
+        ] {
+            shared.users.insert(u.user_id.clone(), u);
+        }
+        let by = |uid: &str, ts: &str| Message {
+            user_id: Some(uid.into()),
+            ts: ts.into(),
+            ..reacted(json!([]))
+        };
+        let bucket = SlackThreadBucket {
+            thread_key: "T1#C1#1767603600.000100".to_string(),
+            messages: vec![
+                by("U1", "1767603600.000100"),
+                by("U1", "1783242000.000100"),
+                by("U2", "1767603600.000200"),
+                by("U3", "1767603600.000300"),
+            ],
+            blobs: Default::default(),
+            inputs: Inputs::default(),
+        };
+        let chat = build_chat(&Lookups::new(&shared), &bucket, "src");
+        let offsets: Vec<_> = chat.buckets[0]
+            .items
+            .iter()
+            .map(|i| i.date_offset_secs)
+            .collect();
+        assert_eq!(offsets, [None, None, None, None]);
+    }
+
     /// Only a root carries Slack's count, and one that is not a number
     /// is a problem on the root rather than a line that lies.
     #[test]
@@ -678,5 +878,132 @@ mod reaction_tests {
         root.raw_json["reply_count"] = json!("three");
         assert_eq!(replies_of(&root, 1, &mut problems), None);
         assert_eq!(problems.len(), 1, "{problems:?}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use datalib_etl_render::inputs::Inputs;
+
+    use super::*;
+
+    /// A thread sits in its channel, and the channel in its workspace:
+    /// both places, keyed on Slack's own ids. The thread is what is read
+    /// together, and a reply is a row inside it, not a reply edge.
+    #[test]
+    fn a_thread_sits_in_its_channel_in_its_workspace() {
+        let message = |ts: &str, root: bool| Message {
+            team_id: "T1".into(),
+            channel_id: "C1".into(),
+            ts: ts.into(),
+            thread_ts: Some("12604000100.000100".into()),
+            effective_thread_ts: "12604000100.000100".into(),
+            is_thread_root: root,
+            user_id: Some("U1".into()),
+            text: "Engage.".into(),
+            ts_iso: None,
+            raw_json: serde_json::json!({}),
+        };
+        let mut shared = Shared {
+            workspace: Some(super::super::Workspace {
+                row_id: "T1".into(),
+                team_id: "T1".into(),
+                team_name: Some("Enterprise".into()),
+                team_url: None,
+                self_user_id: None,
+            }),
+            ..Default::default()
+        };
+        shared.channels.insert(
+            "C1".into(),
+            super::super::Channel {
+                channel_id: "C1".into(),
+                name: Some("bridge".into()),
+                ..Default::default()
+            },
+        );
+        let parsed = ParsedSlack {
+            shared,
+            threads: vec![SlackThreadBucket {
+                thread_key: "T1#C1#12604000100.000100".into(),
+                messages: vec![
+                    message("12604000100.000100", true),
+                    message("12604000200.000100", false),
+                ],
+                blobs: Default::default(),
+                inputs: Inputs::default(),
+            }],
+        };
+        let out = tempfile::tempdir().unwrap();
+        let mut docs = Vec::new();
+        render_all(&parsed, out.path(), "src", &Progress::noop(), &mut |d| {
+            docs.push(d);
+            Ok(())
+        })
+        .unwrap();
+        let [doc] = docs.as_slice() else {
+            panic!("one thread, one document")
+        };
+        let workspace = ids::workspace("src", "T1").uuid;
+        let channel = ids::channel("src", "T1", "C1").uuid;
+        let thread = ids::thread("src", "T1", "C1", "12604000100.000100").uuid;
+        let tree: Vec<_> = doc
+            .data_nodes
+            .iter()
+            .map(|n| {
+                (
+                    n.uuid.as_str(),
+                    n.parent_uuid.as_deref(),
+                    n.is_place,
+                    n.read_together,
+                    n.upstream_id.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            tree,
+            [
+                (workspace.as_str(), None, true, false, Some("T1")),
+                (
+                    channel.as_str(),
+                    Some(workspace.as_str()),
+                    true,
+                    false,
+                    Some("C1")
+                ),
+                (
+                    thread.as_str(),
+                    Some(channel.as_str()),
+                    false,
+                    true,
+                    Some("C1#12604000100.000100")
+                ),
+            ]
+        );
+        assert_eq!(doc.data_nodes[0].name.as_deref(), Some("Enterprise"));
+        assert_eq!(doc.data_nodes[1].name.as_deref(), Some("#bridge"));
+        let messages: Vec<_> = doc.rows.iter().filter(|r| r.uuid != thread).collect();
+        assert_eq!(messages.len(), 2);
+        for row in messages {
+            assert_eq!(row.parent_uuid.as_deref(), Some(thread.as_str()));
+            assert_eq!(row.read_uuid.as_deref(), Some(thread.as_str()));
+            assert_eq!(row.place_uuid.as_deref(), Some(channel.as_str()));
+        }
+        assert!(doc.edges.is_empty(), "{:?}", doc.edges);
+    }
+
+    /// A root opening with a ``` block was titled "```Kitchen".
+    #[test]
+    fn a_title_leaves_out_a_code_fence() {
+        let inputs = Inputs::default();
+        let none = BTreeMap::new();
+        let labels = Labels {
+            users: inputs.lookup("users", &none),
+            channels: inputs.lookup("channels", &none),
+            team_id: "T01",
+        };
+        assert_eq!(thread_title("```Kitchen\nx = 1```", labels), "Kitchen");
     }
 }

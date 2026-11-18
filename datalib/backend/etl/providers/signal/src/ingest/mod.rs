@@ -5,6 +5,7 @@
 pub mod backups;
 pub mod db;
 pub mod keys;
+pub mod not_shown;
 pub mod schema_raw;
 
 use std::collections::HashSet;
@@ -93,6 +94,7 @@ struct Read {
     backup_time_ms: u64,
     /// Frames that would not decode, so it was not read whole.
     undecoded: Vec<String>,
+    not_shown: not_shown::NotShown,
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
@@ -207,6 +209,7 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         // What HEAD holds is the last snapshot read, so its report replaces
         // the last one's.
         Some(read) => {
+            found.skipped(not_shown::PART, read.not_shown.problem());
             if let Some(first) = read.undecoded.first() {
                 found.phase(
                     "frames",
@@ -329,6 +332,7 @@ async fn read_snapshot(
     let mut keys = keys::Keys::default();
 
     let mut undecoded: Vec<String> = Vec::new();
+    let mut not_shown = not_shown::NotShown::default();
     for frame in snap_data.frames() {
         let frame = match frame {
             Ok(f) => f,
@@ -371,6 +375,7 @@ async fn read_snapshot(
                 let author_id = keys.recipient(ci.author_id);
                 let date_sent = ci.date_sent as i64;
                 let pk = schema_raw::chat_item_id_recipe(&chat_id, &author_id, date_sent);
+                not_shown.chat_item(ci);
 
                 // Decrypt synchronously (AES-256 can't be batched), then
                 // queue the entity row and CAS bytes for the end-of-read
@@ -404,10 +409,10 @@ async fn read_snapshot(
                     date_sent,
                 });
             }
-            _ => {
-                // StickerPack, AdHocCall, NotificationProfile,
-                // ChatFolder — not modelled in this first pass.
-            }
+            // StickerPack, AdHocCall, NotificationProfile, ChatFolder: not
+            // modelled yet.
+            Some(other) => not_shown.frame(other),
+            None => {}
         }
     }
     summary.snapshot = snap.name.clone();
@@ -478,6 +483,7 @@ async fn read_snapshot(
     Ok(Ok(Read {
         backup_time_ms: info.backup_time_ms,
         undecoded,
+        not_shown,
     }))
 }
 

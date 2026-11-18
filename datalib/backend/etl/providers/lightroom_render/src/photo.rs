@@ -3,6 +3,8 @@
 //! reads the rows and emits what this returns.
 
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use datalib_etl_render::front_matter::Front;
+use datalib_etl_render::html::{escape_md_block, escape_name_inline};
 use datalib_etl_render::section::Section;
 use datalib_id::{IdNamespace, Identity};
 use datalib_photo_schema::{
@@ -18,7 +20,12 @@ use crate::read::ImageRow;
 use crate::xmp::{self, XmpFields};
 
 /// Bump when what a photo's row or terms say changes.
-pub const RENDER_VERSION: u32 = 2;
+/// v5: keyword, pictured, rating and collection terms; every collection
+/// with members, the quick collection and publish collections included.
+pub const RENDER_VERSION: u32 = 5;
+
+/// How a nested collection's path is shown.
+pub const PATH_SEPARATOR: &str = " › ";
 
 /// The H3 cells a photo's card names: about a region, a town, a
 /// neighbourhood and a block. Search does not need them; it reads the
@@ -33,6 +40,8 @@ pub const ENTITY_KIND: &str = "image";
 pub struct Built {
     pub photo: NormalizedPhoto,
     pub row: Option<GridRow>,
+    /// What identifies it; drawn nowhere, since it has no file.
+    pub front: Front,
     pub section: Section,
     pub problems: Vec<ProblemRow>,
 }
@@ -120,7 +129,11 @@ pub fn build(image: &ImageRow, ctx: &Context<'_>) -> Built {
         color_label: image.color_label.clone(),
         keywords: image.keywords.clone(),
         people: image.people.clone(),
-        albums: image.albums.clone(),
+        albums: image
+            .albums
+            .iter()
+            .map(|a| a.join(PATH_SEPARATOR))
+            .collect(),
         place: image.place.clone(),
         geo,
         h3: geo
@@ -145,13 +158,35 @@ pub fn build(image: &ImageRow, ctx: &Context<'_>) -> Built {
         },
     };
     let row = grid_row(&photo, image, ctx, &mut problems);
+    let front = front(&photo, image);
     let section = Section::keyed(&uuid, summary(&photo));
     Built {
         photo,
         row,
+        front,
         section,
         problems,
     }
+}
+
+fn front(photo: &NormalizedPhoto, image: &ImageRow) -> Front {
+    Front::new()
+        .plain("markdown_uuid", &photo.uuid)
+        .plain("source_id", &photo.source_id)
+        .plain("provider", Provider::Lightroom)
+        .plain("kind", photo.kind.as_str())
+        .name("title", subject(photo))
+        .text("upstream_id", &image.id_global)
+        .text_if("captured_at", photo.captured_at.as_deref())
+}
+
+/// Its title, else its headline, else its file's name.
+fn subject(photo: &NormalizedPhoto) -> String {
+    photo
+        .title
+        .clone()
+        .or_else(|| photo.headline.clone())
+        .unwrap_or_else(|| photo.file_name.clone())
 }
 
 fn grid_row(
@@ -160,11 +195,6 @@ fn grid_row(
     ctx: &Context<'_>,
     problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
-    let subject = photo
-        .title
-        .clone()
-        .or_else(|| photo.headline.clone())
-        .unwrap_or_else(|| photo.file_name.clone());
     let mut row = GridRow::builder()
         .uuid(photo.uuid.clone())
         .provider(Provider::Lightroom)
@@ -181,7 +211,7 @@ fn grid_row(
         .touched_at(photo.captured_at.clone().or(photo.edited_at_utc.clone()))
         .author(photo.creator.clone())
         .channel(photo.folder.clone())
-        .conversation_name(Some(subject))
+        .conversation_name(Some(subject(photo)))
         .conversation_uuid(photo.uuid.clone())
         .entire_chat(format!("/chat/{}", photo.uuid))
         .body(photo.caption.clone().unwrap_or_default())
@@ -197,16 +227,37 @@ fn grid_row(
 }
 
 /// What a photo answers to in search: its keywords and every keyword
-/// above them, its people and albums as labels; its place names; its
+/// above them; the people in it; its rating; its collections, each by
+/// its name, the sets above it and its whole path; its place names; its
 /// caption, title and Lightroom's own id. Its location is the row's own
-/// column, which `place:<cell>` reads.
+/// column, which `place:<cell>` reads. Keywords, people and albums are
+/// labels too, which is how `label:` found them first.
 pub fn terms(photo: &NormalizedPhoto, image: &ImageRow) -> Vec<SearchTerm> {
-    let label = |v: &str| SearchTerm::new(SearchTermKind::Label, v);
-    let place = |v: &str| SearchTerm::new(SearchTermKind::Place, v);
+    let term = |kind, value: &str| SearchTerm::new(kind, value);
+    let label = |v: &str| term(SearchTermKind::Label, v);
+    let place = |v: &str| term(SearchTermKind::Place, v);
     let mut out: Vec<SearchTerm> = Vec::new();
-    out.extend(photo.keywords.iter().flatten().map(|k| label(k)));
-    out.extend(photo.people.iter().map(|p| label(&p.name)));
+    for keyword in photo.keywords.iter().flatten() {
+        out.push(label(keyword));
+        out.push(term(SearchTermKind::Keyword, keyword));
+    }
+    for person in &photo.people {
+        out.push(label(&person.name));
+        out.push(term(SearchTermKind::Pictured, &person.name));
+    }
     out.extend(photo.albums.iter().map(|a| label(a)));
+    for path in &image.albums {
+        out.extend(path.iter().map(|a| term(SearchTermKind::Collection, a)));
+        if path.len() > 1 {
+            out.push(term(SearchTermKind::Collection, &path.join(PATH_SEPARATOR)));
+        }
+    }
+    out.extend(
+        photo
+            .rating
+            .filter(|r| (1..=5).contains(r))
+            .map(|r| term(SearchTermKind::Rating, &r.to_string())),
+    );
     out.extend(photo.place.names().map(place));
     out.extend(
         photo
@@ -326,7 +377,7 @@ fn assumed_utc(source_id: &str, uuid: &str) -> ProblemRow {
         Scope::Markdown(uuid),
         Some(uuid),
         Outcome::Nulled,
-        Problem::lossy(
+        Problem::lossy_explained(
             "capture_time_assumed_utc",
             Some("created_at".to_string()),
             "the photo records no time zone and the source names none \
@@ -340,20 +391,18 @@ fn assumed_utc(source_id: &str, uuid: &str) -> ProblemRow {
 /// The photo as text, for a diff of two renders: there is no page on
 /// disk, and this is what one would say.
 fn summary(photo: &NormalizedPhoto) -> String {
-    let mut out = format!(
-        "# {}\n\n",
-        photo
-            .title
-            .as_deref()
-            .or(photo.headline.as_deref())
-            .unwrap_or(&photo.file_name)
-    );
+    let title = photo
+        .title
+        .as_deref()
+        .or(photo.headline.as_deref())
+        .unwrap_or(&photo.file_name);
+    let mut out = format!("# {}\n\n", escape_name_inline(title));
     if let Some(caption) = &photo.caption {
-        out.push_str(&format!("{caption}\n\n"));
+        out.push_str(&format!("{}\n\n", escape_md_block(caption)));
     }
     let mut line = |label: &str, value: String| {
         if !value.is_empty() {
-            out.push_str(&format!("- {label}: {value}\n"));
+            out.push_str(&format!("- {label}: {}\n", escape_name_inline(&value)));
         }
     };
     line("File", photo.file_name.clone());
@@ -400,6 +449,104 @@ mod tests {
         }
     }
 
+    /// A diff of two renders shows this text as markdown: a caption or
+    /// a keyword in it was read as HTML, and could hide what follows.
+    #[test]
+    fn the_text_a_diff_shows_reads_as_typed() {
+        let hide = "<div style=\"display:none\">";
+        let image = ImageRow {
+            id_global: "G1".into(),
+            base_name: format!("{hide}warp"),
+            caption: Some(format!("Engage.\n{hide}\n\nhidden")),
+            keywords: vec![vec![hide.to_string()]],
+            albums: vec![vec![hide.to_string()]],
+            ..ImageRow::default()
+        };
+        let built = build(
+            &image,
+            &Context {
+                source_id: "lr",
+                qmd_path: "lr/doc.md",
+                catalog: None,
+                zone: None,
+            },
+        );
+        let md = &built.section.md;
+        assert!(!md.contains('<'), "{md}");
+        assert!(
+            md.starts_with("# &lt;div style=\"display:none\"&gt;warp\n\nEngage.\n"),
+            "{md}"
+        );
+    }
+
+    /// `keyword:`, `with:`/`pictured:`, `rating:` and `collection:` each
+    /// read a kind of their own, and `label:` still finds all but the
+    /// rating, as it did before they had one.
+    #[test]
+    fn a_photo_answers_to_its_keywords_people_rating_and_collections() {
+        let image = ImageRow {
+            id_global: "G1".into(),
+            base_name: "away-team.jpg".into(),
+            rating: Some(4.0),
+            keywords: vec![vec!["Places".into(), "Risa".into()]],
+            people: vec![datalib_photo_schema::Person {
+                name: "Deanna Troi".into(),
+                face: None,
+            }],
+            albums: vec![
+                vec!["Shore leave".into(), "Risa".into()],
+                vec!["Quick Collection".into()],
+            ],
+            ..ImageRow::default()
+        };
+        let built = build(
+            &image,
+            &Context {
+                source_id: "lr",
+                qmd_path: "lr/doc.md",
+                catalog: None,
+                zone: None,
+            },
+        );
+        assert_eq!(
+            built.photo.albums,
+            ["Shore leave › Risa", "Quick Collection"]
+        );
+        let terms = terms(&built.photo, &image);
+        let of = |kind: SearchTermKind| -> Vec<&str> {
+            let mut v: Vec<&str> = terms
+                .iter()
+                .filter(|t| t.kind == kind)
+                .map(|t| t.value.as_str())
+                .collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+        assert_eq!(of(SearchTermKind::Keyword), ["Places", "Risa"]);
+        assert_eq!(of(SearchTermKind::Pictured), ["Deanna Troi"]);
+        assert_eq!(of(SearchTermKind::Rating), ["4"]);
+        assert_eq!(
+            of(SearchTermKind::Collection),
+            [
+                "Quick Collection",
+                "Risa",
+                "Shore leave",
+                "Shore leave › Risa"
+            ]
+        );
+        assert_eq!(
+            of(SearchTermKind::Label),
+            [
+                "Deanna Troi",
+                "Places",
+                "Quick Collection",
+                "Risa",
+                "Shore leave › Risa"
+            ]
+        );
+    }
+
     /// The photo's own offset wins over the configured zone, the wall
     /// clock stays Lightroom's (which the person may have edited), and a
     /// photo with neither is read as UTC and says so.
@@ -444,6 +591,19 @@ mod tests {
             capture_time("not a time", &XmpFields::default(), None),
             None
         );
+    }
+
+    /// The warning on a photo read as UTC says so: cut at 80 characters
+    /// it ended before "read as UTC", and so never said what was done.
+    #[test]
+    fn the_assumed_utc_warning_is_kept_whole() {
+        let row = assumed_utc("lightroom", "00000000-0000-8000-8000-000000000001");
+        assert!(
+            row.sample.ends_with("so its time is read as UTC"),
+            "{}",
+            row.sample
+        );
+        assert_eq!(row.rule.as_deref(), Some("capture_time_assumed_utc"));
     }
 
     #[test]

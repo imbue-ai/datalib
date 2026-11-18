@@ -26,6 +26,9 @@ pub struct Emitter {
     /// Set by a `--migrate` that cannot bring the step's store to this
     /// build's shape in place; the outcome then says `needs_rerun`.
     needs_rerun: Arc<std::sync::atomic::AtomicBool>,
+    /// Set by a `--collect` or `--compact` that shrank the step's store:
+    /// its size before and after, in bytes.
+    store_bytes: Arc<Mutex<Option<(u64, u64)>>>,
 }
 
 impl Emitter {
@@ -34,6 +37,7 @@ impl Emitter {
             step,
             out: Arc::new(Mutex::new(std::io::stdout())),
             needs_rerun: Arc::default(),
+            store_bytes: Arc::default(),
         }
     }
 
@@ -45,6 +49,10 @@ impl Emitter {
     pub fn needs_rerun(&self) {
         self.needs_rerun
             .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn store_bytes(&self, before: u64, after: u64) {
+        *self.store_bytes.lock().unwrap() = Some((before, after));
     }
 
     fn line(&self, v: &serde_json::Value) {
@@ -84,6 +92,12 @@ impl Emitter {
         m.insert("outputs".into(), outs.into());
         if self.needs_rerun.load(std::sync::atomic::Ordering::SeqCst) {
             m.insert("needs_rerun".into(), true.into());
+        }
+        if let Some((before, after)) = *self.store_bytes.lock().unwrap() {
+            m.insert(
+                "store_bytes".into(),
+                serde_json::json!({ "before": before, "after": after }),
+            );
         }
         if let Some(f) = failure {
             m.insert("failure".into(), f.as_str().into());

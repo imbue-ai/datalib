@@ -13,7 +13,7 @@ use std::path::Path;
 use anyhow::Result;
 use datalib_dag::disk_space::{human_bytes, space};
 
-use crate::events::OutputClaim;
+use crate::events::{Emitter, OutputClaim};
 use crate::function::Function;
 use crate::source::StepEnv;
 
@@ -23,7 +23,12 @@ pub enum Verb {
     Compact,
 }
 
-pub async fn run(env: &StepEnv, data_root: &Path, verb: Verb) -> Result<Vec<OutputClaim>> {
+pub async fn run(
+    env: &StepEnv,
+    data_root: &Path,
+    verb: Verb,
+    emitter: &Emitter,
+) -> Result<Vec<OutputClaim>> {
     let Some(store) = crate::published::store(env, data_root) else {
         tracing::info!(step = %env.step, "no store of ours to shrink");
         return Ok(Vec::new());
@@ -51,6 +56,7 @@ pub async fn run(env: &StepEnv, data_root: &Path, verb: Verb) -> Result<Vec<Outp
         datalib_etl::doltlite_raw::collect_garbage(&store).await?;
     }
     let after = std::fs::metadata(&store)?.len();
+    emitter.store_bytes(before, after);
     let size = (human_bytes(before), human_bytes(after));
     match folded {
         Some(f) => tracing::info!(

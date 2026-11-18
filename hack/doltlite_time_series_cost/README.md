@@ -13,8 +13,8 @@ that rests on these numbers is
 
 ```sh
 bazelisk build //third-party/doltlite:doltlite
-python3 scripts/doltlite_time_series_cost.py <scratch> 1000000 5000000 20000000
-INT_KEYS=1 python3 scripts/doltlite_time_series_cost.py <scratch> 1000000 5000000 20000000
+uv run python scripts/doltlite_time_series_cost.py <scratch> 1000000 5000000 20000000
+INT_KEYS=1 uv run python scripts/doltlite_time_series_cost.py <scratch> 1000000 5000000 20000000
 ```
 
 ## Results — doltlite 0.50.14, Apple M4, macOS 27.0.1

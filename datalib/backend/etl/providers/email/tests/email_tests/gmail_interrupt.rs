@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use datalib_etl::control::DownloadControl;
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
-use datalib_etl_email::ingest::gmail_api::{fetch, FetchOptions};
+use datalib_etl_email::ingest::gmail_api::{fetch, FetchOptions, Section};
 use datalib_etl_email::ingest::{db_path_for, RawDb};
 use datalib_etl_web::http::HttpResponse;
 use datalib_etl_web::interrupt::{every_cut_resumes, How, Rig};
@@ -53,7 +53,7 @@ impl Rig for Gmail {
         let mut opts = FetchOptions::new(db.clone());
         // Two messages to a write, so a cut lands between writes.
         opts.flush_batch = Some(2);
-        opts.only_labels = self.labels.clone();
+        opts.sections = vec![Section::labels(self.labels.clone())];
         opts.control = DownloadControl {
             stop,
             ..Default::default()

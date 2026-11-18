@@ -68,17 +68,17 @@ function = "render_markdown"
 inputs = ["slack/ingest"]
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
+group = "unified_grid_and_search_index"
+function = "unified_grid_and_search_index"
 inputs = ["slack/render_markdown"]
 
 [[applets]]
-id = "unified_document_index"
-group = "unified_document_index"
-command = "datalib-applet unified_document_index"
+id = "unified_grid_and_search_index"
+group = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 "#;
 
 async fn write_root(root: &Path, config: &str, state_json: Option<&str>) {
@@ -277,7 +277,7 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
             .any(|a| a["id"] == "dashboard")
     };
     assert!(
-        !has_dashboard(&rows["unified_document_index"]),
+        !has_dashboard(&rows["unified_grid_and_search_index"]),
         "the applet"
     );
     // A render that has never run is out of date: Sync reruns it alone,
@@ -293,11 +293,14 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
         .contains("sync slack/ingest"));
 
     // The applet shares its group's id; the group's key keeps them apart.
-    let applet = &rows["unified_document_index"];
+    let applet = &rows["unified_grid_and_search_index"];
     assert_eq!(applet["kind"], "applet");
     assert_eq!(
         applet["path"],
-        serde_json::json!(["group:unified_document_index", "unified_document_index"])
+        serde_json::json!([
+            "group:unified_grid_and_search_index",
+            "unified_grid_and_search_index"
+        ])
     );
     // Its health is the supervisor's word, not the runner's: up, or —
     // here, with no `datalib-applet` on the PATH — failed to start.
@@ -306,18 +309,21 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     assert!(label == "Up" || label == "Failed to start", "{applet}");
     assert_eq!(applet["status"]["at"], serde_json::Value::Null);
     assert_eq!(applet["last_synced"], serde_json::Value::Null);
-    assert_eq!(applet["name"]["label"], "Document Index (Applet)");
+    assert_eq!(applet["name"]["label"], "Grid and Search Index (Applet)");
     assert_eq!(applet["name"]["icon"], "applet");
-    assert_eq!(applet["type"]["label"], "unified_document_index");
+    assert_eq!(applet["type"]["label"], "unified_grid_and_search_index");
     // The group reads a failed applet as its own failure, else its
     // last step, which has never run.
-    let index = &rows["group:unified_document_index"];
+    let index = &rows["group:unified_grid_and_search_index"];
     if label == "Up" {
         assert_eq!(index["status"]["key"], "never_run");
-        assert_eq!(index["status_from"], "unified_document_index/grid_index");
+        assert_eq!(
+            index["status_from"],
+            "unified_grid_and_search_index/unified_grid_and_search_index"
+        );
     } else {
         assert_eq!(index["status"]["key"], "failed");
-        assert_eq!(index["status_from"], "unified_document_index");
+        assert_eq!(index["status_from"], "unified_grid_and_search_index");
     }
     // The index group browses as the projection over every source.
     assert_eq!(index["actions"][0]["label"], "Browse every source");
@@ -425,13 +431,67 @@ async fn a_finished_run_reaches_the_rows() {
     );
 }
 
-/// The counts after a row's name read the `problems{severity=…}`
-/// metrics a step reported at the end of its last run: a red and a
-/// yellow number on each step that counted some, nothing on the index
-/// that counted none or a step that never counted — and the group shows
-/// its steps' summed, since each counts only what it found itself.
+/// Rows written into the root's grid index as `unified_grid_and_search_index` would copy
+/// them in.
+async fn index_problems(root: &Path, rows: &[&datalib_problems::ProblemRow]) {
+    use datalib_problems::ProblemRow;
+    use datalib_table::BulkUpsertable;
+
+    let index =
+        datalib_etl_render::grid_index::open_index(&datalib_core::layout::grid_index_db(root))
+            .await
+            .unwrap();
+    let columns: Vec<&str> = std::iter::once(ProblemRow::ID_COLUMN)
+        .chain(ProblemRow::TYPED_COLUMNS.iter().copied())
+        .collect();
+    let sql = format!(
+        "INSERT INTO problems ({}) VALUES ({})",
+        columns.join(", "),
+        vec!["?"; columns.len()].join(", ")
+    );
+    for row in rows {
+        row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql.clone())))
+            .execute(&index)
+            .await
+            .unwrap();
+    }
+    datalib_etl_render::grid_index::seal(&datalib_etl_render::grid_index::WriteLock::for_index(
+        index.clone(),
+    ))
+    .await
+    .unwrap();
+    index.close().await;
+}
+
+fn chips_of(rows: &HashMap<String, serde_json::Value>, key: &str) -> Vec<(String, String)> {
+    rows[key]["problems"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            (
+                c["kind"].as_str().unwrap().to_string(),
+                c["text"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+fn chip(kind: &str, text: &str) -> (String, String) {
+    (kind.to_string(), text.to_string())
+}
+
+/// The red and yellow numbers after a row's name are the grid index's
+/// error and warning rows the step found, less the muted ones, and never
+/// what the step reported of itself: a count that is not rows opened an
+/// empty list. Each row carries the problems grid's query for exactly
+/// those rows. A group sums its steps; the index's own rows are the
+/// grid index step's; a mute whose problem is gone counts nothing; and
+/// before there is an index nothing is drawn.
 #[tokio::test]
-async fn problem_counts_reach_the_rows_from_the_run_store() {
+async fn problem_counts_are_the_index_rows_less_the_muted_ones() {
+    use datalib_problems::{Outcome, Problem, ProblemRow, Reason, Scope, Severity, Stage};
+
     let tmp = tempfile::tempdir().unwrap();
     write_root(tmp.path(), CONFIG, None).await;
     {
@@ -452,59 +512,174 @@ async fn problem_counts_reach_the_rows_from_the_run_store() {
             updated_at_utc: "2026-08-31T09:00:00+00:00".into(),
             tz_offset: None,
         };
-        w.metric(metric("slack/render_markdown", "severity=error", 2));
+        w.metric(metric("slack/render_markdown", "severity=error", 5));
         w.metric(metric("slack/render_markdown", "severity=warning", 5));
-        w.metric(metric("slack/ingest", "severity=error", 0));
-        w.metric(metric("slack/ingest", "severity=warning", 1));
-        w.metric(metric(
-            "unified_document_index/grid_index",
-            "severity=error",
-            0,
-        ));
-        w.metric(metric(
-            "unified_document_index/grid_index",
-            "severity=warning",
-            0,
-        ));
+        w.metric(metric("slack/ingest", "severity=warning", 5));
+    }
+    let rows = by_key(&get_rows(tmp.path()).await);
+    for key in ["slack/render_markdown", "slack/ingest", "group:slack"] {
+        assert_eq!(chips_of(&rows, key), vec![], "{key}: no index, no count");
+        assert!(rows[key]["problems_query"].is_null(), "{key}");
     }
 
-    let rows = by_key(&get_rows(tmp.path()).await);
-    let chips = |key: &str| -> Vec<(String, String)> {
-        rows[key]["problems"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|c| {
-                (
-                    c["kind"].as_str().unwrap().to_string(),
-                    c["text"].as_str().unwrap().to_string(),
-                )
-            })
-            .collect()
+    let problem = |stage, key: &str, severity| {
+        ProblemRow::new(
+            "slack",
+            stage,
+            Scope::Entity(key),
+            None,
+            Outcome::Dropped,
+            Problem::record(Reason::Undeserializable, key).severity(severity),
+            None,
+        )
     };
-    let red_and_yellow = vec![
-        ("error".to_string(), "2".to_string()),
-        ("warning".to_string(), "5".to_string()),
-    ];
-    assert_eq!(chips("slack/render_markdown"), red_and_yellow);
-    assert_eq!(
-        chips("slack/ingest"),
-        vec![("warning".to_string(), "1".to_string())]
+    let render_error = problem(Stage::Parse, "messages:1", Severity::Error);
+    let fetch_warning = problem(Stage::Fetch, "messages:2", Severity::Warning);
+    let other_fetch_warning = problem(Stage::Fetch, "messages:3", Severity::Warning);
+    let render_info = problem(Stage::Render, "messages:4", Severity::Info);
+    let unreadable = problem(
+        Stage::Render,
+        datalib_problems::INDEX_OWN_SCOPE_KEY,
+        Severity::Warning,
     );
-    assert_eq!(
-        chips("group:slack"),
-        vec![
-            ("error".to_string(), "2".to_string()),
-            ("warning".to_string(), "6".to_string()),
+    index_problems(
+        tmp.path(),
+        &[
+            &render_error,
+            &fetch_warning,
+            &other_fetch_warning,
+            &render_info,
+            &unreadable,
         ],
-        "the group sums its steps"
+    )
+    .await;
+    let store = datalib_problem_mutes::store_path(tmp.path());
+    std::fs::create_dir_all(store.parent().unwrap()).unwrap();
+    let mutes = datalib_etl::doltlite_raw::open_curated(
+        &store,
+        datalib_problem_mutes::DDL,
+        datalib_store_meta::StoreKind::ProblemMutes,
+        &[],
+    )
+    .await
+    .unwrap();
+    datalib_problem_mutes::mute(
+        &mutes,
+        &[
+            render_error.problem_uuid.clone(),
+            fetch_warning.problem_uuid.clone(),
+            "a-problem-fixed-since".to_string(),
+        ],
+        datalib_problem_mutes::MutedHow::Manual,
+        None,
+        &datalib_time::split_stamp("2026-08-31T10:00:00+01:00"),
+    )
+    .await
+    .unwrap();
+    datalib_etl::doltlite_raw::commit_run(&mutes, "mute three")
+        .await
+        .unwrap();
+
+    let rows = by_key(&get_rows(tmp.path()).await);
+    assert_eq!(
+        chips_of(&rows, "slack/render_markdown"),
+        vec![],
+        "its one error is muted, its info row is in no count, and its report is not read"
+    );
+    assert!(rows["slack/render_markdown"]["problems_query"].is_null());
+    assert_eq!(
+        chips_of(&rows, "slack/ingest"),
+        vec![chip("warning", "1")],
+        "one of its two warnings is muted; the fixed one takes nothing off"
+    );
+    let title = rows["slack/ingest"]["problems"][0]["title"]
+        .as_str()
+        .unwrap();
+    assert!(title.contains("and 1 more you muted"), "{title}");
+    assert_eq!(
+        rows["slack/ingest"]["problems_query"],
+        "source:slack stage:fetch -doc:render_store -severity:info muted:no"
+    );
+    assert_eq!(chips_of(&rows, "group:slack"), vec![chip("warning", "1")]);
+    assert_eq!(
+        rows["group:slack"]["problems_query"],
+        "source:slack -stage:time_series -stage:occurrences -doc:render_store \
+         -severity:info muted:no"
     );
     assert_eq!(
-        chips("unified_document_index/grid_index"),
-        vec![],
-        "counted none: nothing drawn"
+        chips_of(
+            &rows,
+            "unified_grid_and_search_index/unified_grid_and_search_index"
+        ),
+        vec![chip("warning", "1")],
+        "the index's own row is its step's, whichever source it names"
     );
-    assert_eq!(chips("group:unified_document_index"), vec![]);
+    assert_eq!(
+        rows["group:unified_grid_and_search_index"]["problems_query"],
+        "scope:entity doc:render_store -severity:info muted:no"
+    );
+
+    datalib_problem_mutes::unmute(&mutes, std::slice::from_ref(&render_error.problem_uuid))
+        .await
+        .unwrap();
+    datalib_etl::doltlite_raw::commit_run(&mutes, "unmute one")
+        .await
+        .unwrap();
+    let rows = by_key(&get_rows(tmp.path()).await);
+    assert_eq!(
+        chips_of(&rows, "slack/render_markdown"),
+        vec![chip("error", "1")],
+        "unmuted, it counts again"
+    );
+    assert_eq!(
+        rows["slack/render_markdown"]["problems_query"],
+        "source:slack -stage:fetch -stage:time_series -stage:occurrences -doc:render_store \
+         -severity:info muted:no"
+    );
+    assert_eq!(
+        chips_of(&rows, "group:slack"),
+        vec![chip("error", "1"), chip("warning", "1")],
+        "a group is its steps' rows together, each kind summed"
+    );
+    assert_eq!(
+        rows["group:slack"]["problems_query"],
+        "source:slack -stage:time_series -stage:occurrences -doc:render_store \
+         -severity:info muted:no"
+    );
+    mutes.close().await;
+}
+
+/// A pass that failed and was run again is not a problem row, so it is
+/// grey and apart from the yellow number, where a double-click could
+/// list nothing for it.
+#[tokio::test]
+async fn a_failed_pass_is_grey_and_not_a_warning() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(tmp.path(), CONFIG, None).await;
+    {
+        let w = datalib_runs::RunWriter::start(
+            tmp.path(),
+            "r1",
+            "r1",
+            None,
+            datalib_runs::Retention::default(),
+        )
+        .unwrap();
+        w.metric(datalib_runs::MetricRow {
+            run_id: "r1".into(),
+            step: "slack/ingest".into(),
+            name: datalib_metrics::FAILED_PASSES.into(),
+            labels: String::new(),
+            value: 2,
+            updated_at_utc: "2026-08-31T09:00:00+00:00".into(),
+            tz_offset: None,
+        });
+    }
+    index_problems(tmp.path(), &[]).await;
+    let rows = by_key(&get_rows(tmp.path()).await);
+    assert_eq!(chips_of(&rows, "slack/ingest"), vec![chip("metric", "2")]);
+    assert!(rows["slack/ingest"]["problems_query"].is_null());
+    assert_eq!(chips_of(&rows, "group:slack"), vec![chip("metric", "2")]);
 }
 
 /// A stopped sync's queue is emptied as it ends, and nothing on the row
@@ -563,7 +738,7 @@ async fn what_a_step_owes_reaches_its_row_and_its_group() {
         "{group}"
     );
     assert_eq!(
-        rows["group:unified_document_index"]["owed"]["value"],
+        rows["group:unified_grid_and_search_index"]["owed"]["value"],
         serde_json::Value::Null
     );
 }
@@ -634,7 +809,7 @@ async fn a_groups_dashboard_charts_the_run_its_steps_took_part_in() {
     // A group none of whose steps ever ran has no run to show.
     let idx = rows_of_at(
         tmp.path(),
-        "/api/manage/groups/unified_document_index/dashboard",
+        "/api/manage/groups/unified_grid_and_search_index/dashboard",
     )
     .await;
     assert_eq!(idx["run"], serde_json::Value::Null);
@@ -812,7 +987,7 @@ async fn a_dropped_entry_keeps_its_row_and_says_why() {
         .unwrap()
         .starts_with("Not in the pipeline"));
     // The fan-in that read it is blocked by it, and says so.
-    let index = &rows["unified_document_index/grid_index"];
+    let index = &rows["unified_grid_and_search_index/unified_grid_and_search_index"];
     assert_eq!(index["status"]["key"], "config_blocked");
     // The group itself still loads and still runs from its ingest step.
     let slack = &rows["group:slack"];
@@ -823,6 +998,50 @@ async fn a_dropped_entry_keeps_its_row_and_says_why() {
 /// A config warning drops nothing, so no entry's row showed it, and it
 /// reached only `datalib-dag --check`. The System row carries the count,
 /// and every warning's words on hover, with nothing on any other row.
+/// An applet filed under no group sits under the Applets heading, after
+/// every group and before System — not at the top level, where it read
+/// as part of whichever group came last. One filed under a group stays
+/// there. (A root with no such applet has no heading: the fresh-root
+/// test counts its rows.)
+#[tokio::test]
+async fn an_applet_outside_any_group_is_filed_under_applets() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config =
+        format!("{CONFIG}\n[[applets]]\nid = \"photos\"\ncommand = \"datalib-applet photos\"\n");
+    write_root(tmp.path(), &config, None).await;
+    let got = get_rows(tmp.path()).await;
+    let rows = by_key(&got);
+
+    let applets = &rows["section:applets"];
+    assert_eq!(applets["kind"], "section", "{got}");
+    assert_eq!(applets["path"], serde_json::json!(["section:applets"]));
+    assert_eq!(applets["name"]["label"], "Applets");
+    assert_eq!(applets["actions"], serde_json::json!([]));
+    assert_eq!(
+        rows["photos"]["path"],
+        serde_json::json!(["section:applets", "photos"])
+    );
+    assert_eq!(rows["photos"]["group"], serde_json::Value::Null);
+    assert_eq!(
+        rows["unified_grid_and_search_index"]["path"],
+        serde_json::json!([
+            "group:unified_grid_and_search_index",
+            "unified_grid_and_search_index"
+        ])
+    );
+    let keys: Vec<&str> = got["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        &keys[keys.len() - 4..],
+        ["section:applets", "photos", "system", "system/runs"],
+        "{got}"
+    );
+}
+
 #[tokio::test]
 async fn config_warnings_reach_the_system_row() {
     let tmp = tempfile::tempdir().unwrap();
@@ -922,7 +1141,7 @@ async fn item_counts_and_their_history_reach_the_rows_from_the_run_store() {
     );
     for key in [
         "slack/ingest",
-        "unified_document_index/grid_index",
+        "unified_grid_and_search_index/unified_grid_and_search_index",
         "system",
     ] {
         assert_eq!(
@@ -940,9 +1159,9 @@ async fn item_counts_and_their_history_reach_the_rows_from_the_run_store() {
 async fn the_contacts_and_time_series_apps_can_be_browsed_and_another_applet_cannot() {
     let tmp = tempfile::tempdir().unwrap();
     let config = format!(
-        "{CONFIG}\n[[applets]]\nid = \"datalib_contacts\"\ngroup = \"unified_document_index\"\n\
+        "{CONFIG}\n[[applets]]\nid = \"datalib_contacts\"\ngroup = \"unified_grid_and_search_index\"\n\
          command = \"datalib-applet datalib_contacts\"\n\
-         [[applets]]\nid = \"unified_time_series_index\"\ngroup = \"unified_document_index\"\n\
+         [[applets]]\nid = \"unified_time_series_index\"\ngroup = \"unified_grid_and_search_index\"\n\
          command = \"datalib-applet unified_time_series_index\"\n"
     );
     write_root(tmp.path(), &config, None).await;
@@ -962,5 +1181,5 @@ async fn the_contacts_and_time_series_apps_can_be_browsed_and_another_applet_can
     let time_series = browse("unified_time_series_index");
     assert_eq!(time_series["enabled"], true, "{time_series}");
     assert_eq!(time_series["label"], "Browse time series");
-    assert_eq!(browse("unified_document_index")["enabled"], false);
+    assert_eq!(browse("unified_grid_and_search_index")["enabled"], false);
 }

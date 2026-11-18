@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 CLI = Path(os.environ["DOLTLITE_BIN"]).resolve()
@@ -139,6 +140,60 @@ class StartingPython(unittest.TestCase):
             env=fresh_env(**env),
         )
 
+    def test_a_child_process_inherits_what_the_bootstrap_leaves(self) -> None:
+        expected = ["_DOLTLITE_BOOTSTRAPPED"]
+        if sys.platform == "darwin":
+            expected.append("DYLD_INSERT_LIBRARIES")
+        self.assertEqual([k for k in BOOTSTRAP_ENV if k in os.environ], expected)
+
+    def test_a_child_python_with_only_the_marker_cannot_read_a_store(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp) / "entities.doltlite_db"
+            cli(str(store), "CREATE TABLE t(id TEXT PRIMARY KEY);")
+            script = Path(tmp) / "child.py"
+            script.write_text(
+                "import doltlite\n"
+                "import sqlite3\n"
+                f"sqlite3.connect({str(store)!r}).execute('SELECT id FROM t')\n"
+            )
+            done = self.run_python(str(script), _DOLTLITE_BOOTSTRAPPED="1")
+            self.assertNotEqual(done.returncode, 0, "it read the store")
+            self.assertIn("file is not a database", done.stderr)
+
+    def test_the_reader_works_beside_a_shared_library_sqlite3(self) -> None:
+        """This host Python loads SQLite as a shared library, so the two engines
+        could collide here as they cannot under python_reader_test's. The reader
+        must read and the sqlite3 module stay stock, whichever loaded first."""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = str(Path(tmp) / "entities.doltlite_db")
+            cli(store, "CREATE TABLE t(id TEXT PRIMARY KEY);")
+            site = Path(tmp) / "site"
+            with zipfile.ZipFile(os.environ["DOLTLITE_READER_WHEEL"]) as wheel:
+                wheel.extractall(site)
+            use_both = (
+                "print(datalib_reader._lib._name)\n"
+                f"with datalib_reader.Store({store!r}) as s:\n"
+                "    assert s.query('SELECT count(*) FROM t') == [(0,)]\n"
+                "try:\n"
+                f"    sqlite3.connect({store!r}).execute('SELECT id FROM t')\n"
+                "except sqlite3.DatabaseError as e:\n"
+                "    assert 'file is not a database' in str(e), e\n"
+                "else:\n"
+                "    raise SystemExit('the sqlite3 module read a store')\n"
+            )
+            for name, imports in (
+                ("sqlite3_first.py", "import sqlite3\nimport datalib_reader\n"),
+                ("reader_first.py", "import datalib_reader\nimport sqlite3\n"),
+            ):
+                script = Path(tmp) / name
+                script.write_text(imports + use_both)
+                done = self.run_python(str(script), PYTHONPATH=str(site))
+                self.assertEqual(done.returncode, 0, f"{name}: {done.stderr}")
+                self.assertEqual(
+                    Path(done.stdout.split("\n")[0]).parent.resolve(),
+                    (site / "datalib_reader").resolve(),
+                )
+
     def test_python_c_fails_on_macos_only(self) -> None:
         done = self.run_python("-c", "import doltlite")
         if sys.platform == "darwin":
@@ -148,9 +203,9 @@ class StartingPython(unittest.TestCase):
             self.assertEqual(done.returncode, 0, done.stderr)
 
     @unittest.skipUnless(sys.platform == "darwin", "the shim is macOS's")
-    def test_macos_copies_the_library_on_every_start(self) -> None:
-        """dolthub/doltlite-python#2. When this fails, upstream reuses the
-        copy: drop the caveat from doltlite.md."""
+    def test_macos_reuses_its_copy_of_the_library(self) -> None:
+        """dolthub/doltlite-python#2: a second start reuses the first one's
+        copy rather than leaving another in $TMPDIR."""
         with tempfile.TemporaryDirectory() as tmp:
             script = Path(tmp) / "one.py"
             script.write_text("import doltlite\nimport sqlite3\n")
@@ -159,7 +214,7 @@ class StartingPython(unittest.TestCase):
             for _ in range(2):
                 done = self.run_python(str(script), TMPDIR=str(shims))
                 self.assertEqual(done.returncode, 0, done.stderr)
-            self.assertEqual(len(list(shims.glob("doltlite-shim-*"))), 2)
+            self.assertEqual(len(list(shims.glob("doltlite-shim-*"))), 1)
 
 
 if __name__ == "__main__":

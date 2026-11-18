@@ -30,7 +30,9 @@ millisecond, and the listing is bounded by whole stamps
 (`updated_after`, `updated_before`); GitLab's listing has no cap the
 way GitHub's search has. An MR is held with its whole discussion list
 in one transaction, so one whose discussions would not list stores
-nothing and stays owed. `max_mrs` is GitHub's `max_prs`: it counts the
+nothing and stays owed, and a seal holds each MR whole or not at all:
+render starts on the first seal and runs again on each later one
+(`tests/gitlab_tests/streaming.rs`). `max_mrs` is GitHub's `max_prs`: it counts the
 MRs fetched, not the ones listed at a stamp the store already holds.
 
 ## Auth

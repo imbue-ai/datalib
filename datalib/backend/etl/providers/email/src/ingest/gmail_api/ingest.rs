@@ -8,7 +8,6 @@ use datalib_etl::blob_cas::blake3_hex;
 use super::super::envelope::{self, GmailId, TransportFacts};
 use super::super::labels::{self, LabelMap};
 use super::super::schema_raw::{FetchedEmail, GMAIL_API_VIA};
-use super::super::K_ONLY_EXTRACT_LABELS;
 use super::api::{GmailMessage, Label};
 use datalib_etl::download_problems;
 
@@ -147,8 +146,8 @@ impl LabelIndex {
     /// Errors only when *nothing* resolved, because an empty `labelIds`
     /// means "every message in the account" — turning a targeted mirror
     /// into a full one is not a partial result, it is the wrong run.
-    pub fn ids_for_names(&self, names: &[String]) -> anyhow::Result<ResolvedLabels> {
-        let out = download_problems::resolve_configured(K_ONLY_EXTRACT_LABELS, names, |name| {
+    pub fn ids_for_names(&self, setting: &str, names: &[String]) -> anyhow::Result<ResolvedLabels> {
+        let out = download_problems::resolve_configured(setting, names, |name| {
             self.id_for_name(name).ok_or_else(|| {
                 format!(
                     "not a label on this Gmail account. Known labels: {}",
@@ -158,7 +157,7 @@ impl LabelIndex {
         });
         if out.nothing_resolved() {
             anyhow::bail!(
-                "email `only_extract_labels` names {} label(s), none of which exist on this \
+                "email `{setting}` names {} label(s), none of which exist on this \
                  Gmail account; refusing to fall back to mirroring everything. Known labels: {}",
                 names.len(),
                 self.known_names().join(", ")
@@ -239,7 +238,14 @@ pub struct Ingested {
     pub label_ids: Vec<String>,
 }
 
-pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Result<Ingested> {
+/// `muted`: whether the message is in a muted thread, `None` when the run
+/// could not find out.
+pub fn ingest(
+    account_id: &str,
+    index: &LabelIndex,
+    msg: &GmailMessage,
+    muted: Option<bool>,
+) -> Result<Ingested> {
     let parsed = envelope::parse(&msg.raw)?;
     let blob_id = blake3_hex(&msg.raw);
     // No fallback to `Message-ID`: a row keyed that way would never meet
@@ -256,6 +262,7 @@ pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Resul
         thread_id: thread_id.clone(),
         mailbox_ids,
         keywords,
+        preview: msg.preview.clone(),
     };
     let mut env = envelope::synthesize(&msg.raw, &parsed, &facts);
 
@@ -280,9 +287,10 @@ pub fn ingest(account_id: &str, index: &LabelIndex, msg: &GmailMessage) -> Resul
         );
     }
 
-    let email = FetchedEmail::from_jmap_envelope(account_id, &env).ok_or_else(|| {
+    let mut email = FetchedEmail::from_jmap_envelope(account_id, &env).ok_or_else(|| {
         anyhow::anyhow!("could not build an email row for Gmail message {}", msg.id)
     })?;
+    email.muted = muted;
     Ok(Ingested {
         email,
         email_id,
@@ -303,6 +311,8 @@ fn internal_date_to_iso(ms: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const SETTING: &str = "only_extract_labels";
 
     fn label(id: &str, name: &str, system: bool) -> Label {
         Label {
@@ -452,7 +462,7 @@ mod tests {
     fn resolves_configured_names_to_gmail_label_ids() {
         let idx = index();
         assert_eq!(
-            idx.ids_for_names(&["Work/Projects".into()])
+            idx.ids_for_names(SETTING, &["Work/Projects".into()])
                 .unwrap()
                 .resolved,
             vec!["Label_7".to_string()]
@@ -460,17 +470,23 @@ mod tests {
         // Written the canonical (Takeout) way, matched against Gmail's
         // ALL-CAPS system name.
         assert_eq!(
-            idx.ids_for_names(&["Inbox".into()]).unwrap().resolved,
+            idx.ids_for_names(SETTING, &["Inbox".into()])
+                .unwrap()
+                .resolved,
             vec!["INBOX"]
         );
         // Written Gmail's way, also matched.
         assert_eq!(
-            idx.ids_for_names(&["INBOX".into()]).unwrap().resolved,
+            idx.ids_for_names(SETTING, &["INBOX".into()])
+                .unwrap()
+                .resolved,
             vec!["INBOX"]
         );
         // A user label by Google's id for it.
         assert_eq!(
-            idx.ids_for_names(&["Label_7".into()]).unwrap().resolved,
+            idx.ids_for_names(SETTING, &["Label_7".into()])
+                .unwrap()
+                .resolved,
             vec!["Label_7"]
         );
     }
@@ -491,7 +507,10 @@ mod tests {
     #[test]
     fn keeps_the_labels_that_resolve_and_reports_the_one_that_does_not() {
         let out = index()
-            .ids_for_names(&["Inbox".into(), "Datalib".into(), "Work/Projects".into()])
+            .ids_for_names(
+                SETTING,
+                &["Inbox".into(), "Datalib".into(), "Work/Projects".into()],
+            )
             .unwrap();
         assert_eq!(out.resolved, vec!["INBOX", "Label_7"]);
         assert_eq!(out.problems.len(), 1, "{:?}", out.problems);
@@ -508,7 +527,7 @@ mod tests {
     #[test]
     fn refuses_a_filter_in_which_no_name_matches() {
         let err = index()
-            .ids_for_names(&["Datalib".into(), "Nope".into()])
+            .ids_for_names(SETTING, &["Datalib".into(), "Nope".into()])
             .unwrap_err()
             .to_string();
         assert!(err.contains("none of which exist"), "{err}");
@@ -519,7 +538,7 @@ mod tests {
     /// nothing — this one legitimately means "the whole account".
     #[test]
     fn resolves_nothing_for_an_empty_filter() {
-        let out = index().ids_for_names(&[]).unwrap();
+        let out = index().ids_for_names(SETTING, &[]).unwrap();
         assert!(out.resolved.is_empty());
         assert!(out.problems.is_empty());
     }

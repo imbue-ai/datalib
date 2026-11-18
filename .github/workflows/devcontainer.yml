@@ -11,11 +11,10 @@
 # pre-fetched output base that degrades gracefully when stale (bazel
 # fetches only what the lockfiles added since), so a release's worth of
 # drift costs seconds. Every build is tagged `:sha-<commit>`, a tag
-# build also `:X.Y.Z`; `:latest` — the tag `test.yml` pulls — moves from
-# a tag, or when a dispatch on `main` asks, and only after the image has
-# proved it can analyse the tree. Never from another branch: every run
-# on `main` runs in `:latest` holding the release cache's write key. To
-# try a Dockerfile change before a release, dispatch this workflow on
+# build also `:X.Y.Z` and `:latest`, once the image has proved it can
+# analyse the tree. CI follows no tag: `test.yml` and `cargo-update.yml`
+# name the image by digest, and pin_release.py moves them to a release's.
+# To try a Dockerfile change before a release, dispatch this workflow on
 # the branch, then `test.yml` with the `sha-` tag it prints. Old `sha-`
 # versions are pruned after each push.
 #
@@ -27,11 +26,6 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
-    inputs:
-      publish_latest:
-        description: Also move the `latest` tag to this build (from `main` only).
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -46,16 +40,9 @@ jobs:
     name: build and push (ghcr.io)
     runs-on: ubuntu-latest
     steps:
-      - name: Refuse to move latest from a branch other than main
-        env:
-          PUBLISH_LATEST: ${{ inputs.publish_latest }}
-        run: |
-          if [[ "${PUBLISH_LATEST}" == "true" && "${GITHUB_REF}" != refs/heads/main ]]; then
-              echo "::error::publish_latest moves the image every main run uses; dispatch it on main, not ${GITHUB_REF}"
-              exit 1
-          fi
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # The pre-fetch pulls the Rust toolchains and ~300 crates into the
       # build; buildx plus the layer cache export need more than the
@@ -66,21 +53,21 @@ jobs:
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup || true
           df -h /
 
-      # BuildKit and the Dockerfile's Docker Hub `FROM`s (ubuntu, node,
-      # bun) come through Google's pull-through mirror: anonymous Docker
+      # BuildKit and the Dockerfile's Docker Hub `FROM`s (ubuntu, node)
+      # come through Google's pull-through mirror: anonymous Docker
       # Hub pulls are rate-limited per IP, and a hosted runner shares its
-      # IP with strangers' jobs. release.yml's docker-publish does the
-      # same, and says more.
+      # IP with strangers' jobs. release.yml's docker-image does the same,
+      # and says more, including how to move this pin.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
         with:
-          driver-opts: image=mirror.gcr.io/moby/buildkit:latest
+          driver-opts: image=mirror.gcr.io/moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
 
       - name: Log in to GHCR
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -131,15 +118,11 @@ jobs:
       - name: Push
         env:
           BUILDKIT_PROGRESS: plain
-          PUBLISH_LATEST: ${{ inputs.publish_latest }}
         run: |
           set -euo pipefail
           tags=("${IMAGE}:sha-${GITHUB_SHA::12}")
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-              tags+=("${IMAGE}:${GITHUB_REF#refs/tags/v}")
-          fi
-          if [[ "${GITHUB_REF}" == refs/tags/v* || ( "${PUBLISH_LATEST}" == "true" && "${GITHUB_REF}" == refs/heads/main ) ]]; then
-              tags+=("${IMAGE}:latest")
+              tags+=("${IMAGE}:${GITHUB_REF#refs/tags/v}" "${IMAGE}:latest")
           fi
           names=$(IFS=,; echo "${tags[*]}")
           docker buildx build \
@@ -153,7 +136,6 @@ jobs:
               --output "type=image,\"name=${names}\",push=true,oci-mediatypes=true,compression=zstd,compression-level=3,force-compression=true" \
               .
           printf 'pushed %s\n' "${tags[@]}"
-          [[ " ${tags[*]} " == *" ${IMAGE}:latest "* ]] && echo "moved :latest to sha-${GITHUB_SHA::12}" || true
 
       # GHCR keeps every pushed version. Keep the newest few `sha-` builds
       # (enough to roll `latest` back by hand) and drop the rest; the

@@ -11,6 +11,7 @@ use datalib_etl_linkedin_render::connections;
 use datalib_etl_linkedin_render::posts;
 use datalib_etl_linkedin_render::processor::Source;
 use datalib_etl_linkedin_render::render;
+use datalib_etl_linkedin_render::skills;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
 
@@ -85,6 +86,11 @@ fn build_export(root: &Path) -> Result<()> {
         root.join("guide_messages.csv"),
         "CONVERSATION ID,CONVERSATION TITLE,FROM,SENDER PROFILE URL,TO,DATE,CONTENT\n\
          guide-1,Coaching,Guide,,You,2026-03-01 09:00:00 UTC,Welcome aboard.\n",
+    )?;
+
+    fs::write(
+        root.join("Skills.csv"),
+        "Name\nDiplomacy\nStarship Command\n",
     )?;
 
     // A CSV that isn't in KNOWN_FILES — should still ingest (with a WARN).
@@ -166,8 +172,8 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         // committed state only.
         datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test: linkedin fetch").await?;
 
-        // 7 CSVs + 1 articles batch = 8 "files".
-        assert_eq!(summary.files, 8, "files (7 csv + articles)");
+        // 8 CSVs + 1 articles batch = 9 "files".
+        assert_eq!(summary.files, 9, "files (8 csv + articles)");
         assert_eq!(summary.parse_errors, 0, "no parse errors");
 
         // Member-id suffix stripped: table is `comments`, not
@@ -410,6 +416,31 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
                 .as_deref()
                 .is_none_or(|u| u.starts_with("https://")))),
             "no thread minted from a message fragment"
+        );
+
+        // ── skills → one page ────────────────────────────────────
+        let mut skill_docs: Vec<RenderedMarkdown> = Vec::new();
+        {
+            let mut on_doc = |d: RenderedMarkdown| {
+                skill_docs.push(d);
+                Ok(())
+            };
+            skills::render_skills(&source, &Progress::noop(), &mut on_doc)
+                .context("render_skills")?;
+        }
+        assert_eq!(skill_docs.len(), 1, "one skills page");
+        let md_skills = fs::read_to_string(&skill_docs[0].md_path)?;
+        assert!(
+            md_skills.contains("Diplomacy") && md_skills.contains("Starship Command"),
+            "every skill on the page: {md_skills}"
+        );
+        assert_eq!(skill_docs[0].rows.len(), 3, "the page and a row per skill");
+        assert!(
+            skill_docs[0]
+                .rows
+                .iter()
+                .all(|r| r.account.as_deref() == Some("data@enterprise.starfleet.test")),
+            "every skill row names the export's owner as its account"
         );
 
         // ── connections → contacts ───────────────────────────────

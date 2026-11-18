@@ -38,7 +38,7 @@ Each task and comment is a section with its own
 
 Task text, descriptions and comments are Todoist markdown, so their
 links and emphasis stay; HTML in them is escaped
-(`escape_html_outside_code`), since Todoist shows it as text. A
+(`markdown_html_as_typed`), since Todoist shows it as text. A
 project's and a section's names are plain text and escaped as such.
 
 ### Which row says what about a task
@@ -92,6 +92,15 @@ Ids are minted through `datalib_id` under the `todoist` namespace
 download problem naming the project finds its document; a task by its
 id and `added_at`; a comment by its id and `posted_at`, task and
 project comments as two kinds.
+
+**Where a row sits** (`grid_rows.md` §"`parent_uuid`…"). A project is
+read together and a place, inside the project above it (`parent_id`);
+a project's document carries every project above it. A section is a
+container in its project, keyed by its id. A task sits in its parent
+task where Todoist names one in the project, else in its section, else
+in the project; a comment sits in its task, or in the project. Sections
+and tasks sort among their siblings by Todoist's own order
+(`section_order`, `child_order`), not by time.
 
 ## Incrementality
 

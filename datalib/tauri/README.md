@@ -21,16 +21,17 @@ launcher are Bazel-built (fully cached) and shipped under the .app's
 (`stage-runtime.sh`); see `tauri.conf.json`'s
 `beforeBuildCommand` + `bundle.resources` and `resolve_bundled` in
 `src/main.rs`. Port handshake: the child gets
-`DATALIB_BIND=127.0.0.1:0` and `--url-file <tmp>` and announces its
-bound URL there; the shell polls for the file, opens the window, and
-kills the child on exit. That announced URL carries the backend's
-per-process API token as `?token=…` (every route requires it — see
-`datalib/backend/http/src/auth.rs`); the webview trades it for an
-HttpOnly session cookie on the first load and is redirected to the
-clean URL, so nothing else in the shell has to know about auth. The
-url-file (tightened by the backend) and the child's log (by the shell)
-are both mode 0600, since both end up holding that token in a shared
-temp dir.
+`DATALIB_BIND=127.0.0.1:0` and `--url-stdout`, and announces its bound
+URL as the first line of its stdout, a pipe only the shell holds; the
+shell reads it, opens the window, and kills the child on exit. That
+announced URL carries the backend's per-process API token as `?token=…`
+(every route requires it — see `datalib/backend/http/src/auth.rs`); the
+webview trades it for an HttpOnly session cookie on the first load and
+is redirected to the clean URL, so nothing else in the shell has to know
+about auth. The URL never goes through a file. A file's mode does not
+keep out another process of the same user, and with the token that
+process could read a library through the server without opening its
+folder (`src/backend_output.rs`).
 
 **Not owned by Bazel** — this crate is a standalone cargo workspace (see
 the `[workspace]` table in `Cargo.toml`) so that Bazel's crate_universe,
@@ -43,18 +44,18 @@ never has to resolve the tauri dependency tree. Drive it with cargo/pnpm:
 # launches it. Optional data-root arg skips the folder picker. Every
 # build below bundles `-c opt` binaries, as the release tarballs do;
 # DATALIB_COMPILATION_MODE=fastbuild builds quicker and syncs about
-# twice as slowly.
-./run.sh
-./run.sh ~/Datalib/Default
+# twice as slowly. From the repo root:
+./run-app.sh
+./run-app.sh ~/Datalib/Default
 
 # Release bundle → target/release/bundle/macos/Datalib.app. The CLI is
 # pinned by package.json + pnpm-lock.yaml here (never `pnpm dlx`, which
-# resolves from the live registry — the signing job runs this with the
-# Developer ID certificate in its environment).
+# resolves from the live registry — the signing job runs this CLI with
+# the Developer ID certificate in its environment).
 pnpm install --frozen-lockfile --ignore-scripts && pnpm exec tauri build
 
 # Signed + notarized release build (.app + .dmg) — the same script the
-# release workflow's macos-app job runs in CI. It also stamps the
+# release workflow's macos-app-* jobs run in CI, a phase each. It also stamps the
 # binaries (DATALIB_STAMP=1, i.e. `--config=release`, so `datalib-dag
 # --version` names the tag rather than `dev`) and refuses a bundle whose
 # binaries are not optimized and stamped
@@ -62,6 +63,9 @@ pnpm install --frozen-lockfile --ignore-scripts && pnpm exec tauri build
 # Vault (restricted/datalib-release/*); they're under restricted/, so log
 # in with the all-secrets role first:
 #   vault login -method oidc role=employee_all_secrets
+# It runs compile, sign and verify in turn; the release runs each on its
+# own machine, so no build has the key in reach
+# (docs/dev/release_steps.md §"Who holds what").
 ./build-signed-app.sh
 
 # Compile-only inner loop (no bundling), for a fast type/borrow check —
@@ -145,8 +149,9 @@ purpose: it is compiled a second time, as its own crate, by
 with a raw store: open it read-only in DB Browser for SQLite or the
 bundled doltlite shell) is kept free of `tauri` the same way, for
 `//datalib/tauri:raw_store_test`, `src/protected.rs` (the protected
-folder, below) for `//datalib/tauri:protected_test`, and
-`src/navigation.rs` (where a window may go) for
+folder, below) for `//datalib/tauri:protected_test`,
+`src/backend_output.rs` (the backend's URL and output) for
+`//datalib/tauri:backend_output_test`, `src/navigation.rs` (where a window may go) for
 `//datalib/tauri:navigation_test`, and `src/library_capabilities.rs`
 (what a library's page may do) for
 `//datalib/tauri:library_capabilities_test`. Those
@@ -167,9 +172,14 @@ point it at a fresh Bazel build without rebundling) → the bundled
 `Resources/binaries/datalib-http`. The child finds the pipeline
 binaries itself: `$DATALIB_BINARY_DIR` (inherited) → a sibling of its
 own executable, which is exactly where
-the bundle puts them. The spawned backend logs to
-`$TMPDIR/datalib-http-<pid>.log`;
-startup failures quote the log tail in the error dialog.
+the bundle puts them. Once the spawned backend has taken its library,
+the shell keeps the backend's output in the library, in
+`system/server-output.log`, and the previous run's in
+`system/server-output.previous.log`. That is the only record of a panic.
+Startup failures quote the output's last lines in the error dialog. An
+earlier build kept this output in `$TMPDIR/datalib-http-<pid>.log`, with
+the token in it; the shell removes any such file, and any
+`datalib-http-<pid>.url`, when it starts a backend.
 
 `app-icon.png` is ✊ on a rounded tile: `app-icon/app-icon.html` drawn
 at 1024×1024 by headless Chromium. The fist is "Raised fist" from
@@ -181,12 +191,14 @@ Microsoft's [Fluent Emoji](https://github.com/microsoft/fluentui-emoji)
 
 ## A protected library
 
-On macOS, "New library" can put the library in a folder only Datalib
-opens without asking: the app group container
+On macOS 15 or later, "New library" can put the library in a folder only
+Datalib opens without asking: the app group container
 `~/Library/Group Containers/LDDYAR29MP.com.imbue.datalib/Libraries/`.
 macOS guards a group container: any other app that reaches in
 (Terminal, an AI agent's shell, Finder) makes it ask the person first,
-and a yes lasts as long as that app runs. An app gets into its own
+and a yes lasts as long as that app runs. An app with Full Disk Access
+is the exception: a Terminal holding it got in with no prompt, and so
+can whatever that Terminal runs. An app gets into its own
 group container without asking when the group's name starts with the
 Team ID that signed it, so only the Imbue-signed app can use this; a
 build from source is asked too, or refused. The option is marked
@@ -194,6 +206,47 @@ experimental, and is meant to stop an agent running shell commands as
 you from reading the library or using its sign-ins, not a program set
 on stealing from you.
 
+> **The keychain does not protect a protected library's sign-ins. Only
+> the folder does.** A library's keychain item lets in the app's Node,
+> and macOS judges a program by who signed it, not by who started it. So
+> any program running as you, an AI agent's shell included, can run that
+> Node and get the key without a prompt. All that stands between that
+> program and the sign-ins is macOS keeping it out of
+> `<library>/system/latchkey`. So anything that lets a program reach
+> those files gives it the sign-ins too: saying **Allow** for that
+> program, Full Disk Access, or any copy of the files outside the folder.
+> That is why deleting a protected library skips the Trash. Check any
+> change to where this store lives, or who may read it, against this.
+
+- **Before macOS 15 the folder is not offered.** macOS only guards a group
+  container from 15 on, so on an earlier version the option is greyed out
+  and says why, and the shell refuses to make one
+  (`make_protected_container`). A library already in the folder, made by
+  an earlier build or on a newer macOS, still opens with its own latchkey
+  store, and its row says "Not protected on this macOS".
+- **The server's output stays in the library** (`system/server-output.log`),
+  since a log line can quote what a library holds. The URL with the token
+  stays out of it. The server prints that URL to stderr only at a terminal,
+  and hands it to the shell over a pipe.
+- **Its temp files stay in the folder too.** The server of a protected
+  library starts with `TMPDIR` naming `<library>/system/tmp`, and every
+  program it runs inherits that: a web response on its way in, a decrypted
+  database, a browser's sign-in state. The server empties the folder when it
+  starts, since macOS only clears its own temp dir.
+- **Its pages stay out of the web view's disk cache.** That cache is under
+  `~/Library/Caches`, outside the folder, where any program running as you
+  can open it, so the server of a protected library answers everything but
+  the app's own code (`/assets/`) `Cache-Control: no-store`. The shell empties
+  the cache at launch for anyone with a protected folder, for what an earlier
+  build stored; it is only a cache, so an ordinary library loses nothing.
+- **What opens the library's servers stays in the folder too.** The API
+  token and the applets' secret are each in a file in `system/`, and in
+  no process's environment or arguments, where `ps eww` would show them
+  to any program running as you. Neither file may ever move or be copied
+  outside the library. Why, and what still reaches outside the folder:
+  [`security_posture.md`](../../docs/dev/security_posture.md) §"Another
+  program running as you". Read it before adding a secret, a log, a temp
+  file or a cache that a protected library's server writes.
 - **Only the app's own executable is entitled** (`Datalib.entitlements`,
   `bundle.macOS.entitlements` in `tauri.conf.json`). macOS counts the
   programs an app starts as that app, so `datalib-http` and everything
@@ -204,12 +257,35 @@ on stealing from you.
 - **macOS makes the folder**, the first time the app asks for it
   (`make_protected_container`, `NSFileManager`); the shell only ever
   creates libraries inside the one it names.
-- **latchkey's store moves in too.** The server of a protected library
-  starts with `LATCHKEY_DIRECTORY` naming `<container>/latchkey`, and
-  every latchkey it runs inherits it. The first time, that store is a
-  copy of `~/.latchkey` (`protected::seed_latchkey`), so the library's
-  sources keep their sign-ins; the originals stay until the person
-  signs out of them. Every protected library shares that one store.
+- **Each library has a latchkey store of its own, and starts empty.**
+  The server of a protected library starts with `LATCHKEY_DIRECTORY`
+  naming `<library>/system/latchkey` and
+  `LATCHKEY_KEYRING_SERVICE_NAME` naming a keychain item of its own,
+  `Datalib Latchkey - <folder name>`, and every latchkey it runs
+  inherits both (`protected::server_env`). Nothing comes from
+  `~/.latchkey` or latchkey's shared `latchkey` item, which stay as they
+  were; a person signs in through the wizard. latchkey makes the item
+  the first time it needs a key, and the program that makes an item is
+  on its list, so macOS has no reason to ask.
+- **The wizard offers no terminal command in one.** A latchkey run from
+  a terminal has neither variable, so it signs in to `~/.latchkey`. The
+  server tells the wizard through `protected_library` in `/api/health`,
+  set by `DATALIB_PROTECTED_LIBRARY`. A source whose only sign-in is
+  those commands (CalDAV and CardDAV on a server of your own) says it
+  cannot sign in here yet.
+- **Deleting one is permanent.** After a confirmation that says so, the
+  app removes the folder, then the keychain item with
+  `/usr/bin/security`, and nothing goes to the Trash, because there the
+  sign-ins would sit outside the folder with the key still available
+  (`launcher_delete`). If only the item is left, the app says so and
+  names it.
+- **The item goes by the folder's name.** A folder given a new name
+  looks for a new item, and latchkey refuses its store until the old
+  name is back.
+- **An earlier build copied `~/.latchkey` to `<container>/latchkey`.**
+  Nothing reads that copy now, so a library that used it signs in again;
+  its raw stores are untouched. The copy stays where it is until someone
+  removes it from Terminal, and macOS asks first.
 - **Nothing hands it to another app.** The folder button is disabled on
   a protected row, and Browse refuses a protected library's raw stores
   (`refuse_if_protected`): Finder or Terminal would have to be let in,
@@ -218,12 +294,24 @@ on stealing from you.
   --version` in `build-signed-app.sh`): macOS kills a program whose
   signature cannot back its entitlements, before any window.
 
-What the first release with it should be checked for, on a Mac
-(#1525): the app makes and opens a protected library with no prompt;
-syncs and sign-ins work in it; from Terminal, `ls` of the folder and
+Checked on a Mac with 0.51.0 (macOS 26.7.2): in a new protected library,
+signing in to GitHub and starting its sync put up no keychain prompt,
+and the login keychain then held `Datalib Latchkey - <folder name>`. To
+check another Mac, read the library's log: a line at launch names the
+store and the item, and a slow lookup says so (`docs/dev/latchkey.md`).
+
+What is still to be checked, on a Mac
+(#1525): the app makes and opens a protected library with no prompt; from
+Terminal, `ls` of the folder and
 each of `Resources/binaries/` run directly get a prompt naming
 Terminal rather than getting in; one Allow for Terminal lets in
-everything that Terminal runs until it quits.
+everything that Terminal runs until it quits, and an Allow given for another
+app's folder lets it in too: Terminal, allowed into Docker's group container,
+then listed this one with no second dialog (macOS 26.7.2). Run those checks from a
+Terminal without Full Disk Access: one that holds it got in with no
+prompt (macOS 26.7.2), so it proves nothing. A person can list what they have
+granted with the query in `docs/user/first_time_user.md`, "Which apps
+have you let in?".
 
 ## Behaviour worth knowing
 
@@ -251,10 +339,10 @@ everything that Terminal runs until it quits.
   closed at, via `tauri-plugin-window-state`, which keeps it in
   `.window-state.json` under the app's config directory. It cannot be
   made narrower than 720px, so the toolbar's search box stays in view.
-- No blocking model download at startup: qmd's models are fetched on
-  first need by the steps and the search applet (`datalib_qmd_models`),
+- No blocking model download at startup: the embedding model is fetched on
+  first need by the steps and the search applet (`datalib_embedding_models`),
   the same as the web packaging — the shell passes nothing besides
-  `--no-open` and the `--url-file` handshake.
+  `--no-open` and the `--url-stdout` handshake.
 - There is no `datalib:` link handler; the shell does not link
   `tauri-plugin-deep-link`. So the `datalib:doc/…` name a 🆔 button
   becomes in a copied selection opens nothing outside the app yet.

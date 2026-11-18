@@ -1,0 +1,271 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== tng_calendar 00000000-0000-80a6-93ad-832002566f74 Warp core maintenance
+--- chunk 0
+title: Warp core maintenance | text: Source: Calendar
+Kind: Recurring Event
+Calendar: Engineering
+
+Warp core maintenance
+
+| When | Tue Jan 6th, 2026 at 08:00 – Tue Jan 6th, 2026 at 12:00 |
+| Repeats | Monthly on the first Tuesday, 12 times |
+| Where | Main Engineering |
+| Calendar | Engineering |
+| Organizer | Geordi La Forge <laforge@enterprise.test> |
+| Added | Sat Dec 20th, 2025 at 10:15 |
+| Last changed | Sat Dec 20th, 2025 at 10:15 |
+
+## Attendees
+
+| Who | Response |
+| Geordi La Forge <laforge@enterprise.test> | Accepted |
+| Wesley Crusher <crusher.w@enterprise.test> | Accepted |
+| Main Engineering <engineering-room@enterprise.test> (room) | Accepted |
+
+## Description
+
+Take the core offline, recalibrate the dilithium matrix.
+
+Join from the pod: https://meet.enterprise.test/warp-core
+
+
+--- chunk 1
+title: Warp core maintenance | text: Source: Calendar
+Kind: Recurring Event
+Calendar: Engineering
+
+## Occurrences
+
+Rule: `RRULE:FREQ=MONTHLY;COUNT=12;BYDAY=1TU`
+
+## Links
+
+- Core checklist.pdf
+
+=== tng_calendar 00000000-0000-81a3-9b5c-946dc4b441a8 Starfleet Academy guest lecture: first contact protocols
+--- chunk 0
+title: Starfleet Academy guest lecture: first contact protocols | text: Source: Calendar
+Kind: Changed Occurrence
+Calendar: Bridge
+
+Starfleet Academy guest lecture: first contact protocols
+
+| When | Mon Oct 5th, 2026 at 14:00 – Mon Oct 5th, 2026 at 15:30 |
+| Occurrence of | a series that is not on this calendar, originally Mon Oct 5th, 2026 at 14:00 |
+| Where | Starfleet Academy, San Francisco |
+| Calendar | Bridge |
+| Organizer | Admiral Brand <brand@starfleet.test> |
+| Last changed | Tue Sep 15th, 2026 at 10:00 |
+
+## Attendees
+
+| Who | Response |
+| Jean-Luc Picard <picard@enterprise.test> | Accepted |
+
+=== tng_calendar 00000000-0000-8470-8240-1b4ee2c9889a Shore leave on Risa
+--- chunk 0
+title: Shore leave on Risa | text: Source: Calendar
+Kind: Event
+Calendar: Bridge
+
+Shore leave on Risa
+
+| When | Mon Jul 13th, 2026 – Fri Jul 17th, 2026 (all day) |
+| Calendar | Bridge |
+| Shows as | Free |
+| Added | Mon Jun 1st, 2026 at 12:00 |
+| Last changed | Mon Jun 1st, 2026 at 12:00 |
+
+## Description
+
+Horga'hn optional.
+
+=== tng_calendar 00000000-0000-8488-9b56-8b957035e673 Senior staff briefing
+--- chunk 0
+title: Senior staff briefing | text: Source: Calendar
+Kind: Recurring Event
+Calendar: Bridge
+
+Senior staff briefing
+
+| When | Mon Jan 5th, 2026 at 09:00 – Mon Jan 5th, 2026 at 10:00 |
+| Repeats | Weekly on Monday and Thursday, until Thu 31 Dec 2026 |
+| Where | Observation lounge, Deck 1 |
+| Calendar | Bridge |
+| Organizer | Jean-Luc Picard <picard@enterprise.test> |
+| Added | Mon Jan 5th, 2026 at 18:00 |
+| Last changed | Wed Sep 2nd, 2026 at 16:00 |
+
+## Attendees
+
+| Who | Response |
+| Jean-Luc Picard <picard@enterprise.test> | Accepted |
+| William Riker <riker@enterprise.test> | Accepted |
+| Data <data@enterprise.test> | Accepted |
+| Deanna Troi <troi@enterprise.test> | Maybe |
+| Geordi La Forge <laforge@enterprise.test> | No reply |
+
+
+--- chunk 1
+title: Senior staff briefing | text: Source: Calendar
+Kind: Recurring Event
+Calendar: Bridge
+
+## Description
+
+Ship's status, then department heads in turn.
+
+Bring your PADDs.
+
+## Occurrences
+
+Rule: `RRULE:FREQ=WEEKLY;BYDAY=MO,TH;UNTIL=20261231T170000Z`
+
+Changed:
+
+- Thu Mar 12th, 2026 at 09:00 → Thu Mar 12th, 2026 at 11:00 — Senior staff briefing — Borg incursion
+
+Cancelled:
+
+- Mon Feb 9th, 2026 at 09:00
+- Thu Apr 2nd, 2026 at 09:00
+
+=== tng_calendar 00000000-0000-872d-a4f4-3355175938a9 Officers' poker night
+--- chunk 0
+title: Officers' poker night | text: Source: Calendar
+Kind: Recurring Event
+Calendar: Bridge
+
+Officers' poker night
+
+| When | Thu Jan 15th, 2026 at 20:00 – Thu Jan 15th, 2026 at 23:00 |
+| Repeats | Every 2 weeks on Thursday |
+| Where | Commander Riker's quarters |
+| Calendar | Bridge |
+| Added | Sat Jan 10th, 2026 at 03:00 |
+| Last changed | Sat Jan 10th, 2026 at 03:00 |
+
+## Occurrences
+
+Rule: `RRULE:FREQ=WEEKLY;INTERVAL=2;BYDAY=TH`
+
+=== tng_calendar 00000000-0000-87f7-ac79-138f8424fdb5 Senior staff briefing — Borg incursion
+--- chunk 0
+title: Senior staff briefing — Borg incursion | text: Source: Calendar
+Kind: Changed Occurrence
+Calendar: Bridge
+
+Senior staff briefing — Borg incursion
+
+| When | Thu Mar 12th, 2026 at 11:00 – Thu Mar 12th, 2026 at 12:30 |
+| Occurrence of | Senior staff briefing, originally Thu Mar 12th, 2026 at 09:00 |
+| Where | Main Engineering |
+| Calendar | Bridge |
+| Organizer | Jean-Luc Picard <picard@enterprise.test> |
+| Added | Mon Jan 5th, 2026 at 18:00 |
+| Last changed | Tue Mar 10th, 2026 at 12:00 |
+
+## Attendees
+
+| Who | Response |
+| Jean-Luc Picard <picard@enterprise.test> | Accepted |
+| William Riker <riker@enterprise.test> | Accepted |
+| Geordi La Forge <laforge@enterprise.test> | Accepted |
+| Worf <worf@enterprise.test> | Accepted |
+
+
+--- chunk 1
+title: Senior staff briefing — Borg incursion | text: Source: Calendar
+Kind: Changed Occurrence
+Calendar: Bridge
+
+## Description
+
+Moved to Main Engineering so Commander La Forge can show the new shield modulations.
+
+=== tng_calendar 00000000-0000-8899-a213-737545dc9ea2 Dilithium shipment arrives
+--- chunk 0
+title: Dilithium shipment arrives | text: Source: Calendar
+Kind: Event
+Calendar: Engineering
+
+Dilithium shipment arrives
+
+| When | Tue Sep 22nd, 2026 at 14:30 – Tue Sep 22nd, 2026 at 15:30 |
+| Where | Cargo bay 2 |
+| Calendar | Engineering |
+| Status | Tentative |
+| Added | Tue Sep 15th, 2026 at 08:00 |
+| Last changed | Wed Sep 16th, 2026 at 09:00 |
+
+=== tng_calendar 00000000-0000-891b-9146-098a54f0815e Reception for the Klingon delegation
+--- chunk 0
+title: Reception for the Klingon delegation | text: Source: Calendar
+Kind: Event
+Calendar: Bridge
+
+Reception for the Klingon delegation
+
+| When | Fri Sep 18th, 2026 at 19:00 – Fri Sep 18th, 2026 at 22:00 |
+| Where | Ten Forward |
+| Calendar | Bridge |
+| Organizer | Deanna Troi <troi@enterprise.test> |
+| Added | Thu Aug 20th, 2026 at 15:00 |
+| Last changed | Thu Aug 20th, 2026 at 15:00 |
+
+## Attendees
+
+| Who | Response |
+| Deanna Troi <troi@enterprise.test> | Accepted |
+| Worf <worf@enterprise.test> | Accepted |
+| Jean-Luc Picard <picard@enterprise.test> | Maybe |
+| Guinan <guinan@enterprise.test> (optional) | Declined |
+
+## Description
+
+Ambassador K'Ehleyr arrives at 1900. Formal uniforms.
+
+Worf has asked that no one serve gagh.
+
+=== tng_calendar 00000000-0000-891c-9fb1-f32c436d1ae4 tng_calendar storage
+--- chunk 0
+title: tng_calendar storage | text: Source: tng_calendar
+
+# tng_calendar — storage
+
+Measured Tue Apr 15th, 2369 at 00:00.
+
+| Kind | Step | What | Size | Count | Id |
+| Source Size | ingest | `tng_calendar/ingest` | <size> | 2 files | `00000000` |
+| Store | ingest | `tng_calendar/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `tng_calendar/ingest/entities.doltlite_db#accounts` |  | 1 row | `00000000` |
+| Table | ingest | `tng_calendar/ingest/entities.doltlite_db#calendars` |  | 2 rows | `00000000` |
+| Table | ingest | `tng_calendar/ingest/entities.doltlite_db#calendly_events` |  | 0 rows | `00000000` |
+| Table | ingest | `tng_calendar/ingest/entities.doltlite_db#calendly_invitees` |  | 0 rows | `00000000` |
+| Table | ingest | `tng_calendar/ingest/entities.doltlite_db#dav_resources` |  | 0 rows | `00000000` |
+| Table | ingest | `tng_calendar/ingest/entities.doltlite_db#dav_unconfirmed` |  | 0 rows | `00000000` |
+| Table | ingest | `tng_calendar/ingest/entities.doltlite_db#google_events` |  | 0 rows | `00000000` |
+| Table | ingest | `tng_calendar/ingest/entities.doltlite_db#ics_objects` |  | 8 rows | `00000000` |
+| Table | ingest | `tng_calendar/ingest/entities.doltlite_db#ingested_files` |  | 2 rows | `00000000` |
+
+=== tng_calendar 00000000-0000-8eca-8033-c38531904ecf Data's activation day
+--- chunk 0
+title: Data's activation day | text: Source: Calendar
+Kind: Recurring Event
+Calendar: Engineering
+
+Data's activation day
+
+| When | Mon Feb 2nd, 2026 (all day) |
+| Repeats | Yearly |
+| Calendar | Engineering |
+| Shows as | Free |
+| Added | Mon Dec 1st, 2025 at 00:00 |
+| Last changed | Thu Jan 1st, 2026 at 00:00 |
+
+## Occurrences
+
+Rule: `RRULE:FREQ=YEARLY`

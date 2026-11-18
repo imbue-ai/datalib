@@ -53,6 +53,12 @@ impl DataProcessor for GithubIngest {
         &self.id
     }
 
+    /// A pull request and its comments and reviews land in one
+    /// transaction, and a seal comes only between transactions.
+    fn streams_output(&self) -> bool {
+        true
+    }
+
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let now = datalib_time::parse_strict(ctx.now)
             .with_context(|| format!("github: run stamp {:?}", ctx.now))?;

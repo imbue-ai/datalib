@@ -1,5 +1,10 @@
 # datalib — Project Data Liberation ✊
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/mission-dark.png">
+  <img src="docs/assets/mission-light.png" width="480" alt="Organize the world's (struck out) your own information and make it universally (struck out) accessible and useful to you, your way.">
+</picture>
+
 Liberate and own your data. Run powerful AI tools on it, on your terms.
 
 > [!NOTE]
@@ -49,11 +54,13 @@ look before you hand it anything of yours.
 ## Read this before you point an agent at it
 
 datalib is Plain Old Software. Running a sync invokes no cloud AI model and no
-agent, and nothing leaves your machine: the only network traffic is
-datalib reading from the services you configured, plus one-time
-downloads the first time they are needed: the search models, and (for
-the command-line install) the Node runtime that search and latchkey run
-on.
+agent, and sends no telemetry: the only network traffic is datalib reading
+from the services you configured, which means sending them your sign-in and
+your requests, plus one-time downloads the first time they are needed: the
+search models, and (for the command-line install) the Node runtime that search
+and latchkey run on. A sign-in that opens a browser also loads that service's
+pages, and may first download the browser. A package you add is fetched from
+the URL you gave it, and runs as you.
 
 What it produces, though, is a very valuable pile of private data in one
 place — and most of it was written by other people. Three things follow:
@@ -121,34 +128,38 @@ welcome.
 
 <table>
   <tr>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#apple-mail"><img src="datalib/ui/src/assets/apple_mail.svg" width="40" height="40" alt=""><br><b>Apple Mail</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#apple-messages"><img src="datalib/ui/src/assets/apple_messages.svg" width="40" height="40" alt=""><br><b>Apple Messages</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#apple-photos"><img src="datalib/ui/src/assets/apple_photos.svg" width="40" height="40" alt=""><br><b>Apple Photos</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#baby-connect"><img src="datalib/ui/src/assets/baby_connect.svg" width="40" height="40" alt=""><br><b>Baby Connect</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#beeper"><img src="datalib/ui/src/assets/beeper.png" width="40" height="40" alt=""><br><b>Beeper</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#calendly"><img src="datalib/ui/src/assets/calendar.svg" width="40" height="40" alt=""><br><b>Calendly</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#facebook"><img src="datalib/ui/src/assets/facebook.svg" width="40" height="40" alt=""><br><b>Facebook</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#file-inventory"><img src="datalib/ui/src/assets/file_inventory.svg" width="40" height="40" alt=""><br><b>File inventory</b></a></td>
   </tr>
   <tr>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#facebook"><img src="datalib/ui/src/assets/facebook.svg" width="40" height="40" alt=""><br><b>Facebook</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#file-inventory"><img src="datalib/ui/src/assets/file_inventory.svg" width="40" height="40" alt=""><br><b>File inventory</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#garmin"><img src="datalib/ui/src/assets/garmin.svg" width="40" height="40" alt=""><br><b>Garmin</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#github"><img src="datalib/ui/src/assets/github.svg" width="40" height="40" alt=""><br><b>GitHub</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#gitlab"><img src="datalib/ui/src/assets/gitlab.svg" width="40" height="40" alt=""><br><b>GitLab</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#google-chat-takeout"><img src="docs/assets/google_chat.svg" width="40" height="40" alt=""><br><b>Google Chat (Takeout)</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#google-takeout"><img src="datalib/ui/src/assets/google_takeout.svg" width="40" height="40" alt=""><br><b>Google Takeout</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#google-voice-takeout"><img src="docs/assets/google_voice.png" width="40" height="40" alt=""><br><b>Google Voice (Takeout)</b></a></td>
   </tr>
   <tr>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#google-takeout"><img src="datalib/ui/src/assets/google_takeout.svg" width="40" height="40" alt=""><br><b>Google Takeout</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#google-voice-takeout"><img src="docs/assets/google_voice.png" width="40" height="40" alt=""><br><b>Google Voice (Takeout)</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#iqair-airvisual"><img src="datalib/ui/src/assets/airvisual.svg" width="40" height="40" alt=""><br><b>IQAir AirVisual</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#lightroom"><img src="datalib/ui/src/assets/lightroom.svg" width="40" height="40" alt=""><br><b>Lightroom</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#linkedin"><img src="datalib/ui/src/assets/linkedin.svg" width="40" height="40" alt=""><br><b>LinkedIn</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#local-media"><img src="datalib/ui/src/assets/media.svg" width="40" height="40" alt=""><br><b>Local media</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#local-pdfs"><img src="datalib/ui/src/assets/pdf.svg" width="40" height="40" alt=""><br><b>Local PDFs</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#perseus-digital-library"><img src="datalib/ui/src/assets/perseus.svg" width="40" height="40" alt=""><br><b>Perseus Digital Library</b></a></td>
   </tr>
   <tr>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#local-pdfs"><img src="datalib/ui/src/assets/pdf.svg" width="40" height="40" alt=""><br><b>Local PDFs</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#perseus-digital-library"><img src="datalib/ui/src/assets/perseus.svg" width="40" height="40" alt=""><br><b>Perseus Digital Library</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#signal-backups"><img src="datalib/ui/src/assets/signal.svg" width="40" height="40" alt=""><br><b>Signal backups</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#sms-backup-and-restore"><img src="datalib/ui/src/assets/sms.svg" width="40" height="40" alt=""><br><b>SMS Backup &amp; Restore</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#todoist"><img src="datalib/ui/src/assets/todoist.svg" width="40" height="40" alt=""><br><b>Todoist</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#whatsapp-backups"><img src="datalib/ui/src/assets/whatsapp.svg" width="40" height="40" alt=""><br><b>WhatsApp backups</b></a></td>
+  </tr>
+  <tr>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#yolink"><img src="datalib/ui/src/assets/yolink.png" width="40" height="40" alt=""><br><b>YoLink</b></a></td>
   </tr>
 </table>
@@ -182,14 +193,12 @@ ready-made steps:
 - `ingest` brings the raw data in.
 - `render_markdown` turns the raw records into readable markdown (most
   sources have one).
-- `keyword_index` adds that markdown to a keyword search index, built
-  with [qmd](https://github.com/tobi/qmd).
 - `embed` adds semantic search, which matches on meaning rather than
   words. It is slow, so you can turn it off per source.
 
-Across all the sources, `grid_index` builds one SQL table of every
-message and document (`grid_rows`), and a single search box reads it
-together with the qmd index. A local web UI, also shipped as a desktop
+Across all the sources, `unified_grid_and_search_index` builds one SQL table of every
+message and document (`grid_rows`) and puts their words in a keyword
+search index beside it, and a single search box reads both. A local web UI, also shipped as a desktop
 app (Tauri), manages your sources and syncs, searches, and browses the
 results.
 
@@ -253,7 +262,7 @@ A mirror you can't leave is just another silo, so the exits are plain:
 - **Search** — `datalib-applet search <data_root> '<query>'` answers as
   the app's search box does, as JSON, with no server: for scripts and
   agents.
-- **SQL** — the grid's table, `unified_document_index/grid_index/db.sqlite`,
+- **SQL** — the grid's table, `unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`,
   is plain SQLite. Each source's own stores are doltlite:
   `datalib-doltlite` ships with the tools and is a `sqlite3` shell that
   understands the versioned format, and one pipe writes a plain SQLite
@@ -262,6 +271,9 @@ A mirror you can't leave is just another silo, so the exits are plain:
   ```sh
   datalib-doltlite -readonly slack/ingest/entities.doltlite_db .dump | sqlite3 slack.sqlite
   ```
+
+  From Python, `uv add imbue-datalib-reader` reads a store directly
+  ([Reading the raw stores](docs/user/raw_stores.md)).
 
   Or browse a store in a GUI: a build of DB Browser for SQLite patched to
   open doltlite files is at

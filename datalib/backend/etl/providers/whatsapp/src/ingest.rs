@@ -14,9 +14,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection, SqlitePool};
+use sqlx::sqlite::{SqliteConnection, SqlitePool};
 use sqlx::Connection;
-use std::str::FromStr;
 
 use datalib_etl::blob_cas::{BlobCas, CasInsert};
 use datalib_etl::doltlite_raw;
@@ -253,8 +252,7 @@ async fn read_wa_db_contacts(
     std::fs::write(tmp.path(), &plaintext).context("write decrypted wa.db to tempfile")?;
     drop(plaintext);
 
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", tmp.path().display()))
-        .context("sqlite uri for decrypted wa.db")?
+    let opts = datalib_sqlite_open::file(tmp.path())
         .read_only(true)
         .create_if_missing(false);
     let mut src = SqliteConnection::connect_with(&opts)

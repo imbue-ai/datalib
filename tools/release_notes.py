@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run python
 """Draft a release's notes: what changed in the raw stores, and the PRs.
 
 An app that reads a raw store directly (`docs/user/raw_stores.md`) needs

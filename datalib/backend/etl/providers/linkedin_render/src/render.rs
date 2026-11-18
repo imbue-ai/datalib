@@ -49,7 +49,10 @@ use datalib_schema::providers::Provider;
 ///     and one the store lacks is a `blob_missing` problem.
 /// v14: the owner's address is marked as the account's own on their
 ///     posts, so search reads it as `me`.
-pub const RENDER_VERSION: u32 = 14;
+/// v15: the tables no feed reads are counted on record.
+/// v16: the profile's skills render, one page with a row per skill.
+/// v17: the tables no feed reads are a note, not a warning.
+pub const RENDER_VERSION: u32 = 17;
 
 fn profile() -> RenderProfile {
     RenderProfile {
@@ -209,6 +212,7 @@ fn build_chats(
                 let date_ms = own_stamp_ms(Some(date), "DATE", parse_date_ms, &mut problems);
                 let id = ids::message(source_id, table, row_id, date_ms);
                 NormalizedChatItem {
+                    reply_to: None,
                     message_uuid: id.uuid,
                     author_handle: Handle::linkedin_profile_url(field(p, "SENDER PROFILE URL")),
                     author_kind: match nonempty(from) {
@@ -217,6 +221,7 @@ fn build_chats(
                     },
                     author_display: nonempty(from).unwrap_or("Unknown").to_string(),
                     date_ms,
+                    date_offset_secs: None,
                     text: nonempty(content).map(str::to_string),
                     kind: ItemKind::Text,
                     attachments: Vec::new(),
@@ -254,6 +259,8 @@ fn build_chats(
             contacts: Vec::new(),
             inputs: inputs.declared(),
             id: format!("{table}:{conv}"),
+            containers: Vec::new(),
+            filed_under: Vec::new(),
             chat_uuid: conversation.uuid.clone(),
             display,
             title: None,
@@ -268,7 +275,6 @@ fn build_chats(
             org_name: None,
             buckets: vec![NormalizedDoc {
                 orphan_reactions: Vec::new(),
-                period_key: "all".to_string(),
                 markdown_uuid: conversation.uuid,
                 source_ref: None,
                 items,

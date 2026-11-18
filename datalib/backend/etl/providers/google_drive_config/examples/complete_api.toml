@@ -1,7 +1,6 @@
 # A backup of a Google account's Docs, Sheets and Slides, signed in through
-# four latchkey services as the same account (`latchkey auth browser
-# google-drive`, then google-docs, google-sheets and google-slides), with
-# every option set.
+# four latchkey services as the same account (google-drive, google-docs,
+# google-sheets and google-slides), with every option set.
 [[groups]]
 id = "google_drive"
 name = "Google Drive"
@@ -48,16 +47,10 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["google_drive/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "google_drive"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["google_drive/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "google_drive"
 function = "embed"
 command = "datalib-step"
-inputs = ["google_drive/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]

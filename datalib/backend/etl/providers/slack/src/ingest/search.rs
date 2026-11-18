@@ -164,6 +164,44 @@ mod tests {
     use super::*;
     use crate::ingest::ts_key;
 
+    fn past_the_last_page(top: &str) -> SearchWalk<impl Fn(&Span) -> String> {
+        let mut walk = SearchWalk::new(&Span::new("20", "90"), |s: &Span| {
+            format!("{}..{}", s.lo, s.hi)
+        });
+        walk.top = Some(top.to_string());
+        walk.page = MAX_PAGES + 1;
+        walk
+    }
+
+    async fn next(walk: &mut SearchWalk<impl Fn(&Span) -> String>) -> Result<Option<SearchPage>> {
+        let empty_tape = tempfile::tempdir().unwrap();
+        let (latchkey, progress) = (
+            LatchkeySettings::default(),
+            datalib_etl::progress::Progress::noop(),
+        );
+        datalib_etl_web::playback::scope(
+            empty_tape.path(),
+            walk.next(|_| true, &latchkey, &progress, "test"),
+        )
+        .await
+    }
+
+    /// Slack serves no page past the hundredth. A walk that settled some
+    /// of its stretch asks again below that; one that settled none of it
+    /// says so rather than asking the same thing for good.
+    #[tokio::test]
+    async fn past_the_last_page_a_walk_asks_again_below_what_it_settled() {
+        let mut lowered = past_the_last_page("70");
+        assert!(next(&mut lowered).await.is_err(), "the tape is empty");
+        assert_eq!(lowered.stretch, Span::new("20", "70"));
+        assert_eq!(lowered.q, "20..70");
+        assert_eq!(lowered.top.as_deref(), Some("70"));
+        assert_eq!(lowered.page, 1);
+
+        let err = next(&mut past_the_last_page("90")).await.err().unwrap();
+        assert!(format!("{err:#}").contains("settled nothing"), "{err:#}");
+    }
+
     #[test]
     fn the_days_clause_pads_two_days_each_way() {
         let span = Span::new(ts_key("1790000000.000000"), ts_key("1790259200.000000"));

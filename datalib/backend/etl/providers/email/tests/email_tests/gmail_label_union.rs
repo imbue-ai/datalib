@@ -33,7 +33,10 @@ async fn mirrors_the_union_of_the_configured_labels() {
     let summary = m
         .run(|db| {
             let mut opts = FetchOptions::new(db);
-            opts.only_labels = vec!["datalib".to_string(), "travel".to_string()];
+            opts.sections = vec![gmail_api::Section::labels(vec![
+                "datalib".to_string(),
+                "travel".to_string(),
+            ])];
             gmail_api::fetch(opts)
         })
         .await;

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use sqlx::sqlite::SqlitePool;
 
+use datalib_etl::expansion::Allowance;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::RunProblems;
 use datalib_etl_sqlite_mirror::{mirror, MirrorOptions, MirrorStats};
@@ -95,6 +96,10 @@ fn catalog_options(catalog: &Unpacked, options: &MirrorOptions) -> MirrorOptions
 }
 
 fn extract_catalog(zip_path: &Path, dest: &Path) -> Result<PathBuf> {
+    extract_catalog_within(zip_path, dest, &Allowance::of_file(zip_path)?)
+}
+
+fn extract_catalog_within(zip_path: &Path, dest: &Path, allowance: &Allowance) -> Result<PathBuf> {
     let file =
         std::fs::File::open(zip_path).with_context(|| format!("open {}", zip_path.display()))?;
     let mut archive = zip::ZipArchive::new(std::io::BufReader::new(file))
@@ -137,7 +142,7 @@ fn extract_catalog(zip_path: &Path, dest: &Path) -> Result<PathBuf> {
     let mut entry = archive.by_index(index)?;
     let mut out = std::fs::File::create(&out_path)
         .with_context(|| format!("create {}", out_path.display()))?;
-    std::io::copy(&mut entry, &mut out)
+    std::io::copy(&mut allowance.meter(&mut entry), &mut out)
         .with_context(|| format!("unpack {name} from {}", zip_path.display()))?;
     Ok(out_path)
 }
@@ -183,6 +188,21 @@ mod tests {
         let out = tempfile::tempdir().unwrap();
         let path = extract_catalog(&zip, out.path()).unwrap();
         assert_eq!(path, out.path().join("escaped.lrcat"));
+    }
+
+    #[test]
+    fn a_catalog_that_expands_too_far_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let zip = dir.path().join("b.zip");
+        write_zip(&zip, &[("big.lrcat", &[0; 4096])]);
+        let out = tempfile::tempdir().unwrap();
+        let tight = Allowance::new(1024, 1, zip.display());
+        let e = format!(
+            "{:#}",
+            extract_catalog_within(&zip, out.path(), &tight).unwrap_err()
+        );
+        assert!(e.contains("more than 1024 bytes"), "{e}");
+        extract_catalog(&zip, out.path()).unwrap();
     }
 
     #[test]

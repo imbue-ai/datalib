@@ -11,7 +11,6 @@ pub const ID_NAMESPACE: IdNamespace = IdNamespace::Whatsapp;
 pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 
 pub const KIND_CHAT: &str = "chat";
-pub const KIND_PERIOD: &str = "chat_period";
 pub const KIND_MESSAGE: &str = "message";
 pub const KIND_REACTION: &str = "reaction";
 
@@ -19,15 +18,6 @@ const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
 pub fn chat(source_id: &str, chat_jid: &str) -> Identity {
     IDS.mint(source_id, KIND_CHAT, chat_jid.to_string(), None)
-}
-
-pub fn period(source_id: &str, chat_jid: &str, period_key: &str) -> Identity {
-    IDS.mint(
-        source_id,
-        KIND_PERIOD,
-        composite_key(&[chat_jid, period_key]),
-        None,
-    )
 }
 
 fn message_key(chat_jid: &str, key_id: &str, from_me: i64) -> String {
@@ -75,7 +65,6 @@ mod tests {
     fn natural_key_regenerates_the_uuid() {
         for got in [
             chat("wa", "a@s.whatsapp.net"),
-            period("wa", "a@s.whatsapp.net", "2024-03"),
             message("wa", "a@s.whatsapp.net", "K1", 1, MS),
             reaction("wa", "a@s.whatsapp.net", "K1", 0, MS),
         ] {

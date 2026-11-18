@@ -2,10 +2,8 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 exports_files([
     "BUILD.bazel",  # read by //datalib/backend:version_consistency_test
-    # Canonical version constants, read by //tools:version_pins_test
-    # (and by //tools:qmd_model_cache_path_test for the qmd one).
-    "src/node_runtime.rs",  # LATCHKEY_VERSION
-    "src/qmd.rs",  # DEFAULT_QMD_VERSION
+    "src/node_runtime.rs",  # LATCHKEY_VERSION, read by //tools:version_pins_test
+    "src/models.rs",  # the model pins, read by //tools:model_pins_test
 ])
 
 # The data-root layout plus the bundled-Node/npx resolution every binary
@@ -21,7 +19,7 @@ rust_library(
     # "which datalib wrote this store" comes from. Must match
     # [package].version in datalib/backend/Cargo.toml;
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.49.0",
+    version = "0.55.0",
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "@datalib_crates//:tempfile",
@@ -47,6 +45,28 @@ rust_test(
     deps = [
         ":datalib_runtime",
         "@datalib_crates//:libc",
+        "@datalib_crates//:runfiles",
+        "@datalib_crates//:tempfile",
+    ],
+)
+
+# What a run of the pinned latchkey does when datalib starts it.
+rust_test(
+    name = "latchkey_counting_test",
+    size = "small",
+    srcs = ["tests/latchkey_counting.rs"],
+    data = [
+        "//third-party/latchkey/runtime:latchkey_package_dir",
+        "//third-party/latchkey/runtime:latchkey_tree",
+        "@nodejs_host//:node_bin",
+    ],
+    edition = "2021",
+    env = {
+        "LATCHKEY_PACKAGE_RLOC": "$(rlocationpath //third-party/latchkey/runtime:latchkey_package_dir)",
+        "NODE_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
+    },
+    deps = [
+        ":datalib_runtime",
         "@datalib_crates//:runfiles",
         "@datalib_crates//:tempfile",
     ],

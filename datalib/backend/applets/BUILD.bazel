@@ -1,6 +1,6 @@
 load("@bazel_lib//lib:copy_to_bin.bzl", "copy_to_bin")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
-load("//datalib/backend/unified_document_index:qmd_fixture.bzl", "QMD_FIXTURE_DATA", "QMD_FIXTURE_ENV")
+load("//datalib/backend/unified_grid_and_search_index:search_fixture.bzl", "SEARCH_FIXTURE_DATA", "SEARCH_FIXTURE_ENV")
 load("//tools:insta.bzl", "insta_update")
 
 # `datalib-applet` — the applet host (see docs/dev/applets.md), one
@@ -21,8 +21,8 @@ rust_binary(
         "//datalib/backend/columns:datalib_columns",
         "//datalib/backend/contact_schema:datalib_contact_schema",
         "//datalib/backend/contacts:datalib_contacts",
+        "//datalib/backend/embedder:datalib_embedder",
         "//datalib/backend/etl:datalib_etl",
-        "//datalib/backend/fetch:datalib_fetch",
         "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/obs:datalib_obs",
         "//datalib/backend/parent_watch:datalib_parent_watch",
@@ -30,18 +30,24 @@ rust_binary(
         "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/env:datalib_env",
         "//datalib/backend/problems:datalib_problems",
+        "//datalib/backend/problem_mutes:datalib_problem_mutes",
+        "//datalib/backend/store_meta:datalib_store_meta",
+        "//datalib/backend/time:datalib_time",
         "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/etl/time_series:datalib_etl_time_series",
+        "//datalib/backend/sqlite_open:datalib_sqlite_open",
         "//datalib/backend/time_series_schema:datalib_time_series_schema",
-        "//datalib/backend/qmd_indexer:datalib_qmd_indexer",
-        "//datalib/backend/qmd_models:datalib_qmd_models",
+        "//datalib/backend/embedding_models:datalib_embedding_models",
         "//datalib/backend/query:datalib_query",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
-        "//datalib/backend/unified_document_index:datalib_unified_document_index",
+        "//datalib/backend/search_index:datalib_search_index",
+        "//datalib/backend/sql_guard:datalib_sql_guard",
+        "//datalib/backend/unified_grid_and_search_index:datalib_unified_grid_and_search_index",
         "//datalib/backend/uri:datalib_uri",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:axum",
+        "@datalib_crates//:base64",
         "@datalib_crates//:chrono",
         "//datalib/backend/cli_help:datalib_cli_help",
         "@datalib_crates//:clap",
@@ -57,27 +63,34 @@ rust_binary(
     ],
 )
 
-# The unified_document_index applet's searches run a real `qmd mcp` over the TNG
-# fixture, so this carries the fixture and a staged qmd; and the applet
-# binary itself, which serve_tests.rs starts the way the gateway does.
+# The unified_grid_and_search_index applet's searches run over the TNG fixture's
+# search index with the real embedding model, so this carries both; and the
+# applet binary itself, which serve_tests.rs starts the way the gateway does.
 rust_test(
     name = "applet_unittests",
     size = "medium",
     crate = ":datalib_applet",
-    data = glob(["src/unified_document_index/snapshots/*.snap"], allow_empty = True) +
-           QMD_FIXTURE_DATA + [":datalib_applet"],
+    data = glob(["src/unified_grid_and_search_index/snapshots/*.snap"], allow_empty = True) +
+           SEARCH_FIXTURE_DATA + [":datalib_applet"],
     edition = "2021",
-    env = QMD_FIXTURE_ENV | {
+    env = SEARCH_FIXTURE_ENV | {
         "APPLET_BIN": "$(rootpath :datalib_applet)",
         "INSTA_WORKSPACE_ROOT": ".",
-        # The qmd tests share `DATALIB_RUNTIME_DIR` (qmd_search_tests.rs).
-        "RUST_TEST_THREADS": "1",
+        # Nothing here fetches the embedding model: a root that holds none,
+        # in a test or in an applet binary a test starts, fails rather than
+        # downloading 300 MB into the cache under `HOME` (TEST_TMPDIR).
+        "DATALIB_MODELS_NO_FETCH": "1",
     },
+    # Its tests run in parallel and llama.cpp embeds on every core; with
+    # other tests beside it on CI's four vCPUs, an embed waits on threads
+    # that are not running and the target ran past its 300 s. `cpu:4`
+    # claims the runner, so bazel starts nothing else beside it.
+    tags = ["cpu:4"],
     deps = [
         "//datalib/backend/agent_docs:datalib_agent_docs",
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
         "//datalib/backend/etl/contact-common:datalib_etl_contact_common",
-        "//datalib/backend/unified_document_index:qmd_fixture",
+        "//datalib/backend/unified_grid_and_search_index:search_fixture",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/table:datalib_table",
@@ -90,11 +103,6 @@ rust_test(
 
 insta_update(
     name = "applet_unittests.update",
-    extra_data = QMD_FIXTURE_DATA + [":datalib_applet"],
-    extra_env = QMD_FIXTURE_ENV | {
-        "APPLET_BIN": "$(rootpath :datalib_applet)",
-        "RUST_TEST_THREADS": "1",
-    },
     test = ":applet_unittests",
 )
 
@@ -122,6 +130,7 @@ rust_test(
         "requires-network",
     ],
     deps = [
+        "//datalib/backend/env:datalib_env",
         "//datalib/backend/photo_schema:datalib_photo_schema",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",

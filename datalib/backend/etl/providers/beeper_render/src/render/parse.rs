@@ -1,5 +1,5 @@
-//! Read the mirrored Beeper Texts tables into rooms and `(room, period)`
-//! buckets.
+//! Read the mirrored Beeper Texts tables into rooms and each room's
+//! events.
 //!
 //! The raw store is `index.db` table for table (`../beeper/INGEST.md`): a
 //! room is a `threads` row, a message an `mx_room_messages` row, a
@@ -16,12 +16,10 @@ use datalib_contact_schema::ContactHandle;
 use datalib_etl::doltlite_raw;
 use datalib_etl_render::inputs::{changed_rows, Inputs, RawRange};
 use datalib_handle::Handle;
-use datalib_schema::problems::{Problem, Reason};
+use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Severity, Stage};
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
-
-use super::Period;
 
 /// The raw tables whose rows each name their room: the room's own row,
 /// its people, its messages and its reactions.
@@ -115,18 +113,13 @@ pub struct Blob {
     pub blake3: Option<String>,
 }
 
-/// One rendered document's worth of events: all messages whose
-/// own period bucket matches the doc's `(room, period_key)`, plus
-/// any reactions whose targets fall here regardless of when the
-/// reaction itself landed.
+/// One room's events, its one rendered document.
 #[derive(Debug, Clone)]
 pub struct DocBucket {
     pub room_uuid: String,
-    pub period_key: String,
     /// Messages in chronological order.
     pub messages: Vec<Event>,
-    /// Reactions whose target falls in this bucket, keyed by target
-    /// `native_event_id`.
+    /// The room's reactions, keyed by target `native_event_id`.
     pub reactions_by_target: BTreeMap<String, Vec<Event>>,
 }
 
@@ -149,19 +142,21 @@ pub struct ParsedBeeper {
     pub rooms: HashMap<String, Room>,
     /// The people of each loaded room, by room uuid.
     pub people: HashMap<String, Vec<Person>>,
-    /// Ordered by `(room_uuid, period_key)`.
+    /// Ordered by `room_uuid`.
     pub docs: Vec<DocBucket>,
     /// The raw rows each loaded room reads, by room uuid.
     pub inputs: HashMap<String, Inputs>,
     pub scan: ScanResult,
+    /// Chats holding messages on an account no bridge here reads, by what
+    /// the account id says it is.
+    pub unlisted_chats: BTreeMap<String, usize>,
 }
 
 /// Open the raw store beside `input` and produce one [`DocBucket`] per
-/// `(room, period)`, for the rooms of `networks` (every room when `None`).
+/// room, for the rooms of `networks` (every room when `None`).
 pub fn parse(
     input: &Path,
     source_id: &str,
-    period: Period,
     networks: Option<&[String]>,
     range: RawRange<'_>,
 ) -> Result<ParsedBeeper> {
@@ -187,7 +182,6 @@ pub fn parse(
                     reader.pool(),
                     &db_path,
                     source_id,
-                    period,
                     networks,
                     range,
                     reader.pin(),
@@ -208,11 +202,26 @@ async fn load(
     pool: &SqlitePool,
     db_path: &Path,
     source_id: &str,
-    period: Period,
     networks: Option<&[String]>,
     range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
 ) -> Result<ParsedBeeper> {
+    let mut unlisted_chats: BTreeMap<String, usize> = BTreeMap::new();
+    for account in sqlx::query_scalar::<_, Option<String>>(
+        "SELECT accountID FROM threads t \
+         WHERE EXISTS (SELECT 1 FROM mx_room_messages m WHERE m.roomID = t.threadID)",
+    )
+    .fetch_all(pool)
+    .await
+    .context("read which accounts hold messages")?
+    {
+        let account = account.unwrap_or_default();
+        if network_for_account(&account).is_none() {
+            *unlisted_chats
+                .entry(bridge_of(&account).to_string())
+                .or_default() += 1;
+        }
+    }
     let mut rooms: HashMap<String, Room> = HashMap::new();
     for r in sqlx::query("SELECT threadID, accountID, thread FROM threads")
         .fetch_all(pool)
@@ -418,7 +427,8 @@ async fn load(
     });
 
     Ok(ParsedBeeper {
-        docs: bucket(events.into_iter().map(|(room, _, e)| (room, e)), period),
+        unlisted_chats,
+        docs: bucket(events.into_iter().map(|(room, _, e)| (room, e))),
         people,
         rooms,
         inputs,
@@ -521,48 +531,26 @@ fn slack_user(mxid: &str) -> Option<Handle> {
     Handle::slack(&team.to_ascii_uppercase(), &user.to_ascii_uppercase())
 }
 
-/// File each message under its `(room, period)`, and each reaction under
-/// its target's period however late it arrived. A reaction whose target
-/// is not in the store at all files under its own period.
-fn bucket(events: impl Iterator<Item = (String, Event)>, period: Period) -> Vec<DocBucket> {
-    let (reactions, messages): (Vec<_>, Vec<_>) = events.partition(|(_, e)| e.is_reaction());
-    let mut docs: BTreeMap<(String, String), DocBucket> = BTreeMap::new();
-    let mut target_period: HashMap<(String, String), String> = HashMap::new();
-    for (room, m) in messages {
-        let key = period.key_for_ms(m.timestamp_ms);
-        target_period.insert((room.clone(), m.native_event_id.clone()), key.clone());
-        doc(&mut docs, &room, key).messages.push(m);
-    }
-    for (room, r) in reactions {
-        let target = r
-            .reaction_target_native_event_id
-            .clone()
-            .unwrap_or_else(|| r.native_event_id.clone());
-        let key = target_period
-            .get(&(room.clone(), target.clone()))
-            .cloned()
-            .unwrap_or_else(|| period.key_for_ms(r.timestamp_ms));
-        doc(&mut docs, &room, key)
-            .reactions_by_target
-            .entry(target)
-            .or_default()
-            .push(r);
-    }
-    docs.into_values().collect()
-}
-
-fn doc<'a>(
-    docs: &'a mut BTreeMap<(String, String), DocBucket>,
-    room: &str,
-    period_key: String,
-) -> &'a mut DocBucket {
-    docs.entry((room.to_string(), period_key.clone()))
-        .or_insert_with(|| DocBucket {
-            room_uuid: room.to_string(),
-            period_key,
+/// File each event under its room, a reaction keyed by its target.
+fn bucket(events: impl Iterator<Item = (String, Event)>) -> Vec<DocBucket> {
+    let mut docs: BTreeMap<String, DocBucket> = BTreeMap::new();
+    for (room, e) in events {
+        let doc = docs.entry(room.clone()).or_insert_with(|| DocBucket {
+            room_uuid: room,
             messages: Vec::new(),
             reactions_by_target: BTreeMap::new(),
-        })
+        });
+        if e.is_reaction() {
+            let target = e
+                .reaction_target_native_event_id
+                .clone()
+                .unwrap_or_else(|| e.native_event_id.clone());
+            doc.reactions_by_target.entry(target).or_default().push(e);
+        } else {
+            doc.messages.push(e);
+        }
+    }
+    docs.into_values().collect()
 }
 
 /// The cached files the store holds, by path under `media/`, with what
@@ -683,6 +671,48 @@ fn slack_channel_url(team_channel: &str) -> Option<String> {
     (!team.is_empty() && !channel.is_empty())
         .then(|| format!("https://slack.com/app_redirect?channel={channel}&team={team}"))
 }
+
+/// The bridge an `index.db` account id names, without the login after it.
+fn bridge_of(account_id: &str) -> &str {
+    account_id.split(['.', '_']).next().unwrap_or(account_id)
+}
+
+/// A row per kind of account whose chats no document shows. On Beeper's own
+/// `hungryserv` and in its `$space`s nothing is wrong, so that is on record at
+/// `info`; a bridge this list does not know is a warning.
+pub fn unlisted_chat_rows(
+    unlisted: &BTreeMap<String, usize>,
+    source_id: &str,
+    render_version: u32,
+) -> Vec<ProblemRow> {
+    unlisted
+        .iter()
+        .map(|(bridge, chats)| {
+            let (severity, why) = if bridge == "hungryserv" || bridge.starts_with('$') {
+                (Severity::Info, "Beeper's own, not a bridge")
+            } else {
+                (Severity::Warning, "a bridge this render does not know")
+            };
+            ProblemRow::new(
+                source_id,
+                Stage::Parse,
+                Scope::Entity(&format!("{UNLISTED_BRIDGES}:{bridge}")),
+                None,
+                Outcome::Dropped,
+                Problem::explained(
+                    Reason::UncoveredType,
+                    None,
+                    &format!("{chats} chat(s) on {bridge} ({why}) not shown"),
+                )
+                .severity(severity),
+                Some(render_version),
+            )
+        })
+        .collect()
+}
+
+/// The raw "table" an unlisted bridge's row names.
+pub const UNLISTED_BRIDGES: &str = "unlisted_bridges";
 
 /// The canonical network an `index.db` account id belongs to: the id is
 /// the bridge's name, alone or followed by `.` or `_` and the login.

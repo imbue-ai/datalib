@@ -1,4 +1,5 @@
 load("@py_pip//:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_rust//rust:defs.bzl", "rust_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
@@ -42,11 +43,51 @@ sh_test(
     size = "small",
     srcs = ["python_package_test.py"],
     data = [
+        "//datalib/reader:host_wheel",
         "//third-party/doltlite:doltlite",
         requirement("doltlite"),
     ],
     env = {
         "DOLTLITE_BIN": "$(rootpath //third-party/doltlite:doltlite)",
+        "DOLTLITE_READER_WHEEL": "$(rootpath //datalib/reader:host_wheel)",
         "DOLTLITE_WHEEL_FILES": "$(rootpaths %s)" % requirement("doltlite"),
     },
+)
+
+# imbue-datalib-reader, from a wheel around the library a release ships. A
+# py_test because it is the interpreter rules_python brings, the one the
+# `doltlite` package cannot take over, that the reader has to work under.
+py_test(
+    name = "python_reader_test",
+    size = "small",
+    srcs = ["python_reader_test.py"],
+    args = [
+        "$(rootpath //third-party/doltlite:doltlite)",
+        "$(rootpath //datalib/reader:host_wheel)",
+    ],
+    data = [
+        "//datalib/reader:host_wheel",
+        "//third-party/doltlite:doltlite",
+    ],
+    main = "python_reader_test.py",
+    deps = [requirement("doltlite")],
+)
+
+# What SQLite's vec1 vector search does in doltlite (docs/dev/doltlite.md
+# § "Vector search: vec1"), through the test-only shell that has it; the
+# shipped shell is here to show it has none.
+rust_test(
+    name = "vec1_facts_test",
+    size = "small",
+    srcs = ["vec1_facts.rs"],
+    data = [
+        "//third-party/doltlite:doltlite",
+        "//third-party/doltlite:doltlite_vec1",
+    ],
+    edition = "2021",
+    env = {
+        "DOLTLITE_BIN": "$(rootpath //third-party/doltlite:doltlite)",
+        "DOLTLITE_VEC1_BIN": "$(rootpath //third-party/doltlite:doltlite_vec1)",
+    },
+    deps = ["@datalib_crates//:tempfile"],
 )

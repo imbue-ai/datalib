@@ -59,6 +59,7 @@ fn read(
 pub async fn run_render(
     env: &StepEnv,
     data_root: &Path,
+    now: &str,
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
     let source_type = SourceType::parse(env.source_type()?)
@@ -66,17 +67,21 @@ pub async fn run_render(
     let raw = data_root.join(env.raw_store_rel());
     let (wanted, unreadable) = read(source_type, &raw, &env.group)?;
     // A file that could not be read costs its own time series and
-    // nothing else; the Manage row counts it as a warning.
-    for (record, why) in &unreadable {
-        tracing::warn!(record = %record, error = %why, "a source file held no readable time series");
-    }
+    // nothing else; it is a warning row, which `unified_grid_and_search_index` copies into
+    // the index for the Manage row to count.
+    let problems = datalib_etl_time_series::unreadable_problems(&env.group, &unreadable);
     let progress = emitter.progress();
-    for (severity, n) in [(Severity::Error, 0), (Severity::Warning, unreadable.len())] {
+    for (severity, n) in [(Severity::Error, 0), (Severity::Warning, problems.len())] {
         progress.metric(METRIC, &[severity.metric_label()], n as i64);
     }
     let db = datalib_etl::layout::render_time_series_db(data_root, &env.group);
     let pool = store::open(&db, StoreKind::TimeSeries).await?;
-    let written = datalib_etl_time_series::apply(&pool, &wanted, &env.group).await;
+    let written = async {
+        let written = datalib_etl_time_series::apply(&pool, &wanted, &env.group).await?;
+        datalib_step_problems::replace(&pool, problems, &datalib_time::split_stamp(now)).await?;
+        Ok(written)
+    }
+    .await;
     let claim = seal(pool, written, "render_time_series", emitter).await?;
     Ok(vec![OutputClaim {
         path: env.step.clone(),
@@ -89,7 +94,7 @@ pub async fn run_index(
     data_root: &Path,
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
-    let sources = crate::qmd_index::groups_from_inputs(&env.inputs);
+    let sources = crate::index_steps::groups_from_inputs(&env.inputs);
     let mut stores = Vec::with_capacity(sources.len());
     for source in &sources {
         let db = datalib_etl::layout::render_time_series_db(data_root, source);
@@ -277,6 +282,105 @@ mod tests {
         assert_eq!(sources[0].commit_hash, riker_head);
         assert_eq!(root.join(&sources[0].store), db);
         index.close().await;
+    }
+
+    /// A source file whose time series could not be read is a warning row
+    /// in the step's own store, where a reader finds it as the step's
+    /// (`datalib_step_problems::of_step`); the `unified_grid_and_search_index` step copies none of it.
+    /// The TNG account's ride holds no FIT file the reader can parse.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unreadable_file_is_a_warning_row_of_the_steps_own() {
+        use datalib_etl::progress::Progress;
+        use datalib_etl_garmin::ingest::{db_path_for, fetch, FetchOptions, RawDb};
+        use datalib_etl_web::synthesize::Synthesizer;
+
+        const NOW: &str = "2369-04-15T09:00:00+02:00";
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        let spec = runfiles::Runfiles::create()
+            .unwrap()
+            .rlocation(
+                "_main/datalib/backend/etl/providers/garmin/tests/fixtures/garmin_tng/tng.json",
+            )
+            .unwrap();
+        let playback = root.join("playback");
+        datalib_etl_garmin::synthesize::GarminSynth::new(spec)
+            .synthesize(&playback)
+            .unwrap();
+        let db = RawDb::open(&db_path_for(&root.join("riker/ingest")))
+            .await
+            .unwrap();
+        let download = fetch(FetchOptions {
+            db: db.clone(),
+            latchkey: Default::default(),
+            api: datalib_etl_garmin_config::GarminApi {
+                since: Some("2369-04-01".into()),
+                ..Default::default()
+            },
+            today: chrono::NaiveDate::from_ymd_opt(2369, 4, 15).unwrap(),
+            progress: Progress::noop(),
+            control: Default::default(),
+            sealer: None,
+        });
+        datalib_etl_web::playback::scope(&playback, download)
+            .await
+            .unwrap();
+        doltlite_raw::commit_run(db.pool(), "test ingest")
+            .await
+            .unwrap();
+        db.close().await;
+
+        let render = StepEnv {
+            step: "riker/render_time_series".into(),
+            group: "riker".into(),
+            group_type: Some("garmin".into()),
+            source_group: None,
+            source_group_type: None,
+            function: crate::function::Function::RenderTimeSeries,
+            inputs: vec!["riker/ingest".into()],
+        };
+        run_render(&render, root, NOW, &Emitter::new("test".into()))
+            .await
+            .unwrap();
+        let read = datalib_step_problems::of_step(root, "riker/render_time_series").await;
+        assert!(read.unread.is_empty(), "{:?}", read.unread);
+        let rows: Vec<(&str, &str, &str, &str)> = read
+            .rows
+            .iter()
+            .map(|r| {
+                (
+                    r.source_id.as_str(),
+                    r.stage.as_str(),
+                    r.severity.as_str(),
+                    r.scope_key.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(rows, [("riker", "time_series", "warning", "17010414002")]);
+
+        crate::unified_grid_and_search_index::run(
+            root,
+            &StepEnv {
+                step: crate::unified_grid_and_search_index::out_rel(),
+                group: datalib_core::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR.into(),
+                group_type: None,
+                source_group: None,
+                source_group_type: None,
+                function: crate::function::Function::UnifiedGridAndSearchIndex,
+                inputs: vec!["riker/render_time_series".into()],
+            },
+            &crate::unified_grid_and_search_index::Params::default(),
+            None,
+            Some(NOW),
+            &Emitter::new("test".into()),
+            &datalib_etl::stop::StopFlag::new(),
+        )
+        .await
+        .unwrap();
+        let index =
+            datalib_step_problems::of_step(root, &crate::unified_grid_and_search_index::out_rel())
+                .await;
+        assert!(index.rows.is_empty(), "the index copied {:?}", index.rows);
     }
 
     /// The config side adds `render_time_series` steps for the types its

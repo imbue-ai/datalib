@@ -10,17 +10,16 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::layout::render_markdown_root;
-use datalib_etl_render::front_matter::yaml_scalar;
+use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
-use datalib_etl_render::html::{
-    escape_html_outside_code, escape_md_inline, escape_text, md_link_dest,
-};
+use datalib_etl_render::html::{escape_md_inline, escape_name_inline, escape_text, md_link_dest};
 use datalib_etl_render::inputs::Inputs;
 use datalib_etl_render::message::{chip_link, stamp_text_html, MessageHeader};
 use datalib_etl_render::section::{join, msg_div_open_with, Section, MSG_DIV_CLOSE};
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
 use datalib_id::Identity;
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
@@ -31,7 +30,11 @@ use crate::store::{flag, str_of, uid_of, Store};
 
 /// v1: one document per project, completed tasks folded under each
 ///     section.
-pub const RENDER_VERSION: u32 = 1;
+/// v2: a comment's time, which Todoist stamps in its own UTC, says it
+///     names no one's clock (`Z`).
+/// v3: a task, a description or a comment is markdown as written, HTML
+///     included.
+pub const RENDER_VERSION: u32 = 3;
 
 const SOURCE_LABEL: &str = "Todoist";
 const KIND_PROJECT: &str = "Todoist Project";
@@ -279,9 +282,40 @@ pub fn build(
         grouped.entry(at).or_default().push(t);
     }
 
+    let (mut data_nodes, above, in_project) = project_nodes(&facts, store, inputs);
+    let mut in_section: HashMap<&str, Lineage> = HashMap::new();
+    for (id, s) in &sections {
+        let node = DataNodeRow::new(
+            &facts.id.uuid,
+            ids::section(source_id, id).uuid,
+            source_id,
+            "Todoist section",
+        )
+        .named(str_of(s, "name").map(String::from))
+        .upstream(ids::KIND_SECTION, *id, facts.account.clone())
+        .sort_key(
+            s.get("section_order")
+                .and_then(Value::as_i64)
+                .map(order_key),
+        )
+        .under(&in_project);
+        in_section.insert(id, in_project.below(&node));
+        data_nodes.push(node);
+    }
+    let task_uuids: HashMap<&str, String> = tasks
+        .iter()
+        .map(|t| {
+            let added = str_of(t.row, "added_at");
+            (t.id, ids::task(source_id, t.id, added).uuid)
+        })
+        .collect();
+
     let mut out = Out {
         facts: &facts,
         people: &people,
+        in_project,
+        in_section,
+        task_uuids,
         sections: vec![Section::unkeyed(head(&facts, project))],
         rows: Vec::new(),
         problems: Vec::new(),
@@ -299,7 +333,7 @@ pub fn build(
             "## Comments on the project\n\n".to_string(),
         ));
         for (id, n) in &project_notes {
-            out.comment(id, n, None, true);
+            out.comment(id, n, None, None);
         }
     }
     for (at, group) in grouped {
@@ -313,7 +347,7 @@ pub fn build(
             };
             out.sections.push(Section::unkeyed(format!(
                 "## {}{archived}\n\n",
-                escape_md_inline(name)
+                escape_name_inline(name)
             )));
         }
         let open: Vec<&Task> = group.iter().copied().filter(|t| !t.done).collect();
@@ -368,9 +402,12 @@ pub fn build(
         .upstream_id(Some(facts.id.natural_key.clone()))
         .upstream_entity_kind(Some(facts.id.entity_kind.to_string()))
         .markdown_uuid(Some(facts.id.uuid.clone()))
+        .lineage(&above)
         .build_or_record(source_id, project_id, RENDER_VERSION, &mut problems);
     rows.splice(0..0, doc_row);
     RenderedMarkdown {
+        section_layout: None,
+        content_hash: None,
         markdown_uuid: facts.id.uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
@@ -381,9 +418,66 @@ pub fn build(
         sections: md_sections,
         edges: Vec::new(),
         contacts: Vec::new(),
+        data_nodes,
+        filings: Vec::new(),
         photos: Vec::new(),
         problems,
+        front: front(&facts, project),
     }
+}
+
+/// The projects above this one, then this one: each read together and a
+/// place, as each is its own document. Returns where the project's own
+/// row sits and where what is in it sits.
+fn project_nodes(
+    facts: &ProjectFacts,
+    store: &Store,
+    inputs: &Inputs,
+) -> (Vec<DataNodeRow>, Lineage, Lineage) {
+    let md = &facts.id.uuid;
+    let node = |id: &str, name: Option<String>| {
+        DataNodeRow::new(
+            md,
+            ids::project(&facts.source_id, id).uuid,
+            &facts.source_id,
+            KIND_PROJECT,
+        )
+        .named(name)
+        .upstream(ids::KIND_PROJECT, id, facts.account.clone())
+        .read_together()
+        .place()
+    };
+    let mut chain: Vec<DataNodeRow> = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::from([facts.project_id.as_str()]);
+    let mut next = store
+        .projects
+        .get(&facts.project_id)
+        .and_then(|p| str_of(p, "parent_id"));
+    while let Some(id) = next.filter(|id| seen.insert(id)) {
+        inputs.read("projects", id);
+        let parent = store.projects.get(id);
+        chain.push(node(
+            id,
+            parent.and_then(|p| str_of(p, "name")).map(String::from),
+        ));
+        next = parent.and_then(|p| str_of(p, "parent_id"));
+    }
+    chain.reverse();
+    let mut at = Lineage::top();
+    for n in &mut chain {
+        *n = n.clone().under(&at);
+        at = at.below(n);
+    }
+    let own = node(&facts.project_id, Some(facts.name.clone())).under(&at);
+    let inside = at.below(&own);
+    chain.push(own);
+    (chain, at, inside)
+}
+
+/// Upstream's order among siblings as a key that sorts as text: a
+/// section's `section_order`, a task's `child_order`.
+fn order_key(order: i64) -> String {
+    format!("{:020}", (order as i128 - i64::MIN as i128) as u64)
 }
 
 /// `tasks` in document order, each with its depth: every task after its
@@ -418,20 +512,22 @@ fn tree<'t, 'a>(tasks: &[&'t Task<'a>]) -> Vec<(&'t Task<'a>, usize)> {
     out
 }
 
-fn head(facts: &ProjectFacts, project: Option<&Value>) -> String {
-    let mut s = String::from("---\n");
-    s.push_str(&format!("title: {}\n", yaml_scalar(&facts.name)));
-    s.push_str(&format!("provider: {}\n", Provider::Todoist));
-    s.push_str(&format!("source_label: {}\n", yaml_scalar(SOURCE_LABEL)));
-    s.push_str(&format!("markdown_uuid: {}\n", facts.id.uuid));
-    s.push_str(&format!("project_id: {}\n", yaml_scalar(&facts.project_id)));
+/// The document's front matter.
+fn front(facts: &ProjectFacts, project: Option<&Value>) -> Front {
+    let mut front = Front::new()
+        .name("title", &facts.name)
+        .plain("provider", Provider::Todoist)
+        .text("source_label", SOURCE_LABEL)
+        .plain("markdown_uuid", &facts.id.uuid)
+        .text("project_id", &facts.project_id);
     for k in ["created_at", "updated_at"] {
-        if let Some(v) = project.and_then(|p| str_of(p, k)) {
-            s.push_str(&format!("{k}: {}\n", yaml_scalar(v)));
-        }
+        front = front.text_if(k, project.and_then(|p| str_of(p, k)));
     }
-    s.push_str(&format!("source_url: {}\n", yaml_scalar(&facts.url)));
-    s.push_str("---\n\n");
+    front.text("source_url", &facts.url)
+}
+
+fn head(facts: &ProjectFacts, project: Option<&Value>) -> String {
+    let mut s = front(facts, project).draw();
     s.push_str(
         &Title {
             text: &facts.name,
@@ -452,7 +548,7 @@ fn head(facts: &ProjectFacts, project: Option<&Value>) -> String {
             s.push_str("*Archived.*\n\n");
         }
         if let Some(d) = str_of(p, "description") {
-            s.push_str(&escape_html_outside_code(d));
+            s.push_str(d);
             s.push_str("\n\n");
         }
     }
@@ -462,6 +558,12 @@ fn head(facts: &ProjectFacts, project: Option<&Value>) -> String {
 struct Out<'f, 'p, 'a> {
     facts: &'f ProjectFacts,
     people: &'p People<'a>,
+    /// Where a task in no section, or a comment on the project, sits.
+    in_project: Lineage,
+    in_section: HashMap<&'a str, Lineage>,
+    /// Every task of the project, by Todoist's id: a sub-task sits in its
+    /// parent, a comment in its task.
+    task_uuids: HashMap<&'a str, String>,
     sections: Vec<Section>,
     rows: Vec<GridRow>,
     problems: Vec<ProblemRow>,
@@ -504,7 +606,7 @@ impl Out<'_, '_, '_> {
         s.push_str("\n\n");
         s.push_str(&format!(
             "{level} {check} {}\n\n",
-            escape_html_outside_code(&content.replace(['\r', '\n'], " "))
+            content.replace(['\r', '\n'], " ")
         ));
         let meta = self.meta(t);
         if !meta.is_empty() {
@@ -512,7 +614,7 @@ impl Out<'_, '_, '_> {
             s.push_str("\n\n");
         }
         if let Some(d) = description {
-            s.push_str(&escape_html_outside_code(d));
+            s.push_str(d);
             s.push_str("\n\n");
         }
         s.push_str(MSG_DIV_CLOSE);
@@ -562,6 +664,8 @@ impl Out<'_, '_, '_> {
             .upstream_id(Some(id.natural_key.clone()))
             .upstream_entity_kind(Some(id.entity_kind.to_string()))
             .markdown_uuid(Some(self.facts.id.uuid.clone()))
+            .lineage(&self.task_at(t))
+            .sort_key((t.order() != i64::MAX).then(|| order_key(t.order())))
             .build_or_record(
                 &self.facts.source_id,
                 t.id,
@@ -572,7 +676,7 @@ impl Out<'_, '_, '_> {
         self.items += 1;
 
         for (note_id, n) in notes.into_iter().flatten() {
-            self.comment(note_id, n, section, false);
+            self.comment(note_id, n, section, Some(&id.uuid));
         }
     }
 
@@ -617,7 +721,7 @@ impl Out<'_, '_, '_> {
             out.push(
                 labels
                     .iter()
-                    .map(|l| escape_md_inline(&format!("@{l}")))
+                    .map(|l| escape_name_inline(&format!("@{l}")))
                     .collect::<Vec<_>>()
                     .join(" "),
             );
@@ -634,12 +738,39 @@ impl Out<'_, '_, '_> {
         out
     }
 
-    fn comment(&mut self, note_id: &str, n: &Value, section: Option<&str>, on_project: bool) {
+    /// In its parent task where upstream names one in this project, else
+    /// in its section, else in the project.
+    fn task_at(&self, t: &Task) -> Lineage {
+        let parent = t
+            .parent()
+            .filter(|p| *p != t.id)
+            .and_then(|p| self.task_uuids.get(p));
+        match (parent, t.section().and_then(|s| self.in_section.get(s))) {
+            (Some(parent), _) => self.inside(parent),
+            (None, Some(section)) => section.clone(),
+            (None, None) => self.in_project.clone(),
+        }
+    }
+
+    /// Inside a task, which is neither read together nor a place.
+    fn inside(&self, task_uuid: &str) -> Lineage {
+        Lineage {
+            parent_uuid: Some(task_uuid.to_string()),
+            ..self.in_project.clone()
+        }
+    }
+
+    /// `task` is the uuid of the task it is on; `None` for a comment on
+    /// the project.
+    fn comment(&mut self, note_id: &str, n: &Value, section: Option<&str>, task: Option<&str>) {
         let posted = str_of(n, "posted_at");
-        let id = if on_project {
-            ids::project_comment(&self.facts.source_id, note_id, posted)
-        } else {
-            ids::comment(&self.facts.source_id, note_id, posted)
+        let id = match task {
+            None => ids::project_comment(&self.facts.source_id, note_id, posted),
+            Some(_) => ids::comment(&self.facts.source_id, note_id, posted),
+        };
+        let at = match task {
+            None => self.in_project.clone(),
+            Some(task) => self.inside(task),
         };
         self.stamp(posted);
         let author = self.people.get(uid_of(n, "posted_uid"));
@@ -651,13 +782,14 @@ impl Out<'_, '_, '_> {
                 author: author.as_ref().map_or("", |p| p.name.as_str()),
                 handle: author.as_ref().and_then(|p| p.handle.as_ref()),
                 date_ms: posted.and_then(datalib_time::record_stamp_ms),
+                offset_secs: posted.and_then(datalib_time::written_offset_secs),
                 source_url: None,
             }
             .render(),
         );
         s.push_str("\n\n");
         if !content.is_empty() {
-            s.push_str(&escape_html_outside_code(content));
+            s.push_str(content);
             s.push_str("\n\n");
         }
         let attachment = n.get("file_attachment").filter(|a| a.is_object());
@@ -666,10 +798,10 @@ impl Out<'_, '_, '_> {
             match str_of(a, "file_url") {
                 Some(url) => s.push_str(&format!(
                     "📎 [{}]({})\n\n",
-                    escape_md_inline(name),
+                    escape_name_inline(name),
                     md_link_dest(url)
                 )),
-                None => s.push_str(&format!("📎 {}\n\n", escape_md_inline(name))),
+                None => s.push_str(&format!("📎 {}\n\n", escape_name_inline(name))),
             }
         }
         s.push_str(MSG_DIV_CLOSE);
@@ -710,6 +842,7 @@ impl Out<'_, '_, '_> {
             .upstream_id(Some(id.natural_key.clone()))
             .upstream_entity_kind(Some(id.entity_kind.to_string()))
             .markdown_uuid(Some(self.facts.id.uuid.clone()))
+            .lineage(&at)
             .build_or_record(
                 &self.facts.source_id,
                 note_id,
@@ -733,6 +866,6 @@ fn labels(row: &Value) -> Vec<&str> {
 fn person_md(p: &Person) -> String {
     match &p.handle {
         Some(h) => chip_link(&p.name, h),
-        None => escape_md_inline(&p.name),
+        None => escape_name_inline(&p.name),
     }
 }

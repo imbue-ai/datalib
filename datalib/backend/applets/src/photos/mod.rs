@@ -25,7 +25,7 @@ use datalib_photo_schema::{NormalizedPhoto, Pictures};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
 use pictures::{Level, Size};
@@ -105,7 +105,7 @@ pub fn serve(port: u16) -> Result<()> {
         let gate = Arc::new(crate::gate::Gate::from_env(bound.port())?);
         let app = routes(Arc::new(root)).layer(middleware::from_fn_with_state(
             gate,
-            crate::unified_document_index::require_gateway,
+            crate::unified_grid_and_search_index::require_gateway,
         ));
         tracing::info!(address = %bound, "listening");
         crate::announce_port(bound.port());
@@ -145,7 +145,7 @@ fn not_found(why: impl Into<String>) -> ApiError {
 
 // ── The index ────────────────────────────────────────────────────────────
 
-/// The grid index, read-only, or `None` before the first `grid_index`.
+/// The grid index, read-only, or `None` before the first `unified_grid_and_search_index`.
 async fn open_index(root: &Path) -> Result<Option<SqlitePool>> {
     let db = datalib_runtime::layout::grid_index_db(root);
     if !db.exists() {
@@ -282,6 +282,8 @@ struct Render {
     uuid: String,
     digest: String,
     levels: Vec<Level>,
+    /// How to turn the stored pixels to show them, Lightroom's code.
+    orientation: Option<String>,
 }
 
 /// The render Lightroom's `previews.db` says is current for this photo,
@@ -302,8 +304,7 @@ async fn current_render(photo: &NormalizedPhoto) -> Result<Option<Render>> {
     if !db.exists() {
         return Ok(None);
     }
-    let opts = SqliteConnectOptions::new()
-        .filename(&db)
+    let opts = datalib_sqlite_open::file(&db)
         .read_only(true)
         .create_if_missing(false)
         .busy_timeout(std::time::Duration::from_secs(2));
@@ -316,7 +317,8 @@ async fn current_render(photo: &NormalizedPhoto) -> Result<Option<Render>> {
         .with_context(|| format!("open {}", db.display()))?;
     let read = async {
         let entry = sqlx::query(
-            "SELECT CAST(uuid AS TEXT) AS uuid, CAST(digest AS TEXT) AS digest \
+            "SELECT CAST(uuid AS TEXT) AS uuid, CAST(digest AS TEXT) AS digest, \
+                    CAST(orientation AS TEXT) AS orientation \
                FROM ImageCacheEntry WHERE CAST(imageId AS INTEGER) = ?",
         )
         .bind(image_id_local)
@@ -327,6 +329,7 @@ async fn current_render(photo: &NormalizedPhoto) -> Result<Option<Render>> {
             return Ok(None);
         };
         let (uuid, digest): (String, String) = (entry.get("uuid"), entry.get("digest"));
+        let orientation: Option<String> = entry.get("orientation");
         let levels = sqlx::query(
             "SELECT CAST(level AS INTEGER) AS level, \
                     CAST(longDimension AS INTEGER) AS long_edge \
@@ -348,6 +351,7 @@ async fn current_render(photo: &NormalizedPhoto) -> Result<Option<Render>> {
             uuid,
             digest,
             levels,
+            orientation,
         }))
     }
     .await;
@@ -412,7 +416,9 @@ async fn image(
     if let Some(render) = current_render(&photo).await.map_err(ours)? {
         if let Some(level) = pictures::pick(&render.levels, q.size) {
             if let Some(bytes) = preview_bytes(&render, level).await.map_err(ours)? {
-                let etag = format!("\"{}-{}\"", render.digest, level.long_edge);
+                let code = render.orientation.as_deref().unwrap_or("AB");
+                let etag = format!("\"{}-{}-{code}\"", render.digest, level.long_edge);
+                let bytes = turned(bytes, code, &uuid);
                 return Ok(picture(bytes, "preview", &etag, &headers));
             }
         }
@@ -436,6 +442,24 @@ async fn image(
         None => Err(not_found(format!(
             "{why_no_preview}, and its original is not on this computer"
         ))),
+    }
+}
+
+/// A preview as Lightroom shows it: its stored pixels, told how to turn.
+fn turned(bytes: Vec<u8>, code: &str, uuid: &str) -> Vec<u8> {
+    let Some(orientation) = pictures::exif_orientation(code) else {
+        tracing::warn!(photo = %uuid, code, "unknown Lightroom orientation; serving the preview unturned");
+        return bytes;
+    };
+    if orientation == 1 {
+        return bytes;
+    }
+    match pictures::with_orientation(&bytes, orientation) {
+        Some(out) => out,
+        None => {
+            tracing::warn!(photo = %uuid, code, "preview is not a JPEG this can turn; serving it unturned");
+            bytes
+        }
     }
 }
 
@@ -595,9 +619,7 @@ mod tests {
     async fn index_photo(root: &Path, uuid: &str, photo_json: &str, touched: &str) {
         let db = datalib_runtime::layout::grid_index_db(root);
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
-        let opts = SqliteConnectOptions::new()
-            .filename(&db)
-            .create_if_missing(true);
+        let opts = datalib_sqlite_open::file(&db).create_if_missing(true);
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .idle_timeout(None)

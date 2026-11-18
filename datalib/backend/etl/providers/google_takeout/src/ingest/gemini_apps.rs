@@ -1,6 +1,7 @@
 //! `My Activity/Gemini Apps/MyActivity.html` walker.
 
 use datalib_etl::prune;
+use datalib_etl_files::export_files::is_regular_file;
 use datalib_etl_files::file_changes_scan;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -303,7 +304,7 @@ fn attach(acc: &mut CasEdgeAccumulator, cell_dir: &Path, owning: &str, file_name
 /// its own takes the one file that shares its stem.
 fn on_disk(dir: &Path, file_name: &str) -> Option<PathBuf> {
     let exact = dir.join(file_name);
-    if exact.is_file() {
+    if is_regular_file(&exact) {
         return Some(exact);
     }
     let stem = Path::new(file_name).file_stem()?;
@@ -311,7 +312,7 @@ fn on_disk(dir: &Path, file_name: &str) -> Option<PathBuf> {
         .ok()?
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.file_stem() == Some(stem) && p.is_file());
+        .filter(|p| p.file_stem() == Some(stem) && is_regular_file(p));
     let only = same_stem.next()?;
     if same_stem.next().is_some() {
         return None;

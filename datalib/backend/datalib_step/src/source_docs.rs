@@ -24,6 +24,9 @@ impl SourceDocs {
 pub fn source_docs(t: SourceType) -> SourceDocs {
     use SourceType as T;
     match t {
+        T::BabyConnect => docs::<datalib_etl_baby_connect_config::BabyConnectConfig>(
+            datalib_etl_baby_connect_config::EXAMPLES,
+        ),
         T::Airvisual => docs::<datalib_etl_airvisual_config::AirvisualConfig>(
             datalib_etl_airvisual_config::EXAMPLES,
         ),
@@ -356,19 +359,22 @@ mod tests {
     // checked-in config, and hands back what the checks below look at.
     fn load(name: &str, toml: &str, dir: &Path) -> Loaded {
         let path = dir.join(format!("{}.toml", name.replace('/', "_")));
+        // In a new library's config, as `examples --append` puts it: its
+        // `embed` reads the `unified_grid_and_search_index` step.
         std::fs::write(
             &path,
-            format!("data_root = \"{}\"\n\n{toml}", dir.join("root").display()),
+            format!(
+                "data_root = \"{}\"\n\n{toml}\n\n{}",
+                dir.join("root").display(),
+                datalib_dag::starter::STARTER_CONFIG
+            ),
         )
         .unwrap();
         crate::config_examples_test::validate_config(name, &path);
         let (cfg, _) = datalib_dag::config::load(&path).unwrap();
-        assert_eq!(
-            cfg.groups.len(),
-            1,
-            "{name}: one [[groups]] entry per example"
-        );
-        let group = &cfg.groups[0];
+        let sources: Vec<_> = cfg.groups.iter().filter(|g| g.r#type.is_some()).collect();
+        assert_eq!(sources.len(), 1, "{name}: one [[groups]] entry per example");
+        let group = sources[0];
         let ingest = cfg
             .steps
             .iter()
@@ -386,6 +392,7 @@ mod tests {
             functions: cfg
                 .steps
                 .iter()
+                .filter(|s| s.group.as_deref() == Some(group.id.as_str()))
                 .filter_map(|s| s.function.clone())
                 .collect(),
         }
@@ -412,11 +419,13 @@ mod tests {
             for m in methods {
                 for &kind in ExampleKind::VARIANTS {
                     let Some(example) = docs.example(kind, m.path) else {
-                        missing.push(format!(
-                            "{t}: no {} example for `{}`",
-                            kind.as_str(),
-                            m.path
-                        ));
+                        if kind != ExampleKind::Sections {
+                            missing.push(format!(
+                                "{t}: no {} example for `{}`",
+                                kind.as_str(),
+                                m.path
+                            ));
+                        }
                         continue;
                     };
                     let name = format!("{t}/{}_{}", kind.as_str(), m.path);
@@ -435,7 +444,7 @@ mod tests {
                         ExampleKind::Minimal => {
                             assert_eq!(holds, [m.path], "{name}: holds the method it is named for")
                         }
-                        ExampleKind::Complete => assert!(
+                        ExampleKind::Complete | ExampleKind::Sections => assert!(
                             holds.contains(&m.path),
                             "{name}: holds the method it is named for, not only {holds:?}"
                         ),
@@ -454,7 +463,7 @@ mod tests {
                             missing.push(format!("{name}: declares no `{needed}` step"));
                         }
                     }
-                    if kind == ExampleKind::Complete {
+                    if kind != ExampleKind::Minimal {
                         written
                             .entry(m.path)
                             .or_default()

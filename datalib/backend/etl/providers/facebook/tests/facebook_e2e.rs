@@ -33,7 +33,8 @@ async fn rows(db: &RawDb, table: &str) -> Vec<serde_json::Value> {
 #[test]
 fn ingests_the_export_and_renders_every_feed() -> Result<()> {
     let tmp = tempfile::tempdir()?;
-    let export = fixture();
+    let export = tmp.path().join("export");
+    copy_tree(&fixture(), &export);
     let raw_dir = tmp.path().join("raw");
     fs::create_dir_all(&raw_dir)?;
 
@@ -142,10 +143,9 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             render_source(&source, &Progress::noop(), &mut on_doc).context("render")?;
         }
 
-        // 5 posts (4 timeline + 1 on another page) + 1 album + a year of
-        // comments + a year of reactions + 3 friends + a year each of 7
-        // Messenger conversations + the edit of a post deleted since + 3
-        // group posts.
+        // 5 posts (4 timeline + 1 on another page) + 1 album + the
+        // comments + the reactions + 3 friends + 7 Messenger conversations
+        // + the edit of a post deleted since + 3 group posts.
         assert_eq!(docs.len(), 5 + 1 + 1 + 1 + 3 + 7 + 1 + 3, "documents rendered");
         let all_rows: Vec<_> = docs.iter().flat_map(|d| d.rows.iter()).collect();
         assert!(
@@ -204,18 +204,21 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             2
         );
 
-        // Comments: one document per year, the title folded in, the
-        // mojibake'd 🍸 restored.
+        // Comments: one document, under the feed's own uuid, the title
+        // folded in, the mojibake'd 🍸 restored.
         let comments: Vec<_> = docs
             .iter()
             .filter(|d| d.rows.iter().any(|r| r.kind == "Facebook Comment"))
             .collect();
-        let [year] = comments.as_slice() else {
+        let [comments_doc] = comments.as_slice() else {
             let paths: Vec<_> = comments.iter().map(|d| &d.md_path).collect();
-            panic!("two months of comments are one year's document: {paths:?}")
+            panic!("two months of comments are one document: {paths:?}")
         };
-        let md = fs::read_to_string(&year.md_path)?;
-        assert!(md.contains("(2369)"), "the year's document: {md}");
+        assert!(
+            comments_doc.rows.iter().all(|r| r.conversation_uuid == comments_doc.markdown_uuid),
+            "the document is the feed's own"
+        );
+        let md = fs::read_to_string(&comments_doc.md_path)?;
         assert!(md.contains("Guinan's synthehol never disappoints. 🍸"), "{md}");
         assert!(md.contains("*Jean-Luc Picard commented on his own album.*"), "{md}");
 
@@ -226,7 +229,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             .filter(|d| d.rows.iter().any(|r| r.kind == "Facebook Reaction"))
             .filter(|d| d.rows.iter().all(|r| r.kind != "Facebook Conversation"))
             .collect();
-        assert_eq!(reactions.len(), 1, "two months of reactions, one year");
+        assert_eq!(reactions.len(), 1, "two months of reactions, one document");
         let reaction_rows: Vec<_> = reactions
             .iter()
             .flat_map(|d| d.rows.iter())
@@ -276,7 +279,10 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         assert_eq!(md.matches("](/data/").count(), 2, "the photo and the sticker: {md}");
         assert!(md.find("Engage.") < md.find("Now."), "the older first: {md}");
         assert!(riker.rows.iter().any(|r| r.kind == "Facebook Reaction"));
-        assert!(md.contains("(2369)"), "the year's document: {md}");
+        assert!(
+            riker.rows.iter().all(|r| r.conversation_uuid == riker.markdown_uuid),
+            "the document is the conversation's own"
+        );
 
         // What render could not use is a problem row on the document,
         // at the message's own section, and says what it was by its
@@ -415,7 +421,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         assert!(md.contains("William Riker"), "{md}");
         assert!(!md.contains("Another version"), "{md}");
         assert!(!md.contains("@["), "{md}");
-        let md = fs::read_to_string(&year.md_path)?;
+        let md = fs::read_to_string(&comments_doc.md_path)?;
         assert!(
             md.find("Enjoy the chair, Number One.") < md.find("Enjoy the chair, Will."),
             "a comment's first version above it: {md}"
@@ -439,7 +445,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             project_of("Saurian brandy").as_deref(),
             Some("Ten Forward Regulars")
         );
-        let comments_md = fs::read_to_string(&year.md_path)?;
+        let comments_md = fs::read_to_string(&comments_doc.md_path)?;
         assert!(comments_md.contains("Proud of you, Ensign."), "{comments_md}");
 
         // Every document declares the rows it read, so a change to any of
@@ -522,6 +528,43 @@ impl Export {
 /// siblings unpruned — its rows are not in this run's set, and that says
 /// nothing about whether they went — and is a `listing:` row until it
 /// reads again.
+/// A `uri` is the export's own text. One that reaches a file through a
+/// link in the export must not put that file in the store, nor may the
+/// link make the run read as if everything it hid had gone.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_uri_through_a_link_in_the_export_stores_nothing() {
+    const LEAK: &str = "your_facebook_activity/posts/leak/secret.png";
+    let e = Export::new().await;
+    let outside = e._tmp.path().join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("secret.png"), b"not from the export").unwrap();
+    std::os::unix::fs::symlink(&outside, e.root.join("your_facebook_activity/posts/leak")).unwrap();
+    assert!(e.root.join(LEAK).is_file(), "the link must really reach it");
+    fs::write(
+        e.root.join(ALBUM_1),
+        format!(r#"{{"name": "Holodeck Three", "photos": [{{"uri": "{LEAK}"}}]}}"#),
+    )
+    .unwrap();
+
+    e.sync().await;
+
+    let edges: Vec<Option<String>> =
+        sqlx::query_scalar("SELECT blake3 FROM media_blobs WHERE uri = ?")
+            .bind(LEAK)
+            .fetch_all(e.db.pool())
+            .await
+            .unwrap();
+    assert_eq!(edges, [None], "the edge says the file is not in the export");
+    let problems = e.problems().await;
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.0 == "listing:files" && p.3.contains("symbolic link")),
+        "{problems:?}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_chunk_that_will_not_read_keeps_its_rows_and_is_a_problem_until_it_reads() {
     let e = Export::new().await;
@@ -585,10 +628,7 @@ async fn a_media_file_the_export_left_out_is_a_warning() {
         (severity.as_str(), reason.as_str()),
         ("warning", "not_found")
     );
-    assert!(
-        sample.starts_with("media file not in the export: "),
-        "{sample}"
-    );
+    assert!(sample == "media file not in the export", "{sample}");
     e.db.clone().close().await;
 }
 

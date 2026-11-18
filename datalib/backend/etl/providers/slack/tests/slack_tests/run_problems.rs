@@ -10,7 +10,7 @@ use datalib_etl_slack::recorded::{
 use serde_json::{json, Value};
 use tempfile::tempdir;
 
-use crate::support::{fetch_into, msg, serve, stored_ts};
+use crate::support::{checked_at, fetch_into, msg, serve, stored_ts};
 
 const A: &str = "1735689600.000100";
 const REPLY: &str = "1735689600.000150";
@@ -107,6 +107,11 @@ async fn a_channel_that_fails_is_a_problem_until_it_walks() {
         problems(&out).await,
         [row("listing:conversations.history engineering", "error")]
     );
+    assert_eq!(
+        checked_at(&out).await.keys().collect::<Vec<_>>(),
+        ["C1"],
+        "a channel whose walk failed is not known to be current"
+    );
 
     let api2 = d.path().join("api2");
     record_listings(&api2, channels);
@@ -119,6 +124,7 @@ async fn a_channel_that_fails_is_a_problem_until_it_walks() {
     fetch_into(&playback2, &out, |o| o).await.unwrap();
     assert_eq!(stored_ts(&out), [A, B]);
     assert_eq!(problems(&out).await, [], "the channel walked this time");
+    assert!(checked_at(&out).await.contains_key("C2"));
 }
 
 /// A thread whose replies will not come is a row on the thread's own

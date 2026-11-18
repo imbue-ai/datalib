@@ -60,6 +60,20 @@ pub struct FetchSummary {
     pub files_removed: usize,
     pub errors: usize,
     pub requests: usize,
+    /// For the run's `sync_runs.status`, which the processor writes
+    /// outside the collector that knows.
+    #[serde(skip)]
+    pub ended_early: bool,
+}
+
+/// `body`'s summary, with how its run ended on it.
+pub(crate) async fn noting_how_it_ended(
+    found: RunProblems,
+    body: impl std::future::Future<Output = Result<FetchSummary>>,
+) -> Result<FetchSummary> {
+    let mut summary = body.await?;
+    summary.ended_early = found.ended_early();
+    Ok(summary)
 }
 
 impl FetchSummary {

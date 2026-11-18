@@ -25,7 +25,7 @@ common --repo_env=ASPECT_TOOLS_TELEMETRY=-all
 # Undeclared test outputs as one downloadable `outputs.zip` rather than
 # a loose directory tree.
 #
-# `//datalib/ui:e2e_test` writes a Playwright HTML report — video and
+# Each part of `//datalib/ui:e2e_test` writes a Playwright HTML report — video and
 # trace per test, with the trace viewer bundled — into
 # TEST_UNDECLARED_OUTPUTS_DIR. Zipped, it arrives as a single artifact
 # on the BuildBuddy invocation page that you can download and open;
@@ -53,12 +53,11 @@ test --zip_undeclared_test_outputs=true
 # bazel doesn't propagate it into the action graph.
 # Resolver:
 #   * NPX_BIN  — datalib_etl_web::latchkey::latchkey_command (the manual
-#                `*_live` tests). Nothing qmd-shaped reaches npx under
-#                bazel any more: both consumers stage a
+#                `*_live` tests). Nothing else reaches npx under
+#                bazel: //datalib/ui:e2e_test stages a
 #                DATALIB_RUNTIME_DIR from Bazel-managed inputs, so
-#                `bundled_command` wins before the npx fallback — the
-#                fixture genrule (//tests/fixtures:ingested_tng_qmd) and
-#                //datalib/ui:e2e_test (see run_e2e.sh).
+#                `bundled_command` wins before the npx fallback
+#                (see run_e2e.sh).
 #
 # That second one matters because of the PATH pinned just below. The
 # e2e test `env_inherit`s PATH, so it ran under the developer's `node`
@@ -90,27 +89,16 @@ test:macos --test_env=LANG=C.UTF-8
 build:macos --macos_minimum_os=11.0
 build:macos --host_macos_minimum_os=11.0
 
-# There used to be a `--sandbox_add_mount_pair=$(HOME)/.cache/qmd/models`
-# here, so the qmd-indexer genrule could read the host's ~2 GB GGUF cache
-# from inside the sandbox instead of re-downloading it. Nothing in the
-# build reads that directory any more: the models are pinned in
-# fetched by a build action (`//third-party/qmd_models`) and reach the two places that need them —
-# `//tests/fixtures:ingested_tng_qmd` and `:materialize_tng_root` — as
-# ordinary bazel inputs. Dropping the mount also drops its onboarding
-# cost, which was a `mkdir -p ~/.cache/qmd/models` that a missing
-# directory turned into a build failure rather than a warning.
-#
-# The host cache still exists and still matters — it is where the SHIPPED
-# app puts models at sync time, which is why
-# `qmd_indexer::default_models_dir()` still has to agree with qmd's own
-# `MODEL_CACHE_DIR`. That agreement is asserted by the rust unit test
-# `default_models_dir_matches_qmd_default` and by
-# `//tools:qmd_model_cache_path_test`.
-#
-# `--action_env=HOME` stays. It was introduced alongside the mount, but
-# it is not specific to it, and the actions that would notice its
-# absence have not been enumerated.
-build --action_env=HOME
+# No `--action_env=HOME`, on Linux or a mac. An inherited `--action_env`
+# value is in the cache key of every C compile, genrule and test, so
+# passing the caller's `HOME` (`/root` in a cloud session, `/github/home`
+# on CI, `/Users/<name>` on a mac) kept machines from sharing those
+# entries. A test still gets one: bazel's test-setup.sh sets
+# `HOME=$TEST_TMPDIR`, private to the test. The build reads no host cache;
+# the embedding model reaches what needs it as an input
+# (`//third-party/embedding_models`), and Apple's toolchain builds without
+# one. A test that does need the real `HOME` (Playwright's browser cache)
+# names it in its own `env_inherit`.
 
 # Workspace status — tools/workspace_status.sh emits STABLE_GIT_HASH +
 # STABLE_GIT_DESCRIBE. Always run so any `--config=release` invocation
@@ -194,14 +182,13 @@ test  --experimental_disk_cache_gc_max_size=150G
 #
 #   * the contributor org, `imbue.buildbuddy.io` — every laptop with the
 #     key, every PR run. What `--config=buildbuddy` reaches.
-#   * the release org, `imbue-release.buildbuddy.io` — written only by
-#     `test.yml` runs of commits on `main` (PR-gated code), read by
-#     `release.yml` on a tag, which builds the same commit and so hits
-#     what main just built. A separate org is a separate subdomain, a
-#     separate cache and its own key: nothing with the contributor key
-#     can write to it, and the release build itself never writes
-#     (`buildbuddy-release-readonly` below). docs/dev/ci.md §"Two
-#     caches" has the setup.
+#   * the release org, `imbue-release.buildbuddy.io` — written and read
+#     only by `test.yml` runs of commits on `main` (PR-gated code). The
+#     name is only a name: a release reads no cache, because this one's
+#     writers run every crate's build script. A separate org is a
+#     separate subdomain, a separate cache and its own key: nothing with
+#     the contributor key can write to it. docs/dev/ci.md §"Two caches"
+#     has the setup.
 build:buildbuddy --bes_results_url=https://imbue.buildbuddy.io/invocation/
 build:buildbuddy --bes_backend=grpcs://imbue.buildbuddy.io
 build:buildbuddy --remote_cache=grpcs://imbue.buildbuddy.io
@@ -218,10 +205,6 @@ build:buildbuddy-release --bes_backend=grpcs://imbue-release.buildbuddy.io
 build:buildbuddy-release --remote_cache=grpcs://imbue-release.buildbuddy.io
 build:buildbuddy-release --experimental_remote_downloader=grpcs://imbue-release.buildbuddy.io
 
-# The tag build's view of the release org: read, never write.
-build:buildbuddy-release-readonly --config=buildbuddy-release
-build:buildbuddy-release-readonly --remote_upload_local_results=false
-
 # Fetch repository downloads through BuildBuddy too, not just action
 # results. Bazel asks BuildBuddy for the URL; BuildBuddy serves it from
 # its cache if it has it, otherwise fetches it once from the origin and
@@ -234,7 +217,7 @@ build:buildbuddy-release-readonly --remote_upload_local_results=false
 # they were ~2.26 GB fetched into every empty CI container, and
 # HuggingFace answered one of those cold fetches with `429 Too Many
 # Requests` on 2026-09-03 and failed the build. They are a build action
-# now (`//third-party/qmd_models`), so they ride the action cache
+# now (`//third-party/embedding_models`), so they ride the action cache
 # instead, and only a run that executes a consumer moves them. The
 # downloader stays for everything else.
 #
@@ -246,12 +229,12 @@ build:buildbuddy --experimental_remote_downloader_local_fallback=true
 
 # BuildBuddy remote EXECUTION, on top of the cache above. Opt-in via
 # `--config=remote`. CI-only, and the reason is toolchain resolution
-# rather than policy: the C/C++ half of this build resolves through
-# bazel's autodetected `local_config_cc`, which is generated from the
-# CLIENT host. Run this from a mac and bazel hands a darwin cc
-# toolchain to a Linux executor. `test.yml` runs *inside* the same
-# devcontainer image the executors run, so there the client and the
-# worker agree — which is what makes it safe there and nowhere else.
+# rather than policy: toolchains are resolved on the CLIENT. A Linux
+# client resolves the hermetic LLVM toolchain MODULE.bazel registers,
+# which runs on any Linux executor; a mac client resolves Apple's and
+# hands a darwin cc toolchain to a Linux executor. `test.yml` runs
+# *inside* the same devcontainer image the executors run, so there the
+# client and the worker agree.
 #
 # The problem it solves is not the critical path, which is a chain of
 # rustc invocations no core count shortens. It is the queue behind it:
@@ -326,6 +309,17 @@ build:remote --jobs=80
 # of the right arch regardless of libc.
 build:musl-x86_64 --platforms=//platforms:linux_x86_64_musl
 build:musl-aarch64 --platforms=//platforms:linux_aarch64_musl
+
+# llama.cpp's CUDA backend (`@llama_cpp//:ggml_cuda_so`, Linux x86_64):
+# the CUDA runtime linked into the module statically, so the module asks
+# the host for the driver and cuBLAS alone. `.github/workflows/cuda.yml` builds it.
+build:cuda --@rules_cuda//cuda:runtime=@cuda//:cuda_runtime_static
+# nvcc compiles host code with the C++ toolchain's compiler, and CUDA
+# 12.9's takes no clang from 20 on, so this build alone uses the
+# machine's gcc rather than the LLVM toolchain (MODULE.bazel). Its
+# actions are then the machine's, and share no cache with another.
+build:cuda --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=0
+build:cuda --extra_toolchains=@local_config_cc_toolchains//:all
 
 # `.bazelrc.user` is per-user (gitignored). Today it carries the
 # BuildBuddy `--remote_header=x-buildbuddy-api-key=...` line and an
@@ -446,6 +440,13 @@ common --enable_platform_specific_config
 # `//tests/fixtures:ingested_tng`.
 build:linux --linkopt=-Wl,--as-needed
 build:linux --host_linkopt=-Wl,--as-needed
+
+# Every Linux C/C++ compile and link goes through the LLVM toolchain
+# MODULE.bazel registers, so the same action has the same cache key on a
+# CI runner, in a cloud VM and on a laptop. Without this, Bazel would
+# still detect the machine's own gcc, and a target that reached it would
+# build quietly and miss the shared cache; with it, that target fails.
+common:linux --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
 
 # rustfmt-check is **always on** for every bazel build/test. This
 # forbids `bazelisk test //...` from running against unformatted code,

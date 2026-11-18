@@ -3,16 +3,16 @@
 #
 #   curl -LsSf https://raw.githubusercontent.com/imbue-ai/datalib/main/scripts/install.sh | sh
 #
-# Downloads the latest release tarball from
+# Downloads the release this script pins, below, from
 #   https://github.com/imbue-ai/datalib/releases
 # unpacks it whole into ${DATALIB_LIB_DIR:-$HOME/.local/lib/datalib} and
 # links each binary into ${DATALIB_INSTALL_DIR:-$HOME/.local/bin}.
 #
 # Whole, because the tarball is more than binaries: `runtime.manifest`
-# beside them names the release's Node runtime (Node plus the `qmd` and
-# `latchkey` package trees), which the binaries fetch, sha256-checked,
-# into ~/.cache/datalib/runtime on their first use — so a sync runs
-# both tools with no Node, npm or npx on the host, and this script
+# beside them names the release's Node runtime (Node plus the `latchkey`
+# package tree), which the binaries fetch, sha256-checked, into
+# ~/.cache/datalib/runtime on their first use — so a sync runs latchkey
+# with no Node, npm or npx on the host, and this script
 # installs nothing but the tarball. The symlinks are what puts the
 # binaries on PATH; they canonicalize their own path before looking
 # beside it, so the link is transparent to them.
@@ -21,9 +21,12 @@
 #   DATALIB_INSTALL_DIR   where the binaries are linked (default ~/.local/bin)
 #   DATALIB_LIB_DIR       where the tarball is unpacked (default
 #                             ~/.local/lib/datalib); replaced on every install
-#   DATALIB_VERSION       release tag to install (default: latest)
+#   DATALIB_VERSION       release tag to install (default: the one pinned below;
+#                             `latest` also means that one). Any other tag is
+#                             checked only against the checksum beside it
 #   DATALIB_LIBC          Linux only: 'gnu' or 'musl' (default:
-#                             auto-detected; see libc detection below)
+#                             auto-detected; see libc detection below).
+#                             Set, it is used as given
 #
 # Supported platforms (one published release tarball each):
 #   macOS arm64          -> aarch64-apple-darwin
@@ -39,6 +42,23 @@ INSTALL_DIR="${DATALIB_INSTALL_DIR:-${HOME}/.local/bin}"
 LIB_DIR="${DATALIB_LIB_DIR:-${HOME}/.local/lib/datalib}"
 VERSION="${DATALIB_VERSION:-latest}"
 
+# The release installed by default, and each tarball's hash. Not
+# `releases/latest`: anyone holding write access can move that to a release of
+# their own (docs/dev/security_posture.md). So this is as trusted as a merge to
+# `main`, and nothing later can change what it installs.
+# scripts/release/pin_release.py writes these.
+PINNED_VERSION="v0.54.1"
+pinned_sha256() {
+    case "$1" in
+        aarch64-apple-darwin) echo 6c3fb44aacee2ff2a4ae51f3f9ca9cb4f8c40f35a33ca0189bc833ea3ba6b223 ;;
+        aarch64-unknown-linux-gnu) echo 94c4197e90561d8ed437e55d3c90030335bee7a885e2b601cfee8212043b17fc ;;
+        aarch64-unknown-linux-musl) echo 37ac1089611de7f65a67262cb80a7fdfb2ba97b921cce753c6b7e6d5673bb9f9 ;;
+        x86_64-unknown-linux-gnu) echo eaa50bfb845a58c05cf4bb447fe0eab4280973b168d59f44f5b9f9e9e1b609e6 ;;
+        x86_64-unknown-linux-musl) echo 419769b4d8ef53327db15aacbb40680cde7e17904907721d564d117b848b71bb ;;
+        *) echo "" ;;
+    esac
+}
+
 say() { printf 'datalib-install: %s\n' "$1"; }
 err() { printf 'datalib-install: error: %s\n' "$1" >&2; exit 1; }
 
@@ -51,9 +71,12 @@ err() { printf 'datalib-install: error: %s\n' "$1" >&2; exit 1; }
 # can't run the gnu builds, so pick the fully-static musl tarball
 # there. Every musl system ships its dynamic loader at
 # /lib/ld-musl-<arch>.so.1 — its presence is the detection signal.
-# glibc hosts default to the gnu build (the long-standing default);
-# set DATALIB_LIBC=musl to force the static build anywhere — it
-# runs on any Linux of the right arch regardless of libc.
+# A glibc host gets the gnu build when its glibc is at least
+# GLIBC_FLOOR, the oldest the gnu builds run on (Ubuntu 24.04's;
+# docs/dev/release_steps.md §"The Linux floor"), and the musl build
+# below it. Set DATALIB_LIBC=musl to force the static build anywhere —
+# it runs on any Linux of the right arch regardless of libc.
+GLIBC_FLOOR="2.39"
 os="$(uname -s)"
 arch="$(uname -m)"
 case "${os}/${arch}" in
@@ -72,6 +95,31 @@ case "${os}/${arch}" in
                     break
                 fi
             done
+        fi
+        if [ -z "${DATALIB_LIBC:-}" ] && [ "${libc}" = "gnu" ]; then
+            # `getconf GNU_LIBC_VERSION` prints `glibc 2.39`.
+            host_glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
+            host_glibc="${host_glibc#glibc }"
+            host_major="${host_glibc%%.*}"
+            host_minor="${host_glibc#*.}"
+            host_minor="${host_minor%%.*}"
+            case "${host_major}.${host_minor}" in
+                *[!0-9.]* | .* | *.)
+                    say "could not tell this host's glibc version; installing the glibc build,"
+                    say "which needs glibc ${GLIBC_FLOOR} or newer. If datalib-step then fails with"
+                    say "'GLIBC_2.xx not found', install again with DATALIB_LIBC=musl."
+                    ;;
+                *)
+                    if [ "${host_major}" -lt "${GLIBC_FLOOR%%.*}" ] || {
+                        [ "${host_major}" -eq "${GLIBC_FLOOR%%.*}" ] \
+                            && [ "${host_minor}" -lt "${GLIBC_FLOOR#*.}" ]
+                    }; then
+                        say "this host has glibc ${host_major}.${host_minor}, older than the ${GLIBC_FLOOR} the glibc build"
+                        say "needs; installing the fully-static musl build instead"
+                        libc="musl"
+                    fi
+                    ;;
+            esac
         fi
         case "${libc}" in
             gnu | musl) ;;
@@ -92,13 +140,14 @@ need mv
 need uname
 
 # --- resolve download URL ---
-if [ "${VERSION}" = "latest" ]; then
-    url="https://github.com/${REPO}/releases/latest/download/${TARBALL}"
-    sha_url="${url}.sha256"
-else
-    url="https://github.com/${REPO}/releases/download/${VERSION}/${TARBALL}"
-    sha_url="${url}.sha256"
+expected=""
+if [ "${VERSION}" = "latest" ] || [ "${VERSION}" = "${PINNED_VERSION}" ]; then
+    VERSION="${PINNED_VERSION}"
+    expected="$(pinned_sha256 "${TRIPLE}")"
+    [ -n "${expected}" ] || err "this script pins no hash for ${TRIPLE}"
 fi
+url="https://github.com/${REPO}/releases/download/${VERSION}/${TARBALL}"
+sha_url="${url}.sha256"
 
 # --- download to tmpdir ---
 tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t datalib-install)"
@@ -110,26 +159,29 @@ if ! curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 \
     err "download failed (${url})"
 fi
 
-# --- optional checksum verification ---
-if curl --proto '=https' --tlsv1.2 -fsSL --retry 2 \
-        -o "${tmpdir}/${TARBALL}.sha256" "${sha_url}" 2>/dev/null; then
-    # The .sha256 file lists the bare filename, so cd into tmpdir for
-    # the `-c` check. Linux ships `sha256sum`; macOS ships `shasum`.
-    # Both consume the same "HASH  filename" format the release writes.
-    if command -v sha256sum >/dev/null 2>&1; then
-        say "verifying checksum"
-        (cd "${tmpdir}" && sha256sum -c "${TARBALL}.sha256") \
-            || err "checksum verification failed"
-    elif command -v shasum >/dev/null 2>&1; then
-        say "verifying checksum"
-        (cd "${tmpdir}" && shasum -a 256 -c "${TARBALL}.sha256") \
-            || err "checksum verification failed"
-    else
-        say "no sha256 tool found; skipping checksum verification"
+# --- checksum verification ---
+# A tarball that cannot be checked is not installed. A tag this script does not
+# pin is checked against the sidecar from its own release, which catches a
+# damaged download rather than a release someone rewrote.
+if [ -z "${expected}" ]; then
+    if ! curl --proto '=https' --tlsv1.2 -fsSL --retry 2 \
+            -o "${tmpdir}/${TARBALL}.sha256" "${sha_url}"; then
+        err "could not fetch the checksum (${sha_url}); not installing"
     fi
-else
-    say "checksum file not published; skipping verification"
+    read -r expected _ < "${tmpdir}/${TARBALL}.sha256" || true
 fi
+# Linux ships `sha256sum`; macOS ships `shasum`.
+if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "${tmpdir}/${TARBALL}")"
+elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "${tmpdir}/${TARBALL}")"
+else
+    err "need sha256sum or shasum to check the download; not installing"
+fi
+say "verifying checksum"
+actual="${actual%% *}"
+[ -n "${expected:-}" ] && [ "${expected}" = "${actual}" ] \
+    || err "checksum mismatch for ${TARBALL}: expected '${expected:-}', got '${actual}'; not installing"
 
 # --- extract ---
 say "extracting"
@@ -175,10 +227,10 @@ say "unpacked into ${LIB_DIR}"
 say "setting it up? start with \`datalib-step help\` (the agent guide: ${LIB_DIR}/docs/agent_user.md)"
 say "linked:${installed} -> ${INSTALL_DIR}"
 if [ -f "${LIB_DIR}/runtime.manifest" ]; then
-    say "the Node runtime for qmd and latchkey is fetched on first use (once per release,"
+    say "the Node runtime for latchkey is fetched on first use (once per release,"
     say "sha256-checked, into ${XDG_CACHE_HOME:-~/.cache}/datalib/runtime); \`datalib-step pull-runtime\` does it now."
 else
-    say "note: this tarball names no Node runtime; semantic search and latchkey need"
+    say "note: this tarball names no Node runtime; latchkey needs"
     say "      DATALIB_RUNTIME_DIR pointed at one, or DATALIB_ALLOW_NPX=1 with Node on the host."
 fi
 
@@ -188,7 +240,8 @@ case ":${PATH}:" in
         ;;
     *)
         say ""
-        say "${INSTALL_DIR} is not on your PATH. Add it with one of:"
+        say "${INSTALL_DIR} is not on your PATH. If nothing else links these binaries"
+        say "onto it, so that \`datalib-step\` does not run in a new shell, add it with one of:"
         say "  echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.zshrc"
         say "  echo 'export PATH=\"${INSTALL_DIR}:\$PATH\"' >> ~/.bashrc"
         ;;
