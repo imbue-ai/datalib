@@ -330,10 +330,12 @@ test.describe("toolbar", () => {
       await page.setViewportSize({ width: 1280, height: 800 });
       for (let i = 0; i < larger; i++)
         await page.getByRole("button", { name: "More spacious" }).click();
-      // 800px leaves the name room whatever its random suffix measures, in
-      // any browser's fonts: at 700px on a mac the search box is already at
-      // its floor and the name a few pixels short.
-      for (const width of [800, 420]) {
+      // At 700px the search box has given up about 80px and is still far
+      // above its floor, so the name keeps its room whatever its random
+      // suffix measures, in any browser's fonts. Anything else in the
+      // toolbar takes its room from the box: a pill there leaves it at its
+      // floor by 700px, and the name short.
+      for (const width of [700, 420]) {
         await page.setViewportSize({ width, height: 800 });
         const b = (await box.boundingBox())!;
         const l = (await lib.boundingBox())!;
@@ -341,7 +343,7 @@ test.describe("toolbar", () => {
         expect(b.width).toBeGreaterThanOrEqual(180);
         expect(b.x + b.width).toBeLessThanOrEqual(width);
         expect(b.x).toBeGreaterThanOrEqual(l.x + l.width);
-        // At 800px the search box has room to give; at 420px it is at
+        // At 700px the search box has room to give; at 420px it is at
         // its floor and the name gives way.
         await expect.poll(truncated).toBe(width === 420);
       }
