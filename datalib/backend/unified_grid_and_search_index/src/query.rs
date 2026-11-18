@@ -321,17 +321,24 @@ fn field<C: Column>(
                 Field::After
             })
         }
-        "is" if !t().is_empty() => t()
-            .iter()
-            .find(|(word, _)| *word == value)
-            .map(|(_, c)| Field::Is(*c))
-            .ok_or_else(|| {
-                let words: Vec<String> = t().iter().map(|(w, _)| format!("`is:{w}`")).collect();
-                format!(
+        "is" if !t().is_empty() => match t().iter().find(|(word, _)| *word == value) {
+            Some((_, c)) => Ok(Field::Is(*c)),
+            None if terms_keys::IS_NODE_WORDS.contains(&value) => {
+                Ok(Field::Terms(&terms_keys::IS_NODE))
+            }
+            None => {
+                let words: Vec<String> = t()
+                    .iter()
+                    .map(|(w, _)| *w)
+                    .chain(terms_keys::IS_NODE_WORDS.iter().copied())
+                    .map(|w| format!("`is:{w}`"))
+                    .collect();
+                Err(format!(
                     "`is:{value}` is not something the search knows; try {}",
                     words.join(" or ")
-                )
-            }),
+                ))
+            }
+        },
         _ => table::key::<C::Table>(key)
             .map(|k| within_vocabulary(key, k, value).map(|()| Field::Column(k)))
             .unwrap_or_else(|| {
@@ -441,6 +448,27 @@ mod tests {
         let q = parse_query("treemap is:document -is:document");
         assert_eq!(q.documents(), Some(false));
         assert_eq!(q.free_text, "treemap");
+    }
+
+    /// `is:folder` is no column: it reads the node kinds the terms hold,
+    /// and leaves the documents filter alone. A word neither knows is
+    /// refused, naming both.
+    #[test]
+    fn is_folder_reads_the_terms() {
+        let q = parse_query("bridge is:folder");
+        assert_eq!(q.documents(), None);
+        assert_eq!(q.free_text, "bridge");
+        assert!(matches!(
+            q.terms[0].field,
+            Field::Terms(k) if *k == terms_keys::IS_NODE
+        ));
+        assert!(!q.terms[0].negate);
+        assert!(parse_query("-is:folder").terms[0].negate);
+        let refusal = parse_query("is:unread").refusal().unwrap();
+        assert!(
+            refusal.contains("`is:document`") && refusal.contains("`is:folder`"),
+            "{refusal}"
+        );
     }
 
     #[test]

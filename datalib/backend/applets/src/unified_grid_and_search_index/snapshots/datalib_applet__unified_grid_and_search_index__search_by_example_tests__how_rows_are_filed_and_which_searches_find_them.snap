@@ -11,6 +11,7 @@ bridge-thread
     participant Q                                        supplied
     participant slack:T1701/U0000002                     supplied
     participant slack:T1701/U0000003                     supplied
+    is         folder                                   derived
 
 captain-text
   columns
@@ -44,6 +45,7 @@ dm-thread
     title      @Data                                    derived
     participant slack:T1701/U0000003                     supplied
     subject    slack:T1701/U0000002                     supplied
+    is         folder                                   derived
 
 picard-card
   columns
@@ -98,6 +100,7 @@ riker-thread
     participant email:picard@enterprise.org              supplied
     participant email:riker@enterprise.org               supplied
     participant email:troi@enterprise.org                supplied
+    is         folder                                   derived
 
 senior-staff-card
   columns
@@ -118,6 +121,7 @@ text-thread
   terms
     id         text-thread                              derived
     title      Number One                               derived
+    is         folder                                   derived
 
 worf-slack
   columns

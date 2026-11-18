@@ -45,6 +45,8 @@ use tokio::sync::Mutex;
 
 use crate::section::{layout, Section};
 
+mod node_rows;
+
 /// Serializes concurrent writers against one doltlite index pool, and
 /// optionally batches every write into one transaction.
 ///
@@ -1266,6 +1268,9 @@ async fn retire_source(
         let remade = remove_documents(write_lock, source, &documents, Some(held), progress).await?;
         let mut guard = write_lock.acquire().await?;
         let conn = guard.conn();
+        node_rows::bring_in_line(conn, write_lock, source)
+            .await
+            .with_context(|| format!("drop {source}'s node rows"))?;
         if remade {
             create_search_indexes(conn).await?;
         }
@@ -1589,6 +1594,12 @@ async fn apply_source(
         summary.rows_inserted += rows;
         let mut guard = write_lock.acquire().await?;
         let conn = guard.conn();
+        if !docs.is_empty() || !removed.is_empty() {
+            let (kept, dropped) = node_rows::bring_in_line(conn, write_lock, stanza)
+                .await
+                .with_context(|| format!("write {stanza}'s node rows"))?;
+            tracing::debug!(source = %stanza, kept, dropped, "node rows in line");
+        }
         if remade {
             let started = Instant::now();
             create_search_indexes(conn).await?;
@@ -1987,6 +1998,9 @@ async fn apply_markdown(
     for node in &md.data_nodes {
         insert_node(conn, &md.markdown_uuid, node).await?;
     }
+    // A node's row answers `is:folder` by what its carriers say, so its
+    // terms are rewritten whenever one of them is.
+    write_lock.note_changed(md.data_nodes.iter().map(|n| n.uuid.clone()));
     for filing in &md.filings {
         insert_filing(conn, &md.markdown_uuid, filing).await?;
     }
@@ -3627,6 +3641,120 @@ mod source_cursor_tests {
             .await
             .unwrap();
         assert_eq!((count("data_nodes").await, count("filings").await), (0, 0));
+    }
+
+    /// A data node no document holds a row for (a channel, the workspace
+    /// above it) gets a row of its own, from what its carriers say, and a
+    /// place answers `is:folder`, a document's row among them. The row stays
+    /// while any document carries its node and goes with the last; a node
+    /// that is a document's row gets no second one.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_node_without_a_row_gets_one_while_a_document_carries_it() {
+        use datalib_schema::data_nodes::{DataNodeRow, Lineage};
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        let sources = ["s".to_string()];
+        let carrying = |uuid: &str, chat_is_a_place: bool| {
+            let mut d = doc(root, "s", uuid, "body");
+            let workspace = DataNodeRow::new(uuid, "ws", "s", "Workspace")
+                .named(Some("Enterprise".to_string()))
+                .place();
+            let at = Lineage::top().below(&workspace);
+            let channel = DataNodeRow::new(uuid, "chan", "s", "Channel")
+                .named(Some("bridge".to_string()))
+                .place()
+                .under(&at);
+            let at = at.below(&channel);
+            let mut chat = DataNodeRow::new(uuid, uuid, "s", "Chat").read_together();
+            if chat_is_a_place {
+                chat = chat.place();
+            }
+            d.data_nodes = vec![workspace, channel, chat.under(&at)];
+            d
+        };
+        let build = || async {
+            build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+                .await
+                .unwrap();
+        };
+        let node_rows = || async {
+            sqlx::query_as::<
+                _,
+                (
+                    String,
+                    String,
+                    Option<String>,
+                    Option<String>,
+                    Option<String>,
+                ),
+            >(
+                "SELECT uuid, kind, conversation_name, parent_uuid, source_id FROM grid_rows \
+                 WHERE markdown_uuid IS NULL ORDER BY uuid",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        };
+        let folders = || async {
+            sqlx::query_scalar::<_, String>(
+                "SELECT r.uuid FROM terms t JOIN rows r ON r.row_id = t.row_id \
+                 JOIN vals v ON v.val_id = t.val_id WHERE t.kind = ? AND v.value = ? \
+                 ORDER BY r.uuid",
+            )
+            .bind(i64::from(
+                datalib_schema::search_terms::SearchTermKind::Is.code(),
+            ))
+            .bind(datalib_schema::search_terms::IS_FOLDER)
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        };
+        let rows_of_md_a = || async {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM grid_rows WHERE uuid = 'md-a'")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        };
+
+        render(
+            root,
+            "s",
+            &[carrying("md-a", true), carrying("md-b", false)],
+        );
+        build().await;
+        let s = || Some("s".to_string());
+        assert_eq!(
+            node_rows().await,
+            [
+                (
+                    "chan".to_string(),
+                    "Channel".to_string(),
+                    Some("bridge".to_string()),
+                    Some("ws".to_string()),
+                    s()
+                ),
+                (
+                    "ws".to_string(),
+                    "Workspace".to_string(),
+                    Some("Enterprise".to_string()),
+                    None,
+                    s()
+                ),
+            ]
+        );
+        assert_eq!(rows_of_md_a().await, 1);
+        assert_eq!(folders().await, ["chan", "md-a", "ws"]);
+
+        unrender(root, "s", "md-a");
+        build().await;
+        assert_eq!(node_rows().await.len(), 2, "md-b still carries both");
+        assert_eq!(folders().await, ["chan", "ws"]);
+
+        unrender(root, "s", "md-b");
+        build().await;
+        assert_eq!(node_rows().await, []);
+        assert_eq!(folders().await, Vec::<String>::new());
     }
 
     /// A store from a build before #962 lacked `source_contacts`, failed
