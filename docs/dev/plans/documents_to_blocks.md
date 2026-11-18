@@ -1,8 +1,8 @@
 # Moving from documents to blocks: grouping chosen when a search runs
 
 **Status: proposal (2026-11-17). Steps 1, 2, 3a, 3b and 3c have
-landed (#1765, #1770, #1775, #1782, #1818); nothing else has
-started.** Facts about the tree were checked against
+landed (#1765, #1770, #1775, #1782, #1818), and 4a is under way;
+nothing else has started.** Facts about the tree were checked against
 the code on 2026-11-16; file references are to that tree.
 
 ## Words
@@ -529,9 +529,36 @@ against the eval before the next.
      taken its group's name: its function is
      `unified_grid_and_search_index`, where it was `grid_index`
      (`index_step_name.rs`).
-4. **Grouping when a search runs.** Search ranks items and groups them
-   by the grouping asked for. `is:document` becomes an alias. The eval
-   compares the grouped answer with today's.
+4. **Grouping when a search runs.** In two parts:
+   - **4a. Every data node is a row.** Nearly every container already is
+     a document's row under its own uuid: in one real library, 60,395
+     of 63,976 data nodes, every thread, chat, event and session. The
+     590 that were not are nearly all places: Slack channels, DMs and
+     the workspace, email labels and accounts, Claude Code projects,
+     calendars, repositories, an address book. The index step writes
+     each of those a row from the `data_nodes` its documents carry, kept
+     while any document carries it, with no `markdown_uuid`
+     (`grid_rows.md` §"`parent_uuid`, …"). Still to come in 4a:
+     - **A path on each data node.** The ancestors' ids from the top of
+       its source, so everything under a node is a prefix range, as
+       Lightroom keeps a `genealogy` on its keywords and collections and
+       none on its photos. A block reaches the tree through
+       `parent_uuid`. Counts are worked out when asked, as a node's own
+       children or as everything under it, never stored.
+     - **`is:<kind>`** (`is:channel`, `is:label`), a word each renderer
+       declares for its data nodes, written as a search term. There is no
+       word for every place: `folder` is what a Drive, Lightroom or
+       Messenger folder is called, and `place:` is already where a thing
+       is on the map.
+   - **4b. Ranking blocks, grouping when asked.** Search ranks blocks,
+     keeping every block a ranking finds where it now keeps the best
+     one per document, and rolls them up to the grouping asked for:
+     `group:document` (today's answer, ranked as today, which
+     `is:document` stays an alias for), `group:place` (each hit's
+     `place_uuid`, ranked first by its best block), or `group:none`, a
+     row per block and nothing to land. The eval scores a target per
+     block and per document, and compares the grouped answer with
+     today's.
 5. **The viewer reads items.** `DocCard` opens what is read together at an
    item and pages through it, each page drawn by the markdown function
    from the stored bodies. The `.md` files stop being written, and with

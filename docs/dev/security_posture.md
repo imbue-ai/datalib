@@ -215,7 +215,8 @@ tag ruleset says nothing about this: no tag moves.
   with a certificate Sigstore issues for the job's GitHub OIDC token, so it
   says what GitHub says ran, and it is entered in Sigstore's public
   transparency log, `rekor.sigstore.dev`, which GitHub cannot quietly edit
-  (measured on a `latchkey-curl-shims` attestation). GitHub also attests each immutable release
+  (measured on a `latchkey-curl-shims` attestation, and on v0.55.0's,
+  datalib's first). GitHub also attests each immutable release
   (`gh release verify v0.51.0` passes). As we read it, that says what a release
   held when it locked, not who built it, so a writer's own release on an old
   tag would likely get one too (not tried); the build attestation is the one
@@ -231,15 +232,15 @@ tag ruleset says nothing about this: no tag moves.
   runs the check in [`first_time_user.md`](../user/first_time_user.md)
   §"Checking who built what you downloaded" by hand.
 
-### What has not been shown
+### What a tag's run has shown
 
-`publish_release.py`'s test runs it against a stand-in for GitHub's API, and
-its real calls, like the `attest` job's, run only on a tag. v0.55.0's run
-published, and `pin_release.py` then passed `gh attestation verify` on every
-tarball and on the image (measured). A swapped
-asset, an extra draft or a tag taken mid-run has not been met on a real
-release. Whether the settings below hold is something only those commands can
-say.
+`publish_release.py` has published every release since v0.52.0. The `attest`
+job first ran on v0.55.0. It read the subjects file, signed an attestation for
+every asset and for both images, pushed the images' attestations to ghcr.io,
+and its own `gh attestation verify` passed on each. The same check run from a
+laptop passes for that release's mac tarball, naming `release.yml` at the tag
+and its commit. Whether the settings below hold is something only those runs
+can say.
 
 ## A bad wheel reaches PyPI
 

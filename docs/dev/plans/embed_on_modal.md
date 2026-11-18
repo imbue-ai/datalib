@@ -4,14 +4,15 @@
 under Bazel (#1750), the embedder loading it (#1752), the module run on
 Modal's T4, A100 and H100 in the published image with several prompts
 per call (#1801, § "Measured on Modal"), and `datalib-step
-embed-prompts`. Step 3 is built and not yet tried by a tag: the module
+embed-prompts`. Step 3 shipped in v0.55.0 (2026-11-18): the module
 as a release asset with NVIDIA's licenses beside it, the `-cuda` image
 whose CUDA layers keep their digests from one release to the next
 (docs/dev/docker.md § "The CUDA variant"), and a tarball install
 fetching the module on first use (docs/dev/runtime_fetch.md § "The CUDA
-module"). Step 4 is built and tested against a stand-in for Modal's
-SDK, not yet run against Modal: `embed_on_modal_from_n_chunks`, and the
-driver in `datalib/backend/datalib_step/src/modal/`. Step 5 is done:
+module"). Step 4, `embed_on_modal_from_n_chunks` and the driver in
+`datalib/backend/datalib_step/src/modal/`, has run once against Modal,
+on the TNG fixture (§ "Measured on Modal"), and not yet on a real
+library. Step 5 is done:
 docs/dev/security_posture.md § "What leaves the machine for Modal".
 Facts marked _to check_ have not been measured or read from source
 yet.**
@@ -53,7 +54,9 @@ plan it and refuse a value that is not a whole number.
 
 The 5,000 in the example is a starting point, not a measurement: about
 seven minutes of a Mac's Metal at 12 chunks a second, against a Modal
-container's start (the image, then the model onto the GPU), which is
+container's start (the image, then the model onto the GPU). One start has
+been measured: about 107 s, the first pull of the image on that account
+(§ "Measured on Modal"). A start with the image already on Modal is
 _to check_.
 
 ## What leaves the machine
@@ -236,6 +239,22 @@ the GPU, _to check_ at scale). Twenty T4s would take the library above
 in about half an hour. What caps it is the account's concurrency limit
 and what Modal has free of a GPU type (_to check_).
 
+**Through the step, once.** On 2026-11-18, `datalib-step` built from
+`main` (version 0.55.0) ran `claude-api/embed` over a TNG fixture root
+with its inference cache deleted and `embed_on_modal_from_n_chunks = 0`.
+It used v0.55.0's Node runtime (Modal's SDK 0.11.1), `~/.modal.toml` as
+the sign-in, and the default image and GPU. All 74 owed chunks (16,086
+bytes of prompt text) went in one slice to one T4 Sandbox from
+`ghcr.io/imbue-ai/datalib:0.55.0-cuda`, and the step said: "74 prompts on
+T4 in 108.9 s", then "1 T4 Sandbox(es), 1 min 49 s of Sandbox time, about
+$0.02 at list price". At the T4's rate above, the embedding itself is
+about 2 s of that, so nearly all of it is the Sandbox's start: pulling
+the image, which this account had not pulled before, and loading the
+model. Every vector came back, and against the fixture's own vectors for
+the same chunks the worst cosine was 0.99966 and the median 0.99977.
+Still to measure: a start once the image is on Modal, a source of a real
+library, many slices at once, and the estimate against the bill.
+
 ## How the step drives Modal
 
 `datalib-step` is Rust, Modal has no Rust SDK, and its Python SDK, the
@@ -311,10 +330,10 @@ into `datalib-step` and run with `node --eval`; it imports npm's `modal`
 A Sandbox's GPU-seconds cost what a Function's do; its CPU and memory
 cost three times a Function's, a small share of the bill. Its output is
 gone if the step stops watching, which is why nothing is kept for later.
-_To check_: that a Sandbox can pull from `ghcr.io` (Modal's examples use
-Docker Hub), whether the SDK reads a Sandbox's stdout as a stream or
-only whole (a slice small enough to read whole works either way), and
-the largest payload a Sandbox's stdin and stdout carry.
+A Sandbox pulls from `ghcr.io` (Modal's examples use Docker Hub): the
+run above did. _To check_: whether the SDK reads a Sandbox's stdout as a
+stream or only whole (a slice small enough to read whole works either
+way), and the largest payload a Sandbox's stdin and stdout carry.
 
 **TODO (#1815): durable batch jobs, once we can reach them.** On a
 deployed Function, Modal's `spawn()` and `spawn_map()` keep running when
@@ -350,19 +369,17 @@ supported"; the issue says what to check for in a new SDK release.
    tested here on the CPU against the step's own vectors.~~ Done:
    `datalib_step/src/embed_prompts.rs`, and its end-to-end test in
    `tests/step_tests/embed_prompts.rs` against the TNG fixture's cache.
-3. The module as a release asset, its license notices, the fetch for a
-   tarball install, and the `-cuda` image with the module and cuBLAS.
-   Built, not yet run by a tag: the release's `cuda`,
-   `docker-image-cuda` and `docker-publish-cuda` jobs,
-   `scripts/release/build_cuda.sh` and `stage_cuda.sh`, the
-   Dockerfile's `CUDA` stage, `third-party/llama_cpp/CUDA-NOTICE.md`
-   with NVIDIA's own `LICENSE` files, and the `cuda` line in
-   `runtime.manifest` that `datalib_runtime::cuda_module` fetches from
-   where there is a driver. Whether releases carry NVIDIA's files at all
-   is the user's decision.
+3. ~~The module as a release asset, its license notices, the fetch for a
+   tarball install, and the `-cuda` image with the module and cuBLAS.~~
+   Done: v0.55.0 carries `ggml-cuda-x86_64-unknown-linux-gnu.tar.gz`
+   and `ghcr.io/imbue-ai/datalib:0.55.0-cuda`, built by the release's
+   `cuda`, `docker-image-cuda` and `docker-publish-cuda` jobs. Its first
+   tag failed in `cuda`, and #1853 fixed that before the tag was cut
+   again. What the `cuda` job costs a release is #1861.
 4. The Modal half behind `embed_on_modal_from_n_chunks`: Sandboxes from
-   the `-cuda` image driven by the JavaScript SDK. Built and tested
-   against a stand-in for the SDK whose Sandboxes run locally; to be
+   the `-cuda` image driven by the JavaScript SDK. Tested against a
+   stand-in for the SDK whose Sandboxes run locally, and run once
+   against Modal on the TNG fixture (§ "Measured on Modal"); to be
    measured on one small source of a real library, then a large one,
    which is where the _to check_ items above get answered.
 5. ~~The security posture section, and `docs/dev/config_model.md` and
