@@ -561,8 +561,10 @@ The test makes three pipeline runs, each asserting something different:
 
 1. **Cold** — snapshots the produced data tree, one `.snap` per file
    (each group's `ingest/`, `render_markdown/` and, for a time-series
-   source, `render_time_series/`, plus the time-series index), a
-   manifest and the layout invariants. A snapshot of a file the bake no
+   source, `render_time_series/`, plus the time-series index), one per
+   document a render store holds, as the store spells it, at
+   `<group>/render_markdown/<shard>/<id>.md`, a manifest and the
+   layout invariants. A snapshot of a file the bake no
    longer writes is deleted, and so is the folder of a group that is no
    longer in the root, which is what renaming a group leaves. Then it makes the contacts listed in
    `contacts.toml` (beside the config) in the contacts app, asserts every

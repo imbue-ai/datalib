@@ -302,9 +302,9 @@ const ROW_COUNT_ONLY_STEPS: &[(&str, &str)] = &[
 ///   of rows whose values the provider's own fixtures pin; here the
 ///   count says the step read the files, and the rendered plots say
 ///   what it made of them.
-/// - `render_inputs`, `sections` and the agent transcripts' `records`
-///   repeat, row by row, what the `.md` files, the `index_text`
-///   snapshots and `grid_rows` beside them already show.
+/// - `render_inputs`, `sections`, `drawings` and the agent transcripts'
+///   `records` repeat, row by row, what the documents' `.md` snapshots, the
+///   `index_text` snapshots and `grid_rows` beside them already show.
 ///
 /// Notion's `tree` and `listed_pages` are the first kind, and the one
 /// pair here that is also a tripwire. A roots source walks down from its
@@ -342,6 +342,7 @@ const ROW_COUNT_ONLY_TABLES: &[(&str, &str)] = &[
     ("codex", "records"),
     ("*", "render_inputs"),
     ("*", "sections"),
+    ("*", "drawings"),
 ];
 
 /// The step a store sits in: the `<sub>` of
@@ -632,6 +633,9 @@ fn manual_e2e_live_sync_golden() {
             snapshot_tree(&dir, &format!("{stanza}/{sub}"), &mut manifest);
         }
     }
+    for stanza in &stanzas {
+        snapshot_documents(&data_root, stanza, &mut manifest);
+    }
     snapshot_index_text(&data_root, &cfg_out, &mut manifest);
     manifest.sort();
 
@@ -650,19 +654,10 @@ fn manual_e2e_live_sync_golden() {
         assert_snapshot!("manifest", manifest.join("\n"));
     });
 
-    // The index is where a problem ends up: a fetch-stage row is copied
-    // raw → render → index, so this one table shows every problem the
-    // run left visible to the grid, under the id it was first minted
-    // with. The rest of the index is the union of the render stores
-    // snapshotted above and is deliberately not dumped again.
-    insta::with_settings!({
-        snapshot_path => snap_base().join("unified_grid_and_search_index").display().to_string(),
-        prepend_module_to_snapshot => false,
-        sort_maps => true,
-        description => "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite#problems",
-    }, {
-        assert_json_snapshot!("problems", index_problems(&data_root));
-    });
+    // The index itself is the union of the render stores snapshotted
+    // above and is not dumped again. A step's problems stay in its own
+    // stores (etl/README.md § "Problems stay in the step that found
+    // them"), so each store's dump above shows them.
 
     // The search index: what each searched source holds, and what its
     // embed step left.
@@ -1456,22 +1451,6 @@ async fn latest_sync_run(path: &Path) -> Value {
     })
 }
 
-/// The unified grid and search index's `problems` table, volatile stamps redacted, ordered
-/// by `problem_uuid` like every dumped table.
-fn index_problems(data_root: &Path) -> Value {
-    let db =
-        data_root.join("unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite");
-    let mut dump = dump_store(&db);
-    let mut rows = match &mut dump {
-        Value::Object(map) => map
-            .remove("problems")
-            .unwrap_or_else(|| panic!("{}: no `problems` table", db.display())),
-        other => panic!("{}: dump is not an object: {other}", db.display()),
-    };
-    strip_volatile(&mut rows);
-    rows
-}
-
 /// Every term in the grid index's search terms, decoded from its dictionary, one
 /// line each as `kind<TAB>value<TAB>uuid`, sorted.
 fn search_terms(data_root: &Path) -> String {
@@ -1726,11 +1705,40 @@ const NON_CONTENT_TABLES: &[&str] = &[
 /// then holds that table to the byte. Empty is the goal.
 const KNOWN_STAMP_LEAKS: &[(&str, &str)] = &[];
 
-/// Walk `root` and emit one snapshot per file. Each snapshot lives at
-/// `<snap_base()>/<top>/<rel_dir>/<filename>.snap` (i.e. under
-/// `$DATALIB_MANUAL_E2E_DIR/snapshots`), mirroring the data layout.
-/// `manifest` collects the snapshot key (top + rel path)
-/// for the overall manifest assertion.
+/// Every document `stanza`'s render store holds, as the store spells it
+/// (what the viewer shows and `datalib-step markdown` exports), at
+/// `<stanza>/render_markdown/<shard>/<id>.md`: where render wrote the page
+/// as a file until the store became its one copy, so a page's diff runs
+/// across that change. Which documents search covers is the `markdowns`
+/// table's `searchable`, in the store's own snapshot beside these.
+fn snapshot_documents(data_root: &Path, stanza: &str, manifest: &mut Vec<String>) {
+    let dir = data_root.join(stanza).join("render_markdown");
+    if !dir.is_dir() {
+        return;
+    }
+    let Some(store) =
+        datalib_etl_render::indexed_markdown::IndexedMarkdownStore::open_for_reading(&dir, None)
+            .expect("open a render store")
+    else {
+        return;
+    };
+    let texts = store.document_texts().expect("read the documents");
+    store.close();
+    for (uuid, s) in texts {
+        let shard = &uuid[uuid.len() - 2..];
+        let key = format!("{stanza}/render_markdown/{shard}/{uuid}.md");
+        manifest.push(key.clone());
+        let s = normalize_str(&s);
+        insta::with_settings!({
+            snapshot_path => snap_base().join(stanza).join("render_markdown").join(shard).display().to_string(),
+            prepend_module_to_snapshot => false,
+            description => key,
+        }, {
+            assert_snapshot!(format!("{uuid}.md"), s);
+        });
+    }
+}
+
 /// Every searchable document's text as the search index embeds it, chunk
 /// by chunk, beside its rendered page: `<source>/index_text/<shard>/<id>.txt`,
 /// for each source `unified_grid_and_search_index` searches.
@@ -1802,6 +1810,11 @@ fn index_text_documents(text: &str) -> Vec<(String, String, String)> {
     docs
 }
 
+/// Walk `root` and emit one snapshot per file. Each snapshot lives at
+/// `<snap_base()>/<top>/<rel_dir>/<filename>.snap` (i.e. under
+/// `$DATALIB_MANUAL_E2E_DIR/snapshots`), mirroring the data layout.
+/// `manifest` collects the snapshot key (top + rel path)
+/// for the overall manifest assertion.
 fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {
     if !root.is_dir() {
         return;
