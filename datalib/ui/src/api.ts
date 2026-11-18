@@ -1397,6 +1397,10 @@ export type ManageRow = {
   /// in, with the series behind them. No value — drawn blank — for
   /// every row but a render step and the group above it.
   items: Timeseries;
+  /// What its Modal Sandboxes cost, in millionths of a dollar at list
+  /// price, over the runs the run store keeps. Blank for every row but
+  /// an `embed` step that used Modal and the group above it.
+  spend: Timeseries;
   last_synced: string | null;
   last_success: string | null;
   disk: Timeseries;
