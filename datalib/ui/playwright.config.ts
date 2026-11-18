@@ -94,6 +94,12 @@ const ONBOARDING_ROOT = onboardingRoot();
 
 const binDir =
   process.env.DATALIB_TEST_E2E_BIN_DIR || path.join(workspaceDir, "bazel-bin/datalib/backend/bin");
+// Every root's steps name `command = "datalib-step"` bare, as the wizard
+// writes them, and the first launch of a build spawns each one to
+// migrate. A release finds it because it sits beside `datalib-http`;
+// here the server binary is alone in bazel-bin, so a backend is told
+// where the dash-named binaries are, the way `dev.sh` tells it.
+const FINDS_STEPS = { DATALIB_BINARY_DIR: binDir };
 
 // The tree the onboarding spec points its PDF source at. Built here
 // rather than in the spec so the spec never has to touch the
@@ -242,11 +248,6 @@ const SANDBOX_ENV: Record<string, Record<string, string>> = {
         DATALIB_HTTP_PLAYBACK_HOLD: playbackHold("DATALIB_TEST_E2E_SYNC_PLAYBACK_HOLD"),
       }
     : {},
-  // Freeing disk runs `datalib-step` on every step, so this root's
-  // server has to find it.
-  "free-disk-space": { DATALIB_BINARY_DIR: binDir },
-  // Syncs a render, which reports the counts the mutes come off.
-  "problem-mutes": { DATALIB_BINARY_DIR: binDir },
   // Its stand-in for a sender's host is on this machine.
   "remote-images-load": { DATALIB_REMOTE_MEDIA_ALLOW_PRIVATE: "1" },
 };
@@ -412,11 +413,13 @@ function awaitAnnouncements(pending: Pending[]): Server[] {
 
 function spawnFirstRunBackends(): Pending[] {
   return [
-    spawnBackend("empty", EMPTY_ROOT),
-    // The one server whose PATH carries the dash-named binaries. The
-    // scaffold config names `datalib-dag`, its steps and the
-    // `unified_grid_and_search_index` applet bare, so PATH is how all three are found —
-    // the installed-user arrangement, which the other two never exercise.
+    spawnBackend("empty", EMPTY_ROOT, FINDS_STEPS),
+    // The one server that finds the dash-named binaries on its PATH
+    // rather than through `DATALIB_BINARY_DIR`. The scaffold config
+    // names `datalib-dag`, its steps and the `unified_grid_and_search_index`
+    // applet bare, so PATH is how all three are found — the arrangement
+    // of an install whose binaries are on PATH but not beside the server,
+    // which no other backend here exercises.
     spawnBackend("onboarding", ONBOARDING_ROOT, {
       PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
       // Signal's download step reads its passphrase from the
@@ -439,13 +442,14 @@ function servers(): Server[] {
   // sandbox specs bring backends of their own.
   const onlySandboxes = !runs("chromium") && !runs("webkit");
   const pending = [
-    ...(onlySandboxes ? [] : [spawnBackend("fixture", fixtureRoot)]),
+    ...(onlySandboxes ? [] : [spawnBackend("fixture", fixtureRoot, FINDS_STEPS)]),
     ...(runs("chromium") ? spawnFirstRunBackends() : []),
     // No sandbox spec searches by meaning, and every sandbox's applet
     // loading the model at once kept a 4-vCPU runner at a load of 40 for
     // the part's first two minutes, past the first specs' 5 s expects.
     ...SANDBOX_ROOTS.map((s) =>
       spawnBackend(`sandbox-${s.spec}`, s.root, {
+        ...FINDS_STEPS,
         DATALIB_SEARCH_NO_WARM: "1",
         ...(SANDBOX_ENV[s.spec] ?? {}),
       }),
