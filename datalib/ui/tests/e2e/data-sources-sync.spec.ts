@@ -46,6 +46,7 @@ import {
   TABLE_ROWS,
   TERMINAL,
   untilTheSecondTurns,
+  expectSyncEverything,
 } from "./grid-helpers";
 import { expectSanePaints, watchPaints } from "./paint-watch";
 
@@ -103,7 +104,7 @@ const syncBtn = (page: Page, id: string) => row(page, id).getByRole("button", { 
 
 async function openManager(page: Page) {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
 }
 
 async function writeConfig(page: Page, text: string) {

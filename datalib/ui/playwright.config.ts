@@ -518,9 +518,17 @@ const CHROMIUM: Project = {
 // One project per config-mutating spec, doing one job: pointing
 // `baseURL` at that spec's own backend, so the spec itself can go
 // on saying `page.goto("/data_sources")`.
+//
+// A project gets workers of its own, so each spec's first test also
+// launches a browser, and the first four launch together. On CI those
+// first tests have taken about 25 s of the default 30 while waiting
+// only five for the sources card, which needs longer then
+// (`CARD_DRAWN`). `timeout` gives their hooks room; a test that sets its
+// own keeps it.
 const SANDBOX_PROJECTS: Project[] = SANDBOXES.map((s) => ({
   name: `chromium-${s.spec}`,
   testMatch: new RegExp(`${s.spec}\\.spec\\.ts`),
+  timeout: 60_000,
   use: { browserName: "chromium", baseURL: s.url },
 }));
 const WEBKIT: Project = {

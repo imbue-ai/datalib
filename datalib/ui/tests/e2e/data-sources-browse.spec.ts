@@ -19,6 +19,7 @@ import {
   searchAndSettle,
   searchHeader,
   TABLE_ROWS,
+  expectSyncEverything,
 } from "./grid-helpers";
 
 const ROWS = TABLE_ROWS;
@@ -53,7 +54,7 @@ function columnValues(page: Page, colId: string) {
 
 async function openManage(page: Page) {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
   await page.locator(ROWS).first().waitFor({ timeout: 10_000 });
 }
 
