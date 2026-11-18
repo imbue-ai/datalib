@@ -668,9 +668,10 @@ step's newest sample, and the reset step itself does not run again
 until the next sync.
 
 Nothing resets an ingest step's blob CAS, `blobs.sqlite`: a reset keeps
-the bytes, and the refetch lands on them. Deleting the file needs a
-reset beside it ([`etl/README.md`](../../datalib/backend/etl/README.md)
-§"Blob CAS and per-provider edge tables").
+the bytes, and the refetch lands on them. To get the space back, delete
+the file **and** reset the ingest step, together. Deleting the file
+alone leaves edge rows naming bytes that are gone, and the download
+does not fetch what its edge rows say it already has.
 
 ## Migrate
 
