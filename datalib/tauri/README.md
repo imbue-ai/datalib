@@ -140,6 +140,15 @@ library and opens this screen, and the library's name opens a menu of
 the other libraries to switch to (`library_menu`, `library_switch`, `libraries_show`, granted to the
 app's page by `capabilities/switch-libraries.json`).
 
+The screen can delete a library, so it runs under a content security
+policy of its own (`app.security.csp` in `tauri.conf.json`): its own
+script and style and the shell's IPC, nothing else. A library's page is
+served by the backend and has the policy the backend sends. The screen
+calls the shell through `window.__TAURI_INTERNALS__.invoke`, the call
+`@tauri-apps/api` makes too; `withGlobalTauri` stays off, so no page,
+a library's included, gets `window.__TAURI__`.
+`//datalib/tauri:webview_policy_test` checks both.
+
 `src/launcher.rs` holds every decision the screen makes — which
 libraries it lists, whether a directory is a data library at all,
 where a new one goes and what is already there — and is
