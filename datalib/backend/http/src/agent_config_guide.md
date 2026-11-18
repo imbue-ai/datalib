@@ -32,8 +32,9 @@ kinds of entry. `[[groups]]` is what a person sees as one thing: an
 composed as `<group>/<function>` — the one tree it writes — and is
 never written. Every step names the program it runs in `command`.
 Datalib's own steps write `command = "datalib-step"` (the functions
-`ingest`, `render_markdown`, `embed`, `unified_grid_and_search_index` and
-`embedding_map`); a custom step names its own. `[[applets]]` is the app surface —
+`ingest`, `render_markdown`, `render_time_series`, `render_occurrences`,
+`embed`, `unified_grid_and_search_index`, `embedding_map` and
+`time_series_index`); a custom step names its own. `[[applets]]` is the app surface —
 long-lived servers that contribute card components and the endpoints
 behind them, filed under a group but declaring no inputs because they
 read what steps wrote. This guide is about groups and steps; for
@@ -48,7 +49,7 @@ source feeds the fan-in step under the `unified_grid_and_search_index` group:
 
 ```toml
 # One source = a group with a `type`, plus an ingest step and a
-# render step under it, neither with a `command`. The ingest step has
+# render step under it, each running `datalib-step`. The ingest step has
 # no inputs (that makes it a source step). `params` carries
 # per-provider config; credentials never live here (latchkey provides
 # them at runtime).
@@ -166,19 +167,17 @@ writes no other. A config in the retired shape (steps with a
 refused, and the diagnostic says so; tell the user to rewrite it once
 with
 `datalib-migrate-config <data_root> --force`. There is no API for it,
-and you should not try to translate the file yourself. A `qmd_index`
-step is different: the server rewrites it into each source's own `embed`
-step as soon as it reads the file, keeping the old one as
-`config.toml.bak`, so re-read the config after writing one. So is a
-`keyword_index` step: `unified_grid_and_search_index` does that work now, and the server
-takes the step out, listing in `unified_grid_and_search_index`'s `not_searched` each
-source that had none. And a `qmd_aggregator` step, whose work
-`unified_grid_and_search_index` does too: the server takes it out, and the embedding map
-reads every `embed` instead. The same goes for an index group under an earlier
-name, `unified_index` or `unified_document_index`: the server renames
-it, its steps and its applet to `unified_grid_and_search_index`. And for an id with capitals in it: every
-group, step and applet id is lower case, since each names a folder,
-and the server lowercases one it finds and moves its folder.
+and you should not try to translate the file yourself. Every other
+older shape the server rewrites itself as soon as it reads the file,
+keeping the old text as `config.toml.bak`, so re-read the config after
+writing one: a `qmd_index`, `keyword_index` or `qmd_aggregator` step
+(each source's `embed` and `unified_grid_and_search_index` do that
+work), a `grid_index` step (the index step's old function), the index
+group under an earlier name (`unified_index`, `unified_document_index`),
+a lock named `qmd_embed` (now `embedder`), and an id with capitals in it
+(every id is lower case, since each names a folder, and the server
+moves the folder too). `datalib-step help config-model` lists every
+rewrite.
 
 ## Adding your own step commands
 
@@ -202,8 +201,8 @@ with their output captured into the run's log (the Manage tab shows it).
 Steps run with the data root as their working directory and write the
 one tree their id names, which is what downstream steps' `inputs` name
 — a new source should ultimately produce rendered markdown under
-`<group>/render_markdown`, and that id added to the index steps' `inputs`,
-so the shared index steps pick it up.
+`<group>/render_markdown`, which the index step's `*/render_markdown`
+then reads with no edit.
 
 ## Checking your work
 
@@ -218,5 +217,4 @@ so the shared index steps pick it up.
 - `POST <origin>/api/requests` with `{"roots": ["<step id>", …]}` syncs
   those steps and everything downstream of them (`{}` syncs every
   source). A source step always runs, any other only if it is out of
-  date, and nothing upstream of a root runs but a render whose store is
-  in a shape this build no longer writes, which runs before what reads it.
+  date, and nothing upstream of a root runs.

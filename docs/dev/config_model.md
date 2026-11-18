@@ -141,14 +141,14 @@ package's programs by its path under the data root, in its `command`;
   `check-params` refuses anything else. What leaves and what guards it:
   `docs/dev/security_posture.md` § "What leaves the machine for Modal";
   how the step does it: `docs/dev/plans/embed_on_modal.md`.
-- The search steps are the exception to "a step writes its own tree":
-  `unified_grid_and_search_index`'s keyword pass writes the search index's tables in the
-  grid index's file, each source's `embed` writes its vectors to the
-  one inference cache under `unified_grid_and_search_index/search_index/`,
-  and `unified_grid_and_search_index`'s sweep deletes the vectors no chunk names from it.
-  The runner cannot see those files as shared, so these steps hold
-  one-slot locks instead (below), and an `embed` reads `unified_grid_and_search_index` off
-  disk, so the runner never runs the two at once.
+- The search is the exception to "a step writes its own tree": each
+  source's `embed` writes its vectors to the one inference cache,
+  `unified_grid_and_search_index/search_index/inference_cache.sqlite`,
+  and `unified_grid_and_search_index` sweeps from it the vectors no
+  chunk names. The runner cannot see that file as shared, so every
+  `embed` holds the one-slot `embedder` lock (below), and an `embed`
+  reads `unified_grid_and_search_index` off disk, so the runner never
+  runs the two at once.
 - A group's `type` names the thing mirrored, never the way it is
   reached — `claude` over the API or from an export, `contacts` over
   CardDAV or from `.vcf` files — and the product a person recognizes,
@@ -167,16 +167,16 @@ its own `path`. There is no global vocabulary — each provider's
 
 | type | methods |
 |---|---|
-| garmin, github, gitlab, google_drive, linear, notion, slack, todoist, yolink | `api` |
+| baby_connect, garmin, github, gitlab, google_drive, linear, notion, slack, todoist, yolink | `api` |
 | chatgpt, claude | `api`, `export` |
-| contacts | `carddav`, `vcf` |
-| email | `jmap`, `gmail`, `mbox` |
-| calendar | `google`, `fastmail`, `caldav`, `ics` |
+| contacts | `fastmail`, `carddav`, `vcf` |
+| email | `jmap`, `gmail`, `mbox`, `apple_mail` |
+| calendar | `google`, `fastmail`, `caldav`, `calendly`, `ics` |
 | lightroom | `catalog`, `backups` |
 | airvisual, facebook, google_takeout, linkedin | `export` |
 | signal, sms_backup_restore, whatsapp | `backup` |
 | file_inventory, media, pdf | `fswalk` |
-| beeper `texts` · apple_messages `database` · apple_photos `library` · claude_code `sessions` · codex `sessions` · perseus `github` | |
+| beeper `texts` · apple_messages `messages` · apple_photos `library` · claude_code `sessions` · codex `sessions` · perseus `github` | |
 
 That table is `ui/src/config/ingestMethods.json`, the one place to
 read the list from.
@@ -202,8 +202,8 @@ params on a `render_markdown` step are refused.
 ## Time windows: `since` and `until`
 
 A method that can mirror only part of a source's history takes
-`since`, the oldest thing to mirror; a calendar and Garmin, whose days
-run forward, also take `until`. Both are keys of the method table, and
+`since`, the oldest thing to mirror; a calendar, Garmin and Baby
+Connect, whose days run forward, also take `until`. Both are keys of the method table, and
 every one reads the same grammar, `datalib_time::TimeBound`
 (`datalib/backend/time/src/window.rs`):
 
@@ -236,7 +236,10 @@ metric per day.
 | email `gmail` | `since`: everything | `after:` on the listing walk | stays |
 | todoist `api` | `since`: the day the account joined | a task's completion time | stays |
 | garmin `api` | `since`: a year before the first run, recorded; `until`: today | days | stays |
+| baby_connect `api` | `since`: the eldest child's birthday; `until`: today | days | stays |
+| baby_connect `api` | `since`: the eldest child's birthday; `until`: today | days | stays |
 | calendar `google`, `fastmail`, `caldav` | `since`, `until`: no bound | events with any part inside | **dropped**: a windowed calendar is listed whole every run, and an event the listing no longer names goes (`calendar/INGEST.md` §"A window") |
+| calendar `calendly` | `since`, `until`: no bound | a meeting's start | **dropped**, as above |
 
 An earlier `since` backfills on the next run everywhere: each source
 owes what its listing now names and its store does not hold
@@ -365,11 +368,14 @@ file runs.
 
 Warnings: a group with nothing filed under it; a `name` on a grouped
 step (the label comes from the group and the function); an applet
-filed under an undeclared group; a built-in step's
-`common.always_clear_before_ingest`, or linkedin's
-`export.fetch_photos` (linkedin.com no longer shows a profile to
-anyone signed out), which no longer do anything (`datalib-step` drops
-them before parsing). The Manage screen's System
+filed under an undeclared group; a top-level `embed_contexts` or
+`embed_search_index` (`RETIRED_TOP_KEYS`); and a built-in step's
+`period` or `backup.period`, `common.always_clear_before_ingest`,
+linkedin's `export.fetch_photos` (linkedin.com no longer shows a
+profile to anyone signed out) or email's `gmail.request_concurrency`
+(`INERT_PARAM_PATHS`). None of those does anything, and `datalib-step`
+drops the params ones before parsing, so the step still runs. The
+Manage screen's System
 row counts the config's warnings and names them on hover; a
 double-click opens the config.
 
@@ -469,15 +475,9 @@ own: the runner holds a step's finish back while anything upstream of
 it is still running, so a step downstream of a fan-in would finish only
 when the slowest source did. Search by meaning is off for a source with
 no `embed`, or with its `embed` turned off; removing `unified_grid_and_search_index` takes
-every `embed` with it. A `keyword_index` or `qmd_aggregator` step is
-the shape from before `unified_grid_and_search_index` did that work: the loader refuses
-it, and `datalib-http` rewrites it (below). A `qmd_index` step is the
-shape from before the per-source steps,
-when that fan-in fed the per-source steps or did their work itself; the
-loader refuses it, and `datalib-http` rewrites it as soon as it reads such
-a file, at boot or on any change to it, keeping the old text as
-`config.toml.bak` (`http/src/config_upgrade.rs`).
-`datalib-migrate-config` makes the same rewrite from a terminal.
+every `embed` with it. A `qmd_index`, `keyword_index` or
+`qmd_aggregator` step is an older shape of this work: the loader
+refuses it, and `datalib-http` rewrites it (§"The retired shapes").
 
 So every source reaches the grid and the keyword search unless the
 config says otherwise, and leaving one out is something written down:
@@ -557,7 +557,7 @@ group each step after the steps it reads. Nothing else moves, and the
 comments above an entry move with it. Where two groups read each other
 it orders the steps one by one instead.
 
-The UI and the qmd upgrade edit the text rather than re-serializing it.
+The UI and the config upgrades edit the text rather than re-serializing it.
 An `inputs` array is edited where it stands (`dag/src/config_array.rs` on the
 server, `ui/src/config/tomlText.ts` in the UI): one id per line stays one
 id per line, with its indentation, trailing comma and comments, and a
@@ -624,9 +624,7 @@ the next would put the first back:
    that named the step stops naming it. Its markdown is daily summaries
    of numbers, which the keyword index already finds, so the wizard
    never offers the step (`embedAllowed` in
-   `ui/src/config/sourceSteps.ts`). This rewrite is the only one of the
-   thirteen that is meant to take an entry out; it still refuses a result
-   that loses any other entry.
+   `ui/src/config/sourceSteps.ts`).
 6. The step commands (`upgrade_step_commands`, `step_commands.rs`):
    a step that writes no `command` was read as `datalib-step`, the
    shape from before every step named its program. The rewrite writes
