@@ -29,7 +29,9 @@
 //! `input_patterns.rs`: the index steps read every source by pattern,
 //! which finds them by their current functions; then `unread_inputs.rs`:
 //! the index step stops naming the `render_time_series` and
-//! `render_occurrences` steps it does not read. Every rewrite after
+//! `render_occurrences` steps it does not read; then `lock_names.rs`:
+//! the `qmd_embed` lock is `embedder` and `qmd_keyword` goes. Every
+//! rewrite after
 //! `convert.rs` is also one `datalib-http` makes by itself
 //! ([`UNATTENDED`]).
 
@@ -40,6 +42,7 @@ pub mod index_name;
 pub mod index_step_name;
 pub mod input_patterns;
 pub mod keyword_fold;
+pub mod lock_names;
 pub mod lowercase_ids;
 pub mod qmd_steps;
 pub mod step_commands;
@@ -103,6 +106,9 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if unread_inputs::is_retired(text)? {
         return Ok(LegacyFormat::UnreadGridInputs);
     }
+    if lock_names::is_retired(text)? {
+        return Ok(LegacyFormat::SearchLockNames);
+    }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
@@ -119,7 +125,8 @@ pub fn convert(text: &str) -> Result<String> {
         | LegacyFormat::KeywordIndexSteps
         | LegacyFormat::AggregatorStep
         | LegacyFormat::GridIndexStep
-        | LegacyFormat::UnreadGridInputs => text.to_string(),
+        | LegacyFormat::UnreadGridInputs
+        | LegacyFormat::SearchLockNames => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = lowercase_ids::rewrite(&out)?;
@@ -139,6 +146,7 @@ pub fn convert(text: &str) -> Result<String> {
     let out = index_step_name::rewrite(&out)?;
     let out = input_patterns::rewrite(&out)?;
     let out = unread_inputs::rewrite(&out)?;
+    let out = lock_names::rewrite(&out)?;
     // The conversion is value-level, so anything the loader would refuse in
     // the result surfaces here rather than on the next run. Report what the
     // runner rejected and let the message speak.
@@ -271,6 +279,19 @@ pub fn upgrade_aggregator_drop(text: &str) -> Result<Option<String>> {
     Ok(Some(out))
 }
 
+/// Rename `qmd_embed` to `embedder` and drop `qmd_keyword`, in steps'
+/// `locks` and in `[[locks]]` entries (`lock_names.rs`). Refused, as
+/// [`upgrade_qmd_steps`] is, when the result would not load every entry
+/// the original did.
+pub fn upgrade_lock_names(text: &str) -> Result<Option<String>> {
+    if !lock_names::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = lock_names::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
+    Ok(Some(out))
+}
+
 /// Write a pattern (`*/render_markdown`) in each index step's `inputs`
 /// where it names every step of that function (`input_patterns.rs`).
 /// Refused, as [`upgrade_qmd_steps`] is, when the result would not load
@@ -350,7 +371,7 @@ pub struct Rewrite {
 /// Every unattended rewrite, in the order they are made. `datalib-http`
 /// runs these on its config, and a config the repo ships or documents is
 /// tested to need none of them.
-pub const UNATTENDED: [Rewrite; 13] = [
+pub const UNATTENDED: [Rewrite; 14] = [
     Rewrite {
         why: "has an id with capitals in it",
         what: "every group, step and applet id, and every function, is lower case, \
@@ -433,6 +454,13 @@ pub const UNATTENDED: [Rewrite; 13] = [
                `render_occurrences` steps: their problems are read in their own stores, so \
                the inputs only made it run again after each of them",
         run: upgrade_unread_inputs,
+    },
+    Rewrite {
+        why: "names the `qmd_embed` or `qmd_keyword` lock",
+        what: "every embed holds the `embedder` lock, which was `qmd_embed`; \
+               `qmd_keyword` is gone, since only the index step writes the grid index's file, \
+               and a step that named it holds its default lock",
+        run: upgrade_lock_names,
     },
 ];
 

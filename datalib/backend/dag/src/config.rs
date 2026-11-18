@@ -2032,16 +2032,9 @@ const UNPINNED_BUILTINS: &[(Option<&str>, &str)] = &[
 ];
 
 /// The lock a built-in step holds when it names none, where its shape's
-/// budget would not keep it safe: the index step's load, its keyword pass
-/// and its sweep write the grid index's file and the inference cache,
-/// which the runner cannot see as shared; every embed loads the model.
-const BUILTIN_LOCKS: &[(&str, &str)] = &[
-    (
-        "unified_grid_and_search_index",
-        crate::supervisor::locks::QMD_KEYWORD,
-    ),
-    ("embed", crate::supervisor::locks::QMD_EMBED),
-];
+/// budget would not keep it safe: every embed loads the model and writes
+/// the inference cache, which the runner cannot see as shared.
+const BUILTIN_LOCKS: &[(&str, &str)] = &[("embed", crate::supervisor::locks::EMBEDDER)];
 
 fn builtin_lock(function: Option<&str>) -> Option<&'static str> {
     BUILTIN_LOCKS
@@ -4871,21 +4864,19 @@ inputs = ["a"]
         let check = check_text("[[locks]]\nname = \"network\"\nslots = 1\n");
         assert!(check.is_clean(), "{:?}", check.diagnostics);
         let names: Vec<&str> = check.graph.locks.iter().map(|l| l.name.as_str()).collect();
-        assert_eq!(
-            names,
-            ["network", "cpu", "index", "qmd_keyword", "qmd_embed"]
-        );
+        assert_eq!(names, ["network", "cpu", "index", "embedder"]);
         assert_eq!(slots(&check, "network"), Some(1));
         assert_eq!(slots(&check, "cpu"), Some(4));
     }
 
-    /// The one writer of the grid index's file, the
-    /// `unified_grid_and_search_index` step (the grid's load, its keyword
-    /// pass and its sweep of the vectors), holds the one-slot `qmd_keyword`
-    /// lock. An embed only reads that file and holds `qmd_embed`. A step
-    /// that names its own locks, or runs its own command, keeps those.
+    /// Every embed holds the one-slot `embedder` lock, so one model is
+    /// loaded at a time. The index step, the one writer of the grid index's
+    /// file, needs no lock of its own: no other step writes that file, and
+    /// an embed reading it off disk keeps it from running beside one. It
+    /// holds the `index` budget, as any index step does. A step that names
+    /// its own locks, or runs its own command, keeps those.
     #[test]
-    fn the_qmd_steps_hold_the_qmd_locks() {
+    fn every_embed_holds_the_embedder_lock() {
         let check = check_text(
             r#"
 [[groups]]
@@ -4939,17 +4930,17 @@ inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
         };
         assert_eq!(
             held("unified_grid_and_search_index/unified_grid_and_search_index"),
-            ["qmd_keyword"]
+            ["index"]
         );
-        assert_eq!(held("mail/embed"), ["qmd_embed"]);
+        assert_eq!(held("mail/embed"), ["embedder"]);
         assert_eq!(held("riker/embed"), ["cpu"], "named locks win");
         assert_eq!(
             held("custom/embed"),
             ["index"],
             "a custom command is not built in"
         );
-        assert_eq!(slots(&check, "qmd_keyword"), Some(1));
-        assert_eq!(slots(&check, "qmd_embed"), Some(1));
+        assert_eq!(slots(&check, "embedder"), Some(1));
+        assert_eq!(slots(&check, "qmd_keyword"), None);
     }
 
     /// `qmd_index` did the search's work in one fan-in. A config still

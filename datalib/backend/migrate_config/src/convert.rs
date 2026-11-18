@@ -149,6 +149,9 @@ pub enum Retired {
     /// A `grid_index` that names a `render_time_series` or
     /// `render_occurrences` step it does not read (`unread_inputs.rs`).
     UnreadGridInputs,
+    /// A step's `locks` or a `[[locks]]` entry naming `qmd_embed` or
+    /// `qmd_keyword` (`lock_names.rs`).
+    SearchLockNames,
     /// An id that names a folder, with capitals in it (`lowercase_ids.rs`).
     UpperCaseId,
 }
