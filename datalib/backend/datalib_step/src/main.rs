@@ -22,6 +22,7 @@ mod index_steps;
 mod index_text;
 mod ingest;
 mod introspect;
+mod markdown;
 mod methods;
 mod migrate;
 mod modal;
@@ -344,6 +345,28 @@ enum Cmd {
         #[arg(long)]
         check: bool,
     },
+    /// Utility (not a pipeline step): each document's markdown as its
+    /// source's render store spells it, the text the viewer shows. With
+    /// `--out`, one file per document at `<out>/<source>/<id>.md`, for an
+    /// export or another tool; without, printed: one document's text alone,
+    /// or each as `=== <source> <id>` and its text. Reads the render stores
+    /// and writes nothing under the data root.
+    Markdown {
+        /// The data root.
+        data_root: PathBuf,
+        /// Only this source (its group id).
+        #[arg(long)]
+        source: Option<String>,
+        /// Only this document (its id).
+        #[arg(long)]
+        document: Option<String>,
+        /// Read the source's render store as it was at this commit.
+        #[arg(long, requires = "source")]
+        at: Option<String>,
+        /// The folder to write the documents into.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// Utility (not a pipeline step): print what the search index draws
     /// of each document, by the call the keyword and embed passes make:
     /// for each, `=== <source> <id> <title>`, then each piece as `---
@@ -427,6 +450,21 @@ async fn main() {
     let cli = Cli::parse();
     match &cli.cmd {
         Some(Cmd::Help { topic }) => std::process::exit(print_help(topic)),
+        Some(Cmd::Markdown {
+            data_root,
+            source,
+            document,
+            at,
+            out,
+        }) => std::process::exit(markdown::run_cli(
+            data_root,
+            &markdown::Ask {
+                source: source.as_deref(),
+                document: document.as_deref(),
+                at: at.as_deref(),
+                out: out.as_deref(),
+            },
+        )),
         Some(Cmd::IndexText {
             data_root,
             source,
@@ -757,6 +795,7 @@ async fn run(
         Some(Cmd::Probe { .. }) => unreachable!("probe is answered in main"),
         Some(Cmd::Help { .. }) => unreachable!("help is answered in main"),
         Some(Cmd::IndexText { .. }) => unreachable!("index-text is answered in main"),
+        Some(Cmd::Markdown { .. }) => unreachable!("markdown is answered in main"),
         Some(Cmd::Examples { .. }) => unreachable!("examples is answered in main"),
         Some(Cmd::CheckParams { .. }) => unreachable!("check-params is answered in main"),
         Some(Cmd::PullModels { .. }) => unreachable!("pull-models is answered in main"),
