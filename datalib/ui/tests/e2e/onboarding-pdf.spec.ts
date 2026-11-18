@@ -3,7 +3,7 @@
 // produced is in the grid — then a file lands in the watched folder and
 // the second sync picks it up.
 
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { openAdvanced, reviewToml } from "./wizard-helpers";
 import { copyFileSync } from "node:fs";
 import {
@@ -76,6 +76,20 @@ async function bytesOf(page: Page, id: string): Promise<number | null> {
   expect(m, `unparsable size in the Bytes column: ${JSON.stringify(text)}`).not.toBeNull();
   const scale = { B: 1, kB: 1e3, MB: 1e6, GB: 1e9, TB: 1e12 }[m![2]]!;
   return Number(m![1]) * scale;
+}
+
+/// A store's size in bytes, measured now, for asking whether it grew. The
+/// column rounds: from 1 MB it moves in steps of 100 kB, and one more
+/// short PDF's markdown is a few kB.
+async function exactBytesOf(request: APIRequestContext, id: string): Promise<number | null> {
+  const res = await request.post(`${BASE}/api/manage/rows/refresh`);
+  expect(res.ok(), `refreshing the rows answered ${res.status()}`).toBe(true);
+  const { rows } = (await res.json()) as {
+    rows: { key: string; disk: { value: number | null } }[];
+  };
+  const found = rows.find((r) => r.key === id);
+  expect(found, `no row ${id} in /api/manage/rows`).toBeDefined();
+  return found!.disk.value;
 }
 
 /// Every row the Explore grid is holding, read through the grid api the
@@ -247,10 +261,13 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
       `Status claims ${stamp}, which is not a moment ago`,
     ).toBeLessThan(5 * 60_000);
 
-    const rawBytes = await bytesOf(page, "pdfs/ingest");
-    const renderedBytes = await bytesOf(page, "pdfs/render_markdown");
-    expect(rawBytes, "the raw store should be on disk now").toBeGreaterThan(0);
-    expect(renderedBytes, "so should the markdown").toBeGreaterThan(0);
+    const shownRawBytes = await bytesOf(page, "pdfs/ingest");
+    expect(shownRawBytes, "the raw store should be on disk now").toBeGreaterThan(0);
+    expect(await bytesOf(page, "pdfs/render_markdown"), "so should the markdown").toBeGreaterThan(
+      0,
+    );
+    const rawBytes = await exactBytesOf(request, "pdfs/ingest");
+    const renderedBytes = await exactBytesOf(request, "pdfs/render_markdown");
 
     // ── 10-11. the documents, in the grid ────────────────────────────
     await openExplore(page);
@@ -283,7 +300,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
       .poll(() => bytesOf(page, "pdfs/ingest"), {
         message: "the fresh page should show the size the first sync left",
       })
-      .toBe(rawBytes);
+      .toBe(shownRawBytes);
 
     const secondRun = await stampsBefore(page, SYNCED_ROWS);
     await row(page, "pdfs/ingest").getByRole("button", { name: "Sync now" }).click();
@@ -296,14 +313,14 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
 
     // A document more on disk.
     await expect
-      .poll(async () => (await bytesOf(page, "pdfs/render_markdown")) ?? 0, {
+      .poll(async () => (await exactBytesOf(request, "pdfs/render_markdown")) ?? 0, {
         timeout: 10_000,
         intervals: [250],
         message: `the rendered markdown never grew past ${renderedBytes}`,
       })
       .toBeGreaterThan(renderedBytes!);
     expect(
-      (await bytesOf(page, "pdfs/ingest"))!,
+      (await exactBytesOf(request, "pdfs/ingest"))!,
       "the raw store should have gained a document, not just per-run churn",
     ).toBeGreaterThan(rawBytes! + 4_000);
 
