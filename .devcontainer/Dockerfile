@@ -27,6 +27,18 @@ ARG NODE_VERSION=22.23.4
 ARG NODE_IMAGE_DIGEST=sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da
 FROM node:${NODE_VERSION}-bookworm-slim@${NODE_IMAGE_DIGEST} AS node_dist
 
+# The Playwright version the UI's lockfile resolves, read out in a stage
+# of its own. The lockfile names it twice, under `packages:` and
+# `snapshots:`, so it is deduplicated before checking there is one. This stage reruns on every lockfile change, but it writes
+# only the version, and BuildKit keys a COPY by the content it copies: the
+# browser install below reruns only when that version moves.
+FROM ubuntu:26.04 AS playwright_version
+COPY datalib/ui/pnpm-lock.yaml /pnpm-lock.yaml
+RUN sed -n "s/^  '@playwright\/test@\([^']*\)':$/\1/p" /pnpm-lock.yaml | sort -u > /playwright-version \
+    && [ "$(wc -l < /playwright-version)" -eq 1 ] \
+    && grep -qxE '[0-9]+\.[0-9]+\.[0-9]+' /playwright-version \
+    || { echo "expected one '@playwright/test@X.Y.Z' entry in datalib/ui/pnpm-lock.yaml, found: $(cat /playwright-version)" >&2; exit 1; }
+
 FROM ubuntu:26.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -89,15 +101,16 @@ RUN npm install -g "latchkey@${LATCHKEY_VERSION}" && npm cache clean --force
 # `--with-deps` needs root and a package index, which a test action has
 # neither of — so both engines are baked here and that call is a no-op.
 #
-# PLAYWRIGHT_VERSION MUST match the resolved `playwright` version in
-# `datalib/ui/pnpm-lock.yaml` (`//tools:version_pins_test`); a mismatch
-# means Bazel's Playwright looks for a browser revision that isn't here.
+# The version is the one `datalib/ui/pnpm-lock.yaml` resolves, read by the
+# `playwright_version` stage above, so it has no pin of its own to drift:
+# a different version would leave Bazel's Playwright looking for a
+# browser revision that isn't here.
 #
 # The cache lands at /root/.cache/ms-playwright. GitHub forces
 # HOME=/github/home for container steps, so `test.yml` points the suite
 # at it with `--test_env=PLAYWRIGHT_BROWSERS_PATH`.
-ARG PLAYWRIGHT_VERSION=1.65.1
-RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium webkit \
+COPY --from=playwright_version /playwright-version /opt/playwright-version
+RUN npx -y "playwright@$(cat /opt/playwright-version)" install --with-deps chromium webkit \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 
 # uv — `//:lint` drives ruff / pyright through it. The static binary from
