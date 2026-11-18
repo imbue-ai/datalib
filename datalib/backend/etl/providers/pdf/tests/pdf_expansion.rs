@@ -343,7 +343,6 @@ async fn a_document_missing_part_of_itself_says_so() {
     let mut emitted = Vec::new();
     let summary = render::render(
         &raw,
-        dir.path(),
         "tng_pdf",
         &datalib_etl::progress::Progress::noop(),
         &mut |doc| {

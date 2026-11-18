@@ -2,17 +2,13 @@
 //! document, a section and a grid row per skill, so a skill is found by
 //! search like anything else the export holds.
 
-use std::fs;
-use std::path::{Path, PathBuf};
-
 use anyhow::{Context, Result};
-use datalib_etl::layout::render_markdown_root;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::Front;
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::escape_name_inline;
 use datalib_etl_render::inputs::{changed_rows, Bucket, Input, Inputs};
-use datalib_etl_render::section::{join, msg_div_open_with, Section, MSG_DIV_CLOSE};
+use datalib_etl_render::section::{msg_div_open_with, Section, MSG_DIV_CLOSE};
 use datalib_etl_render::title::Title;
 use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
@@ -31,8 +27,7 @@ const TITLE: &str = "LinkedIn skills";
 const KIND_SKILLS: &str = "LinkedIn Skills";
 const KIND_SKILL: &str = "LinkedIn Skill";
 
-/// The skills document, its `md_path` relative to the data root, and the
-/// rows it read.
+/// The skills document and the rows it read.
 pub struct SkillsDoc {
     pub doc: RenderedMarkdown,
     pub inputs: Vec<Input>,
@@ -75,16 +70,11 @@ pub fn render_skills(
         .collect();
     let mut outcome = narrow_docs(&mut docs, doc_key, changed, source.range, new_head);
     for SkillsDoc { doc, inputs } in docs {
-        let md_path = source.out_dir.join(&doc.md_path);
-        let dir = md_path.parent().expect("a document's file has a folder");
-        fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
-        fs::write(&md_path, join(&doc.sections))
-            .with_context(|| format!("write {}", md_path.display()))?;
         outcome.buckets.push(Bucket {
             key: doc.markdown_uuid.clone(),
             inputs,
         });
-        on_doc_complete(RenderedMarkdown { md_path, ..doc })?;
+        on_doc_complete(doc)?;
         progress.inc(1);
     }
     Ok(outcome)
@@ -95,7 +85,6 @@ fn doc_key(d: &SkillsDoc) -> (&str, &[Input]) {
 }
 
 /// The one skills document, or `None` when the export lists no skill.
-/// Pure: `md_path` is relative to the data root.
 pub fn build(
     source_id: &str,
     rows: &[(String, Value)],
@@ -113,12 +102,6 @@ pub fn build(
         inputs.read(&input.table, &input.id);
     }
     let doc_id = ids::skills(source_id);
-    let md_rel = doc_md_path(
-        &render_markdown_root(Path::new(""), source_id),
-        &doc_id.uuid,
-    )
-    .to_string_lossy()
-    .into_owned();
 
     let mut skills: Vec<(&str, &str)> = Vec::new();
     let mut problems = Vec::new();
@@ -207,11 +190,10 @@ pub fn build(
             source_id: source_id.to_string(),
             upstream_cursor: None,
             bucket_key: Some(doc_id.uuid.clone()),
-            md_path: PathBuf::from(md_rel),
             render_version: RENDER_VERSION,
             rows: rows_out,
             sections,
-            section_layout: None,
+            searchable: true,
             content_hash: None,
             edges: Vec::new(),
             contacts: Vec::new(),

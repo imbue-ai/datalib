@@ -1,6 +1,6 @@
 //! End-to-end render test against the checked-in tiny TEI fixture.
 //! Feeds two TEI editions (Greek + English) through `parse + render_all`
-//! and asserts what it renders — the files, emitted rows
+//! and asserts what it renders — the documents, emitted rows
 //! structure, key text fragments. This is the regression net for the
 //! multi-edition render path: if the parser silently drops a section
 //! or the renderer flips a UUID derivation, this fails before bad data
@@ -24,7 +24,8 @@ fn paragraph_uuid(b: &str, c: &str, s: &str, e: &str) -> String {
 }
 use datalib_etl_perseus_render::render::align::PerseusAlignments;
 use datalib_etl_perseus_render::render::{parse, render};
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
+use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::section::join;
 
 const GRC: &str = "perseus-grc2";
 const ENG: &str = "1st1K-eng1";
@@ -36,15 +37,11 @@ fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/perseus_tiny")
 }
 
-fn render_fixture(
-    parsed: &parse::ParsedPerseus,
-    out: &std::path::Path,
-) -> (render::RenderSummary, Vec<RenderedMarkdown>) {
+fn render_fixture(parsed: &parse::ParsedPerseus) -> (render::RenderSummary, Vec<RenderedMarkdown>) {
     let mut emitted: Vec<RenderedMarkdown> = Vec::new();
     let summary = render::render_all(
         parsed,
         &PerseusAlignments::default(),
-        out,
         "perseus",
         &Progress::noop(),
         &mut |r: RenderedMarkdown| {
@@ -58,7 +55,6 @@ fn render_fixture(
 
 #[test]
 fn renders_all_books_chapters_and_editions() {
-    let out = tempfile::tempdir().unwrap();
     let parsed = parse::parse(&fixture_dir()).expect("parse tiny fixture");
 
     // 2 editions; grc sorts first.
@@ -70,7 +66,7 @@ fn renders_all_books_chapters_and_editions() {
     assert_eq!(parsed.books[0].chapters.len(), 2);
     assert_eq!(parsed.books[1].chapters.len(), 2);
 
-    let (summary, emitted) = render_fixture(&parsed, out.path());
+    let (summary, emitted) = render_fixture(&parsed);
 
     // 2 books + 4 chapters × 2 editions = 10 docs.
     assert_eq!(summary.markdowns_total, 10);
@@ -92,45 +88,38 @@ fn renders_all_books_chapters_and_editions() {
     );
 
     let page = |uuid: String| {
-        doc_md_path(
-            &datalib_etl::layout::render_markdown_root(out.path(), "perseus"),
-            &uuid,
-        )
+        let doc = emitted
+            .iter()
+            .find(|d| d.markdown_uuid == uuid)
+            .unwrap_or_else(|| panic!("no document {uuid}"));
+        join(&doc.sections)
     };
-    let book1 = page(book_uuid("1"));
-    assert!(book1.exists(), "missing {}", book1.display());
+    page(book_uuid("1"));
 
     // Book 1 chapter 1, Greek side has both sections. Unaligned
     // editions render section text verbatim (no per-sentence spans).
-    let ch11_grc = page(chapter_uuid("1", "1", GRC));
-    let body = std::fs::read_to_string(&ch11_grc).unwrap();
+    let body = page(chapter_uuid("1", "1", GRC));
     assert!(body.contains("Θουκυδίδης Ἀθηναῖος ξυνέγραψε."));
     assert!(body.contains("### 1.1.1"));
     assert!(body.contains("### 1.1.2"));
     assert!(!body.contains("<span data-section-uuid"));
 
     // English side: section 2 is the deliberate translation gap.
-    let ch11_eng = page(chapter_uuid("1", "1", ENG));
-    let body_eng = std::fs::read_to_string(&ch11_eng).unwrap();
+    let body_eng = page(chapter_uuid("1", "1", ENG));
     assert!(body_eng.contains("the Athenian wrote"));
     assert!(body_eng.contains("### 1.1.1"));
     assert!(!body_eng.contains("### 1.1.2"));
 
     // Book 2 chapter 2: bare chapter text → section "1".
-    let ch22_grc = page(chapter_uuid("2", "2", GRC));
-    let body22 = std::fs::read_to_string(&ch22_grc).unwrap();
+    let body22 = page(chapter_uuid("2", "2", GRC));
     assert!(body22.contains("### 2.2.1"));
 }
 
 #[test]
 fn documents_carry_stable_uuids_and_provider_metadata() {
-    let out = tempfile::tempdir().unwrap();
     let parsed = parse::parse(&fixture_dir()).unwrap();
-    let (_summary, emitted) = render_fixture(&parsed, out.path());
+    let (_summary, emitted) = render_fixture(&parsed);
 
-    // Asserted on the emitted documents rather than on
-    // `*.grid_rows.json` files: the renderer stopped writing those, and
-    // the emitted document is what both the store and the index consume.
     let expected = chapter_uuid("1", "1", GRC);
     let chapter = emitted
         .iter()
@@ -148,11 +137,6 @@ fn documents_carry_stable_uuids_and_provider_metadata() {
     // with no CTS the title is the short id.
     assert_eq!(row.conversation_name.as_deref(), Some("1.1 grc2"));
     assert!(row.preview.contains("Θουκυδίδης"));
-    let page = doc_md_path(
-        &datalib_etl::layout::render_markdown_root(out.path(), "perseus"),
-        &expected,
-    );
-    assert_eq!(chapter.md_path, page);
 
     let book = emitted
         .iter()
@@ -164,9 +148,8 @@ fn documents_carry_stable_uuids_and_provider_metadata() {
 
 #[test]
 fn chapter_doc_carries_chapter_and_section_rows_sharing_markdown_uuid() {
-    let out = tempfile::tempdir().unwrap();
     let parsed = parse::parse(&fixture_dir()).unwrap();
-    let (_, emitted) = render_fixture(&parsed, out.path());
+    let (_, emitted) = render_fixture(&parsed);
 
     // Book 1 Chapter 1 Greek: 2 sections → 1 chapter + 2 section rows.
     let ch11_grc = chapter_uuid("1", "1", GRC);
@@ -196,13 +179,13 @@ fn chapter_doc_carries_chapter_and_section_rows_sharing_markdown_uuid() {
     assert_eq!(doc_e.rows.len(), 2);
 
     // Each section row's uuid has a matching div anchor in the md.
-    let chapter_md = std::fs::read_to_string(&doc.md_path).unwrap();
+    let chapter_md = join(&doc.sections);
     for r in doc.rows.iter().skip(1) {
         let needle = format!("data-section-uuid=\"{}\"", r.uuid);
         assert!(
             chapter_md.contains(&needle),
             "{} missing div anchor for section row uuid={}",
-            doc.md_path.display(),
+            doc.markdown_uuid,
             r.uuid
         );
     }
@@ -210,9 +193,8 @@ fn chapter_doc_carries_chapter_and_section_rows_sharing_markdown_uuid() {
 
 #[test]
 fn unaligned_corpus_emits_no_edges() {
-    let out = tempfile::tempdir().unwrap();
     let parsed = parse::parse(&fixture_dir()).unwrap();
-    let (_, emitted) = render_fixture(&parsed, out.path());
+    let (_, emitted) = render_fixture(&parsed);
     // With no alignment pairs configured, every doc is edge-free.
     for d in &emitted {
         assert!(

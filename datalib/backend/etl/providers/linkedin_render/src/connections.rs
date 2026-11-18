@@ -53,7 +53,6 @@ fn render_open(
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<FeedOutcome> {
     let Source {
-        out_dir,
         name: source_id,
         account,
         account_inputs,
@@ -131,14 +130,7 @@ fn render_open(
                 .push(Problem::field("photo", Reason::BlobMissing, hash)),
         }
     }
-    let summary = render_all(
-        &profile,
-        &contacts,
-        out_dir,
-        source_id,
-        progress,
-        on_doc_complete,
-    )?;
+    let summary = render_all(&profile, &contacts, source_id, progress, on_doc_complete)?;
     outcome.buckets.extend(summary.buckets);
     Ok(outcome)
 }
@@ -234,7 +226,6 @@ mod tests {
     fn render(raw: &std::path::Path) -> Result<FeedOutcome> {
         let source = Source {
             raw_dir: raw,
-            out_dir: raw,
             name: "linkedin",
             account: None,
             owner: None,

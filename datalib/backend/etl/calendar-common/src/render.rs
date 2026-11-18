@@ -1,20 +1,17 @@
-//! `render_all` — one `.md`, one grid row and its edges per event,
+//! `render_all` — one document, one grid row and its edges per event,
 //! handed to the render driver's callback. Everything provider-specific
 //! arrives in the [`CalendarRenderProfile`] and the events.
-
-use std::fs;
-use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::Front;
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{
     escape_md_block, escape_md_inline, escape_name_inline, md_code_span, md_link_dest,
 };
 use datalib_etl_render::inputs::{Bucket, Buckets};
 use datalib_etl_render::message::{chip_link, stamp_text_html};
-use datalib_etl_render::section::{join, Section};
+use datalib_etl_render::section::Section;
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
 use datalib_schema::data_nodes::{DataNodeRow, Lineage};
@@ -57,7 +54,6 @@ pub struct RenderSummary {
 pub fn render_all(
     profile: &CalendarRenderProfile,
     events: &[NormalizedEvent],
-    out_dir: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -69,7 +65,7 @@ pub fn render_all(
             key: event.event_uuid.clone(),
             inputs: event.inputs.clone(),
         });
-        let doc = render_one(profile, event, out_dir, source_id)
+        let doc = render_one(profile, event, source_id)
             .with_context(|| format!("render event {}", event.event_uuid))?;
         on_doc_complete(doc).with_context(|| format!("on_doc_complete {}", event.event_uuid))?;
         summary.events_rendered += 1;
@@ -81,17 +77,9 @@ pub fn render_all(
 fn render_one(
     profile: &CalendarRenderProfile,
     event: &NormalizedEvent,
-    out_dir: &Path,
     source_id: &str,
 ) -> Result<RenderedMarkdown> {
     let uuid = &event.event_uuid;
-    let md_path = doc_md_path(
-        &datalib_etl::layout::render_markdown_root(out_dir, source_id),
-        uuid,
-    );
-    let page_dir = md_path.parent().expect("a document's file has a folder");
-    fs::create_dir_all(page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
-
     let mut problems: Vec<ProblemRow> = event
         .problems
         .iter()
@@ -101,7 +89,6 @@ fn render_one(
 
     let front = front(profile, event, source_id, start.as_deref());
     let sections = render_markdown(profile, event, source_id, start.as_deref());
-    fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
     let data_nodes = tree(profile, event, source_id);
     let row = build_grid_row(
         profile,
@@ -112,13 +99,12 @@ fn render_one(
         &mut problems,
     );
     Ok(RenderedMarkdown {
-        section_layout: None,
+        searchable: true,
         content_hash: None,
         markdown_uuid: uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: event.modified_at.clone(),
         bucket_key: Some(uuid.clone()),
-        md_path,
         render_version: profile.render_version,
         rows: row.into_iter().collect(),
         sections,
@@ -720,6 +706,7 @@ mod tests {
     use crate::types::{
         Attendee, EventLink, GuestAnswers, OccurrenceRef, Person, QuestionAnswer, SeriesRef,
     };
+    use datalib_etl_render::section::join;
 
     const SERIES: &str = "11111111-1111-8111-8111-111111111111";
     const MOVED: &str = "22222222-2222-8222-8222-222222222222";
@@ -799,8 +786,7 @@ mod tests {
     /// upstream's id for it; the series link stays a link, not a reply.
     #[test]
     fn an_event_sits_in_its_calendar() {
-        let dir = tempfile::tempdir().unwrap();
-        let doc = render_one(&profile(), &series(), dir.path(), "tng_calendar").unwrap();
+        let doc = render_one(&profile(), &series(), "tng_calendar").unwrap();
         type Node<'a> = (&'a str, Option<&'a str>, bool, bool, Option<&'a str>);
         let data_nodes: Vec<Node<'_>> = doc
             .data_nodes
@@ -907,12 +893,10 @@ mod tests {
         if let EventShape::Series { changed, .. } = &mut event.shape {
             changed[0].title = Some(format!("moved {RLO}here"));
         }
-        let dir = tempfile::tempdir().unwrap();
         let mut docs = Vec::new();
         render_all(
             &profile(),
             &[event],
-            dir.path(),
             "tng_calendar",
             &Progress::default(),
             &mut |d| {
@@ -921,7 +905,7 @@ mod tests {
             },
         )
         .unwrap();
-        let md = std::fs::read_to_string(&docs[0].md_path).unwrap();
+        let md = join(&docs[0].sections);
         let (_, body) = md
             .split_once("---\n\n")
             .expect("front matter, then the body");
@@ -1143,12 +1127,10 @@ mod tests {
     /// The sink's answer is the run's answer.
     #[test]
     fn a_sink_that_refuses_fails_the_render() {
-        let dir = tempfile::tempdir().unwrap();
         let mut refuse = |_: RenderedMarkdown| -> Result<()> { anyhow::bail!("no room") };
         let err = render_all(
             &profile(),
             &[series()],
-            dir.path(),
             "tng_calendar",
             &Progress::default(),
             &mut refuse,

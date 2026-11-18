@@ -141,7 +141,6 @@ pub struct RenderOutcome {
 /// of at most `blob_bytes` at a time.
 pub fn render(
     raw_dir: &Path,
-    out_root: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -158,15 +157,7 @@ pub fn render(
     let Some(db) = block_on(RawDb::open_reader(&db_path, range.pin))? else {
         return Ok(RenderOutcome::default());
     };
-    let rendered = render_open(
-        &db,
-        out_root,
-        source_id,
-        progress,
-        on_doc_complete,
-        range,
-        blob_bytes,
-    );
+    let rendered = render_open(&db, source_id, progress, on_doc_complete, range, blob_bytes);
     // Closed, not dropped: the next open of this store is a second
     // connection until this one is actually gone.
     block_on(db.close());
@@ -175,7 +166,6 @@ pub fn render(
 
 fn render_open(
     db: &RawDb,
-    out_root: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -217,7 +207,6 @@ fn render_open(
         }
         let mut renderer = ChatRenderer::new(
             profile,
-            out_root,
             source_id,
             chats.iter().map(|c| c.buckets.len()).sum(),
             progress,

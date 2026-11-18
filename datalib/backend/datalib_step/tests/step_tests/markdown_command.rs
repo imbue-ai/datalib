@@ -1,6 +1,6 @@
 //! `datalib-step markdown`, run as a person runs it over the fixture's
-//! rendered root: what it writes for each document is the `.md` file render
-//! wrote, byte for byte, so it can stand in for the files as the way the
+//! rendered root: it writes each document as its render store spells it,
+//! one file per document at `<out>/<source>/<id>.md`, so it is the way the
 //! documents leave the library. One document printed is the same text, and
 //! one no store holds is an error.
 
@@ -14,7 +14,7 @@ fn step() -> Command {
 }
 
 #[test]
-fn the_markdown_command_writes_every_document_as_its_file() {
+fn the_markdown_command_writes_every_document_its_store_spells() {
     let td = tempfile::tempdir().unwrap();
     let tarball = std::env::var_os("INGESTED_RENDERED_TAR").expect("INGESTED_RENDERED_TAR");
     tar::Archive::new(std::fs::File::open(tarball).unwrap())
@@ -42,21 +42,16 @@ fn the_markdown_command_writes_every_document_as_its_file() {
         let store = IndexedMarkdownStore::open_for_reading(&rendered, None)
             .unwrap()
             .unwrap();
-        for row in store.markdown_rows().unwrap() {
-            let Some(file) = row.md_path.map(|p| root.join(p)).filter(|f| f.exists()) else {
-                continue;
-            };
-            let exported = out.join(&source).join(format!("{}.md", row.markdown_uuid));
-            let written = std::fs::read_to_string(&file).unwrap();
+        for (uuid, text) in store.document_texts().unwrap() {
+            let exported = out.join(&source).join(format!("{uuid}.md"));
             assert_eq!(
                 std::fs::read_to_string(&exported)
                     .unwrap_or_else(|e| panic!("{}: {e}", exported.display())),
-                written,
-                "{source}: {} differs from its file",
-                row.markdown_uuid
+                text,
+                "{source}: {uuid} is not exported as its store spells it"
             );
             *checked.entry(source.clone()).or_default() += 1;
-            one.get_or_insert((source.clone(), row.markdown_uuid.clone(), written));
+            one.get_or_insert((source.clone(), uuid, text));
         }
         store.close();
     }
@@ -65,7 +60,7 @@ fn the_markdown_command_writes_every_document_as_its_file() {
         "the fixture's rendering sources: {checked:?}"
     );
 
-    let (source, document, written) = one.unwrap();
+    let (source, document, text) = one.unwrap();
     let printed = step()
         .args(["markdown"])
         .arg(&root)
@@ -73,7 +68,7 @@ fn the_markdown_command_writes_every_document_as_its_file() {
         .output()
         .unwrap();
     assert!(printed.status.success());
-    assert_eq!(String::from_utf8(printed.stdout).unwrap(), written);
+    assert_eq!(String::from_utf8(printed.stdout).unwrap(), text);
 
     let missing = step()
         .arg("markdown")

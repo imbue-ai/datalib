@@ -2313,28 +2313,22 @@ mod tests {
             .item_count(Some(1))
     }
 
-    /// `row` as a document of its own, filed where its id files it under
-    /// the source it names, else `enterprise`.
+    /// `row` as a document of its own, under the source it names, else
+    /// `enterprise`.
     fn own_document(
-        root: &std::path::Path,
         row: datalib_schema::grid_rows::GridRow,
     ) -> datalib_etl_render::grid_index::RenderedMarkdown {
         let source = row
             .source_id
             .clone()
             .unwrap_or_else(|| "enterprise".to_string());
-        let rel = format!(
-            "{source}/render_markdown/{}",
-            datalib_schema::grid_rows::doc_file_rel(&row.uuid)
-        );
         datalib_etl_render::grid_index::RenderedMarkdown {
-            section_layout: None,
+            searchable: true,
             content_hash: None,
             markdown_uuid: row.uuid.clone(),
             source_id: source,
             upstream_cursor: None,
             bucket_key: None,
-            md_path: root.join(rel),
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
@@ -2366,7 +2360,7 @@ mod tests {
                 )
                 .unwrap();
                 for d in docs.iter().filter(|d| d.source_id == source) {
-                    store.put_document(&at, d).unwrap();
+                    store.put_document(d).unwrap();
                 }
                 store.commit("test render").unwrap();
                 store.close();
@@ -2410,9 +2404,7 @@ mod tests {
             .unwrap();
         let lock = WriteLock::for_index(pool.clone());
         for row in rows {
-            apply_one(&lock, root, &own_document(root, row))
-                .await
-                .unwrap();
+            apply_one(&lock, &own_document(row)).await.unwrap();
         }
         datalib_etl_render::grid_index::seal(&lock).await.unwrap();
         pool.close().await;
@@ -2445,7 +2437,6 @@ mod tests {
             Section::keyed("m2", wrapper("m2", "Make it so.")),
         ];
         let mut doc = own_document(
-            root,
             document_row(uuid, "2026-01-01T00:00:00Z", "Chat")
                 .build()
                 .unwrap(),
@@ -2483,10 +2474,9 @@ mod tests {
             &datalib_etl::layout::render_markdown_root(root, &doc.source_id),
         )
         .unwrap();
-        let at = root.to_path_buf();
         let rerendered = since.clone();
         tokio::task::spawn_blocking(move || {
-            store.put_document(&at, &rerendered).unwrap();
+            store.put_document(&rerendered).unwrap();
             store.commit("a render the index has not read").unwrap();
             store.close();
         })
@@ -2551,7 +2541,6 @@ mod tests {
             ),
         ];
         let mut doc = own_document(
-            root,
             document_row(uuid, "2026-01-01T00:00:00Z", "Chat")
                 .build()
                 .unwrap(),
@@ -2768,9 +2757,7 @@ mod tests {
                     .into_iter()
                     .map(|(kind, value)| SearchTerm::new(kind, value)),
             );
-            apply_one(&lock, root, &own_document(root, row))
-                .await
-                .unwrap();
+            apply_one(&lock, &own_document(row)).await.unwrap();
         }
         datalib_etl_render::grid_index::seal(&lock).await.unwrap();
         pool.close().await;

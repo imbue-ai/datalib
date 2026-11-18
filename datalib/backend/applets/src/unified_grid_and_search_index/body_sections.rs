@@ -1,12 +1,20 @@
 //! Where each section of a document's body lies, as the UI counts it: the
-//! layout render stored for the file, cut to the body the route sends
+//! layout its render store spells it in, cut to the body the route sends
 //! (its front matter dropped) and measured in UTF-16 code units, the way
 //! JavaScript indexes a string. The UI renders each message from it as a
 //! fragment of its own (`docs/dev/data_architecture_parse_and_render.md`
 //! §"One section cannot reach the next").
 
-use datalib_schema::markdowns::SectionSpan;
 use serde::Serialize;
+
+/// One section of a spelled document: the `data-section-uuid` it wraps,
+/// or none for layout (front matter, a title, a `<details>` opener), and
+/// its length in bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionSpan {
+    pub uuid: Option<String>,
+    pub bytes: usize,
+}
 
 /// One section of the body: the `data-section-uuid` it wraps, or none for
 /// a piece of the page's frame, and its length in UTF-16 code units.

@@ -2,7 +2,7 @@
 
 The address book, LinkedIn's connections and Facebook's friends each
 hand this crate a `NormalizedContact` per person (in a `ContactDoc`) and
-get back a rendered `.md` and the person's grid row. Who a person is,
+get back a rendered document and the person's grid row. Who a person is,
 and what a handle is, is [`docs/dev/contacts.md`](../../../../docs/dev/contacts.md).
 
 ## The page
@@ -58,8 +58,7 @@ and what a handle is, is [`docs/dev/contacts.md`](../../../../docs/dev/contacts.
 - **A group lists its members** under `## Members`, each a chip where
   the member has a handle.
 - **The photo is markdown** (`![…](/data/<group>/<function>/blob/<hash>)`),
-  linked where its source's blob store holds it; nothing is written
-  beside the page.
+  linked where its source's blob store holds it.
 
 The look is `documentBody.css` (`.contact-head`, `.contact-fields`,
 `.contact-members`); a chip's grey (not linked to a contact) and blue

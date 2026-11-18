@@ -41,8 +41,8 @@ impl SourceRender for GithubRender {
             ctx.declare_bucket(key, &[])?;
         }
         let mut on_doc = |md| ctx.emit_doc(md);
-        let s = render_github(&parsed, ctx.root, ctx.name, ctx.progress, &mut on_doc)
-            .context("render_github")?;
+        let s =
+            render_github(&parsed, ctx.name, ctx.progress, &mut on_doc).context("render_github")?;
         ctx.finish(&s.buckets, parsed.head.as_deref())?;
         Ok(format!("rendered={}", s.rendered))
     }

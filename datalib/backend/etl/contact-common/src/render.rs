@@ -1,22 +1,19 @@
-//! `render_all` — one `.md` + one [`GridRow`] per contact, handed to
+//! `render_all` — one document + one [`GridRow`] per contact, handed to
 //! the `on_doc_complete` callback the orchestrator threads through.
 //! Provider-agnostic: everything provider-specific arrives via
 //! [`ContactRenderProfile`] + the [`ContactDoc`]s.
 
-use std::fs;
-use std::path::Path;
-
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::Front;
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{
     escape_attr, escape_name_inline, escape_name_text, escape_text, without_bidi_controls,
 };
 use datalib_etl_render::inputs::{Bucket, Buckets};
 use datalib_etl_render::message::chip_link;
 use datalib_etl_render::photo::{photo_address, with_photo_url};
-use datalib_etl_render::section::{join, Section};
+use datalib_etl_render::section::Section;
 use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
@@ -71,7 +68,6 @@ pub struct RenderSummary {
 pub fn render_all(
     profile: &ContactRenderProfile,
     contacts: &[ContactDoc],
-    out_dir: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -85,7 +81,6 @@ pub fn render_all(
         &mut summary,
         profile,
         contacts,
-        out_dir,
         source_id,
         progress,
         on_doc_complete,
@@ -99,7 +94,6 @@ pub fn render_into(
     summary: &mut RenderSummary,
     profile: &ContactRenderProfile,
     contacts: &[ContactDoc],
-    out_dir: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -111,10 +105,9 @@ pub fn render_into(
             inputs: doc.inputs.clone(),
         });
         // Nothing here fails on the card's account — a row that will not
-        // validate is recorded as a problem — so what is left is the disk
-        // and the sink, and either failing is the run's to report, not
-        // one card's.
-        render_one(profile, doc, out_dir, source_id, on_doc_complete)
+        // validate is recorded as a problem — so what is left is the
+        // sink, and its failing is the run's to report, not one card's.
+        render_one(profile, doc, source_id, on_doc_complete)
             .with_context(|| format!("render contact {}", doc.doc_uuid))?;
         summary.contacts_rendered += 1;
         progress.inc(1);
@@ -125,22 +118,14 @@ pub fn render_into(
 fn render_one(
     profile: &ContactRenderProfile,
     doc: &ContactDoc,
-    out_dir: &Path,
     source_id: &str,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
     let m_uuid = &doc.doc_uuid;
     let contact = &doc.contact;
-    let md_path = doc_md_path(
-        &datalib_etl::layout::render_markdown_root(out_dir, source_id),
-        m_uuid,
-    );
-    let page_dir = md_path.parent().expect("a document's file has a folder");
-    fs::create_dir_all(page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
 
     let photo = contact.photo.as_ref().and_then(photo_address);
     let sections = render_markdown(profile, doc, source_id, photo.as_deref());
-    fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
 
     let mut problems: Vec<ProblemRow> = doc
         .problems
@@ -169,7 +154,7 @@ fn render_one(
     // `row` reaches the index through `on_doc_complete` below; the
     // renderer writes no projection of its own any more.
     on_doc_complete(RenderedMarkdown {
-        section_layout: None,
+        searchable: true,
         content_hash: None,
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
@@ -178,7 +163,6 @@ fn render_one(
             .clone()
             .or_else(|| contact.created_at.clone()),
         bucket_key: Some(m_uuid.clone()),
-        md_path,
         render_version: profile.render_version,
         rows: row.into_iter().collect(),
         sections,
@@ -613,6 +597,7 @@ fn build_grid_row(
 mod tests {
     use super::*;
     use datalib_contact_schema::{ContactHandle, ContactKind, Detail};
+    use datalib_etl_render::section::join;
 
     fn mk_contact() -> ContactDoc {
         let mut contact = NormalizedContact::new(
@@ -700,12 +685,10 @@ mod tests {
                 .upstream("addressbook", "acct!/books/bridge/", None)
                 .place(),
         );
-        let dir = tempfile::tempdir().unwrap();
         let mut docs = Vec::new();
         render_all(
             &mk_profile(),
             &[doc.clone()],
-            dir.path(),
             "linkedin",
             &Progress::noop(),
             &mut |d| {
@@ -910,13 +893,11 @@ mod tests {
     }
 
     /// A stored photo is linked at its blob-store address, on the page
-    /// and as the contact's URL in the index, and nothing is written
-    /// beside the page. A photo no browser draws is still on its page but gives the chip no
-    /// URL, and a contact with no photo carries none, so the chip draws
+    /// and as the contact's URL in the index. A photo no browser draws is
+    /// still on its page but gives the chip no URL, and a contact with no photo carries none, so the chip draws
     /// an initial.
     #[test]
     fn a_stored_photo_is_linked_where_its_blob_store_holds_it() {
-        let dir = tempfile::tempdir().unwrap();
         let address = format!("/data/linkedin/ingest/blob/{}", "ab".repeat(32));
         let mut with_photo = mk_contact();
         with_photo.contact.photo = Some(stored("image/png"));
@@ -933,7 +914,6 @@ mod tests {
         render_all(
             &mk_profile(),
             &[with_photo, without, opaque],
-            dir.path(),
             "linkedin",
             &Progress::default(),
             &mut sink,
@@ -944,20 +924,16 @@ mod tests {
             .map(|r| r.contacts[0].photo_url.clone())
             .collect();
         assert_eq!(urls, [Some(address.clone()), None, None]);
-        let page = |r: &RenderedMarkdown| std::fs::read_to_string(&r.md_path).unwrap();
+        let page = |r: &RenderedMarkdown| join(&r.sections);
         assert!(page(&got[0]).contains(&format!("]({address})")));
         assert!(page(&got[2]).contains(&format!("]({address})")));
         assert!(!page(&got[1]).contains("contact-photo"));
-        for r in &got {
-            assert!(!r.md_path.parent().unwrap().join("blobs").exists());
-        }
     }
 
     /// A problem the provider found with the card, such as a photo its
     /// blob store lacks, reaches the index on the card's document.
     #[test]
     fn the_cards_own_problems_are_on_its_document() {
-        let dir = tempfile::tempdir().unwrap();
         let mut doc = mk_contact();
         doc.problems = vec![datalib_schema::problems::Problem::field(
             "photo",
@@ -968,7 +944,6 @@ mod tests {
         render_all(
             &mk_profile(),
             &[doc],
-            dir.path(),
             "linkedin",
             &Progress::default(),
             &mut |r| {
@@ -1100,12 +1075,10 @@ mod tests {
         doc.contact.members = vec![format!("Will {RLO}Riker"), format!("Q{RLO}")];
         doc.member_handles = vec![Handle::email("riker@enterprise.org"), None];
         doc.contact.note = Some(format!("Orders {RLO}exe.live"));
-        let dir = tempfile::tempdir().unwrap();
         let mut docs = Vec::new();
         render_all(
             &mk_profile(),
             &[doc],
-            dir.path(),
             "linkedin",
             &Progress::default(),
             &mut |d| {
@@ -1114,7 +1087,7 @@ mod tests {
             },
         )
         .unwrap();
-        let md = std::fs::read_to_string(&docs[0].md_path).unwrap();
+        let md = join(&docs[0].sections);
         let note = format!("<dt>Note</dt><dd>Orders {RLO}exe.live</dd>");
         assert!(md.contains(&note), "the note is the card's own: {md}");
         let rest = md.replace(&note, "");
@@ -1135,12 +1108,10 @@ mod tests {
     /// the render rather than being logged and left out.
     #[test]
     fn a_sink_that_refuses_fails_the_render() {
-        let dir = tempfile::tempdir().unwrap();
         let mut refuse = |_: RenderedMarkdown| -> Result<()> { anyhow::bail!("no room") };
         let err = render_all(
             &mk_profile(),
             &[mk_contact()],
-            dir.path(),
             "linkedin",
             &Progress::default(),
             &mut refuse,

@@ -63,7 +63,6 @@ impl SourceRender for ChatgptRender {
         let mut on_doc = |md| ctx.emit_doc(md);
         let buckets = render_all(
             &parsed,
-            ctx.root,
             ctx.name,
             ctx.progress,
             &mut on_doc,

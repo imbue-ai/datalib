@@ -2,8 +2,8 @@
 
 Slack threads from the raw store the ingest writes
 ([`../slack/INGEST.md`](../slack/INGEST.md)) render through chat-common,
-one document per thread, filed by its id like every document
-([`grid_rows.md`](../../../../../docs/dev/grid_rows.md) §"`source_id`, and where a document's file is"). See
+one document per thread, kept by its id in the render store like every document
+([`grid_rows.md`](../../../../../docs/dev/grid_rows.md) §"`source_id`"). See
 [`chat-common/README.md`](../../chat-common/README.md) for the page layout, the unread marker and `LAYOUT_VERSION`,
 and [`data_architecture_parse_and_render.md` §5](../../../../../docs/dev/data_architecture_parse_and_render.md#5-incrementality-and-deletion) for the diff scan this file extends.
 

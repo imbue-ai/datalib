@@ -57,8 +57,8 @@ const { allowRemote, checkRemote, fetchChat, forgetRemoteAllow } = useApi();
 
 const props = defineProps<{
   ctx: CardCtx;
-  // Addresses one rendered `.md` file — the file this card fetches
-  // and displays. Same value the applet's `/chat/{markdown_uuid}` takes.
+  // The document this card fetches and displays. Same value the
+  // applet's `/chat/{markdown_uuid}` takes.
   markdownUuid: string | null;
   // Section uuid inside the doc to highlight and scroll to. Matches
   // the renderer-emitted `data-section-uuid` attributes.

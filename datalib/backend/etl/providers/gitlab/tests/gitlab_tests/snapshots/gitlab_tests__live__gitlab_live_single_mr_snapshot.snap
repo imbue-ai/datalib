@@ -3,12 +3,12 @@ source: datalib/backend/etl/providers/gitlab/tests/gitlab_live.rs
 expression: view
 ---
 {
+  "document_rendered": true,
   "has_title": true,
   "has_web_url": true,
   "mr_iid": 7643,
   "note_count": 9,
   "project": "generally-intelligent/generally_intelligent",
-  "rendered_md_exists": true,
   "rows_emitted": true,
   "sections_present": [
     "General",

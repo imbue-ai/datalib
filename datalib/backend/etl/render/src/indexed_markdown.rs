@@ -41,18 +41,16 @@ use datalib_etl::bulk::BulkUpsertable;
 /// File name inside a source's `render_markdown/`.
 pub const STORE_FILE: &str = "indexed_markdown.doltlite_db";
 
-/// What `remove_documents` reads and deletes beside the rows
+/// What `remove_documents` deletes beside the rows
 /// `grid_index::delete_document_rows` takes, the set bound as one JSON array.
-const REMOVED_MD_PATHS: &str = "SELECT md_path FROM markdowns \
-     WHERE markdown_uuid IN (SELECT value FROM json_each(?)) AND md_path IS NOT NULL";
 const REMOVED_PROBLEMS: &str = "DELETE FROM problems \
      WHERE scope_kind = ? AND scope_key IN (SELECT value FROM json_each(?))";
 const REMOVED_SECTIONS: &str =
     "DELETE FROM sections WHERE markdown_uuid IN (SELECT value FROM json_each(?))";
 const DOCUMENT_SECTIONS: &str = "DELETE FROM sections WHERE markdown_uuid = ?";
 const REMOVED_DRAWN: &str =
-    "DELETE FROM drawn_pieces WHERE markdown_uuid IN (SELECT value FROM json_each(?))";
-const DOCUMENT_DRAWN: &str = "DELETE FROM drawn_pieces WHERE markdown_uuid = ?";
+    "DELETE FROM drawings WHERE markdown_uuid IN (SELECT value FROM json_each(?))";
+const DOCUMENT_DRAWN: &str = "DELETE FROM drawings WHERE markdown_uuid = ?";
 
 /// A kept section as [`IndexedMarkdownStore::kept_sections`] reads it.
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
@@ -131,16 +129,14 @@ async fn put_sections(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<(
         return Ok(());
     }
     for row in crate::section::drawn(&md.markdown_uuid, &md.sections) {
-        sqlx::query(
-            "INSERT INTO drawn_pieces (markdown_uuid, seq, md, body_at) VALUES (?, ?, ?, ?)",
-        )
-        .bind(&row.markdown_uuid)
-        .bind(row.seq)
-        .bind(&row.md)
-        .bind(row.body_at)
-        .execute(&mut **conn)
-        .await
-        .with_context(|| format!("document {}: store drawing {}", md.markdown_uuid, row.seq))?;
+        sqlx::query("INSERT INTO drawings (markdown_uuid, seq, md, body_at) VALUES (?, ?, ?, ?)")
+            .bind(&row.markdown_uuid)
+            .bind(row.seq)
+            .bind(&row.md)
+            .bind(row.body_at)
+            .execute(&mut **conn)
+            .await
+            .with_context(|| format!("document {}: store drawing {}", md.markdown_uuid, row.seq))?;
     }
     for row in crate::section::stored(&md.markdown_uuid, &md.sections) {
         sqlx::query(
@@ -195,7 +191,7 @@ pub(crate) fn store_tables() -> impl Iterator<Item = (&'static str, &'static str
         .chain(datalib_schema::data_nodes::DDL.iter())
         .chain(datalib_schema::filings::DDL.iter())
         .chain(datalib_schema::sections::DDL.iter())
-        .chain(datalib_schema::drawn_pieces::DDL.iter())
+        .chain(datalib_schema::drawings::DDL.iter())
         .chain(SOURCE_CONTACTS_DDL.iter())
         .chain(SOURCE_CONTACT_HANDLES_DDL.iter())
         .chain(SOURCE_PHOTOS_DDL.iter())
@@ -480,16 +476,11 @@ impl IndexedMarkdownStore {
     }
 
     /// Store `md`, replacing what the store held for it. Always: a
-    /// document whose rows and file come out unchanged writes identical
-    /// rows, and doltlite's content-addressed tables then carry no diff
-    /// for it — that, and nothing here, is how "unchanged" is decided.
-    /// Write one document: its rows here and, when the document moved —
-    /// a re-keyed path prefix, a document filed under another
-    /// directory — the `.md` it used to be at goes, for the same reason
-    /// [`Self::remove_documents`] unlinks: a file nothing names is still
-    /// served and still indexed. A document with no rows is removed the
-    /// same way, the `.md` just written included; its problems stay.
-    pub fn put_document(&self, out_dir: &Path, md: &RenderedMarkdown) -> Result<()> {
+    /// document whose rows come out unchanged writes identical rows, and
+    /// doltlite's content-addressed tables then carry no diff for it —
+    /// that, and nothing here, is how "unchanged" is decided. A document
+    /// with no rows is removed; its problems stay.
+    pub fn put_document(&self, md: &RenderedMarkdown) -> Result<()> {
         if let Some(row) = md
             .rows
             .iter()
@@ -502,64 +493,29 @@ impl IndexedMarkdownStore {
                 row.uuid
             );
         }
-        let previous = self.transaction(|| {
+        self.transaction(|| {
             blocking(async {
-                let previous: Option<String> = {
-                    let mut guard = self.write_lock.acquire().await?;
-                    sqlx::query_scalar("SELECT md_path FROM markdowns WHERE markdown_uuid = ?")
-                        .bind(&md.markdown_uuid)
-                        .fetch_optional(&mut **guard.conn())
-                        .await
-                        .with_context(|| format!("read md_path for {}", md.markdown_uuid))?
-                        .flatten()
-                };
-                crate::grid_index::apply_one(&self.write_lock, out_dir, md)
+                crate::grid_index::apply_one(&self.write_lock, md)
                     .await
                     .with_context(|| format!("apply {}", md.markdown_uuid))?;
                 put_sections(&self.write_lock, md).await?;
-                self.sweep_problems(&md.markdown_uuid, &md.problems).await?;
-                Ok(previous)
+                self.sweep_problems(&md.markdown_uuid, &md.problems).await
             })
-        })?;
-        let now = md
-            .md_path
-            .strip_prefix(out_dir)
-            .unwrap_or(&md.md_path)
-            .to_string_lossy();
-        if md.rows.is_empty() {
-            unlink_rendered(out_dir, &now);
-        }
-        if let Some(previous) = previous.filter(|p| *p != now) {
-            unlink_rendered(out_dir, &previous);
-        }
-        Ok(())
+        })
     }
 
-    /// Drop documents: their rows here, and their `.md` files. However
-    /// many there are, the rows go in a handful of statements, each
-    /// binding the whole set once.
-    ///
-    /// The file matters as much as the rows. `md_path` is what
-    /// `/applet/unified_grid_and_search_index/chat/{uuid}` serves and what search indexed, so a
-    /// document deleted from the store but left on disk stays searchable and
-    /// still resolves — a deletion the user can still read. The unlink
-    /// follows the rows; inside a batch that later rolls back it leaves
-    /// rows for a file that is gone, which the next run's removal of the
-    /// same documents repairs (an absent file is the state wanted).
-    pub fn remove_documents(&self, out_dir: &Path, markdown_uuids: &[String]) -> Result<()> {
+    /// Drop documents and everything the store keeps of them. However many
+    /// there are, they go in a handful of statements, each binding the
+    /// whole set once.
+    pub fn remove_documents(&self, markdown_uuids: &[String]) -> Result<()> {
         if markdown_uuids.is_empty() {
             return Ok(());
         }
-        let md_paths = self.transaction(|| {
+        self.transaction(|| {
             blocking(async {
                 let mut guard = self.write_lock.acquire().await?;
                 let conn = guard.conn();
                 let set = serde_json::to_string(markdown_uuids)?;
-                let md_paths: Vec<String> = sqlx::query_scalar(REMOVED_MD_PATHS)
-                    .bind(&set)
-                    .fetch_all(&mut **conn)
-                    .await
-                    .context("read the md_paths of the documents to remove")?;
                 crate::grid_index::delete_document_rows(conn, markdown_uuids)
                     .await
                     .context("remove documents from the store")?;
@@ -576,13 +532,9 @@ impl IndexedMarkdownStore {
                     .execute(&mut **conn)
                     .await
                     .context("remove the problems of documents removed from the store")?;
-                Ok(md_paths)
+                Ok(())
             })
-        })?;
-        for rel in md_paths {
-            unlink_rendered(out_dir, &rel);
-        }
-        Ok(())
+        })
     }
 
     /// Record what `bucket_key` was rendered from, replacing what it
@@ -1021,13 +973,14 @@ impl IndexedMarkdownStore {
         })
     }
 
-    /// A document spelled back from what the store keeps of it, piece by
-    /// piece in order, joined exactly the document render drew. `None` for a document the store does not
-    /// hold, or one whose rows cannot spell it.
+    /// A document spelled back from what the store keeps of it, section by
+    /// section in order: joined, exactly the document render drew. `None`
+    /// for a document the store does not hold, or one whose rows cannot
+    /// spell it.
     pub fn document(
         &self,
         markdown_uuid: &str,
-    ) -> Result<Option<Vec<crate::section::SpelledPiece>>> {
+    ) -> Result<Option<Vec<crate::section::SpelledSection>>> {
         blocking(async {
             let sections: Vec<datalib_schema::sections::SectionRow> = sqlx::query_as(
                 "SELECT markdown_uuid, seq, uuid, text, framed, addressed, labels \
@@ -1037,8 +990,8 @@ impl IndexedMarkdownStore {
             .fetch_all(&self.pool)
             .await
             .context("read a document's sections")?;
-            let drawn: Vec<datalib_schema::drawn_pieces::DrawnPieceRow> = sqlx::query_as(
-                "SELECT markdown_uuid, seq, md, body_at FROM drawn_pieces \
+            let drawn: Vec<datalib_schema::drawings::DrawingRow> = sqlx::query_as(
+                "SELECT markdown_uuid, seq, md, body_at FROM drawings \
                  WHERE markdown_uuid = ? ORDER BY seq",
             )
             .bind(markdown_uuid)
@@ -1050,6 +1003,24 @@ impl IndexedMarkdownStore {
             }
             Ok(crate::section::spell(&sections, &drawn))
         })
+    }
+
+    /// [`Self::document`] as one string: the document's markdown.
+    pub fn document_text(&self, markdown_uuid: &str) -> Result<Option<String>> {
+        Ok(self
+            .document(markdown_uuid)?
+            .map(|sections| sections.into_iter().map(|s| s.md).collect()))
+    }
+
+    /// Every document the store can spell, by id, as its markdown.
+    pub fn document_texts(&self) -> Result<std::collections::BTreeMap<String, String>> {
+        let mut texts = std::collections::BTreeMap::new();
+        for row in self.markdown_rows()? {
+            if let Some(text) = self.document_text(&row.markdown_uuid)? {
+                texts.insert(row.markdown_uuid, text);
+            }
+        }
+        Ok(texts)
     }
 
     /// These documents as the search index takes them, drawn from what
@@ -1151,41 +1122,6 @@ where
         by_doc.entry(doc).or_default().push(T::from_row(&row)?);
     }
     Ok(by_doc)
-}
-
-/// Delete a rendered document's file, and every folder that leaves empty: a
-/// layout change would otherwise leave the old tree behind as folders that
-/// make a moved document still look present to anyone listing it. A file
-/// filed under an older layout may have a `blobs/` folder beside it, from
-/// before images went to the blob store; it goes with the file.
-///
-/// Best-effort by design: a file already gone is the state we wanted, and a
-/// tree we cannot write is not worth failing a render over once the rows —
-/// the thing the grid reads — are gone.
-fn unlink_rendered(out_dir: &Path, md_path_rel: &str) {
-    let abs = out_dir.join(md_path_rel);
-    if let Err(e) = std::fs::remove_file(&abs) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(
-                path = %abs.display(),
-                error = %e,
-                "could not delete the markdown of a document that went away",
-            );
-            return;
-        }
-    }
-    if datalib_schema::grid_rows::markdown_uuid_of_path(md_path_rel).is_none() {
-        if let Some(dir) = abs.parent() {
-            let _ = std::fs::remove_dir_all(dir.join("blobs"));
-        }
-    }
-    let mut dir = abs.parent();
-    while let Some(d) = dir.filter(|d| d.starts_with(out_dir) && *d != out_dir) {
-        if std::fs::remove_dir(d).is_err() {
-            break;
-        }
-        dir = d.parent();
-    }
 }
 
 impl IndexedMarkdownStore {
@@ -1459,12 +1395,8 @@ impl IndexedMarkdownStore {
         })
     }
 
-    pub fn documents(
-        &self,
-        out_dir: &Path,
-        pin: &datalib_etl::pin::Pin,
-    ) -> Result<Vec<RenderedMarkdown>> {
-        self.documents_matching(out_dir, None, pin)
+    pub fn documents(&self, pin: &datalib_etl::pin::Pin) -> Result<Vec<RenderedMarkdown>> {
+        self.documents_matching(None, pin)
     }
 
     pub fn changed_since(
@@ -1530,7 +1462,6 @@ impl IndexedMarkdownStore {
     /// store has nothing to protect itself from.
     pub fn documents_matching(
         &self,
-        out_dir: &Path,
         only: Option<&HashSet<String>>,
         pin: &datalib_etl::pin::Pin,
     ) -> Result<Vec<RenderedMarkdown>> {
@@ -1658,17 +1589,10 @@ impl IndexedMarkdownStore {
                     source_id: md.source_id.clone(),
                     upstream_cursor: md.upstream_cursor.clone(),
                     bucket_key: md.bucket_key.clone(),
-                    md_path: match md.md_path.as_deref() {
-                        Some(rel) => out_dir.join(rel),
-                        None => PathBuf::from(&md.markdown_uuid),
-                    },
                     render_version,
                     rows,
                     sections: Vec::new(),
-                    section_layout: md
-                        .section_layout
-                        .as_deref()
-                        .and_then(datalib_schema::markdowns::parse_layout),
+                    searchable: md.searchable,
                     content_hash: md.content_hash.clone(),
                     front: md
                         .front
@@ -1760,7 +1684,7 @@ impl IndexedMarkdownStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_schema::grid_rows::{doc_file_rel, GridRow};
+    use datalib_schema::grid_rows::GridRow;
     use datalib_schema::problems::{Outcome, Problem, Reason, Scope, Stage};
     use datalib_schema::providers::Provider;
 
@@ -1778,7 +1702,6 @@ mod tests {
         let mut statements = vec![
             "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?",
             crate::grid_index::DELETE_DOCUMENT_GRID_ROWS,
-            REMOVED_MD_PATHS,
             REMOVED_PROBLEMS,
             REMOVED_SECTIONS,
             DOCUMENT_SECTIONS,
@@ -1829,8 +1752,7 @@ mod tests {
         let st = store(td.path());
         assert!(tokio::runtime::Handle::try_current().is_err());
         for i in 0..3 {
-            st.put_document(td.path(), &doc(td.path(), &format!("d{i}"), "fp"))
-                .unwrap();
+            st.put_document(&doc(&format!("d{i}"), "fp")).unwrap();
             // `size` is the pool's own count of live connections; the
             // dying runtime dropped the guard that decrements it. Whether
             // it is idle yet is a race with the return task, so not asserted.
@@ -1848,7 +1770,7 @@ mod tests {
     /// so the fill costs the same with or without the lookup indexes.
     fn store_holding(dir: &Path, n: usize) -> IndexedMarkdownStore {
         let st = store(dir);
-        st.put_document(dir, &doc(dir, "seed", "fp")).unwrap();
+        st.put_document(&doc("seed", "fp")).unwrap();
         let (_table, columns) = datalib_schema::grid_rows::COLUMNS[0];
         let copied: Vec<String> = columns
             .iter()
@@ -1872,12 +1794,11 @@ mod tests {
 
     /// Seconds to replace `replaced` of a store's documents in one batch,
     /// the way the render driver writes them.
-    fn seconds_to_replace(dir: &Path, st: &IndexedMarkdownStore, replaced: usize) -> f64 {
+    fn seconds_to_replace(st: &IndexedMarkdownStore, replaced: usize) -> f64 {
         let started = std::time::Instant::now();
         st.begin_batch().unwrap();
         for i in 0..replaced {
-            st.put_document(dir, &doc(dir, &format!("m{i}"), "fp"))
-                .unwrap();
+            st.put_document(&doc(&format!("m{i}"), "fp")).unwrap();
         }
         st.commit_batch().unwrap();
         started.elapsed().as_secs_f64()
@@ -1901,8 +1822,8 @@ mod tests {
         let big = store_holding(big_dir.path(), GROWTH * REPLACED);
         let (mut small_s, mut big_s) = (f64::MAX, f64::MAX);
         for _ in 0..3 {
-            small_s = small_s.min(seconds_to_replace(small_dir.path(), &small, REPLACED));
-            big_s = big_s.min(seconds_to_replace(big_dir.path(), &big, REPLACED));
+            small_s = small_s.min(seconds_to_replace(&small, REPLACED));
+            big_s = big_s.min(seconds_to_replace(&big, REPLACED));
         }
         assert!(
             big_s < 5.0 * small_s,
@@ -1931,24 +1852,18 @@ mod tests {
             .expect("row")
     }
 
-    fn doc(dir: &Path, markdown_uuid: &str, label: &str) -> RenderedMarkdown {
-        doc_with(dir, markdown_uuid, label, Vec::new())
+    fn doc(markdown_uuid: &str, label: &str) -> RenderedMarkdown {
+        doc_with(markdown_uuid, label, Vec::new())
     }
 
-    fn doc_with(
-        dir: &Path,
-        markdown_uuid: &str,
-        _label: &str,
-        problems: Vec<ProblemRow>,
-    ) -> RenderedMarkdown {
+    fn doc_with(markdown_uuid: &str, _label: &str, problems: Vec<ProblemRow>) -> RenderedMarkdown {
         RenderedMarkdown {
-            section_layout: None,
+            searchable: true,
             content_hash: None,
             markdown_uuid: markdown_uuid.to_string(),
             source_id: "src".into(),
             upstream_cursor: None,
             bucket_key: None,
-            md_path: dir.join(doc_file_rel(markdown_uuid)),
             render_version: 7,
             rows: vec![row(markdown_uuid, markdown_uuid)],
             sections: Vec::new(),
@@ -1998,9 +1913,9 @@ mod tests {
             items: 2,
             last_at: Some("2369-05-28T15:08:20+00:00".into()),
         });
-        let mut d = doc(td.path(), "a", "fp");
+        let mut d = doc("a", "fp");
         d.contacts = vec![riker.clone()];
-        st.put_document(td.path(), &d).unwrap();
+        st.put_document(&d).unwrap();
         st.commit("with riker").unwrap();
         let handles = |st: &IndexedMarkdownStore| -> Vec<String> {
             blocking(
@@ -2020,13 +1935,12 @@ mod tests {
             .unwrap()
             .expect("a committed store is readable");
         let pin = rd.pin().unwrap().clone();
-        let docs = rd.documents_matching(td.path(), None, &pin).unwrap();
+        let docs = rd.documents_matching(None, &pin).unwrap();
         assert_eq!(docs[0].contacts, vec![riker]);
         rd.close();
 
         let st = store(td.path());
-        st.put_document(td.path(), &doc(td.path(), "a", "fp"))
-            .unwrap();
+        st.put_document(&doc("a", "fp")).unwrap();
         assert!(handles(&st).is_empty());
         let rows: i64 = blocking(
             sqlx::query_scalar("SELECT count(*) FROM source_contacts").fetch_one(&st.pool),
@@ -2052,10 +1966,10 @@ mod tests {
             .read_together()
             .under(&Lineage::top().below(&channel));
         let label = DataNodeRow::new("a", "label", "src", "Label").place();
-        let mut d = doc(td.path(), "a", "fp");
+        let mut d = doc("a", "fp");
         d.data_nodes = vec![channel.clone(), thread.clone(), label.clone()];
         d.filings = vec![FilingRow::new("a", "a", "label")];
-        st.put_document(td.path(), &d).unwrap();
+        st.put_document(&d).unwrap();
         st.commit("with containers").unwrap();
         st.close();
 
@@ -2063,7 +1977,7 @@ mod tests {
             .unwrap()
             .expect("a committed store is readable");
         let pin = rd.pin().unwrap().clone();
-        let docs = rd.documents_matching(td.path(), None, &pin).unwrap();
+        let docs = rd.documents_matching(None, &pin).unwrap();
         // The thread is the document's own row, so it sorts as that row.
         let row_key = d
             .rows
@@ -2079,8 +1993,7 @@ mod tests {
         rd.close();
 
         let st = store(td.path());
-        st.put_document(td.path(), &doc(td.path(), "a", "fp"))
-            .unwrap();
+        st.put_document(&doc("a", "fp")).unwrap();
         for table in ["data_nodes", "filings"] {
             let n: i64 = blocking(
                 sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
@@ -2114,7 +2027,7 @@ mod tests {
         };
         let with = |id: &str, sections: Vec<Section>| RenderedMarkdown {
             sections,
-            ..doc(td.path(), id, "fp")
+            ..doc(id, "fp")
         };
         let item = |uuid: &str, said: &str| {
             Section::item(
@@ -2124,20 +2037,16 @@ mod tests {
                 Vec::new(),
             )
         };
-        st.put_document(
-            td.path(),
-            &with(
-                "a",
-                vec![
-                    Section::frame("# Tea\n".into()),
-                    item("a", "hi"),
-                    Section::keyed("m2", "<div>Data: yes</div>\n".into()),
-                ],
-            ),
-        )
+        st.put_document(&with(
+            "a",
+            vec![
+                Section::frame("# Tea\n".into()),
+                item("a", "hi"),
+                Section::keyed("m2", "<div>Data: yes</div>\n".into()),
+            ],
+        ))
         .unwrap();
-        st.put_document(td.path(), &with("b", vec![item("b", "b")]))
-            .unwrap();
+        st.put_document(&with("b", vec![item("b", "b")])).unwrap();
         let b = ("b".into(), 0, Some("b".into()), "b".into(), false);
         assert_eq!(
             kept(&st),
@@ -2154,16 +2063,14 @@ mod tests {
             ]
         );
 
-        st.put_document(td.path(), &with("a", vec![item("a", "bye")]))
-            .unwrap();
+        st.put_document(&with("a", vec![item("a", "bye")])).unwrap();
         let a_now = ("a".into(), 0, Some("a".into()), "bye".into(), false);
         assert_eq!(kept(&st), vec![a_now.clone(), b.clone()]);
 
-        st.put_document(td.path(), &doc(td.path(), "a", "fp"))
-            .unwrap();
+        st.put_document(&doc("a", "fp")).unwrap();
         assert_eq!(kept(&st), vec![a_now, b.clone()], "read back: kept");
 
-        st.remove_documents(td.path(), &["a".to_string()]).unwrap();
+        st.remove_documents(&["a".to_string()]).unwrap();
         assert_eq!(kept(&st), vec![b]);
         st.close();
     }
@@ -2182,9 +2089,9 @@ mod tests {
                     Section::unkeyed("Page text\n".into()),
                     Section::item(id, format!("<div>{id}</div>\n"), "hi".into(), Vec::new()),
                 ],
-                ..doc(td.path(), id, "fp")
+                ..doc(id, "fp")
             };
-            st.put_document(td.path(), &d).unwrap();
+            st.put_document(&d).unwrap();
         }
         st.commit("two documents").unwrap();
         st.close();
@@ -2222,11 +2129,11 @@ mod tests {
     fn a_container_carried_by_another_document_is_refused() {
         let td = tempfile::tempdir().unwrap();
         let st = store(td.path());
-        let mut d = doc(td.path(), "a", "fp");
+        let mut d = doc("a", "fp");
         d.data_nodes = vec![datalib_schema::data_nodes::DataNodeRow::new(
             "b", "chat", "src", "Chat",
         )];
-        let err = st.put_document(td.path(), &d).unwrap_err();
+        let err = st.put_document(&d).unwrap_err();
         assert!(
             format!("{err:#}").contains("carries container chat"),
             "{err:#}"
@@ -2240,7 +2147,7 @@ mod tests {
         let st = store(td.path());
         st.transaction(|| {
             for id in ["b", "a", "c"] {
-                let mut d = doc(td.path(), id, "fp");
+                let mut d = doc(id, "fp");
                 for extra in ["z", "m"] {
                     let mut r = row(&format!("{id}-{extra}"), id);
                     r.is_document = false;
@@ -2250,7 +2157,7 @@ mod tests {
                     edge(&format!("{id}-e2"), id, "a"),
                     edge(&format!("{id}-e1"), id, "c"),
                 ];
-                st.put_document(td.path(), &d)?;
+                st.put_document(&d)?;
             }
             Ok(())
         })
@@ -2281,20 +2188,18 @@ mod tests {
             )
         };
 
-        let whole = rd.documents_matching(td.path(), None, &pin).unwrap();
+        let whole = rd.documents_matching(None, &pin).unwrap();
         assert_eq!(shape(whole), vec![expect("a"), expect("b"), expect("c")]);
 
         let only: HashSet<String> = ["c", "gone"].map(String::from).into();
-        let some = rd.documents_matching(td.path(), Some(&only), &pin).unwrap();
+        let some = rd.documents_matching(Some(&only), &pin).unwrap();
         assert_eq!(
             shape(some),
             vec![expect("c")],
             "an id with no document is absent"
         );
 
-        let none = rd
-            .documents_matching(td.path(), Some(&HashSet::new()), &pin)
-            .unwrap();
+        let none = rd.documents_matching(Some(&HashSet::new()), &pin).unwrap();
         assert!(none.is_empty());
         rd.close();
     }
@@ -2308,17 +2213,17 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let st = store(td.path());
 
-        let mut none = doc(td.path(), "d-none", "fp");
+        let mut none = doc("d-none", "fp");
         none.rows[0].is_document = false;
-        let err = st.put_document(td.path(), &none).unwrap_err();
+        let err = st.put_document(&none).unwrap_err();
         assert!(
             format!("{err:#}").contains("none of its 1 rows is marked is_document"),
             "{err:#}"
         );
 
-        let mut two = doc(td.path(), "d-two", "fp");
+        let mut two = doc("d-two", "fp");
         two.rows.push(row("d-two-extra", "d-two"));
-        let err = st.put_document(td.path(), &two).unwrap_err();
+        let err = st.put_document(&two).unwrap_err();
         assert!(
             format!("{err:#}").contains("both marked is_document"),
             "{err:#}"
@@ -2342,14 +2247,14 @@ mod tests {
     fn markdowns_takes_its_stamps_from_the_document_row() {
         let td = tempfile::tempdir().unwrap();
         let st = store(td.path());
-        let mut d = doc(td.path(), "d-stamped", "fp");
+        let mut d = doc("d-stamped", "fp");
         d.rows[0].created_at = Some("2026-01-01T00:00:00+00:00".into());
         d.rows[0].modified_at = Some("2026-03-01T00:00:00+00:00".into());
         let mut inner = row("d-stamped-m1", "d-stamped");
         inner.is_document = false;
         inner.created_at = Some("2026-02-01T00:00:00+00:00".into());
         d.rows.push(inner);
-        st.put_document(td.path(), &d).unwrap();
+        st.put_document(&d).unwrap();
         let (created, modified): (Option<String>, Option<String>) = blocking(async {
             sqlx::query_as(
                 "SELECT created_at, modified_at FROM markdowns WHERE markdown_uuid = 'd-stamped'",
@@ -2378,7 +2283,7 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let st = store(td.path());
 
-        let mut report = doc(td.path(), "storage-doc", "fp-1");
+        let mut report = doc("storage-doc", "fp-1");
         report.render_version = 1;
         report.rows = vec![GridRow::builder()
             .uuid("storage-doc")
@@ -2394,7 +2299,7 @@ mod tests {
             .is_document(true)
             .build()
             .expect("row")];
-        st.put_document(td.path(), &report).expect("store report");
+        st.put_document(&report).expect("store report");
 
         assert!(
             st.render_versions().expect("versions").is_empty(),
@@ -2403,7 +2308,7 @@ mod tests {
         );
 
         // A real provider document alongside it is still counted.
-        st.put_document(td.path(), &doc(td.path(), "real-doc", "fp-2"))
+        st.put_document(&doc("real-doc", "fp-2"))
             .expect("store provider doc");
         assert_eq!(
             st.render_versions().expect("versions"),
@@ -2553,8 +2458,8 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         let s = store(root);
-        s.put_document(root, &doc(root, "md-1", "fp-1")).unwrap();
-        s.put_document(root, &doc(root, "md-1", "fp-1")).unwrap();
+        s.put_document(&doc("md-1", "fp-1")).unwrap();
+        s.put_document(&doc("md-1", "fp-1")).unwrap();
         let n: i64 = blocking(async {
             sqlx::query_scalar("SELECT COUNT(*) FROM markdowns")
                 .fetch_one(&s.pool)
@@ -2574,7 +2479,7 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         let s = store(root);
-        s.put_document(root, &doc(root, "storage", "fp-s")).unwrap();
+        s.put_document(&doc("storage", "fp-s")).unwrap();
         let none = Holdings::default();
         assert_eq!(s.holdings(Some("storage")).unwrap(), none);
         let one = Holdings {
@@ -2582,8 +2487,8 @@ mod tests {
             items: 3,
         };
         assert_eq!(s.holdings(None).unwrap(), one, "without one to skip");
-        s.put_document(root, &doc(root, "md-1", "fp-1")).unwrap();
-        s.put_document(root, &doc(root, "md-2", "fp-2")).unwrap();
+        s.put_document(&doc("md-1", "fp-1")).unwrap();
+        s.put_document(&doc("md-2", "fp-2")).unwrap();
         let two = Holdings {
             documents: 2,
             items: 6,
@@ -2599,42 +2504,11 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         let s = store(root);
-        let mut uncounted = doc(root, "md-1", "fp-1");
+        let mut uncounted = doc("md-1", "fp-1");
         uncounted.rows[0].item_count = None;
-        let err = s.put_document(root, &uncounted).unwrap_err();
+        let err = s.put_document(&uncounted).unwrap_err();
         assert!(format!("{err:#}").contains("has no item_count"), "{err:#}");
         assert_eq!(s.holdings(None).unwrap(), Holdings::default());
-    }
-
-    /// A document an older build filed under its old layout — a folder of
-    /// its own, with a `blobs/` folder beside the file — leaves nothing of
-    /// it behind once written where its id files it.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_document_filed_under_an_old_layout_leaves_nothing_behind() {
-        let td = tempfile::tempdir().unwrap();
-        let root = td.path();
-        let s = store(root);
-        let d = doc(root, "md-1", "fp-1");
-        std::fs::create_dir_all(d.md_path.parent().unwrap()).unwrap();
-        std::fs::write(&d.md_path, "new").unwrap();
-        s.put_document(root, &d).unwrap();
-        let old = root.join("src/render_markdown/md-1");
-        std::fs::create_dir_all(old.join("blobs")).unwrap();
-        std::fs::write(old.join("all.md"), "old").unwrap();
-        std::fs::write(old.join("blobs/photo.png"), "png").unwrap();
-        blocking(
-            sqlx::query("UPDATE markdowns SET md_path = 'src/render_markdown/md-1/all.md'")
-                .execute(&s.pool),
-        )
-        .unwrap();
-
-        s.put_document(root, &d).unwrap();
-        assert!(!old.exists(), "the old folder and its blobs are gone");
-        assert!(!root.join("src").exists(), "and the folders it alone kept");
-        assert!(d.md_path.exists(), "the new file stays");
-        // The same path twice is left alone.
-        s.put_document(root, &d).unwrap();
-        assert!(d.md_path.exists());
     }
 
     /// Re-rendering replaces a document's rows rather than accumulating
@@ -2644,8 +2518,8 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         let s = store(root);
-        s.put_document(root, &doc(root, "md-1", "fp-1")).unwrap();
-        s.put_document(root, &doc(root, "md-1", "fp-2")).unwrap();
+        s.put_document(&doc("md-1", "fp-1")).unwrap();
+        s.put_document(&doc("md-1", "fp-2")).unwrap();
 
         let n: i64 = blocking(async {
             sqlx::query_scalar("SELECT COUNT(*) FROM grid_rows")
@@ -2656,8 +2530,8 @@ mod tests {
         assert_eq!(n, 1, "one row, not two");
     }
 
-    fn doc_in(dir: &Path, markdown_uuid: &str, row_uuid: &str, fp: &str) -> RenderedMarkdown {
-        let mut d = doc(dir, markdown_uuid, fp);
+    fn doc_in(markdown_uuid: &str, row_uuid: &str, fp: &str) -> RenderedMarkdown {
+        let mut d = doc(markdown_uuid, fp);
         d.rows = vec![row(row_uuid, markdown_uuid)];
         d
     }
@@ -2675,14 +2549,14 @@ mod tests {
         let root = td.path();
         let earlier = store(root);
         earlier
-            .put_document(root, &doc_in(root, "doc-a", "row-1", "fp-a"))
+            .put_document(&doc_in("doc-a", "row-1", "fp-a"))
             .unwrap();
         earlier.close();
 
         // A second open is a second run, whatever the clock says.
         let later = store(root);
         later
-            .put_document(root, &doc_in(root, "doc-b", "row-1", "fp-b"))
+            .put_document(&doc_in("doc-b", "row-1", "fp-b"))
             .expect("the row moves to doc-b");
         let owner: String = blocking(async {
             sqlx::query_scalar("SELECT markdown_uuid FROM grid_rows WHERE uuid = 'row-1'")
@@ -2693,9 +2567,7 @@ mod tests {
         assert_eq!(owner, "doc-b");
         // doc-a re-renders without the row: its delete-by-owner must not
         // touch what doc-b now holds.
-        later
-            .put_document(root, &doc(root, "doc-a", "fp-a2"))
-            .unwrap();
+        later.put_document(&doc("doc-a", "fp-a2")).unwrap();
         let n: i64 = blocking(async {
             sqlx::query_scalar("SELECT COUNT(*) FROM grid_rows WHERE uuid = 'row-1'")
                 .fetch_one(&later.pool)
@@ -2712,10 +2584,9 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         let s = store(root);
-        s.put_document(root, &doc_in(root, "doc-a", "row-1", "fp-a"))
-            .unwrap();
+        s.put_document(&doc_in("doc-a", "row-1", "fp-a")).unwrap();
         let err = s
-            .put_document(root, &doc_in(root, "doc-b", "row-1", "fp-b"))
+            .put_document(&doc_in("doc-b", "row-1", "fp-b"))
             .expect_err("a same-run collision must fail");
         assert!(format!("{err:#}").contains("written this run"), "{err:#}");
     }
@@ -2729,16 +2600,10 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         let s = store(root);
-        s.put_document(
-            root,
-            &doc_with(root, "md-1", "fp-1", vec![problem("row-a", "md-1")]),
-        )
-        .unwrap();
-        s.put_document(
-            root,
-            &doc_with(root, "md-2", "fp-1", vec![problem("row-b", "md-2")]),
-        )
-        .unwrap();
+        s.put_document(&doc_with("md-1", "fp-1", vec![problem("row-a", "md-1")]))
+            .unwrap();
+        s.put_document(&doc_with("md-2", "fp-1", vec![problem("row-b", "md-2")]))
+            .unwrap();
         assert_eq!(
             s.own_problem_counts()
                 .unwrap()
@@ -2748,7 +2613,7 @@ mod tests {
         );
 
         // A second run that only reprocesses md-2, and finds it clean.
-        s.put_document(root, &doc(root, "md-2", "fp-2")).unwrap();
+        s.put_document(&doc("md-2", "fp-2")).unwrap();
 
         let counts = s.own_problem_counts().unwrap();
         assert_eq!(
@@ -2760,8 +2625,7 @@ mod tests {
 
     /// A document that comes back with no rows — every one rejected by
     /// validation — is not a document: its `markdowns` row goes, so a
-    /// bucket sweep never finds it under the bucket it used to be in,
-    /// and so does the `.md` just written, which nothing would resolve.
+    /// bucket sweep never finds it under the bucket it used to be in.
     /// The problems saying why stay. Found by the contract harness on a
     /// gitlab merge request re-keyed under another bucket whose rows all
     /// failed `created_at`: `markdowns` kept the old bucket.
@@ -2770,23 +2634,18 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         let s = store(root);
-        let mut first = doc(root, "md-1", "fp-1");
+        let mut first = doc("md-1", "fp-1");
         first.bucket_key = Some("mr!17".into());
-        std::fs::create_dir_all(first.md_path.parent().unwrap()).unwrap();
-        std::fs::write(&first.md_path, "first").unwrap();
-        s.put_document(root, &first).unwrap();
+        s.put_document(&first).unwrap();
         assert_eq!(
             s.documents_for_buckets(&["mr!17"]).unwrap(),
             vec![("mr!17".to_string(), "md-1".to_string())]
         );
 
-        let mut empty = doc_with(root, "md-1", "fp-2", vec![problem("row-a", "md-1")]);
+        let mut empty = doc_with("md-1", "fp-2", vec![problem("row-a", "md-1")]);
         empty.bucket_key = Some("mr!17~new".into());
-        empty.md_path = root.join("moved").join("md-1.md");
         empty.rows.clear();
-        std::fs::create_dir_all(empty.md_path.parent().unwrap()).unwrap();
-        std::fs::write(&empty.md_path, "empty").unwrap();
-        s.put_document(root, &empty).unwrap();
+        s.put_document(&empty).unwrap();
 
         assert!(
             s.documents_for_buckets(&["mr!17", "mr!17~new"])
@@ -2795,8 +2654,6 @@ mod tests {
             "no markdowns row under either bucket"
         );
         assert!(s.all_document_uuids().unwrap().is_empty());
-        assert!(!first.md_path.exists(), "the old file is gone");
-        assert!(!empty.md_path.exists(), "and so is the one just written");
         assert_eq!(
             s.own_problem_counts()
                 .unwrap()
@@ -2814,11 +2671,8 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         let s = store(root);
-        s.put_document(
-            root,
-            &doc_with(root, "md-1", "fp-1", vec![problem("row-a", "md-1")]),
-        )
-        .unwrap();
+        s.put_document(&doc_with("md-1", "fp-1", vec![problem("row-a", "md-1")]))
+            .unwrap();
         assert_eq!(
             s.own_problem_counts()
                 .unwrap()
@@ -2827,7 +2681,7 @@ mod tests {
             Some(1)
         );
 
-        s.put_document(root, &doc(root, "md-1", "fp-2")).unwrap();
+        s.put_document(&doc("md-1", "fp-2")).unwrap();
         assert!(
             s.own_problem_counts().unwrap().is_empty(),
             "reprocessed clean ⇒ no problem rows left"
@@ -2869,7 +2723,7 @@ mod tests {
             "no document behind it"
         );
 
-        s.put_document(root, &doc(root, "md-1", "fp-1")).unwrap();
+        s.put_document(&doc("md-1", "fp-1")).unwrap();
         assert!(
             s.own_problem_counts().unwrap().is_empty(),
             "the run that produced the document swept its failure"

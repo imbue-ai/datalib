@@ -24,7 +24,6 @@ Args: the doltlite shell, then `run_sync_pipeline.py`'s own arguments
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import random
@@ -67,8 +66,6 @@ RUN_HISTORY_TABLES = {"sync_runs", "_datalib_meta", "sqlite_sequence", "source_c
 # history, so the file is bigger after one than before.
 SELF_MEASUREMENT_TABLES = {"source_measurements"}
 SELF_MEASUREMENT_PROVIDER = "datalib"
-# The `markdowns.kind` of the storage page.
-SELF_MEASUREMENT_KIND = "storage"
 # Columns that hold churn by construction.
 VOLATILE_COLUMNS = {"volatile_payload"}
 # A `*_bookkeeping` row counts the attempts at a record across runs.
@@ -230,24 +227,14 @@ def children(pid: int) -> list[int]:
 
 
 def snapshot(doltlite: str, workspace: Path) -> dict[str, object]:
-    """Every store's content, masked, plus every document's hash."""
+    """Every store's content, masked: a document is its render store's
+    `sections` and `drawings` rows."""
     shot: dict[str, object] = {}
-    storage_pages: set[str] = set()
     for db in sorted(workspace.glob("*/*/*.doltlite_db")):
         rel = str(db.relative_to(workspace))
         tables = query(
             doltlite, db, "SELECT name FROM sqlite_master WHERE type='table'"
         )
-        if any(r["name"] == "markdowns" for r in tables):
-            storage_pages |= {
-                r["md_path"]
-                for r in query(
-                    doltlite,
-                    db,
-                    "SELECT md_path FROM markdowns "
-                    f"WHERE kind = '{SELF_MEASUREMENT_KIND}'",
-                )
-            }
         for t in sorted(r["name"] for r in tables):
             if t in RUN_HISTORY_TABLES | SELF_MEASUREMENT_TABLES or t.startswith(
                 "sqlite_"
@@ -262,12 +249,6 @@ def snapshot(doltlite: str, workspace: Path) -> dict[str, object]:
                 if row.get("provider") != SELF_MEASUREMENT_PROVIDER
             ]
             shot[f"{rel}:{t}"] = sorted(json.dumps(r, sort_keys=True) for r in rows)
-    for md in sorted(workspace.glob("*/render_markdown/**/*.md")):
-        if str(md.relative_to(workspace)) in storage_pages:
-            continue
-        shot[str(md.relative_to(workspace))] = hashlib.sha256(
-            mask(md.read_text()).encode()  # type: ignore[union-attr]
-        ).hexdigest()
     return shot
 
 

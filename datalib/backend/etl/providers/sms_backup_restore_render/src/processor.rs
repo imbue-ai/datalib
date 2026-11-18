@@ -36,7 +36,6 @@ impl SourceRender for SmsRender {
         let mut on_doc = |md| ctx.emit_doc(md);
         let outcome = crate::render::render(
             raw_path,
-            ctx.root,
             ctx.name,
             ctx.progress,
             &mut on_doc,

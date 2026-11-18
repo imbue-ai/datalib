@@ -229,7 +229,6 @@ fn render_open<S: SessionRender>(
     };
     let mut renderer = ChatRenderer::new(
         &profile,
-        target.out_root,
         target.source_id,
         plan.render.len(),
         target.progress,

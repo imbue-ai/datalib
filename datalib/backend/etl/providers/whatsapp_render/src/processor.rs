@@ -70,7 +70,6 @@ impl SourceRender for WhatsappRender {
             &parsed.chats,
             &parsed.commit,
             raw_path,
-            ctx.root,
             ctx.name,
             ctx.progress,
             ctx.raw_range(),

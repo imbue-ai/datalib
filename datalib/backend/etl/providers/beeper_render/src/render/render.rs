@@ -61,7 +61,6 @@ pub struct RenderSummary {
 /// attachment bytes read a batch of at most `blob_bytes` at a time.
 pub fn render_all(
     parsed: &ParsedBeeper,
-    out_dir: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -73,7 +72,6 @@ pub fn render_all(
         .with_context(|| format!("open the blob store beside {}", raw_db_path.display()))?;
     let rendered = render_open(
         parsed,
-        out_dir,
         source_id,
         progress,
         on_doc_complete,
@@ -90,7 +88,6 @@ pub fn render_all(
 
 fn render_open(
     parsed: &ParsedBeeper,
-    out_dir: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -113,7 +110,6 @@ fn render_open(
     for network in networks {
         let mut renderer = ChatRenderer::new(
             &network.profile,
-            out_dir,
             source_id,
             network.chats.len(),
             progress,

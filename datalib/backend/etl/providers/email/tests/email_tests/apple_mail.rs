@@ -489,6 +489,7 @@ async fn images_mail_kept_aside_are_stored_and_drawn() {
     use datalib_etl_email_render::render::parse::open;
     use datalib_etl_render::inputs::RawRange;
     use datalib_etl_render::pages::PageSize;
+    use datalib_etl_render::section::join;
 
     let folder = MailFolder::empty().await;
     write_emlx(
@@ -519,10 +520,8 @@ async fn images_mail_kept_aside_are_stored_and_drawn() {
     )
     .expect("open")
     .expect("a committed store");
-    let pages = tempfile::tempdir().unwrap();
     let (docs, _) = super::jmap_mbox::render_paged(
         &store,
-        pages.path(),
         PageSize {
             buckets: 10,
             bytes: 1 << 30,
@@ -530,7 +529,7 @@ async fn images_mail_kept_aside_are_stored_and_drawn() {
     );
     store.close();
     assert_eq!(docs.len(), 1);
-    let md = std::fs::read_to_string(&docs[0].md_path).unwrap();
+    let md = join(&docs[0].sections);
 
     let cas = datalib_etl::blob_cas::cas_path_for(&db_path);
     let linked = super::jmap_mbox::parts_linked(&md, &cas).await;

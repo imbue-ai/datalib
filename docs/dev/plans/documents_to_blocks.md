@@ -2,8 +2,9 @@
 
 **Status: proposal (2026-11-17). Steps 1, 2, 3a, 3b and 3c have
 landed (#1765, #1770, #1775, #1782, #1818), and step 6 landed with
-step 1 (#1765): a chat is one document. 4a and 5 are under way;
-nothing else has started.** Facts about the tree were checked against
+step 1 (#1765): a chat is one document. 5a–5d have landed (#1868,
+#1872, #1876) and 5e is in review. 4a is under way; nothing else has
+started, step 10 (bodies in their own format) included.** Facts about the tree were checked against
 the code on 2026-11-16; file references are to that tree.
 
 ## Words
@@ -569,7 +570,7 @@ against the eval before the next.
    - **5a. The store spells every document.** `sections` keeps a
      chat-common item's body alone and none of its layout, so
      chat-common's fourteen sources could not be read back from the
-     store. A `drawn_pieces` table keeps the rest as drawn: each block's
+     store. A `drawings` table keeps the rest as drawn: each block's
      drawing with its body cut out and where it goes back, and each
      stretch of layout whole. The store then spells every document byte
      for byte, which a step test checks against every fixture document's
@@ -587,18 +588,21 @@ against the eval before the next.
      commit the grid index read (`source_cursors`), so the text matches
      the rows the grid shows; a render the index has not read yet shows
      once it has.
-   - **5d.** A command prints or exports a document's markdown: the way
-     out the README and the first-time guide promise as the `.md` files.
-     Tests and fixtures read drawn text.
-   - **5e.** Render stops writing the files, and the existing ones are
-     deleted, each render store kept; the rule that rendered markdown is
-     write-only goes with them. The render store's shape changes, so with
-     it, at no extra re-render: `drawn_pieces` and `SpelledPiece` take
-     names without "piece" (`drawings`, `SpelledSection`), and Notion
-     hands a page's text as a big block named by the page's row, its
-     front matter as layout. Today the page's text is a section with no
-     uuid, though its row has one. Paging through what is read together,
-     a page at a time, comes after.
+   - **5d.** `datalib-step markdown <root>` prints one document
+     (`--source`, `--document`) or writes every one as
+     `<folder>/<source>/<id>.md` (`--out`), as its render store spells
+     it, at a commit with `--at`. It is the way out the README and the
+     first-time guide promise; tests and fixtures read documents through
+     it or the store.
+   - **5e.** Render stops writing the files, and the ones an earlier
+     build wrote are deleted the next time a source renders, each render
+     store kept. `markdowns` loses `md_path` and `section_layout`; a
+     renderer says `searchable` itself. The render store's shape
+     changes, so with it, at no extra re-render: `drawn_pieces` and
+     `SpelledPiece` are renamed `drawings` and `SpelledSection`, and
+     Notion hands a page's text as a big block named by the page's row,
+     its front matter as layout. Paging through what is read together, a
+     page at a time, comes after.
 6. **No time buckets.** Landed with step 1 (#1765): a bucketed source
    renders one container per chat, and the `period` setting is gone.
 7. **Embedding context.** Chunks are cut from windows of what is read
@@ -615,6 +619,37 @@ against the eval before the next.
    source on the Manage screen.
 9. **The rest of the table above:** the map, links, the problems banner
    with the problems plan, the docs.
+10. **Each block keeps its body in the format it came in.** Today every
+    body is turned into markdown at render. For some sources that is
+    what the text already is (a Claude or ChatGPT message, a Notion
+    page), and for a PDF it is a good target. For email it is a lossy
+    conversion: each HTML part goes through `htmd`
+    (`email_render/src/render/render.rs`), with handlers to repair what
+    it gets wrong. A mail reader like Thunderbird does no such thing: it
+    draws the sender's HTML in a locked-down view (no scripts, no remote
+    content) and offers simplified HTML or plain text as fallbacks.
+    Since 5e a block's body is a row of its own, so the format can be
+    a column beside it:
+    - **What is stored.** `sections` gains the body's format: markdown,
+      HTML or plain text. Email keeps its HTML part as sent; chat sources
+      whose messages are plain text say so rather than escaping them into
+      markdown; markdown sources stay as they are.
+    - **What draws it.** The viewer draws each block by its format: markdown
+      through markdown-it as now, HTML through the sanitizer
+      (`ui/src/cards/sanitize.ts`) on its allowlist, text as text. Each
+      block is still a fragment of its own, so one cannot reach into the
+      next.
+    - **What search reads.** Search draws words from each format with its
+      own extractor (`search_index/src/text.rs` does markdown today).
+      Changing the extractor changes the indexed text, so it is an
+      `INDEX_TEXT_VERSION` bump.
+    - **What an export writes.** `datalib-step markdown` still writes
+      markdown, converting an HTML block on the way out, or writes it as
+      HTML. Which one is to decide; nothing else depends on it.
+
+    Email goes first, since it loses the most. It costs a re-render of
+    every email source and the two new drawing paths; the
+    `htmd` repairs go.
 
 ## Open questions
 

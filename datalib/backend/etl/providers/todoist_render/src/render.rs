@@ -5,17 +5,13 @@
 //! says what becomes what.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs;
-use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
-use datalib_etl::layout::render_markdown_root;
 use datalib_etl_render::front_matter::Front;
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_inline, escape_name_inline, escape_text, md_link_dest};
 use datalib_etl_render::inputs::Inputs;
 use datalib_etl_render::message::{chip_link, stamp_text_html, MessageHeader};
-use datalib_etl_render::section::{join, msg_div_open_with, Section, MSG_DIV_CLOSE};
+use datalib_etl_render::section::{msg_div_open_with, Section, MSG_DIV_CLOSE};
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
 use datalib_id::Identity;
@@ -174,30 +170,11 @@ struct ProjectFacts {
     name: String,
     known: bool,
     url: String,
-    md_rel: String,
     account: Option<String>,
 }
 
-/// One project's document: what the store holds of it, written to its
-/// `.md` under `root`. `inputs` gets every raw row it read.
-pub fn render_project(
-    root: &Path,
-    source_id: &str,
-    store: &Store,
-    project_id: &str,
-    inputs: &Inputs,
-) -> Result<RenderedMarkdown> {
-    let doc = build(source_id, store, project_id, inputs);
-    let md_path = root.join(&doc.md_path);
-    let dir = md_path.parent().expect("a document's file has a folder");
-    fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
-    fs::write(&md_path, join(&doc.sections))
-        .with_context(|| format!("write {}", md_path.display()))?;
-    Ok(RenderedMarkdown { md_path, ..doc })
-}
-
-/// [`render_project`] without the file: the document as it would be
-/// stored, its `md_path` relative to the data root.
+/// One project's document: what the store holds of it. `inputs` gets
+/// every raw row it read.
 pub fn build(
     source_id: &str,
     store: &Store,
@@ -211,9 +188,6 @@ pub fn build(
     }
     let people = People { store, inputs };
     let id = ids::project(source_id, project_id);
-    let rel = doc_md_path(&render_markdown_root(Path::new(""), source_id), &id.uuid)
-        .to_string_lossy()
-        .into_owned();
     let facts = ProjectFacts {
         source_id: source_id.to_string(),
         project_id: project_id.to_string(),
@@ -224,7 +198,6 @@ pub fn build(
             .unwrap_or_else(|| format!("Project {project_id}")),
         known: project.is_some(),
         url: project_url(project_id),
-        md_rel: rel,
         account: store
             .user
             .as_ref()
@@ -405,13 +378,12 @@ pub fn build(
         .build_or_record(source_id, project_id, RENDER_VERSION, &mut problems);
     rows.splice(0..0, doc_row);
     RenderedMarkdown {
-        section_layout: None,
+        searchable: true,
         content_hash: None,
         markdown_uuid: facts.id.uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
         bucket_key: Some(project_id.to_string()),
-        md_path: PathBuf::from(&facts.md_rel),
         render_version: RENDER_VERSION,
         rows,
         sections: md_sections,

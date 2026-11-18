@@ -36,9 +36,9 @@ use sqlx::{Row, SqlitePool};
 
 use datalib_columns::Entity;
 use datalib_etl_render::front_matter::Front;
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::message::{entity_link, stamp_text_html};
-use datalib_etl_render::section::{self, Section};
+use datalib_etl_render::section::Section;
 use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
@@ -309,28 +309,11 @@ pub async fn scan(data_root: &Path, raw_rel: &str) -> Result<Vec<Subject>> {
 }
 
 /// Everything one measured source contributes: the document to store,
-/// whose sections are the report that has to reach disk before it is
-/// stored, and the samples to append to its series.
+/// whose sections are the report, and the samples to append to its
+/// series.
 pub struct Measured {
     pub doc: RenderedMarkdown,
     pub samples: Vec<SourceMeasurementRow>,
-}
-
-impl Measured {
-    /// Never called by [`plan`]. The split is load-bearing: the caller
-    /// skips a source whose numbers have not moved, and writing the file
-    /// before that check would restamp `measured_at_utc` on every run —
-    /// churning the rendered tree, whose content hash is what the
-    /// scheduler uses to decide that `unified_grid_and_search_index` has nothing to do.
-    pub fn write_report(&self) -> Result<()> {
-        let path = &self.doc.md_path;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("mkdir -p {}", parent.display()))?;
-        }
-        std::fs::write(path, section::join(&self.doc.sections))
-            .with_context(|| format!("write {}", path.display()))
-    }
 }
 
 fn report_front(source_id: &str, now: &str) -> Front {
@@ -395,21 +378,15 @@ fn report_node(source_id: &str, markdown_uuid: &str, subjects: &[Subject]) -> Da
 }
 
 /// Turn a scan into the document and samples to store. Writes nothing:
-/// see [`Measured::write_report`]. `None` when the source has nothing
-/// to measure. `rendered_rel` is the render step's own tree, where the
-/// report lands.
+/// the caller skips a source whose numbers have not moved, and storing
+/// before that check would restamp `measured_at_utc` on every run. `None`
+/// when the source has nothing to measure.
 ///
 /// `now` stamps the rows and samples this produces, so it is the time
 /// the numbers last *moved* rather than the last time anything looked —
 /// a run that measures and finds no change is skipped whole by the
 /// caller and leaves the previous stamp standing.
-pub fn plan(
-    data_root: &Path,
-    source_id: &str,
-    rendered_rel: &str,
-    subjects: Vec<Subject>,
-    now: &str,
-) -> Result<Option<Measured>> {
+pub fn plan(source_id: &str, subjects: Vec<Subject>, now: &str) -> Result<Option<Measured>> {
     if subjects.is_empty() {
         return Ok(None);
     }
@@ -420,8 +397,6 @@ pub fn plan(
         .find(|s| s.kind == MeasurementKind::Tree)
         .unwrap_or(&subjects[0])
         .uuid(source_id);
-
-    let md_path = doc_md_path(&data_root.join(rendered_rel), &markdown_uuid);
 
     let measured_at = datalib_time::split_stamp(now);
     let mut rows = Vec::with_capacity(subjects.len());
@@ -482,13 +457,12 @@ pub fn plan(
     let body = report_body(source_id, &subjects, now);
     Ok(Some(Measured {
         doc: RenderedMarkdown {
-            section_layout: None,
+            searchable: true,
             content_hash: None,
             markdown_uuid,
             source_id: source_id.to_string(),
             upstream_cursor: None,
             bucket_key: None,
-            md_path,
             render_version: RENDER_VERSION,
             rows,
             sections: vec![Section::unkeyed(body)],
@@ -587,22 +561,15 @@ mod tests {
     /// id from the columns the row carries reproduces the row's uuid.
     #[test]
     fn the_stored_backpointer_reproduces_the_uuid() {
-        let td = tempdir().unwrap();
         let subjects = vec![subject(
             "s/ingest",
             MeasurementKind::Tree,
             Some(64),
             Some(2),
         )];
-        let m = plan(
-            td.path(),
-            "s",
-            "s/render_markdown",
-            subjects,
-            "2026-09-07T10:00:00-07:00",
-        )
-        .unwrap()
-        .expect("a measured source");
+        let m = plan("s", subjects, "2026-09-07T10:00:00-07:00")
+            .unwrap()
+            .expect("a measured source");
         let row = &m.doc.rows[0];
         // The stored `provider` tag is parsed back into the namespace
         // rather than assumed: that the two spell the same thing is
@@ -627,7 +594,6 @@ mod tests {
     /// tree its document is sits in it.
     #[test]
     fn each_measurement_sits_in_the_report() {
-        let td = tempfile::tempdir().unwrap();
         let subjects = vec![
             subject("s/ingest", MeasurementKind::Tree, Some(64), Some(2)),
             subject(
@@ -637,15 +603,9 @@ mod tests {
                 Some(7),
             ),
         ];
-        let m = plan(
-            td.path(),
-            "s",
-            "s/render_markdown",
-            subjects,
-            "2026-09-07T10:00:00-07:00",
-        )
-        .unwrap()
-        .expect("a measured source");
+        let m = plan("s", subjects, "2026-09-07T10:00:00-07:00")
+            .unwrap()
+            .expect("a measured source");
         let doc = &m.doc;
         assert_eq!(doc.data_nodes.len(), 1);
         assert_eq!(doc.data_nodes[0].uuid, doc.markdown_uuid);
@@ -764,15 +724,9 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
-        assert!(plan(
-            td.path(),
-            "never-ran",
-            "never-ran/render_markdown",
-            Vec::new(),
-            "2026-09-07T10:00:00-07:00"
-        )
-        .unwrap()
-        .is_none());
+        assert!(plan("never-ran", Vec::new(), "2026-09-07T10:00:00-07:00")
+            .unwrap()
+            .is_none());
     }
 
     /// The whole point of the scan: real files, real tables, real
@@ -1030,12 +984,9 @@ mod tests {
         );
     }
 
-    /// The report is a real file on disk with the anchors the preview
-    /// pane walks, and `md_path` points at it — a document whose file
-    /// is missing serves as a blank page.
+    /// The report carries the anchors the viewer walks, one per row.
     #[tokio::test]
-    async fn the_report_is_written_where_the_document_says_it_is() {
-        let td = tempdir().unwrap();
+    async fn the_report_anchors_every_row() {
         let subjects = vec![
             subject("s/ingest", MeasurementKind::Tree, Some(2048), Some(2)),
             subject(
@@ -1045,21 +996,10 @@ mod tests {
                 Some(7),
             ),
         ];
-        let m = plan(
-            td.path(),
-            "s",
-            "s/render_markdown",
-            subjects,
-            "2026-09-07T10:00:00-07:00",
-        )
-        .unwrap()
-        .unwrap();
-        assert!(
-            !m.doc.md_path.exists(),
-            "planning must not touch the disk; only write_report may"
-        );
-        m.write_report().expect("write the report");
-        let body = std::fs::read_to_string(&m.doc.md_path).expect("the report exists");
+        let m = plan("s", subjects, "2026-09-07T10:00:00-07:00")
+            .unwrap()
+            .unwrap();
+        let body = datalib_etl_render::section::join(&m.doc.sections);
         for row in &m.doc.rows {
             assert!(
                 body.contains(&format!("data-section-uuid=\"{}\"", row.uuid)),
@@ -1078,7 +1018,6 @@ mod tests {
     /// `now` rather than each sampling its own clock.
     #[test]
     fn every_measurement_becomes_one_sample_at_the_runs_own_time() {
-        let td = tempdir().unwrap();
         let subjects = vec![
             subject("s/ingest", MeasurementKind::Tree, Some(1), Some(1)),
             subject(
@@ -1088,15 +1027,9 @@ mod tests {
                 None,
             ),
         ];
-        let m = plan(
-            td.path(),
-            "s",
-            "s/render_markdown",
-            subjects.clone(),
-            "2026-09-07T10:00:00-07:00",
-        )
-        .unwrap()
-        .unwrap();
+        let m = plan("s", subjects.clone(), "2026-09-07T10:00:00-07:00")
+            .unwrap()
+            .unwrap();
         assert_eq!(m.samples.len(), subjects.len());
         assert!(m.samples.iter().all(|s| {
             s.measured_at_utc == "2026-09-07T17:00:00.000000+00:00"
@@ -1123,16 +1056,9 @@ mod tests {
         let body = report_body("s", std::slice::from_ref(&s), "2026-09-07T10:00:00-07:00");
         assert!(body.contains("| 2.0 KiB |"), "{body}");
 
-        let td = tempdir().unwrap();
-        let m = plan(
-            td.path(),
-            "s",
-            "s/render_markdown",
-            vec![s],
-            "2026-09-07T10:00:00-07:00",
-        )
-        .unwrap()
-        .unwrap();
+        let m = plan("s", vec![s], "2026-09-07T10:00:00-07:00")
+            .unwrap()
+            .unwrap();
         assert_eq!(m.doc.rows[0].byte_size, Some(2048));
     }
 

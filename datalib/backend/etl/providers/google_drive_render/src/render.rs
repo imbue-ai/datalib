@@ -3,15 +3,12 @@
 //! row for the Doc and for every comment and reply.
 
 use std::collections::{BTreeMap, HashMap};
-use std::fs;
-use std::path::Path;
 
-use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl_render::front_matter::Front;
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::Inputs;
-use datalib_etl_render::section::{join, Section};
+use datalib_etl_render::section::Section;
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
 use datalib_schema::data_nodes::{DataNodeRow, Lineage};
@@ -52,14 +49,9 @@ pub struct DocInput<'a> {
     pub comments: &'a [(String, Value)],
 }
 
-/// Write one Doc's `.md` and its images, and return what goes in the
-/// store. `inputs` gets every raw row it read.
-pub fn render_doc(
-    root: &Path,
-    source_id: &str,
-    input: &DocInput<'_>,
-    inputs: &Inputs,
-) -> Result<RenderedMarkdown> {
+/// One Doc's document, as it goes in the store. `inputs` gets every raw
+/// row it read.
+pub fn render_doc(source_id: &str, input: &DocInput<'_>, inputs: &Inputs) -> RenderedMarkdown {
     let DocInput {
         file_id,
         entry,
@@ -104,13 +96,6 @@ pub fn render_doc(
     let front = file.front();
     let mut sections = vec![Section::unkeyed(file.head(&front))];
     sections.extend(interleave(&body.blocks, &threads, &placed));
-    let md_path = doc_md_path(
-        &datalib_etl::layout::render_markdown_root(root, source_id),
-        &file.id.uuid,
-    );
-    let dir = md_path.parent().expect("a document's file has a folder");
-    fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
-    fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
 
     let mut problems: Vec<ProblemRow> = Vec::new();
     let mut rows: Vec<GridRow> = Vec::new();
@@ -158,14 +143,13 @@ pub fn render_doc(
         problems.push(problem_row(Some(&file.id.uuid), Outcome::Nulled, p));
     }
 
-    Ok(RenderedMarkdown {
-        section_layout: None,
+    RenderedMarkdown {
+        searchable: true,
         content_hash: None,
         markdown_uuid: file.id.uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
         bucket_key: Some(file_id.to_string()),
-        md_path,
         render_version: RENDER_VERSION,
         rows,
         front,
@@ -176,7 +160,7 @@ pub fn render_doc(
         filings: Vec::new(),
         photos: Vec::new(),
         problems,
-    })
+    }
 }
 
 /// The body with each thread after the block it was made on. A thread
@@ -468,6 +452,7 @@ fn comment_rows_of(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datalib_etl_render::section::join;
     use serde_json::json;
 
     fn blocks(spec: &[(&str, BlockKind)]) -> Vec<Block> {

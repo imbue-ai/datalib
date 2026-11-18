@@ -27,6 +27,7 @@ mod methods;
 mod migrate;
 mod modal;
 mod occurrences;
+mod old_markdown;
 mod probe;
 mod published;
 mod render;

@@ -103,7 +103,6 @@ impl SourceRender for EmailRender {
         };
         let rendered = render_store(
             &store,
-            ctx.root,
             ctx.name,
             self.outlink,
             ctx.page_size,
@@ -246,7 +245,7 @@ mod tests {
         // The names are settled as the store takes the document, so the
         // test reads back what the store holds.
         let store = IndexedMarkdownStore::open(out.path()).unwrap();
-        let mut on_doc = |md: RenderedMarkdown| store.put_document(out.path(), &md);
+        let mut on_doc = |md: RenderedMarkdown| store.put_document(&md);
         let mut on_declare = |_: &str, _: BucketEnd<'_>| Ok(());
         let mut on_problems = |_: &ReadScope, _: &[ProblemRow]| Ok(());
         let ctx = RenderCtx::new(
@@ -269,7 +268,7 @@ mod tests {
             .unwrap()
             .expect("a committed store is readable");
         let pin = reader.pin().unwrap().clone();
-        let docs = reader.documents_matching(out.path(), None, &pin).unwrap();
+        let docs = reader.documents_matching(None, &pin).unwrap();
         reader.close();
 
         let q = datalib_handle::Handle::email("q@continuum.test").unwrap();

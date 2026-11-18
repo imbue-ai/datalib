@@ -6,17 +6,14 @@
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
-use std::fs;
-use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::Front;
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::escape_md_inline;
 use datalib_etl_render::message::stamp_text_html;
-use datalib_etl_render::section::Pieces;
-use datalib_etl_render::section::{self, Section};
+use datalib_etl_render::section::{Pieces, Section};
 use datalib_etl_render::title::Title;
 use datalib_etl_timeseries_render::text::{iso, short_ts, stamp};
 use datalib_id::{entity_id_str, IdNamespace};
@@ -129,10 +126,9 @@ pub struct RenderSummary {
     pub items: usize,
 }
 
-/// Where documents are written, and the one bucket they all go in.
+/// Where documents go, and the one bucket they all go in.
 struct Out<'a> {
     source_id: &'a str,
-    dir: PathBuf,
     bucket: String,
     on_doc: &'a mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 }
@@ -144,16 +140,11 @@ impl Out<'_> {
         (front, sections): (Front, Vec<Section>),
         build_rows: impl FnOnce(&mut Vec<ProblemRow>) -> Vec<GridRow>,
     ) -> Result<()> {
-        let md_path = doc_md_path(&self.dir, m_uuid);
-        let parent = md_path.parent().expect("a document's file has a folder");
-        fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
-        fs::write(&md_path, section::join(&sections))
-            .with_context(|| format!("write {}", md_path.display()))?;
         let mut problems: Vec<ProblemRow> = Vec::new();
         let mut rows = build_rows(&mut problems);
         let data_nodes = place(self.source_id, m_uuid, &mut rows);
         (self.on_doc)(RenderedMarkdown {
-            section_layout: None,
+            searchable: true,
             content_hash: None,
             markdown_uuid: m_uuid.to_string(),
             source_id: self.source_id.to_string(),
@@ -161,7 +152,6 @@ impl Out<'_> {
             // content did not change may carry nothing per-run.
             upstream_cursor: None,
             bucket_key: Some(self.bucket.clone()),
-            md_path,
             render_version: RENDER_VERSION,
             rows,
             sections,
@@ -239,21 +229,10 @@ fn section_open(out: &mut String, uuid: &str) {
 /// records as no change.
 pub fn render_all(
     parsed: &ParsedGarmin,
-    root: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
-    let page_dir = datalib_etl::layout::render_markdown_root(root, source_id);
-    fs::create_dir_all(&page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
-    // Where an earlier build wrote its Plotly pages; a chart is now drawn
-    // from the time-series store.
-    match fs::remove_dir_all(page_dir.join("plots")) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            return Err(e).context("remove the retired plots/");
-        }
-        _ => {}
-    }
     let families: Vec<Family> = Family::ALL
         .into_iter()
         .filter(|f| daily::has_any(&parsed.days, *f))
@@ -274,7 +253,6 @@ pub fn render_all(
     let m_uuid = document_uuid(source_id);
     let mut out = Out {
         source_id,
-        dir: page_dir,
         bucket: m_uuid.clone(),
         on_doc: on_doc_complete,
     };
@@ -850,7 +828,7 @@ mod tests {
             sections[1].uuid.as_deref(),
             Some(device_uuid("garmin", "<i>1</i>").as_str())
         );
-        let out = section::join(&sections);
+        let out = datalib_etl_render::section::join(&sections);
         assert!(!out.contains("<script>") && !out.contains("<b>"), "{out}");
         assert!(
             out.contains("### &lt;script&gt;x&lt;/script&gt; &amp; co\n"),

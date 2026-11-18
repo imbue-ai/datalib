@@ -17,6 +17,8 @@ use datalib_etl::progress::Progress;
 use datalib_schema::providers::Provider;
 use datalib_time::RecordStampPrecision;
 
+use datalib_etl_render::section::join;
+
 use crate::render::{render_all, RenderProfile, TextFormat, ENTITY_KIND_CONVERSATION};
 use crate::types::{
     AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
@@ -50,19 +52,20 @@ pub fn sample_chats() -> Vec<NormalizedChat> {
     ]
 }
 
-/// Render every sample into `out_dir` as a source named `samples`, and
-/// return the `.md` paths in corpus order.
+/// Render every sample, write each as `<id>.md` into `out_dir`, and
+/// return the paths in corpus order.
 pub fn write_samples(out_dir: &Path) -> Result<Vec<String>> {
     let mut paths = Vec::new();
     render_all(
         &sample_profile(),
         &sample_chats(),
-        out_dir,
         "samples",
         &HashMap::new(),
         &Progress::noop(),
         &mut |doc| {
-            paths.push(doc.md_path.to_string_lossy().into_owned());
+            let path = out_dir.join(format!("{}.md", doc.markdown_uuid));
+            std::fs::write(&path, join(&doc.sections))?;
+            paths.push(path.to_string_lossy().into_owned());
             Ok(())
         },
     )?;

@@ -34,8 +34,8 @@ the context for anything the user asks you to build on top of it.
 Everything lives under one **data root** directory. A sync is a DAG of
 steps run by `datalib-dag`: per source (a `[[groups]]` entry) a
 `<group>/ingest` step (bring the raw data in) and a
-`<group>/render_markdown` step (raw → markdown + a per-source index
-database), `unified_grid_and_search_index` under the `unified_grid_and_search_index` group (the SQL
+`<group>/render_markdown` step (raw → each document's markdown and
+rows, in a per-source store), `unified_grid_and_search_index` under the `unified_grid_and_search_index` group (the SQL
 index, which also puts every source it reads in the keyword search but
 those its `params.not_searched` lists), and, for a source searched by
 meaning, `<group>/embed`, which embeds that source's part of the search
@@ -51,8 +51,8 @@ its vectors to the one cache in
 ├── <group>/ingest/                 # per-source raw stores (<group> is the source's id)
 │   ├── entities.doltlite_db        #   (doltlite = SQLite + git-shaped history)
 │   └── blobs.sqlite                #   attachment bytes by blake3 (plain SQLite)
-├── <group>/render_markdown/        # per-source markdown tree
-│   └── indexed_markdown.doltlite_db  #   its rows, edges + render problems
+├── <group>/render_markdown/        # per-source render store
+│   └── indexed_markdown.doltlite_db  #   its documents, rows, edges + render problems
 ├── unified_grid_and_search_index/                  # derived; carries a CACHEDIR.TAG
 │   ├── unified_grid_and_search_index/db.sqlite  # the grid_rows SQL index, each row's search terms and the search index (plain SQLite) — query this
 │   └── search_index/inference_cache.sqlite  # each chunk's vector, by its prompt's hash
@@ -405,7 +405,7 @@ Pick the surface that fits the question:
   message/document/entity across all sources, with `provider`, `kind`,
   `created_at`, `modified_at`, `touched_at`, `author`, `channel`, `conversation_uuid`,
   `preview` (the first 240 characters of the row's text; the whole text
-  is in the rendered markdown), `entire_chat`, etc. `is_document = 1`
+  is in the document's markdown), `entire_chat`, etc. `is_document = 1`
   picks the one row per rendered document — the thread, the
   conversation, the PR, the page — and leaves out the messages inside
   them, which is usually the row count you meant.
@@ -455,8 +455,8 @@ Pick the surface that fits the question:
   <markdown_uuid>` prints one, `--out <folder>` writes every one as
   `<folder>/<group>/<markdown_uuid>.md`, and `GET
   /applet/unified_grid_and_search_index/chat/{markdown_uuid}` serves it.
-  The files under `<group>/render_markdown/` are going away; read the
-  text through one of these.
+  The render store keeps every document; there are no `.md` files under
+  `<group>/render_markdown/` to read.
 - **Raw stores** — the per-source doltlite stores under
   `<group>/ingest/` keep what the service sent, when the rendered form
   isn't enough: Slack's and Google Calendar's JSON, Gmail's original

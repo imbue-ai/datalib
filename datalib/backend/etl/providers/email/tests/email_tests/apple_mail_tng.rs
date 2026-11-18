@@ -13,6 +13,7 @@ use datalib_etl_email_render::render::parse::open;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_render::inputs::RawRange;
 use datalib_etl_render::pages::PageSize;
+use datalib_etl_render::section::join;
 
 const GMAIL: &str = "apple_mail_1f0b8a52";
 const FASTMAIL: &str = "apple_mail_5d3c9e70";
@@ -195,10 +196,8 @@ async fn the_tng_mail_folder_is_copied_and_rendered() {
     )
     .expect("open")
     .expect("a committed store");
-    let pages = tempfile::tempdir().unwrap();
     let (docs, _) = super::jmap_mbox::render_paged(
         &store,
-        pages.path(),
         PageSize {
             buckets: 3,
             bytes: 1 << 30,
@@ -208,7 +207,7 @@ async fn the_tng_mail_folder_is_copied_and_rendered() {
     assert_eq!(docs.len(), 8, "one page per thread");
     let page_with = |needle: &str| -> String {
         docs.iter()
-            .map(|d| std::fs::read_to_string(&d.md_path).unwrap())
+            .map(|d| join(&d.sections))
             .find(|md| md.contains(needle))
             .unwrap_or_else(|| panic!("no page mentions {needle}"))
     };

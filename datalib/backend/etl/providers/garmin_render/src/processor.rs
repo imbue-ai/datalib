@@ -51,7 +51,7 @@ impl SourceRender for GarminRender {
         )?;
         ctx.declare_bucket(&page, &inputs())?;
         let mut on_doc = |md| ctx.emit_doc(md);
-        let s = render_all(&parsed, ctx.root, ctx.name, ctx.progress, &mut on_doc)
+        let s = render_all(&parsed, ctx.name, ctx.progress, &mut on_doc)
             .context("garmin render_all")?;
         if let Some(head) = parsed.head.as_deref() {
             ctx.consumed(head);

@@ -83,7 +83,6 @@ fn profile() -> RenderProfile {
 /// at most `blob_bytes` at a time.
 pub fn render_all(
     parsed: &ParsedChatGPTApi,
-    root: &std::path::Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -115,7 +114,6 @@ pub fn render_all(
     let profile = profile();
     let mut renderer = ChatRenderer::new(
         &profile,
-        root,
         source_id,
         chats.iter().map(|c| c.buckets.len()).sum(),
         progress,
@@ -629,11 +627,9 @@ mod tree_tests {
             ],
             ..Default::default()
         };
-        let out = tempfile::tempdir().unwrap();
         let mut docs = Vec::new();
         render_all(
             &parsed,
-            out.path(),
             "gpt",
             &Progress::noop(),
             &mut |d| {

@@ -1,12 +1,8 @@
 //! End-to-end render test: build a tiny in-memory `ParsedEmail`
 //! whose per-bucket `BlobBundle` carries real RFC 5322 `.eml` bytes
 //! for each email, render it through `render_all`, and assert the
-//! on-disk layout + emitted grid_rows shape. Doesn't need a real
-//! JMAP server or HTTP playback — exercises the renderer in
-//! isolation.
-
-#[allow(unused_imports)]
-use std::path::PathBuf;
+//! page and the grid_rows it emits. Doesn't need a real JMAP server or
+//! HTTP playback — exercises the renderer in isolation.
 
 use datalib_etl::blob_cas::{blake3_hex, BlobBundle};
 use datalib_etl::progress::Progress;
@@ -16,6 +12,7 @@ use datalib_etl_email_render::render::ids;
 use datalib_etl_email_render::render::parse::{EmailThreadBucket, Shared};
 use datalib_etl_email_render::render::render::{render_all, OutlinkFormat};
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::section::join;
 use serde_json::json;
 
 const EML_E1: &str = "From: Alice <a@x.test>\r\n\
@@ -73,19 +70,12 @@ fn one_thread(
     }
 }
 
-/// Renders `parsed` as source `source` into a fresh tree, which is
-/// returned with every document it completed.
-fn render(
-    parsed: &ParsedEmail,
-    source: &str,
-    outlink: OutlinkFormat,
-) -> (tempfile::TempDir, Vec<RenderedMarkdown>) {
-    let tmp = tempfile::tempdir().unwrap();
+/// Every document rendering `parsed` as source `source` completes.
+fn render(parsed: &ParsedEmail, source: &str, outlink: OutlinkFormat) -> Vec<RenderedMarkdown> {
     let mut docs = Vec::new();
     render_all(
         &parsed.shared,
         &parsed.docs,
-        tmp.path(),
         source,
         Some(outlink),
         &Progress::noop(),
@@ -95,7 +85,15 @@ fn render(
         },
     )
     .expect("render_all");
-    (tmp, docs)
+    docs
+}
+
+/// The markdown of the one document in `docs`.
+fn only_page(docs: &[RenderedMarkdown]) -> String {
+    let [doc] = docs else {
+        panic!("expected exactly one document, got {}", docs.len())
+    };
+    join(&doc.sections)
 }
 
 /// The decoded bytes of the attachment `make_loaded` lists.
@@ -177,21 +175,13 @@ fn make_loaded() -> ParsedEmail {
 }
 
 #[test]
-fn render_smoke_produces_thread_dir_with_md_and_rows() {
+fn render_smoke_produces_one_page_and_its_rows() {
     let parsed = make_loaded();
-    let (tmp, completed) = render(&parsed, "fastmail", OutlinkFormat::Fastmail);
+    let completed = render(&parsed, "fastmail", OutlinkFormat::Fastmail);
     assert_eq!(completed.len(), 1, "one on_doc_complete call");
 
-    // The one rendered doc, found by walking rather than by its path.
-    let md_path = find_one(tmp.path(), ".md");
-    let page_dir = md_path.parent().unwrap();
-
-    // An attachment is linked inside its stored `.eml`, never copied
-    // beside the page.
-    assert!(!page_dir.join("blobs").exists(), "a blobs/ was written");
-
     let tuid = ids::thread("fastmail", "A1", "T1").uuid;
-    let md = std::fs::read_to_string(&md_path).unwrap();
+    let md = only_page(&completed);
     assert!(
         md.contains("display: \"Hello\""),
         "subject as display: {md}"
@@ -256,27 +246,6 @@ fn render_smoke_produces_thread_dir_with_md_and_rows() {
         "every row names the mailbox's address: {:?}",
         rows.iter().map(|r| r.account.clone()).collect::<Vec<_>>()
     );
-}
-
-fn find_one(root: &std::path::Path, suffix: &str) -> PathBuf {
-    fn walk(dir: &std::path::Path, suffix: &str, out: &mut Vec<PathBuf>) {
-        for e in std::fs::read_dir(dir).unwrap().flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                walk(&p, suffix, out);
-            } else if p.to_string_lossy().ends_with(suffix) {
-                out.push(p);
-            }
-        }
-    }
-    let mut found = Vec::new();
-    walk(root, suffix, &mut found);
-    assert_eq!(
-        found.len(),
-        1,
-        "expected exactly one *{suffix} under {root:?}"
-    );
-    found.pop().unwrap()
 }
 
 // Calendar invites: the same payload arriving twice
@@ -386,11 +355,7 @@ fn make_two_copy(eml: String, att_type: &str, att_name: &str, payload: &str) -> 
 fn calendar_invite_is_linked_once() {
     let eml = invite_eml();
     let parsed = make_invite();
-    let (tmp, _) = render(&parsed, "gmail", OutlinkFormat::Gmail);
-
-    let md_path = find_one(tmp.path(), ".md");
-    assert!(!md_path.parent().unwrap().join("blobs").exists());
-    let md = std::fs::read_to_string(&md_path).unwrap();
+    let md = only_page(&render(&parsed, "gmail", OutlinkFormat::Gmail));
     let address = part_address(&eml, ICS.as_bytes());
     assert_eq!(
         md.matches("/part/").count(),
@@ -416,11 +381,7 @@ fn inline_image_that_is_also_an_attachment_keeps_its_preview() {
     const PNG: &str = "not-really-png-but-bytes-are-bytes";
     let eml = two_copy_eml("image/png", "image/png", "shot.png", PNG);
     let parsed = make_two_copy(eml.clone(), "image/png", "shot.png", PNG);
-    let (tmp, _) = render(&parsed, "fastmail", OutlinkFormat::Fastmail);
-
-    let md_path = find_one(tmp.path(), ".md");
-    assert!(!md_path.parent().unwrap().join("blobs").exists());
-    let md = std::fs::read_to_string(&md_path).unwrap();
+    let md = only_page(&render(&parsed, "fastmail", OutlinkFormat::Fastmail));
     let address = part_address(&eml, PNG.as_bytes());
     assert!(
         md.contains(&format!("![]({address})")),
@@ -441,8 +402,7 @@ fn an_email_marked_unread_renders_unread() {
     parsed.docs[0]
         .marks
         .insert("E2".into(), ReadMark::Read(false));
-    let (tmp, _) = render(&parsed, "fastmail", OutlinkFormat::Fastmail);
-    let md = std::fs::read_to_string(find_one(tmp.path(), ".md")).unwrap();
+    let md = only_page(&render(&parsed, "fastmail", OutlinkFormat::Fastmail));
     let wrappers: Vec<&str> = md
         .lines()
         .filter(|l| l.starts_with("<div id=\"m-"))
@@ -483,9 +443,8 @@ fn one_email(eml: &str, subject: &str, atts: Vec<LoadedAttachment>) -> ParsedEma
 }
 
 fn rendered_page(parsed: &ParsedEmail) -> (String, Vec<RenderedMarkdown>) {
-    let (tmp, docs) = render(parsed, "fastmail", OutlinkFormat::Fastmail);
-    let md = std::fs::read_to_string(find_one(tmp.path(), ".md")).unwrap();
-    (md, docs)
+    let docs = render(parsed, "fastmail", OutlinkFormat::Fastmail);
+    (only_page(&docs), docs)
 }
 
 const PATCH_EML: &str = "From: Geordi La Forge <geordi@enterprise.example>\r\n\

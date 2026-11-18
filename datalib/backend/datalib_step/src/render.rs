@@ -60,7 +60,7 @@ pub async fn run(
     // Every source gets a storage report, including the ones that
     // render no documents of their own — for `file_inventory` and `media` it
     // is the only thing they put in the grid.
-    let storage = crate::introspect::plan(data_root, &name, &env.step, measured, now)?;
+    let storage = crate::introspect::plan(&name, measured, now)?;
 
     let source = RenderSource {
         name: name.clone(),
@@ -264,6 +264,7 @@ pub fn render_source(
     let declared = declared_render_versions(processors);
     let declared_params = declared_render_params(processors);
     let declared_params_text = declared_params.to_string();
+    crate::old_markdown::clear(&rendered_root);
     let store = IndexedMarkdownStore::open(&rendered_root)
         .map(|s| s.with_now(&now))
         .with_context(|| format!("open render store for {}", name))?;
@@ -339,7 +340,7 @@ pub fn render_source(
         // writes the same rows, and doltlite's content-addressed tables
         // then carry no diff for it — nothing here decides "unchanged".
         store
-            .put_document(&data_root, &md)
+            .put_document(&md)
             .with_context(|| format!("store document {}", md.markdown_uuid))?;
         emitted.insert(md.markdown_uuid);
         if let Some(bucket) = md.bucket_key {
@@ -537,7 +538,6 @@ pub fn render_source(
     // holds, and `?` above already returned.
     let sealed = seal_run(
         &store,
-        &data_root,
         RunEnd {
             source_id: &name,
             sweep: full_walk,
@@ -810,11 +810,7 @@ fn kept_problem(source_id: &str, markdown_uuid: &str, ending: &Ending) -> Option
 
 /// The sweep, the storage report and the cursor land as one transaction,
 /// so the cursor can never claim a range the store's rows do not reflect.
-pub(crate) fn seal_run(
-    store: &IndexedMarkdownStore,
-    data_root: &Path,
-    end: RunEnd<'_>,
-) -> Result<Sealed> {
+pub(crate) fn seal_run(store: &IndexedMarkdownStore, end: RunEnd<'_>) -> Result<Sealed> {
     store.transaction(|| {
         let mut sealed = Sealed {
             stored: 0,
@@ -849,7 +845,7 @@ pub(crate) fn seal_run(
                 .filter(|uuid| !end.keep.contains(uuid) && !kept_documents.contains(uuid.as_str()))
                 .collect();
             store
-                .remove_documents(data_root, &gone)
+                .remove_documents(&gone)
                 .context("remove the documents this source no longer produces")?;
             sealed.removed += gone.len();
             if !gone.is_empty() {
@@ -888,7 +884,7 @@ pub(crate) fn seal_run(
             }
         }
         store
-            .remove_documents(data_root, &gone)
+            .remove_documents(&gone)
             .context("remove the documents swept buckets no longer produce")?;
         sealed.removed += gone.len();
         // One line for the sweep, not one per document: a source that
@@ -916,10 +912,7 @@ pub(crate) fn seal_run(
             if same_version && same_counts {
                 tracing::debug!("storage unchanged since the last run");
             } else {
-                m.write_report().context("write the storage report")?;
-                store
-                    .put_document(data_root, &m.doc)
-                    .context("store storage report")?;
+                store.put_document(&m.doc).context("store storage report")?;
                 store
                     .put_measurements(&m.samples)
                     .context("append measurements")?;
@@ -1306,20 +1299,15 @@ const STORE_SCHEMA_PARAM: &str = "_store_schema";
 /// change is rare enough that re-rendering the rest costs little.
 const HANDLE_RULES_PARAM: &str = "_handle_rules";
 
-/// The key `datalib_etl_render::grid_index::DOC_LAYOUT` sits under: where
-/// documents are filed moved, so every source writes its files again.
-const DOC_LAYOUT_PARAM: &str = "_doc_layout";
-
 /// The key `datalib_etl_render::SHARED_RULES_VERSION` sits under: what
 /// the shared writers put on every source's pages changed.
 const SHARED_RULES_PARAM: &str = "_shared_render_rules";
 
 /// Every processor's params under its id, plus the render store's DDL
-/// hash, the handle rules, the document layout and the shared render
-/// rules, so one source's cursor carries all of them and a change to any
-/// one — a processor's knob, the shape of the store, what a handle
-/// normalizes to, where a document is filed, what every page's shared
-/// parts say — re-renders the source.
+/// hash, the handle rules and the shared render rules, so one source's
+/// cursor carries all of them and a change to any one — a processor's
+/// knob, the shape of the store, what a handle normalizes to, what every
+/// page's shared parts say — re-renders the source.
 pub(crate) fn declared_render_params(processors: &[Box<dyn RenderProcessor>]) -> serde_json::Value {
     processors
         .iter()
@@ -1332,10 +1320,6 @@ pub(crate) fn declared_render_params(processors: &[Box<dyn RenderProcessor>]) ->
             (
                 HANDLE_RULES_PARAM.to_string(),
                 serde_json::Value::from(datalib_handle::RULES_VERSION),
-            ),
-            (
-                DOC_LAYOUT_PARAM.to_string(),
-                serde_json::Value::from(datalib_etl_render::grid_index::DOC_LAYOUT),
             ),
             (
                 SHARED_RULES_PARAM.to_string(),
@@ -1516,7 +1500,6 @@ mod plan_tests {
 
     fn write_doc_in(root: &Path, uuid: &str, bucket_key: Option<&str>) {
         let store = IndexedMarkdownStore::open(root).unwrap();
-        let file = datalib_schema::grid_rows::doc_file_rel(uuid);
         let row = datalib_schema::grid_rows::GridRow::builder()
             .uuid(uuid)
             .provider(datalib_schema::providers::Provider::Test)
@@ -1531,28 +1514,24 @@ mod plan_tests {
             .build()
             .unwrap();
         store
-            .put_document(
-                root,
-                &RenderedMarkdown {
-                    section_layout: None,
-                    content_hash: None,
-                    markdown_uuid: uuid.to_string(),
-                    source_id: "src".into(),
-                    upstream_cursor: None,
-                    bucket_key: bucket_key.map(String::from),
-                    md_path: root.join(file),
-                    render_version: 5,
-                    rows: vec![row],
-                    sections: Vec::new(),
-                    front: Default::default(),
-                    edges: Vec::new(),
-                    contacts: Vec::new(),
-                    data_nodes: Vec::new(),
-                    filings: Vec::new(),
-                    photos: Vec::new(),
-                    problems: Vec::new(),
-                },
-            )
+            .put_document(&RenderedMarkdown {
+                searchable: true,
+                content_hash: None,
+                markdown_uuid: uuid.to_string(),
+                source_id: "src".into(),
+                upstream_cursor: None,
+                bucket_key: bucket_key.map(String::from),
+                render_version: 5,
+                rows: vec![row],
+                sections: Vec::new(),
+                front: Default::default(),
+                edges: Vec::new(),
+                contacts: Vec::new(),
+                data_nodes: Vec::new(),
+                filings: Vec::new(),
+                photos: Vec::new(),
+                problems: Vec::new(),
+            })
             .unwrap();
         store.commit("fixture").unwrap();
         store.close();
@@ -1589,7 +1568,6 @@ mod plan_tests {
         let keep: BTreeSet<String> = ["kept".to_string()].into_iter().collect();
         seal_run(
             &store,
-            td.path(),
             RunEnd {
                 source_id: "src",
                 sweep: true,
@@ -1637,7 +1615,6 @@ mod plan_tests {
         let keep: BTreeSet<String> = ["kept".to_string()].into_iter().collect();
         let sealed = seal_run(
             &store,
-            td.path(),
             RunEnd {
                 source_id: "src",
                 sweep: true,
@@ -1684,7 +1661,6 @@ mod plan_tests {
         .collect();
         let sealed = seal_run(
             &store,
-            td.path(),
             RunEnd {
                 source_id: "src",
                 sweep: false,
@@ -1712,7 +1688,6 @@ mod plan_tests {
         let store = IndexedMarkdownStore::open(&root).unwrap();
         let sealed = seal_run(
             &store,
-            td.path(),
             RunEnd {
                 source_id: "src",
                 sweep: false,
@@ -1820,7 +1795,6 @@ mod stale_tree_tests {
 
     fn write_doc(root: &Path, chat_uuid: &str, version: u32) {
         let store = IndexedMarkdownStore::open(root).unwrap();
-        let file = datalib_schema::grid_rows::doc_file_rel(chat_uuid);
         let row = GridRow::builder()
             .uuid(chat_uuid)
             .provider(Provider::Test)
@@ -1835,28 +1809,24 @@ mod stale_tree_tests {
             .build()
             .unwrap();
         store
-            .put_document(
-                root,
-                &RenderedMarkdown {
-                    section_layout: None,
-                    content_hash: None,
-                    markdown_uuid: chat_uuid.to_string(),
-                    source_id: "claude_web".into(),
-                    upstream_cursor: None,
-                    bucket_key: None,
-                    md_path: root.join(file),
-                    render_version: version,
-                    rows: vec![row],
-                    sections: Vec::new(),
-                    front: Default::default(),
-                    edges: Vec::new(),
-                    contacts: Vec::new(),
-                    data_nodes: Vec::new(),
-                    filings: Vec::new(),
-                    photos: Vec::new(),
-                    problems: Vec::new(),
-                },
-            )
+            .put_document(&RenderedMarkdown {
+                searchable: true,
+                content_hash: None,
+                markdown_uuid: chat_uuid.to_string(),
+                source_id: "claude_web".into(),
+                upstream_cursor: None,
+                bucket_key: None,
+                render_version: version,
+                rows: vec![row],
+                sections: Vec::new(),
+                front: Default::default(),
+                edges: Vec::new(),
+                contacts: Vec::new(),
+                data_nodes: Vec::new(),
+                filings: Vec::new(),
+                photos: Vec::new(),
+                problems: Vec::new(),
+            })
             .unwrap();
         store.commit("fixture").unwrap();
         store.close();
@@ -2049,7 +2019,7 @@ mod stale_tree_tests {
             serde_json::Value::String(datalib_etl_render::indexed_markdown::schema_hash())
         );
         assert!(params["stub"].is_object() || params["stub"].is_null());
-        assert_eq!(params.as_object().unwrap().len(), 5);
+        assert_eq!(params.as_object().unwrap().len(), 4);
     }
 
     /// A stored handle is only as current as the rules that minted it

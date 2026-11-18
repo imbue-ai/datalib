@@ -12,6 +12,7 @@ use datalib_etl_notion::ingest::{FetchOptions, RawDb};
 use datalib_etl_notion_render::render::parse_api_dir;
 use datalib_etl_notion_render::render::render::render_notion;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_render::section::join;
 use datalib_etl_web::playback::{Asked, Playback};
 use serde_json::{json, Value};
 use tempfile::tempdir;
@@ -53,15 +54,13 @@ async fn body(store: &Path, id: &str) -> String {
 /// The document a cold render of `store` writes for `id`.
 fn document(store: &Path, id: &str) -> String {
     let parsed = parse_api_dir(store, RawRange::cold()).unwrap();
-    let root = tempdir().unwrap();
-    let mut files = Vec::new();
+    let mut docs = Vec::new();
     let mut on_doc = |md: datalib_etl_render::grid_index::RenderedMarkdown| {
-        files.push((md.bucket_key.clone(), md.md_path));
+        docs.push((md.bucket_key.clone(), join(&md.sections)));
         Ok(())
     };
     render_notion(
         &parsed,
-        root.path(),
         "notion",
         &Progress::noop(),
         &mut on_doc,
@@ -69,11 +68,10 @@ fn document(store: &Path, id: &str) -> String {
         1,
     )
     .unwrap();
-    let (_, file) = files
-        .iter()
+    docs.into_iter()
         .find(|(bucket, _)| bucket.as_deref() == Some(id))
-        .unwrap();
-    std::fs::read_to_string(file).unwrap()
+        .map(|(_, markdown)| markdown)
+        .unwrap()
 }
 
 /// The commit a render resuming from now would read from.

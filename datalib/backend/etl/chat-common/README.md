@@ -1,7 +1,7 @@
 # chat-common — one markdown layout for every chat provider
 
 Fourteen providers' render crates hand this crate a `NormalizedChat`
-and get back a rendered `.md` plus the `grid_rows` that go with it
+and get back a rendered document plus the `grid_rows` that go with it
 (`claude_code` and `codex` through `agent_sessions_render`). This file covers
 the parts of that markdown you have to know about before changing it.
 

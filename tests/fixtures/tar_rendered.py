@@ -14,21 +14,22 @@ so callers can extract with `--strip-components=1` to land
 
 TWO archives come out, and the split is a build-cache decision:
 
-  * `rendered.tar` — the whole rendered tree. Markdown, each source's
-    `indexed_markdown.doltlite_db` (which carries its render cursor), the
-    attachment files render wrote beside a page, and each source's blob
-    store (`<stanza>/ingest/blobs.sqlite`), which a page links its
-    attachments in as `/data/<stanza>/ingest/blob/<hash>`. This is what
+  * `rendered.tar` — the whole rendered tree: each source's
+    `indexed_markdown.doltlite_db` (which carries its render cursor and
+    every document), and each source's blob store
+    (`<stanza>/ingest/blobs.sqlite`), which a page links its attachments
+    in as `/data/<stanza>/ingest/blob/<hash>`. This is what
     `materialize_tng_root.sh` extracts to build a data root you can
     actually browse.
 
-  * `rendered_md.tar` — markdown only: every `<group>/render_markdown/**/*.md`.
-    The UI's render preview reads it. Bazel keys an action on the
-    content of its inputs, and the excluded kind changes on every
-    pipeline run (each `indexed_markdown.doltlite_db` chains its commit
-    hashes off a wall-clock initial commit, and the pdf provider's rows
-    carry the absolute sandbox path), so an action that reads only
-    markdown takes this archive and is not re-run for nothing.
+  * `rendered_md.tar` — markdown only: every document as `datalib-step
+    markdown --out` exports it, at `root/<group>/<id>.md`. The UI's
+    render preview reads it. Bazel keys an action on the content of its
+    inputs, and the stores change on every pipeline run (each
+    `indexed_markdown.doltlite_db` chains its commit hashes off a
+    wall-clock initial commit, and the pdf provider's rows carry the
+    absolute sandbox path), so an action that reads only markdown takes
+    this archive and is not re-run for nothing.
 
 A third, `time_series.tar`, holds the time-series stores: each
 source's `<stanza>/render_time_series/` and the index over them,
@@ -44,6 +45,7 @@ Args (positional):
     2: output path for rendered.tar (the whole rendered tree)
     3: output path for rendered_md.tar (markdown only)
     4: output path for time_series.tar (the time-series stores)
+    5: the folder `datalib-step markdown --out` exported the documents to
 """
 
 from __future__ import annotations
@@ -92,26 +94,18 @@ def main() -> int:
     )
 
     all_entries: list[Path] = []
-    md_entries: set[Path] = set()
     for rendered in rendered_dirs:
         children = sorted(p for p in rendered.rglob("*") if p.is_file() or p.is_dir())
         all_entries.extend([rendered] + children)
         blob_store = rendered.parent / "ingest" / "blobs.sqlite"
         if blob_store.is_file():
             all_entries.extend([blob_store.parent, blob_store])
-        for p in children:
-            if p.is_file() and p.suffix == ".md":
-                md_entries.add(p)
-                # Carry the ancestor directories so the archive stands on
-                # its own rather than relying on the extractor to create
-                # parents implicitly.
-                for parent in p.parents:
-                    if parent == src_root:
-                        break
-                    md_entries.add(parent)
-
     _write_tar(out_tar, src_root, all_entries)
-    _write_tar(out_md_tar, src_root, sorted(md_entries))
+
+    # The folders come along so the archive stands on its own rather than
+    # relying on the extractor to create parents implicitly.
+    exported = Path(sys.argv[5]).resolve()
+    _write_tar(out_md_tar, exported, sorted(exported.rglob("*")))
 
     series_dirs = sorted(src_root.glob("*/render_time_series")) + sorted(
         src_root.glob("unified_time_series_index/time_series_index")

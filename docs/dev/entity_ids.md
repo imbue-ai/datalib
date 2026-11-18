@@ -345,7 +345,7 @@ backup, and expect a re-key when you do:
    a parse that narrows by it maps the id back (beeper, chatgpt,
    claude, email, slack all do).
 4. Bump the provider's `RENDER_VERSION`. A re-key moves each
-   document's id, and so its `.md` file. The bump makes the next render
+   document's id. The bump makes the next render
    a full walk, whose sweep removes every document the walk did not
    produce, old ids included
    ([`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md#the-sweep)).
@@ -367,9 +367,9 @@ old `grid_rows.uuid`s does not survive, and that is not recoverable.
 
 What *is* handled — neither needs a human to delete anything:
 
-- **The rendered tree.** The version bump renders every bucket again,
+- **The render store.** The version bump renders every bucket again,
   and the full walk's sweep removes each document the new recipe no
-  longer mints, rows and `.md` file. The store, its history and its
+  longer mints, with its rows. The store, its history and its
   cursor are kept.
 - **The index.** It reads the re-keyed documents from the render
   store's diff, as a deletion plus an addition.

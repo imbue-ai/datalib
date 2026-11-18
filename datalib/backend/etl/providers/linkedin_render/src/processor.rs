@@ -25,11 +25,10 @@ pub fn plan_render(
 }
 
 /// What every feed's render needs to know about the source it is
-/// rendering: where the raw store and the output tree are, what the
-/// source is called, and whose export it is.
+/// rendering: where the raw store is, what the source is called, and
+/// whose export it is.
 pub struct Source<'a> {
     pub raw_dir: &'a Path,
-    pub out_dir: &'a Path,
     pub name: &'a str,
     pub account: Option<&'a str>,
     /// The export owner's handle, which their own posts and comments are
@@ -74,7 +73,6 @@ impl SourceRender for LinkedinRender {
             crate::account::load_account(raw_path, ctx.raw_range()).context("linkedin account")?;
         let source = Source {
             raw_dir: raw_path,
-            out_dir: ctx.root,
             name: ctx.name,
             account: account.label.as_deref(),
             owner: account.handle.as_ref(),

@@ -474,28 +474,24 @@ mod tests {
 
         let store = IndexedMarkdownStore::open(dir).unwrap();
         store
-            .put_document(
-                dir,
-                &RenderedMarkdown {
-                    section_layout: None,
-                    content_hash: None,
-                    markdown_uuid: md.to_string(),
-                    source_id: "slack".into(),
-                    upstream_cursor: None,
-                    bucket_key: None,
-                    md_path: datalib_etl_render::grid_index::doc_md_path(dir, md),
-                    render_version: 1,
-                    rows,
-                    sections: Vec::new(),
-                    front: Default::default(),
-                    edges: Vec::new(),
-                    contacts: Vec::new(),
-                    data_nodes: Vec::new(),
-                    filings: Vec::new(),
-                    photos: Vec::new(),
-                    problems: Vec::new(),
-                },
-            )
+            .put_document(&RenderedMarkdown {
+                searchable: true,
+                content_hash: None,
+                markdown_uuid: md.to_string(),
+                source_id: "slack".into(),
+                upstream_cursor: None,
+                bucket_key: None,
+                render_version: 1,
+                rows,
+                sections: Vec::new(),
+                front: Default::default(),
+                edges: Vec::new(),
+                contacts: Vec::new(),
+                data_nodes: Vec::new(),
+                filings: Vec::new(),
+                photos: Vec::new(),
+                problems: Vec::new(),
+            })
             .unwrap();
         // The applet reads at HEAD, as the render step leaves it.
         store.commit("test").unwrap();

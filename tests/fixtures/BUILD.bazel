@@ -64,10 +64,11 @@ sh_binary(
 #
 #   * backend_index.sqlite -- the grid index the backend reads (plain SQLite),
 #                   its search terms included.
-#   * rendered.tar -- the rendered conversation tree (markdown, each
-#                   source's indexed_markdown.doltlite_db, render
-#                   cursors, attachment blobs).
-#   * rendered_md.tar -- markdown alone, for the UI's render preview.
+#   * rendered.tar -- each source's render store
+#                   (indexed_markdown.doltlite_db, its render cursor
+#                   inside) and blob store.
+#   * rendered_md.tar -- every document's markdown as `datalib-step
+#                   markdown` exports it, for the UI's render preview.
 #   * config_body.toml -- every source as a render-only group plus the
 #                   two fan-ins, for materialize_tng_root.sh to declare
 #                   in the root it builds from the tars.
@@ -257,15 +258,25 @@ genrule(
             "$(execpath ingested/config_body.toml)",
             "$(RULEDIR)/sync_workspace/unified_time_series_index/time_series_index/time_series.doltlite_db",
         ]),
-        # Tar the render_markdown tree hermetically: the whole tree into
-        # rendered.tar, and markdown alone into rendered_md.tar. See
-        # tar_rendered.py for why markdown alone gets its own archive.
+        # Every document's markdown, spelled from its render store the
+        # way a person exports it.
+        "rm -rf $(RULEDIR)/exported_md",
+        " ".join([
+            "$(execpath //datalib/backend/datalib_step:datalib_step) markdown",
+            "$(RULEDIR)/sync_workspace",
+            "--out $(RULEDIR)/exported_md",
+            "> /dev/null",
+        ]),
+        # Tar the render_markdown tree hermetically into rendered.tar, and
+        # the exported markdown into rendered_md.tar. See tar_rendered.py
+        # for why markdown alone gets its own archive.
         " ".join([
             "python3 $(execpath tar_rendered.py)",
             "$(RULEDIR)/sync_workspace",
             "$(execpath ingested/rendered.tar)",
             "$(execpath ingested/rendered_md.tar)",
             "$(execpath ingested/time_series.tar)",
+            "$(RULEDIR)/exported_md",
         ]),
     ]),
     visibility = ["//visibility:public"],

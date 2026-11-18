@@ -3,7 +3,6 @@
 //! grid-row plumbing to [`datalib_etl_chat_common::render::render_all`].
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -149,10 +148,8 @@ impl<'a> Lookups<'a> {
 
 /// Renders every thread `store` hands out, a page at a time; `on_page`
 /// hears how each page ended before the next is read.
-#[allow(clippy::too_many_arguments)]
 pub fn render_store(
     store: &SlackStore,
-    out_dir: &Path,
     source_id: &str,
     size: PageSize,
     progress: &Progress,
@@ -171,7 +168,6 @@ pub fn render_store(
     let profile = profile();
     let mut renderer = ChatRenderer::new(
         &profile,
-        out_dir,
         source_id,
         store.threads,
         progress,
@@ -207,7 +203,6 @@ pub fn render_store(
 /// Renders every thread in `parsed`, its attachments already loaded.
 pub fn render_all(
     parsed: &ParsedSlack,
-    out_dir: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -216,7 +211,6 @@ pub fn render_all(
     let profile = profile();
     let mut renderer = ChatRenderer::new(
         &profile,
-        out_dir,
         source_id,
         parsed.threads.len(),
         progress,
@@ -936,9 +930,8 @@ mod tests {
                 inputs: Inputs::default(),
             }],
         };
-        let out = tempfile::tempdir().unwrap();
         let mut docs = Vec::new();
-        render_all(&parsed, out.path(), "src", &Progress::noop(), &mut |d| {
+        render_all(&parsed, "src", &Progress::noop(), &mut |d| {
             docs.push(d);
             Ok(())
         })

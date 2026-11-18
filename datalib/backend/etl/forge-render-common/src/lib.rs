@@ -10,13 +10,11 @@ mod markdown;
 mod tree;
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 use anyhow::Result;
 use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
-use datalib_etl::layout::render_markdown_root;
 use datalib_etl::progress::Progress;
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{Bucket, Buckets, Input, RawRange};
 use datalib_handle::Handle;
 use datalib_schema::problems::ProblemRow;
@@ -210,7 +208,6 @@ fn account_contact(
 pub fn render_all(
     profile: &ForgeProfile,
     parsed: &Parsed,
-    root: &Path,
     stanza: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -230,19 +227,17 @@ pub fn render_all(
     progress.set_length(Some(parsed.change_requests.len() as u64));
     for cr in &parsed.change_requests {
         let comments = by_parent.remove(cr.row_id.as_str()).unwrap_or_default();
-        let md_path = doc_md_path(&render_markdown_root(root, stanza), &cr.uuid);
-        let sections = markdown::write(profile, cr, &comments, &md_path)?;
+        let sections = markdown::render(profile, cr, &comments);
         let mut problems: Vec<ProblemRow> = Vec::new();
         let tree = tree::of(profile, cr, stanza);
         let rows = grid_rows::rows_for(profile, cr, &comments, stanza, &tree, &mut problems);
         on_doc_complete(RenderedMarkdown {
-            section_layout: None,
+            searchable: true,
             content_hash: None,
             markdown_uuid: cr.uuid.clone(),
             source_id: stanza.to_string(),
             upstream_cursor: None,
             bucket_key: Some(cr.row_id.clone()),
-            md_path,
             render_version: profile.render_version,
             rows,
             sections,
@@ -447,19 +442,11 @@ mod tests {
             comments: vec![first, reply, other],
             ..Parsed::default()
         };
-        let dir = tempfile::tempdir().unwrap();
         let mut docs = Vec::new();
-        render_all(
-            &profile,
-            &parsed,
-            dir.path(),
-            "gh",
-            &Progress::noop(),
-            &mut |d| {
-                docs.push(d);
-                Ok(())
-            },
-        )
+        render_all(&profile, &parsed, "gh", &Progress::noop(), &mut |d| {
+            docs.push(d);
+            Ok(())
+        })
         .unwrap();
         let doc = &docs[0];
         let data_nodes: Vec<(&str, Option<&str>, bool, bool)> = doc

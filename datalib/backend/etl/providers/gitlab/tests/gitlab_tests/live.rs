@@ -53,12 +53,10 @@ async fn gitlab_live_single_mr_snapshot() {
     assert_eq!(parsed.change_requests.len(), 1, "expected exactly one MR");
     let mr = &parsed.change_requests[0];
 
-    let render_root = tmp.clone();
     let stanza = "gitlab";
     let mut docs: Vec<datalib_etl_render::grid_index::RenderedMarkdown> = Vec::new();
     render_gitlab(
         &parsed,
-        &render_root,
         stanza,
         &datalib_etl::progress::Progress::noop(),
         &mut |doc| {
@@ -68,13 +66,8 @@ async fn gitlab_live_single_mr_snapshot() {
     )
     .expect("render_gitlab failed");
 
-    let md_abs = datalib_etl_render::grid_index::doc_md_path(
-        &datalib_etl::layout::render_markdown_root(&render_root, stanza),
-        &mr.uuid,
-    );
-    assert!(md_abs.exists(), "rendered md missing: {}", md_abs.display());
-    // The projection rides on the emitted document now, not in a file
-    // beside the markdown.
+    let document_rendered = docs.iter().any(|d| d.markdown_uuid == mr.uuid);
+    assert!(document_rendered, "no document rendered for {}", mr.uuid);
     assert!(
         docs.iter().any(|d| !d.rows.is_empty()),
         "render emitted no rows"
@@ -101,7 +94,7 @@ async fn gitlab_live_single_mr_snapshot() {
         "state_known": mr.state.is_some(),
         "note_count": parsed.comments.len(),
         "sections_present": sections,
-        "render_markdown_exists": md_abs.exists(),
+        "document_rendered": document_rendered,
         "rows_emitted": docs.iter().any(|d| !d.rows.is_empty()),
     });
 

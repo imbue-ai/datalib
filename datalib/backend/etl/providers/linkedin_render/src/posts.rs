@@ -53,7 +53,6 @@ pub fn render_posts(
 ) -> Result<FeedOutcome> {
     let Source {
         raw_dir,
-        out_dir,
         name: source_id,
         account,
         owner,
@@ -109,7 +108,6 @@ pub fn render_posts(
     let s = cc_render_all(
         &profile(),
         &chats,
-        out_dir,
         source_id,
         &blobs,
         progress,
