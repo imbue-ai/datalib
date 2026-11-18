@@ -36,10 +36,11 @@ enough that reading them all costs less than working out which to read.
 Each task and comment is a section with its own
 `data-section-uuid`, so a grid row opens at its place in the page.
 
-Task text, descriptions and comments are Todoist markdown, so their
-links and emphasis stay; HTML in them is escaped
-(`markdown_html_as_typed`), since Todoist shows it as text. A
-project's and a section's names are plain text and escaped as such.
+Task text, descriptions and comments are Todoist markdown and go in as
+written, HTML included; each is a section of its own, and the app's
+sanitizer contains the rest
+([`chat-common/README.md`](../../chat-common/README.md#plain-text-is-escaped-the-ui-sanitizes-the-rest)).
+A project's and a section's names are plain text and escaped as such.
 
 ### Which row says what about a task
 

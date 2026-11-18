@@ -46,16 +46,15 @@ keeps its stamps.
 
 The scan goes on, and what it could not do is a `problems` row:
 
-- **An entry the walk could not read** (a folder it may not list, a
-  dangling link) means a path the walk did
-  not see may only be one it could not see, so **that scan does not
-  truncate `pdf_paths`**: what it saw is upserted over what was there
-  and nothing falls out. It leaves a `listing:files` row; the next
-  clean walk truncates as usual and clears it
-  (`a_walk_with_errors_drops_no_path`).
-- **A file that would not open** is `record:files:<path>`. It is
-  there, so it keeps its path row and holds back no other deletion; the
-  row goes the scan it opens.
+- **A walk error** (an entry the walk could not read) leaves a
+  `listing:files` row, and **that scan does not truncate `pdf_paths`**:
+  what it saw is upserted over what was there and nothing falls out.
+  **A file that would not open** is `record:files:<path>`; it keeps its
+  path row and holds back no other deletion. These are the rules of
+  [`file_changes_scan`](../../files/README.md#answering-did-it-change-for-a-file-backed-source).
+  The next clean walk truncates as usual and clears the listing row
+  (`a_walk_with_errors_drops_no_path`); a file's row goes the scan that
+  opens it.
 - **A document that would not identify** is
   `record:pdf_paths:<path>`, with what the parser said. It is retried
   every scan (above), and the scan that identifies it clears the row; a

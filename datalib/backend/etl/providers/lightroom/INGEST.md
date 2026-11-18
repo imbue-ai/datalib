@@ -8,11 +8,13 @@ content-addressed prolly trees do the deduplication.
 
 The engine is
 [`datalib_etl_sqlite_mirror`](/datalib/backend/etl/sqlite_mirror/),
-shared with `apple_photos`; this provider is the config that points it
-at a `.lrcat`, with `id_global` as the preferred key and the `skip_xmp`
-preset. This document is where the engine is explained;
-[`apple_photos/INGEST.md`](../apple_photos/INGEST.md) covers only what
-differs there.
+shared with `apple_photos`, `apple_messages`, `beeper` and `whatsapp`;
+this provider is the config that points it at a `.lrcat`, with
+`id_global` as the preferred key and the `skip_xmp` preset. This
+document is where the engine is explained;
+[`apple_photos/INGEST.md`](../apple_photos/INGEST.md) and
+[`whatsapp/INGEST.md`](../whatsapp/INGEST.md) cover only what differs
+there.
 
 The result is an incremental, versioned backup that costs one pass over
 the catalog per run and stores only what actually changed, with every
@@ -101,8 +103,8 @@ is kept in both versions. No table is dropped, a column the source
 gained is added (nullable, since the rows already kept have no value
 for it), and one it dropped stays, holding NULL in new rows. A table
 whose key would change fails the run before anything is written: the
-rows kept are keyed by the old key, and nothing can re-key them. Only
-`apple_messages` sets it.
+rows kept are keyed by the old key, and nothing can re-key them.
+`apple_messages` and `beeper` set it.
 
 ## What gets mirrored
 
@@ -222,8 +224,7 @@ since a UNIQUE index lets NULLs repeat and a key does not; a table with
 NULLs there stays keyless and the run warns. A table with two UNIQUE
 indexes stays keyless too, since neither is more its key than the
 other; none of the test catalogs has one. A `primary_keys` entry
-or an `id_global` still wins. Every run mirrors the newest state again,
-so a store synced before this rule takes it on its next run.
+or an `id_global` still wins.
 
 Set `stable_key_columns = []` to mirror declared keys verbatim, or use
 `primary_keys = { Table = ["a", "b"] }` to pin one explicitly (an empty
@@ -907,8 +908,7 @@ books, slideshows, prints and web galleries) and
 `AgLibraryPublishedCollection` (each publish service's collections),
 each with its `…Image` table of members. A smart collection has no
 member rows (its rules are in `AgLibraryCollectionContent`), so it is
-not one. Keywords, people and collections are `label:` terms as well,
-which is how photos were searched before these keys existed.
+not one. Keywords, people and collections are `label:` terms as well.
 
 **`file_inventory` as a companion**, if you want to know whether the files the
 catalog points at are still there.
