@@ -592,6 +592,41 @@ pub async fn latest_metric(data_root: &Path, name: &str) -> Vec<MetricRow> {
     newest_per_series(data_root, Some(name)).await
 }
 
+/// One metric's value in each run the store keeps, per (step, labels):
+/// for a running total, what each run came to. Oldest run first within a
+/// series.
+pub async fn metric_by_run(data_root: &Path, name: &str) -> Vec<MetricRow> {
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(pool) = open_existing(&path).await else {
+        return Vec::new();
+    };
+    let rows = sqlx::query(
+        "SELECT m.run_id, m.step, m.name, m.labels, m.value, m.updated_at_utc, m.tz_offset \
+         FROM metrics m JOIN runs r ON r.run_id = m.run_id \
+         WHERE m.name = ?1 \
+         ORDER BY m.step, m.labels, r.started_at_utc, r.rowid",
+    )
+    .bind(name)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
+    pool.close().await;
+    rows.iter()
+        .map(|r| MetricRow {
+            run_id: r.get("run_id"),
+            step: r.get("step"),
+            name: r.get("name"),
+            labels: r.get("labels"),
+            value: r.get("value"),
+            updated_at_utc: r.get("updated_at_utc"),
+            tz_offset: r.get("tz_offset"),
+        })
+        .collect()
+}
+
 /// The newest sample of every series every step has reported, across
 /// every run the store keeps: what `GET /metrics` serves.
 pub async fn latest_metrics(data_root: &Path) -> Vec<MetricRow> {

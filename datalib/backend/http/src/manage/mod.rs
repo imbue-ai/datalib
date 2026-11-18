@@ -15,6 +15,7 @@ mod group;
 mod items;
 mod problems;
 mod queue;
+mod spend;
 mod status;
 mod summary;
 
@@ -45,6 +46,7 @@ pub use dashboard::get_dashboard;
 pub use items::{by_step as items_by_step, WINDOW as ITEMS_WINDOW};
 pub use problems::{counts_by_step, IndexCounts, ProblemCounts};
 pub use queue::{owed_by_step, queue_drain, Owed, QueueDrain};
+pub use spend::by_step as spend_by_step;
 pub use status::dropped_detail;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -125,6 +127,9 @@ pub fn columns() -> Vec<ColumnSpec> {
             .describe("What it is doing now, or did last, and when it got there. While it has work queued: how much the step says is still ahead of it (a group shows none, since its steps count different things), then when that is done at the pace work has come off the queue over the last two minutes (or since the step started; a group waits on its slowest step) \u{2014} or a word when there is no pace to go by: stalled, measuring, growing, flat. At rest after a run that stopped, failed or gave up, what it saw waiting and did not get to, which the next sync starts on: 412 owed (a group shows its first step that owes). Hover any part for why; double-click for the log."),
         ColumnSpec::new("items", "Items", ColumnType::Timeseries)
             .describe("How many things this source holds \u{2014} messages, readings, events \u{2014} whole store, as of its last render, with the last few days of syncs behind it. Hover for how many documents they sit in. Blank means it has never counted."),
+        ColumnSpec::new("spend", "Modal spend", ColumnType::Timeseries)
+            .hide_when_uniform()
+            .describe("What this step's Modal Sandboxes cost, at Modal's list price, over the runs the run store keeps, with the total climbing run by run behind it. Only an `embed` step that sent chunks to Modal spends; a group shows its step's. Hover for the latest run's Sandboxes and Sandbox time. An estimate, set high on purpose; your Modal bill is the real figure."),
         ColumnSpec::new("last_synced", "Last synced", ColumnType::Timestamp)
             .hidden()
             .describe("When it last ran, whatever came of it. A source's is its ingest step's."),
@@ -199,6 +204,10 @@ pub struct ManageRow {
     /// value, drawn blank, for a row that has never counted, which is
     /// every row but a render step and the group above it.
     pub items: Timeseries,
+    /// What its Modal Sandboxes cost over the runs the store keeps — see
+    /// `manage::spend`. Blank for every row but an `embed` step that sent
+    /// chunks to Modal and the group above it.
+    pub spend: Timeseries,
     pub last_synced: Option<String>,
     /// When it last succeeded; see `Status::last_success_at`.
     pub last_success: Option<String>,
@@ -798,6 +807,7 @@ impl Snapshot<'_> {
             problems: vec![],
             problems_query: None,
             items: Timeseries::default(),
+            spend: Timeseries::default(),
             last_synced: None,
             last_success: None,
             disk,
@@ -908,6 +918,7 @@ fn applets_section_row() -> ManageRow {
         problems: vec![],
         problems_query: None,
         items: Timeseries::default(),
+        spend: Timeseries::default(),
         last_synced: None,
         last_success: None,
         disk: Timeseries::default(),
@@ -1315,6 +1326,11 @@ impl RowCtx<'_> {
             Entry::Applet(_) => None,
         }
         .unwrap_or_default();
+        let spend = match e {
+            Entry::Step(_) => self.snap.record.spend.get(&id).cloned(),
+            Entry::Applet(_) => None,
+        }
+        .unwrap_or_default();
         // A step under a group takes its group's Browse once the group
         // row is built (`inherit_browse`); this is the answer for one
         // outside any group.
@@ -1394,6 +1410,7 @@ impl RowCtx<'_> {
             problems,
             problems_query,
             items,
+            spend,
             disk,
             actions: [browse, sync]
                 .into_iter()
@@ -1643,6 +1660,13 @@ impl RowCtx<'_> {
             .find(|t| t.value.is_some())
             .cloned()
             .unwrap_or_default();
+        // Likewise only the embed step spends.
+        let spend = ordered
+            .iter()
+            .map(|c| &row_of(c.id()).spend)
+            .find(|t| t.value.is_some())
+            .cloned()
+            .unwrap_or_default();
         let stamp_of = |at: fn(&StatusView) -> Option<String>| {
             if dropped.is_some() {
                 return None;
@@ -1686,6 +1710,7 @@ impl RowCtx<'_> {
             problems,
             problems_query,
             items,
+            spend,
             last_synced,
             last_success,
             disk,

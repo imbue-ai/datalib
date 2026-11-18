@@ -334,6 +334,11 @@ into `datalib-step` and run with `node --eval`; it imports npm's `modal`
   the driver could not end (a SIGKILL) goes uncounted. _To check_
   against the bill on the first live run, which also measures what a
   Sandbox uses, so the assumption can be set from that.
+- **The Manage screen's Modal spend column** sums the estimate over the
+  runs the run store keeps, per `embed` step and for its group, with
+  the total climbing run by run behind it, and the latest run's
+  Sandboxes and Sandbox time in its hover (`http/src/manage/spend.rs`).
+  It hides while no row has spent anything.
 - **The run ends with one line** on its Manage row's Status (a hover)
   and in its log: "embedded 8192 chunks on Modal: 3 T4 Sandbox(es), 6
   min 0 s of Sandbox time, about $0.08 at list price". A failed run puts

@@ -52,6 +52,7 @@ rust_library(
         "src/manage/group.rs",
         "src/manage/mod.rs",
         "src/manage/problems.rs",
+        "src/manage/spend.rs",
         "src/manage/status.rs",
         "src/manage/summary.rs",
         "src/oauth_client.rs",
