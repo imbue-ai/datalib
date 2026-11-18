@@ -69,8 +69,8 @@ pub struct MarkdownRow {
     /// root** — `<stanza>/render_markdown/...`, derived by
     /// `grid_index::apply_one` stripping the data root off the absolute
     /// path the renderer wrote. NULL until the renderer has produced
-    /// output. The backend's `/api/chat/{markdown_uuid}` endpoint
-    /// resolves this column to find the file to serve.
+    /// output. Nothing reads the file through it: the viewer reads the
+    /// render store.
     #[col(sql = "VARCHAR(1024)")]
     pub md_path: Option<String>,
     /// Optional provider-defined cheap-probe value, consulted *before*

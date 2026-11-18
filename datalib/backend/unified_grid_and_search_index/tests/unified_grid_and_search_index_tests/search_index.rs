@@ -101,7 +101,6 @@ async fn the_nearest_documents_come_first_of_the_sources_asked() {
         }),
         "a Meaning hit names the first item its chunk covers"
     );
-    assert!(top.path.is_empty(), "a page looks the file up");
 
     let mail = ["mail".to_string()];
     let only_mail = held

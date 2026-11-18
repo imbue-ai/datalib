@@ -35,6 +35,7 @@ mod search_tests;
 #[cfg(test)]
 mod serve_tests;
 mod sql;
+mod stored_text;
 pub(crate) mod warm;
 
 use body_sections::{body_sections, BodySection};
@@ -894,17 +895,7 @@ async fn land(
         .grid_row_refs_for_documents(&documents)
         .await
         .map_err(index)?;
-    // A hit from the search index names its document, not its file.
-    let unfiled: Vec<String> = todo
-        .iter()
-        .filter(|(_, hit)| hit.path.is_empty())
-        .map(|(e, _)| e.uuid.clone())
-        .collect();
-    let files = if unfiled.is_empty() {
-        Default::default()
-    } else {
-        s.repo.md_paths_for(&unfiled).await.map_err(index)?
-    };
+    let where_kept = s.repo.document_stores(&documents).await.map_err(index)?;
     let fetched = started.elapsed();
     // Every term, `source:` too: a source's file can hold rows filed
     // under another, which its collection's ranking does not drop.
@@ -930,7 +921,7 @@ async fn land(
     let n_refs = refs.len();
     let words =
         datalib_unified_grid_and_search_index::hits::lex::strip_lex_syntax(&parsed.free_text);
-    let idx = GridIndex::new((*s.root).clone(), refs).with_terms(&words);
+    let idx = GridIndex::new(refs).with_terms(&words);
     let idx = match kept {
         Some(kept) => idx.within(kept),
         None => idx,
@@ -938,19 +929,21 @@ async fn land(
     let documents_only = parsed.documents() == Some(true);
     let work: Vec<_> = todo
         .iter()
-        .map(|(e, hit)| {
-            let mut hit = (*hit).clone();
-            if let Some(file) = files.get(&e.uuid).filter(|_| hit.path.is_empty()) {
-                hit.path = file.display().to_string();
-            }
-            (e.uuid.clone(), hit, e.landed.clone())
-        })
+        .map(|(e, hit)| (e.uuid.clone(), (*hit).clone(), e.landed.clone()))
         .collect();
     let n = work.len();
+    let root = (*s.root).clone();
     tokio::task::spawn_blocking(move || {
+        // A store that will not read leaves the hits unquoted, not lost:
+        // each still lands on the row it names.
+        let texts = stored_text::spell(&root, &where_kept).unwrap_or_else(|e| {
+            tracing::warn!(error = %format!("{e:#}"), "could not read a page's documents; quoting none");
+            Default::default()
+        });
         for (document, hit, landed) in work {
+            let text = texts.get(&document).map(|d| d.text.as_str());
             let found = idx
-                .land(&hit, documents_only)
+                .land(&document, &hit, text, documents_only)
                 .map_or((document, String::new()), |(row, quoted)| {
                     (row.uuid, display_snippet(&quoted))
                 });
@@ -2027,20 +2020,21 @@ async fn chat(
     State(s): State<Index>,
     Path(markdown_uuid): Path<String>,
 ) -> Result<Json<ChatResponse>, StatusCode> {
-    // Rendered markdown is write-only output. We read the file just to ship its body
-    // to the UI as-is; structured metadata comes from grid_rows. Per-section
+    // The document's markdown as its render store spells it, shipped to the
+    // UI as-is; structured metadata comes from grid_rows. Per-section
     // anchors in the body (`<div id="m-{uuid}" data-section-uuid="…">`)
     // let the UI scroll-and-highlight without a structured chat schema.
-    // One UUID → one file: no enumeration, no fallbacks.
-    let file = s
+    let where_kept = s
         .repo
-        .document_file(&markdown_uuid)
+        .document_stores(std::slice::from_ref(&markdown_uuid))
         .await
         .map_err(|e| {
-            tracing::error!(document = %markdown_uuid, error = %e, "could not find the document's file");
+            tracing::error!(document = %markdown_uuid, error = %e, "could not find where the document is kept");
             StatusCode::INTERNAL_SERVER_ERROR
-        })?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        })?;
+    if where_kept.is_empty() {
+        return Err(StatusCode::NOT_FOUND);
+    }
     let meta = s
         .repo
         .chat_meta(&markdown_uuid)
@@ -2048,35 +2042,34 @@ async fn chat(
         .ok()
         .flatten()
         .unwrap_or_default();
-    let (body, sections) = match std::fs::read_to_string(&file.path) {
-        Ok(raw) => {
-            let body = strip_frontmatter(&raw);
-            let sections = file.section_layout.as_deref().and_then(|layout| {
-                let found = body_sections(&raw, raw.len() - body.len(), layout);
-                if found.is_none() {
-                    tracing::warn!(
-                        document = %markdown_uuid,
-                        "the stored section layout does not spell the file; \
-                         the body goes out without one",
-                    );
-                }
-                found
-            });
+    let root = (*s.root).clone();
+    let spelled = tokio::task::spawn_blocking(move || stored_text::spell(&root, &where_kept))
+        .await
+        .map_err(|e| {
+            tracing::error!(document = %markdown_uuid, error = %e, "reading the document panicked");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .map_err(|e| {
+            tracing::error!(document = %markdown_uuid, error = %format!("{e:#}"), "could not read the document");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .remove(&markdown_uuid);
+    let (body, sections) = match spelled {
+        // A picture's document is drawn by its applet, not from a page.
+        _ if meta.image.is_some() => (String::new(), None),
+        Some(doc) => {
+            let body = strip_frontmatter(&doc.text);
+            let sections = body_sections(&doc.text, doc.text.len() - body.len(), &doc.layout);
+            if sections.is_none() {
+                tracing::warn!(
+                    document = %markdown_uuid,
+                    "the front matter cuts into a message; the body goes out whole",
+                );
+            }
             (body.to_string(), sections)
         }
-        // A picture's document is drawn by its applet, not from a page.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && meta.image.is_some() => {
-            (String::new(), None)
-        }
-        Err(e) => {
-            tracing::error!(
-                document = %markdown_uuid,
-                path = %file.path.display(),
-                error = %e,
-                "could not read the document's file",
-            );
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
-        }
+        // The store at the commit the index read no longer holds it.
+        None => return Err(StatusCode::NOT_FOUND),
     };
     // Synthesize page-level URLs for providers that don't carry one in
     // `source_url`. Claude/ChatGPT use the conversation UUID directly
@@ -2317,6 +2310,7 @@ mod tests {
             .entire_chat(format!("/chat/{uuid}"))
             .body("")
             .markdown_uuid(Some(uuid.to_string()))
+            .item_count(Some(1))
     }
 
     /// `row` as a document of its own, filed where its id files it under
@@ -2354,6 +2348,59 @@ mod tests {
         }
     }
 
+    /// Writes `docs` into their sources' render stores and runs the grid
+    /// index over them, as a sync does: the index reads each store at its
+    /// head and records that commit, which is where the route reads a
+    /// document's text.
+    async fn render_and_index(
+        root: &std::path::Path,
+        docs: Vec<datalib_etl_render::grid_index::RenderedMarkdown>,
+    ) {
+        let sources: std::collections::BTreeSet<String> =
+            docs.iter().map(|d| d.source_id.clone()).collect();
+        let at = root.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            for source in sources_of(&docs) {
+                let store = datalib_etl_render::indexed_markdown::IndexedMarkdownStore::open(
+                    &datalib_etl::layout::render_markdown_root(&at, &source),
+                )
+                .unwrap();
+                for d in docs.iter().filter(|d| d.source_id == source) {
+                    store.put_document(&at, d).unwrap();
+                }
+                store.commit("test render").unwrap();
+                store.close();
+            }
+        })
+        .await
+        .unwrap();
+        let pool = datalib_etl_render::grid_index::open_index(
+            &datalib_runtime::layout::grid_index_db(root),
+        )
+        .await
+        .unwrap();
+        let sources: Vec<String> = sources.into_iter().collect();
+        datalib_etl_render::grid_index::build_grid_index_for(
+            &pool,
+            root,
+            &sources,
+            |_| {},
+            None,
+            &datalib_etl::stop::StopFlag::new(),
+        )
+        .await
+        .unwrap();
+        datalib_etl_render::grid_index::close_index(pool)
+            .await
+            .unwrap();
+    }
+
+    fn sources_of(docs: &[datalib_etl_render::grid_index::RenderedMarkdown]) -> Vec<String> {
+        let set: std::collections::BTreeSet<String> =
+            docs.iter().map(|d| d.source_id.clone()).collect();
+        set.into_iter().collect()
+    }
+
     /// Commits each row as a document of its own.
     async fn index_rows(root: &std::path::Path, rows: Vec<datalib_schema::grid_rows::GridRow>) {
         use datalib_etl_render::grid_index::{apply_one, open_index, WriteLock};
@@ -2371,14 +2418,15 @@ mod tests {
         pool.close().await;
     }
 
-    /// The route says where each message of the body begins, from the
-    /// sections the renderer handed over, so the UI can render each as a
-    /// fragment of its own; and says nothing once a render has rewritten
-    /// the file since the index was read, rather than cut it wrongly.
-    #[tokio::test]
+    /// The route sends the document as its render store spells it and says
+    /// where each message of the body begins, so the UI can render each as
+    /// a fragment of its own. It reads the store at the commit the index
+    /// read: a render the index has not read yet changes nothing until it
+    /// has, so the text always matches the grid's rows.
+    // The render store's reader blocks in place, which needs worker threads.
+    #[tokio::test(flavor = "multi_thread")]
     async fn the_document_route_sends_where_each_message_lies() {
-        use datalib_etl_render::grid_index::{apply_one, open_index, WriteLock};
-        use datalib_etl_render::section::{join, Section};
+        use datalib_etl_render::section::Section;
 
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -2402,16 +2450,8 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        std::fs::create_dir_all(doc.md_path.parent().unwrap()).unwrap();
-        std::fs::write(&doc.md_path, join(&sections)).unwrap();
         doc.sections = sections.clone();
-        let pool = open_index(&datalib_runtime::layout::grid_index_db(root))
-            .await
-            .unwrap();
-        let lock = WriteLock::for_index(pool.clone());
-        apply_one(&lock, root, &doc).await.unwrap();
-        datalib_etl_render::grid_index::seal(&lock).await.unwrap();
-        pool.close().await;
+        render_and_index(root, vec![doc.clone()]).await;
 
         let s = index_over(root).await;
         let Json(got) = chat(State(s.clone()), Path(uuid.to_string()))
@@ -2437,20 +2477,55 @@ mod tests {
         assert_eq!(pieces[1], sections[1].md);
         assert_eq!(pieces[2], sections[2].md);
 
-        std::fs::write(&doc.md_path, "---\n---\n\nrewritten since\n").unwrap();
+        let mut since = doc.clone();
+        since.sections = vec![Section::unkeyed("---\n---\n\nrewritten since\n".into())];
+        let store = datalib_etl_render::indexed_markdown::IndexedMarkdownStore::open(
+            &datalib_etl::layout::render_markdown_root(root, &doc.source_id),
+        )
+        .unwrap();
+        let at = root.to_path_buf();
+        let rerendered = since.clone();
+        tokio::task::spawn_blocking(move || {
+            store.put_document(&at, &rerendered).unwrap();
+            store.commit("a render the index has not read").unwrap();
+            store.close();
+        })
+        .await
+        .unwrap();
+        let Json(got) = chat(State(s.clone()), Path(uuid.to_string()))
+            .await
+            .unwrap();
+        assert_eq!(pieces_of(&got)[2], sections[2].md, "what the index read");
+
+        render_and_index(root, vec![since]).await;
         let Json(got) = chat(State(s), Path(uuid.to_string())).await.unwrap();
         assert_eq!(got.body, "\nrewritten since\n");
-        assert!(got.sections.is_none(), "a stale layout is not sent");
+    }
+
+    /// The body cut where the route says each section lies.
+    fn pieces_of(got: &ChatResponse) -> Vec<String> {
+        let units: Vec<u16> = got.body.encode_utf16().collect();
+        let mut at = 0;
+        got.sections
+            .as_ref()
+            .expect("the route sends the sections")
+            .iter()
+            .map(|b| {
+                let piece = String::from_utf16(&units[at..at + b.len]).unwrap();
+                at += b.len;
+                piece
+            })
+            .collect()
     }
 
     /// Read from the search index, a hit is the message holding the words,
     /// and lands there, quoted from it. A word only the thread's title
     /// holds finds it too, and an excluded word drops a message, not the
     /// thread.
-    #[tokio::test]
+    // The render store's reader blocks in place, which needs worker threads.
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_words_search_reads_the_search_index_and_lands_on_the_message() {
-        use datalib_etl_render::grid_index::{apply_one, open_index, WriteLock};
-        use datalib_etl_render::section::{join, Section};
+        use datalib_etl_render::section::Section;
         use datalib_search_index::{IndexDoc, IndexSection};
 
         let tmp = tempfile::tempdir().unwrap();
@@ -2490,16 +2565,8 @@ mod tests {
             message.is_document = false;
             doc.rows.push(message);
         }
-        std::fs::create_dir_all(doc.md_path.parent().unwrap()).unwrap();
-        std::fs::write(&doc.md_path, join(&sections)).unwrap();
         doc.sections = sections.clone();
-        let pool = open_index(&datalib_runtime::layout::grid_index_db(root))
-            .await
-            .unwrap();
-        let lock = WriteLock::for_index(pool.clone());
-        apply_one(&lock, root, &doc).await.unwrap();
-        datalib_etl_render::grid_index::seal(&lock).await.unwrap();
-        pool.close().await;
+        render_and_index(root, vec![doc.clone()]).await;
 
         let index =
             datalib_search_index::Index::open(&datalib_runtime::layout::grid_index_db(root))

@@ -15,7 +15,7 @@ use datalib_unified_grid_and_search_index::dolt_repo::{listing_sql, DoltRepo};
 use datalib_unified_grid_and_search_index::grid_columns::GridColumn;
 use datalib_unified_grid_and_search_index::problems::{Ids, ProblemsQuery};
 use datalib_unified_grid_and_search_index::query::parse_query;
-use datalib_unified_grid_and_search_index::repo::{IndexRepo, LocatedProblem};
+use datalib_unified_grid_and_search_index::repo::{DocumentStore, IndexRepo, LocatedProblem};
 use datalib_unified_grid_and_search_index::sort::Sort;
 use datalib_unified_grid_and_search_index::view;
 use std::path::{Path, PathBuf};
@@ -145,9 +145,8 @@ async fn dolt_repo_databaseless_root_reads_as_empty() {
         .unwrap()
         .is_empty());
     assert!(repo.chat_meta("c-1").await.unwrap().is_none());
-    assert!(repo.document_file("c-1").await.unwrap().is_none());
     assert!(repo
-        .md_paths_for(&["c-1".to_string()])
+        .document_stores(&["c-1".to_string()])
         .await
         .unwrap()
         .is_empty());
@@ -286,62 +285,44 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     assert_eq!(meta.project, None, "project was NULL");
     assert_eq!(meta.channel, None, "channel was NULL");
 
-    let file = repo.document_file("c-1").await.unwrap().map(|f| f.path);
-    assert!(file.is_some());
-    let file = file.unwrap();
-    assert!(
-        file.is_absolute(),
-        "expected an absolute path, got {file:?}"
-    );
-    assert!(file.to_string_lossy().ends_with("chats/c-1.md"));
-
-    // The batch form the grid's index-state columns use must agree
-    // with the single lookup, and must simply omit uuids it has no
-    // rendered file for rather than inventing an entry for them.
-    let batch = repo
-        .md_paths_for(&["c-1".to_string(), "nope".to_string()])
-        .await
-        .unwrap();
-    assert_eq!(batch.len(), 1, "unknown uuid should be absent: {batch:?}");
-    assert_eq!(batch.get("c-1"), Some(&file));
-
-    drop(repo);
-    let _ = std::fs::remove_file(&db_path);
-}
-
-/// An index an older build wrote has no `markdowns.section_layout` until
-/// `unified_grid_and_search_index` rebuilds it, and opening any document there was a 500
-/// for the whole re-render an upgrade starts.
-#[tokio::test]
-async fn a_document_opens_in_an_index_without_section_layouts() {
-    let db_path = unique_db_path();
-    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
-    let repo = DoltRepo::open(root.clone()).await.unwrap();
-    let writer = writer(&root).await;
-    for (_t, ddl) in MARKDOWNS_DDL {
+    // Where a document is kept is its source's render store at the commit
+    // the index read: none before the index has read the source, and a
+    // uuid it does not know is left out rather than invented.
+    let kept = |uuids: &[&str]| {
+        let uuids: Vec<String> = uuids.iter().map(|u| u.to_string()).collect();
+        let repo = &repo;
+        async move { repo.document_stores(&uuids).await.unwrap() }
+    };
+    for (_t, ddl) in datalib_schema::source_cursors::DDL {
         sqlx::query(*ddl).execute(&writer).await.unwrap();
     }
-    sqlx::query("ALTER TABLE markdowns DROP COLUMN section_layout")
-        .execute(&writer)
-        .await
-        .expect("take the index back to its 0.52 shape");
+    commit(&writer, "no cursor yet").await;
+    assert!(
+        kept(&["c-1"]).await.is_empty(),
+        "the index has not read the source"
+    );
     sqlx::query(
-        "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, md_path, \
-         renderer_version, searchable) \
-         VALUES ('c-1','test','claude','chat','chats/c-1.md','test-v1',1)",
+        "INSERT INTO source_cursors (source_id, store_commit, store_tree, indexed_at_utc, \
+         tz_offset, documents_applied) VALUES ('test', 'abc123', NULL, '2026-01-01T00:00:00Z', \
+         '+00:00', 1)",
     )
     .execute(&writer)
     .await
-    .unwrap();
-    commit(&writer, "rows").await;
-
-    let file = repo
-        .document_file("c-1")
-        .await
-        .expect("an older shape is not an error")
-        .expect("the document is there");
-    assert!(file.path.ends_with("chats/c-1.md"), "{:?}", file.path);
-    assert!(file.section_layout.is_none());
+    .expect("insert the source's cursor");
+    commit(&writer, "cursor").await;
+    let batch = kept(&["c-1", "nope"]).await;
+    assert_eq!(
+        batch,
+        [(
+            "c-1".to_string(),
+            DocumentStore {
+                source_id: "test".to_string(),
+                commit: "abc123".to_string(),
+            },
+        )]
+        .into(),
+        "an unknown uuid is absent"
+    );
 
     drop(repo);
     let _ = std::fs::remove_file(&db_path);

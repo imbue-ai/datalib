@@ -1,7 +1,6 @@
 //! [`IndexRepo`] — the seam to the grid index: `grid_rows`,
 //! `markdowns`, `edges`.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -16,16 +15,15 @@ use crate::sort::Sort;
 use datalib_core::repo::RepoError;
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRowColumn;
-use datalib_schema::markdowns::SectionSpan;
 use datalib_schema::problems::{ProblemRow, ProblemRowColumn};
 
-/// One document's file, and the layout `markdowns.section_layout` holds
-/// for it: `None` when its renderer declares no sections, or wrote a
-/// layout this build cannot read.
+/// Where a document's text is kept: its source's render store, and the
+/// commit of it the grid index read, so the text and the grid's rows are
+/// one rendering.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DocumentFile {
-    pub path: PathBuf,
-    pub section_layout: Option<Vec<SectionSpan>>,
+pub struct DocumentStore {
+    pub source_id: String,
+    pub commit: String,
 }
 
 /// Which rows a search holds, in order, and the commit they were read at
@@ -170,25 +168,15 @@ pub trait IndexRepo: Send + Sync {
     /// — the same UUID `/api/chat/{markdown_uuid}` takes.
     async fn chat_meta(&self, markdown_uuid: &str) -> Result<Option<ChatMeta>, RepoError>;
 
-    /// The on-disk file of one rendered markdown, keyed by
-    /// `markdowns.markdown_uuid`, and where its sections lie. The path
-    /// is absolute (already joined with the data root): one UUID per
-    /// rendered file, no enumeration, no fallbacks.
-    async fn document_file(&self, markdown_uuid: &str) -> Result<Option<DocumentFile>, RepoError>;
-
-    /// Resolve the on-disk paths of many rendered markdowns at once,
-    /// keyed by `markdowns.markdown_uuid`. Same resolution as
-    /// [`document_file`](Self::document_file) — paths
-    /// come back absolute — but in one round trip, because the grid's
-    /// index-state columns ask about every markdown behind the current
-    /// result set.
-    async fn md_paths_for(
+    /// Where each of `markdown_uuids` is kept, keyed by
+    /// `markdowns.markdown_uuid`. A document of a source the grid index
+    /// has not read is left out.
+    async fn document_stores(
         &self,
         markdown_uuids: &[String],
-    ) -> Result<std::collections::HashMap<String, PathBuf>, RepoError>;
+    ) -> Result<std::collections::HashMap<String, DocumentStore>, RepoError>;
 
-    /// The rows of the documents the search's hits name, by `markdown_uuid`: a
-    /// hit's path is its document's id (`grid_rows::markdown_uuid_of_path`).
+    /// The rows of the documents the search's hits name, by `markdown_uuid`.
     async fn grid_row_refs_for_documents(
         &self,
         markdown_uuids: &[String],

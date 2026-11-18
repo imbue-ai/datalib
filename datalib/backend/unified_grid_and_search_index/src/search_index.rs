@@ -101,7 +101,6 @@ async fn read_unless_held(
 
 fn hit(score: f64, place: Place) -> SearchHit {
     SearchHit {
-        path: String::new(),
         score,
         snippet: String::new(),
         place: Some(place),

@@ -1,11 +1,8 @@
-//! Land a search hit on a grid row. A hit's path is its document's file,
-//! which names its id (`grid_rows::markdown_uuid_of_path`); the search
-//! index names the item it matched, and the quote is read from the file.
+//! Land a search hit on a grid row. The search index names the item it
+//! matched; the quote is read from the document's text as its render
+//! store spells it, which the caller reads and hands in.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
-
-use datalib_schema::grid_rows::markdown_uuid_of_path;
 
 /// Which collections a search may draw from: every one, or exactly these.
 /// Sources are scoped by group, so these are group ids; an empty
@@ -29,9 +26,6 @@ impl CollectionScope {
 /// One document a ranking found: by its words or by its meaning.
 #[derive(Debug, Clone)]
 pub struct SearchHit {
-    /// The document's file, relative to the data root; empty until the
-    /// page that shows the hit looks it up.
-    pub path: String,
     pub score: f64,
     pub snippet: String,
     /// Where in the document the ranking matched, for [`GridIndex::land`].
@@ -98,10 +92,8 @@ fn quoted_from(lines: &[&str], line: usize) -> String {
     format!("@@ -{line},1 @@ (0 before, 0 after)\n{}", text.join("\n"))
 }
 
-/// A set of `GridRowRef`s, looked up by row and by document, and the data
-/// root, whose files a hit's quote is read from.
+/// A set of `GridRowRef`s, looked up by row and by document.
 pub struct GridIndex {
-    root: PathBuf,
     by_uuid: HashMap<String, GridRowRef>,
     by_document: HashMap<String, Vec<GridRowRef>>,
     /// The search's words, lowercased: a quote starts at the first line of
@@ -113,7 +105,7 @@ pub struct GridIndex {
 }
 
 impl GridIndex {
-    pub fn new(root: impl Into<PathBuf>, rows: impl IntoIterator<Item = GridRowRef>) -> Self {
+    pub fn new(rows: impl IntoIterator<Item = GridRowRef>) -> Self {
         let mut by_uuid: HashMap<String, GridRowRef> = HashMap::new();
         let mut by_document: HashMap<String, Vec<GridRowRef>> = HashMap::new();
         for r in rows {
@@ -124,7 +116,6 @@ impl GridIndex {
                 .push(r);
         }
         Self {
-            root: root.into(),
             by_uuid,
             by_document,
             terms: Vec::new(),
@@ -149,13 +140,11 @@ impl GridIndex {
         self
     }
 
-    /// The rows `hit` lands on: the item it names when the search keeps
-    /// it, else the document's own row, or every row of a document that
-    /// has none. Empty for a document the grid does not have.
-    fn rows_for_hit(&self, hit: &SearchHit) -> Vec<GridRowRef> {
-        let Some(file_rows) =
-            markdown_uuid_of_path(&hit.path).and_then(|d| self.by_document.get(d))
-        else {
+    /// The rows `hit` on `document` lands on: the item it names when the
+    /// search keeps it, else the document's own row, or every row of a
+    /// document that has none. Empty for a document the grid does not have.
+    fn rows_for_hit(&self, document: &str, hit: &SearchHit) -> Vec<GridRowRef> {
+        let Some(file_rows) = self.by_document.get(document) else {
             return Vec::new();
         };
         if let Some(Place::Item { uuid: Some(uuid) }) = &hit.place {
@@ -178,8 +167,8 @@ impl GridIndex {
     /// The row that *is* the document `hit` lands in, for an
     /// `is:document` search, whose filter would drop a message row. Empty
     /// when the document has no such row.
-    fn document_for_hit(&self, hit: &SearchHit) -> Vec<GridRowRef> {
-        self.rows_for_hit(hit)
+    fn document_for_hit(&self, document: &str, hit: &SearchHit) -> Vec<GridRowRef> {
+        self.rows_for_hit(document, hit)
             .first()
             .and_then(|r| self.by_document.get(&r.markdown_uuid))
             .into_iter()
@@ -189,24 +178,28 @@ impl GridIndex {
             .collect()
     }
 
-    /// The row a hit lands on, with the lines quoted from its message,
-    /// reading the document's file once: the work a page does for each hit
-    /// it shows, and only for those. The document's own row for an
-    /// `is:document` search, quoting the message the hit matched.
-    /// `None` for a document the grid does not have.
-    pub fn land(&self, hit: &SearchHit, documents_only: bool) -> Option<(GridRowRef, String)> {
-        let text = std::fs::read_to_string(self.root.join(&hit.path)).ok();
+    /// The row a hit on `document` lands on, with the lines quoted from its
+    /// message in `text`, the document as its render store spells it: the
+    /// work a page does for each hit it shows, and only for those. The
+    /// document's own row for an `is:document` search, quoting the message
+    /// the hit matched. `None` for a document the grid does not have.
+    pub fn land(
+        &self,
+        document: &str,
+        hit: &SearchHit,
+        text: Option<&str>,
+        documents_only: bool,
+    ) -> Option<(GridRowRef, String)> {
         let rows = if documents_only {
-            self.document_for_hit(hit)
+            self.document_for_hit(document, hit)
         } else {
-            self.rows_for_hit(hit)
+            self.rows_for_hit(document, hit)
         };
         let row = rows.into_iter().next()?;
         let row = if self.keeps(&row) {
             row
         } else {
-            self.first_kept(text.as_deref(), &row.markdown_uuid)
-                .unwrap_or(row)
+            self.first_kept(text, &row.markdown_uuid).unwrap_or(row)
         };
         let quoted_section = match &hit.place {
             Some(Place::Item {
@@ -214,7 +207,7 @@ impl GridIndex {
             }) if documents_only => matched.as_str(),
             _ => row.uuid.as_str(),
         };
-        let quoted = match (&text, &hit.place) {
+        let quoted = match (text, &hit.place) {
             (Some(text), Some(Place::Item { .. })) => self.quote(text, quoted_section),
             _ => None,
         };
@@ -226,7 +219,7 @@ impl GridIndex {
     }
 
     /// The first row of `document` the search keeps, its messages in the
-    /// order the file has them, then its own row: where a hit lands when
+    /// order its text has them, then its own row: where a hit lands when
     /// none of the messages it matched is kept, rather than on one the
     /// search drops.
     fn first_kept(&self, text: Option<&str>, document: &str) -> Option<GridRowRef> {
@@ -263,15 +256,8 @@ impl GridIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_schema::grid_rows::doc_file_rel;
-
     const CHAT: &str = "00000000-0000-8000-aaaa-0000000000c1";
     const OTHER: &str = "00000000-0000-8000-bbbb-0000000000d2";
-
-    /// Where a source files document `id`: what a hit's path names.
-    fn path_of(source: &str, id: &str) -> String {
-        format!("{source}/render_markdown/{}", doc_file_rel(id))
-    }
 
     fn row(uuid: &str, kind: &str, document: &str, provider: &str) -> GridRowRef {
         GridRowRef {
@@ -290,9 +276,8 @@ mod tests {
         }
     }
 
-    fn hit(path: &str, snippet: &str) -> SearchHit {
+    fn hit(snippet: &str) -> SearchHit {
         SearchHit {
-            path: path.to_string(),
             score: 1.0,
             snippet: snippet.to_string(),
             place: None,
@@ -315,10 +300,8 @@ mod tests {
         );
     }
 
-    /// Writes `id`'s two-message chat where claude files it, and answers
-    /// its message rows.
-    fn write_two_message_doc(root: &std::path::Path, id: &str) -> Vec<GridRowRef> {
-        let body = "---\n\
+    /// A two-message chat as its render store spells it.
+    const TWO_MESSAGES: &str = "---\n\
                     provider: claude\n\
                     ---\n\
                     \n\
@@ -335,66 +318,55 @@ mod tests {
                     ## Assistant\n\
                     second message text\n\
                     </div>\n";
-        let path = root.join(path_of("claude", id));
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, body).unwrap();
-        vec![
-            row(
-                "aaaaaaaa-0000-0000-0000-000000000001",
-                "User Input",
-                id,
-                "claude",
-            ),
-            row(
-                "bbbbbbbb-0000-0000-0000-000000000002",
-                "LLM Response",
-                id,
-                "claude",
-            ),
-        ]
-    }
 
-    /// The search index names the item it matched, and the hit lands on
-    /// that item's row and quotes it, whatever the file holds where: the
-    /// index's text is drawn for it, not cut from the file, so its offsets
-    /// are no place in the file. A hit naming no item, or one the grid
-    /// does not have, lands on the document.
-    #[test]
-    fn a_hit_lands_on_the_item_the_index_names() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mut rows = write_two_message_doc(tmp.path(), CHAT);
-        rows.push(document(CHAT, "Chat", CHAT, "claude"));
-        let idx = GridIndex::new(tmp.path(), rows);
-        let named = |uuid: Option<&str>| SearchHit {
-            place: Some(Place::Item {
-                uuid: uuid.map(String::from),
-            }),
-            ..hit(&path_of("claude", CHAT), "")
-        };
-        for (uuid, says) in [
-            ("aaaaaaaa-0000-0000-0000-000000000001", "first message"),
-            ("bbbbbbbb-0000-0000-0000-000000000002", "second message"),
-        ] {
-            let (row, quoted) = idx.land(&named(Some(uuid)), false).unwrap();
-            assert_eq!(row.uuid, uuid);
-            assert!(quoted.contains(says), "{quoted}");
-        }
-        for nowhere in [None, Some("not-a-row-of-the-grid")] {
-            let (row, _) = idx.land(&named(nowhere), false).unwrap();
-            assert!(row.is_document, "{nowhere:?} landed on {}", row.uuid);
-        }
+    /// The message rows of `id`'s two-message chat.
+    fn two_messages(id: &str) -> Vec<GridRowRef> {
+        vec![
+            row(FIRST, "User Input", id, "claude"),
+            row(SECOND, "LLM Response", id, "claude"),
+        ]
     }
 
     const FIRST: &str = "aaaaaaaa-0000-0000-0000-000000000001";
     const SECOND: &str = "bbbbbbbb-0000-0000-0000-000000000002";
 
-    /// A hit on `CHAT` naming item `uuid`, as the search index answers.
+    /// A hit naming item `uuid`, as the search index answers.
     fn on_item(uuid: Option<&str>) -> SearchHit {
         SearchHit {
             place: Some(Place::Item {
                 uuid: uuid.map(String::from),
             }),
-            ..hit(&path_of("claude", CHAT), "")
+            ..hit("")
+        }
+    }
+
+    /// A hit on `CHAT`, landed in its text.
+    fn land_in_chat(
+        idx: &GridIndex,
+        uuid: Option<&str>,
+        documents_only: bool,
+    ) -> Option<(GridRowRef, String)> {
+        idx.land(CHAT, &on_item(uuid), Some(TWO_MESSAGES), documents_only)
+    }
+
+    /// The search index names the item it matched, and the hit lands on
+    /// that item's row and quotes it, whatever the text holds where: the
+    /// index's text is drawn for it, not cut from the document, so its
+    /// offsets are no place in it. A hit naming no item, or one the grid
+    /// does not have, lands on the document.
+    #[test]
+    fn a_hit_lands_on_the_item_the_index_names() {
+        let mut rows = two_messages(CHAT);
+        rows.push(document(CHAT, "Chat", CHAT, "claude"));
+        let idx = GridIndex::new(rows);
+        for (uuid, says) in [(FIRST, "first message"), (SECOND, "second message")] {
+            let (row, quoted) = land_in_chat(&idx, Some(uuid), false).unwrap();
+            assert_eq!(row.uuid, uuid);
+            assert!(quoted.contains(says), "{quoted}");
+        }
+        for nowhere in [None, Some("not-a-row-of-the-grid")] {
+            let (row, _) = land_in_chat(&idx, nowhere, false).unwrap();
+            assert!(row.is_document, "{nowhere:?} landed on {}", row.uuid);
         }
     }
 
@@ -403,17 +375,16 @@ mod tests {
     /// stems; with none, at the message's first line.
     #[test]
     fn a_hit_is_quoted_from_the_first_line_holding_a_search_word() {
-        let tmp = tempfile::tempdir().unwrap();
-        let rows = write_two_message_doc(tmp.path(), CHAT);
+        let rows = two_messages(CHAT);
         for terms in ["Second message", "seconds"] {
-            let idx = GridIndex::new(tmp.path(), rows.clone()).with_terms(terms);
-            let (row, quoted) = idx.land(&on_item(Some(SECOND)), false).unwrap();
+            let idx = GridIndex::new(rows.clone()).with_terms(terms);
+            let (row, quoted) = land_in_chat(&idx, Some(SECOND), false).unwrap();
             assert_eq!(row.uuid, SECOND);
             assert!(quoted.starts_with("@@ -16,1 @@"), "{terms}: {quoted}");
             assert!(quoted.contains("second message text"), "{quoted}");
         }
-        let idx = GridIndex::new(tmp.path(), rows).with_terms("tea");
-        let (_, quoted) = idx.land(&on_item(Some(SECOND)), false).unwrap();
+        let idx = GridIndex::new(rows).with_terms("tea");
+        let (_, quoted) = land_in_chat(&idx, Some(SECOND), false).unwrap();
         assert!(quoted.starts_with("@@ -13,1 @@"), "{quoted}");
         assert!(quoted.contains("## Assistant"), "{quoted}");
     }
@@ -422,10 +393,8 @@ mod tests {
     /// keep, so the document is not lost with the message.
     #[test]
     fn a_hit_on_a_dropped_message_lands_on_a_kept_one() {
-        let tmp = tempfile::tempdir().unwrap();
-        let idx = GridIndex::new(tmp.path(), write_two_message_doc(tmp.path(), CHAT))
-            .within([SECOND.to_string()].into());
-        let (row, quoted) = idx.land(&on_item(Some(FIRST)), false).unwrap();
+        let idx = GridIndex::new(two_messages(CHAT)).within([SECOND.to_string()].into());
+        let (row, quoted) = land_in_chat(&idx, Some(FIRST), false).unwrap();
         assert_eq!(row.uuid, SECOND);
         assert!(quoted.contains("second message text"), "{quoted}");
     }
@@ -435,30 +404,26 @@ mod tests {
     /// document's row.
     #[test]
     fn a_hit_on_a_dropped_message_lands_on_its_kept_document() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mut rows = write_two_message_doc(tmp.path(), CHAT);
+        let mut rows = two_messages(CHAT);
         rows.push(document(CHAT, "Chat", CHAT, "claude"));
-        let idx = GridIndex::new(tmp.path(), rows).within([CHAT.to_string()].into());
-        let (row, _) = idx.land(&on_item(Some(FIRST)), false).unwrap();
+        let idx = GridIndex::new(rows).within([CHAT.to_string()].into());
+        let (row, _) = land_in_chat(&idx, Some(FIRST), false).unwrap();
         assert_eq!(row.uuid, CHAT);
     }
 
-    /// The file is gone (a render since the index was written): the hit
-    /// still lands, on the item it names, else on a row of its document,
-    /// quoting nothing.
+    /// The store cannot spell the document (it changed since the index
+    /// read it): the hit still lands, on the item it names, else on a row
+    /// of its document, quoting nothing.
     #[test]
-    fn a_hit_whose_file_cannot_be_read_still_lands() {
-        let idx = GridIndex::new(
-            "/nonexistent-root",
-            vec![
-                row("u1", "User Input", CHAT, "claude"),
-                row("u2", "LLM Response", CHAT, "claude"),
-                row("u3", "Chat", OTHER, "claude"),
-            ],
-        );
-        let (row, quoted) = idx.land(&on_item(Some("u2")), false).unwrap();
+    fn a_hit_whose_text_cannot_be_read_still_lands() {
+        let idx = GridIndex::new(vec![
+            row("u1", "User Input", CHAT, "claude"),
+            row("u2", "LLM Response", CHAT, "claude"),
+            row("u3", "Chat", OTHER, "claude"),
+        ]);
+        let (row, quoted) = idx.land(CHAT, &on_item(Some("u2")), None, false).unwrap();
         assert_eq!((row.uuid.as_str(), quoted.as_str()), ("u2", ""));
-        let (row, quoted) = idx.land(&on_item(None), false).unwrap();
+        let (row, quoted) = idx.land(CHAT, &on_item(None), None, false).unwrap();
         assert_eq!((row.uuid.as_str(), quoted.as_str()), ("u1", ""));
     }
 
@@ -467,18 +432,17 @@ mod tests {
     /// with nothing rather than a message the SQL filter would drop.
     #[test]
     fn a_document_search_lands_on_the_documents_own_row() {
-        let td = tempfile::tempdir().unwrap();
-        let mut rows = write_two_message_doc(td.path(), CHAT);
-        let without = GridIndex::new(td.path(), rows.clone());
+        let mut rows = two_messages(CHAT);
+        let without = GridIndex::new(rows.clone());
         assert_eq!(
-            without.land(&on_item(Some(SECOND)), false).unwrap().0.uuid,
+            land_in_chat(&without, Some(SECOND), false).unwrap().0.uuid,
             SECOND
         );
-        assert!(without.land(&on_item(Some(SECOND)), true).is_none());
+        assert!(land_in_chat(&without, Some(SECOND), true).is_none());
         rows.push(document("conv", "Chat", CHAT, "claude"));
-        let with = GridIndex::new(td.path(), rows);
+        let with = GridIndex::new(rows);
         assert_eq!(
-            with.land(&on_item(Some(SECOND)), true).unwrap().0.uuid,
+            land_in_chat(&with, Some(SECOND), true).unwrap().0.uuid,
             "conv"
         );
     }
@@ -489,34 +453,27 @@ mod tests {
     /// as before.
     #[test]
     fn a_document_search_quotes_the_message_it_matched() {
-        let td = tempfile::tempdir().unwrap();
-        let mut rows = write_two_message_doc(td.path(), CHAT);
+        let mut rows = two_messages(CHAT);
         rows.push(document(CHAT, "Chat", CHAT, "claude"));
-        let idx = GridIndex::new(td.path(), rows)
+        let idx = GridIndex::new(rows)
             .with_terms("second")
             .within([CHAT.to_string()].into());
-        let (row, quoted) = idx.land(&on_item(Some(SECOND)), true).unwrap();
+        let (row, quoted) = land_in_chat(&idx, Some(SECOND), true).unwrap();
         assert_eq!(row.uuid, CHAT);
         assert!(quoted.starts_with("@@ -16,1 @@"), "{quoted}");
         assert!(quoted.contains("second message text"), "{quoted}");
-        let (row, quoted) = idx.land(&on_item(None), true).unwrap();
+        let (row, quoted) = land_in_chat(&idx, None, true).unwrap();
         assert_eq!((row.uuid.as_str(), quoted.as_str()), (CHAT, ""));
     }
 
-    /// A hit lands nowhere when its path names a document the grid does
-    /// not have, or is not filed by an id at all.
+    /// A hit lands nowhere when it names a document the grid does not have.
     #[test]
     fn a_hit_on_a_document_the_grid_lacks_lands_nowhere() {
-        let idx = GridIndex::new("/nonexistent-root", vec![row("u1", "Chat", CHAT, "claude")]);
-        for path in [
-            path_of("claude", OTHER),
-            format!("claude/render_markdown/{CHAT}/all.md"),
-        ] {
-            let h = SearchHit {
-                place: Some(Place::Item { uuid: None }),
-                ..hit(&path, "")
-            };
-            assert!(idx.land(&h, false).is_none(), "{path}");
-        }
+        let idx = GridIndex::new(vec![row("u1", "Chat", CHAT, "claude")]);
+        let h = SearchHit {
+            place: Some(Place::Item { uuid: None }),
+            ..hit("")
+        };
+        assert!(idx.land(OTHER, &h, Some(TWO_MESSAGES), false).is_none());
     }
 }
