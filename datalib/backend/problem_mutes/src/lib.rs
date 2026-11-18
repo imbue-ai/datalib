@@ -259,10 +259,9 @@ pub async fn count_in_index(
 pub async fn counts(data_root: &Path) -> Result<Option<HashMap<Counter, Counted>>> {
     let muted: HashSet<String> = read_published(data_root).await?.into_keys().collect();
     let mut rows = Vec::new();
-    for step in datalib_step_problems::of_steps(data_root).await {
-        for why in &step.unread {
-            tracing::error!(step = %step.step_id, error = %why, "could not read a step's problems");
-        }
+    let steps = datalib_step_problems::of_steps(data_root).await;
+    datalib_step_problems::say_unread(&steps);
+    for step in steps {
         rows.extend(step.rows);
     }
     Ok(Some(count_rows(&rows, &muted)))
