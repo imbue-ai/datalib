@@ -13,8 +13,7 @@
 //
 // DATALIB_MODAL_SDK_ENTRY names Modal's SDK (npm `modal`, from the runtime
 // tree) or a test's stand-in; DATALIB_MODAL_OPTIONS holds `image`, `gpu`,
-// `command`, `app`, `slice`, `sandboxes`, `timeoutMs`, `cpuMillicores` and
-// `memoryMib`.
+// `command`, `app`, `slice`, `sandboxes` and `timeoutMs`.
 
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
@@ -68,8 +67,6 @@ async function runSlice(n, lines) {
   const started = Date.now();
   const sb = await client.sandboxes.create(app, image, {
     gpu: options.gpu,
-    cpu: options.cpuMillicores / 1000,
-    memoryMiB: options.memoryMib,
     command: options.command,
     timeoutMs: options.timeoutMs,
   });

@@ -121,11 +121,6 @@ pub(crate) struct Options {
     /// One Sandbox's longest life: the image's pull, the model's load,
     /// and a slice of long prompts, with room.
     pub(crate) timeout_ms: u64,
-    /// What each Sandbox reserves beside its GPU, in thousandths of a
-    /// physical core and in MiB. Modal bills a reservation whether or not
-    /// it is used, so the estimate prices these.
-    pub(crate) cpu_millicores: u32,
-    pub(crate) memory_mib: u32,
 }
 
 impl Options {
@@ -156,8 +151,6 @@ impl Options {
                 .filter(|n| *n > 0)
                 .unwrap_or(10),
             timeout_ms: 15 * 60 * 1000,
-            cpu_millicores: 1000,
-            memory_mib: 2048,
         }
     }
 }
@@ -290,6 +283,10 @@ const GPU_USD_PER_SEC: &[(&str, f64)] = &[
 ];
 const CPU_USD_PER_CORE_SEC: f64 = 0.00003942;
 const MEMORY_USD_PER_GIB_SEC: f64 = 0.00000667;
+/// What Modal bills a container that reserves nothing, the least a
+/// Sandbox of ours can cost beside its GPU: an eighth of a core, 128 MiB.
+const MINIMUM_CORES: f64 = 0.125;
+const MINIMUM_GIB: f64 = 0.125;
 
 /// A GPU as Modal's SDK names it (`T4`, `A100-80GB`, `H100:2`): its price
 /// a second for the count asked for, or `None` for one the table lacks.
@@ -306,14 +303,14 @@ fn gpu_usd_per_sec(gpu: &str) -> Option<f64> {
 }
 
 /// What `usage` cost at list price, in millionths of a dollar: each
-/// Sandbox's GPU, and the CPU and memory it reserved, for as long as it
-/// lived. An estimate: Modal bills what a Sandbox uses past its
-/// reservation too, and its own bill is the one to trust. `None` for a GPU
-/// the table has no price for.
+/// Sandbox's GPU, and Modal's minimum CPU and memory, for as long as it
+/// lived. An estimate that runs low: the CPU and memory a Sandbox uses past
+/// that minimum are billed too and not counted here, and Modal's own bill
+/// is the one to trust. `None` for a GPU the table has no price for.
 pub(crate) fn estimated_micro_usd(usage: &Usage, options: &Options) -> Option<u64> {
     let per_sec = gpu_usd_per_sec(&options.gpu)?
-        + f64::from(options.cpu_millicores) / 1000.0 * CPU_USD_PER_CORE_SEC
-        + f64::from(options.memory_mib) / 1024.0 * MEMORY_USD_PER_GIB_SEC;
+        + MINIMUM_CORES * CPU_USD_PER_CORE_SEC
+        + MINIMUM_GIB * MEMORY_USD_PER_GIB_SEC;
     Some((per_sec * usage.sandbox_ms as f64 / 1000.0 * 1e6).round() as u64)
 }
 
@@ -485,10 +482,10 @@ mod tests {
         );
     }
 
-    /// An hour of one T4 Sandbox with the step's reservation: the GPU's
-    /// $0.5904, a core's $0.141912 and 2 GiB's $0.048024 at list price.
+    /// An hour of one T4 Sandbox: the GPU's $0.5904, and Modal's minimum
+    /// eighth of a core ($0.017739) and 128 MiB ($0.0030015) at list price.
     #[test]
-    fn the_estimate_prices_the_gpu_and_the_reservation() {
+    fn the_estimate_prices_the_gpu_and_the_minimum() {
         let options = Options::for_this_build();
         let mut usage = Usage::default();
         usage.add(3_600_000, true);
@@ -496,12 +493,12 @@ mod tests {
             gpu: "T4".into(),
             ..options.clone()
         };
-        assert_eq!(estimated_micro_usd(&usage, &t4), Some(780_336));
+        assert_eq!(estimated_micro_usd(&usage, &t4), Some(611_141));
         let two = Options {
             gpu: "t4:2".into(),
             ..options.clone()
         };
-        assert_eq!(estimated_micro_usd(&usage, &two), Some(780_336 + 590_400));
+        assert_eq!(estimated_micro_usd(&usage, &two), Some(611_141 + 590_400));
         let unknown = Options {
             gpu: "Z9".into(),
             ..options
@@ -522,7 +519,7 @@ mod tests {
         assert_eq!(
             summary(8192, &usage, &options),
             "embedded 8192 chunks on Modal: 3 T4 Sandbox(es), 1 of them failed, \
-             6 min 0 s of Sandbox time, about $0.08 at list price"
+             6 min 0 s of Sandbox time, about $0.06 at list price"
         );
         let unpriced = Options {
             gpu: "Z9".into(),

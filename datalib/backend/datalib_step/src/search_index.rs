@@ -1534,8 +1534,8 @@ mod tests {
                 )
             );
             assert_eq!(s["gpu"], "T4");
-            assert_eq!(s["cpu"], 1.0);
-            assert_eq!(s["memoryMiB"], 2048);
+            // No reservation: Modal's minimum, and whatever the run uses.
+            assert!(s["cpu"].is_null() && s["memoryMiB"].is_null(), "{s}");
             assert_eq!(s["app"], "datalib-embed");
         }
         assert_eq!(reported.metric("modal_chunks_total{}"), Some(5));

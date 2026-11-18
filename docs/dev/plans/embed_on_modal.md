@@ -270,9 +270,9 @@ into `datalib-step` and run with `node --eval`; it imports npm's `modal`
 - **Each slice's vectors go into the inference cache as it returns**,
   and the step counts what failed. A slice that fails is re-sent once,
   then reported.
-- **Each Sandbox reserves a physical core and 2 GiB beside its GPU**
-  (`cpu_millicores`, `memory_mib` in `modal::Options`), and the driver
-  reports each one as it ends: how long it lived, from its creation to
+- **Each Sandbox asks only for its GPU**, so Modal reserves its minimum
+  CPU and memory and bills whatever more the run uses. The driver
+  reports each Sandbox as it ends: how long it lived, from its creation to
   its end, and whether its slice came back. A failed attempt ran, so it
   is counted too.
 - **What the run spent is reported as it goes**, as running totals the
@@ -280,16 +280,19 @@ into `datalib-step` and run with `node --eval`; it imports npm's `modal`
   and by GPU `modal_sandboxes_total`, `modal_sandboxes_failed_total`,
   `modal_sandbox_seconds_total` and `modal_cost_estimate_micro_usd_total`.
   The estimate is each Sandbox's life priced at Modal's list price for
-  its GPU plus the core and memory it reserved, at the Sandbox's rate
-  (`modal::estimated_micro_usd`). The table in `src/modal.rs` was read
-  from modal.com/pricing on 2026-11-18 (a T4 Sandbox with that
-  reservation: $0.78 an hour) and has to follow the page. It is not the
-  bill: Modal also bills what a Sandbox uses past its reservation, and a
-  Sandbox the driver could not end (a SIGKILL) goes uncounted. _To
-  check_ against the bill on the first live run.
+  its GPU plus Modal's minimum of an eighth of a core and 128 MiB, at the
+  Sandbox's rate (`modal::estimated_micro_usd`). The table in
+  `src/modal.rs` was read from modal.com/pricing on 2026-11-18 (a T4
+  Sandbox at that minimum: $0.61 an hour) and has to follow the page. It
+  runs low, not high: the CPU and memory a Sandbox uses past the minimum
+  are billed and not counted, nor is a Sandbox the driver could not end
+  (a SIGKILL). The GPU is most of the price. _To check_ against the bill
+  on the first live run, which also measures what a Sandbox uses; if
+  that is much more than the minimum, a reservation of what it uses
+  would make the estimate exact at no extra cost.
 - **The run ends with one line** on its Manage row's Status (a hover)
   and in its log: "embedded 8192 chunks on Modal: 3 T4 Sandbox(es), 6
-  min 0 s of Sandbox time, about $0.08 at list price". A failed run puts
+  min 0 s of Sandbox time, about $0.06 at list price". A failed run puts
   the same words in its error instead, since the row shows the error.
 - **Nothing about the remote work is stored** but how much of it there
   was (the metrics above): no Sandbox to go back to. An interrupted run loses
