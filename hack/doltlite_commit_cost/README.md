@@ -1,8 +1,8 @@
 # What does a doltlite write cost, and does committing often make it worse?
 
-The question: a step that checkpoints every 15 s
-(`datalib_etl::checkpointer`) makes a commit per checkpoint rather than
-one per run. Same rows at the end — what does the extra history cost?
+The question: a step that seals as it goes (first after 15 s, then at
+doubling intervals: `datalib_etl::checkpointer`) makes a commit per
+seal rather than one per run. Same rows at the end — what does the extra history cost?
 
 `scripts/doltlite_commit_cost.py` builds the same 100k-row table six ways against the
 Bazel-built doltlite CLI and reports the file size before and after

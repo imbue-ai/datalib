@@ -408,8 +408,9 @@ should be testable without a database or a browser in the way:
 - **`analyze(inputs) -> DiffResult`** is pure. Move pairing, subtree
   rollup, delete-vs-copy-remains, in-tree duplicate grouping — all of it
   happens here, over plain data.
-- **`DiffResult`** is the representation. The page is a projection of
-  it (`to_payload()`), and so is `--json`.
+- **`DiffResult`** is the representation. The page is its JSON
+  dropped into the viewer template (`render::render`), and `--json`
+  writes the same JSON.
 
 Every type derives `Serialize` + `Deserialize`, so the JSON *is* the
 representation rather than a debug dump — a run captured with `--json`
