@@ -367,8 +367,8 @@ from the cell alone, and a new search shows the new title.
   anything. The rest of the title
   bar's menu (`documentMenu.ts`: open at the source, feedback) needs the
   document itself, which a chip does not hold.
-- **drag**: no search key names a document in the search grid, so it
-  drags as a link.
+- **drag**: it drags as a link. `chipDragQuery` writes no search for
+  it, though `datalib_document_id:` could now name one.
 
 ## A date
 
