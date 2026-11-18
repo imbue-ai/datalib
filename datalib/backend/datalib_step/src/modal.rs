@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use anyhow::{bail, Context, Result};
+use datalib_etl::progress::Progress;
 use serde::Deserialize;
 
 /// The step's one parameter, as a person writes it.
@@ -120,6 +121,11 @@ pub(crate) struct Options {
     /// One Sandbox's longest life: the image's pull, the model's load,
     /// and a slice of long prompts, with room.
     pub(crate) timeout_ms: u64,
+    /// What each Sandbox reserves beside its GPU, in thousandths of a
+    /// physical core and in MiB. Modal bills a reservation whether or not
+    /// it is used, so the estimate prices these.
+    pub(crate) cpu_millicores: u32,
+    pub(crate) memory_mib: u32,
 }
 
 impl Options {
@@ -150,6 +156,8 @@ impl Options {
                 .filter(|n| *n > 0)
                 .unwrap_or(10),
             timeout_ms: 15 * 60 * 1000,
+            cpu_millicores: 1000,
+            memory_mib: 2048,
         }
     }
 }
@@ -238,8 +246,129 @@ pub(crate) enum Reply {
     },
     /// A slice that failed twice: its prompts are still owed.
     Failed { failed: Vec<String>, error: String },
+    /// One Sandbox ended: how long it lived, from its creation to its
+    /// end, and whether its slice came back. One per attempt.
+    Sandbox { sandbox_ms: u64, ok: bool },
     /// Nothing could start.
     Fatal { fatal: String, sign_in: bool },
+}
+
+/// The Sandboxes a run started, as they ended.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Usage {
+    pub(crate) sandboxes: u64,
+    pub(crate) failed: u64,
+    pub(crate) sandbox_ms: u64,
+}
+
+impl Usage {
+    pub(crate) fn add(&mut self, sandbox_ms: u64, ok: bool) {
+        self.sandboxes += 1;
+        self.failed += u64::from(!ok);
+        self.sandbox_ms += sandbox_ms;
+    }
+}
+
+/// Modal's list prices for a Sandbox, in dollars a second, from
+/// <https://modal.com/pricing>: each GPU at its standard price, and CPU and
+/// memory at the Sandbox's rate, three times a Function's. When the page
+/// changes, so does this table.
+const GPU_USD_PER_SEC: &[(&str, f64)] = &[
+    ("T4", 0.000164),
+    ("L4", 0.000222),
+    ("A10", 0.000306),
+    ("A10G", 0.000306),
+    ("L40S", 0.000542),
+    ("A100", 0.000583),
+    ("A100-40GB", 0.000583),
+    ("A100-80GB", 0.000694),
+    ("RTX-PRO-6000", 0.000842),
+    ("H100", 0.001097),
+    ("H200", 0.001261),
+    ("B200", 0.001736),
+    ("B300", 0.001972),
+];
+const CPU_USD_PER_CORE_SEC: f64 = 0.00003942;
+const MEMORY_USD_PER_GIB_SEC: f64 = 0.00000667;
+
+/// A GPU as Modal's SDK names it (`T4`, `A100-80GB`, `H100:2`): its price
+/// a second for the count asked for, or `None` for one the table lacks.
+fn gpu_usd_per_sec(gpu: &str) -> Option<f64> {
+    let (kind, count) = match gpu.split_once(':') {
+        Some((kind, n)) => (kind, n.trim().parse::<u32>().ok()?),
+        None => (gpu, 1),
+    };
+    let kind = kind.trim().trim_end_matches('!').to_ascii_uppercase();
+    GPU_USD_PER_SEC
+        .iter()
+        .find(|(name, _)| *name == kind)
+        .map(|(_, usd)| usd * f64::from(count))
+}
+
+/// What `usage` cost at list price, in millionths of a dollar: each
+/// Sandbox's GPU, and the CPU and memory it reserved, for as long as it
+/// lived. An estimate: Modal bills what a Sandbox uses past its
+/// reservation too, and its own bill is the one to trust. `None` for a GPU
+/// the table has no price for.
+pub(crate) fn estimated_micro_usd(usage: &Usage, options: &Options) -> Option<u64> {
+    let per_sec = gpu_usd_per_sec(&options.gpu)?
+        + f64::from(options.cpu_millicores) / 1000.0 * CPU_USD_PER_CORE_SEC
+        + f64::from(options.memory_mib) / 1024.0 * MEMORY_USD_PER_GIB_SEC;
+    Some((per_sec * usage.sandbox_ms as f64 / 1000.0 * 1e6).round() as u64)
+}
+
+/// One line for the Manage row and the log: what went to Modal, on what,
+/// for how long, and about what it cost.
+pub(crate) fn summary(embedded: usize, usage: &Usage, options: &Options) -> String {
+    let sandboxes = match usage.failed {
+        0 => format!("{} {} Sandbox(es)", usage.sandboxes, options.gpu),
+        n => format!(
+            "{} {} Sandbox(es), {n} of them failed",
+            usage.sandboxes, options.gpu
+        ),
+    };
+    let cost = match estimated_micro_usd(usage, options) {
+        Some(micro) => format!("about {} at list price", usd(micro)),
+        None => format!("no price known for a {} GPU", options.gpu),
+    };
+    format!(
+        "embedded {embedded} chunks on Modal: {sandboxes}, {} of Sandbox time, {cost}",
+        duration(usage.sandbox_ms)
+    )
+}
+
+fn usd(micro: u64) -> String {
+    let dollars = micro as f64 / 1e6;
+    if dollars < 0.01 {
+        format!("${dollars:.4}")
+    } else {
+        format!("${dollars:.2}")
+    }
+}
+
+fn duration(ms: u64) -> String {
+    let secs = ms / 1000;
+    match secs {
+        0..=99 => format!("{:.1} s", ms as f64 / 1000.0),
+        100..=5999 => format!("{} min {} s", secs / 60, secs % 60),
+        _ => format!("{} h {} min", secs / 3600, secs / 60 % 60),
+    }
+}
+
+/// The run's Modal numbers so far, each a running total: the dashboard
+/// draws them and `/metrics` exports them.
+pub(crate) fn report(progress: &Progress, usage: &Usage, options: &Options) {
+    let gpu = [("gpu", options.gpu.as_str())];
+    progress.metric("modal_sandboxes_total", &gpu, usage.sandboxes as i64);
+    progress.metric("modal_sandboxes_failed_total", &gpu, usage.failed as i64);
+    progress.metric(
+        "modal_sandbox_seconds_total",
+        &gpu,
+        (usage.sandbox_ms / 1000) as i64,
+    );
+    if let Some(micro) = estimated_micro_usd(usage, options) {
+        progress.metric("modal_cost_estimate_micro_usd_total", &gpu, micro as i64);
+    }
 }
 
 /// Asks the driver to stop: it ends the Sandboxes it started and exits.
@@ -342,6 +471,64 @@ mod tests {
         ] {
             assert!(said.contains(want), "{want}: {said}");
         }
+    }
+
+    #[test]
+    fn a_sandbox_reply_parses_beside_the_others() {
+        let r: Reply = serde_json::from_str(r#"{"sandbox_ms":61500,"ok":false}"#).unwrap();
+        assert_eq!(
+            r,
+            Reply::Sandbox {
+                sandbox_ms: 61500,
+                ok: false
+            }
+        );
+    }
+
+    /// An hour of one T4 Sandbox with the step's reservation: the GPU's
+    /// $0.5904, a core's $0.141912 and 2 GiB's $0.048024 at list price.
+    #[test]
+    fn the_estimate_prices_the_gpu_and_the_reservation() {
+        let options = Options::for_this_build();
+        let mut usage = Usage::default();
+        usage.add(3_600_000, true);
+        let t4 = Options {
+            gpu: "T4".into(),
+            ..options.clone()
+        };
+        assert_eq!(estimated_micro_usd(&usage, &t4), Some(780_336));
+        let two = Options {
+            gpu: "t4:2".into(),
+            ..options.clone()
+        };
+        assert_eq!(estimated_micro_usd(&usage, &two), Some(780_336 + 590_400));
+        let unknown = Options {
+            gpu: "Z9".into(),
+            ..options
+        };
+        assert_eq!(estimated_micro_usd(&usage, &unknown), None);
+    }
+
+    #[test]
+    fn the_summary_says_what_ran_how_long_and_what_it_cost() {
+        let options = Options {
+            gpu: "T4".into(),
+            ..Options::for_this_build()
+        };
+        let mut usage = Usage::default();
+        usage.add(90_000, true);
+        usage.add(150_000, false);
+        usage.add(120_000, true);
+        assert_eq!(
+            summary(8192, &usage, &options),
+            "embedded 8192 chunks on Modal: 3 T4 Sandbox(es), 1 of them failed, \
+             6 min 0 s of Sandbox time, about $0.08 at list price"
+        );
+        let unpriced = Options {
+            gpu: "Z9".into(),
+            ..options
+        };
+        assert!(summary(1, &usage, &unpriced).ends_with("no price known for a Z9 GPU"));
     }
 
     #[test]

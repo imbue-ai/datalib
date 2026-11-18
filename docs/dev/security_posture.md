@@ -432,8 +432,11 @@ it came from, so it gets its own section.
 - **The driver prints no prompt.** Its stderr, which goes to the step's
   log, says which slice ran where and how long it took. Read from
   source; no test greps the log for prompt text.
-- **Nothing about the remote work is stored**, so a stopped run leaves no
-  record of what went where beyond the vectors and the step's log.
+- **What is stored of the remote work is how much of it there was**: the
+  vectors, the step's log, and the run's counts as metrics (chunks sent,
+  Sandboxes and their seconds by GPU, an estimated cost). No prompt, no
+  Sandbox's id and no job to resume, so a stopped run leaves no record
+  of what went where.
 - **The SDK is pinned** by a lockfile with integrity hashes and no
   install scripts (`third-party/modal/runtime/`), like latchkey's.
 

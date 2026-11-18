@@ -11,7 +11,7 @@ import uPlot from "uplot";
 import { formatBytes } from "@/config/bytes";
 import { formatClock } from "@/config/timeFormat";
 import { sinceT0, timeView } from "@/config/timeView";
-import { aligned, valueAt, yRange, type Chart, type Line } from "./dashboardCharts";
+import { aligned, formatMicroUsd, valueAt, yRange, type Chart, type Line } from "./dashboardCharts";
 import { axis, seriesColor } from "./plot/plot";
 import { t0TickTexts, t0Ticks } from "./plot/t0Axis";
 import { usePlot } from "./plot/usePlot";
@@ -33,8 +33,12 @@ const box = ref<HTMLElement | null>(null);
 /// The instant under the crosshair, in ms, or null.
 const cursorAt = ref<number | null>(null);
 
-const format = (v: number | null) =>
-  v === null ? "—" : props.chart.unit === "bytes" ? formatBytes(v) : v.toLocaleString();
+const format = (v: number | null) => {
+  if (v === null) return "—";
+  if (props.chart.unit === "bytes") return formatBytes(v);
+  if (props.chart.unit === "micro_usd") return formatMicroUsd(v);
+  return v.toLocaleString();
+};
 
 /// What the header and legend read: under the crosshair, or the latest.
 const readAt = computed(() =>
