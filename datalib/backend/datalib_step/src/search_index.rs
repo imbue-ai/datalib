@@ -2095,4 +2095,50 @@ mod tests {
             "each slice of two, then its one missing prompt"
         );
     }
+
+    /// Many Sandboxes answering while the step is slow to read: each
+    /// slice waiting on stdout once added a `drain` listener of its own,
+    /// and past ten Node printed `MaxListenersExceededWarning` on every
+    /// write, which the step logged as the driver's own lines.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn many_slices_waiting_on_a_full_stdout_share_one_wait() {
+        use tokio::io::AsyncReadExt;
+        const SLICES: usize = 20;
+        let fake = FakeModal::new();
+        let modal = fake.modal_with(0, true, &[], SLICES);
+        let mut driver = (modal.driver)().unwrap();
+        driver.options.slice = 1;
+        let mut child = driver.command().unwrap().spawn().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let mut stdout = child.stdout.take().unwrap();
+        let mut stderr = child.stderr.take().unwrap();
+        // A hash longer than a pipe holds, so every answer's write fills it.
+        let long = "h".repeat(128 * 1024);
+        for i in 0..SLICES {
+            let line = modal::request_line(&format!("{i:02}{long}"), "tea");
+            stdin.write_all(line.as_bytes()).await.unwrap();
+        }
+        drop(stdin);
+
+        // Nothing reads stdout until every Sandbox has ended, so each
+        // slice is waiting on it by then.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while fake.sandboxes().len() < SLICES {
+            assert!(
+                Instant::now() < deadline,
+                "only {} of {SLICES} Sandboxes ended",
+                fake.sandboxes().len()
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let mut out = String::new();
+        stdout.read_to_string(&mut out).await.unwrap();
+        let mut err = String::new();
+        stderr.read_to_string(&mut err).await.unwrap();
+        assert!(child.wait().await.unwrap().success(), "{err}");
+
+        let vectors = out.lines().filter(|l| l.contains("\"vector\"")).count();
+        assert_eq!(vectors, SLICES, "every answer arrived");
+        assert!(!err.contains("MaxListenersExceededWarning"), "{err}");
+    }
 }
