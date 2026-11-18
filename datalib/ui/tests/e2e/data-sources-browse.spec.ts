@@ -29,8 +29,10 @@ const SEARCH = '[data-testid="search-input"]';
 /// … — see `materialize_tng_root.sh`), so the positive cases browse
 /// what is already there. The negative case is not in the fixture: a
 /// `media` source with no `render_markdown` step, as a config written
-/// before download-only providers got one still has.
-const GROUPS = `
+/// before download-only providers got one still has. Its folder is the
+/// scan tree the materializer puts in the root: a save checks the params
+/// a sync would get, and an ingest has to say where it reads from.
+const groups = (config: string) => `
 [[groups]]
 id = "media"
 type = "media"
@@ -38,7 +40,16 @@ type = "media"
 [[steps]]
 group = "media"
 function = "ingest"
+
+[steps.params.fswalk]
+path = "${dataRoot(config)}/file_inventory_scan"
 `;
+
+function dataRoot(config: string): string {
+  const root = /^data_root = "(.*)"$/m.exec(config)?.[1];
+  if (!root) throw new Error(`no data_root in the saved config:\n${config}`);
+  return root;
+}
 
 /// The painted values of one column of the search grid, retried until
 /// the grid has them.
@@ -93,7 +104,7 @@ let original = "";
 test.beforeEach(async ({ page, request }) => {
   await openManage(page);
   original = await savedConfig(request);
-  await writeConfig(page, `${original.replace(/\s*$/, "")}\n${GROUPS}`);
+  await writeConfig(page, `${original.replace(/\s*$/, "")}\n${groups(original)}`);
 });
 
 test.afterEach(async ({ page }) => {
