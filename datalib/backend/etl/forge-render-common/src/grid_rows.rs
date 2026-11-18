@@ -15,7 +15,6 @@ pub(crate) fn rows_for(
     cr: &ChangeRequest,
     comments: &[&Comment],
     stanza: &str,
-    md_rel: &str,
     tree: &Tree,
     problems: &mut Vec<ProblemRow>,
 ) -> Vec<GridRow> {
@@ -45,7 +44,6 @@ pub(crate) fn rows_for(
             } else {
                 format!("{}\n\n{}", cr.title, cr.body)
             })
-            .qmd_path(Some(md_rel.to_string()))
             .source_url(cr.url.clone())
             .git_sha(cr.head_sha.clone())
             .upstream_id(Some(composite_key(&[
@@ -79,7 +77,6 @@ pub(crate) fn rows_for(
                 .message_index(Some(idx as i64))
                 .entire_chat(entire_chat.clone())
                 .body(c.body.clone())
-                .qmd_path(Some(md_rel.to_string()))
                 .source_url(c.url.clone())
                 .git_sha(c.commit_sha.clone())
                 .upstream_id(Some(composite_key(&[

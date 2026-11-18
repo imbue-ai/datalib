@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
@@ -23,7 +23,6 @@ use datalib_etl_render::message::{chip_link, message_stamp_text_html};
 use datalib_etl_render::section::{join, Section};
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
-use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
 use serde_json::Value;
 
@@ -364,29 +363,11 @@ fn thread_sections(
     (front, sections)
 }
 
-/// Write a document to `md_path`, and point each of its rows at that file.
-fn file_document(
-    root: &Path,
-    md_path: PathBuf,
-    rows: &[GridRow],
-    body: &str,
-) -> Result<(PathBuf, Vec<GridRow>)> {
+/// Write a document to `md_path`.
+fn write_document(md_path: &Path, body: &str) -> Result<()> {
     let dir = md_path.parent().expect("a document's file has a folder");
     fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
-    fs::write(&md_path, body).with_context(|| format!("write {}", md_path.display()))?;
-    let md_rel = md_path
-        .strip_prefix(root)
-        .unwrap_or(&md_path)
-        .to_string_lossy()
-        .into_owned();
-    let rows = rows
-        .iter()
-        .map(|r| GridRow {
-            qmd_path: Some(md_rel.clone()),
-            ..r.clone()
-        })
-        .collect();
-    Ok((md_path, rows))
+    fs::write(md_path, body).with_context(|| format!("write {}", md_path.display()))
 }
 
 /// Where a pass reads its pages' attachment bytes: what each page's
@@ -598,13 +579,14 @@ pub fn render_notion(
             ));
             out.push_str(&body);
             let md_path = doc_md_path(&render_root, markdown_uuid);
-            let (md_path, rows) = file_document(root, md_path, &doc.rows, &out)?;
+            write_document(&md_path, &out)?;
+            let rows = doc.rows.clone();
 
             on_doc_complete(RenderedMarkdown {
                 section_layout: None,
                 content_hash: None,
                 markdown_uuid: markdown_uuid.clone(),
-                source_id: String::new(),
+                source_id: stanza.to_string(),
                 upstream_cursor: None,
                 bucket_key: Some(page_uuid.clone()),
                 md_path,
@@ -657,12 +639,13 @@ pub fn render_notion(
         let author_of = |c: &Value| comment_author_handle(c, emails);
         let (front, sections) = thread_sections(stanza, page_title, members, anchor, &author_of);
         let md_path = doc_md_path(&render_root, markdown_uuid);
-        let (md_path, rows) = file_document(root, md_path, &doc.rows, &join(&sections))?;
+        write_document(&md_path, &join(&sections))?;
+        let rows = doc.rows.clone();
         on_doc_complete(RenderedMarkdown {
             section_layout: None,
             content_hash: None,
             markdown_uuid: markdown_uuid.clone(),
-            source_id: String::new(),
+            source_id: stanza.to_string(),
             upstream_cursor: None,
             bucket_key: Some(discussion_uuid.clone()),
             md_path,
@@ -686,12 +669,13 @@ pub fn render_notion(
     }
     if let Some(doc) = contents {
         let md_path = unindexed_doc_md_path(&render_root, &doc.markdown_uuid);
-        let (md_path, rows) = file_document(root, md_path, &doc.rows, &doc.markdown)?;
+        write_document(&md_path, &doc.markdown)?;
+        let rows = doc.rows.clone();
         on_doc_complete(RenderedMarkdown {
             section_layout: None,
             content_hash: None,
             markdown_uuid: doc.markdown_uuid,
-            source_id: String::new(),
+            source_id: stanza.to_string(),
             upstream_cursor: None,
             bucket_key: Some(toc::BUCKET.to_string()),
             md_path,
@@ -979,11 +963,6 @@ mod tests {
             "free-text search leaves it out: {}",
             rel.display()
         );
-        assert_eq!(
-            contents.rows[0].qmd_path.as_deref(),
-            rel.to_str(),
-            "the row names the file"
-        );
         let bucket = summary
             .buckets
             .iter()
@@ -1150,9 +1129,13 @@ mod tests {
             let want = doc_md_path(&render_markdown_root(d.path(), "notion"), &md.markdown_uuid);
             assert_eq!(md.md_path, want);
             assert!(want.exists(), "{} was not written", want.display());
-            let rel = want.strip_prefix(d.path()).unwrap().to_string_lossy();
             for r in &md.rows {
-                assert_eq!(r.qmd_path.as_deref(), Some(&*rel), "row {}", r.uuid);
+                assert_eq!(
+                    r.markdown_uuid.as_deref(),
+                    Some(md.markdown_uuid.as_str()),
+                    "row {}",
+                    r.uuid
+                );
             }
         }
     }

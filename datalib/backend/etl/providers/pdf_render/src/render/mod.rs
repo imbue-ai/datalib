@@ -160,7 +160,7 @@ pub fn render_targets(
             Err(e) => Err(e),
         };
         let changed = matches!(content, Ok(Content::FileChanged));
-        match content.and_then(|c| render_one(t, c, data_root, &md_path, source_id, &doc_uuid)) {
+        match content.and_then(|c| render_one(t, c, &md_path, source_id, &doc_uuid)) {
             Ok(rendered) => {
                 if changed {
                     summary.changed += 1;
@@ -246,18 +246,11 @@ fn front(t: &RenderTarget, title: &str) -> Front {
 fn render_one(
     t: &RenderTarget,
     content: Content,
-    data_root: &Path,
     md_path: &Path,
     source_id: &str,
     doc_uuid: &str,
 ) -> Result<RenderedMarkdown> {
     let title = grid_rows::display_title(t.title.as_deref(), &t.rel_path);
-
-    let md_rel = md_path
-        .strip_prefix(data_root)
-        .unwrap_or(md_path)
-        .to_string_lossy()
-        .into_owned();
 
     let front = front(t, &title);
     let mut body = front.draw();
@@ -327,7 +320,6 @@ fn render_one(
         copy_count: t.copy_count,
         created_at: t.doc_created_at.as_deref(),
         modified_at: t.doc_modified_at.as_deref(),
-        qmd_path: Some(&md_rel),
     };
     let rows = grid_rows::rows_for_document(source_id, &meta, &page_rows);
     let node = grid_rows::document_node(source_id, &meta);

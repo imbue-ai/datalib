@@ -83,16 +83,10 @@ impl SourceRender for LightroomRender {
         let mut emitted = 0usize;
         for image in catalog.images.values() {
             let md_path = doc_md_path(&render_root, &photo::uuid(ctx.name, &image.id_global));
-            let qmd_path = md_path
-                .strip_prefix(ctx.root)
-                .unwrap_or(&md_path)
-                .to_string_lossy()
-                .into_owned();
             let built = photo::build(
                 image,
                 &PhotoContext {
                     source_id: ctx.name,
-                    qmd_path: &qmd_path,
                     catalog: catalog_path,
                     zone: zone.as_ref(),
                 },

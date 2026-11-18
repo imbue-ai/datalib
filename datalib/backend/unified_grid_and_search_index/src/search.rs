@@ -66,10 +66,9 @@ pub struct SearchRow {
     /// absent from a repo's raw answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_ref: Option<datalib_columns::Identity>,
-    /// The **id** of the configured source this row came from: the
-    /// first path segment of the row's `qmd_path`, which is the group's
-    /// directory under the data root (`slack/render_markdown/…` →
-    /// `slack`). Empty when the row carries no `qmd_path`.
+    /// The **id** of the configured source this row is filed under: the
+    /// group's directory under the data root (`grid_rows.source_id`).
+    /// Empty when the row carries none.
     ///
     /// Never the group's display name. The grid's "Source" column shows
     /// the name, resolved client-side from the config; this is what it

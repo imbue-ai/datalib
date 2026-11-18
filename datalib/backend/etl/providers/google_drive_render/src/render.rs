@@ -111,11 +111,6 @@ pub fn render_doc(
     let dir = md_path.parent().expect("a document's file has a folder");
     fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
     fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
-    let md_rel = md_path
-        .strip_prefix(root)
-        .unwrap_or(&md_path)
-        .to_string_lossy()
-        .into_owned();
 
     let mut problems: Vec<ProblemRow> = Vec::new();
     let mut rows: Vec<GridRow> = Vec::new();
@@ -127,14 +122,13 @@ pub fn render_doc(
         .collect::<Vec<_>>()
         .join("\n");
     let tree = file.tree();
-    rows.extend(file.row(&md_rel, &text, &tree.file, &mut problems));
+    rows.extend(file.row(&text, &tree.file, &mut problems));
     let mut data_nodes = tree.data_nodes;
     for t in &threads {
         let thread = file.thread_node(t, &tree.inside);
         rows.extend(comment_rows_of(
             &file,
             t,
-            &md_rel,
             &tree.inside,
             &tree.inside.below(&thread),
             &mut problems,
@@ -390,13 +384,7 @@ impl FileFacts {
         self.me.as_ref().map(|h| h.value().to_string())
     }
 
-    fn row(
-        &self,
-        md_rel: &str,
-        text: &str,
-        at: &Lineage,
-        problems: &mut Vec<ProblemRow>,
-    ) -> Option<GridRow> {
+    fn row(&self, text: &str, at: &Lineage, problems: &mut Vec<ProblemRow>) -> Option<GridRow> {
         let (author, handle) = match &self.owner {
             Some((name, handle)) => (
                 Some(name.clone()),
@@ -420,7 +408,6 @@ impl FileFacts {
             .conversation_uuid(self.id.uuid.clone())
             .entire_chat(format!("/chat/{}", self.id.uuid))
             .body(format!("{}\n{text}", self.title))
-            .qmd_path(Some(md_rel.to_string()))
             .source_url(self.url.clone())
             .upstream_id(Some(self.id.natural_key.clone()))
             .upstream_entity_kind(Some(self.id.entity_kind.to_string()))
@@ -433,7 +420,6 @@ impl FileFacts {
 fn comment_rows_of(
     file: &FileFacts,
     t: &Thread,
-    md_rel: &str,
     in_file: &Lineage,
     in_thread: &Lineage,
     problems: &mut Vec<ProblemRow>,
@@ -469,7 +455,6 @@ fn comment_rows_of(
                 .message_index(Some(i as i64))
                 .entire_chat(format!("/chat/{}", file.id.uuid))
                 .body(body)
-                .qmd_path(Some(md_rel.to_string()))
                 .source_url(url.clone())
                 .upstream_id(Some(m.id.natural_key.clone()))
                 .upstream_entity_kind(Some(m.id.entity_kind.to_string()))

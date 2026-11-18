@@ -43,7 +43,6 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
             .entire_chat(format!("/chat/{md}"))
             .body(text)
             .markdown_uuid(Some(md.to_string()))
-            .qmd_path(file.clone())
             .build()
             .unwrap()
     };

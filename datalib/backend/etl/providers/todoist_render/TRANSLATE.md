@@ -3,7 +3,7 @@
 The raw store keeps each Todoist object as the API sent it
 ([`../todoist/INGEST.md`](../todoist/INGEST.md)). This crate turns each
 **project** into one markdown document, filed by its id like every
-document ([`grid_rows.md`](../../../../../docs/dev/grid_rows.md) §"`qmd_path` and `source_id`"), and gives the
+document ([`grid_rows.md`](../../../../../docs/dev/grid_rows.md) §"`source_id`, and where a document's file is"), and gives the
 project, each task and each comment a grid row. Every table is read
 whole at the render's pin (`src/store.rs`); an account's tasks are few
 enough that reading them all costs less than working out which to read.

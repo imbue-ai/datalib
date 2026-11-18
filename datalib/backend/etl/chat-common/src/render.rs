@@ -380,22 +380,8 @@ fn render_one(
     let sections = render_markdown(profile, chat, doc, &chat_title);
     fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
 
-    let md_rel = md_path
-        .strip_prefix(out_dir)
-        .unwrap_or(&md_path)
-        .to_string_lossy()
-        .into_owned();
-
     let mut problems: Vec<ProblemRow> = Vec::new();
-    let mut rows = build_grid_rows(
-        profile,
-        chat,
-        doc,
-        &chat_title,
-        &md_rel,
-        source_id,
-        &mut problems,
-    );
+    let mut rows = build_grid_rows(profile, chat, doc, &chat_title, source_id, &mut problems);
     put_supplied_terms(chat, doc, &mut rows);
     let tree = tree_of(profile, chat, doc, source_id);
     place_rows(&mut rows, &doc.markdown_uuid, &tree);
@@ -1080,7 +1066,6 @@ fn build_grid_rows(
     chat: &NormalizedChat,
     doc: &NormalizedDoc,
     chat_title: &str,
-    md_rel: &str,
     source_id: &str,
     problems: &mut Vec<ProblemRow>,
 ) -> Vec<GridRow> {
@@ -1152,7 +1137,6 @@ fn build_grid_rows(
                     .collect::<Vec<_>>()
                     .join("\n"),
             )
-            .qmd_path(Some(md_rel.to_string()))
             .source_url(chat.source_url.clone())
             .upstream_id(match &doc.source_ref {
                 Some(r) => Some(r.native_id.clone()),
@@ -1227,7 +1211,6 @@ fn build_grid_rows(
                 .message_index(Some(idx as i64))
                 .entire_chat(entire_chat.clone())
                 .body(text)
-                .qmd_path(Some(md_rel.to_string()))
                 // Per-message linkout wins; fall back to an attachment's URL.
                 .source_url(
                     item.source_url
@@ -1250,7 +1233,6 @@ fn build_grid_rows(
                 r,
                 &conversation_name,
                 &entire_chat,
-                md_rel,
                 source_id,
                 problems,
             ));
@@ -1265,7 +1247,6 @@ fn build_grid_rows(
                 r,
                 &conversation_name,
                 &entire_chat,
-                md_rel,
                 source_id,
                 problems,
             ));
@@ -1403,7 +1384,6 @@ fn reaction_row(
     r: &crate::types::NormalizedReaction,
     conversation_name: &Option<String>,
     entire_chat: &str,
-    md_rel: &str,
     source_id: &str,
     problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
@@ -1431,7 +1411,6 @@ fn reaction_row(
         .conversation_uuid(chat.chat_uuid.clone())
         .entire_chat(entire_chat.to_string())
         .body(r.emoji.clone())
-        .qmd_path(Some(md_rel.to_string()))
         .markdown_uuid(Some(doc.markdown_uuid.clone()))
         .build_or_record(
             source_id,
@@ -1520,7 +1499,6 @@ mod tests {
             chat,
             &chat.buckets[0],
             "Test",
-            "x.md",
             "test_source",
             &mut problems,
         );
@@ -2006,7 +1984,6 @@ mod tests {
             &chat,
             &chat.buckets[0],
             "Test",
-            "x.md",
             "test_source",
             &mut problems,
         );
@@ -2073,7 +2050,6 @@ mod tests {
             &chat,
             &chat.buckets[0],
             "Test",
-            "x.md",
             "test_source",
             &mut problems,
         );
@@ -2112,24 +2088,8 @@ mod tests {
         let mut a = Vec::new();
         let mut b = Vec::new();
         let args = ("Test", "x.md", "test_source");
-        build_grid_rows(
-            &profile,
-            &chat,
-            &chat.buckets[0],
-            args.0,
-            args.1,
-            args.2,
-            &mut a,
-        );
-        build_grid_rows(
-            &profile,
-            &chat,
-            &chat.buckets[0],
-            args.0,
-            args.1,
-            args.2,
-            &mut b,
-        );
+        build_grid_rows(&profile, &chat, &chat.buckets[0], args.0, args.2, &mut a);
+        build_grid_rows(&profile, &chat, &chat.buckets[0], args.0, args.2, &mut b);
         assert_eq!(a[0].problem_uuid, b[0].problem_uuid);
     }
 

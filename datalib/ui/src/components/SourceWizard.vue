@@ -10,7 +10,7 @@
 // Two fields carry the identity, and only one of them is permanent.
 // **Name** is what you type and what every screen shows; it is free
 // text and always editable. **Id** is the group's id: the directory on
-// disk and the prefix inside every `qmd_path` the index holds, so
+// disk and the `source_id` on every row the index holds, so
 // changing it is a migration rather than an edit — it is derived from
 // the name once, at creation, and read-only forever after. Both land on
 // the `[[groups]]` entry; the steps written under it carry neither.

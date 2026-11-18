@@ -47,8 +47,10 @@ machinery:
 - `section_layout`, the byte spans that cut a file into messages, and
   the check that fails a render when they do not add up to the file's
   size;
-- `qmd_path`, the `unindexed/` directory convention, and unlinking an
-  old file when its path moves or its document empties;
+- `markdowns.md_path`, the `unindexed/` directory convention, and
+  unlinking an old file when its path moves or its document empties
+  (`grid_rows.qmd_path`, the copy of that path on every row, is
+  already gone);
 - reading a file and converting bytes to lines to land a hit, and
   re-quoting the snippet from it;
 - a file and its database row disagreeing after a crash between the

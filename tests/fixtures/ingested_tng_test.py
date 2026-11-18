@@ -738,23 +738,23 @@ class IngestedTngPipelineTest(unittest.TestCase):
     def _markdown(self, group: str, needle: str) -> str:
         """A group's one document whose rows' preview carries `needle`,
         off the tree."""
-        qmd_path = self._scalar(
+        md_path = self._scalar(
             self._index_db,
-            "SELECT DISTINCT g.qmd_path FROM grid_rows g JOIN markdowns m "
+            "SELECT DISTINCT m.md_path FROM grid_rows g JOIN markdowns m "
             "ON g.markdown_uuid = m.markdown_uuid "
             f"WHERE m.source_id = '{group}' AND g.preview LIKE '%{needle}%';",
         )
-        return (self.workspace / qmd_path).read_text()
+        return (self.workspace / md_path).read_text()
 
     def _contact_markdown(self, group: str, contact: str) -> str:
         """A contacts group's page for `contact`, off the tree."""
-        qmd_path = self._scalar(
+        md_path = self._scalar(
             self._index_db,
-            "SELECT DISTINCT g.qmd_path FROM grid_rows g JOIN markdowns m "
+            "SELECT DISTINCT m.md_path FROM grid_rows g JOIN markdowns m "
             "ON g.markdown_uuid = m.markdown_uuid "
             f"WHERE m.source_id = '{group}' AND g.contact = '{contact}';",
         )
-        return (self.workspace / qmd_path).read_text()
+        return (self.workspace / md_path).read_text()
 
     def _pdf_shape(self) -> dict[str, int]:
         """The `pdf` source's contribution, by grid_rows kind.
@@ -776,30 +776,22 @@ class IngestedTngPipelineTest(unittest.TestCase):
             out[kind] = int(n)
         return out
 
-    def _qmd_path_mismatches(self) -> list[str]:
-        """Rows whose `qmd_path` disagrees with their markdown's path.
+    def _misfiled_rows(self) -> list[str]:
+        """Rows filed under a source other than their document's.
 
-        The two columns name the same file and must name it the same
-        way: a search hit names its document's file, the spelling
-        `apply_one` stores in `markdowns.md_path`, while search reads a
-        row by its `qmd_path`, whose first segment is the row's
-        `source_id`. A provider that stamps any other form still renders
-        correct markdown and still gets indexed, so nothing else goes
-        red; its documents just vanish from free-text search, because
-        their hits land on no row search reads. `pdf` shipped that
-        way — it wrote the out-dir-relative `docs/<blake3>.md` while
-        every other provider wrote `<stanza>/render_markdown/...`.
-
-        Rows with no markdown row to join against are left to the
-        NULL-`qmd_path` check above; this one is about disagreement.
+        `source:` compares `grid_rows.source_id`, which the writer fills
+        from the group whose render store holds the document, and files a
+        storage row under `datalib` whatever source it measures. A row
+        filed anywhere else is in the grid, but the source it came from
+        does not find it.
         """
         return self._query(
             self._index_db,
-            "SELECT DISTINCT g.provider, g.qmd_path, m.md_path "
+            "SELECT DISTINCT g.provider, g.source_id, m.source_id "
             "FROM grid_rows g JOIN markdowns m "
             "  ON m.markdown_uuid = g.markdown_uuid "
-            "WHERE m.md_path IS NOT NULL "
-            "  AND (g.qmd_path IS NULL OR g.qmd_path <> m.md_path);",
+            "WHERE g.source_id IS NOT "
+            "  CASE WHEN g.provider = 'datalib' THEN 'datalib' ELSE m.source_id END;",
         )
 
     def _duplicate_uuids(self) -> list[str]:
@@ -1829,32 +1821,18 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # and the corrupt file is skipped). The mixed hull survey is one
         # of the four and contributes one page, not two — its image-only
         # second page becomes a note in the markdown rather than a row.
-        # Every page row must carry a `qmd_path`, since that column is
-        # what lets a search hit land on a grid row — a page indexed
-        # without one is in the search index but never shown from it.
         self.assertEqual(
             self._pdf_shape(),
             {"PDF Document": 4, "PDF Page": 5},
             "pdf grid_rows shape",
         )
+        # Cross-provider: every row is filed under its document's source,
+        # or under datalib for a storage row. Asserted over the whole
+        # index so a new source inherits the check.
         self.assertEqual(
-            self._scalar(
-                self._index_db,
-                "SELECT COUNT(*) FROM grid_rows "
-                "WHERE provider = 'pdf' AND qmd_path IS NULL;",
-            ),
-            "0",
-            "every pdf row needs a qmd_path to be reachable from search",
-        )
-        # Cross-provider: `grid_rows.qmd_path` must be byte-equal to
-        # its markdown's `markdowns.md_path`. Asserted over the whole
-        # index rather than per-provider so a new source inherits the
-        # check for free — this is the invariant the search hit→row
-        # mapping is built on.
-        self.assertEqual(
-            self._qmd_path_mismatches(),
+            self._misfiled_rows(),
             [],
-            "every grid row's qmd_path must equal its markdown's md_path",
+            "every grid row's source_id must be its document's source",
         )
         # ...and the join must actually have matched something, or the
         # emptiness above would prove nothing.
@@ -1864,11 +1842,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
                     self._index_db,
                     "SELECT COUNT(*) FROM grid_rows g JOIN markdowns m "
                     "  ON m.markdown_uuid = g.markdown_uuid "
-                    "WHERE g.provider = 'pdf' AND m.md_path IS NOT NULL;",
+                    "WHERE g.provider = 'pdf' AND g.source_id IS NOT NULL;",
                 )
             ),
             0,
-            "the qmd_path/md_path join must cover pdf rows",
+            "the source_id join must cover pdf rows",
         )
 
         # ── the per-source render stores ────────────────────────

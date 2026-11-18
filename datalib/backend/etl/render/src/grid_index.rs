@@ -925,8 +925,8 @@ pub struct RenderedMarkdown {
     /// provider declares through `RenderCtx::declare_bucket`. `None`
     /// from a renderer that does not declare buckets yet.
     pub bucket_key: Option<String>,
-    /// Absolute path to the rendered `.md`; `qmd_path` is this with the
-    /// out-dir prefix stripped.
+    /// Absolute path to the rendered `.md`; `markdowns.md_path` is this
+    /// with the out-dir prefix stripped.
     pub md_path: PathBuf,
     pub render_version: u32,
     /// Empty means there is no document: the store drops it, `.md` and
@@ -994,32 +994,41 @@ pub fn unindexed_doc_md_path(render_root: &Path, markdown_uuid: &str) -> PathBuf
     )
 }
 
-/// Why a document cannot be indexed where it was written: a file not
-/// named for its id, or a row naming another file. `None` when it can.
-fn misfiled(md: &RenderedMarkdown, qmd_path: &str) -> Option<String> {
+/// Why a document cannot be indexed where it was written: it names no
+/// source, its file is not named for its id, or it holds a row of another
+/// document. `None` when it can.
+fn misfiled(md: &RenderedMarkdown, md_rel: &str) -> Option<String> {
     use datalib_schema::grid_rows::markdown_uuid_of_path;
-    if markdown_uuid_of_path(qmd_path) != Some(md.markdown_uuid.as_str()) {
+    if md.source_id.is_empty() {
         return Some(format!(
-            "document {} is written to {qmd_path}, not to the file its id names \
+            "document {} names no source: its renderer must set \
+             `RenderedMarkdown::source_id` to its group's id",
+            md.markdown_uuid
+        ));
+    }
+    if markdown_uuid_of_path(md_rel) != Some(md.markdown_uuid.as_str()) {
+        return Some(format!(
+            "document {} is written to {md_rel}, not to the file its id names \
              (`datalib_etl_render::grid_index::doc_md_path`)",
             md.markdown_uuid
         ));
     }
     md.rows
         .iter()
-        .find(|r| r.qmd_path.as_deref() != Some(qmd_path))
+        .find(|r| r.markdown_uuid.as_deref() != Some(md.markdown_uuid.as_str()))
         .map(|r| {
             format!(
-                "row {} of document {} names {:?} as its file, not {qmd_path}",
-                r.uuid, md.markdown_uuid, r.qmd_path
+                "row {} of document {} names {:?} as its document",
+                r.uuid, md.markdown_uuid, r.markdown_uuid
             )
         })
 }
 
 /// Write one rendered document into the index unconditionally. `out_dir`
-/// is stripped off `md_path` to produce a portable `qmd_path`. Every
-/// document reaches a render store or the grid index through here, so its
-/// names are settled here ([`crate::names`]).
+/// is stripped off `md_path` to give the file's path relative to the data
+/// root, which `markdowns.md_path` keeps. Every document reaches a render
+/// store or the grid index through here, so its names are settled and its
+/// rows filed under their source here ([`crate::names`]).
 pub async fn apply_one(
     write_lock: &WriteLock,
     out_dir: &Path,
@@ -1896,7 +1905,7 @@ pub(crate) async fn delete_document_rows(
 async fn apply_markdown(
     write_lock: &WriteLock,
     md: &RenderedMarkdown,
-    qmd_path: &str,
+    md_rel: &str,
 ) -> Result<usize> {
     // Inside `begin_transaction` every guard hands back the same connection,
     // so the per-doc statements accumulate in one batch; otherwise each takes
@@ -1919,7 +1928,7 @@ async fn apply_markdown(
         return Ok(0);
     }
     let canonical = document_row(&md.rows, &md.markdown_uuid)?;
-    if let Some(why) = misfiled(md, qmd_path) {
+    if let Some(why) = misfiled(md, md_rel) {
         bail!("{why}");
     }
 
@@ -1944,7 +1953,14 @@ async fn apply_markdown(
     write_lock.note_changed(gone);
 
     for row in &md.rows {
-        put_grid_row(conn, write_lock, row).await?;
+        let row = GridRow {
+            source_id: Some(datalib_schema::grid_rows::filed_under(
+                &row.provider,
+                &md.source_id,
+            )),
+            ..row.clone()
+        };
+        put_grid_row(conn, write_lock, &row).await?;
     }
 
     // Each markdown owns the edges whose `src_markdown_uuid` matches, so a
@@ -1995,7 +2011,7 @@ async fn apply_markdown(
     for photo in &md.photos {
         insert_source_photo(conn, &md.markdown_uuid, photo).await?;
     }
-    upsert_markdown(conn, md, canonical, qmd_path)
+    upsert_markdown(conn, md, canonical, md_rel)
         .await
         .context("upsert markdowns")?;
     write_lock.note_written(&md.markdown_uuid);
@@ -2043,17 +2059,10 @@ async fn upsert_markdown(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     md: &RenderedMarkdown,
     canonical: &GridRow,
-    qmd_path: &str,
+    md_rel: &str,
 ) -> Result<()> {
     let kind = doc_kind_for(&canonical.kind);
     let version_str = format!("{RENDERER_VERSION}.{}", md.render_version);
-    // Fall back to the canonical row's provider when build_grid_index
-    // rebuilds from disk without the config-level name.
-    let source_id = if md.source_id.is_empty() {
-        canonical.provider.clone()
-    } else {
-        md.source_id.clone()
-    };
 
     let section_layout = section_layout(md)?;
     let content_hash = if md.sections.is_empty() {
@@ -2075,14 +2084,14 @@ async fn upsert_markdown(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&md.markdown_uuid)
-    .bind(&source_id)
+    .bind(&md.source_id)
     .bind(&canonical.provider)
     .bind(kind)
     .bind(&canonical.conversation_name)
     .bind(canonical.created_at.as_deref())
     .bind(canonical.modified_at.as_deref())
     .bind(canonical.item_count)
-    .bind(qmd_path)
+    .bind(md_rel)
     .bind(md.upstream_cursor.as_deref())
     .bind(&version_str)
     .bind(&md.bucket_key)
@@ -2503,7 +2512,7 @@ mod insert_round_trip_tests {
             entire_chat: "/chat/conv-1701".into(),
             preview: "Tea. Earl Grey. Hot.".into(),
             content_hash: content_hash("Tea. Earl Grey. Hot."),
-            qmd_path: Some("chats/conv-1701.md".into()),
+            source_id: Some("claude_web".into()),
             source_url: Some("https://claude.ai/chat/conv-1701".into()),
             git_sha: Some("0123456789abcdef".into()),
             upstream_id: Some("upstream-1701".into()),
@@ -2639,7 +2648,7 @@ mod write_lock_tests {
             entire_chat: format!("/chat/{uuid}"),
             preview: format!("body for {uuid}"),
             content_hash: content_hash(&format!("body for {uuid}")),
-            qmd_path: Some(format!("chats/{}", doc_file_rel(&uuid))),
+            source_id: Some("test".into()),
             source_url: None,
             git_sha: None,
             upstream_id: None,
@@ -3087,12 +3096,11 @@ mod source_cursor_tests {
 
     use crate::grid_index::{
         build_grid_index, build_grid_index_for, discover_sources, doc_md_path, load_source_cursors,
-        RenderedMarkdown,
+        misfiled, RenderedMarkdown,
     };
     use crate::indexed_markdown::IndexedMarkdownStore;
     use datalib_etl::stop::StopFlag;
-    use datalib_schema::grid_rows::doc_file_rel;
-    use datalib_schema::grid_rows::GridRow;
+    use datalib_schema::grid_rows::{doc_file_rel, GridRow};
     use datalib_schema::providers::Provider;
 
     async fn index_pool(root: &Path) -> SqlitePool {
@@ -3111,10 +3119,6 @@ mod source_cursor_tests {
             .entire_chat(format!("/chat/{uuid}"))
             .body(text)
             .markdown_uuid(Some(uuid.to_string()))
-            .qmd_path(Some(format!(
-                "{source}/render_markdown/{}",
-                doc_file_rel(uuid)
-            )))
             .created_at(Some("2026-01-01T00:00:00+00:00".to_string()))
             .is_document(true)
             .item_count(Some(1))
@@ -3140,6 +3144,39 @@ mod source_cursor_tests {
             photos: Vec::new(),
             problems: Vec::new(),
         }
+    }
+
+    /// A document must name its source, be written to the file its id
+    /// names, and hold only its own rows; a renderer that forgets its
+    /// group's id would otherwise file every row under nothing.
+    #[test]
+    fn misfiled_says_what_a_document_got_wrong() {
+        let root = Path::new("/data");
+        let rel = |md: &RenderedMarkdown| {
+            md.md_path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        };
+        let good = doc(root, "enterprise", "d-1", "Engage.");
+        assert_eq!(misfiled(&good, &rel(&good)), None);
+
+        let nameless = RenderedMarkdown {
+            source_id: String::new(),
+            ..good.clone()
+        };
+        let why = misfiled(&nameless, &rel(&nameless)).expect("refused");
+        assert!(why.contains("names no source"), "{why}");
+
+        let elsewhere = format!("enterprise/render_markdown/{}", doc_file_rel("d-2"));
+        let why = misfiled(&good, &elsewhere).expect("refused");
+        assert!(why.contains("not to the file its id names"), "{why}");
+
+        let mut stray = good.clone();
+        stray.rows[0].markdown_uuid = Some("d-2".to_string());
+        let why = misfiled(&stray, &rel(&stray)).expect("refused");
+        assert!(why.contains("as its document"), "{why}");
     }
 
     fn rendered_root(root: &Path, source: &str) -> std::path::PathBuf {

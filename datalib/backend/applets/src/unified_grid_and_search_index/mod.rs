@@ -2320,21 +2320,19 @@ mod tests {
     }
 
     /// `row` as a document of its own, filed where its id files it under
-    /// the source its `qmd_path` names, else `enterprise`.
+    /// the source it names, else `enterprise`.
     fn own_document(
         root: &std::path::Path,
-        mut row: datalib_schema::grid_rows::GridRow,
+        row: datalib_schema::grid_rows::GridRow,
     ) -> datalib_etl_render::grid_index::RenderedMarkdown {
         let source = row
-            .qmd_path
-            .as_deref()
-            .and_then(|p| p.split_once('/'))
-            .map_or("enterprise".to_string(), |(s, _)| s.to_string());
+            .source_id
+            .clone()
+            .unwrap_or_else(|| "enterprise".to_string());
         let rel = format!(
             "{source}/render_markdown/{}",
             datalib_schema::grid_rows::doc_file_rel(&row.uuid)
         );
-        row.qmd_path = Some(rel.clone());
         datalib_etl_render::grid_index::RenderedMarkdown {
             section_layout: None,
             content_hash: None,
@@ -2490,7 +2488,6 @@ mod tests {
                 .build()
                 .unwrap();
             message.is_document = false;
-            message.qmd_path = doc.rows[0].qmd_path.clone();
             doc.rows.push(message);
         }
         std::fs::create_dir_all(doc.md_path.parent().unwrap()).unwrap();

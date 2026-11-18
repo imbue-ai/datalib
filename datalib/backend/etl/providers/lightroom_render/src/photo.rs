@@ -48,9 +48,6 @@ pub struct Built {
 
 pub struct Context<'a> {
     pub source_id: &'a str,
-    /// The data-root-relative path every document of this source files
-    /// under, from `doc_file_rel`.
-    pub qmd_path: &'a str,
     pub catalog: Option<&'a str>,
     pub zone: Option<&'a NamedZone>,
 }
@@ -215,7 +212,6 @@ fn grid_row(
         .conversation_uuid(photo.uuid.clone())
         .entire_chat(format!("/chat/{}", photo.uuid))
         .body(photo.caption.clone().unwrap_or_default())
-        .qmd_path(Some(ctx.qmd_path.to_string()))
         .markdown_uuid(Some(photo.uuid.clone()))
         .upstream_id(Some(image.id_global.clone()))
         .upstream_entity_kind(Some(ENTITY_KIND.to_string()))
@@ -466,7 +462,6 @@ mod tests {
             &image,
             &Context {
                 source_id: "lr",
-                qmd_path: "lr/doc.md",
                 catalog: None,
                 zone: None,
             },
@@ -503,7 +498,6 @@ mod tests {
             &image,
             &Context {
                 source_id: "lr",
-                qmd_path: "lr/doc.md",
                 catalog: None,
                 zone: None,
             },

@@ -232,27 +232,14 @@ pub fn render_all(
         let comments = by_parent.remove(cr.row_id.as_str()).unwrap_or_default();
         let md_path = doc_md_path(&render_markdown_root(root, stanza), &cr.uuid);
         let sections = markdown::write(profile, cr, &comments, &md_path)?;
-        let md_rel = md_path
-            .strip_prefix(root)
-            .unwrap_or(&md_path)
-            .to_string_lossy()
-            .into_owned();
         let mut problems: Vec<ProblemRow> = Vec::new();
         let tree = tree::of(profile, cr, stanza);
-        let rows = grid_rows::rows_for(
-            profile,
-            cr,
-            &comments,
-            stanza,
-            &md_rel,
-            &tree,
-            &mut problems,
-        );
+        let rows = grid_rows::rows_for(profile, cr, &comments, stanza, &tree, &mut problems);
         on_doc_complete(RenderedMarkdown {
             section_layout: None,
             content_hash: None,
             markdown_uuid: cr.uuid.clone(),
-            source_id: String::new(),
+            source_id: stanza.to_string(),
             upstream_cursor: None,
             bucket_key: Some(cr.row_id.clone()),
             md_path,

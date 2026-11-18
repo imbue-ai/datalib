@@ -131,7 +131,6 @@ pub struct RenderSummary {
 
 /// Where documents are written, and the one bucket they all go in.
 struct Out<'a> {
-    root: &'a Path,
     source_id: &'a str,
     dir: PathBuf,
     bucket: String,
@@ -143,20 +142,15 @@ impl Out<'_> {
         &mut self,
         m_uuid: &str,
         (front, sections): (Front, Vec<Section>),
-        build_rows: impl FnOnce(&str, &mut Vec<ProblemRow>) -> Vec<GridRow>,
+        build_rows: impl FnOnce(&mut Vec<ProblemRow>) -> Vec<GridRow>,
     ) -> Result<()> {
         let md_path = doc_md_path(&self.dir, m_uuid);
         let parent = md_path.parent().expect("a document's file has a folder");
         fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
         fs::write(&md_path, section::join(&sections))
             .with_context(|| format!("write {}", md_path.display()))?;
-        let md_rel = md_path
-            .strip_prefix(self.root)
-            .unwrap_or(&md_path)
-            .to_string_lossy()
-            .into_owned();
         let mut problems: Vec<ProblemRow> = Vec::new();
-        let mut rows = build_rows(&md_rel, &mut problems);
+        let mut rows = build_rows(&mut problems);
         let data_nodes = place(self.source_id, m_uuid, &mut rows);
         (self.on_doc)(RenderedMarkdown {
             section_layout: None,
@@ -279,15 +273,14 @@ pub fn render_all(
 
     let m_uuid = document_uuid(source_id);
     let mut out = Out {
-        root,
         source_id,
         dir: page_dir,
         bucket: m_uuid.clone(),
         on_doc: on_doc_complete,
     };
     let doc = render_markdown(parsed, source_id, &m_uuid);
-    out.emit(&m_uuid, doc, |md_rel, problems| {
-        build_grid_rows(parsed, source_id, &m_uuid, md_rel, problems)
+    out.emit(&m_uuid, doc, |problems| {
+        build_grid_rows(parsed, source_id, &m_uuid, problems)
     })?;
     progress.inc(1);
 
@@ -378,7 +371,7 @@ fn render_family(
         "{title}\n{last}: {latest}\n{} days since {first}",
         with_data.len()
     );
-    out.emit(&m_uuid, whole((front, body)), |md_rel, problems| {
+    out.emit(&m_uuid, whole((front, body)), |problems| {
         GridRow::builder()
             .uuid(m_uuid.clone())
             .provider(Provider::Garmin)
@@ -393,7 +386,6 @@ fn render_family(
             .conversation_uuid(m_uuid.clone())
             .entire_chat(format!("/chat/{m_uuid}"))
             .body(text)
-            .qmd_path(Some(md_rel.to_string()))
             .markdown_uuid(Some(m_uuid.clone()))
             .upstream_id(Some(family.slug().to_string()))
             .upstream_entity_kind(Some(KIND_METRIC_PAGE.to_string()))
@@ -443,7 +435,7 @@ fn render_daily_log(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resu
     }
     let count = lines.len();
     let doc = (front, body.into_sections());
-    out.emit(&m_uuid, doc, |md_rel, problems| {
+    out.emit(&m_uuid, doc, |problems| {
         let mut rows: Vec<GridRow> = GridRow::builder()
             .uuid(m_uuid.clone())
             .provider(Provider::Garmin)
@@ -458,7 +450,6 @@ fn render_daily_log(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resu
             .conversation_uuid(m_uuid.clone())
             .entire_chat(format!("/chat/{m_uuid}"))
             .body(format!("{title}\n{count} days"))
-            .qmd_path(Some(md_rel.to_string()))
             .markdown_uuid(Some(m_uuid.clone()))
             .upstream_id(Some(source_id.to_string()))
             .upstream_entity_kind(Some(KIND_DAILY_LOG.to_string()))
@@ -483,7 +474,6 @@ fn render_daily_log(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resu
                     .message_index(Some(idx as i64))
                     .entire_chat(format!("/chat/{m_uuid}"))
                     .body(format!("{date}\n{}", text.join("\n")))
-                    .qmd_path(Some(md_rel.to_string()))
                     .upstream_id(Some((*date).clone()))
                     .upstream_entity_kind(Some(KIND_DAY.to_string()))
                     .markdown_uuid(Some(m_uuid.clone()))
@@ -514,7 +504,7 @@ fn render_activity(
         let _ = writeln!(body, "{}\n", time_series_chart(&ids));
     }
     activities::body(&mut body, a, device.as_deref());
-    out.emit(&m_uuid, whole((front, body)), |md_rel, problems| {
+    out.emit(&m_uuid, whole((front, body)), |problems| {
         GridRow::builder()
             .uuid(m_uuid.clone())
             .provider(Provider::Garmin)
@@ -529,7 +519,6 @@ fn render_activity(
             .conversation_uuid(m_uuid.clone())
             .entire_chat(format!("/chat/{m_uuid}"))
             .body(activities::row_text(a))
-            .qmd_path(Some(md_rel.to_string()))
             .markdown_uuid(Some(m_uuid.clone()))
             .upstream_id(Some(a.id.clone()))
             .upstream_entity_kind(Some(KIND_ACTIVITY.to_string()))
@@ -581,7 +570,7 @@ fn render_listings(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resul
     }
     let count = lines.len();
     let doc = (front, body.into_sections());
-    out.emit(&m_uuid, doc, |md_rel, problems| {
+    out.emit(&m_uuid, doc, |problems| {
         let mut rows: Vec<GridRow> = GridRow::builder()
             .uuid(m_uuid.clone())
             .provider(Provider::Garmin)
@@ -594,7 +583,6 @@ fn render_listings(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resul
             .conversation_uuid(m_uuid.clone())
             .entire_chat(format!("/chat/{m_uuid}"))
             .body(format!("{title}\n{count} entries"))
-            .qmd_path(Some(md_rel.to_string()))
             .markdown_uuid(Some(m_uuid.clone()))
             .upstream_id(Some(source_id.to_string()))
             .upstream_entity_kind(Some(KIND_LISTINGS.to_string()))
@@ -615,7 +603,6 @@ fn render_listings(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resul
                     .message_index(Some(idx as i64))
                     .entire_chat(format!("/chat/{m_uuid}"))
                     .body(format!("{name}\n{said}"))
-                    .qmd_path(Some(md_rel.to_string()))
                     .upstream_id(Some(item.id.clone()))
                     .upstream_entity_kind(Some(KIND_ITEM.to_string()))
                     .markdown_uuid(Some(m_uuid.clone()))
@@ -745,7 +732,6 @@ fn build_grid_rows(
     parsed: &ParsedGarmin,
     source_id: &str,
     m_uuid: &str,
-    md_rel: &str,
     problems: &mut Vec<ProblemRow>,
 ) -> Vec<GridRow> {
     let title = page_title(parsed, source_id);
@@ -781,7 +767,6 @@ fn build_grid_rows(
         .conversation_uuid(m_uuid.to_string())
         .entire_chat(format!("/chat/{m_uuid}"))
         .body(text)
-        .qmd_path(Some(md_rel.to_string()))
         .markdown_uuid(Some(m_uuid.to_string()))
         .upstream_id(Some(source_id.to_string()))
         .upstream_entity_kind(Some(KIND_PAGE.to_string()))
@@ -802,7 +787,6 @@ fn build_grid_rows(
                 .message_index(Some(idx as i64))
                 .entire_chat(format!("/chat/{m_uuid}"))
                 .body(format!("{} (device {})", d.name, d.id))
-                .qmd_path(Some(md_rel.to_string()))
                 .upstream_id(Some(d.id.clone()))
                 .upstream_entity_kind(Some(KIND_DEVICE.to_string()))
                 .markdown_uuid(Some(m_uuid.to_string()))

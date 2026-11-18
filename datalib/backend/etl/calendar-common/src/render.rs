@@ -102,17 +102,11 @@ fn render_one(
     let front = front(profile, event, source_id, start.as_deref());
     let sections = render_markdown(profile, event, source_id, start.as_deref());
     fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
-    let md_rel = md_path
-        .strip_prefix(out_dir)
-        .unwrap_or(&md_path)
-        .to_string_lossy()
-        .into_owned();
     let data_nodes = tree(profile, event, source_id);
     let row = build_grid_row(
         profile,
         event,
         source_id,
-        &md_rel,
         start,
         &Lineage::top().below(&data_nodes[0]),
         &mut problems,
@@ -479,7 +473,6 @@ fn build_grid_row(
     profile: &CalendarRenderProfile,
     event: &NormalizedEvent,
     source_id: &str,
-    md_rel: &str,
     start: Option<String>,
     at: &Lineage,
     problems: &mut Vec<ProblemRow>,
@@ -543,7 +536,6 @@ fn build_grid_row(
         .conversation_uuid(event.event_uuid.clone())
         .entire_chat(format!("/chat/{}", event.event_uuid))
         .body(text.join("\n"))
-        .qmd_path(Some(md_rel.to_string()))
         .source_url(event.source_url.clone())
         .upstream_id(Some(event.upstream_id.clone()))
         .upstream_entity_kind(Some(event.upstream_entity_kind.to_string()))
@@ -1023,7 +1015,6 @@ mod tests {
             &profile(),
             &series(),
             "tng_calendar",
-            "x/index.md",
             start,
             &Lineage::top(),
             &mut problems,
@@ -1092,7 +1083,6 @@ mod tests {
             &profile(),
             &event,
             "tng_calendar",
-            "x/index.md",
             None,
             &Lineage::top(),
             &mut problems,

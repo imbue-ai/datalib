@@ -346,17 +346,26 @@ out its asides, and an email's mailbox labels are not in it at all.
 Changing what a producer puts there changes every row it wrote, so it
 takes a `RENDER_VERSION` bump to reach a store already rendered.
 
-### `qmd_path` and `source_id`
+### `source_id`, and where a document's file is
 
-`qmd_path` is where the document's markdown is filed,
-`<source_id>/render_markdown/<xx>/<markdown_uuid>.md`, where
-`<source_id>` is the group's id (its directory under the data root,
-never the display name the config may also give it) and `<xx>` is the
-id's last two characters. Those come from the id's hash, so they spread
-documents over 256 folders; the first characters are a stamp or zeros
-and would not. Every renderer gets the path from one function,
+`source_id` is the id of the source a row is filed under: its group's
+id, the directory under the data root, never the display name the
+config may also give it. A renderer does not set it. The one writer
+every document passes through (`grid_index::apply_one`) files each row
+under the group whose render store holds its document, and a storage
+row (provider `datalib`) under `datalib`
+(`grid_rows::filed_under`). A document that names no source
+(`RenderedMarkdown::source_id` empty) is refused, and its render fails
+rather than filing rows under nothing. The `source:` filter compares it.
+
+A row names its document by `markdown_uuid`, and the document's file,
+relative to the data root, is `markdowns.md_path`:
+`<source_id>/render_markdown/<xx>/<markdown_uuid>.md`, where `<xx>` is
+the id's last two characters. Those come from the id's hash, so they
+spread documents over 256 folders; the first characters are a stamp or
+zeros and would not. Every renderer gets the path from one function,
 `datalib_etl_render::grid_index::doc_md_path`, and the store refuses a
-document filed any other way, or a row naming another file
+document filed any other way, or a row of another document
 (`misfiled` in `grid_index.rs`).
 
 So a search hit's path *is* its document's id
@@ -366,11 +375,6 @@ with no lookup by path. Changing the layout is a bump of
 `grid_index::DOC_LAYOUT`, which every source carries in its render
 params, so every source renders again; each document's old file is
 deleted as the new one is written.
-
-`source_id` is derived from `qmd_path` at index time: its first
-segment, except a storage row (provider `datalib`), which sits under
-the source it measures and is filed under `datalib`
-(`GridRow::derived_source_id`). The `source:` filter compares it.
 
 ### `byte_size`, `item_count`
 
@@ -451,9 +455,9 @@ render gives a row a location and nothing else. `place:<cell>` and
 `near:<cell>` are ranges of this one indexed column, at any resolution
 (`datalib/backend/h3/README.md`).
 
-**A photo's document has no file.** Its rows name a `qmd_path` like any
-document's, so `source_id` and the id-from-path rule hold, but render
-never writes the file: the `photos` applet draws the photo from the
+**A photo's document has no file.** It has a `markdowns.md_path` like
+any document's, so the id-from-path rule holds, but render never writes
+the file: the `photos` applet draws the photo from the
 `NormalizedPhoto` its document carries in `source_photos`
 (`datalib_photo_schema`), which the index copies the way it copies
 `source_contacts`. `/chat/<uuid>` answers such a document with its
@@ -508,9 +512,9 @@ reasons behind the rules below.
 **They are filed under `datalib`, not under the source they measure.**
 The report's markdown sits in the measured source's
 `render_markdown/`, the one tree the render step may write, so its
-`qmd_path` starts with that source's id. `GridRow::derived_source_id`
-asks `provider` first, so a `datalib` row gets `source_id = datalib`
-whatever directory it came out of, and "what claude weighs" never lands
+document belongs to that source. `grid_rows::filed_under` asks
+`provider` first, so a `datalib` row gets `source_id = datalib`
+whatever store it came out of, and "what claude weighs" never lands
 in the same bucket as the Claude conversations. Which source a
 measurement describes is `markdowns.source_id`, the row's
 `conversation_name` (`<source_id> storage`), and its `upstream_id` (the

@@ -724,17 +724,11 @@ mod tests {
     }
 
     /// A document as a renderer hands it over, its file written.
-    fn rendered_doc(
-        root: &Path,
-        uuid: &str,
-        sections: Vec<Section>,
-        md_path: PathBuf,
-    ) -> RenderedMarkdown {
-        rendered_doc_of(root, GROUP, uuid, sections, md_path)
+    fn rendered_doc(uuid: &str, sections: Vec<Section>, md_path: PathBuf) -> RenderedMarkdown {
+        rendered_doc_of(GROUP, uuid, sections, md_path)
     }
 
     fn rendered_doc_of(
-        root: &Path,
         group: &str,
         uuid: &str,
         sections: Vec<Section>,
@@ -742,7 +736,6 @@ mod tests {
     ) -> RenderedMarkdown {
         std::fs::create_dir_all(md_path.parent().unwrap()).unwrap();
         std::fs::write(&md_path, join(&sections)).unwrap();
-        let rel = md_path.strip_prefix(root).unwrap().display().to_string();
         let row = GridRow::builder()
             .uuid(uuid)
             .provider(Provider::Test)
@@ -753,7 +746,6 @@ mod tests {
             .entire_chat(format!("/chat/{uuid}"))
             .body("body")
             .markdown_uuid(Some(uuid.to_string()))
-            .qmd_path(Some(rel))
             .is_document(true)
             .item_count(Some(1))
             .build()
@@ -835,7 +827,7 @@ mod tests {
     /// One document, `uuid`, saying `text`, committed under `group`.
     fn one_doc(root: &Path, group: &str, uuid: &str, text: &str) {
         let rr = render_root_of(root, group);
-        let doc = rendered_doc_of(root, group, uuid, thread(text), doc_md_path(&rr, uuid));
+        let doc = rendered_doc_of(group, uuid, thread(text), doc_md_path(&rr, uuid));
         commit_of(root, group, &[doc], &[]);
     }
 
@@ -956,7 +948,7 @@ mod tests {
         let rr = render_root(root);
         let docs: Vec<RenderedMarkdown> = ["d-tea", "d-hush"]
             .into_iter()
-            .map(|u| rendered_doc(root, u, thread(u), doc_md_path(&rr, u)))
+            .map(|u| rendered_doc(u, thread(u), doc_md_path(&rr, u)))
             .collect();
         commit(root, &docs, &[]);
         let bar = Recorder::default();
@@ -1097,20 +1089,9 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         let rr = render_root(root);
-        let tea = rendered_doc(
-            root,
-            "d-tea",
-            thread("Tea, Earl Grey"),
-            doc_md_path(&rr, "d-tea"),
-        );
-        let hush = rendered_doc(
-            root,
-            "d-hush",
-            thread("Shields up"),
-            doc_md_path(&rr, "d-hush"),
-        );
+        let tea = rendered_doc("d-tea", thread("Tea, Earl Grey"), doc_md_path(&rr, "d-tea"));
+        let hush = rendered_doc("d-hush", thread("Shields up"), doc_md_path(&rr, "d-hush"));
         let quiet = rendered_doc(
-            root,
             "d-quiet",
             thread("a repeat"),
             unindexed_doc_md_path(&rr, "d-quiet"),
@@ -1134,7 +1115,7 @@ mod tests {
 
         assert_eq!(update(root).await, Done::default(), "nothing changed");
 
-        let tea2 = rendered_doc(root, "d-tea", thread("Tea, hot"), doc_md_path(&rr, "d-tea"));
+        let tea2 = rendered_doc("d-tea", thread("Tea, hot"), doc_md_path(&rr, "d-tea"));
         commit(root, &[tea2], &["d-hush".to_string()]);
         assert_eq!(
             update(root).await,
@@ -1159,7 +1140,7 @@ mod tests {
         std::fs::write(&old, b"an older build's index").unwrap();
         std::fs::write(format!("{}-wal", old.display()), b"its log").unwrap();
         let rr = render_root(root);
-        let tea = rendered_doc(root, "d-tea", thread("Tea"), doc_md_path(&rr, "d-tea"));
+        let tea = rendered_doc("d-tea", thread("Tea"), doc_md_path(&rr, "d-tea"));
         commit(root, &[tea], &[]);
 
         update(root).await;
@@ -1178,12 +1159,7 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         let rr = render_root(root);
-        let tea = rendered_doc(
-            root,
-            "d-tea",
-            thread("Tea, Earl Grey"),
-            doc_md_path(&rr, "d-tea"),
-        );
+        let tea = rendered_doc("d-tea", thread("Tea, Earl Grey"), doc_md_path(&rr, "d-tea"));
         commit(root, &[tea], &[]);
         assert_eq!(update(root).await.put, 1);
 
@@ -1218,7 +1194,7 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         let rr = render_root(root);
-        let mut tea = rendered_doc(root, "d-tea", Vec::new(), doc_md_path(&rr, "d-tea"));
+        let mut tea = rendered_doc("d-tea", Vec::new(), doc_md_path(&rr, "d-tea"));
         tea.sections = vec![
             Section::frame("---\n---\n\n# Ten Forward\n\n".into()),
             Section::item(
