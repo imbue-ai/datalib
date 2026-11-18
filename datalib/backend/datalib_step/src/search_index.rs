@@ -77,13 +77,10 @@ struct Embedded {
     took: Duration,
 }
 
-/// A document the search covers: one with a file, outside `unindexed/`.
+/// A document the search covers: every one but those filed for the grid
+/// alone (`markdowns.searchable`).
 pub(crate) fn searchable(row: &MarkdownRow) -> bool {
-    row.md_path.as_deref().is_some_and(|p| {
-        !Path::new(p)
-            .components()
-            .any(|c| c.as_os_str() == layout::UNINDEXED_DIR)
-    })
+    row.searchable
 }
 
 /// `IndexedMarkdownStore::index_docs` off the runtime, opening the store at
