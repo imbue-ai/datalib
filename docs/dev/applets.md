@@ -71,9 +71,6 @@ other language it is one line:
 secret = open(os.environ["DATALIB_APPLET_SECRET_FILE"]).read().strip()
 ```
 
-An applet written against `DATALIB_APPLET_SECRET`, the variable that used to
-hold the secret itself, finds it unset and has to change to this.
-
 `id` must be a valid JavaScript identifier. It is both the mount
 prefix (`/applet/<id>/`) and a namespace in card source
 (`comp.<id>.<name>`), whose grammar only reads identifiers, so a dotted
@@ -447,32 +444,23 @@ writes the indexes, and by `datalib-applet`, which serves them.
 `datalib/backend/applets` — `datalib-applet`, one subcommand per
 applet (`slack`, `unified_grid_and_search_index`, `unified_time_series_index`,
 `datalib_contacts` and `photos`), the same shape as `datalib-step`.
-`photos` draws a photo or video by the uuid of its grid row, from the
-`NormalizedPhoto` its render stored in the grid index: `/photos` a page
-of them newest taken first, `/photo/<uuid>` one, `/photo/<uuid>/image?size=thumb|full`
-its picture from the source's own previews (else its original, with
-`X-Datalib-Image-From: original`), `/photo/<uuid>/original` the file in
-byte ranges. Its component's metadata says `"serves": ["photo"]`, which
-is how the UI finds the applet to draw a `datalib:photo/…` name with
-(`docs/dev/plans/photos_applet.md`). One more,
-`search`, is not an applet: it answers one `/search` with no server,
-through the same function the route calls (`answer_search`), so the
-command and the search box cannot drift apart.
-`unified_time_series_index` serves the time-series index read-only:
-`GET /time_series` lists the time series (`?source_id=`, `?q=`),
-`GET /time_series/<id>` is one, and `POST /points` with
-`{ids, from, to, budget}` answers each one's points in the range, or,
-past `budget` points, that many buckets of min, max and mean
-(`etl/time_series/src/read.rs`). It reads the points from each
-source's own store, at the commit the index recorded for it
-(`docs/dev/time_series.md` §"The index"). `datalib_contacts` is the one that writes: it is the
-only writer of the contacts store under `datalib_curated/`
-(`app_stores.md`), and like `unified_grid_and_search_index` it contributes endpoints
-only, which the document view calls; one of them,
-`/photo/<contact_id>`, serves the photo a person put on a contact (and
-takes one with `PUT`, drops it with `DELETE`). Its routes are registered
-together with what each says about itself (`datalib_contacts/api.rs`), and
-`GET /` and `--help` list them. One
+Each one's routes are in [`docs/user/applets.md`](../user/applets.md).
+`photos` reads the `NormalizedPhoto` each render stored in the grid
+index, and says where a picture came from in `X-Datalib-Image-From`
+(`original` when no preview served). Its component's metadata says
+`"serves": ["photo"]`, which is how the UI finds the applet to draw a
+`datalib:photo/…` name with (`docs/dev/plans/photos_applet.md`). One
+more, `search`, is not an applet: it answers one `/search` with no
+server, through the same function the route calls (`answer_search`), so
+the command and the search box cannot drift apart.
+`unified_time_series_index` reads the points from each source's own
+store, at the commit the index recorded for it
+(`etl/time_series/src/read.rs`; `docs/dev/time_series.md` §"The
+index"). `datalib_contacts` is the one that writes: it is the only
+writer of the contacts store under `datalib_curated/` (`app_stores.md`),
+and like `unified_grid_and_search_index` it contributes endpoints only.
+Its routes are registered together with what each says about itself
+(`datalib_contacts/api.rs`), and `GET /` and `--help` list them. One
 binary rather than one per applet keeps the shared machinery in one
 place and ships one file instead of a growing list; adding an applet is
 a subcommand plus a module, not a new crate and five packaging edits.

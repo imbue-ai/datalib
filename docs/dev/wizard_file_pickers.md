@@ -152,12 +152,13 @@ the *only* way in short of Full Disk Access.
 
 What is established by reading the tree:
 
-- **The app is not sandboxed.** No `.entitlements` file exists for it;
+- **The app is not sandboxed.** Its one entitlement
+  (`Datalib.entitlements`) is the application group that holds a
+  protected library's folder, with no `com.apple.security.app-sandbox`;
   `build-signed-app.sh` has Tauri sign with the Developer ID identity,
-  `sign-staged.sh` signs the bundled binaries
-  with `--options runtime` (hardened runtime), and neither sets macOS
-  entitlements. So the mechanism usually meant by this question —
-  Powerbox handing a *sandboxed* app a grant for the user-selected
+  and `sign-staged.sh` signs the bundled binaries with `--options
+  runtime` (hardened runtime) and no entitlements. So the mechanism
+  usually meant by this question — Powerbox handing a *sandboxed* app a grant for the user-selected
   file, persisted with a security-scoped bookmark — is not in play at
   all. There is no `com.apple.security.files.user-selected.read-only`
   for the panel to satisfy. **Do not reach for security-scoped
