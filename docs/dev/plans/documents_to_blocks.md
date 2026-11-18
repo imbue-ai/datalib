@@ -10,7 +10,8 @@ the code on 2026-11-16; file references are to that tree.
 
 | word | means |
 |---|---|
-| **block** | one piece of content: one thing a person or program wrote, with one author, one time and a body (a message, an email, a comment, an event, a tool call, a page's own text). What search ranks and a hit lands on. A `grid_rows` row; the text below and the search index's code call it an **item**. |
+| **block** | content: one thing a person or program wrote, with one author, one time and a body (a message, an email, a comment, an event, a tool call, a page's own text). What search ranks and a hit lands on. A `grid_rows` row; the text below and the search index's code call it an **item**. A page source's whole page (a Notion page, a calendar event, a contact) is one **big block** for now, which its renderer may later split into the blocks it is made of. |
+| **layout** | what is drawn around blocks and says nothing of its own: front matter, the title, a `<details>` opener. The code calls a block and a stretch of layout alike a section (`Section`, the render store's `sections`). |
 | **data node** | a node of the tree that holds blocks and other data nodes: a chat, a thread, a channel, a label, a page, a session. It often has a name and other metadata (its kind, its upstream id), and most of what it says is in the blocks it holds. A `data_nodes` row. Many data nodes are **places**: ones a person browses or filters by, such as a channel, a mailbox or a workspace. |
 | **document** | a group of blocks that are often read together: a thread, a chat, a page. Today it is also the markdown file render writes for it, which step 5 stops writing. |
 
@@ -479,10 +480,10 @@ against the eval before the next.
    it reads but those. The config upgrade lists there every source that
    had no `keyword_index` step. In three parts:
    - **3a. Bodies.** A `sections` table in the render store: every
-     piece of a document in order, keyed or not. chat-common hands each
-     item's body and who it was addressed to, and marks its layout as
-     frame, which is not kept; every other renderer's pieces are kept
-     whole and marked `framed`, unkeyed ones too (a PDF's text is
+     block and stretch of layout of a document in order, keyed or not.
+     chat-common hands each item's body and who it was addressed to, and
+     marks its layout as frame, which is not kept; every other renderer's
+     sections are kept whole and marked `framed`, unkeyed ones too (a PDF's text is
      unkeyed), and each splits its own bodies off later. Every renderer
      also hands its front matter as facts (`Front`), drawn by one
      function and kept on `markdowns.front`, and its document as
@@ -566,11 +567,11 @@ against the eval before the next.
    landing (`hits/mapping.rs`), which quotes a hit and picks its row from
    the file. In order:
    - **5a. The store spells every document.** `sections` keeps a
-     chat-common item's body alone and no frame piece, so chat-common's
-     fourteen sources could not be read back from the store. A
-     `drawn_pieces` table keeps the rest of each piece as drawn: an
-     item's drawing with its body cut out and where it goes back, and
-     each frame piece whole. The store then spells every document byte
+     chat-common item's body alone and none of its layout, so
+     chat-common's fourteen sources could not be read back from the
+     store. A `drawn_pieces` table keeps the rest as drawn: each block's
+     drawing with its body cut out and where it goes back, and each
+     stretch of layout whole. The store then spells every document byte
      for byte, which a step test checks against every fixture document's
      file. Storing the drawing, rather than drawing it again from facts,
      is the choice that lets the files go first: what the frame and a
@@ -591,8 +592,13 @@ against the eval before the next.
      Tests and fixtures read drawn text.
    - **5e.** Render stops writing the files, and the existing ones are
      deleted, each render store kept; the rule that rendered markdown is
-     write-only goes with them. Paging through what is read together, a
-     page at a time, comes after.
+     write-only goes with them. The render store's shape changes, so with
+     it, at no extra re-render: `drawn_pieces` and `SpelledPiece` take
+     names without "piece" (`drawings`, `SpelledSection`), and Notion
+     hands a page's text as a big block named by the page's row, its
+     front matter as layout. Today the page's text is a section with no
+     uuid, though its row has one. Paging through what is read together,
+     a page at a time, comes after.
 6. **No time buckets.** Landed with step 1 (#1765): a bucketed source
    renders one container per chat, and the `period` setting is gone.
 7. **Embedding context.** Chunks are cut from windows of what is read
@@ -630,9 +636,11 @@ against the eval before the next.
 - **What a group row shows** in the grid when it spans years: first and
   last time, the last few participants, the number of items matched.
 - **How deep each source's tree goes.** A Notion page is one row today,
-  with none for its blocks. Making blocks items lets a hit land on a
-  paragraph and a page be windowed for embedding, at the cost of many
-  more rows; Drive's paragraphs are the same question. Which kinds are
+  with none for its blocks: a big block. Making blocks items lets a hit
+  land on a paragraph and a page be windowed for embedding, at the cost
+  of many more rows; Drive's paragraphs are the same question. Notion
+  is the place to start: its renderer walks a page block by block and
+  holds every block's id as it draws. Which kinds are
   read together and which are places is each source's to declare, and
   this plan's tables are a first guess to check source by source.
 - **Where a label lives.** Gmail labels a message, and a thread
