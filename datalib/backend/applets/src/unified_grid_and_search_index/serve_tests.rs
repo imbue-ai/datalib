@@ -133,6 +133,45 @@ fn it_serves_the_root_it_was_started_on_and_leaves_with_its_parent() {
     assert_eq!(exit_code_within_deadline(&mut child), Some(0));
 }
 
+/// An applet that has loaded the search model still exits cleanly when its
+/// parent goes, as when the app quits. On a mac, ggml's Metal teardown
+/// aborted the process while the model was loaded, leaving a crash report.
+#[test]
+fn it_leaves_with_its_parent_after_a_search_by_meaning() {
+    let root = tempfile::tempdir().unwrap();
+    datalib_search_fixture::materialize_root(root.path());
+    let log = root.path().join("applet.stderr");
+    let mut child = applet()
+        .env(super::DATA_ROOT_ENV, root.path())
+        .env("DATALIB_PARENT_PIPE", "0")
+        .env("RUST_LOG", "info")
+        .current_dir(root.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(std::fs::File::create(&log).unwrap())
+        .spawn()
+        .expect("start the applet");
+    let port = announced_port(&mut child);
+
+    let (status, body) = get(port, "/search?q=the%20enterprise&limit=3", Some(SECRET));
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(
+        body["query_echo"]["search_error"],
+        serde_json::Value::Null,
+        "{body}"
+    );
+    let stderr = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        stderr.contains("loaded the search model"),
+        "the search never loaded the model, so this exit tests nothing:\n{stderr}"
+    );
+
+    drop(child.stdin.take());
+    let code = exit_code_within_deadline(&mut child);
+    let stderr = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(code, Some(0), "{stderr}");
+}
+
 /// With no data root the applet says which variable it wanted and stops,
 /// rather than serving whatever directory it happened to start in.
 #[test]

@@ -225,9 +225,8 @@ pub fn cuda_module_report() -> Option<&'static str> {
         .as_deref()
 }
 
-/// A loaded model and one context over it. Drop it before the process
-/// exits: on Metal, ggml asserts at exit that no model is still loaded, and
-/// aborts the process otherwise, so an embedder must not live in a static.
+/// A loaded model and one context over it. One still open when the
+/// process exits is freed then (README § "Exit"), so it may live in a static.
 pub struct Embedder {
     raw: NonNull<ffi::Embedder>,
     dim: usize,

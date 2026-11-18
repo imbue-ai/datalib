@@ -19,8 +19,6 @@ fn model() -> PathBuf {
     p
 }
 
-/// An embedder of the test's own, dropped when it ends: on Metal, ggml
-/// aborts at exit if a model is still loaded, so none may live in a static.
 fn open(device: Device) -> Embedder {
     Embedder::open_with(&model(), device, 2, Batching::ONE).unwrap()
 }
@@ -298,4 +296,37 @@ fn pin_this_thread_to_one_core() {
         libc::CPU_SET(first, &mut set);
         assert_eq!(libc::sched_setaffinity(0, size, &set), 0);
     }
+}
+
+// ── Exit ────────────────────────────────────────────────────────────
+
+const HOLD_A_MODEL_TO_EXIT: &str = "EMBEDDING_FACTS_HOLD_A_MODEL_TO_EXIT";
+
+/// On Metal, ggml's teardown asserted that no model was still loaded and
+/// aborted the process, so a test binary keeping its model in a static
+/// (the applet's) failed after every test had passed. This test runs
+/// itself again as a child that exits holding a model it has used.
+#[test]
+fn a_process_that_exits_with_a_model_loaded_exits_cleanly() {
+    if std::env::var_os(HOLD_A_MODEL_TO_EXIT).is_some() {
+        let mut e = open(Device::Best);
+        e.embed("warp core breach").unwrap();
+        std::mem::forget(e);
+        std::process::exit(0);
+    }
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "a_process_that_exits_with_a_model_loaded_exits_cleanly",
+            "--nocapture",
+        ])
+        .env(HOLD_A_MODEL_TO_EXIT, "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "the child {}:\n{}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
 }

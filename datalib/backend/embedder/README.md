@@ -94,6 +94,19 @@ having no GPU, is in § "Measured by hand".
   cores; the steps and applets a test starts inherit it
   (`datalib_env::hands_down`).
 
+## Exit
+
+- **A process may exit with a model loaded.** ggml's Metal device is a
+  C++ static whose destructor aborts the process when a model's buffers
+  are still on it. Statics are torn down in the reverse of the order
+  they were built, so the shim builds one of its own when the first
+  model loads, after that device, and its destructor frees every
+  embedder still open before the device goes. So an embedder may live in
+  a static (the search applet's tests share one) and need not be dropped
+  before exit. A call still running on another thread finishes first;
+  one made after that fails. On a Linux build, with no Metal, this test
+  cannot fail.
+
 ## Measured by hand
 
 CI has no GPU, so these were measured with `gpu_check`
