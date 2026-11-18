@@ -2,6 +2,7 @@
 //! [`Section`] a renderer hands over so a document can be read piece by
 //! piece without parsing its markdown.
 
+use datalib_schema::drawn_pieces::{self, DrawnPieceRow};
 use datalib_schema::markdowns::SectionSpan;
 use datalib_schema::providers::Provider;
 use datalib_schema::sections::{addressed_json, labels_json, Addressee, SectionRow};
@@ -20,8 +21,9 @@ pub struct Section {
     pub kept: Kept,
 }
 
-/// What of a section the render store keeps, for whatever draws it
-/// again: the viewer, an export, the search index.
+/// What of a section the render store keeps in `sections`, for whatever
+/// draws it again: the viewer, an export, the search index. What it does
+/// not keep there as drawn, `drawn_pieces` keeps ([`drawn`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kept {
     /// The piece whole, as drawn, marked framed: from a renderer that has
@@ -35,8 +37,8 @@ pub enum Kept {
         addressed: Vec<Addressee>,
         labels: Vec<String>,
     },
-    /// Nothing: layout alone (front matter, a `<details>` opener), drawn
-    /// again from the document's facts.
+    /// No section: layout alone (front matter, a `<details>` opener),
+    /// kept whole as its drawing.
     Frame,
 }
 
@@ -117,6 +119,66 @@ pub fn stored(markdown_uuid: &str, sections: &[Section]) -> Vec<SectionRow> {
                 addressed,
                 labels,
             })
+        })
+        .collect()
+}
+
+/// How the store keeps what `sections` does not hold as drawn: each
+/// message's drawing with its body cut out, and each piece of layout
+/// whole. With [`stored`] it spells the document back ([`spell`]).
+pub fn drawn(markdown_uuid: &str, sections: &[Section]) -> Vec<DrawnPieceRow> {
+    sections
+        .iter()
+        .enumerate()
+        .filter_map(|(seq, s)| {
+            let body = match &s.kept {
+                Kept::Whole => return None,
+                Kept::Body { text, .. } => Some(text.as_str()),
+                Kept::Frame => None,
+            };
+            let (md, body_at) = drawn_pieces::cut(&s.md, body)?;
+            Some(DrawnPieceRow {
+                markdown_uuid: markdown_uuid.to_string(),
+                seq: seq as i64,
+                md,
+                body_at,
+            })
+        })
+        .collect()
+}
+
+/// One piece of a document as the store spells it back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpelledPiece {
+    /// The item it is; `None` for a piece that is no item's.
+    pub uuid: Option<String>,
+    pub md: String,
+}
+
+/// A document spelled back from what the store keeps of it, piece by
+/// piece in order. `None` when the rows cannot spell it: a drawing whose
+/// cut falls inside a character.
+pub fn spell(sections: &[SectionRow], drawn: &[DrawnPieceRow]) -> Option<Vec<SpelledPiece>> {
+    let mut by_seq: std::collections::BTreeMap<i64, (Option<&SectionRow>, Option<&DrawnPieceRow>)> =
+        std::collections::BTreeMap::new();
+    for s in sections {
+        by_seq.entry(s.seq).or_default().0 = Some(s);
+    }
+    for d in drawn {
+        by_seq.entry(d.seq).or_default().1 = Some(d);
+    }
+    by_seq
+        .into_values()
+        .map(|piece| match piece {
+            (Some(s), None) => Some(SpelledPiece {
+                uuid: s.uuid.clone(),
+                md: s.text.clone(),
+            }),
+            (s, Some(d)) => Some(SpelledPiece {
+                uuid: s.and_then(|s| s.uuid.clone()),
+                md: d.spell(s.map(|s| s.text.as_str()))?,
+            }),
+            (None, None) => unreachable!("every entry has a row"),
         })
         .collect()
 }
@@ -238,6 +300,45 @@ pub const MSG_DIV_CLOSE: &str = "</div>";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the store keeps of a document spells it back byte for byte:
+    /// layout from its drawing, a message from its drawing with the body
+    /// put back, a whole piece from its text.
+    #[test]
+    fn the_stored_pieces_spell_the_document() {
+        let sections = vec![
+            Section::frame("---\ntitle: Bridge\n---\n\n# Bridge\n\n".into()),
+            Section::item(
+                "m1",
+                "<div id=\"m-m1\">\n\n**Riker** — 09:00\n\nEngage.\n\n</div>\n\n".into(),
+                "Engage.".into(),
+                Vec::new(),
+            ),
+            Section::item(
+                "m2",
+                "<div id=\"m-m2\">\n\nSaid.\n\n\n*[attached]*\n</div>\n\n".into(),
+                "Said.\n\n*[attached]*".into(),
+                Vec::new(),
+            ),
+            Section::keyed("p", "A page's own words.\n".into()),
+        ];
+        let rows = stored("doc", &sections);
+        let drawings = drawn("doc", &sections);
+        assert_eq!(drawings.len(), 3, "the layout and both messages");
+        assert_eq!(
+            drawings[1].body_at,
+            sections[1].md.find("Engage.").map(|i| i as i64)
+        );
+        assert_eq!(
+            drawings[2].body_at, None,
+            "a body not drawn verbatim is kept whole"
+        );
+        let spelled = spell(&rows, &drawings).unwrap();
+        let joined: String = spelled.iter().map(|p| p.md.as_str()).collect();
+        assert_eq!(joined, join(&sections));
+        let uuids: Vec<Option<&str>> = spelled.iter().map(|p| p.uuid.as_deref()).collect();
+        assert_eq!(uuids, [None, Some("m1"), Some("m2"), Some("p")]);
+    }
 
     #[test]
     fn joined_sections_are_the_document() {

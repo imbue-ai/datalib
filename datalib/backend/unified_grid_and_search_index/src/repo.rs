@@ -217,7 +217,7 @@ pub trait IndexRepo: Send + Sync {
     /// The documents holding a row `q` keeps that have a page the search could
     /// index, each with the source it is filed under. A row with no page,
     /// a photo's, has nothing to embed, and a page filed for the grid alone
-    /// (`layout::UNINDEXED_DIR`) is left out on purpose.
+    /// (`markdowns.searchable`) is left out on purpose.
     async fn documents_with_pages(
         &self,
         q: &ParsedQuery,

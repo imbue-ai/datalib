@@ -106,8 +106,8 @@ database per source, at
     addressed to (name and handle) and its labels; the store draws its header again from its row.
     Any other piece is kept whole and marked `framed`, so whatever reads
     it draws nothing around it; a piece that is layout alone (front
-    matter, a `<details>` opener) the renderer marks as frame, and it is
-    not kept. A renderer that keeps its whole page as one piece keeps
+    matter, a `<details>` opener) the renderer marks as frame, and
+    `sections` has no row for it. A renderer that keeps its whole page as one piece keeps
     its front matter at the start of it. The search index draws its text
     from it (`search_index/src/text.rs`): each item as an envelope line
     (who, to whom, when), its labels and its body; a page, a document
@@ -118,6 +118,13 @@ database per source, at
     escapes. The grid index does not copy it
     ([`documents_to_blocks.md`](plans/documents_to_blocks.md)
     §"Store the body, format on read").
+  - `drawn_pieces` — how each piece is drawn where `sections` does not
+    hold it as drawn: a split item's whole drawing with its body cut out
+    and where to put it back (`body_at`), and each frame piece whole.
+    With `sections` it spells the document byte for byte
+    (`IndexedMarkdownStore::document`), which a step test checks against
+    every fixture document's file, so the markdown files are not the
+    only copy of what a document looks like.
   - `source_contacts` and `source_contact_handles` — the people it
     describes or mentions, each as its source describes them (a
     `NormalizedContact`, `contact_schema/`), and the handles that reach

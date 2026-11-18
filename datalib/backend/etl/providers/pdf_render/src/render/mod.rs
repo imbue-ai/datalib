@@ -290,6 +290,7 @@ fn render_one(
 ",
                 escape_name_inline(&title)
             ));
+            sections.push(Section::unkeyed(body.clone()));
             let problem = ProblemRow::new(
                 source_id,
                 Stage::Render,
@@ -440,6 +441,37 @@ mod tests {
             [(1, pages[0].text.clone()), (2, pages[1].text.clone())],
             "the grid keeps the words"
         );
+    }
+
+    /// A file that changed since the sync read it is drawn as a note, and
+    /// the note is what the store keeps: before, its pieces were the last
+    /// render's, so search still found the old pages' words.
+    #[test]
+    fn a_changed_file_is_kept_as_the_note_it_is_drawn_as() {
+        let td = tempfile::tempdir().unwrap();
+        let dir = td.path();
+        let md_path = dir.join("doc.md");
+        let t = RenderTarget {
+            blake3: "b3".into(),
+            title: Some("Warp core".into()),
+            author: None,
+            page_count: 2,
+            pdf_type: "text".into(),
+            doc_created_at: None,
+            doc_modified_at: None,
+            abs_path: dir.join("warp.pdf"),
+            rel_path: "warp.pdf".into(),
+            copy_count: 1,
+            path_ids: vec!["p1".into()],
+        };
+        let md = render_one(&t, Content::FileChanged, &md_path, "pdfs", "doc").unwrap();
+        let written = std::fs::read_to_string(&md_path).unwrap();
+        assert!(
+            !md.sections.is_empty(),
+            "the note is a piece the store keeps"
+        );
+        assert_eq!(join(&md.sections), written);
+        assert!(written.contains(FILE_CHANGED), "{written}");
     }
 }
 

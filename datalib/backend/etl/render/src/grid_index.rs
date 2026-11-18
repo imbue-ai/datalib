@@ -989,6 +989,14 @@ pub fn doc_md_path(render_root: &Path, markdown_uuid: &str) -> PathBuf {
 /// [`doc_md_path`] for a document free-text search should not return: one
 /// that only repeats what other documents say, at a size that would cost
 /// real embedding time. Its grid row and its link work as usual.
+/// Whether the search indexes a document filed at `md_rel`: every one
+/// but those its renderer filed under `unindexed/`.
+fn searchable(md_rel: &str) -> bool {
+    !Path::new(md_rel)
+        .components()
+        .any(|c| c.as_os_str() == datalib_etl::layout::UNINDEXED_DIR)
+}
+
 pub fn unindexed_doc_md_path(render_root: &Path, markdown_uuid: &str) -> PathBuf {
     doc_md_path(
         &render_root.join(datalib_etl::layout::UNINDEXED_DIR),
@@ -2091,8 +2099,8 @@ async fn upsert_markdown(
         "INSERT INTO markdowns \
          (markdown_uuid, source_id, provider, kind, title, created_at, modified_at, \
           item_count, md_path, upstream_cursor, renderer_version, bucket_key, section_layout, \
-          content_hash, front) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          content_hash, front, searchable) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&md.markdown_uuid)
     .bind(&md.source_id)
@@ -2109,6 +2117,7 @@ async fn upsert_markdown(
     .bind(section_layout.as_deref().map(layout_json))
     .bind(content_hash)
     .bind((!md.front.is_empty()).then(|| md.front.to_json()))
+    .bind(searchable(md_rel))
     .execute(&mut **conn)
     .await
     .context("insert markdowns row")?;
@@ -2936,8 +2945,8 @@ mod shape_tests {
     async fn holding_one_document(db: &Path) -> SqlitePool {
         let pool = open_index(db).await.unwrap();
         sqlx::query(
-            "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind) \
-             VALUES ('md-1', 'claude_web', 'claude', 'Chat')",
+            "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, searchable) \
+             VALUES ('md-1', 'claude_web', 'claude', 'Chat', 1)",
         )
         .execute(&pool)
         .await

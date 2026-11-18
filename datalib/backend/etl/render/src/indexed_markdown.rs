@@ -50,6 +50,9 @@ const REMOVED_PROBLEMS: &str = "DELETE FROM problems \
 const REMOVED_SECTIONS: &str =
     "DELETE FROM sections WHERE markdown_uuid IN (SELECT value FROM json_each(?))";
 const DOCUMENT_SECTIONS: &str = "DELETE FROM sections WHERE markdown_uuid = ?";
+const REMOVED_DRAWN: &str =
+    "DELETE FROM drawn_pieces WHERE markdown_uuid IN (SELECT value FROM json_each(?))";
+const DOCUMENT_DRAWN: &str = "DELETE FROM drawn_pieces WHERE markdown_uuid = ?";
 
 /// A kept section as [`IndexedMarkdownStore::kept_sections`] reads it.
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
@@ -106,23 +109,38 @@ pub fn index_key(row: &datalib_schema::markdowns::MarkdownRow) -> Option<String>
         .map(|h| format!("{h}{}", datalib_search_index::text::key_suffix()))
 }
 
-/// Replace what the store keeps of `md`'s sections. The grid index keeps
-/// none, so this is the render store's own write beside
-/// `grid_index::apply_one`. A document read back from the store has no
-/// sections, and keeps the ones it has, as it keeps its layout.
+/// Replace what the store keeps of `md`'s sections, and how each is
+/// drawn. The grid index keeps none, so this is the render store's own
+/// write beside `grid_index::apply_one`. A document read back from the
+/// store has no sections, and keeps the ones it has, as it keeps its
+/// layout.
 async fn put_sections(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<()> {
     if !md.rows.is_empty() && md.sections.is_empty() {
         return Ok(());
     }
     let mut guard = write_lock.acquire().await?;
     let conn = guard.conn();
-    sqlx::query(DOCUMENT_SECTIONS)
-        .bind(&md.markdown_uuid)
-        .execute(&mut **conn)
-        .await
-        .context("delete prior sections")?;
+    for sql in [DOCUMENT_SECTIONS, DOCUMENT_DRAWN] {
+        sqlx::query(sql)
+            .bind(&md.markdown_uuid)
+            .execute(&mut **conn)
+            .await
+            .context("delete prior sections")?;
+    }
     if md.rows.is_empty() {
         return Ok(());
+    }
+    for row in crate::section::drawn(&md.markdown_uuid, &md.sections) {
+        sqlx::query(
+            "INSERT INTO drawn_pieces (markdown_uuid, seq, md, body_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(&row.markdown_uuid)
+        .bind(row.seq)
+        .bind(&row.md)
+        .bind(row.body_at)
+        .execute(&mut **conn)
+        .await
+        .with_context(|| format!("document {}: store drawing {}", md.markdown_uuid, row.seq))?;
     }
     for row in crate::section::stored(&md.markdown_uuid, &md.sections) {
         sqlx::query(
@@ -177,6 +195,7 @@ pub(crate) fn store_tables() -> impl Iterator<Item = (&'static str, &'static str
         .chain(datalib_schema::data_nodes::DDL.iter())
         .chain(datalib_schema::filings::DDL.iter())
         .chain(datalib_schema::sections::DDL.iter())
+        .chain(datalib_schema::drawn_pieces::DDL.iter())
         .chain(SOURCE_CONTACTS_DDL.iter())
         .chain(SOURCE_CONTACT_HANDLES_DDL.iter())
         .chain(SOURCE_PHOTOS_DDL.iter())
@@ -544,11 +563,13 @@ impl IndexedMarkdownStore {
                 crate::grid_index::delete_document_rows(conn, markdown_uuids)
                     .await
                     .context("remove documents from the store")?;
-                sqlx::query(REMOVED_SECTIONS)
-                    .bind(&set)
-                    .execute(&mut **conn)
-                    .await
-                    .context("remove the sections of documents removed from the store")?;
+                for sql in [REMOVED_SECTIONS, REMOVED_DRAWN] {
+                    sqlx::query(sql)
+                        .bind(&set)
+                        .execute(&mut **conn)
+                        .await
+                        .context("remove the sections of documents removed from the store")?;
+                }
                 sqlx::query(REMOVED_PROBLEMS)
                     .bind(ScopeKind::Markdown.as_str())
                     .bind(&set)
@@ -997,6 +1018,37 @@ impl IndexedMarkdownStore {
             .fetch_all(&self.pool)
             .await
             .context("read kept sections")
+        })
+    }
+
+    /// A document spelled back from what the store keeps of it, piece by
+    /// piece in order, joined exactly the document render drew. `None` for a document the store does not
+    /// hold, or one whose rows cannot spell it.
+    pub fn document(
+        &self,
+        markdown_uuid: &str,
+    ) -> Result<Option<Vec<crate::section::SpelledPiece>>> {
+        blocking(async {
+            let sections: Vec<datalib_schema::sections::SectionRow> = sqlx::query_as(
+                "SELECT markdown_uuid, seq, uuid, text, framed, addressed, labels \
+                 FROM sections WHERE markdown_uuid = ? ORDER BY seq",
+            )
+            .bind(markdown_uuid)
+            .fetch_all(&self.pool)
+            .await
+            .context("read a document's sections")?;
+            let drawn: Vec<datalib_schema::drawn_pieces::DrawnPieceRow> = sqlx::query_as(
+                "SELECT markdown_uuid, seq, md, body_at FROM drawn_pieces \
+                 WHERE markdown_uuid = ? ORDER BY seq",
+            )
+            .bind(markdown_uuid)
+            .fetch_all(&self.pool)
+            .await
+            .context("read a document's drawings")?;
+            if sections.is_empty() && drawn.is_empty() {
+                return Ok(None);
+            }
+            Ok(crate::section::spell(&sections, &drawn))
         })
     }
 
@@ -1730,6 +1782,8 @@ mod tests {
             REMOVED_PROBLEMS,
             REMOVED_SECTIONS,
             DOCUMENT_SECTIONS,
+            REMOVED_DRAWN,
+            DOCUMENT_DRAWN,
         ];
         statements.extend(crate::grid_index::DELETE_DOCUMENTS);
         blocking(crate::grid_index::assert_searched_by_index(
