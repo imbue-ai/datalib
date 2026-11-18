@@ -17,8 +17,7 @@ input shape to be correct against, and there is exactly one parser.
 
 The store is `<data_root>/<group>/ingest/entities.doltlite_db`, with a
 `<table>_bookkeeping` sidecar per table and the blob CAS beside it; the
-schema is `src/ingest/schema_raw.rs`. `claude-ingest --out <dir>` runs
-the `api` method from the command line into `<dir>/entities.doltlite_db`.
+schema is `src/ingest/schema_raw.rs`.
 
 ## Why "export shape" if we hit the live API?
 
@@ -45,15 +44,13 @@ as written: one export comes from one serializer.
 
 ## Auth + Cloudflare
 
-The downloader never handles claude.ai cookies. It shells out to
-[`latchkey curl`](https://github.com/imbue-ai/latchkey), which injects
-the `sessionKey` cookie registered under the `claude-ai` service.
-
-Cloudflare sits in front of `claude.ai`; requests clear its managed
-challenge by going through the bundled curl that impersonates Chrome's
-TLS handshake ([`docs/dev/curl_impersonate.md`](/docs/dev/curl_impersonate.md)
-has the pieces and `LATCHKEY_CURL`). That handshake is never asked for a
-`cf_clearance` cookie, so `sessionKey` is the whole credential. Should
+Requests go out as `latchkey curl` ([`docs/dev/latchkey.md`](/docs/dev/latchkey.md)),
+which adds the `sessionKey` cookie registered under the `claude-ai`
+service. Cloudflare sits in front of `claude.ai`, so they go through the
+bundled Chrome-impersonating curl
+([`docs/dev/curl_impersonate.md`](/docs/dev/curl_impersonate.md)). That
+handshake is never asked for a `cf_clearance` cookie, so `sessionKey` is
+the whole credential. Should
 Cloudflare start demanding one, take `cf_clearance` (HttpOnly) from
 DevTools → Application → Cookies → `claude.ai` and store it via
 `$(pbpaste)`, keeping it out of shell history:
@@ -111,7 +108,7 @@ the step.
 | a configured `conv_uuids` entry every org answers 404 or 403 for | `config:conv_uuids:<value>` | as above |
 | one conversation's detail fetch | `conversations:<id>` on its bookkeeping row | its next successful fetch: a conversation not held at the `updated_at` listed is owed, so the next run asks again |
 | one file | `claude_attachments:<conversation>#<file>`, with the real reason | the file landing; see Attachments |
-| the rate limit (the shared give-up guard tripped), or 25 failures in a row in one loop | `phase:conversations`, `phase:projects` or `phase:attachments`, wherever it stopped | the next run that gets through; the walk stops there, since every later request would be refused too |
+| the rate limit (the shared give-up guard tripped), or 25 failures in a row in one loop | `phase:conversations`, `phase:projects`, `phase:cowork` or `phase:attachments`, wherever it stopped | the next run that gets through; the walk stops there, since every later request would be refused too |
 | a conversation or project in a bulk export with no `uuid` | `phase:export` | the next export ingest without one |
 
 Render shows a `conversations:` or `claude_attachments:` row on the
@@ -377,13 +374,12 @@ between. What is still open:
 
 ## What is owed
 
-There is no checkpoint file and no cursor. Each run lists every org's
-conversations, and a listed conversation is owed when the store does
-not hold it at the `updated_at` listed: the sidecar's `held_version`,
-written in the transaction that stores the row and its attachment
-edges, so a run cut off anywhere leaves nothing reading as done that
-is not (`tests/claude_tests/interrupt.rs` cuts a replayed run at every
-request and requires the store an uninterrupted run leaves). The ones
+Each run lists every org's conversations, and a listed conversation is
+owed when the store does not hold it at the `updated_at` listed: the
+sidecar's `held_version`, written in the transaction that stores the
+row and its attachment edges ([`data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md#what-is-left-to-fetch-listed-minus-held)).
+`tests/claude_tests/interrupt.rs` cuts a replayed run at every request
+and requires the store an uninterrupted run leaves. The ones
 never fetched come first, then the stale, so genuinely new
 conversations are fetched first. The N most recently updated
 conversations of each org (`refetch_newest_conversations`) are fetched
@@ -391,11 +387,8 @@ every run, held or not, as a check against the live copy. A run fetches
 at most `max_conversations_per_run` of all these, and waits
 `seconds_between_requests` between them.
 
-Items whose listing `updated_at` predates the configured `since`
-(`api.since`, a day, an RFC 3339 instant or an offset such as `-30d`
-resolved against the run's start; CLI `--since`, RFC 3339 or
-`YYYY-MM-DD`, assumed UTC; in a config a day is midnight in the
-run's own offset)
+Items whose listing `updated_at` predates `api.since` (the grammar is
+[`config_model.md`](/docs/dev/config_model.md#time-windows-since-and-until))
 are out of scope: they are never detail-fetched and never counted
 among the newest. The filter only gates fetching — already-stored rows are
 untouched — so moving `since` further back later lists the newly in
@@ -486,8 +479,7 @@ rows alone. The export prune has no such limit, and `users` /
 
 ## Named conversations
 
-`api.conv_uuids` (CLI `--conv-uuid`, once per target; bare UUIDs or
-`https://claude.ai/chat/<uuid>` URLs) fetches exactly those
+`api.conv_uuids` (bare UUIDs or `https://claude.ai/chat/<uuid>` URLs) fetches exactly those
 conversations, every run, instead of walking the listing, and prunes
 nothing. Each
 org is tried in turn; a `404`, or a `403` that outlasts the retries,

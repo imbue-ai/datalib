@@ -42,7 +42,7 @@ your_facebook_activity/
   messages/stickers_used/…, messaging_settings.json, …
 ```
 
-Three record shapes recur across the files:
+Four record shapes recur across the files:
 
 - **An array of records** (`your_posts__…_1.json`,
   `likes_and_reactions_1.json`), or an object wrapping one under a
@@ -193,7 +193,8 @@ that the next run which reads the thing clears:
 
 ## What render does
 
-One open of the store per pass, loading the nine tables and diffing
+One open of the store per pass, loading the fourteen tables
+`ALL_TABLES` names (`facebook_render/src/processor.rs`) and diffing
 them against the render cursor, then six feeds:
 
 | feed | table | one document per |
@@ -285,12 +286,14 @@ is read. Beside those:
 | `Text`, `Noted` | info | an edit of a post or comment the export no longer has |
 | `title`, `Noted` | info | a group post whose group the membership file does not name |
 
-Counting them over a real export says what to build next:
+Counting them over a real export says what to build next. They are in
+the render step's own store
+([`step_protocol.md`](/docs/dev/step_protocol.md) §"Problems: what you
+could not do"):
 
 ```sh
-datalib-doltlite -readonly <root>/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
-  "SELECT severity, field, sample, count(*) FROM problems
-   WHERE source_id = '<the source id>' GROUP BY 1,2,3 ORDER BY 4 DESC"
+datalib-doltlite -readonly <root>/<source id>/render_markdown/indexed_markdown.doltlite_db \
+  "SELECT severity, field, sample, count(*) FROM problems GROUP BY 1,2,3 ORDER BY 4 DESC"
 ```
 
 ### Groups

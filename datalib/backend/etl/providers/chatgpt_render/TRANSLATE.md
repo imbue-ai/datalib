@@ -9,12 +9,11 @@ that moved is [`data_architecture_parse_and_render.md` §5](../../../../../docs/
 
 ## One conversation, one document
 
-A conversation's `mapping` is a tree, because an edited prompt or a
-regenerated answer starts a branch. The page reads the branch ending at
-`current_node`, the one the user last saw, and every other version is
-folded in, collapsed, where it forked (chat-common's
-`branches::reading_order`; see its README). A conversation with no
-usable `current_node` reads every message in `create_time` order. A message with no `create_time` takes the previous
+A conversation's `mapping` is a tree of branches. The page reads the
+branch ending at `current_node` and folds the other versions in where
+they forked ([chat-common §"Branches"](../../chat-common/README.md#branches-the-versions-a-conversation-left-fold-in-where-they-forked)).
+A conversation with no usable `current_node` reads every message in
+`create_time` order. A message with no `create_time` takes the previous
 item's time plus 1 ms, and a null `created_at` when there is none.
 
 Each message is one item, its `kind` decided by `(role, content_type)`

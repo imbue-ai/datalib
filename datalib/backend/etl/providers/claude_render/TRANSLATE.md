@@ -14,19 +14,19 @@ An API-fetched payload goes through
 out of the store; an export-ingested one is already that shape. Either
 way one parser reads it (`src/render/parse.rs`).
 
-A conversation's messages are a tree, because an edited prompt or a
-retried answer starts a branch: each names its `parent_message_uuid`.
-The page reads the branch ending at `current_leaf_message_uuid`, the
-one the user last saw, and every other version is folded in, collapsed,
-where it forked (chat-common's `branches::reading_order`; see its
-README). A conversation with no usable leaf (a bulk export may carry
-none) reads every message in `(created_at, message_uuid)` order.
+A conversation's messages are a tree of branches: each names its
+`parent_message_uuid`. The page reads the branch ending at
+`current_leaf_message_uuid` and folds the other versions in where they
+forked ([chat-common §"Branches"](../../chat-common/README.md#branches-the-versions-a-conversation-left-fold-in-where-they-forked)).
+A conversation with no usable leaf (a bulk export may carry none) reads
+every message in `(created_at, message_uuid)` order.
 
 Each message becomes one item whose `kind` comes from its sender: `User
 Input` for `human`, `LLM Response` for `assistant` (authored by the
 conversation's `model`), `Tool Call` for anything else. Its body is the
-message's `text` blocks, so search prose is not polluted by thinking
-or tool traffic; then a numbered **Sources** list of every page those
+`text` blocks after its last `thinking`, `tool_use` or `tool_result`
+block, so search prose is not polluted by thinking or tool traffic;
+then a numbered **Sources** list of every page any of its `text`
 blocks' `citations` name, once each by url; then each `attachments[]`
 entry's extracted text as a quoted block, headed by its file name, or
 "Pasted text" when the name is empty (a paste is an attachment with
@@ -34,7 +34,9 @@ none). Downloadable `files[]` are materialized by chat-common from the
 ingest's `claude_attachments` edges.
 
 Every `thinking`, `tool_use` and `tool_result` block is an item of its
-own, placed just before its message's answer:
+own, and so is each `text` block written before the last of them ("I'll
+read the file first."), with the message's author and kind. They keep
+their block order, just before the message's answer:
 
 | block | `kind` | aside | body |
 |---|---|---|---|

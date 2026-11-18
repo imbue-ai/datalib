@@ -245,6 +245,6 @@ live month ending in NULs. Its clocks behave like a real device's: every
 `Timestamp` is the line's local time read as UTC, *Sickbay* moves a time zone,
 and *Ten Forward* moves one and then takes a clock change hours late, so its
 two stretches overlap in its own count. A test holds it to that shape, so
-change the fixture's dates with it in mind. `airvisual_fixture_e2e` ingests and renders
-it; the central fixture pipeline (`//tests/fixtures:ingested_tng`)
+change the fixture's dates with it in mind. The `fixture_e2e` module of
+`:airvisual_tests` ingests and renders it; the central fixture pipeline (`//tests/fixtures:ingested_tng`)
 carries it as the `ship-air` source, so it reaches the grid golden.

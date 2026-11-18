@@ -140,8 +140,8 @@ The cache holds the **hash as well as the stat**, which is what makes
 it work at all: a cursor that only said "unchanged" would still have to
 go to the scan store for the digest, and on a fresh branch there would
 be nothing there. Holding both means an unchanged tree scans fast into
-*any* branch, or into a database that has never seen it — measured at
-8000 files / 64 MB, 0.63s against the 1.6s a cold scan costs.
+*any* branch, or into a database that has never seen it
+(`STORAGE_NOTES.md` §3 has the measurement).
 
 `stamp_kind = "nostamp"` (some FUSE mounts, some network filesystems)
 drops the inode check and falls back to `(mtime, size, ctime)`. Less safe,
@@ -325,5 +325,5 @@ part of any tree-hash; see §"Stamping policy".
 
 - **The row impls are hand-rolled.** Every `BulkUpsertable` impl in
   `schema_raw.rs` is written out by hand; `#[derive(RawTable)]`
-  ([`etl/macros/README.md`](/datalib/backend/etl/macros/README.md)) now
+  ([`etl/macros/README.md`](/datalib/backend/etl/macros/README.md))
   covers payload-less tables, so they could collapse to it.
