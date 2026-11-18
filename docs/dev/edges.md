@@ -5,8 +5,8 @@ inside documents. The schema is the `EdgeRow` struct in
 `datalib/backend/schema/src/edges.rs` (DDL via
 `#[derive(PortableTable)]`). A renderer returns a document's outgoing
 edges on `RenderedMarkdown::edges`; they are stored in the source's
-render store beside its rows, and the `grid_index` step copies them into
-`<root>/unified_grid_and_search_index/grid_index/db.sqlite` beside `grid_rows` and
+render store beside its rows, and the `unified_grid_and_search_index` step copies them into
+`<root>/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite` beside `grid_rows` and
 `markdowns` (`init_schema` in
 `datalib/backend/etl/render/src/grid_index.rs` creates the table).
 
@@ -19,7 +19,7 @@ The src and dst sides are symmetric: each can be a whole document
 baked into the body as `data-section-uuid`). The primary key
 (`edge_uuid`) is `datalib_id::edge_id` over that tuple, so re-rendering
 is idempotent. A document owns the edges whose `src_markdown_uuid` is
-its own: the `grid_index` step deletes them and inserts the new set
+its own: the `unified_grid_and_search_index` step deletes them and inserts the new set
 each time it loads that document. The id carries the stamp of its
 source end; see [`entity_ids.md` § "The layout"](entity_ids.md#the-layout-the-stamp-first-then-the-hash).
 

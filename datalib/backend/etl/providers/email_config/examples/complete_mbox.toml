@@ -38,16 +38,10 @@ outlink_format = "gmail"        # each message's `↗` link opens it in Gmail; o
 only_render_labels = ["Inbox"]  # render only threads with a message under these labels
                                 # (exact paths, like `only_extract_labels`); default [] is all
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_grid_and_search_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "email"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["email/render_markdown"]
-
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
 [[steps]]
 group = "email"
 function = "embed"
 command = "datalib-step"
-inputs = ["email/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]

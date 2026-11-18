@@ -59,41 +59,30 @@ pub const NETWORK: &str = "network";
 pub const CPU: &str = "cpu";
 /// An index: a step outside any typed group that reads something.
 pub const INDEX: &str = "index";
-/// Whatever writes the grid index's file: `grid_index`, every
-/// `keyword_index` and `qmd_aggregator`. Named for the qmd keyword index it
-/// once guarded. One slot, and resizing it is a mistake: the file takes one
-/// writer at a time, and a writer left to wait inside SQLite behind a long
-/// run of another's transactions times out.
-pub const QMD_KEYWORD: &str = "qmd_keyword";
-/// Whatever embeds into qmd's index. One slot: two embeds race on qmd's
-/// vector table, and share one GPU besides.
-pub const QMD_EMBED: &str = "qmd_embed";
+/// Whatever embeds into the search index. One slot: two embeds race on the
+/// cache's vector table, and share one GPU besides.
+pub const EMBEDDER: &str = "embedder";
 
 /// The locks every config has, whether or not it declares them: the three
-/// budgets, as `--parallelism 4` sizes them, and the two qmd writers'. A
+/// budgets, as `--parallelism 4` sizes them, and the embedder's. A
 /// config's `[[locks]]` entry of the same name resizes one;
 /// `--parallelism N` sets `network` and `cpu` to N, over the config.
 pub fn defaults() -> Vec<LockSpec> {
-    [
-        (NETWORK, 4),
-        (CPU, 4),
-        (INDEX, 2),
-        (QMD_KEYWORD, 1),
-        (QMD_EMBED, 1),
-    ]
-    .into_iter()
-    .map(|(name, slots)| LockSpec {
-        name: name.to_string(),
-        slots,
-    })
-    .collect()
+    [(NETWORK, 4), (CPU, 4), (INDEX, 2), (EMBEDDER, 1)]
+        .into_iter()
+        .map(|(name, slots)| LockSpec {
+            name: name.to_string(),
+            slots,
+        })
+        .collect()
 }
 
-/// The lock a step holds when it names none: `network` for a step that
-/// reads nothing (a download), `cpu` for one in a group with a `type`
-/// (a source's render), `index` for any other step that reads something.
+/// The lock a step holds when it names none: `network` for a source (a
+/// download), `cpu` for one in a group with a `type` (a source's render),
+/// `index` for any other step, a fan-in whose patterns match nothing yet
+/// among them.
 pub fn default_for(spec: &StepSpec) -> &'static str {
-    if spec.inputs.is_empty() {
+    if spec.is_source() {
         NETWORK
     } else if spec.group_type.is_none() {
         INDEX

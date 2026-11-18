@@ -15,8 +15,10 @@ so a line number that drifts is still findable.
 No sync drives qmd now: search keeps its own index
 (`datalib/backend/search_index`), built in process. These facts stay as
 the record behind what still bears qmd's mark — the one-slot
-`qmd_keyword` and `qmd_embed` locks (findings 4, 5 and 12) and the
-shared model cache's path — until those are revisited.
+`embedder` lock, once `qmd_embed` (findings 5 and 12), and the shared
+model cache's path — until those are revisited. Its other lock,
+`qmd_keyword` (finding 4), is gone: only the index step writes the file it
+guarded.
 
 **The CLI and the SDK are not the same program.** `@tobilu/qmd` ships
 both a CLI (`dist/cli/qmd.js`) and a library entry (`dist/index.js`,
@@ -287,7 +289,7 @@ Finding 15 is closed in `qmd_sdk.mjs`'s `pinModels`, before any verb
 runs: `resolveModel` answers only the files its caller names, by the
 name qmd asks for each (`PinnedModel::qmd_uri`), and fails on
 anything else; and `setLlamaDirWritableForTest(false)` turns the
-source build off. The files named are ones `datalib_qmd_models` has
+source build off. The files named are ones `datalib_embedding_models` has
 verified, and the search applet's query embedder asks for them before
 it starts qmd at all (`VerifiedModels`), so a search during the first
 download says the model is not in place yet. Both hooks are qmd

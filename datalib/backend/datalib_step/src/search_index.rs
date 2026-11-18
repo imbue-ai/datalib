@@ -1,31 +1,41 @@
-//! The search index (docs/dev/plans/search_index_from_ram.md): what each
-//! source's `keyword_index` and `embed`, and the aggregator, do with it.
+//! The search index (docs/dev/plans/search_index_from_ram.md): what the
+//! `unified_grid_and_search_index` step's keyword pass and sweep, and
+//! each source's `embed`, do with it.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use datalib_embedder::{Device, Embedder};
 use datalib_etl::progress::Progress;
 use datalib_etl::stop::StopFlag;
 use datalib_etl_render::indexed_markdown::{index_key, IndexedMarkdownStore};
 use datalib_runtime::layout;
 use datalib_schema::markdowns::MarkdownRow;
+use datalib_search_index::chunk::TokenEnds;
 #[cfg(test)]
 use datalib_search_index::text::{self, Piece, INDEX_TEXT_VERSION};
 use datalib_search_index::{Index, IndexDoc, InferenceCache, Reader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+use crate::modal::{self, Reply, Route, SignIn};
 
 /// Documents read and indexed together, one transaction each.
 const DOCUMENT_BATCH: usize = 200;
 /// Chunks embedded between two writes to the cache, and two checks for a stop.
 const CHUNK_BATCH: usize = 32;
+/// Vectors from Modal written to the cache together.
+const MODAL_PUT_BATCH: usize = 256;
 
 /// What a keyword pass or an embed did, for its log line.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Done {
     pub(crate) put: usize,
     pub(crate) removed: usize,
+    /// Chunks the cache had no vector for when the embed began.
+    pub(crate) owed: usize,
     pub(crate) embedded: usize,
     /// Documents whose file and render store disagree, so they are left for
     /// the next pass: the render is mid-write, or the file was touched.
@@ -76,41 +86,6 @@ pub(crate) fn searchable(row: &MarkdownRow) -> bool {
     })
 }
 
-/// This source's searchable `markdowns` rows at its render store's head,
-/// by id. Empty when the store has nothing committed; `None` when an older
-/// build wrote it, which its next render rewrites in this build's shape.
-async fn rendered(root: &Path, group: &str) -> Result<Option<BTreeMap<String, MarkdownRow>>> {
-    let render_root = datalib_etl::layout::render_markdown_root(root, group);
-    let group = group.to_string();
-    tokio::task::spawn_blocking(move || {
-        let Some(store) = IndexedMarkdownStore::open_for_reading(&render_root, None)? else {
-            return Ok(Some(BTreeMap::new()));
-        };
-        let rows = match store.in_this_shape() {
-            Ok(true) => store.markdown_rows().map(Some),
-            Ok(false) => Ok(None),
-            Err(e) => Err(e),
-        };
-        store.close();
-        let Some(rows) = rows? else {
-            tracing::warn!(
-                group = %group,
-                "the render store was written by an older build; the search index takes \
-                 this source once its render has rewritten it"
-            );
-            return Ok(None);
-        };
-        Ok(Some(
-            rows.into_iter()
-                .filter(searchable)
-                .map(|r| (r.markdown_uuid.clone(), r))
-                .collect(),
-        ))
-    })
-    .await
-    .context("render store read panicked")?
-}
-
 /// `IndexedMarkdownStore::index_docs` off the runtime, opening the store at
 /// its head.
 async fn draw_batch(root: &Path, group: &str, uuids: Vec<String>) -> Result<Vec<IndexDoc>> {
@@ -128,36 +103,96 @@ async fn draw_batch(root: &Path, group: &str, uuids: Vec<String>) -> Result<Vec<
     .context("render store read panicked")?
 }
 
-/// `<group>/keyword_index`'s half: this source's documents in the search
-/// index, brought in line with its render store.
+/// One source's documents in the search index, brought in line with its
+/// render store: the `unified_grid_and_search_index` step's keyword pass, once per searched source.
+/// The store is read at one commit for the whole pass, and a source whose
+/// store and text version are where its last finished pass left them is
+/// not read at all.
 pub(crate) async fn update_keywords(
     root: &Path,
     group: &str,
+    ends: TokenEnds<'_>,
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
     retire_separate_file(root)?;
-    let Some(rows) = rendered(root, group).await? else {
-        return Ok(Done::default());
+    let render_root = datalib_etl::layout::render_markdown_root(root, group);
+    let store = tokio::task::spawn_blocking(move || {
+        IndexedMarkdownStore::open_for_reading(&render_root, None)
+    })
+    .await
+    .context("render store open panicked")??
+    .map(Arc::new);
+    let index = Index::open(&layout::grid_index_db(root)).await;
+    let out = match index {
+        Ok(index) => {
+            let out = keyword_pass(&index, group, store.clone(), ends, progress, stop).await;
+            index.close().await;
+            out
+        }
+        Err(e) => Err(e),
     };
-    let index = Index::open(&layout::grid_index_db(root)).await?;
-    let out = update_keywords_in(&index, root, group, &rows, progress, stop).await;
-    index.close().await;
+    if let Some(store) = store.and_then(Arc::into_inner) {
+        tokio::task::spawn_blocking(move || store.close())
+            .await
+            .context("render store close panicked")?;
+    }
     out
 }
 
-async fn update_keywords_in(
+/// Where a pass over `store` reads: its commit, and the text version
+/// every document is drawn with. `None` with no store to read.
+fn read_at(store: Option<&IndexedMarkdownStore>) -> Option<String> {
+    let pin = store?.pin()?;
+    Some(format!(
+        "{}{}",
+        pin.commit(),
+        datalib_search_index::text::key_suffix()
+    ))
+}
+
+async fn keyword_pass(
     index: &Index,
-    root: &Path,
     group: &str,
-    rows: &BTreeMap<String, MarkdownRow>,
+    store: Option<Arc<IndexedMarkdownStore>>,
+    ends: TokenEnds<'_>,
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
     let mut done = Done::default();
+    let reading = read_at(store.as_deref());
+    if reading.is_some() && index.read_at(group).await? == reading {
+        return Ok(done);
+    }
+    let rows = match &store {
+        None => BTreeMap::new(),
+        Some(store) => {
+            let store = Arc::clone(store);
+            let rows = tokio::task::spawn_blocking(move || match store.in_this_shape()? {
+                true => store.markdown_rows().map(Some),
+                false => Ok(None),
+            })
+            .await
+            .context("render store read panicked")??;
+            let Some(rows) = rows else {
+                tracing::warn!(
+                    group = %group,
+                    "the render store was written by an older build; the search index takes \
+                     this source once its render has rewritten it"
+                );
+                return Ok(done);
+            };
+            rows.into_iter()
+                .filter(searchable)
+                .map(|r| (r.markdown_uuid.clone(), r))
+                .collect()
+        }
+    };
+    // Forgotten first, so a pass cut short is never taken for a finished one.
+    index.set_read_at(group, None).await?;
     let indexed = index.indexed(group).await?;
     let mut current: BTreeMap<String, String> = BTreeMap::new();
-    for (uuid, row) in rows {
+    for (uuid, row) in &rows {
         match index_key(row) {
             Some(key) => {
                 current.insert(uuid.clone(), key);
@@ -166,63 +201,99 @@ async fn update_keywords_in(
         }
     }
     let owed = datalib_search_index::owed(&current, &indexed);
-    progress.set_message("search index: keywords");
+    progress.set_message(&format!("search index: keywords for {group}"));
     progress.set_length(Some(owed.put.len() as u64));
+    let mut cut_short = false;
     for batch in owed.put.chunks(DOCUMENT_BATCH) {
         if stop.requested() {
+            cut_short = true;
             break;
         }
-        let docs = draw_batch(root, group, batch.to_vec()).await?;
+        let Some(store) = &store else { break };
+        let store = Arc::clone(store);
+        let (source, uuids) = (group.to_string(), batch.to_vec());
+        let docs = tokio::task::spawn_blocking(move || store.index_docs(&source, &uuids))
+            .await
+            .context("render store read panicked")??;
         done.unsettled += batch.len() - docs.len();
-        index.put(&docs).await?;
+        index.put(&docs, ends).await?;
         done.put += docs.len();
         progress.inc(batch.len() as u64);
     }
     index.remove(&owed.remove).await?;
     done.removed = owed.remove.len();
+    if !cut_short && done.unsettled == 0 {
+        index.set_read_at(group, reading.as_deref()).await?;
+    }
     Ok(done)
 }
 
-/// What the embed pass asks of a model: a prompt's vector, cut to fit its
-/// context, and whether it had to be.
-trait EmbedPrompt: Send + 'static {
-    fn embed_fitted(&mut self, prompt: &str) -> Result<(Vec<f32>, bool)>;
+/// What the embed pass asks of a model: each prompt's vector, cut to fit
+/// its context, and whether it had to be.
+pub(crate) trait EmbedPrompt: Send + 'static {
+    fn embed_fitted_many(&mut self, prompts: &[String]) -> Result<Vec<(Vec<f32>, bool)>>;
 }
 
 impl EmbedPrompt for Embedder {
-    fn embed_fitted(&mut self, prompt: &str) -> Result<(Vec<f32>, bool)> {
-        Embedder::embed_fitted(self, prompt)
+    fn embed_fitted_many(&mut self, prompts: &[String]) -> Result<Vec<(Vec<f32>, bool)>> {
+        Embedder::embed_fitted_many(self, prompts)
+    }
+}
+
+/// Where a run that owes enough chunks sends them
+/// (`embed_on_modal_from_n_chunks`), and how it gets there.
+pub(crate) struct Modal {
+    pub(crate) threshold: u64,
+    pub(crate) sign_in: Box<dyn FnOnce() -> SignIn + Send>,
+    pub(crate) driver: Box<dyn FnOnce() -> Result<modal::Driver> + Send>,
+}
+
+impl Modal {
+    /// This process's sign-in and the driver in its runtime.
+    pub(crate) fn for_this_process(threshold: u64) -> Modal {
+        Modal {
+            threshold,
+            sign_in: Box::new(SignIn::of_this_process),
+            driver: Box::new(modal::Driver::from_runtime),
+        }
     }
 }
 
 /// `<group>/embed`'s half: every chunk of this source the inference cache
-/// has no vector for, embedded and cached.
+/// has no vector for, embedded and cached, here or on Modal.
 pub(crate) async fn embed(
     root: &Path,
     group: &str,
     model_path: &Path,
+    ends: TokenEnds<'_>,
+    on_modal: Option<Modal>,
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
     let model_path = model_path.to_path_buf();
     let open = move || {
         let embedder = Embedder::open(&model_path, Device::Best, 0)?;
+        let batching = embedder.batching();
         tracing::info!(
             device = %embedder.device(),
             cuda = datalib_embedder::cuda_module_report().unwrap_or("not looked for"),
+            prompts_per_call = batching.prompts,
+            tokens_per_call = batching.tokens,
             "loaded the search model"
         );
         Ok(embedder)
     };
-    embed_with(root, group, open, progress, stop).await
+    embed_with(root, group, open, ends, on_modal, progress, stop).await
 }
 
 /// [`embed`] with the model `open` loads, which it calls only when a chunk
-/// is owed.
+/// is owed here.
 async fn embed_with<E: EmbedPrompt>(
     root: &Path,
     group: &str,
     open: impl FnOnce() -> Result<E> + Send + 'static,
+    ends: TokenEnds<'_>,
+    on_modal: Option<Modal>,
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
@@ -240,16 +311,22 @@ async fn embed_with<E: EmbedPrompt>(
     reader.close().await;
     let spans = spans?;
     let cache = InferenceCache::open(&layout::inference_cache_db(root)).await?;
-    let out = embed_into(&cache, root, group, open, spans, progress, stop).await;
+    let out = embed_into(
+        &cache, root, group, open, ends, on_modal, spans, progress, stop,
+    )
+    .await;
     cache.close().await;
     out
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn embed_into<E: EmbedPrompt>(
     cache: &InferenceCache,
     root: &Path,
     group: &str,
     open: impl FnOnce() -> Result<E> + Send + 'static,
+    ends: TokenEnds<'_>,
+    on_modal: Option<Modal>,
     spans: Vec<(String, String)>,
     progress: &Progress,
     stop: &StopFlag,
@@ -268,8 +345,26 @@ async fn embed_into<E: EmbedPrompt>(
             by_doc.entry(doc).or_default().insert(hash);
         }
     }
-    progress.set_message("search index: embedding");
+    done.owed = queued.len();
     progress.set_length(Some(queued.len() as u64));
+    if let Some(on_modal) = on_modal {
+        if modal::route(Some(on_modal.threshold), queued.len()) == Route::Modal {
+            progress.set_message("search index: embedding on Modal");
+            return embed_on_modal(
+                cache,
+                root,
+                group,
+                ends,
+                &by_doc,
+                queued.len(),
+                on_modal,
+                progress,
+                stop,
+            )
+            .await;
+        }
+    }
+    progress.set_message("search index: embedding");
 
     let mut embedder = Some(
         tokio::task::spawn_blocking(open)
@@ -282,7 +377,7 @@ async fn embed_into<E: EmbedPrompt>(
     'docs: for uuids in owing.chunks(DOCUMENT_BATCH) {
         for doc in draw_batch(root, group, uuids.to_vec()).await? {
             let wanted = &by_doc[doc.markdown_uuid.as_str()];
-            let prompts = prompts_for(&doc, wanted);
+            let prompts = prompts_for(&doc, wanted, ends)?;
             let Some(prompts) = prompts else {
                 done.unsettled += 1;
                 continue;
@@ -326,17 +421,200 @@ async fn embed_into<E: EmbedPrompt>(
     result.map(|()| done)
 }
 
+/// What the Modal driver said, besides vectors.
+#[derive(Default)]
+struct FromModal {
+    embedded: usize,
+    truncated: usize,
+    failed: usize,
+    first_error: Option<String>,
+    fatal: Option<(String, bool)>,
+}
+
+/// Every owed chunk sent to Modal through the driver (`crate::modal`):
+/// prompts in on its stdin as the documents are read, vectors out of its
+/// stdout into the cache as each slice returns. A stop interrupts the
+/// driver, which ends its Sandboxes; what was cached stays, and the next
+/// run owes the rest. Nothing about the remote work is kept.
+#[allow(clippy::too_many_arguments)]
+async fn embed_on_modal(
+    cache: &InferenceCache,
+    root: &Path,
+    group: &str,
+    ends: TokenEnds<'_>,
+    by_doc: &BTreeMap<&str, HashSet<&str>>,
+    owed: usize,
+    on_modal: Modal,
+    progress: &Progress,
+    stop: &StopFlag,
+) -> Result<Done> {
+    let threshold = on_modal.threshold;
+    if !(on_modal.sign_in)().signed_in() {
+        bail!(modal::not_signed_in(
+            group,
+            owed,
+            threshold,
+            "this machine is not signed in to Modal"
+        ));
+    }
+    let driver = (on_modal.driver)()?;
+    tracing::info!(
+        owed,
+        threshold,
+        image = %driver.options.image,
+        gpu = %driver.options.gpu,
+        sandboxes = driver.options.sandboxes,
+        "embedding on Modal: {owed} chunks owed, at least `{}` of {threshold}",
+        modal::PARAM
+    );
+    let mut child = driver
+        .command()?
+        .spawn()
+        .with_context(|| format!("start the Modal driver with {}", driver.node.display()))?;
+    let stdin = child.stdin.take().context("the driver's stdin")?;
+    let stdout = child.stdout.take().context("the driver's stdout")?;
+    let stderr = child.stderr.take().context("the driver's stderr")?;
+    let started = Instant::now();
+    let model = datalib_search_index::model_key();
+
+    let feed = async move {
+        let mut stdin = stdin;
+        let mut unsettled = 0;
+        let mut prompt_bytes = 0;
+        let owing: Vec<String> = by_doc.keys().map(|u| u.to_string()).collect();
+        'docs: for uuids in owing.chunks(DOCUMENT_BATCH) {
+            for doc in draw_batch(root, group, uuids.to_vec()).await? {
+                if stop.requested() {
+                    break 'docs;
+                }
+                let Some(prompts) = prompts_for(&doc, &by_doc[doc.markdown_uuid.as_str()], ends)?
+                else {
+                    unsettled += 1;
+                    continue;
+                };
+                for (hash, prompt) in prompts {
+                    prompt_bytes += prompt.len();
+                    stdin
+                        .write_all(modal::request_line(&hash, &prompt).as_bytes())
+                        .await
+                        .context("write to the Modal driver")?;
+                }
+            }
+        }
+        stdin.shutdown().await.ok();
+        Ok::<_, anyhow::Error>((unsettled, prompt_bytes))
+    };
+    let collect = async {
+        let mut from = FromModal::default();
+        let mut lines = BufReader::new(stdout).lines();
+        let mut batch: Vec<(String, Vec<f32>)> = Vec::new();
+        while let Some(line) = lines.next_line().await.context("read the Modal driver")? {
+            match serde_json::from_str::<Reply>(&line)
+                .with_context(|| format!("the Modal driver said {:.200}", line))?
+            {
+                Reply::Vector { hash, vector, cut } => {
+                    from.truncated += usize::from(cut);
+                    batch.push((hash, vector));
+                }
+                Reply::Failed { failed, error } => {
+                    from.failed += failed.len();
+                    from.first_error.get_or_insert(error);
+                }
+                Reply::Fatal { fatal, sign_in } => from.fatal = Some((fatal, sign_in)),
+            }
+            if batch.len() >= MODAL_PUT_BATCH {
+                cache.put(&model, &batch).await?;
+                from.embedded += batch.len();
+                progress.inc(batch.len() as u64);
+                batch.clear();
+            }
+        }
+        cache.put(&model, &batch).await?;
+        from.embedded += batch.len();
+        progress.inc(batch.len() as u64);
+        Ok::<_, anyhow::Error>(from)
+    };
+    let said = async {
+        let mut last = Vec::new();
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            tracing::info!(group, "{line}");
+            last.push(line);
+            if last.len() > 5 {
+                last.remove(0);
+            }
+        }
+        last
+    };
+    let watch = async {
+        while !stop.requested() {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        modal::interrupt(&child);
+        std::future::pending::<()>().await
+    };
+    let (fed, collected, last) = tokio::select! {
+        out = async { tokio::join!(feed, collect, said) } => out,
+        () = watch => unreachable!("the watch never ends"),
+    };
+    let status = child.wait().await.context("wait for the Modal driver")?;
+    let from = collected?;
+    if let Some((fatal, sign_in)) = from.fatal {
+        if sign_in {
+            bail!(modal::not_signed_in(
+                group,
+                owed,
+                threshold,
+                &format!("Modal refused the sign-in ({fatal})")
+            ));
+        }
+        bail!("the Modal driver could not start: {fatal}");
+    }
+    let done = Done {
+        owed,
+        embedded: from.embedded,
+        truncated: from.truncated,
+        embed_time: started.elapsed(),
+        ..Done::default()
+    };
+    if stop.requested() {
+        return Ok(done);
+    }
+    let (unsettled, prompt_bytes) = fed?;
+    if !status.success() {
+        bail!("the Modal driver exited {status}: {}", last.join(" | "));
+    }
+    if from.failed > 0 {
+        bail!(
+            "{} of {owed} chunks could not be embedded on Modal ({}); the {} that were are \
+             cached, and the next run sends the rest again",
+            from.failed,
+            from.first_error.unwrap_or_default(),
+            from.embedded
+        );
+    }
+    Ok(Done {
+        unsettled,
+        prompt_bytes,
+        ..done
+    })
+}
+
 /// `(hash, prompt)` for each chunk of `doc` the cache lacks, or `None`
 /// when the document no longer draws one of them: it changed after the
 /// keyword pass, and the next one re-chunks it.
-fn prompts_for(doc: &IndexDoc, wanted: &HashSet<&str>) -> Option<Vec<(String, String)>> {
+fn prompts_for(
+    doc: &IndexDoc,
+    wanted: &HashSet<&str>,
+    ends: TokenEnds<'_>,
+) -> Result<Option<Vec<(String, String)>>> {
     let prompts: BTreeMap<String, String> = doc
-        .prompted()
+        .prompted(ends)?
         .into_iter()
         .filter(|p| wanted.contains(p.hash.as_str()))
         .map(|p| (p.hash, p.prompt))
         .collect();
-    (prompts.len() == wanted.len()).then(|| prompts.into_iter().collect())
+    Ok((prompts.len() == wanted.len()).then(|| prompts.into_iter().collect()))
 }
 
 /// Each prompt's vector, and how many had to be cut to fit the context.
@@ -348,16 +626,13 @@ async fn embed_batch<E: EmbedPrompt>(
     let prompt_bytes = batch.iter().map(|(_, prompt)| prompt.len()).sum();
     let started = Instant::now();
     let (e, out) = tokio::task::spawn_blocking(move || {
-        let mut cut = 0;
-        let out: Result<Vec<_>> = batch
-            .into_iter()
-            .map(|(hash, prompt)| {
-                let (vector, truncated) = e.embed_fitted(&prompt)?;
-                cut += usize::from(truncated);
-                Ok((hash, vector))
-            })
-            .collect();
-        (e, out.map(|v| (v, cut)))
+        let (hashes, prompts): (Vec<String>, Vec<String>) = batch.into_iter().unzip();
+        let out = e.embed_fitted_many(&prompts).map(|embedded| {
+            let cut = embedded.iter().filter(|(_, truncated)| *truncated).count();
+            let vectors = hashes.into_iter().zip(embedded.into_iter().map(|(v, _)| v));
+            (vectors.collect(), cut)
+        });
+        (e, out)
     })
     .await
     .context("embedding panicked")?;
@@ -371,34 +646,36 @@ async fn embed_batch<E: EmbedPrompt>(
     })
 }
 
-/// The aggregator's half: drop every source it no longer reads, then let
-/// the cache keep only what the index still names. Touches nothing that
-/// does not exist yet.
-pub(crate) async fn sweep(root: &Path, groups: &[String]) -> Result<(usize, u64)> {
+/// The `unified_grid_and_search_index` step's sweep: the cache keeps only
+/// the vectors a chunk of the index still names. Answers how many went.
+/// Touches nothing that does not exist yet.
+pub(crate) async fn sweep(root: &Path) -> Result<u64> {
     retire_separate_file(root)?;
     let index_path = layout::grid_index_db(root);
-    if !index_path.exists() {
-        return Ok((0, 0));
+    let cache_path = layout::inference_cache_db(root);
+    if !index_path.exists() || !cache_path.exists() {
+        return Ok(0);
     }
     let index = Index::open(&index_path).await?;
-    let kept = sweep_index(&index, groups).await;
+    let hashes = index.all_hashes().await;
     index.close().await;
-    let (removed, hashes) = kept?;
-    let cache_path = layout::inference_cache_db(root);
-    if !cache_path.exists() {
-        return Ok((removed, 0));
-    }
+    let hashes = hashes?;
     let cache = InferenceCache::open(&cache_path).await?;
     let gone = cache
         .keep_only(&datalib_search_index::model_key(), &hashes)
         .await;
     cache.close().await;
-    Ok((removed, gone?))
+    gone
 }
 
-async fn sweep_index(index: &Index, groups: &[String]) -> Result<(usize, HashSet<String>)> {
-    let removed = index.keep_sources(groups).await?;
-    Ok((removed, index.all_hashes().await?))
+/// The `unified_grid_and_search_index` step's half after its keyword passes: every document of a
+/// source it does not search goes, whether the source left the config or
+/// was put in `not_searched`. Returns how many went.
+pub(crate) async fn keep_searched(root: &Path, searched: &[String]) -> Result<usize> {
+    let index = Index::open(&layout::grid_index_db(root)).await?;
+    let out = index.keep_sources(searched).await;
+    index.close().await;
+    out
 }
 
 /// Deletes the file the search index was before its tables moved into the
@@ -421,7 +698,7 @@ fn retire_separate_file(root: &Path) -> Result<()> {
 
 /// Where the pinned embedding model is, once provisioned.
 pub(crate) fn model_file(models_dir: &Path) -> PathBuf {
-    models_dir.join(datalib_runtime::qmd::EMBED_MODELS[0].cache_name())
+    models_dir.join(datalib_runtime::models::EMBED_MODELS[0].cache_name())
 }
 
 #[cfg(test)]
@@ -431,6 +708,7 @@ mod tests {
     use datalib_etl_render::section::{join, Section};
     use datalib_schema::grid_rows::GridRow;
     use datalib_schema::providers::Provider;
+    use datalib_search_index::chunk::four_bytes_a_token;
 
     const GROUP: &str = "ten-forward";
 
@@ -532,9 +810,15 @@ mod tests {
     }
 
     async fn update_of(root: &Path, group: &str) -> Done {
-        update_keywords(root, group, &Progress::noop(), &StopFlag::new())
-            .await
-            .unwrap()
+        update_keywords(
+            root,
+            group,
+            &four_bytes_a_token,
+            &Progress::noop(),
+            &StopFlag::new(),
+        )
+        .await
+        .unwrap()
     }
 
     async fn indexed(root: &Path) -> BTreeMap<String, String> {
@@ -588,9 +872,10 @@ mod tests {
     struct Fixed(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 
     impl EmbedPrompt for Fixed {
-        fn embed_fitted(&mut self, _prompt: &str) -> Result<(Vec<f32>, bool)> {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Ok((vec![0.6, 0.8], false))
+        fn embed_fitted_many(&mut self, prompts: &[String]) -> Result<Vec<(Vec<f32>, bool)>> {
+            self.0
+                .fetch_add(prompts.len(), std::sync::atomic::Ordering::SeqCst);
+            Ok(prompts.iter().map(|_| (vec![0.6, 0.8], false)).collect())
         }
     }
 
@@ -652,7 +937,7 @@ mod tests {
         one_doc(root, GROUP, "d-tea", "Tea, Earl Grey");
         let stop = StopFlag::new();
         stop.request();
-        let done = update_keywords(root, GROUP, &Progress::noop(), &stop)
+        let done = update_keywords(root, GROUP, &four_bytes_a_token, &Progress::noop(), &stop)
             .await
             .unwrap();
         assert_eq!(done.put, 0);
@@ -661,7 +946,9 @@ mod tests {
     }
 
     /// The Manage row's bar: its length is the documents owed, and it
-    /// fills to that length; a pass that owes nothing says so.
+    /// fills to that length. A pass over a store that has not moved since
+    /// the last finished one does not read it, and draws no bar; the next
+    /// commit is read again.
     #[tokio::test(flavor = "multi_thread")]
     async fn keyword_progress_counts_the_documents_owed() {
         let td = tempfile::tempdir().unwrap();
@@ -674,7 +961,7 @@ mod tests {
         commit(root, &docs, &[]);
         let bar = Recorder::default();
         let stop = StopFlag::new();
-        update_keywords(root, GROUP, &bar.progress(), &stop)
+        update_keywords(root, GROUP, &four_bytes_a_token, &bar.progress(), &stop)
             .await
             .unwrap();
         let events = bar.take();
@@ -688,10 +975,66 @@ mod tests {
             .sum();
         assert_eq!(filled, 2, "{events:?}");
 
-        update_keywords(root, GROUP, &bar.progress(), &stop)
+        update_keywords(root, GROUP, &four_bytes_a_token, &bar.progress(), &stop)
             .await
             .unwrap();
-        assert_eq!(bar.take(), [Ev::Length(Some(0))]);
+        assert_eq!(bar.take(), [], "the store has not moved");
+
+        one_doc(root, GROUP, "d-quarters", "Captain's quarters");
+        update_keywords(root, GROUP, &four_bytes_a_token, &bar.progress(), &stop)
+            .await
+            .unwrap();
+        assert_eq!(bar.take().first(), Some(&Ev::Length(Some(1))));
+    }
+
+    /// The `unified_grid_and_search_index` step searches every source it reads but those its
+    /// `not_searched` lists: a listed source's documents leave the index,
+    /// and come back once it is off the list, though its store has not
+    /// moved since its last pass.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_grid_step_searches_every_source_it_reads_but_those_not_searched() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        one_doc(root, GROUP, "d-tea", "Tea, Earl Grey");
+        one_doc(root, OTHER, "d-hypo", "a hypospray");
+        let env = crate::source::StepEnv {
+            step: "unified_grid_and_search_index/unified_grid_and_search_index".into(),
+            group: "unified_grid_and_search_index".into(),
+            group_type: None,
+            source_group: None,
+            source_group_type: None,
+            function: crate::function::Function::UnifiedGridAndSearchIndex,
+            inputs: vec![
+                format!("{GROUP}/render_markdown"),
+                format!("{OTHER}/render_markdown"),
+            ],
+        };
+        let run = |not_searched: Vec<String>| {
+            let env = &env;
+            async move {
+                crate::unified_grid_and_search_index::run_with(
+                    root,
+                    env,
+                    &crate::unified_grid_and_search_index::Params { not_searched },
+                    &four_bytes_a_token,
+                    Some("2026-01-01T00:00:00+00:00"),
+                    &crate::events::Emitter::new("test".into()),
+                    &StopFlag::new(),
+                )
+                .await
+                .unwrap()
+            }
+        };
+        run(Vec::new()).await;
+        assert_eq!(indexed(root).await.len(), 1);
+        assert_eq!(indexed_of(root, OTHER).await.len(), 1);
+
+        run(vec![OTHER.to_string()]).await;
+        assert_eq!(indexed(root).await.len(), 1);
+        assert!(indexed_of(root, OTHER).await.is_empty());
+
+        run(Vec::new()).await;
+        assert_eq!(indexed_of(root, OTHER).await.len(), 1);
     }
 
     /// An embed is one source's: it embeds that source's chunks and no
@@ -714,9 +1057,17 @@ mod tests {
                     flag.store(true, std::sync::atomic::Ordering::SeqCst);
                     Ok(Fixed(calls))
                 };
-                let done = embed_with(root, group, open, &Progress::noop(), &StopFlag::new())
-                    .await
-                    .unwrap();
+                let done = embed_with(
+                    root,
+                    group,
+                    open,
+                    &four_bytes_a_token,
+                    None,
+                    &Progress::noop(),
+                    &StopFlag::new(),
+                )
+                .await
+                .unwrap();
                 (done, opened.load(std::sync::atomic::Ordering::SeqCst))
             }
         };
@@ -924,19 +1275,339 @@ mod tests {
             markdown_uuid: "d".into(),
             content_hash: "h".into(),
             title: "T".into(),
-            sections: text::draw(&[Piece {
-                text: "hello".into(),
-                framed: true,
-                ..Piece::default()
-            }]),
+            head: None,
+            sections: text::draw(
+                &[Piece {
+                    text: "hello".into(),
+                    framed: true,
+                    ..Piece::default()
+                }],
+                &text::Facts::default(),
+            ),
         };
-        let drawn = doc.prompted();
+        let drawn = doc.prompted(&four_bytes_a_token).unwrap();
         let good: HashSet<&str> = [drawn[0].hash.as_str()].into();
         assert_eq!(
-            prompts_for(&doc, &good),
+            prompts_for(&doc, &good, &four_bytes_a_token).unwrap(),
             Some(vec![(drawn[0].hash.clone(), drawn[0].prompt.clone())])
         );
         let stale: HashSet<&str> = ["not-a-chunk-of-it"].into();
-        assert_eq!(prompts_for(&doc, &stale), None);
+        assert_eq!(
+            prompts_for(&doc, &stale, &four_bytes_a_token).unwrap(),
+            None
+        );
+    }
+
+    /// The driver over a runtime tree of the test's making: the pinned
+    /// Node, and the stand-in for Modal's SDK where npm's `modal` would be,
+    /// whose Sandboxes run `fake_embed_prompts.mjs` here.
+    struct FakeModal {
+        _dir: tempfile::TempDir,
+        root: PathBuf,
+        log: PathBuf,
+        node: PathBuf,
+        embed_prompts: PathBuf,
+    }
+
+    impl FakeModal {
+        fn new() -> FakeModal {
+            let r = runfiles::Runfiles::create().expect("runfiles");
+            let file = |rel: &str| {
+                let path = r.rlocation(rel).unwrap_or_else(|| panic!("{rel}"));
+                assert!(path.is_file(), "{}", path.display());
+                path
+            };
+            let node = file(&std::env::var("NODE_RLOC").expect("NODE_RLOC"));
+            let sdk = file("_main/datalib/backend/datalib_step/src/modal/testdata/fake_sdk.mjs");
+            let embed_prompts = file(
+                "_main/datalib/backend/datalib_step/src/modal/testdata/fake_embed_prompts.mjs",
+            );
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("runtime");
+            let node_at = root.join(datalib_runtime::node_runtime::NODE_REL);
+            std::fs::create_dir_all(node_at.parent().unwrap()).unwrap();
+            std::os::unix::fs::symlink(&node, &node_at).unwrap();
+            let entry = root
+                .join("modal")
+                .join(datalib_runtime::node_runtime::MODAL_SDK_VERSION)
+                .join(datalib_runtime::node_runtime::MODAL_SDK_ENTRY_REL);
+            std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+            std::fs::copy(&sdk, &entry).unwrap();
+            let log = dir.path().join("sandboxes.jsonl");
+            FakeModal {
+                _dir: dir,
+                root,
+                log,
+                node,
+                embed_prompts,
+            }
+        }
+
+        /// The step's own options, but for the command each Sandbox runs
+        /// and slices small enough that a test makes several.
+        fn modal(&self, threshold: u64, signed_in: bool, env: &[(&str, &str)]) -> Modal {
+            self.modal_with(threshold, signed_in, env, 2)
+        }
+
+        fn modal_with(
+            &self,
+            threshold: u64,
+            signed_in: bool,
+            env: &[(&str, &str)],
+            sandboxes: usize,
+        ) -> Modal {
+            let mut options = modal::Options::for_this_build();
+            options.command = vec![
+                self.node.display().to_string(),
+                self.embed_prompts.display().to_string(),
+            ];
+            options.slice = 2;
+            options.sandboxes = sandboxes;
+            let root = self.root.clone();
+            let mut env: Vec<(String, String)> = env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            env.push(("FAKE_MODAL_LOG".into(), self.log.display().to_string()));
+            Modal {
+                threshold,
+                sign_in: Box::new(move || SignIn {
+                    token_in_env: signed_in,
+                    config_file: None,
+                }),
+                driver: Box::new(move || {
+                    let mut driver = modal::Driver::in_tree(&root, options)?;
+                    driver.env = env;
+                    Ok(driver)
+                }),
+            }
+        }
+
+        /// One line per Sandbox the run made.
+        fn sandboxes(&self) -> Vec<serde_json::Value> {
+            std::fs::read_to_string(&self.log)
+                .unwrap_or_default()
+                .lines()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect()
+        }
+    }
+
+    /// Five documents of one chunk each, keyword-indexed and owing their
+    /// vectors.
+    async fn five_docs(root: &Path) {
+        for i in 0..5 {
+            one_doc(
+                root,
+                GROUP,
+                &format!("d-{i}"),
+                &format!("Log entry number {i}"),
+            );
+        }
+        update(root).await;
+        assert_eq!(unembedded(root, GROUP).await, 5);
+    }
+
+    /// A model that must not be loaded: the run went to Modal.
+    fn never_opened() -> Result<Fixed> {
+        panic!("the local model was loaded for a run that should have gone to Modal")
+    }
+
+    /// Each cached vector, by hash.
+    async fn cached(root: &Path, group: &str) -> BTreeMap<String, Vec<f32>> {
+        let reader = Reader::open(
+            &layout::grid_index_db(root),
+            &layout::inference_cache_db(root),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let hashes: Vec<String> = reader
+            .chunk_hashes(group)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(_, h)| h)
+            .collect();
+        reader.close().await;
+        let cache = InferenceCache::open(&layout::inference_cache_db(root))
+            .await
+            .unwrap();
+        let model = datalib_search_index::model_key();
+        let out = cache.get(&model, &hashes).await.unwrap();
+        cache.close().await;
+        out.into_iter().collect()
+    }
+
+    /// Over the threshold, every owed chunk goes to Modal: one Sandbox per
+    /// slice from this release's `-cuda` image on a T4, and each slice's
+    /// vectors land in the cache under its prompt's hash, as a local embed
+    /// would put them; the local model is never loaded. The next run owes
+    /// nothing and makes no Sandbox.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_run_over_the_threshold_embeds_on_modal() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        five_docs(root).await;
+        let fake = FakeModal::new();
+
+        let done = embed_with(
+            root,
+            GROUP,
+            never_opened,
+            &four_bytes_a_token,
+            Some(fake.modal(5, true, &[])),
+            &Progress::noop(),
+            &StopFlag::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(done.embedded, 5);
+        assert!(done.prompt_bytes > 0);
+        assert_eq!(unembedded(root, GROUP).await, 0);
+        // fake_embed_prompts answers [prompt length, 1].
+        for (hash, vector) in cached(root, GROUP).await {
+            assert_eq!(vector.len(), 2, "{hash}");
+            assert_eq!(vector[1], 1.0, "{hash}");
+        }
+        let made = fake.sandboxes();
+        assert_eq!(made.len(), 3, "5 prompts, 2 a slice: {made:?}");
+        let sent: u64 = made.iter().map(|s| s["lines"].as_u64().unwrap()).sum();
+        assert_eq!(sent, 5);
+        for s in &made {
+            assert_eq!(
+                s["image"],
+                format!(
+                    "ghcr.io/imbue-ai/datalib:{}-cuda",
+                    datalib_runtime::build_id::DATALIB_VERSION
+                )
+            );
+            assert_eq!(s["gpu"], "T4");
+            assert_eq!(s["app"], "datalib-embed");
+        }
+
+        let again = embed_with(
+            root,
+            GROUP,
+            never_opened,
+            &four_bytes_a_token,
+            Some(fake.modal(0, true, &[])),
+            &Progress::noop(),
+            &StopFlag::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(again, Done::default());
+        assert_eq!(fake.sandboxes().len(), 3, "nothing owed, nothing sent");
+    }
+
+    /// Under the threshold the run stays here and makes no Sandbox; with
+    /// no threshold at all nothing ever leaves.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_run_under_the_threshold_embeds_here() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        five_docs(root).await;
+        let fake = FakeModal::new();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let local = calls.clone();
+        let done = embed_with(
+            root,
+            GROUP,
+            move || Ok(Fixed(local)),
+            &four_bytes_a_token,
+            Some(fake.modal(6, true, &[])),
+            &Progress::noop(),
+            &StopFlag::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(done.embedded, 5);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 5);
+        assert!(fake.sandboxes().is_empty());
+    }
+
+    /// Over the threshold and not signed in, the run fails before anything
+    /// leaves, saying how to sign in or raise the threshold; it does not
+    /// quietly embed here. A sign-in Modal itself refuses fails the same way.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_run_over_the_threshold_without_a_sign_in_fails_loudly() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        five_docs(root).await;
+        let fake = FakeModal::new();
+        for (signed_in, env, says) in [
+            (false, &[][..], "not signed in to Modal"),
+            (
+                true,
+                &[("FAKE_MODAL_SIGNED_OUT", "1")][..],
+                "Modal refused the sign-in (Profile is missing credentials",
+            ),
+        ] {
+            let err = embed_with(
+                root,
+                GROUP,
+                never_opened,
+                &four_bytes_a_token,
+                Some(fake.modal(1, signed_in, env)),
+                &Progress::noop(),
+                &StopFlag::new(),
+            )
+            .await
+            .unwrap_err();
+            let err = format!("{err:#}");
+            for want in [says, "modal setup", modal::PARAM, "owes 5 chunks"] {
+                assert!(err.contains(want), "{want}: {err}");
+            }
+            assert_eq!(unembedded(root, GROUP).await, 5);
+        }
+        assert!(fake.sandboxes().is_empty());
+    }
+
+    /// A slice whose Sandbox fails is sent again; one that fails twice is
+    /// reported, the step fails, and the vectors the other slices brought
+    /// back are cached all the same, so the next run owes only the rest.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_slice_that_fails_twice_is_owed_by_the_next_run() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        five_docs(root).await;
+        let fake = FakeModal::new();
+        let done = embed_with(
+            root,
+            GROUP,
+            never_opened,
+            &four_bytes_a_token,
+            Some(fake.modal(0, true, &[("FAKE_MODAL_FAIL", "1")])),
+            &Progress::noop(),
+            &StopFlag::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(done.embedded, 5, "the first failure is sent again");
+        assert_eq!(fake.sandboxes().len(), 4);
+
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        five_docs(root).await;
+        let fake = FakeModal::new();
+        let err = embed_with(
+            root,
+            GROUP,
+            never_opened,
+            &four_bytes_a_token,
+            // One at a time, so the first slice is the one that fails twice.
+            Some(fake.modal_with(0, true, &[("FAKE_MODAL_FAIL", "2")], 1)),
+            &Progress::noop(),
+            &StopFlag::new(),
+        )
+        .await
+        .unwrap_err();
+        let err = format!("{err:#}");
+        assert!(
+            err.contains("2 of 5 chunks could not be embedded on Modal"),
+            "{err}"
+        );
+        assert_eq!(unembedded(root, GROUP).await, 2);
     }
 }

@@ -115,7 +115,16 @@ cuda.redist_json(
     version = "12.9.1",
 )
 cuda.toolkit(name = "cuda")
-use_repo(cuda, "cuda")
+
+# The two components a release redistributes, by the names rules_cuda
+# gives them (which carry the version), for the LICENSE in each archive:
+# `@llama_cpp//:nvidia_licenses`.
+use_repo(
+    cuda,
+    "cuda",
+    "cuda_cublas_linux_x86_64_12_9_1",
+    "cuda_cudart_linux_x86_64_12_9_1",
+)
 
 # cuobjdump, from the same manifest but unknown to rules_cuda, reports
 # what GPU code the module holds (.github/workflows/cuda.yml).
@@ -301,9 +310,9 @@ filegroup(
     urls = ["https://github.com/thadd3us/lightroom_db_diff/archive/d8d1364926a3e0acb08af57951df94b0f8ef361d.tar.gz"],
 )
 
-# qmd's GGUF models are fetched by a build action, not a repository
-# rule: see //third-party/qmd_models. As `http_file` repositories they were
-# downloaded whenever `//...` was analysed, needed or not.
+# The embedding model is fetched by a build action, not a repository
+# rule (//third-party/embedding_models): a repository is downloaded
+# whenever `//...` is analysed, needed or not.
 
 # Rules Python — pinned to a recent stable. uv.lock ingestion via pip.parse.
 bazel_dep(name = "rules_python", version = "2.4.5")
@@ -482,8 +491,8 @@ register_toolchains("@rust_toolchains//:all")
 #
 # `extra_target_compatible_with` stamps the same `//platforms:musl`
 # constraint the rust musl toolchains use onto the cc toolchains, so
-# only an explicit `--config=musl-*` build resolves them; host builds
-# keep the autodetected host cc toolchain.
+# only an explicit `--config=musl-*` build resolves them; every other
+# Linux build gets the LLVM toolchain registered below.
 bazel_dep(name = "toolchains_musl", version = "0.1.29")
 
 toolchains_musl = use_extension("@toolchains_musl//:toolchains_musl.bzl", "toolchains_musl")
@@ -492,20 +501,38 @@ toolchains_musl.config(
 )
 use_repo(toolchains_musl, "musl_toolchains_hub")
 
-# Register the musl cc toolchains from the ROOT module, not just via
-# toolchains_musl's own MODULE.bazel. Root-module registrations take
-# precedence in toolchain resolution; relying on the dependency
-# module's registration let Bazel's auto-configured host cc toolchain
-# (registered by an earlier module in the graph, and constraint-wise a
-# match for any `linux + <cpu>` platform — it carries no linker
-# constraint) win the musl platforms on Linux hosts. Symptom: the
-# release leg linked the (since-removed) wreq-based impersonating curl
-# with `/usr/bin/gcc` against glibc-compiled BoringSSL objects and
-# died on `__memcpy_chk` / `fopen64`. Harmless for every other build: these toolchains require
-# `//platforms:musl`, which only the musl platforms carry. (macOS
-# hosts never hit the ambiguity — a darwin host cc toolchain can't
-# target linux at all.)
+# Register the musl cc toolchains from the ROOT module, and ahead of the
+# LLVM one below. Resolution takes the first registered toolchain that
+# matches, and a toolchain that only asks for `linux + <cpu>` matches
+# the musl platforms too: a glibc toolchain winning them links musl
+# objects against glibc and dies on `__memcpy_chk` / `fopen64`.
+# Harmless for every other build: these toolchains require
+# `//platforms:musl`, which only the musl platforms carry.
 register_toolchains("@musl_toolchains_hub//:all")
+
+# The C/C++ toolchain every Linux build uses, gnu legs and build tools
+# alike: a prebuilt clang with its own glibc headers and stubs, libc++
+# and compiler-rt, all fetched by hash (hermeticbuild/hermetic-llvm).
+# Bazel's autodetected toolchain linked with whatever gcc the machine
+# had, so a proc-macro or build script built on a CI runner and one
+# built in a cloud VM differed, and so did the cache key of everything
+# built on them. Registered after the musl toolchains: these match any
+# Linux platform of their CPU, the musl ones included.
+bazel_dep(name = "llvm", version = "0.8.26")
+
+llvm_toolchain = use_extension("@llvm//extensions:toolchain.bzl", "toolchain")
+llvm_toolchain.exec(arch = "x86_64", os = "linux")
+llvm_toolchain.exec(arch = "aarch64", os = "linux")
+llvm_toolchain.target(arch = "x86_64", os = "linux")
+llvm_toolchain.target(arch = "aarch64", os = "linux")
+use_repo(llvm_toolchain, "llvm_toolchains")
+
+register_toolchains("@llvm_toolchains//:all")
+
+# The machine's own gcc, for `--config=cuda` alone: CUDA 12.9's nvcc
+# refuses a host clang from 20 on, and the LLVM toolchain's is newer.
+cc_configure = use_extension("@rules_cc//cc:extensions.bzl", "cc_configure_extension")
+use_repo(cc_configure, "local_config_cc_toolchains")
 
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 
@@ -680,6 +707,16 @@ npm.npm_translate_lock(
     verify_node_modules_ignored = "//:.bazelignore",
 )
 use_repo(npm, "npm_latchkey")
+
+# Modal's JavaScript SDK, which `datalib-step embed` runs on the bundled
+# Node (third-party/modal/README.md): the same lockfile discipline as
+# latchkey's, and no native addon.
+npm.npm_translate_lock(
+    name = "npm_modal",
+    pnpm_lock = "//third-party/modal/runtime:pnpm-lock.yaml",
+    verify_node_modules_ignored = "//:.bazelignore",
+)
+use_repo(npm, "npm_modal")
 
 # Exposes the lockfile's pinned pnpm so `bazel run -- @pnpm --dir
 # datalib/ui install` works without a host install — useful for

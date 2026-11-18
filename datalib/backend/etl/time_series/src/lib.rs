@@ -22,7 +22,7 @@ use sqlx::SqlitePool;
 /// The problem rows for the records a source's time series could not be
 /// read from, as `(record, why)`: a warning each, since the record's
 /// time series are left out and the rest are not. The step writes them
-/// into its store (`datalib_etl::step_problems`).
+/// into its store (`datalib_step_problems::replace`).
 pub fn unreadable_problems(source_id: &str, unreadable: &[(String, String)]) -> Vec<ProblemRow> {
     unreadable
         .iter()

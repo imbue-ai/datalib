@@ -1,6 +1,6 @@
 # Minimal config in the format `datalib-dag` runs: one source (claude.ai
 # conversations) — a group and its two steps — plus the unified grid and search index
-# group with its two shared index steps. See configs/dag_example.toml
+# group with its shared index step. See configs/dag_example.toml
 # for a walkthrough of the format.
 
 # Where the downloaded data gets written. Top-level keys have to come
@@ -27,30 +27,18 @@ inputs = ["claude_chats/ingest"]
 
 [[steps]]
 group = "claude_chats"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["claude_chats/render_markdown"]
-
-[[steps]]
-group = "claude_chats"
 function = "embed"
 command = "datalib-step"
-inputs = ["claude_chats/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[groups]]
 id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 command = "datalib-step"
-inputs = ["claude_chats/render_markdown"]
-
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-command = "datalib-step"
-inputs = ["claude_chats/keyword_index", "claude_chats/embed"]
+inputs = ["*/render_markdown"]
 
 # The app's own surface: `unified_grid_and_search_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is

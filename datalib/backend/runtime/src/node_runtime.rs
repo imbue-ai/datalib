@@ -22,7 +22,7 @@ use std::sync::OnceLock;
 pub use crate::runtime_manifest::{AssetKind, Manifest, RuntimeAsset, MANIFEST_FILE};
 
 /// Relative path of the Node executable inside `runtime/`.
-const NODE_REL: &str = "node/bin/node";
+pub const NODE_REL: &str = "node/bin/node";
 
 /// Every bundled tool starts with this. Without it, any program running
 /// as the same user can send Node `SIGUSR1`, which opens its debugger on
@@ -48,6 +48,15 @@ pub const LATCHKEY_ENTRY_REL: &str = "node_modules/latchkey/dist/src/cli.js";
 /// what to stage — keep the `LATCHKEY_VERSION` name and string-literal
 /// shape.
 pub const LATCHKEY_VERSION: &str = "3.24.0";
+
+/// The Modal SDK pin: the staged `runtime/modal/<version>/` tree the
+/// `embed` step's Modal driver imports. `scripts/stage_runtime.sh` greps
+/// this constant, and `//tools:version_pins_test` holds it equal to
+/// `third-party/modal/runtime/package.json`.
+pub const MODAL_SDK_VERSION: &str = "0.11.1";
+
+/// The SDK's ES module entry inside `runtime/modal/<version>/`.
+pub const MODAL_SDK_ENTRY_REL: &str = "node_modules/modal/dist/index.js";
 
 /// Left unset, latchkey pings its own usage counter once a day from any run.
 /// `scripts/latchkey-wrapper.sh` sets it too, for a `latchkey` run by hand.

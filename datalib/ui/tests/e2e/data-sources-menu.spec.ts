@@ -15,6 +15,7 @@ import {
   menuEntry,
   pipelineRow,
   MANAGE_WITH_CONFIG,
+  expectSyncEverything,
 } from "./grid-helpers";
 
 /// The menu's entries by their text — separators carry none.
@@ -22,7 +23,7 @@ const menuEntries = (page: Page) => page.locator(".slick-context-menu .slick-men
 
 async function openManager(page: Page) {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
 }
 
 test("a row's menu offers the actions for its kind, grouped, wherever the pointer is", async ({
@@ -70,7 +71,7 @@ test("Show sync dashboard opens the group step by step, each with its row's acti
 
   const section = (id: string) => page.locator(`.sd-section[data-step="${id}"]`);
   await expect(section("unified_grid_and_search_index")).toBeVisible();
-  const grid = section("unified_grid_and_search_index/grid_index");
+  const grid = section("unified_grid_and_search_index/unified_grid_and_search_index");
   await expect(grid.locator(".sd-btn", { hasText: "Show step log" })).toBeVisible();
   await expect(grid.locator(".sd-btn", { hasText: "Sync now" })).toBeVisible();
   await expect(page.locator(".sd-btn", { hasText: "Edit settings…" })).toHaveCount(0);
@@ -94,13 +95,16 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   await expandGroup(page, "slack");
   await expandGroup(page, "unified_grid_and_search_index");
   const render = pipelineRow(page, "slack/render_markdown");
-  const qmd = pipelineRow(page, "unified_grid_and_search_index/qmd_aggregator");
+  const gridIndexRow = pipelineRow(
+    page,
+    "unified_grid_and_search_index/unified_grid_and_search_index",
+  );
   await expect(render).toBeVisible();
   await render.locator('[col-id="status"]').click();
-  await qmd.locator('[col-id="status"]').click({ modifiers: ["ControlOrMeta"] });
+  await gridIndexRow.locator('[col-id="status"]').click({ modifiers: ["ControlOrMeta"] });
   await expect(page.locator(SELECTED_ROWS)).toHaveCount(2);
 
-  await qmd.locator('[col-id="status"]').click({ button: "right" });
+  await gridIndexRow.locator('[col-id="status"]').click({ button: "right" });
   await expect(menuEntries(page).last()).toHaveText("Remove 2 entries from config");
   // The one-row actions are left out, and an entry only some rows take
   // is disabled with a reason naming the row it came from.
@@ -109,7 +113,7 @@ test("right-clicking inside a selection targets all of it; outside it, the one r
   await expect(history).toHaveClass(MENU_DISABLED);
   await expect(history.locator(".slick-menu-content")).toHaveAttribute(
     "title",
-    /QMD aggregator: The QMD index keeps no doltlite store/,
+    /Grid and search index: The grid index is plain SQLite, with no commit history/,
   );
   await page.keyboard.press("Escape");
 

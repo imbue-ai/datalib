@@ -185,29 +185,7 @@ where
 /// The row-struct write contract. Re-exported so the `RawTable` /
 /// `WirePayloadRow` / `CasEdgeRow` derives can name it as
 /// `::datalib_etl::bulk::BulkUpsertable` from any provider crate.
-pub use datalib_table::BulkUpsertable;
-
-pub fn insert_sql<T: BulkUpsertable>() -> String {
-    let mut cols = String::from(T::ID_COLUMN);
-    for c in T::TYPED_COLUMNS {
-        cols.push_str(", ");
-        cols.push_str(c);
-    }
-    let n = 1 + T::TYPED_COLUMNS.len();
-    let mut placeholders = String::with_capacity(n * 3);
-    for i in 0..n {
-        if i > 0 {
-            placeholders.push_str(", ");
-        }
-        placeholders.push('?');
-    }
-    format!(
-        "INSERT INTO {} ({}) VALUES ({})",
-        T::TABLE,
-        cols,
-        placeholders
-    )
-}
+pub use datalib_table::{insert_sql, BulkUpsertable};
 
 pub async fn bulk_upsert_in_tx<T: BulkUpsertable>(
     tx: &mut Transaction<'_, Sqlite>,

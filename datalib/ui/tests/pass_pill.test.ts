@@ -108,7 +108,7 @@ describe("freeSpaceView", () => {
       running: false,
       steps: [
         step("a/ingest", "done", null, { before: 3000, after: 1000 }),
-        step("a/keyword_index", "done"),
+        step("a/embed", "done"),
       ],
     });
     expect(freeSpaceView(over, false)).toMatchObject({ tone: "done", label: "Freed 2.0 kB" });
@@ -143,12 +143,12 @@ describe("the sources of a pass", () => {
       steps: [
         step("enterprise-mail/ingest", "done"),
         step("enterprise-mail/render_markdown", "failed", "no datalib-step"),
-        step("unified_grid_and_search_index/grid_index", "done"),
+        step("unified_grid_and_search_index/unified_grid_and_search_index", "done"),
       ],
       rerender: [
         "ten-forward/render_markdown",
-        "ten-forward/keyword_index",
-        "unified_grid_and_search_index/grid_index",
+        "ten-forward/embed",
+        "unified_grid_and_search_index/unified_grid_and_search_index",
       ],
     };
     expect(sourceRows(upgrade.steps)).toEqual([

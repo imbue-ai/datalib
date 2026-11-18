@@ -388,6 +388,75 @@ These all put something from a protected library outside its folder:
 - The Mac before version 15. The launcher page was drawn with stubbed state
   and only the version comparison has a test.
 
+## What leaves the machine for Modal
+
+An `embed` step whose params set `embed_on_modal_from_n_chunks` sends
+the text of a source's chunks to the person's own [Modal](https://modal.com)
+account to be embedded on rented GPUs
+([`plans/embed_on_modal.md`](plans/embed_on_modal.md)). This is the one
+place datalib hands a person's content to a service other than the one
+it came from, so it gets its own section.
+
+### What goes, and to whom
+
+- **The text of every chunk the run owes, and nothing else**: the
+  prompt for each chunk (its document's title and the chunk's text) and
+  the prompt's hash. No file, path, store or credential of the library.
+  What comes back is one vector per chunk, which goes into the inference
+  cache as a local embed's would. Read from source:
+  `embed_on_modal` in `datalib_step/src/search_index.rs` writes
+  `modal::request_line(hash, prompt)` and nothing else to the driver.
+- **Only for a source that names a threshold, and only on a run that owes
+  at least that many chunks.** Absent, nothing of the source leaves; a
+  run under the threshold embeds here. The parameter is per source
+  because that is where a person decides what may leave: a work Slack,
+  maybe; their health data, never.
+- **To Modal, as the person's processor**, under the person's own
+  account and sign-in (`~/.modal.toml`, or `MODAL_TOKEN_ID` and
+  `MODAL_TOKEN_SECRET`). datalib never reads the token's value, copies
+  it or stores it. The text crosses Modal's TLS connection into a
+  Sandbox that runs our own published `-cuda` image and lives for one
+  slice of the run.
+
+### What guards it
+
+- **Off by default, per source, in the config the person writes.** Nothing
+  in the wizard or the app turns it on; `check-params` refuses a value
+  that is not a whole number, so a typo fails the check rather than
+  sending everything (a misspelled name is refused too).
+- **The driver is handed a named environment**
+  (`datalib_env::Child::Modal`): what every child gets plus Modal's own
+  variables, and no other secret the step holds. A step itself is not
+  handed `MODAL_*` by a sync's runner unless `DATALIB_CHILD_ENV` names
+  them, so a custom step or a package's never sees a Modal token.
+- **The driver prints no prompt.** Its stderr, which goes to the step's
+  log, says which slice ran where and how long it took. Read from
+  source; no test greps the log for prompt text.
+- **Nothing about the remote work is stored**, so a stopped run leaves no
+  record of what went where beyond the vectors and the step's log.
+- **The SDK is pinned** by a lockfile with integrity hashes and no
+  install scripts (`third-party/modal/runtime/`), like latchkey's.
+
+### What is still open
+
+- **What Modal keeps.** Whether Modal retains a Sandbox's stdin, stdout or
+  logs after it ends, and for how long, has not been read from Modal's
+  terms or measured. Until it is, treat anything sent as possibly kept
+  by Modal under the person's account.
+- **A driver killed outright leaves its Sandboxes running** until their
+  15-minute limit; one stopped the ordinary way ends them first. Their
+  input was already sent, so this costs GPU time, not privacy.
+- **The image is pulled by tag**, `ghcr.io/imbue-ai/datalib:<version>-cuda`,
+  not by digest: whoever can push that tag decides what code reads the
+  text. The release attests the image, but the driver does not check the
+  attestation.
+
+### What has not been shown
+
+- None of this has run against Modal: the tests stand a fake in for the
+  SDK whose Sandboxes run locally. The live checks are listed in the
+  plan's _to check_ items.
+
 ## Other threats, briefly
 
 These have guards in the tree and deserve the same treatment as the one
@@ -406,5 +475,6 @@ code before repeating it as current.
 | A secret reaches a log, an error or a child process | any of the above, or an accident | A child process gets a named environment, and an error carries only a safe form of a URL | `datalib/backend/env/src/lib.rs` |
 | A link makes a card run code | a website, or a stranger who sent the link | A card's source is data, opening a card never writes, and nothing a query says runs as code: the DACTAL frame has no `eval` and no `'unsafe-eval'` | [`cards.md`](cards.md) § "Card source", [`dactal.md`](dactal.md) caveat 5 |
 | datalib reports on you without saying so | us, or a dependency | Nothing we ship sends telemetry: every `latchkey` we start, or that a person runs from our launcher, has its usage count off. A check of the real package, not a scan for others | `latchkey_counting_test`, `README.md` §"Read this before you point an agent at it" |
-| A downloaded runtime or model is swapped | whoever controls the host | Every Bazel download, the runtime fetch and the qmd models are pinned by sha256; the docker image fetches nothing at run time (`DATALIB_NO_FETCH`) | [`runtime_fetch.md`](runtime_fetch.md) |
+| A source's text goes to Modal without the person choosing it | us, by a bug | Only an `embed` step with `embed_on_modal_from_n_chunks` set sends anything, and only what it owes | § "What leaves the machine for Modal" above |
+| A downloaded runtime or model is swapped | whoever controls the host | Every Bazel download, the runtime and CUDA module fetches and the embedding models are pinned by sha256; the docker image fetches nothing at run time (`DATALIB_NO_FETCH`) | [`runtime_fetch.md`](runtime_fetch.md) |
 | A person's data lands in this public repo | us, by accident | A rule, not a check | AGENTS.md §"Real data stays out of the repo" |

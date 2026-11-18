@@ -18,29 +18,39 @@ trace appears only when it fails.
 ## Where it lands
 
 Under `bazel test`, the report goes to `TEST_UNDECLARED_OUTPUTS_DIR`,
-which bazel zips:
+which bazel zips, one per part of the suite (`chromium`, `sandboxes`,
+`webkit`; `datalib/ui/BUILD.bazel`):
 
 ```
-bazel-testlogs/datalib/ui/e2e_test/test.outputs/outputs.zip
+bazel-testlogs/datalib/ui/e2e_<part>_test/test.outputs/outputs.zip
 ```
 
 Outside bazel (`pnpm exec playwright test`) it is `datalib/ui/playwright-report/`.
 
 On CI the suite runs in the `bazel test //...` gate
 (`.github/workflows/test.yml`). A red run uploads that zip as the
-`e2e-playwright-report` artifact (kept a week); a green one uploads no
-report. The zip also reaches the BuildBuddy invocation page under
+`e2e-playwright-report` artifact (kept a week), one zip per red part; a green one uploads no
+report. The same step prints each failure's error and page snapshot (the
+report's `data/*.md`) into the job's log, under "e2e `<part>`: each
+failure and the page it left", so a failure can be read without the
+download. The zip also reaches the BuildBuddy invocation page under
 Artifacts (`--zip_undeclared_test_outputs` in `.bazelrc`). Green or red, the job uploads the suite's console log as
-the `e2e-test-log` artifact (two weeks): Playwright's list of every
+the `e2e-test-log` artifact (two weeks), `<part>.log` for each part: Playwright's list of every
 test with its duration, and the specs' `[e2e]` lines. That is where to
 look when the question is what the suite spends its minutes on, not
-what broke — bazel prints one number for the whole target. If the job's
-test step says `(cached) PASSED` for `//datalib/ui:e2e_test`, the suite
-did not run in that job and the log is from the run that did.
+what broke — bazel prints one number per part. If the job's test step
+says `(cached) PASSED` for a part, it did not run in that job and its
+log is from the run that did.
+
+The zip also holds `diagnostics/`: `cpu.tsv`, the machine's busy
+percentage and load once a second for the part's whole run (Linux
+only), and `servers/<name>.log`, what each backend the part started
+wrote. Lay a failure's trace against `cpu.tsv` to tell a page that was
+slow from one that was starved of CPU.
 
 ```bash
 gh run download <run-id> -n e2e-test-log -D /tmp/e2e
-grep -E '^\s+(✓|✘)' /tmp/e2e/test.log | grep -oE '\[[a-z0-9-]+\] › [^›]+ › .*\([0-9.]+m?s\)$'
+grep -hE '^\s+(✓|✘)' /tmp/e2e/*.log | grep -oE '\[[a-z0-9-]+\] › [^›]+ › .*\([0-9.]+m?s\)$'
 ```
 
 ## Opening it
@@ -54,7 +64,7 @@ videos, and then fails on "View Trace".
 So:
 
 ```bash
-unzip -d /tmp/e2e bazel-testlogs/datalib/ui/e2e_test/test.outputs/outputs.zip
+unzip -d /tmp/e2e bazel-testlogs/datalib/ui/e2e_chromium_test/test.outputs/outputs.zip
 npx playwright show-report /tmp/e2e/playwright-report
 ```
 
@@ -67,8 +77,8 @@ npx playwright show-trace /tmp/e2e/playwright-report/data/<hash>.zip
 ## Why the suite has no CI job of its own
 
 Don't give it one. A second bazel invocation shares the gate's remote
-cache only if its configuration matches the gate's exactly (`-c opt --config=release --config=ci`, the qmd mount
-pair), and one that matches is redundant with the gate. The attempt
+cache only if its configuration matches the gate's exactly (`-c opt --config=release --config=ci`),
+and one that matches is redundant with the gate. The attempt
 that did not match rebuilt 2664 actions with no cache hits and took
 999s against the gate's 143s.
 

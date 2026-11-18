@@ -4,7 +4,7 @@
 // endpoint that pages the same way (/problems) — a page at a time
 // (grid/pagedWindow.ts). The server orders the rows: a header click asks
 // it again in the new order. What a row is named by, the document it
-// opens and whether qmd ranks its free text, the server declares
+// opens and whether the search index ranks its free text, the server declares
 // (`RowsSpec`).
 //
 // Over the search itself the card is the Search card, with two views of
@@ -74,7 +74,7 @@ import {
   SEARCH,
   type AccountsMap,
   type ColumnSpec,
-  type QmdDocState,
+  type DocIndexState,
   type RowsResponse,
   type RowsSpec,
   type SearchRow,
@@ -111,7 +111,7 @@ import {
   stepThroughSelection,
   tabLeavesRows,
 } from "@/grid/rowIdioms";
-import { markdownsToAsk, widen } from "@/grid/qmdAsk";
+import { markdownsToAsk, widen } from "@/grid/indexStateAsk";
 import { searchNotices, type SearchEcho } from "@/grid/searchCoverage";
 import { registerSearchCard } from "@/search/searchCards";
 import {
@@ -158,7 +158,7 @@ import { pushToast } from "@/toasts";
 import type { CardCtx } from "./types";
 import { TEXT_ONLY_GRID } from "@/grid/textOnly";
 
-const { fetchAccounts, fetchGroups, fetchQmdState, fetchRows, muteProblems } = useApi();
+const { fetchAccounts, fetchGroups, fetchIndexState, fetchRows, muteProblems } = useApi();
 
 /// A row of whichever table the card pages: a search row's fields where
 /// it is one, and nothing is assumed of any of them.
@@ -289,8 +289,8 @@ const columns = ref<ColumnSpec[]>([]);
 /// How the rows are named, what they open, and what free text matches —
 /// see `RowsSpec`. Set by the first answer, before the grid is built.
 let rowsSpec: RowsSpec | null = null;
-/// qmd ranks this table's free text, and indexes its documents.
-const qmd = () => rowsSpec?.free_text === "qmd";
+/// The search index ranks this table's free text, and indexes its documents.
+const rankedTable = () => rowsSpec?.free_text === "ranked";
 /// The rows can be muted (the problems): each says whether it is.
 let mutable = false;
 // The query whose results are actually painted right now — not `query`
@@ -319,48 +319,48 @@ const showingStale = computed(
 // Why the search cannot read what is typed — often a filter not
 // finished yet (`is:do`). The rows of the last query it could read stay.
 const unfinished = ref<string | null>(null);
-// A free-text search failed in qmd, and came back with no rows.
-const qmdError = ref<string | null>(null);
-// Free text asked of a root no sync has built a qmd index for yet.
-const qmdIndexMissing = ref(false);
+// A free-text search failed to rank, and came back with no rows.
+const searchError = ref<string | null>(null);
+// Free text asked of a root no sync has built a search index for yet.
+const searchIndexMissing = ref(false);
 const accounts = ref<AccountsMap>({});
 
-// --- qmd index state (the Indexed / Embedded columns) ---------------
+// --- search index state (the Indexed / Embedded columns) ------------
 // Answers for the documents behind the rows on screen, gathered as the
 // grid scrolls, and started over when the result set changes.
-const qmdState = ref<Map<string, QmdDocState>>(new Map());
+const indexState = ref<Map<string, DocIndexState>>(new Map());
 // Bumped when the result set changes. An answer for an older one is
 // dropped rather than merged into state describing rows now gone.
-let qmdGeneration = 0;
+let indexStateGeneration = 0;
 // What is out for this generation, so a scroll does not ask twice.
-const qmdAsked = new Set<string>();
-const qmdInflight = new Set<AbortController>();
+const indexStateAsked = new Set<string>();
+const indexStateInflight = new Set<AbortController>();
 
 // True when either index-state column is on screen. Both are hidden by
 // default, and asking about a document costs a file read + a SHA-256
 // server-side, so this is what keeps the feature free for everyone who
 // isn't using it.
-function qmdColumnsVisible(): boolean {
+function indexColumnsVisible(): boolean {
   if (!vueGrid) return false;
   return vueGrid.slickGrid
     .getColumns()
-    .some((c) => (c.id === "qmd_indexed" || c.id === "qmd_embedded") && !c.hidden);
+    .some((c) => (c.id === "search_indexed" || c.id === "search_embedded") && !c.hidden);
 }
 
 // The result set changed: forget every answer and ask afresh. With both
 // columns hidden this still asks, with no documents, for the "N documents
 // searchable" line under the grid, which is the only thing on screen that
 // hints the columns exist.
-function refreshQmdState() {
-  if (!qmd()) return;
-  qmdGeneration++;
-  qmdAsked.clear();
-  for (const ctrl of qmdInflight) ctrl.abort();
-  qmdInflight.clear();
-  qmdState.value = new Map();
+function refreshIndexState() {
+  if (!rankedTable()) return;
+  indexStateGeneration++;
+  indexStateAsked.clear();
+  for (const ctrl of indexStateInflight) ctrl.abort();
+  indexStateInflight.clear();
+  indexState.value = new Map();
   refreshIndexCells();
-  if (qmdColumnsVisible()) askAboutVisibleRows();
-  else void askQmdState([]);
+  if (indexColumnsVisible()) askAboutVisibleRows();
+  else void askIndexState([]);
 }
 
 // Who the Author, Contact and Subject chips are comes from `people`, the one resolver every
@@ -383,56 +383,56 @@ function refreshCells(columnId: string) {
 
 function askAboutVisibleRows() {
   const grid = vueGrid?.slickGrid;
-  if (!grid || !qmdColumnsVisible()) return;
+  if (!grid || !indexColumnsVisible()) return;
   const { top, bottom } = widen(grid.getRenderedRange(), grid.getDataLength());
   const rowsInView = [];
   for (let row = top; row <= bottom; row++) rowsInView.push(rowData(row));
-  const uuids = markdownsToAsk(rowsInView, qmdState.value, qmdAsked);
-  if (uuids.length > 0) void askQmdState(uuids);
+  const uuids = markdownsToAsk(rowsInView, indexState.value, indexStateAsked);
+  if (uuids.length > 0) void askIndexState(uuids);
 }
 
-async function askQmdState(uuids: string[]) {
-  const generation = qmdGeneration;
-  for (const u of uuids) qmdAsked.add(u);
+async function askIndexState(uuids: string[]) {
+  const generation = indexStateGeneration;
+  for (const u of uuids) indexStateAsked.add(u);
   const ctrl = new AbortController();
-  qmdInflight.add(ctrl);
+  indexStateInflight.add(ctrl);
   try {
-    const r = await fetchQmdState(uuids, ctrl.signal);
-    if (generation !== qmdGeneration) return;
-    const merged = new Map(qmdState.value);
+    const r = await fetchIndexState(uuids, ctrl.signal);
+    if (generation !== indexStateGeneration) return;
+    const merged = new Map(indexState.value);
     for (const [uuid, st] of Object.entries(r.docs)) merged.set(uuid, st);
-    qmdState.value = merged;
+    indexState.value = merged;
     refreshIndexCells();
   } catch (e) {
     if ((e as { name?: string }).name === "AbortError") return;
     // Non-fatal: these cells stay "unknown", and the next scroll over
-    // them asks again. fetchQmdState has already raised a toast for
+    // them asks again. fetchIndexState has already raised a toast for
     // anything the user should see.
-    if (generation === qmdGeneration) for (const u of uuids) qmdAsked.delete(u);
+    if (generation === indexStateGeneration) for (const u of uuids) indexStateAsked.delete(u);
   } finally {
-    qmdInflight.delete(ctrl);
+    indexStateInflight.delete(ctrl);
   }
 }
 
 // The grid calls this as it scrolls, many times a second; ask once it
 // settles.
-let qmdScrollTimer: ReturnType<typeof setTimeout> | null = null;
+let indexStateScrollTimer: ReturnType<typeof setTimeout> | null = null;
 function onViewportChanged() {
   loadWanted();
-  if (qmdScrollTimer) clearTimeout(qmdScrollTimer);
-  qmdScrollTimer = setTimeout(() => {
-    qmdScrollTimer = null;
+  if (indexStateScrollTimer) clearTimeout(indexStateScrollTimer);
+  indexStateScrollTimer = setTimeout(() => {
+    indexStateScrollTimer = null;
     askAboutVisibleRows();
   }, 150);
 }
 
-// Repaint the two index columns, which read `qmdState`, a map the grid
+// Repaint the two index columns, which read `indexState`, a map the grid
 // has no way to observe on its own. Only those cells: a row rebuilt
 // under the pointer loses the click aimed at it.
 function refreshIndexCells() {
   const grid = vueGrid?.slickGrid;
   if (!grid) return;
-  const cells = ["qmd_indexed", "qmd_embedded"]
+  const cells = ["search_indexed", "search_embedded"]
     .map((id) => grid.getColumnIndex(id))
     .filter((i): i is number => i != null && i >= 0);
   const { top, bottom } = grid.getRenderedRange();
@@ -450,17 +450,17 @@ function indexFlag(v: boolean | null | undefined): string {
 }
 
 // The index state for a row's document, or undefined before the first
-// /qmd_state response lands.
-function qmdDocState(row: Row | null | undefined): QmdDocState | undefined {
+// /index_state response lands.
+function docIndexState(row: Row | null | undefined): DocIndexState | undefined {
   if (!row?.markdown_uuid) return undefined;
-  return qmdState.value.get(row.markdown_uuid);
+  return indexState.value.get(row.markdown_uuid);
 }
 
-function qmdFlagTooltip(row: Row | null | undefined, which: "indexed" | "embedded"): string {
+function indexFlagTooltip(row: Row | null | undefined, which: "indexed" | "embedded"): string {
   if (!row) return "";
   if (!row.markdown_uuid) return "This row has no rendered document.";
-  const st = qmdState.value.get(row.markdown_uuid);
-  if (!st) return "Checking the qmd index…";
+  const st = indexState.value.get(row.markdown_uuid);
+  if (!st) return "Checking the search index…";
   if (st.note) return st.note;
   const v = which === "indexed" ? st.indexed : st.embedded;
   if (v === null) return "Unknown.";
@@ -476,12 +476,12 @@ function qmdFlagTooltip(row: Row | null | undefined, which: "indexed" | "embedde
 
 function flagFormatter(which: "indexed" | "embedded"): Formatter<Row> {
   return (_r, _c, _v, _col, row) => {
-    const flag = indexFlag(qmdDocState(row)?.[which]);
+    const flag = indexFlag(docIndexState(row)?.[which]);
     const span = document.createElement("span");
-    span.className = "qmd-flag";
+    span.className = "index-flag";
     span.dataset.flag = flag;
     span.textContent = flag === "yes" ? "✅" : flag === "no" ? "❌" : "—";
-    return { html: span, toolTip: qmdFlagTooltip(row, which) };
+    return { html: span, toolTip: indexFlagTooltip(row, which) };
   };
 }
 const selectedRow = ref<Row | null>(null);
@@ -602,13 +602,17 @@ function updateCols() {
 /// menu is not part of.
 function applyColumns(cols: CurrentColumn[], pins = pinsOf(vueGrid?.slickGrid.getColumns() ?? [])) {
   if (!vueGrid) return;
-  const known = new Set(cols.map((c) => c.columnId));
+  const offered = new Set(vueGrid.slickGrid.getColumns().map((c) => String(c.id)));
+  // A layout from a link or a preset may name a column this build does
+  // not have; it is dropped rather than handed to the grid.
+  const named = cols.filter((c) => offered.has(c.columnId));
+  const known = new Set(named.map((c) => c.columnId));
   const rest = vueGrid.slickGrid
     .getColumns()
     .filter((c) => !known.has(String(c.id)))
     .map((c) => ({ columnId: String(c.id), hidden: !!c.hidden, width: c.width }));
   restoring = true;
-  vueGrid.gridStateService.applyColumnLayout([...cols, ...rest], false);
+  vueGrid.gridStateService.applyColumnLayout([...named, ...rest], false);
   for (const [id, side] of pins) vueGrid.slickGrid.setColumnPinning(id, side);
   restoring = false;
   fitRowsToPictures();
@@ -786,8 +790,8 @@ function formatSlugUuid(slug: string, uuid: string): string {
 /// What a cell copies as when its row is copied: by its declared type,
 /// and the card's own two columns as the flag's word.
 function copyCell(column: Column<Row>, row: Row): string {
-  if (column.id === "qmd_indexed") return indexFlag(qmdDocState(row)?.indexed);
-  if (column.id === "qmd_embedded") return indexFlag(qmdDocState(row)?.embedded);
+  if (column.id === "search_indexed") return indexFlag(docIndexState(row)?.indexed);
+  if (column.id === "search_embedded") return indexFlag(docIndexState(row)?.embedded);
   const spec = columns.value.find((c) => c.field === column.id);
   if (spec?.type === "identity") {
     const v = row[spec.field] as Identity | null | undefined;
@@ -961,8 +965,8 @@ async function runSearch(q: string, refresh = false) {
       : null;
   loading.value = true;
   error.value = null;
-  qmdError.value = null;
-  qmdIndexMissing.value = false;
+  searchError.value = null;
+  searchIndexMissing.value = false;
   try {
     // The card shows a failure itself, beside the rows it concerns.
     const r = await fetchRows<Row>(url, q, limit, ctrl.signal, { toast: false }, { sort, through });
@@ -974,8 +978,8 @@ async function runSearch(q: string, refresh = false) {
       columns.value = r.columns;
     }
     win = firstWindow(searchPage(r));
-    // qmd's rank is not an order in time.
-    const ranked = qmd() && !!r.query_echo?.free_text;
+    // The search's rank is not an order in time.
+    const ranked = rankedTable() && !!r.query_echo?.free_text;
     if (!again) {
       shown = { q, sort, tail: sort === null && !ranked };
       nowAt = r.now_at ?? null;
@@ -983,8 +987,9 @@ async function runSearch(q: string, refresh = false) {
     }
     rows.value = win.rows;
     total.value = r.total;
-    qmdError.value = typeof r.query_echo?.qmd_error === "string" ? r.query_echo.qmd_error : null;
-    qmdIndexMissing.value = r.query_echo?.qmd_index_missing === true;
+    searchError.value =
+      typeof r.query_echo?.search_error === "string" ? r.query_echo.search_error : null;
+    searchIndexMissing.value = r.query_echo?.search_index_missing === true;
     shownQuery.value = q;
     searchEcho.value = r.query_echo ?? null;
     if (again) showChanged(true);
@@ -1112,8 +1117,8 @@ async function runGrouped(q: string, refresh: boolean) {
     refresh && was !== null && was.q === q && was.sort === sort && was.by.join() === by.join();
   loading.value = true;
   error.value = null;
-  qmdError.value = null;
-  qmdIndexMissing.value = false;
+  searchError.value = null;
+  searchIndexMissing.value = false;
   try {
     const r = await fetchGroups<Row>(q, by.join(","), ctrl.signal, url);
     unfinished.value = r.refused?.[0] ?? null;
@@ -1149,8 +1154,8 @@ async function runGrouped(q: string, refresh: boolean) {
     nowAt = null;
     hasNow.value = false;
     win = null;
-    qmdError.value = r.qmd_error ?? null;
-    qmdIndexMissing.value = r.qmd_index_missing ?? false;
+    searchError.value = r.search_error ?? null;
+    searchIndexMissing.value = r.search_index_missing ?? false;
     shownQuery.value = q;
     showGroups(again ? "refresh" : "new");
     if (!again) answered(q, "rows", { grouped_by: by, groups: r.groups.length });
@@ -1219,7 +1224,7 @@ function showGroups(kind: "new" | "refresh" | "more") {
     handed = handedOf(items, rowKey);
     asOwnChange(() => (vueGrid!.dataset = items));
     vueGrid.slickGrid.scrollRowIntoView(0);
-    refreshQmdState();
+    refreshIndexState();
   } else {
     const next = patchRows(handed, items, rowKey);
     handed = next.handed;
@@ -1227,7 +1232,7 @@ function showGroups(kind: "new" | "refresh" | "more") {
     if (kind === "refresh") {
       // A group's count can change with none of its rows on screen.
       redrawGroupRows();
-      refreshQmdState();
+      refreshIndexState();
     } else askAboutVisibleRows();
   }
   restoreKept();
@@ -1254,7 +1259,7 @@ watch(query, (q, before) => {
   // debounce leaves the user staring at the old rows with no feedback.
   loading.value = true;
   // Before the table's first answer says so, the search is known to be ranked.
-  const ranked = rowsSpec === null ? isSearch : qmd();
+  const ranked = rowsSpec === null ? isSearch : rankedTable();
   debounceTimer = setTimeout(
     () => {
       if (sameSearch(q, settledQuery.value)) {
@@ -1432,7 +1437,7 @@ function showNew() {
   restoreKept();
   // Fire-and-forget: the badges fill in a beat after the rows land
   // rather than holding the result set hostage to a second request.
-  refreshQmdState();
+  refreshIndexState();
   loadWanted();
 }
 
@@ -1446,7 +1451,7 @@ function showChanged(indexMoved: boolean) {
   applyPatch(next.patch, display(win.rows));
   tryRestoreSelection();
   restoreKept();
-  if (indexMoved) refreshQmdState();
+  if (indexMoved) refreshIndexState();
   else askAboutVisibleRows();
   loadWanted();
 }
@@ -1488,7 +1493,7 @@ onMounted(async () => {
 
 const hint = computed(() => props.placeholder ?? "search…");
 
-// The index moved under us — a `grid_index` pass committed, which under
+// The index moved under us — a `unified_grid_and_search_index` pass committed, which under
 // streaming happens many times per sync, as each source's rows arrive.
 // Ask the shown search again; the rows update in place while the
 // download is still going.
@@ -1610,8 +1615,8 @@ const columnOverrides: Record<string, Partial<Column<Row>>> = {
 void ensureFrontend();
 watch(frontendManifest, () => vueGrid?.slickGrid.invalidate());
 
-/// Two columns rather than one combined "search state": `qmd update`
-/// and `qmd embed` are separate passes, so "in the keyword index" and
+/// Two columns rather than one combined "search state": `keyword_index`
+/// and `embed` are separate passes, so "in the keyword index" and
 /// "reachable by semantic search" are genuinely different facts, and
 /// the gap between them is exactly what a user hunting a missing
 /// result needs to see. The card's own, not the applet's: they are
@@ -1620,20 +1625,20 @@ watch(frontendManifest, () => vueGrid?.slickGrid.invalidate());
 /// type that names its fields only by string.
 const extraColumns: Column[] = [
   {
-    id: "qmd_indexed",
+    id: "search_indexed",
     field: "markdown_uuid",
     name: "Indexed",
     hidden: true,
     toolTip: "Whether this row's rendered document is in the keyword index, at its current content",
     width: 100,
     cssClass: "tg-center",
-    cellAttrs: { "col-id": "qmd_indexed" },
-    headerCellAttrs: { "col-id": "qmd_indexed" },
+    cellAttrs: { "col-id": "search_indexed" },
+    headerCellAttrs: { "col-id": "search_indexed" },
     formatter: flagFormatter("indexed"),
     sortable: false,
   },
   {
-    id: "qmd_embedded",
+    id: "search_embedded",
     field: "markdown_uuid",
     name: "Embedded",
     hidden: true,
@@ -1641,8 +1646,8 @@ const extraColumns: Column[] = [
       "Whether this document has a complete set of embedding vectors — semantic search cannot reach it until it does",
     width: 110,
     cssClass: "tg-center",
-    cellAttrs: { "col-id": "qmd_embedded" },
-    headerCellAttrs: { "col-id": "qmd_embedded" },
+    cellAttrs: { "col-id": "search_embedded" },
+    headerCellAttrs: { "col-id": "search_embedded" },
     formatter: flagFormatter("embedded"),
     sortable: false,
   },
@@ -1709,7 +1714,7 @@ watch(
       specs.filter((s) => startsDescending(s.type)).map((s) => s.field),
     );
     const at = typed.findIndex((c) => c.id === "project") + 1;
-    const own = qmd() ? extraColumns : [];
+    const own = rankedTable() ? extraColumns : [];
     gridColumns.value = [...typed.slice(0, at), ...own, ...typed.slice(at)].map((c) => ({
       ...c,
       sortComparer: serverOrder,
@@ -2703,12 +2708,14 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <p v-if="qmdError" class="qmd-error" role="alert">Free-text search failed: {{ qmdError }}</p>
+      <p v-if="searchError" class="search-error" role="alert">
+        Free-text search failed: {{ searchError }}
+      </p>
       <p v-if="unfinished" class="query-unread" role="status">
         {{ unfinished }}
         <template v-if="showingStale">The rows below are from the previous search.</template>
       </p>
-      <p v-if="qmdIndexMissing" class="qmd-unbuilt" role="status">
+      <p v-if="searchIndexMissing" class="search-unbuilt" role="status">
         Free-text search starts working once the first sync builds the search index.
       </p>
 
@@ -2747,7 +2754,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <p
-        v-if="!loading && rows.length === 0 && !error && !qmdError && !qmdIndexMissing"
+        v-if="!loading && rows.length === 0 && !error && !searchError && !searchIndexMissing"
         class="empty"
       >
         no matches.
@@ -2960,14 +2967,14 @@ onBeforeUnmount(() => {
   visibility: hidden;
 }
 .query-unread,
-.qmd-unbuilt {
+.search-unbuilt {
   padding: 0.4rem 0.6rem;
   border: 1px solid var(--datalib-border);
   border-radius: 4px;
   color: var(--datalib-muted);
   font-size: 0.9rem;
 }
-.qmd-error {
+.search-error {
   padding: 0.4rem 0.6rem;
   border: 1px solid #d18a3a;
   border-radius: 4px;
@@ -3053,7 +3060,7 @@ onBeforeUnmount(() => {
 /* Built by a cellRenderer, so it never receives the scoped-style
    attribute — same reason `.datalib-clamp-2` lives in
    this unscoped block. */
-.qmd-flag {
+.index-flag {
   display: inline-block;
   font-size: 0.95em;
   line-height: 1;

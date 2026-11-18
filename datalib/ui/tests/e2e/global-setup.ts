@@ -1,7 +1,8 @@
-// Two things that have to be true before any worker starts.
+// Two things that have to be true before any worker starts, and a
+// record of how busy the machine was for the rest of the run.
 import { request } from "@playwright/test";
 import { CONFIG_MUTATING } from "./config-mutating";
-import { readFileSync, readdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 
 // Declared locally rather than pulling in @types/node — same reason as
 // api-token.spec.ts: tsconfig's `types` is deliberately narrow.
@@ -75,7 +76,7 @@ async function awaitHealthy(servers: Server[], token: string): Promise<void> {
 /// Spawn each sandbox backend's `unified_grid_and_search_index` applet before its spec
 /// asks for it.
 ///
-/// An empty `q` is answered from SQL and never reaches qmd, which is
+/// An empty `q` is answered from SQL and never reaches the ranked search, which is
 /// what is wanted: no spec on a sandbox root issues a free-text query,
 /// so none of them should pay a model load.
 async function warmApplets(urls: string[], token: string): Promise<void> {
@@ -94,20 +95,94 @@ async function warmApplets(urls: string[], token: string): Promise<void> {
   );
 }
 
-export default async function globalSetup(): Promise<void> {
-  // `decodeURIComponent`, because a file: URL percent-encodes: a checkout
-  // whose path contains a space arrives as `%20` and `readdirSync` fails
-  // with ENOENT. Only bites when cwd is the workspace — i.e. under
-  // `bazel run`, which is how the snapshot-update workflow is invoked, so
-  // `bazel test` never saw it.
-  assertOnlyKnownSpecsWriteTheConfig(decodeURIComponent(new URL(".", import.meta.url).pathname));
-  const token = process.env.DATALIB_TOKEN ?? "";
-  await awaitHealthy(JSON.parse(process.env.DATALIB_TEST_E2E_SERVERS ?? "[]") as Server[], token);
-  const sandboxes = JSON.parse(process.env.DATALIB_TEST_E2E_SANDBOXES ?? "[]") as {
-    url: string;
-  }[];
-  await warmApplets(
-    sandboxes.map((s) => s.url),
-    token,
+/// Ask every backend for the Manage table once, and wait for each answer.
+///
+/// Settled is not ready for the first spec on a root: its first page is
+/// the sources card, which draws from `/api/manage/rows`, and specs give
+/// that card five seconds. On a busy CI runner the first answer after a
+/// launch has taken longer, and the first spec of a sandboxed root failed
+/// on a card still saying "Loading the sources…".
+async function awaitManageRows(servers: Server[], token: string): Promise<void> {
+  await Promise.all(
+    servers.map(async (server) => {
+      const ctx = await request.newContext({
+        baseURL: server.url,
+        extraHTTPHeaders: { authorization: `Bearer ${token}` },
+      });
+      try {
+        const res = await ctx.get("/api/manage/rows", { timeout: 60_000 });
+        if (!res.ok()) {
+          throw new Error(
+            `backend ${server.name} (${server.url}) answered /api/manage/rows with ` +
+              `${res.status()} — its output is in ${server.log}`,
+          );
+        }
+      } finally {
+        await ctx.dispose();
+      }
+    }),
   );
+}
+
+/// How busy the machine is, once a second for the whole run, so a
+/// failure's trace can be laid against it: a page that painted nothing
+/// for seconds while every core was taken was starved, not slow. Linux
+/// only (it reads `/proc`), and only under bazel, where the file lands
+/// in the report zip CI keeps for a red run
+/// (`tests/e2e/README-artifacts.md`).
+function sampleCpu(): () => void {
+  const out = process.env.TEST_UNDECLARED_OUTPUTS_DIR;
+  if (!out || !existsSync("/proc/stat")) return () => {};
+  const dir = `${out}/diagnostics`;
+  mkdirSync(dir, { recursive: true });
+  const file = `${dir}/cpu.tsv`;
+  appendFileSync(file, "utc\tbusy_percent\tloadavg_1m\n");
+  const counters = (): { busy: number; total: number } => {
+    const fields = readFileSync("/proc/stat", "utf8")
+      .split("\n")[0]
+      .trim()
+      .split(/\s+/)
+      .slice(1)
+      .map(Number);
+    const total = fields.reduce((a, b) => a + b, 0);
+    const idle = fields[3] + (fields[4] ?? 0);
+    return { busy: total - idle, total };
+  };
+  let last = counters();
+  const timer = setInterval(() => {
+    const now = counters();
+    const busy = (100 * (now.busy - last.busy)) / Math.max(1, now.total - last.total);
+    last = now;
+    const load = readFileSync("/proc/loadavg", "utf8").split(" ")[0];
+    appendFileSync(file, `${new Date().toISOString()}\t${busy.toFixed(0)}\t${load}\n`);
+  }, 1_000);
+  return () => clearInterval(timer);
+}
+
+export default async function globalSetup(): Promise<() => void> {
+  const stopSampling = sampleCpu();
+  try {
+    // `decodeURIComponent`, because a file: URL percent-encodes: a checkout
+    // whose path contains a space arrives as `%20` and `readdirSync` fails
+    // with ENOENT. Only bites when cwd is the workspace — i.e. under
+    // `bazel run`, which is how the snapshot-update workflow is invoked, so
+    // `bazel test` never saw it.
+    assertOnlyKnownSpecsWriteTheConfig(decodeURIComponent(new URL(".", import.meta.url).pathname));
+    const token = process.env.DATALIB_TOKEN ?? "";
+    const servers = JSON.parse(process.env.DATALIB_TEST_E2E_SERVERS ?? "[]") as Server[];
+    await awaitHealthy(servers, token);
+    await awaitManageRows(servers, token);
+    const sandboxes = JSON.parse(process.env.DATALIB_TEST_E2E_SANDBOXES ?? "[]") as {
+      url: string;
+    }[];
+    await warmApplets(
+      sandboxes.map((s) => s.url),
+      token,
+    );
+  } catch (err) {
+    stopSampling();
+    throw err;
+  }
+  // Playwright runs a function globalSetup returns as one more teardown.
+  return stopSampling;
 }

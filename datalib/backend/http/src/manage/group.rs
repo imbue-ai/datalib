@@ -238,20 +238,26 @@ mod tests {
     #[test]
     fn pipeline_order_keeps_config_order_between_steps_that_do_not_read_each_other() {
         let out = pipeline_order(&[
-            step("u/grid_index", &["a/render_markdown"]),
-            step("u/qmd_aggregator", &["a/render_markdown"]),
+            step("u/unified_grid_and_search_index", &["a/render_markdown"]),
+            step("u/embedding_map", &["a/render_markdown"]),
         ]);
-        assert_eq!(ids(&out), ["u/grid_index", "u/qmd_aggregator"]);
+        assert_eq!(
+            ids(&out),
+            ["u/unified_grid_and_search_index", "u/embedding_map"]
+        );
     }
 
     #[test]
     fn pipeline_order_trails_the_applets_which_are_never_scheduled() {
         let out = pipeline_order(&[
             applet("u"),
-            step("u/qmd_aggregator", &[]),
-            step("u/grid_index", &[]),
+            step("u/embedding_map", &[]),
+            step("u/unified_grid_and_search_index", &[]),
         ]);
-        assert_eq!(ids(&out), ["u/qmd_aggregator", "u/grid_index", "u"]);
+        assert_eq!(
+            ids(&out),
+            ["u/embedding_map", "u/unified_grid_and_search_index", "u"]
+        );
     }
 
     #[test]
@@ -362,12 +368,11 @@ mod tests {
         let got = group_status(&[
             child("s/ingest", "succeeded", Step, None),
             child("s/render_markdown", "succeeded", Step, None),
-            child("s/keyword_index", "succeeded", Step, None),
             child("s/embed", "never_run", Step, None),
         ])
         .unwrap();
         assert_eq!(got.0.key, "succeeded");
-        assert_eq!(got.1, "s/keyword_index");
+        assert_eq!(got.1, "s/render_markdown");
 
         let nothing_yet = group_status(&[
             child("s/ingest", "never_run", Step, None),
@@ -385,13 +390,12 @@ mod tests {
     fn group_status_passes_over_a_child_that_is_turned_off() {
         let got = group_status(&[
             child("s/ingest", "succeeded", Step, None),
-            child("s/render_markdown", "succeeded", Step, None),
-            child("s/keyword_index", "skipped_up_to_date", Step, None),
+            child("s/render_markdown", "skipped_up_to_date", Step, None),
             child("s/embed", "off", Step, None),
         ])
         .unwrap();
         assert_eq!(got.0.key, "skipped_up_to_date");
-        assert_eq!(got.1, "s/keyword_index");
+        assert_eq!(got.1, "s/render_markdown");
 
         let failed = group_status(&[
             child("s/ingest", "failed", Step, None),
@@ -415,12 +419,12 @@ mod tests {
     #[test]
     fn group_status_reads_the_last_step_not_a_trailing_applet() {
         let got = group_status(&[
-            child("u/grid_index", "succeeded", Step, None),
-            child("u/qmd_aggregator", "skipped_up_to_date", Step, None),
+            child("u/unified_grid_and_search_index", "succeeded", Step, None),
+            child("u/embedding_map", "skipped_up_to_date", Step, None),
             child("u", "succeeded", Applet, None),
         ])
         .unwrap();
-        assert_eq!(got.1, "u/qmd_aggregator");
+        assert_eq!(got.1, "u/embedding_map");
     }
 
     #[test]
@@ -535,7 +539,13 @@ mod tests {
 
     #[test]
     fn group_seeds_is_empty_for_a_group_whose_steps_all_read_something() {
-        let got = group_seeds(&[step("u/grid_index", &["a/render_markdown"])], |_| false);
+        let got = group_seeds(
+            &[step(
+                "u/unified_grid_and_search_index",
+                &["a/render_markdown"],
+            )],
+            |_| false,
+        );
         assert!(got.is_empty());
     }
 

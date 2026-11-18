@@ -5,3 +5,13 @@
 # the same allowlist.
 allowBuilds:
   esbuild: true
+
+# Advisories `pnpm audit` (CI's npm-audit job) skips, each until a fixed
+# release exists. GHSA-fc5q-39xc-vjpf: a ReDoS in `picomatch` <= 4.0.7
+# through crafted extglob patterns, with no patched version yet. It
+# comes in through `vue-router` and its build-time route tooling, which
+# compile globs datalib writes, never one a person or a source supplies.
+# Take the entry out, and bump, once a fixed `picomatch` ships.
+auditConfig:
+  ignoreGhsas:
+    - GHSA-fc5q-39xc-vjpf

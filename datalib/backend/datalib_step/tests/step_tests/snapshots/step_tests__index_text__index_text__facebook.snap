@@ -3,8 +3,8 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === facebook 00000000-0000-80d5-a95b-fe11f630248a Two views of the bridge before alpha shift.
---- 0b751fcc-e1c0-8cfc-af76-63e50c166b7e
-Jean-Luc Picard — Sun 16 Mar 2369 09:30
+--- chunk 0
+title: Two views of the bridge before alpha shift. | text: Jean-Luc Picard — Sun 16 Mar 2369 09:30
 
 Two views of the bridge before alpha shift.
 
@@ -16,175 +16,135 @@ The bridge at dawn.
 
 200000000000004.png
 
+
 === facebook 00000000-0000-83eb-9997-79540a4520c8 Guinan's new menu — try the Saurian brandy.
---- 0b754532-3f00-8241-8f48-e40ad1f7d630
-Jean-Luc Picard — Sun 23 Mar 2369 15:46
+--- chunk 0
+title: Guinan's new menu — try the Saurian brandy. | text: Jean-Luc Picard — Sun 23 Mar 2369 15:46
 
 Guinan's new menu — try the Saurian brandy.
 
 https://tenforward.example/menu
 
+
 === facebook 00000000-0000-840e-933b-7e3c0a96ee52 Lwaxana Troi
---- 0b75aad2-7b40-8083-8869-7d21b7e58885
-Lwaxana Troi — Sat 12 Apr 2369 09:23
+--- chunk 0
+title: Lwaxana Troi | text: Lwaxana Troi — Sat 12 Apr 2369 09:23
 
 Jean-Luc! I shall be aboard on Tuesday.
 
+
 === facebook 00000000-0000-84d8-9001-d3718b01d5e1 Facebook user · 1000000003
---- 0b75aaa4-b480-81fc-b675-fc28f005e361
-Facebook user — Sat 12 Apr 2369 08:33
+--- chunk 0
+title: Facebook user · 1000000003 | text: Facebook user — Sat 12 Apr 2369 08:33
 
 Do you still have my copy of Shakespeare?
 
---- 0b75aaa5-9ee0-8907-8a57-9a44cd5ee422
-Jean-Luc Picard — Sat 12 Apr 2369 08:34
+
+--- chunk 1
+title: Facebook user · 1000000003 | text: Jean-Luc Picard — Sat 12 Apr 2369 08:34
 
 Who is this?
 
+
 === facebook 00000000-0000-84e6-9994-8925c3e28d23 Facebook user · 1000000002
---- 0b75aa95-7240-8d37-ad48-3efd4fdd09cd
-Facebook user — Sat 12 Apr 2369 08:16
+--- chunk 0
+title: Facebook user · 1000000002 | text: Facebook user — Sat 12 Apr 2369 08:16
 
 We met at the Academy reunion, Jean-Luc.
 
---- 0b75aa96-5ca0-8bfe-b8e7-f894df0be99b
-Jean-Luc Picard — Sat 12 Apr 2369 08:17
+
+--- chunk 1
+title: Facebook user · 1000000002 | text: Jean-Luc Picard — Sat 12 Apr 2369 08:17
 
 Of course. Boothby's garden, wasn't it?
 
+
 === facebook 00000000-0000-86e3-ad4e-e82f016fe3d4 facebook storage
---- -
----
-title: facebook storage
-source: facebook
-measured_at: 2369-04-15T00:00:00+00:00
----
+--- chunk 0
+title: facebook storage | text: Source: facebook
 
-# [facebook](datalib:group/facebook "facebook") — storage
+# facebook — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest` | <size> | 3 files | <span id="m-00000000-0000-86e3-ad4e-e82f016fe3d4" data-section-uuid="00000000-0000-86e3-ad4e-e82f016fe3d4">`00000000`</span> |
-| Store | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/blobs.sqlite` | <size> |  | <span id="m-00000000-0000-83a9-b667-ce7baf8edeca" data-section-uuid="00000000-0000-83a9-b667-ce7baf8edeca">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/blobs.sqlite#cas_objects` |  | 4 rows | <span id="m-00000000-0000-8d40-ab7b-19ac32970891" data-section-uuid="00000000-0000-8d40-ab7b-19ac32970891">`00000000`</span> |
-| Store | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-816a-bf9a-537544ae1dce" data-section-uuid="00000000-0000-816a-bf9a-537544ae1dce">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#ads_information_story_views_in_past_7_days` |  | 1 row | <span id="m-00000000-0000-8713-8004-72b721cef54e" data-section-uuid="00000000-0000-8713-8004-72b721cef54e">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#connections_friends_your_friends` |  | 3 rows | <span id="m-00000000-0000-84de-9616-1d43a199a9c2" data-section-uuid="00000000-0000-84de-9616-1d43a199a9c2">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#ingested_files` |  | 30 rows | <span id="m-00000000-0000-8286-b7b7-87f33e17e32e" data-section-uuid="00000000-0000-8286-b7b7-87f33e17e32e">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#logged_information_search_your_search_history` |  | 1 row | <span id="m-00000000-0000-8008-b1b6-6c112d28b291" data-section-uuid="00000000-0000-8008-b1b6-6c112d28b291">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#media_blobs` |  | 11 rows | <span id="m-00000000-0000-8bbc-9e79-a277d7105d38" data-section-uuid="00000000-0000-8bbc-9e79-a277d7105d38">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#messenger_messages` |  | 25 rows | <span id="m-00000000-0000-8387-8437-864f902ea529" data-section-uuid="00000000-0000-8387-8437-864f902ea529">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#messenger_threads` |  | 7 rows | <span id="m-00000000-0000-82b1-8548-e3c6a5a366e6" data-section-uuid="00000000-0000-82b1-8548-e3c6a5a366e6">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#personal_information_profile_information_profile_information` |  | 1 row | <span id="m-00000000-0000-8a0b-bbf3-5f23c9d36cff" data-section-uuid="00000000-0000-8a0b-bbf3-5f23c9d36cff">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_comments_and_reactions_comments` |  | 3 rows | <span id="m-00000000-0000-83da-afbe-24cf41409c2f" data-section-uuid="00000000-0000-83da-afbe-24cf41409c2f">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_comments_and_reactions_likes_and_reactions` |  | 4 rows | <span id="m-00000000-0000-8b81-901e-eb88245e78b1" data-section-uuid="00000000-0000-8b81-901e-eb88245e78b1">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_comments_and_reactions_your_comment_edits` |  | 2 rows | <span id="m-00000000-0000-841d-8511-b32c470b5ef6" data-section-uuid="00000000-0000-841d-8511-b32c470b5ef6">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_group_posts_and_comments` |  | 3 rows | <span id="m-00000000-0000-8920-a8b3-51eabaca011d" data-section-uuid="00000000-0000-8920-a8b3-51eabaca011d">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_your_comments_in_groups` |  | 1 row | <span id="m-00000000-0000-837b-a346-46c46ca06072" data-section-uuid="00000000-0000-837b-a346-46c46ca06072">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_your_group_membership_activity` |  | 2 rows | <span id="m-00000000-0000-8a43-ac98-a646d562b9a4" data-section-uuid="00000000-0000-8a43-ac98-a646d562b9a4">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_album` |  | 1 row | <span id="m-00000000-0000-8b8d-b81c-16182e43b448" data-section-uuid="00000000-0000-8b8d-b81c-16182e43b448">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_edits_you_made_to_posts` |  | 5 rows | <span id="m-00000000-0000-8cda-9c3e-ff535a5e9231" data-section-uuid="00000000-0000-8cda-9c3e-ff535a5e9231">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_posts_on_other_pages_and_profiles` |  | 1 row | <span id="m-00000000-0000-89a8-87bc-3b60e695daab" data-section-uuid="00000000-0000-89a8-87bc-3b60e695daab">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_your_posts_check_ins_photos_and_videos` |  | 4 rows | <span id="m-00000000-0000-8d94-a739-dc44db29b642" data-section-uuid="00000000-0000-8d94-a739-dc44db29b642">`00000000`</span> |
-| Table | [ingest](datalib:step/facebook/ingest "facebook/ingest") | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_your_videos` |  | 1 row | <span id="m-00000000-0000-8c94-99a6-a363328076ba" data-section-uuid="00000000-0000-8c94-99a6-a363328076ba">`00000000`</span> |
+| Source Size | ingest | `facebook/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `facebook/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `facebook/ingest/blobs.sqlite#cas_objects` |  | 4 rows | `00000000` |
+| Store | ingest | `facebook/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#ads_information_story_views_in_past_7_days` |  | 1 row | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#connections_friends_your_friends` |  | 3 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#ingested_files` |  | 30 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#logged_information_search_your_search_history` |  | 1 row | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#media_blobs` |  | 11 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#messenger_messages` |  | 25 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#messenger_threads` |  | 7 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#personal_information_profile_information_profile_information` |  | 1 row | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_comments_and_reactions_comments` |  | 3 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_comments_and_reactions_likes_and_reactions` |  | 4 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_comments_and_reactions_your_comment_edits` |  | 2 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_group_posts_and_comments` |  | 3 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_your_comments_in_groups` |  | 1 row | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_your_group_membership_activity` |  | 2 rows | `00000000` |
+
+--- chunk 1
+title: facebook storage | text: Source: facebook
+
+group_posts_and_comments` |  | 3 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_your_comments_in_groups` |  | 1 row | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_groups_your_group_membership_activity` |  | 2 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_album` |  | 1 row | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_edits_you_made_to_posts` |  | 5 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_posts_on_other_pages_and_profiles` |  | 1 row | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_your_posts_check_ins_photos_and_videos` |  | 4 rows | `00000000` |
+| Table | ingest | `facebook/ingest/entities.doltlite_db#your_facebook_activity_posts_your_videos` |  | 1 row | `00000000` |
 
 === facebook 00000000-0000-8709-9b9f-6daf23a20dfe Away team to Risa. Bring the horga'hn, Number One.
---- 0b758cb8-cb00-8cdb-9093-e1e57b64491b
-Jean-Luc Picard — Sun 6 Apr 2369 13:06
+--- chunk 0
+title: Away team to Risa. Bring the horga'hn, Number One. | text: Jean-Luc Picard — Sun 6 Apr 2369 13:06
 
 Away team to Risa. Bring the horga'hn, Number One.
 
 *The last saved version of a post the export no longer has.*
 
+
 === facebook 00000000-0000-8768-85df-b763ceaebe85 Beverly Crusher
---- -
----
-markdown_uuid: 00000000-0000-8768-85df-b763ceaebe85
-source_id: facebook
-provider: facebook
-group: "Friends"
-external_id: "d949e946-6aae-5f6f-a21b-5fca0ada59c8"
-title: "Beverly Crusher"
-created_at: "2364-02-14T18:30:00+00:00"
----
+--- chunk 0
+title: Beverly Crusher | text: Source: Facebook
+Group: Friends
 
---- 00000000-0000-8768-85df-b763ceaebe85
-<div class="contact-head" data-page-title-uuid="00000000-0000-8768-85df-b763ceaebe85">
+# Beverly Crusher
 
-<div class="contact-who">
-
-# [Beverly Crusher](datalib:handle/facebook/name/Beverly%20Crusher "Beverly Crusher (facebook:name/Beverly Crusher)")
-
-</div>
-</div>
-
-<dl class="contact-fields">
-<dt>Friends since</dt><dd>2364-02-14T18:30:00+00:00</dd>
-</dl>
+Friends since: 2364-02-14T18:30:00+00:00
 
 === facebook 00000000-0000-88f7-a8ca-8020c717b96b Class of 2327: reunion at Boothby's garden. Bring your own trowel.
---- 0b753f3c-5e00-8e06-b236-c6aac8793f4d
-Jean-Luc Picard — Sat 22 Mar 2369 12:00
+--- chunk 0
+title: Class of 2327: reunion at Boothby's garden. Bring your own trowel. | text: Jean-Luc Picard — Sat 22 Mar 2369 12:00
 
 Class of 2327: reunion at Boothby's garden. Bring your own trowel.
 
+
 === facebook 00000000-0000-8a3c-a66b-d2616975dbfc William Riker
---- -
----
-markdown_uuid: 00000000-0000-8a3c-a66b-d2616975dbfc
-source_id: facebook
-provider: facebook
-group: "Friends"
-external_id: "630810df-4ebd-567b-a423-2010262f9c38"
-title: "William Riker"
-created_at: "2364-01-06T10:00:00+00:00"
----
+--- chunk 0
+title: William Riker | text: Source: Facebook
+Group: Friends
 
---- 00000000-0000-8a3c-a66b-d2616975dbfc
-<div class="contact-head" data-page-title-uuid="00000000-0000-8a3c-a66b-d2616975dbfc">
+# William Riker
 
-<div class="contact-who">
-
-# [William Riker](datalib:handle/facebook/name/William%20Riker "William Riker (facebook:name/William Riker)")
-
-</div>
-</div>
-
-<dl class="contact-fields">
-<dt>Friends since</dt><dd>2364-01-06T10:00:00+00:00</dd>
-</dl>
+Friends since: 2364-01-06T10:00:00+00:00
 
 === facebook 00000000-0000-8a95-8e69-5d9ef0dcdf0c Data
---- -
----
-markdown_uuid: 00000000-0000-8a95-8e69-5d9ef0dcdf0c
-source_id: facebook
-provider: facebook
-group: "Friends"
-external_id: "6ef7f338-8446-5f9f-835b-1b7e7dd7ab93"
-title: "Data"
-created_at: "2364-01-06T10:05:00+00:00"
----
+--- chunk 0
+title: Data | text: Source: Facebook
+Group: Friends
 
---- 00000000-0000-8a95-8e69-5d9ef0dcdf0c
-<div class="contact-head" data-page-title-uuid="00000000-0000-8a95-8e69-5d9ef0dcdf0c">
+# Data
 
-<div class="contact-who">
-
-# [Data](datalib:handle/facebook/name/Data "Data (facebook:name/Data)")
-
-</div>
-</div>
-
-<dl class="contact-fields">
-<dt>Friends since</dt><dd>2364-01-06T10:05:00+00:00</dd>
-</dl>
+Friends since: 2364-01-06T10:05:00+00:00
 
 === facebook 00000000-0000-8b03-b202-0ecc96ba797c Comments
---- 0b751fe8-5900-8112-b919-93e76f91f97d
-Jean-Luc Picard — Sun 16 Mar 2369 10:00
+--- chunk 0
+title: Comments | text: Jean-Luc Picard — Sun 16 Mar 2369 10:00
 
 And the same view an hour later.
 
@@ -192,58 +152,66 @@ And the same view an hour later.
 
 200000000000004.png
 
---- 0b752b47-b980-89c3-8b3d-65ba6f7c2be4
-Jean-Luc Picard — Tue 18 Mar 2369 15:00
+
+--- chunk 1
+title: Comments | text: Jean-Luc Picard — Tue 18 Mar 2369 15:00
 
 Enjoy the chair, Number One.
 
---- 0b752b47-b980-8eb3-812f-5dde417cd6e2
-Jean-Luc Picard — Tue 18 Mar 2369 15:00
+
+--- chunk 2
+title: Comments | text: Jean-Luc Picard — Tue 18 Mar 2369 15:00
 
 Enjoy the chair, Will.
 
 *Jean-Luc Picard commented on William Riker's post.*
 
---- 0b754237-4e80-8957-a001-e0281126f4a1
-Jean-Luc Picard — Sun 23 Mar 2369 01:53
+
+--- chunk 3
+title: Comments | text: Jean-Luc Picard — Sun 23 Mar 2369 01:53
 
 Proud of you, Ensign.
 
 *Jean-Luc Picard commented on Wesley Crusher's post in Starfleet Academy Alumni.*
 
---- 0b757706-9800-8486-823f-6cdc07d0b538
-Jean-Luc Picard — Wed 2 Apr 2369 08:00
+
+--- chunk 4
+title: Comments | text: Jean-Luc Picard — Wed 2 Apr 2369 08:00
 
 Guinan's synthehol never disappoints. 🍸
 
 *Jean-Luc Picard commented on his own album.*
 
+
 === facebook 00000000-0000-8ba6-97c6-f48500bf8e47 Happy birthday, Number One. The bridge is yours for the day.
---- 0b752b10-cb00-884d-9f04-a02d1c74c917
-Jean-Luc Picard — Tue 18 Mar 2369 14:00
+--- chunk 0
+title: Happy birthday, Number One. The bridge is yours for the day. | text: Jean-Luc Picard — Tue 18 Mar 2369 14:00
 
 Happy birthday, Number One. The bridge is yours for the day.
 
 — feeling grateful
 
-*Edited <time datetime="2369-03-18T15:00:00+00:00" title="2369-03-18 15:00:00 UTC">Tue Mar 18th, 2369 at 15:00</time>*
+*Edited Tue Mar 18th, 2369 at 15:00*
+
 
 === facebook 00000000-0000-8c30-82a5-bc6ccada3dd3 Deanna Troi
---- 0b75aae1-bd80-88f9-9b00-f89fa636a47f
-Deanna Troi — Sat 12 Apr 2369 09:40
+--- chunk 0
+title: Deanna Troi | text: Deanna Troi — Sat 12 Apr 2369 09:40
 
 I sense you could use a holiday.
 
 🔗 Risa — sun, sand and horgahns
 
---- 0b75aae2-a7e0-8549-9308-872ca2740d0b
-Jean-Luc Picard — Sat 12 Apr 2369 09:41
+
+--- chunk 1
+title: Deanna Troi | text: Jean-Luc Picard — Sat 12 Apr 2369 09:41
 
 Counselor, I do not need a holiday.
 
+
 === facebook 00000000-0000-8c76-a058-06e137cfac2d Jean-Luc Picard added a life event from January 5, 2364: Took command of the En…
---- 0b7534ef-a600-8bc7-8639-c45c24950327
-Jean-Luc Picard — Thu 20 Mar 2369 12:00
+--- chunk 0
+title: Jean-Luc Picard added a life event from January 5, 2364: Took command of the En… | text: Jean-Luc Picard — Thu 20 Mar 2369 12:00
 
 **Took command of the Enterprise**
 
@@ -253,105 +221,123 @@ William Riker
 
 📍 Farpoint Station — Deneb IV
 
+
 === facebook 00000000-0000-8c82-8a32-5b80abc87553 William Riker
---- 0b75aa86-33e8-8605-8827-b1fa570515aa
-William Riker — Sat 12 Apr 2369 08:00
+--- chunk 0
+title: William Riker | text: William Riker — Sat 12 Apr 2369 08:00
 
 Captain, the away team is ready.
 
---- 0b75aa87-1e48-8895-aafc-f518fd27d57b
-Jean-Luc Picard — Sat 12 Apr 2369 08:01
+
+--- chunk 1
+title: William Riker | text: Jean-Luc Picard — Sat 12 Apr 2369 08:01
 
 Make it so, Number One.
 And take Data with you.
 
---- 0b75aa88-04c0-89b5-a659-bd6a070a5dd7
-William Riker — Sat 12 Apr 2369 08:02
+
+--- chunk 2
+title: William Riker | text: William Riker — Sat 12 Apr 2369 08:02
 
 300000000000001.png
 
---- 0b75aa88-ef20-8375-82ce-d8d6bbdfda8c
-Jean-Luc Picard — Sat 12 Apr 2369 08:03
+
+--- chunk 3
+title: William Riker | text: Jean-Luc Picard — Sat 12 Apr 2369 08:03
 
 Remember this one?
 
 🔗 The Picard Maneuver — a warp-speed feint
 
---- 0b75aa89-d980-8c93-a669-41b1034c43ae
-William Riker — Sat 12 Apr 2369 08:04
+
+--- chunk 4
+title: William Riker | text: William Riker — Sat 12 Apr 2369 08:04
 
 400000000000001.png
 
---- 0b75aa8a-c3e0-868b-b7fa-fc8375e4ae82
-William Riker — Sat 12 Apr 2369 08:05
+
+--- chunk 5
+title: William Riker | text: William Riker — Sat 12 Apr 2369 08:05
 
 Tea, Earl Grey, hot? ☕
 
---- 0b75aa8b-ae40-823f-8b4d-a2e6cfbc0413
-Jean-Luc Picard — Sat 12 Apr 2369 08:06
+
+--- chunk 6
+title: William Riker | text: Jean-Luc Picard — Sat 12 Apr 2369 08:06
 
 Engage.
 
---- 0b75aa8b-ae40-8971-84a5-a78725f9ba26
-Jean-Luc Picard — Sat 12 Apr 2369 08:06
+
+--- chunk 7
+title: William Riker | text: Jean-Luc Picard — Sat 12 Apr 2369 08:06
 
 Now.
 
---- 0b75aa8c-98a0-8b1c-ab78-f14f6c215968
-William Riker — Sat 12 Apr 2369 08:07
+
+--- chunk 8
+title: William Riker | text: William Riker — Sat 12 Apr 2369 08:07
 
 Unsent
 
---- 0b75aa8d-8300-8a42-b652-9507008d5441
-Jean-Luc Picard — Sat 12 Apr 2369 08:08
+
+--- chunk 9
+title: William Riker | text: Jean-Luc Picard — Sat 12 Apr 2369 08:08
 
 Jean-Luc Picard started a video chat.
 
+
 === facebook 00000000-0000-8cc5-baf1-845294bad07e Reactions
---- 0b752b2c-4240-8fed-b7ba-2a2e745b3546
-Jean-Luc Picard — Tue 18 Mar 2369 14:30
+--- chunk 0
+title: Reactions | text: Jean-Luc Picard — Tue 18 Mar 2369 14:30
 
 👍 Jean-Luc Picard liked William Riker's post.
 
---- 0b75770b-2be0-8c1b-84b2-0eacd016df5e
-Jean-Luc Picard — Wed 2 Apr 2369 08:05
+
+--- chunk 1
+title: Reactions | text: Jean-Luc Picard — Wed 2 Apr 2369 08:05
 
 ❤️ Jean-Luc Picard reacted to Guinan's photo.
 
+
 === facebook 00000000-0000-8d5b-9ccc-4069d9d92992 Ten Forward Nights
---- 0b7574a1-30c0-81cf-8ff9-c592d6aff132
-Jean-Luc Picard — Tue 1 Apr 2369 20:50
+--- chunk 0
+title: Ten Forward Nights | text: Jean-Luc Picard — Tue 1 Apr 2369 20:50
 
 Off-duty evenings on Deck 10.
 
---- 0b7574a1-30c0-83d2-959f-e96abe351f0f
-Jean-Luc Picard — Tue 1 Apr 2369 20:50
+
+--- chunk 1
+title: Ten Forward Nights | text: Jean-Luc Picard — Tue 1 Apr 2369 20:50
 
 200000000000001.png
 
---- 0b7574a3-0580-8e3d-8a8e-02920d2e9d3c
-Jean-Luc Picard — Tue 1 Apr 2369 20:52
+
+--- chunk 2
+title: Ten Forward Nights | text: Jean-Luc Picard — Tue 1 Apr 2369 20:52
 
 Guinan behind the bar.
 
 200000000000002.png
 
+
 === facebook 00000000-0000-8dca-8614-69a1a3d92c28 Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff.
---- 0b751ce7-4e00-813b-a3e3-ef94b9216c94
-Jean-Luc Picard — Sat 15 Mar 2369 20:00
+--- chunk 0
+title: Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff. | text: Jean-Luc Picard — Sat 15 Mar 2369 20:00
 
 Tea, Earl Grey, hot. Evening in Ten Forward with the senior staff
 
---- 0b751ce7-4e00-8aa3-96fc-fc3bb74c0111
-Jean-Luc Picard — Sat 15 Mar 2369 20:00
+
+--- chunk 1
+title: Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff. | text: Jean-Luc Picard — Sat 15 Mar 2369 20:00
 
 Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff.
 
 📍 Ten Forward — Deck 10, USS Enterprise
 
+
 === facebook 00000000-0000-8e1c-8c2e-c30f42ab6c8b Ten Forward Nights
---- 0b7574aa-5880-8869-a53f-321f7cade7cd
-Jean-Luc Picard — Tue 1 Apr 2369 21:00
+--- chunk 0
+title: Ten Forward Nights | text: Jean-Luc Picard — Tue 1 Apr 2369 21:00
 
 Ten Forward Nights
 
@@ -359,52 +345,61 @@ Ten Forward Nights
 
 200000000000002.png
 
+
 === facebook 00000000-0000-8ef0-a5ad-33a9d1bb3c0b Ten Forward
---- 0b75aab3-f6c0-82ed-9976-ca875cebaeb6
-Guinan — Sat 12 Apr 2369 08:50
+--- chunk 0
+title: Ten Forward | text: Guinan — Sat 12 Apr 2369 08:50
 
 The usual table is free tonight.
 
---- 0b75aab4-e120-86ea-a906-2afc51a83d45
-Data — Sat 12 Apr 2369 08:51
+
+--- chunk 1
+title: Ten Forward | text: Data — Sat 12 Apr 2369 08:51
 
 I will attend. I am attempting to understand humour.
 
---- 0b75aab5-cb80-8738-9c8f-a4f7722e14c7
-Worf — Sat 12 Apr 2369 08:52
+
+--- chunk 2
+title: Ten Forward | text: Worf — Sat 12 Apr 2369 08:52
 
 Prune juice. A warrior's drink.
 
---- 0b75aab6-b5e0-8a5e-b221-b2aaaffab5bc
-Facebook user (one of 3 deleted accounts here) — Sat 12 Apr 2369 08:53
+
+--- chunk 3
+title: Ten Forward | text: Facebook user (one of 3 deleted accounts here) — Sat 12 Apr 2369 08:53
 
 Save me a seat by the window.
 
---- 0b75aab7-a040-8974-a9fa-b864d208d924
-Facebook user (one of 3 deleted accounts here) — Sat 12 Apr 2369 08:54
+
+--- chunk 4
+title: Ten Forward | text: Facebook user (one of 3 deleted accounts here) — Sat 12 Apr 2369 08:54
 
 Same for me.
 
---- 0b75aab8-8aa0-8f88-9479-99e31bf0a1f1
-Facebook user (one of 3 deleted accounts here) — Sat 12 Apr 2369 08:55
+
+--- chunk 5
+title: Ten Forward | text: Facebook user (one of 3 deleted accounts here) — Sat 12 Apr 2369 08:55
 
 Is the poker game still on?
 
---- 0b75aab9-7500-8649-a7c9-bcf2a91acd15
-Wesley Crusher — Sat 12 Apr 2369 08:56
+
+--- chunk 6
+title: Ten Forward | text: Wesley Crusher — Sat 12 Apr 2369 08:56
 
 I'm off to Starfleet Academy! Goodbye, everyone.
 
+
 === facebook 00000000-0000-8f0b-a18a-78e2d79f491a Facebook user · 1000000005
---- 0b75aac3-3900-8d45-bdd9-d3ed4ddb44df
-Facebook user — Sat 12 Apr 2369 09:06
+--- chunk 0
+title: Facebook user · 1000000005 | text: Facebook user — Sat 12 Apr 2369 09:06
 
 You have won a shuttlecraft! Claim it here.
 
 🔗 <https://shuttles.example/claim>
 
+
 === facebook 00000000-0000-8f4d-b0a7-cfeb302ede83 Jean-Luc Picard posted in Away Team Photographers.
---- 0b754b28-2000-83b2-9916-69a95bb3c612
-Jean-Luc Picard — Mon 24 Mar 2369 19:33
+--- chunk 0
+title: Jean-Luc Picard posted in Away Team Photographers. | text: Jean-Luc Picard — Mon 24 Mar 2369 19:33
 
 200000000000003.png

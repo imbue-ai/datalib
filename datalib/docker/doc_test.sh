@@ -133,7 +133,7 @@ doc_test_after() {
             ;;
         demo-index)
             docker exec datalib-demo datalib-doltlite -readonly \
-                /opt/datalib/demo/unified_grid_and_search_index/grid_index/db.sqlite \
+                /opt/datalib/demo/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
                 "SELECT count(*) FROM search_documents;" | grep -qv '^0$'
             assert_rows "warp%20core" 1
             ;;
@@ -144,7 +144,7 @@ doc_test_after() {
             # that is how the page's reader will look at their data
             # root. A container that leaves it unreadable (root-owned
             # 0700, the umask leak of #469) fails here and nowhere else.
-            for f in unified_grid_and_search_index/grid_index/db.sqlite; do
+            for f in unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite; do
                 if ! test -s "$DATA_ROOT/$f"; then
                     echo "doc_test: $DATA_ROOT/$f is missing or empty as seen from the host" >&2
                     ls -laR "$DATA_ROOT" >&2 || true

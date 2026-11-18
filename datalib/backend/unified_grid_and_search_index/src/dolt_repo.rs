@@ -13,13 +13,13 @@ use sqlx::Row;
 use crate::children::{
     self, Anchor, Ask, ChildrenFailure, ChildrenPage, Key, NodeFacts, RowFacts, Side, Split, Via,
 };
-use crate::db::{build_where, vals_holding, ChatMeta};
+use crate::db::{build_where, matching_sql, vals_holding, ChatMeta, KEPT_DOCUMENTS, KEPT_ROWS};
 use crate::group::{
     group_sql, like_pattern, values_sql, where_within, GroupCount, Grouping, Within, MAX_GROUPS,
     MAX_VALUES,
 };
+use crate::hits::GridRowRef;
 use crate::problems::{Ids, ProblemsQuery};
-use crate::qmd::GridRowRef;
 use crate::query::ParsedQuery;
 use crate::repo::{
     DocRow, DocumentFile, EdgeRowOut, IndexRepo, Listing, LocatedProblem, MapDocRow,
@@ -37,7 +37,7 @@ use datalib_schema::problems::{ProblemRow, ProblemRowColumn, ScopeKind};
 /// SQLite/doltlite-backed implementation of [`IndexRepo`].
 pub struct DoltRepo {
     /// The grid index: `grid_rows`, `markdowns`, `edges`. The
-    /// `grid_index` step is its only writer, and this handle cannot be
+    /// `unified_grid_and_search_index` step is its only writer, and this handle cannot be
     /// a second one: it is opened `read_only`, and only once the file
     /// exists — a root that has never synced has none, and a reader must
     /// not be the thing that creates it. Filled on first use and kept: a
@@ -166,7 +166,7 @@ async fn add_subject_people<'r>(
     {
         Ok(found) => found,
         Err(e) if is_missing_table(&e, "source_contact_handles") => return Ok(()),
-        // An index an older build wrote, until `grid_index` rebuilds it.
+        // An index an older build wrote, until `unified_grid_and_search_index` rebuilds it.
         Err(e) if matches!(missing_schema(&e), Some(Missing::Column(c)) if c.ends_with("supplied_terms")) => {
             return Ok(())
         }
@@ -413,21 +413,14 @@ impl DoltRepo {
         q: &ParsedQuery,
         columns: &'static str,
     ) -> Result<Vec<sqlx::sqlite::SqliteRow>, RepoError> {
-        let (where_sql, params) = build_where(q);
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
-        let clause = if where_sql.is_empty() {
-            " WHERE markdown_uuid IS NOT NULL".to_string()
-        } else {
-            format!("{where_sql} AND markdown_uuid IS NOT NULL")
-        };
-        // Audited: as `search` — a literal table name, literal columns and
-        // `build_where`'s static column names; every value is bound.
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT {columns} FROM {}{clause}",
-            at.grid_rows
-        )));
+        let (sql, params) = matching_sql(at.grid_rows, columns, q);
+        // Audited: as `search` — a literal table name, literal columns, a
+        // literal index name and `build_where`'s static column names;
+        // every value is bound.
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
         for p in &params {
             query = query.bind(p);
         }
@@ -440,7 +433,7 @@ impl DoltRepo {
 
     /// The directory is created here, the file never is. The server's
     /// watcher arms its watch on this directory when it exists, and a
-    /// grid that learns of the first `grid_index` pass from that watch
+    /// grid that learns of the first `unified_grid_and_search_index` pass from that watch
     /// needs it armed before the pass, not after.
     pub async fn open(root: Arc<PathBuf>) -> Result<Self, sqlx::Error> {
         let db_path = datalib_core::layout::grid_index_db(&root);
@@ -455,13 +448,62 @@ impl DoltRepo {
     }
 
     /// The index at the generation it is at now, or `None` while the
-    /// `grid_index` step has yet to create it — the same answer every read
+    /// `unified_grid_and_search_index` step has yet to create it — the same answer every read
     /// gives for a missing table.
     ///
     /// A transaction on a read-only connection to the WAL file reads one
     /// state of it for every statement, and the writer changes it one
     /// whole source per transaction, so a request never sees a
     /// half-written batch.
+    /// [`pinned`](Self::pinned), with `problems` every step's problems:
+    /// each read where its step keeps it (`datalib_step_problems::of_steps`),
+    /// gathered into a table of this read's own, since no store holds them
+    /// all. A store that could not be read is said in the log.
+    async fn pinned_problems(&self) -> Result<Option<At>, RepoError> {
+        let internal = |what: &str, e: sqlx::Error| RepoError::Internal(format!("{what}: {e}"));
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(None);
+        };
+        let ddl = datalib_schema::problems::DDL[0].1.replacen(
+            "CREATE TABLE IF NOT EXISTS problems",
+            "CREATE TEMP TABLE IF NOT EXISTS step_problems",
+            1,
+        );
+        // Audited: the problems table's own DDL, its name swapped for a
+        // literal; nothing from data.
+        sqlx::query(sqlx::AssertSqlSafe(ddl))
+            .execute(&mut *at.tx)
+            .await
+            .map_err(|e| internal("make this read's problems table", e))?;
+        sqlx::query("DELETE FROM temp.step_problems")
+            .execute(&mut *at.tx)
+            .await
+            .map_err(|e| internal("empty this read's problems table", e))?;
+        let insert = datalib_table::insert_sql::<ProblemRow>().replacen(
+            "INSERT INTO problems ",
+            "INSERT INTO temp.step_problems ",
+            1,
+        );
+        for step in datalib_step_problems::of_steps(&self.root).await {
+            for why in &step.unread {
+                tracing::error!(step = %step.step_id, error = %why, "could not read a step's problems");
+            }
+            for row in &step.rows {
+                // Audited: `insert` is built from `ProblemRow`'s associated
+                // consts, never from row data; every value is bound.
+                datalib_table::BulkUpsertable::bind_into(
+                    row,
+                    sqlx::query(sqlx::AssertSqlSafe(insert.clone())),
+                )
+                .execute(&mut *at.tx)
+                .await
+                .map_err(|e| internal("gather a step's problems", e))?;
+            }
+        }
+        at.problems = "temp.step_problems";
+        Ok(Some(at))
+    }
+
     async fn pinned(&self) -> Result<Option<At>, RepoError> {
         let internal = |what: &str, e: sqlx::Error| RepoError::Internal(format!("{what}: {e}"));
         use std::os::unix::fs::MetadataExt;
@@ -571,7 +613,7 @@ fn grouping<R>(
 }
 
 /// A read of the tree's tables from an index an older build wrote, which
-/// has none of them, until `grid_index` rebuilds it: no children.
+/// has none of them, until `unified_grid_and_search_index` rebuilds it: no children.
 fn older_than_the_tree(e: &sqlx::Error) -> bool {
     match missing_schema(e) {
         Some(Missing::Table(t)) => ["grid_rows", "data_nodes", "filings"].contains(&t.as_str()),
@@ -1178,7 +1220,7 @@ impl IndexRepo for DoltRepo {
         column: ProblemRowColumn,
         typed: &str,
     ) -> Result<Vec<(String, u64)>, RepoError> {
-        let Some(mut at) = self.pinned().await? else {
+        let Some(mut at) = self.pinned_problems().await? else {
             return Ok(Vec::new());
         };
         let (where_sql, params) = where_within(q, &[]);
@@ -1276,7 +1318,7 @@ impl IndexRepo for DoltRepo {
         sort: &[Sort<ProblemRowColumn>],
         within: &[Within<ProblemRowColumn>],
     ) -> Result<Listing, RepoError> {
-        let Some(mut at) = self.pinned().await? else {
+        let Some(mut at) = self.pinned_problems().await? else {
             return Ok(Listing::default());
         };
         let uuids = at
@@ -1289,7 +1331,7 @@ impl IndexRepo for DoltRepo {
     }
 
     async fn problems_by_keys(&self, keys: &[String]) -> Result<Vec<LocatedProblem>, RepoError> {
-        let Some(mut at) = self.pinned().await? else {
+        let Some(mut at) = self.pinned_problems().await? else {
             return Ok(Vec::new());
         };
         let rows = at.problems_in(keys).await?;
@@ -1302,7 +1344,7 @@ impl IndexRepo for DoltRepo {
         ids: &Ids,
         by: &[ProblemRowColumn],
     ) -> Result<Grouping<LocatedProblem>, RepoError> {
-        let Some(mut at) = self.pinned().await? else {
+        let Some(mut at) = self.pinned_problems().await? else {
             return Ok(Grouping::default());
         };
         let (where_sql, params) = ids.narrow(where_within(q, &[]));
@@ -1314,7 +1356,7 @@ impl IndexRepo for DoltRepo {
     }
 
     async fn document_problems(&self, markdown_uuid: &str) -> Result<Vec<ProblemRow>, RepoError> {
-        let Some(mut at) = self.pinned().await? else {
+        let Some(mut at) = self.pinned_problems().await? else {
             return Ok(Vec::new());
         };
         // The document's own rows, and any entity-scoped row about one
@@ -1417,7 +1459,7 @@ impl IndexRepo for DoltRepo {
         &self,
         q: &ParsedQuery,
     ) -> Result<std::collections::HashSet<String>, RepoError> {
-        let rows = self.matching(q, "DISTINCT markdown_uuid").await?;
+        let rows = self.matching(q, KEPT_DOCUMENTS).await?;
         rows.iter()
             .map(|r| r.try_get::<String, _>("markdown_uuid"))
             .collect::<Result<_, _>>()
@@ -1428,7 +1470,7 @@ impl IndexRepo for DoltRepo {
         &self,
         q: &ParsedQuery,
     ) -> Result<Vec<(String, String, bool)>, RepoError> {
-        let rows = self.matching(q, "uuid, markdown_uuid, is_document").await?;
+        let rows = self.matching(q, KEPT_ROWS).await?;
         rows.iter()
             .map(|r| {
                 Ok((
@@ -1678,13 +1720,13 @@ impl IndexRepo for DoltRepo {
         };
         let lacks_layouts = |e: &sqlx::Error| matches!(missing_schema(e), Some(Missing::Column(c)) if c.ends_with("section_layout"));
         let row = match document_file_row(&mut at, markdown_uuid, "section_layout").await {
-            // An index an older build wrote, until `grid_index` rebuilds it:
+            // An index an older build wrote, until `unified_grid_and_search_index` rebuilds it:
             // the document goes out as one piece.
             Err(e) if lacks_layouts(&e) => {
                 tracing::info!(
                     document = %markdown_uuid,
-                    "the grid index has no section layouts yet; \
-                     the document goes out without one until grid_index rebuilds it",
+                    "the grid index has no section layouts yet; the document goes out \
+                     without one until the `unified_grid_and_search_index` step rebuilds it",
                 );
                 document_file_row(&mut at, markdown_uuid, "NULL AS section_layout").await
             }

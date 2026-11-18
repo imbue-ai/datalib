@@ -65,7 +65,7 @@ const PDFS: Source = {
   type: "pdf",
   params: `[steps.params.fswalk]\npath = "${PDF_DIR}"`,
 };
-const INDEX = "unified_grid_and_search_index/grid_index";
+const INDEX = "unified_grid_and_search_index/unified_grid_and_search_index";
 const ingestOf = (s: Source) => `${s.id}/ingest`;
 const renderOf = (s: Source) => `${s.id}/render_markdown`;
 
@@ -308,7 +308,7 @@ name = "Grid and Search Index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 command = "'${STEP_BIN}'"
 inputs = [${sources.map((s) => `"${renderOf(s)}"`).join(", ")}]
 ${sources.map((s) => stanza(s, names[s.id])).join("")}${applets()}`;

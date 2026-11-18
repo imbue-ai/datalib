@@ -1,5 +1,5 @@
 // Rendered markdown as the words a person reads in a one-line cell: the
-// grid's Contents column, and a qmd hit's snippet. Markup goes — tags,
+// grid's Contents column, and a search hit's snippet. Markup goes — tags,
 // images, link targets, heading and quote marks, emphasis, code fences,
 // entities — and every run of whitespace, non-breaking included, is one
 // space.
@@ -332,7 +332,7 @@ fn escaped_brackets_restored(line: &str) -> String {
         out.push_str(&rest[..at]);
         let after = &rest[at + ESCAPED_LT.len_utf8()..];
         let close = after.find(ESCAPED_GT);
-        // One the line cut off (qmd's snippets end mid-word) goes too.
+        // One the line cut off (a snippet can end mid-word) goes too.
         let tag = close.map_or(after, |end| &after[..end]);
         let breaks = tag_name(&format!("{tag}>"))
             .is_some_and(|name| BREAKS.contains(&name.to_ascii_lowercase().as_str()));
@@ -379,7 +379,7 @@ fn without_tags(line: &str) -> String {
         if BREAKS.contains(&name.to_ascii_lowercase().as_str()) {
             out.push(' ');
         }
-        // A tag the line cut off — qmd's snippets end mid-word — goes too.
+        // A tag the line cut off — a snippet can end mid-word — goes too.
         let tag_end = after.find('>');
         rest = tag_end.map_or("", |close| &after[close + 1..]);
         // A date reads as the instant it names, which the viewer shows in

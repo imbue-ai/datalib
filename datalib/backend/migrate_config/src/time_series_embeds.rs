@@ -118,7 +118,7 @@ pub fn rewrite(text: &str) -> Result<String> {
 
 /// Whether this entry of the file is a built-in step whose id is in
 /// `ids`.
-fn is_one_of(entry: &str, ids: &BTreeSet<String>) -> bool {
+pub(crate) fn is_one_of(entry: &str, ids: &BTreeSet<String>) -> bool {
     let Ok(table) = toml::from_str::<toml::Table>(entry) else {
         return false;
     };
@@ -207,7 +207,7 @@ inputs = [
 "#;
 
     fn step_ids(text: &str) -> Vec<String> {
-        let check = datalib_dag::config::check_text(text);
+        let check = datalib_dag::config::check_text(&crate::folded(text));
         assert_eq!(
             check.dropped(),
             0,
@@ -226,7 +226,6 @@ inputs = [
         let ids = step_ids(&after);
         assert!(!ids.contains(&"riker/embed".to_string()), "{after}");
         assert!(ids.contains(&"troi-mail/embed".to_string()), "{after}");
-        assert!(ids.contains(&"unified_grid_and_search_index/qmd_aggregator".to_string()));
         assert!(!after.contains("riker's embeddings"), "{after}");
         assert!(
             after.contains(

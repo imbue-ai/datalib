@@ -255,6 +255,15 @@ impl RawStoreSession {
     where
         Fut: std::future::Future<Output = Result<String>>,
     {
+        if let Err(e) = crate::doltlite_raw::adopt_sourceless_problems(
+            &self.state.pool,
+            datalib_problems::step_source(),
+        )
+        .await
+        {
+            self.state.close_all().await;
+            return Err(e.context("name the source on the store's older problems"));
+        }
         let result = body(self.sealer()).await;
         // Counted before the stores close, and on the error path too: a
         // failed run's sealed checkpoints hold rows the Manage screen

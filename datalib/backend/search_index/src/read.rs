@@ -125,8 +125,8 @@ impl Reader {
     /// Pages (documents that are no conversation) holding every one of
     /// `terms`, each an FTS5 query, somewhere among their pieces, and none
     /// of `excluded`, of `sources` and `among` (all when `None`): a page's
-    /// pieces are parts of one thing, as qmd scored a whole document,
-    /// where a conversation's messages are each said on their own. Best
+    /// pieces are parts of one thing, where a conversation's messages are
+    /// each said on their own. Best
     /// first by the sum of each term's best piece's BM25, at most `limit`,
     /// each landing on the piece holding the most of the terms, an item
     /// before the text above them.

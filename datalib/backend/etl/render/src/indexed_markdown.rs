@@ -158,6 +158,15 @@ fn store_ddl() -> Vec<&'static str> {
         .collect()
 }
 
+/// Which grid row a raw record a download's problem names belongs to,
+/// where this store holds that row: `<table>:<id>` as the problem spells
+/// it, and the row's uuid. A reader joins a download's problems to it,
+/// since the download never sees the ids rows are minted under.
+pub const ENTITY_ITEMS_DDL: &[(&str, &str)] = &[(
+    "entity_items",
+    "CREATE TABLE IF NOT EXISTS entity_items (\n    entity_key TEXT PRIMARY KEY NOT NULL,\n    item_uuid TEXT NOT NULL\n)",
+)];
+
 /// `(table, CREATE TABLE)` for every table this store holds but
 /// `_datalib_meta`, in creation order.
 pub(crate) fn store_tables() -> impl Iterator<Item = (&'static str, &'static str)> {
@@ -172,6 +181,7 @@ pub(crate) fn store_tables() -> impl Iterator<Item = (&'static str, &'static str
         .chain(SOURCE_CONTACT_HANDLES_DDL.iter())
         .chain(SOURCE_PHOTOS_DDL.iter())
         .chain(PROBLEMS_DDL.iter())
+        .chain(ENTITY_ITEMS_DDL.iter())
         .chain(MEASUREMENTS_DDL.iter())
         .chain(RENDER_CURSOR_DDL.iter())
         .chain(RENDER_INPUTS_DDL.iter())
@@ -511,7 +521,7 @@ impl IndexedMarkdownStore {
     /// binding the whole set once.
     ///
     /// The file matters as much as the rows. `md_path` is what
-    /// `/applet/unified_grid_and_search_index/chat/{uuid}` serves and what qmd indexed, so a
+    /// `/applet/unified_grid_and_search_index/chat/{uuid}` serves and what search indexed, so a
     /// document deleted from the store but left on disk stays searchable and
     /// still resolves — a deletion the user can still read. The unlink
     /// follows the rows; inside a batch that later rolls back it leaves
@@ -1015,12 +1025,14 @@ impl IndexedMarkdownStore {
                     .into_iter()
                     .map(KeptSection::piece)
                     .collect();
+                let facts = index_facts(&row);
                 Some(datalib_search_index::IndexDoc {
                     source_id: source_id.to_string(),
                     markdown_uuid: row.markdown_uuid,
                     content_hash,
                     title: row.title.unwrap_or_default(),
-                    sections: datalib_search_index::text::draw(&pieces),
+                    head: datalib_search_index::text::head(&pieces, &facts),
+                    sections: datalib_search_index::text::draw(&pieces, &facts),
                 })
             })
             .collect())
@@ -1040,6 +1052,32 @@ impl IndexedMarkdownStore {
                 .map(|r| r.try_get::<String, _>(0).map_err(Into::into))
                 .collect()
         })
+    }
+}
+
+/// A document's front matter as the search index draws its facts line
+/// from it. A `front` this build cannot read is no facts, as from a store
+/// an older build wrote.
+fn index_facts(row: &datalib_schema::markdowns::MarkdownRow) -> datalib_search_index::text::Facts {
+    use crate::front_matter::{Front, FrontValue};
+    let front = row
+        .front
+        .as_deref()
+        .and_then(Front::from_json)
+        .unwrap_or_default();
+    datalib_search_index::text::Facts {
+        source_name: datalib_schema::providers::Provider::parse(&row.provider)
+            .map_or_else(|| row.provider.clone(), |p| p.label().to_string()),
+        front: front
+            .facts()
+            .iter()
+            .filter_map(|f| match &f.value {
+                FrontValue::Plain(v) | FrontValue::Text(v) | FrontValue::Name(v) => {
+                    Some((f.key.clone(), v.clone()))
+                }
+                FrontValue::Null => None,
+            })
+            .collect(),
     }
 }
 
@@ -1206,11 +1244,29 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// Make [`ENTITY_ITEMS_DDL`]'s table hold `items` and nothing else.
+    pub fn replace_entity_items(&self, items: &[(String, String)]) -> Result<()> {
+        blocking(async {
+            let mut guard = self.write_lock.acquire().await?;
+            let conn = guard.conn();
+            sqlx::query("DELETE FROM entity_items")
+                .execute(&mut **conn)
+                .await
+                .context("clear the entity items")?;
+            for (entity_key, item_uuid) in items {
+                sqlx::query("INSERT INTO entity_items (entity_key, item_uuid) VALUES (?, ?)")
+                    .bind(entity_key)
+                    .bind(item_uuid)
+                    .execute(&mut **conn)
+                    .await
+                    .with_context(|| format!("record {entity_key}'s item"))?;
+            }
+            Ok(())
+        })
+    }
+
     /// Replace every row of one stage with `rows`, stamps carried as
-    /// they are. How the fetch stage reaches this store: the render
-    /// step reads the raw store's `problems` at the commit it rendered
-    /// from — the complete truth about what the download could not do
-    /// — and hands them here whole, so there is nothing to sweep.
+    /// they are.
     pub fn replace_stage_problems(&self, stage: Stage, rows: &[ProblemRow]) -> Result<()> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
@@ -1778,7 +1834,9 @@ mod tests {
     /// `grid_rows` for the document's old rows, so a full render was
     /// quadratic: a 20k-thread mailbox spent minutes there. Compared
     /// against a small store in the same process, so a slow machine
-    /// slows both sides alike.
+    /// slows both sides alike; each side's best of three, taken in turn,
+    /// so a burst of load on a shared CI runner during one measurement
+    /// is not read as a scan.
     #[test]
     fn replacing_a_document_does_not_slow_down_as_the_store_grows() {
         const REPLACED: usize = 700;
@@ -1787,8 +1845,11 @@ mod tests {
         let small = store_holding(small_dir.path(), REPLACED);
         let big_dir = tempfile::tempdir().unwrap();
         let big = store_holding(big_dir.path(), GROWTH * REPLACED);
-        let small_s = seconds_to_replace(small_dir.path(), &small, REPLACED);
-        let big_s = seconds_to_replace(big_dir.path(), &big, REPLACED);
+        let (mut small_s, mut big_s) = (f64::MAX, f64::MAX);
+        for _ in 0..3 {
+            small_s = small_s.min(seconds_to_replace(small_dir.path(), &small, REPLACED));
+            big_s = big_s.min(seconds_to_replace(big_dir.path(), &big, REPLACED));
+        }
         assert!(
             big_s < 5.0 * small_s,
             "{GROWTH}x the documents made replacing {REPLACED} take {:.1}x as long \

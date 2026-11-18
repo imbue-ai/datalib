@@ -34,6 +34,8 @@ rust_library(
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/source_common:datalib_source_common",
+        "//datalib/backend/problems:datalib_problems",
+        "//datalib/backend/step_problems:datalib_step_problems",
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
@@ -77,7 +79,7 @@ rust_binary(
     edition = "2021",
     # Must match [package].version in datalib/backend/Cargo.toml;
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.54.1",
+    version = "0.55.0",
     # Stamp STABLE_GIT_DESCRIBE into `datalib-dag --version` (release.yml
     # smoke-tests that the published tarball reports the tag). `stamp = -1`
     # defers to the --stamp flag (on under --config=release); day-to-day
@@ -209,6 +211,7 @@ rust_test(
         ":datalib_dag",
         "//datalib/backend/contacts:datalib_contacts",
         "//datalib/backend/handle:datalib_handle",
+        "//datalib/backend/migrate_config:datalib_migrate_config",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/search_index:datalib_search_index",
@@ -229,14 +232,9 @@ rust_test(
 # the live test with INSTA_UPDATE=always; the test writes the new `.snap`s
 # straight into `$DATALIB_MANUAL_E2E_DIR/snapshots` (an absolute host path), so
 # nothing lands in this repo's source tree.
-#
-# `extra_data` re-declares the binary dir because bazel does NOT propagate a
-# rust_test's `data`/`env` to the sibling sh_binary this macro generates —
-# without it the runfiles lookup finds nothing under `bazel run`.
 insta_update(
     name = "manual_e2e_live_sync_golden.update",
     test = ":manual_e2e_live_sync_golden",
-    extra_data = ["//datalib/backend:bin"],
     test_args = ["--ignored"],
 )
 

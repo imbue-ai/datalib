@@ -3,41 +3,29 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === ship-air 00000000-0000-8376-8138-98b5e3d7ae50 ship-air storage
---- -
----
-title: ship-air storage
-source: ship-air
-measured_at: 2369-04-15T00:00:00+00:00
----
+--- chunk 0
+title: ship-air storage | text: Source: ship-air
 
-# [ship-air](datalib:group/ship-air "ship-air") — storage
+# ship-air — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/ship-air/ingest "ship-air/ingest") | `ship-air/ingest` | <size> | 2 files | <span id="m-00000000-0000-8376-8138-98b5e3d7ae50" data-section-uuid="00000000-0000-8376-8138-98b5e3d7ae50">`00000000`</span> |
-| Store | [ingest](datalib:step/ship-air/ingest "ship-air/ingest") | `ship-air/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-82cd-9800-d48277a518a8" data-section-uuid="00000000-0000-82cd-9800-d48277a518a8">`00000000`</span> |
-| Table | [ingest](datalib:step/ship-air/ingest "ship-air/ingest") | `ship-air/ingest/entities.doltlite_db#airvisual_clock_changes` |  | 3 rows | <span id="m-00000000-0000-8598-b835-c0a28915b734" data-section-uuid="00000000-0000-8598-b835-c0a28915b734">`00000000`</span> |
-| Table | [ingest](datalib:step/ship-air/ingest "ship-air/ingest") | `ship-air/ingest/entities.doltlite_db#airvisual_devices` |  | 2 rows | <span id="m-00000000-0000-8425-a11f-ed7dc7042b8f" data-section-uuid="00000000-0000-8425-a11f-ed7dc7042b8f">`00000000`</span> |
-| Table | [ingest](datalib:step/ship-air/ingest "ship-air/ingest") | `ship-air/ingest/entities.doltlite_db#airvisual_samples` |  | 81 rows | <span id="m-00000000-0000-8919-8d37-644d70b3d379" data-section-uuid="00000000-0000-8919-8d37-644d70b3d379">`00000000`</span> |
-| Table | [ingest](datalib:step/ship-air/ingest "ship-air/ingest") | `ship-air/ingest/entities.doltlite_db#airvisual_unplaced_samples` |  | 2 rows | <span id="m-00000000-0000-8cbb-8480-3da8787b92e9" data-section-uuid="00000000-0000-8cbb-8480-3da8787b92e9">`00000000`</span> |
-| Table | [ingest](datalib:step/ship-air/ingest "ship-air/ingest") | `ship-air/ingest/entities.doltlite_db#ingested_files` |  | 9 rows | <span id="m-00000000-0000-8993-b977-cd37cdcc30ec" data-section-uuid="00000000-0000-8993-b977-cd37cdcc30ec">`00000000`</span> |
+| Source Size | ingest | `ship-air/ingest` | <size> | 2 files | `00000000` |
+| Store | ingest | `ship-air/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `ship-air/ingest/entities.doltlite_db#airvisual_clock_changes` |  | 3 rows | `00000000` |
+| Table | ingest | `ship-air/ingest/entities.doltlite_db#airvisual_devices` |  | 2 rows | `00000000` |
+| Table | ingest | `ship-air/ingest/entities.doltlite_db#airvisual_samples` |  | 81 rows | `00000000` |
+| Table | ingest | `ship-air/ingest/entities.doltlite_db#airvisual_unplaced_samples` |  | 2 rows | `00000000` |
+| Table | ingest | `ship-air/ingest/entities.doltlite_db#ingested_files` |  | 9 rows | `00000000` |
 
 === ship-air 00000000-0000-88da-b36e-289718ab00fd AirVisual monitors — ship-air
---- -
----
-markdown_uuid: 00000000-0000-88da-b36e-289718ab00fd
-source_id: ship-air
-provider: airvisual
-title: "AirVisual monitors — ship-air"
-created_at: "2024-08-30T23:00:00+00:00"
-modified_at: "2024-11-03T11:45:09+00:00"
----
+--- chunk 0
+title: AirVisual monitors — ship-air | text: Source: AirVisual
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-88da-b36e-289718ab00fd">AirVisual monitors — ship-air</h1>
+AirVisual monitors — ship-air
 
-2 devices · 81 samples across 20 series, <time datetime="2024-08-30T23:00:00+00:00" title="2024-08-30 23:00:00 UTC">Fri Aug 30th, 2024 at 23:00</time> — <time datetime="2024-11-03T11:45:09+00:00" title="2024-11-03 11:45:09 UTC">Sun Nov 3rd, 2024 at 11:45</time>.
+2 devices · 81 samples across 20 series, Fri Aug 30th, 2024 at 23:00 — Sun Nov 3rd, 2024 at 11:45.
 
 Every value is as the device logged it; the sampling interval follows the device's own sensor-mode schedule, so the markers are unevenly spaced by design.
 
@@ -47,99 +35,98 @@ Every value is as the device logged it; the sampling interval follows the device
 
 PM1, PM2.5 and PM10 mass concentration from the device's laser particle counter. PM1 ⊂ PM2.5 ⊂ PM10, so the three lines nest.
 
-6 series · 216 points · <time datetime="2024-08-30T23:00:00+00:00" title="2024-08-30 23:00:00 UTC">Fri Aug 30th, 2024 at 23:00</time> — <time datetime="2024-11-03T11:45:09+00:00" title="2024-11-03 11:45:09 UTC">Sun Nov 3rd, 2024 at 11:45</time>
-
-<div class="time-series-chart" data-time-series="00000000-0000-804e-809f-21e745e7e90f 00000000-0000-85a7-9500-e94da9507fd6 00000000-0000-81eb-8c79-94d38d9e1384 00000000-0000-8274-84e3-ef525ca4e38c 00000000-0000-8e07-86b1-15565691a55e 00000000-0000-833e-857e-a59ba3f51467"></div>
+6 series · 216 points · Fri Aug 30th, 2024 at 23:00 — Sun Nov 3rd, 2024 at 11:45
 
 ### Air quality index
 
 The device's own PM2.5 index on the US and Chinese scales, and the index of the outdoor station it follows. An index, not a concentration: 0–50 is good on the US scale.
 
-8 series · 290 points · <time datetime="2024-08-30T23:00:00+00:00" title="2024-08-30 23:00:00 UTC">Fri Aug 30th, 2024 at 23:00</time> — <time datetime="2024-11-03T11:45:09+00:00" title="2024-11-03 11:45:09 UTC">Sun Nov 3rd, 2024 at 11:45</time>
-
-<div class="time-series-chart" data-time-series="00000000-0000-8b31-8532-5391f897ea54 00000000-0000-8588-97cc-0acf8df8de20 00000000-0000-8c55-858e-67e412aa2a48 00000000-0000-8cc8-b5cc-3a86275e0eeb 00000000-0000-8a43-b381-4465c5be8afb 00000000-0000-8bf4-8b69-96b4ebb917ee 00000000-0000-832f-987a-bbafb03ad562 00000000-0000-8560-9726-6a1d8f897e31"></div>
+8 series · 290 points · Fri Aug 30th, 2024 at 23:00 — Sun Nov 3rd, 2024 at 11:45
 
 ### CO₂
 
 Carbon dioxide. Outdoor air is ~420 ppm; a closed room with people in it climbs past 1000.
 
-2 series · 73 points · <time datetime="2024-08-30T23:00:00+00:00" title="2024-08-30 23:00:00 UTC">Fri Aug 30th, 2024 at 23:00</time> — <time datetime="2024-11-03T11:45:09+00:00" title="2024-11-03 11:45:09 UTC">Sun Nov 3rd, 2024 at 11:45</time>
-
-<div class="time-series-chart" data-time-series="00000000-0000-8118-8d0e-77e2d5415d6e 00000000-0000-828a-82c4-595bcc35fcb2"></div>
+2 series · 73 points · Fri Aug 30th, 2024 at 23:00 — Sun Nov 3rd, 2024 at 11:45
 
 ### Temperature
 
 Degrees Celsius. The device also logs Fahrenheit; that column is kept in the sample payload and not plotted twice.
 
-2 series · 73 points · <time datetime="2024-08-30T23:00:00+00:00" title="2024-08-30 23:00:00 UTC">Fri Aug 30th, 2024 at 23:00</time> — <time datetime="2024-11-03T11:45:09+00:00" title="2024-11-03 11:45:09 UTC">Sun Nov 3rd, 2024 at 11:45</time>
-
-<div class="time-series-chart" data-time-series="00000000-0000-858c-a215-ec292186737f 00000000-0000-8d3d-bd55-9b3c023fe814"></div>
+2 series · 73 points · Fri Aug 30th, 2024 at 23:00 — Sun Nov 3rd, 2024 at 11:45
 
 ### Relative humidity
 
 Relative humidity is already a dimensionless ratio — no conversion applies.
 
-2 series · 69 points · <time datetime="2024-08-30T23:00:00+00:00" title="2024-08-30 23:00:00 UTC">Fri Aug 30th, 2024 at 23:00</time> — <time datetime="2024-11-03T11:45:09+00:00" title="2024-11-03 11:45:09 UTC">Sun Nov 3rd, 2024 at 11:45</time>
+2 series · 69 points · Fri Aug 30th, 2024 at 23:00 — Sun Nov 3rd, 2024 at 11:45
 
-<div class="time-series-chart" data-time-series="00000000-0000-8d1e-a54d-622256434f83 00000000-0000-8ea0-a9fb-bd4b5ff9595f"></div>
+
+--- chunk 1
+title: AirVisual monitors — ship-air | text: Source: AirVisual
 
 ## Devices
 
---- 00000000-0000-88c0-b6ee-3210db9c4ed5
-<div id="m-00000000-0000-88c0-b6ee-3210db9c4ed5" data-section-uuid="00000000-0000-88c0-b6ee-3210db9c4ed5" class="msg msg--airvisual">
+--- chunk 2
+title: AirVisual monitors — ship-air | text: Source: AirVisual
 
 ### Sickbay
 
-*serial `SICKBAY01` · model 30 · firmware 1.1937 / KBG66F85 · clock in America/Denver · last sample <time datetime="2024-09-01T11:25:00+00:00" title="2024-09-01 11:25:00 UTC">Sun Sep 1st, 2024 at 11:25</time>*
+*serial `SICKBAY01` · model 30 · firmware 1.1937 / KBG66F85 · clock in America/Denver · last sample Sun Sep 1st, 2024 at 11:25*
 
 | Column | Unit | Samples | Min | Max | Mean | Latest | First | Last | Median gap |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: |
-| `aqi_cn` | AQI | 30 | 2.0 | 232.0 | 26.1 | 2.0 | <time datetime="2024-08-30T23:00:00+00:00" title="2024-08-30 23:00:00 UTC">Fri Aug 30th, 2024 at 23:00</time> | <time datetime="2024-09-01T11:25:00+00:00" title="2024-09-01 11:25:00 UTC">Sun Sep 1st, 2024 at 11:25</time> | 5.0m |
-| `aqi_us` | AQI | 30 | 7.0 | 257.0 | 40.8 | 8.0 | <time datetime="2024-08-30T23:00:00+00:00" title="2024-08-30 23:00:00 UTC">Fri Aug 30th, 2024 at 23:00</time> | <time datetime="2024-09-01T11:25:00+00:00" title="2024-09-01 11:25:00 UTC">Sun Sep 1st, 2024 at 11:25</time> | 5.0m |
-| `co2_ppm` | ppm | 35 | 450.0 | 470.0 | 457.5 | 463.0 | <time datetime="2024-08-30T23:00:00+00:00" title="2024-08-30 23:00:00 UTC">Fri Aug 30th, 2024 at 23:00</time> | <time datetime="2024-09-01T11:25:00+00:00" title="2024-09-01 11:25:00 UTC">Sun Sep 1st, 2024 at 11:25</time> | 5.0m |
-| `humidity_pct` | %RH | 31 | 43.0 | 44.0 | 43.8 | 43.0 | <time datetime="2024-08-30T23:00:00+00:00" title="2024-08-30 23:00:00 UTC">Fri Aug 30th, 2024 at 23:00</time> | <time datetime="2024-09-01T11:25:00+00:00" title="2024-09-01 11:25:00 UTC">Sun Sep 1st, 2024 at 11:25</time> | 5.0m |
-| `outdoor_aqi_cn` | AQI | 39 | 8.0 | 9.0 | 8.4 | 9.0 | <time datetime="2024-08-30T23:00:00+00:00" title="2024-08-30 23:00:00 UTC">Fri Aug 30th, 2024 at 23:00</time> | <time datetime="2024-09-01T11:25:00+00:00" title="2024-09-01 11:25:00 UTC">Sun Sep 1st, 2024 at 11:25</time> | 5.0m |
-| `outdoor_aqi_us` | AQI | 39 | 12.0 | 17.0 | 13.2 | 14.0 | <time datetime="2024-08-30T23:00:00+00:00" title="2024-08-30 23:00:00 UTC">Fri Aug 30th, 2024 at 23:00</time> | <time datetime="2024-09-01T11:25:00+00:00" title="2024-09-01 11:25:00 UTC">Sun Sep 1st, 2024 at 11:25</time> | 5.0m |
-| `pm10_ugm3` | µg/m³ | 34 | 1.9 | 254.5 | 24.9 | 1.9 | <time datetime="2024-08-30T23:00:00+00:00" title="2024-08-30 23:00:00 UTC">Fri Aug 30th, 2024 at 23:00</time> | <time datetime="2024-09-01T11:25:00+00:00" title="2024-09-01 11:25:00 UTC">Sun Sep 1st, 2024 at 11:25</time> | 5.0m |
-| `pm1_ugm3` | µg/m³ | 34 | 1.0 | 145.4 | 14.2 | 1.0 | <time datetime="2024-08-30T23:00:00+00:00" title="2024-08-30 23:00:00 UTC">Fri Aug 30th, 2024 at 23:00</time> | <time datetime="2024-09-01T11:25:00+00:00" title="2024-09-01 11:25:00 UTC">Sun Sep 1st, 2024 at 11:25</time> | 5.0m |
-| `pm25_ugm3` | µg/m³ | 34 | 1.2 | 181.8 | 17.8 | 1.4 | <time datetime="2024-08-30T23:00:00+00:00" title="2024-08-30 23:00:00 UTC">Fri Aug 30th, 2024 at 23:00</time> | <time datetime="2024-09-01T11:25:00+00:00" title="2024-09-01 11:25:00 UTC">Sun Sep 1st, 2024 at 11:25</time> | 5.0m |
-| `temperature_c` | °C | 35 | 22.0 | 22.3 | 22.2 | 22.1 | <time datetime="2024-08-30T23:00:00+00:00" title="2024-08-30 23:00:00 UTC">Fri Aug 30th, 2024 at 23:00</time> | <time datetime="2024-09-01T11:25:00+00:00" title="2024-09-01 11:25:00 UTC">Sun Sep 1st, 2024 at 11:25</time> | 5.0m |
+| `aqi_cn` | AQI | 30 | 2.0 | 232.0 | 26.1 | 2.0 | Fri Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
+| `aqi_us` | AQI | 30 | 7.0 | 257.0 | 40.8 | 8.0 | Fri Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
+| `co2_ppm` | ppm | 35 | 450.0 | 470.0 | 457.5 | 463.0 | Fri Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
+| `humidity_pct` | %RH | 31 | 43.0 | 44.0 | 43.8 | 43.0 | Fri Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
+| `outdoor_aqi_cn` | AQI | 39 | 8.0 | 9.0 | 8.4 | 9.0 | Fri Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
+| `outdoor_aqi_us` | AQI | 39 | 12.0 | 17.0 | 13.2 | 14.0 | Fri Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
+| `pm10_ugm3` | µg/m³ | 34 | 1.9 | 254.5 | 24.9 | 1.9 | Fri Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
+| `pm1_ugm3` | µg/m³ | 34 | 1.0 | 145.4 | 14.2 | 1.0 | Fri Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
+| `pm25_ugm3` | µg/m³ | 34 | 1.2 | 181.8 | 17.8 | 1.4 | Fri Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
 
-</div>
+--- chunk 3
+title: AirVisual monitors — ship-air | text: Source: AirVisual
 
---- 00000000-0000-8e1d-8ce6-ca9fcdd15aaf
-<div id="m-00000000-0000-8e1d-8ce6-ca9fcdd15aaf" data-section-uuid="00000000-0000-8e1d-8ce6-ca9fcdd15aaf" class="msg msg--airvisual">
+ Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
+| `pm25_ugm3` | µg/m³ | 34 | 1.2 | 181.8 | 17.8 | 1.4 | Fri Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
+| `temperature_c` | °C | 35 | 22.0 | 22.3 | 22.2 | 22.1 | Fri Aug 30th, 2024 at 23:00 | Sun Sep 1st, 2024 at 11:25 | 5.0m |
+
+--- chunk 4
+title: AirVisual monitors — ship-air | text: Source: AirVisual
 
 ### Ten Forward
 
-*serial `TENFWD10X` · model 30 · firmware 1.1937 / KBG66F85 · clock in America/Los_Angeles · last sample <time datetime="2024-11-03T11:45:09+00:00" title="2024-11-03 11:45:09 UTC">Sun Nov 3rd, 2024 at 11:45</time>*
+*serial `TENFWD10X` · model 30 · firmware 1.1937 / KBG66F85 · clock in America/Los_Angeles · last sample Sun Nov 3rd, 2024 at 11:45*
 
 | Column | Unit | Samples | Min | Max | Mean | Latest | First | Last | Median gap |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: |
-| `aqi_cn` | AQI | 38 | 1.0 | 13.0 | 5.5 | 2.0 | <time datetime="2024-08-31T02:00:00+00:00" title="2024-08-31 02:00:00 UTC">Sat Aug 31st, 2024 at 02:00</time> | <time datetime="2024-11-03T11:45:09+00:00" title="2024-11-03 11:45:09 UTC">Sun Nov 3rd, 2024 at 11:45</time> | 15.0m |
-| `aqi_us` | AQI | 38 | 6.0 | 49.0 | 21.2 | 6.0 | <time datetime="2024-08-31T02:00:00+00:00" title="2024-08-31 02:00:00 UTC">Sat Aug 31st, 2024 at 02:00</time> | <time datetime="2024-11-03T11:45:09+00:00" title="2024-11-03 11:45:09 UTC">Sun Nov 3rd, 2024 at 11:45</time> | 15.0m |
-| `co2_ppm` | ppm | 38 | 430.0 | 1787.0 | 947.2 | 660.0 | <time datetime="2024-08-31T02:00:00+00:00" title="2024-08-31 02:00:00 UTC">Sat Aug 31st, 2024 at 02:00</time> | <time datetime="2024-11-03T11:45:09+00:00" title="2024-11-03 11:45:09 UTC">Sun Nov 3rd, 2024 at 11:45</time> | 15.0m |
-| `humidity_pct` | %RH | 38 | 38.0 | 57.0 | 45.7 | 42.0 | <time datetime="2024-08-31T02:00:00+00:00" title="2024-08-31 02:00:00 UTC">Sat Aug 31st, 2024 at 02:00</time> | <time datetime="2024-11-03T11:45:09+00:00" title="2024-11-03 11:45:09 UTC">Sun Nov 3rd, 2024 at 11:45</time> | 15.0m |
-| `outdoor_aqi_cn` | AQI | 38 | 8.0 | 9.0 | 8.5 | 9.0 | <time datetime="2024-08-31T02:00:00+00:00" title="2024-08-31 02:00:00 UTC">Sat Aug 31st, 2024 at 02:00</time> | <time datetime="2024-11-03T11:45:09+00:00" title="2024-11-03 11:45:09 UTC">Sun Nov 3rd, 2024 at 11:45</time> | 15.0m |
-| `outdoor_aqi_us` | AQI | 38 | 12.0 | 15.0 | 13.4 | 15.0 | <time datetime="2024-08-31T02:00:00+00:00" title="2024-08-31 02:00:00 UTC">Sat Aug 31st, 2024 at 02:00</time> | <time datetime="2024-11-03T11:45:09+00:00" title="2024-11-03 11:45:09 UTC">Sun Nov 3rd, 2024 at 11:45</time> | 15.0m |
-| `pm10_ugm3` | µg/m³ | 38 | 2.0 | 14.2 | 6.1 | 2.0 | <time datetime="2024-08-31T02:00:00+00:00" title="2024-08-31 02:00:00 UTC">Sat Aug 31st, 2024 at 02:00</time> | <time datetime="2024-11-03T11:45:09+00:00" title="2024-11-03 11:45:09 UTC">Sun Nov 3rd, 2024 at 11:45</time> | 15.0m |
-| `pm1_ugm3` | µg/m³ | 38 | 1.0 | 6.2 | 2.7 | 1.0 | <time datetime="2024-08-31T02:00:00+00:00" title="2024-08-31 02:00:00 UTC">Sat Aug 31st, 2024 at 02:00</time> | <time datetime="2024-11-03T11:45:09+00:00" title="2024-11-03 11:45:09 UTC">Sun Nov 3rd, 2024 at 11:45</time> | 15.0m |
-| `pm25_ugm3` | µg/m³ | 38 | 1.0 | 8.9 | 3.8 | 1.2 | <time datetime="2024-08-31T02:00:00+00:00" title="2024-08-31 02:00:00 UTC">Sat Aug 31st, 2024 at 02:00</time> | <time datetime="2024-11-03T11:45:09+00:00" title="2024-11-03 11:45:09 UTC">Sun Nov 3rd, 2024 at 11:45</time> | 15.0m |
-| `temperature_c` | °C | 38 | 21.0 | 23.5 | 22.0 | 21.5 | <time datetime="2024-08-31T02:00:00+00:00" title="2024-08-31 02:00:00 UTC">Sat Aug 31st, 2024 at 02:00</time> | <time datetime="2024-11-03T11:45:09+00:00" title="2024-11-03 11:45:09 UTC">Sun Nov 3rd, 2024 at 11:45</time> | 15.0m |
+| `aqi_cn` | AQI | 38 | 1.0 | 13.0 | 5.5 | 2.0 | Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
+| `aqi_us` | AQI | 38 | 6.0 | 49.0 | 21.2 | 6.0 | Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
+| `co2_ppm` | ppm | 38 | 430.0 | 1787.0 | 947.2 | 660.0 | Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
+| `humidity_pct` | %RH | 38 | 38.0 | 57.0 | 45.7 | 42.0 | Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
+| `outdoor_aqi_cn` | AQI | 38 | 8.0 | 9.0 | 8.5 | 9.0 | Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
+| `outdoor_aqi_us` | AQI | 38 | 12.0 | 15.0 | 13.4 | 15.0 | Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
+| `pm10_ugm3` | µg/m³ | 38 | 2.0 | 14.2 | 6.1 | 2.0 | Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
+| `pm1_ugm3` | µg/m³ | 38 | 1.0 | 6.2 | 2.7 | 1.0 | Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
+| `pm25_ugm3` | µg/m³ | 38 | 1.0 | 8.9 | 3.8 | 1.2 | Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
 
-</div>
+--- chunk 5
+title: AirVisual monitors — ship-air | text: Source: AirVisual
 
---- -
+ Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
+| `pm25_ugm3` | µg/m³ | 38 | 1.0 | 8.9 | 3.8 | 1.2 | Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
+| `temperature_c` | °C | 38 | 21.0 | 23.5 | 22.0 | 21.5 | Sat Aug 31st, 2024 at 02:00 | Sun Nov 3rd, 2024 at 11:45 | 15.0m |
+
+--- chunk 6
+title: AirVisual monitors — ship-air | text: Source: AirVisual
+
 ## Store
 
-| | |
-| --- | --- |
 | Samples | 81 |
 | History files read | 9 |
 | History bytes read | 7,075 |
 
 | File | Bytes |
-| --- | ---: |
 | `202409_AirVisual_values.txt` | 610 |
 | `202411_AirVisual_values.txt` | 400 |
 | `archive1/197001_AirVisual_values.txt` | 261 |

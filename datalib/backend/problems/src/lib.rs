@@ -1,10 +1,9 @@
 //! The `problems` table: one row per thing a step could not fully do to
-//! one record, kept in the store the step owns and copied downstream
-//! with the data until it reaches the unified grid and search index and the screen.
+//! one record, kept in the store the step owns, where a reader finds it.
 //! Every closed vocabulary here is an enum: the row binds them as text
 //! and a reader parses them back, never comparing the column to a
-//! literal. How the rows travel, and what reads them: `etl/README.md`
-//! §"Problems flow downstream with the data".
+//! literal. Where the rows are, and what reads them: `etl/README.md`
+//! §"Problems stay in the step that found them".
 
 mod recorded;
 pub use recorded::{log_recorded, note_recorded};
@@ -80,7 +79,7 @@ closed_vocabulary! {
 
 impl Stage {
     /// The stages a step other than the download and the render records
-    /// in a store of its own, each that step's alone. `grid_index` copies
+    /// in a store of its own, each that step's alone. `unified_grid_and_search_index` copies
     /// each one's rows apart from the render store's, so neither copy
     /// erases the other's.
     pub const OWN_STORE: [Stage; 2] = [Stage::TimeSeries, Stage::Occurrences];
@@ -282,6 +281,21 @@ impl<'a> Scope<'a> {
     }
 }
 
+static STEP_SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Set once by `datalib-step`, from its group: the source every problem
+/// this process's step finds is about. A download's writers mint their
+/// rows under it, since none of them is handed the source.
+pub fn set_step_source(source_id: &str) {
+    let _ = STEP_SOURCE.set(source_id.to_string());
+}
+
+/// The source [`set_step_source`] named; empty where nothing set it, as
+/// in a library's own tests.
+pub fn step_source() -> &'static str {
+    STEP_SOURCE.get().map_or("", String::as_str)
+}
+
 pub fn sample_of(s: &str) -> String {
     const MAX: usize = 80;
     if s.len() <= MAX {
@@ -473,6 +487,15 @@ pub struct ProblemRow {
     /// left by an older renderer is identifiable. `None` off a fetch.
     #[col(sql = "INT")]
     pub render_version: Option<i64>,
+    /// The upstream record the problem is about, as the step that found
+    /// it named it: the values a grid row carries under the same names,
+    /// which is how a reader finds the row a problem is about.
+    #[col(sql = "VARCHAR(64)")]
+    pub upstream_entity_kind: Option<String>,
+    #[col(sql = "VARCHAR(255)")]
+    pub upstream_id: Option<String>,
+    #[col(sql = "VARCHAR(255)")]
+    pub upstream_account: Option<String>,
 }
 
 impl ProblemRow {
@@ -518,6 +541,9 @@ impl ProblemRow {
             changed_at_utc: String::new(),
             tz_offset: None,
             render_version: render_version.map(i64::from),
+            upstream_entity_kind: None,
+            upstream_id: None,
+            upstream_account: None,
         }
     }
 
@@ -590,6 +616,9 @@ impl ProblemRow {
             changed_at_utc: r.try_get("changed_at_utc")?,
             tz_offset: r.try_get("tz_offset")?,
             render_version: r.try_get("render_version")?,
+            upstream_entity_kind: r.try_get("upstream_entity_kind")?,
+            upstream_id: r.try_get("upstream_id")?,
+            upstream_account: r.try_get("upstream_account")?,
         })
     }
 }
@@ -831,6 +860,6 @@ mod tests {
         ] {
             assert!(ddl.contains(col), "{ddl}");
         }
-        assert_eq!(COLUMNS[0].1.len(), 17);
+        assert_eq!(COLUMNS[0].1.len(), 20);
     }
 }

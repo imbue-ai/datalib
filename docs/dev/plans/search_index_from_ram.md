@@ -1,13 +1,16 @@
 # Our own search index, fed from memory
 
-**Status: proposal (2026-11-11). Steps 1 to 8 of "Order of work" and
-the first half of step 9 are built (`//datalib/backend/search_index`,
-`//datalib/backend/embedder`): search reads only the search index, the
-steps no longer run qmd, and the aggregator deletes qmd's index. Of the
-second half, qmd's code is deleted (`qmd_indexer`, the readers of qmd's
-index, the fixture's qmd index); its runtime, the release's share of it,
-`third-party/qmd` and the names are not.** Numbers were
-measured that day on `~/datalib/stay_alive_1` (sizes and counts only).
+**Status: built, but for one name (2026-11-17). All of "Order of work"
+is built (`//datalib/backend/search_index`, `//datalib/backend/embedder`):
+search reads only the search index, nothing runs qmd, and qmd's code,
+its runtime, the release's share of it and `third-party/qmd` are
+deleted (#1797), as are the names in the code (#1805). The
+`qmd_aggregator` step is gone, its work done by `grid_index` (#1818);
+the `qmd_embed` lock is `embedder`, and `qmd_keyword` is gone. One name
+remains, left to [`documents_to_blocks.md`](documents_to_blocks.md):
+`qmd_path` goes in its step 5, when the markdown files stop being
+written.** Numbers were
+measured on 2026-11-11 on `~/datalib/stay_alive_1` (sizes and counts only).
 The wider retrieval redesign in [`multimodal_retrieval.md`](multimodal_retrieval.md)
 overlaps with this one; this plan is the narrow first cut of it: keep the
 model, keep the rendered files, stop qmd from storing the text again, and
@@ -437,12 +440,12 @@ that matched. Meaning search fills back in over the first day.
    aggregator deletes qmd's directory; the embedding map lays out the
    inference cache's vectors; the TNG fixture builds the search index by
    running `keyword_index`, and its vectors in an action of their own
-   that reruns only when a chunk's prompt changes. Not built: deleting
-   `qmd_indexer`, `qmd_sdk.mjs`, the qmd code under
-   `unified_document_index/src/qmd/`, qmd in the Node runtime and the
-   release, `third-party/qmd`, and the names that still say qmd (the
-   `qmd_aggregator` step id, the `qmd_keyword` and `qmd_embed` locks,
-   `/qmd_state` and the `qmd_*` fields of a search's answer).
+   that reruns only when a chunk's prompt changes; qmd's code, its
+   runtime, the release's share of it and `third-party/qmd` are deleted,
+   and the code that still said qmd is renamed. The aggregator is
+   gone, `qmd_embed` is `embedder` and `qmd_keyword` is gone. Left to
+   [`documents_to_blocks.md`](documents_to_blocks.md): `qmd_path`
+   (step 5).
 
 ## Later
 

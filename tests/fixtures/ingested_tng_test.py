@@ -123,10 +123,9 @@ MAX_STAMP_MS = (1 << 48) - 1
 # saved place with no date; the files no feed reads; and what the
 # account's Chat membership says of a space.
 #
-# A fetch row about an attachment names the grid row of what owns it,
-# so the screen can open it: the conversation for claude (minted from
-# the raw key), the message for Takeout (looked up by its upstream id,
-# since the message's uuid carries a date the raw key does not).
+# A fetch row names only the raw record its download held, in the
+# download's own store; render says which grid row that record belongs
+# to (`entity_items`), and the reader links the two when it reads them.
 POISONED_PROBLEM = (
     "6df47df9-b6ad-5372-942e-5db5e4d068bb"  # problem_uuid
     "|warning|parse|markdown"
@@ -142,8 +141,7 @@ CLAUDE_ATTACHMENT_WITHOUT_BYTES = (
     "|error|fetch|entity"
     "|claude_attachments:c0000004-1701-4d00-8000-00000000c004"
     "#f0000001-1701-4d00-8000-0000000f0001"
-    "|00000000-0000-89b3-8bed-0eecc97d45ce"  # conversation c0000004's row
-    "||fetch_failed|no recorded response: GET https://claude.ai/api/organizations"
+    "|||fetch_failed|no recorded response: GET https://claude.ai/api/organizations"
     "/0aa00000-1701-4d00-8000-0000000000aa/files/f0000001-1701-4d00-8000-0000000f0001/contents"
 )
 FACEBOOK_VIDEO_NOT_IN_EXPORT = (
@@ -203,7 +201,7 @@ FACEBOOK_TABLES_NOT_READ = (
 )
 # The TNG ride's activity file is not a FIT file, so `render_time_series`
 # leaves its time series out and keeps a warning in its own store, which
-# `grid_index` copies into the index under the step's own stage.
+# `unified_grid_and_search_index` copies into the index under the step's own stage.
 GARMIN_RIDE_WITH_NO_FIT = (
     "5692ad7c-fce5-54e6-96af-eb91974cbf89|warning|time_series|entity|17010414002"
     "|||render_failed|no .FIT signature"
@@ -240,8 +238,7 @@ TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT = (
     "c662c0a8-aa0a-5a9c-a618-a9f36e2d47d5"
     "|warning|fetch|entity"
     "|chat_attachments:TNG-BRIDGE/T2/T2#risa-shore-leave.png"
-    "|0195683a-d140-87f9-bdf6-234da6d6880c"  # Riker's message
-    "||not_found|<name>.png is not in the export"
+    "|||not_found|<name>.png is not in the export"
 )
 # Every kind of file no feed reads is a row, named by the shape of its
 # path: a warning where nothing reads it, a note where it is left out on
@@ -556,24 +553,38 @@ class IngestedTngPipelineTest(unittest.TestCase):
             if s.get("function") == "ingest"
         )
 
-    def _grid_index_inputs(self) -> tuple[str, ...]:
-        """What the config's `grid_index` reads: every source's render.
+    def _index_step_inputs(self) -> tuple[str, ...]:
+        """What the config's `unified_grid_and_search_index` reads: every source's render.
         The runner always hands a fan-in all of these, and a source
         missing from them is one the config dropped, which leaves the
         index."""
         config = tomllib.loads((self.workspace / "dag.toml").read_text())
+        steps = config.get("steps", [])
         (step,) = [
-            s for s in config.get("steps", []) if s.get("function") == "grid_index"
+            s for s in steps if s.get("function") == "unified_grid_and_search_index"
         ]
-        return tuple(step["inputs"])
+        ids = [
+            f"{s['group']}/{s['function']}" if "group" in s else s["id"] for s in steps
+        ]
+        # A pattern (`*/render_markdown`) stands for every step of its
+        # function, as the loader expands it before the step sees it.
+        out: list[str] = []
+        for written in step["inputs"]:
+            named = (
+                [i for i in ids if i.split("/", 1)[-1] == written[2:] and "/" in i]
+                if written.startswith("*/")
+                else [written]
+            )
+            out.extend(i for i in named if i not in out)
+        return tuple(out)
 
     @property
     def _index_db(self) -> Path:
-        """The grid index the `grid_index` fan-in step writes."""
+        """The grid index the `unified_grid_and_search_index` fan-in step writes."""
         return (
             self.workspace
             / "unified_grid_and_search_index"
-            / "grid_index"
+            / "unified_grid_and_search_index"
             / "db.sqlite"
         )
 
@@ -749,7 +760,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """The `pdf` source's contribution, by grid_rows kind.
 
         Pinned rather than merely non-empty because this source is the
-        one whose output feeds the qmd index by *page*: silent growth
+        one whose output feeds the search index by *page*: silent growth
         here shows up as a slower fixture build for everyone, and a
         silent drop to zero would mean PDFs stopped being searchable
         without any test going red.
@@ -769,14 +780,13 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """Rows whose `qmd_path` disagrees with their markdown's path.
 
         The two columns name the same file and must name it the same
-        way: `GridIndex` (unified_grid_and_search_index/src/qmd/mapping.rs) keys grid
-        rows by `norm_path(qmd_path)` and looks each qmd hit up by the
-        hit's own data-root-relative path — the same spelling
-        `apply_one` stores in `markdowns.md_path`. A provider that
-        stamps any other form still renders correct markdown and still
-        gets indexed by qmd, so nothing else goes red; its documents
-        just vanish from free-text search, because every hit in them
-        resolves to zero grid rows and is dropped. `pdf` shipped that
+        way: a search hit names its document's file, the spelling
+        `apply_one` stores in `markdowns.md_path`, while search reads a
+        row by its `qmd_path`, whose first segment is the row's
+        `source_id`. A provider that stamps any other form still renders
+        correct markdown and still gets indexed, so nothing else goes
+        red; its documents just vanish from free-text search, because
+        their hits land on no row search reads. `pdf` shipped that
         way — it wrote the out-dir-relative `docs/<blake3>.md` while
         every other provider wrote `<stanza>/render_markdown/...`.
 
@@ -1027,9 +1037,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         can be pinned across runs.
         """
         out: dict[str, list[str]] = {}
-        # Every store a step keeps problems in: the render's, and the
-        # time-series and occurrences steps' own.
+        # Every store a step keeps problems in: the download's, the
+        # render's, and the time-series and occurrences steps' own.
         stores = [
+            *self.workspace.glob("*/ingest/entities.doltlite_db"),
             *self.workspace.glob("*/render_markdown/indexed_markdown.doltlite_db"),
             *self.workspace.glob("*/render_time_series/time_series.doltlite_db"),
             *self.workspace.glob("*/render_occurrences/occurrences.doltlite_db"),
@@ -1046,8 +1057,36 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 out[source] = sorted(out.get(source, []) + rows)
         return out
 
+    def _linked_fetch_problems(self) -> dict[str, str]:
+        """`problem_uuid -> item_uuid` for each download problem its
+        source's render links to a grid row: the raw store's fetch rows
+        joined, by the record they name, to the render store's
+        `entity_items`, as the problems reader joins them."""
+        out: dict[str, str] = {}
+        for raw in sorted(self.workspace.glob("*/ingest/entities.doltlite_db")):
+            render = (
+                raw.parent.parent / "render_markdown" / "indexed_markdown.doltlite_db"
+            )
+            if not render.exists():
+                continue
+            items = dict(
+                line.split("|", 1)
+                for line in self._query(
+                    render, "SELECT entity_key, item_uuid FROM entity_items;"
+                )
+            )
+            for line in self._query(
+                raw,
+                "SELECT problem_uuid, scope_key FROM problems "
+                "WHERE stage = 'fetch' AND scope_kind = 'entity';",
+            ):
+                problem, scope_key = line.split("|", 1)
+                if scope_key in items:
+                    out[problem] = items[scope_key]
+        return out
+
     def _index_problems(self) -> list[str]:
-        """The index's copy of every source's problems, same columns."""
+        """The index's own problems, same columns: none of a source's."""
         return self._query(
             self._index_db,
             "SELECT problem_uuid, severity, stage, scope_kind, scope_key, "
@@ -1081,17 +1120,17 @@ class IngestedTngPipelineTest(unittest.TestCase):
 
     # The step's tracing event, as it reaches stderr: JSON nested inside
     # the NDJSON envelope, so the inner quotes arrive backslash-escaped.
-    _GRID_INDEX_READ = re.compile(r'the index is built.*?\\?"read\\?":\s*(\d+)')
+    _INDEX_STEP_READ = re.compile(r'the index is built.*?\\?"read\\?":\s*(\d+)')
 
-    def _grid_index_reads(self, stderr: str) -> list[int]:
-        """How many documents each grid_index step in a run READ.
+    def _index_step_reads(self, stderr: str) -> list[int]:
+        """How many documents each `unified_grid_and_search_index` step in a run READ.
 
         Not `loaded`: that was already 0 on a steady-state run before
         the index kept cursors, because the fingerprint compare happened
         after paying to read every document out of every source's store.
         `read` is the number the cursors actually move.
         """
-        return [int(n) for n in self._GRID_INDEX_READ.findall(stderr)]
+        return [int(n) for n in self._INDEX_STEP_READ.findall(stderr)]
 
     def _run_pipeline(
         self, *, reset: bool, now: str | None = None
@@ -1791,8 +1830,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # of the four and contributes one page, not two — its image-only
         # second page becomes a note in the markdown rather than a row.
         # Every page row must carry a `qmd_path`, since that column is
-        # what lets a qmd hit resolve back to a grid row — a page indexed
-        # without one is findable by search but unreachable from the UI.
+        # what lets a search hit land on a grid row — a page indexed
+        # without one is in the search index but never shown from it.
         self.assertEqual(
             self._pdf_shape(),
             {"PDF Document": 4, "PDF Page": 5},
@@ -1810,7 +1849,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # Cross-provider: `grid_rows.qmd_path` must be byte-equal to
         # its markdown's `markdowns.md_path`. Asserted over the whole
         # index rather than per-provider so a new source inherits the
-        # check for free — this is the invariant the qmd hit→row
+        # check for free — this is the invariant the search hit→row
         # mapping is built on.
         self.assertEqual(
             self._qmd_path_mismatches(),
@@ -1896,15 +1935,15 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # sink: the one built to fail, and the ones its downloads cannot
         # fetch or skip. Every renderer drops-and-records a row
         # it cannot build instead of failing the step, which is what
-        # stops one bad record from poisoning `grid_index` for every
+        # stops one bad record from poisoning `unified_grid_and_search_index` for every
         # other source — but the same change means a projection that
         # quietly started dropping rows would no longer show up as a
         # failure anywhere. Here it does: any row outside the expected
         # rows is a regression and the message names it. The poisoned
         # row is what proves the sink works end to end — through the
-        # real render, into the source's store, and copied into the
-        # index — and every id is pinned so a later run mints the same
-        # one (asserted after run 2 and run 4).
+        # real render, into the source's store, where a reader finds it
+        # — and every id is pinned so a later run mints the same one
+        # (asserted after run 2 and run 4).
         problems1 = self._problems()
         self.assertEqual(
             problems1,
@@ -1915,8 +1954,25 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         self.assertEqual(
             self._index_problems(),
-            sorted(row for rows in EXPECTED_PROBLEMS.values() for row in rows),
-            "grid_index copies every source's problems into the index",
+            [],
+            "the index step copies no source's problems; each is read in its own store",
+        )
+        # A download names only its raw record; render says which grid row
+        # that record belongs to, and the reader links the two. These are
+        # the rows a person opens from the problem: the claude
+        # conversation (its uuid minted from the raw key) and Riker's
+        # Takeout message (found by its upstream id).
+        self.assertEqual(
+            self._linked_fetch_problems(),
+            {
+                CLAUDE_ATTACHMENT_WITHOUT_BYTES.split("|")[0]: (
+                    "00000000-0000-89b3-8bed-0eecc97d45ce"
+                ),
+                TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT.split("|")[0]: (
+                    "0195683a-d140-87f9-bdf6-234da6d6880c"
+                ),
+            },
+            "each download problem whose record has a row links to it",
         )
         self._assert_problems_reach_the_log(EXPECTED_PROBLEMS)
 
@@ -2034,7 +2090,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 self._scalar(self._index_db, "SELECT generation FROM store_generation;")
             ),
             0,
-            "grid_index must seal, raising the index's generation",
+            "the index step must seal, raising the index's generation",
         )
         # Signal recorded both phones' snapshots in its resume cursor.
         cursor1 = self._signal_cursor()
@@ -2119,17 +2175,17 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # store. Asserting on it would pass either way and prove
         # nothing.
         # Every pass, not one pass: since `render` streams, a producer
-        # finishing can dispatch `grid_index` before its siblings are done,
+        # finishing can dispatch `unified_grid_and_search_index` before its siblings are done,
         # so a run has one pass per source whose version moved plus the
         # final one. What must hold either way is that each of them reads
         # nothing — that is the claim, and it does not depend on how many
         # times the step was dispatched.
-        reads2 = self._grid_index_reads(run2.stderr)
-        self.assertTrue(reads2, "run 2 recorded no grid_index pass at all")
+        reads2 = self._index_step_reads(run2.stderr)
+        self.assertTrue(reads2, "run 2 recorded no index step pass at all")
         self.assertEqual(
             set(reads2),
             {0},
-            "every one of run 2's grid_index passes must read 0 documents: "
+            "every one of run 2's index step passes must read 0 documents: "
             "nothing changed, so every source's dolt_diff should have come "
             f"back empty (got {reads2})",
         )
@@ -2320,8 +2376,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # only this one has moved.
         self._run_step(
             "unified_grid_and_search_index",
-            "grid_index",
-            inputs=self._grid_index_inputs(),
+            "unified_grid_and_search_index",
+            inputs=self._index_step_inputs(),
         )
 
         self.assertEqual(
@@ -2347,8 +2403,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 f.is_file(),
                 f"{f} outlived the conversation it renders. The grid no "
                 "longer lists it, but /applet/unified_grid_and_search_index/chat/{uuid} "
-                "still resolves and qmd still finds it — a deletion the "
-                "user can read",
+                "still resolves — a deletion the user can read",
             )
         # Nothing else moved. A sweep that takes the neighbours with it is
         # worse than one that never fires.
@@ -2403,8 +2458,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self._run_step("github", "render_markdown", "github", inputs=("github/ingest",))
         self._run_step(
             "unified_grid_and_search_index",
-            "grid_index",
-            inputs=self._grid_index_inputs(),
+            "unified_grid_and_search_index",
+            inputs=self._index_step_inputs(),
         )
 
         github_docs_after = set(

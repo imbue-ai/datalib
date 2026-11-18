@@ -3,7 +3,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 exports_files([
     "BUILD.bazel",  # read by //datalib/backend:version_consistency_test
     "src/node_runtime.rs",  # LATCHKEY_VERSION, read by //tools:version_pins_test
-    "src/qmd.rs",  # the model pins, read by //tools:qmd_model_pins_test
+    "src/models.rs",  # the model pins, read by //tools:model_pins_test
 ])
 
 # The data-root layout plus the bundled-Node/npx resolution every binary
@@ -19,7 +19,7 @@ rust_library(
     # "which datalib wrote this store" comes from. Must match
     # [package].version in datalib/backend/Cargo.toml;
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.54.1",
+    version = "0.55.0",
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "@datalib_crates//:tempfile",

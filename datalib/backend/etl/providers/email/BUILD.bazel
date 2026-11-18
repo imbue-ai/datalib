@@ -136,7 +136,5 @@ insta_update(
 # shell's `LATCHKEY_CURL` and reach the host keyring.
 live_run(
     name = "gmail_live",
-    extra_data = ["//datalib/backend/datalib_step"],
-    extra_env = {"DATALIB_STEP_BIN": "$(rootpath //datalib/backend/datalib_step)"},
     test = ":email_tests",
 )

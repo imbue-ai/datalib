@@ -47,18 +47,9 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["garmin/ingest"]
 
-# Its numbers as time series, for charts and the time-series index: add
-# `garmin/render_time_series` to `unified_time_series_index/time_series_index`'s inputs.
+# Its numbers as time series, for charts and the time-series index.
 [[steps]]
 group = "garmin"
 function = "render_time_series"
 command = "datalib-step"
 inputs = ["garmin/ingest"]
-
-# Free-text search by keyword (BM25). Add it to
-# `unified_grid_and_search_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "garmin"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["garmin/render_markdown"]

@@ -2,7 +2,13 @@
 // box — `kind: "select"` in `ui/src/config/catalog.ts`.
 import { test, expect, type Page } from "@playwright/test";
 import { openAdvanced, reviewToml } from "./wizard-helpers";
-import { fillConfigEditor, expandGroup, MANAGE_WITH_CONFIG, savedConfig } from "./grid-helpers";
+import {
+  fillConfigEditor,
+  expandGroup,
+  MANAGE_WITH_CONFIG,
+  savedConfig,
+  expectSyncEverything,
+} from "./grid-helpers";
 
 const wizard = (page: Page) => page.getByRole("dialog");
 // Structural, matching data-sources-name.spec.ts: each field's <label>
@@ -12,7 +18,7 @@ const field = (page: Page, caption: string) =>
 
 async function openManager(page: Page) {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
 }
 
 let original = "";

@@ -121,7 +121,7 @@ mod tests {
         }
     }
 
-    /// The `markdowns` DDL this struct derives is the one `grid_index`
+    /// The `markdowns` DDL this struct derives is the one `unified_grid_and_search_index`
     /// creates, so this spells it out in full: a change to the struct
     /// that nobody meant to make to the table shows up here. Three
     /// drifts had already opened up while nothing read the struct — it

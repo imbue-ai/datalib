@@ -497,9 +497,10 @@ fn require_update_mode() {
 fn manual_e2e_live_sync_golden() {
     require_update_mode();
 
-    let src_config = match std::env::var("DATALIB_TEST_CONFIG") {
-        Ok(p) => PathBuf::from(p),
-        Err(_) => e2e_dir()
+    let explicit = std::env::var("DATALIB_TEST_CONFIG").ok();
+    let src_config = match &explicit {
+        Some(p) => PathBuf::from(p),
+        None => e2e_dir()
             .expect(
                 "set DATALIB_MANUAL_E2E_DIR to the external test-data dir \
                  (holding dag.toml + sources/ + snapshots/), or set \
@@ -514,7 +515,11 @@ fn manual_e2e_live_sync_golden() {
          DATALIB_TEST_CONFIG to a config explicitly.",
         src_config.display()
     );
-    let cfg_text = std::fs::read_to_string(&src_config).expect("read config");
+    let cfg_text = upgraded_config(
+        &src_config,
+        std::fs::read_to_string(&src_config).expect("read config"),
+        explicit.is_none(),
+    );
 
     // Persist the run dir pytest-`tmp_path`-style (see `persistent_run_root`)
     // rather than a self-deleting tempdir, so you can always peek at the last
@@ -588,9 +593,9 @@ fn manual_e2e_live_sync_golden() {
     );
     assert!(
         data_root
-            .join("unified_grid_and_search_index/grid_index/db.sqlite")
+            .join("unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite")
             .is_file(),
-        "backend index DB must live at unified_grid_and_search_index/grid_index/db.sqlite"
+        "backend index DB must live at unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite"
     );
     // Only the genuinely-derived index dirs are tagged as rebuildable cache so
     // `--exclude-caches` backups skip them (the per-group `render_markdown/` tags
@@ -608,9 +613,10 @@ fn manual_e2e_live_sync_golden() {
         "system/ (operational history) must NOT be tagged as cache"
     );
 
-    // Snapshot each group's `ingest/` and `render_markdown/` trees, mirroring
-    // the on-disk per-group layout. `system/` and the `unified_grid_and_search_index` group
-    // (the grid and search index) are skipped — see the module header.
+    // Snapshot each group's stores, mirroring the on-disk per-group layout:
+    // `ingest/`, `render_markdown/`, a time-series source's
+    // `render_time_series/` and the time-series index's `time_series_index/`.
+    // `system/` and the grid and search index are skipped.
     let mut stanzas: Vec<String> = std::fs::read_dir(&data_root)
         .expect("read data_root")
         .filter_map(|e| e.ok())
@@ -622,7 +628,7 @@ fn manual_e2e_live_sync_golden() {
 
     let mut manifest: Vec<String> = Vec::new();
     for stanza in &stanzas {
-        for sub in ["ingest", "render_markdown"] {
+        for sub in TREE_SNAPSHOTS {
             let dir = data_root.join(stanza).join(sub);
             snapshot_tree(&dir, &format!("{stanza}/{sub}"), &mut manifest);
         }
@@ -634,7 +640,7 @@ fn manual_e2e_live_sync_golden() {
     // insta's `INSTA_UNREFERENCED=delete` is a cargo-insta feature that does
     // not fire under `bazel run` and would not scan our external snapshot
     // tree anyway. Update mode only.
-    prune_orphan_snapshots(&manifest);
+    prune_orphan_snapshots(&manifest, &data_root);
 
     // Manifest pins which files we expect to find. Catches additions /
     // removals without having to diff every per-file snapshot.
@@ -654,13 +660,13 @@ fn manual_e2e_live_sync_golden() {
         snapshot_path => snap_base().join("unified_grid_and_search_index").display().to_string(),
         prepend_module_to_snapshot => false,
         sort_maps => true,
-        description => "unified_grid_and_search_index/grid_index/db.sqlite#problems",
+        description => "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite#problems",
     }, {
         assert_json_snapshot!("problems", index_problems(&data_root));
     });
 
-    // The search index: the per-source split the keyword_index and embed
-    // steps exist for.
+    // The search index: what each searched source holds, and what its
+    // embed step left.
     insta::with_settings!({
         snapshot_path => snap_base().join("unified_grid_and_search_index").display().to_string(),
         prepend_module_to_snapshot => false,
@@ -676,7 +682,7 @@ fn manual_e2e_live_sync_golden() {
     insta::with_settings!({
         snapshot_path => snap_base().join("unified_grid_and_search_index").display().to_string(),
         prepend_module_to_snapshot => false,
-        description => "unified_grid_and_search_index/grid_index/db.sqlite#terms, one term a line: kind, value, uuid",
+        description => "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite#terms, one term a line: kind, value, uuid",
     }, {
         assert_snapshot!("search_terms", search_terms(&data_root));
     });
@@ -760,7 +766,6 @@ fn manual_e2e_live_sync_golden() {
     );
     let summary2 = run2.run_summary().expect("run 2 run_summary");
     assert_step_statuses_ok(&summary2);
-    assert_index_steps_follow_their_render(&summary2);
 
     // Run 1's problems are all still standing minutes later, and a problem
     // recorded again unchanged keeps its row, stamps and all, so run 2
@@ -1272,13 +1277,13 @@ fn assert_step_statuses_ok(summary: &Value) {
     );
 }
 
-/// Every source with a keyword index holds one document per markdown file
+/// Every searched source holds one document per markdown file
 /// its render tree has outside `unindexed/`, a source with an `embed` step
 /// has nothing left to embed, and one without still has all of it left: the
 /// embed stayed in its own source.
 fn search_index_report(data_root: &Path, cfg_text: &str) -> Value {
     let embedded = groups_with(cfg_text, "embed");
-    let keyword: Vec<String> = groups_with(cfg_text, "keyword_index").into_iter().collect();
+    let keyword: Vec<String> = searched_groups(cfg_text).into_iter().collect();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1289,7 +1294,7 @@ fn search_index_report(data_root: &Path, cfg_text: &str) -> Value {
     assert_eq!(
         held.len(),
         keyword.len(),
-        "the search index was never made, though {} sources have a keyword_index",
+        "the search index was never made, though {} sources are searched",
         keyword.len()
     );
 
@@ -1342,6 +1347,28 @@ fn groups_with(cfg_text: &str, function: &str) -> std::collections::BTreeSet<Str
         .collect()
 }
 
+/// The sources `unified_grid_and_search_index` puts in the search: every one with a render,
+/// but those its `params.not_searched` lists.
+fn searched_groups(cfg_text: &str) -> std::collections::BTreeSet<String> {
+    let cfg: toml::Value = toml::from_str(cfg_text).expect("config parses");
+    let not_searched: Vec<String> = cfg
+        .get("steps")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|s| {
+            s.get("function").and_then(toml::Value::as_str) == Some("unified_grid_and_search_index")
+        })
+        .filter_map(|s| s.get("params")?.get("not_searched")?.as_array().cloned())
+        .flatten()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect();
+    groups_with(cfg_text, "render_markdown")
+        .into_iter()
+        .filter(|g| !not_searched.contains(g))
+        .collect()
+}
+
 /// The markdown files the search covers under `dir`: every one a renderer
 /// did not file under `UNINDEXED_DIR`.
 fn searchable_markdown_files(dir: &Path) -> u64 {
@@ -1354,52 +1381,6 @@ fn searchable_markdown_files(dir: &Path) -> u64 {
             parts.next().map(|c| c.as_os_str()) != Some(UNINDEXED_DIR.as_ref())
         })
         .count() as u64
-}
-
-/// Run 2's search-index work is only where a render moved: a source's
-/// `keyword_index` reads only its render and its `embed` only that, so a
-/// source whose render did not move skips both, whatever other sources did.
-fn assert_index_steps_follow_their_render(summary: &Value) {
-    let steps = summary
-        .get("steps")
-        .and_then(Value::as_array)
-        .expect("run_summary.steps");
-    let find = |id: &str| {
-        steps
-            .iter()
-            .find(|s| s.get("step").and_then(Value::as_str) == Some(id))
-    };
-    let status = |s: &Value| {
-        s.get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string()
-    };
-    let moved = |id: &str| {
-        find(id).is_some_and(|s| {
-            s.get("outputs").and_then(Value::as_array).is_some_and(|o| {
-                o.iter()
-                    .any(|x| x.get("changed") == Some(&Value::Bool(true)))
-            })
-        })
-    };
-    for step in steps {
-        let id = step.get("step").and_then(Value::as_str).unwrap_or("");
-        let Some(group) = id
-            .strip_suffix("/keyword_index")
-            .or_else(|| id.strip_suffix("/embed"))
-        else {
-            continue;
-        };
-        if moved(&format!("{group}/render_markdown")) {
-            continue;
-        }
-        assert_eq!(
-            status(step),
-            "skipped_up_to_date",
-            "{id} ran in run 2 though {group}'s render did not move"
-        );
-    }
 }
 
 fn step_id_list(summary: &Value) -> String {
@@ -1479,7 +1460,8 @@ async fn latest_sync_run(path: &Path) -> Value {
 /// The unified grid and search index's `problems` table, volatile stamps redacted, ordered
 /// by `problem_uuid` like every dumped table.
 fn index_problems(data_root: &Path) -> Value {
-    let db = data_root.join("unified_grid_and_search_index/grid_index/db.sqlite");
+    let db =
+        data_root.join("unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite");
     let mut dump = dump_store(&db);
     let mut rows = match &mut dump {
         Value::Object(map) => map
@@ -1584,7 +1566,8 @@ fn read_contact_specs(path: &Path) -> Vec<ContactSpec> {
 /// Every handle the specs link is an author in the index, so each link
 /// lands on documents rather than on nothing.
 fn assert_handles_indexed(data_root: &Path, specs: &[ContactSpec], after: &str) {
-    let db = data_root.join("unified_grid_and_search_index/grid_index/db.sqlite");
+    let db =
+        data_root.join("unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite");
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1751,13 +1734,13 @@ const KNOWN_STAMP_LEAKS: &[(&str, &str)] = &[];
 /// for the overall manifest assertion.
 /// Every searchable document's text as the search index embeds it, chunk
 /// by chunk, beside its rendered page: `<source>/index_text/<shard>/<id>.txt`,
-/// for each source with a `keyword_index`, the ones search reads.
+/// for each source `unified_grid_and_search_index` searches.
 /// Drawn by `datalib-step index-text --chunks`, the call the keyword and
 /// embed passes make, so a change to what search reads (the envelope line,
 /// a flattened link, where a chunk is cut, the prompt) is a diff here even
 /// when the page looks the same.
 fn snapshot_index_text(data_root: &Path, cfg_text: &str, manifest: &mut Vec<String>) {
-    let searched = groups_with(cfg_text, "keyword_index");
+    let searched = searched_groups(cfg_text);
     let out = Command::new(bin_dir().join("datalib-step"))
         .arg("index-text")
         .arg(data_root)
@@ -1880,13 +1863,36 @@ fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {
 /// Delete per-stanza `.snap` files that no longer correspond to a manifest
 /// key — orphans from a run whose produced paths have since changed. No-op
 /// outside update mode, which must never mutate the version-controlled golden.
-fn prune_orphan_snapshots(manifest: &[String]) {
+/// The step trees snapshotted file by file, under each group.
+const TREE_SNAPSHOTS: [&str; 4] = [
+    "ingest",
+    "render_markdown",
+    "render_time_series",
+    "time_series_index",
+];
+
+/// Deletes the snapshots this bake no longer writes: a tree snapshot whose
+/// file is gone, and a top-level folder whose group is gone from the data
+/// root, which is what a renamed group leaves.
+fn prune_orphan_snapshots(manifest: &[String], data_root: &Path) {
     if !insta_update_mode() {
         return;
     }
     let base = snap_base();
     if !base.is_dir() {
         return;
+    }
+    for entry in std::fs::read_dir(&base)
+        .expect("read snapshot tree")
+        .flatten()
+    {
+        let name = entry.file_name();
+        let written_later = name == datalib_contacts::CURATED_DIR;
+        if entry.path().is_dir() && !written_later && !data_root.join(&name).is_dir() {
+            std::fs::remove_dir_all(entry.path()).unwrap_or_else(|e| {
+                panic!("delete orphan snapshots {}: {e}", entry.path().display())
+            });
+        }
     }
     let keys: std::collections::HashSet<&str> = manifest.iter().map(String::as_str).collect();
     for entry in WalkDir::new(&base) {
@@ -1899,16 +1905,12 @@ fn prune_orphan_snapshots(manifest: &[String]) {
             continue;
         }
         // Snapshot path mirrors the data layout, so only the per-group
-        // tree snaps are manifest-keyed — hence pruning only under an
-        // `ingest/`, `render_markdown/`, `render_occurrences/` or
-        // `index_text/` segment.
+        // tree snaps are manifest-keyed — hence pruning only under one of
+        // `TREE_SNAPSHOTS`, `render_occurrences/` or `index_text/`.
         let rel = p.strip_prefix(&base).unwrap().to_string_lossy().to_string();
         let key = rel.strip_suffix(".snap").unwrap_or(&rel);
         let is_tree_snap = key.split('/').any(|seg| {
-            matches!(
-                seg,
-                "ingest" | "render_markdown" | "render_occurrences" | "index_text"
-            )
+            TREE_SNAPSHOTS.contains(&seg) || matches!(seg, "render_occurrences" | "index_text")
         });
         if is_tree_snap && !keys.contains(key) {
             std::fs::remove_file(p)
@@ -1994,6 +1996,35 @@ fn summarize_file(path: &Path) -> SnapValue {
             }
         }
     }
+}
+
+/// The config as `datalib-http` would leave it. The bake runs
+/// `datalib-dag`, which loads a config but never upgrades one, so a shape
+/// the app rewrites on sight (the index group's old name) would fail the
+/// bake rather than be carried forward. A rewrite that refuses fails it
+/// here, by name, since the app would then run the config as it is. With
+/// `write_back`, the data repo's `dag.toml` takes the upgrade, so its diff
+/// shows it and git keeps what it replaced.
+fn upgraded_config(path: &Path, text: String, write_back: bool) -> String {
+    let up = datalib_migrate_config::upgrade_unattended(&text);
+    assert!(
+        up.refused.is_empty(),
+        "{}: the app would leave this config as it is: {}",
+        path.display(),
+        up.refused
+            .iter()
+            .map(|(why, e)| format!("it {why}, and the rewrite refused: {e:#}"))
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
+    if up.done.is_empty() {
+        return text;
+    }
+    eprintln!("[test] upgraded {}: {}", path.display(), up.done.join("; "));
+    if write_back {
+        std::fs::write(path, &up.text).expect("write the upgraded config back");
+    }
+    up.text
 }
 
 fn rewrite_config(text: &str) -> String {

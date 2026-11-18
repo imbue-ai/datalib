@@ -2,8 +2,8 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 # Text to vectors in process, with llama.cpp (//third-party/llama_cpp)
-# running a GGUF embedding model. The search index's replacement for
-# `qmd embed` (docs/dev/plans/search_index_from_ram.md).
+# running a GGUF embedding model, for the search index
+# (docs/dev/plans/search_index_from_ram.md).
 cc_library(
     name = "embedder_shim",
     srcs = ["csrc/embedder.cpp"],
@@ -24,6 +24,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         ":embedder_shim",
+        "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:anyhow",
     ],
 )
@@ -43,12 +44,44 @@ rust_binary(
     ],
 )
 
+# Holds a machine's GPU to its CPU (tools/gpu_check.rs). Built in CI with
+# libggml-cuda.so (.github/workflows/cuda.yml), run where there is a GPU.
+rust_binary(
+    name = "gpu_check",
+    srcs = ["tools/gpu_check.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_embedder",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
+    ],
+)
+
 rust_test(
     name = "embedder_unittests",
     size = "small",
     crate = ":datalib_embedder",
     edition = "2021",
     deps = ["@datalib_crates//:tempfile"],
+)
+
+# The embedding behaviour datalib depends on (README.md), one test per
+# fact. Run it after every llama.cpp or model bump; a fact that moved fails
+# by name.
+rust_test(
+    name = "embedding_facts",
+    size = "medium",
+    srcs = ["tests/embedding_facts.rs"],
+    data = ["//third-party/embedding_models:embeddinggemma"],
+    edition = "2021",
+    env = {
+        "EMBED_MODEL_RLOC": "$(rlocationpath //third-party/embedding_models:embeddinggemma)",
+    },
+    tags = ["cpu:2"],
+    deps = [
+        ":datalib_embedder",
+        "@datalib_crates//:runfiles",
+    ],
 )
 
 # The embedder against qmd's own answers on the same texts, captured once
@@ -59,11 +92,11 @@ rust_test(
     srcs = ["tests/parity.rs"],
     data = [
         "tests/qmd_cpu_golden.json",
-        "//third-party/qmd_models:embeddinggemma",
+        "//third-party/embedding_models:embeddinggemma",
     ],
     edition = "2021",
     env = {
-        "EMBED_MODEL_RLOC": "$(rlocationpath //third-party/qmd_models:embeddinggemma)",
+        "EMBED_MODEL_RLOC": "$(rlocationpath //third-party/embedding_models:embeddinggemma)",
         "QMD_GOLDEN_RLOC": "$(rlocationpath tests/qmd_cpu_golden.json)",
     },
     tags = ["cpu:2"],

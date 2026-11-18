@@ -6,7 +6,7 @@
 # notices landed in the wrong directory. Then unpacks the tarball and
 # checks what a release ships: every binary, the launcher, the commit,
 # the manifest naming this triple's runtime asset (the gnu one for a
-# musl triple), every doc `datalib-step help` prints, its links on the
+# musl triple) and, for x86_64 gnu alone, the CUDA module, every doc `datalib-step help` prints, its links on the
 # release's commit or the command that prints the doc,
 # the example configs beside it, and the notices. RELEASE_SHELL picks
 # the bash the script runs under; the macOS variant sets /bin/bash, the
@@ -62,7 +62,8 @@ cd "$work"
 # have published them: any bytes, with the sidecar sha256sum writes.
 mkdir assets
 for name in runtime-x86_64-unknown-linux-gnu.tar.gz \
-            runtime-aarch64-unknown-linux-gnu.tar.gz runtime-aarch64-apple-darwin.tar.gz; do
+            runtime-aarch64-unknown-linux-gnu.tar.gz runtime-aarch64-apple-darwin.tar.gz \
+            ggml-cuda-x86_64-unknown-linux-gnu.tar.gz; do
     printf 'not a runtime: %s\n' "$name" > "assets/$name"
     ( cd assets && if command -v sha256sum >/dev/null; then sha256sum "$name" > "$name.sha256"; else shasum -a 256 "$name" > "$name.sha256"; fi )
 done
@@ -132,9 +133,15 @@ check() { # triple, expected runtime triple
     local cpu="runtime-$runtime_triple.tar.gz"
     local expected_cpu="cpu $cpu $(sha_of "$cpu") $(wc -c < "assets/$cpu" | tr -d ' ') https://github.com/imbue-ai/datalib/releases/download/v0.0.0-test/$cpu"
     grep -qxF "$expected_cpu" "$manifest" || { echo "ERROR: manifest lacks the line: $expected_cpu" >&2; cat "$manifest" >&2; exit 1; }
-    local assets
+    local assets want=1
+    if [[ "$triple" == x86_64-unknown-linux-gnu ]]; then
+        want=2
+        local cuda="ggml-cuda-$triple.tar.gz"
+        local expected_cuda="cuda $cuda $(sha_of "$cuda") $(wc -c < "assets/$cuda" | tr -d ' ') https://github.com/imbue-ai/datalib/releases/download/v0.0.0-test/$cuda"
+        grep -qxF "$expected_cuda" "$manifest" || { echo "ERROR: manifest lacks the line: $expected_cuda" >&2; cat "$manifest" >&2; exit 1; }
+    fi
     assets="$(grep -cv '^#' "$manifest")"
-    [[ "$assets" == 1 ]] || { echo "ERROR: manifest names $assets assets, not the one runtime" >&2; cat "$manifest" >&2; exit 1; }
+    [[ "$assets" == "$want" ]] || { echo "ERROR: manifest names $assets assets, not $want" >&2; cat "$manifest" >&2; exit 1; }
 
     # The launcher finds the tree from the manifest the release wrote.
     local cache="$PWD/cache-$triple"

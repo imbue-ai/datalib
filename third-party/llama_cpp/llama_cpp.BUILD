@@ -12,6 +12,7 @@
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
 load("@rules_cuda//cuda:defs.bzl", "cuda_library")
+load("@@//third-party/llama_cpp:shared_libraries.bzl", "shared_libraries")
 
 GGML_VERSION = "0.19.0"
 
@@ -38,6 +39,17 @@ COMMON_COPTS = [
     "@platforms//os:linux": ["-D_GNU_SOURCE"],
     "//conditions:default": [],
 }) + ["-D_XOPEN_SOURCE=600"]
+
+# llama.cpp uses getenv, atoi and errno without including <cstdlib> or
+# <cerrno>, which libstdc++ and Apple's libc++ bring in by the way and
+# LLVM's libc++, the Linux toolchain's, does not.
+CXXOPTS = [
+    "-std=c++17",
+    "-include",
+    "cstdlib",
+    "-include",
+    "cerrno",
+]
 
 # ggml picks its x86 kernels at compile time, by these flags. Without them
 # x86_64 gets the SSE2 baseline and an embedding runs tens of times slower.
@@ -183,7 +195,7 @@ cc_library(
         "@platforms//os:macos": ["-DGGML_METAL_EMBED_LIBRARY"],
         "//conditions:default": [],
     }),
-    cxxopts = ["-std=c++17"],
+    cxxopts = CXXOPTS,
     defines = ["GGML_USE_CPU"] + select({
         "@platforms//os:macos": ["GGML_USE_METAL"],
         "//conditions:default": [],
@@ -198,10 +210,8 @@ cc_library(
     # default libraries, and ends in -Bdynamic, where a bare -l finds a
     # .so. So name the archives, after the C++ runtime what it calls:
     # libc, and libgcc's helpers (aarch64's outline atomics among them).
-    # The glibc link needs libgcc.a named too: rustc puts -lgcc_s before
-    # its last -lllama.pic, so with gcc 13 (ubuntu-24.04-arm) llama's
-    # `__aarch64_ldset4_relax` and its kin are wanted after libgcc was
-    # scanned, and the link fails.
+    # The glibc link is the LLVM toolchain's, whose compiler-rt carries
+    # those helpers and comes last on the line, so it names none.
     linkopts = select({
         ":musl": [
             "-l:libstdc++.a",
@@ -212,10 +222,8 @@ cc_library(
             "-lpthread",
             "-ldl",
             "-lm",
-            "-l:libgcc.a",
             # For libggml-cuda.so, which takes ggml from the program
-            # that loads it (below). A list, not --export-dynamic-symbol:
-            # gold, which links the gnu builds, takes no glob there.
+            # that loads it (below).
             "-Wl,--dynamic-list=$(execpath @@//third-party/llama_cpp:ggml_exports.dynlist)",
         ],
         "@platforms//os:macos": [
@@ -249,7 +257,7 @@ cc_library(
     ]),
     hdrs = ["include/llama.h"],
     copts = COMMON_COPTS,
-    cxxopts = ["-std=c++17"],
+    cxxopts = CXXOPTS,
     includes = [
         "include",
         "src",
@@ -338,6 +346,36 @@ cuda_library(
         "@cuda//:cublas",
         "@cuda//:cuda",
     ],
+)
+
+# The cuBLAS libraries the module links, as files, for the `-cuda` image
+# (scripts/release/stage_cuda.sh).
+shared_libraries(
+    name = "cublas_libs",
+    target_compatible_with = LINUX_X86_64,
+    visibility = ["//visibility:public"],
+    deps = ["@cuda//:cublas"],
+)
+
+# NVIDIA's license for the CUDA runtime the module links in and for
+# cuBLAS, verbatim from the archive each was fetched from, to ship beside
+# them (scripts/release/stage_cuda.sh).
+genrule(
+    name = "nvidia_licenses",
+    srcs = [
+        "@cuda_cudart_linux_x86_64_12_9_1//:cudart/LICENSE",
+        "@cuda_cublas_linux_x86_64_12_9_1//:cublas/LICENSE",
+    ],
+    outs = [
+        "nvidia/cudart/LICENSE",
+        "nvidia/cublas/LICENSE",
+    ],
+    cmd = " && ".join([
+        "cp $(location @cuda_cudart_linux_x86_64_12_9_1//:cudart/LICENSE) $(location nvidia/cudart/LICENSE)",
+        "cp $(location @cuda_cublas_linux_x86_64_12_9_1//:cublas/LICENSE) $(location nvidia/cublas/LICENSE)",
+    ]),
+    target_compatible_with = LINUX_X86_64,
+    visibility = ["//visibility:public"],
 )
 
 cc_shared_library(

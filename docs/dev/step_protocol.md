@@ -116,7 +116,7 @@ its id, which arrives in the environment.
 | `DATALIB_DAG_INPUTS` | resolved input artifacts, `\n`-separated, relative to the data root |
 | `DATALIB_DAG_CHANGED_INPUTS` | the subset of the above whose version moved since this step's last success, `\n`-separated; every input when there is no last success to compare against (a first run, or the step's own config changed). Empty only when nothing moved |
 | `DATALIB_DAG_FAILED_INPUTS` | the subset of `DATALIB_DAG_INPUTS` whose producer's most recent run did not succeed — it failed (`incomplete` included), was stopped, or was blocked — `\n`-separated; empty when every one succeeded or is running now. You are started anyway, on what each committed before it ended; whether to go on is yours to decide |
-| `DATALIB_READS` | a JSON object, input path → the version the runner started this invocation against, as `<fingerprint>:<version>` (§ "When you are started"); an input with no version yet is absent. A version for what you *read*, where the output's own would say less (the qmd index reports a hash of this) |
+| `DATALIB_READS` | a JSON object, input path → the version the runner started this invocation against, as `<fingerprint>:<version>` (§ "When you are started"); an input with no version yet is absent. A version for what you *read*, where the output's own would say less (an `embed` step reports a hash of this as its version) |
 | `DATALIB_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of sampling your own clock, so one run's outputs agree |
 | `DATALIB_DAG_CHECKPOINT_CADENCE` | set when the config has `checkpoint_cadence`: how many seconds to let pass before a run's first checkpoint. `datalib-step` doubles the wait after each one (the next comes once the run is twice as old as at the last), since every commit keeps the pages it touched; `0` means every consistent point and never grows |
 | `DATALIB_DAG_RENDER_PAGES` | set when the config has `render_pages`: `<buckets>,<blob_mb>`, either side empty when the config leaves it out — how many buckets a render reads together and how many MB of their blobs it loads at once |
@@ -273,9 +273,8 @@ sit in, for that cell's hover; **`problems`**, with
 a `severity=error` or `severity=warning` label, is a grey count after
 a row's name — count the problems your step found, not ones it copied
 from an input, since the group's count is the sum of its steps'. (The
-red and yellow counts are the grid index's problem rows, which only
-datalib's own download, render, time-series, occurrences and index
-steps write.) Report each one every run, zero
+red and yellow counts are problem rows, read where each step keeps
+them; §"Problems: what you could not do".) Report each one every run, zero
 included: the screen shows the newest value a step reported, so a
 count left out keeps last run's. A step that counts neither leaves no
 series, and draws a blank Items cell and no counts. They are
@@ -363,6 +362,53 @@ SQLite, one row per log line, the newest value per metric, every
 step's state — for this run and the ones before it, which is what the
 Manage screen reads. The store, its retention and how to read it:
 [`logging.md`](logging.md).
+
+### Problems: what you could not do
+
+A problem is one thing your step could not fully do: a record it could
+not fetch, a file it could not read. It is a row of the `problems`
+table (`datalib_problems::ProblemRow`), the same table in every store,
+and a reader finds a step's problems in the stores directly in its
+folder (`<data root>/<group>/<function>/`): each `.doltlite_db` as its
+`main` commit has it, and each plain `.sqlite` file
+(`datalib_step_problems::of_step`). `datalib-step`'s steps keep theirs
+in their own stores. A step with no store of its own keeps them in
+`problems.sqlite` there: it writes the file itself through
+`datalib_step_problems::StepFile`, or sends two lines and lets the
+runner write it:
+
+```json
+{"event":"problem","stage":"fetch","scope_kind":"entity","scope_key":"messages:C01/1712345678.000100","outcome":"dropped","reason":"fetch_failed","severity":"warning","sample":"HTTP 404","upstream_entity_kind":"message","upstream_id":"C01/1712345678.000100"}
+{"event":"covered","kind":"records","table":"messages","all_but":["C01/1712345999.000200"]}
+```
+
+- **A `problem` line** is a `ProblemRow` without the columns its writer
+  fills: its id (minted from what the line says), its source (the
+  step's group) and its stamps. `stage`, `scope_kind`, `outcome`,
+  `reason` and `severity` are datalib's own closed sets
+  (`datalib_problems`); `sample` says what happened; `item_uuid`,
+  `field`, `path` and `rule` are optional.
+- **`scope_key`** is what the problem is about within your step:
+  `<table>:<id>` for a record, `file:<path>` for a file, or
+  `listing:<name>` or `phase:<name>` for a part of your run. It is
+  what `covered` matches.
+- **What it is about upstream** goes in `upstream_entity_kind`,
+  `upstream_id` and `upstream_account`, the names a grid row carries;
+  never an id some other step mints.
+- **`covered`** says what this run checked again, so what it covered
+  and did not find again can go: `all`, `listings` (every `listing:`
+  and `phase:` scope), `records` of one `table`, or `files` `under` a
+  folder. A `records` line with `only` vouches for exactly those
+  records; one with `all_but`, and a `files` line with it, for every
+  one but those. Both count even when your run fails. Without either,
+  and for `all` and `listings`, only a run that succeeds clears
+  anything.
+
+The runner writes the problems as they arrive, at most a second after
+a line, so they show while you run, and clears when you end. A step
+that sends no `problem` or `covered` line has its file left alone. Run
+by hand (§"Running `datalib-step` by hand"), these lines are printed
+and kept nowhere; a step that wants them kept writes the file itself.
 
 ### The outcome line
 
@@ -458,7 +504,7 @@ Failing there is wrong: `data` means "a human must look at this", and
 the Manage row turns red for a source that has simply not been synced
 yet.
 
-An empty render is safe for the index: `grid_index` deletes per
+An empty render is safe for the index: `unified_grid_and_search_index` deletes per
 document (`DELETE FROM grid_rows WHERE markdown_uuid = ?`), driven by
 the markdown files actually present, so rendering nothing contributes
 nothing rather than dropping another source's rows.
@@ -659,7 +705,10 @@ rung, the additive DDL and an old blob store's conversion run, and each
 is sealed to `main`. A render step and the grid index compare their
 store's `_datalib_meta.schema_hash` with this build's and answer
 `needs_rerun` when it differs; a derived store is rebuilt, never
-migrated. The qmd steps have nothing to answer.
+migrated. The grid index also answers `needs_rerun` when the search
+index's keyword tables are in another shape or a source's documents
+were drawn by another version, which its keyword pass reads again;
+`embed` and `embedding_map` have nothing to answer.
 
 ## Compact and collect
 
@@ -731,7 +780,7 @@ The run then returns as a shorter run, `finish` commits blobs then
 entities, and the step reports `cancelled`. A stopped run does not
 record its scope config as satisfied, so a widened filter interrupted
 part-way is backfilled by the next run rather than believed done.
-`grid_index` reads the same flag between documents: it rolls back the
+`unified_grid_and_search_index` reads the same flag between documents: it rolls back the
 source it is loading and keeps the ones it has already committed.
 
 ## Minimal examples
@@ -803,7 +852,7 @@ emit({"event": "outcome",
 The built-in step types are one binary implementing this protocol,
 run with no arguments of its own. It reads `DATALIB_DAG_FUNCTION` to
 learn what to do — `ingest`, `render_markdown`, `render_time_series`,
-`keyword_index`, `embed`, `grid_index`, `qmd_aggregator`, `embedding_map`
+`embed`, `unified_grid_and_search_index`, `embedding_map`
 or `time_series_index`; anything else is
 refused with the list — and `DATALIB_DAG_GROUP_TYPE` to learn which
 provider to run, which `ingest`, `render_markdown` and
@@ -872,5 +921,5 @@ Four things a hand run has to get right that the runner does for it:
   second time, beneath itself.
 
 The index functions' ids are fixed at `unified_grid_and_search_index/<function>`, and
-the qmd steps share one index file; the rules are in
+the search index's tables live in `unified_grid_and_search_index`'s file; the rules are in
 [`config_model.md`](config_model.md) § "Naming rules".

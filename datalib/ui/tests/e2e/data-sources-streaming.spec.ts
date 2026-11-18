@@ -25,7 +25,7 @@
 // Both are states to wait for, not frames to catch: nothing upstream can
 // finish while the hold is in place.
 //
-// The qmd steps are deliberately not in this config: their sink is an FTS
+// The search steps are deliberately not in this config: their sink is an FTS
 // index rewritten in place, which cannot be read mid-write, so it is a
 // barrier by design and says nothing about streaming — and its model
 // load is the slowest thing in the suite.
@@ -51,6 +51,7 @@ import {
   stampsBefore,
   statusOf,
   TABLE_ROWS,
+  expectSyncEverything,
 } from "./grid-helpers";
 import { expectSanePaints, watchPaints } from "./paint-watch";
 
@@ -74,7 +75,7 @@ function release() {
 const SOURCES = ["chatgpt-replay", "claude-replay"] as const;
 const INGESTS = SOURCES.map((s) => `${s}/ingest`);
 const RENDERS = SOURCES.map((s) => `${s}/render_markdown`);
-const INDEX = "unified_grid_and_search_index/grid_index";
+const INDEX = "unified_grid_and_search_index/unified_grid_and_search_index";
 const STEPS = [...INGESTS, ...RENDERS, INDEX];
 
 type DagStep = { id: string; current_state: string | null };
@@ -89,7 +90,7 @@ async function resolveDataRoot(request: APIRequestContext): Promise<string> {
 
 async function openManager(page: Page) {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
 }
 
 async function writeConfig(page: Page, text: string) {
@@ -222,7 +223,7 @@ name = "Grid and Search Index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 command = "'${STEP_BIN}'"
 inputs = [${sources.map(([id]) => `"${id}/render_markdown"`).join(", ")}]
 ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;

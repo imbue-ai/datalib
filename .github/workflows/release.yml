@@ -139,11 +139,12 @@ jobs:
   build:
     name: build (${{ matrix.triple }})
     runs-on: ${{ matrix.runs-on }}
-    # After the runtime artifacts exist, whose sha256s the manifest below
-    # carries. `!cancelled()` rather than the default `success()`: a runtime
-    # leg that failed costs the tarballs that name it (their manifest step
-    # fails), not every tarball.
-    needs: runtime
+    # After the runtime artifacts and the CUDA module exist, whose sha256s
+    # the manifest below carries (the module's in the x86_64 gnu tarball's
+    # alone). `!cancelled()` rather than the default `success()`: a runtime
+    # leg or a `cuda` job that failed costs the tarballs that name it (their
+    # manifest step fails), not every tarball.
+    needs: [runtime, cuda]
     if: ${{ !cancelled() }}
     strategy:
       # One platform failing shouldn't cancel the others: a re-run of the
@@ -306,12 +307,18 @@ jobs:
       # The step is a script so //tools:stage_tarball_test runs the same
       # lines before a tag does (docs/dev/release_steps.md): the binaries
       # `:bin` laid out above, the `latchkey` launcher, the commit, the
-      # manifest of the runtime asset the `runtime` job staged (with its
-      # sha256 and size), and the third-party notices — then the tarball
+      # manifest of the assets the `runtime` and `cuda` jobs staged (with
+      # their sha256s and sizes), and the third-party notices — then the tarball
       # and its sha256.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: runtime-${{ matrix.runtime-triple }}
+          path: ${{ runner.temp }}/runtime-assets
+      # The CUDA module, which only the x86_64 gnu manifest names.
+      - if: matrix.triple == 'x86_64-unknown-linux-gnu'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cuda-x86_64-unknown-linux-gnu
           path: ${{ runner.temp }}/runtime-assets
 
       - name: Stage tarball
@@ -363,6 +370,67 @@ jobs:
           path: |
             ${{ steps.stage.outputs.tarball }}
             ${{ steps.stage.outputs.sha256 }}
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  # What CUDA adds, x86_64 gnu Linux only (docs/dev/plans/embed_on_modal.md):
+  # the module `libggml-cuda.so` as a release asset, and the cuBLAS the
+  # `-cuda` image carries, which is not published. One script stages both
+  # and checks them (scripts/release/build_cuda.sh), the one
+  # `.github/workflows/cuda.yml` runs on every change that could move them.
+  # Its own job: NVIDIA's toolkit is a ~1 GB fetch and the GPU code a long
+  # compile that no other leg needs, and the plain image does not wait for it.
+  cuda:
+    name: cuda (x86_64-unknown-linux-gnu)
+    # The gnu legs' runner: its gcc 13 is one CUDA 12.9's nvcc accepts, and
+    # its glibc is the floor (release_steps.md §"The Linux floor").
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # datalib-step is stamped, as in `build`.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: ./.github/actions/free-runner-disk
+
+      # No cache of any kind, as in `build`.
+      - uses: bazel-contrib/setup-bazel@f34d6a05eae3c24acab7fa54587492daeaeffdab # 0.19.2
+        with:
+          bazelisk-cache: false
+          disk-cache: false
+          repository-cache: false
+          external-cache: false
+
+      - name: Build and stage
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/cuda" && cd "$RUNNER_TEMP/cuda"
+          BAZEL=bazel "$GITHUB_WORKSPACE/scripts/release/build_cuda.sh" \
+              -c opt --config=release --build_metadata=ROLE=CI
+          mkdir -p asset image
+          mv ggml-cuda-x86_64-unknown-linux-gnu.tar.gz* asset/
+          mv cuda-libs-x86_64-unknown-linux-gnu.tar.gz* image/
+
+      - name: Assert the module needs no glibc above the floor
+        run: scripts/release/check_glibc_floor.sh "$RUNNER_TEMP/cuda/asset/ggml-cuda-x86_64-unknown-linux-gnu.tar.gz"
+
+      # `overwrite`, as on the tarballs (release_steps.md §"What a re-run does").
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cuda-x86_64-unknown-linux-gnu
+          overwrite: true
+          path: ${{ runner.temp }}/cuda/asset/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cuda-image-x86_64-unknown-linux-gnu
+          overwrite: true
+          path: ${{ runner.temp }}/cuda/image/
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
@@ -671,17 +739,7 @@ jobs:
           ARCH: ${{ matrix.arch }}
           ASSETS: ${{ runner.temp }}/image-assets
           TRIPLE: ${{ matrix.triple }}
-        run: |
-          set -euo pipefail
-          mkdir -p "ctx/dist/${ARCH}"
-          cp datalib/docker/Dockerfile ctx/Dockerfile
-          cp datalib/docker/entrypoint.sh ctx/entrypoint.sh
-          datalib/docker/stage_demo.sh ctx
-          cp "${ASSETS}/datalib-${TRIPLE}.tar.gz" \
-             "${ASSETS}/runtime-${TRIPLE}.tar.gz" \
-             "${ASSETS}/runtime-${TRIPLE}.tar.gz.sha256" \
-             "ctx/dist/${ARCH}/"
-          ls -la "ctx/dist/${ARCH}"
+        run: scripts/release/stage_docker_context.sh ctx "${ARCH}" "${TRIPLE}" "${ASSETS}"
 
       # Every Docker Hub image this job needs — BuildKit and the
       # Dockerfile's `FROM`s — comes through Google's pull-through mirror
@@ -757,6 +815,90 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The CUDA variant, `<version>-cuda`, amd64 only: the same build with
+  # cuBLAS and the module in layers below the release's
+  # (docs/dev/docker.md § "The CUDA variant"). A job of its own, so the
+  # plain image neither waits for the `cuda` job nor fails with it.
+  docker-image-cuda:
+    name: docker-image (amd64-cuda)
+    needs: [runtime, build, cuda]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write  # push the image to ghcr.io
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/free-runner-disk
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tarball-x86_64-unknown-linux-gnu
+          path: ${{ runner.temp }}/image-assets
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: runtime-x86_64-unknown-linux-gnu
+          path: ${{ runner.temp }}/image-assets
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cuda-x86_64-unknown-linux-gnu
+          path: ${{ runner.temp }}/cuda-assets
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cuda-image-x86_64-unknown-linux-gnu
+          path: ${{ runner.temp }}/cuda-assets
+
+      - name: Stage tarballs, CUDA and the demo into docker build context
+        env:
+          ASSETS: ${{ runner.temp }}/image-assets
+          CUDA: ${{ runner.temp }}/cuda-assets
+        run: scripts/release/stage_docker_context.sh ctx amd64 x86_64-unknown-linux-gnu "${ASSETS}" "${CUDA}"
+
+      # As in docker-image.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+        with:
+          driver-opts: image=mirror.gcr.io/moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+          cache-binary: false
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build it and push it by digest
+        env:
+          BUILDKIT_PROGRESS: plain
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker buildx build \
+              --platform linux/amd64 \
+              --build-arg CUDA=12 \
+              --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+              --output "type=image,name=${image},push-by-digest=true,name-canonical=true,push=true" \
+              --metadata-file "${RUNNER_TEMP}/metadata.json" \
+              ctx
+          mkdir -p "${RUNNER_TEMP}/digests"
+          jq --exit-status --raw-output '."containerimage.digest"' "${RUNNER_TEMP}/metadata.json" \
+              > "${RUNNER_TEMP}/digests/amd64-cuda"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docker-digest-amd64-cuda
+          overwrite: true
+          path: ${{ runner.temp }}/digests/amd64-cuda
+          if-no-files-found: error
+          retention-days: 7
+
   # Give the two architectures' images one tag, and check the result. Builds
   # nothing. An architecture that failed leaves the version and `:latest`
   # untouched.
@@ -782,8 +924,11 @@ jobs:
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: docker-digest-*
-          merge-multiple: true
+          name: docker-digest-amd64
+          path: ${{ runner.temp }}/digests
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docker-digest-arm64
           path: ${{ runner.temp }}/digests
 
       - name: Log in to GHCR
@@ -843,6 +988,69 @@ jobs:
           DATALIB_DOCKER_IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}@${digest}" \
               datalib/docker/doc_test.sh
 
+  # Tag the CUDA variant `<version>-cuda` and `latest-cuda`, and check it as
+  # docker-publish checks the plain one: a runner has no GPU, so this is the
+  # variant on the CPU, which is what it does wherever there is none.
+  docker-publish-cuda:
+    name: docker-publish (ghcr.io, -cuda)
+    needs: docker-image-cuda
+    if: ${{ !cancelled() && needs.docker-image-cuda.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # tag the image on ghcr.io
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/free-runner-disk
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docker-digest-amd64-cuda
+          path: ${{ runner.temp }}/digests
+
+      - name: Log in to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag the CUDA image
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${REF_NAME#v}"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker buildx imagetools create \
+              --tag "${image}:${version}-cuda" \
+              --tag "${image}:latest-cuda" \
+              "${image}@$(cat "${RUNNER_TEMP}/digests/amd64-cuda")"
+          digest="$(docker buildx imagetools inspect "${image}:${version}-cuda" --format '{{json .Manifest}}' \
+              | jq --exit-status --raw-output .digest)"
+          mkdir -p "${RUNNER_TEMP}/image-digest"
+          echo "${digest}" > "${RUNNER_TEMP}/image-digest/docker-image-cuda.digest"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docker-image-cuda-digest
+          overwrite: true
+          path: ${{ runner.temp }}/image-digest/docker-image-cuda.digest
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Check docs/user/docker.md against the pushed image
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          digest="$(cat "${RUNNER_TEMP}/image-digest/docker-image-cuda.digest")"
+          DATALIB_DOCKER_IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}@${digest}" \
+              datalib/docker/doc_test.sh
+
   # Signs a build provenance attestation (a SLSA statement, signed through
   # Sigstore with this job's OIDC identity) for every asset the release will
   # hold and for the image by digest: that this workflow, at this tag and
@@ -864,6 +1072,8 @@ jobs:
       - build
       - macos-app-verify
       - docker-publish
+      - cuda
+      - docker-publish-cuda
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -893,6 +1103,14 @@ jobs:
         with:
           name: docker-image-digest
           path: ${{ runner.temp }}/release-artifacts/docker-image-digest
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cuda-x86_64-unknown-linux-gnu
+          path: ${{ runner.temp }}/release-artifacts/cuda-x86_64-unknown-linux-gnu
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docker-image-cuda-digest
+          path: ${{ runner.temp }}/release-artifacts/docker-image-cuda-digest
 
       - name: Check the assets and list them
         id: subjects
@@ -909,6 +1127,7 @@ jobs:
               echo "subjects_sha256=$(sha256sum "$subjects" | cut -d' ' -f1)"
               echo "image=ghcr.io/${GITHUB_REPOSITORY,,}"
               echo "image_digest=$(cat "${ARTIFACTS}/docker-image-digest/docker-image.digest")"
+              echo "image_cuda_digest=$(cat "${ARTIFACTS}/docker-image-cuda-digest/docker-image-cuda.digest")"
           } >> "$GITHUB_OUTPUT"
 
       - name: Attest the assets
@@ -930,6 +1149,14 @@ jobs:
         with:
           subject-name: ${{ steps.subjects.outputs.image }}
           subject-digest: ${{ steps.subjects.outputs.image_digest }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Attest the CUDA image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.subjects.outputs.image }}
+          subject-digest: ${{ steps.subjects.outputs.image_cuda_digest }}
           push-to-registry: true
           create-storage-record: false
 
@@ -956,6 +1183,8 @@ jobs:
       - build
       - macos-app-verify
       - docker-publish
+      - cuda
+      - docker-publish-cuda
       - attest
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -981,6 +1210,14 @@ jobs:
         with:
           name: docker-image-digest
           path: ${{ runner.temp }}/release-artifacts/docker-image-digest
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cuda-x86_64-unknown-linux-gnu
+          path: ${{ runner.temp }}/release-artifacts/cuda-x86_64-unknown-linux-gnu
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docker-image-cuda-digest
+          path: ${{ runner.temp }}/release-artifacts/docker-image-cuda-digest
       - name: Create, upload, check and publish
         env:
           ARTIFACTS: ${{ runner.temp }}/release-artifacts

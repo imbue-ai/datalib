@@ -39,6 +39,8 @@ STAGE_RUNTIME_DATA = [
     "//datalib/tauri:bundled_node",
     "//third-party:bundled_licenses",
     "//third-party/latchkey/runtime:latchkey_tree",
+    "//third-party/modal:LICENSE",
+    "//third-party/modal/runtime:modal_tree",
 ]
 
 STAGE_TARBALL_DATA = [
@@ -231,6 +233,7 @@ py_test(
         "//datalib/ui:pnpm-lock.yaml",
         "//third-party/doltlite:BUILD.bazel",
         "//third-party/latchkey/runtime:package.json",
+        "//third-party/modal/runtime:package.json",
     ],
     main = "check_version_pins.py",
 )
@@ -298,17 +301,17 @@ py_test(
     main = "step_protocol_example_test.py",
 )
 
-# The qmd model pins (repo, revision, file, sha256) live in the build's
+# The model pins (repo, revision, file, sha256) live in the build's
 # fetch rule and in the Rust table the shipped binaries verify against.
 py_test(
-    name = "qmd_model_pins_test",
+    name = "model_pins_test",
     size = "small",
-    srcs = ["check_qmd_model_pins.py"],
+    srcs = ["check_model_pins.py"],
     data = [
-        "//datalib/backend/runtime:src/qmd.rs",
-        "//third-party/qmd_models:BUILD.bazel",
+        "//datalib/backend/runtime:src/models.rs",
+        "//third-party/embedding_models:BUILD.bazel",
     ],
-    main = "check_qmd_model_pins.py",
+    main = "check_model_pins.py",
 )
 
 # cargo-about (the release's third-party notices) must accept every

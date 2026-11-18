@@ -162,12 +162,13 @@ compile error.
   rows' order when nobody asks for one. Its first column is also a
   group's newest row.
 - `range = "created_at_utc"` — the stamp `before:` and `after:` compare.
-- `qmd` — free text goes to the table's qmd index. Without it, at least
+- `ranked` — free text goes to the search index, which ranks the rows.
+  Without it, at least
   one column must say `like`.
 
 On a `#[col(...)]` or a `#[derived(...)]`:
 
-- `search` (the key is the column's name) or `search = "convo"`; with
+- `search` (the key is the column's name) or `search = "datalib_document_id"`; with
   `alias = "old_name"` (repeatable) for a spelling people already type,
   and `uuid` when a value may come as `slug-uuid`.
   On an `enum` column the key takes only the enum's words

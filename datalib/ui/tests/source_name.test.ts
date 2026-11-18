@@ -84,13 +84,13 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 name = "Search index"
 inputs = ["slack/render_markdown"]
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
+function = "embedding_map"
 inputs = []
 
 [[applets]]
@@ -101,14 +101,18 @@ command = "datalib-applet unified_grid_and_search_index"
 
   it("lets a written name beat the shared step's default label", () => {
     const byId = new Map(listSteps(OTHER).map((e) => [e.id, e]));
-    expect(byId.get("unified_grid_and_search_index/grid_index")?.kind).toBe("step");
-    expect(byId.get("unified_grid_and_search_index/grid_index")?.name).toBe("Search index");
+    expect(byId.get("unified_grid_and_search_index/unified_grid_and_search_index")?.kind).toBe(
+      "step",
+    );
+    expect(byId.get("unified_grid_and_search_index/unified_grid_and_search_index")?.name).toBe(
+      "Search index",
+    );
   });
 
   it("gives an unnamed shared step its default label", () => {
     const byId = new Map(listSteps(OTHER).map((e) => [e.id, e]));
-    expect(byId.get("unified_grid_and_search_index/qmd_aggregator")?.name).toBe(
-      "Grid and Search Index (QMD)",
+    expect(byId.get("unified_grid_and_search_index/embedding_map")?.name).toBe(
+      "Grid and Search Index (map)",
     );
   });
 

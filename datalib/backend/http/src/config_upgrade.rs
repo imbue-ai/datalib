@@ -1,29 +1,15 @@
 //! A config in a shape the server can bring forward unattended is
 //! rewritten in place as soon as the server sees it: at boot, on a save
-//! through the API, and whenever the file changes. Eight rewrites, in
-//! order: an id that names a folder and has capitals in it
-//! (`datalib_migrate_config::upgrade_lowercase_ids`), a `qmd_index` step from
-//! before `qmd_aggregator` (`datalib_migrate_config::upgrade_qmd_steps`),
-//! the index group under an earlier name, `unified_index` or
-//! `unified_document_index` (`datalib_migrate_config::upgrade_index_name`),
-//! a config with
-//! time-series sources and no time-series index
-//! (`datalib_migrate_config::upgrade_time_series_steps`), a
-//! time-series source with an `embed` step
-//! (`datalib_migrate_config::upgrade_time_series_embeds`), and a step of
-//! datalib's own that does not name `datalib-step` as its `command`
-//! (`datalib_migrate_config::upgrade_step_commands`), and a Todoist
-//! ingest whose window is still named `completed_since`
-//! (`datalib_migrate_config::upgrade_todoist_since`), and a `grid_index`
-//! that does not read a `render_time_series` or `render_occurrences` step
-//! (`datalib_migrate_config::upgrade_problem_inputs`), all listed once in
-//! `datalib_migrate_config::UNATTENDED`. The text they replaced is kept
-//! as `config.toml.bak`.
+//! through the API, and whenever the file changes. The rewrites are
+//! `datalib_migrate_config::UNATTENDED`, made in its order;
+//! `docs/dev/config_model.md` §"The retired shapes" says what each does.
+//! The text they replaced is kept as `config.toml.bak`.
 //!
 //! At boot only, [`move_index_dir`] then brings the index's tree and the
-//! loop's record of its steps over to the current name, and
-//! [`move_case_folders`] moves each folder the config now names in lower
-//! case to that spelling, before anything opens them.
+//! loop's record of its steps over to the current name,
+//! [`move_index_step_dir`] does the same for the index step's own tree
+//! and record, and [`move_case_folders`] moves each folder the config now
+//! names in lower case to that spelling, before anything opens them.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -173,6 +159,62 @@ async fn move_one_index_dir(
         Ok(0) => {}
         Ok(n) => tracing::warn!("supervisor: moved {n} rows from {old_id}/ to {new_id}/"),
         Err(e) => tracing::error!("supervisor: could not rename the {old_id}/ steps: {e:#}"),
+    }
+}
+
+/// Move the index step's tree from the name it had while its function was
+/// `grid_index` to `unified_grid_and_search_index/unified_grid_and_search_index/`
+/// with one rename, so the grid index's file, and the search tables and
+/// cursors in it, are kept rather than rebuilt; and carry the loop's rows
+/// for the step (turned off, its last success, its tree's version) over
+/// to its new id. Before the loop starts: nothing may have the file open.
+/// A config that still names the old step, because its rewrite was
+/// refused, keeps the old tree.
+pub async fn move_index_step_dir(root: &Path) {
+    use datalib_core::layout::{
+        INDEX_STEP_DIR, RETIRED_INDEX_STEP_DIR, UNIFIED_GRID_AND_SEARCH_INDEX_DIR as GROUP,
+    };
+    let config = datalib_dag::config::root_config_path(root);
+    let text = std::fs::read_to_string(&config).unwrap_or_default();
+    let Ok(written) = datalib_dag::written::entries_as_written(&text) else {
+        return;
+    };
+    let old_id = format!("{GROUP}/{RETIRED_INDEX_STEP_DIR}");
+    let new_id = format!("{GROUP}/{INDEX_STEP_DIR}");
+    let config_uses_old = written.steps.iter().any(|s| s.id == old_id);
+    let (old, new) = (root.join(&old_id), root.join(&new_id));
+    match index_dir_plan(old.exists(), new.exists(), config_uses_old) {
+        IndexDir::Leave => {}
+        IndexDir::Move => match std::fs::rename(&old, &new) {
+            Ok(()) => tracing::warn!("moved {} to {}", old.display(), new.display()),
+            Err(e) => tracing::error!(
+                "could not move {} to {}: {e}; the index is rebuilt under the new name",
+                old.display(),
+                new.display()
+            ),
+        },
+        IndexDir::Both => tracing::error!(
+            "both {} and {} exist; left as they are. The index step writes the second; \
+             delete the first once nothing in it is wanted.",
+            old.display(),
+            new.display()
+        ),
+    }
+    if config_uses_old || !datalib_core::layout::supervisor_db(root).exists() {
+        return;
+    }
+    let renamed = match datalib_dag::supervisor::store::Store::open(root).await {
+        Ok(store) => {
+            let moved = store.rename_step(&old_id, &new_id).await;
+            store.close().await;
+            moved
+        }
+        Err(e) => Err(e),
+    };
+    match renamed {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!("supervisor: moved {n} rows from {old_id} to {new_id}"),
+        Err(e) => tracing::error!("supervisor: could not rename {old_id}: {e:#}"),
     }
 }
 

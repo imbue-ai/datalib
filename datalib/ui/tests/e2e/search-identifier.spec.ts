@@ -1,6 +1,7 @@
 // A pasted uuid is answered from the grid index's search terms, which the
-// fixture's own `grid_index` step wrote, not from qmd: the row comes back
-// first, saying it matched as its own id.
+// fixture's own `unified_grid_and_search_index` step wrote, not from the
+// ranked search: the row comes back first, saying it matched as its own
+// id.
 
 import { test, expect, type Page } from "@playwright/test";
 import { EVERY_ROW, SEARCH_ROWS, searchAndSettle, type GridApi } from "./grid-helpers";
@@ -22,12 +23,12 @@ test("a pasted uuid finds its row from the terms, first", async ({ page, request
   );
   const answer = (await found.json()) as {
     rows: { uuid: string; snippet: string; score: number | null }[];
-    query_echo: { qmd_error?: string | null };
+    query_echo: { search_error?: string | null };
   };
   expect(answer.rows[0]?.uuid).toBe(uuid);
   expect(answer.rows[0]?.snippet).toBe(`id: ${uuid}`);
   expect(answer.rows[0]?.score).toBe(5);
-  expect(answer.query_echo.qmd_error ?? null).toBeNull();
+  expect(answer.query_echo.search_error ?? null).toBeNull();
 
   await page.goto(EVERY_ROW);
   await expect(page.locator(SEARCH_ROWS).first()).toBeVisible({ timeout: 15_000 });

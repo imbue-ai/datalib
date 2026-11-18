@@ -3,18 +3,20 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === chatgpt-api 00000000-0000-8020-9a72-3216b3199332 Sonnet on a Cat Named Spot
---- 0b80ee6f-7000-8780-8c9c-f86c1c65ce83
-System — Sat 24 Oct 2370 08:00
+--- chunk 0
+title: Sonnet on a Cat Named Spot | text: System — Sat 24 Oct 2370 08:00
 
 User is Lt. Cmdr. Data, a sentient android. Prefers precise, literal language.
 
---- 0b80ee6f-7000-8264-8005-f040582f6f37
-Me — Sat 24 Oct 2370 08:00
+
+--- chunk 1
+title: Sonnet on a Cat Named Spot | text: Me — Sat 24 Oct 2370 08:00
 
 Compose a Shakespearean sonnet about my cat Spot. Spot is an orange tabby with a fondness for jumping on consoles.
 
---- 0b80ee71-44c0-8e9c-b418-d92e15aaa9aa
-gpt-5 — Sat 24 Oct 2370 08:02
+
+--- chunk 2
+title: Sonnet on a Cat Named Spot | text: gpt-5 — Sat 24 Oct 2370 08:02
 
 Upon the bridge, where duty bids us stand,
 A tabby of the warmest tangerine,
@@ -34,53 +36,53 @@ Reflects the very life he hopes to share.
 So bless thee, Spot, of fur and quiet purr:
 Thou art my muse, my console saboteur.
 
---- 0b80ee74-03e0-855d-8e63-cf0701eedfcd
-Me — Sat 24 Oct 2370 08:05
+
+--- chunk 3
+title: Sonnet on a Cat Named Spot | text: Me — Sat 24 Oct 2370 08:05
 
 Curious. The closing couplet is satisfying. Thank you.
 
+
 === chatgpt-api 00000000-0000-81f5-a220-ad1cdf647ea8 chatgpt-api storage
---- -
----
-title: chatgpt-api storage
-source: chatgpt-api
-measured_at: 2369-04-15T00:00:00+00:00
----
+--- chunk 0
+title: chatgpt-api storage | text: Source: chatgpt-api
 
-# [chatgpt-api](datalib:group/chatgpt-api "chatgpt-api") — storage
+# chatgpt-api — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/chatgpt-api/ingest "chatgpt-api/ingest") | `chatgpt-api/ingest` | <size> | 3 files | <span id="m-00000000-0000-81f5-a220-ad1cdf647ea8" data-section-uuid="00000000-0000-81f5-a220-ad1cdf647ea8">`00000000`</span> |
-| Store | [ingest](datalib:step/chatgpt-api/ingest "chatgpt-api/ingest") | `chatgpt-api/ingest/blobs.sqlite` | <size> |  | <span id="m-00000000-0000-8e8e-bfa6-85f21f6d0e1c" data-section-uuid="00000000-0000-8e8e-bfa6-85f21f6d0e1c">`00000000`</span> |
-| Table | [ingest](datalib:step/chatgpt-api/ingest "chatgpt-api/ingest") | `chatgpt-api/ingest/blobs.sqlite#cas_objects` |  | 4 rows | <span id="m-00000000-0000-8df9-b479-b68a1e1d758f" data-section-uuid="00000000-0000-8df9-b479-b68a1e1d758f">`00000000`</span> |
-| Store | [ingest](datalib:step/chatgpt-api/ingest "chatgpt-api/ingest") | `chatgpt-api/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-8fd8-b664-94a14eee4f42" data-section-uuid="00000000-0000-8fd8-b664-94a14eee4f42">`00000000`</span> |
-| Table | [ingest](datalib:step/chatgpt-api/ingest "chatgpt-api/ingest") | `chatgpt-api/ingest/entities.doltlite_db#chatgpt_attachments` |  | 4 rows | <span id="m-00000000-0000-865b-b49c-a7e4111ac63e" data-section-uuid="00000000-0000-865b-b49c-a7e4111ac63e">`00000000`</span> |
-| Table | [ingest](datalib:step/chatgpt-api/ingest "chatgpt-api/ingest") | `chatgpt-api/ingest/entities.doltlite_db#conversations` |  | 5 rows | <span id="m-00000000-0000-8710-b041-6c312503e484" data-section-uuid="00000000-0000-8710-b041-6c312503e484">`00000000`</span> |
-| Table | [ingest](datalib:step/chatgpt-api/ingest "chatgpt-api/ingest") | `chatgpt-api/ingest/entities.doltlite_db#ingested_files` |  | 0 rows | <span id="m-00000000-0000-8207-bdc6-98a375b46e9f" data-section-uuid="00000000-0000-8207-bdc6-98a375b46e9f">`00000000`</span> |
-| Table | [ingest](datalib:step/chatgpt-api/ingest "chatgpt-api/ingest") | `chatgpt-api/ingest/entities.doltlite_db#me` |  | 1 row | <span id="m-00000000-0000-896c-8fe3-23e37a758fb7" data-section-uuid="00000000-0000-896c-8fe3-23e37a758fb7">`00000000`</span> |
+| Source Size | ingest | `chatgpt-api/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `chatgpt-api/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `chatgpt-api/ingest/blobs.sqlite#cas_objects` |  | 4 rows | `00000000` |
+| Store | ingest | `chatgpt-api/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `chatgpt-api/ingest/entities.doltlite_db#chatgpt_attachments` |  | 4 rows | `00000000` |
+| Table | ingest | `chatgpt-api/ingest/entities.doltlite_db#conversations` |  | 5 rows | `00000000` |
+| Table | ingest | `chatgpt-api/ingest/entities.doltlite_db#ingested_files` |  | 0 rows | `00000000` |
+| Table | ingest | `chatgpt-api/ingest/entities.doltlite_db#me` |  | 1 row | `00000000` |
 
 === chatgpt-api 00000000-0000-89af-8390-876943e6455b I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?
---- 0b80f8bc-2800-8a69-bb7f-1e0df1cbf549
-Me — Mon 26 Oct 2370 08:00
+--- chunk 0
+title: I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom? | text: Me — Mon 26 Oct 2370 08:00
 
 I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?
 
---- 0b80f8c0-bbe0-8121-b680-bdce033b4ef4
-gpt-5 — Mon 26 Oct 2370 08:05
+
+--- chunk 1
+title: I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom? | text: gpt-5 — Mon 26 Oct 2370 08:05
 
 The premise has merit, but the trilithium containment problem is the load-bearing assumption. Before committing to the layered-composite design, I'd want to see whether the subspace shear signature you're describing can be addressed with a phase-conjugate recrystallization pass on standard dilithium first — it's a much cheaper experiment and would tell you whether the c-axis fractures are intrinsic or just a side effect of the current lattice geometry.
 
+
 === chatgpt-api 00000000-0000-8bd2-8afb-b21d3b87dfa5 Holodeck Cave on Risa
---- 0b80fde2-8400-89c8-91fb-27cd8a9294bb
-Me — Tue 27 Oct 2370 08:00
+--- chunk 0
+title: Holodeck Cave on Risa | text: Me — Tue 27 Oct 2370 08:00
 
 What is Holodeck Cave on Risa like?
 
---- 0b80fde3-6e60-82f1-9502-1cfc6c31e5c6
-gpt-5 — Tue 27 Oct 2370 08:01
+
+--- chunk 1
+title: Holodeck Cave on Risa | text: gpt-5 — Tue 27 Oct 2370 08:01
 
 I'm not aware of any lounge named "Holodeck Cave" on Risa. However, Risa is home to several notable resorts that offer unique experiences:
 
@@ -90,14 +92,16 @@ I'm not aware of any lounge named "Holodeck Cave" on Risa. However, Risa is home
 
 If you have a specific resort in mind, feel free to ask!
 
+
 === chatgpt-api 00000000-0000-8d7f-8279-1fc2e44e05fd Polynomial Fit for Sensor Calibration
---- 0b80f395-cc00-8de8-a2b1-7bd8ae189254
-Me — Sun 25 Oct 2370 08:00
+--- chunk 0
+title: Polynomial Fit for Sensor Calibration | text: Me — Sun 25 Oct 2370 08:00
 
 Fit a degree-2 polynomial to (1,2.1),(2,4.0),(3,9.1),(4,15.8),(5,25.0) in Python.
 
---- 0b80f398-d940-86be-b5c8-5aa0bf279ef4
-gpt-5 — Sun 25 Oct 2370 08:03
+
+--- chunk 1
+title: Polynomial Fit for Sensor Calibration | text: gpt-5 — Sun 25 Oct 2370 08:03
 
 ```python
 import numpy as np
@@ -107,31 +111,36 @@ coeffs = np.polyfit(x, y, 2)
 print(coeffs)
 ```
 
---- 0b80f39a-ae00-8625-8447-84de779cb353
-gpt-5 — Sun 25 Oct 2370 08:05
+
+--- chunk 2
+title: Polynomial Fit for Sensor Calibration | text: gpt-5 — Sun 25 Oct 2370 08:05
 
 The fit gives approximately y = 1.014 x² + 0.06 x + 1.07. R² ≈ 0.9997. The residuals suggest the underlying process is very close to pure quadratic with small measurement noise.
 
+
 === chatgpt-api 00000000-0000-8db7-990a-e9ff89094860 Risa Survey Briefing
---- 0b810308-e000-8024-a221-df86e41aba81
-Me — Wed 28 Oct 2370 08:00
+--- chunk 0
+title: Risa Survey Briefing | text: Me — Wed 28 Oct 2370 08:00
 
 Search the subspace archives for the three most recent survey missions to Risa and cite your sources.
 
---- 0b810308-f388-828f-a1a7-8bf149d358a3
-gpt-5 — Wed 28 Oct 2370 08:00
+
+--- chunk 1
+title: Risa Survey Briefing | text: gpt-5 — Wed 28 Oct 2370 08:00
 
 > Checking the archives
 > 
 > Looking for survey logs.
 
---- 0b810308-ff40-8953-90ae-1cff6a12ad27
-gpt-5 — Wed 28 Oct 2370 08:00
+
+--- chunk 2
+title: Risa Survey Briefing | text: gpt-5 — Wed 28 Oct 2370 08:00
 
 > Searched 3 archives
 
---- 0b810309-0328-8fc3-ac90-11211e48db9a
-gpt-5 — Wed 28 Oct 2370 08:00
+
+--- chunk 3
+title: Risa Survey Briefing | text: gpt-5 — Wed 28 Oct 2370 08:00
 
 The three most recent surveys of Risa were led by the USS Enterprise.
 
@@ -140,13 +149,15 @@ The three most recent surveys of Risa were led by the USS Enterprise.
 1. Risa — Memory Alpha
 2. Starfleet Survey Log: Risa — Starfleet
 
---- 0b810309-ca60-89f5-9b91-14ef38c09bcd
-Me — Wed 28 Oct 2370 08:01
+
+--- chunk 4
+title: Risa Survey Briefing | text: Me — Wed 28 Oct 2370 08:01
 
 Use Python to plot the survey durations as a bar chart, and show me the code.
 
---- 0b810309-dde8-82d2-b56c-34ce9633dd84
-gpt-5 — Wed 28 Oct 2370 08:01
+
+--- chunk 5
+title: Risa Survey Briefing | text: gpt-5 — Wed 28 Oct 2370 08:01
 
 ```
 import matplotlib.pyplot as plt
@@ -154,20 +165,23 @@ plt.bar(['41153', '42286', '43125'], [3, 5, 2])
 plt.savefig('surveys.png')
 ```
 
---- 0b810309-e1d0-83cb-b81d-91088fee6b5d
-Tool — Wed 28 Oct 2370 08:01
+
+--- chunk 6
+title: Risa Survey Briefing | text: Tool — Wed 28 Oct 2370 08:01
 
 ```
 Saved surveys.png
 ```
 
---- 0b810309-e5b8-84ea-be76-c57447df09d4
-gpt-5 — Wed 28 Oct 2370 08:01
+
+--- chunk 7
+title: Risa Survey Briefing | text: gpt-5 — Wed 28 Oct 2370 08:01
 
 Here is the chart of survey durations in days.
 
---- 0b81030a-b4c0-8a1c-89fa-a5cbfbed339b
-Me — Wed 28 Oct 2370 08:02
+
+--- chunk 8
+title: Risa Survey Briefing | text: Me — Wed 28 Oct 2370 08:02
 
 Summarize the away team report and describe the photos.
 
@@ -177,45 +191,53 @@ beach.jpg
 
 📎 Away Team Report.pdf — 400 B
 
---- 0b81030a-bc90-8a3d-b7b3-3f8b83016a2a
-Tool — Wed 28 Oct 2370 08:02
+
+--- chunk 9
+title: Risa Survey Briefing | text: Tool — Wed 28 Oct 2370 08:02
 
 **Away Team Report.pdf**
 
 > All crew accounted for.
 
---- 0b81030a-c078-8615-ae99-32cf8970dfff
-gpt-5 — Wed 28 Oct 2370 08:02
+
+--- chunk 10
+title: Risa Survey Briefing | text: gpt-5 — Wed 28 Oct 2370 08:02
 
 The report says all crew are accounted for. The first photo is the bridge viewscreen; the second is a beach at dusk.
 
---- 0b81030b-9f20-8da2-9a36-e142d74fb02a
-Me — Wed 28 Oct 2370 08:03
+
+--- chunk 11
+title: Risa Survey Briefing | text: Me — Wed 28 Oct 2370 08:03
 
 Generate an image of the Enterprise in orbit at dusk.
 
---- 0b81030b-c630-85bd-947f-8c9ccfe6c432
-Tool — Wed 28 Oct 2370 08:03
+
+--- chunk 12
+title: Risa Survey Briefing | text: Tool — Wed 28 Oct 2370 08:03
 
 f612a31ba7cf5ab9edae17b65285ce5dde81c7365e11010b953ccd6cfff9d19e
 
---- 0b81030b-ca18-8eed-9f10-eb73e8e7eb4e
-gpt-5 — Wed 28 Oct 2370 08:03
+
+--- chunk 13
+title: Risa Survey Briefing | text: gpt-5 — Wed 28 Oct 2370 08:03
 
 Here is the Enterprise in orbit.
 
---- 0b81030b-ed40-82b4-8fd6-a46f47dd0218
-gpt-5 — Wed 28 Oct 2370 08:03
+
+--- chunk 14
+title: Risa Survey Briefing | text: gpt-5 — Wed 28 Oct 2370 08:03
 
 Here is another rendering, with the planet's twin moons.
 
---- 0b81030d-73e0-813d-9589-149c79a61fd4
-Me — Wed 28 Oct 2370 08:05
+
+--- chunk 15
+title: Risa Survey Briefing | text: Me — Wed 28 Oct 2370 08:05
 
 Search the subspace archives for the four most recent survey missions to Risa and cite your sources.
 
---- 0b81030d-8768-8d62-aea5-4ff6fe200f12
-gpt-5 — Wed 28 Oct 2370 08:05
+
+--- chunk 16
+title: Risa Survey Briefing | text: gpt-5 — Wed 28 Oct 2370 08:05
 
 Four surveys of Risa are on record; the most recent was led by the USS Enterprise.
 

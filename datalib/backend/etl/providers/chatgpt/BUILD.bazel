@@ -115,14 +115,6 @@ insta_update(
     name = "chatgpt_tests.update",
     test = ":chatgpt_tests",
     test_args = ["--skip", "live::"],
-    extra_data = [
-        ":tng_export_fixture",
-        ":tng_fixture",
-    ],
-    extra_env = {
-        "CHATGPT_EXPORT_FIXTURE_DIR": "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_export",
-        "CHATGPT_FIXTURE_DIR": "datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api",
-    },
 )
 
 insta_update(

@@ -37,7 +37,7 @@ rust_binary(
         "//datalib/backend/etl/time_series:datalib_etl_time_series",
         "//datalib/backend/sqlite_open:datalib_sqlite_open",
         "//datalib/backend/time_series_schema:datalib_time_series_schema",
-        "//datalib/backend/qmd_models:datalib_qmd_models",
+        "//datalib/backend/embedding_models:datalib_embedding_models",
         "//datalib/backend/query:datalib_query",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
@@ -76,9 +76,16 @@ rust_test(
     env = SEARCH_FIXTURE_ENV | {
         "APPLET_BIN": "$(rootpath :datalib_applet)",
         "INSTA_WORKSPACE_ROOT": ".",
-        # Each search test loads the embedding model, which is large.
-        "RUST_TEST_THREADS": "1",
+        # Nothing here fetches the embedding model: a root that holds none,
+        # in a test or in an applet binary a test starts, fails rather than
+        # downloading 300 MB into the cache under `HOME` (TEST_TMPDIR).
+        "DATALIB_MODELS_NO_FETCH": "1",
     },
+    # Its tests run in parallel and llama.cpp embeds on every core; with
+    # other tests beside it on CI's four vCPUs, an embed waits on threads
+    # that are not running and the target ran past its 300 s. `cpu:4`
+    # claims the runner, so bazel starts nothing else beside it.
+    tags = ["cpu:4"],
     deps = [
         "//datalib/backend/agent_docs:datalib_agent_docs",
         "//datalib/backend/etl/chat-common:datalib_etl_chat_common",
@@ -96,11 +103,6 @@ rust_test(
 
 insta_update(
     name = "applet_unittests.update",
-    extra_data = SEARCH_FIXTURE_DATA + [":datalib_applet"],
-    extra_env = SEARCH_FIXTURE_ENV | {
-        "APPLET_BIN": "$(rootpath :datalib_applet)",
-        "RUST_TEST_THREADS": "1",
-    },
     test = ":applet_unittests",
 )
 

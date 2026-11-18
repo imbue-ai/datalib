@@ -359,19 +359,22 @@ mod tests {
     // checked-in config, and hands back what the checks below look at.
     fn load(name: &str, toml: &str, dir: &Path) -> Loaded {
         let path = dir.join(format!("{}.toml", name.replace('/', "_")));
+        // In a new library's config, as `examples --append` puts it: its
+        // `embed` reads the `unified_grid_and_search_index` step.
         std::fs::write(
             &path,
-            format!("data_root = \"{}\"\n\n{toml}", dir.join("root").display()),
+            format!(
+                "data_root = \"{}\"\n\n{toml}\n\n{}",
+                dir.join("root").display(),
+                datalib_dag::starter::STARTER_CONFIG
+            ),
         )
         .unwrap();
         crate::config_examples_test::validate_config(name, &path);
         let (cfg, _) = datalib_dag::config::load(&path).unwrap();
-        assert_eq!(
-            cfg.groups.len(),
-            1,
-            "{name}: one [[groups]] entry per example"
-        );
-        let group = &cfg.groups[0];
+        let sources: Vec<_> = cfg.groups.iter().filter(|g| g.r#type.is_some()).collect();
+        assert_eq!(sources.len(), 1, "{name}: one [[groups]] entry per example");
+        let group = sources[0];
         let ingest = cfg
             .steps
             .iter()
@@ -389,6 +392,7 @@ mod tests {
             functions: cfg
                 .steps
                 .iter()
+                .filter(|s| s.group.as_deref() == Some(group.id.as_str()))
                 .filter_map(|s| s.function.clone())
                 .collect(),
         }

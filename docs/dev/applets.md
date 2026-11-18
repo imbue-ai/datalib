@@ -389,10 +389,11 @@ that is not configured at all, since the two want different fixes.
 One that is running but sends nothing for 30 seconds answers `504`,
 `applet "<id>" did not answer within 30s`. The `unified_grid_and_search_index` applet
 builds a search's whole answer before sending any of it, so a big
-search on a machine short of memory is the usual cause there. A hung
-qmd is not: a search waits at most 20 seconds on qmd to embed its text
-(`EMBED_DEADLINE`), then stops it and answers with a `qmd_error`. The
-next search starts a fresh qmd.
+search on a machine short of memory is the usual cause there. The
+embedding model is not: a search by meaning waits at most 20 seconds for
+the model to be verified (`EMBED_DEADLINE`), and a model still on its
+way answers with a `search_error` naming it. Once loaded, the model
+stays loaded in the applet for every later search.
 
 A read the caller gives up on is hung up on: when the browser cancels
 a `GET` (a search the person has typed past), the gateway closes its

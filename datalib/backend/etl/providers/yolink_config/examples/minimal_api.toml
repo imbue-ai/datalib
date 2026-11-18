@@ -27,8 +27,7 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["yolink/ingest"]
 
-# Its numbers as time series, for charts and the time-series index: add
-# `yolink/render_time_series` to `unified_time_series_index/time_series_index`'s inputs.
+# Its numbers as time series, for charts and the time-series index.
 [[steps]]
 group = "yolink"
 function = "render_time_series"

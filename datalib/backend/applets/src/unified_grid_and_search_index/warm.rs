@@ -9,10 +9,19 @@
 
 use std::time::Duration;
 
-use datalib_unified_grid_and_search_index::qmd::index_state::IndexStamp;
+use datalib_unified_grid_and_search_index::hits::index_state::IndexStamp;
 
 use super::models::ModelGate;
 use super::{meaning_ranking, parse_query, with_people, Index, SearchFailure};
+
+/// Set (to anything but empty) to skip the warming, so the model is loaded
+/// by the first search instead. For a test harness that starts many
+/// backends at once and searches none of them by meaning.
+const NO_WARM_ENV: &str = "DATALIB_SEARCH_NO_WARM";
+
+pub(super) fn turned_off() -> bool {
+    std::env::var_os(NO_WARM_ENV).is_some_and(|v| !v.is_empty())
+}
 
 /// How often the index is looked at, and how long it must then sit still:
 /// an embed step commits as it goes, and each load costs tens of seconds of
@@ -53,6 +62,10 @@ impl<S: PartialEq + Clone> Watch<S> {
 }
 
 pub(super) async fn keep_warm(s: Index, models: ModelGate) {
+    if turned_off() {
+        tracing::info!("not warming the search by meaning: {NO_WARM_ENV} is set");
+        return;
+    }
     // Waiting here, however long a first download takes, means a failure
     // below is a real one rather than the model still being on its way.
     if tokio::task::spawn_blocking(move || models.wait_while_provisioning())
@@ -89,7 +102,7 @@ pub(super) async fn warm_once(s: &Index) {
         };
         match meaning_ranking(s, &parsed).await {
             Ok(_) | Err(SearchFailure::NoIndex) => {}
-            Err(SearchFailure::Qmd(e) | SearchFailure::Index(e)) => {
+            Err(SearchFailure::Ranking(e) | SearchFailure::Index(e)) => {
                 tracing::warn!(query = q, error = %e, "could not warm the search by meaning");
                 return;
             }

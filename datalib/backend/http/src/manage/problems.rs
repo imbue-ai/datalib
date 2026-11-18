@@ -80,7 +80,7 @@ fn counter_of(step: &str) -> Option<Counter> {
         "render_markdown" => CountedBy::Render,
         "render_time_series" => CountedBy::TimeSeries,
         "render_occurrences" => CountedBy::Occurrences,
-        "grid_index" => CountedBy::Index,
+        "unified_grid_and_search_index" => CountedBy::Index,
         _ => return None,
     };
     Some(datalib_problem_mutes::counter_of(group, by))
@@ -496,8 +496,12 @@ mod tests {
             },
         )]);
         let steps = [
-            StepProblems::of("unified_grid_and_search_index/grid_index", None, &held),
-            StepProblems::of("unified_grid_and_search_index/qmd_aggregator", None, &held),
+            StepProblems::of(
+                "unified_grid_and_search_index/unified_grid_and_search_index",
+                None,
+                &held,
+            ),
+            StepProblems::of("unified_grid_and_search_index/embedding_map", None, &held),
         ];
         assert_eq!(kinds(&group_chips(&steps)), [(ChipKind::Error, "1")]);
         assert_eq!(

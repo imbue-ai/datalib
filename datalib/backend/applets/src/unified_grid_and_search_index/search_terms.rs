@@ -1,4 +1,4 @@
-//! Searches answered from the grid index's search terms rather than qmd:
+//! Searches answered from the grid index's search terms rather than the ranked search:
 //! the Fields tab, and a search made only of identifiers (a uuid, an email
 //! address, a handle) whichever tab asks. The rows that answer to each
 //! word, best match first, as deep as the other tabs rank. The terms and
@@ -77,7 +77,7 @@ fn phrase(s: &str) -> String {
 }
 
 fn identifier(word: &str) -> Option<String> {
-    // A quoted word is a phrase for qmd, and a quote would end the
+    // A quoted word is a phrase for the keyword index, and a quote would end the
     // search terms' own phrase early.
     if word.contains('"') {
         return None;

@@ -1,5 +1,5 @@
 //! What the index holds of each source: its documents, and how many of
-//! their chunks have no vector yet. The aggregator reports it; the live
+//! their chunks have no vector yet. `unified_grid_and_search_index` reports it; the live
 //! bake checks it.
 
 use std::collections::HashSet;

@@ -11,7 +11,7 @@
 id = "placeholder-in-a-fence"
 edge = """A backtrace's `<unnamed>` inside a code fence stopped finding \
 its page after #1689: the fence became `<pre><code>` with `&lt;` \
-entities, which qmd reads as the words "lt" and "gt"."""
+entities, which a keyword index reads as the words "lt" and "gt"."""
 enters = "markdown"
 text = '''
 The holodeck program crashed again:

@@ -1,0 +1,23 @@
+# Reports how close a bazel job came to the pipeline's 10 GB
+# `[disk_space]` floor, from the samples `prepare-bazel` started taking.
+# The runner's disk is shared by the image, the build and every test's
+# data root, so the end-of-job `df` alone misses a test's peak.
+name: Disk low point
+description: Print the lowest free disk space seen during the job.
+
+runs:
+  using: composite
+  steps:
+    - name: Disk low point
+      shell: bash
+      run: |
+        df -h /
+        log="${RUNNER_TEMP}/disk-free-mb.log"
+        samples="$(grep -sE '^[0-9]+$' "${log}" || true)"
+        if [[ -z "${samples}" ]]; then
+          echo "no free-space samples at ${log}"
+          exit 0
+        fi
+        lowest_mb="$(sort -n <<< "${samples}" | head -n 1)"
+        count="$(wc -l <<< "${samples}")"
+        echo "lowest free space during the job: $(( lowest_mb / 1024 )) GB (${count} samples, one per 10 s)"

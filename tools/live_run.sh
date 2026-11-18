@@ -15,7 +15,7 @@
 # test` would need a `--test_env` per variable.
 #
 # Required env (populated by the bazel rule):
-#   LIVE_TEST_BIN      absolute path to the compiled test binary
+#   LIVE_TEST_BIN      the test binary, relative to the runfiles workspace
 #   LIVE_TEST_FILTER   the name filter that selects the live tests
 set -euo pipefail
 

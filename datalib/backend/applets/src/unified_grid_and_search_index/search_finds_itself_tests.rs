@@ -8,6 +8,7 @@
 //! review. A new key or term kind is checked with no change here.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
 use datalib_query::table::SearchTable;
 use datalib_schema::grid_rows::GridRow;
@@ -25,6 +26,15 @@ use super::*;
 struct Coverage(BTreeMap<String, BTreeMap<String, usize>>);
 
 impl Coverage {
+    fn extend(&mut self, other: Coverage) {
+        for (search, by_source) in other.0 {
+            let mine = self.0.entry(search).or_default();
+            for (source, n) in by_source {
+                *mine.entry(source).or_default() += n;
+            }
+        }
+    }
+
     fn checked(&mut self, search: &str, source: &str) {
         *self
             .0
@@ -91,7 +101,7 @@ struct Row {
     markdown_uuid: Option<String>,
 }
 
-/// Whether a document is filed for the grid alone, so qmd has no text of it.
+/// Whether a document is filed for the grid alone, so the search index has no text of it.
 fn is_unindexed(qmd_path: &str) -> bool {
     qmd_path
         .split('/')
@@ -232,7 +242,7 @@ async fn names_of(root: &std::path::Path) -> HashMap<String, Vec<String>> {
     out
 }
 
-/// The words a document's text holds, cut where qmd's tokenizer cuts
+/// The words a document's text holds, cut where the keyword index's tokenizer cuts
 /// them (at anything not a letter or digit), keeping the ones of four or
 /// more letters and nothing else, lowercased.
 fn words(text: &str) -> BTreeSet<String> {
@@ -287,20 +297,81 @@ fn listed(uuids: &BTreeSet<&str>) -> String {
     }
 }
 
-#[tokio::test]
+/// What every part of the check reads: the fixture's root, its grid rows
+/// and its documents' texts.
+struct Fixture {
+    root: std::path::PathBuf,
+    rows: HashMap<String, Row>,
+    texts: HashMap<String, String>,
+}
+
+impl Fixture {
+    fn source_of(&self, uuid: &str) -> String {
+        self.rows[uuid].source_id.clone()
+    }
+
+    fn source_of_document(&self, md: &str) -> String {
+        self.rows
+            .values()
+            .find(|r| r.markdown_uuid.as_deref() == Some(md))
+            .map(|r| r.source_id.clone())
+            .expect("a document has rows")
+    }
+}
+
+/// What one part of the check found wrong, and which sources it reached.
+#[derive(Default)]
+struct Findings {
+    failures: Vec<String>,
+    coverage: Coverage,
+}
+
+/// The parts run at once, each on an index of its own: an index reads the
+/// grid through one connection, so searches sharing one would wait their
+/// turn. Their findings are joined in this order, so the failures and the
+/// snapshot read the same however the parts were scheduled.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn every_row_is_found_by_what_it_holds() {
     let root = fixture_root();
     let (rows, texts) = read_rows(root.path()).await;
-    let s = index_over(root.path()).await;
-    let source_of = |uuid: &str| rows[uuid].source_id.clone();
     let sources: BTreeSet<String> = rows.values().map(|r| r.source_id.clone()).collect();
-    let mut coverage = Coverage::default();
+    let f = Arc::new(Fixture {
+        root: root.path().to_path_buf(),
+        rows,
+        texts,
+    });
+    let parts = [
+        tokio::spawn(by_each_key(f.clone())),
+        tokio::spawn(by_each_terms_key(f.clone())),
+        tokio::spawn(by_each_term_on_the_fields(f.clone())),
+        tokio::spawn(by_the_rarest_word_on_the_words(f.clone())),
+        tokio::spawn(the_table_of_contents_on_the_fields_alone(f.clone())),
+        tokio::spawn(by_the_opening_words_on_the_meaning(f.clone())),
+    ];
     let mut failures: Vec<String> = Vec::new();
+    let mut coverage = Coverage::default();
+    for part in futures::future::join_all(parts).await {
+        let found = part.expect("a part of the check panicked");
+        failures.extend(found.failures);
+        coverage.extend(found.coverage);
+    }
 
-    // A key compares its column exactly, so it finds exactly the rows
-    // holding the value: none missing, none extra.
+    assert!(
+        failures.is_empty(),
+        "{} searches did not find what they hold:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+    insta::assert_snapshot!("search_finds_itself_coverage", coverage.render(&sources));
+}
+
+/// A key compares its column exactly, so it finds exactly the rows
+/// holding the value: none missing, none extra.
+async fn by_each_key(f: Arc<Fixture>) -> Findings {
+    let s = index_over(&f.root).await;
+    let mut found = Findings::default();
     for key in GridRow::KEYS {
-        for (value, holding) in values_of(root.path(), key.column.as_str()).await {
+        for (value, holding) in values_of(&f.root, key.column.as_str()).await {
             let q = datalib_query::term(key.key, &value, false);
             let got: BTreeSet<String> = every_uuid(&s, &q, None)
                 .await
@@ -310,26 +381,33 @@ async fn every_row_is_found_by_what_it_holds() {
             let missing: BTreeSet<&str> = holding.difference(&got).map(String::as_str).collect();
             let extra: BTreeSet<&str> = got.difference(&holding).map(String::as_str).collect();
             if !missing.is_empty() || !extra.is_empty() {
-                failures.push(format!(
+                found.failures.push(format!(
                     "`{q}` missed [{}] and found [{}]",
                     listed(&missing),
                     listed(&extra)
                 ));
             }
             for uuid in &holding {
-                coverage.checked(&format!("{}:", key.key), &source_of(uuid));
+                found
+                    .coverage
+                    .checked(&format!("{}:", key.key), &f.source_of(uuid));
             }
         }
     }
+    found
+}
 
-    // A key that reads the search terms, given a value quoted, finds
-    // exactly the rows holding its words in order in one of its kinds,
-    // case-blind; a handle-shaped value its handle's rows (`+1701…` shown
-    // as a name is the `tel:` handle), and a name the rows of every handle
-    // seen under exactly it. A bare value matches in part, which the
-    // applet's own tests pin down.
-    let terms = terms_of(root.path()).await;
-    let names = names_of(root.path()).await;
+/// A key that reads the search terms, given a value quoted, finds
+/// exactly the rows holding its words in order in one of its kinds,
+/// case-blind; a handle-shaped value its handle's rows (`+1701…` shown
+/// as a name is the `tel:` handle), and a name the rows of every handle
+/// seen under exactly it. A bare value matches in part, which the
+/// applet's own tests pin down.
+async fn by_each_terms_key(f: Arc<Fixture>) -> Findings {
+    let s = index_over(&f.root).await;
+    let mut found = Findings::default();
+    let terms = terms_of(&f.root).await;
+    let names = names_of(&f.root).await;
     for key in TERMS_KEYS {
         let kinds: Vec<&str> = key.kinds().iter().map(|k| k.as_str()).collect();
         let mut by_value: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
@@ -378,21 +456,28 @@ async fn every_row_is_found_by_what_it_holds() {
             let missing: BTreeSet<&str> = expected.difference(&got).map(String::as_str).collect();
             let extra: BTreeSet<&str> = got.difference(&expected).map(String::as_str).collect();
             if !missing.is_empty() || !extra.is_empty() {
-                failures.push(format!(
+                found.failures.push(format!(
                     "`{q}` missed [{}] and found [{}]",
                     listed(&missing),
                     listed(&extra)
                 ));
             }
             for uuid in holding {
-                coverage.checked(&format!("terms: {}:", key.key), &source_of(uuid));
+                found
+                    .coverage
+                    .checked(&format!("terms: {}:", key.key), &f.source_of(uuid));
             }
         }
     }
+    found
+}
 
-    // A term is found by its value on the fields, among whatever else
-    // answers to the same words.
-    for ((kind, value), holding) in terms {
+/// A term is found by its value on the fields, among whatever else
+/// answers to the same words.
+async fn by_each_term_on_the_fields(f: Arc<Fixture>) -> Findings {
+    let s = index_over(&f.root).await;
+    let mut found = Findings::default();
+    for ((kind, value), holding) in terms_of(&f.root).await {
         let q = format!("\"{value}\"");
         let got: HashSet<String> = every_uuid(&s, &q, Some(Part::Fields))
             .await
@@ -405,37 +490,48 @@ async fn every_row_is_found_by_what_it_holds() {
             .map(String::as_str)
             .collect();
         if !missing.is_empty() {
-            failures.push(format!(
+            found.failures.push(format!(
                 "the fields's `{q}` ({kind}) missed [{}]",
                 listed(&missing)
             ));
         }
         for uuid in &holding {
-            coverage.checked(&format!("fields: {kind}"), &source_of(uuid));
+            found
+                .coverage
+                .checked(&format!("fields: {kind}"), &f.source_of(uuid));
         }
     }
+    found
+}
 
-    // A document is found on the words by the word of its text the
-    // fewest documents hold.
-    for (md, word) in rarest_words(&texts) {
+/// A document is found on the words by the word of its text the fewest
+/// documents hold.
+async fn by_the_rarest_word_on_the_words(f: Arc<Fixture>) -> Findings {
+    let s = index_over(&f.root).await;
+    let mut found = Findings::default();
+    for (md, word) in rarest_words(&f.texts) {
         let got = every_uuid(&s, &word, Some(Part::Words)).await;
         if !got
             .iter()
             .any(|r| r.markdown_uuid.as_deref() == Some(md.as_str()))
         {
-            failures.push(format!("the words's `{word}` missed document {md}"));
+            found
+                .failures
+                .push(format!("the words's `{word}` missed document {md}"));
         }
-        let source = rows
-            .values()
-            .find(|r| r.markdown_uuid.as_deref() == Some(md.as_str()))
-            .map(|r| r.source_id.clone())
-            .expect("a document has rows");
-        coverage.checked("words: its rarest word", &source);
+        found
+            .coverage
+            .checked("words: its rarest word", &f.source_of_document(&md));
     }
+    found
+}
 
-    // Notion's table of contents is filed for the grid alone: its title
-    // finds its row on the fields, and the words, which reads qmd,
-    // does not return it.
+/// Notion's table of contents is filed for the grid alone: its title
+/// finds its row on the fields, and the words, which reads the search
+/// index, does not return it.
+async fn the_table_of_contents_on_the_fields_alone(f: Arc<Fixture>) -> Findings {
+    let s = index_over(&f.root).await;
+    let mut found = Findings::default();
     let contents_rows = |got: Vec<SearchRow>| {
         got.iter()
             .filter(|r| r.kind == "Notion Table of Contents")
@@ -443,72 +539,72 @@ async fn every_row_is_found_by_what_it_holds() {
     };
     let by_title = every_uuid(&s, "Table-of-Contents", Some(Part::Fields)).await;
     if contents_rows(by_title) != 1 {
-        failures.push("the fields missed the table of contents by its title".to_string());
+        found
+            .failures
+            .push("the fields missed the table of contents by its title".to_string());
     }
     let by_words = every_uuid(&s, "Table-of-Contents", Some(Part::Words)).await;
     if contents_rows(by_words) != 0 {
-        failures.push("the words returned the table of contents".to_string());
+        found
+            .failures
+            .push("the words returned the table of contents".to_string());
     }
+    found
+}
 
-    // A document is among the ten nearest its own opening words on the
-    // meaning. Vectors are near, not exact: a document with a twin
-    // (two chats between the same people) may lose its place to it, so
-    // this asks for nearly every document and some of every source's.
+/// A document is among the ten nearest its own opening words on the
+/// meaning. Vectors are near, not exact: a document with a twin (two
+/// chats between the same people) may lose its place to it, so this asks
+/// for nearly every document and some of every source's.
+async fn by_the_opening_words_on_the_meaning(f: Arc<Fixture>) -> Findings {
+    let s = index_over(&f.root).await;
+    let mut found = Findings::default();
     let mut meaning: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     let mut lost: Vec<String> = Vec::new();
-    for (md, text) in &texts {
+    for (md, text) in &f.texts {
         let q = opening(text, 30);
         if q.is_empty() {
             continue;
         }
         let got = search_part(&s, &q, Part::Meaning, 0, 10).await;
         assert!(got.errors.is_empty(), "{q}: {:?}", got.errors);
-        let found = got
+        let hit = got
             .rows
             .iter()
             .any(|r| r.markdown_uuid.as_deref() == Some(md.as_str()));
-        let source = rows
-            .values()
-            .find(|r| r.markdown_uuid.as_deref() == Some(md.as_str()))
-            .map(|r| r.source_id.clone())
-            .expect("a document has rows");
+        let source = f.source_of_document(md);
         let tally = meaning.entry(source.clone()).or_default();
-        tally.0 += usize::from(found);
+        tally.0 += usize::from(hit);
         tally.1 += 1;
-        if !found {
+        if !hit {
             lost.push(format!("{md} ({source}) by {q:?}"));
         }
-        coverage.checked("meaning: its opening words", &source);
+        found
+            .coverage
+            .checked("meaning: its opening words", &source);
     }
-    let (found, asked) = meaning
+    let (hits, asked) = meaning
         .values()
-        .fold((0, 0), |(f, a), (found, asked)| (f + found, a + asked));
-    if found * 10 < asked * 9 {
-        failures.push(format!(
-            "the meaning found {found} of {asked} documents by their opening words; \
+        .fold((0, 0), |(h, a), (hit, asked)| (h + hit, a + asked));
+    if hits * 10 < asked * 9 {
+        found.failures.push(format!(
+            "the meaning found {hits} of {asked} documents by their opening words; \
              lost {lost:?}"
         ));
     }
-    for (source, (found, asked)) in &meaning {
-        if found * 2 < *asked {
+    for (source, (hits, asked)) in &meaning {
+        if hits * 2 < *asked {
             let lost: Vec<&String> = lost
                 .iter()
                 .filter(|l| l.contains(&format!("({source})")))
                 .collect();
-            failures.push(format!(
-                "the meaning found {found} of {source}'s {asked} documents \
+            found.failures.push(format!(
+                "the meaning found {hits} of {source}'s {asked} documents \
                  by their opening words; lost {lost:?}"
             ));
         }
     }
-
-    assert!(
-        failures.is_empty(),
-        "{} searches did not find what they hold:\n{}",
-        failures.len(),
-        failures.join("\n")
-    );
-    insta::assert_snapshot!("search_finds_itself_coverage", coverage.render(&sources));
+    found
 }
 
 /// The opening of a document's text, as words a person might paste: the

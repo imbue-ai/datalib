@@ -4,7 +4,7 @@
 // the second sync picks it up.
 
 import { test, expect, type Page } from "@playwright/test";
-import { reviewToml } from "./wizard-helpers";
+import { openAdvanced, reviewToml } from "./wizard-helpers";
 import { copyFileSync } from "node:fs";
 import {
   cardOf,
@@ -33,6 +33,19 @@ import {
 declare const process: { env: Record<string, string | undefined> };
 
 const BASE = process.env.DATALIB_TEST_E2E_ONBOARDING_URL;
+/// Keeps the source the wizard is adding out of the keyword search. The
+/// `unified_grid_and_search_index` step cuts a searched source's chunks with the embedding model's
+/// tokenizer, and a library made from an empty folder has no model and
+/// may not fetch one here. What this spec checks reads the grid alone.
+async function leaveOutOfSearch(page: Page) {
+  await openAdvanced(page);
+  await page
+    .getByRole("dialog")
+    .locator(".wiz-section .wiz-choice", { hasText: "Keyword-index the markdown" })
+    .locator("input.wiz-bool")
+    .uncheck();
+}
+
 /// The folder the source scans. Seeded by playwright.config.ts with the
 /// two Captain's Log PDFs; the third arrives mid-test.
 const SCAN_DIR = process.env.DATALIB_TEST_E2E_PDF_SCAN_DIR;
@@ -49,7 +62,7 @@ const SIGNAL_BACKUP_DIR = process.env.DATALIB_TEST_E2E_SIGNAL_BACKUP_DIR;
 const SYNCED_ROWS = [
   "pdfs/ingest",
   "pdfs/render_markdown",
-  "unified_grid_and_search_index/grid_index",
+  "unified_grid_and_search_index/unified_grid_and_search_index",
 ];
 
 /// The "Size" column as a number, read back off the label drawn over the
@@ -133,7 +146,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
     await expect(cardOf(page, "sourcesView(")).toHaveCount(1);
     // The scaffold's one group, and the System group every root has,
-    // are the table's whole content; the scaffold's four entries are
+    // are the table's whole content; the scaffold's three entries are
     // under it.
     await expect(nameCell(page, "group:unified_grid_and_search_index")).toContainText(
       "Grid and Search Index",
@@ -142,34 +155,18 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(nameCell(page, "system")).toContainText("System");
     await expandGroup(page, "unified_grid_and_search_index");
     for (const id of [
-      "unified_grid_and_search_index/grid_index",
-      "unified_grid_and_search_index/qmd_aggregator",
+      "unified_grid_and_search_index/unified_grid_and_search_index",
       "unified_grid_and_search_index",
       "datalib_contacts",
     ]) {
       await expect(row(page, id)).toHaveCount(1);
     }
-    // The two index steps are labelled by their function, not by the
-    // generic "Index" the label map falls through to when a key is
-    // stale — which is what happened when the functions were renamed.
-    await expect(nameCell(page, "unified_grid_and_search_index/grid_index")).toContainText(
-      "Grid index",
-    );
-    await expect(nameCell(page, "unified_grid_and_search_index/qmd_aggregator")).toContainText(
-      "QMD aggregator",
-    );
-
-    // The qmd aggregator, removed before the source is added: without it
-    // the wizard writes no qmd steps, whose embedding is real work this
-    // test cannot afford, and the delete action is the honest way to not
-    // run it.
-    const remove = await rowMenuEntry(
-      page,
-      row(page, "unified_grid_and_search_index/qmd_aggregator"),
-      /^Remove from config$/,
-    ).open();
-    await remove.click();
-    await expect(row(page, "unified_grid_and_search_index/qmd_aggregator")).toHaveCount(0);
+    // The index step is labelled by its function, not by the generic
+    // "Index" the label map falls through to when a key is stale —
+    // which is what happened when the functions were renamed.
+    await expect(
+      nameCell(page, "unified_grid_and_search_index/unified_grid_and_search_index"),
+    ).toContainText("Grid and search index");
 
     // ── 4-6. the wizard ──────────────────────────────────────────────
     await page.getByRole("button", { name: "Add source" }).click();
@@ -196,6 +193,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(toml).toContainText('function = "render_markdown"');
     await expect(toml).toContainText('inputs = ["pdfs/ingest"]');
 
+    await leaveOutOfSearch(page);
     await wizard.getByRole("button", { name: "Add source" }).click();
     await expect(wizard).toHaveCount(0);
 
@@ -217,11 +215,13 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     expect(await bytesOf(page, "pdfs/ingest")).toBeNull();
     await expect(row(page, "pdfs/ingest").locator(LAST_UPDATE_AT)).toHaveCount(0);
 
-    // The render step was wired into the surviving fan-in, which is
-    // what gets these documents indexed rather than merely converted.
+    // The surviving fan-in reads every render by pattern, which is what
+    // gets these documents indexed rather than merely converted; the
+    // render step needs no edit there.
     const wired = await (await request.get(`${BASE}/api/config`)).json();
     expect(wired.parsed_ok, wired.error ?? "config must load").toBe(true);
-    expect(wired.text).toContain('inputs = ["pdfs/render_markdown"]');
+    expect(wired.text).toContain('"*/render_markdown"');
+    expect(wired.text).not.toContain('"pdfs/render_markdown"');
 
     // ── 7-8. run it ──────────────────────────────────────────────────
     const firstRun = await stampsBefore(page, SYNCED_ROWS);
@@ -233,7 +233,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     const firstDone = await settleRows(page, SYNCED_ROWS, firstRun);
     expect(firstDone["pdfs/ingest"]).toBe("Succeeded");
     expect(firstDone["pdfs/render_markdown"]).toMatch(/^(Succeeded|Up to date)$/);
-    expect(firstDone["unified_grid_and_search_index/grid_index"]).toMatch(
+    expect(firstDone["unified_grid_and_search_index/unified_grid_and_search_index"]).toMatch(
       /^(Succeeded|Up to date)$/,
     );
 
@@ -290,7 +290,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     const secondDone = await settleRows(page, SYNCED_ROWS, secondRun);
     expect(secondDone["pdfs/ingest"]).toBe("Succeeded");
     expect(secondDone["pdfs/render_markdown"]).toMatch(/^(Succeeded|Up to date)$/);
-    expect(secondDone["unified_grid_and_search_index/grid_index"]).toMatch(
+    expect(secondDone["unified_grid_and_search_index/unified_grid_and_search_index"]).toMatch(
       /^(Succeeded|Up to date)$/,
     );
 
@@ -350,6 +350,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // The render step has a `period` option, shown under the Rendering
     // heading of the same form. Its default is what we want.
     await expect(wizard.locator(".wiz-section-head")).toHaveText("Rendering");
+    await leaveOutOfSearch(page);
     await wizard.getByRole("button", { name: "Add source" }).click();
     await expect(wizard).toHaveCount(0);
 

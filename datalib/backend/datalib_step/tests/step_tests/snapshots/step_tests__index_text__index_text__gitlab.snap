@@ -3,163 +3,91 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === gitlab 00000000-0000-8b91-8399-3668763e7fba gitlab storage
---- -
----
-title: gitlab storage
-source: gitlab
-measured_at: 2369-04-15T00:00:00+00:00
----
+--- chunk 0
+title: gitlab storage | text: Source: gitlab
 
-# [gitlab](datalib:group/gitlab "gitlab") — storage
+# gitlab — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/gitlab/ingest "gitlab/ingest") | `gitlab/ingest` | <size> | 2 files | <span id="m-00000000-0000-8b91-8399-3668763e7fba" data-section-uuid="00000000-0000-8b91-8399-3668763e7fba">`00000000`</span> |
-| Store | [ingest](datalib:step/gitlab/ingest "gitlab/ingest") | `gitlab/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-86f9-af5c-f863786e2a2e" data-section-uuid="00000000-0000-86f9-af5c-f863786e2a2e">`00000000`</span> |
-| Table | [ingest](datalib:step/gitlab/ingest "gitlab/ingest") | `gitlab/ingest/entities.doltlite_db#coverage` |  | 3 rows | <span id="m-00000000-0000-8020-b853-841b666c91cf" data-section-uuid="00000000-0000-8020-b853-841b666c91cf">`00000000`</span> |
-| Table | [ingest](datalib:step/gitlab/ingest "gitlab/ingest") | `gitlab/ingest/entities.doltlite_db#discussions` |  | 4 rows | <span id="m-00000000-0000-86c2-8bfd-1e86b26c5e73" data-section-uuid="00000000-0000-86c2-8bfd-1e86b26c5e73">`00000000`</span> |
-| Table | [ingest](datalib:step/gitlab/ingest "gitlab/ingest") | `gitlab/ingest/entities.doltlite_db#listed_change_requests` |  | 2 rows | <span id="m-00000000-0000-8afb-b68b-b0025bb2b45e" data-section-uuid="00000000-0000-8afb-b68b-b0025bb2b45e">`00000000`</span> |
-| Table | [ingest](datalib:step/gitlab/ingest "gitlab/ingest") | `gitlab/ingest/entities.doltlite_db#merge_requests` |  | 2 rows | <span id="m-00000000-0000-8462-8c02-6a6f23e4995a" data-section-uuid="00000000-0000-8462-8c02-6a6f23e4995a">`00000000`</span> |
-| Table | [ingest](datalib:step/gitlab/ingest "gitlab/ingest") | `gitlab/ingest/entities.doltlite_db#self_identity` |  | 1 row | <span id="m-00000000-0000-8f9f-a6fb-5538db0e0486" data-section-uuid="00000000-0000-8f9f-a6fb-5538db0e0486">`00000000`</span> |
+| Source Size | ingest | `gitlab/ingest` | <size> | 2 files | `00000000` |
+| Store | ingest | `gitlab/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `gitlab/ingest/entities.doltlite_db#coverage` |  | 3 rows | `00000000` |
+| Table | ingest | `gitlab/ingest/entities.doltlite_db#discussions` |  | 4 rows | `00000000` |
+| Table | ingest | `gitlab/ingest/entities.doltlite_db#listed_change_requests` |  | 2 rows | `00000000` |
+| Table | ingest | `gitlab/ingest/entities.doltlite_db#merge_requests` |  | 2 rows | `00000000` |
+| Table | ingest | `gitlab/ingest/entities.doltlite_db#self_identity` |  | 1 row | `00000000` |
 
 === gitlab 0b75b9f9-4400-887d-bae6-937c2e6ee3a6 Add Earl Grey, hot to replicator menu
---- -
----
-provider: gitlab
-project: "enterprise-d/holodeck"
-mr_iid: 17
-title: "Add Earl Grey, hot to replicator menu"
-state: "merged"
-author: "Jean-Luc Picard"
-created_at: "2369-04-15T08:00:00.000Z"
-updated_at: "2369-04-15T11:30:00.000Z"
-merged_at: "2369-04-15T11:30:00.000Z"
-head_sha: "1701d017aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-base_sha: "1701d000basebasebasebasebasebasebasebase"
-source_branch: "picard/earl-grey"
-target_branch: "main"
----
+--- chunk 0
+title: Add Earl Grey, hot to replicator menu | text: Source: GitLab
+Project: enterprise-d/holodeck
+Merge request: 17
+State: merged
+Author: Jean-Luc Picard
+Branch: picard/earl-grey
+Into: main
 
-<h1 class="page-title" data-page-title-uuid="0b75b9f9-4400-887d-bae6-937c2e6ee3a6">Add Earl Grey, hot to replicator menu (!17) <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/17" target="_blank" rel="noopener noreferrer">↗</a></h1>
+Add Earl Grey, hot to replicator menu (!17)
 
-*merged* — [Jean-Luc Picard](datalib:handle/gitlab/gitlab.com/jlpicard "Jean-Luc Picard (gitlab:gitlab.com/jlpicard)") — `picard/earl-grey` → `main`
+*merged* — Jean-Luc Picard — `picard/earl-grey` → `main`
 
 ## Description
-
---- 0b75b9f9-4400-887d-bae6-937c2e6ee3a6
-<div id="m-0b75b9f9-4400-887d-bae6-937c2e6ee3a6" data-section-uuid="0b75b9f9-4400-887d-bae6-937c2e6ee3a6" class="msg msg--gitlab">
-
 Tea. Earl Grey. Hot.
-
-</div>
-
---- -
 ## General discussion
-
---- 0b75ba6b-b4e0-8d87-b39b-6e62030598db
-<div id="m-0b75ba6b-b4e0-8d87-b39b-6e62030598db" data-section-uuid="0b75ba6b-b4e0-8d87-b39b-6e62030598db" class="msg msg--gitlab">
-
-[Jean-Luc Picard](datalib:handle/gitlab/gitlab.com/jlpicard "Jean-Luc Picard (gitlab:gitlab.com/jlpicard)") *(reply)* · <time class="msg-ts" datetime="2369-04-15T10:05:00Z" title="2369-04-15 10:05:00 UTC">Tue Apr 15th, 2369 at 10:05</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/17#note_1700017002" target="_blank" rel="noopener noreferrer">↗</a>
+Jean-Luc Picard *(reply)* · Tue Apr 15th, 2369 at 10:05
 
 Adopted. Make it so.
-
-</div>
-
---- 0b75ba82-9840-81d6-88bc-01156ea95dd6
-<div id="m-0b75ba82-9840-81d6-88bc-01156ea95dd6" data-section-uuid="0b75ba82-9840-81d6-88bc-01156ea95dd6" class="msg msg--gitlab">
-
-[Worf](datalib:handle/gitlab/gitlab.com/worf-rozhenko "Worf (gitlab:gitlab.com/worf-rozhenko)") · <time class="msg-ts" datetime="2369-04-15T10:30:00Z" title="2369-04-15 10:30:00 UTC">Tue Apr 15th, 2369 at 10:30</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/17#note_1700017003" target="_blank" rel="noopener noreferrer">↗</a>
+Worf · Tue Apr 15th, 2369 at 10:30
 
 I will set the standard temperature to be served warm in case of crisis. Klingon ambassadors will not accept tepid beverages.
-
-</div>
-
---- -
 ## Inline comments
 
 ### `src/replicator/menu.rs:88`
-
---- 0b75ba67-2100-8cc2-a0d4-510cce260212
-<div id="m-0b75ba67-2100-8cc2-a0d4-510cce260212" data-section-uuid="0b75ba67-2100-8cc2-a0d4-510cce260212" class="msg msg--gitlab">
-
-[William T. Riker](datalib:handle/gitlab/gitlab.com/wtriker "William T. Riker (gitlab:gitlab.com/wtriker)") · <time class="msg-ts" datetime="2369-04-15T10:00:00Z" title="2369-04-15 10:00:00 UTC">Tue Apr 15th, 2369 at 10:00</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/17#note_1700017001" target="_blank" rel="noopener noreferrer">↗</a>
+William T. Riker · Tue Apr 15th, 2369 at 10:00
 
 Use `enum Tea { EarlGrey, Chamomile, ... }` here rather than a string match — it'll catch typos at compile time.
 
-</div>
 === gitlab 0b75bad4-fe00-8155-aa7c-9db9f663482a Holodeck safety interlock regression test
---- -
----
-provider: gitlab
-project: "enterprise-d/holodeck"
-mr_iid: 18
-title: "Holodeck safety interlock regression test"
-state: "opened"
-author: "Jean-Luc Picard"
-created_at: "2369-04-15T12:00:00.000Z"
-updated_at: "2369-04-15T14:30:00.000Z"
-merged_at: null
-head_sha: "1701d018bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-base_sha: "1701d000basebasebasebasebasebasebasebase"
-source_branch: "picard/safety-regression"
-target_branch: "main"
----
+--- chunk 0
+title: Holodeck safety interlock regression test | text: Source: GitLab
+Project: enterprise-d/holodeck
+Merge request: 18
+State: opened
+Author: Jean-Luc Picard
+Branch: picard/safety-regression
+Into: main
 
-<h1 class="page-title" data-page-title-uuid="0b75bad4-fe00-8155-aa7c-9db9f663482a">Holodeck safety interlock regression test (!18) <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/18" target="_blank" rel="noopener noreferrer">↗</a></h1>
+Holodeck safety interlock regression test (!18)
 
-*opened* — [Jean-Luc Picard](datalib:handle/gitlab/gitlab.com/jlpicard "Jean-Luc Picard (gitlab:gitlab.com/jlpicard)") — `picard/safety-regression` → `main`
+*opened* — Jean-Luc Picard — `picard/safety-regression` → `main`
 
 ## Description
-
---- 0b75bad4-fe00-8155-aa7c-9db9f663482a
-<div id="m-0b75bad4-fe00-8155-aa7c-9db9f663482a" data-section-uuid="0b75bad4-fe00-8155-aa7c-9db9f663482a" class="msg msg--gitlab">
-
 Adds a regression test that asserts holodeck weapons cannot fire while safeties are engaged. Closes #41.
-
-</div>
-
---- -
 ## General discussion
-
---- 0b75bb4c-02c0-816b-93e3-fa09181a699d
-<div id="m-0b75bb4c-02c0-816b-93e3-fa09181a699d" data-section-uuid="0b75bb4c-02c0-816b-93e3-fa09181a699d" class="msg msg--gitlab">
-
-[Geordi La Forge](datalib:handle/gitlab/gitlab.com/geordi-laforge "Geordi La Forge (gitlab:gitlab.com/geordi-laforge)") *(reply)* · <time class="msg-ts" datetime="2369-04-15T14:10:00Z" title="2369-04-15 14:10:00 UTC">Tue Apr 15th, 2369 at 14:10</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/18#note_1700018002" target="_blank" rel="noopener noreferrer">↗</a>
+Geordi La Forge *(reply)* · Tue Apr 15th, 2369 at 14:10
 
 Agreed — I can wire that into the simulator harness if Data writes the assertion.
-
-</div>
-
---- 0b75bb55-2a80-8a4c-abf0-af3670ee359e
-<div id="m-0b75bb55-2a80-8a4c-abf0-af3670ee359e" data-section-uuid="0b75bb55-2a80-8a4c-abf0-af3670ee359e" class="msg msg--gitlab">
-
-[Jean-Luc Picard](datalib:handle/gitlab/gitlab.com/jlpicard "Jean-Luc Picard (gitlab:gitlab.com/jlpicard)") *(reply)* · <time class="msg-ts" datetime="2369-04-15T14:20:00Z" title="2369-04-15 14:20:00 UTC">Tue Apr 15th, 2369 at 14:20</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/18#note_1700018003" target="_blank" rel="noopener noreferrer">↗</a>
+Jean-Luc Picard *(reply)* · Tue Apr 15th, 2369 at 14:20
 
 Concur. Make it so.
-
-</div>
-
---- 0b75bb5e-5240-8a34-b5b2-12c9558a6379
-<div id="m-0b75bb5e-5240-8a34-b5b2-12c9558a6379" data-section-uuid="0b75bb5e-5240-8a34-b5b2-12c9558a6379" class="msg msg--gitlab">
-
-[Beverly Crusher](datalib:handle/gitlab/gitlab.com/bcrusher "Beverly Crusher (gitlab:gitlab.com/bcrusher)") · <time class="msg-ts" datetime="2369-04-15T14:30:00Z" title="2369-04-15 14:30:00 UTC">Tue Apr 15th, 2369 at 14:30</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/18#note_1700018004" target="_blank" rel="noopener noreferrer">↗</a>
+Beverly Crusher · Tue Apr 15th, 2369 at 14:30
 
 Please ensure the medical override path is preserved — Sickbay must be able to disable safeties on a holodeck program in a triage scenario.
 
-</div>
+--- chunk 1
+title: Holodeck safety interlock regression test | text: Source: GitLab
+Project: enterprise-d/holodeck
+Merge request: 18
+State: opened
+Author: Jean-Luc Picard
+Branch: picard/safety-regression
+Into: main
 
---- -
 ## Inline comments
 
 ### `tests/safety.rs:42`
-
---- 0b75bb42-db00-8df2-988c-d4c436597bec
-<div id="m-0b75bb42-db00-8df2-988c-d4c436597bec" data-section-uuid="0b75bb42-db00-8df2-988c-d4c436597bec" class="msg msg--gitlab">
-
-[Lt. Cmdr. Data](datalib:handle/gitlab/gitlab.com/data-soong "Lt. Cmdr. Data (gitlab:gitlab.com/data-soong)") · <time class="msg-ts" datetime="2369-04-15T14:00:00Z" title="2369-04-15 14:00:00 UTC">Tue Apr 15th, 2369 at 14:00</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/18#note_1700018001" target="_blank" rel="noopener noreferrer">↗</a>
+Lt. Cmdr. Data · Tue Apr 15th, 2369 at 14:00
 
 The assertion only checks the safety flag *before* arming. We should also assert that arming the weapon while safeties are engaged returns Err(SafetyEngaged).
-
-</div>

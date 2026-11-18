@@ -45,9 +45,10 @@ async fn boot(root: &Path) -> datalib_http::AppState {
 }
 
 fn is_upgraded(text: &str) -> bool {
-    text.contains("function = \"qmd_aggregator\"")
-        && text.contains("function = \"keyword_index\"")
+    text.contains("function = \"unified_grid_and_search_index\"")
         && text.contains("function = \"embed\"")
+        && !text.contains("function = \"qmd_aggregator\"")
+        && !text.contains("function = \"keyword_index\"")
         && !text.contains("function = \"qmd_index\"")
 }
 
@@ -157,6 +158,98 @@ async fn boot_brings_a_unified_index_root_forward() {
 #[tokio::test]
 async fn boot_brings_a_unified_document_index_root_forward() {
     boot_brings_an_old_index_root_forward("unified_document_index").await;
+}
+
+/// The current scaffold as a build before the index step took its
+/// group's name wrote it.
+const GRID_INDEX_STEP: &str = r#"# my sources
+[[groups]]
+id = "mail"
+type = "email"
+
+[[steps]]
+group = "mail"
+function = "ingest"
+command = "datalib-step"
+[steps.params.mbox]
+path = "/nowhere/mail.mbox"
+
+[[steps]]
+group = "mail"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["mail/ingest"]
+
+[[steps]]
+group = "mail"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/grid_index"]
+
+[[groups]]
+id = "unified_grid_and_search_index"
+name = "Grid and Search Index"
+
+[[steps]]
+group = "unified_grid_and_search_index"
+function = "grid_index"
+command = "datalib-step"
+inputs = ["*/render_markdown", "*/render_time_series", "*/render_occurrences"]
+
+[[steps]]
+group = "unified_grid_and_search_index"
+function = "embedding_map"
+command = "datalib-step"
+inputs = ["*/embed"]
+"#;
+
+/// A root from before the index step's rename keeps its grid index: the
+/// config names the new step, the step's tree is moved rather than
+/// rebuilt, and the loop's record follows it, so the step a person
+/// turned off stays off and the embed's record of what it read names the
+/// new id.
+#[tokio::test]
+async fn boot_moves_the_index_steps_tree_to_its_new_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    std::fs::write(root.join("config.toml"), GRID_INDEX_STEP).unwrap();
+    let old_db = root.join("unified_grid_and_search_index/grid_index/db.sqlite");
+    std::fs::create_dir_all(old_db.parent().unwrap()).unwrap();
+    std::fs::write(&old_db, "the grid index").unwrap();
+    let (old_id, new_id) = (
+        "unified_grid_and_search_index/grid_index",
+        "unified_grid_and_search_index/unified_grid_and_search_index",
+    );
+    let store = datalib_dag::supervisor::store::Store::open(root)
+        .await
+        .unwrap();
+    store.turn_off(old_id, "test").await.unwrap();
+    store.close().await;
+
+    let _state = boot(root).await;
+
+    let text = std::fs::read_to_string(root.join("config.toml")).unwrap();
+    assert!(text.starts_with("# my sources"), "{text}");
+    assert!(!text.contains("grid_index"), "{text}");
+    let check = datalib_dag::config::check_text(&text);
+    assert!(check.is_clean(), "{:?}\n{text}", check.diagnostics);
+    let step = |id: &str| check.cfg.steps.iter().find(|s| s.id == id).unwrap();
+    assert_eq!(step("mail/embed").inputs, [new_id]);
+    assert!(step(new_id)
+        .inputs
+        .contains(&"mail/render_markdown".to_string()));
+
+    assert!(!root.join(old_id).exists());
+    assert_eq!(
+        std::fs::read_to_string(datalib_core::layout::grid_index_db(root)).unwrap(),
+        "the grid index"
+    );
+    let store = datalib_dag::supervisor::store::Store::open(root)
+        .await
+        .unwrap();
+    let off = store.turned_off().await.unwrap();
+    store.close().await;
+    assert_eq!(off.keys().collect::<Vec<_>>(), [new_id]);
 }
 
 #[tokio::test]

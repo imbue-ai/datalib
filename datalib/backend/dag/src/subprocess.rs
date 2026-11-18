@@ -12,7 +12,9 @@ use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::events::{Event, EventSink, LogLevel, Stream};
+use crate::problems_relay::{self, Line, Relay};
 use crate::step::{ArtifactState, FailureKind, StepCtx, StepError, StepOutcome};
+use datalib_step_problems::Ended;
 
 /// Where a step finds the runner's pipe, named to the child in
 /// `datalib_parent_watch::ENV_VAR`. Deliberately not stdin: a step is an
@@ -377,7 +379,7 @@ pub(crate) async fn run_subprocess(
     let stderr = child.stderr().take().expect("stderr piped");
 
     // Drain stderr concurrently: every line is forwarded onto the
-    // event stream (so child chatter — tracing output, qmd noise — is
+    // event stream (so child chatter — tracing output, a tool's noise — is
     // captured somewhere instead of discarded), and a short tail is
     // kept for the error message on failure. stderr is where commands
     // put ordinary progress chatter, so the default level is `info`;
@@ -397,8 +399,25 @@ pub(crate) async fn run_subprocess(
     });
 
     let mut outcome: Option<WireOutcome> = None;
+    let mut relay = Relay::new(ctx.data_root.clone(), &ctx.step_id, extra_env, sink.clone());
     let mut lines = BufReader::new(stdout).lines();
-    while let Some(line) = lines.next_line().await.map_err(|e| internal(e.into()))? {
+    loop {
+        // `next_line` is cancel safe, so a lull can write what is waiting
+        // without losing the line being read.
+        let next = if relay.has_pending() {
+            match tokio::time::timeout(problems_relay::FLUSH_AFTER, lines.next_line()).await {
+                Ok(next) => next,
+                Err(_) => {
+                    relay.flush().await;
+                    continue;
+                }
+            }
+        } else {
+            lines.next_line().await
+        };
+        let Some(line) = next.map_err(|e| internal(e.into()))? else {
+            break;
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -407,13 +426,27 @@ pub(crate) async fn run_subprocess(
                 match serde_json::from_value::<WireOutcome>(v) {
                     Ok(w) => outcome = Some(w),
                     Err(e) => {
+                        relay.finish(None).await;
                         return Err(internal(anyhow::anyhow!(
                             "step {}: malformed outcome line {line:?}: {e}",
                             ctx.step_id
-                        )))
+                        )));
                     }
                 }
             }
+            Ok(v) if Line::read(&v).is_some() => match Line::read(&v).expect("matched above") {
+                Ok(l) => relay.take(l).await,
+                Err(e) => sink.emit(&Event::Log {
+                    step: ctx.step_id.clone(),
+                    level: LogLevel::Error,
+                    msg: format!("a problem line that does not read ({e}): {line}"),
+                    ts: None,
+                    stream: Some(Stream::Stdout),
+                    target: Some("datalib_dag::problems_relay".into()),
+                    thread: None,
+                    fields: None,
+                }),
+            },
             Ok(v) => match serde_json::from_value::<Event>(v) {
                 // Forward, re-tagged with the authoritative id.
                 Ok(ev) => {
@@ -469,6 +502,13 @@ pub(crate) async fn run_subprocess(
     if let Some(t) = stop_task {
         t.abort();
     }
+    relay
+        .finish(Some(if status.success() {
+            Ended::Succeeded
+        } else {
+            Ended::Short
+        }))
+        .await;
 
     if status.success() {
         let w = outcome.unwrap_or_default();
@@ -969,9 +1009,77 @@ mod tests {
         );
     }
 
+    async fn problem_keys(root: &Path) -> Vec<String> {
+        datalib_step_problems::read(&datalib_step_problems::file_of(root, "g/out"))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.scope_key)
+            .collect()
+    }
+
+    async fn run_sh(root: &Path, script: &str) {
+        let g = Graph::build(vec![StepSpec::new("g/out", sh(script))]).unwrap();
+        let _ = Runner::new(root.to_path_buf()).run(&g).await;
+    }
+
+    /// A step that sends `problem` and `covered` lines gets its
+    /// `problems.sqlite` written by the runner: a run that succeeds and
+    /// covered everything leaves exactly what it found; a run that failed
+    /// takes nothing away; a step that sends no problem line is left alone.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_runner_keeps_the_problems_a_step_sends() {
+        let root = tempfile::tempdir().unwrap();
+        let p = |key: &str| {
+            format!(
+                r#"echo '{{"event":"problem","stage":"fetch","scope_kind":"entity","scope_key":"{key}","severity":"warning","outcome":"dropped","reason":"fetch_failed","sample":"404"}}'"#
+            )
+        };
+        let all = r#"echo '{"event":"covered","kind":"all"}'"#;
+        run_sh(root.path(), &format!("{}\n{}\n{all}", p("t:1"), p("t:2"))).await;
+        assert_eq!(problem_keys(root.path()).await, ["t:1", "t:2"]);
+
+        run_sh(root.path(), &format!("{}\n{all}", p("t:2"))).await;
+        assert_eq!(problem_keys(root.path()).await, ["t:2"]);
+
+        run_sh(root.path(), &format!("{all}\nexit 1")).await;
+        assert_eq!(problem_keys(root.path()).await, ["t:2"], "a failed run");
+
+        run_sh(root.path(), "true").await;
+        assert_eq!(problem_keys(root.path()).await, ["t:2"], "said nothing");
+    }
+
+    /// A problem is in the file while its step is still running: the step
+    /// below waits, after sending it, until the test has read it there.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_problem_is_in_the_file_while_its_step_runs() {
+        let root = tempfile::tempdir().unwrap();
+        let seen = root.path().join("seen");
+        let script = format!(
+            r#"echo '{{"event":"problem","stage":"fetch","scope_kind":"entity","scope_key":"t:1","severity":"error","outcome":"dropped","reason":"fetch_failed"}}'
+               i=0; while [ ! -e '{}' ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done"#,
+            seen.display()
+        );
+        let path = root.path().to_path_buf();
+        let run = tokio::spawn(async move { run_sh(&path, &script).await });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while problem_keys(root.path()).await.is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the problem never reached the file while the step ran"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(!run.is_finished(), "the step was still running");
+        std::fs::write(&seen, "").unwrap();
+        run.await.unwrap();
+    }
+
     /// A signal aimed at a step reaches what the step spawned, because
     /// the runner gives each step a process group of its own and
-    /// `signal_children` signals the group. Without it a `qmd embed`
+    /// `signal_children` signals the group. Without it a `latchkey curl`
     /// outlived the app that started it: the step never forwarded the
     /// signal, and nothing else ever signals a step.
     ///
@@ -1183,7 +1291,7 @@ mod tests {
     }
 
     /// A step is told the version of each input it was started against, as
-    /// the runner recorded it — which is how the qmd index versions itself
+    /// the runner recorded it — which is how the search index versions itself
     /// by what it indexed.
     #[tokio::test]
     async fn a_step_is_told_the_versions_it_was_started_against() {

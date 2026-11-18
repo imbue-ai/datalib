@@ -3,109 +3,121 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === google-takeout 00000000-0000-811b-999e-be378270a4c8 Jean-Luc Picard
---- 0b50188d-4280-875d-b6ae-81fe30608308
-Jean-Luc Picard <+12025550101> — Sun 1 Mar 2364 17:00
+--- chunk 0
+title: Jean-Luc Picard | text: Jean-Luc Picard <+12025550101> — Sun 1 Mar 2364 17:00
 
 Number One, report to the bridge.
 
---- 0b50188e-a210-834f-a043-6506959b931b
-Me — Sun 1 Mar 2364 17:01
+
+--- chunk 1
+title: Jean-Luc Picard | text: Me — Sun 1 Mar 2364 17:01
 
 On my way, Captain.
 Riker out.
 
---- 0b501890-01a0-8621-aed0-ae4ef59b0e09
-Jean-Luc Picard <+12025550101> — Sun 1 Mar 2364 17:03
+
+--- chunk 2
+title: Jean-Luc Picard | text: Jean-Luc Picard <+12025550101> — Sun 1 Mar 2364 17:03
 
 Here is the sensor reading.
 
 Jean-Luc Picard - Text - 2364-03-01T09_00_00Z-1-1.jpg
 
---- 0b501dea-8d00-8ed9-8a44-2b8899d19c0e
-Jean-Luc Picard <+12025550101> — Mon 2 Mar 2364 18:00
+
+--- chunk 3
+title: Jean-Luc Picard | text: Jean-Luc Picard <+12025550101> — Mon 2 Mar 2364 18:00
 
 **Voicemail:** Number One, the away team is ready. Make it so.
 
-<audio controls src="/data/google-takeout/ingest/blob/1971bd86278d9dc6b0e644bdba490e69d18db586e47e37075b7f70ef4463cbb4"></audio>
-
 🔊 Jean-Luc Picard - Voicemail - 2364-03-02T10_00_00Z.mp3 — 22 B
 
+
 === google-takeout 00000000-0000-819a-843b-b8b8c4ffdc90 +12025550190
---- 0b5028a5-2200-8788-8ea2-a11c5b54142e
-Ferengi Commerce Authority <+12025550190> — Wed 4 Mar 2364 20:00
+--- chunk 0
+title: +12025550190 | text: Ferengi Commerce Authority <+12025550190> — Wed 4 Mar 2364 20:00
 
 **Voicemail:** Greetings, valued customer. You have won a free holodeck program.
 
-<audio controls src="/data/google-takeout/ingest/blob/5b1a259c45cfa10e5d8e4e8cb5cb58c68d0f8fef5e41f9cf0837c757b57ee859"></audio>
+🔊  - Voicemail - 2364-03-04T12_00_00Z.mp3 — 23 B
 
-🔊  \- Voicemail - 2364-03-04T12_00_00Z.mp3 — 23 B
 
 === google-takeout 00000000-0000-825b-8782-6b584a2e75c1 YouTube history
---- 019e93f7-4788-85a6-87ec-fe8e18d21afb
-Me — Thu 4 Jun 2026 18:48
+--- chunk 0
+title: YouTube history | text: Me — Thu 4 Jun 2026 18:48
 
 Watched Encounter at Farpoint · Captain's Log Official
 
---- 019e9b16-7200-8451-902b-b529e61352c5
-Me — Sat 6 Jun 2026 04:00
+
+--- chunk 1
+title: YouTube history | text: Me — Sat 6 Jun 2026 04:00
 
 Watched The Measure of a Man · Lt. Cmdr. Data
 
---- 019e9da9-a000-8828-a961-c92f128abecf
-Me — Sat 6 Jun 2026 16:00
+
+--- chunk 2
+title: YouTube history | text: Me — Sat 6 Jun 2026 16:00
 
 Watched Sins of the Father · Brüder 1234
 
+
 === google-takeout 00000000-0000-842f-b9a6-cc14dbeb0fbc The Art of Diplomacy
---- 00000000-0000-8905-844e-7082704a238c
-Me
+--- chunk 0
+title: The Art of Diplomacy | text: Me
 
 By Jean-Luc Picard
 
---- 0b4f1c5b-2fe0-8b30-92c2-f1cd8ee5597d
-Me — Sun 12 Jan 2364 17:41
+
+--- chunk 1
+title: The Art of Diplomacy | text: Me — Sun 12 Jan 2364 17:41
 
 > Make it so.
 
 The captain's motto.
 
---- 0b4f9496-4d00-86aa-8e70-e05f1b060f1d
-Me — Wed 5 Feb 2364 02:00
+
+--- chunk 2
+title: The Art of Diplomacy | text: Me — Wed 5 Feb 2364 02:00
 
 > There is a way out of every box, a solution to every puzzle; it's just a matter of finding it.
 
---- 0b4fe7e5-82a0-81c7-af25-afec47d51229
-Me — Fri 21 Feb 2364 06:15
+
+--- chunk 3
+title: The Art of Diplomacy | text: Me — Fri 21 Feb 2364 06:15
 
 > Chapter 7: The Cardassian Question
 
+
 === google-takeout 00000000-0000-84b4-80af-50ab120b27f4 Google Maps
---- 019b8805-3000-86e6-9960-620c35b8c1b8
-Me — Sun 4 Jan 2026 08:00
+--- chunk 0
+title: Google Maps | text: Me — Sun 4 Jan 2026 08:00
 
 **Mount Seleya**
 
---- 019c5b29-ec00-8402-b0a9-1e1af476e5b1
-Me — Sat 14 Feb 2026 08:00
+
+--- chunk 1
+title: Google Maps | text: Me — Sat 14 Feb 2026 08:00
 
 **Risa Beach Resort**
 
 Risa
 
---- 019ca869-5000-8c1e-8c4a-e9f5104df6a9
-Me — Sun 1 Mar 2026 08:00
+
+--- chunk 2
+title: Google Maps | text: Me — Sun 1 Mar 2026 08:00
 
 **Quark's Bar, Deep Space Nine**
 
---- 019d7bfb-e900-8689-b06f-03ee09f0819c
-Me — Sat 11 Apr 2026 10:00
+
+--- chunk 3
+title: Google Maps | text: Me — Sat 11 Apr 2026 10:00
 
 ★★☆☆☆
 
 The station at Farpoint was not what it seemed.
 
---- 019de88f-5200-8106-81bc-0461c67fa1d5
-Me — Sat 2 May 2026 12:00
+
+--- chunk 4
+title: Google Maps | text: Me — Sat 2 May 2026 12:00
 
 **Resort Lounge** ★★★★☆
 
@@ -113,8 +125,9 @@ Risa
 
 Lovely beaches. The horga'hn shop was crowded.
 
---- 019e8ef6-cec0-89e5-9c9f-538486290dbd
-Me — Wed 3 Jun 2026 19:30
+
+--- chunk 5
+title: Google Maps | text: Me — Wed 3 Jun 2026 19:30
 
 **Ten Forward** ★★★★★
 
@@ -127,65 +140,71 @@ Excellent place to relax after duty shift. Synthehol is acceptable; the view of 
 - **Recommended dishes:** Tea, Earl Grey, hot; Gagh
 - **Anything else?:** Ask Guinan for the green drink.
 
---- 019e941d-2ac0-8086-8756-df018957d9d2
-Me — Thu 4 Jun 2026 19:30
+
+--- chunk 6
+title: Google Maps | text: Me — Thu 4 Jun 2026 19:30
 
 View from Picard's usual table
 
 Ten Forward bar
 
+
 === google-takeout 00000000-0000-858d-8592-42d8db3d75d5 Lieutenant Commander Geordi La Forge, Chief Engineer
---- 0b502d42-29c0-8a93-9415-026aee9ec1bd
-Lieutenant Commander Geordi La Forge, Chief Engineer <+12025550153> — Thu 5 Mar 2364 17:30
+--- chunk 0
+title: Lieutenant Commander Geordi La Forge, Chief Engineer | text: Lieutenant Commander Geordi La Forge, Chief Engineer <+12025550153> — Thu 5 Mar 2364 17:30
 
 Placed call — Lieutenant Commander Geordi La Forge, Chief Engineer
 
+
 === google-takeout 00000000-0000-877c-9cdc-4597c96ff7ac google-takeout storage
---- -
----
-title: google-takeout storage
-source: google-takeout
-measured_at: 2369-04-15T00:00:00+00:00
----
+--- chunk 0
+title: google-takeout storage | text: Source: google-takeout
 
-# [google-takeout](datalib:group/google-takeout "google-takeout") — storage
+# google-takeout — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest` | <size> | 3 files | <span id="m-00000000-0000-877c-9cdc-4597c96ff7ac" data-section-uuid="00000000-0000-877c-9cdc-4597c96ff7ac">`00000000`</span> |
-| Store | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/blobs.sqlite` | <size> |  | <span id="m-00000000-0000-8aa5-b14e-80e236748077" data-section-uuid="00000000-0000-8aa5-b14e-80e236748077">`00000000`</span> |
-| Table | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/blobs.sqlite#cas_objects` |  | 12 rows | <span id="m-00000000-0000-812f-99cb-77b7fe27d783" data-section-uuid="00000000-0000-812f-99cb-77b7fe27d783">`00000000`</span> |
-| Store | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-8bc9-b913-a54d6660411c" data-section-uuid="00000000-0000-8bc9-b913-a54d6660411c">`00000000`</span> |
-| Table | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/entities.doltlite_db#chat_attachments` |  | 4 rows | <span id="m-00000000-0000-87ba-820e-b8cfeb43e26a" data-section-uuid="00000000-0000-87ba-820e-b8cfeb43e26a">`00000000`</span> |
-| Table | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/entities.doltlite_db#chat_groups` |  | 3 rows | <span id="m-00000000-0000-8dbe-b2dc-ca88587cd7a4" data-section-uuid="00000000-0000-8dbe-b2dc-ca88587cd7a4">`00000000`</span> |
-| Table | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/entities.doltlite_db#chat_messages` |  | 6 rows | <span id="m-00000000-0000-86f6-9fe8-fec142640ab9" data-section-uuid="00000000-0000-86f6-9fe8-fec142640ab9">`00000000`</span> |
-| Table | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/entities.doltlite_db#chat_users` |  | 1 row | <span id="m-00000000-0000-8948-b715-9b70430598de" data-section-uuid="00000000-0000-8948-b715-9b70430598de">`00000000`</span> |
-| Table | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/entities.doltlite_db#gemini_activity` |  | 3 rows | <span id="m-00000000-0000-8d65-b99b-890a88939918" data-section-uuid="00000000-0000-8d65-b99b-890a88939918">`00000000`</span> |
-| Table | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/entities.doltlite_db#gemini_attachments` |  | 3 rows | <span id="m-00000000-0000-8504-b3b1-99a0e1d5c998" data-section-uuid="00000000-0000-8504-b3b1-99a0e1d5c998">`00000000`</span> |
-| Table | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/entities.doltlite_db#ingested_files` |  | 28 rows | <span id="m-00000000-0000-8697-9555-8469b6656bdc" data-section-uuid="00000000-0000-8697-9555-8469b6656bdc">`00000000`</span> |
-| Table | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/entities.doltlite_db#maps_photos` |  | 1 row | <span id="m-00000000-0000-804e-ba5d-23955947e248" data-section-uuid="00000000-0000-804e-ba5d-23955947e248">`00000000`</span> |
-| Table | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/entities.doltlite_db#maps_reviews` |  | 3 rows | <span id="m-00000000-0000-80e0-8145-6762394fd896" data-section-uuid="00000000-0000-80e0-8145-6762394fd896">`00000000`</span> |
-| Table | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/entities.doltlite_db#maps_saved_lists` |  | 5 rows | <span id="m-00000000-0000-8eeb-b82b-a920082d179f" data-section-uuid="00000000-0000-8eeb-b82b-a920082d179f">`00000000`</span> |
-| Table | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/entities.doltlite_db#maps_saved_places` |  | 3 rows | <span id="m-00000000-0000-8357-bf61-01531b45e4e6" data-section-uuid="00000000-0000-8357-bf61-01531b45e4e6">`00000000`</span> |
-| Table | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/entities.doltlite_db#my_maps_placemarks` |  | 4 rows | <span id="m-00000000-0000-8639-8926-4af3574a65a3" data-section-uuid="00000000-0000-8639-8926-4af3574a65a3">`00000000`</span> |
-| Table | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/entities.doltlite_db#play_books_annotations` |  | 4 rows | <span id="m-00000000-0000-81b6-8911-e66afdb37e40" data-section-uuid="00000000-0000-81b6-8911-e66afdb37e40">`00000000`</span> |
-| Table | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/entities.doltlite_db#voice_attachments` |  | 5 rows | <span id="m-00000000-0000-8874-9a90-086e2689cd14" data-section-uuid="00000000-0000-8874-9a90-086e2689cd14">`00000000`</span> |
-| Table | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/entities.doltlite_db#voice_bills` |  | 2 rows | <span id="m-00000000-0000-82b4-a32d-ffe1ac0e8072" data-section-uuid="00000000-0000-82b4-a32d-ffe1ac0e8072">`00000000`</span> |
-| Table | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/entities.doltlite_db#voice_greetings` |  | 1 row | <span id="m-00000000-0000-821b-8e8b-e32900238b2d" data-section-uuid="00000000-0000-821b-8e8b-e32900238b2d">`00000000`</span> |
-| Table | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/entities.doltlite_db#voice_messages` |  | 11 rows | <span id="m-00000000-0000-8483-9681-e5bafdf2e7e7" data-section-uuid="00000000-0000-8483-9681-e5bafdf2e7e7">`00000000`</span> |
-| Table | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/entities.doltlite_db#youtube_subscriptions` |  | 3 rows | <span id="m-00000000-0000-8b92-aa68-29b8608abcf8" data-section-uuid="00000000-0000-8b92-aa68-29b8608abcf8">`00000000`</span> |
-| Table | [ingest](datalib:step/google-takeout/ingest "google-takeout/ingest") | `google-takeout/ingest/entities.doltlite_db#youtube_watch_history` |  | 3 rows | <span id="m-00000000-0000-8600-824f-ad718271ef73" data-section-uuid="00000000-0000-8600-824f-ad718271ef73">`00000000`</span> |
+| Source Size | ingest | `google-takeout/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `google-takeout/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `google-takeout/ingest/blobs.sqlite#cas_objects` |  | 12 rows | `00000000` |
+| Store | ingest | `google-takeout/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#chat_attachments` |  | 4 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#chat_groups` |  | 3 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#chat_messages` |  | 6 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#chat_users` |  | 1 row | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#gemini_activity` |  | 3 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#gemini_attachments` |  | 3 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#ingested_files` |  | 28 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#maps_photos` |  | 1 row | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#maps_reviews` |  | 3 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#maps_saved_lists` |  | 5 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#maps_saved_places` |  | 3 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#my_maps_placemarks` |  | 4 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#play_books_annotations` |  | 4 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#voice_attachments` |  | 5 rows | `00000000` |
+
+--- chunk 1
+title: google-takeout storage | text: Source: google-takeout
+
+ `google-takeout/ingest/entities.doltlite_db#my_maps_placemarks` |  | 4 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#play_books_annotations` |  | 4 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#voice_attachments` |  | 5 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#voice_bills` |  | 2 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#voice_greetings` |  | 1 row | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#voice_messages` |  | 11 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#youtube_subscriptions` |  | 3 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#youtube_watch_history` |  | 3 rows | `00000000` |
 
 === google-takeout 00000000-0000-8841-8b6d-116feade3563 Jean-Luc Picard, William Riker
---- 0194f4c9-3698-843e-8c00-2bb666b7355c
-Jean-Luc Picard <picard@enterprise.starfleet> — Tue 11 Feb 2025 11:33
+--- chunk 0
+title: Jean-Luc Picard, William Riker | text: Jean-Luc Picard <picard@enterprise.starfleet> — Tue 11 Feb 2025 11:33
 
 Number One, set a course for Earth.
 
---- 0194f4c9-3698-8368-9caa-de73830de593
-Jean-Luc Picard <picard@enterprise.starfleet> — Tue 11 Feb 2025 11:33
+
+--- chunk 1
+title: Jean-Luc Picard, William Riker | text: Jean-Luc Picard <picard@enterprise.starfleet> — Tue 11 Feb 2025 11:33
 
 Labels: Starred
 
@@ -193,10 +212,11 @@ Number One, set a course for Risa.
 
 🔗 Risa
 
-*Edited <time datetime="2025-02-11T11:35:00+00:00" title="2025-02-11 11:35:00 UTC">Tue Feb 11th, 2025 at 11:35</time>*
+*Edited Tue Feb 11th, 2025 at 11:35*
 
---- 0195683a-d140-87f9-bdf6-234da6d6880c
-William Riker <riker@enterprise.starfleet> — Wed 5 Mar 2025 21:34
+
+--- chunk 2
+title: Jean-Luc Picard, William Riker | text: William Riker <riker@enterprise.starfleet> — Wed 5 Mar 2025 21:34
 
 > **Jean-Luc Picard**:
 >
@@ -210,47 +230,54 @@ Aye, sir.
 
 🖼 *[risa-shore-leave.png (not yet fetched)]*
 
+
 === google-takeout 00000000-0000-885c-86c6-d4a3cb9a45c2 Away team favourites
---- 00000000-0000-8f2d-8a6d-e1c18031f808
-Me
+--- chunk 0
+title: Away team favourites | text: Me
 
 Places the away team keeps going back to
 
---- 00000000-0000-8527-9614-6e93f69d454f
-Me
+
+--- chunk 1
+title: Away team favourites | text: Me
 
 **Mount Seleya**
 
 Bring water
 
---- 00000000-0000-8b15-b2ef-f4042d79f39c
-Me
+
+--- chunk 2
+title: Away team favourites | text: Me
 
 **Mount Seleya**
 
 Second climb
 
+
 === google-takeout 00000000-0000-886c-849f-4206f438cee1 Tales of the Picard Maneuver
---- 00000000-0000-85a3-9aca-5f6858ef1c97
-Me
+--- chunk 0
+title: Tales of the Picard Maneuver | text: Me
 
 By William Riker · Narrated by Data
 
---- 0b4f788c-9100-8e44-b7d7-f3f6cbaad258
-Me — Thu 30 Jan 2364 15:20
+
+--- chunk 1
+title: Tales of the Picard Maneuver | text: Me — Thu 30 Jan 2364 15:20
 
 *Chapter 3, 12:04*
 
+
 === google-takeout 00000000-0000-88ab-b54c-6183150810df Gemini
---- 019c5d7b-bf88-8ade-b4de-09eb0cc9b339
-Me — Sat 14 Feb 2026 18:48
+--- chunk 0
+title: Gemini | text: Me — Sat 14 Feb 2026 18:48
 
 Tell me about the Prime Directive. Is it ever waived?
 
 📎 Prime Directive summary.txt — 97 B
 
---- 019c5d7b-bf88-8170-aa67-ff5dba6a09b2
-Gemini — Sat 14 Feb 2026 18:48
+
+--- chunk 1
+title: Gemini | text: Gemini — Sat 14 Feb 2026 18:48
 
 The Prime Directive (General Order 1) prohibits Starfleet personnel from interfering with the natural development of pre-warp civilizations.
 
@@ -258,41 +285,47 @@ The Prime Directive (General Order 1) prohibits Starfleet personnel from interfe
 
 Captains have set it aside, but never without a court of inquiry after.
 
---- 019cb47b-37a0-8569-a994-f8d76ad88c90
-Me — Tue 3 Mar 2026 16:15
+
+--- chunk 2
+title: Gemini | text: Me — Tue 3 Mar 2026 16:15
 
 Make this saucer sketch look like the Enterprise-D at warp.
 
 saucer-sketch.jpg
 
---- 019cb47b-37a0-8062-8af5-e9ae30432d33
-Gemini — Tue 3 Mar 2026 16:15
+
+--- chunk 3
+title: Gemini | text: Gemini — Tue 3 Mar 2026 16:15
 
 Here is the Enterprise-D at warp.
 
 2364030112000000001-ncc1701d0e5f6a7b.jpeg
 
---- 019d5ea4-0220-8071-872a-454306cb7e22
-Me — Sun 5 Apr 2026 17:15
+
+--- chunk 4
+title: Gemini | text: Me — Sun 5 Apr 2026 17:15
 
 How does a warp coil work?
 
---- 019d5ea4-0220-84d4-9b5a-34be1729073e
-Gemini — Sun 5 Apr 2026 17:15
+
+--- chunk 5
+title: Gemini | text: Gemini — Sun 5 Apr 2026 17:15
 
 A warp coil generates an asymmetric subspace field around the ship, allowing faster-than-light travel without local time dilation.
 
 *   **Verterium cortenide** windings shape the field.
 *   The coils fire in sequence, front to back.
 
+
 === google-takeout 00000000-0000-8911-b4f4-e7022a921136 Away missions
---- 00000000-0000-843f-84f8-5ceabd35f3d3
-Me
+--- chunk 0
+title: Away missions | text: Me
 
 Every planet the Enterprise-D sent an away team to.
 
---- 00000000-0000-8c06-afb1-6e879c3bf3e8
-Me
+
+--- chunk 1
+title: Away missions | text: Me
 
 Labels: Shore leave
 
@@ -305,8 +338,9 @@ Bring sunscreen.
 
 🖼 https://memory-alpha.example/risa.jpg
 
---- 00000000-0000-8789-b1a0-7bd4d0a1b1a2
-Me
+
+--- chunk 2
+title: Away missions | text: Me
 
 Labels: Shore leave
 
@@ -314,8 +348,9 @@ Labels: Shore leave
 
 📍 51.5, -0.1
 
---- 00000000-0000-89e5-9f67-a49777419264
-Me
+
+--- chunk 3
+title: Away missions | text: Me
 
 Labels: Patrol routes
 
@@ -325,8 +360,9 @@ Long-range sensors only.
 
 〰 3 points
 
---- 00000000-0000-80b4-8a03-0f6e3ccf8698
-Me
+
+--- chunk 4
+title: Away missions | text: Me
 
 Labels: Patrol routes
 
@@ -334,81 +370,94 @@ Labels: Patrol routes
 
 〰 4 points
 
+
 === google-takeout 00000000-0000-89f3-bd53-77e4883722ea Group Conversation
---- 0b50324d-0e80-8f77-b992-697e37f1313b
-Wesley Crusher <+12025550142> — Fri 6 Mar 2364 17:00
+--- chunk 0
+title: Group Conversation | text: Wesley Crusher <+12025550142> — Fri 6 Mar 2364 17:00
 
 The warp field equations check out.
 
---- 0b50324e-e340-8ff5-ad85-73a0a4b3a34d
-Jean-Luc Picard <+12025550101> — Fri 6 Mar 2364 17:02
+
+--- chunk 1
+title: Group Conversation | text: Jean-Luc Picard <+12025550101> — Fri 6 Mar 2364 17:02
 
 Well done, Ensign.
 
+
 === google-takeout 00000000-0000-8a29-a97a-3aa759a898ef Wesley Crusher
---- 0b502347-d780-87b9-9615-14926b2ecdf0
-Wesley Crusher <+12025550142> — Tue 3 Mar 2364 19:00
+--- chunk 0
+title: Wesley Crusher | text: Wesley Crusher <+12025550142> — Tue 3 Mar 2364 19:00
 
 Missed call — Wesley Crusher
 
+
 === google-takeout 00000000-0000-8a5c-92c1-f761ed74e325 +12025550147
---- 0b502cef-c400-8eae-b531-4c683f6e6977
-+12025550147 — Thu 5 Mar 2364 16:00
+--- chunk 0
+title: +12025550147 | text: +12025550147 — Thu 5 Mar 2364 16:00
 
 Placed call — +12025550147
 
+
 === google-takeout 00000000-0000-8c4c-ac1c-6428fa2456b3 Shore leave
---- 00000000-0000-8589-a64c-07977753e9d7
-Me
+--- chunk 0
+title: Shore leave | text: Me
 
 **Ten Forward**
 
 Guinan's bar, Deck 10.
 Ask for the green drink.
 
---- 00000000-0000-8558-8d0e-597e27582a57
-Me
+
+--- chunk 1
+title: Shore leave | text: Me
 
 **Risa**
 
---- 00000000-0000-8991-b7f0-ebe11cfa469d
-Me
+
+--- chunk 2
+title: Shore leave | text: Me
 
 **Holodeck 3**
 
 Reserved for Dixon Hill programs
 
+
 === google-takeout 00000000-0000-8cce-a52f-e56db2f9fc70 YouTube subscriptions
---- 00000000-0000-88ec-afae-edb151ee18be
-Me
+--- chunk 0
+title: YouTube subscriptions | text: Me
 
 Captain's Log Official
 
---- 00000000-0000-8f99-9bba-5bb414fb6eb3
-Me
+
+--- chunk 1
+title: YouTube subscriptions | text: Me
 
 Lt. Cmdr. Data
 
---- 00000000-0000-8aff-972c-999e6dfd57d8
-Me
+
+--- chunk 2
+title: YouTube subscriptions | text: Me
 
 Riker, William T.
 
+
 === google-takeout 00000000-0000-8e5f-8eb1-967f63ffb4eb Ten Forward regulars
---- 019573e8-ee00-8ccc-bca0-7b369a4046d2
-Guinan <guinan@tenforward.example> — Fri 7 Mar 2025 20:00
+--- chunk 0
+title: Ten Forward regulars | text: Guinan <guinan@tenforward.example> — Fri 7 Mar 2025 20:00
 
 Who wants to hear about the Nexus?
 
---- 019573ed-81e0-85f8-aa56-75303382a980
-Data <data@enterprise.starfleet> — Fri 7 Mar 2025 20:05
+
+--- chunk 1
+title: Ten Forward regulars | text: Data <data@enterprise.starfleet> — Fri 7 Mar 2025 20:05
 
 I would.
 
 📎 nexus-draft.txt — 18 B
 
---- 019573ed-81e0-850e-823e-0bd667fb26ce
-Data <data@enterprise.starfleet> — Fri 7 Mar 2025 20:05
+
+--- chunk 2
+title: Ten Forward regulars | text: Data <data@enterprise.starfleet> — Fri 7 Mar 2025 20:05
 
 Labels: Starred
 
@@ -416,32 +465,33 @@ Labels: Starred
 
 I would. I have attached my notes.
 
-*Edited <time datetime="2025-03-07T20:06:30-08:00" title="2025-03-07 20:06:30 -08:00">Fri Mar 7th, 2025 at 20:06</time>*
+*Edited Fri Mar 7th, 2025 at 20:06*
 
 📎 nexus notes — 33 B
 
 📎 nexus-draft.txt — 18 B
 
---- 01957946-3880-80c5-9801-8f9e41ad216c
-William Riker <riker@enterprise.starfleet> — Sat 8 Mar 2025 21:00
+
+--- chunk 3
+title: Ten Forward regulars | text: William Riker <riker@enterprise.starfleet> — Sat 8 Mar 2025 21:00
 
 Jam session tonight: https://youtu.be/tngJazz01
 
 *Sent via Trombone Bot*
 
---- 01957dfe-b780-8745-b772-ee23e83e0948
-Guinan <guinan@tenforward.example> — Sun 9 Mar 2025 19:00
+
+--- chunk 4
+title: Ten Forward regulars | text: Guinan <guinan@tenforward.example> — Sun 9 Mar 2025 19:00
 
 📹 https://meet.google.com/tng-tenf-wrd
 
 *Call ended*
 
+
 === google-takeout 00000000-0000-8ee7-a23a-b6a9b64eb3fb Lieutenant Worf, Son of Mogh, Chief of Security
---- 0b503713-4920-867c-9ccd-20aa374a86f4
-Lieutenant Worf, Son of Mogh, Chief of Security <+12025550160> — Sat 7 Mar 2364 15:15
+--- chunk 0
+title: Lieutenant Worf, Son of Mogh, Chief of Security | text: Lieutenant Worf, Son of Mogh, Chief of Security <+12025550160> — Sat 7 Mar 2364 15:15
 
 **Voicemail:** Commander, the away team is ready.
-
-<audio controls src="/data/google-takeout/ingest/blob/a5b3ab3e7284746147292745b086a5bef098475811ddb1c09c938c4fcd657979"></audio>
 
 🔊 Lieutenant Worf, Son of Mogh, Chief of Security - Voi.mp3 — 23 B

@@ -65,9 +65,7 @@ describe("rowMenu", () => {
     expect(
       has(rowMenu([target({ kind: "applet", dashboardGroup: null })], opts), "dashboard"),
     ).toBe(false);
-    expect(has(rowMenu([target({ kind: "step", func: "qmd_aggregator" })], opts), "history")).toBe(
-      false,
-    );
+    expect(has(rowMenu([target({ kind: "step", func: "embed" })], opts), "history")).toBe(false);
     expect(
       entry(rowMenu([target({ runBlocked: "Not in the pipeline" })], opts), "sync").disabled,
     ).toBe("Not in the pipeline");
@@ -122,13 +120,13 @@ describe("rowMenu", () => {
       func: "embedding_map",
     });
     expect(entry(rowMenu([map], opts), "reset").disabled).toBeNull();
-    const qmd = target({
-      id: "unified_grid_and_search_index/qmd_aggregator",
+    const gridIndexStep = target({
+      id: "unified_grid_and_search_index/unified_grid_and_search_index",
       kind: "step",
       type: null,
-      func: "qmd_aggregator",
+      func: "unified_grid_and_search_index",
     });
-    expect(has(rowMenu([qmd], opts), "reset")).toBe(false);
+    expect(has(rowMenu([gridIndexStep], opts), "reset")).toBe(false);
   });
 
   it("offers the system row its log and its path, and nothing that edits the config", () => {
@@ -229,7 +227,7 @@ describe("rowMenu", () => {
 
   it("names the trees that keep no store", () => {
     expect(noStoreReason(target({ kind: "step", func: "ingest" }))).toBeNull();
-    expect(noStoreReason(target({ kind: "step", func: "grid_index" }))).toBe(
+    expect(noStoreReason(target({ kind: "step", func: "unified_grid_and_search_index" }))).toBe(
       "The grid index is plain SQLite, with no commit history",
     );
     expect(

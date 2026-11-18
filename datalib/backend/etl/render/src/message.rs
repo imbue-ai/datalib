@@ -81,11 +81,8 @@ pub struct MessageHeader<'a> {
 impl MessageHeader<'_> {
     /// The header line, without a trailing newline.
     ///
-    /// **It is a real `##`, and that is load-bearing.** qmd cuts a
-    /// chunk at the best break point near its size limit and scores an
-    /// `h2` far above the blank line it would otherwise settle for, so
-    /// the heading is what makes every message start a chunk boundary
-    /// it prefers. The frontend styles it down to a one-line
+    /// It is a real `##` heading in the file. The frontend styles it down
+    /// to a one-line
     /// "name, then a small grey time"; it is not a heading on screen.
     pub fn render(&self) -> String {
         let mut s = String::with_capacity(160);

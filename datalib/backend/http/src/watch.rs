@@ -151,12 +151,13 @@ pub enum RootEvent {
     /// A component appeared, changed or vanished under
     /// `system/frontend/`.
     FrontendChanged,
-    /// The grid index (`unified_grid_and_search_index/grid_index/db.sqlite`) has a
-    /// new generation. Under streaming that happens many times per sync --
-    /// a `grid_index` pass per checkpoint -- and it is how rows reach the
-    /// grid while the download that produced them is still running. The
-    /// generation, not the file: a write in a transaction that has not
-    /// committed is not something a reader can fetch yet.
+    /// The grid index
+    /// (`unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`)
+    /// has a new generation. Under streaming that happens many times per sync
+    /// -- a `unified_grid_and_search_index` pass per checkpoint -- and it is
+    /// how rows reach the grid while the download that produced them is still
+    /// running. The generation, not the file: a write in a transaction that has
+    /// not committed is not something a reader can fetch yet.
     IndexChanged,
     /// The time-series index
     /// (`unified_time_series_index/time_series_index/time_series.doltlite_db`)
@@ -240,7 +241,7 @@ fn classify(root: &Path, path: &Path) -> Option<Moved> {
     {
         return Some(Moved::RunStore);
     }
-    if path.parent() == Some(datalib_core::layout::grid_index_dir(root).as_path())
+    if path.parent() == Some(datalib_core::layout::index_step_dir(root).as_path())
         && name.starts_with(datalib_core::layout::GRID_DB)
     {
         return Some(Moved::GridIndex);
@@ -735,7 +736,7 @@ fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Optio
     // Not created here: `unified_grid_and_search_index/` belongs to the steps and the
     // applet, and a root that has never synced has none. Watched once it
     // exists — see the debounce loop below.
-    let grid_index = datalib_core::layout::grid_index_dir(&root);
+    let index_step_dir = datalib_core::layout::index_step_dir(&root);
     let time_series_index = time_series_index_dir(&root);
     // Likewise `datalib_curated/`, which exists once an app made it; its
     // own watcher is recursive, since each app keeps a directory of its
@@ -793,7 +794,7 @@ fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Optio
                     tracing::warn!("watch: {} ({e})", dir.display());
                 }
             }
-            index_watcher = watch_dir(&grid_index, RecursiveMode::NonRecursive, &*make);
+            index_watcher = watch_dir(&index_step_dir, RecursiveMode::NonRecursive, &*make);
             time_series_watcher =
                 watch_dir(&time_series_index, RecursiveMode::NonRecursive, &*make);
             curated_watcher = watch_dir(&curated, RecursiveMode::Recursive, &*make);
@@ -871,7 +872,7 @@ fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Optio
             // does: on macOS every `watch` call restarts the watcher's
             // stream, and a restarted stream loses what lands meanwhile.
             if let (None, Some(make)) = (&index_watcher, &make_watcher) {
-                index_watcher = watch_dir(&grid_index, RecursiveMode::NonRecursive, &**make);
+                index_watcher = watch_dir(&index_step_dir, RecursiveMode::NonRecursive, &**make);
             }
             if let (None, Some(make)) = (&time_series_watcher, &make_watcher) {
                 time_series_watcher =
@@ -1044,14 +1045,16 @@ mod tests {
         assert_eq!(
             classify(
                 root,
-                &root.join("unified_grid_and_search_index/grid_index/db.sqlite-wal")
+                &root.join(
+                    "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite-wal"
+                )
             ),
             Some(Moved::GridIndex)
         );
         assert_eq!(
             classify(
                 root,
-                &root.join("unified_grid_and_search_index/grid_index/db.sqlite")
+                &root.join("unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite")
             ),
             Some(Moved::GridIndex)
         );
@@ -1543,7 +1546,7 @@ mod tests {
         until(&mut rx, RootEvent::TableChanged { table: Table::Log }).await;
     }
 
-    /// A commit to the grid index, the way the `grid_index` step makes
+    /// A commit to the grid index, the way the `unified_grid_and_search_index` step makes
     /// one: its own process, opening and closing the store around it.
     async fn write_index(db: &Path, id: i64, commit: bool) {
         let writer = datalib_core::store::open_pool(db).await.unwrap();

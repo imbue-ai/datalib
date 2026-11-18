@@ -4,7 +4,7 @@
 # Runs the staged `datalib-*` binaries (`//datalib/backend:bin_unstamped`
 # — `:bin` minus the per-commit `git-hash`, so this test stays cached
 # across commits — in whatever configuration it is built with) over the two-vCard
-# fixture — ingest, render, grid_index — and reads the raw store's commit
+# fixture — ingest, render, unified_grid_and_search_index — and reads the raw store's commit
 # log back through the doltlite shell, and the grid index's rows (the index
 # is plain SQLite, the one store with no log). A binary linked against
 # stock SQLite writes files the shell refuses (`dolt version-control
@@ -49,6 +49,12 @@ root="${TEST_TMPDIR:-$(mktemp -d)}/root"
 mkdir -p "$root"
 # Not the host's fingerprint cache: this test's paths are gone by the next run.
 export DATALIB_CACHE_DIR="$root/fingerprint_cache"
+# Off the network and out of the host's caches: a step that comes to need
+# something it would download fails here by name, rather than fetching it
+# into a cache that tests running in parallel share. The contacts are kept
+# out of the search below for that reason: the keyword pass cuts chunks
+# with the embedding model's tokenizer, 300 MB from HuggingFace.
+export XDG_CACHE_HOME="$root/cache" DATALIB_NO_FETCH=1 DATALIB_MODELS_NO_FETCH=1
 cat > "$root/config.toml" <<CONFIG
 [[groups]]
 id = "contacts"
@@ -70,8 +76,10 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 inputs = ["contacts/render_markdown"]
+[steps.params]
+not_searched = ["contacts"]
 CONFIG
 
 # The run takes seconds. Past the deadline it is hung, and a job killed
@@ -157,7 +165,7 @@ commits() {  # <store> — prints the commit count, or fails loudly
 }
 
 raw="$root/contacts/ingest/entities.doltlite_db"
-grid="$root/unified_grid_and_search_index/grid_index/db.sqlite"
+grid="$root/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite"
 n_raw="$(commits "$raw")"
 rows="$("$shell" -readonly "$grid" "SELECT count(*) FROM grid_rows;")"
 echo "raw store commits: $n_raw; grid_rows: $rows"

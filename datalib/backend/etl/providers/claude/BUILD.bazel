@@ -95,10 +95,6 @@ insta_update(
     name = "claude_tests.update",
     test = ":claude_tests",
     test_args = ["--skip", "live::"],
-    extra_data = [":tng_fixture"],
-    extra_env = {
-        "CLAUDE_FIXTURE_DIR": "datalib/backend/etl/providers/claude/tests/fixtures/claude_export",
-    },
 )
 
 insta_update(
@@ -113,10 +109,4 @@ insta_update(
 live_run(
     name = "claude_live",
     test = ":claude_tests",
-    extra_data = [
-        ":tng_fixture",
-    ],
-    extra_env = {
-        "CLAUDE_FIXTURE_DIR": "datalib/backend/etl/providers/claude/tests/fixtures/claude_export",
-    },
 )

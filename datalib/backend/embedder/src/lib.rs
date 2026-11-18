@@ -1,14 +1,16 @@
 //! Text to vectors, in process: llama.cpp (`third-party/llama_cpp`) running
 //! a GGUF embedding model, behind a small C shim (`csrc/embedder.cpp`). Set
 //! up as qmd's node-llama-cpp set it up, so the vectors are the ones qmd
-//! wrote; `tests/parity.rs` holds that against qmd itself.
+//! wrote; `tests/parity.rs` holds that against a golden of qmd's answers.
 
 use std::ffi::{c_char, CString};
-use std::path::{Path, PathBuf};
+use std::ops::Range;
+use std::path::Path;
 use std::ptr::NonNull;
 use std::sync::OnceLock;
 
 use anyhow::{bail, Context, Result};
+use datalib_runtime::cuda_module;
 
 mod ffi {
     use std::ffi::c_char;
@@ -18,27 +20,52 @@ mod ffi {
         _private: [u8; 0],
     }
 
+    #[repr(C)]
+    pub struct Tokenizer {
+        _private: [u8; 0],
+    }
+
     extern "C" {
         pub fn dl_embedder_open(
             model_path: *const c_char,
             n_ctx: i32,
             n_threads: i32,
             use_gpu: i32,
+            n_seq_max: i32,
+            n_tokens: i32,
             err: *mut c_char,
             err_len: usize,
         ) -> *mut Embedder;
+        pub fn dl_embedder_device_for(use_gpu: i32) -> *const c_char;
         pub fn dl_embedder_load_module(
             path: *const c_char,
             err: *mut c_char,
             err_len: usize,
         ) -> i32;
+        pub fn dl_embedder_can_load(name: *const c_char) -> i32;
         pub fn dl_embedder_gpu_available() -> i32;
         pub fn dl_embedder_close(e: *mut Embedder);
         pub fn dl_embedder_device(e: *const Embedder) -> *const c_char;
         pub fn dl_embedder_n_embd(e: *const Embedder) -> i32;
         pub fn dl_embedder_n_ctx(e: *const Embedder) -> i32;
+        pub fn dl_embedder_n_seq_max(e: *const Embedder) -> i32;
+        pub fn dl_embedder_n_tokens(e: *const Embedder) -> i32;
+        pub fn dl_embedder_keeps_cache(e: *const Embedder) -> i32;
         pub fn dl_embedder_tokenize(
             e: *const Embedder,
+            text: *const c_char,
+            text_len: i32,
+            out: *mut i32,
+            cap: i32,
+        ) -> i32;
+        pub fn dl_tokenizer_open(
+            model_path: *const c_char,
+            err: *mut c_char,
+            err_len: usize,
+        ) -> *mut Tokenizer;
+        pub fn dl_tokenizer_close(t: *mut Tokenizer);
+        pub fn dl_tokenizer_ends(
+            t: *const Tokenizer,
             text: *const c_char,
             text_len: i32,
             out: *mut i32,
@@ -49,6 +76,15 @@ mod ffi {
             tokens: *const i32,
             n: i32,
             batch: i32,
+            out: *mut f32,
+            err: *mut c_char,
+            err_len: usize,
+        ) -> i32;
+        pub fn dl_embedder_embed_seqs(
+            e: *mut Embedder,
+            tokens: *const i32,
+            lens: *const i32,
+            n_seqs: i32,
             out: *mut f32,
             err: *mut c_char,
             err_len: usize,
@@ -69,6 +105,74 @@ pub enum Device {
     Best,
 }
 
+/// How many prompts one call to the model takes, and how many tokens they
+/// may be in all. The model keeps no cache, so a call attends over all of
+/// its tokens, the prompts masked from each other: its time and scratch
+/// memory grow with the square of `tokens`. A budget of one full prompt's
+/// tokens costs no more than one long prompt alone and lets short ones
+/// share a call. `tokens` below [`CONTEXT_TOKENS`] is raised to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Batching {
+    pub prompts: usize,
+    pub tokens: usize,
+}
+
+impl Batching {
+    /// One prompt per call, as qmd embedded.
+    pub const ONE: Batching = Batching {
+        prompts: 1,
+        tokens: CONTEXT_TOKENS as usize,
+    };
+
+    /// What a device runs best with, by the name [`device_for`] gives.
+    /// Metal gained nothing from sharing a call, and more tokens per call
+    /// only took more memory; CUDA ran 15% (T4) to 80% (A100) faster at 8
+    /// prompts in one context's tokens, and slower at any larger budget
+    /// (docs/dev/plans/embed_on_modal.md § "Measured on Modal").
+    pub fn for_device(device: &str) -> Batching {
+        if device == "CPU" || device.starts_with("MTL") {
+            Batching::ONE
+        } else {
+            Batching {
+                prompts: 8,
+                tokens: CONTEXT_TOKENS as usize,
+            }
+        }
+    }
+}
+
+/// The device [`Embedder::open`] would choose: `CPU`, or the GPU's name.
+pub fn device_for(device: Device) -> String {
+    if device == Device::Best {
+        cuda_module_report();
+    }
+    let name = unsafe { ffi::dl_embedder_device_for(i32::from(device == Device::Best)) };
+    unsafe { std::ffi::CStr::from_ptr(name) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// `lens` cut into consecutive runs, each at most `b.prompts` long and
+/// `b.tokens` in sum, but never empty: a length over the budget runs alone.
+pub fn pack(lens: &[usize], b: Batching) -> Vec<Range<usize>> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut sum = 0;
+    for (i, &len) in lens.iter().enumerate() {
+        let full = i - start == b.prompts.max(1) || sum + len > b.tokens;
+        if i > start && full {
+            out.push(start..i);
+            start = i;
+            sum = 0;
+        }
+        sum += len;
+    }
+    if start < lens.len() {
+        out.push(start..lens.len());
+    }
+    out
+}
+
 /// Whether this build and machine offer a GPU.
 pub fn gpu_available() -> bool {
     unsafe { ffi::dl_embedder_gpu_available() != 0 }
@@ -87,16 +191,20 @@ pub fn load_gpu_module(path: &Path) -> Result<usize> {
     Ok(usize::try_from(n)?)
 }
 
-/// Where a gnu Linux build looks for the CUDA module: `lib/` beside the
-/// running binary, as the release tarball lays it out. Never the loader's
-/// search path, which would run whatever library it found first.
-pub fn cuda_module_path(exe: &Path) -> Option<PathBuf> {
-    Some(exe.parent()?.join("lib").join("libggml-cuda.so"))
+/// Whether the dynamic loader can load the library `name` names.
+pub fn can_load(name: &str) -> bool {
+    let Ok(name) = CString::new(name) else {
+        return false;
+    };
+    unsafe { ffi::dl_embedder_can_load(name.as_ptr()) != 0 }
 }
 
 /// What became of the CUDA module, decided once per process on the first
 /// [`Device::Best`] open: `None` on a build that does not look for one
-/// (macOS, musl).
+/// (macOS, musl). The module is the one beside the binary, else the one
+/// the release names, fetched where there is an NVIDIA driver
+/// (`datalib_runtime::cuda_module`); never one on the loader's search
+/// path, which would run whatever library it found first.
 pub fn cuda_module_report() -> Option<&'static str> {
     static REPORT: OnceLock<Option<String>> = OnceLock::new();
     REPORT
@@ -104,17 +212,13 @@ pub fn cuda_module_report() -> Option<&'static str> {
             if !cfg!(all(target_os = "linux", target_env = "gnu")) {
                 return None;
             }
-            let exe = std::env::current_exe().ok();
-            let Some(path) = exe.as_deref().and_then(cuda_module_path) else {
-                return Some("no CUDA module: the running binary's path is unknown".into());
-            };
-            Some(if !path.exists() {
-                format!("no CUDA module at {}", path.display())
-            } else {
-                match load_gpu_module(&path) {
+            let driver = can_load(cuda_module::DRIVER_LIBRARY);
+            Some(match cuda_module::find(driver) {
+                Err(why) => why,
+                Ok(path) => match load_gpu_module(&path) {
                     Ok(n) => format!("loaded {}: {n} CUDA device(s)", path.display()),
                     Err(e) => format!("could not load {}: {e:#}", path.display()),
-                }
+                },
             })
         })
         .as_deref()
@@ -127,6 +231,7 @@ pub struct Embedder {
     raw: NonNull<ffi::Embedder>,
     dim: usize,
     context: usize,
+    batching: Batching,
 }
 
 // The context is used from one thread at a time: `embed` takes `&mut self`,
@@ -134,8 +239,19 @@ pub struct Embedder {
 unsafe impl Send for Embedder {}
 
 impl Embedder {
-    /// `threads` of 0 is llama.cpp's own choice.
+    /// `threads` of 0 is llama.cpp's own choice; the batching is the
+    /// device's own ([`Batching::for_device`]).
     pub fn open(model: &Path, device: Device, threads: u32) -> Result<Embedder> {
+        let batching = Batching::for_device(&device_for(device));
+        Embedder::open_with(model, device, threads, batching)
+    }
+
+    pub fn open_with(
+        model: &Path,
+        device: Device,
+        threads: u32,
+        batching: Batching,
+    ) -> Result<Embedder> {
         if device == Device::Best {
             cuda_module_report();
         }
@@ -148,6 +264,8 @@ impl Embedder {
                 CONTEXT_TOKENS,
                 i32::try_from(threads)?,
                 i32::from(device == Device::Best),
+                i32::try_from(batching.prompts.max(1))?,
+                i32::try_from(batching.tokens)?,
                 err.as_mut_ptr(),
                 err.len(),
             )
@@ -157,11 +275,28 @@ impl Embedder {
         };
         let dim = unsafe { ffi::dl_embedder_n_embd(raw.as_ptr()) };
         let context = unsafe { ffi::dl_embedder_n_ctx(raw.as_ptr()) };
+        let prompts = unsafe { ffi::dl_embedder_n_seq_max(raw.as_ptr()) };
+        let tokens = unsafe { ffi::dl_embedder_n_tokens(raw.as_ptr()) };
         Ok(Embedder {
             raw,
             dim: usize::try_from(dim)?,
             context: usize::try_from(context)?,
+            batching: Batching {
+                prompts: usize::try_from(prompts)?,
+                tokens: usize::try_from(tokens)?,
+            },
         })
+    }
+
+    /// Whether llama.cpp keeps a cache for the model. Without one, a call
+    /// attends over every token in it ([`Batching`]).
+    pub fn keeps_cache(&self) -> bool {
+        unsafe { ffi::dl_embedder_keeps_cache(self.raw.as_ptr()) != 0 }
+    }
+
+    /// The batching the context was made with, as llama.cpp took it.
+    pub fn batching(&self) -> Batching {
+        self.batching
     }
 
     /// What the model runs on: `CPU`, or the GPU's name (`MTL0` on a mac,
@@ -215,11 +350,64 @@ impl Embedder {
     }
 
     /// [`Self::embed`], with a text longer than the context cut to fit
-    /// first, as qmd does; and whether it was cut.
+    /// first, as qmd did; and whether it was cut.
     pub fn embed_fitted(&mut self, text: &str) -> Result<(Vec<f32>, bool)> {
         let tokens = self.tokenize(text)?;
         let (tokens, cut) = fit(tokens, self.context);
         Ok((self.embed_tokens(&tokens)?, cut))
+    }
+
+    /// [`Self::embed_fitted`] of each text, as many to a call as the
+    /// batching allows.
+    pub fn embed_fitted_many<S: AsRef<str>>(
+        &mut self,
+        texts: &[S],
+    ) -> Result<Vec<(Vec<f32>, bool)>> {
+        let fitted = texts
+            .iter()
+            .map(|t| Ok(fit(self.tokenize(t.as_ref())?, self.context)))
+            .collect::<Result<Vec<_>>>()?;
+        let lens: Vec<usize> = fitted.iter().map(|(tokens, _)| tokens.len()).collect();
+        let mut out = Vec::with_capacity(texts.len());
+        for run in pack(&lens, self.batching) {
+            let vectors = self.embed_runs(&fitted[run.clone()])?;
+            out.extend(
+                vectors
+                    .into_iter()
+                    .zip(fitted[run].iter().map(|(_, cut)| *cut)),
+            );
+        }
+        Ok(out)
+    }
+
+    fn embed_runs(&mut self, inputs: &[(Vec<i32>, bool)]) -> Result<Vec<Vec<f32>>> {
+        let tokens: Vec<i32> = inputs.iter().flat_map(|(t, _)| t.iter().copied()).collect();
+        let lens = inputs
+            .iter()
+            .map(|(t, _)| i32::try_from(t.len()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut out = vec![0f32; self.dim * inputs.len()];
+        let mut err = [0 as c_char; 256];
+        let rc = unsafe {
+            ffi::dl_embedder_embed_seqs(
+                self.raw.as_ptr(),
+                tokens.as_ptr(),
+                lens.as_ptr(),
+                i32::try_from(inputs.len())?,
+                out.as_mut_ptr(),
+                err.as_mut_ptr(),
+                err.len(),
+            )
+        };
+        if rc != 0 {
+            bail!(
+                "embed {} inputs, {} tokens: {}",
+                inputs.len(),
+                tokens.len(),
+                message(&err)
+            );
+        }
+        Ok(out.chunks(self.dim).map(<[f32]>::to_vec).collect())
     }
 
     pub fn embed_tokens(&mut self, tokens: &[i32]) -> Result<Vec<f32>> {
@@ -247,6 +435,80 @@ impl Embedder {
             bail!("embed {} tokens: {}", tokens.len(), message(&err));
         }
         Ok(out)
+    }
+}
+
+/// The model's tokenizer alone, read from the model file without its
+/// weights: what the chunker counts its budget in, where nothing is
+/// embedded.
+pub struct Tokenizer {
+    raw: NonNull<ffi::Tokenizer>,
+}
+
+// llama.cpp's vocabulary is read-only once loaded, and each tokenize call
+// works on state of its own.
+unsafe impl Send for Tokenizer {}
+unsafe impl Sync for Tokenizer {}
+
+impl Tokenizer {
+    pub fn open(model: &Path) -> Result<Tokenizer> {
+        let path = CString::new(model.as_os_str().as_encoded_bytes())
+            .context("a model path with a NUL in it")?;
+        let mut err = [0 as c_char; 256];
+        let raw = unsafe { ffi::dl_tokenizer_open(path.as_ptr(), err.as_mut_ptr(), err.len()) };
+        let Some(raw) = NonNull::new(raw) else {
+            bail!("open {}: {}", model.display(), message(&err));
+        };
+        Ok(Tokenizer { raw })
+    }
+
+    /// Where each of `text`'s tokens ends, as a byte offset into `text`,
+    /// without BOS and EOS: its length is the token count, and its last
+    /// offset is `text.len()`. A token can end inside a character, where
+    /// the model spells it in bytes.
+    pub fn ends(&self, text: &str) -> Result<Vec<usize>> {
+        let len = i32::try_from(text.len()).context("a text over 2 GB")?;
+        let mut out = vec![0i32; text.len() / 2 + 8];
+        loop {
+            let cap = i32::try_from(out.len())?;
+            let n = unsafe {
+                ffi::dl_tokenizer_ends(
+                    self.raw.as_ptr(),
+                    text.as_ptr().cast(),
+                    len,
+                    out.as_mut_ptr(),
+                    cap,
+                )
+            };
+            if n == -2 {
+                bail!("a token's piece does not line up with the text");
+            }
+            if n < 0 {
+                bail!("llama.cpp could not tokenize the text");
+            }
+            let n = n as usize;
+            if n > out.len() {
+                out.resize(n, 0);
+                continue;
+            }
+            out.truncate(n);
+            let ends: Vec<usize> = out.into_iter().map(|e| e as usize).collect();
+            let covered = ends.last().copied().unwrap_or(0);
+            if covered != text.len() {
+                bail!(
+                    "the tokens' pieces are {covered} bytes, the text {}: \
+                     the tokenizer changed the text",
+                    text.len()
+                );
+            }
+            return Ok(ends);
+        }
+    }
+}
+
+impl Drop for Tokenizer {
+    fn drop(&mut self) {
+        unsafe { ffi::dl_tokenizer_close(self.raw.as_ptr()) }
     }
 }
 
@@ -279,15 +541,42 @@ pub fn fit(mut tokens: Vec<i32>, context: usize) -> (Vec<i32>, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{cuda_module_path, fit, load_gpu_module};
+    use super::{can_load, cuda_module, fit, load_gpu_module, pack, Batching};
     use std::path::Path;
+
+    #[test]
+    fn prompts_share_a_call_up_to_its_count_and_its_tokens() {
+        let b = Batching {
+            prompts: 3,
+            tokens: 100,
+        };
+        assert_eq!(pack(&[10, 20, 30, 40, 5], b), vec![0..3, 3..5]);
+        assert_eq!(pack(&[60, 50, 40, 10], b), vec![0..1, 1..4]);
+        assert_eq!(pack(&[150, 10], b), vec![0..1, 1..2], "too long runs alone");
+        assert_eq!(pack(&[1, 1, 1], Batching::ONE), vec![0..1, 1..2, 2..3]);
+        assert!(pack(&[], b).is_empty());
+    }
 
     #[test]
     fn the_cuda_module_is_looked_for_in_lib_beside_the_binary() {
         assert_eq!(
-            cuda_module_path(Path::new("/opt/datalib/datalib-step")).unwrap(),
+            cuda_module::beside(Path::new("/opt/datalib/datalib-step")).unwrap(),
             Path::new("/opt/datalib/lib/libggml-cuda.so")
         );
+    }
+
+    /// How the embedder asks whether there is an NVIDIA driver to fetch
+    /// the module for: a library that loads says so, and one that is not
+    /// there does not.
+    #[test]
+    fn can_load_asks_the_dynamic_loader() {
+        let libc = if cfg!(target_os = "macos") {
+            "/usr/lib/libSystem.B.dylib"
+        } else {
+            "libc.so.6"
+        };
+        assert!(can_load(libc));
+        assert!(!can_load("libdatalib-no-such-library.so.1"));
     }
 
     /// A module that will not load says why, in the loader's words.

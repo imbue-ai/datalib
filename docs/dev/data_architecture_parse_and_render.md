@@ -107,10 +107,16 @@ database per source, at
     Any other piece is kept whole and marked `framed`, so whatever reads
     it draws nothing around it; a piece that is layout alone (front
     matter, a `<details>` opener) the renderer marks as frame, and it is
-    not kept. The search index draws its text from it, each item as an
-    envelope line (who, to whom, when), its labels and its body
-    (`search_index/src/text.rs`). The grid index does not copy it
-    ([`messages_not_documents.md`](plans/messages_not_documents.md)
+    not kept. A renderer that keeps its whole page as one piece keeps
+    its front matter at the start of it. The search index draws its text
+    from it (`search_index/src/text.rs`): each item as an envelope line
+    (who, to whom, when), its labels and its body; a page, a document
+    whose first piece is framed, as a line of the facts worth searching
+    for from its front matter (`markdowns.front`: the source, the kind,
+    the calendar, the repository …), then each framed piece as the words
+    a person reads, without its front matter, tags, link targets or
+    escapes. The grid index does not copy it
+    ([`documents_to_blocks.md`](plans/documents_to_blocks.md)
     §"Store the body, format on read").
   - `source_contacts` and `source_contact_handles` — the people it
     describes or mentions, each as its source describes them (a
@@ -193,7 +199,7 @@ row, no `.md` file — and its problem rows are the whole record of it.
 ### What is still a file: the markdown
 
 The rendered `.md` lives on disk rather than in a table. Search does
-not read it: each source's `keyword_index` and `embed` steps
+not read it: `unified_grid_and_search_index`'s keyword pass and each source's `embed`
 (`datalib/backend/datalib_step/src/search_index.rs`) draw a document's
 text from the render store (`IndexedMarkdownStore::index_docs`), and
 `embed` runs the embedding model in process. What keeps the file is
@@ -206,7 +212,7 @@ text already stored five times on a real data root.
 Whatever the medium, the *contract* holds: render emits a human
 artifact and a separate machine-readable projection, and the index
 reads the projection — **it never re-parses markdown** (AGENTS.md's
-"QMDs are write-only"), whatever database the markdown sits in.
+"Rendered markdown is write-only"), whatever database the markdown sits in.
 
 ### Upstream text is escaped where it becomes markup
 
@@ -669,7 +675,6 @@ document. How it is wired at each stage:
 | fetch, one record | `record_object_attempt`'s failure arm (`record_object_error`), in the raw store, `Reason::FetchFailed` | the next attempt on that record, success or failure |
 | fetch, a configured entry upstream does not have | `RunProblems::config`, in the raw store, keyed `config:<setting>:<value>` | the next run that looked every entry up, whose set replaces the last one's whole |
 | fetch, a listing or phase the run could not do | `RunProblems::listing` / `phase`, in the raw store, keyed `listing:<name>` / `phase:<name>` | the next run that reached every listing and phase; one that was stopped or cut short clears none (`data_architecture_ingestion.md` §"Error handling") |
-| fetch, carried into render | the render step reads the raw store's rows at the commit it rendered from and replaces its own fetch-stage rows with them, re-minted under the source's id, with `item_uuid` set where the provider's `item_of_entity` names a row the store holds (`render.rs`, `carry_fetch_problems`) | every render |
 | grid row | `GridRowBuilder::build_or_record` | the document, when re-rendered |
 | parse, in a document | `NormalizedChatItem::problems` (`own_stamp_ms` for a stamp) | the document |
 | parse, no document yet | `RenderCtx::report_unparsed` with a `ReadScope` | the tables the parse read whole |
@@ -677,7 +682,7 @@ document. How it is wired at each stage:
 
 The fetch-stage rows are the download side's; the rule for writing
 one is in [`data_architecture_ingestion.md` §"Error handling"](data_architecture_ingestion.md#error-handling),
-and how they travel is [`etl/README.md` §"Problems flow downstream with the data"](/datalib/backend/etl/README.md#problems-flow-downstream-with-the-data).
+and where they are read is [`etl/README.md` §"Problems stay in the step that found them"](/datalib/backend/etl/README.md#problems-stay-in-the-step-that-found-them).
 
 The audit that produced them is
 [`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md).
@@ -716,7 +721,7 @@ what to change, the sink is wrong.
 [`step_protocol.md`](step_protocol.md) draws one line — absent vs
 malformed — and classifies a record that will not deserialize as a
 `data` failure, which fails the step and poisons its entire downstream
-subtree, including the `grid_index` fan-in that depends on *every*
+subtree, including the `unified_grid_and_search_index` fan-in that depends on *every*
 source. Right for "the store will not open," wrong for "one of forty
 thousand Slack messages has a field we did not expect."
 
@@ -984,11 +989,11 @@ The `.md` file matters as much as the rows: `md_path` is what
 `/applet/unified_grid_and_search_index/chat/{uuid}` serves, so a
 document deleted from the store but left on disk is a deletion the user
 can still read. A document that comes back at a different path loses
-the file at its old one (`put_document`). `grid_index` needs no part in
+the file at its old one (`put_document`). `unified_grid_and_search_index` needs no part in
 any of this — it learns of a removal from the render store's own diff.
 
 Across a version bump or a params change the store is **kept**: its
-history, the commit `grid_index` last consumed, and the cursor. "Render
+history, the commit `unified_grid_and_search_index` last consumed, and the cursor. "Render
 every bucket again" and "forget where I was" are different requests,
 and only the first is ever wanted — a re-keyed document then reaches the
 index as a deletion plus an addition rather than as an old row nobody

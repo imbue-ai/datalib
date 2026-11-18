@@ -78,6 +78,9 @@ pub enum Child {
     Applet,
     /// latchkey itself, run by the server's sign-in wizard.
     Latchkey,
+    /// The `embed` step's driver of Modal's SDK, run on the bundled Node
+    /// (`datalib_step::modal`).
+    Modal,
 }
 
 /// What every child needs to run at all: where programs, home and
@@ -121,6 +124,7 @@ const EVERY_CHILD: &[&str] = &[
     "NPX_BIN",
     "DATALIB_GIT_HASH",
     "DATALIB_POOL_ACQUIRE_SECS",
+    "DATALIB_MODELS_NO_FETCH",
     "DATALIB_QMD_MODELS_NO_FETCH",
     "DATALIB_NO_FETCH",
     // Bazel's, so a child of a test finds its runfiles and keeps out of
@@ -157,8 +161,20 @@ const STEP_ALSO: &[&str] = &[
 ];
 
 /// What an applet reads beyond every child's: the search's pinned now,
-/// in tests.
-const APPLET_ALSO: &[&str] = &["DATALIB_SEARCH_NOW"];
+/// and whether it warms the search by meaning at launch, both for tests.
+const APPLET_ALSO: &[&str] = &["DATALIB_SEARCH_NOW", "DATALIB_SEARCH_NO_WARM"];
+
+/// What Modal's SDK signs in with and is pointed by, beyond every child's.
+/// A step is not handed these: a sync's runner passes them on only when
+/// [`DATALIB_CHILD_ENV`] names them.
+const MODAL_ALSO: &[&str] = &[
+    "MODAL_TOKEN_ID",
+    "MODAL_TOKEN_SECRET",
+    "MODAL_PROFILE",
+    "MODAL_CONFIG_PATH",
+    "MODAL_ENVIRONMENT",
+    "MODAL_SERVER_URL",
+];
 
 /// Whether `child` is handed the variable `name` from this process's
 /// environment. `also` names more, from wherever the caller learned of
@@ -172,6 +188,7 @@ pub fn hands_down(name: &str, child: Child, also: &[String]) -> bool {
             Child::Step => latchkey(name) || STEP_ALSO.contains(&name),
             Child::Latchkey => latchkey(name),
             Child::Applet => APPLET_ALSO.contains(&name),
+            Child::Modal => MODAL_ALSO.contains(&name),
         }
 }
 
@@ -219,6 +236,31 @@ pub fn inherit_only(cmd: &mut std::process::Command, child: Child, also: &[Strin
 mod tests {
     use super::*;
 
+    /// Modal's sign-in reaches its driver and nothing else: not a step,
+    /// whatever program it runs, and not latchkey; the driver gets no
+    /// latchkey key.
+    #[test]
+    fn modal_s_sign_in_reaches_only_its_driver() {
+        for name in ["MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "MODAL_CONFIG_PATH"] {
+            assert!(hands_down(name, Child::Modal, &[]), "{name}");
+            for other in [Child::Step, Child::Applet, Child::Latchkey] {
+                assert!(!hands_down(name, other, &[]), "{name} to {other:?}");
+            }
+        }
+        assert!(hands_down("HOME", Child::Modal, &[]));
+        assert!(hands_down("HTTPS_PROXY", Child::Modal, &[]));
+        assert!(!hands_down("LATCHKEY_ENCRYPTION_KEY", Child::Modal, &[]));
+    }
+
+    /// The e2e suite turns the applet's launch warming off for its sandbox
+    /// backends; dropped on the way down, the variable would leave every
+    /// one of them loading the model at once.
+    #[test]
+    fn the_search_warming_switch_reaches_the_applet() {
+        assert!(hands_down("DATALIB_SEARCH_NO_WARM", Child::Applet, &[]));
+        assert!(!hands_down("DATALIB_SEARCH_NO_WARM", Child::Step, &[]));
+    }
+
     fn step_protocol_doc() -> String {
         const REL: &str = "docs/dev/step_protocol.md";
         let r = runfiles::Runfiles::create().expect("runfiles tree");
@@ -251,7 +293,7 @@ mod tests {
     /// latchkey and steps and never an applet.
     #[test]
     fn a_child_is_handed_only_what_it_is_listed_for() {
-        for child in [Child::Step, Child::Applet, Child::Latchkey] {
+        for child in [Child::Step, Child::Applet, Child::Latchkey, Child::Modal] {
             assert!(hands_down("PATH", child, &[]));
             assert!(hands_down("LC_ALL", child, &[]));
             assert!(!hands_down("DATALIB_TOKEN", child, &[]));

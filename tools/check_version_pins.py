@@ -87,6 +87,27 @@ FAMILIES: list[Family] = [
         ],
     ),
     Family(
+        name="modal",
+        why=(
+            "The Rust constant names the directory scripts/stage_runtime.sh "
+            "stages Modal's SDK under and the one the embed step's driver "
+            "imports from; the package.json is what Bazel builds the tree "
+            "from. If they disagree, the step looks for an SDK the runtime "
+            "does not hold."
+        ),
+        canonical="datalib/backend/runtime/src/node_runtime.rs",
+        sites=[
+            (
+                "datalib/backend/runtime/src/node_runtime.rs",
+                r'^pub const MODAL_SDK_VERSION: &str = "([^"]+)"',
+            ),
+            (
+                "third-party/modal/runtime/package.json",
+                r'"modal"\s*:\s*"([^"]+)"',
+            ),
+        ],
+    ),
+    Family(
         name="doltlite",
         why=(
             "The amalgamation and autoconf archives must come from one "

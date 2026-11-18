@@ -72,7 +72,7 @@ id = "unified_grid_and_search_index"
 
 [[steps]]
 group = "unified_grid_and_search_index"
-function = "grid_index"
+function = "unified_grid_and_search_index"
 inputs = ["slack/render_markdown"]
 
 [[applets]]
@@ -319,7 +319,7 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
         assert_eq!(index["status"]["key"], "never_run");
         assert_eq!(
             index["status_from"],
-            "unified_grid_and_search_index/grid_index"
+            "unified_grid_and_search_index/unified_grid_and_search_index"
         );
     } else {
         assert_eq!(index["status"]["key"], "failed");
@@ -431,7 +431,7 @@ async fn a_finished_run_reaches_the_rows() {
     );
 }
 
-/// Rows written into the root's grid index as `grid_index` would copy
+/// Rows written into the root's grid index as `unified_grid_and_search_index` would copy
 /// them in.
 async fn index_problems(root: &Path, rows: &[&datalib_problems::ProblemRow]) {
     use datalib_problems::ProblemRow;
@@ -607,7 +607,10 @@ async fn problem_counts_are_the_index_rows_less_the_muted_ones() {
          -severity:info muted:no"
     );
     assert_eq!(
-        chips_of(&rows, "unified_grid_and_search_index/grid_index"),
+        chips_of(
+            &rows,
+            "unified_grid_and_search_index/unified_grid_and_search_index"
+        ),
         vec![chip("warning", "1")],
         "the index's own row is its step's, whichever source it names"
     );
@@ -984,7 +987,7 @@ async fn a_dropped_entry_keeps_its_row_and_says_why() {
         .unwrap()
         .starts_with("Not in the pipeline"));
     // The fan-in that read it is blocked by it, and says so.
-    let index = &rows["unified_grid_and_search_index/grid_index"];
+    let index = &rows["unified_grid_and_search_index/unified_grid_and_search_index"];
     assert_eq!(index["status"]["key"], "config_blocked");
     // The group itself still loads and still runs from its ingest step.
     let slack = &rows["group:slack"];
@@ -1138,7 +1141,7 @@ async fn item_counts_and_their_history_reach_the_rows_from_the_run_store() {
     );
     for key in [
         "slack/ingest",
-        "unified_grid_and_search_index/grid_index",
+        "unified_grid_and_search_index/unified_grid_and_search_index",
         "system",
     ] {
         assert_eq!(

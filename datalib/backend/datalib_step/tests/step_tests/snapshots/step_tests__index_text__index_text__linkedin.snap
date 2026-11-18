@@ -3,61 +3,61 @@ source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
 === linkedin 00000000-0000-801a-aee1-8f706574061b linkedin storage
---- -
----
-title: linkedin storage
-source: linkedin
-measured_at: 2369-04-15T00:00:00+00:00
----
+--- chunk 0
+title: linkedin storage | text: Source: linkedin
 
-# [linkedin](datalib:group/linkedin "linkedin") — storage
+# linkedin — storage
 
-Measured <time datetime="2369-04-15T00:00:00+00:00" title="2369-04-15 00:00:00 UTC">Tue Apr 15th, 2369 at 00:00</time>.
+Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-|---|---|---|---|---|---|
-| Source Size | [ingest](datalib:step/linkedin/ingest "linkedin/ingest") | `linkedin/ingest` | <size> | 3 files | <span id="m-00000000-0000-801a-aee1-8f706574061b" data-section-uuid="00000000-0000-801a-aee1-8f706574061b">`00000000`</span> |
-| Store | [ingest](datalib:step/linkedin/ingest "linkedin/ingest") | `linkedin/ingest/blobs.sqlite` | <size> |  | <span id="m-00000000-0000-8f64-a189-6da1bc3ebf3b" data-section-uuid="00000000-0000-8f64-a189-6da1bc3ebf3b">`00000000`</span> |
-| Table | [ingest](datalib:step/linkedin/ingest "linkedin/ingest") | `linkedin/ingest/blobs.sqlite#cas_objects` |  | 0 rows | <span id="m-00000000-0000-854c-aa20-b019b1f3dc29" data-section-uuid="00000000-0000-854c-aa20-b019b1f3dc29">`00000000`</span> |
-| Store | [ingest](datalib:step/linkedin/ingest "linkedin/ingest") | `linkedin/ingest/entities.doltlite_db` | <size> |  | <span id="m-00000000-0000-8c75-a38a-67f1093a904f" data-section-uuid="00000000-0000-8c75-a38a-67f1093a904f">`00000000`</span> |
-| Table | [ingest](datalib:step/linkedin/ingest "linkedin/ingest") | `linkedin/ingest/entities.doltlite_db#comments` |  | 3 rows | <span id="m-00000000-0000-8b0e-b6d9-408e03b66582" data-section-uuid="00000000-0000-8b0e-b6d9-408e03b66582">`00000000`</span> |
-| Table | [ingest](datalib:step/linkedin/ingest "linkedin/ingest") | `linkedin/ingest/entities.doltlite_db#connections` |  | 3 rows | <span id="m-00000000-0000-821c-8778-3e5dde6f2c6e" data-section-uuid="00000000-0000-821c-8778-3e5dde6f2c6e">`00000000`</span> |
-| Table | [ingest](datalib:step/linkedin/ingest "linkedin/ingest") | `linkedin/ingest/entities.doltlite_db#email_addresses` |  | 2 rows | <span id="m-00000000-0000-8e5e-85e1-502347eecafb" data-section-uuid="00000000-0000-8e5e-85e1-502347eecafb">`00000000`</span> |
-| Table | [ingest](datalib:step/linkedin/ingest "linkedin/ingest") | `linkedin/ingest/entities.doltlite_db#messages` |  | 3 rows | <span id="m-00000000-0000-8b47-9a3a-ed9a17603def" data-section-uuid="00000000-0000-8b47-9a3a-ed9a17603def">`00000000`</span> |
-| Table | [ingest](datalib:step/linkedin/ingest "linkedin/ingest") | `linkedin/ingest/entities.doltlite_db#shares` |  | 1 row | <span id="m-00000000-0000-8a5a-81d4-12c034d2f928" data-section-uuid="00000000-0000-8a5a-81d4-12c034d2f928">`00000000`</span> |
-| Table | [ingest](datalib:step/linkedin/ingest "linkedin/ingest") | `linkedin/ingest/entities.doltlite_db#skills` |  | 3 rows | <span id="m-00000000-0000-8f72-a9a6-2659988472d3" data-section-uuid="00000000-0000-8f72-a9a6-2659988472d3">`00000000`</span> |
+| Source Size | ingest | `linkedin/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `linkedin/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `linkedin/ingest/blobs.sqlite#cas_objects` |  | 0 rows | `00000000` |
+| Store | ingest | `linkedin/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `linkedin/ingest/entities.doltlite_db#comments` |  | 3 rows | `00000000` |
+| Table | ingest | `linkedin/ingest/entities.doltlite_db#connections` |  | 3 rows | `00000000` |
+| Table | ingest | `linkedin/ingest/entities.doltlite_db#email_addresses` |  | 2 rows | `00000000` |
+| Table | ingest | `linkedin/ingest/entities.doltlite_db#messages` |  | 3 rows | `00000000` |
+| Table | ingest | `linkedin/ingest/entities.doltlite_db#shares` |  | 1 row | `00000000` |
+| Table | ingest | `linkedin/ingest/entities.doltlite_db#skills` |  | 3 rows | `00000000` |
 
 === linkedin 00000000-0000-8027-9f1f-73b03617467e Jean-Luc Picard, William Riker
---- 0b75a070-6680-881c-a54a-36b690506dbf
-Jean-Luc Picard — Thu 10 Apr 2369 09:00
+--- chunk 0
+title: Jean-Luc Picard, William Riker | text: Jean-Luc Picard — Thu 10 Apr 2369 09:00
 
 Number One, the bridge is yours.
 
---- 0b75a074-fa60-8c0a-b870-4aceeb2d9ce6
-William Riker — Thu 10 Apr 2369 09:05
+
+--- chunk 1
+title: Jean-Luc Picard, William Riker | text: William Riker — Thu 10 Apr 2369 09:05
 
 Aye, Captain. Setting a course for Risa.
 
---- 0b75a076-59f0-8340-bf8a-62a6277b1b83
-Jean-Luc Picard — Thu 10 Apr 2369 09:06
+
+--- chunk 2
+title: Jean-Luc Picard, William Riker | text: Jean-Luc Picard — Thu 10 Apr 2369 09:06
 
 Make it so.
 
+
 === linkedin 00000000-0000-84c5-a0e7-167d60e47f98 Comment: Captain, I must respectfully disagree: the odds are 1 in 4.7 trillion, not "ast…
---- 0b75aa93-eba0-8d7e-aecf-f814af3527d5
-LinkedIn — Sat 12 Apr 2369 08:15
+--- chunk 0
+title: Comment: Captain, I must respectfully disagree: the odds are 1 in 4.7 trillion, not "ast… | text: LinkedIn — Sat 12 Apr 2369 08:15
 
 Original post not included in the LinkedIn export — https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A2369041208000000002
 
---- 0b75aa93-eba0-82a6-896c-c5d51aaaf0c1
-Me <data@enterprise.starfleet.test> — Sat 12 Apr 2369 08:15
+
+--- chunk 1
+title: Comment: Captain, I must respectfully disagree: the odds are 1 in 4.7 trillion, not "ast… | text: Me <data@enterprise.starfleet.test> — Sat 12 Apr 2369 08:15
 
 Captain, I must respectfully disagree: the odds are 1 in 4.7 trillion, not "astronomical".
 
 🔗 View on LinkedIn
 
---- 0b75aa98-f4b0-8678-9884-d96821160511
-Me <data@enterprise.starfleet.test> — Sat 12 Apr 2369 08:20
+
+--- chunk 2
+title: Comment: Captain, I must respectfully disagree: the odds are 1 in 4.7 trillion, not "ast… | text: Me <data@enterprise.starfleet.test> — Sat 12 Apr 2369 08:20
 
 On reflection, "astronomical" is an acceptable approximation.
 
@@ -65,143 +65,70 @@ I am attempting humor.
 
 🔗 View on LinkedIn
 
+
 === linkedin 00000000-0000-8878-b482-b77c75689e79 Post: Thrilled to share: the Enterprise has completed its survey of the Mintaka syste…
---- 0b75a6a9-6b00-8a4e-a7c0-9a4b04cc20dc
-Me <data@enterprise.starfleet.test> — Fri 11 Apr 2369 14:00
+--- chunk 0
+title: Post: Thrilled to share: the Enterprise has completed its survey of the Mintaka syste… | text: Me <data@enterprise.starfleet.test> — Fri 11 Apr 2369 14:00
 
 Thrilled to share: the Enterprise has completed its survey of the Mintaka system. "Fascinating" barely covers it.
 
 🔗 View on LinkedIn
 
---- 0b75a6e2-2e40-8c19-9fdb-d46147660a2f
-Me <data@enterprise.starfleet.test> — Fri 11 Apr 2369 15:02
+
+--- chunk 1
+title: Post: Thrilled to share: the Enterprise has completed its survey of the Mintaka syste… | text: Me <data@enterprise.starfleet.test> — Fri 11 Apr 2369 15:02
 
 Correction: the survey concluded at 13:47 ship's time.
 
 🔗 View on LinkedIn
 
+
 === linkedin 00000000-0000-8980-b4a1-ea8e394399fe LinkedIn skills
---- -
----
-title: "LinkedIn skills"
-provider: linkedin
-source_label: "LinkedIn"
-markdown_uuid: 00000000-0000-8980-b4a1-ea8e394399fe
----
+--- chunk 0
+title: LinkedIn skills | text: Source: LinkedIn
 
-<h1 class="page-title" data-page-title-uuid="00000000-0000-8980-b4a1-ea8e394399fe">LinkedIn skills</h1>
-
---- 00000000-0000-8251-bf2a-e6c7cb665574
-<div id="m-00000000-0000-8251-bf2a-e6c7cb665574" data-section-uuid="00000000-0000-8251-bf2a-e6c7cb665574" class="msg msg--linkedin linkedin-skill">
-
+LinkedIn skills
 Diplomacy
-
-</div>
-
---- 00000000-0000-8a6a-8901-f5acbd5843d6
-<div id="m-00000000-0000-8a6a-8901-f5acbd5843d6" data-section-uuid="00000000-0000-8a6a-8901-f5acbd5843d6" class="msg msg--linkedin linkedin-skill">
-
 Starship Command
-
-</div>
-
---- 00000000-0000-8068-a764-f47052ad2e6e
-<div id="m-00000000-0000-8068-a764-f47052ad2e6e" data-section-uuid="00000000-0000-8068-a764-f47052ad2e6e" class="msg msg--linkedin linkedin-skill">
-
 Tactical Analysis
 
-</div>
-
 === linkedin 00000000-0000-8bbb-8c8b-8ae1dedef5e2 Jean-Luc Picard
---- -
----
-markdown_uuid: 00000000-0000-8bbb-8c8b-8ae1dedef5e2
-source_id: linkedin
-provider: linkedin
-group: "Connections"
-external_id: "https://www.linkedin.com/in/jlpicard"
-title: "Jean-Luc Picard"
-created_at: "2369-04-10T00:00:00+00:00"
----
+--- chunk 0
+title: Jean-Luc Picard | text: Source: LinkedIn
+Group: Connections
 
---- 00000000-0000-8bbb-8c8b-8ae1dedef5e2
-<div class="contact-head" data-page-title-uuid="00000000-0000-8bbb-8c8b-8ae1dedef5e2">
+# Jean-Luc Picard <jlpicard@starfleet.gov>
 
-<div class="contact-who">
+Captain · Starfleet
 
-# [Jean-Luc Picard](mailto:jlpicard@starfleet.gov "Jean-Luc Picard <jlpicard@starfleet.gov>") <a class="source-link" href="https://www.linkedin.com/in/jlpicard" target="_blank" rel="noopener noreferrer">↗</a>
+Email:
 
-<p class="contact-role">Captain · Starfleet</p>
+jlpicard@starfleet.gov
 
-</div>
-</div>
+linkedin:
 
-<dl class="contact-fields">
-<dt>Email</dt><dd class="chip-identifiers">
+jlpicard
 
-[jlpicard@starfleet.gov](mailto:jlpicard@starfleet.gov "jlpicard@starfleet.gov")
-
-</dd>
-<dt>linkedin</dt><dd class="chip-identifiers">
-
-[jlpicard](https://www.linkedin.com/in/jlpicard "jlpicard")
-
-</dd>
-<dt>Connected On</dt><dd>10 Apr 2369</dd>
-</dl>
+Connected On: 10 Apr 2369
 
 === linkedin 00000000-0000-8d5b-95c0-1e95e75b6e77 William Riker
---- -
----
-markdown_uuid: 00000000-0000-8d5b-95c0-1e95e75b6e77
-source_id: linkedin
-provider: linkedin
-group: "Connections"
-external_id: "https://www.linkedin.com/in/wriker"
-title: "William Riker"
-created_at: "2369-04-09T00:00:00+00:00"
----
+--- chunk 0
+title: William Riker | text: Source: LinkedIn
+Group: Connections
 
---- 00000000-0000-8d5b-95c0-1e95e75b6e77
-<div class="contact-head" data-page-title-uuid="00000000-0000-8d5b-95c0-1e95e75b6e77">
+# William Riker
 
-<div class="contact-who">
+Commander · Starfleet
 
-# [William Riker](https://www.linkedin.com/in/wriker "William Riker (linkedin:wriker)") <a class="source-link" href="https://www.linkedin.com/in/wriker" target="_blank" rel="noopener noreferrer">↗</a>
-
-<p class="contact-role">Commander · Starfleet</p>
-
-</div>
-</div>
-
-<dl class="contact-fields">
-<dt>Connected On</dt><dd>09 Apr 2369</dd>
-</dl>
+Connected On: 09 Apr 2369
 
 === linkedin 00000000-0000-8f36-a408-50d26aa9b0db Data Soong
---- -
----
-markdown_uuid: 00000000-0000-8f36-a408-50d26aa9b0db
-source_id: linkedin
-provider: linkedin
-group: "Connections"
-external_id: "https://www.linkedin.com/in/datasoong"
-title: "Data Soong"
-created_at: "2369-04-08T00:00:00+00:00"
----
+--- chunk 0
+title: Data Soong | text: Source: LinkedIn
+Group: Connections
 
---- 00000000-0000-8f36-a408-50d26aa9b0db
-<div class="contact-head" data-page-title-uuid="00000000-0000-8f36-a408-50d26aa9b0db">
+# Data Soong
 
-<div class="contact-who">
+Lt. Commander, Operations · Starfleet
 
-# [Data Soong](https://www.linkedin.com/in/datasoong "Data Soong (linkedin:datasoong)") <a class="source-link" href="https://www.linkedin.com/in/datasoong" target="_blank" rel="noopener noreferrer">↗</a>
-
-<p class="contact-role">Lt. Commander, Operations · Starfleet</p>
-
-</div>
-</div>
-
-<dl class="contact-fields">
-<dt>Connected On</dt><dd>08 Apr 2369</dd>
-</dl>
+Connected On: 08 Apr 2369

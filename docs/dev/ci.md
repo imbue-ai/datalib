@@ -33,9 +33,15 @@ reference behind them.
   builds our own crates at opt-level 1 and leaves third-party crates and
   doltlite's C at 3 (see "Every `rust_test` is a whole test binary"
   below); so a PR's tarball is not what a release ships.
-- `bazel test //datalib/ui:e2e_test` — the Playwright suite, alone. It
-  is tagged `cpu:4`, the whole runner, and takes about six minutes, so
-  in the job above every other test waited behind it. The two jobs'
+- `bazel test //datalib/ui:e2e_test` — the Playwright suite, alone: a
+  `test_suite` of three tests, `e2e_chromium_test`, `e2e_sandboxes_test`
+  and `e2e_webkit_test`, one per group of Playwright projects
+  ([`testing.md`](testing.md) § "The Playwright suite runs in two
+  engines"). Each is tagged `cpu:4`, the whole runner, so they run one
+  after another, about eleven minutes in all; in the job above every
+  other test would wait behind them. They are three tests rather than
+  one so each has its own 900 s timeout: whole, the suite took 600 to
+  850 s, and a slow runner timed it out two-thirds of the way through. The two jobs'
   patterns are complements (`//...` less one label, and that label), so
   a new test lands in the first without anyone choosing. On a run where
   the binaries the suite drives are not cached yet, both jobs compile
@@ -48,13 +54,20 @@ reference behind them.
 - `warm the contributor cache` — on a `main` push only; see "Two caches"
   below.
 
-Each bazel job first deletes the runner's unused preinstalls (Android
-SDK, .NET, GHC), which the job mounts into its container for the
-purpose (`prepare-bazel`'s "Free the runner's disk"). A runner starts
-with about 14 GB free, and the image and the build have left as little
-as 2.6 GB of it: under the pipeline's 10 GB `[disk_space]` floor, so
-every test that syncs waited on `waiting for disk space` until it timed
-out. The step prints `df -h /` before and after.
+Each bazel job mounts the runner's unused preinstalls (Android SDK,
+.NET, GHC) into its container, and `prepare-bazel`'s "Free the runner's
+disk" deletes them when the runner starts with under 40 GB free. Some
+runners have started with about 14 GB, and the image and the build have
+left as little as 2.6 GB of it: under the pipeline's 10 GB
+`[disk_space]` floor, so every test that syncs waited on `waiting for
+disk space` until it timed out (2026-11-02). Every job measured from
+2026-11-03 to 2026-11-17 started with about 80 GB free of 145 GB
+instead, and deleting the preinstalls, which frees about 17 GB, took 50
+to 130 s there; so a runner with room keeps them. The step prints
+`df -h /` first. `prepare-bazel` also samples the free space every 10 s
+for the rest of the job, and each bazel job ends with
+`.github/actions/disk-low-point`, which prints the lowest it saw: the
+number to judge the 40 GB threshold by.
 
 A `pull_request` run builds **the merge of the PR into `main` as it
 is at that moment** (`HEAD is now at … Merge <pr> into <main>` in the
@@ -207,14 +220,61 @@ secret; a second org means creating it from BuildBuddy's org switcher,
 minting a key under its Settings → API keys, and `gh secret set
 BUILD_BUDDY_RELEASE_API_KEY --env main-ci --repo imbue-ai/datalib`.
 
+### The local gate and CI's cache
+
+A laptop or cloud session with the contributor key reads and writes the
+same org as a PR run, but it only gets CI's entries when its action
+keys are CI's. A key holds the action's command line, its environment
+and the digest of every input, so two things have to agree.
+
+**The flags.** `bazelisk run //:precommit` (`scripts/run_checks.sh`)
+passes CI's pull-request flags to each of its bazel calls when it runs
+on x86_64 Linux and `.bazelrc.user` holds a BuildBuddy key:
+
+| flag | why |
+|---|---|
+| `-c opt --config=release --nostamp --config=pr-tests` | the build mode of `test.yml`'s PR run and of `warm-contributor-cache`; any other mode is a different key for every action |
+| `--test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright` | in every test's key, so a test CI passed is not run again |
+| `--remote_download_minimal` | a hit's outputs stay remote unless a local action needs them (the same reason as in `build:ci`, below) |
+
+It takes nothing else from `--config=ci`. `--lockfile_mode=error` is
+left out because `//:lint_repo`, the gate's first step, already refuses
+a `MODULE.bazel.lock` that bazel had to rewrite. `--disk_cache=` is left
+out because a laptop's disk cache outlives the run; a cloud session's
+`.bazelrc.user` turns it off itself. On a mac, or with no key, the gate
+stays in fastbuild: there is nothing of CI's to reuse, and fastbuild
+compiles faster. The cost on Linux: on a miss, opt compiles slower, and
+the gate's outputs live in `bazel-out/k8-opt`, apart from the fastbuild
+tree a plain `bazelisk test` uses, so a crate you just tested is
+compiled again for the gate.
+
+**The toolchains and the environment.** On Linux the C/C++ toolchain is
+the hermetic LLVM one `MODULE.bazel` registers and Rust's is pinned
+too, so neither depends on the machine's compiler (§"The caches, and
+what each is for"). Nor does an action's environment carry the caller's
+`HOME`, on any host, which every C compile, genrule and test would
+otherwise hold in its key (`/root` in a cloud session, `/github/home`
+on CI, `/Users/<name>` on a mac); a test runs with `HOME` set to its
+own `TEST_TMPDIR` (`.bazelrc`). So a cloud session, a Linux laptop and
+CI's runner build the same keys from the same flags, and so do two
+macs whatever their users are called. A mac uses Apple's toolchain,
+never shares CI's entries, and is why the gate leaves it in fastbuild.
+
 ## The caches, and what each is for
 
 **The BuildBuddy action cache** is the one that matters: on a warm run
 of `main` every compile and test is a cache hit and the run executes
-nothing. An action's key covers its toolchain, so a darwin-arm64 rustc
-action and CI's linux-x86_64 one never share an entry — locally the
-remote cache buys sharing with your own other worktrees and machines,
-not a replay of CI's work.
+nothing. An action's key covers its toolchain and every input it
+reads. On Linux the C/C++ toolchain is the hermetic LLVM one
+`MODULE.bazel` registers, not the machine's gcc, so the proc-macros and
+build scripts every Rust compile reads come out byte for byte the same
+on CI's runner, in a cloud VM and on a Linux laptop, and those share
+CI's entries when they build with CI's flags (`-c opt --config=release
+--nostamp --config=pr-tests` for a PR's; the local gate passes them,
+§"The local gate and CI's cache"). A mac builds with Apple's
+toolchain, so a darwin-arm64 rustc action and CI's linux-x86_64 one
+never share an entry: there the remote cache buys sharing with your own
+other worktrees and machines, not a replay of CI's work.
 
 **`--remote_download_minimal`** (`build:ci`, #497). A warm run has
 ~4400 cache hits; without this each hit's outputs were downloaded to
@@ -259,8 +319,8 @@ what a run uses.
 `buildbuddy` configs, with a local fallback) serves repository
 downloads from BuildBuddy instead of the origin, so a repository added
 after the image was built never reaches crates.io or GitHub from a
-runner. The qmd GGUF models are build actions rather than repositories
-(`//third-party/qmd_models`, #499): fetched once per pin into the
+runner. The embedding model GGUFs are build actions rather than repositories
+(`//third-party/embedding_models`, #499): fetched once per pin into the
 action cache, with retries on HuggingFace's 429, and never moved on a
 warm run.
 
@@ -494,6 +554,6 @@ done
 Not in `$HOME/.bazelrc`: the `buildbuddy` config exists only in this
 repo's `.bazelrc`, and every other workspace on the machine would fail
 with "Config value 'buildbuddy' is not defined". `--config=remote` is
-CI-only for the same reason the cache shares nothing with a mac: the
-autodetected cc toolchain is generated from the client host, so
-driving Linux executors from a mac hands them a darwin toolchain.
+CI-only for the same reason the cache shares nothing with a mac:
+toolchains are resolved on the client, so driving Linux executors from
+a mac hands them a darwin toolchain.

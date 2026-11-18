@@ -1,7 +1,7 @@
 """Write `wal.sqlite` and `wal.sqlite-wal` into
 `datalib/backend/doltlite_facts/wal_fixture/`: a stock-SQLite file in WAL
 mode whose first row is in the main file and whose next two are only in the
-WAL, as qmd's index is between checkpoints. `doltlite_facts_test` reads them
+WAL, as the grid index is between checkpoints. `doltlite_facts_test` reads them
 through doltlite, which cannot write a WAL itself.
 
 Run with any Python whose `sqlite3` is stock SQLite:

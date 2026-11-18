@@ -8,6 +8,9 @@ use datalib_schema::problems::{
 };
 use datalib_schema::providers::Provider;
 use datalib_table::BulkUpsertable;
+use datalib_unified_grid_and_search_index::db::{
+    matching_sql, DOCUMENTS_INDEX, KEPT_DOCUMENTS, KEPT_ROWS,
+};
 use datalib_unified_grid_and_search_index::dolt_repo::{listing_sql, DoltRepo};
 use datalib_unified_grid_and_search_index::grid_columns::GridColumn;
 use datalib_unified_grid_and_search_index::problems::{Ids, ProblemsQuery};
@@ -18,7 +21,7 @@ use datalib_unified_grid_and_search_index::view;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// The `grid_index` step's handle on the root's index, for seeding: a
+/// The `unified_grid_and_search_index` step's handle on the root's index, for seeding: a
 /// plain WAL file with its generation row, as `open_index` makes it. The
 /// repo under test opens its own, read-only, once the file exists — which
 /// is exactly how the applet reads what the step wrote.
@@ -280,11 +283,14 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     assert_eq!(meta.project, None, "project was NULL");
     assert_eq!(meta.channel, None, "channel was NULL");
 
-    let qmd = repo.document_file("c-1").await.unwrap().map(|f| f.path);
-    assert!(qmd.is_some());
-    let qmd = qmd.unwrap();
-    assert!(qmd.is_absolute(), "expected absolute qmd path, got {qmd:?}");
-    assert!(qmd.to_string_lossy().ends_with("chats/c-1.md"));
+    let file = repo.document_file("c-1").await.unwrap().map(|f| f.path);
+    assert!(file.is_some());
+    let file = file.unwrap();
+    assert!(
+        file.is_absolute(),
+        "expected an absolute path, got {file:?}"
+    );
+    assert!(file.to_string_lossy().ends_with("chats/c-1.md"));
 
     // The batch form the grid's index-state columns use must agree
     // with the single lookup, and must simply omit uuids it has no
@@ -294,14 +300,14 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
         .await
         .unwrap();
     assert_eq!(batch.len(), 1, "unknown uuid should be absent: {batch:?}");
-    assert_eq!(batch.get("c-1"), Some(&qmd));
+    assert_eq!(batch.get("c-1"), Some(&file));
 
     drop(repo);
     let _ = std::fs::remove_file(&db_path);
 }
 
 /// An index an older build wrote has no `markdowns.section_layout` until
-/// `grid_index` rebuilds it, and opening any document there was a 500
+/// `unified_grid_and_search_index` rebuilds it, and opening any document there was a 500
 /// for the whole re-render an upgrade starts.
 #[tokio::test]
 async fn a_document_opens_in_an_index_without_section_layouts() {
@@ -339,7 +345,7 @@ async fn a_document_opens_in_an_index_without_section_layouts() {
 }
 
 /// A search's rows are listed once, as uuids, and every page is read by
-/// uuid: the listing is in the order asked for, a qmd ranking keeps its
+/// uuid: the listing is in the order asked for, a search's ranking keeps its
 /// own order unless a sort replaces it, and the rows come back in the
 /// order they were asked for, whatever order the table holds them in.
 #[tokio::test]
@@ -380,7 +386,7 @@ async fn a_listing_orders_filters_and_reads_back_by_uuid() {
         .unwrap();
     assert_eq!(oldest_first.uuids, ["c-old", "c-mid", "c-new"]);
 
-    // A qmd ranking, with a row from another source and one the index
+    // A search's ranking, with a row from another source and one the index
     // does not have.
     let ranked: Vec<String> = ["c-mid", "v-1", "gone", "c-old", "c-new"]
         .map(String::from)
@@ -901,6 +907,54 @@ fn searched_index(plan: &[String]) -> Option<&str> {
         .filter(|d| d.starts_with("SEARCH grid_rows USING"))
         .find_map(|d| d.split("INDEX ").nth(1)?.split_whitespace().next())
         .filter(|name| name.starts_with("grid_rows_by_"))
+}
+
+/// A search narrowed to documents, alone or within sources, reads the
+/// documents' index and no row of the table: fetching each document's
+/// row took seconds a search on a cold disk, in a library of 60k
+/// documents. Beside any other key the plan is the planner's.
+#[tokio::test]
+async fn a_narrowing_to_documents_reads_their_index_alone() {
+    let db_path = unique_db_path();
+    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
+    let writer = writer(&root).await;
+    crate::children::create_tree(&writer).await;
+    for (_t, ddl) in GRID_INDEXES.iter() {
+        sqlx::query(*ddl).execute(&writer).await.expect("create");
+    }
+    let covered = format!("SEARCH grid_rows USING COVERING INDEX {DOCUMENTS_INDEX} ");
+    for q in [
+        "is:document",
+        "source:x is:document",
+        "-source:x source:y is:document",
+    ] {
+        for columns in [KEPT_ROWS, KEPT_DOCUMENTS] {
+            let (sql, params) = matching_sql("grid_rows", columns, &parse_query(q));
+            let mut explain = sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")));
+            for p in &params {
+                explain = explain.bind(p.clone());
+            }
+            let plan: Vec<String> = explain
+                .fetch_all(&writer)
+                .await
+                .expect("explain")
+                .iter()
+                .map(|r| sqlx::Row::get::<String, _>(r, "detail"))
+                .collect();
+            assert!(
+                plan.iter().any(|d| d.starts_with(&covered)),
+                "{q:?} reading {columns:?}: {plan:?}"
+            );
+        }
+    }
+    for q in [
+        "-is:document",
+        "kind:x is:document",
+        "after:2025-01-01 is:document",
+    ] {
+        let (sql, _) = matching_sql("grid_rows", KEPT_ROWS, &parse_query(q));
+        assert!(!sql.contains("INDEXED BY"), "{q:?}: {sql}");
+    }
 }
 
 /// The problems banner and table read the index's `problems` through the

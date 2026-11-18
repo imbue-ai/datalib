@@ -32,7 +32,7 @@ pub const TABLE_PREFIX: &str = "search_";
 /// model's file and its sha256, so another model's vectors are never read
 /// as this one's.
 pub fn model_key() -> String {
-    let model = &datalib_runtime::qmd::EMBED_MODELS[0];
+    let model = &datalib_runtime::models::EMBED_MODELS[0];
     format!("{}@{}", model.file, model.sha256)
 }
 
@@ -46,6 +46,10 @@ pub struct IndexDoc {
     /// What the render store records for this rendering of the document.
     pub content_hash: String,
     pub title: String,
+    /// What every chunk of it says first, as its title frames it: a
+    /// page's facts line ([`text::head`]). The first chunk has it in its
+    /// text already.
+    pub head: Option<String>,
     pub sections: Vec<IndexSection>,
 }
 
@@ -71,8 +75,13 @@ impl IndexDoc {
     /// Its chunks with their hashes and prompts
     /// ([`chunk::prompted`]): what the keyword pass files and the embed
     /// pass embeds.
-    pub fn prompted(&self) -> Vec<chunk::Prompted> {
-        chunk::prompted(&self.title, &self.sections_or_one())
+    pub fn prompted(&self, ends: chunk::TokenEnds) -> anyhow::Result<Vec<chunk::Prompted>> {
+        chunk::prompted(
+            &self.title,
+            self.head.as_deref(),
+            &self.sections_or_one(),
+            ends,
+        )
     }
 
     /// The sections, or one empty one, so the title is indexed for a

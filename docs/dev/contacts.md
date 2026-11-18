@@ -69,7 +69,7 @@ tree does for a person.
 | word | means |
 |---|---|
 | **handle** | one identifier in one namespace, normalized: `email:riker@enterprise.org`, `tel:+12025550101`, `slack:T01/U02`, `signal_aci:<uuid>`, `facebook:name/Will Riker`. `datalib_handle` makes them; the UI's `chipLinks.js` mirrors its rules by hand. |
-| **render** | the pipeline's render step: it writes a source's documents (markdown files) and grid rows into its render store during a sync, and the index and qmd read them from there. "Renders again" means those stored documents are rewritten. |
+| **render** | the pipeline's render step: it writes a source's documents (markdown files) and grid rows into its render store during a sync, and the grid index and the search index read them from there. "Renders again" means those stored documents are rewritten. |
 | **draw** | what the UI does with a chip when it is shown: it asks who the handle is and paints the name, photo and mark. Nothing is stored. |
 | **chip link** | how a document names a person: a markdown link whose href is the handle as a URI, `[Will Riker](mailto:riker@enterprise.org "Will Riker <riker@enterprise.org>")`. The viewer draws it as a chip. |
 | **source contact** | a `NormalizedContact` a source wrote: that source's attempt at a neutral, unified record of what it knows about one person, keyed by `source_id` and the source's own `key`. The index stores them in `source_contacts`; the UI holds them as `Who.sourceContacts`. |
@@ -324,7 +324,7 @@ and the index hold them in two tables: `source_contacts`
 (`markdown_uuid`, `contact_key`, `source_id`, `name`, `seen_items`,
 `last_seen_at`, and the whole record as `contact_json`) and
 `source_contact_handles` (`markdown_uuid`, `contact_key`, `handle`;
-the index's copy is indexed by handle). `grid_index` loads them the way
+the index's copy is indexed by handle). `unified_grid_and_search_index` loads them the way
 it loads `grid_rows`.
 
 **`POST /people` on the `unified_grid_and_search_index` applet** takes `{"handles":
@@ -759,13 +759,14 @@ Links sit over the view, so the search terms know handles and never
 contacts. A `contact:<id>` value on a person key is read from the
 contacts store when the search runs (`datalib_contacts::read`, a
 detached read, so the applet stays the one writer) and matches each
-handle the contact reaches: its own, stopped ones included; those of
-the contact it was merged into, or merged into it; and, for a group,
-every member's. The search bar offers your contacts first and draws the
-value as a contact chip. Making a link changes nothing in the index: no
-document renders again, qmd re-indexes nothing, and search follows the
-link at once, as chips do. A root without the contacts app refuses
-`contact:` by name ([`plans/search_autocomplete.md`](plans/search_autocomplete.md)
+handle the contact reaches: its own, stopped ones included; those of the
+contact it was merged into, or merged into it; and, for a group, every
+member's. The search bar offers your contacts first and draws the value
+as a contact chip. Making a link changes nothing in the index: no
+document renders again, the search index re-indexes nothing, and search
+follows the link at once, as chips do. A root without the contacts app
+refuses `contact:` by name
+([`plans/search_autocomplete.md`](plans/search_autocomplete.md)
 §"Contacts: expanded when the search runs").
 
 **`me` is the person whose library this is.** On a person key, an
@@ -795,10 +796,11 @@ what `me` cannot find, is the table in
 **Keeping the name out of the markdown is a choice, not a rule.**
 Writing a contact's name into each chip link (its text or its title)
 would make a document say who a handle is on its own: readable as a
-plain file, findable by `grep`, and searchable by qmd under the name
+plain file, findable by `grep`, and searchable by its words under the name
 you gave the person. It would cost what the paragraph above saves:
 render would read the contacts store, and a link would render again
-every document naming the handle and send each back through qmd. The
+every document naming the handle and send each back through
+`unified_grid_and_search_index`'s keyword pass and the source's `embed`. The
 search terms name exactly those documents, so the cost can stay
 proportional to the link. Nothing in the tree rules it out: chips draw
 from the live answer whatever the link text says.

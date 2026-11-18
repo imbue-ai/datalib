@@ -158,7 +158,7 @@ without re-running the pipeline:
 ```
 bazelisk build //tests/fixtures:ingested_tng
 # bazel-bin/tests/fixtures/ingested/backend_index.sqlite
-# bazel-bin/tests/fixtures/ingested/qmd.tar
+# bazel-bin/tests/fixtures/ingested/rendered.tar
 # bazel-bin/tests/fixtures/ingested/time_series.tar
 ```
 
@@ -174,7 +174,7 @@ inside the same second can agree by luck:
 |---|---|
 | `grid_rows` / `markdowns` / `edges` **contents** | **yes** |
 | `backend_index.sqlite` **file** | no |
-| the render stores in `qmd.tar` | no |
+| the render stores in `rendered.tar` | no |
 | rendered `.md` trees | yes, except yolink's `index.md` (below) |
 
 **The table contents are the property worth relying on, and they hold.**
