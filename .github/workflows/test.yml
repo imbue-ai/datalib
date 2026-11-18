@@ -184,7 +184,9 @@ jobs:
   # the latchkey tree in the runtime asset, the app and the docker image.
   # A high or critical advisory against a production dependency of either
   # fails this job; the fix is a bump, or a pnpm `overrides` entry in that
-  # tree's pnpm-workspace.yaml. `pnpm audit` reads the lockfile
+  # tree's pnpm-workspace.yaml. Only when no fixed release exists, an
+  # `auditConfig.ignoreGhsas` entry there skips the one advisory, with a
+  # comment saying when to take it out. `pnpm audit` reads the lockfile
   # and asks the registry; nothing is installed.
   npm-audit:
     name: pnpm audit
