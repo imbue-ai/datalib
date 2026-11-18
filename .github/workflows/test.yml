@@ -89,7 +89,8 @@ concurrency:
 # The costs are a second container pull and a second analysis phase, and
 # both are compute rather than wall clock: the jobs run concurrently on
 # separate runners. No job is a `needs:` of another, and all three are
-# merge gates, so a musl regression doesn't mask a test failure.
+# merge gates, so a musl regression doesn't mask a test failure. `e2e`
+# itself runs as three jobs, one per part, behind `e2e-gate`.
 #
 # Their common setup — the BuildBuddy key — lives in
 # `.github/actions/prepare-bazel` so the jobs cannot drift apart.
@@ -428,8 +429,19 @@ jobs:
   # It builds what the suite runs — the backend binaries, the fixture
   # root, the UI bundle — and nothing else. On a run where those are
   # not cached yet both jobs compile them: neither waits for the other.
+  # The Playwright suite, one runner per part (`DATALIB_TEST_E2E_PART`,
+  # datalib/ui/BUILD.bazel): each part is `cpu:4`, so on one runner they
+  # ran one after another and the job took their sum, ~11 min. Apart,
+  # the job takes the slowest part. `e2e-gate` below carries the check
+  # name the merge ruleset requires.
   e2e:
-    name: bazel test //datalib/ui:e2e_test
+    name: e2e ${{ matrix.part }}
+    strategy:
+      # A red part does not cancel the others: each one's report is the
+      # diagnosis, and a flake in one says nothing about the rest.
+      fail-fast: false
+      matrix:
+        part: [chromium, sandboxes, webkit]
     # Only `main` may use this environment, and only it holds the release
     # org's key, so a workflow edited on a branch cannot name the key
     # (docs/dev/ci.md § "Two caches"). Everything else runs with no environment.
@@ -439,6 +451,7 @@ jobs:
 
     env:
       PR_TESTS: ${{ github.event_name != 'push' && '--config=pr-tests' || '' }}
+      PART: ${{ matrix.part }}
 
     # Same shell, image, checkout depth and cache as `bazel-test` above,
     # for the reasons documented there.
@@ -469,7 +482,7 @@ jobs:
           buildbuddy-api-key: ${{ github.event_name == 'push' && secrets.BUILD_BUDDY_RELEASE_API_KEY || secrets.BUILD_BUDDY_API_KEY }}
           buildbuddy-config: ${{ github.event_name == 'push' && 'buildbuddy-release' || 'buildbuddy' }}
 
-      - name: bazel test //datalib/ui:e2e_test
+      - name: bazel test //datalib/ui:e2e_${{ matrix.part }}_test
         run: |
           # `//datalib/ui:e2e_test` (Playwright) IS in this gate. The image
           # bakes both browsers with their OS libraries (the
@@ -501,8 +514,8 @@ jobs:
           # the step after this one uploads when the run is red; see
           # datalib/ui/tests/e2e/README-artifacts.md.
           #
-          # It is `no-sandbox` + `requires-network` and takes ~11 min (its
-          # three parts, one after another), so
+          # It is `no-sandbox` + `requires-network` and each part takes
+          # 2.5–5 min, so
           # it lands on the critical path rather than being a cache
           # replay like the rest of a warm `main` run. That is the price
           # of gating UI regressions; see `docs/dev/testing.md`.
@@ -542,7 +555,7 @@ jobs:
           bazel test -c opt --config=release --config=ci --nostamp ${PR_TESTS} "${mode[@]}" \
             --build_metadata=ROLE=CI \
             --test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
-            //datalib/ui:e2e_test
+            "//datalib/ui:e2e_${PART}_test"
 
       # The e2e suite's Playwright report, when the run is red: a trace
       # per failed test, scrubbable action by action with the DOM before
@@ -558,32 +571,31 @@ jobs:
           flags=(-c opt --config=release --config=ci --nostamp ${PR_TESTS})
           testlogs="$(bazel info bazel-testlogs "${flags[@]}")"
           mkdir -p e2e-report
-          for part in chromium sandboxes webkit; do
-            zip="${testlogs}/datalib/ui/e2e_${part}_test/test.outputs/outputs.zip"
-            if [[ -f "${zip}" ]]; then
-              cp -L "${zip}" "e2e-report/playwright-report-${part}.zip"
-              # Each failure's error and the page as it stood, here in the
-              # job's log, readable without downloading the artifact.
-              echo "::group::e2e ${part}: each failure and the page it left"
-              unzip -p "${zip}" 'playwright-report/data/*.md' || true
-              echo "::endgroup::"
-            else
-              echo "no e2e outputs at ${zip} — that part did not run, or passed"
-            fi
-          done
+          zip="${testlogs}/datalib/ui/e2e_${PART}_test/test.outputs/outputs.zip"
+          if [[ -f "${zip}" ]]; then
+            cp -L "${zip}" "e2e-report/playwright-report-${PART}.zip"
+            # Each failure's error and the page as it stood, here in the
+            # job's log, readable without downloading the artifact.
+            echo "::group::e2e ${PART}: each failure and the page it left"
+            unzip -p "${zip}" 'playwright-report/data/*.md' || true
+            echo "::endgroup::"
+          else
+            echo "no e2e outputs at ${zip} — the part did not run, or passed"
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() && hashFiles('e2e-report/playwright-report-*.zip') != ''
         with:
-          name: e2e-playwright-report
+          name: e2e-playwright-report-${{ matrix.part }}
           path: e2e-report/playwright-report-*.zip
           retention-days: 7
 
       # The suite's console log, green or red: Playwright's list of every
       # test with its duration, and the specs' own `[e2e]` lines. This is
       # the only record of what the suite spends its minutes on when it
-      # passes — bazel prints one wall-clock number per part. One file
-      # per part, `<part>.log`. When the test step says `(cached) PASSED`
-      # for a part, it did not run here and its log is the run's that did.
+      # passes — bazel prints one wall-clock number per part. One
+      # artifact per part, `e2e-test-log-<part>` holding `<part>.log`.
+      # When the test step says `(cached) PASSED`, the part did not run
+      # here and its log is the run's that did.
       # `!cancelled()`, not `always()`: on a cancelled run the bazel
       # server is still winding down the build, `bazel info` queues
       # behind it, and the job then holds its concurrency group — and
@@ -595,23 +607,39 @@ jobs:
           flags=(-c opt --config=release --config=ci --nostamp ${PR_TESTS})
           testlogs="$(bazel info bazel-testlogs "${flags[@]}")"
           mkdir -p e2e-report
-          for part in chromium sandboxes webkit; do
-            log="${testlogs}/datalib/ui/e2e_${part}_test/test.log"
-            if [[ -f "${log}" ]]; then
-              cp -L "${log}" "e2e-report/${part}.log"
-            else
-              echo "no e2e log at ${log} — that part did not run"
-            fi
-          done
+          log="${testlogs}/datalib/ui/e2e_${PART}_test/test.log"
+          if [[ -f "${log}" ]]; then
+            cp -L "${log}" "e2e-report/${PART}.log"
+          else
+            echo "no e2e log at ${log} — the part did not run"
+          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() && hashFiles('e2e-report/*.log') != '' }}
         with:
-          name: e2e-test-log
+          name: e2e-test-log-${{ matrix.part }}
           path: e2e-report/*.log
           retention-days: 14
 
       - uses: ./.github/actions/disk-low-point
         if: ${{ !cancelled() }}
+
+  # The check the merge ruleset requires, under the name the e2e job had
+  # before it became three: green only when every part is. `!cancelled()`
+  # so that a red part makes this red rather than skipped, which a
+  # ruleset would leave pending.
+  e2e-gate:
+    name: bazel test //datalib/ui:e2e_test
+    needs: e2e
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every e2e part passed
+        env:
+          RESULT: ${{ needs.e2e.result }}
+        run: |
+          echo "e2e parts: ${RESULT}"
+          [[ "${RESULT}" == "success" ]]
 
   # Fill the *contributor* cache with main's tree, after the merge.
   #

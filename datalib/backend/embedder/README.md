@@ -40,6 +40,9 @@ having no GPU, is in § "Measured by hand".
 - **The same input in the same call gives the same vector, to the bit**,
   on the CPU and on the best device. The inference cache keys a vector by
   its prompt alone and relies on this.
+- **The thread count does not change a vector**, to the bit: 1, 3 and 4
+  CPU threads agree. Tests run the embedder on fewer threads than a
+  sync does (§ "Threads"), and their vectors are a sync's.
 
 ## One call
 
@@ -61,6 +64,30 @@ having no GPU, is in § "Measured by hand".
 
 - **On a mac, the best device is Metal** (`MTL0`).
 - **The best device agrees with the CPU** to a cosine over 0.999.
+
+## Threads
+
+- **A caller that passes 0 threads gets `DATALIB_EMBED_THREADS`**, and
+  llama.cpp's own choice where that is unset: four, on any machine. The
+  step's `embed` and the search applet pass 0. A value that is not a
+  count is an error, not a fallback.
+- **llama.cpp's threads wait for each other spinning.** ggml is built
+  without OpenMP, and `ggml_barrier` busy-waits; a model's forward pass
+  crosses it hundreds of times. On a machine with more runnable threads
+  than cores, each crossing waits for a thread the scheduler has set
+  aside. Measured on a 4-vCPU VM, embedding 60 prompts:
+
+  | threads | idle | beside 3 busy processes | beside 6 |
+  | --- | --- | --- | --- |
+  | 4 (llama.cpp's) | 25.7 s | 166 s | 286 s |
+  | 2 | 43.5 s | 64 s | 158 s |
+  | 1 | 71.7 s | 72 s | 125 s |
+
+  `//datalib/backend/applets:applet_unittests` took 21 s alone at four
+  threads and timed out at 300 s beside 3 busy processes; at two it took
+  24 s alone and 30 to 37 s beside 3 or 6. So every test runs the
+  embedder on two (`.bazelrc`'s `--test_env`), and the steps and
+  applets a test starts inherit it (`datalib_env::hands_down`).
 
 ## Measured by hand
 

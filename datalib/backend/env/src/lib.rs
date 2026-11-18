@@ -65,6 +65,12 @@ pub const DATALIB_PROTECTED_LIBRARY: &str = "DATALIB_PROTECTED_LIBRARY";
 /// custom step or applet that reads one of its own, or a test harness.
 pub const DATALIB_CHILD_ENV: &str = "DATALIB_CHILD_ENV";
 
+/// How many threads the embedder computes on where its caller leaves that
+/// to llama.cpp, which otherwise takes four on any machine. Its threads
+/// wait for each other spinning, so on a machine busier than it has cores
+/// four of them run far slower than one: tests set it (`.bazelrc`).
+pub const DATALIB_EMBED_THREADS: &str = "DATALIB_EMBED_THREADS";
+
 /// A child process, for what of this process's environment it is handed
 /// ([`hands_down`]). Nothing else is: the server's API token, a latchkey
 /// key meant for latchkey, a key one source reads, a variable a person
@@ -148,8 +154,8 @@ const LATCHKEY_ALSO: &[&str] = &[
 ];
 
 /// What a step reads beyond what latchkey does: where the fingerprint
-/// cache is, replayed HTTP in tests, and the URL prefix a Minds
-/// workspace routes some requests through.
+/// cache is, replayed HTTP in tests, the URL prefix a Minds workspace
+/// routes some requests through, and how many threads `embed` takes.
 const STEP_ALSO: &[&str] = &[
     "DATALIB_CACHE_DIR",
     "DATALIB_HTTP_PLAYBACK",
@@ -158,11 +164,17 @@ const STEP_ALSO: &[&str] = &[
     "DATALIB_HTTP_PLAYBACK_HOLD_SEALED",
     "DATALIB_HTTP_PLAYBACK_OFFLINE",
     "MINDS_VIA_DESKTOP_URL_PREFIX",
+    DATALIB_EMBED_THREADS,
 ];
 
 /// What an applet reads beyond every child's: the search's pinned now,
-/// and whether it warms the search by meaning at launch, both for tests.
-const APPLET_ALSO: &[&str] = &["DATALIB_SEARCH_NOW", "DATALIB_SEARCH_NO_WARM"];
+/// and whether it warms the search by meaning at launch, both for tests;
+/// how many threads its embedder takes.
+const APPLET_ALSO: &[&str] = &[
+    "DATALIB_SEARCH_NOW",
+    "DATALIB_SEARCH_NO_WARM",
+    DATALIB_EMBED_THREADS,
+];
 
 /// What Modal's SDK signs in with and is pointed by, beyond every child's.
 /// A step is not handed these: a sync's runner passes them on only when
@@ -259,6 +271,15 @@ mod tests {
     fn the_search_warming_switch_reaches_the_applet() {
         assert!(hands_down("DATALIB_SEARCH_NO_WARM", Child::Applet, &[]));
         assert!(!hands_down("DATALIB_SEARCH_NO_WARM", Child::Step, &[]));
+    }
+
+    /// Tests cap the embedder's threads; dropped on the way down, a step's
+    /// `embed` and the search applet would each spin four threads again.
+    #[test]
+    fn the_embedder_thread_cap_reaches_steps_and_applets() {
+        assert!(hands_down(DATALIB_EMBED_THREADS, Child::Step, &[]));
+        assert!(hands_down(DATALIB_EMBED_THREADS, Child::Applet, &[]));
+        assert!(!hands_down(DATALIB_EMBED_THREADS, Child::Latchkey, &[]));
     }
 
     fn step_protocol_doc() -> String {

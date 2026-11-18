@@ -33,19 +33,24 @@ reference behind them.
   builds our own crates at opt-level 1 and leaves third-party crates and
   doltlite's C at 3 (see "Every `rust_test` is a whole test binary"
   below); so a PR's tarball is not what a release ships.
-- `bazel test //datalib/ui:e2e_test` — the Playwright suite, alone: a
-  `test_suite` of three tests, `e2e_chromium_test`, `e2e_sandboxes_test`
-  and `e2e_webkit_test`, one per group of Playwright projects
+- `e2e chromium`, `e2e sandboxes`, `e2e webkit` — the Playwright suite,
+  one job per part. `//datalib/ui:e2e_test` is a `test_suite` of three
+  tests, `e2e_chromium_test`, `e2e_sandboxes_test` and
+  `e2e_webkit_test`, one per group of Playwright projects
   ([`testing.md`](testing.md) § "The Playwright suite runs in two
-  engines"). Each is tagged `cpu:4`, the whole runner, so they run one
-  after another, about eleven minutes in all; in the job above every
-  other test would wait behind them. They are three tests rather than
-  one so each has its own 900 s timeout: whole, the suite took 600 to
-  850 s, and a slow runner timed it out two-thirds of the way through. The two jobs'
-  patterns are complements (`//...` less one label, and that label), so
-  a new test lands in the first without anyone choosing. On a run where
-  the binaries the suite drives are not cached yet, both jobs compile
-  them; neither waits for the other.
+  engines"). Each is tagged `cpu:4`, the whole runner, so on one runner
+  they ran one after another, about eleven minutes in all, and in the
+  job above every other test would wait behind them. Each part has a
+  runner of its own instead, and the slowest part sets the time. They
+  are three tests rather than one so each also has its own 900 s
+  timeout: whole, the suite took 600 to 850 s, and a slow runner timed
+  it out two-thirds of the way through. `e2e-gate` passes when all three
+  do, and carries the check name the merge ruleset requires, `bazel test
+  //datalib/ui:e2e_test`. The test job's pattern and the suite are
+  complements (`//...` less that label, and that label), so a new test
+  lands in the test job without anyone choosing. On a run where the
+  binaries the suite drives are not cached yet, every job compiles
+  them; none waits for another.
 - `bazel build :dist (musl static)` — the fully static release leg,
   plus `doltlite_link_test` against those binaries. Separate job so
   its ~80 s is not on the other one's critical path. The test's sync
@@ -506,11 +511,11 @@ test job's pull (64 s → 56–60 s, two runs) and cut the *push* in
 1. **More test jobs.** Measured on experiment branches beside #1139's
    runs, same two changes, medians: the provider tests
    (`//datalib/backend/etl/providers/...`) in a job apart from the
-   rest, 974 s → 701 s on the `datalib_etl` change (n=3); the e2e suite
-   in three Playwright shards (`--test_arg=--shard=i/3`), 488 s → 311 s
-   on the e2e-spec change (n=4) and nothing on the `datalib_etl` one,
-   where the Rust test job is the slowest. Each job added is another
-   required check and another chance to lose DNS to BuildBuddy.
+   rest, 974 s → 701 s on the `datalib_etl` change (n=3). The e2e
+   suite in three Playwright shards (`--test_arg=--shard=i/3`) measured
+   488 s → 311 s on the e2e-spec change (n=4); the suite now runs as
+   three jobs, one per part. Each job added is another runner per run
+   and another chance to lose DNS to BuildBuddy.
 2. **BuildBuddy remote execution** (`--config=remote`): −34% on a cold
    run, measured in #324, left dispatch-only pending the free tier's
    cache-transfer quota — which #497 and #499 have since cut by most

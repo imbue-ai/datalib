@@ -10,6 +10,7 @@ use std::ptr::NonNull;
 use std::sync::OnceLock;
 
 use anyhow::{bail, Context, Result};
+use datalib_env::DATALIB_EMBED_THREADS;
 use datalib_runtime::cuda_module;
 
 mod ffi {
@@ -239,8 +240,9 @@ pub struct Embedder {
 unsafe impl Send for Embedder {}
 
 impl Embedder {
-    /// `threads` of 0 is llama.cpp's own choice; the batching is the
-    /// device's own ([`Batching::for_device`]).
+    /// `threads` of 0 is [`DATALIB_EMBED_THREADS`] where it is set and
+    /// llama.cpp's own choice where not; the batching is the device's own
+    /// ([`Batching::for_device`]).
     pub fn open(model: &Path, device: Device, threads: u32) -> Result<Embedder> {
         let batching = Batching::for_device(&device_for(device));
         Embedder::open_with(model, device, threads, batching)
@@ -255,6 +257,10 @@ impl Embedder {
         if device == Device::Best {
             cuda_module_report();
         }
+        let threads = threads_to_use(
+            threads,
+            std::env::var(DATALIB_EMBED_THREADS).ok().as_deref(),
+        )?;
         let path = CString::new(model.as_os_str().as_encoded_bytes())
             .context("a model path with a NUL in it")?;
         let mut err = [0 as c_char; 256];
@@ -518,6 +524,21 @@ impl Drop for Embedder {
     }
 }
 
+/// The threads an embedder computes on: what its caller asked for, or,
+/// where that is llama.cpp's own choice (0), what [`DATALIB_EMBED_THREADS`]
+/// says. A value that is not a count fails rather than being ignored.
+pub fn threads_to_use(asked: u32, from_env: Option<&str>) -> Result<u32> {
+    match (asked, from_env) {
+        (0, Some(value)) => value
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|&n| n > 0)
+            .with_context(|| format!("{DATALIB_EMBED_THREADS}={value:?} is not a thread count")),
+        _ => Ok(asked),
+    }
+}
+
 fn message(err: &[c_char]) -> String {
     let bytes: Vec<u8> = err
         .iter()
@@ -541,8 +562,19 @@ pub fn fit(mut tokens: Vec<i32>, context: usize) -> (Vec<i32>, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{can_load, cuda_module, fit, load_gpu_module, pack, Batching};
+    use super::{can_load, cuda_module, fit, load_gpu_module, pack, threads_to_use, Batching};
     use std::path::Path;
+
+    /// The tests' cap reaches an embedder whose caller left the count to
+    /// llama.cpp, never one that asked for its own, and a typo fails.
+    #[test]
+    fn the_thread_cap_fills_in_only_where_the_caller_left_it_open() {
+        assert_eq!(threads_to_use(0, None).unwrap(), 0);
+        assert_eq!(threads_to_use(0, Some("1")).unwrap(), 1);
+        assert_eq!(threads_to_use(2, Some("1")).unwrap(), 2);
+        assert!(threads_to_use(0, Some("one")).is_err());
+        assert!(threads_to_use(0, Some("0")).is_err());
+    }
 
     #[test]
     fn prompts_share_a_call_up_to_its_count_and_its_tokens() {

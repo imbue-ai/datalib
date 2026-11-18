@@ -164,6 +164,23 @@ fn the_same_input_in_the_same_call_gives_the_same_vector_to_the_bit() {
     }
 }
 
+/// Tests run the embedder on fewer threads than a sync does
+/// (`DATALIB_EMBED_THREADS`), so a vector must not depend on the count:
+/// each row of a product is summed by one thread, whichever it is.
+#[test]
+fn the_thread_count_does_not_change_a_vector() {
+    let at = |threads| {
+        let mut e = Embedder::open_with(&model(), Device::Cpu, threads, Batching::ONE).unwrap();
+        texts()
+            .iter()
+            .map(|t| e.embed(t).unwrap())
+            .collect::<Vec<_>>()
+    };
+    let one = at(1);
+    assert_eq!(one, at(4), "1 thread against 4");
+    assert_eq!(one, at(3), "1 thread against 3");
+}
+
 // ── One call ────────────────────────────────────────────────────────
 
 /// So a call attends over all of its tokens, and its time and scratch
