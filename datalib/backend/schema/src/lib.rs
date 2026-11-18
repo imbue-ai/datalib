@@ -31,6 +31,10 @@ pub mod sections {
     include!("sections.rs");
 }
 
+pub mod drawn_pieces {
+    include!("drawn_pieces.rs");
+}
+
 pub mod search_terms {
     include!("search_terms.rs");
 }

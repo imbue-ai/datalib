@@ -1,7 +1,7 @@
 # Moving from documents to blocks: grouping chosen when a search runs
 
 **Status: proposal (2026-11-17). Steps 1, 2, 3a, 3b and 3c have
-landed (#1765, #1770, #1775, #1782, #1818), and 4a is under way;
+landed (#1765, #1770, #1775, #1782, #1818); 4a and 5 are under way;
 nothing else has started.** Facts about the tree were checked against
 the code on 2026-11-16; file references are to that tree.
 
@@ -559,10 +559,34 @@ against the eval before the next.
      row per block and nothing to land. The eval scores a target per
      block and per document, and compares the grouped answer with
      today's.
-5. **The viewer reads items.** `DocCard` opens what is read together at an
-   item and pages through it, each page drawn by the markdown function
-   from the stored bodies. The `.md` files stop being written, and with
-   them the rule that they are write-only.
+5. **The viewer reads items, and the `.md` files go.** Only two things
+   read the files' bytes: the viewer's `/chat/{markdown_uuid}` and search
+   landing (`hits/mapping.rs`), which quotes a hit and picks its row from
+   the file. In order:
+   - **5a. The store spells every document.** `sections` keeps a
+     chat-common item's body alone and no frame piece, so chat-common's
+     fourteen sources could not be read back from the store. A
+     `drawn_pieces` table keeps the rest of each piece as drawn: an
+     item's drawing with its body cut out and where it goes back, and
+     each frame piece whole. The store then spells every document byte
+     for byte, which a step test checks against every fixture document's
+     file. Storing the drawing, rather than drawing it again from facts,
+     is the choice that lets the files go first: what the frame and a
+     message's header show (unread, a branch, reply counts, which
+     message a reaction is on) is not all on the rows yet. Drawing from
+     facts can follow one fact at a time, each checked against the
+     stored drawing.
+   - **5b.** "Unindexed" (Notion's table of contents) is a `markdowns`
+     column, not a folder in the file's path.
+   - **5c.** The viewer and search landing read the render store, at the
+     commit the grid index read.
+   - **5d.** A command prints or exports a document's markdown: the way
+     out the README and the first-time guide promise as the `.md` files.
+     Tests and fixtures read drawn text.
+   - **5e.** Render stops writing the files, and the existing ones are
+     deleted, each render store kept; the rule that rendered markdown is
+     write-only goes with them. Paging through what is read together, a
+     page at a time, comes after.
 6. **No time buckets.** A bucketed source renders one container per
    chat. The `period` setting goes.
 7. **Embedding context.** Chunks are cut from windows of what is read
