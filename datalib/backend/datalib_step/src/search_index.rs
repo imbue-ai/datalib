@@ -87,13 +87,10 @@ struct Embedded {
     took: Duration,
 }
 
-/// A document the search covers: one with a file, outside `unindexed/`.
+/// A document the search covers: every one but those filed for the grid
+/// alone (`markdowns.searchable`).
 pub(crate) fn searchable(row: &MarkdownRow) -> bool {
-    row.md_path.as_deref().is_some_and(|p| {
-        !Path::new(p)
-            .components()
-            .any(|c| c.as_os_str() == layout::UNINDEXED_DIR)
-    })
+    row.searchable
 }
 
 /// `IndexedMarkdownStore::index_docs` off the runtime, opening the store at
@@ -1875,6 +1872,16 @@ mod tests {
             // No reservation: Modal's minimum, and whatever the run uses.
             assert!(s["cpu"].is_null() && s["memoryMiB"].is_null(), "{s}");
             assert_eq!(s["app"], "datalib-embed");
+            // The Sandbox idles and the slice moves as files: its own
+            // stdout is what lost answers on a GPU.
+            assert_eq!(s["command"][0], "sleep", "{s}");
+            let execs = s["execs"].as_array().unwrap();
+            assert_eq!(execs.len(), 1, "{s}");
+            let script = execs[0][2].as_str().unwrap();
+            assert!(
+                script.contains("< /tmp/datalib-embed/in.jsonl > /tmp/datalib-embed/out.jsonl"),
+                "{s}"
+            );
         }
         assert_eq!(reported.metric("modal_chunks_total{}"), Some(5));
         assert_eq!(reported.metric("modal_sandboxes_total{gpu=T4}"), Some(3));
@@ -2036,5 +2043,38 @@ mod tests {
             "the error says what the run spent: {err}"
         );
         assert_eq!(unembedded(root, GROUP).await, 2);
+    }
+
+    /// A Sandbox that hands back only part of a slice, with no error, as a
+    /// T4's stdout did on Modal: the vectors that came are kept, and only
+    /// the prompts still missing go out again. Every Sandbox here answers
+    /// half its slice, so a slice of two is two Sandboxes, and all five
+    /// chunks still arrive.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_short_answer_keeps_what_came_and_sends_only_the_rest() {
+        let td = tempfile::tempdir().unwrap();
+        let root = td.path();
+        five_docs(root).await;
+        let fake = FakeModal::new();
+        let done = embed_with(
+            root,
+            GROUP,
+            four_bytes,
+            never_opened,
+            Some(fake.modal_with(0, true, &[("FAKE_MODAL_SHORT", "99")], 1)),
+            &Progress::noop(),
+            &StopFlag::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(done.embedded, 5);
+        assert_eq!(unembedded(root, GROUP).await, 0);
+        let made = fake.sandboxes();
+        let sent: Vec<u64> = made.iter().map(|s| s["lines"].as_u64().unwrap()).collect();
+        assert_eq!(
+            sent,
+            [2, 1, 2, 1, 1],
+            "each slice of two, then its one missing prompt"
+        );
     }
 }

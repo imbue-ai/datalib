@@ -27,9 +27,8 @@ bazel-testlogs/datalib/ui/e2e_<part>_test/test.outputs/outputs.zip
 
 Outside bazel (`pnpm exec playwright test`) it is `datalib/ui/playwright-report/`.
 
-On CI the suite runs in the `bazel test //...` gate
-(`.github/workflows/test.yml`). Each part runs in a job of its own
-(`e2e <part>`). A red part uploads that zip as the
+On CI each part runs in a job of its own in
+`.github/workflows/test.yml` (`e2e <part>`). A red part uploads that zip as the
 `e2e-playwright-report-<part>` artifact (kept a week); a green one uploads no
 report. The same step prints each failure's error and page snapshot (the
 report's `data/*.md`) into the job's log, under "e2e `<part>`: each
@@ -75,13 +74,13 @@ A single trace, without the report around it:
 npx playwright show-trace /tmp/e2e/playwright-report/data/<hash>.zip
 ```
 
-## Why the suite has no CI job of its own
+## Its jobs build with the test job's flags
 
-Don't give it one. A second bazel invocation shares the gate's remote
-cache only if its configuration matches the gate's exactly (`-c opt --config=release --config=ci`),
-and one that matches is redundant with the gate. The attempt
-that did not match rebuilt 2664 actions with no cache hits and took
-999s against the gate's 143s.
+Each part's job runs `bazel test` with the test job's configuration
+(`-c opt --config=release --config=ci --nostamp`, plus `--config=pr-tests`
+on a PR), so it replays what that job built. A job with any other
+configuration shares no cache entry with it: one attempt rebuilt 2664
+actions with no cache hits and took 999 s against the gate's 143 s.
 
 ## Cost
 

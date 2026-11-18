@@ -66,9 +66,8 @@ pub const DATALIB_PROTECTED_LIBRARY: &str = "DATALIB_PROTECTED_LIBRARY";
 pub const DATALIB_CHILD_ENV: &str = "DATALIB_CHILD_ENV";
 
 /// How many threads the embedder computes on where its caller leaves that
-/// to llama.cpp, which otherwise takes four on any machine. Its threads
-/// wait for each other spinning, so on a machine busier than it has cores
-/// four of them run far slower than one: tests set it (`.bazelrc`).
+/// to llama.cpp, which otherwise takes four on any machine. Tests set it
+/// (`.bazelrc`), since several of them share CI's cores.
 pub const DATALIB_EMBED_THREADS: &str = "DATALIB_EMBED_THREADS";
 
 /// A child process, for what of this process's environment it is handed

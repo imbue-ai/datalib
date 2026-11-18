@@ -45,7 +45,7 @@ bash that runs the outer one runs the inner one too.
 
 Attesting and publishing are one script too, `scripts/release/publish_release.py`,
 and `//:publish_release_test` runs it against a stand-in for GitHub's API. Only
-a tag's run shows that the real API takes its calls.
+a tag's run makes the real calls.
 
 ## Attest, then draft, then publish
 
@@ -346,8 +346,8 @@ cache to leave anything in.
   triples (gnu, the two musl ones naming their
   gnu sibling, mac) against the built binaries, unpacks each tarball
   and checks every binary is a regular executable, the library, the launcher, the
-  commit, the manifest line for this triple's runtime asset, and the
-  six notice files. `cargo-about` cannot run in the sandbox (it needs
+  commit, the manifest line for this triple's runtime asset (and on
+  x86_64 gnu the CUDA module's), the docs, and the six notice files. `cargo-about` cannot run in the sandbox (it needs
   `cargo` and the crate sources), so the test hands
   `third_party_notices.sh` a stub, `tools/fake_cargo_about.sh`, that
   writes the file `-o` names from the directory it is run in, which is
@@ -522,12 +522,10 @@ matches.
   artifact hand-off and that the bundle compiles nothing; Vault refuses
   anything but a tag, so the real certificate and `notarytool` are first
   tried by the next release.
-- The attestations. Their verify flags were tried on a
-  `latchkey-curl-shims` release signed by the same action, and the job's
-  place in the graph on a branch, but the action reading the subjects file,
-  the image's attestation going to ghcr.io and the check passing on our own
-  first happen on a tag. A failure there holds the release back, as any job's
-  does.
+- The attestations. The job's place in the graph can be tried on a branch
+  (§"Trying the job graph on a branch"), but the action reading the subjects
+  file, the image's attestation going to ghcr.io and the check passing happen
+  only on a tag. A failure there holds the release back, as any job's does.
 - The `cuda` job's stamped build and the `-cuda` image's push. On a PR,
   `.github/workflows/cuda.yml` runs `build_cuda.sh` unstamped and builds
   the `-cuda` image, up to its demo, over the latest release's binaries, so the

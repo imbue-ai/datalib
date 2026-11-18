@@ -39,9 +39,9 @@ reference behind them.
   `e2e_webkit_test`, one per group of Playwright projects
   ([`testing.md`](testing.md) § "The Playwright suite runs in two
   engines"). Each is tagged `cpu:4`, the whole runner, so on one runner
-  they ran one after another, about eleven minutes in all, and in the
-  job above every other test would wait behind them. Each part has a
-  runner of its own instead, and the slowest part sets the time. They
+  they would run one after another and hold every other test behind
+  them. Each part has a runner of its own instead, and the slowest part
+  sets the time. They
   are three tests rather than one so each also has its own 900 s
   timeout: whole, the suite took 600 to 850 s, and a slow runner timed
   it out two-thirds of the way through. `e2e-gate` passes when all three
@@ -109,13 +109,25 @@ so that nothing in a release can keep it from publishing (#500).
 
 **`release.yml`** runs on a `v*` tag: the runtime assets first
 (the Node runtime `latchkey` runs from, which the binaries
-fetch on first use — `runtime_fetch.md`; one per host platform), then the five tarballs (macOS arm64,
+fetch on first use — `runtime_fetch.md`; one per host platform) and the
+CUDA module, then the five tarballs (macOS arm64,
 Linux gnu and musl on x86_64 and aarch64), the notarized macOS app, and
-the prod docker image with its doc test (`datalib/docker/doc_test.sh`,
-#469). It does not build the CI image. The steps that
+the prod docker image and its `-cuda` variant, each checked by the doc
+test (`datalib/docker/doc_test.sh`). Last, `attest` signs a build
+provenance attestation for every asset and `publish-release` publishes
+them. It does not build the CI image. The steps that
 assemble the assets are scripts under `scripts/release/`, run by
 `bazel test //...` before any tag runs them, and no job that builds
 holds a write token or the signing key: `release_steps.md`.
+
+The other workflows: **`reader-wheels.yml`** builds the
+`imbue-datalib-reader` wheels and, on a tag, publishes them to PyPI
+(`release_steps.md` §"The reader wheels"); **`cuda.yml`** builds what
+CUDA adds to a release, on a PR that could change it
+(`docker.md` §"The CUDA variant"); **`latchkey-auth.yml`** runs the
+sign-in suite on a mac, nightly ([`testing.md`](testing.md) §"The
+sign-in suite"); **`tzdata.yml`** goes red, weekly, when the tz
+database the binaries bundle is older than IANA's latest.
 
 **`cargo-update.yml`** keeps `datalib/backend/Cargo.lock` current,
 which Dependabot cannot (`.github/dependabot.yml` says why). Every
@@ -192,20 +204,16 @@ an origin refuses fails the leg rather than being served from a copy.
 the job's own builder holds. `setup-buildx-action`, which would cache by
 default, is told not to.
 
-**What holds the write key.** `test.yml`'s three jobs that run on a push
-to `main` compile with it in `.bazelrc.user`. Their actions run under
-bazel's `processwrapper-sandbox`, which hides no file and blocks no
-network, so a build script in a crate that reached `main` can read the
-key or write any entry. That reaches `main`'s CI and nothing that ships:
-an entry can make a failing test look green on `main`, or run code in
-those jobs by replacing a tool the build runs. The jobs hold that key
-and a read-only token, and no workflow takes their artifacts, though one
-of them is a built tarball a person could download by hand. The gate on
-a PR uses the contributor org, so the key cannot fake a required check.
+**What holds the write key.** `test.yml`'s jobs that run on a push to
+`main` (the test job, the three e2e parts and the musl build) compile
+with it in `.bazelrc.user`, where any build script can read it. What
+that reaches, `main`'s CI and nothing that ships, is in
+[`security_posture.md`](security_posture.md) §"What a build script can
+do with that position".
 
 **Only `main` can name the key.** It is a secret of the `main-ci`
 environment, whose deployment branch policy allows `main` and nothing else,
-so a workflow edited on a branch gets no such secret. `test.yml`'s three jobs
+so a workflow edited on a branch gets no such secret. Those jobs
 ask for the environment on a push and for none otherwise, and `lint_repo.py`
 check 21 refuses a job that names the key without it. The environment itself
 is a repository setting: [`security_posture.md`](security_posture.md)
@@ -258,9 +266,10 @@ tree a plain `bazelisk test` uses, so a crate you just tested is
 compiled again for the gate.
 
 **The toolchains and the environment.** On Linux the C/C++ toolchain is
-the hermetic LLVM one `MODULE.bazel` registers and Rust's is pinned
-too, so neither depends on the machine's compiler (§"The caches, and
-what each is for"). Nor does an action's environment carry the caller's
+the hermetic LLVM one `MODULE.bazel` registers, not the machine's gcc,
+and Rust's is pinned too, so the proc-macros and build scripts every
+Rust compile reads come out byte for byte the same on CI's runner, in a
+cloud VM and on a Linux laptop. Nor does an action's environment carry the caller's
 `HOME`, on any host, which every C compile, genrule and test would
 otherwise hold in its key (`/root` in a cloud session, `/github/home`
 on CI, `/Users/<name>` on a mac); a test runs with `HOME` set to its
@@ -273,14 +282,10 @@ never shares CI's entries, and is why the gate leaves it in fastbuild.
 
 **The BuildBuddy action cache** is the one that matters: on a warm run
 of `main` every compile and test is a cache hit and the run executes
-nothing. An action's key covers its toolchain and every input it
-reads. On Linux the C/C++ toolchain is the hermetic LLVM one
-`MODULE.bazel` registers, not the machine's gcc, so the proc-macros and
-build scripts every Rust compile reads come out byte for byte the same
-on CI's runner, in a cloud VM and on a Linux laptop, and those share
-CI's entries when they build with CI's flags (`-c opt --config=release
---nostamp --config=pr-tests` for a PR's; the local gate passes them,
-§"The local gate and CI's cache"). A mac builds with Apple's
+nothing. An action's key covers its toolchain, its environment and
+every input it reads, so a Linux machine shares CI's entries when it
+builds with CI's flags (§"The local gate and CI's cache" says what else
+has to match). A mac builds with Apple's
 toolchain, so a darwin-arm64 rustc action and CI's linux-x86_64 one
 never share an entry: there the remote cache buys sharing with your own
 other worktrees and machines, not a replay of CI's work.
@@ -513,7 +518,7 @@ test job's pull (64 s → 56–60 s, two runs) and cut the *push* in
    (`//datalib/backend/etl/providers/...`) in a job apart from the
    rest, 974 s → 701 s on the `datalib_etl` change (n=3). The e2e
    suite in three Playwright shards (`--test_arg=--shard=i/3`) measured
-   488 s → 311 s on the e2e-spec change (n=4); the suite now runs as
+   488 s → 311 s on the e2e-spec change (n=4); the suite runs as
    three jobs, one per part. Each job added is another runner per run
    and another chance to lose DNS to BuildBuddy.
 2. **BuildBuddy remote execution** (`--config=remote`): −34% on a cold

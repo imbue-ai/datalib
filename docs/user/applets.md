@@ -26,7 +26,10 @@ A running server writes its address on start (`--url-file` writes it to
 a file). The token is minted fresh each start, so read the file again
 rather than keeping the value. An answer of 502 with `no applet "<id>"`
 means the config has no such entry; add its `[[applets]]` table below
-and the app starts it within a moment, with no restart.
+and the app starts it within a moment, with no restart. A script written
+against the index applet's older names still reaches it:
+`/applet/unified_index/` and `/applet/unified_document_index/` answer
+as `/applet/unified_grid_and_search_index/` does.
 
 ## What ships
 
@@ -231,14 +234,14 @@ ask '{"store": "system/runs/runs.sqlite", "sql": "SELECT seq, msg FROM log ORDER
       "limit": 1000, "offset": 1000}'
 ```
 
- Give the statement an
-`ORDER BY`, or two pages may disagree on the order. On a doltlite store,
-send the first page's `commit` with every later page, and they all read
-that commit however far the sync has moved on. A plain SQLite store (the
-grid index, the run store) has no commits, so a page reads it as it is
-then; to walk one that is being written, page by key instead: `WHERE
-seq > :after ORDER BY seq` with `{"after": <the last seq you read>}`. A page can stop short of `limit` when its
-values pass 8 MB; `next_offset` still says where to go on.
+Give the statement an `ORDER BY`, or two pages may disagree on the
+order. On a doltlite store, send the first page's `commit` with every
+later page, and they all read that commit however far the sync has
+moved on. A plain SQLite store (the grid index, the run store) has no
+commits, so a page reads it as it is then; to walk one that is being
+written, page by key instead: `WHERE seq > :after ORDER BY seq` with
+`{"after": <the last seq you read>}`. A page can stop short of `limit`
+when its values pass 8 MB; `next_offset` still says where to go on.
 
 **What it will not do.** It reads, and nothing else. The store is opened
 read-only and pinned to one commit, and every statement is checked before

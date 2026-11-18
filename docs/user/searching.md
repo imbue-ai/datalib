@@ -285,14 +285,14 @@ every group with its count, then each group's rows a page at a time.
 A part of the search that cannot answer costs that part, not the rest: while
 the embedding model is still downloading on a first launch, you still get what
 your words and fields match, with a line above the results saying what is
-missing, `query_echo.partial`. `datalib-applet search` prints those rows and
-exits 1.
-
+missing, `query_echo.partial`.
 
 The answer's `refused` says why a query was not run: `tab=` or `--tab`, which a
 search no longer has, a key the search
 does not have, `is:` with a word it does not know, a `contact:` on a
 root without the contacts app, or `me` on a root whose index has not
-synced since it learned which handles are yours. `datalib-applet
-search` prints the reason and exits 1, so a script cannot take a
-refusal for an empty result.
+synced since it learned which handles are yours.
+
+Either way `datalib-applet search` prints what it has and the reason, and
+exits 1, so a script cannot take a refusal or a partial answer for an
+empty or a whole one.

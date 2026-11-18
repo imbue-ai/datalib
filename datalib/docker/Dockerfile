@@ -51,7 +51,7 @@
 # build time from the TNG fixtures — see the demo step near the bottom.
 #
 # The devcontainer (`.devcontainer/Dockerfile`) does NOT build on this
-# image: it is its own `ubuntu:24.04` image with the Bazel toolchain,
+# image: it is its own `ubuntu:26.04` image with the Bazel toolchain,
 # published by `devcontainer.yml` independently of releases. The two
 # share their Node major and latchkey pin through
 # `//tools:version_pins_test`, and nothing else.

@@ -32,4 +32,5 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_pdf_render",
     edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
 )

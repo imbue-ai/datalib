@@ -195,12 +195,12 @@ fallback, which serves the main app instead.
    precisely so that `script-src` need not allow `'unsafe-inline'` — **do
    not move it inline.**
 
-   **No query runs as code, and there is no `'unsafe-eval'`.** Inline math
-   used to go through a regular-expression filter and then `eval`, and a
-   query could be written that passed the filter and reached `Function`.
-   A card's arguments can come from a link, and a script in the frame can
-   ask the host for search results and then navigate the frame to an
-   outside URL with them. So `calc.js` parses the arithmetic the language
+   **No query runs as code, and there is no `'unsafe-eval'`.** Upstream's
+   inline math filters a query with a regular expression and then calls
+   `eval`, and a query can be written that passes the filter and reaches
+   `Function`. A card's arguments can come from a link, and a script in
+   the frame can ask the host for search results and then navigate the
+   frame to an outside URL with them. So `calc.js` parses the arithmetic the language
    can write (numbers, strings, arrays, the operators, `Math.*`, an index by
    number, `.split`), the one vendored line that called `eval` calls it
    instead (`vendor/PROVENANCE.md`), and the CSP refuses `eval` and

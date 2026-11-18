@@ -232,7 +232,9 @@ What each source has today:
 | Beeper | a Slack user by `slack:<team>/<user>`, read out of the bridge's Matrix id (the owner by the Slack user the room was bridged for); anyone else by a number or address the app lists for them (`participant_identifiers`); a Matrix id alone has no kind | each reaction's; the person's numbers, addresses and cached avatar, in the source contact |
 | calendar | an event's organizer, by address | each guest with an address, as a chip on the event's page |
 | GitHub, GitLab | a change request's or a comment's author, by login (GitLab's on the host the merge request's address is on) | |
-| Notion | a comment's author, and a page's last editor, by the address the users table gives, else by user id | |
+| Notion | a comment's author, and a page's last editor, by the address the users table gives, else by user id | a user mentioned in a page |
+| Todoist | a task's adder and a comment's author, by the address the account or its collaborators list gives | a task's assignee, as a chip on its line |
+| Baby Connect | whoever logged an entry, by the address the account's users list gives | |
 
 An AI chat's answers (Claude, ChatGPT, Claude Code, Codex) are by their
 model, `ai_model:<id>`, where the record names one.
@@ -281,11 +283,8 @@ the backend writes is shaped by one function,
 
 The viewer draws a chip for any explicit link whose href is a handle,
 whoever wrote it, so a `mailto:` link in an email's HTML body is drawn
-as a chip too. A chip anywhere in a body is safe for one reason: **it
-shows who the href resolves to, never the link text**. A link
-`[Picard](mailto:phisher@romulan.net)` gets a chip for the phisher
-under the name the sources know, with "Shown here as “Picard”" in its
-tooltip.
+as a chip too. That is safe because a chip shows who the href resolves
+to, never the link text ([`chips.md`](chips.md) §"Trust").
 
 ## Source contacts: `NormalizedContact`
 
@@ -597,12 +596,9 @@ yet.
 
 Everything is in `datalib/ui/src/cards/`:
 
-- `chipLinks.js` is the markdown-it plugin: an explicit link whose
-  href `handleFromUri` reads becomes `<a class="chip" data-handle=…>`
-  (and one naming a group or step, `data-entity`; see
-  [`chips.md`](chips.md)); a link `linkify` made from a
-  bare address in running text is left alone, so a signature's address
-  stays an address. Plain JavaScript, so the render preview runs it
+- `chipLinks.js` is the markdown-it plugin that marks a link whose
+  href `handleFromUri` reads as a person's chip ([`chips.md`](chips.md)
+  §"Drawing a chip"). Plain JavaScript, so the render preview runs it
   too. It mirrors `to_uri` and `from_uri` over the same test cases.
 - `contacts.ts` holds the pure rules, unit-tested in `contacts.test.ts`:
   `chipLook` (what a chip shows, from the contact if there is one,
@@ -697,27 +693,14 @@ too (`contacts.ts::namesSomeoneElse`), showing the identifier instead.
 
 ## Searching for a person
 
-A person is searched by the role they had on a row, through the search
-terms (`docs/dev/plans/search_tabs.md` § "The search terms"), which
-hold each row's people by handle:
-
-| key | finds the rows where the person |
-|---|---|
-| `from:` (and `author:`, `author_handle:`) | wrote it: by handle, or by the name they were shown under |
-| `to:`, `cc:`, `bcc:` | was in that header |
-| `recipient:` | was in any of them |
-| `mention:` | was mentioned, where the source marks a mention up |
-| `with:` (and `involves:`) | had any role, took part in the conversation the row is (a document's own row), or is who a contact's card is about |
-
-A value that is a handle (`email:riker@enterprise.org`, or simply
-`riker@enterprise.org`, `+12025550101`) matches that handle exactly, and
-the search bar draws it as the person's chip; a quoted value matches a
-handle or name whole (`from:"Will Riker"`); anything else matches any
-handle or name holding it, so `from:riker` finds Riker under every
-spelling a source used, and anyone else whose name holds it. A name
-also reaches every handle a source ever showed under it, through the
-search terms' `names` table, filled from the rows' authors and from
-`source_contacts`. A chip's "Everything with <name>" writes
+A person is searched by the role they had on a row: `from:`, `to:`,
+`mention:`, `with:` and the rest. Which key finds which role, and what
+a value matches, is [`searching.md`](../user/searching.md) §"People".
+They read the search terms, which hold each row's people by handle
+(`etl/render/src/search_terms.rs`; [`grid_rows.md`](grid_rows.md)
+§"`supplied_terms`"). A name also reaches every handle a source ever
+showed under it, through the search terms' `names` table, filled from
+the rows' authors and from `source_contacts`. A chip's "Everything with <name>" writes
 `with:contact:<id>` when the handle is linked to one of your contacts,
 so it finds them under every handle linked there, and `with:<handle>`
 otherwise; either finds what they wrote, what they received and their

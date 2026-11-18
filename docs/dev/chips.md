@@ -69,10 +69,12 @@ failing.
 
 Who writes chips today: calendar-common for an event's organizer and
 each guest with an address; forge-render-common for a pull or merge
-request's author and each comment's; Notion for a comment's author;
-chat-common for a message's author,
+request's author and each comment's; Notion for a comment's author and
+a user mentioned in a page; Google Drive for a person chip in a Doc;
+Todoist for a task's assignee; chat-common for a message's author,
 recipients and reactors (`chat-common/README.md` §"The message
-header"); Slack for a `<@U…>` mention in a body; contact-common for
+header"); Slack for a `<@U…>` mention in a body, and email for an `@`
+mention; contact-common for
 the person a contact's page is about, as its heading, and for each
 member of a group of contacts that has a handle; the storage report
 (`datalib_step/src/introspect.rs`) for its group in the heading and
@@ -365,8 +367,8 @@ from the cell alone, and a new search shows the new title.
   anything. The rest of the title
   bar's menu (`documentMenu.ts`: open at the source, feedback) needs the
   document itself, which a chip does not hold.
-- **drag**: no search key names a document in the search grid, so it
-  drags as a link.
+- **drag**: it drags as a link. `chipDragQuery` writes no search for
+  it, though `datalib_document_id:` could now name one.
 
 ## A date
 
@@ -554,6 +556,5 @@ A system event as a chip ("Worf joined the channel"), which needs each
 provider to carry the handle on its system events; a chip for a
 channel; a document chip in a rendered page (a `datalib:doc/` link in
 markdown is not marked as one yet, and would need a resolver for its
-title) or in the search field (no `doc:` key in the search grid); the
-title bar's whole menu on a document chip; and editing a contact on the person card
-([`plans/contact_editing.md`](plans/contact_editing.md)).
+title) or in the search field (no `doc:` key in the search grid); and
+the title bar's whole menu on a document chip.

@@ -4,17 +4,17 @@ WhatsApp for Android backs its message store up as
 `Databases/msgstore.db.crypt15`: an ordinary SQLite database, encrypted
 with a 32-byte key the user can read off the app. This provider decrypts
 it to a tempfile and mirrors that file into a doltlite store with the
-engine `lightroom` and `apple_photos` use,
+engine `lightroom`, `apple_photos`, `apple_messages` and `beeper` use,
 [`datalib_etl_sqlite_mirror`](/datalib/backend/etl/sqlite_mirror/) —
 every table, dropped and refilled each run, doltlite keeping only what
 changed. **Read [`lightroom/INGEST.md`](../lightroom/INGEST.md) first**;
 this document covers only what is WhatsApp-shaped, and the one thing the
 engine does not do here: the attachments.
 
-Unlike `lightroom` and `apple_photos`, this one **renders**. The render
-crate (`datalib_etl_whatsapp_render`) reads the mirrored tables straight
-off the pinned commit and turns them into the chat-common markdown, so
-there is a `render_markdown` step and the messages reach `grid_rows`.
+It **renders documents**: the render crate
+(`datalib_etl_whatsapp_render`) reads the mirrored tables straight off
+the pinned commit and turns them into the chat-common markdown, so the
+messages reach `grid_rows`.
 
 ## What a backup looks like
 

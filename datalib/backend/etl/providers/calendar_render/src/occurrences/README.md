@@ -15,6 +15,7 @@ other shape: one row per occurrence, the way Google's
 [[steps]]
 group = "calendar"
 function = "render_occurrences"
+command = "datalib-step"
 inputs = ["calendar/ingest"]
 
 [steps.params]

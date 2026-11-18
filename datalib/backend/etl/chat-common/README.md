@@ -10,7 +10,7 @@ the parts of that markdown you have to know about before changing it.
 Every message starts with a line like:
 
 ```markdown
-## <span class="msg-author">Picard</span> <time class="msg-ts" datetime="2364-04-11T00:00:00+00:00" title="2364-04-11 00:00:00 UTC">Sat Apr 11th, 2364 at 00:00</time>
+## <span class="msg-author">Picard</span> <time class="msg-ts" datetime="2364-04-11T00:00:00Z" title="2364-04-11 00:00:00 UTC">Sat Apr 11th, 2364 at 00:00</time>
 ```
 
 **Keep the `##`.** It is not there to be a heading on screen — the UI
@@ -41,17 +41,13 @@ The text stays what the source showed; the href is the handle as a URI
 (`Handle::to_uri`: `mailto:`, `tel:`, Slack's `slack://user?team=…&id=…`,
 and `datalib:handle/<kind>/<value>` for a kind with no scheme of its
 own, a Signal account id);
-the title is the hover any other markdown viewer shows. The UI's
-markdown-it marks a link it can resolve as a chip
-(`ui/src/cards/chipLinks.js`), asks the contacts app, if one is
-configured, and the index whom the handle belongs to, and draws a chip
-in place of the link (`ui/src/cards/contacts.ts`), whose own title
-says what every source knows of the person. The href is load-bearing, like
+the title is the hover any other markdown viewer shows. The app draws
+the link as the person's chip. The href is load-bearing, like
 `data-section-uuid`: it is how a contact linked after this file was
 written still finds the author. An author with no handle is a plain
 `<span class="msg-author">`. How a handle becomes a person is
-`docs/dev/contacts.md`; the design, and why a chip may appear anywhere
-in a body, is `docs/dev/chips.md`.
+`docs/dev/contacts.md`; how a chip is drawn, and why one may appear
+anywhere in a body, is `docs/dev/chips.md`.
 
 An item with `recipients` (an email's To, Cc and Bcc) gets one more line
 straight under the header, a paragraph rather than an HTML block
@@ -236,10 +232,10 @@ worth knowing about before you invent a third:
   has none; the one test that renders one is
   `every_timestamp_carries_the_full_instant` in `src/render.rs`.
 
-A chat is one document whose id is the chat's own. A chat with more
-than one (a document that is part of a chat and read on its own) has
-each of them as a container inside the chat; `render.rs`'s `tree_of`
-places them, and every row, in the chat's tree.
+A chat is one document whose id is the chat's own. A document that is
+part of a chat rather than all of it, as a sub-agent's transcript is of
+a session, is a container inside the chat, read on its own;
+`render.rs`'s `tree_of` places it, and every row, in the chat's tree.
 
 ## `LAYOUT_VERSION`
 
@@ -323,17 +319,13 @@ only when it is exactly an attachment's blob-store address,
 there, `…/blob/<hash>/part/<hash>`. Anything else on this origin,
 relative references included, is dropped.
 
-Nor can one message reach the next. The UI renders and sanitizes each
+Nor can one message reach the next: the UI renders and sanitizes each
 message as a fragment of its own, from the sections this crate hands
-over (`render_markdown` returns them; the store keeps their layout), so
-a tag a message leaves open is closed at its end, and only the
-renderer's own wrapper answers to a message's id. Each wrapper also has
-`contain: paint`, so nothing in a message draws over another. Keep the
-pieces honest: a message is one keyed `Section` that opens with its
-wrapper's line and ends with its `</div>`, and the `<details>` openers
-and closers are unkeyed ones of their own
-(`docs/dev/data_architecture_parse_and_render.md` §"One section cannot
-reach the next").
+over (`docs/dev/data_architecture_parse_and_render.md` §"One section
+cannot reach the next"). Keep the pieces honest: a message is one keyed
+`Section` that opens with its wrapper's line and ends with its
+`</div>`, and the `<details>` openers and closers are unkeyed ones of
+their own.
 
 The sanitizer is not the boundary, though. The page draws the body in a
 frame whose policy is `script-src 'none'` (`ui/src/cards/docFrame.ts`),

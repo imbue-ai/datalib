@@ -117,8 +117,9 @@ async fn migrate_raw_store(
     const UPDATING: &str = "updating the raw store for this build; nothing is downloaded";
     tracing::info!(step = %env.step, "migrate: {UPDATING}");
     emitter.progress().set_message(UPDATING);
-    crate::dispatch::migrate(env.source_type()?, tree).await?;
-    adopt_sourceless_problems(env, tree).await?;
+    bring_raw_store_up_to_date(env.source_type()?, &env.group, tree)
+        .await
+        .with_context(|| format!("migrate {}", env.step))?;
     tracing::info!(step = %env.step, "migrate: the raw store is in this build's shape");
     Ok(crate::ingest::raw_store_version(tree)
         .await?
@@ -131,17 +132,25 @@ async fn migrate_raw_store(
         .collect())
 }
 
+/// The source's own migration, then its older problems named.
+async fn bring_raw_store_up_to_date(source_type: &str, group: &str, tree: &Path) -> Result<()> {
+    crate::dispatch::migrate(source_type, tree).await?;
+    adopt_sourceless_problems(group, tree).await
+}
+
 /// Name the source on the problems an older build wrote naming none, so
 /// they count on the source's row from launch rather than from its next
 /// sync. Committed only when there was one to name.
-async fn adopt_sourceless_problems(env: &StepEnv, tree: &Path) -> Result<()> {
-    let pool = datalib_etl::doltlite_raw::open(&entities_db(tree), &[]).await?;
+async fn adopt_sourceless_problems(group: &str, tree: &Path) -> Result<()> {
+    // Bare: only the provider's own open knows its DDL and ladder, and
+    // one without them reads a store its ladder has climbed as newer.
+    let pool = datalib_etl::doltlite_raw::open_bare(&entities_db(tree)).await?;
     let adopted = async {
-        let n = datalib_etl::doltlite_raw::adopt_sourceless_problems(&pool, &env.group).await?;
+        let n = datalib_etl::doltlite_raw::adopt_sourceless_problems(&pool, group).await?;
         if n > 0 {
             datalib_etl::doltlite_raw::commit_run(
                 &pool,
-                &format!("migrate {}: name the source on {n} problems", env.group),
+                &format!("migrate {group}: name the source on {n} problems"),
             )
             .await?;
         }
@@ -149,9 +158,13 @@ async fn adopt_sourceless_problems(env: &StepEnv, tree: &Path) -> Result<()> {
     }
     .await;
     pool.close().await;
-    let n = adopted.with_context(|| format!("name {}'s source on its problems", env.step))?;
+    let n = adopted.with_context(|| format!("name {group}'s source on its problems"))?;
     if n > 0 {
-        tracing::info!(step = %env.step, problems = n, "migrate: named the source on older problems");
+        tracing::info!(
+            group,
+            problems = n,
+            "migrate: named the source on older problems"
+        );
     }
     Ok(())
 }
@@ -445,7 +458,9 @@ mod tests {
     }
 
     /// The upgrade a person makes: a store every past release left, opened
-    /// by this build's migrate, ends in this build's shape. A non-additive
+    /// by this build's migrate as a launch runs it, ends in this build's
+    /// shape and records it. A later open that skips the ladder fails here
+    /// too, as a newer store or a wrong shape. A non-additive
     /// change with no rung on the provider's ladder fails here, naming the
     /// release and the source type, instead of in someone's data root.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -461,7 +476,7 @@ mod tests {
                 let want = columns_of(&entities_db(&fresh_raw)).await;
                 let dir = tempfile::tempdir().unwrap();
                 let raw = store_at(dir.path(), &shape, &release).await;
-                if let Err(e) = crate::dispatch::migrate(&source_type, &raw).await {
+                if let Err(e) = bring_raw_store_up_to_date(&source_type, "enterprise", &raw).await {
                     failures.push(format!("{source_type} from {release}: {e:#}"));
                     continue;
                 }
@@ -484,6 +499,12 @@ mod tests {
                     shape_of(&entities_db(&raw)).await,
                     shape_of(&entities_db(&fresh_raw)).await,
                 );
+                if got.schema_hash != want.schema_hash {
+                    failures.push(format!(
+                        "{source_type} from {release}: recorded shape {}, this build's {}",
+                        got.schema_hash, want.schema_hash
+                    ));
+                }
                 if (got.schema_version, got.shared_schema_version)
                     != (want.schema_version, want.shared_schema_version)
                 {

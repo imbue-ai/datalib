@@ -41,8 +41,8 @@ Three sources do:
   `time_series` (`datalib_etl_time_series::unreadable_problems`), read
   there, where the step's Manage row counts it
   (`etl/README.md` §"Problems stay in the step that found them").
-- **`time_series_index`** (same file) reads each source store named in
-  its `inputs` at that store's newest commit. It copies the store's
+- **`time_series_index`** (same file) reads each source store its
+  `inputs` name (`*/render_time_series`) at that store's newest commit. It copies the store's
   rows and records the store's path and that commit. It copies no
   points.
 - **The applet** (`datalib/backend/applets/src/unified_time_series_index.rs`)

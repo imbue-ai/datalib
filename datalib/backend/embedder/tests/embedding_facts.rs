@@ -254,3 +254,48 @@ fn the_best_device_agrees_with_the_cpu() {
         assert!(c > 0.999, "cosine {c} for {text:?}");
     }
 }
+
+// ── Threads ─────────────────────────────────────────────────────────
+
+/// ggml's threads sleep at its barrier (third-party/llama_cpp's patch), so
+/// four of them pinned to one core embed about as fast as one. On
+/// upstream's busy wait, four took 17 times as long as one here.
+#[cfg(target_os = "linux")]
+#[test]
+fn four_threads_on_one_core_wait_asleep() {
+    std::thread::spawn(|| {
+        pin_this_thread_to_one_core();
+        let time = |threads| {
+            let mut e = Embedder::open_with(&model(), Device::Cpu, threads, Batching::ONE).unwrap();
+            let start = std::time::Instant::now();
+            for text in texts() {
+                e.embed(&text).unwrap();
+            }
+            start.elapsed()
+        };
+        let one = time(1);
+        let four = time(4);
+        assert!(
+            four < one * 3,
+            "on one core, four threads took {four:?} and one took {one:?}"
+        );
+    })
+    .join()
+    .unwrap();
+}
+
+/// The threads ggml starts from this one inherit its CPU mask.
+#[cfg(target_os = "linux")]
+fn pin_this_thread_to_one_core() {
+    let size = std::mem::size_of::<libc::cpu_set_t>();
+    unsafe {
+        let mut set: libc::cpu_set_t = std::mem::zeroed();
+        assert_eq!(libc::sched_getaffinity(0, size, &mut set), 0);
+        let first = (0..libc::CPU_SETSIZE as usize)
+            .find(|&cpu| libc::CPU_ISSET(cpu, &set))
+            .expect("a CPU this thread may run on");
+        libc::CPU_ZERO(&mut set);
+        libc::CPU_SET(first, &mut set);
+        assert_eq!(libc::sched_setaffinity(0, size, &set), 0);
+    }
+}

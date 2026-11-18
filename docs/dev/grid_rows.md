@@ -7,8 +7,8 @@ projection of its records into one table, **`grid_rows`**, and the
 `unified_grid_and_search_index` applet reads it with one query and no per-provider
 branches.
 
-The index holds one more table the grid does not read: `problems`,
-the `unified_grid_and_search_index` step's own rows about a render store it could not read. The
+The index also holds `problems`, which the grid does not read: the
+`unified_grid_and_search_index` step's own rows about a render store it could not read. The
 applet serves every step's problems at `/problems`, each read where its
 step keeps it, which filters, sorts, groups
 (`/problems/groups`) and pages the way `/search` does, through the keys
@@ -86,7 +86,8 @@ moment.
 
 The keys the search bar takes are declared on `GridRow`'s own columns
 (`#[col(…, search = "datalib_document_id", uuid)]`, and `search(order = …, range = …,
-qmd)` on the struct), and the derive turns them into a `SearchTable`
+ranked)` on the struct; [`etl/macros/README.md`](../../datalib/backend/etl/macros/README.md)
+§"Searched tables"), and the derive turns them into a `SearchTable`
 (`datalib_query::table`) that the `WHERE`, the order and the grouping
 are all built from. The grid's own column ids (`source_ref`, `snippet`)
 map onto `grid_rows` columns in `unified_grid_and_search_index/src/grid_columns.rs`.
@@ -169,10 +170,11 @@ the new shape, and the grid index rebuilds itself from the stores.
 2. Wire it into `datalib-step`: add it to the deps of
    `datalib/backend/datalib_step` and to the dispatch table in
    `datalib/backend/datalib_step/src/dispatch.rs`, then declare its
-   ingest/render step pair in the config and name the render step in
-   `unified_grid_and_search_index`'s `inputs` (the wizard does this for a source it adds,
-   with the source's `embed`); `unified_grid_and_search_index` reads exactly the stores
-   its inputs name.
+   ingest/render step pair in the config. `unified_grid_and_search_index`
+   reads the stores its `inputs` name, which is normally the pattern
+   `*/render_markdown`, so a new source's render is read with no edit
+   there ([`config_model.md`](config_model.md) §"The fan-ins read exactly
+   their `inputs`").
 3. Give it an icon and a catalog entry (`datalib/ui/src/assets/README.md`)
    — the query path itself does not change.
 
@@ -201,9 +203,10 @@ the plain product name ("Claude", "Slack").
 
 True on exactly one row per rendered markdown document — the row
 whose `uuid` is the document's `markdown_uuid` — and false on every
-row inside it. Every row carries a `markdown_uuid`, so this is not
-"has a document"; it is "opening this row opens a whole document
-rather than a place in one". Each renderer says so through
+row inside it. Every row a document carries has a `markdown_uuid`, so
+this is not "has a document"; it is "opening this row opens a whole
+document rather than a place in one". A container's own row, below, has
+none and is not a document. Each renderer says so through
 `GridRowBuilder::is_document`, and a document with any number of them
 other than one fails the render (`document_row` in
 `etl/render/src/grid_index.rs`), so the flag is declared, never
@@ -316,6 +319,19 @@ row of each kind, so grouping by either is one column. Besides its
 parent a row or container may be filed under others, an email thread
 under each of its labels: those are `filings` rows. Why, and what the
 tree is for: `docs/dev/plans/documents_to_blocks.md`.
+
+**Every container is a row.** Most are already a document's row: a
+thread or a chat is the document that holds its messages, under the
+same uuid. The rest (a Slack channel or workspace, an email label or
+account, a project, a calendar, an address book) are written by the
+`unified_grid_and_search_index` step from the `data_nodes` its
+documents carry, one row
+per container, as the newest carrier describes it: its `kind`, its name
+as `conversation_name`, its place in the tree and its upstream id, and
+no author, time or text (`etl/render/src/grid_index/node_rows.rs`).
+Such a row has no `markdown_uuid`, because no document owns it: it is
+kept while any document carries its container and deleted with the
+last. So a container's uuid opens a row like any other.
 
 ### `conversation_uuid`, `preview`, `content_hash`
 
@@ -467,8 +483,9 @@ caption is a `caption:` term.
 
 **A document can be in the grid and not in the search index.** One filed with
 `grid_index::unindexed_doc_md_path`, under `render_markdown/unindexed/`, has
-its rows and opens like any other, and `unified_grid_and_search_index`'s keyword pass leaves
-that folder out (`searchable` in `datalib_step/src/search_index.rs`). Use it for a document that only
+its rows and opens like any other, and is stored with `markdowns.searchable`
+false, which `unified_grid_and_search_index`'s keyword pass, the embeddings
+and the "without vectors" count read. Use it for a document that only
 repeats what others say, so a free-text search does not return it and nothing
 embeds it: Notion's table of contents is the one today. Its row is still found
 by its own columns.

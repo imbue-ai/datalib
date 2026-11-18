@@ -160,8 +160,9 @@ bundled doltlite shell) is kept free of `tauri` the same way, for
 `//datalib/tauri:raw_store_test`, `src/protected.rs` (the protected
 folder, below) for `//datalib/tauri:protected_test`,
 `src/backend_output.rs` (the backend's URL and output) for
-`//datalib/tauri:backend_output_test`, and `src/navigation.rs` (where a window may go) for
-`//datalib/tauri:navigation_test`. Those
+`//datalib/tauri:backend_output_test`, `src/navigation.rs` (where a window may go) for
+`//datalib/tauri:navigation_test`, and `src/zoom.rs` (the zoom level) for
+`//datalib/tauri:zoom_test`. Those
 targets are the only way any of this crate's logic reaches `bazelisk
 test //...`, since the shell is a standalone cargo workspace Bazel does
 not build. Anything in those files that reaches for `tauri` breaks its
@@ -209,9 +210,9 @@ can whatever that Terminal runs. An app gets into its own
 group container without asking when the group's name starts with the
 Team ID that signed it, so only the Imbue-signed app can use this; a
 build from source is asked too, or refused. The option is marked
-experimental, and is meant to stop an agent running shell commands as
-you from reading the library or using its sign-ins, not a program set
-on stealing from you.
+experimental; who it defends against, and who not, is in
+[`security_posture.md`](../../docs/dev/security_posture.md) §"What we
+defend".
 
 > **The keychain does not protect a protected library's sign-ins. Only
 > the folder does.** A library's keychain item lets in the app's Node,

@@ -157,7 +157,7 @@ Inside a feed read file by file (`per_file.rs`), a file whose parse
 panics is skipped the way one that will not parse is, and the rest of
 the feed goes on.
 The export is someone else's HTML and JSON, so one odd entry must not
-stop nine products from syncing; the row is what puts the failure on
+stop the other feeds from syncing; the row is what puts the failure on
 the Manage screen. `feeds_failed` in the step summary counts them. A
 feed that failed stamped nothing, so the next run tries it again and the
 row goes with the run that succeeds.

@@ -744,9 +744,8 @@ besides components:
   points are asked for at about one per pixel: past that the applet
   answers buckets, drawn as each bucket's mean with a band from its
   minimum to its maximum. Hovering reads every line at that time. The
-  chart's legend names each line, and the axis it is on when there are
-  two; a click turns a line off or on, a double-click shows it alone
-  and another shows them all, and its × takes the line off the chart.
+  chart's legend (`PlotLegend`, §"Charts") names each line, and the
+  axis it is on when there are two; its × takes the line off the chart.
   Dragging across the chart zooms in and asks the applet for that
   stretch again at one point per pixel of the plot, so a zoom shows
   finer data rather than stretched buckets; a double-click goes back to
@@ -931,11 +930,8 @@ never a URL — a URL arriving as data would be a capability.
 One layer is joined in the viewer, deliberately: what a chip names. An
 identity cell that is a chip — a person's Author cell, a group's Source
 cell — arrives with what the producer knows, and the viewer asks a
-resolver what it names now: the contact a person linked, the name the
-config gives a group today, a step's status. Those move while the row
-does not, so they are joined where they are live, and one link made in
-a document redraws every grid showing it. How, and what a chip does on
-click: [`chips.md`](chips.md) §"In a grid".
+resolver what it names now ([`chips.md`](chips.md) §"Resolving" says
+why; §"In a grid" how, and what a chip does on click).
 
 `GET /api/manage/rows` and the `unified_grid_and_search_index` applet's `/search` are
 the two producers. The applet resolves the search grid's Source

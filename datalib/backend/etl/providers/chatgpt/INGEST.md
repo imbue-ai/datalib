@@ -77,10 +77,9 @@ repeats the original's (`../chatgpt_render/TRANSLATE.md` §"A message id
 is not unique across conversations"). Stock `sqlite3` cannot open the store;
 `docs/dev/doltlite.md` has the one-pipe export.
 
-The `_bookkeeping` sidecars (`fetched_at_utc`, `attempt_count`,
-`last_error`, `held_version`, …) are per-fetch state, kept out of the
-data tables so that a doltlite diff between two syncs shows only what
-changed upstream. `datalib/backend/etl/README.md` explains the split.
+Per-fetch state (`held_version`, `last_error`, …) is in each table's
+`_bookkeeping` sidecar; `datalib/backend/etl/README.md` explains the
+split.
 
 ## What is owed
 
@@ -372,10 +371,9 @@ works too.
 
 ## Auth + Cloudflare
 
-The downloader never handles ChatGPT cookies. It shells out to
-[`latchkey curl`](https://github.com/imbue-ai/latchkey), which injects
-the `Authorization: Bearer <accessToken>` registered under the
-`chatgpt` service.
+Requests go out as `latchkey curl` ([`docs/dev/latchkey.md`](/docs/dev/latchkey.md)),
+which adds the `Authorization: Bearer <accessToken>` registered under
+the `chatgpt` service.
 
 ### Refreshing the access token
 
@@ -407,8 +405,9 @@ before anything is listed, since that account's listing would prune
 every conversation this one holds.
 
 It works because the `chatgpt` service is registered with latchkey's
-`token-capture` login flow. `latchkey services info chatgpt` says
-whether yours is: `authOptions` lists `browser` if it is, and only
+`token-capture` login flow, which the wizard does on the first sign-in
+(`credentialRegister` in `datalib/ui/src/config/catalog.ts`). `latchkey
+services info chatgpt` says whether yours is: `authOptions` lists `browser` if it is, and only
 `set` if it was registered any other way. latchkey refuses to
 re-register a name that already exists, so switching an old
 registration over means dropping it first:

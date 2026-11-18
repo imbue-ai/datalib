@@ -7,13 +7,14 @@ payload is the object as the API sent it. The render half,
 `todoist_render`, turns each project into one document
 (`../todoist_render/TRANSLATE.md`).
 
-**Nothing here was checked against a live account.** This machine's
-latchkey held no Todoist credential when the provider was written, so
-every request and response shape is taken from Todoist's published
-reference (read 2026-10-26), cited below. The tests replay made-up TNG
-data in those shapes. `tests/todoist_tests/live.rs` is the check to run
-first against a real account (see "Checking it against a real
-account").
+**Most of this comes from Todoist's published reference** (read
+2026-10-26), cited below, not from a live account. The tests replay
+made-up TNG data in those shapes. `tests/todoist_tests/live.rs` has
+passed against one real account holding one project and a few open
+tasks, which confirmed the `/sync` request and the `user`, `projects`
+and `items` shapes, and that no token reaches the store; what that
+account could not show is listed under "Not verified against the live
+API".
 
 ## Signing in
 
@@ -93,9 +94,9 @@ changed or not, so its sidecar is stamped only the first time
 
 ### Volatile fields
 
-A field that moves without anyone editing the record goes into the
-sidecar's `volatile_payload` instead of the payload
-(`src/ingest/schema_raw.rs`):
+Fields that move without anyone editing the record are volatile
+([`etl/README.md`](../../README.md#volatile-fields-split-them-out-dont-diff-them));
+the lists are in `src/ingest/schema_raw.rs`:
 
 - a task's `day_order`, its place in the Today and Upcoming views,
   which moves as other tasks come and go there;
@@ -150,14 +151,13 @@ stored as sent, and render leaves it out.
 
 Every one of these comes from the reference, not from an answer:
 
-- that `/sync` takes a form-encoded `POST` with `resource_types` as a
-  JSON array, and answers with the keys and record shapes above;
+- the shapes of sections, comments, labels, collaborators and a
+  completed task;
 - that an incremental sync reports a task completed since the last one
   as an `items` record with `checked: true`, and a deleted one with
   `is_deleted: true`;
-- that `since` and `until` are accepted as `YYYY-MM-DDTHH:MM:SSZ`, that
-  `until` is exclusive, and that twelve weeks is within the endpoint's
-  three months;
+- that `until` is exclusive, and that twelve weeks is within the
+  endpoint's three months;
 - that `next_cursor` is `null` (or absent) on a window's last page;
 - that a refused token answers HTTP 401 with Todoist's JSON error body;
 - what an expired or unknown `sync_token` answers. The download treats
@@ -173,7 +173,7 @@ Every one of these comes from the reference, not from an answer:
   §"Tasks Completed By Completion Date", §"Pagination",
   §"Request limits", §"Migrating from v9" (task URLs, the `/sync`
   exceptions to the renames).
-- `latchkey services info todoist`, latchkey 3.19.3.
+- `latchkey services info todoist`, on the pinned latchkey.
 
 ## Checking it against a real account
 

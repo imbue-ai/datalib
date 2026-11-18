@@ -245,9 +245,8 @@ says `where the render's time went`, in `load_ms` (the store's answer),
 
 - **Anything about a record** — a fetch that failed, a render that
   could not project a field — goes through `problems`
-  ([`etl/README.md`](/datalib/backend/etl/README.md#problems-flow-downstream-with-the-data)), which
-  travels with the data and reaches the Manage counts and the document
-  banner. A `warn!` reaches nobody who is not reading the log, so do
+  ([`etl/README.md`](../../datalib/backend/etl/README.md#problems-stay-in-the-step-that-found-them)),
+  which reaches the Manage counts and the document banner. A `warn!` reaches nobody who is not reading the log, so do
   not write one beside a problem: the step logs what is new, once, at
   its end — one `problems_recorded` line per kind of problem (stage,
   reason, rule, field) with its `count`, at its loudest row's severity
@@ -255,8 +254,8 @@ says `where the render's time went`, in `load_ms` (the store's answer),
   `sample` or key, which hold the record's own contents. A row that says
   what it said last run is not news: it stays on the Manage row and says
   nothing in the log. A writer that stores a row it made, new or changed
-  (`ProblemRow::is_news`), calls `datalib_problems::note_recorded`; one
-  that copies another step's rows does not. `ingested_tng_test` checks
+  (`ProblemRow::is_news`), calls `datalib_problems::note_recorded`.
+  `ingested_tng_test` checks
   the counts against the rows.
 - **A number** — rows written, requests made, queue depth — is a
   `metric` event, not a sentence with a number in it. The Manage
@@ -377,6 +376,11 @@ What it serves (`http/src/prometheus.rs`):
   source that has not synced in a day.
 - **`datalib_tree_bytes{tree=…}`** and **`datalib_root_bytes`**: what
   the usage sampler last measured.
+- **`datalib_disk_free_bytes`**, **`datalib_disk_size_bytes`**,
+  **`datalib_disk_pause_below_bytes`**, **`datalib_disk_resume_at_bytes`**
+  and **`datalib_disk_low`**: the data root's disk and the config's
+  `[disk_space]` floor (`datalib/backend/dag/README.md` §"When the disk
+  runs low"); `datalib_disk_low` is 1 while the steps are held.
 - **`datalib_applet_rss_bytes{applet=…}`** and
   **`datalib_applet_rss_peak_bytes{applet=…}`**: the resident memory of
   each running applet and every process below it, read every five
@@ -444,7 +448,7 @@ producer), never a record's contents. Log lines do not go out this way.
   is then that. Say what it came to, once, at the end.
 - **Say a standing fact once.** What is still true on the next pass is a
   `problems` row, which a person sees as long as it holds; the log says
-  when it became true. `is_news` in `etl/render/src/grid_index.rs` is how.
+  when it became true. `ProblemRow::is_news` (`datalib_problems`) is how.
 - **Say what happened, not who is saying it.** The `target` column
   already names the module; `"opening the store"`, not
   `"doltlite_raw::open: opening {store}"`. A fan-in that runs once per

@@ -45,6 +45,8 @@ use tokio::sync::Mutex;
 
 use crate::section::{layout, Section};
 
+mod node_rows;
+
 /// Serializes concurrent writers against one doltlite index pool, and
 /// optionally batches every write into one transaction.
 ///
@@ -441,8 +443,8 @@ pub fn schema_hash() -> String {
         index_ddl()
             .chain(remade_indexes())
             .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
-            // What the terms derive, which no DDL shows.
-            .chain([TERMS_SHAPE]),
+            // What the terms and the node rows derive, which no DDL shows.
+            .chain([TERMS_SHAPE, node_rows::NODE_ROWS_SHAPE]),
     )
 }
 
@@ -825,11 +827,11 @@ fn retire_old_files(db_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Copy the WAL back into the index and empty it, then close. Doltlite,
-/// which our binaries link, never does this by itself
-/// (`docs/dev/doltlite.md`), and while the search applet holds the file
-/// open, closing the writer's connection does not either: the `-wal`
-/// would keep every page any pass wrote.
+/// Copy the WAL back into the index and empty it, then close. A
+/// checkpoint by itself leaves the `-wal` at the size its largest
+/// transaction gave it (`docs/dev/doltlite.md`), and while the search
+/// applet holds the file open, closing the writer's connection does not
+/// empty it either.
 pub async fn close_index(pool: SqlitePool) -> Result<()> {
     let checkpoint: Result<(i64, i64, i64), sqlx::Error> =
         sqlx::query_as("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -987,6 +989,14 @@ pub fn doc_md_path(render_root: &Path, markdown_uuid: &str) -> PathBuf {
 /// [`doc_md_path`] for a document free-text search should not return: one
 /// that only repeats what other documents say, at a size that would cost
 /// real embedding time. Its grid row and its link work as usual.
+/// Whether the search indexes a document filed at `md_rel`: every one
+/// but those its renderer filed under `unindexed/`.
+fn searchable(md_rel: &str) -> bool {
+    !Path::new(md_rel)
+        .components()
+        .any(|c| c.as_os_str() == datalib_etl::layout::UNINDEXED_DIR)
+}
+
 pub fn unindexed_doc_md_path(render_root: &Path, markdown_uuid: &str) -> PathBuf {
     doc_md_path(
         &render_root.join(datalib_etl::layout::UNINDEXED_DIR),
@@ -1266,6 +1276,9 @@ async fn retire_source(
         let remade = remove_documents(write_lock, source, &documents, Some(held), progress).await?;
         let mut guard = write_lock.acquire().await?;
         let conn = guard.conn();
+        node_rows::bring_in_line(conn, write_lock, source)
+            .await
+            .with_context(|| format!("drop {source}'s node rows"))?;
         if remade {
             create_search_indexes(conn).await?;
         }
@@ -1589,6 +1602,12 @@ async fn apply_source(
         summary.rows_inserted += rows;
         let mut guard = write_lock.acquire().await?;
         let conn = guard.conn();
+        if !docs.is_empty() || !removed.is_empty() {
+            let (kept, dropped) = node_rows::bring_in_line(conn, write_lock, stanza)
+                .await
+                .with_context(|| format!("write {stanza}'s node rows"))?;
+            tracing::debug!(source = %stanza, kept, dropped, "node rows in line");
+        }
         if remade {
             let started = Instant::now();
             create_search_indexes(conn).await?;
@@ -2080,8 +2099,8 @@ async fn upsert_markdown(
         "INSERT INTO markdowns \
          (markdown_uuid, source_id, provider, kind, title, created_at, modified_at, \
           item_count, md_path, upstream_cursor, renderer_version, bucket_key, section_layout, \
-          content_hash, front) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          content_hash, front, searchable) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&md.markdown_uuid)
     .bind(&md.source_id)
@@ -2098,6 +2117,7 @@ async fn upsert_markdown(
     .bind(section_layout.as_deref().map(layout_json))
     .bind(content_hash)
     .bind((!md.front.is_empty()).then(|| md.front.to_json()))
+    .bind(searchable(md_rel))
     .execute(&mut **conn)
     .await
     .context("insert markdowns row")?;
@@ -2925,8 +2945,8 @@ mod shape_tests {
     async fn holding_one_document(db: &Path) -> SqlitePool {
         let pool = open_index(db).await.unwrap();
         sqlx::query(
-            "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind) \
-             VALUES ('md-1', 'claude_web', 'claude', 'Chat')",
+            "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, searchable) \
+             VALUES ('md-1', 'claude_web', 'claude', 'Chat', 1)",
         )
         .execute(&pool)
         .await
@@ -3621,6 +3641,95 @@ mod source_cursor_tests {
             .await
             .unwrap();
         assert_eq!((count("data_nodes").await, count("filings").await), (0, 0));
+    }
+
+    /// A data node no document holds a row for (a channel, the workspace
+    /// above it) gets a row of its own, from what its carriers say. The row
+    /// stays while any document carries its node and goes with the last; a
+    /// node that is a document's row gets no second one.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_node_without_a_row_gets_one_while_a_document_carries_it() {
+        use datalib_schema::data_nodes::{DataNodeRow, Lineage};
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        let sources = ["s".to_string()];
+        let carrying = |uuid: &str| {
+            let mut d = doc(root, "s", uuid, "body");
+            let workspace = DataNodeRow::new(uuid, "ws", "s", "Workspace")
+                .named(Some("Enterprise".to_string()))
+                .place();
+            let at = Lineage::top().below(&workspace);
+            let channel = DataNodeRow::new(uuid, "chan", "s", "Channel")
+                .named(Some("bridge".to_string()))
+                .place()
+                .under(&at);
+            let at = at.below(&channel);
+            let chat = DataNodeRow::new(uuid, uuid, "s", "Chat").read_together();
+            d.data_nodes = vec![workspace, channel, chat.under(&at)];
+            d
+        };
+        let build = || async {
+            build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+                .await
+                .unwrap();
+        };
+        let node_rows = || async {
+            sqlx::query_as::<
+                _,
+                (
+                    String,
+                    String,
+                    Option<String>,
+                    Option<String>,
+                    Option<String>,
+                ),
+            >(
+                "SELECT uuid, kind, conversation_name, parent_uuid, source_id FROM grid_rows \
+                 WHERE markdown_uuid IS NULL ORDER BY uuid",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        };
+        let rows_of_md_a = || async {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM grid_rows WHERE uuid = 'md-a'")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        };
+
+        render(root, "s", &[carrying("md-a"), carrying("md-b")]);
+        build().await;
+        let s = || Some("s".to_string());
+        assert_eq!(
+            node_rows().await,
+            [
+                (
+                    "chan".to_string(),
+                    "Channel".to_string(),
+                    Some("bridge".to_string()),
+                    Some("ws".to_string()),
+                    s()
+                ),
+                (
+                    "ws".to_string(),
+                    "Workspace".to_string(),
+                    Some("Enterprise".to_string()),
+                    None,
+                    s()
+                ),
+            ]
+        );
+        assert_eq!(rows_of_md_a().await, 1);
+
+        unrender(root, "s", "md-a");
+        build().await;
+        assert_eq!(node_rows().await.len(), 2, "md-b still carries both");
+
+        unrender(root, "s", "md-b");
+        build().await;
+        assert_eq!(node_rows().await, []);
     }
 
     /// A store from a build before #962 lacked `source_contacts`, failed

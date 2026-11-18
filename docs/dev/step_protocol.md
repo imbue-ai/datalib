@@ -59,9 +59,9 @@ the directory `datalib-dag` itself lives in; also settable as
 library's own `<data_root>/system/bin/` second, both ahead of the
 inherited `PATH`. The first is how `datalib-step` is found without an
 absolute path; the second is where a library's own programs go, so
-they travel with it. (They used to go in `~/.datalib/bin`, shared by
-every library; a launch copies any program the config still runs from
-there into `system/bin/`, `http/src/library_bin.rs`.) A first word
+they travel with it; a launch copies a program the config runs from
+`~/.datalib/bin`, which every library once shared, into `system/bin/`
+(`http/src/library_bin.rs`). A first word
 that is a relative path with a `/` in it is relative to the data root,
 the step's working directory; that is how a step runs a package's
 program, `system/packages/<pin>/bin/…` (`packages.md`).
@@ -176,7 +176,8 @@ What that means from your side:
   "checkpoint") lets the steps that read it start on each of its seals
   while it carries on. The downloads datalib ships for Slack, mail,
   Claude, ChatGPT, Notion, Google Drive, Linear, Todoist, Garmin, YoLink,
-  GitHub and GitLab all declare it. You are run again after each later seal, and
+  GitHub, GitLab and Baby Connect all declare it, and so does every
+  `render_markdown`. You are run again after each later seal, and
   once more when the producer ends if it moved since your last run;
   never twice at once. A step that sets `reads = "files"` is not
   started while what it reads is being written.
@@ -504,10 +505,10 @@ Failing there is wrong: `data` means "a human must look at this", and
 the Manage row turns red for a source that has simply not been synced
 yet.
 
-An empty render is safe for the index: `unified_grid_and_search_index` deletes per
-document (`DELETE FROM grid_rows WHERE markdown_uuid = ?`), driven by
-the markdown files actually present, so rendering nothing contributes
-nothing rather than dropping another source's rows.
+An empty render is safe for the index: `unified_grid_and_search_index`
+reads each source's render store on its own and removes only the
+documents that store dropped, so rendering nothing contributes nothing
+rather than dropping another source's rows.
 
 Keep failing, loudly, when the data is *there but wrong*: a store that
 exists and can't be opened, a schema missing tables it should have, a
@@ -852,12 +853,10 @@ emit({"event": "outcome",
 The built-in step types are one binary implementing this protocol,
 run with no arguments of its own. It reads `DATALIB_DAG_FUNCTION` to
 learn what to do — `ingest`, `render_markdown`, `render_time_series`,
-`embed`, `unified_grid_and_search_index`, `embedding_map`
-or `time_series_index`; anything else is
-refused with the list — and `DATALIB_DAG_GROUP_TYPE` to learn which
-provider to run, which `ingest`, `render_markdown` and
-`render_time_series` require and the
-rest ignore. It
+`render_occurrences`, `embed`, `unified_grid_and_search_index`,
+`embedding_map` or `time_series_index`; anything else is refused with
+the list — and `DATALIB_DAG_GROUP_TYPE` to learn which provider to run,
+which the three renders and `ingest` require and the rest ignore. It
 writes the tree `DATALIB_DAG_STEP` names, after checking that it is
 `<DATALIB_DAG_GROUP>/<DATALIB_DAG_FUNCTION>`; a render reads its raw
 store from the first entry of `DATALIB_DAG_INPUTS`. It reads the
@@ -867,8 +866,9 @@ block, …), the render step only the render knobs (nothing for most
 providers; perseus `alignment_pairs`, email
 `outlink_format`/`only_render_labels`) — honors `DATALIB_DAG_NOW`,
 `--reset`, `--migrate`, `--compact` and `--collect`, stops at its next consistent point
-on SIGINT and commits there, and emits versions where it has them (the grid
-index claims the hash of its store's tree). Use it as the
+on SIGINT and commits there, and emits versions where it has them (the
+index reports its generation; the versions are in the [runner's
+README](../../datalib/backend/dag/README.md#versions-reported-by-the-step)). Use it as the
 reference implementation.
 
 ### Running `datalib-step` by hand

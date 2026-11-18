@@ -64,8 +64,9 @@ The `render_time_series` step writes the same data as time series into
   keeps its decimals. `speed` and `altitude` are left out when the
   file has `enhanced_speed` and `enhanced_altitude`, which carry the
   same readings. A file that is held but cannot be read costs that
-  activity's time series and counts as a warning on the step's Manage
-  row.
+  activity's time series and is a warning row, stage `time_series`, in
+  the `problems` table of the step's own store, which the step's Manage
+  row counts.
 
 A time series with no points is not written. Its id is minted from the
 source id, the word `account` and the field's key, or for an

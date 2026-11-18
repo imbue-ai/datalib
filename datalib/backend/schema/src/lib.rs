@@ -31,6 +31,10 @@ pub mod sections {
     include!("sections.rs");
 }
 
+pub mod drawn_pieces {
+    include!("drawn_pieces.rs");
+}
+
 pub mod search_terms {
     include!("search_terms.rs");
 }
@@ -149,6 +153,7 @@ mod tests {
     section_layout TEXT,
     content_hash VARCHAR(64),
     front TEXT,
+    searchable INTEGER NOT NULL,
     PRIMARY KEY (markdown_uuid)
 )"#;
         let derived = super::markdowns::DDL[0].1;

@@ -52,18 +52,15 @@ Six phases, in this order. Every date walk is bounded below by
 `garmin:default_since` so later runs start there too) and above by
 `api.until` or the run's local date, whichever is earlier; a past
 `until` fixes the window, so a mirror of a finished stretch stops
-growing. Either may be an offset (`since = "-90d"`), which the
-processor turns into a date in the run's own offset each run; days it
-slides past stay stored.
+growing. Either may be an offset (`since = "-90d"`; the grammar is
+[`config_model.md`](/docs/dev/config_model.md#time-windows-since-and-until)),
+resolved each run; days it slides past stay stored.
 
 **No walk keeps a cursor.** What a run fetches is what the window lists
 less what the store already holds, worked out from the store each run
-([`data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md#what-is-left-to-fetch-listed-minus-held)). The shared form is
-`datalib_etl_web::owed`: a listing is a key and a version per record; what
-a row is held at is `held_version` in its table's `_bookkeeping`
-sidecar, written in the transaction that stores the row; a record is
-owed while the two differ, or while no fetch has landed. Each kind
-below is one `owed::drain` over a fetcher of its own, one request per
+([`data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md#what-is-left-to-fetch-listed-minus-held)),
+with what a row is held at in its sidecar's `held_version`. Each kind
+below is one `datalib_etl_web::owed::drain` over a fetcher of its own, one request per
 record; days are written 31 to a transaction, details, files and
 bundles 20, and a stop writes what was answered before it.
 
@@ -170,8 +167,8 @@ run, since every phase would share it. The run still exits 0 after a
 failed phase, on purpose: the step driver commits the store and reports
 its problem counts only when the run returns `Ok`, so failing the run
 would hide the rows that say what failed. Every way a run falls short
-is a row in the raw store's `problems` table, which the render step
-carries downstream and the Manage screen counts:
+is a row in the raw store's `problems` table, which the Manage screen
+counts and the problems grid lists, read from this store:
 
 | what | key | when it clears |
 | --- | --- | --- |
@@ -184,8 +181,7 @@ The `listing:` and `phase:` rows of a run that reached its end replace
 the last run's (`datalib_etl::run_problems`), so a listing that answers
 again clears its row without anyone doing anything; a run that was
 stopped or ended on an auth failure adds what it found and clears
-none; a row that persists keeps its `first_seen_at_utc`. A `warn!` alone is never the
-only record.
+none; a row that persists keeps its `first_seen_at_utc`.
 
 Each file edge carries its own record's hash. An earlier build keyed
 every file of a batch under one ref, so each edge of a batch got the

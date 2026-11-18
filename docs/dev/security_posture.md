@@ -132,7 +132,7 @@ That does nothing about the build scripts that run once one starts.
 
 - **Bad code a release compiles itself** (item 1 above). The burn-in and
   `cargo deny` are all that stand in front of it.
-- **The write key sits where crates compile.** `test.yml`'s three jobs
+- **The write key sits where crates compile.** `test.yml`'s jobs
   that run on a push to `main` hold it, and it cannot be hidden from
   build scripts on those runners. Its reach is `main`'s CI.
 - **Nothing can tell a bad entry from a good one.** If a compromise is
@@ -215,8 +215,8 @@ tag ruleset says nothing about this: no tag moves.
   with a certificate Sigstore issues for the job's GitHub OIDC token, so it
   says what GitHub says ran, and it is entered in Sigstore's public
   transparency log, `rekor.sigstore.dev`, which GitHub cannot quietly edit
-  (measured on a `latchkey-curl-shims` attestation; datalib's first one comes
-  with the next tag). GitHub also attests each immutable release
+  (measured on a `latchkey-curl-shims` attestation, and on v0.55.0's,
+  datalib's first). GitHub also attests each immutable release
   (`gh release verify v0.51.0` passes). As we read it, that says what a release
   held when it locked, not who built it, so a writer's own release on an old
   tag would likely get one too (not tried); the build attestation is the one
@@ -232,15 +232,15 @@ tag ruleset says nothing about this: no tag moves.
   runs the check in [`first_time_user.md`](../user/first_time_user.md)
   §"Checking who built what you downloaded" by hand.
 
-### What has not been shown
+### What a tag's run has shown
 
-`publish_release.py` has run only against a stand-in for GitHub's API, so its
-real calls are first tried by a tag's run. So is the `attest` job: its place in
-the job graph and its hand-off to `publish-release` ran on a branch with steps
-that only echo, and its `gh attestation verify` flags against another
-repository's attestation, but the attest action reading the subjects file and
-pushing the image's attestation to ghcr.io first run on a tag. Whether the settings below hold is
-something only those commands can say.
+`publish_release.py` has published every release since v0.52.0. The `attest`
+job first ran on v0.55.0. It read the subjects file, signed an attestation for
+every asset and for both images, pushed the images' attestations to ghcr.io,
+and its own `gh attestation verify` passed on each. The same check run from a
+laptop passes for that release's mac tarball, naming `release.yml` at the tag
+and its commit. Whether the settings below hold is something only those runs
+can say.
 
 ## A bad wheel reaches PyPI
 
@@ -442,8 +442,9 @@ it came from, so it gets its own section.
 
 ### What is still open
 
-- **What Modal keeps.** Whether Modal retains a Sandbox's stdin, stdout or
-  logs after it ends, and for how long, has not been read from Modal's
+- **What Modal keeps.** Whether Modal retains a Sandbox's files (the
+  slice and its vectors are files in it) or logs after it ends, and for
+  how long, has not been read from Modal's
   terms or measured. Until it is, treat anything sent as possibly kept
   by Modal under the person's account.
 - **A driver killed outright leaves its Sandboxes running** until their

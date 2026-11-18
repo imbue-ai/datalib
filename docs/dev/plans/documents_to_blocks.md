@@ -1,8 +1,8 @@
 # Moving from documents to blocks: grouping chosen when a search runs
 
 **Status: proposal (2026-11-17). Steps 1, 2, 3a, 3b and 3c have
-landed (#1765, #1770, #1775, #1782, #1818); nothing else has
-started.** Facts about the tree were checked against
+landed (#1765, #1770, #1775, #1782, #1818); 4a and 5 are under way;
+nothing else has started.** Facts about the tree were checked against
 the code on 2026-11-16; file references are to that tree.
 
 ## Words
@@ -529,13 +529,66 @@ against the eval before the next.
      taken its group's name: its function is
      `unified_grid_and_search_index`, where it was `grid_index`
      (`index_step_name.rs`).
-4. **Grouping when a search runs.** Search ranks items and groups them
-   by the grouping asked for. `is:document` becomes an alias. The eval
-   compares the grouped answer with today's.
-5. **The viewer reads items.** `DocCard` opens what is read together at an
-   item and pages through it, each page drawn by the markdown function
-   from the stored bodies. The `.md` files stop being written, and with
-   them the rule that they are write-only.
+4. **Grouping when a search runs.** In two parts:
+   - **4a. Every data node is a row.** Nearly every container already is
+     a document's row under its own uuid: in one real library, 60,395
+     of 63,976 data nodes, every thread, chat, event and session. The
+     590 that were not are nearly all places: Slack channels, DMs and
+     the workspace, email labels and accounts, Claude Code projects,
+     calendars, repositories, an address book. The index step writes
+     each of those a row from the `data_nodes` its documents carry, kept
+     while any document carries it, with no `markdown_uuid`
+     (`grid_rows.md` §"`parent_uuid`, …"). Still to come in 4a:
+     - **A path on each data node.** The ancestors' ids from the top of
+       its source, so everything under a node is a prefix range, as
+       Lightroom keeps a `genealogy` on its keywords and collections and
+       none on its photos. A block reaches the tree through
+       `parent_uuid`. Counts are worked out when asked, as a node's own
+       children or as everything under it, never stored.
+     - **`is:<kind>`** (`is:channel`, `is:label`), a word each renderer
+       declares for its data nodes, written as a search term. There is no
+       word for every place: `folder` is what a Drive, Lightroom or
+       Messenger folder is called, and `place:` is already where a thing
+       is on the map.
+   - **4b. Ranking blocks, grouping when asked.** Search ranks blocks,
+     keeping every block a ranking finds where it now keeps the best
+     one per document, and rolls them up to the grouping asked for:
+     `group:document` (today's answer, ranked as today, which
+     `is:document` stays an alias for), `group:place` (each hit's
+     `place_uuid`, ranked first by its best block), or `group:none`, a
+     row per block and nothing to land. The eval scores a target per
+     block and per document, and compares the grouped answer with
+     today's.
+5. **The viewer reads items, and the `.md` files go.** Only two things
+   read the files' bytes: the viewer's `/chat/{markdown_uuid}` and search
+   landing (`hits/mapping.rs`), which quotes a hit and picks its row from
+   the file. In order:
+   - **5a. The store spells every document.** `sections` keeps a
+     chat-common item's body alone and no frame piece, so chat-common's
+     fourteen sources could not be read back from the store. A
+     `drawn_pieces` table keeps the rest of each piece as drawn: an
+     item's drawing with its body cut out and where it goes back, and
+     each frame piece whole. The store then spells every document byte
+     for byte, which a step test checks against every fixture document's
+     file. Storing the drawing, rather than drawing it again from facts,
+     is the choice that lets the files go first: what the frame and a
+     message's header show (unread, a branch, reply counts, which
+     message a reaction is on) is not all on the rows yet. Drawing from
+     facts can follow one fact at a time, each checked against the
+     stored drawing.
+   - **5b.** "Unindexed" (Notion's table of contents) is a `markdowns`
+     column, `searchable`, which every reader reads. It is still set from
+     the folder the renderer files the document under, until 5e takes
+     the paths away and the renderer says so itself.
+   - **5c.** The viewer and search landing read the render store, at the
+     commit the grid index read.
+   - **5d.** A command prints or exports a document's markdown: the way
+     out the README and the first-time guide promise as the `.md` files.
+     Tests and fixtures read drawn text.
+   - **5e.** Render stops writing the files, and the existing ones are
+     deleted, each render store kept; the rule that rendered markdown is
+     write-only goes with them. Paging through what is read together, a
+     page at a time, comes after.
 6. **No time buckets.** A bucketed source renders one container per
    chat. The `period` setting goes.
 7. **Embedding context.** Chunks are cut from windows of what is read

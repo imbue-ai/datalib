@@ -67,7 +67,7 @@ back to `mbox` when no live block is set.
 
 ## 2. The thing that makes multiple modes worth having
 
-Three transports writing one schema is only worth the trouble if the same
+Several transports writing one schema are only worth the trouble if the same
 mailbox ingested two ways **dedupes rather than doubles**. That is a
 property of three specific pieces of shared code, not of two
 implementations happening to agree:
@@ -244,7 +244,7 @@ same namespacing discipline as the JMAP path's `jmap:` keys. A run:
    deletes nothing it did not name, and the mirror keeps what a sliding
    `since` leaves behind. Where each scope's last whole walk began is
    `gmail:<account>:listed_since:<scope>` in `sync_scope_state` (no row:
-   from the first message, as every store before `since` was), written
+   from the first message), written
    before the scope is recorded as listed whole. A `since` earlier than
    that walks the scope again, which lists the older mail and makes it
    owed. A later one walks nothing, and so does not cancel what an
@@ -462,11 +462,11 @@ Each of these fails silently: a single run passes.
   configured labels are resolved to Gmail's ids once
   (`LabelIndex::ids_for_names`, which takes a path or an id), and the
   check after `messages.get` compares those ids with the message's
-  `labelIds`. A build that compared the configured strings with the
-  labels' paths dropped every message of a filter written as ids
-  (`INBOX` against `Inbox`), and since a dropped message loses its
-  listing, never asked for them again; raw-store rung 5 has every
-  Gmail store walk its labels once more to list them.
+  `labelIds`. Compared with the labels' paths, a filter written as ids
+  (`INBOX` against `Inbox`) drops every message, and a dropped message
+  loses its listing, so it is never asked for again. Raw-store rung 5
+  has every Gmail store walk its labels once more for what such a
+  filter dropped.
 - **Repeated `labelIds` intersect.** `only_extract_labels` means
   "carrying **any** of these", and `messages.list` cannot express a
   union: asking for three labels at once returns the messages carrying
@@ -610,8 +610,10 @@ account where nothing moved reads no message file and commits nothing.
 - A message the index has and no file holds yet (Mail has not
   downloaded it) is counted in one `phase:apple_mail_files` problem. A
   stored copy of it stays.
-- A part Mail left out and holds no file for is left empty, and counted
-  in `phase:apple_mail_attachments`.
+- A part Mail left out and holds no file for is left empty, and is a
+  warning on its email (`emails:<id>`) naming the parts.
+- A message file that will not read or parse is one
+  `skipped:apple_mail` row naming it.
 - A message the index no longer has, or marks `deleted`, leaves the
   store, unless a file failed to read in that sync. As in the mbox mode,
   narrowing `only_extract_labels` deletes nothing.
@@ -632,9 +634,8 @@ the partial rebuild, the Apple Mail plan). Hermetic tests in
 `tests/email_tests/` replay synthesized Gmail conversations through
 HTTP playback: `gmail_label_union`,
 `gmail_widened_labels_backfill`, `gmail_failed_fetch_is_owed`,
-`gmail_history_replay` and `gmail_interrupt` (a download cut off at each
-request in turn and run again must leave the store an uninterrupted run
-leaves). `apple_mail` syncs a made-up Mail folder three times: once
+`gmail_history_replay` and `gmail_interrupt` (the provider's
+`INGEST.md` §"Tests" says what the interrupt tests require). `apple_mail` syncs a made-up Mail folder three times: once
 whole, once with nothing moved (nothing written), and once after a
 message is read and another deleted in the index. `apple_mail_tng`
 syncs and renders the TNG Mail folder
@@ -666,10 +667,8 @@ for any label. Two of them need more than one run to fail:
 
 ### Known gaps
 
-- **The JMAP surface has no replayed conversation.**
-  `tests/email_tests/jmap_render.rs` builds its input in memory, and
-  `tests/email_tests/playback_roundtrip.rs` is a placeholder. A synth +
-  playback pair matching the slack/notion pattern would let the live
-  test's invariants run in CI.
-- **`INGEST.md` is titled "JMAP Extract"** and documents only that
-  mode.
+- **No recorded JMAP traffic.** The `jmap_*` tests replay answers
+  written by hand in RFC 8621's shapes (`tests/email_tests/jmap_tape.rs`),
+  `tests/email_tests/playback_roundtrip.rs` is a placeholder, and there
+  is no JMAP live test. A synth + playback pair matching the slack/notion
+  pattern would let a live test's invariants run in CI.

@@ -4,12 +4,21 @@
 //
 // Reads `{"hash","prompt"}` lines on stdin and cuts them into slices; runs
 // each slice through `embed-prompts` in a Modal Sandbox of its own, a few
-// at once. On stdout, as each slice returns: its `{"hash","vector","cut"}`
-// lines, or for a slice that failed twice one `{"failed":[…],"error":…}`;
-// as each Sandbox ends, `{"sandbox_ms":…,"ok":<bool>}`, its life from
-// creation to end, what Modal bills; or, when nothing could start, one
-// `{"fatal":…,"sign_in":<bool>}` and exit 1. On stderr, what it is doing, never a prompt's text. SIGTERM ends
-// every Sandbox it started, then the driver.
+// at once. On stdout, as each Sandbox returns: the `{"hash","vector","cut"}`
+// lines it brought back; for the prompts of a slice still missing after a
+// second Sandbox, one `{"failed":[…],"error":…}`; as each Sandbox ends,
+// `{"sandbox_ms":…,"ok":<bool>}`, its life from creation to end, what Modal
+// bills; or, when nothing could start, one `{"fatal":…,"sign_in":<bool>}`
+// and exit 1. On stderr, what it is doing, never a prompt's text. SIGTERM
+// ends every Sandbox it started, then the driver.
+//
+// A slice goes in and its vectors come out as files in the Sandbox, never
+// through the Sandbox's stdin and stdout: on a GPU Sandbox, stdout lost most
+// of a large answer and still ended cleanly (docs/dev/plans/embed_on_modal.md
+// § "Measured on Modal"). So the Sandbox idles, the slice is written to it,
+// `embed-prompts` runs with its stdin and stdout on files, and the answer is
+// read once it has exited. Whatever comes back is checked line by line
+// against what was sent, and what is missing is sent again once.
 //
 // DATALIB_MODAL_SDK_ENTRY names Modal's SDK (npm `modal`, from the runtime
 // tree) or a test's stand-in; DATALIB_MODAL_OPTIONS holds `image`, `gpu`,
@@ -62,38 +71,56 @@ try {
   await fatal(message, /credential|token|unauthenticated|not authorized/i.test(message));
 }
 
-/// One slice's replies, or a throw saying why there are none.
-async function runSlice(n, lines) {
+const WORK = "/tmp/datalib-embed";
+const IN = `${WORK}/in.jsonl`;
+const OUT = `${WORK}/out.jsonl`;
+const ERR = `${WORK}/err.log`;
+
+/// The rows of `out` that answer a prompt of `lines`, each hash once.
+function answers(out, lines) {
+  const wanted = new Set(lines.map((l) => l.hash));
+  const rows = [];
+  for (const text of out.split("\n")) {
+    if (text.length === 0) continue;
+    let row;
+    try {
+      row = JSON.parse(text);
+    } catch {
+      continue;
+    }
+    if (wanted.delete(row?.hash) && Array.isArray(row.vector)) rows.push(row);
+  }
+  return rows;
+}
+
+/// What one Sandbox brought back of `lines`, which may be short of them
+/// all; a throw when its `embed-prompts` did not finish.
+async function runSandbox(lines) {
   const started = Date.now();
   const sb = await client.sandboxes.create(app, image, {
     gpu: options.gpu,
-    command: options.command,
+    command: ["sleep", String(Math.ceil(options.timeoutMs / 1000))],
     timeoutMs: options.timeoutMs,
   });
   live.add(sb);
   let ok = false;
   try {
-    const stdout = sb.stdout.readText();
-    const stderr = sb.stderr.readText();
-    await sb.stdin.writeText(lines.map((l) => l.text).join("\n") + "\n");
-    await sb.stdin.close();
-    const [out, err, code] = await Promise.all([stdout, stderr, sb.wait()]);
+    await sb.filesystem.writeText(lines.map((l) => l.text).join("\n") + "\n", IN);
+    const run = await sb.exec([
+      "sh",
+      "-c",
+      `exec "$0" "$@" < ${IN} > ${OUT} 2> ${ERR}`,
+      ...options.command,
+    ]);
+    const code = await run.wait();
     if (code !== 0) {
+      const err = await sb.filesystem.readText(ERR).catch(() => "");
       const tail = err.trim().split("\n").slice(-3).join(" | ");
       throw new Error(`${sb.sandboxId} exited ${code}: ${tail}`);
     }
-    const rows = out
-      .split("\n")
-      .filter((l) => l.length > 0)
-      .map((l) => JSON.parse(l));
-    const got = new Set(rows.map((r) => r.hash));
-    if (rows.length !== lines.length || !lines.every((l) => got.has(l.hash))) {
-      throw new Error(`${sb.sandboxId} returned ${rows.length} vectors for ${lines.length} prompts`);
-    }
-    const secs = ((Date.now() - started) / 1000).toFixed(1);
-    say(`slice ${n}: ${rows.length} prompts on ${options.gpu} in ${secs} s (${sb.sandboxId})`);
-    ok = true;
-    return rows;
+    const rows = answers(await sb.filesystem.readText(OUT), lines);
+    ok = rows.length === lines.length;
+    return { rows, sandboxId: sb.sandboxId, secs: ((Date.now() - started) / 1000).toFixed(1) };
   } finally {
     live.delete(sb);
     await sb.terminate().catch(() => {});
@@ -101,26 +128,29 @@ async function runSlice(n, lines) {
   }
 }
 
-/// A slice, sent again once if it fails; then its vectors or its failure, out.
+/// A slice: its vectors out as each Sandbox brings them, what is missing
+/// sent once more, and what is missing after that out as failed.
 async function handle(n, lines) {
-  let rows;
+  let pending = lines;
   let error;
   for (const attempt of [1, 2]) {
     try {
-      rows = await runSlice(n, lines);
-      break;
+      const { rows, sandboxId, secs } = await runSandbox(pending);
+      for (const row of rows) {
+        await emit({ hash: row.hash, vector: row.vector, cut: row.cut });
+      }
+      const came = new Set(rows.map((r) => r.hash));
+      const sent = pending.length;
+      pending = pending.filter((l) => !came.has(l.hash));
+      say(`slice ${n}: ${rows.length} of ${sent} prompts on ${options.gpu} in ${secs} s (${sandboxId})`);
+      if (pending.length === 0) return;
+      error = `${sandboxId} returned ${rows.length} vectors for ${sent} prompts`;
     } catch (e) {
       error = String(e?.message ?? e);
       say(`slice ${n}, attempt ${attempt}: ${error}`);
     }
   }
-  if (rows) {
-    for (const row of rows) {
-      await emit({ hash: row.hash, vector: row.vector, cut: row.cut });
-    }
-  } else {
-    await emit({ failed: lines.map((l) => l.hash), error });
-  }
+  await emit({ failed: pending.map((l) => l.hash), error });
 }
 
 const inflight = new Set();

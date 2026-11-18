@@ -244,8 +244,8 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
     insert_rows(&writer, &[chat_row("c-1", "chats"), message]).await;
     sqlx::query(
         "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, md_path, \
-         renderer_version, title) \
-         VALUES ('c-1','test','claude','chat','chats/c-1.md','test-v1','Test conv')",
+         renderer_version, title, searchable) \
+         VALUES ('c-1','test','claude','chat','chats/c-1.md','test-v1','Test conv',1)",
     )
     .execute(&writer)
     .await
@@ -327,8 +327,8 @@ async fn a_document_opens_in_an_index_without_section_layouts() {
         .expect("take the index back to its 0.52 shape");
     sqlx::query(
         "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, md_path, \
-         renderer_version) \
-         VALUES ('c-1','test','claude','chat','chats/c-1.md','test-v1')",
+         renderer_version, searchable) \
+         VALUES ('c-1','test','claude','chat','chats/c-1.md','test-v1',1)",
     )
     .execute(&writer)
     .await
@@ -974,8 +974,8 @@ async fn a_committed_problem_is_read_back_by_query_and_by_document() {
     }
     sqlx::query(
         "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, md_path, \
-         renderer_version, title) \
-         VALUES ('md-1','slack','slack','thread','slack/md-1.md','test-v1','Away team')",
+         renderer_version, title, searchable) \
+         VALUES ('md-1','slack','slack','thread','slack/md-1.md','test-v1','Away team',1)",
     )
     .execute(&writer)
     .await

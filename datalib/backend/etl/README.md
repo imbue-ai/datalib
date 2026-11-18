@@ -114,29 +114,15 @@ on each run, so its rows replace the store's whole
 unchanged. `unified_grid_and_search_index` keeps only its own rows, about a render store
 it could not read, and drops a source's when it reads that store again.
 
-The Manage screen's red and yellow counts are every step's rows, read
-where each step keeps them, counted by whose they are: a fetch-stage
-row on the Download row, a time-series-stage row on
-`render_time_series`'s, an occurrences-stage row on
-`render_occurrences`'s, the index's own row about a render store it
-could not read on `unified_grid_and_search_index`'s, every other row on the render's. A
-group's count is the sum of its steps'. An `info` row is counted
-nowhere: nothing failed, and the problems grid is where it is seen. The
-problems grid gathers the same rows into a table of its read's own and
-runs its search over it, so each count opens exactly the rows it
-counted ([`problem_mutes/README.md`](../problem_mutes/README.md)). A
-reader keeps each file's rows until the file changes, so a refresh
-reopens only what moved. A step still reports whole-store counts of the
-rows it found itself as `problems{severity=…}` metrics, and those are
-what a step that writes no rows (a package's own program) is drawn
-from, in grey.
-
-Every error and warning row counts toward the Dashboard's "Needs you",
-including ones nothing can be done about (a corrupt file, a file no
-feed reads), until a person mutes it in the problems grid. A mute is
-kept apart, by the row's id, in a store nothing rebuilds, and left out
-of the count of the step that found the row as the Manage rows are
-drawn; no step knows of it ([`problem_mutes/README.md`](../problem_mutes/README.md)).
+The Manage screen counts every step's error and warning rows, read
+where each step keeps them, less the ones a person muted. Which step a
+row counts toward, and why a count opens exactly the rows it counted,
+is [`problem_mutes/README.md`](../problem_mutes/README.md). A reader
+keeps each file's rows until the file changes, so a refresh reopens
+only what moved. A step still reports whole-store counts of the rows
+it found itself as `problems{severity=…}` metrics, and those are what
+a step that writes no rows (a package's own program) is drawn from, in
+grey.
 
 ## Volatile fields: split them out, don't diff them
 
@@ -169,12 +155,24 @@ signal, sort it instead.
 
 ## JSONB payloads
 
-`payload` columns store JSON as SQLite JSONB. Inserts wrap the bound text in
-`jsonb(?)`; reads select `json(payload)` so Rust still gets text for
-`serde_json`. Ad-hoc CLI queries need `json(payload)` too.
+`payload` columns store JSON as SQLite JSONB, a BLOB on disk; the Rust
+side still binds and reads text. Inserts wrap the bound text in
+`jsonb(?)`; reads select `json(payload)` so `serde_json` gets text, and
+an ad-hoc CLI query needs `json(payload)` too. Three things are easy to
+get wrong:
 
-`sync_runs.config` / `summary` stay plain TEXT — tiny, single-row, and worth
-being greppable.
+- `ON CONFLICT … DO UPDATE SET payload = excluded.payload` carries the
+  JSONB through the upsert already: don't wrap it again.
+- `dr::load_payloads()` unwraps for you; a hand-written SELECT that
+  returns `payload` calls `json()` itself.
+- `sync_runs.config` / `summary` stay plain TEXT — tiny, single-row, and
+  worth being greppable.
+
+Dropping the `jsonb()` wrapper falls back to text storage with no other
+visible difference, so a provider's tests assert the encoding:
+`SELECT typeof(payload)` must be `blob`. Six providers' tests do
+(email, github, gitlab, google_drive, notion, slack); a new one should
+too.
 
 ## Naming the file to open
 
@@ -204,7 +202,7 @@ about the tree ([locks and writers](/docs/dev/doltlite.md#locks-and-writers)).
 So every open here pins `max_connections(1)` and disables
 `idle_timeout` and `max_lifetime`: sqlx would otherwise retire the very
 connection whose session state is load-bearing, and its replacement
-starts on the default branch — an file_inventory scan on a non-`main` branch
+starts on the default branch — a file_inventory scan on a non-`main` branch
 would silently start writing to `main` after 30 minutes and report
 success.
 
@@ -261,11 +259,11 @@ a refusal that depends on the machine's speed; a second *live* writer in
 the same process is refused after the wait.
 
 Per file, not per root, so two sources with nothing in common can be
-written by two runners at once (#247): the lock says who owns *this*
+written by two runners at once: the lock says who owns *this*
 store, and nothing about the others.
 
-`datalib-file-inventory` and the provider `*_ingest` binaries write through
-`RawDb::open`, so they take the lock; `datalib-dirtree-diff` reads the
+`datalib-file-inventory` writes through `RawDb::open`, so it takes the
+lock; `datalib-dirtree-diff` reads the
 stores it is given through `datalib_pin::open_reader` and writes only
 its own scratch. `datalib-doltlite` is the raw shell and takes no lock
 of *ours*: run it `-readonly` against a store a sync may be writing.
@@ -400,10 +398,8 @@ file and its first commit, and under streaming a consumer opens there
 often enough to matter. The `pin.rs` `Pin` refuses `HEAD` by name.
 
 This is the detached open, one of
-[three ways to read one commit](/docs/dev/doltlite.md#three-ways-to-read-one-commit).
-The one long-lived reader, the search applet, holds a read transaction
-instead (`DoltRepo::pinned`), and moves to the newest `main` with
-`COMMIT; BEGIN` rather than reopening.
+[three ways to read one commit](/docs/dev/doltlite.md#three-ways-to-read-one-commit),
+and the one every reader of a doltlite store here uses.
 
 **The allowlist.** The two-process test measures what a reader may do
 beside a live writer — `dolt_hashof`, `sqlite_master`,
@@ -473,9 +469,13 @@ What that means here:
   `docs/dev/data_architecture_ingestion_practices.md` § "Key a table
   for what one run writes together" and `docs/dev/entity_ids.md`
   § "The layout".
-- **Commit cadence is free until something runs `dolt_gc()`**, and only
-  `sqlite_mirror` and `file_inventory` do today. Without gc every store keeps
-  every transaction's pages regardless.
+- **Commit cadence is free until something runs `dolt_gc()`.** A sync
+  runs it only in `sqlite_mirror` and `file_inventory`; every other store
+  keeps every transaction's pages until a person frees disk
+  (`datalib-dag --free-disk-space`, which hands each step `--collect`,
+  `doltlite_raw::collect_garbage`, or `--compact`:
+  [`step_protocol.md`](../../../docs/dev/step_protocol.md) §"Compact and
+  collect").
 - **A squash deletes commit hashes.** Folding old commits into one
   (`dolt_reset('--soft', <base>)` then `dolt_commit`) lets the next gc
   reclaim what only they reached, but a consumer whose cursor named one
@@ -608,12 +608,13 @@ every `open` would cost bytes whether or not anything was ingested.
 
 ## `_datalib_meta`: which build wrote this store
 
-`open` writes six rows into `_datalib_meta` before the schema commit:
+`open` writes seven rows into `_datalib_meta` before the schema commit:
 `datalib_version`, `git_hash`, `doltlite_version`, `schema_hash`
 (`recorded_shape`: blake3 over `_datalib_meta`'s DDL and the DDL the
 store was opened with, leaving out the lookup indexes
 `open_derived_indexed` was handed, which change no row), `schema_version` (the
-migration ladder position, `0` until there is a ladder) and
+migration ladder position, `0` until there is a ladder),
+`shared_schema_version` (the shared ladder's, above) and
 `store_kind`. Only a row whose value moved is rewritten, so an
 unchanged store costs no commit, and a schema commit that did move
 one is titled `schema: apply DDL (datalib <version>)`. The table is in
@@ -631,7 +632,9 @@ is the record of the program this was the first step of.
 Every entity table is written the same way — `INSERT INTO <t> (id, …cols)
 VALUES (…) ON CONFLICT(id) DO UPDATE SET <every non-id col> = excluded.<col>`.
 No `COALESCE`-style per-column policies: each write is complete, and the
-newest upstream state is by definition the truth.
+newest upstream state is by definition the truth
+([`data_architecture_ingestion.md`](../../../docs/dev/data_architecture_ingestion.md)
+§"One writer per row" has the argument).
 
 A provider declares its row struct and its `BulkUpsertable` impl next to the
 DDL in `schema_raw.rs`, then calls `bulk_upsert_in_tx`, which chunks the rows,

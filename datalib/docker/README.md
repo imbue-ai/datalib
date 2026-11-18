@@ -35,10 +35,9 @@ tarballs at `dist/{amd64,arm64}/`) and invokes `docker buildx` with the
 right platform flags.
 
 ```sh
-# 1. Build for both arches against the LATEST published GitHub Release.
-#    Default version comes from datalib/backend/Cargo.toml
-#    version. Builds into the buildx cache only (no push, no load) — fast
-#    "does it still build?" smoke.
+# 1. Build for both arches against the published GitHub Release whose
+#    version is datalib/backend/Cargo.toml's. Builds into the buildx
+#    cache only (no push, no load) — fast "does it still build?" smoke.
 scripts/build_docker.sh
 
 # 2. Same, but load the host-native arch into your local docker daemon so

@@ -6,7 +6,7 @@ weight, a milestone, a diary entry), the note typed with it, and who
 logged it. Each kind of object gets its own table of `(id, payload)`
 rows, keyed by Baby Connect's id; the payload is the object as the web
 app was sent it. The render half, `baby_connect_render`, turns each
-child's month into one document (`../baby_connect_render/TRANSLATE.md`).
+child into one document (`../baby_connect_render/TRANSLATE.md`).
 
 Baby Connect publishes no API. The download makes the two requests the
 web page at `app.babyconnect.com` makes, as its own scripts make them

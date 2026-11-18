@@ -322,8 +322,8 @@ renews must check the account it got before using it
 The wizard's paste form stores a credential with `latchkey auth set
 <service> -H '<header>'` (or `-u user:password`, or `auth set-nocurl
 <service> <folder>`), and a pasted OAuth client with `latchkey auth
-prepare <service> '<json with the secret>'`. latchkey 3.21.0 takes all
-of these only as arguments, so for the second the command runs, the
+prepare <service> '<json with the secret>'`. The pinned latchkey takes
+all of these only as arguments, so for the second the command runs, the
 secret is on its command line, where another user on the machine can
 read it with `ps`. It is the same exposure as the `auth set … $(pbpaste)`
 a person would type, and the wizard cannot close it from its side:

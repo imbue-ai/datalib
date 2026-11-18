@@ -83,11 +83,9 @@ What it says:
 3. **Floats with few decimals cost what integers cost** (0.55 against
    0.57 bytes a value, latitude and longitude aside), because they are
    stored as integers over a power of ten. That only works when the
-   render computes a value without rounding error. For an altitude
-   stored as 2501 (scale 5, offset 500), `(2501 - 2500) / 5` is 0.2,
-   while `2501 / 5 - 500` is 0.19999999999998863, which has no
-   short decimal form and is stored as 8 raw bytes. Take an offset off
-   before dividing.
+   render computes a value without rounding error: take an offset off
+   before dividing (`docs/dev/time_series.md` §"The chunk encoding" has
+   the example).
 4. **Latitude and longitude need the binary layout.** In degrees they
    have no short decimal form. As raw 8-byte floats, deflated, they
    cost 3.44 bytes a value at 1,024 points a chunk, 36% of all the

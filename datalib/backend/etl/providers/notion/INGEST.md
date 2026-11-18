@@ -38,11 +38,9 @@ stores page objects; the trash pass says which of them are in Notion's
 trash; each loop then fetches what the store lists and does not yet
 hold, through `datalib_etl_web::owed`: the databases and blocks a page
 sits under, a page's body, an attachment's bytes, a page's comments, a
-commented block, a user. What a table holds
-is `held_version` in its `_bookkeeping` sidecar, written in the
-transaction that wrote the content; what is owed is the difference,
-asked of the store each run and never stored. Nothing is marked done
-(docs/dev/data_architecture_ingestion.md, "What is left to fetch").
+commented block, a user. What is owed is worked out the way every
+network source works it out
+([`data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md#what-is-left-to-fetch-listed-minus-held)).
 
 **Listing.** A mirror is what sits under its roots. With `api.roots`
 set, the roots are the pages and databases it names; with it empty —
@@ -401,7 +399,10 @@ came, and drops the search mark, so the first run lists the workspace
 whole once — listing requests only; nothing held is fetched again.
 Rung 2 gives every page held its `tree` row, since a search walk past
 it would not list it again; its databases and blocks are fetched by the
-next run's first loop.
+next run's first loop. Rung 3 makes a held body owed again when it has
+a hole that matters (§"Truncation: two cases, one attribute tells them
+apart"), so a body stored before holes were
+filled in place is read once more.
 
 ## Where a page sits
 

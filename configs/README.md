@@ -2,7 +2,8 @@
 
 [`dag_example.toml`](dag_example.toml) is a complete, commented config:
 a `[[groups]]` entry per source, `[[steps]]` entries declared as
-`group` + `function` (a built-in one names no `command`), and edges
+`group` + `function`, each naming the program it runs in `command`
+(`datalib-step` for a built-in one), and edges
 from each step's declared `inputs`. Its header comment explains the
 shape; [`docs/dev/step_protocol.md`](../docs/dev/step_protocol.md) says
 what a step with a `command` must do.

@@ -1,6 +1,6 @@
 # GitLab Translate
 
-The render step for a `gitlab` source reads the raw store `gitlab-ingest`
+The render step for a `gitlab` source reads the raw store its `ingest` step
 writes and emits **one markdown document per merge request**, plus that
 document's `grid_rows`. The document and its rows are the shared forge
 shape GitHub uses, described in

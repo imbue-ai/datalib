@@ -76,6 +76,13 @@ pub(crate) fn run<E: EmbedPrompt>(
             };
             let prompts: Vec<String> = group.iter().map(|p| p.prompt.clone()).collect();
             let vectors = e.embed_fitted_many(&prompts)?;
+            if vectors.len() != group.len() {
+                bail!(
+                    "the embedder gave {} vectors for {} prompts",
+                    vectors.len(),
+                    group.len()
+                );
+            }
             for (p, (vector, cut)) in group.iter().zip(&vectors) {
                 let line = serde_json::to_string(&Embedded {
                     hash: &p.hash,
@@ -149,6 +156,28 @@ mod tests {
         .unwrap();
         assert_eq!(n, 0);
         assert!(out.is_empty());
+    }
+
+    /// Answers all but the last prompt of each call.
+    struct OneShort;
+
+    impl EmbedPrompt for OneShort {
+        fn embed_fitted_many(&mut self, prompts: &[String]) -> Result<Vec<(Vec<f32>, bool)>> {
+            Ok(prompts[1..].iter().map(|_| (vec![0.5], false)).collect())
+        }
+    }
+
+    /// An embedder that answers fewer prompts than it was given fails the
+    /// run; it is not written as fewer lines and an exit of 0.
+    #[test]
+    fn fewer_vectors_than_prompts_is_an_error() {
+        let mut out = Vec::new();
+        let err = run(lines(3).as_bytes(), &mut out, || Ok(OneShort)).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("2 vectors for 3 prompts"),
+            "{err:#}"
+        );
+        assert!(out.is_empty(), "nothing of a short group is written");
     }
 
     #[test]
