@@ -23,6 +23,18 @@ library.
 "Verified" means the code path was read end to end. "Inferred" means the
 effect on a person follows from the code but was not seen.
 
+## Fixed on this branch
+
+Only fixes that leave less code or fewer mechanisms than before. Nothing
+was added to do them: no cache, no timer, no flag.
+
+| finding | before | now |
+|---|---|---|
+| 1 | a refresh after an index commit blurred the grid and dropped clicks | a refresh leaves the rows usable; only a search a person asked for shows the spinner |
+| 8, rate-limited retry | the runner re-ran a rate-limited step in full 1 s, then 2 s, after its own retries ran out | it fails at once, like `incomplete`, and the next run resumes (`step_protocol.md` §"Failure classification") |
+| 9, filtered search | the ranking was cut to 1,000 before the filters ran | it is cut once, after them, so `from:ann meeting` keeps Ann's matches wherever they ranked |
+| not listed above | the search grid's first search waited for `/api/accounts`, which reads `accounts.json`, a file nothing writes | the route, the map and its formatters are gone |
+
 ## What is already sound
 
 The bones are good, and most of the jank comes from a few places that

@@ -478,7 +478,7 @@ kind* of failure this is, which drives retry policy:
 | `failure` | meaning | scheduler reaction |
 | --- | --- | --- |
 | `transient` | network blip, lock contention | retry, up to 3 attempts in all, 1s then 2s apart |
-| `rate_limited` | HTTP 429 and friends | retry, as for `transient` |
+| `rate_limited` | HTTP 429 and friends | fail fast: the transport's own retries, which honour `Retry-After`, are what ran out, and the next run resumes |
 | `auth` | credentials need a human | fail fast |
 | `permission` | the OS would not let you read a path your settings name (macOS privacy) | fail fast; the app's Manage row offers "Choose folder again" |
 | `data` | bad input; retrying won't help | fail fast (default when absent) |

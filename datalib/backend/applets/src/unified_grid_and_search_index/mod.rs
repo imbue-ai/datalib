@@ -1138,9 +1138,12 @@ async fn entries_kept(
             .map_err(index)?;
         (listing.uuids.into_iter().collect(), listing.at)
     };
+    // Cut after the terms, not before: a row they keep may rank past the
+    // depth among every row that matched.
     let list = ranking
         .into_iter()
         .filter(|(uuid, hit)| hit.document.is_some() || kept.contains(uuid))
+        .take(RANK_DEPTH)
         .map(|(uuid, hit)| results::Entry::new(uuid, Some(hit)))
         .collect();
     Ok((list, at))
@@ -1226,11 +1229,7 @@ async fn fused_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Answer, Search
     };
     let words = part("words", words);
     let meaning = part("meaning", meaning);
-    let mut rankings: [Ranking; 3] = [words, meaning, fields];
-    for r in &mut rankings {
-        // Each cut to the depth fused: a rank past it adds next to nothing.
-        r.truncate(RANK_DEPTH);
-    }
+    let rankings: [Ranking; 3] = [words, meaning, fields];
     let partial = match failed {
         Some(failure) if rankings.iter().all(Vec::is_empty) => return Err(failure),
         Some(SearchFailure::Index(e)) => return Err(SearchFailure::Index(e)),
@@ -1295,7 +1294,6 @@ fn fuse(rankings: &[Ranking], doc_of: &std::collections::HashMap<String, String>
         }
     }
     fused.sort_by(|a, b| b.1.score.total_cmp(&a.1.score));
-    fused.truncate(RANK_DEPTH);
     fused
 }
 
@@ -2701,6 +2699,43 @@ mod tests {
         assert_eq!(uuids(&kept), [a]);
         let narrowed = search(&s, &format!("{a} kind:Email"), None, 10, None).await;
         assert_eq!(uuids(&narrowed), Vec::<&str>::new());
+    }
+
+    /// A filter keeps a row that ranks past the depth among every row the
+    /// words matched: the ranking was once cut to its best `RANK_DEPTH`
+    /// before the filter ran, so `kind:Email` found none of the thousand
+    /// newer chats and dropped the one email with them.
+    #[tokio::test]
+    async fn a_filter_keeps_a_match_ranked_past_the_depth() {
+        let tmp = tempfile::tempdir().unwrap();
+        let email = "00000000-0000-4000-8000-00000000e0e0";
+        let titled = |uuid: &str, at: &str, kind: &str| {
+            document_row(uuid, at, kind)
+                .conversation_name(Some("Holodeck safety review".to_string()))
+                .build()
+                .unwrap()
+        };
+        let mut rows = vec![titled(email, "2026-01-01T09:00:00+00:00", "Email")];
+        rows.extend((0..RANK_DEPTH).map(|i| {
+            titled(
+                &format!("00000000-0000-4000-8000-{i:012}"),
+                "2026-02-01T09:00:00+00:00",
+                "Chat",
+            )
+        }));
+        index_rows(tmp.path(), rows).await;
+        let s = index_over(tmp.path()).await;
+        let every = search(&s, "holodeck", None, 10, None).await;
+        assert_eq!(
+            every.total, RANK_DEPTH as u64,
+            "the depth still caps a search"
+        );
+        assert!(
+            !uuids(&every).contains(&email),
+            "the older email ranks last"
+        );
+        let kept = search(&s, "holodeck kind:Email", None, 10, None).await;
+        assert_eq!(uuids(&kept), [email]);
     }
 
     /// A grid that holds one page asks whether its selected rows are still

@@ -2210,14 +2210,9 @@ mod tests {
             "#),
         );
         let g = Graph::build(vec![spec]).unwrap();
-        // One retry round-trip happens (rate_limited is retryable) —
-        // zero backoff keeps the test fast.
-        let r = Runner::new(root.path()).retry(crate::scheduler::RetryPolicy {
-            backoff: std::time::Duration::ZERO,
-            rate_limited_attempts: 2,
-            ..Default::default()
-        });
-        let rep = r.run(&g).await.unwrap();
+        // A rate-limited step is not invoked again: its own retries,
+        // which honour Retry-After, are what ran out.
+        let rep = Runner::new(root.path()).run(&g).await.unwrap();
         let step = rep.step("bad/raw");
         assert_eq!(
             step.status,
@@ -2225,7 +2220,7 @@ mod tests {
                 kind: FailureKind::RateLimited
             }
         );
-        assert_eq!(step.attempts, 2);
+        assert_eq!(step.attempts, 1);
         assert!(
             step.error
                 .as_deref()

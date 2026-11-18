@@ -25,9 +25,8 @@ use crate::supervisor::record::{LastRun, Record};
 
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
-    /// Max invocations (first try + retries) per failure kind.
+    /// Max invocations (first try + retries) of a transient failure.
     pub transient_attempts: u32,
-    pub rate_limited_attempts: u32,
     /// Sleep before the first retry, doubled each further retry.
     pub backoff: Duration,
 }
@@ -36,7 +35,6 @@ impl Default for RetryPolicy {
     fn default() -> Self {
         Self {
             transient_attempts: 3,
-            rate_limited_attempts: 3,
             backoff: Duration::from_secs(1),
         }
     }
@@ -46,11 +44,12 @@ impl RetryPolicy {
     fn max_attempts(&self, kind: FailureKind) -> u32 {
         match kind {
             FailureKind::Transient => self.transient_attempts,
-            FailureKind::RateLimited => self.rate_limited_attempts,
             // Auth: a human has to act. Data: retrying won't help.
-            // Cancelled: the user asked us to stop. Incomplete: the
-            // step's own retries already ran out.
-            FailureKind::Auth
+            // Cancelled: the user asked us to stop. Incomplete and
+            // RateLimited: the step's own retries, which honour
+            // Retry-After, already ran out.
+            FailureKind::RateLimited
+            | FailureKind::Auth
             | FailureKind::Permission
             | FailureKind::Data
             | FailureKind::Cancelled

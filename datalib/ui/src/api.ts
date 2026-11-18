@@ -537,18 +537,6 @@ export function healthSnapshot(): Health | null {
   return lastHealth;
 }
 
-export type AccountInfo = {
-  provider?: string;
-  label?: string;
-  email?: string | null;
-};
-
-export type AccountsMap = Record<string, AccountInfo>;
-
-export function fetchAccounts(signal?: AbortSignal): Promise<AccountsMap> {
-  return getJson<AccountsMap>("/api/accounts", signal);
-}
-
 // `toast: false` is for a caller that shows the failure where it happened.
 /// `method: "POST"` is for a read that does work first and answers the
 /// same body, like a walk of the data root (`…/refresh`).

@@ -68,8 +68,8 @@ pub use embed::FrameAncestors;
 
 #[derive(Clone)]
 pub struct AppState {
-    /// Data root on disk — the `accounts.json` lookup and the config
-    /// path. The SQL store is reached through [`AppState::repo`].
+    /// Data root on disk, and so the config path. The SQL store is
+    /// reached through [`AppState::repo`].
     pub root: Arc<PathBuf>,
     /// The stores this process owns and writes: filed feedback, disk
     /// usage and remote media.
@@ -227,7 +227,6 @@ fn routes(state: AppState) -> Router {
     let gate = state.api_token.clone();
     Router::new()
         .route("/api/health", get(health))
-        .route("/api/accounts", get(accounts))
         .route("/api/feedback", post(submit_feedback))
         .route("/api/config", get(get_config).put(put_config))
         .route("/api/config/check", post(check_config))
@@ -378,19 +377,6 @@ async fn send_no_referrer(
         axum::http::HeaderValue::from_static("no-referrer"),
     );
     response
-}
-
-async fn accounts(State(s): State<AppState>) -> Json<serde_json::Value> {
-    // `<root>/accounts.json` maps account ids → display names. Nothing
-    // in this tree writes it, so this answers `{}` and the grid shows
-    // the raw value; a provider that wants a readable account resolves
-    // one into `grid_rows.account` at render time, as `claude` does.
-    let path = s.root.join("accounts.json");
-    let v: serde_json::Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    Json(v)
 }
 
 async fn health(State(s): State<AppState>) -> Json<Health> {
