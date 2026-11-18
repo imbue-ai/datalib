@@ -237,7 +237,6 @@ metric per day.
 | todoist `api` | `since`: the day the account joined | a task's completion time | stays |
 | garmin `api` | `since`: a year before the first run, recorded; `until`: today | days | stays |
 | baby_connect `api` | `since`: the eldest child's birthday; `until`: today | days | stays |
-| baby_connect `api` | `since`: the eldest child's birthday; `until`: today | days | stays |
 | calendar `google`, `fastmail`, `caldav` | `since`, `until`: no bound | events with any part inside | **dropped**: a windowed calendar is listed whole every run, and an event the listing no longer names goes (`calendar/INGEST.md` §"A window") |
 | calendar `calendly` | `since`, `until`: no bound | a meeting's start | **dropped**, as above |
 

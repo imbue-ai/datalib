@@ -172,7 +172,8 @@ older shape the server rewrites itself as soon as it reads the file,
 keeping the old text as `config.toml.bak`, so re-read the config after
 writing one: a `qmd_index`, `keyword_index` or `qmd_aggregator` step
 (each source's `embed` and `unified_grid_and_search_index` do that
-work), a `grid_index` step (the index step's old function), the index
+work, and a source that was not keyword-indexed is listed in the
+index step's `params.not_searched`), a `grid_index` step (the index step's old function), the index
 group under an earlier name (`unified_index`, `unified_document_index`),
 a lock named `qmd_embed` (now `embedder`), and an id with capitals in it
 (every id is lower case, since each names a folder, and the server
