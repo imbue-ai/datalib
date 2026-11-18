@@ -96,7 +96,7 @@ RUN npm install -g "latchkey@${LATCHKEY_VERSION}" && npm cache clean --force
 # The cache lands at /root/.cache/ms-playwright. GitHub forces
 # HOME=/github/home for container steps, so `test.yml` points the suite
 # at it with `--test_env=PLAYWRIGHT_BROWSERS_PATH`.
-ARG PLAYWRIGHT_VERSION=1.65.0
+ARG PLAYWRIGHT_VERSION=1.65.1
 RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium webkit \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 
