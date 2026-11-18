@@ -5,6 +5,17 @@ landed (#1765, #1770, #1775, #1782, #1818); nothing else has
 started.** Facts about the tree were checked against
 the code on 2026-11-16; file references are to that tree.
 
+## Words
+
+| word | means |
+|---|---|
+| **block** | one piece of content: one thing a person or program wrote, with one author, one time and a body (a message, an email, a comment, an event, a tool call, a page's own text). What search ranks and a hit lands on. A `grid_rows` row; the text below and the search index's code call it an **item**. |
+| **data node** | a node of the tree that holds blocks and other data nodes: a chat, a thread, a channel, a label, a page, a session. It often has a name and other metadata (its kind, its upstream id), and most of what it says is in the blocks it holds. A `data_nodes` row. Many data nodes are **places**: ones a person browses or filters by, such as a channel, a mailbox or a workspace. |
+| **document** | a group of blocks that are often read together: a thread, a chat, a page. Today it is also the markdown file render writes for it, which step 5 stops writing. |
+
+The text below also calls a container **read together**. When that holds
+is not settled; see §"Open questions".
+
 ## The problem
 
 Every record datalib renders goes into a markdown file, and the file
@@ -146,12 +157,13 @@ differently, and no fixed set of levels fits them all:
 | Google Drive | folder › … › file › comment thread › reply |
 | Claude Code | project › session › sub-agent session › message |
 
-So every **data node** (an item, or a container that holds items; "node"
-below, never a DAG step, and the `data_nodes` table) names **one
-parent and how it sorts among its siblings**, and that is all the tree
-stores. A container is a row too, with a uuid a person can open; some
-containers have text of their own (a Notion page, a Slack thread's
-first message) and some have none (an email thread). "The children of
+So every item, and every **data node** (a container that holds items;
+"node" below, never a DAG step, and a row of the `data_nodes` table),
+names **one parent and how it sorts among its siblings**, and that is
+all the tree stores. A container has a uuid a person can open. What
+some containers say is an item inside them (a Notion page's own text,
+a Slack thread's first message); some say nothing of their own (an
+email thread). "The children of
 X, in order" is one indexed query on `(parent, sort key, uuid)` and needs no
 stored list.
 
@@ -543,6 +555,14 @@ against the eval before the next.
 
 ## Open questions
 
+- **What is read together.** Today each kind of container says so once,
+  at render: a thread, a chat, a page, and in a chat cut into months,
+  each month's document. Whether a Slack channel's messages are read
+  together depends on how the channel is used: a thready channel's
+  threads are, and a flat channel's run of messages may not be. Steps
+  4 (grouping), 6 (no time buckets) and 7 (embedding windows) all lean
+  on the answer. Until it is settled, a search can group by document or
+  by place.
 - **How wide an embedding window is.** How many items or bytes of a
   thread, and does it overlap the next? The eval decides.
   [`multimodal_retrieval.md`](multimodal_retrieval.md) §5.1 argues for
