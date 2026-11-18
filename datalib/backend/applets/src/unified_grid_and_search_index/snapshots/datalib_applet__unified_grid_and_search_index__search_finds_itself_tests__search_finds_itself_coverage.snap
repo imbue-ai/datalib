@@ -47,9 +47,6 @@ fields: from
   never: datalib, garmin, ship-air, tng_contacts, tng_contacts-diff, tng_pdfs, yolink
 fields: id
   checked: beeper 24, chatgpt-api 33, claude-api 82, claude-code 30, codex 41, datalib 260, facebook 71, garmin 16, github 11, gitlab 10, google-drive 7, google-takeout 74, linkedin 18, notion 9, ship-air 3, signal 15, slack 42, slack-diff 13, sms-backup-restore 14, tng_calendar 11, tng_contacts 12, tng_contacts-diff 5, tng_email 18, tng_pdfs 9, whatsapp 29, yolink 5
-fields: is
-  checked: beeper 5, chatgpt-api 5, claude-api 8, claude-code 1, codex 1, facebook 19, github 1, gitlab 1, google-takeout 18, linkedin 3, signal 2, slack 7, sms-backup-restore 4, tng_calendar 2, tng_contacts 3, tng_email 4, whatsapp 5
-  never: datalib, garmin, google-drive, notion, ship-air, slack-diff, tng_contacts-diff, tng_pdfs, yolink
 fields: label
   checked: google-takeout 6, tng_email 14
   never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-drive, linkedin, notion, ship-air, signal, slack, slack-diff, sms-backup-restore, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, whatsapp, yolink

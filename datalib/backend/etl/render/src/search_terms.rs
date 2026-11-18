@@ -9,10 +9,9 @@
 
 use anyhow::{Context, Result};
 use datalib_schema::search_terms::{
-    decode_supplied, search_terms_of, SearchTerm, SearchTermKind, SearchTermSource, IS_FOLDER,
+    decode_supplied, search_terms_of, SearchTerm, SearchTermSource,
 };
 use sqlx::SqliteConnection;
-use std::collections::HashSet;
 
 /// Rewrite the terms of the grid rows `uuids` names, as `grid_rows` holds
 /// them on `conn` now: a row it no longer holds only loses its terms.
@@ -29,7 +28,6 @@ pub(crate) async fn write_rows(conn: &mut SqliteConnection, uuids: &[String]) ->
 
 async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usize> {
     let rows = rows_by_uuid(conn, uuids).await?;
-    let places = places_among(conn, uuids).await?;
     // The batch is staged first, so the dictionary tables fill by
     // joins rather than a lookup per term. `dropped` holds the values
     // the removed rows used: the only ones that can have lost their
@@ -64,7 +62,7 @@ async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usi
             q.execute(&mut *conn).await?;
         }
     }
-    let terms = every_term(&rows, &places)?;
+    let terms = every_term(&rows)?;
     for chunk in terms.chunks(CHUNK) {
         // Audited: four placeholders per term, every value bound.
         let sql = format!(
@@ -257,40 +255,11 @@ async fn rows_by_uuid(
     Ok(out)
 }
 
-/// Which of `uuids` are data nodes that are places, by any document's
-/// account of them: those answer to `is:folder`.
-async fn places_among(conn: &mut SqliteConnection, uuids: &[String]) -> Result<HashSet<String>> {
-    let mut out = HashSet::new();
-    for chunk in uuids.chunks(CHUNK) {
-        // Audited: a placeholder per value, every value bound.
-        let sql = format!(
-            "SELECT DISTINCT uuid FROM data_nodes WHERE is_place = 1 AND uuid IN ({})",
-            placeholders(chunk.len(), 1)
-        );
-        let mut q = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
-        for uuid in chunk {
-            q = q.bind(uuid);
-        }
-        out.extend(
-            q.fetch_all(&mut *conn)
-                .await
-                .context("read which changed rows are places")?,
-        );
-    }
-    Ok(out)
-}
-
-/// Every term of `rows`: what each derives from its columns, what its
-/// render supplied, and `is:folder` for those `places` names.
-fn every_term<'a>(
-    rows: &'a [SearchTermSource],
-    places: &HashSet<String>,
-) -> Result<Vec<(&'a SearchTermSource, SearchTerm)>> {
+/// Every term of `rows`: what each derives from its columns, then what
+/// its render supplied.
+fn every_term(rows: &[SearchTermSource]) -> Result<Vec<(&SearchTermSource, SearchTerm)>> {
     let mut out = Vec::new();
     for row in rows {
-        if places.contains(&row.uuid) {
-            out.push((row, SearchTerm::new(SearchTermKind::Is, IS_FOLDER)));
-        }
         let supplied = match row.supplied_terms.as_deref() {
             Some(json) => decode_supplied(json)
                 .map_err(anyhow::Error::msg)

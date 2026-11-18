@@ -12,6 +12,12 @@ use datalib_schema::providers::Provider;
 
 use super::{put_grid_row, WriteLock};
 
+/// How the index derives the node rows. It is part of the grid index's
+/// shape, as the terms' is, and an index in another shape is built again:
+/// change it whenever what a node row holds, or which nodes get one,
+/// changes.
+pub(super) const NODE_ROWS_SHAPE: &str = "1";
+
 /// One carrier's account of a node that no document holds a row for, with
 /// what that carrier's document row says of the source.
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]

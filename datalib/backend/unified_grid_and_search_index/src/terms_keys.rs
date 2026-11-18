@@ -95,14 +95,6 @@ const fn plain(
     }
 }
 
-/// `is:` for a word that is no flag column: what kind of node a row is,
-/// as its terms say. Not in [`TERMS_KEYS`], since `is:document` is a
-/// column and is read first.
-pub const IS_NODE: TermsKey = plain("is", &[], &[Kind::Is]);
-
-/// The words [`IS_NODE`] takes.
-pub const IS_NODE_WORDS: &[&str] = &[datalib_schema::search_terms::IS_FOLDER];
-
 /// `author:` and `author_handle:` were `grid_rows` columns' keys, exact
 /// on the name or the handle; they are `from:` now, which reads both.
 pub const TERMS_KEYS: &[TermsKey] = &[

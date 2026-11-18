@@ -329,9 +329,7 @@ as `conversation_name`, its place in the tree and its upstream id, and
 no author, time or text (`etl/render/src/grid_index/node_rows.rs`).
 Such a row has no `markdown_uuid`, because no document owns it: it is
 kept while any document carries its container and deleted with the
-last. So a container's uuid opens a row like any other. A container
-that is a place answers `is:folder`, a search term the index writes for
-it (`SearchTermKind::Is`), whether or not it is also a document's row.
+last. So a container's uuid opens a row like any other.
 
 ### `conversation_uuid`, `preview`, `content_hash`
 

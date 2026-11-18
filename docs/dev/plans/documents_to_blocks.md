@@ -538,10 +538,7 @@ against the eval before the next.
      calendars, repositories, an address book. The index step writes
      each of those a row from the `data_nodes` its documents carry, kept
      while any document carries it, with no `markdown_uuid`
-     (`grid_rows.md` §"`parent_uuid`, …"). A place answers `is:folder`, a
-     search term the index writes (`SearchTermKind::Is`), so `is:` reads
-     a column first (`is:document`) and then the terms. Still to come in
-     4a:
+     (`grid_rows.md` §"`parent_uuid`, …"). Still to come in 4a:
      - **A path on each data node.** The ancestors' ids from the top of
        its source, so everything under a node is a prefix range, as
        Lightroom keeps a `genealogy` on its keywords and collections and
@@ -549,12 +546,15 @@ against the eval before the next.
        `parent_uuid`. Counts are worked out when asked, as a node's own
        children or as everything under it, never stored.
      - **`is:<kind>`** (`is:channel`, `is:label`), a word each renderer
-       declares for its data nodes, written as the same term.
+       declares for its data nodes, written as a search term. There is no
+       word for every place: `folder` is what a Drive, Lightroom or
+       Messenger folder is called, and `place:` is already where a thing
+       is on the map.
    - **4b. Ranking blocks, grouping when asked.** Search ranks blocks,
      keeping every block a ranking finds where it now keeps the best
      one per document, and rolls them up to the grouping asked for:
      `group:document` (today's answer, ranked as today, which
-     `is:document` stays an alias for), `group:folder` (each hit's
+     `is:document` stays an alias for), `group:place` (each hit's
      `place_uuid`, ranked first by its best block), or `group:none`, a
      row per block and nothing to land. The eval scores a target per
      block and per document, and compares the grouped answer with

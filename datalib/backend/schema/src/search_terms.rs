@@ -83,14 +83,7 @@ pub enum SearchTermKind {
     /// above it, and its whole path: a photo's albums. What
     /// `collection:` finds it by.
     Collection = 21,
-    /// What kind of node the row is, in a word `is:` takes: `folder` for a
-    /// data node a person browses or filters by.
-    Is = 22,
 }
-
-/// The [`SearchTermKind::Is`] word of a data node that is a place: what
-/// `is:folder` finds.
-pub const IS_FOLDER: &str = "folder";
 
 impl SearchTermKind {
     pub fn as_str(self) -> &'static str {
@@ -139,8 +132,7 @@ impl SearchTermKind {
             SearchTermKind::Author
             | SearchTermKind::Name
             | SearchTermKind::Participant
-            | SearchTermKind::Rating
-            | SearchTermKind::Is => 1,
+            | SearchTermKind::Rating => 1,
         }
     }
 
@@ -167,8 +159,7 @@ impl SearchTermKind {
             | SearchTermKind::Keyword
             | SearchTermKind::Pictured
             | SearchTermKind::Rating
-            | SearchTermKind::Collection
-            | SearchTermKind::Is => false,
+            | SearchTermKind::Collection => false,
         }
     }
 }
@@ -299,7 +290,7 @@ fn is_dashed_uuid(s: &str) -> bool {
 /// is part of the grid index's shape, and an index in another shape is
 /// built again, so change it whenever either changes. A kind a render
 /// starts to supply needs no change: it arrives as its rows are written.
-pub const TERMS_SHAPE: &str = "11";
+pub const TERMS_SHAPE: &str = "10";
 
 /// The search terms' tables in the grid index, dictionary-encoded: each grid row once in
 /// `rows`, each distinct value once in `vals`, and a term is three

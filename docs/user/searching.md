@@ -97,7 +97,6 @@ for every document of a source; `--document <id>` for one, `--at
 | `key:*` / `-key:*` | rows with any value there / with none |
 | `before:2026-10-01`, `after:2026-10-01T09:00` (`since:` is `after:`) | rows last active before or after then — a thread's last message, a page's last edit, an event's start. See "Writing a time" below |
 | `is:document` / `-is:document` | one row per document (a thread, a conversation, a page) / only the rows inside documents |
-| `is:folder` / `-is:folder` | what things are filed in: a Slack channel, an email label, a project, a calendar, an address book / everything else |
 
 The keys for what a row is and where it lives are `source:` (a
 source by its id in the config; also `source_id:`), `kind:` (`Email`,
