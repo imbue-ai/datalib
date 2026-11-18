@@ -12,6 +12,7 @@ mod final_message;
 mod index_text;
 mod interrupt;
 mod item_table;
+mod markdown_command;
 mod no_op_ingest;
 mod offline;
 mod probe;

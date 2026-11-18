@@ -724,9 +724,10 @@ is worth knowing the exit before you need it. The markdown is already
 in an open format, and one command turns each database into one:
 
 - **The markdown.** `<group>/render_markdown/` is a tree of ordinary
-  UTF-8 `.md` files, one per conversation or document. Copy it
-  anywhere; every text editor and search tool on your machine already
-  reads it.
+  UTF-8 `.md` files, one per conversation or document, and
+  `datalib-step markdown <data root> --out <folder>` writes the same
+  text, a file per document, wherever you like. Every text editor and
+  search tool on your machine already reads it.
 - **The databases.** The `.doltlite_db` files are
   [doltlite](https://github.com/dolthub/doltlite) stores — SQLite's SQL
   engine over a versioned, content-addressed file format, which is what

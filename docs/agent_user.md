@@ -450,9 +450,13 @@ Pick the surface that fits the question:
   Cross-document links: [`docs/dev/edges.md`](dev/edges.md).
   doltlite recipes (history, diffs, a crashed writer):
   [`docs/dev/doltlite.md`](dev/doltlite.md).
-- **Markdown** — `<group>/render_markdown/` holds human-readable
-  markdown per conversation/document. Read files directly, or serve
-  them via `GET /applet/unified_grid_and_search_index/chat/{markdown_uuid}`.
+- **Markdown** — each conversation or document as human-readable
+  markdown: `datalib-step markdown <data root> --source <group> --document
+  <markdown_uuid>` prints one, `--out <folder>` writes every one as
+  `<folder>/<group>/<markdown_uuid>.md`, and `GET
+  /applet/unified_grid_and_search_index/chat/{markdown_uuid}` serves it.
+  The files under `<group>/render_markdown/` are going away; read the
+  text through one of these.
 - **Raw stores** — the per-source doltlite stores under
   `<group>/ingest/` keep what the service sent, when the rendered form
   isn't enough: Slack's and Google Calendar's JSON, Gmail's original
