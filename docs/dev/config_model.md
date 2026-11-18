@@ -140,7 +140,11 @@ package's programs by its path under the data root, in its `command`;
   GPUs, and a run that owes fewer embeds them here; `0` sends every run.
   `check-params` refuses anything else. What leaves and what guards it:
   `docs/dev/security_posture.md` § "What leaves the machine for Modal";
-  how the step does it: `docs/dev/plans/embed_on_modal.md`.
+  how the step does it: `docs/dev/plans/embed_on_modal.md`. The
+  top-level `[modal]` table holds what every such step shares:
+  `max_sandboxes`, how many Modal Sandboxes one step runs at once (100
+  when omitted). A step spreads what it owes over that many, at least
+  256 chunks each.
 - The search is the exception to "a step writes its own tree": each
   source's `embed` writes its vectors to the one inference cache,
   `unified_grid_and_search_index/search_index/inference_cache.sqlite`,

@@ -459,13 +459,15 @@ async fn embed_on_modal(
             "this machine is not signed in to Modal"
         ));
     }
-    let driver = (on_modal.driver)()?;
+    let mut driver = (on_modal.driver)()?;
+    driver.options.slice = modal::slice_for(owed, driver.options.sandboxes, driver.options.slice);
     tracing::info!(
         owed,
         threshold,
         image = %driver.options.image,
         gpu = %driver.options.gpu,
         sandboxes = driver.options.sandboxes,
+        slice = driver.options.slice,
         "embedding on Modal: {owed} chunks owed, at least `{}` of {threshold}",
         modal::PARAM
     );

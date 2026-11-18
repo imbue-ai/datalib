@@ -90,6 +90,9 @@ impl Shrink {
 pub const ENV_CHECKPOINT_CADENCE: &str = datalib_env::DATALIB_DAG_CHECKPOINT_CADENCE;
 /// How much a render reads at once — see `config::RenderPages`.
 pub const ENV_RENDER_PAGES: &str = datalib_env::DATALIB_DAG_RENDER_PAGES;
+/// The most Modal Sandboxes an `embed` runs at once — see
+/// `config::ModalSettings`.
+pub const ENV_MODAL_MAX_SANDBOXES: &str = datalib_env::DATALIB_DAG_MODAL_MAX_SANDBOXES;
 
 /// The flag a step's params arrive on: the path of a JSON file holding
 /// the entry's `params` subtree. A file rather than an argument because

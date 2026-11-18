@@ -96,6 +96,37 @@ pub(crate) fn not_signed_in(group: &str, owed: usize, threshold: u64, detail: &s
     )
 }
 
+/// Sandboxes at once when the config's `[modal]` names no number. Modal's
+/// own concurrency limit for the account may hold a run to fewer; the
+/// rest wait their turn there.
+pub(crate) const DEFAULT_SANDBOXES: usize = 100;
+/// The most prompts one Sandbox is handed: a minute or two of a T4.
+const MOST_A_SLICE: usize = 4096;
+/// The fewest a Sandbox is started for, so its start-up (the image, the
+/// model's load) stays a small part of what it is paid for.
+const FEWEST_A_SLICE: usize = 256;
+
+/// How many prompts each Sandbox gets: `owed` spread over every Sandbox
+/// allowed, but no fewer than [`FEWEST_A_SLICE`] and no more than `most`.
+pub(crate) fn slice_for(owed: usize, sandboxes: usize, most: usize) -> usize {
+    owed.div_ceil(sandboxes.max(1))
+        .max(FEWEST_A_SLICE)
+        .min(most)
+}
+
+fn sandboxes(said: Option<String>) -> usize {
+    let Some(said) = said else {
+        return DEFAULT_SANDBOXES;
+    };
+    match said.trim().parse::<usize>() {
+        Ok(n) if n > 0 => n,
+        _ => {
+            tracing::warn!(said = %said, "not a number of Modal Sandboxes; using {DEFAULT_SANDBOXES}");
+            DEFAULT_SANDBOXES
+        }
+    }
+}
+
 /// Overrides for measuring: the image, the GPU and how many Sandboxes run
 /// at once. Read by the step, never by a sync's runner.
 pub(crate) const IMAGE_ENV: &str = "DATALIB_MODAL_IMAGE";
@@ -114,9 +145,11 @@ pub(crate) struct Options {
     pub(crate) command: Vec<String>,
     /// The Modal App the Sandboxes are filed under.
     pub(crate) app: String,
-    /// Prompts per Sandbox: a minute or two of a T4.
+    /// Prompts per Sandbox: [`slice_for`] what is owed, at most
+    /// [`MOST_A_SLICE`].
     pub(crate) slice: usize,
-    /// Sandboxes at once.
+    /// Sandboxes at once: the config's `[modal] max_sandboxes`, else
+    /// [`DEFAULT_SANDBOXES`].
     pub(crate) sandboxes: usize,
     /// One Sandbox's longest life: the image's pull, the model's load,
     /// and a slice of long prompts, with room.
@@ -145,11 +178,10 @@ impl Options {
             .map(String::from)
             .to_vec(),
             app: "datalib-embed".to_string(),
-            slice: 4096,
-            sandboxes: var(SANDBOXES_ENV)
-                .and_then(|v| v.parse().ok())
-                .filter(|n| *n > 0)
-                .unwrap_or(10),
+            slice: MOST_A_SLICE,
+            sandboxes: sandboxes(
+                var(SANDBOXES_ENV).or_else(|| var(datalib_env::DATALIB_DAG_MODAL_MAX_SANDBOXES)),
+            ),
             timeout_ms: 15 * 60 * 1000,
         }
     }
@@ -527,6 +559,27 @@ mod tests {
             ..options
         };
         assert!(summary(1, &usage, &unpriced).ends_with("no price known for a Z9 GPU"));
+    }
+
+    /// A step's chunks spread over every Sandbox allowed, none started
+    /// for fewer than 256 or handed more than the most a slice holds.
+    #[test]
+    fn a_slice_spreads_what_is_owed_over_the_sandboxes() {
+        assert_eq!(slice_for(4429, 100, MOST_A_SLICE), 256);
+        assert_eq!(slice_for(100_000, 100, MOST_A_SLICE), 1000);
+        assert_eq!(slice_for(1_000_000, 100, MOST_A_SLICE), MOST_A_SLICE);
+        assert_eq!(slice_for(4429, 10, MOST_A_SLICE), 443);
+        assert_eq!(slice_for(10, 100, MOST_A_SLICE), 256);
+        assert_eq!(slice_for(5, 100, 2), 2, "a test's tiny slices stand");
+    }
+
+    #[test]
+    fn the_number_of_sandboxes_is_the_configs_or_the_default() {
+        assert_eq!(sandboxes(None), DEFAULT_SANDBOXES);
+        assert_eq!(sandboxes(Some("40".into())), 40);
+        for bad in ["0", "-3", "lots", ""] {
+            assert_eq!(sandboxes(Some(bad.into())), DEFAULT_SANDBOXES, "{bad:?}");
+        }
     }
 
     #[test]

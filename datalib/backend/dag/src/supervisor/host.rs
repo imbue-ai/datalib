@@ -14,7 +14,9 @@ use tokio::sync::watch;
 use crate::config::DagConfig;
 use crate::run_state::RunState;
 use crate::runs_sink::RunStoreSink;
-use crate::subprocess::{ENV_CHECKPOINT_CADENCE, ENV_NOW, ENV_RENDER_PAGES, ENV_RUN_ID};
+use crate::subprocess::{
+    ENV_CHECKPOINT_CADENCE, ENV_MODAL_MAX_SANDBOXES, ENV_NOW, ENV_RENDER_PAGES, ENV_RUN_ID,
+};
 use crate::supervisor::announce::{Listener, CONFIG_CHANGED};
 use crate::supervisor::store::{RequestOutcome, RequestRow, Store, WipeKind, WipeRow};
 use strum::VariantArray;
@@ -145,6 +147,9 @@ pub fn step_env(
     }
     if let Some(pages) = cfg.render_pages {
         vars.insert(ENV_RENDER_PAGES.into(), pages.encode());
+    }
+    if let Some(n) = cfg.modal.and_then(|m| m.max_sandboxes) {
+        vars.insert(ENV_MODAL_MAX_SANDBOXES.into(), n.to_string());
     }
     // A `RUST_LOG` already in the environment is a person's choice and
     // wins; else the config's level.
@@ -650,5 +655,18 @@ buckets = 200
         let without = crate::config::parse("").unwrap();
         let env = step_env(&without, None, &[], "now", "run").unwrap();
         assert!(!env.vars.contains_key(ENV_RENDER_PAGES));
+    }
+
+    /// A config's `[modal]` reaches every step, and a config without one
+    /// leaves the step its default.
+    #[test]
+    fn the_configs_modal_sandboxes_reach_every_step() {
+        let with = crate::config::parse("[modal]\nmax_sandboxes = 100\n").unwrap();
+        let env = step_env(&with, None, &[], "now", "run").unwrap();
+        assert_eq!(env.vars[ENV_MODAL_MAX_SANDBOXES], "100");
+
+        let without = crate::config::parse("").unwrap();
+        let env = step_env(&without, None, &[], "now", "run").unwrap();
+        assert!(!env.vars.contains_key(ENV_MODAL_MAX_SANDBOXES));
     }
 }
