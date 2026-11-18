@@ -7,8 +7,8 @@ projection of its records into one table, **`grid_rows`**, and the
 `unified_grid_and_search_index` applet reads it with one query and no per-provider
 branches.
 
-The index holds one more table the grid does not read: `problems`,
-the `unified_grid_and_search_index` step's own rows about a render store it could not read. The
+The index also holds `problems`, which the grid does not read: the
+`unified_grid_and_search_index` step's own rows about a render store it could not read. The
 applet serves every step's problems at `/problems`, each read where its
 step keeps it, which filters, sorts, groups
 (`/problems/groups`) and pages the way `/search` does, through the keys
@@ -86,7 +86,8 @@ moment.
 
 The keys the search bar takes are declared on `GridRow`'s own columns
 (`#[col(…, search = "datalib_document_id", uuid)]`, and `search(order = …, range = …,
-qmd)` on the struct), and the derive turns them into a `SearchTable`
+ranked)` on the struct; [`etl/macros/README.md`](../../datalib/backend/etl/macros/README.md)
+§"Searched tables"), and the derive turns them into a `SearchTable`
 (`datalib_query::table`) that the `WHERE`, the order and the grouping
 are all built from. The grid's own column ids (`source_ref`, `snippet`)
 map onto `grid_rows` columns in `unified_grid_and_search_index/src/grid_columns.rs`.
@@ -169,10 +170,11 @@ the new shape, and the grid index rebuilds itself from the stores.
 2. Wire it into `datalib-step`: add it to the deps of
    `datalib/backend/datalib_step` and to the dispatch table in
    `datalib/backend/datalib_step/src/dispatch.rs`, then declare its
-   ingest/render step pair in the config and name the render step in
-   `unified_grid_and_search_index`'s `inputs` (the wizard does this for a source it adds,
-   with the source's `embed`); `unified_grid_and_search_index` reads exactly the stores
-   its inputs name.
+   ingest/render step pair in the config. `unified_grid_and_search_index`
+   reads the stores its `inputs` name, which is normally the pattern
+   `*/render_markdown`, so a new source's render is read with no edit
+   there ([`config_model.md`](config_model.md) §"The fan-ins read exactly
+   their `inputs`").
 3. Give it an icon and a catalog entry (`datalib/ui/src/assets/README.md`)
    — the query path itself does not change.
 

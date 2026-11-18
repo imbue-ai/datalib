@@ -507,8 +507,8 @@ record's* problem, not the step's. Parse reports what it could not read
 and keeps going; only a systemically wrong input (§4's R2 third
 category) may fail the step. Concretely this means the parse of a
 collection returns the records it got **and** the problems it hit, not
-one or the other — see R1's sink. Today the parses of chatgpt, email
-and slack do this (`Unparsed`, reported through
+one or the other — see R1's sink. Today the parses of calendar, chatgpt,
+email, garmin and slack do this (`Unparsed`, reported through
 `RenderCtx::report_unparsed`).
 
 **P2 — Declare the type you expect, and what happens when it isn't
@@ -540,9 +540,9 @@ small. It should grow deliberately: the test for admitting one is
 whether two providers disagreeing about it would produce a *wrong
 answer* rather than merely an inconsistent-looking one.
 
-The tree does not yet follow this rule for timestamps: seven of the 25
-render crates (`calendar`, `chatgpt`, `facebook`, `google_takeout`,
-`linkedin`, `perseus`, `sms_backup_restore`) call `chrono` directly
+The tree does not yet follow this rule for timestamps: seven of the 28
+render crates (`baby_connect`, `calendar`, `chatgpt`, `garmin`,
+`lightroom`, `linkedin`, `perseus`) call `chrono` directly
 rather than going through `datalib-time` alone. The retrofit is in
 [`data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md).
 
@@ -660,16 +660,12 @@ cheaper than one family with an exception in it.
 ## 4. Data-quality rules
 
 R1's sink is built for every stage — fetch, parse, render and grid row
-— and on screen, though most providers do not yet route a per-record
-fetch failure into it (chatgpt, claude, garmin and notion do). R2's
-middle category is followed where the sink is wired. R3–R7 are adopted
-in principle and not built. The sink is the `problems` table
-(`datalib_problems`), one row per problem per record: a fetch problem
-starts in the source's raw store, everything else in its render
-store, and the render store carries the raw store's rows forward so
-one store holds the source's whole list. From there it is copied into
-the unified grid and search index, counted on the Manage row and shown on the
-document. How it is wired at each stage:
+— and on screen. R2's middle category is followed where the sink is
+wired. R3–R7 are adopted in principle and not built. The sink is the
+`problems` table (`datalib_problems`), one row per problem per record:
+a fetch problem in the source's raw store, everything else in its
+render store. Each is read where it is kept, counted on the Manage row
+and shown on the document. How it is wired at each stage:
 
 | stage | how a problem gets in | swept by |
 | --- | --- | --- |
@@ -757,9 +753,7 @@ The line between R2's second and third category is a number. Start at
 the log path, exit non-zero. Deliberately cruder than shape detection,
 and worth having precisely because
 [Detecting upstream shape drift](data_architecture_ingestion_practices.md#detecting-upstream-shape-drift)
-records that we tried the sophisticated version (`endpoint_shapes`),
-deleted it, and don't know what we want. Counting drops would have
-caught the same class of problem.
+is not built and we don't know what we want there.
 
 ### R5 — Verify against the source, not against yesterday's output
 
@@ -830,10 +824,6 @@ the whole section rests on:
 
 > **`dolt_diff` between two commits of our own raw store reports every
 > row that left. Render never infers a deletion from anything else.**
-
-The ingestion doc's
-[dolt_diff supersedes per-bucket fingerprints](data_architecture_ingestion.md#dolt_diff-supersedes-per-bucket-fingerprints)
-is the download-side half of the same idea.
 
 ### What is recorded
 
@@ -1151,7 +1141,7 @@ The principle: **every event-shaped `GridRow` carries an ISO-8601 timestamp with
 - **Real upstream timestamp when one exists**, on the clock it was written on: an email's `Date:` offset, a calendar event's zone.
 - **Microsecond-bump for synthesized timestamps.** Blocks and sub-items that lack their own timestamp (chat blocks within a message, ChatGPT messages within a conversation that only has a create_time) get a synthesized one by bumping microseconds off the parent's stamp. This keeps within-parent order stable across re-runs and guarantees no collision with real stamps (real timestamps don't carry per-row µs precision from upstream).
 - **Strict RFC 3339 with an offset, never naive.** A naive timestamp can't be globally sorted alongside a `+02:00` one without a hidden timezone assumption.
-- **`Z` means the clock is unknown, `+00:00` that it was UTC** ([RFC 9557](https://www.rfc-editor.org/rfc/rfc9557.html) §2, which updated RFC 3339; its older `-00:00` for "unknown" is read but never written, since ISO 8601 refuses it). A message whose source records only an instant (epoch milliseconds, a service's own `Z`, a Slack author with no profile zone) is written `Z`, in its header and its rows' `created_at`, so the viewer can show it on its reader's clock rather than claim the sender was on UTC. Every parser reads `Z` and `+00:00` as the same instant, so sorting and `before:` / `after:` are unaffected.
+- **`Z` means the clock is unknown, `+00:00` that it was UTC** (AGENTS.md §"Timestamp convention"). A message whose source records only an instant is written `Z`, in its header and its rows' `created_at` (below).
 
 The crate that enforces all of this —
 `IsoOffsetTimestamp::now_local()`, `parse_strict`,
@@ -1181,7 +1171,7 @@ beside the instant (`MessageHeader::offset_secs`, which chat-common fills
 from `NormalizedChatItem::date_offset_secs`), and the message's grid row
 keeps the same offset in `created_at`. A message whose source names no
 clock (epoch milliseconds, a service's own `Z`, a Slack `ts`: a profile's
-`tz` is where its author is now, not where they were) is written in `Z`, which RFC 9557 defines as "local offset unknown"
+`tz` is where its author is now, not where they were) is written in `Z`
 (`datalib_time::with_unknown_offset`), in the header and in
 `created_at`, and the viewer reads it on its reader's clock. A real UTC
 clock (an email dated `+0000`) stays `+00:00`. A grid
