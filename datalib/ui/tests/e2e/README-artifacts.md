@@ -30,7 +30,10 @@ Outside bazel (`pnpm exec playwright test`) it is `datalib/ui/playwright-report/
 On CI the suite runs in the `bazel test //...` gate
 (`.github/workflows/test.yml`). A red run uploads that zip as the
 `e2e-playwright-report` artifact (kept a week), one zip per red part; a green one uploads no
-report. The zip also reaches the BuildBuddy invocation page under
+report. The same step prints each failure's error and page snapshot (the
+report's `data/*.md`) into the job's log, under "e2e `<part>`: each
+failure and the page it left", so a failure can be read without the
+download. The zip also reaches the BuildBuddy invocation page under
 Artifacts (`--zip_undeclared_test_outputs` in `.bazelrc`). Green or red, the job uploads the suite's console log as
 the `e2e-test-log` artifact (two weeks), `<part>.log` for each part: Playwright's list of every
 test with its duration, and the specs' `[e2e]` lines. That is where to

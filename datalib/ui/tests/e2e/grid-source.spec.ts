@@ -17,6 +17,7 @@ import {
   searchAndSettle,
   MANAGE_WITH_CONFIG,
   savedConfig,
+  expectSyncEverything,
 } from "./grid-helpers";
 
 const SOURCE_CELLS = '.grid-box .slick-row [col-id="source_ref"]';
@@ -36,7 +37,7 @@ async function openGrid(page: Page) {
 /// which PUTs through the same validating endpoint everything else uses.
 async function writeConfig(page: Page, text: string): Promise<void> {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
   await fillConfigEditor(page, text);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
@@ -50,7 +51,7 @@ let original = "";
 
 test.beforeEach(async ({ page, request }) => {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
   original = await savedConfig(request);
 });
 
