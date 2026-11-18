@@ -1864,11 +1864,48 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertNotEqual(stores, {}, "every rendering source must write a store")
         for source, rows in stores.items():
             self.assertGreater(rows, 0, f"{source}'s render store holds no rows")
+        # A data node no document holds a row for has a row of its own in
+        # the index alone (`markdown_uuid` null), so it is left out here.
         self.assertEqual(
             sum(stores.values()),
-            self._count(self._index_db, "grid_rows"),
+            int(
+                self._scalar(
+                    self._index_db,
+                    "SELECT COUNT(*) FROM grid_rows WHERE markdown_uuid IS NOT NULL;",
+                )
+            ),
             "the stores and the index must hold the same number of rows — "
             f"per-source: {stores}",
+        )
+        # Every node of the tree is a row, and a row no document carries is
+        # a node.
+        self.assertEqual(
+            self._scalar(
+                self._index_db,
+                "SELECT COUNT(DISTINCT n.uuid) FROM data_nodes n "
+                "WHERE NOT EXISTS (SELECT 1 FROM grid_rows g WHERE g.uuid = n.uuid);",
+            ),
+            "0",
+            "every data node must have a grid row",
+        )
+        self.assertEqual(
+            self._scalar(
+                self._index_db,
+                "SELECT COUNT(*) FROM grid_rows g WHERE g.markdown_uuid IS NULL "
+                "AND NOT EXISTS (SELECT 1 FROM data_nodes n WHERE n.uuid = g.uuid);",
+            ),
+            "0",
+            "a grid row no document carries must be a data node",
+        )
+        self.assertGreater(
+            int(
+                self._scalar(
+                    self._index_db,
+                    "SELECT COUNT(*) FROM grid_rows WHERE markdown_uuid IS NULL;",
+                )
+            ),
+            0,
+            "the fixture's places (a Slack channel, a label) have no document row",
         )
 
         # ── WhatsApp attachments reach the CAS ──────────────────
