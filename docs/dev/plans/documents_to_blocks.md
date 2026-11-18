@@ -2,10 +2,11 @@
 
 **Status: proposal (2026-11-17). Steps 1, 2, 3a, 3b and 3c have
 landed (#1765, #1770, #1775, #1782, #1818), and step 6 landed with
-step 1 (#1765): a chat is one document. 5a–5d have landed (#1868,
-#1872, #1876) and 5e is in review. 4a is under way; nothing else has
-started, step 10 (bodies in their own format) included.** Facts about the tree were checked against
-the code on 2026-11-16; file references are to that tree.
+step 1 (#1765): a chat is one document. Step 5 has landed (#1868,
+#1872, #1876, #1879): there are no `.md` files. 4a is under way;
+nothing else has started, step 10 (bodies in their own format)
+included.** Facts about the tree were checked against the code on
+2026-11-16; file references are to that tree.
 
 ## Words
 
@@ -708,6 +709,30 @@ against the eval before the next.
   If it is large, a render-version bump can write the new text on a
   fresh branch and move `main` to it, then drop the old branch's
   history, so two full copies never stay.
+- **Whether the body needs a copy at all.** Most bodies are upstream's
+  text as it arrived: a Slack or Claude message's text, a Notion page's
+  markdown, an email's HTML part (already in the blob store by hash).
+  Two options, in order:
+  - **A body by reference.** A `sections` row names where its body is
+    (the raw table, the row's id and the field, or a blob hash) beside
+    its format (step 10), instead of holding a copy. The raw commit the
+    render read is already on its cursor, so a reader at a render
+    commit reads the raw row as it was. A body render transforms keeps
+    its text: a PDF's markdown, and email's until step 10. The layout
+    around each body stays in `drawings`.
+  - **Drawing on read.** The viewer asks the source's renderer for one
+    document, from the raw store, at view time; nothing of the page is
+    stored but its rows, and a layout fix shows without a re-render.
+    Provider code is linked by `datalib-step` alone, so either the
+    applet links every renderer or the step answers "draw this
+    document" as a service; a package source would need that verb in
+    the step protocol; and what a page shows from beyond its own rows
+    (the names people go by, which account is "me") has to be at hand
+    when it is drawn.
+
+  The grid rows, tree, edges and contacts stay a stored projection
+  either way. Before either, measure how much of a real root's render
+  stores is body text rather than rows: that is what the first buys.
 - **Reactions.** An item of their own (they have an author and a time)
   or an attribute of the item they react to?
 - **Time-of-day bucketing** for display ("this conversation on 3 May")
