@@ -673,7 +673,9 @@ inputs = [{grid_list}]"""
             root_blocks.append(series_index)
         for group in groups:
             root_blocks.append(
-                step(group, "embed", run("embed", type_args[group]), "files", "embedder")
+                step(
+                    group, "embed", run("embed", type_args[group]), "files", "embedder"
+                )
                 + '\ninputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]'
             )
         root_text = "\n\n".join(root_blocks) + "\n"
