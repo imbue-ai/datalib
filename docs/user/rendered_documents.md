@@ -1,15 +1,13 @@
 # Showing a rendered document in your app
 
-Every source's render step writes its records as markdown documents: an
-email thread, a Slack thread, a calendar's week. The markdown
-names people and times in two fixed shapes, so that any markdown viewer
-shows something sensible and an app that knows the shapes can do more:
-draw a person as who they are, and show every time in the zone its reader
-wants. This page is that contract, for an app that shows documents
-itself.
-
-Datalib's own document view is built on exactly this. Nothing here is
-private to it.
+Every source's render step writes its records as markdown documents (an
+email thread, a Slack thread, a calendar's week) into its render store.
+The markdown names people and times in two fixed shapes, so that any
+markdown viewer shows something sensible and an app that knows the
+shapes can do more: draw a person as who they are, and show every time
+in the zone its reader wants. This page is that contract, for an app
+that shows documents itself. Datalib's own document view is built on it,
+and nothing here is private to it.
 
 ## Getting a document
 
@@ -24,6 +22,10 @@ The `unified_grid_and_search_index` applet serves the documents, and
   `source_url`, `problems`, its links to other documents). Add
   `?pieces=true` for the same markdown as `pieces` in place of `body`.
 
+Without the app running, `datalib-step markdown <data_root> --document
+<id>` prints one document's markdown, and `--out <dir>` writes every
+document to a file.
+
 The markdown mixes markdown with a little HTML. It quotes what strangers
 wrote, so **show it through an HTML sanitizer**, as you would any mail.
 Keep at least the `<time>` and `<div>` elements and the attributes this
@@ -34,9 +36,8 @@ that, joined in order, is `body`. A piece with a `uuid` is one message;
 render and sanitize it on its own, and a tag it leaves open is closed at
 its end instead of hiding the messages after it. The pieces without one
 (the title, the folds around a run of tool steps) open and close
-elements between them, so render those together. Datalib's viewer does
-both in `ui/src/cards/renderDocument.ts`. A document whose source does
-not mark its messages comes as pieces without a `uuid`.
+elements between them, so render those together. A document whose
+source does not mark its messages comes as pieces without a `uuid`.
 
 ## The parts of a document
 
@@ -57,7 +58,7 @@ the time:
 ## [Will Riker](mailto:riker@enterprise.org "Will Riker <riker@enterprise.org>") <time class="msg-ts" datetime="2369-04-15T10:05:00+02:00" title="2369-04-15 10:05:00 +02:00">Tue Apr 15th, 2369 at 10:05</time>
 ```
 
-It is a real `##` heading so that anyone reading the file sees where
+It is a real `##` heading so that anyone reading the markdown sees where
 each message starts. Datalib's viewer styles it down to one line; yours
 may too.
 
@@ -164,7 +165,7 @@ nearest thing to its sender's clock that the source has:
 | Google Chat, from a Takeout | the zone the export names (`CET`, `PST`) |
 | a calendar event | the event's own zone |
 
-**`Z` says the clock is unknown.** Since RFC 9557, which updated RFC
+**`Z` says the clock is unknown.** In RFC 9557, which updated RFC
 3339, `Z` means "the instant in UTC is known, the local offset is not",
 and `+00:00` means the time really was on UTC's clock. (RFC 3339 spelled
 the first `-00:00`; read that the same way.) A message's time is written

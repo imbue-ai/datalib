@@ -3,18 +3,18 @@
 # `render_markdown` and `embed`, each written as `group` + `function`
 # with `command = "datalib-step"`, the program datalib ships), and the shared
 # index step under the `unified_grid_and_search_index` group, which every
-# source's rendered markdown feeds. A step's id is `<group>/<function>`,
-# composed rather than written; `inputs` name steps by that id. See
-# configs/dag_example.toml for a walkthrough of the format and
-# all_sources.toml (next to this file) for every supported source.
+# source's rendered documents feed. A step's id is `<group>/<function>`,
+# composed rather than written; `inputs` name steps by that id.
+# `datalib-step help dag-example` walks through the format, and
+# `datalib-step help all-sources` shows every source.
 
 # Where the downloaded data gets written. Top-level keys have to come
 # before the first [[…]] header — everything after a table header
 # belongs to that table.
 data_root = "~/datalib"
 
-# The shared fan-in step: the SQL index behind the grid UI and the keyword
-# search, fed by every source's rendered markdown.
+# The shared fan-in step: the SQL index behind the grid and the keyword
+# search, fed by every source's rendered documents.
 [[groups]]
 id = "unified_grid_and_search_index"
 
@@ -51,11 +51,11 @@ function = "embed"
 command = "datalib-step"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
-# Slack workspace mirror. Credentials come from `latchkey` at runtime
-# (see the "Register Slack with latchkey" section in the first-time
-# user guide). `channels` restricts the sync to the listed channels;
-# omit it (or set `all_channels = true`) to mirror every channel the
-# account can see. `media = true` pulls file attachments into blobs.
+# Slack workspace mirror. Credentials come from `latchkey` at runtime;
+# `datalib-step help slack` says how to sign in. `channels` restricts
+# the sync to the listed channels; omit it (or set `all_channels =
+# true`) to mirror every channel the account can see. `media = true`
+# pulls file attachments into blobs.
 [[groups]]
 id = "slack"
 type = "slack"
@@ -102,11 +102,11 @@ function = "embed"
 command = "datalib-step"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
-# Anthropic / claude.ai conversation mirror. Credentials come from
-# `latchkey` at runtime (see the "Register Claude web with latchkey"
-# section in the first-time user guide). An empty `api` table fetches
-# every conversation across every org the account can see; uncomment
-# the knobs below to bound the work on incremental re-runs.
+# Claude (claude.ai) conversation mirror. Credentials come from
+# `latchkey` at runtime; `datalib-step help claude` says how to sign in.
+# An empty `api` table fetches every conversation, project and Cowork
+# task across every org the account can see; uncomment the knobs below
+# to bound the work.
 [[groups]]
 id = "claude-api"
 type = "claude"
@@ -120,6 +120,7 @@ command = "datalib-step"
 # since = "2025-01-01"      # only sync conversations updated at/after this
 # projects = false          # skip Claude Projects (default: on)
 # project_uuids = [...]     # or: mirror only these projects (UUIDs or URLs)
+# cowork = false            # skip Cowork tasks (default: on)
 
 [[steps]]
 group = "claude-api"
