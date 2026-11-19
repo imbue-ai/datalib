@@ -244,8 +244,8 @@ mod tests {
     #[test]
     fn identifiers_are_uuids_and_handles_and_nothing_else() {
         assert_eq!(
-            includes(identifiers("00000000-0000-8B8A-896D-63addc7b31ad")),
-            Some(vec!["\"00000000-0000-8b8a-896d-63addc7b31ad\"".to_string()])
+            includes(identifiers("00000000-0000-8BaD-8eeF-0000bead0002")),
+            Some(vec!["\"00000000-0000-8bad-8eef-0000bead0002\"".to_string()])
         );
         assert_eq!(
             includes(identifiers(

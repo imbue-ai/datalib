@@ -2011,7 +2011,7 @@ mod fts5 {
             "d1",
             "r1",
             "id",
-            "00000000-0000-8b8a-896d-63addc7b31ad",
+            "00000000-0000-8bad-8eef-0000bead0002",
         )
         .await;
         add(&mut c, 2, "d1", "r1", "from", "email:ann@example.com").await;
@@ -2029,7 +2029,7 @@ mod fts5 {
             ["r1:from", "r2:to"]
         );
         assert_eq!(
-            matching(&mut c, "\"00000000-0000-8b8a-896d-63addc7b31ad\"").await,
+            matching(&mut c, "\"00000000-0000-8bad-8eef-0000bead0002\"").await,
             ["r1:id"]
         );
         assert_eq!(matching(&mut c, "\"00000000\"").await, Vec::<String>::new());
