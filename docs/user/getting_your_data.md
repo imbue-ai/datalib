@@ -120,6 +120,8 @@ latchkey services register babyconnect \
 latchkey auth browser babyconnect
 ```
 
+Tick **Remember Me** on the sign-in page: Baby Connect then keeps the
+session for a year, where without it the session can end within a day.
 Once the session ends, signing in again needs you at the browser.
 
 Baby Connect answers one day at a time, so the first sync asks once for

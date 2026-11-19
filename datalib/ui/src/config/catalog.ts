@@ -198,7 +198,8 @@ export type CatalogEntry = {
   /// latchkey already holds is left exactly as its owner set it up.
   credentialRegister?: import("@/api").ServiceRegistration;
   /// Shown beside the Connect button, when connecting this way costs
-  /// something the person should decide about before clicking.
+  /// something the person should decide about before clicking, or the
+  /// sign-in page asks for a choice the download depends on.
   credentialConnectWarning?: string;
   /// The "Paste a key" tab. `help` says where the credential
   /// comes from; `headers` replaces the shape latchkey's own example
@@ -983,6 +984,9 @@ export const CATALOG: CatalogEntry[] = [
       login_flow: "cookie-capture",
       login_flow_params: { cookieKeys: ["seacloud1", "srf"] },
     },
+    credentialConnectWarning:
+      "Tick Remember Me when you sign in. Without it the session can end within a day, " +
+      "and every sync after that fails until you sign in again.",
     fields: [
       {
         kind: "text",
