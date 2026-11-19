@@ -301,7 +301,10 @@ datalib/
                    over quick-xml's HTML5 table; the one decoder.
     handle/        `Handle`: one identifier for a person (`email:`, `tel:`,
                    `slack:`), normalized; what renders write as
-                   `data-handle`. No first-party deps.
+                   `data-handle`. Its one first-party dep is uuid_text.
+    uuid_text/     a uuid read however it is written (dashed or not,
+                   either case, at the end of a slug or a link) and
+                   written lowercase with dashes; the one reader. No deps.
     contact_schema/ `NormalizedContact`: a person as one source describes
                    them. Only the shape; contact-common renders it.
     photo_schema/  `NormalizedPhoto`: a photo or video as one source

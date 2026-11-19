@@ -687,13 +687,13 @@ async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
     let mut ended: Option<RunEnded> = None;
     let mut roots: Vec<(&str, String)> = Vec::new();
     if let Some(single) = opts.page.as_deref() {
-        let id = format_uuid(single);
+        let id = datalib_etl::ids::normalize_id_token(single);
         phase(&mut ended, ctx.single_page(id, s)).await?;
         phase(&mut ended, ctx.ancestors()).await?;
     } else {
         let mut ids: Vec<String> = Vec::new();
         for raw in &opts.subtree_pages {
-            let id = format_uuid(&datalib_etl::ids::normalize_id_token(raw));
+            let id = datalib_etl::ids::normalize_id_token(raw);
             roots.push((raw, id.clone()));
             if !ids.contains(&id) {
                 ids.push(id);
@@ -768,22 +768,6 @@ fn roots_upstream_lacks(
         .collect()
 }
 
-/// A Notion id in its dashed form, whichever form it came in.
-pub fn format_uuid(s: &str) -> String {
-    let raw: String = s.chars().filter(|c| *c != '-').collect();
-    if raw.len() != 32 {
-        return s.into();
-    }
-    format!(
-        "{}-{}-{}-{}-{}",
-        &raw[0..8],
-        &raw[8..12],
-        &raw[12..16],
-        &raw[16..20],
-        &raw[20..32]
-    )
-}
-
 /// The event-store entity names the synthesizer reads a recorded
 /// workspace under.
 pub const ENTITY_PAGE: &str = "notion_official_page";
@@ -795,16 +779,6 @@ pub const ENTITY_ANCHOR_BLOCK: &str = "notion_anchor_block";
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn format_uuid_handles_dashed_and_undashed() {
-        assert_eq!(
-            format_uuid("f9a3f309bde54852944042374cc01dc5"),
-            "f9a3f309-bde5-4852-9440-42374cc01dc5"
-        );
-        let already = "f9a3f309-bde5-4852-9440-42374cc01dc5";
-        assert_eq!(format_uuid(already), already);
-    }
 
     /// Nothing attempted is not a failure — an empty roots config,
     /// or a run where every page was already current, must stay green.

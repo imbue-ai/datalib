@@ -22,71 +22,6 @@ pub enum Field<C: 'static> {
     Terms(&'static TermsKey),
 }
 
-/// Notion-style slug+UUID parser. If `value` ends with a `-`-prefixed
-/// UUID-shaped suffix (8-4-4-4-12 lowercase hex), return that suffix; else
-/// return the input unchanged. The leading slug is non-load-bearing — it
-/// exists only to make URLs/tokens self-describing.
-pub fn extract_uuid_suffix(value: &str) -> &str {
-    let Some(candidate) = value.len().checked_sub(36).and_then(|at| value.get(at..)) else {
-        return value;
-    };
-    if is_uuid_shape(candidate) && (value.len() == 36 || value.as_bytes()[value.len() - 37] == b'-')
-    {
-        candidate
-    } else {
-        value
-    }
-}
-
-/// The ways a source may write the uuid `value` is, whole: dashed or not,
-/// lowercase or capitals. Notion's links drop the dashes; Apple writes
-/// capitals. `None` for any other value, which a key matches as written.
-pub fn uuid_spellings(value: &str) -> Option<Vec<String>> {
-    let hex = if is_uuid_shape(value) {
-        value.replace('-', "")
-    } else if value.len() == 32 && value.bytes().all(|c| c.is_ascii_hexdigit()) {
-        value.to_string()
-    } else {
-        return None;
-    };
-    let hex = hex.to_ascii_lowercase();
-    let dashed = format!(
-        "{}-{}-{}-{}-{}",
-        &hex[..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..]
-    );
-    let mut spellings = vec![
-        dashed.to_ascii_uppercase(),
-        dashed,
-        hex.to_ascii_uppercase(),
-        hex,
-    ];
-    spellings.sort();
-    spellings.dedup();
-    Some(spellings)
-}
-
-pub fn is_uuid_shape(s: &str) -> bool {
-    if s.len() != 36 {
-        return false;
-    }
-    let b = s.as_bytes();
-    for (i, &c) in b.iter().enumerate() {
-        let is_dash_pos = matches!(i, 8 | 13 | 18 | 23);
-        if is_dash_pos {
-            if c != b'-' {
-                return false;
-            }
-        } else if !c.is_ascii_hexdigit() {
-            return false;
-        }
-    }
-    true
-}
-
 /// One filter occurrence from the query string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilterTerm<C: 'static> {
@@ -629,73 +564,8 @@ mod tests {
         assert!(parsed.refusal().is_some(), "{parsed:?}");
     }
 
-    #[test]
-    fn extract_uuid_suffix_strips_slug() {
-        // Notion-style: slug-uuid.
-        assert_eq!(
-            extract_uuid_suffix("picard-jean-luc-00000001-1701-4d00-8000-000000000001"),
-            "00000001-1701-4d00-8000-000000000001"
-        );
-        // Bare UUID passes through.
-        assert_eq!(
-            extract_uuid_suffix("00000001-1701-4d00-8000-000000000001"),
-            "00000001-1701-4d00-8000-000000000001"
-        );
-        // No UUID-shaped suffix → unchanged.
-        assert_eq!(extract_uuid_suffix("plain-name"), "plain-name");
-        // Too-short string → unchanged.
-        assert_eq!(extract_uuid_suffix("short"), "short");
-        // Suffix is hex-shaped but missing the boundary dash before slug.
-        assert_eq!(
-            extract_uuid_suffix("xxx00000001-1701-4d00-8000-000000000001"),
-            "xxx00000001-1701-4d00-8000-000000000001"
-        );
-    }
-
     /// A word whose 36th byte from the end falls inside a character
     /// panicked on the byte slice; every free-text search reaches this.
-    #[test]
-    fn extract_uuid_suffix_leaves_a_word_split_mid_character_alone() {
-        let word = format!("é{}", "a".repeat(35));
-        assert_eq!(extract_uuid_suffix(&word), word);
-    }
-
-    #[test]
-    fn a_uuid_is_spelled_dashed_or_not_in_either_case() {
-        let all = [
-            "1701D000-ABCD-4E00-A000-0000000000EF",
-            "1701D000ABCD4E00A0000000000000EF",
-            "1701d000-abcd-4e00-a000-0000000000ef",
-            "1701d000abcd4e00a0000000000000ef",
-        ];
-        for typed in [
-            all[0],
-            all[1],
-            all[2],
-            all[3],
-            "1701D000-abcd-4E00-a000-0000000000eF",
-        ] {
-            assert_eq!(uuid_spellings(typed).unwrap(), all, "{typed}");
-        }
-        assert_eq!(
-            uuid_spellings("00000001-1701-4000-8000-000000000001").unwrap(),
-            [
-                "00000001-1701-4000-8000-000000000001",
-                "00000001170140008000000000000001"
-            ],
-            "digits alone have one case"
-        );
-        for not in [
-            "M-ncc1701-0042",
-            "1701d000-abcd",
-            "1701d000abcd4e00a0000000000000e",
-            "x1701d000abcd4e00a0000000000000ef",
-            "1701d000-abcd-4e00-a000-0000000000eg",
-        ] {
-            assert_eq!(uuid_spellings(not), None, "{not}");
-        }
-    }
-
     #[test]
     fn bare_text_defaults_to_hybrid_mode() {
         let q = parse_query("earl grey");

@@ -81,8 +81,9 @@ tree does for a person.
 ## Handles
 
 [`datalib/backend/handle`](../../datalib/backend/handle/src/lib.rs) is a
-crate with no first-party dependencies, so render crates, the index, the
-applets and the contacts store all share one definition. A handle is
+crate whose one first-party dependency, `uuid_text`, has none, so render
+crates, the index, the applets and the contacts store all share one
+definition. A handle is
 `<kind>:<value>`. The rule that matters most: **where a native id is an
 email address or a phone number, the handle is `email:` or `tel:`, not a
 per-app kind**, so one link covers every app that reaches a person that

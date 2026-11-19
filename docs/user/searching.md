@@ -106,19 +106,25 @@ source by its id in the config; also `source_id:`), `kind:` (`Email`,
 row in it), `contact:` and `email:` (an address book's columns), and
 the id of any other column the grid shows (`org_name:`, `created_at:`,
 …). These match the whole value as stored, case and all: `kind:Email`,
-not `kind:email`. The one exception is a uuid (32 hex digits, with or
-without its four dashes): it matches however it is written, dashed or
-not, in capitals or not, so the id at the end of a Notion link finds
-the page that Notion's API spells with dashes.
+not `kind:email`. A uuid is the one exception: 32 hex digits, with or
+without the four dashes, match the same uuid however it is written and
+however its source stored it, dashed or not, in capitals or not.
+`datalib_document_id:` and `notion_page:` also take their uuid at the
+end of a slug or a link, so a Notion page's link can follow
+`notion_page:` as it is.
 
 `id:` takes the id as the source spells it: an email's id in Gmail or
 on a JMAP server (not its `Message-ID` header), a Notion page's id, a
-Claude or ChatGPT conversation's. Any id that is not a uuid is matched
-exactly: a Google Drive comment's id can differ from another's only in
-case. Where one id is not enough to name a
-record, the value joins several with `#`: a Slack message is
-`<channel>#<ts>`, a GitHub comment `<owner>/<repo>#<id>`. Two sources
-can use the same id, so add `source:` when that matters.
+Claude or ChatGPT conversation's. A Notion page's id can be copied from
+the end of its link, where Notion leaves out the dashes:
+`id:1701d000abcd4e00a0000000000000ef` finds the page whose id Notion's
+API writes `1701d000-abcd-4e00-a000-0000000000ef`. Any id that is not a
+uuid matches only as written, case and all, since some sources' ids
+differ only in case (two comments on one Google Doc can). Where one id
+is not enough to name a record, the value joins several with `#`: a
+Slack message is `<channel>#<ts>`, a GitHub comment
+`<owner>/<repo>#<id>`. Two sources can use the same id, so add
+`source:` when that matters.
 
 Pasting an id as free text (above) finds every row that names it,
 ranked. `id:` is the exact match: the rows whose source id is that
