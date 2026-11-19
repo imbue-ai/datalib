@@ -514,13 +514,13 @@ with the reasons behind these rules in its header, is
 - **A `Table` row carries no byte size.** Doltlite shares chunks
   between tables and between commits, so no honest per-table number
   exists ([query plans](doltlite.md#query-plans-and-indexes)).
-- **Scope is `<name>/ingest`.** The render's own output is datalib's,
+- **Scope is `<name>/ingest`.** The render's own output is Datalib's,
   and `system/disk_stats.sqlite` already tracks it per step.
 - **What re-renders the report is a count, never a byte.** A doltlite
   store's size is not reproducible from identical inputs, and
   bookkeeping rewrites chunks with no row added, so byte sizes are
   reported but never compared (`introspect::counts_unchanged`), and
-  datalib's own tables (`sync_runs`, `sync_scope_state`, every
+  Datalib's own tables (`sync_runs`, `sync_scope_state`, every
   `<table>_bookkeeping` sidecar) are left out of the report. Otherwise
   every run would rewrite it.
 

@@ -1,15 +1,15 @@
-# datalib links: a name for what something is, an address for its bytes
+# Datalib links: a name for what something is, an address for its bytes
 
-*Mirror of the "Names and addresses" tab of the [datalib links](https://claude.ai/code/artifact/dd31c9e3-8ef9-4185-a85f-0c29a1318117) Claude Doc, which is the source of truth while this plan is under review. Edit the doc and re-mirror this file; don't edit it here. Proposal (2026-10-20); step 1 of §6 landed in PR #1305; the `doc` kind (§3) is written by search results and the copied 🆔 (PRs #1441, #1443).*
+*Mirror of the "Names and addresses" tab of the [Datalib links](https://claude.ai/code/artifact/dd31c9e3-8ef9-4185-a85f-0c29a1318117) Claude Doc, which is the source of truth while this plan is under review. Edit the doc and re-mirror this file; don't edit it here. Proposal (2026-10-20); step 1 of §6 landed in PR #1305; the `doc` kind (§3) is written by search results and the copied 🆔 (PRs #1441, #1443).*
 
-Copy a message's 🆔 today and paste it into your notes: you get a link like `datalib://chat/1f3a…?msg=9c2e…`, and it opens nothing anywhere. That link is one of ten ways datalib writes a link to something it holds, and the attachments work is about to add more. This doc proposes two forms to replace all of them but card links (§1), before the new ones ship: a `datalib:` **name**, which says what something is, and a `/data/…` **address**, where the server hands out its bytes.
+Copy a message's 🆔 today and paste it into your notes: you get a link like `datalib://chat/1f3a…?msg=9c2e…`, and it opens nothing anywhere. That link is one of ten ways Datalib writes a link to something it holds, and the attachments work is about to add more. This doc proposes two forms to replace all of them but card links (§1), before the new ones ship: a `datalib:` **name**, which says what something is, and a `/data/…` **address**, where the server hands out its bytes.
 
 Words used throughout:
 
-- **Data root**: the directory datalib keeps everything in, one subdirectory per group.
+- **Data root**: the directory Datalib keeps everything in, one subdirectory per group.
 - **Group** and **step**: a group is one entry on the Manage screen, usually a data source such as a Gmail account. A step is one job a group runs: `ingest` downloads, `render_markdown` turns what was downloaded into pages. Each step writes under `<data root>/<group>/<step>/`.
 - **Store**: the files a step keeps its data in. Each source's `ingest` step keeps attachment bytes in one file, `blobs.sqlite`, each under a hash of its contents, so an attachment that arrives twice is kept once.
-- **URI**: a link that names something, like `mailto:riker@enterprise.org`. The part before the first colon is its *scheme*; datalib's own scheme is `datalib:`.
+- **URI**: a link that names something, like `mailto:riker@enterprise.org`. The part before the first colon is its *scheme*; Datalib's own scheme is `datalib:`.
 - **Chip**: the small rounded label the app draws for a person, a source or a step inside a page. Double-clicking one opens that thing.
 
 Already decided: kinds are written in `snake_case`, and attachment addresses are built first, to try the design out.
@@ -37,7 +37,7 @@ Card links are the one form that names a *screen* rather than a thing, and they 
 
 What goes wrong:
 
-- **A copied 🆔 opens nothing.** The desktop app doesn't register `datalib://` with macOS or Windows, and nothing in the app reads one back, so pasting it into a browser, a note or datalib itself does nothing.
+- **A copied 🆔 opens nothing.** The desktop app doesn't register `datalib://` with macOS or Windows, and nothing in the app reads one back, so pasting it into a browser, a note or Datalib itself does nothing.
 - **Two spellings share the `datalib:` scheme, and they can collide.** In `datalib://chat/…` the word after `//` is read as a host name. Had attachments been linked as `datalib://<source>/…`, a source named `chat` would look like a 🆔 link, and a browser may lowercase a host, turning a source `Gmail` into `gmail`.
 - **A page is linked four ways**, so code that recognizes a page link has to know all four.
 - **Every attachment is on disk twice**: once in its source's store, and again as a file beside each page that shows it. Email is the same: the stored email carries each attachment encoded as text, and render writes it out again decoded.
@@ -48,7 +48,7 @@ What goes wrong:
 
 Two forms, each with one job:
 
-- **A name says what something is**, and means the same wherever it is pasted: a page, a note, another app. Where a standard form exists, use it (`mailto:`, `tel:`, Slack's `slack://user?…`, a LinkedIn profile address), so the link also works outside datalib. Everything else is `datalib:<kind>/<id>`, never `datalib://`: without the `//`, nothing in it is read as a host name, so nothing gets lowercased and nothing collides with an app route.
+- **A name says what something is**, and means the same wherever it is pasted: a page, a note, another app. Where a standard form exists, use it (`mailto:`, `tel:`, Slack's `slack://user?…`, a LinkedIn profile address), so the link also works outside Datalib. Everything else is `datalib:<kind>/<id>`, never `datalib://`: without the `//`, nothing in it is read as a host name, so nothing gets lowercased and nothing collides with an app route.
 - **An address says where the server hands out something's bytes**: a path that starts with `/data/`, which stands for the data root. `/data/gmail/ingest/blob/<hash>` is the attachment with that hash in the store under `<data root>/gmail/ingest/`. A path starting with `/` resolves against whichever server sent the page, so a page uses it as it is: in an image, a download link, an audio player.
 
 **Rules for names:**
@@ -57,7 +57,7 @@ Two forms, each with one job:
 2. **Every kind is on one fixed list**, written in `snake_case`. A build that meets a kind it doesn't know says so rather than guessing.
 3. **Each kind has a fixed number of parts between slashes.** A source's id is one part, a step's is two (`gmail/ingest`). Only the last part of a name may contain `/`: a handle's value can.
 4. **A message within a page goes after `#`**: `datalib:doc/<page uuid>#<message uuid>`, the way `#` picks out a place on a web page.
-5. **Ids datalib makes are written as they are** (source and step ids, uuids, hashes), since they never contain spaces or slashes. Anything else is percent-encoded, a space becoming `%20`, as handle values already are.
+5. **Ids Datalib makes are written as they are** (source and step ids, uuids, hashes), since they never contain spaces or slashes. Anything else is percent-encoded, a space becoming `%20`, as handle values already are.
 
 **Rules for addresses:**
 
@@ -93,7 +93,7 @@ Addresses, for bytes the server hands out. Both reach the same place, a step's b
 - **What:** one table, `cas_objects (blake3 PRIMARY KEY, byte_len, content_type, bytes)`. Each row is filed under the hash of its bytes and never changes once written.
 - **Inside an email:** a row whose type is `message/rfc822` is an email, and `part/<hash>` picks out the attachment whose bytes have that hash. Taking an email apart follows MIME, the standard every email uses, so this is knowledge of a format, not of any source.
 
-The server knows nothing else: not a source's own tables, not its versioned store, not which kind of source a step is. A custom step that writes a `blobs.sqlite` in this shape has its attachments served with no change to datalib.
+The server knows nothing else: not a source's own tables, not its versioned store, not which kind of source a step is. A custom step that writes a `blobs.sqlite` in this shape has its attachments served with no change to Datalib.
 
 **Who answers an address: `datalib-http`, for now.** It reads the blob store directly, through one small crate that defines the contract and that the download side writes through too. AGENTS.md's rule becomes: `datalib-http` reads stores' commit logs and blob stores, and no other rows. §7 says when to revisit this.
 
@@ -105,7 +105,7 @@ The server knows nothing else: not a source's own tables, not its versioned stor
 
 | Change | Before | After | What a person notices |
 | --- | --- | --- | --- |
-| Attachments | Written again as a file beside every page that shows them | The page points at the copy the source already keeps, at `/data/…` | Less disk used. In the app, nothing, except that attachment links and players in chat pages should start opening. Someone reading a page's `.md` file outside the app sees a `/data/…` path and needs a running datalib to open it. |
+| Attachments | Written again as a file beside every page that shows them | The page points at the copy the source already keeps, at `/data/…` | Less disk used. In the app, nothing, except that attachment links and players in chat pages should start opening. Someone reading a page's `.md` file outside the app sees a `/data/…` path and needs a running Datalib to open it. |
 | Copied 🆔 | `datalib://chat/<uuid>?msg=<message>` | `datalib:doc/<uuid>#<message>` | The pasted text looks different. It still opens nothing until the desktop app registers the scheme. An old link pasted back is still understood. |
 | Links between pages, inside the app | Four spellings | One `doc` name | Nothing, apart from one full re-render of every source after the upgrade. |
 | Source, step, contact and person chips | Written in four places in the code | Written in one | Nothing: spelled as today. |
@@ -118,7 +118,7 @@ One Rust library and one UI module write and read the names; one small crate hol
 - **`datalib_uri`**, a small Rust library with no dependencies: one variant per kind of name, a way to write it and a way to read it back, plus the `/data/<group>/<function>/` start of an address. Reading a kind it doesn't know returns "unknown", never a guess. Every place that writes a link today goes through it.
 - **`ui/src/uri.ts`**, the same in the UI. The code that draws chips and opens pages reads names through it. Addresses need nothing from the UI: the browser fetches them as they are.
 - **`ui/tests/uri-fixtures.json`**, a list of example names and addresses that tests on both sides read and write. A kind with no example fails a test.
-- **The blob-store contract crate** (name to pick): the table's definition, opening a blob store read-only, fetching a row by hash, and taking a part out of an email. The download side writes through it and `datalib-http` reads through it, so neither defines the table on its own. It depends on SQLite and a mail parser, and on nothing else of datalib's.
+- **The blob-store contract crate** (name to pick): the table's definition, opening a blob store read-only, fetching a row by hash, and taking a part out of an email. The download side writes through it and `datalib-http` reads through it, so neither defines the table on its own. It depends on SQLite and a mail parser, and on nothing else of Datalib's.
 
 ## 6. The order of work
 
@@ -131,10 +131,10 @@ One Rust library and one UI module write and read the names; one small crate hol
 ## 7. Open questions
 
 - [ ] **When should serving move from `datalib-http` to the search applet?** Moving it is moving one route, since an address never names the server that answers it. Revisit if a new kind of address needs more than the blob-store contract (a source's own tables, its versioned store), or if parsing untrusted email inside the process that holds the API token and runs every sync proves a risk worth a separate process.
-- [ ] **`doc` or `object`?** The app calls these pages "chats", but they are any page datalib renders: a PDF, a Notion page, a day of Garmin data. `doc` is the working name; `object` would also cover things that aren't pages.
+- [ ] **`doc` or `object`?** The app calls these pages "chats", but they are any page Datalib renders: a PDF, a Notion page, a day of Garmin data. `doc` is the working name; `object` would also cover things that aren't pages.
 - [ ] **`/data/` or another prefix?** It needs to be one word no route will ever want for itself.
 - [ ] **Should a page have an address too?** For example `/data/<group>/render_markdown/doc/<uuid>` for its markdown. An export could then write each page and its attachments at their addresses, and every link in the exported tree would work offline.
 - [ ] **How would a page made on request find what to make it from?** A page's uuid is computed from the ids of the records it shows, but nothing maps a uuid back to them. One way: keep a small table from page uuid to record, without storing the page. An address that names the record itself would need more than the blob-store contract: only the step that wrote a record can read it.
 - [ ] **Which pages would be made on request?** Old email is the obvious first: rarely opened, and most of what render writes. Search and the grid still need each page's row and searchable text, so those stay stored.
 - [ ] **Can macOS and Windows open a name without `//`?** Both pick the app by the part before the colon, so `datalib:doc/…` should open the same way `datalib://` would. To check against Tauri's deep-link plugin before step 5.
-- [ ] **Is there anything datalib names or serves that these two forms can't write?**
+- [ ] **Is there anything Datalib names or serves that these two forms can't write?**

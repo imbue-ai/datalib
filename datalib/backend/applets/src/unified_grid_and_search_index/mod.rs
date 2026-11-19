@@ -255,7 +255,7 @@ pub(crate) async fn require_gateway(
         .status(StatusCode::UNAUTHORIZED)
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
-            r#"{"error":"this port answers only to the datalib gateway"}"#,
+            r#"{"error":"this port answers only to the Datalib gateway"}"#,
         ))
         .unwrap_or_else(|_| Response::new(Body::empty()))
 }

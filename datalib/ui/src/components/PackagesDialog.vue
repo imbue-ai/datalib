@@ -80,7 +80,7 @@ function onKeydown(e: KeyboardEvent) {
       </header>
       <div class="dialog-body pkd-body">
         <p class="pkd-intro">
-          Programs this library runs besides datalib's own. They are listed in its config.toml, so a
+          Programs this library runs besides Datalib's own. They are listed in its config.toml, so a
           copy of the library brings them along.
         </p>
         <ul v-if="packages.length" class="pkd-list">

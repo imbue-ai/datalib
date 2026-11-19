@@ -90,7 +90,7 @@ impl Manifest {
     fn check(&self) -> Result<()> {
         if self.schema != SCHEMA {
             bail!(
-                "schema {} — this build of datalib reads schema {SCHEMA}; a newer datalib may \
+                "schema {} — this build of Datalib reads schema {SCHEMA}; a newer Datalib may \
                  read this package",
                 self.schema
             );
@@ -104,7 +104,7 @@ impl Manifest {
         for (target, a) in &self.artifacts {
             if target != ANY && !TARGETS.contains(&target.as_str()) {
                 bail!(
-                    "artifacts: {target:?} is not a platform datalib ships for ({}, or {ANY})",
+                    "artifacts: {target:?} is not a platform Datalib ships for ({}, or {ANY})",
                     TARGETS.join(", ")
                 );
             }

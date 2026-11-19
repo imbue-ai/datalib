@@ -250,7 +250,7 @@ export function photoDrop(
   if (url.origin !== origin) {
     return {
       refused:
-        "That image is on another site, which datalib does not fetch. Save it, then drop the file.",
+        "That image is on another site, which Datalib does not fetch. Save it, then drop the file.",
     };
   }
   return { url: url.pathname + url.search };

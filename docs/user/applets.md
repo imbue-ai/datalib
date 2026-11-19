@@ -7,7 +7,7 @@ entry when it starts and keeps it running, so an applet's routes answer
 only while the app is up. A sync needs no applet; it is the steps that
 write the data, and the applets read it.
 
-This page says what the applets datalib ships serve, for an agent
+This page says what the applets Datalib ships serve, for an agent
 calling them or a person deciding which to keep. To write your own, see
 [writing an applet](../dev/applets.md).
 

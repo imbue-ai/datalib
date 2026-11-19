@@ -356,7 +356,7 @@ fn handle(
     let (status, body) = if !gate.admits(header("host"), header(crate::gate::SECRET_HEADER)) {
         (
             401,
-            r#"{"error":"this port answers only to the datalib gateway"}"#.to_string(),
+            r#"{"error":"this port answers only to the Datalib gateway"}"#.to_string(),
         )
     } else {
         match path {

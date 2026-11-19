@@ -1,6 +1,6 @@
 # Searching your mirror
 
-One query language answers everywhere you can search datalib: the
+One query language answers everywhere you can search Datalib: the
 search box at the top of the app (Enter runs it in the search tab you are on,
 or a new tab from anywhere else; ⌘Enter always opens a new tab; and its arrow
 opens Advanced search, whose every setting writes the same
@@ -105,7 +105,7 @@ The keys for what a row is and where it lives are `source:` (a
 source by its id in the config; also `source_id:`), `kind:` (`Email`,
 `Slack Message`, …), `subject:` (also `conversation:`), `channel:`,
 `account:`, `project:`, `id:` (a row by the id its source gave it),
-`datalib_document_id:` (a document by datalib's id for it, and every
+`datalib_document_id:` (a document by Datalib's id for it, and every
 row in it), `contact:` and `email:` (an address book's columns), and
 the id of any other column the grid shows (`org_name:`, `created_at:`,
 …). These match the whole value as stored, case and all: `kind:Email`,
@@ -132,7 +132,7 @@ Slack message is `<channel>#<ts>`, a GitHub comment
 `id:` is the exact match, unlike an id pasted as free text (above):
 the rows whose source id is that value, and nothing else.
 
-`datalib_document_id:` takes the id datalib gave a document (a thread,
+`datalib_document_id:` takes the id Datalib gave a document (a thread,
 a conversation, a page) and keeps that document and every row in it,
 over every month of a chat; Keep only on a Subject cell writes it. A
 message's own id finds nothing, since a message is a row inside a
@@ -192,7 +192,7 @@ A person is found by the part they played:
 The value can be:
 
 - **An address or number** (`riker@enterprise.org`, `+12025550101`), or
-  any handle as datalib writes it (`email:…`, `tel:…`,
+  any handle as Datalib writes it (`email:…`, `tel:…`,
   `slack:T…/U…`, `github:jlpicard`): that person exactly.
 - **A quoted name** (`from:"Will Riker"`): any name holding those
   words in that order, each whole (`from:"Riker"` finds "Will Riker

@@ -3,7 +3,7 @@
 Please report it privately, using GitHub's private vulnerability reporting:
 [**Report a vulnerability**](https://github.com/imbue-ai/datalib/security/advisories/new).
 You'll need a GitHub account, and only you and the maintainers can see the
-report. Please don't open a public issue, because datalib holds people's email,
+report. Please don't open a public issue, because Datalib holds people's email,
 messages and sign-ins.
 
 It helps to say which version you ran (`datalib-dag --version`), what you did,

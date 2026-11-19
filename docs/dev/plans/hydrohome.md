@@ -53,7 +53,7 @@ meter is in Canada.
 The important correction over the first draft: **the REST API serves
 minute-resolution history**, so the real-time MQTT stream is not needed
 to mirror per-minute data. The stream matters only if you want the
-live "right now" number streamed continuously; for a datalib mirror,
+live "right now" number streamed continuously; for a Datalib mirror,
 polling the REST endpoint is enough and far simpler.
 
 ### Real-time demand — AWS IoT Core MQTT
@@ -215,7 +215,7 @@ system and is not needed to authenticate.
 ### Using latchkey (imbue-ai/latchkey) — the intended auth layer
 
 Auth belongs in `latchkey` (Imbue's own credential tool), exactly as the
-`claude` and `chatgpt` providers do it, so the datalib provider embeds
+`claude` and `chatgpt` providers do it, so the Datalib provider embeds
 **no auth code and no secrets** — it just calls `latchkey_curl` with its
 service name.
 
@@ -265,7 +265,7 @@ Three rungs, in increasing polish:
    exchange, holding the refresh token for silent renewal. latchkey
    already has the hook for registering OAuth client details:
    `latchkey auth prepare <service> <json>`. This is a latchkey code
-   change, not a datalib one, and it is what turns auth into a one-time
+   change, not a Datalib one, and it is what turns auth into a one-time
    browser login for shipping.
 
 **What building rung 3 needs:** one *focused* capture session (same rig,
@@ -297,7 +297,7 @@ per user (see above). If the `/v3/login/12` question above turns out to
 require an app-embedded shared secret, that is an argument for keeping the
 provider private, not for baking the secret into the tree.
 
-## How this would land in datalib
+## How this would land in Datalib
 
 ### `hydrohome` — usage history, all resolutions (buildable now, from anywhere)
 

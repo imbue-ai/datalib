@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// "Data Liberation ✊ › <library>" at the start of the top bar. In the
+// "Datalib ✊ › <library>" at the start of the top bar. In the
 // desktop app the name goes up to the libraries screen and the
 // library's name opens a menu of the other libraries to switch to. A
 // browser shows the same two words with nothing behind them, since only
@@ -72,9 +72,9 @@ onBeforeUnmount(() => (open.value = false));
 <template>
   <div ref="el" class="crumb" data-tauri-drag-region>
     <button v-if="desktop" class="crumb-home" title="All libraries" @click="goUp()">
-      Data Liberation ✊
+      Datalib ✊
     </button>
-    <span v-else class="crumb-home" data-tauri-drag-region>Data Liberation ✊</span>
+    <span v-else class="crumb-home" data-tauri-drag-region>Datalib ✊</span>
     <template v-if="name">
       <span class="crumb-sep" aria-hidden="true">›</span>
       <button

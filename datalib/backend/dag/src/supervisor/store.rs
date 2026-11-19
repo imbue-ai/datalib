@@ -318,7 +318,7 @@ impl Store {
         if let Some(meta) = datalib_store_meta::read(&self.pool).await? {
             if meta.schema_version > SCHEMA_VERSION {
                 bail!(
-                    "{} was written by datalib {} (schema {}), newer than this build \
+                    "{} was written by Datalib {} (schema {}), newer than this build \
                      (schema {SCHEMA_VERSION}); run that build or a later one",
                     path.display(),
                     meta.datalib_version,

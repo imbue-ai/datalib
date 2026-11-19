@@ -1,6 +1,6 @@
 # The docs `datalib-step help` prints
 
-An agent setting datalib up has a release and a shell, not the repo.
+An agent setting Datalib up has a release and a shell, not the repo.
 Every doc it is sent to is compiled into `datalib-step`, listed in
 `src/lib.rs` (`DOCS`), and printed whole by `datalib-step help
 <topic>`; `datalib-step help docs` lists them. A release writes each
@@ -26,7 +26,7 @@ An agent in a network sandbox reaches neither GitHub URL, so a doc here
 says what its reader needs to act and links out only for more: a
 contributor's file, a place to file an issue or download a release.
 
-A **guide** (`Kind::Guide`, a doc written for someone using datalib)
+A **guide** (`Kind::Guide`, a doc written for someone using Datalib)
 links only to docs here, or to a contributor file named in
 `GUIDE_LINKS_SERVED_RAW` in `src/tests.rs`. A doc an agent needs goes
 in `DOCS` instead. A **reference** (written for contributors too) may

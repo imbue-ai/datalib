@@ -163,10 +163,10 @@ fn docs_page() -> String {
         0,
     );
     for (kind, heading) in [
-        (Kind::Guide, "Guides, for using datalib:"),
+        (Kind::Guide, "Guides, for using Datalib:"),
         (
             Kind::Reference,
-            "References, written for datalib's contributors too:",
+            "References, written for Datalib's contributors too:",
         ),
         (Kind::Config, "Example configs, each one that loads:"),
     ] {
@@ -325,9 +325,9 @@ fn examples_intro(t: SourceType) -> Vec<String> {
 }
 
 fn overview(commands: &[String]) -> String {
-    let mut out = String::from("datalib-step help: setting datalib up from a shell\n\n");
+    let mut out = String::from("datalib-step help: setting Datalib up from a shell\n\n");
     out.push_str(&wrap(
-        "datalib mirrors a person's data (chats, email, messages, contacts, …) into one \
+        "Datalib mirrors a person's data (chats, email, messages, contacts, …) into one \
          directory, the data root, and indexes it for search. Its config.toml lists the \
          sources, and datalib-dag syncs them. To set a source up:",
         0,
@@ -701,9 +701,9 @@ mod tests {
     #[test]
     fn every_doc_prints_by_its_topic_with_no_relative_link_left() {
         for (word, title) in [
-            ("agent", "# datalib — agent user guide"),
+            ("agent", "# Datalib — agent user guide"),
             ("raw-stores", "# Reading the raw stores"),
-            ("apps", "# Building an app on datalib"),
+            ("apps", "# Building an app on Datalib"),
             ("search", "# Searching your mirror"),
             ("step-protocol", "# Writing a step command"),
         ] {

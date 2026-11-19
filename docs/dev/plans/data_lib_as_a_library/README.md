@@ -1,6 +1,6 @@
-# datalib as a library
+# Datalib as a library
 
-Two proposals, written 2026-09-03, about turning datalib from an
+Two proposals, written 2026-09-03, about turning Datalib from an
 application that mirrors personal data into something other people —
 and other people's agents — can build on. **Read them in order; the
 second depends on the first.**

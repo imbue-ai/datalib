@@ -1107,7 +1107,7 @@ def main() -> None:
     k.add_argument("--history", required=True, help="the history's directory")
     k.add_argument("--note", required=True, help="what this run measured, a few words")
     k.add_argument(
-        "--commit", help="the datalib commit, for a run that did not record one"
+        "--commit", help="the Datalib commit, for a run that did not record one"
     )
     k.set_defaults(func=keep)
     h = sub.add_parser("history", help="the kept runs, oldest first")

@@ -172,7 +172,7 @@ impl AppStore {
             if changed && has_dolt && committed {
                 sqlx::query("SELECT dolt_commit('-Am', ?)")
                     .bind(format!(
-                        "meta: written by datalib {}",
+                        "meta: written by Datalib {}",
                         datalib_runtime::build_id::DATALIB_VERSION
                     ))
                     .execute(pool)
@@ -964,7 +964,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            message.starts_with("meta: written by datalib "),
+            message.starts_with("meta: written by Datalib "),
             "feedback commits its meta rows on open, got {message:?}"
         );
         drop(store);
@@ -994,7 +994,7 @@ mod tests {
             Ok(_) => panic!("an older build opened a newer root"),
             Err(e) => e.to_string(),
         };
-        assert!(err.contains("was written by datalib 99.0.0"), "{err}");
+        assert!(err.contains("was written by Datalib 99.0.0"), "{err}");
     }
 
     /// A root from before `disk_stats` keeps both series in the doltlite

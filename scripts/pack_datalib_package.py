@@ -4,7 +4,7 @@
     scripts/pack_datalib_package.py <package dir> <out dir>
 
 <package dir> holds `datalib-package.toml` without an `[artifacts]` table,
-and `build/<target>/` for each build: a target triple datalib ships for,
+and `build/<target>/` for each build: a target triple Datalib ships for,
 or `any`. <out dir> gets one `<name>-<version>-<target>.tar.gz` per build
 and the manifest with `[artifacts]` naming each by its sha256. Upload
 everything in <out dir> to one GitHub release, and `github:owner/repo`
@@ -57,7 +57,7 @@ def main(src: Path, out: Path) -> None:
     for build in sorted((src / "build").iterdir()):
         if build.name not in TARGETS:
             sys.exit(
-                f"build/{build.name}: not a target datalib ships for ({', '.join(sorted(TARGETS))})"
+                f"build/{build.name}: not a target Datalib ships for ({', '.join(sorted(TARGETS))})"
             )
         data = pack(build)
         name = f"{slug}-{manifest['version']}-{build.name}.tar.gz"

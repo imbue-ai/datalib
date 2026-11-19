@@ -135,7 +135,7 @@ fills one in. A folder that is already a library is opened instead,
 and one with other files in it is refused. The new library's server
 starts with `--init`, so it opens on the Dashboard.
 
-The app's top bar leads back here: "Data Liberation ✊" closes the
+The app's top bar leads back here: "Datalib ✊" closes the
 library and opens this screen, and the library's name opens a menu of
 the other libraries to switch to (`library_menu`, `library_switch`, `libraries_show`, granted to the
 app's page by `capabilities/switch-libraries.json`).

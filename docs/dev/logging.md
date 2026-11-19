@@ -7,7 +7,7 @@ lines on stderr (pipes, envelopes, flushing, the error tail) is
 
 ## One store
 
-Everything any datalib process says lands in one file,
+Everything any Datalib process says lands in one file,
 `<data_root>/system/runs/runs.sqlite` — plain SQLite in WAL mode, so
 `sqlite3` opens it. The runner writes it during a run; `datalib-http`
 writes it for the life of the server. The tables:
@@ -141,7 +141,7 @@ the wait ends when the answer arrives and the line says `hidden`.
 
 **Levels** are `trace` … `error`. The level a root logs at is
 `log_level` at the top of its `config.toml` — `trace` when it does not
-say — and it applies to datalib's own crates (the server's `http.*`
+say — and it applies to Datalib's own crates (the server's `http.*`
 targets included) in every process of that root: the server reads it at
 launch (a change takes a restart), the runner per run, and each step
 gets the resulting filter as `RUST_LOG`. Third-party crates follow it

@@ -12,7 +12,7 @@ use datalib_source_common::ExampleKind;
 
 const REL: &str = "docs/user/config_examples/all_sources.toml";
 
-const HEAD: &str = r#"# Every source datalib can mirror, one group per way in, ready to copy.
+const HEAD: &str = r#"# Every source Datalib can mirror, one group per way in, ready to copy.
 #
 # GENERATED: each group below is its source's complete example stanza,
 # `datalib/backend/etl/providers/<type>_config/examples/complete_<method>.toml`,

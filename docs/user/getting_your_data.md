@@ -16,7 +16,7 @@ ways in (email's are `jmap`, `gmail`, `mbox` and `apple_mail`). A table
 that reads files carries its own `path`.
 
 Conventions: exports land under `~/backups/`; adjust to taste and point
-the source at them. `latchkey` is the one the datalib installer put on
+the source at them. `latchkey` is the one the Datalib installer put on
 your `PATH`. Wherever a command takes a secret, it is written as
 `$(pbpaste)`: copy the secret to your clipboard, then run the command,
 and your shell history keeps `$(pbpaste)` rather than the secret.

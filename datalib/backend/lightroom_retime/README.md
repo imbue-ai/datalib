@@ -72,7 +72,7 @@ files.
   and day columns already have its target is counted as done, and a run
   with nothing to do writes nothing, backup included.
 
-It writes with datalib's own SQLite, doltlite, which reads and writes
+It writes with Datalib's own SQLite, doltlite, which reads and writes
 plain SQLite files. `apply_test` builds a catalog with stock SQLite, as
 Lightroom's is, and reads the result back with stock SQLite.
 

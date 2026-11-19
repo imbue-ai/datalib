@@ -1,6 +1,6 @@
 # Chips: a link the app resolves, drawn as what it names
 
-A **chip** is how datalib shows something inline: a person, a source
+A **chip** is how Datalib shows something inline: a person, a source
 group, a pipeline step, a document, a date. It has a name, a picture or
 a mark, and behind it a stable identifier the app looks up to learn what
 that thing is *now*: the contact a person linked, the name the config
@@ -11,7 +11,7 @@ tooltip, right-click menu, double-click and copied text.
 What a document promises any viewer (the link a person is written as,
 the `<time>` a date is) is
 [showing a rendered document in your app](../user/rendered_documents.md);
-this page is how datalib's own viewer keeps it, and where to start to add
+this page is how Datalib's own viewer keeps it, and where to start to add
 a kind of chip or a place that draws them. What makes a *person* who
 they are (handles, each source's record, the contacts app) is
 [`contacts.md`](contacts.md).
@@ -30,7 +30,7 @@ they are (handles, each source's record, the contacts app) is
 
 **A chip is a markdown link whose href the app knows how to resolve.**
 In the markdown it is an ordinary link, so any markdown viewer shows a
-named link with a tooltip; datalib recognizes the href and draws a
+named link with a tooltip; Datalib recognizes the href and draws a
 chip. Nothing about how the chip looks is written down. The link
 carries only what the producer knew when it wrote it:
 
@@ -44,7 +44,7 @@ carries only what the producer knew when it wrote it:
   source showed for a person, the id for a group, the function for a
   step.
 - **href** — the entity URI.
-- **title** — the hover any other viewer shows; datalib shows a live
+- **title** — the hover any other viewer shows; Datalib shows a live
   tooltip instead.
 
 The URI for each kind of handle, and the trust rule a viewer keeps, are
@@ -357,8 +357,8 @@ from the cell alone, and a new search shows the new title.
   Copy title and link, which puts a link on the clipboard —
   `<a href="datalib:doc/<uuid>">Captain's log</a>` for whatever pastes
   rich text, `Captain's log (datalib:doc/<uuid>)` as plain text. The
-  href is the document's name, which datalib reads; no app registers
-  the scheme, so outside datalib it is a name, not a link that opens
+  href is the document's name, which Datalib reads; no app registers
+  the scheme, so outside Datalib it is a name, not a link that opens
   anything. The rest of the title
   bar's menu (`documentMenu.ts`: open at the source, feedback) needs the
   document itself, which a chip does not hold.

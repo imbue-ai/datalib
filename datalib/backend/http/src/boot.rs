@@ -314,7 +314,7 @@ mod tests {
             .await
             .unwrap_err()
             .to_string();
-        assert!(err.contains("written by datalib 99.0.0"), "{err}");
+        assert!(err.contains("written by Datalib 99.0.0"), "{err}");
         // Not opened: still says what the newer release wrote.
         let meta = datalib_store_meta::guard::read_at(&feedback)
             .await

@@ -44,7 +44,7 @@ function onKeydown(e: KeyboardEvent) {
       </header>
       <div class="rerender-body dialog-body">
         <p>
-          This version of datalib lays out rendered documents differently. Until they are rendered
+          This version of Datalib lays out rendered documents differently. Until they are rendered
           again, these sources show what the older version wrote, and a sync re-renders only the
           source it syncs:
         </p>

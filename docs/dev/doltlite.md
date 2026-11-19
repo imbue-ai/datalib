@@ -1137,7 +1137,7 @@ cause (network timeout, panic, OOM, etc.).
 
 ## When not to use the CLI
 
-- **Writably, on a store a sync may write.** Every writer datalib runs
+- **Writably, on a store a sync may write.** Every writer Datalib runs
   takes the store's writer lock; the CLI takes none, so a writable CLI
   session is exactly the second writer that lock exists to keep out.
 - **For routine reads from a program.** Open the file through sqlx, or

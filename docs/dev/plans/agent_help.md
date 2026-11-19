@@ -1,4 +1,4 @@
-# Help an agent can set datalib up from
+# Help an agent can set Datalib up from
 
 **Status: agreed 2026-10-21. §2.1 is #1275, §2.2 is #1278, §2.3 is
 built on the branch after it except the two items marked open, and
@@ -6,7 +6,7 @@ built on the branch after it except the two items marked open, and
 
 ## 1. The problem
 
-A person sets datalib up through the app: the source wizard says which
+A person sets Datalib up through the app: the source wizard says which
 fields matter, checks the connection, and writes a config that loads.
 An agent has a release tarball and a shell. What it gets there today:
 
