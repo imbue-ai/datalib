@@ -1,0 +1,14 @@
+load("@aspect_rules_js//js:defs.bzl", "js_binary")
+
+# A page that shows off <vs-tree> (//third-party/vscode-tree) over made-up
+# TNG data: `bazelisk run //hack/vscode_tree_demo`, then open the URL it
+# prints. README.md says what to try.
+js_binary(
+    name = "vscode_tree_demo",
+    data = [
+        "demo.js",
+        "index.html",
+        "//third-party/vscode-tree:vs_tree",
+    ],
+    entry_point = "serve.mjs",
+)
