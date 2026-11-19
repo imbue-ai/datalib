@@ -20,6 +20,14 @@ pub enum Field<C: 'static> {
     Column(&'static SearchKey<C>),
     /// A key that reads the search terms (`crate::terms_keys`).
     Terms(&'static TermsKey),
+    /// The row's text holds these words in this order: a quoted phrase or a
+    /// `+word`, or with `-`, does not. A message's text is its own; a
+    /// document's own row holds its whole document.
+    Text,
+    /// The row names this id or handle in any of its terms: an id, a link
+    /// ending in one, or an address, typed as free text. The value is as
+    /// typed; [`identifier`] reads it.
+    Names,
 }
 
 /// One filter occurrence from the query string.
@@ -85,9 +93,10 @@ pub struct ParsedQuery<C: 'static = GridRowColumn> {
     /// Each occurrence preserved in order. Same-field repetitions are
     /// AND-ed downstream (tree-zoom).
     pub terms: Vec<FilterTerm<C>>,
-    /// Free-text portion of the query (after structured filters are peeled
-    /// off, `qmd:` and `qmd_vsearch:` being other spellings of free text).
-    /// Empty when the user typed only structured filters.
+    /// The words to rank by, space-separated, with no quotes: every bare,
+    /// quoted and `+` word (`qmd:` and `qmd_vsearch:` being other
+    /// spellings). Empty when nothing is to be ranked: the filters are
+    /// then listed in order.
     pub free_text: String,
     pub semantic: Semantic,
     refusal: Option<String>,
@@ -123,16 +132,13 @@ impl<C: Column> ParsedQuery<C> {
                 datalib_query::Token::Term(t)
                     if ranked && !t.negate && (t.key == "qmd" || t.key == "qmd_vsearch") =>
                 {
-                    // Re-quote multi-word values so the search can route
-                    // them as a single lex phrase. `qmd:"earl grey"` and
-                    // `qmd:earl` both work; quotes survive into free_text
-                    // only when the user actually typed a phrase.
-                    let term = if t.value.contains(char::is_whitespace) {
-                        format!("\"{}\"", t.value)
+                    // `qmd:"earl grey"` was a phrase.
+                    let typed = if t.value.contains(char::is_whitespace) {
+                        datalib_query::quote(&t.value)
                     } else {
                         t.value
                     };
-                    free_terms.push(term);
+                    free_token(&typed, &mut terms, &mut free_terms);
                 }
                 datalib_query::Token::Term(t) => match field::<C>(&t.key, &t.value, terms_keys) {
                     Ok(field) => terms.push(FilterTerm {
@@ -146,11 +152,9 @@ impl<C: Column> ParsedQuery<C> {
                         refusal.get_or_insert(why);
                     }
                 },
-                // Bare term: surrounding quotes and a leading `-` stay
-                // verbatim so the daemon can forward lex-meaningful syntax to
-                // the search. `"earl grey"` → exact-phrase match; `-foo` →
-                // term exclusion; `-"earl grey"` → phrase exclusion. See
-                // `hits::lex`. Plain words pass through too.
+                datalib_query::Token::Free(raw) if ranked => {
+                    free_token(&raw, &mut terms, &mut free_terms)
+                }
                 datalib_query::Token::Free(raw) => free_terms.push(raw),
             }
         }
@@ -236,6 +240,46 @@ impl ParsedQuery<GridRowColumn> {
     pub fn documents(&self) -> Option<bool> {
         self.flag(GridRowColumn::IsDocument)
     }
+}
+
+/// One free token of a ranked table's query. An id or an address is a
+/// filter on the row's terms; a quoted, `+` or `-` one a filter on its
+/// text; every word but an excluded one is ranked by.
+fn free_token<C>(raw: &str, terms: &mut Vec<FilterTerm<C>>, words: &mut Vec<String>) {
+    let (text, negate) = datalib_query::free_text(raw);
+    let body = raw.strip_prefix('-').filter(|_| negate).unwrap_or(raw);
+    let quoted = body.len() >= 2 && body.starts_with('"') && body.ends_with('"');
+    let filter = |field, value: String| FilterTerm {
+        field,
+        value,
+        negate,
+        quoted,
+        handles: None,
+    };
+    if !quoted && identifier(&text).is_some() {
+        terms.push(filter(Field::Names, text));
+        return;
+    }
+    let (required, text) = match text.strip_prefix('+') {
+        Some(rest) if !quoted && !negate && !rest.is_empty() => (true, rest.to_string()),
+        _ => (false, text),
+    };
+    // Punctuation alone (`warp - core`) is no word: the index holds none.
+    if !text.chars().any(char::is_alphanumeric) {
+        return;
+    }
+    if quoted || required || negate {
+        terms.push(filter(Field::Text, text.clone()));
+    }
+    if !negate {
+        words.push(text);
+    }
+}
+
+/// `word` as the id or handle it names: a uuid, dashed or not, alone or at
+/// the end of a slug or a link, canonical; or a handle (`terms_keys::handle_of`).
+pub fn identifier(word: &str) -> Option<String> {
+    datalib_uuid_text::at_end(word).or_else(|| terms_keys::handle_of(word))
 }
 
 fn is_me<C>(t: &FilterTerm<C>) -> bool {
@@ -478,27 +522,6 @@ mod tests {
     }
 
     #[test]
-    fn quoted_free_text_preserves_quotes() {
-        // Quotes survive into free_text so the search can take a
-        // lex sub-query for exact-phrase matching.
-        let q = parse_query("\"hello world\" channel:bridge");
-        assert_eq!(q.free_text, "\"hello world\"");
-        assert_eq!(kept(&q, col("channel")), ["bridge"]);
-    }
-
-    #[test]
-    fn negated_quoted_free_text_preserves_quotes_and_dash() {
-        let q = parse_query("-\"earl grey\"");
-        assert_eq!(q.free_text, "-\"earl grey\"");
-    }
-
-    #[test]
-    fn phrase_plus_word_concatenated_in_order() {
-        let q = parse_query("\"earl grey\" tea");
-        assert_eq!(q.free_text, "\"earl grey\" tea");
-    }
-
-    #[test]
     fn duplicate_filters_accumulate() {
         let q = parse_query("channel:a channel:b");
         assert_eq!(kept(&q, col("channel")), ["a", "b"]);
@@ -566,44 +589,117 @@ mod tests {
 
     /// A word whose 36th byte from the end falls inside a character
     /// panicked on the byte slice; every free-text search reaches this.
+    /// The words to rank by are every word but an excluded one, without its
+    /// quotes; a quoted, `+` or `-` one is a filter on the row's text too.
     #[test]
-    fn bare_text_defaults_to_hybrid_mode() {
-        let q = parse_query("earl grey");
+    fn free_text_is_words_to_rank_and_filters_on_the_text() {
+        let q = parse_query(r#""warp core" +deck -breach -"red alert" twelve channel:bridge"#);
+        assert_eq!(q.free_text, "warp core deck twelve");
+        let text: Vec<(&str, bool)> = q
+            .terms
+            .iter()
+            .filter(|t| t.field == Field::Text)
+            .map(|t| (t.value.as_str(), t.negate))
+            .collect();
+        assert_eq!(
+            text,
+            [
+                ("warp core", false),
+                ("deck", false),
+                ("breach", true),
+                ("red alert", true)
+            ]
+        );
+        assert_eq!(kept(&q, col("channel")), ["bridge"]);
+        assert_eq!(parse_query("-breach").free_text, "", "nothing to rank");
+    }
+
+    /// Punctuation alone is no word; a lone `+` or `-` is punctuation.
+    #[test]
+    fn punctuation_alone_is_skipped() {
+        let q = parse_query("warp - core + \"--\"");
+        assert_eq!(q.free_text, "warp core");
+        assert!(q.terms.is_empty(), "{:?}", q.terms);
+    }
+
+    /// `qmd:` and `qmd_vsearch:` are free text: a value of several words a
+    /// phrase.
+    #[test]
+    fn qmd_values_are_free_text() {
+        let q = parse_query("qmd:\"earl grey\" source:slack");
         assert_eq!(q.free_text, "earl grey");
+        assert_eq!(q.terms[0].field, Field::Text);
+        assert_eq!(parse_query("qmd_vsearch:tea").free_text, "tea");
+    }
+
+    /// An id or an address typed as free text is a filter on what a row
+    /// names, as typed, and nothing to rank.
+    #[test]
+    fn an_id_or_an_address_is_a_filter() {
+        let q = parse_query("Ann@Example.com -1701d000abcd4e00a0000000000000ef budget");
+        assert_eq!(q.free_text, "budget");
+        let names: Vec<(&str, bool)> = q
+            .terms
+            .iter()
+            .filter(|t| t.field == Field::Names)
+            .map(|t| (t.value.as_str(), t.negate))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                ("Ann@Example.com", false),
+                ("1701d000abcd4e00a0000000000000ef", true)
+            ]
+        );
+        assert_eq!(
+            parse_query("\"ann@example.com\"").terms[0].field,
+            Field::Text,
+            "quoted, it is words"
+        );
     }
 
     #[test]
-    fn qmd_predicate_keeps_a_phrase_quoted() {
-        let q = parse_query("qmd:\"earl grey\"");
-        // Multi-word qmd: value is re-quoted so the search can route
-        // it as a single lex phrase.
-        assert_eq!(q.free_text, "\"earl grey\"");
-        // qmd: is NOT a Field — it doesn't show up as a structured filter.
-        assert!(q.terms.is_empty());
+    fn identifiers_are_uuids_and_handles_and_nothing_else() {
+        let id = |w: &str| identifier(w);
+        assert_eq!(
+            id("00000000-0000-8B8A-896D-63addc7b31ad").as_deref(),
+            Some("00000000-0000-8b8a-896d-63addc7b31ad")
+        );
+        assert_eq!(
+            id("away-team-00000000-0000-4000-8000-000000000001").as_deref(),
+            Some("00000000-0000-4000-8000-000000000001")
+        );
+        assert_eq!(
+            id("Ann@Example.com").as_deref(),
+            Some("email:ann@example.com")
+        );
+        assert_eq!(id("slack:T1/U2").as_deref(), Some("slack:T1/U2"));
+        assert_eq!(id("budget"), None);
+        assert_eq!(
+            id("xxx00000000-0000-4000-8000-000000000001"),
+            None,
+            "a uuid run into the word before it is not one"
+        );
     }
 
+    /// Notion's id for a page, and the link a person copies from Notion,
+    /// carry no dashes.
     #[test]
-    fn qmd_vsearch_predicate_is_plain_free_text() {
-        let q = parse_query("qmd_vsearch:\"hello world\"");
-        assert_eq!(q.free_text, "\"hello world\"");
-    }
-
-    #[test]
-    fn qmd_predicate_single_word_unquoted() {
-        // Single-word qmd: value doesn't need re-quoting.
-        let q = parse_query("qmd:\"foo\" source:slack");
-        assert_eq!(q.free_text, "foo");
-        assert_eq!(kept(&q, col("source_id")), ["slack"]);
-    }
-
-    #[test]
-    fn lone_dash_term_stays_free_text() {
-        // `-foo` (no colon) is just a free-text token (we don't yet
-        // implement free-text negation); the leading `-` is preserved so
-        // round-tripping isn't lossy.
-        let q = parse_query("-foo bar");
-        assert_eq!(q.free_text, "-foo bar");
-        assert!(q.terms.is_empty());
+    fn an_id_without_dashes_or_inside_a_link_is_an_identifier() {
+        for word in [
+            "1701d00ab0a14e5f8c3a9d2e4f6b7c81",
+            "1701D00AB0A14E5F8C3A9D2E4F6B7C81",
+            "https://app.notion.com/p/bridge/Project-Away-Team-1701d00ab0a14e5f8c3a9d2e4f6b7c81",
+            "https://www.notion.so/1701d00ab0a14e5f8c3a9d2e4f6b7c81?pvs=4",
+            "https://claude.test/chat/1701d00a-b0a1-4e5f-8c3a-9d2e4f6b7c81/",
+        ] {
+            assert_eq!(
+                identifier(word).as_deref(),
+                Some("1701d00a-b0a1-4e5f-8c3a-9d2e4f6b7c81"),
+                "{word}"
+            );
+        }
+        assert_eq!(identifier("x1701d00ab0a14e5f8c3a9d2e4f6b7c81"), None);
     }
 
     /// The search bar's one say over meaning: on by default at a cutoff, off,

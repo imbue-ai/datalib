@@ -389,7 +389,7 @@ fn percent_encoded(s: &str) -> String {
 
 /// `datalib-applet search` prints what `/search` answers, for the same
 /// root and the same parameters, byte for byte as JSON: structured terms,
-/// paging and sort, an identifier, the Fields and Words tabs, and a
+/// paging and sort, an address, words, a `tab` it no longer has, and a
 /// refusal. It exits 1 on the refusal, saying why on stderr.
 #[test]
 fn the_search_command_answers_what_the_search_box_gets() {

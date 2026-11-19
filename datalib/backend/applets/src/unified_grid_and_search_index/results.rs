@@ -109,15 +109,35 @@ impl ResultCache {
     }
 }
 
-/// What a search's structured terms keep, worked out once per query and
-/// commit and shared by every answer to it: Words narrows to its
-/// documents, Meaning to its messages, a page lands only on its rows.
+/// What a search's filters keep, worked out once per query and commit and
+/// shared by every answer to it: Words and Meaning rank only what it keeps,
+/// a page lands only on its rows.
 /// Asked of the index each time, one person key cost seconds per ask, and
 /// one search asked four or five times.
 pub struct Keyed {
     pub rows: HashSet<String>,
     pub documents: HashSet<String>,
     pub kept: HashMap<String, datalib_unified_grid_and_search_index::hits::vectors::Kept>,
+}
+
+impl Keyed {
+    /// What it keeps, as the search index's words read it.
+    pub fn kept_rows(&self) -> datalib_search_index::KeptRows<'_> {
+        use datalib_unified_grid_and_search_index::hits::vectors::Kept;
+        let mut out = datalib_search_index::KeptRows {
+            whole: Vec::new(),
+            messages: Vec::new(),
+        };
+        for (document, kept) in &self.kept {
+            match kept {
+                Kept::Whole => out.whole.push(document),
+                Kept::Sections(messages) => {
+                    out.messages.extend(messages.iter().map(String::as_str))
+                }
+            }
+        }
+        out
+    }
 }
 
 /// How many of the documents a search could find have no vectors, so search
