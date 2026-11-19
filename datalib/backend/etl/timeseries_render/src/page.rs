@@ -436,7 +436,11 @@ fn render_device_sections(
     for dev in &page.devices {
         let uuid = profile.device_uuid(source_id, &dev.key);
         let series = by_device.get(dev.key.as_str()).map(Vec::as_slice);
-        out.keyed(&uuid, device_section(profile, &uuid, dev, series));
+        out.boxed(
+            &uuid,
+            format!("msg msg--{}", profile.tag),
+            &device_section(profile, dev, series),
+        );
     }
 
     // Values can exist for a device the store no longer names. Say so
@@ -465,18 +469,8 @@ fn render_device_sections(
     }
 }
 
-fn device_section(
-    profile: &PageProfile,
-    uuid: &str,
-    dev: &Device,
-    series: Option<&[&Series]>,
-) -> String {
+fn device_section(profile: &PageProfile, dev: &Device, series: Option<&[&Series]>) -> String {
     let mut out = String::new();
-    let _ = writeln!(
-        out,
-        "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--{}\">\n",
-        profile.tag
-    );
     let _ = writeln!(out, "### {}\n", escape_md_inline(&dev.name));
     let _ = writeln!(out, "*{}*\n", dev.facts);
     match series {
@@ -485,7 +479,6 @@ fn device_section(
             let _ = write!(out, "*(no {})*\n\n", profile.noun);
         }
     }
-    out.push_str("</div>\n\n");
     out
 }
 

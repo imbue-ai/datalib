@@ -11,7 +11,7 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_inline, escape_name_inline, escape_text, md_link_dest};
 use datalib_etl_render::inputs::Inputs;
 use datalib_etl_render::message::{chip_link, stamp_text_html, MessageHeader};
-use datalib_etl_render::section::{msg_div_open_with, Section, MSG_DIV_CLOSE};
+use datalib_etl_render::section::{msg_class, Section};
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
 use datalib_id::Identity;
@@ -573,8 +573,7 @@ impl Out<'_, '_, '_> {
 
         let level = "#".repeat((3 + depth).min(6));
         let check = if t.done { "☑" } else { "☐" };
-        let mut s = msg_div_open_with(&id.uuid, Provider::Todoist, &["todoist-task"]);
-        s.push_str("\n\n");
+        let mut s = String::new();
         s.push_str(&format!(
             "{level} {check} {}\n\n",
             content.replace(['\r', '\n'], " ")
@@ -588,9 +587,11 @@ impl Out<'_, '_, '_> {
             s.push_str(d);
             s.push_str("\n\n");
         }
-        s.push_str(MSG_DIV_CLOSE);
-        s.push_str("\n\n");
-        self.sections.push(Section::keyed(&id.uuid, s));
+        self.sections.push(Section::boxed(
+            &id.uuid,
+            msg_class(Provider::Todoist, &["todoist-task"]),
+            &s,
+        ));
 
         let adder = self
             .people
@@ -745,8 +746,7 @@ impl Out<'_, '_, '_> {
         self.stamp(posted);
         let author = self.people.get(uid_of(n, "posted_uid"));
         let content = str_of(n, "content").unwrap_or("");
-        let mut s = msg_div_open_with(&id.uuid, Provider::Todoist, &["todoist-comment"]);
-        s.push_str("\n\n");
+        let mut s = String::new();
         s.push_str(
             &MessageHeader {
                 author: author.as_ref().map_or("", |p| p.name.as_str()),
@@ -774,9 +774,11 @@ impl Out<'_, '_, '_> {
                 None => s.push_str(&format!("📎 {}\n\n", escape_name_inline(name))),
             }
         }
-        s.push_str(MSG_DIV_CLOSE);
-        s.push_str("\n\n");
-        self.sections.push(Section::keyed(&id.uuid, s));
+        self.sections.push(Section::boxed(
+            &id.uuid,
+            msg_class(Provider::Todoist, &["todoist-comment"]),
+            &s,
+        ));
 
         let mut body = content.to_string();
         if let Some(name) = attachment.and_then(|a| str_of(a, "file_name")) {

@@ -18,6 +18,9 @@ pub struct Section {
     pub md: String,
     /// What the render store keeps of it (`sections`).
     pub kept: Kept,
+    /// The class of the box `md` is drawn in ([`Section::boxed`]); `None`
+    /// for a section in no box.
+    pub class: Option<String>,
 }
 
 /// What of a section the render store keeps in `sections`, for whatever
@@ -47,18 +50,36 @@ impl Section {
             uuid: Some(uuid.to_string()),
             md,
             kept: Kept::Whole,
+            class: None,
+        }
+    }
+
+    /// An item's section drawn in its box: the `<div>` naming the item,
+    /// with `class`, around `inside`. Every box is drawn this one way, so
+    /// what reads it back knows the box from the uuid and the class alone
+    /// ([`inside_box`]) and the viewer can draw the box itself.
+    pub fn boxed(uuid: &str, class: String, inside: &str) -> Self {
+        Self {
+            md: draw_box(uuid, &class, inside),
+            class: Some(class),
+            ..Self::keyed(uuid, String::new())
         }
     }
 
     /// An item's section that also says which part of it is the body.
     pub fn item(uuid: &str, md: String, text: String, addressed: Vec<Addressee>) -> Self {
+        Self::keyed(uuid, md).with_body(text, addressed)
+    }
+
+    /// The section kept as an item's body, `text`, rather than whole.
+    pub fn with_body(self, text: String, addressed: Vec<Addressee>) -> Self {
         Self {
             kept: Kept::Body {
                 text,
                 addressed,
                 labels: Vec::new(),
             },
-            ..Self::keyed(uuid, md)
+            ..self
         }
     }
 
@@ -76,6 +97,7 @@ impl Section {
             uuid: None,
             md,
             kept: Kept::Whole,
+            class: None,
         }
     }
 
@@ -117,6 +139,7 @@ pub fn stored(markdown_uuid: &str, sections: &[Section]) -> Vec<SectionRow> {
                 framed,
                 addressed,
                 labels,
+                class: s.class.clone(),
             })
         })
         .collect()
@@ -152,6 +175,8 @@ pub struct SpelledSection {
     /// The item it is; `None` for a section that is no item's.
     pub uuid: Option<String>,
     pub md: String,
+    /// The class of the box `md` is drawn in, where it is in one.
+    pub class: Option<String>,
 }
 
 /// A document spelled back from what the store keeps of it, section by
@@ -172,10 +197,12 @@ pub fn spell(sections: &[SectionRow], drawn: &[DrawingRow]) -> Option<Vec<Spelle
             (Some(s), None) => Some(SpelledSection {
                 uuid: s.uuid.clone(),
                 md: s.text.clone(),
+                class: s.class.clone(),
             }),
             (s, Some(d)) => Some(SpelledSection {
                 uuid: s.and_then(|s| s.uuid.clone()),
                 md: d.spell(s.map(|s| s.text.as_str()))?,
+                class: s.and_then(|s| s.class.clone()),
             }),
             (None, None) => unreachable!("every entry has a row"),
         })
@@ -228,6 +255,12 @@ impl Pieces {
         self.done.push(Section::keyed(uuid, md));
     }
 
+    /// A keyed piece in its box ([`Section::boxed`]).
+    pub fn boxed(&mut self, uuid: &str, class: String, inside: &str) {
+        self.flush();
+        self.done.push(Section::boxed(uuid, class, inside));
+    }
+
     pub fn into_sections(mut self) -> Vec<Section> {
         self.flush();
         self.done
@@ -256,31 +289,42 @@ pub fn section_attrs(uuid: &str) -> String {
     format!(r#"id="m-{uuid}" data-section-uuid="{uuid}""#)
 }
 
-/// Opening tag for a per-message wrapper div. Pair with
-/// [`MSG_DIV_CLOSE`]. `provider` tags the element so per-provider CSS
-/// (avatar, accent color, etc.) can apply without each renderer
-/// inventing its own class scheme.
-pub fn msg_div_open(msg_uuid: &str, provider: Provider) -> String {
-    msg_div_open_with(msg_uuid, provider, &[])
-}
-
-/// [`msg_div_open`] with further classes after the two it always has.
-pub fn msg_div_open_with(msg_uuid: &str, provider: Provider, classes: &[&str]) -> String {
+/// A message's box class: `msg`, `msg--{provider}` so per-provider CSS can
+/// apply without each renderer inventing its own scheme, then `more`.
+pub fn msg_class(provider: Provider, more: &[&str]) -> String {
     let mut class = format!("msg msg--{provider}");
-    for c in classes {
+    for c in more {
         class.push(' ');
         class.push_str(c);
     }
+    class
+}
+
+/// The opening tag of an item's box ([`Section::boxed`]).
+pub fn box_open(uuid: &str, class: &str) -> String {
     format!(
         r#"<div {attrs} class="{class}">"#,
-        attrs = section_attrs(msg_uuid),
+        attrs = section_attrs(uuid)
     )
 }
 
-/// Closes a div opened with [`msg_div_open`]. A constant rather than
-/// a function so renderers can hard-code it in `const`-evaluable
-/// contexts; the close tag has no per-message state to thread in.
-pub const MSG_DIV_CLOSE: &str = "</div>";
+/// What ends an item's box, the blank line after it included.
+const BOX_CLOSE: &str = "</div>\n\n";
+
+/// What `md`, a section of `uuid` drawn in a box of `class` by
+/// [`Section::boxed`], holds inside its box. `None` when `md` is not that
+/// box: the drawing came from somewhere else.
+pub fn inside_box<'a>(uuid: &str, class: &str, md: &'a str) -> Option<&'a str> {
+    md.strip_prefix(box_open(uuid, class).as_str())?
+        .strip_prefix("\n\n")?
+        .strip_suffix(BOX_CLOSE)
+}
+
+/// `inside` drawn in the box of `uuid` and `class`: [`Section::boxed`]'s
+/// markdown, for what has only the box's facts and what is inside it.
+pub fn draw_box(uuid: &str, class: &str, inside: &str) -> String {
+    format!("{}\n\n{inside}{BOX_CLOSE}", box_open(uuid, class))
+}
 
 #[cfg(test)]
 mod tests {
@@ -369,6 +413,7 @@ mod tests {
                 framed,
                 addressed,
                 labels,
+                class: None,
             }
         };
         assert_eq!(
@@ -412,10 +457,56 @@ mod tests {
     }
 
     #[test]
-    fn div_open_shape() {
+    fn box_open_shape() {
         assert_eq!(
-            msg_div_open("abc", Provider::Slack),
-            r#"<div id="m-abc" data-section-uuid="abc" class="msg msg--slack">"#
+            box_open("abc", &msg_class(Provider::Slack, &["unread"])),
+            r#"<div id="m-abc" data-section-uuid="abc" class="msg msg--slack unread">"#
+        );
+    }
+
+    /// A box is drawn one way, so its inside comes back out of the drawing
+    /// from the uuid and class alone, and only from that box.
+    #[test]
+    fn a_box_gives_back_what_is_inside_it() {
+        let inside = "## Riker\n\n<div>Engage.</div>\n";
+        let s = Section::boxed("m1", msg_class(Provider::Slack, &[]), inside);
+        assert_eq!(
+            s.md,
+            "<div id=\"m-m1\" data-section-uuid=\"m1\" class=\"msg msg--slack\">\n\n\
+             ## Riker\n\n<div>Engage.</div>\n</div>\n\n"
+        );
+        let class = s.class.as_deref().unwrap();
+        assert_eq!(inside_box("m1", class, &s.md), Some(inside));
+        assert_eq!(draw_box("m1", class, inside), s.md);
+        assert_eq!(inside_box("m2", class, &s.md), None, "another item's box");
+        assert_eq!(inside_box("m1", "msg", &s.md), None, "another class");
+        assert_eq!(inside_box("m1", class, "Engage.\n"), None, "no box");
+    }
+
+    /// The store keeps a box's class with its section, and spells it back.
+    #[test]
+    fn the_store_keeps_the_box() {
+        let sections = vec![
+            Section::frame("# Title\n".into()),
+            Section::boxed("a", "msg".into(), "hi\n").with_body("hi".into(), Vec::new()),
+            Section::boxed("b", "msg".into(), "yes\n"),
+        ];
+        let rows = stored("doc", &sections);
+        assert_eq!(
+            rows.iter().map(|r| r.class.as_deref()).collect::<Vec<_>>(),
+            [Some("msg"), Some("msg")]
+        );
+        let spelled = spell(&rows, &drawn("doc", &sections)).unwrap();
+        assert_eq!(
+            spelled
+                .iter()
+                .map(|s| s.class.as_deref())
+                .collect::<Vec<_>>(),
+            [None, Some("msg"), Some("msg")]
+        );
+        assert_eq!(
+            spelled.iter().map(|s| s.md.as_str()).collect::<String>(),
+            join(&sections)
         );
     }
 }

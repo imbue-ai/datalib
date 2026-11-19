@@ -1,14 +1,13 @@
 # `edges` — directed links between source and destination anchors
 
 `edges` stores directed links between documents, or between spans
-inside documents. The schema is the `EdgeRow` struct in
-`datalib/backend/schema/src/edges.rs` (DDL via
-`#[derive(PortableTable)]`). A renderer returns a document's outgoing
-edges on `RenderedMarkdown::edges`; they are stored in the source's
-render store beside its rows, and the `unified_grid_and_search_index` step copies them into
-`<root>/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite` beside `grid_rows` and
-`markdowns` (`init_schema` in
-`datalib/backend/etl/render/src/grid_index.rs` creates the table).
+inside documents. A renderer returns a document's outgoing edges on
+`RenderedMarkdown::edges`; they are stored in the source's render store
+beside its rows, and the `unified_grid_and_search_index` step copies
+them into the grid index,
+`<root>/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`,
+beside `grid_rows` and `markdowns`. The row is the `EdgeRow` struct in
+`datalib/backend/schema/src/edges.rs`.
 
 ## Data model
 
@@ -16,16 +15,17 @@ One row =
 `(src_markdown_uuid, src_anchor_uuid?, dst_markdown_uuid, dst_anchor_uuid?, label?, kind)`.
 The src and dst sides are symmetric: each can be a whole document
 (anchor is NULL) or a span inside one (anchor is the value the renderer
-baked into the body as `data-section-uuid`). The primary key
-(`edge_uuid`) is `datalib_id::edge_id` over that tuple, so re-rendering
-is idempotent. A document owns the edges whose `src_markdown_uuid` is
-its own: the `unified_grid_and_search_index` step deletes them and inserts the new set
-each time it loads that document. The id carries the stamp of its
-source end; see [`entity_ids.md` § "The layout"](entity_ids.md#the-layout-the-stamp-first-then-the-hash).
+baked into the body as `data-section-uuid`). The primary key,
+`edge_uuid`, is `datalib_id::edge_id` over that tuple less `kind`, so
+re-rendering is idempotent. Its leading bits are its source end's
+stamp (the anchor's, else the document's), so an edge is stored beside
+the row it leaves from. A document owns the edges whose
+`src_markdown_uuid` is its own: each time the document is stored, its
+old set is replaced.
 
-`kind` says what the edge means, an `EdgeKind` stored as its number
-(`schema/src/edges.rs`): `Link` (0), a link the page draws, or
-`ReplyTo` (1), an item that answers another. A number is never reused.
+`kind` says what the edge means, an `EdgeKind` stored as its number:
+`Link` (0), a link the page draws, or `ReplyTo` (1), an
+item that answers another. A number is never reused.
 
 ## Producers
 
@@ -47,15 +47,13 @@ with the occurrence's or series' title).
 - one `bilingual-alignment` edge per aligned sentence pair, from the
   sentence span on this side to the sentence span on the other.
 
-
 ### Label conventions
 
-The destinations list at the top of a document uses `label` as the link
-text when present, then the destination's title, then its bare uuid.
-When both label and title are set and differ, the title follows in
-parentheses; the title is also the link's hover tooltip. So set `label`
-to what a person should read in that list — a short handle, not a
-taxonomy tag.
+The list of destinations at the top of a document shows `label` as the
+link text, else the destination's title, else its bare uuid; when label
+and title are both set and differ, the title follows in parentheses,
+and it is the hover too. So set `label` to what a person should read
+there: a short handle, not a taxonomy tag.
 
 Span-source edges (`src_anchor_uuid` set) are not listed; they show as
 clickable spans in the body, so their `label` can be metadata
@@ -64,8 +62,8 @@ clickable spans in the body, so their `label` can be metadata
 ## Consumers
 
 - `GET /applet/unified_grid_and_search_index/chat/{markdown_uuid}` returns
-  the `Link` edges as `outgoing_edges`, each joined with the
-  destination's title (`dst_title`). A reply is not drawn as a link.
+  the document's `Link` edges as `outgoing_edges`, each with the
+  destination's title (`dst_title`). `ReplyTo` edges are not returned.
 - `DocCard.ce.vue` lists the whole-doc outgoing edges at the top of the
   preview.
 - `ChatBody.ce.vue` marks every `[data-section-uuid]` that matches an

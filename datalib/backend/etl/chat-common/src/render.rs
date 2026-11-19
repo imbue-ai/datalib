@@ -84,7 +84,7 @@ use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::message::{chip_link, timestamp_html, MessageHeader};
-use datalib_etl_render::section::{msg_div_open_with, Section};
+use datalib_etl_render::section::{msg_class, Section};
 use datalib_etl_render::title::Title;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
@@ -618,12 +618,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
         (true, false) => &["unread"],
         (false, _) => &[],
     };
-    s.push_str(&msg_div_open_with(
-        &item.message_uuid,
-        profile.provider,
-        classes,
-    ));
-    s.push_str("\n\n");
+    let class = msg_class(profile.provider, classes);
 
     match item.kind {
         ItemKind::System => {
@@ -640,8 +635,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
                 "*<small>{ts} — system: {summary}</small>*\n\n",
                 ts = timestamp_html(item.date_ms, item.date_offset_secs),
             ));
-            s.push_str("</div>\n\n");
-            return Section::item(&item.message_uuid, s, summary, Vec::new());
+            return Section::boxed(&item.message_uuid, class, &s).with_body(summary, Vec::new());
         }
         ItemKind::Text | ItemKind::Attachment => {
             s.push_str(
@@ -727,14 +721,10 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
         s.push('\n');
     }
 
-    s.push_str("\n</div>\n\n");
-    Section::item(
-        &item.message_uuid,
-        s,
-        item_body,
-        addressed(&item.recipients),
-    )
-    .labelled(item.labels.clone())
+    s.push('\n');
+    Section::boxed(&item.message_uuid, class, &s)
+        .with_body(item_body, addressed(&item.recipients))
+        .labelled(item.labels.clone())
 }
 
 /// Who an item says it was addressed to, by name, for the search's
@@ -1482,7 +1472,7 @@ mod tests {
         rows
     }
     use crate::types::{NormalizedAttachment, NormalizedReaction, OrphanReactions};
-    use datalib_etl_render::section::{join, msg_div_open, Kept};
+    use datalib_etl_render::section::{inside_box, join, Kept};
 
     fn mk_chat() -> NormalizedChat {
         NormalizedChat {
@@ -2591,12 +2581,9 @@ mod tests {
         );
         for s in &sections {
             if let Some(uuid) = &s.uuid {
-                assert!(
-                    s.md.starts_with(&msg_div_open(uuid, Provider::Test)),
-                    "{}",
-                    s.md
-                );
-                assert!(s.md.ends_with("</div>\n\n"), "{}", s.md);
+                let class = s.class.as_deref().expect("every message is in a box");
+                assert!(class.starts_with("msg msg--test"), "{class}");
+                assert!(inside_box(uuid, class, &s.md).is_some(), "{}", s.md);
             }
         }
         assert!(

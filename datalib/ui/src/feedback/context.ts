@@ -1,6 +1,8 @@
 // Producer-side helpers for `FeedbackContext` — the shape the HTTP layer
 // stores in `feedback.context_json` (see schemas/feedback.schema.json).
 
+import { answers } from "@/cards/chatSections.js";
+
 export type FeedbackSurface =
   | "grid_cell"
   | "grid_row"
@@ -159,20 +161,13 @@ function elementOf(node: Node | null | undefined): Element | null {
   return node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
 }
 
-/** Look for the closest per-message wrapper the renderer emits around
- *  each message and return its message UUID.
- *
- *  Walks past per-block sections (tool_use / tool_result / thinking,
- *  whose `data-section-uuid` is prefixed `tu-`/`tr-`/`th-`) until we
- *  hit a message-level wrapper, i.e. one with `id="m-{uuid}"`. The
- *  feedback payload tracks the parent message, not the block — by
- *  design, since selections can span blocks. */
+/** The closest message around `el` and its UUID: an element with
+ *  `id="m-{uuid}"` that answers to its id (`sectionEl`), so a copy of
+ *  another message's wrapper inside a message is walked past. */
 export function messageAncestor(el: Element | null | undefined): string | null {
   let cur: Element | null = el ?? null;
   while (cur) {
-    if (cur.id && cur.id.startsWith("m-") && cur.hasAttribute("data-section-uuid")) {
-      return cur.id.slice(2);
-    }
+    if (cur.id.startsWith("m-") && answers(cur.ownerDocument, cur)) return cur.id.slice(2);
     cur = cur.parentElement;
   }
   return null;

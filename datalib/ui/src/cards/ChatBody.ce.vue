@@ -63,6 +63,7 @@ import {
   injectCopyUuidButtons,
   openEnclosingDetails,
   scrollSectionToTop,
+  sectionEl,
 } from "./chatSections.js";
 
 const props = defineProps<{
@@ -357,19 +358,16 @@ const edgeBySrcAnchor = computed<Map<string, EdgeOut>>(() => {
 });
 
 /**
- * Walk the rendered body and decorate every `[data-section-uuid]`
- * whose value matches a span-source edge. We stamp `data-edge-id` on
- * the element and add `.edge-source` so the CSS picks up the subtle
- * background. Click handling lives below via `onBodyEdgeClick`.
+ * Decorate the element each span-source edge starts at: stamp
+ * `data-edge-id` on it and add `.edge-source` so the CSS picks up the
+ * subtle background. Click handling lives below via `onBodyEdgeClick`.
  */
 function decorateEdgeSources() {
-  if (!body.value) return;
-  const lookup = edgeBySrcAnchor.value;
-  if (lookup.size === 0) return;
-  for (const el of body.value.querySelectorAll<HTMLElement>("[data-section-uuid]")) {
-    const anchor = el.getAttribute("data-section-uuid") ?? "";
-    const edge = lookup.get(anchor);
-    if (!edge) continue;
+  const root = body.value;
+  if (!root) return;
+  for (const [anchor, edge] of edgeBySrcAnchor.value) {
+    const el = sectionEl(root, anchor);
+    if (!el) continue;
     el.classList.add("edge-source");
     el.dataset.edgeId = edge.edge_uuid;
   }
@@ -425,10 +423,7 @@ function applyHoverDst() {
   }
   const anchor = props.hoverAnchorUuid;
   if (!anchor) return;
-  const target = body.value.querySelector<HTMLElement>(
-    `[data-section-uuid="${anchor.replace(/"/g, '\\"')}"]`,
-  );
-  if (target) target.classList.add("hover-dst");
+  sectionEl(body.value, anchor)?.classList.add("hover-dst");
 }
 
 function applySelection(scroll = true) {
@@ -437,14 +432,7 @@ function applySelection(scroll = true) {
     el.classList.remove("selected");
   }
   if (!props.selectedSectionUuid) return;
-  // Attribute-selector lookup avoids the CSS-id escaping minefield —
-  // tool_use block ids look like `tu-toolu_01ABC…`, which is a valid
-  // HTML id but not a valid bare CSS selector (the digit-prefixed
-  // chunks need escaping). `[data-section-uuid="…"]` keeps the
-  // matching pure string equality.
-  const target = body.value.querySelector<HTMLElement>(
-    `[data-section-uuid="${props.selectedSectionUuid.replace(/"/g, '\\"')}"]`,
-  );
+  const target = sectionEl(body.value, props.selectedSectionUuid);
   if (!target) return;
   target.classList.add("selected");
   openEnclosingDetails(target);

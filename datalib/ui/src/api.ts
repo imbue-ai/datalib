@@ -270,8 +270,9 @@ export type DocProblem = {
 };
 
 /// One piece of a document's body, in order: a message (`uuid`), or a
-/// piece of the page's frame (a title, a `<details>` opener).
-export type BodyPiece = { uuid: string | null; md: string };
+/// piece of the page's frame (a title, a `<details>` opener). A message
+/// in a box names the box's `class`, and `md` is what is inside it.
+export type BodyPiece = { uuid: string | null; class?: string | null; md: string };
 
 export type ChatResponse = {
   markdown_uuid: string;

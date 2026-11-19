@@ -216,11 +216,9 @@ fn whole((front, body): (Front, String)) -> (Front, Vec<Section>) {
     (front, vec![Section::unkeyed(body)])
 }
 
-fn section_open(out: &mut String, uuid: &str) {
-    let _ = writeln!(
-        out,
-        "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--garmin\">\n"
-    );
+/// The class of a Garmin section's box.
+fn boxed_class() -> String {
+    "msg msg--garmin".to_string()
 }
 
 /// The raw store's HEAD moves on every ingest (the bookkeeping stamps
@@ -402,13 +400,12 @@ fn render_daily_log(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resu
             .collect();
         let uuid = day_uuid(source_id, date);
         let mut piece = String::new();
-        section_open(&mut piece, &uuid);
         let _ = writeln!(piece, "### {}\n", stamp_text_html(date));
         for (family, line) in &by_family {
             let _ = writeln!(piece, "- **{}:** {line}", family.title());
         }
-        piece.push_str("\n</div>\n\n");
-        body.keyed(&uuid, piece);
+        piece.push('\n');
+        body.boxed(&uuid, boxed_class(), &piece);
         lines.push((date, by_family));
     }
     let count = lines.len();
@@ -532,14 +529,13 @@ fn render_listings(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resul
             let (name, said) = item.line(activity_name);
             let uuid = item_uuid(source_id, &item.id);
             let mut piece = String::new();
-            section_open(&mut piece, &uuid);
             let _ = write!(piece, "**{}**", escape_md_inline(&name));
             if !said.is_empty() {
                 let _ = write!(piece, " · {}", escape_md_inline(&said));
             }
             piece.push('\n');
-            piece.push_str("\n</div>\n\n");
-            body.keyed(&uuid, piece);
+            piece.push('\n');
+            body.boxed(&uuid, boxed_class(), &piece);
             lines.push((item, *row_kind, name, said));
         }
     }
@@ -662,7 +658,6 @@ fn render_device_section(out: &mut Pieces, parsed: &ParsedGarmin, source_id: &st
     for d in &parsed.devices {
         let uuid = device_uuid(source_id, &d.id);
         let mut piece = String::new();
-        section_open(&mut piece, &uuid);
         let _ = writeln!(piece, "### {}\n", escape_md_inline(&d.name));
         let _ = writeln!(
             piece,
@@ -673,8 +668,7 @@ fn render_device_section(out: &mut Pieces, parsed: &ParsedGarmin, source_id: &st
                 .map(|s| format!(" · last synced {}", escape_md_inline(s)))
                 .unwrap_or_default()
         );
-        piece.push_str("</div>\n\n");
-        out.keyed(&uuid, piece);
+        out.boxed(&uuid, boxed_class(), &piece);
     }
 }
 

@@ -26,8 +26,8 @@ inputs = ["beeper/ingest"]
 networks = ["signal", "googlechat"]  # which networks to render; omit for every one
                                      # (the ingest mirrors them all either way)
 
-# Search by meaning: the embeddings of what the grid index's keyword
-# pass cut of this source. Leave it out and keyword search still finds it.
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 group = "beeper"
 function = "embed"

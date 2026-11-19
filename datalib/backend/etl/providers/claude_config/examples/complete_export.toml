@@ -30,8 +30,8 @@ inputs = ["claude/ingest"]
 max_project_doc_bytes = 131072  # cut a project knowledge document's text at this many
                                 # bytes on the project's page; default 131072 (128 KiB)
 
-# Search by meaning: the embeddings of what the grid index's keyword
-# pass cut of this source. Leave it out and keyword search still finds it.
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 group = "claude"
 function = "embed"
