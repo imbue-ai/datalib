@@ -1001,6 +1001,20 @@ one row; renaming or moving a PDF preserves its identity. No OCR yet: a
 scanned, image-only PDF is recorded (`needs_ocr = 1` in the source's
 `pdf_documents` table) and produces no text.
 
+## Markdown notes
+
+`type = "markdown"` — a folder on disk (`fswalk.path`), such as an
+Obsidian vault. Mirrors every `.md` and `.markdown` file under it, one
+document per note, so notes show up in the grid and in search.
+
+Nothing but a path. A note is its path under the folder: editing it
+updates its document, and renaming or moving it replaces the document
+with one at the new path. Search knows where a note is filed, the same
+way it does for a PDF. Folders whose names start with a dot
+(`.obsidian`, `.trash`, `.git`) are skipped. Each sync keeps the text
+it read, so the copy holds earlier versions of a note even after the
+file has changed or gone.
+
 ## Notion
 
 `type = "notion"` — web API through latchkey (`api`). Mirrors your

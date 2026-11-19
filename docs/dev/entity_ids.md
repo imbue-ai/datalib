@@ -304,6 +304,7 @@ back by render as the natural key.
 | linkedin | none — keyed on the profile URL, the post link, the raw row id; the one skills page on its kind | messages, shares, comments |
 | notion | none — page, discussion and comment ids are Notion UUIDs, the backpointer rather than the key; `notion_page_uuid` holds the page's Datalib id; the table of contents is keyed `toc`, an anchor in it on the Notion id of what it lists | pages, comments — Notion's `created_time` |
 | pdf | none — keyed on the blake3, so two copies within a source are one row | documents and pages, when the Info dictionary dates the file |
+| markdown | none — keyed on the note's path under the folder, so a rename is a new note | none — an edit moves the file's mtime, and must not move the note's id |
 | perseus | none — keyed on the CTS locator and edition | none — a classical text has no stamp of its own |
 | signal | none — keyed on who a chat is with and who wrote a message (ACI, else PNI, else number; a group by its master key's hash), never the backup's own numbering | messages, on `date_sent` |
 | slack | `team_id` | messages, reactions — the `ts` in the key |

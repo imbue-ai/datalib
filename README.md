@@ -156,13 +156,14 @@ welcome.
   </tr>
   <tr>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#local-pdfs"><img src="datalib/ui/src/assets/pdf.svg" width="40" height="40" alt=""><br><b>Local PDFs</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#markdown-notes"><img src="datalib/ui/src/assets/markdown.svg" width="40" height="40" alt=""><br><b>Markdown notes</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#perseus-digital-library"><img src="datalib/ui/src/assets/perseus.svg" width="40" height="40" alt=""><br><b>Perseus Digital Library</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#signal-backups"><img src="datalib/ui/src/assets/signal.svg" width="40" height="40" alt=""><br><b>Signal backups</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#sms-backup-and-restore"><img src="datalib/ui/src/assets/sms.svg" width="40" height="40" alt=""><br><b>SMS Backup &amp; Restore</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#todoist"><img src="datalib/ui/src/assets/todoist.svg" width="40" height="40" alt=""><br><b>Todoist</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#whatsapp-backups"><img src="datalib/ui/src/assets/whatsapp.svg" width="40" height="40" alt=""><br><b>WhatsApp backups</b></a></td>
   </tr>
   <tr>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#whatsapp-backups"><img src="datalib/ui/src/assets/whatsapp.svg" width="40" height="40" alt=""><br><b>WhatsApp backups</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#yolink"><img src="datalib/ui/src/assets/yolink.png" width="40" height="40" alt=""><br><b>YoLink</b></a></td>
   </tr>
 </table>

@@ -398,6 +398,7 @@ therefore what it can see:
 | `media` | the scan; a file evicted to the cloud, over `max_bytes` or that will not open is present (`Scan::present_unread`) | path rows of files the scan did not find; then the items no path names, with their audio and visual rows. Nothing after a walk that reported errors |
 | `file_inventory` | every run's walk | rows the walk did not write. An entry it found and could not read (a folder that will not list, a file that will not hash) keeps its rows and its subtree's |
 | `pdf` | the scan; a file over `max_bytes` is present | path rows of files the scan did not find, then documents no path names. Nothing after a walk that reported errors |
+| `markdown` | the scan; a file over `max_bytes` is present | the note of each path the scan did not find, and a moved note's old path once its new one is stored. Nothing after a walk that reported errors, or while a file that changed could not be read |
 | `facebook` | each table's chunk files, read whole | rows a table no longer holds, only when every chunk file it was last read from is there and read, with the deleted records' media edges and edges to a `uri` a record of that table stopped naming. A missing chunk (a partial unpack), a file that will not parse, or a walk error deletes nothing in that table, edges included; a table none of whose files is present was left out |
 | `claude` (`export`) | `users.json`, `conversations.json` and `projects/`, each read whole | rows a present file no longer lists. A missing `users.json` or `projects/` deletes nothing, nor does a file whose entries are there but none has a uuid (a `phase:<file>` problem) |
 | `signal` | each snapshot read, when every frame decodes | recipients, chats, messages and attachment edges it no longer holds, in that snapshot's commit. A frame that would not decode, a snapshot that will not open, a missing snapshot folder or an unset passphrase deletes nothing |
@@ -441,7 +442,7 @@ section) and "we noticed and the grid still shows it" (that one) look
 identical from the UI.
 
 Every provider that records deltas can also detect a deletion, and
-`media` / `file_inventory` / `pdf` detect by set difference while recording none;
+`media` / `file_inventory` / `pdf` / `markdown` detect by set difference while recording none;
 the one mismatch is that the structural detectors write no `sync_runs`
 row.
 

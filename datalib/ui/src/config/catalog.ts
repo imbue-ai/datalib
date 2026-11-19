@@ -2448,6 +2448,45 @@ export const CATALOG: CatalogEntry[] = [
     ],
   },
   {
+    type: "markdown",
+    label: "Markdown notes",
+    blurb: "Make a folder of markdown notes searchable, such as an Obsidian vault.",
+    keywords: ["markdown", "notes", "obsidian", "vault", "md", "zettelkasten", "files"],
+    kind: "local",
+    icon: "markdown",
+    defaultName: "notes",
+    nameHint: "My Obsidian vault",
+    wizard: true,
+    sections: [{ heading: "Notes folder", fields: ["fswalk.path"] }],
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose the folder of notes to index",
+        required: true,
+        target: "fswalk.path",
+        label: "Notes folder",
+        help:
+          "Every .md file in this folder and the folders inside it. Folders whose names " +
+          "start with a dot, such as .obsidian and .trash, are skipped.",
+      },
+      {
+        kind: "string_list",
+        target: "ignore",
+        label: "Ignore patterns",
+        help:
+          "Gitignore-shaped patterns, comma-separated (templates/**, **/archive/**), on top " +
+          "of any .gitignore in the tree.",
+      },
+      {
+        kind: "bytes",
+        target: "max_bytes",
+        label: "Skip files larger than",
+        help: "Empty is the 16 MiB default.",
+      },
+    ],
+  },
+  {
     type: "file_inventory",
     label: "File inventory",
     blurb: "Keep a record of a directory tree — paths, sizes, content hashes.",

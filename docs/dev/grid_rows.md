@@ -390,6 +390,7 @@ Two nullable measurements. What each one measures is decided per
 | datalib.Store | the `.doltlite_db` file's size | — |
 | datalib.Table | — (see below) | rows in the table |
 | pdf.document | — | 1 |
+| markdown.Note | — | 1 |
 | any chat-common conversation row | the sum of its items' `byte_size` | its messages: what a person or an assistant said |
 | any chat-common message row | the body's UTF-8 length | 1; — for a tool call, a tool result or a system note |
 | any chat-common reaction row | — | — |

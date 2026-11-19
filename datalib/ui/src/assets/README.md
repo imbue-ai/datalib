@@ -50,11 +50,12 @@ the light and dark backgrounds.
   `fastmail_contacts.svg` take Fastmail's blue and yellow from
   `fastmail.svg`, so they sit beside Fastmail but read as what they hold.
 - **Generic glyphs** (`apple_photos`, `baby_connect`, `calendar`, `contacts`, `file_inventory`,
-  `media`, `pdf`, `perseus`, `search`, `system`) are
+  `markdown`, `media`, `pdf`, `perseus`, `search`, `system`) are
   [Material Design Icons](https://pictogrammers.com/library/mdi/)
   (Apache-2.0) in a mid grey that reads on both themes. Apple publishes
   no vector app icons, Baby Connect publishes no mark (`baby_connect` is
-  MDI's `baby-bottle-outline`), and the rest are not products. `search` marks the
+  MDI's `baby-bottle-outline`), and the rest are not products (`markdown` is
+  MDI's `language-markdown`). `search` marks the
   unified grid and search index group, and `system` the System group.
 - **Our own:**
   - `claude_code.svg` and `codex.svg`: a terminal glyph in Claude's
