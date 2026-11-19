@@ -56,8 +56,9 @@ There is no `OR`: typed between two words it is searched as the word
 for each separately. A search without words to rank by lists what its
 filters keep, newest first.
 
-The words are matched by their stems ("runs" finds "running"), and so is a
-quoted phrase.
+Words match as written, ignoring case and accents: "runs" does not find
+"running", and a quoted phrase is exact. Meaning finds the other forms of
+a word, and its synonyms.
 
 Every document has some similarity to any words, so meaning needs a cutoff, or
 every search would find every document:

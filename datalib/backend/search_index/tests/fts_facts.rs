@@ -10,7 +10,7 @@ use sqlx::{AssertSqlSafe, Connection, Row};
 const SENTENCE: &str = "the quarterly budget review moved to thursday afternoon";
 
 const CONTENTLESS: &str = "CREATE VIRTUAL TABLE t USING fts5(title, body, \
-     content='', contentless_delete=1, tokenize='porter unicode61')";
+     content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2')";
 
 async fn open(dir: &tempfile::TempDir) -> (SqliteConnection, std::path::PathBuf) {
     let path = dir.path().join("index.sqlite");
@@ -182,14 +182,25 @@ async fn a_phrase_matches_only_adjacent_words() {
     assert_eq!(matching(&mut c, "t", "budget review").await, vec![1, 2]);
 }
 
-/// The porter tokenizer qmd's index used, so a word matches its inflections
-/// as it did there.
+/// The index matches a word as written, so a quoted phrase is exact: another
+/// form of the word is not it, while case and accents fold. A stemming
+/// table, the control, matches the other form.
 #[tokio::test]
-async fn porter_matches_an_inflection() {
+async fn a_word_matches_as_written_with_case_and_accents_folded() {
     let dir = tempfile::tempdir().unwrap();
     let (mut c, _) = open(&dir).await;
     ok(&mut c, CONTENTLESS).await;
-    insert(&mut c, "t", 1, "", "two meetings were moved").await;
-    assert_eq!(matching(&mut c, "t", "meeting").await, vec![1]);
-    assert_eq!(matching(&mut c, "t", "moving").await, vec![1]);
+    insert(&mut c, "t", 1, "", "two meetings were moved to the Café").await;
+    assert_eq!(matching(&mut c, "t", "meeting").await, Vec::<i64>::new());
+    assert_eq!(matching(&mut c, "t", "moving").await, Vec::<i64>::new());
+    assert_eq!(matching(&mut c, "t", "\"MEETINGS were\"").await, vec![1]);
+    assert_eq!(matching(&mut c, "t", "cafe").await, vec![1]);
+
+    ok(
+        &mut c,
+        "CREATE VIRTUAL TABLE stemmed USING fts5(title, body, tokenize='porter unicode61')",
+    )
+    .await;
+    insert(&mut c, "stemmed", 1, "", "two meetings were moved").await;
+    assert_eq!(matching(&mut c, "stemmed", "meeting").await, vec![1]);
 }
