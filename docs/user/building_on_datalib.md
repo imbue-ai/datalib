@@ -435,7 +435,9 @@ three ways:
    HTTP requests and run nothing else, in a container or on another
    machine. It reads and nothing else, and stops a query after 20
    seconds. It costs a store open per page and works only while the app
-   runs, so a step, which may run with no app up, reads the store itself.
+   runs, so [a step of your own in the
+   pipeline](#your-apps-derived-data-as-a-step), which may run with no app
+   up, reads the store itself.
    Listing the stores, parameters, paging across commits and errors:
    [the applets](applets.md#reading-any-store-with-sql).
 2. **A connection in your own process**, the fastest: a query on an open
