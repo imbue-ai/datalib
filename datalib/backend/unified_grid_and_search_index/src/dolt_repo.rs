@@ -467,10 +467,9 @@ impl DoltRepo {
             "INSERT INTO temp.step_problems ",
             1,
         );
-        for step in datalib_step_problems::of_steps(&self.root).await {
-            for why in &step.unread {
-                tracing::error!(step = %step.step_id, error = %why, "could not read a step's problems");
-            }
+        let steps = datalib_step_problems::of_steps(&self.root).await;
+        datalib_step_problems::say_unread(&steps);
+        for step in steps {
             for row in &step.rows {
                 // Audited: `insert` is built from `ProblemRow`'s associated
                 // consts, never from row data; every value is bound.
