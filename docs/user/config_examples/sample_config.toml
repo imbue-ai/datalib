@@ -1,7 +1,7 @@
 # Sample config in the format `datalib-dag` runs: each source is a
 # `[[groups]]` entry with a `type` plus its steps (`ingest`,
 # `render_markdown` and `embed`, each written as `group` + `function`
-# with `command = "datalib-step"`, the program datalib ships), and the shared
+# with `command = "datalib-step"`, the program Datalib ships), and the shared
 # index step under the `unified_grid_and_search_index` group, which every
 # source's rendered markdown feeds. A step's id is `<group>/<function>`,
 # composed rather than written; `inputs` name steps by that id. See

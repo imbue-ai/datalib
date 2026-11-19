@@ -150,7 +150,7 @@ onMounted(() => {
   <section class="pkr">
     <template v-if="!found && !props.current">
       <div v-if="gallery.length" class="pkr-gallery">
-        <span class="pkr-label">From the datalib gallery</span>
+        <span class="pkr-label">From the Datalib gallery</span>
         <ul class="pkr-list">
           <li v-for="g in gallery" :key="g.source" class="pkr-item">
             <span class="pkr-item-text">

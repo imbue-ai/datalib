@@ -172,7 +172,7 @@ pub fn families(inputs: &Inputs<'_>) -> Vec<Family> {
         add(
             format!("datalib_step_{}", metric_name(&m.name)),
             format!(
-                "`{}` as a datalib step reported it: its newest value, from the last run it \
+                "`{}` as a Datalib step reported it: its newest value, from the last run it \
                  reported in.",
                 m.name
             ),

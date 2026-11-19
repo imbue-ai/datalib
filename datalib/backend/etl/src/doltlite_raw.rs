@@ -1133,7 +1133,7 @@ async fn open_inner(
     // datalib, or a new shape — so `dolt_log` reads as an upgrade history.
     let message = if meta_moved {
         format!(
-            "schema: apply DDL (datalib {})",
+            "schema: apply DDL (Datalib {})",
             datalib_runtime::build_id::DATALIB_VERSION
         )
     } else {
@@ -5906,7 +5906,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            message.starts_with("schema: apply DDL (datalib "),
+            message.starts_with("schema: apply DDL (Datalib "),
             "a commit that moved the meta names the build, got {message:?}"
         );
         b.close().await;

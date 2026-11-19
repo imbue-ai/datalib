@@ -791,7 +791,7 @@ fn main() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error while building datalib tauri app");
+        .expect("error while building the Datalib app");
 
     app.run(|app, event| {
         // The backend child must not outlive the window: an orphaned
@@ -902,7 +902,7 @@ const MIN_WINDOW_HEIGHT: f64 = 480.0;
 fn main_window(app: &AppHandle, url: WebviewUrl) -> WebviewWindowBuilder<'_, Wry, AppHandle> {
     app_window(
         WebviewWindowBuilder::new(app, MAIN_WINDOW, url)
-            .title("Data Liberation")
+            .title("Datalib")
             .inner_size(1280.0, 800.0)
             .min_inner_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT),
         app,
@@ -1087,7 +1087,7 @@ fn open_card_window(app: &AppHandle, url: Url) {
         let label = format!("card-{}", OPENED_WINDOWS.fetch_add(1, Ordering::Relaxed));
         let built = app_window(
             WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(url.clone()))
-                .title("Data Liberation")
+                .title("Datalib")
                 .inner_size(1100.0, 760.0)
                 .min_inner_size(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT),
             &app,

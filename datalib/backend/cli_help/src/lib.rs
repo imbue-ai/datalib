@@ -13,7 +13,7 @@ pub struct Example {
 
 /// The line every binary's help ends with: where to begin when setting
 /// datalib up, whichever binary an agent happened to ask first.
-pub const START_HERE: &str = "Setting datalib up? Start with `datalib-step help`.";
+pub const START_HERE: &str = "Setting Datalib up? Start with `datalib-step help`.";
 
 pub fn render(examples: &[Example]) -> String {
     let mut out = String::from("Examples:\n");

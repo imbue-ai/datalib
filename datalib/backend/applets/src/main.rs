@@ -36,8 +36,8 @@ const EXAMPLES: &[Example] = &[
     name = "datalib-applet",
     bin_name = "datalib-applet",
     version = datalib_runtime::build_id::DATALIB_VERSION,
-    about = "Applet host for the datalib app, and its search from the command line",
-    long_about = "Applet host for the datalib app, and its search from the command line. \
+    about = "Applet host for the Datalib app, and its search from the command line",
+    long_about = "Applet host for the Datalib app, and its search from the command line. \
                   `datalib-applet search <data_root> '<query>'` answers as the app's \
                   search box does, as JSON, with no server; `datalib-step help search` \
                   has its query language. The other commands are \
