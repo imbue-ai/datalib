@@ -915,21 +915,35 @@ async fn land(
     let n = work.len();
     let root = (*s.root).clone();
     tokio::task::spawn_blocking(move || {
+        // Each hit lands by the item the search index named, and reads
+        // only what the item it quotes says.
+        let landed: Vec<_> = work
+            .into_iter()
+            .map(|(document, hit, cell)| {
+                let at = idx.land(&document, &hit, documents_only);
+                (document, hit, cell, at)
+            })
+            .collect();
+        let wanted: Vec<(String, String)> = landed
+            .iter()
+            .filter_map(|(document, _, _, at)| {
+                Some((document.clone(), at.as_ref()?.quote.clone()?))
+            })
+            .collect();
         // A store that will not read leaves the hits unquoted, not lost:
         // each still lands on the row it names.
-        let texts = stored_text::spell(&root, &where_kept).unwrap_or_else(|e| {
-            tracing::warn!(error = %format!("{e:#}"), "could not read a page's documents; quoting none");
+        let texts = stored_text::item_texts(&root, &where_kept, &wanted).unwrap_or_else(|e| {
+            tracing::warn!(error = %format!("{e:#}"), "could not read a page's items; quoting none");
             Default::default()
         });
-        for (document, hit, landed) in work {
-            let text = texts.get(&document).map(stored_text::Spelled::text);
-            let found = idx
-                .land(&document, &hit, text.as_deref(), documents_only)
-                .map_or((document, String::new()), |(row, quoted)| {
-                    (row.uuid, display_snippet(&quoted))
-                });
+        for (document, hit, cell, at) in landed {
+            let found = at.map_or((document, String::new()), |at| {
+                let said = at.quote.as_ref().and_then(|uuid| texts.get(uuid));
+                let quoted = said.map_or_else(|| hit.snippet.clone(), |t| idx.quote(t));
+                (at.row.uuid, display_snippet(&quoted))
+            });
             // Another page may have landed it first, on the same row.
-            let _ = landed.set(found);
+            let _ = cell.set(found);
         }
     })
     .await

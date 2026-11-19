@@ -1,6 +1,6 @@
 //! Land a search hit on a grid row. The search index names the item it
-//! matched; the quote is read from the document's text as its render
-//! store spells it, which the caller reads and hands in.
+//! matched, so a hit lands by id and reads no text; the caller then reads
+//! what the landed item says, and only that, for [`GridIndex::quote`].
 
 use std::collections::{HashMap, HashSet};
 
@@ -24,6 +24,14 @@ pub enum Place {
     Item { uuid: Option<String> },
 }
 
+/// Where a hit landed: the row, and the item whose text to quote, where
+/// the hit matched one.
+#[derive(Debug, Clone)]
+pub struct Landed {
+    pub row: GridRowRef,
+    pub quote: Option<String>,
+}
+
 /// The bits of a `grid_rows` row that the hit↔row mapping needs.
 #[derive(Debug, Clone)]
 pub struct GridRowRef {
@@ -33,14 +41,6 @@ pub struct GridRowRef {
     pub provider: String,
     /// The row that is the whole document, as opposed to a place inside it.
     pub is_document: bool,
-}
-
-pub fn parse_section_uuid(line: &str) -> Option<&str> {
-    const KEY: &str = "data-section-uuid=\"";
-    let start = line.find(KEY)? + KEY.len();
-    let rest = &line[start..];
-    let end = rest.find('"')?;
-    Some(&rest[..end])
 }
 
 /// A search's words as hits are placed by: lowercased runs of letters and
@@ -64,13 +64,6 @@ fn holds(text: &str, term: &str) -> bool {
         at_edge(text[..at].chars().next_back())
             && (!whole || at_edge(text[at + stem.len()..].chars().next()))
     })
-}
-
-/// `lines`, the first of them line `line` of the file, as a hit's snippet:
-/// under a `@@ -line,1 @@` header, twelve at most.
-fn quoted_from(lines: &[&str], line: usize) -> String {
-    let text: Vec<&str> = lines.iter().take(12).copied().collect();
-    format!("@@ -{line},1 @@ (0 before, 0 after)\n{}", text.join("\n"))
 }
 
 /// A set of `GridRowRef`s, looked up by row and by document.
@@ -159,18 +152,11 @@ impl GridIndex {
             .collect()
     }
 
-    /// The row a hit on `document` lands on, with the lines quoted from its
-    /// message in `text`, the document as its render store spells it: the
-    /// work a page does for each hit it shows, and only for those. The
+    /// The row a hit on `document` lands on, and the item to quote for it:
+    /// the work a page does for each hit it shows, and only for those. The
     /// document's own row for an `is:document` search, quoting the message
     /// the hit matched. `None` for a document the grid does not have.
-    pub fn land(
-        &self,
-        document: &str,
-        hit: &SearchHit,
-        text: Option<&str>,
-        documents_only: bool,
-    ) -> Option<(GridRowRef, String)> {
+    pub fn land(&self, document: &str, hit: &SearchHit, documents_only: bool) -> Option<Landed> {
         let rows = if documents_only {
             self.document_for_hit(document, hit)
         } else {
@@ -180,19 +166,16 @@ impl GridIndex {
         let row = if self.keeps(&row) {
             row
         } else {
-            self.first_kept(text, &row.markdown_uuid).unwrap_or(row)
+            self.first_kept(&row.markdown_uuid).unwrap_or(row)
         };
-        let quoted_section = match &hit.place {
+        let quote = match &hit.place {
             Some(Place::Item {
                 uuid: Some(matched),
-            }) if documents_only => matched.as_str(),
-            _ => row.uuid.as_str(),
+            }) if documents_only => Some(matched.clone()),
+            Some(Place::Item { .. }) => Some(row.uuid.clone()),
+            None => None,
         };
-        let quoted = match (text, &hit.place) {
-            (Some(text), Some(Place::Item { .. })) => self.quote(text, quoted_section),
-            _ => None,
-        };
-        Some((row, quoted.unwrap_or_else(|| hit.snippet.clone())))
+        Some(Landed { row, quote })
     }
 
     fn keeps(&self, row: &GridRowRef) -> bool {
@@ -200,37 +183,36 @@ impl GridIndex {
     }
 
     /// The first row of `document` the search keeps, its messages in the
-    /// order its text has them, then its own row: where a hit lands when
+    /// order the grid lists them, then its own row: where a hit lands when
     /// none of the messages it matched is kept, rather than on one the
     /// search drops.
-    fn first_kept(&self, text: Option<&str>, document: &str) -> Option<GridRowRef> {
+    fn first_kept(&self, document: &str) -> Option<GridRowRef> {
         let rows = self.by_document.get(document)?;
-        let in_order = text
+        let (own, messages): (Vec<_>, Vec<_>) = rows.iter().partition(|r| r.is_document);
+        messages
             .into_iter()
-            .flat_map(str::lines)
-            .filter_map(parse_section_uuid)
-            .filter_map(|uuid| self.by_uuid.get(uuid));
-        in_order.chain(rows).find(|r| self.keeps(r)).cloned()
+            .chain(own)
+            .find(|r| self.keeps(r))
+            .cloned()
     }
 
-    /// The lines of message `uuid` from the first that holds one of the
-    /// search's words.
-    fn quote(&self, text: &str, uuid: &str) -> Option<String> {
+    /// Twelve lines at most of `text`, what an item says, from the first
+    /// that holds one of the search's words, else from its first.
+    pub fn quote(&self, text: &str) -> String {
         let lines: Vec<&str> = text.lines().collect();
-        let start = lines
+        let at = lines
             .iter()
-            .position(|l| parse_section_uuid(l) == Some(uuid))?;
-        let end = lines[start + 1..]
-            .iter()
-            .position(|l| parse_section_uuid(l).is_some())
-            .map_or(lines.len(), |i| start + 1 + i);
-        let at = (start + 1..end)
-            .find(|&i| {
-                let line = lines[i].to_lowercase();
+            .position(|l| {
+                let line = l.to_lowercase();
                 self.terms.iter().any(|t| holds(&line, t))
             })
-            .unwrap_or(start);
-        Some(quoted_from(&lines[at..end], at + 1))
+            .unwrap_or(0);
+        lines[at..]
+            .iter()
+            .take(12)
+            .copied()
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
 
@@ -265,40 +247,15 @@ mod tests {
         }
     }
 
-    #[test]
-    fn parse_section_uuid_pulls_value() {
-        let line = "<div id=\"m-11111111-2222-3333-4444-555555555555\" \
-                    data-section-uuid=\"11111111-2222-3333-4444-555555555555\" class=\"msg\">";
-        assert_eq!(
-            parse_section_uuid(line),
-            Some("11111111-2222-3333-4444-555555555555")
-        );
-        assert_eq!(parse_section_uuid("## Human"), None);
-        // `th-`/`tu-`/`tr-` block ids are returned verbatim.
-        assert_eq!(
-            parse_section_uuid("<div data-section-uuid=\"th-abc-1\">"),
-            Some("th-abc-1")
-        );
+    /// What each message of the two-message chat says, by its id, as the
+    /// caller reads it from the render store for the item a hit landed on.
+    fn says(uuid: &str) -> Option<&'static str> {
+        match uuid {
+            FIRST => Some("## Human\nfirst message text\n"),
+            SECOND => Some("## Assistant\nsecond message text\n"),
+            _ => None,
+        }
     }
-
-    /// A two-message chat as its render store spells it.
-    const TWO_MESSAGES: &str = "---\n\
-                    provider: claude\n\
-                    ---\n\
-                    \n\
-                    <h1 class=\"page-title\">Reactive data pipeline composition in Rust</h1>\n\
-                    \n\
-                    <div id=\"m-aaaaaaaa-0000-0000-0000-000000000001\" data-section-uuid=\"aaaaaaaa-0000-0000-0000-000000000001\" class=\"msg\">\n\
-                    \n\
-                    ## Human\n\
-                    first message text\n\
-                    </div>\n\
-                    \n\
-                    <div id=\"m-bbbbbbbb-0000-0000-0000-000000000002\" data-section-uuid=\"bbbbbbbb-0000-0000-0000-000000000002\" class=\"msg\">\n\
-                    \n\
-                    ## Assistant\n\
-                    second message text\n\
-                    </div>\n";
 
     /// The message rows of `id`'s two-message chat.
     fn two_messages(id: &str) -> Vec<GridRowRef> {
@@ -321,13 +278,18 @@ mod tests {
         }
     }
 
-    /// A hit on `CHAT`, landed in its text.
+    /// A hit on `CHAT` landed, and quoted from what the item it names to
+    /// quote says, as the search's caller does; the hit's own snippet
+    /// where there is nothing to read.
     fn land_in_chat(
         idx: &GridIndex,
         uuid: Option<&str>,
         documents_only: bool,
     ) -> Option<(GridRowRef, String)> {
-        idx.land(CHAT, &on_item(uuid), Some(TWO_MESSAGES), documents_only)
+        let hit = on_item(uuid);
+        let landed = idx.land(CHAT, &hit, documents_only)?;
+        let quoted = landed.quote.as_deref().and_then(says).map(|t| idx.quote(t));
+        Some((landed.row, quoted.unwrap_or(hit.snippet)))
     }
 
     /// The search index names the item it matched, and the hit lands on
@@ -361,13 +323,11 @@ mod tests {
             let idx = GridIndex::new(rows.clone()).with_terms(terms);
             let (row, quoted) = land_in_chat(&idx, Some(SECOND), false).unwrap();
             assert_eq!(row.uuid, SECOND);
-            assert!(quoted.starts_with("@@ -16,1 @@"), "{terms}: {quoted}");
-            assert!(quoted.contains("second message text"), "{quoted}");
+            assert_eq!(quoted, "second message text", "{terms}");
         }
         let idx = GridIndex::new(rows).with_terms("tea");
         let (_, quoted) = land_in_chat(&idx, Some(SECOND), false).unwrap();
-        assert!(quoted.starts_with("@@ -13,1 @@"), "{quoted}");
-        assert!(quoted.contains("## Assistant"), "{quoted}");
+        assert_eq!(quoted, "## Assistant\nsecond message text");
     }
 
     /// A hit on a message the search's other terms drop lands on one they
@@ -392,9 +352,9 @@ mod tests {
         assert_eq!(row.uuid, CHAT);
     }
 
-    /// The store cannot spell the document (it changed since the index
-    /// read it): the hit still lands, on the item it names, else on a row
-    /// of its document, quoting nothing.
+    /// A hit lands without reading any text: on the item it names, else on
+    /// a row of its document, and says which item to quote, which the
+    /// caller may find it cannot read.
     #[test]
     fn a_hit_whose_text_cannot_be_read_still_lands() {
         let idx = GridIndex::new(vec![
@@ -402,10 +362,11 @@ mod tests {
             row("u2", "LLM Response", CHAT, "claude"),
             row("u3", "Chat", OTHER, "claude"),
         ]);
-        let (row, quoted) = idx.land(CHAT, &on_item(Some("u2")), None, false).unwrap();
-        assert_eq!((row.uuid.as_str(), quoted.as_str()), ("u2", ""));
-        let (row, quoted) = idx.land(CHAT, &on_item(None), None, false).unwrap();
-        assert_eq!((row.uuid.as_str(), quoted.as_str()), ("u1", ""));
+        let landed = idx.land(CHAT, &on_item(Some("u2")), false).unwrap();
+        assert_eq!(landed.row.uuid, "u2");
+        assert_eq!(landed.quote.as_deref(), Some("u2"));
+        let landed = idx.land(CHAT, &on_item(None), false).unwrap();
+        assert_eq!(landed.row.uuid, "u1");
     }
 
     /// `is:document` with free text: a hit on a message answers with the
@@ -441,8 +402,7 @@ mod tests {
             .within([CHAT.to_string()].into());
         let (row, quoted) = land_in_chat(&idx, Some(SECOND), true).unwrap();
         assert_eq!(row.uuid, CHAT);
-        assert!(quoted.starts_with("@@ -16,1 @@"), "{quoted}");
-        assert!(quoted.contains("second message text"), "{quoted}");
+        assert_eq!(quoted, "second message text");
         let (row, quoted) = land_in_chat(&idx, None, true).unwrap();
         assert_eq!((row.uuid.as_str(), quoted.as_str()), (CHAT, ""));
     }
@@ -455,6 +415,6 @@ mod tests {
             place: Some(Place::Item { uuid: None }),
             ..hit("")
         };
-        assert!(idx.land(OTHER, &h, Some(TWO_MESSAGES), false).is_none());
+        assert!(idx.land(OTHER, &h, false).is_none());
     }
 }

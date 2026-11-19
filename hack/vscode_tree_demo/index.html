@@ -1,0 +1,69 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>vs-tree demo</title>
+<style>
+  :root { --fg: #1f2328; --muted: #59636e; --line: #d0d7de; --bg: #f6f8fa; --card: #fff; --accent: #0969da; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--fg); background: var(--bg); }
+  header { padding: 16px 24px 8px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  header p { margin: 0; color: var(--muted); max-width: 70ch; }
+  main { display: grid; grid-template-columns: minmax(280px, 420px) 1fr; gap: 16px; padding: 16px 24px 24px; height: calc(100vh - 92px); min-height: 480px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+  .card > h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  vs-tree { flex: 1; }
+  .side { display: grid; grid-template-rows: auto auto 1fr; gap: 16px; min-height: 0; }
+  .body { padding: 12px 14px; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+  dt { color: var(--muted); }
+  dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  code, kbd, #log { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: var(--bg); }
+  ul { margin: 0; padding-left: 18px; }
+  li { margin: 2px 0; }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 10px; }
+  button { font: inherit; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  #log { flex: 1; overflow: auto; margin: 0; padding: 8px 14px; white-space: pre; color: var(--muted); }
+  #log b { color: var(--fg); font-weight: 600; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; height: auto; } .card.tree { height: 70vh; } }
+</style>
+<header>
+  <h1>&lt;vs-tree&gt; — VS Code's tree, as a web component</h1>
+  <p>A library of made-up sources, served one level at a time by the page, with a delay you can set. Everything on the left is VS Code's own <code>AsyncDataTree</code>.</p>
+</header>
+<main>
+  <section class="card tree">
+    <h2>Library</h2>
+    <vs-tree aria-label="Library"></vs-tree>
+  </section>
+  <div class="side">
+    <section class="card">
+      <h2>Selected</h2>
+      <div class="body">
+        <dl id="selected"><dt>Nothing yet</dt><dd>Click a row.</dd></dl>
+      </div>
+    </section>
+    <section class="card">
+      <h2>Try</h2>
+      <div class="body">
+        <ul>
+          <li>Open <b>Google Drive › My Drive</b>: 10,000 folders, and only the rows on screen exist in the page.</li>
+          <li>Scroll inside it, or into <b>Notion</b>'s deep pages: the ancestors stay pinned at the top.</li>
+          <li><kbd>↑</kbd><kbd>↓</kbd> move, <kbd>←</kbd><kbd>→</kbd> close and open, <kbd>PgUp</kbd><kbd>PgDn</kbd> page, and typing a name jumps to it (try “sick” in Slack).</li>
+          <li>Reload the page: what was open, selected and scrolled comes back.</li>
+        </ul>
+        <div class="controls">
+          <label>Server delay <input id="delay" type="range" min="0" max="1500" step="50"> <span id="delay-value"></span></label>
+          <button id="reset">Forget saved state</button>
+        </div>
+      </div>
+    </section>
+    <section class="card">
+      <h2>What the tree asked the page for</h2>
+      <pre id="log"></pre>
+    </section>
+  </div>
+</main>
+<script type="module" src="/demo.js"></script>

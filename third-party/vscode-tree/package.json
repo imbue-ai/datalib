@@ -1,0 +1,17 @@
+{
+  "name": "vscode-tree",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "//": "VS Code's tree widget as a <vs-tree> custom element (README.md). monaco-editor is where the tree's code comes from; it is fetched by this lockfile and never checked in. playwright is pinned to the version datalib/ui's lockfile resolves, so the facts test finds the browser the e2e suite already installed.",
+  "type": "module",
+  "devDependencies": {
+    "esbuild": "0.27.7",
+    "monaco-editor": "0.57.0",
+    "playwright": "1.65.1"
+  },
+  "pnpm": {
+    "//": "No package's install scripts run: esbuild finds its binary in its platform package without its postinstall.",
+    "onlyBuiltDependencies": []
+  }
+}
