@@ -1907,7 +1907,7 @@ mod tests {
     /// message — and reads the same either way.
     fn conversation_with_nulls() -> Value {
         json!({
-            "uuid": "e2afda7d-3b67-42a7-90e6-e84017fee652",
+            "uuid": "1701c000-a000-4000-8000-00000000c003",
             "name": "Warp core diagnostics",
             "updated_at": "2026-09-18T10:00:00Z",
             "chat_messages": [{
@@ -1941,7 +1941,7 @@ mod tests {
 
     fn conversation_without_nulls() -> Value {
         json!({
-            "uuid": "e2afda7d-3b67-42a7-90e6-e84017fee652",
+            "uuid": "1701c000-a000-4000-8000-00000000c003",
             "name": "Warp core diagnostics",
             "updated_at": "2026-09-18T10:00:00Z",
             "chat_messages": [{
@@ -2001,7 +2001,7 @@ mod tests {
 
         let d = tempfile::tempdir().unwrap();
         let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
-        let uuid = "e2afda7d-3b67-42a7-90e6-e84017fee652";
+        let uuid = "1701c000-a000-4000-8000-00000000c003";
         for (k, v) in [
             ("user.name", "null-test"),
             ("user.email", "null-test@datalib.local"),

@@ -29,25 +29,25 @@ mod tests {
     #[test]
     fn passthrough_for_bare_ids() {
         assert_eq!(
-            normalize_id_token("fb3f094f-2bef-4b62-8137-1383b4f3a1e4"),
-            "fb3f094f-2bef-4b62-8137-1383b4f3a1e4"
+            normalize_id_token("1701c000-a000-4000-8000-00000000c001"),
+            "1701c000-a000-4000-8000-00000000c001"
         );
         assert_eq!(
-            normalize_id_token("f9a3f309bde54852944042374cc01dc5"),
-            "f9a3f309-bde5-4852-9440-42374cc01dc5"
+            normalize_id_token("1701d000a0004000800000000000d007"),
+            "1701d000-a000-4000-8000-00000000d007"
         );
         // A token that only holds a uuid is left as written.
         assert_eq!(
-            normalize_id_token("g-p-f9a3f309bde54852944042374cc01dc5"),
-            "g-p-f9a3f309bde54852944042374cc01dc5"
+            normalize_id_token("g-p-1701d000a0004000800000000000d007"),
+            "g-p-1701d000a0004000800000000000d007"
         );
     }
 
     #[test]
     fn strips_claude_url() {
         assert_eq!(
-            normalize_id_token("https://claude.ai/chat/fb3f094f-2bef-4b62-8137-1383b4f3a1e4"),
-            "fb3f094f-2bef-4b62-8137-1383b4f3a1e4"
+            normalize_id_token("https://claude.ai/chat/1701c000-a000-4000-8000-00000000c001"),
+            "1701c000-a000-4000-8000-00000000c001"
         );
     }
 
@@ -55,9 +55,9 @@ mod tests {
     fn strips_chatgpt_url_with_query() {
         assert_eq!(
             normalize_id_token(
-                "https://chatgpt.com/c/6a0de88e-d104-83ea-9f3a-dad7a9c734a8?model=gpt-5"
+                "https://chatgpt.com/c/1701c000-a000-4000-8000-00000000c002?model=gpt-5"
             ),
-            "6a0de88e-d104-83ea-9f3a-dad7a9c734a8"
+            "1701c000-a000-4000-8000-00000000c002"
         );
     }
 
@@ -65,13 +65,13 @@ mod tests {
     fn strips_notion_url_with_title() {
         assert_eq!(
             normalize_id_token(
-                "https://www.notion.so/myws/Roadmap-f9a3f309bde54852944042374cc01dc5"
+                "https://www.notion.so/myws/Roadmap-1701d000a0004000800000000000d007"
             ),
-            "f9a3f309-bde5-4852-9440-42374cc01dc5"
+            "1701d000-a000-4000-8000-00000000d007"
         );
         assert_eq!(
-            normalize_id_token("https://www.notion.so/f9a3f309bde54852944042374cc01dc5#h1"),
-            "f9a3f309-bde5-4852-9440-42374cc01dc5"
+            normalize_id_token("https://www.notion.so/1701d000a0004000800000000000d007#h1"),
+            "1701d000-a000-4000-8000-00000000d007"
         );
     }
 }
