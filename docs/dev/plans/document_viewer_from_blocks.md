@@ -277,6 +277,15 @@ lists by time. A page is a run of the document's top-level nodes (step
 - **Notices:** a long chat opens fast, and the reader's place holds
   through a sync.
 
+**A possibility, not planned:** once a window holds only part of a
+document, the frame's scrollbar measures only what is loaded. A very
+long chat could get a scrubber beside it, as Google Photos has: a bar
+for the whole document, the date under the pointer shown while dragging,
+and a jump to that place on release. The server would answer an outline
+of a few hundred marks spaced by length, each with its date and a
+cursor; only a document longer than a page, whose messages carry times,
+would show one.
+
 ### Step 7: layouts by kind
 
 The last step changes what a person sees, and each part of it is a
