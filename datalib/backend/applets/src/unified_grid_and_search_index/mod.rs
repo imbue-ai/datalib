@@ -2545,13 +2545,25 @@ mod tests {
 
     /// Whether any test in this process has the file `(dev, ino)` open.
     /// The caller keeps a name linked to that file, so its number cannot
-    /// be handed to another test's file while it looks.
+    /// be handed to another test's file while it looks. Each descriptor
+    /// is asked with `fstat` on a copy of it: on macOS, `stat` of
+    /// `/dev/fd/N` answers with devfs's device number, not the file's.
     fn held_open((dev, ino): (u64, u64)) -> bool {
+        use std::os::fd::{BorrowedFd, RawFd};
         use std::os::unix::fs::MetadataExt;
         std::fs::read_dir("/dev/fd")
             .unwrap()
             .flatten()
-            .filter_map(|fd| std::fs::metadata(fd.path()).ok())
+            .filter_map(|entry| entry.file_name().to_str()?.parse::<RawFd>().ok())
+            .filter_map(|fd| {
+                // SAFETY: only `dup`ed. A descriptor another test closed
+                // meanwhile fails with EBADF or copies whatever took its
+                // number; neither touches the original.
+                unsafe { BorrowedFd::borrow_raw(fd) }
+                    .try_clone_to_owned()
+                    .ok()
+            })
+            .filter_map(|fd| std::fs::File::from(fd).metadata().ok())
             .any(|m| (m.dev(), m.ino()) == (dev, ino))
     }
 
