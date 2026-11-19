@@ -19,12 +19,12 @@ use datalib_etl::pin::Pin;
 use datalib_etl_chat_common::render::{ChatRenderer, RenderProfile};
 use datalib_etl_chat_common::types::NormalizedChat;
 use datalib_etl_chat_common::RenderTarget;
-use datalib_etl_render::inputs::{Bucket, Buckets, RawRange};
+use datalib_etl_render::inputs::{RawRange, RenderUnit, RenderUnits};
 use datalib_etl_render::pages::{batches, PageSize};
 use serde_json::Value;
 use sqlx::SqlitePool;
 
-use crate::TRANSCRIPT_BUCKETS_SQL;
+use crate::TRANSCRIPT_RENDER_UNITS_SQL;
 
 /// What a record's JSON comes to on average: 4.3 KB across a 2.2 GB
 /// Claude Code store, with no session's average over four times that.
@@ -131,7 +131,7 @@ pub trait SessionRender {
 }
 
 /// What a paged render did. The processor stamps `new_head` once
-/// every page's buckets are declared.
+/// every page's render units are declared.
 #[derive(Debug, Default)]
 pub struct PagedOutcome {
     pub rendered: usize,
@@ -149,7 +149,7 @@ pub fn titles(transcripts: &[(String, Value)]) -> HashMap<String, String> {
 }
 
 /// Renders the transcripts in the store at `db_path` that this run has
-/// to, a page at a time. `on_buckets` hears each page's buckets before
+/// to, a page at a time. `on_render_units` hears each page's render units before
 /// the next page is read; its first call names, with nothing, the ones
 /// whose transcript is gone, so their documents go.
 pub fn render_paged<S: SessionRender>(
@@ -158,7 +158,7 @@ pub fn render_paged<S: SessionRender>(
     range: RawRange<'_>,
     size: PageSize,
     target: RenderTarget<'_>,
-    on_buckets: &mut dyn FnMut(&[Bucket]) -> Result<()>,
+    on_render_units: &mut dyn FnMut(&[RenderUnit]) -> Result<()>,
 ) -> Result<PagedOutcome> {
     if !db_path.exists() {
         return Ok(PagedOutcome::default());
@@ -174,7 +174,7 @@ pub fn render_paged<S: SessionRender>(
         range,
         size,
         target,
-        on_buckets,
+        on_render_units,
     );
     // Closed, not dropped, on the error path too: the next open of this
     // store is a second connection until this one is gone.
@@ -189,18 +189,18 @@ fn render_open<S: SessionRender>(
     range: RawRange<'_>,
     size: PageSize,
     target: RenderTarget<'_>,
-    on_buckets: &mut dyn FnMut(&[Bucket]) -> Result<()>,
+    on_render_units: &mut dyn FnMut(&[RenderUnit]) -> Result<()>,
 ) -> Result<PagedOutcome> {
     let (transcripts, counts, scan) = block_on(async {
         let transcripts = doltlite_raw::load_payloads_with_id(pool, "transcripts").await?;
         let counts = record_counts(pool).await?;
-        let scan = doltlite_raw::scan_buckets(
+        let scan = doltlite_raw::scan_render_units(
             pool,
             range.cursor,
             pin,
             &DiffScanSpec {
                 fanout_query: None,
-                bucket_query: TRANSCRIPT_BUCKETS_SQL,
+                render_unit_query: TRANSCRIPT_RENDER_UNITS_SQL,
             },
         )
         .await?;
@@ -209,12 +209,12 @@ fn render_open<S: SessionRender>(
 
     let titles = titles(&transcripts);
     // No early return on an empty store: a run that deleted every
-    // transcript still has to declare their buckets empty so the
+    // transcript still has to declare their render units empty so the
     // documents go.
     let plan = plan(transcripts, range, scan.render.as_ref(), |id| {
         source.chat_uuid(id)
     });
-    on_buckets(&plan.gone)?;
+    on_render_units(&plan.gone)?;
 
     let profile = source.profile();
     // Writing happens inside rendering, in the callback, so its time is
@@ -254,7 +254,7 @@ fn render_open<S: SessionRender>(
             renderer.render_chat(&chat, &no_blobs)?;
         }
         let declaring = Instant::now();
-        on_buckets(&renderer.take_buckets())?;
+        on_render_units(&renderer.take_render_units())?;
         writing.set(writing.get() + declaring.elapsed());
         let times = PageTimes::split(
             started.elapsed(),
@@ -290,13 +290,13 @@ fn render_open<S: SessionRender>(
     })
 }
 
-/// The transcripts a run renders, and the buckets it names empty first.
+/// The transcripts a run renders, and the render units it names empty first.
 #[derive(Debug)]
 struct Plan {
     render: Vec<(String, Value)>,
-    /// The changed transcripts with no row left, as buckets with no
+    /// The changed transcripts with no row left, as render units with no
     /// inputs.
-    gone: Buckets,
+    gone: RenderUnits,
     skipped: usize,
 }
 
@@ -333,7 +333,7 @@ fn plan(
         .chain(narrowed.gone)
         .collect::<BTreeSet<String>>()
         .into_iter()
-        .map(|key| Bucket {
+        .map(|key| RenderUnit {
             key,
             inputs: Vec::new(),
         })
@@ -346,10 +346,10 @@ fn plan(
 }
 
 /// `weights` (records per transcript) cut into pages of at most
-/// `size.bytes` worth of records and `size.buckets` transcripts. One
+/// `size.bytes` worth of records and `size.render units` transcripts. One
 /// transcript over the budget is a page of its own.
 fn pages(weights: &[u64], size: PageSize) -> Vec<Range<usize>> {
-    let per_page = size.buckets.max(1);
+    let per_page = size.render_units.max(1);
     let mut out = Vec::new();
     for batch in batches(weights, (size.bytes / RECORD_BYTES).max(1)) {
         let mut start = batch.start;
@@ -399,8 +399,8 @@ mod tests {
         plan.render.iter().map(|(id, _)| id.as_str()).collect()
     }
 
-    fn keys(buckets: &Buckets) -> Vec<&str> {
-        buckets.iter().map(|b| b.key.as_str()).collect()
+    fn keys(render_units: &RenderUnits) -> Vec<&str> {
+        render_units.iter().map(|b| b.key.as_str()).collect()
     }
 
     /// The narrowed run loads only the transcripts the diff or the
@@ -458,7 +458,7 @@ mod tests {
     #[test]
     fn pages_hold_a_budget_of_records_and_a_count_of_transcripts() {
         let size = PageSize {
-            buckets: 2,
+            render_units: 2,
             bytes: 10 * RECORD_BYTES,
         };
         assert_eq!(

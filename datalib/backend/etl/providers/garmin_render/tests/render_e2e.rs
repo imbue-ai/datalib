@@ -103,9 +103,9 @@ async fn renders_every_document_then_renders_an_unchanged_store_the_same() {
     );
     for d in &emitted {
         assert_eq!(
-            d.bucket_key.as_deref(),
+            d.render_unit_key.as_deref(),
             Some(document_uuid(SOURCE).as_str()),
-            "every document is in the one bucket"
+            "every document is in the one render unit"
         );
         let doc_rows: Vec<_> = d.rows.iter().filter(|r| r.is_document).collect();
         assert_eq!(doc_rows.len(), 1);

@@ -2056,7 +2056,7 @@ mod tests {
             markdown_uuid: row.uuid.clone(),
             source_id: source,
             upstream_cursor: None,
-            bucket_key: None,
+            render_unit_key: None,
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),

@@ -290,7 +290,7 @@ async fn a_later_render_narrows_to_the_projects_whose_rows_moved() {
         .await
         .unwrap()
         .expect("committed");
-    // As the driver hands it over: a cursor, and no bucket whose
+    // As the driver hands it over: a cursor, and no render unit whose
     // declared rows moved.
     let stale = std::collections::HashSet::new();
     let range = RawRange {

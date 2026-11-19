@@ -241,7 +241,7 @@ pub struct GridRow {
     /// The key `uuid` was minted from: the upstream's own id for the
     /// record, verbatim, where it has one (a Slack `ts`, a Message-ID, a
     /// CTS URN); the key datalib chose where it composes the row (a period
-    /// bucket's period, a storage report's path). `uuid` is a one-way
+    /// render unit's period, a storage report's path). `uuid` is a one-way
     /// hash, so this is what lets a row be taken back to the provider.
     ///
     /// With `upstream_entity_kind`, `upstream_account`, `created_at_utc`

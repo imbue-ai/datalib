@@ -12,7 +12,7 @@ use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_email::ingest::db::{db_path_for, RawDb};
 use datalib_etl_email::ingest::mbox;
 use datalib_etl_email_render::render::ids;
-use datalib_etl_email_render::render::parse::{open, EmailStore, EmailThreadBucket};
+use datalib_etl_email_render::render::parse::{open, EmailStore, EmailThreadRenderUnit};
 use datalib_etl_email_render::render::render::{render_store, OutlinkFormat, PageEnd};
 use datalib_etl_render::pages::PageSize;
 
@@ -48,7 +48,7 @@ pub(crate) async fn parts_linked(
 }
 
 /// Every thread `store` holds, read two to a page, as a render reads them.
-fn every_thread(store: &EmailStore) -> Vec<EmailThreadBucket> {
+fn every_thread(store: &EmailStore) -> Vec<EmailThreadRenderUnit> {
     let mut pages = store.pages(2);
     let mut out = Vec::new();
     while let Some(page) = store.next_page(&mut pages).expect("next page") {
@@ -382,7 +382,7 @@ async fn render_only_labels_filters_to_thread_subset() {
 
     let store = open_sent();
     let one_a_page = PageSize {
-        buckets: 1,
+        render_units: 1,
         bytes: 1,
     };
     let (docs, pages) = render_paged(&store, one_a_page);
@@ -427,14 +427,14 @@ async fn star_trek_mbox_renders_through_render_all() {
 
     // One thread a page and one a batch, so every page boundary is crossed.
     let one_a_page = PageSize {
-        buckets: 1,
+        render_units: 1,
         bytes: 1,
     };
     let (docs, pages) = render_paged(&store, one_a_page);
     store.close();
     let mut declared: Vec<String> = pages
         .iter()
-        .flat_map(|p| p.rendered.buckets.iter().map(|b| b.key.clone()))
+        .flat_map(|p| p.rendered.render_units.iter().map(|b| b.key.clone()))
         .collect();
     declared.sort();
     let mut emitted: Vec<String> = docs.iter().map(|d| d.markdown_uuid.clone()).collect();

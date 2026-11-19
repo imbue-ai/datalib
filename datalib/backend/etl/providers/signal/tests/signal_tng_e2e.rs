@@ -179,7 +179,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
             "signal-tng",
             &progress,
             &mut on_doc_complete,
-            // One bucket's attachments a batch.
+            // One render unit's attachments a batch.
             1,
         )?;
         assert_eq!(render_summary.docs_rendered, 1);
@@ -326,7 +326,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     );
     assert!(
         rendered_docs_second_pass.is_empty(),
-        "on_doc_complete must not fire for skipped buckets"
+        "on_doc_complete must not fire for skipped render units"
     );
 
     Ok(())

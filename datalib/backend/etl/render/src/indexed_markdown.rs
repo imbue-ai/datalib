@@ -227,13 +227,13 @@ fn lookup_indexes() -> impl Iterator<Item = &'static str> {
         .copied()
         .chain([
             "CREATE INDEX IF NOT EXISTS problems_by_scope ON problems (scope_kind, scope_key)",
-            // The render asks it at every checkpoint (`documents_for_buckets`).
-            "CREATE INDEX IF NOT EXISTS markdowns_by_bucket ON markdowns (bucket_key)",
+            // The render asks it at every checkpoint (`documents_for_render_units`).
+            "CREATE INDEX IF NOT EXISTS markdowns_by_render_unit ON markdowns (render_unit_key)",
         ])
 }
 
-const DOCUMENTS_FOR_BUCKETS: &str = "SELECT bucket_key, markdown_uuid FROM markdowns \
-                                     WHERE bucket_key IN (SELECT value FROM json_each(?))";
+const DOCUMENTS_FOR_RENDER_UNITS: &str = "SELECT render_unit_key, markdown_uuid FROM markdowns \
+                                     WHERE render_unit_key IN (SELECT value FROM json_each(?))";
 
 /// This store's shape: what its `_datalib_meta` records, what the render
 /// step folds into its params so a change to any render-store table
@@ -244,7 +244,7 @@ pub fn schema_hash() -> String {
     datalib_etl::doltlite_raw::recorded_shape(store_ddl())
 }
 
-/// One raw row a bucket's render asked for, found or not.
+/// One raw row a render unit's render asked for, found or not.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Input {
     /// A table of the raw store, bare name.
@@ -254,7 +254,7 @@ pub struct Input {
     pub id: String,
 }
 
-/// The `input_id` that stands for every row of a table: a bucket that
+/// The `input_id` that stands for every row of a table: a render unit that
 /// reads a table whole declares this rather than each key.
 pub const WHOLE_TABLE: &str = "*";
 
@@ -428,7 +428,7 @@ impl IndexedMarkdownStore {
     /// So is a document a run kept although it could not render it
     /// again (its problem says so): it carries the version that last
     /// rendered it, and counting that would fail every run, or walk the
-    /// whole source every run, until the one bucket renders.
+    /// whole source every run, until the one render unit renders.
     pub fn render_versions(&self) -> Result<BTreeSet<u32>> {
         blocking(async {
             let rows = sqlx::query(
@@ -558,24 +558,24 @@ impl IndexedMarkdownStore {
         })
     }
 
-    /// Record what `bucket_key` was rendered from, replacing what it
-    /// declared last time. Joins the open batch, so a bucket's documents
-    /// and its inputs reach the store together. Says whether the bucket
+    /// Record what `render_unit_key` was rendered from, replacing what it
+    /// declared last time. Joins the open batch, so a render unit's documents
+    /// and its inputs reach the store together. Says whether the render unit
     /// had any before.
-    pub fn put_inputs(&self, bucket_key: &str, inputs: &[Input]) -> Result<bool> {
+    pub fn put_inputs(&self, render_unit_key: &str, inputs: &[Input]) -> Result<bool> {
         self.transaction(|| {
             blocking(async {
                 let mut guard = self.write_lock.acquire().await?;
                 let conn = guard.conn();
-                let prior = sqlx::query("DELETE FROM render_inputs WHERE bucket_key = ?")
-                    .bind(bucket_key)
+                let prior = sqlx::query("DELETE FROM render_inputs WHERE render_unit_key = ?")
+                    .bind(render_unit_key)
                     .execute(&mut **conn)
                     .await
                     .context("clear prior render_inputs")?
                     .rows_affected();
                 for chunk in inputs.chunks(datalib_etl::bulk::SQL_CHUNK / 3) {
                     let mut sql = String::from(
-                        "INSERT OR IGNORE INTO render_inputs (bucket_key, input_table, input_id) VALUES ",
+                        "INSERT OR IGNORE INTO render_inputs (render_unit_key, input_table, input_id) VALUES ",
                     );
                     for (i, _) in chunk.iter().enumerate() {
                         if i > 0 {
@@ -587,25 +587,25 @@ impl IndexedMarkdownStore {
                     // value is bound.
                     let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
                     for input in chunk {
-                        q = q.bind(bucket_key).bind(&input.table).bind(&input.id);
+                        q = q.bind(render_unit_key).bind(&input.table).bind(&input.id);
                     }
                     q.execute(&mut **conn)
                         .await
-                        .with_context(|| format!("write render_inputs for {bucket_key}"))?;
+                        .with_context(|| format!("write render_inputs for {render_unit_key}"))?;
                 }
                 Ok(prior > 0)
             })
         })
     }
 
-    /// What each of `bucket_keys` was last declared to read.
-    pub fn inputs_of(&self, bucket_keys: &[&str]) -> Result<HashMap<String, Vec<Input>>> {
+    /// What each of `render_unit_keys` was last declared to read.
+    pub fn inputs_of(&self, render_unit_keys: &[&str]) -> Result<HashMap<String, Vec<Input>>> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
             let mut out: HashMap<String, Vec<Input>> = HashMap::new();
-            for chunk in bucket_keys.chunks(datalib_etl::bulk::SQL_CHUNK) {
+            for chunk in render_unit_keys.chunks(datalib_etl::bulk::SQL_CHUNK) {
                 let mut sql = String::from(
-                    "SELECT bucket_key, input_table, input_id FROM render_inputs WHERE bucket_key IN (",
+                    "SELECT render_unit_key, input_table, input_id FROM render_inputs WHERE render_unit_key IN (",
                 );
                 datalib_etl::bulk::push_placeholder_list(&mut sql, chunk.len());
                 sql.push(')');
@@ -615,19 +615,21 @@ impl IndexedMarkdownStore {
                 for key in chunk {
                     q = q.bind(*key);
                 }
-                for (bucket, table, id) in q
+                for (render_unit, table, id) in q
                     .fetch_all(&mut **guard.conn())
                     .await
-                    .context("read the inputs of buckets")?
+                    .context("read the inputs of render units")?
                 {
-                    out.entry(bucket).or_default().push(Input::new(table, id));
+                    out.entry(render_unit)
+                        .or_default()
+                        .push(Input::new(table, id));
                 }
             }
             Ok(out)
         })
     }
 
-    /// Which buckets declare each of `inputs`, matched exactly: a
+    /// Which render units declare each of `inputs`, matched exactly: a
     /// whole-table declaration does not count as reading one row.
     pub fn readers_of(&self, inputs: &[Input]) -> Result<Vec<(Input, String)>> {
         blocking(async {
@@ -635,7 +637,7 @@ impl IndexedMarkdownStore {
             let mut out = Vec::new();
             for chunk in inputs.chunks(datalib_etl::bulk::SQL_CHUNK / 2) {
                 let mut sql = String::from(
-                    "SELECT input_table, input_id, bucket_key FROM render_inputs \
+                    "SELECT input_table, input_id, render_unit_key FROM render_inputs \
                      WHERE (input_table, input_id) IN (",
                 );
                 for (i, _) in chunk.iter().enumerate() {
@@ -651,19 +653,19 @@ impl IndexedMarkdownStore {
                 for input in chunk {
                     q = q.bind(&input.table).bind(&input.id);
                 }
-                for (table, id, bucket) in q
+                for (table, id, render_unit) in q
                     .fetch_all(&mut **guard.conn())
                     .await
                     .context("read who declares these inputs")?
                 {
-                    out.push((Input::new(table, id), bucket));
+                    out.push((Input::new(table, id), render_unit));
                 }
             }
             Ok(out)
         })
     }
 
-    /// Every raw table any bucket declared an input from.
+    /// Every raw table any render unit declared an input from.
     pub fn input_tables(&self) -> Result<Vec<String>> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
@@ -676,10 +678,10 @@ impl IndexedMarkdownStore {
         })
     }
 
-    /// The buckets that declared any of `changed` as an input — the
+    /// The render units that declared any of `changed` as an input — the
     /// reverse lookup. `changed` is `(table, id)` as the diff named them;
-    /// a bucket that declared a whole table matches any row of it.
-    pub fn buckets_reading(&self, changed: &[Input]) -> Result<HashSet<String>> {
+    /// a render unit that declared a whole table matches any row of it.
+    pub fn render_units_reading(&self, changed: &[Input]) -> Result<HashSet<String>> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
             let mut out = HashSet::new();
@@ -687,7 +689,7 @@ impl IndexedMarkdownStore {
             for table in tables {
                 out.extend(
                     sqlx::query_scalar::<_, String>(
-                        "SELECT DISTINCT bucket_key FROM render_inputs WHERE input_table = ? AND input_id = ?",
+                        "SELECT DISTINCT render_unit_key FROM render_inputs WHERE input_table = ? AND input_id = ?",
                     )
                     .bind(table)
                     .bind(WHOLE_TABLE)
@@ -698,7 +700,7 @@ impl IndexedMarkdownStore {
             }
             for chunk in changed.chunks(datalib_etl::bulk::SQL_CHUNK / 2) {
                 let mut sql = String::from(
-                    "SELECT DISTINCT bucket_key FROM render_inputs WHERE (input_table, input_id) IN (",
+                    "SELECT DISTINCT render_unit_key FROM render_inputs WHERE (input_table, input_id) IN (",
                 );
                 for (i, _) in chunk.iter().enumerate() {
                     if i > 0 {
@@ -723,27 +725,27 @@ impl IndexedMarkdownStore {
         })
     }
 
-    /// The buckets that declared any input from `table`, a whole-table
+    /// The render units that declared any input from `table`, a whole-table
     /// one included.
-    pub fn buckets_reading_table(&self, table: &str) -> Result<HashSet<String>> {
+    pub fn render_units_reading_table(&self, table: &str) -> Result<HashSet<String>> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
-            let buckets = sqlx::query_scalar::<_, String>(
-                "SELECT DISTINCT bucket_key FROM render_inputs WHERE input_table = ?",
+            let render_units = sqlx::query_scalar::<_, String>(
+                "SELECT DISTINCT render_unit_key FROM render_inputs WHERE input_table = ?",
             )
             .bind(table)
             .fetch_all(&mut **guard.conn())
             .await
-            .context("the buckets that read one table")?;
-            Ok(buckets.into_iter().collect())
+            .context("the render units that read one table")?;
+            Ok(render_units.into_iter().collect())
         })
     }
 
-    /// Up to `limit` of the row ids `bucket_key` declared from `table`,
+    /// Up to `limit` of the row ids `render_unit_key` declared from `table`,
     /// in order, after `after`; a whole-table input is not a row.
     pub fn ids_read_from(
         &self,
-        bucket_key: &str,
+        render_unit_key: &str,
         table: &str,
         after: Option<&str>,
         limit: usize,
@@ -752,32 +754,35 @@ impl IndexedMarkdownStore {
             let mut guard = self.write_lock.acquire().await?;
             sqlx::query_scalar::<_, String>(
                 "SELECT input_id FROM render_inputs \
-                  WHERE bucket_key = ?1 AND input_table = ?2 AND input_id <> ?3 \
+                  WHERE render_unit_key = ?1 AND input_table = ?2 AND input_id <> ?3 \
                     AND (?4 IS NULL OR input_id > ?4) \
                   ORDER BY input_id LIMIT ?5",
             )
-            .bind(bucket_key)
+            .bind(render_unit_key)
             .bind(table)
             .bind(WHOLE_TABLE)
             .bind(after)
             .bind(limit as i64)
             .fetch_all(&mut **guard.conn())
             .await
-            .context("the rows a bucket read from one table")
+            .context("the rows a render unit read from one table")
         })
     }
 
-    /// Every document rendered under any of `bucket_keys`, as
-    /// `(bucket, document)`. One query rather than one per bucket — a run
-    /// declares as many buckets as it rendered.
-    pub fn documents_for_buckets(&self, bucket_keys: &[&str]) -> Result<Vec<(String, String)>> {
+    /// Every document rendered under any of `render_unit_keys`, as
+    /// `(render unit, document)`. One query rather than one per render unit — a run
+    /// declares as many render units as it rendered.
+    pub fn documents_for_render_units(
+        &self,
+        render_unit_keys: &[&str],
+    ) -> Result<Vec<(String, String)>> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
-            sqlx::query_as::<_, (String, String)>(DOCUMENTS_FOR_BUCKETS)
-                .bind(serde_json::to_string(bucket_keys)?)
+            sqlx::query_as::<_, (String, String)>(DOCUMENTS_FOR_RENDER_UNITS)
+                .bind(serde_json::to_string(render_unit_keys)?)
                 .fetch_all(&mut **guard.conn())
                 .await
-                .context("documents for buckets")
+                .context("documents for render units")
         })
     }
 
@@ -1439,7 +1444,7 @@ impl IndexedMarkdownStore {
         cursor: Option<&str>,
         pin: &datalib_etl::pin::Pin,
     ) -> Result<datalib_etl::doltlite_raw::DiffScan> {
-        blocking(datalib_etl::doltlite_raw::scan_buckets(
+        blocking(datalib_etl::doltlite_raw::scan_render_units(
             &self.pool,
             cursor,
             pin,
@@ -1451,7 +1456,7 @@ impl IndexedMarkdownStore {
                 // every rendered doc; by the time rows reach here that
                 // fan-out has already happened, on the render side.
                 fanout_query: None,
-                bucket_query: "
+                render_unit_query: "
                     SELECT DISTINCT markdown_uuid FROM (
                         SELECT coalesce(to_markdown_uuid, from_markdown_uuid) AS markdown_uuid
                           FROM dolt_diff_markdowns
@@ -1623,7 +1628,7 @@ impl IndexedMarkdownStore {
                     markdown_uuid: md.markdown_uuid.clone(),
                     source_id: md.source_id.clone(),
                     upstream_cursor: md.upstream_cursor.clone(),
-                    bucket_key: md.bucket_key.clone(),
+                    render_unit_key: md.render_unit_key.clone(),
                     render_version,
                     rows,
                     sections: Vec::new(),
@@ -1728,16 +1733,16 @@ mod tests {
     }
 
     /// Every per-document lookup `put_document` and `remove_documents`
-    /// make, and the lookup of a bucket's documents at each checkpoint,
+    /// make, and the lookup of a render unit's documents at each checkpoint,
     /// goes through an index: without them a full render is quadratic in
-    /// the store's size. The bucket lookup scanned `markdowns` at every
+    /// the store's size. The render unit lookup scanned `markdowns` at every
     /// checkpoint of a 135k-document render.
     #[test]
     fn replacing_a_document_finds_its_old_rows_by_index() {
         let td = tempfile::tempdir().unwrap();
         let st = store(td.path());
         let mut statements = vec![
-            DOCUMENTS_FOR_BUCKETS,
+            DOCUMENTS_FOR_RENDER_UNITS,
             "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?",
             crate::grid_index::DELETE_DOCUMENT_GRID_ROWS,
             REMOVED_PROBLEMS,
@@ -1903,7 +1908,7 @@ mod tests {
             markdown_uuid: markdown_uuid.to_string(),
             source_id: "src".into(),
             upstream_cursor: None,
-            bucket_key: None,
+            render_unit_key: None,
             render_version: 7,
             rows: vec![row(markdown_uuid, markdown_uuid)],
             sections: Vec::new(),
@@ -2665,33 +2670,33 @@ mod tests {
 
     /// A document that comes back with no rows — every one rejected by
     /// validation — is not a document: its `markdowns` row goes, so a
-    /// bucket sweep never finds it under the bucket it used to be in.
+    /// render unit sweep never finds it under the render unit it used to be in.
     /// The problems saying why stay. Found by the contract harness on a
-    /// gitlab merge request re-keyed under another bucket whose rows all
-    /// failed `created_at`: `markdowns` kept the old bucket.
+    /// gitlab merge request re-keyed under another render unit whose rows all
+    /// failed `created_at`: `markdowns` kept the old render unit.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_document_re_rendered_with_no_rows_is_gone_bucket_and_all() {
+    async fn a_document_re_rendered_with_no_rows_is_gone_render_unit_and_all() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         let s = store(root);
         let mut first = doc("md-1", "fp-1");
-        first.bucket_key = Some("mr!17".into());
+        first.render_unit_key = Some("mr!17".into());
         s.put_document(&first).unwrap();
         assert_eq!(
-            s.documents_for_buckets(&["mr!17"]).unwrap(),
+            s.documents_for_render_units(&["mr!17"]).unwrap(),
             vec![("mr!17".to_string(), "md-1".to_string())]
         );
 
         let mut empty = doc_with("md-1", "fp-2", vec![problem("row-a", "md-1")]);
-        empty.bucket_key = Some("mr!17~new".into());
+        empty.render_unit_key = Some("mr!17~new".into());
         empty.rows.clear();
         s.put_document(&empty).unwrap();
 
         assert!(
-            s.documents_for_buckets(&["mr!17", "mr!17~new"])
+            s.documents_for_render_units(&["mr!17", "mr!17~new"])
                 .unwrap()
                 .is_empty(),
-            "no markdowns row under either bucket"
+            "no markdowns row under either render unit"
         );
         assert!(s.all_document_uuids().unwrap().is_empty());
         assert_eq!(
@@ -2865,7 +2870,7 @@ mod tests {
         assert!(s.own_problem_counts().unwrap().is_empty());
     }
 
-    /// A bucket that declared a whole table is stale when any row of it
+    /// A render unit that declared a whole table is stale when any row of it
     /// moves, and one that declared a row is not stale for its neighbours.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_whole_table_input_matches_any_row_of_it() {
@@ -2877,16 +2882,22 @@ mod tests {
         s.put_inputs("one", &[Input::new("readings", "r-1")])
             .unwrap();
 
-        let stale = s.buckets_reading(&[Input::new("readings", "r-2")]).unwrap();
+        let stale = s
+            .render_units_reading(&[Input::new("readings", "r-2")])
+            .unwrap();
         assert_eq!(stale, ["page".to_string()].into_iter().collect());
-        let stale = s.buckets_reading(&[Input::new("readings", "r-1")]).unwrap();
+        let stale = s
+            .render_units_reading(&[Input::new("readings", "r-1")])
+            .unwrap();
         assert_eq!(
             stale,
             ["page".to_string(), "one".to_string()]
                 .into_iter()
                 .collect()
         );
-        let stale = s.buckets_reading(&[Input::new("devices", "d-1")]).unwrap();
+        let stale = s
+            .render_units_reading(&[Input::new("devices", "d-1")])
+            .unwrap();
         assert!(stale.is_empty());
     }
 }

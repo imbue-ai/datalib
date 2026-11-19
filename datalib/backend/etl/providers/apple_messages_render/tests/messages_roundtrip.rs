@@ -96,14 +96,14 @@ impl Fixture {
                 render(&raw, "messages", &Progress::noop(), range, &mut on_doc).expect("render");
             let written: HashSet<&str> = rendered
                 .outcome
-                .buckets
+                .render_units
                 .iter()
                 .filter(|b| !b.inputs.is_empty())
                 .map(|b| b.key.as_str())
                 .collect();
             let gone: Vec<String> = rendered
                 .outcome
-                .buckets
+                .render_units
                 .iter()
                 .filter(|b| b.inputs.is_empty() && !written.contains(b.key.as_str()))
                 .map(|b| b.key.clone())
@@ -145,7 +145,7 @@ fn pages(docs: &[RenderedMarkdown], chat_guid: &str) -> String {
     let mut out = String::new();
     for doc in docs
         .iter()
-        .filter(|d| d.bucket_key.as_deref() == Some(&uuid))
+        .filter(|d| d.render_unit_key.as_deref() == Some(&uuid))
     {
         out.push_str(&join(&doc.sections));
     }
@@ -197,7 +197,7 @@ async fn bodies_tapbacks_and_attachments_render() -> Result<()> {
     let bridge_uuid = chat_uuid("messages", BRIDGE);
     let troi = docs
         .iter()
-        .filter(|d| d.bucket_key.as_deref() == Some(&bridge_uuid))
+        .filter(|d| d.render_unit_key.as_deref() == Some(&bridge_uuid))
         .flat_map(|d| &d.contacts)
         .find(|c| c.key == "tel:+14155550199")
         .expect("the tapback's sender is a person in the document");
@@ -341,7 +341,7 @@ async fn a_second_run_renders_only_what_moved() -> Result<()> {
         docs.iter().map(|d| &d.markdown_uuid).collect::<Vec<_>>()
     );
     assert_eq!(
-        docs[0].bucket_key.as_deref(),
+        docs[0].render_unit_key.as_deref(),
         Some(chat_uuid("messages", BRIDGE).as_str())
     );
     assert!(pages(&docs, BRIDGE).contains("Recalibrating now."));
@@ -451,7 +451,7 @@ async fn a_chat_spanning_two_months_is_one_document() -> Result<()> {
     let riker = chat_uuid("messages", RIKER);
     let riker_docs: Vec<_> = docs
         .iter()
-        .filter(|d| d.bucket_key.as_deref() == Some(riker.as_str()))
+        .filter(|d| d.render_unit_key.as_deref() == Some(riker.as_str()))
         .collect();
     assert_eq!(riker_docs.len(), 1);
     assert_eq!(riker_docs[0].markdown_uuid, riker);

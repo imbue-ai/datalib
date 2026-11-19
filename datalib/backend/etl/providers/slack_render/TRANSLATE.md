@@ -50,7 +50,7 @@ missing, and lives in a sidecar every attempt rewrites. A
 root shows no line.
 
 The line needs nothing extra to stay true. A reply's row carries its
-root's key, which is the thread's bucket key, so a reply that arrives
+root's key, which is the thread's render unit key, so a reply that arrives
 renders its thread again, and the root's own row changes when Slack's
 count does. `slack_tests`'s `reply_count` module holds a thread whose
 read failed, then reads it, and checks the incremental render.

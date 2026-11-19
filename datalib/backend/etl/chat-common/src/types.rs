@@ -6,7 +6,7 @@ use datalib_schema::problems::{Problem, Reason};
 use serde::Serialize;
 
 /// What flavor of item this is. Collapses each provider's richer event
-/// taxonomy into three buckets the renderer knows how to lay out.
+/// taxonomy into three render units the renderer knows how to lay out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ItemKind {
     Text,
@@ -38,7 +38,7 @@ pub struct NormalizedAttachment {
     pub source_url: Option<String>,
     /// Upstream ref_id of the attachment bytes — the same key the
     /// provider hands to its per-chat [`BlobBundle`] in `parse`. When
-    /// chat-common's renderer resolves it in the bucket's bundle it sets
+    /// chat-common's renderer resolves it in the render unit's bundle it sets
     /// `href` from there. Unknown ref_ids fall through to the
     /// "(not yet fetched)" placeholder.
     pub ref_id: Option<String>,
@@ -373,7 +373,7 @@ pub struct NormalizedChat {
     /// Provider-local chat id. Goes into the on-disk path slug.
     pub id: String,
     /// Stable per-chat UUID minted by the provider. Same value across
-    /// every bucket of this chat.
+    /// every render unit of this chat.
     pub chat_uuid: String,
     /// The containers above the chat, top first: a Slack thread's
     /// workspace and channel. Each document of the chat carries them, with
@@ -433,7 +433,7 @@ pub struct NormalizedChat {
     pub org_uuid: Option<String>,
     pub org_name: Option<String>,
     /// Its documents: one for most chats.
-    pub buckets: Vec<NormalizedDoc>,
+    pub render_units: Vec<NormalizedDoc>,
     /// Who `display` names, when the chat has no title of its own and is
     /// called by its people instead: a direct message's other party, a
     /// group's members. Empty for a chat with a title. Each document's own
@@ -447,7 +447,7 @@ pub struct NormalizedChat {
     #[serde(skip)]
     pub contacts: Vec<datalib_contact_schema::NormalizedContact>,
     /// Every raw row this chat was built from, found or not — what the
-    /// processor declares through `RenderCtx::declare_bucket` so a
+    /// processor declares through `RenderCtx::declare_render_unit` so a
     /// change to any of them renders this chat again. Empty only for a
     /// provider that has not declared its inputs yet.
     #[serde(skip)]

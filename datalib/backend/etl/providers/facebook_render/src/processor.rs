@@ -22,7 +22,7 @@ use datalib_etl_facebook::ingest::schema_raw::{
 use datalib_etl_facebook::ingest::{db_path_for, RawDb};
 use datalib_etl_facebook_config::FacebookRenderConfig;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::inputs::{changed_rows, Bucket, Buckets, Input, RawRange};
+use datalib_etl_render::inputs::{changed_rows, Input, RawRange, RenderUnit, RenderUnits};
 use datalib_etl_render::not_read::{self, tables_not_read, tables_not_read_row};
 use datalib_etl_render::processor::{
     plan_source_render, ReadScope, RenderCtx, RenderProcessor, SourceRender,
@@ -129,11 +129,11 @@ pub struct Source<'a> {
     pub blob_bytes: u64,
 }
 
-/// What one render pass did: every bucket it looked at, and the commit
+/// What one render pass did: every render unit it looked at, and the commit
 /// it read.
 #[derive(Debug, Default)]
 pub struct Outcome {
-    pub buckets: Buckets,
+    pub render_units: RenderUnits,
     pub new_head: Option<String>,
     /// Stored tables no feed reads, with their rows.
     pub not_read: Vec<(String, i64)>,
@@ -176,7 +176,7 @@ struct Loaded {
     reactions: Vec<NormalizedChat>,
     conversations: Vec<NormalizedChat>,
     friends: Vec<ContactDoc>,
-    buckets: Buckets,
+    render_units: RenderUnits,
     head: String,
 }
 
@@ -249,7 +249,7 @@ async fn load(db: &RawDb, source: &Source<'_>) -> Result<Loaded> {
     );
     let mut friends = build_friends(rows(FRIENDS_TABLE), &owner);
 
-    let mut buckets = Buckets::new();
+    let mut render_units = RenderUnits::new();
     // Which post an edit is of is decided over every post and every
     // edit, so where there are edits, a change to any of them can
     // move a version — to another post, or to a document of its
@@ -268,16 +268,16 @@ async fn load(db: &RawDb, source: &Source<'_>) -> Result<Loaded> {
     } else {
         &[]
     };
-    buckets.extend(narrow_chats(&mut posts, changed.as_ref(), range, as_one));
+    render_units.extend(narrow_chats(&mut posts, changed.as_ref(), range, as_one));
     for chats in [
         &mut albums,
         &mut comments,
         &mut reactions,
         &mut conversations,
     ] {
-        buckets.extend(narrow_chats(chats, changed.as_ref(), range, &[]));
+        render_units.extend(narrow_chats(chats, changed.as_ref(), range, &[]));
     }
-    buckets.extend(narrow_contacts(&mut friends, changed.as_ref(), range));
+    render_units.extend(narrow_contacts(&mut friends, changed.as_ref(), range));
     Ok(Loaded {
         owner,
         posts,
@@ -286,7 +286,7 @@ async fn load(db: &RawDb, source: &Source<'_>) -> Result<Loaded> {
         reactions,
         conversations,
         friends,
-        buckets,
+        render_units,
         head: pin.commit().to_string(),
     })
 }
@@ -299,7 +299,7 @@ fn render_loaded(
     on_doc: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<Outcome> {
     let mut outcome = Outcome {
-        buckets: loaded.buckets,
+        render_units: loaded.render_units,
         new_head: Some(loaded.head),
         not_read: Vec::new(),
     };
@@ -315,13 +315,13 @@ fn render_loaded(
         let mut renderer = ChatRenderer::new(
             &profile,
             source.name,
-            chats.iter().map(|c| c.buckets.len()).sum(),
+            chats.iter().map(|c| c.render_units.len()).sum(),
             progress,
             &mut *on_doc,
         );
         render_batched(&mut renderer, chats, &blobs, source.blob_bytes)
             .with_context(|| format!("render {}", profile.chat_kind))?;
-        outcome.buckets.extend(renderer.finish().buckets);
+        outcome.render_units.extend(renderer.finish().render_units);
     }
     let s = contact_render_all(
         &friends_profile(&loaded.owner),
@@ -331,7 +331,7 @@ fn render_loaded(
         on_doc,
     )
     .context("render friends")?;
-    outcome.buckets.extend(s.buckets);
+    outcome.render_units.extend(s.render_units);
     Ok(outcome)
 }
 
@@ -350,7 +350,7 @@ fn narrow_chats(
     changed: Option<&HashMap<String, HashSet<String>>>,
     range: RawRange<'_>,
     as_one: &[&str],
-) -> Buckets {
+) -> RenderUnits {
     let forward = changed.map(|changed| {
         let all = as_one
             .iter()
@@ -365,14 +365,14 @@ fn narrow_chats(
     if let Some(render) = &render {
         chats.retain(|c| render.contains(&c.chat_uuid));
     }
-    empty_buckets(render)
+    empty_render_units(render)
 }
 
 fn narrow_contacts(
     contacts: &mut Vec<ContactDoc>,
     changed: Option<&HashMap<String, HashSet<String>>>,
     range: RawRange<'_>,
-) -> Buckets {
+) -> RenderUnits {
     let forward = changed.map(|changed| {
         contacts
             .iter()
@@ -384,7 +384,7 @@ fn narrow_contacts(
     if let Some(render) = &render {
         contacts.retain(|c| render.contains(&c.doc_uuid));
     }
-    empty_buckets(render)
+    empty_render_units(render)
 }
 
 fn touched(inputs: &[Input], changed: &HashMap<String, HashSet<String>>) -> bool {
@@ -393,11 +393,11 @@ fn touched(inputs: &[Input], changed: &HashMap<String, HashSet<String>>) -> bool
         .any(|i| changed.get(&i.table).is_some_and(|ids| ids.contains(&i.id)))
 }
 
-fn empty_buckets(render: Option<HashSet<String>>) -> Buckets {
+fn empty_render_units(render: Option<HashSet<String>>) -> RenderUnits {
     let mut keys: Vec<String> = render.into_iter().flatten().collect();
     keys.sort();
     keys.into_iter()
-        .map(|key| Bucket {
+        .map(|key| RenderUnit {
             key,
             inputs: Vec::new(),
         })
@@ -428,16 +428,16 @@ impl SourceRender for FacebookRender {
         };
         let outcome =
             render_source(&source, ctx.progress, &mut on_doc).context("facebook render")?;
-        // Every bucket looked at, named first with nothing and then, for
+        // Every render unit looked at, named first with nothing and then, for
         // the rendered ones, with what they read — in that order, so a
-        // bucket no feed rendered ends declared with nothing and its
+        // render unit no feed rendered ends declared with nothing and its
         // documents go.
         let not_read: Vec<_> =
             tables_not_read_row(ctx.name, &outcome.not_read, crate::common::RENDER_VERSION)
                 .into_iter()
                 .collect();
         ctx.report_entity_problems(&ReadScope::Whole(vec![not_read::SCOPE]), &not_read)?;
-        ctx.finish(&outcome.buckets, outcome.new_head.as_deref())?;
+        ctx.finish(&outcome.render_units, outcome.new_head.as_deref())?;
         Ok("rendered".into())
     }
 }

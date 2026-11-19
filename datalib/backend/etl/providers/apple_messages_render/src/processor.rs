@@ -62,7 +62,7 @@ impl SourceRender for AppleMessagesRender {
             })
             .collect();
         ctx.report_entity_problems(&ReadScope::Whole(vec![crate::render::DROPPED_FROM]), &rows)?;
-        ctx.finish(&outcome.buckets, outcome.new_head.as_deref())?;
+        ctx.finish(&outcome.render_units, outcome.new_head.as_deref())?;
         Ok(format!(
             "rendered={} skipped={}",
             outcome.rendered, outcome.skipped

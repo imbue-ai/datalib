@@ -198,7 +198,7 @@ fn conversation(
         upstream_account: None,
         org_uuid: None,
         org_name: None,
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             markdown_uuid: chat.uuid,
             source_ref: None,
             items,
@@ -514,7 +514,7 @@ mod tests {
     }
 
     fn authors(chat: &NormalizedChat) -> Vec<(String, Option<String>)> {
-        chat.buckets
+        chat.render_units
             .iter()
             .flat_map(|b| &b.items)
             .map(|i| {
@@ -631,8 +631,8 @@ mod tests {
             ],
             &owner(),
         );
-        let [doc] = chats[0].buckets.as_slice() else {
-            panic!("one document: {:?}", chats[0].buckets)
+        let [doc] = chats[0].render_units.as_slice() else {
+            panic!("one document: {:?}", chats[0].render_units)
         };
         assert_eq!(doc.markdown_uuid, chats[0].chat_uuid);
         assert!(doc.source_ref.is_none());
@@ -675,7 +675,7 @@ mod tests {
             ],
             &owner(),
         );
-        let items = &chats[0].buckets[0].items;
+        let items = &chats[0].render_units[0].items;
         assert_eq!(
             items[0].text.as_deref(),
             Some("Look\n\n🔗 [Risa](https://risa.example/)")

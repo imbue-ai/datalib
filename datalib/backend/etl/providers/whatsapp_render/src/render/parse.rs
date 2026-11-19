@@ -479,7 +479,7 @@ async fn parse_async(
             title: None,
             org_uuid: None,
             org_name: None,
-            buckets: vec![whole],
+            render_units: vec![whole],
         });
     }
 

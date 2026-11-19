@@ -1,4 +1,4 @@
-//! Signal's parsed buckets, in the shape `chat-common` renders.
+//! Signal's parsed render units, in the shape `chat-common` renders.
 //!
 //! Signal used to write its own markdown — a bulleted list with a raw
 //! ISO stamp per line — and its own grid rows. Everything below turns
@@ -18,7 +18,7 @@ use datalib_etl_render::inputs::{Inputs, Lookup};
 use super::ids;
 use super::parse::{ParsedChat, ParsedChatItem, ParsedRecipient, ParsedSignal};
 
-/// A bucket whose document this run could not build, and why: a
+/// A render unit whose document this run could not build, and why: a
 /// `problems` row on that document rather than a skip nobody sees.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unrendered {
@@ -93,7 +93,7 @@ pub fn to_chats(parsed: &ParsedSignal, source_id: &str) -> (Vec<NormalizedChat>,
             source_url: None,
             org_uuid: None,
             org_name: None,
-            buckets: vec![NormalizedDoc {
+            render_units: vec![NormalizedDoc {
                 orphan_reactions: Vec::new(),
                 markdown_uuid: chat_id.uuid,
                 source_ref: None,
@@ -284,7 +284,7 @@ fn author_handle(
         .and_then(|r| handles_of(r).into_iter().next())
 }
 
-/// Signal's own account of each person who wrote in the bucket: the
+/// Signal's own account of each person who wrote in the render unit: the
 /// name the backup shows and every handle it has for them. This is
 /// where a number and an ACI are tied together, so a link made through
 /// either finds the other.
@@ -339,14 +339,14 @@ fn author_display(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::parse::DocBucket;
+    use crate::render::parse::DocRenderUnit;
 
-    /// A bucket whose chat the parse did not read was skipped with a
+    /// A render unit whose chat the parse did not read was skipped with a
     /// log line; its document now carries why it was not rendered. A
-    /// bucket beside it whose chat is there renders.
+    /// render unit beside it whose chat is there renders.
     #[test]
-    fn a_bucket_with_no_chat_is_unrendered() {
-        let bucket = |chat_id: &str| DocBucket {
+    fn a_render_unit_with_no_chat_is_unrendered() {
+        let render_unit = |chat_id: &str| DocRenderUnit {
             chat_id: chat_id.into(),
             items: Vec::new(),
         };
@@ -359,7 +359,7 @@ mod tests {
                 },
             )]
             .into(),
-            docs: vec![bucket("1"), bucket("1701")],
+            docs: vec![render_unit("1"), render_unit("1701")],
             ..ParsedSignal::default()
         };
         let (chats, unrendered) = to_chats(&parsed, "signal");

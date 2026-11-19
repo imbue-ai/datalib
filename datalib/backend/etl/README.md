@@ -2,7 +2,7 @@
 
 Everything a provider needs but should not re-invent: the doltlite-backed
 raw store (`doltlite_raw.rs`, `bulk.rs`), the blob CAS (`blob_cas.rs`), the
-diff scan a render cursor drives (`doltlite_raw::scan_buckets`), the
+diff scan a render cursor drives (`doltlite_raw::scan_render_units`), the
 content-line grammar iCalendar and vCard share (`content_line.rs`:
 unfolding, quoted parameters, TEXT unescaping, splitting a structured
 value on its unescaped `;`). The render side's shared code is `render/`.
@@ -772,7 +772,7 @@ until it is rendered again, and at render a type the provider's edge
 projection names still comes before the CAS's (`BlobBundle::load_many`).
 
 The bundle is the common vocabulary at both ends. Download adds bytes as they
-arrive and drains the bundle at end of bucket; parse loads the documents'
+arrive and drains the bundle at end of render unit; parse loads the documents'
 bundles with `BlobBundle::load_many`; render then consumes an
 already-loaded bundle — no SQL, no `block_in_place`, no dyn blob reader.
 Parse reads the edge table in one query for every document it loads,

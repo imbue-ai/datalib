@@ -22,10 +22,10 @@ use crate::read::{self, Catalog};
 use crate::tree;
 use datalib_schema::grid_rows::GridRow;
 
-/// Every photo is filed under one bucket, read from whole tables: a sync
+/// Every photo is filed under one render unit, read from whole tables: a sync
 /// where the catalog did not change costs one lookup, and one where it
 /// did renders every photo again.
-const BUCKET: &str = "catalog";
+const RENDER_UNIT: &str = "catalog";
 
 pub fn plan_render(
     ctx: PlanContext,
@@ -67,7 +67,7 @@ impl SourceRender for LightroomRender {
 
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
         let range = ctx.raw_range();
-        if let (Some(pin), false) = (range.pin, range.is_stale(BUCKET)) {
+        if let (Some(pin), false) = (range.pin, range.is_stale(RENDER_UNIT)) {
             ctx.consumed(pin);
             return Ok(format!("up to date at {pin}"));
         }
@@ -102,7 +102,7 @@ impl SourceRender for LightroomRender {
                 markdown_uuid: built.photo.uuid.clone(),
                 source_id: ctx.name.to_string(),
                 upstream_cursor: None,
-                bucket_key: Some(BUCKET.to_string()),
+                render_unit_key: Some(RENDER_UNIT.to_string()),
                 render_version: RENDER_VERSION,
                 rows: row.into_iter().collect(),
                 sections: vec![built.section],
@@ -126,8 +126,8 @@ impl SourceRender for LightroomRender {
             .map(|t| Input::whole_table(*t))
             .collect();
         ctx.finish(
-            &[datalib_etl_render::inputs::Bucket {
-                key: BUCKET.to_string(),
+            &[datalib_etl_render::inputs::RenderUnit {
+                key: RENDER_UNIT.to_string(),
                 inputs,
             }],
             Some(&head),

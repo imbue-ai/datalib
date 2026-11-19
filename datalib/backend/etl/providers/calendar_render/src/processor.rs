@@ -57,9 +57,9 @@ impl SourceRender for CalendarRender {
         )
         .context("calendar render_all")?;
         for key in &rendered.gone {
-            ctx.exclude_bucket(key)?;
+            ctx.exclude_render_unit(key)?;
         }
-        ctx.finish(&rendered.buckets, parsed.head.as_deref())?;
+        ctx.finish(&rendered.render_units, parsed.head.as_deref())?;
         Ok("rendered".into())
     }
 }

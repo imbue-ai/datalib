@@ -65,7 +65,7 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
             markdown_uuid: md.to_string(),
             source_id: "slack".into(),
             upstream_cursor: None,
-            bucket_key: None,
+            render_unit_key: None,
             render_version: 1,
             rows,
             sections: Vec::new(),

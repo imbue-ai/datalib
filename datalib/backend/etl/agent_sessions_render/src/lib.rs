@@ -14,12 +14,12 @@ use datalib_id::Identity;
 use datalib_schema::data_nodes::DataNodeRow;
 use serde_json::Value;
 
-/// The `bucket_query` of an agent-session render's diff scan: the
+/// The `render_unit_query` of an agent-session render's diff scan: the
 /// transcripts the diff since `?1` touched, by `transcripts.id`, over
 /// the two tables every agent-session raw store keeps.
-pub const TRANSCRIPT_BUCKETS_SQL: &str = "
-    SELECT DISTINCT bucket FROM (
-        SELECT coalesce(to_transcript_id, from_transcript_id) AS bucket
+pub const TRANSCRIPT_RENDER_UNITS_SQL: &str = "
+    SELECT DISTINCT render_unit FROM (
+        SELECT coalesce(to_transcript_id, from_transcript_id) AS render_unit
           FROM dolt_diff_records
          WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
         UNION
@@ -27,7 +27,7 @@ pub const TRANSCRIPT_BUCKETS_SQL: &str = "
           FROM dolt_diff_transcripts
          WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
     )
-    WHERE bucket IS NOT NULL
+    WHERE render_unit IS NOT NULL
 ";
 
 /// One item of a transcript, as chat-common renders it.

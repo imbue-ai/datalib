@@ -31,7 +31,7 @@ fn renders_tng_fixture() {
     )
     .expect("render");
     // 6 channel threads + 5 DM threads (two 1:1 DMs and a group DM;
-    // each standalone message is its own thread bucket).
+    // each standalone message is its own thread render unit).
     assert_eq!(summary.threads_total, 11);
     assert_eq!(summary.threads_rendered, 11);
     assert_eq!(docs.len(), 11);
