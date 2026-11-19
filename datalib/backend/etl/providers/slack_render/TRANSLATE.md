@@ -31,6 +31,17 @@ link on bare `slack.com` opens in whichever workspace the browser is
 signed into, so that form, with `?team=<T…>`, is only for a store with
 no workspace URL. `render::slack_link` is the one place either is built.
 
+## Who wrote a message
+
+A message by a person is theirs: the user's label from the workspace's
+users (`users` rows), and their handle, so the page draws them as a
+person. A bot has no handle. It is named by what it posted under:
+`username`, which an integration sets per message, then its app's
+`bot_profile.name`, then the name `bots.info` gave its `bot_id` (`bots`
+rows, which a thread declares it read, so a renamed bot renders its
+threads again), then the bare id. A message that names no one reads
+"Unknown".
+
 ## Replies not mirrored yet
 
 A thread's root says how many replies it has, `2 replies`, and while

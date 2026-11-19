@@ -65,6 +65,17 @@ pub fn record_user_info(api_dir: &Path, user: Value) -> Result<()> {
     )
 }
 
+/// `bots.info` answering for `bot`, keyed by its `id`.
+pub fn record_bot_info(api_dir: &Path, bot: Value) -> Result<()> {
+    let id = bot["id"].as_str().context("a bot with an id")?.to_string();
+    record_call(
+        api_dir,
+        "bots.info",
+        json!({"bot": id}),
+        json!({"ok": true, "bot": bot}),
+    )
+}
+
 /// One `conversations.list` page listing `channels`, asked for `types`.
 pub fn record_conversations(api_dir: &Path, types: &str, channels: Value) -> Result<()> {
     record_call(

@@ -197,7 +197,7 @@ expression: rows
   },
   {
     "account": "picard@enterprise.starfleet",
-    "author": "unknown",
+    "author": "Sensor Array",
     "author_handle": null,
     "byte_size": 476,
     "channel": null,
@@ -1148,7 +1148,7 @@ expression: rows
     "source_id": null,
     "source_label": "Slack",
     "source_url": "https://enterprise-d.slack.com/archives/C_ENG/p12604000450000450",
-    "supplied_terms": "[[\"participant\",\"unknown\"]]",
+    "supplied_terms": "[[\"participant\",\"Sensor Array\"]]",
     "touched_at": "2369-05-28T15:14:10Z",
     "upstream_account": "T_NCC1701D",
     "upstream_entity_kind": "thread",

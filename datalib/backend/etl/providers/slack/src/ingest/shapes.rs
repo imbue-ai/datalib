@@ -4,6 +4,7 @@ pub const M_AUTH_TEST: &str = "auth.test";
 pub const M_CHANNELS: &str = "conversations.list";
 pub const M_USERS: &str = "users.list";
 pub const M_USER_INFO: &str = "users.info";
+pub const M_BOT_INFO: &str = "bots.info";
 pub const M_HISTORY: &str = "conversations.history";
 pub const M_REPLIES: &str = "conversations.replies";
 /// Not in Slack's published API: the web client's own call, which a
