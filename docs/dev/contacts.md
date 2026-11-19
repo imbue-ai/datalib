@@ -25,22 +25,16 @@ Three things to know before the rest:
 ## The same move chat-common makes
 
 Fourteen chat-like sources (email, Slack, WhatsApp, Signal, Messages,
-the AI chats and more) each store messages in their own raw shape.
-Their render crates don't each write markdown: each translates its raw
-rows into one neutral shape, `NormalizedChat`, and
-[chat-common](../../datalib/backend/etl/chat-common/README.md) turns
-that into the document and its grid rows. A provider's render knows its
-source; chat-common knows what a message looks like.
-
-People get the same treatment at the render layer. A Slack profile, an
-address-book card, a LinkedIn connection, a WhatsApp address-book
-entry, and the bare fact that someone wrote in a chat under some name
-all describe a person, each in their source's own shape. Every one of
-them is translated into one neutral shape, `NormalizedContact`
+the AI chats and more) each translate their raw rows into one neutral
+shape, `NormalizedChat`, and chat-common turns that into the document
+and its grid rows. People get the same treatment. A Slack profile, an
+address-book card, a LinkedIn connection, a WhatsApp address-book entry
+and the bare fact that someone wrote in a chat under some name all
+describe a person; each is translated into `NormalizedContact`
 (`datalib_contact_schema`): what one source knows about one person, in
-terms no source owns. `contact-common` is the counterpart of
-chat-common for the sources that are *about* people: it turns a
-`NormalizedContact` into a document.
+terms no source owns. `contact-common` is chat-common's counterpart
+for the sources that are *about* people: it turns a `NormalizedContact`
+into a document.
 
 On top of that sit three layers, each of which works without the one
 above it:
@@ -56,13 +50,9 @@ above it:
    the contacts app, the one store under a data root that nothing can
    rebuild. Its answer ranks above every source's.
 
-What is still to build: [`plans/contact_linking.md`](plans/contact_linking.md)
-(groups, numbers without a country code), [`plans/search_autocomplete.md`](plans/search_autocomplete.md)
-(contacts in search) and [`plans/contact_editing.md`](plans/contact_editing.md)
-(the contact card: its fields, drafts, saving, undo, the export).
-How every chip is written, drawn, resolved and clicked — a person's, a
-group's, a step's — is [`chips.md`](chips.md). This page says what the
-tree does for a person.
+How every chip is written, drawn, resolved and clicked is
+[`chips.md`](chips.md); this page is what is particular to a person.
+What is still to build is §"Not built" at the end.
 
 ## Words
 
@@ -80,11 +70,9 @@ tree does for a person.
 
 ## Handles
 
-[`datalib/backend/handle`](../../datalib/backend/handle/src/lib.rs) is a
-crate whose one first-party dependency, `uuid_text`, has none, so render
-crates, the index, the applets and the contacts store all share one
-definition. A handle is
-`<kind>:<value>`. The rule that matters most: **where a native id is an
+The `datalib_handle` crate (`datalib/backend/handle`) is the one
+definition, shared by the renders, the index, the applets and the
+contacts store. A handle is `<kind>:<value>`. The rule that matters most: **where a native id is an
 email address or a phone number, the handle is `email:` or `tel:`, not a
 per-app kind**, so one link covers every app that reaches a person that
 way. Only an id that is opaque by nature gets a kind of its own.
@@ -168,10 +156,9 @@ lost, but nothing links to it either.
 That is not a rare case. WhatsApp and Signal always store the
 international form, but an address-book card is often typed by hand
 without one, and a phone's SMS backup keeps whatever the phone was
-given. A card whose numbers
-are all national reaches nobody through them. The fix is a default
-region that the render applies to such a number, planned in
-[`plans/contact_linking.md`](plans/contact_linking.md) §"Handle kinds not made yet".
+given. A card whose numbers are all national reaches nobody through
+them. The planned fix, not built, is a default region the render
+applies to such a number.
 
 ### Changing the rules
 
@@ -261,11 +248,9 @@ for a person").
 
 chat-common writes an author with a handle as a chip link in the
 message header, and recipients as a line straight under it, leaving
-off those the conversation already names (an SMS thread's other
-side); the shape,
-and why the href is load-bearing, is
-[`chat-common/README.md`](../../datalib/backend/etl/chat-common/README.md)
-§"The message header". A reactor with a handle is a chip link too, in a
+off those the conversation already names (an SMS thread's other side);
+the shape is in [the document contract](../user/rendered_documents.md#a-person).
+A reactor with a handle is a chip link too, in a
 message's reaction list and in the list of reactions to messages not
 in the mirror (`render.rs::reactor`). Slack writes a `<@U…>` mention as
 a chip link in the body (`slack_render/src/render/mrkdwn.rs`), and as
@@ -275,8 +260,7 @@ A contact's own page leads with the person as a chip, so the
 right-click that links them to a contact is at the top of the page;
 a group of contacts lists its members, each a chip link where the
 member's card has an address or a full number (contact-common, from
-`ContactDoc::member_handles`; the page's layout is
-[`contact-common/README.md`](../../datalib/backend/etl/contact-common/README.md)).
+`ContactDoc::member_handles`).
 Every mention a source marks up is also a `mention` search term on its
 message's row. Every chip link
 the backend writes is shaped by one function,
@@ -289,8 +273,8 @@ to, never the link text ([`chips.md`](chips.md) §"Trust").
 
 ## Source contacts: `NormalizedContact`
 
-[`datalib/backend/contact_schema`](../../datalib/backend/contact_schema/src/lib.rs)
-is only the shape: `source_id` and `key` say who describes the person;
+`datalib_contact_schema` (`datalib/backend/contact_schema`) is only
+the shape: `source_id` and `key` say who describes the person;
 then `kind` (`person` or `group`), `names` (the preferred one first),
 `handles` (each a `ContactHandle`: its `medium`, the value as written,
 its `Handle` if one could be made, a label, and `stopped_working_by`),
@@ -303,9 +287,8 @@ Four producers, each needing less of a provider than the one before:
 
 - **The contacts app**, from its store, with `source_id =
   "datalib_contacts"`.
-- **A source about people**, through `contact-common`
-  ([`etl/contact-common`](../../datalib/backend/etl/contact-common/src/render.rs)):
-  an address-book card, a LinkedIn connection, a Facebook friend. Each
+- **A source about people**, through `contact-common`: an address-book
+  card, a LinkedIn connection, a Facebook friend. Each
   is a document of its own, and carries its source contact.
 - **A chat provider, for what only it knows**, in
   `NormalizedChat::contacts`: Slack's profiles (names, title, avatar,
@@ -353,38 +336,35 @@ page is about and for each of a chat's source contacts. A stored photo
 of another type is still shown on its contact's page, at the same
 address, and gets no URL.
 
-Where the bytes come from: LinkedIn's photos an earlier build fetched
-and Beeper's cached avatars are in the source's blob store already (an
-avatar counts only when the store holds it as an image). A vCard
-carries its photo inside the card, in the raw store: the contacts
-download decodes each inline `PHOTO` and puts it in the source's blob
-store before the card is stored (`contacts/src/ingest/photo.rs`), and
-the source's `--migrate` puts in the photos of every card a store
-already holds, for a store an older build filled. Render hashes the
-card's decoded photo and links it. A photo the blob store lacks leaves
-the contact with no photo and a `blob_missing` problem on its page.
+Where the bytes come from: LinkedIn's connection photos (fetched by
+earlier builds; linkedin.com no longer shows them) and Beeper's cached
+avatars are in the source's blob store already (an avatar counts only
+when the store holds it as an image). A vCard carries its photo inside
+the card: the contacts download decodes each inline `PHOTO` into the
+source's blob store before the card is stored, and the source's
+`--migrate` does the same for every card a store already holds. Render
+hashes the card's decoded photo and links it. A photo the blob store
+lacks leaves the contact with no photo and a `blob_missing` problem on
+its page.
 
-A render store written before photos were linked holds the retired
-`Inline` spelling in `contact_json`; it reads as no photo until the
-page renders again. The contacts app fills it with
-`/applet/datalib_contacts/photo/<contact_id>?v=<when it was set>` for a
-photo a person put on their contact: a page draws an image it has
-already loaded under one URL again from memory, so a changed photo has
-to be a new URL to show without a reload. With no photo, or one the browser fails to load, a
-chip linked to a contact draws the person's initial, and any other
-chip draws the mark for its handle's kind.
+For a photo a person put on their own contact, the contacts app answers
+`/applet/datalib_contacts/photo/<contact_id>?v=<when it was set>`: a
+page draws an image it has already loaded under one URL from memory, so
+a changed photo needs a new URL to show without a reload. With no
+photo, or one the browser fails to load, a chip linked to a contact
+draws the person's initial, and any other chip draws the mark for its
+handle's kind.
 
 ## The contacts app
 
 `<data_root>/datalib_curated/datalib_contacts/contacts.doltlite_db`,
-written only by the `datalib_contacts` applet
-([`datalib/backend/contacts`](../../datalib/backend/contacts/src/lib.rs)
-is the store, `applets/src/datalib_contacts.rs` the routes). It is a
-person's work, so the rules that make it irreplaceable:
+written only by the `datalib_contacts` applet (the store is
+`datalib/backend/contacts`, the routes
+`datalib/backend/applets/src/datalib_contacts.rs`). It is a person's
+work, and nothing can rebuild it:
 
-- **Every write is a commit** on `datalib_writer`, sealed onto `main`
-  (`etl/README.md` §"Connection pools"), so the history is an audit
-  trail.
+- **Every write is a commit** on `datalib_writer`, sealed onto `main`,
+  so its commit log is an audit trail.
 - **Nothing resets it.** A reset or removal of a source or the index
   never touches `datalib_curated/`. Every shape change is a rung on
   `LADDER`, never a rebuild (`doltlite_raw::open_curated` refuses a
@@ -465,10 +445,10 @@ for an agent, as steps:
 | `GET /not_linked` | every link a person turned down, newest first |
 
 The config entry is `[[applets]] id = "datalib_contacts"` with
-`command = "datalib-applet datalib_contacts"`; the gateway passes the
-data root in the environment. A new root's starter config
-(`datalib_dag::starter::STARTER_CONFIG`) writes it, filed under
-`unified_grid_and_search_index`; a config written before that has to add it by hand.
+`command = "datalib-applet datalib_contacts"`, in the
+`unified_grid_and_search_index` group; the gateway passes the data root
+in the environment. A new root's starter config has it; an older config
+adds it by hand.
 
 ### Fields, and editing a contact through a draft
 
@@ -532,8 +512,7 @@ knows (`contactFields.ts`):
   copied from now says something else, the field says so ("… now says
   *X*", with *Take it*), or that the source no longer says it.
 
-Not built yet: history and undo, and the export
-([`plans/contact_editing.md`](plans/contact_editing.md)).
+Not built yet: history and undo, and the export.
 
 ### Agents propose, a person decides
 
@@ -584,8 +563,7 @@ The contacts card's *Review* switch is the person's side: every row
 with something proposed or labelled, close calls first (what waits,
 the agent's least sure first), filtered by what `real` says or by any
 other label. `real`, and the label picked in the filter, is a
-`membership` column ([`cards.md`](cards.md) §"Typed tables"): a
-three-position switch per row, out · not known · in, the agent's
+`membership` column: a three-position switch per row, out · not known · in, the agent's
 unreviewed answer outlined; a press on a third of it is the person's
 answer. *Confirm*, *Reject*, *Real*, *Not real* or a new label in the
 bar act on every selected row, and the right-click adds *Not <label>*
@@ -610,16 +588,14 @@ Everything is in `datalib/ui/src/cards/`:
   edit), `copyText` and the copy rewrite. `people` is who each handle
   is, for the whole app: the resolver ([`chips.md`](chips.md)
   §"Resolving") over `/people` and the contacts app's `/resolve`; an
-  edit (create, link, unlink, no longer works) forgets the handles it
-  touched. An edit made anywhere else — another window, an agent —
-  reaches every page as the live stream's `curated` frame, on which
-  `people` asks again: the applet holds its store open, so the OS
-  reports none of its writes, and instead the gateway nudges
-  `datalib-http`'s watch after every write it forwards to an applet;
-  the watch compares each `datalib_curated/` store's head and sends the
-  frame only when one moved (`http/src/watch.rs`). A draft's autosave
-  is no commit, so it sends none. `decorateHandles` draws a document's
-  chips and `chipCell` a grid cell's.
+  edit made in the page forgets the handles it touched. An edit made
+  anywhere else (another window, an agent) reaches every page as the
+  live stream's `curated` frame, on which `people` asks again. The
+  gateway nudges `datalib-http`'s watch after every write it forwards
+  to an applet, and the watch sends the frame when a `datalib_curated/`
+  store's head moved (`http/src/watch.rs`); a draft's autosave is no
+  commit, so it sends none. `decorateHandles` draws a document's chips
+  and `chipCell` a grid cell's.
 - `ChatBody.ce.vue` runs the decorate pass over a document's frame and
   owns the popover
   (`HandlePopover.ce.vue`: link to a contact, create one, unlink, mark
@@ -645,11 +621,9 @@ Everything is in `datalib/ui/src/cards/`:
   anywhere as soon as the `curated` frame arrives. Browse on the app's
   Manage row opens it. A contact with no handle is drawn as a contact
   chip (`contactCell`, through `contactsById`), and one marked as you
-  wears a "me" chip. Its right-click deletes
-  the rows it aims at, and merges every other selected row into the one
-  clicked, so duplicates are merged by selecting them all and
-  right-clicking the one to keep. Your contacts are not in the search grid: the
-  index holds what sources render, and nothing renders this store.
+  wears a "me" chip. Its right-click deletes the rows it aims at, or
+  merges every other selected row into the one clicked. Your contacts
+  are not in the search grid: nothing renders this store.
 - The grid's Author column is a chip too: `grid_rows.author_handle`
   (which `from:` finds through the search terms) comes with each
   message's row and each reaction's, and
@@ -657,17 +631,14 @@ Everything is in `datalib/ui/src/cards/`:
   them when an answer changes. The applet names the mark for a handle's
   kind in `columns.rs::handle_mark`.
 - A contact's own row is drawn by who it is about, not by where it is
-  filed. Its grid row names the person in `contact` and
-  `conversation_name`, puts its first email address and phone number
-  in `email` and `phone`, and files the address book (or LinkedIn's or
-  Facebook's list) in `channel` alone. The grid's Contact column is a
-  chip from those (`columns.rs::contact_identity`: the address, else
-  the number, by the rule `contact-common::chip_handle` writes the
-  members' chips by, else any handle the index holds for the contact in
-  `source_contact_handles`, read beside the row), and the search list titles such a row with the
-  same chip (`SearchList.ce.vue`). Browsing an address book opens on
-  Subject (the contact's chip), Phone, Email, Contents (the note first), Touched, Type and
-  then Channel (`config/browsePresets.ts`).
+  filed ([`grid_rows.md`](grid_rows.md) §"`contact`, `email`, `phone`"
+  has its columns). The grid's Contact column is a chip
+  (`columns.rs::contact_identity`: the address, else the number, by the
+  rule `contact-common::chip_handle` writes the members' chips by, else
+  any handle the index holds for the contact), and the search list
+  titles such a row with the same chip. Browsing an address book opens
+  on Subject (the contact's chip), Phone, Email, Contents (the note
+  first), Touched, Type and Channel (`config/browsePresets.ts`).
 
 A chip ranks what it hears: your contact first, then the source
 contacts as `/people` ranked them, then the text the source showed. A
@@ -687,109 +658,79 @@ that spells out an address, a number, a handle's URI or its stored form
 (`"picard@enterprise.org" <q@continuum.test>`) is no name for it
 (`NormalizedContact::is_anothers_handle`). The render drops it from
 every source's contacts as the document is stored
-(`datalib_etl_render::names`), `/people` drops it from a store rendered
-before that, the search's `names` table takes no row author spelled
-that way (`search_terms::names_seen_under`), and the chip refuses one
-too (`contacts.ts::namesSomeoneElse`), showing the identifier instead.
+(`datalib_etl_render::names`), `/people` drops it too, the search's
+`names` table takes no row author spelled that way
+(`search_terms::names_seen_under`), and the chip refuses one
+(`contacts.ts::namesSomeoneElse`), showing the identifier instead.
 
 ## Searching for a person
 
 A person is searched by the role they had on a row: `from:`, `to:`,
-`mention:`, `with:` and the rest. Which key finds which role, and what
+`mention:`, `with:` and the rest; which key finds which role, and what
 a value matches, is [`searching.md`](../user/searching.md) §"People".
-They read the search terms, which hold each row's people by handle
-(`etl/render/src/search_terms.rs`; [`grid_rows.md`](grid_rows.md)
-§"`supplied_terms`"). A name also reaches every handle a source ever
-showed under it, through the search terms' `names` table, filled from
-the rows' authors and from `source_contacts`. A chip's "Everything with <name>" writes
+The keys read the search terms, which hold each row's people by handle
+([`grid_rows.md`](grid_rows.md) §"`supplied_terms`"). A name also
+reaches every handle a source ever showed under it, through the search
+terms' `names` table, filled from the rows' authors and from
+`source_contacts`. A chip's "Everything with <name>" writes
 `with:contact:<id>` when the handle is linked to one of your contacts,
-so it finds them under every handle linked there, and `with:<handle>`
-otherwise; either finds what they wrote, what they received and their
-own cards (`chipActions.ts::everythingWith`). Typing `@` at the start of a word offers people and
-writes the pick as `with:`.
+else `with:<handle>` (`chipActions.ts::everythingWith`). Typing `@` at
+the start of a word offers people and writes the pick as `with:`.
 
-A conversation's own row answers `with:` for everyone who took part in
-it: chat-common supplies a `participant` term on each document's row
-for every author, recipient, mention and reactor of the messages it
-holds, by handle, else by the name shown. Only messages count — a tool
-call or a system note is not one — and a label a provider shows where
-it has no person (the account's "Me", an "Unknown" sender; the item's
-`AuthorKind`) names nobody, so only a handle behind it takes part. So
-`is:document with:riker`
-lists the conversations Riker was in, one row each, whatever his role;
-without `is:document` the same search also finds each of his messages.
+What a document's own row answers to:
 
-A conversation with no title of its own is named after its people, and
-says so: the provider fills `NormalizedChat::named_after` (a DM's other
-party, an untitled group's members, by handle where it has one) and
-chat-common writes each as a `subject` term on the document's row. The
-grid's Subject cell draws them as chips, and `with:` reads them too, so
-`with:riker` finds a thread in your direct messages with him where only
-you wrote. LinkedIn, Slack DMs, Messenger,
-Signal and WhatsApp one-to-one chats, Messages, Google Chat and SMS
-backups fill it; a titled chat names nobody.
-
-A contact's card answers `with:` and never `from:`: contact-common
-supplies an `about` search term for each handle the card holds and each
-name it gives, and nobody wrote the card. So `with:riker` finds his card
-beside everything he took part in.
-
-[`search_by_example_tests.rs`](../../datalib/backend/applets/src/unified_grid_and_search_index/search_by_example_tests.rs)
-shows each of these rules on a small cast: how its rows are filed, and
-which queries do and do not find them.
+- **Everyone who took part.** chat-common supplies a `participant` term
+  for every author, recipient, mention and reactor of the messages it
+  holds, by handle, else by the name shown. Only messages count (not a
+  tool call or a system note), and a label a provider shows where it
+  has no person (the account's "Me", an "Unknown" sender) names nobody.
+  So `is:document with:riker` lists the conversations Riker was in, one
+  row each; without `is:document` it also finds each of his messages.
+- **Who an untitled conversation is named after.** The provider fills
+  `NormalizedChat::named_after` (a DM's other party, an untitled
+  group's members) and chat-common writes each as a `subject` term,
+  which the Subject cell draws as chips and `with:` reads, so
+  `with:riker` finds a DM with him where only you wrote. LinkedIn, Slack
+  DMs, Messenger, Signal and WhatsApp one-to-one chats, Messages, Google
+  Chat and SMS backups fill it.
+- **Who a contact's card is about.** contact-common supplies an `about`
+  term for each handle and name on the card, so `with:riker` finds his
+  card; `from:` never does, since nobody wrote it.
 
 **`contact:<id>` is everything from Riker, whatever handle he used.**
-Links sit over the view, so the search terms know handles and never
-contacts. A `contact:<id>` value on a person key is read from the
-contacts store when the search runs (`datalib_contacts::read`, a
-detached read, so the applet stays the one writer) and matches each
-handle the contact reaches: its own, stopped ones included; those of the
-contact it was merged into, or merged into it; and, for a group, every
-member's. The search bar offers your contacts first and draws the value
-as a contact chip. Making a link changes nothing in the index: no
-document renders again, the search index re-indexes nothing, and search
-follows the link at once, as chips do. A root without the contacts app
-refuses `contact:` by name
-([`plans/search_autocomplete.md`](plans/search_autocomplete.md)
-§"Contacts: expanded when the search runs").
+The search terms know handles and never contacts. A `contact:<id>`
+value is read from the contacts store when the search runs (a detached
+read, so the applet stays the one writer) and matches each handle the
+contact reaches: its own, stopped ones included; those of a contact
+merged with it; and, for a group, every member's. So a new link changes
+nothing in the index and search follows it at once, as chips do. A root
+without the contacts app refuses `contact:` by name.
 
-**`me` is the person whose library this is.** On a person key, an
-unquoted `me` (`from:me`, `to:me`, `with:me`) matches `me:self`, the
-stand-in the messaging backups write for the owner, and every handle a
-source says is its account's own: the handles of each source contact
-marked `account`, which the grid index keeps in `account_handles`,
-written whole on each pass beside `names`; and every
-handle of each of your contacts marked as you (*This is me* on its
-card, the store's `me` table), as `contact:` reaches them. Both are
-read when the search runs and go into the cache key (`with_me` in the
-applet), so marking a contact, or linking a handle to one that is
-marked, changes the next search with no re-index. More than one
-contact can be marked, for a duplicate not merged yet; a merge carries
-the mark to the survivor. An index built before that table existed
-refuses `me` by name until the index's next sync rebuilds it. A
-quoted `"me"` is the text.
-
-A source marks its owner by putting a record of them marked `account`
-in `NormalizedChat::contacts` (`chat-common`'s `account_contact`; a
-source that shows its owner as "Me" uses `stand_in_account`, which ties
-`me:self` to the account's address), and chat-common carries it into
-each document where one of its handles appears. Which sources do, and
-what `me` cannot find, is the table in
+**`me` is the person whose library this is.** An unquoted `me` on a
+person key matches `me:self`, the stand-in the messaging backups write
+for the owner; the handles of each source contact marked `account`,
+which the grid index keeps in `account_handles`; and every handle of
+each of your contacts marked as you (the store's `me` table). These are
+read when the search runs and are part of the search's cache key, so
+marking a contact, or linking a handle to a marked one, changes the
+next search with no re-index. An index from before `account_handles`
+refuses `me` by name until its next sync. A source marks its owner by
+putting a record of them marked `account` in `NormalizedChat::contacts`
+(`account_contact`, or `stand_in_account` for a source that shows its
+owner as "Me"). Which sources do, and what `me` cannot find, is
 [`searching.md`](../user/searching.md) §"`me`"; change it with them.
 
+In a checkout,
+`datalib/backend/applets/src/unified_grid_and_search_index/search_by_example_tests.rs`
+shows each of these rules on a small cast.
+
 **Keeping the name out of the markdown is a choice, not a rule.**
-Writing a contact's name into each chip link (its text or its title)
-would make a document say who a handle is on its own: readable as a
-plain file, findable by `grep`, and searchable by its words under the name
-you gave the person. It would cost what the paragraph above saves:
-render would read the contacts store, and a link would render again
-every document naming the handle and send each back through
-`unified_grid_and_search_index`'s keyword pass and the source's `embed`. The
-search terms name exactly those documents, so the cost can stay
-proportional to the link. Nothing in the tree rules it out: chips draw
-from the live answer whatever the link text says.
-[`plans/contact_linking.md`](plans/contact_linking.md) §"Option: the contact's name
-in the markdown" keeps it open.
+Writing a contact's name into each chip link would make a document say
+who a handle is on its own, and searchable under the name you gave the
+person. It would cost what the links above save: render would read the
+contacts store, and a link would render again every document naming
+the handle and send each back through the keyword index and the
+source's `embed`.
 
 ## What renders again when
 
@@ -839,7 +780,6 @@ working in some apps but not others, mentions in Google Chat,
 WhatsApp and Messages (each marks them up, in a shape not yet checked
 on real data), in Facebook (a tag is `@[<id>:2048:<Name>]` in a post,
 not yet written as a handle) and in Beeper (no handle kind for its
-users), and a handle for a Beeper (Matrix) user: [`plans/contact_linking.md`](plans/contact_linking.md),
-[`plans/contact_editing.md`](plans/contact_editing.md) and
-[`plans/search_autocomplete.md`](plans/search_autocomplete.md),
-§"Order of work" in each.
+users), and a handle for a Beeper (Matrix) user. The plans for them
+are `docs/dev/plans/contact_linking.md`, `contact_editing.md` and
+`search_autocomplete.md` in the repo.

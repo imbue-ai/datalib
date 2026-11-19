@@ -35,11 +35,12 @@ const HEAD: &str = r#"# Every source Datalib can mirror, one group per way in, r
 # `<group>/ingest` (its `params` hold one method table, `[steps.params.api]`,
 # `[steps.params.export]`, …, and the options every method shares);
 # `render_markdown` turns that raw store into documents under
-# `<group>/render_markdown`, which the grid index puts in the keyword
-# search; `embed` puts them in the search by meaning; a source whose data
-# is also numbers over time adds `render_time_series`. Neither writes a `command`: a step without one is
-# the built-in `datalib-step`. A step's id is `<group>/<function>`, never
-# written; it is what another step's `inputs` name.
+# `<group>/render_markdown`, which `unified_grid_and_search_index` puts in
+# the grid and the keyword search; `embed` puts them in the search by
+# meaning; a source whose data is also numbers over time adds
+# `render_time_series`. Each runs the built-in `datalib-step`. A step's id
+# is `<group>/<function>`, never written; it is what another step's
+# `inputs` name.
 #
 # TOML shape: a table header ends the table it sits in, so within a step
 # the plain keys (`group`, `function`, `inputs`) come first and the params

@@ -67,8 +67,8 @@ outlink_format = "gmail"        # each message's `↗` link opens it in Gmail; o
 only_render_labels = ["Inbox"]  # render only threads with a message under these labels
                                 # (exact paths, like `only_extract_labels`); default [] is all
 
-# Search by meaning: the embeddings of what the grid index's keyword
-# pass cut of this source. Leave it out and keyword search still finds it.
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 group = "email"
 function = "embed"

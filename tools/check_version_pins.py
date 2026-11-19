@@ -200,6 +200,22 @@ FAMILIES: list[Family] = [
             (".devcontainer/Dockerfile", r"^ARG NODE_VERSION=(\d+)\."),
         ],
     ),
+    Family(
+        name="playwright",
+        why=(
+            "Each Playwright version drives one Chromium build. The "
+            "devcontainer bakes the browsers for the version the UI's "
+            "lockfile resolves, and CI hands that cache to every test; "
+            "//third-party/vscode-tree:facts_test launches its own "
+            "pinned Playwright against it, so on any other version it "
+            "finds no browser."
+        ),
+        canonical="datalib/ui/pnpm-lock.yaml",
+        sites=[
+            ("datalib/ui/pnpm-lock.yaml", r"^  '@playwright/test@([^']+)':$"),
+            ("third-party/vscode-tree/package.json", r'"playwright"\s*:\s*"([^"]+)"'),
+        ],
+    ),
 ]
 
 

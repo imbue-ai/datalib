@@ -28,28 +28,22 @@ command = "datalib-applet slack"
 tree = "slack/render_markdown"
 ```
 
-There is no `title` key, and an unknown key is rejected by name rather
-than ignored. The label the gallery shows is written by the applet
-into its own namespace metadata, so a config-level title would be a
-second spelling of a label that lives elsewhere — one the gallery
-never reads. An applet that wants a configurable label takes it
-through `params`, the way the slack applet takes `workspace`.
+An unknown key is rejected by name, not ignored. There is no `title`
+key: the label the gallery shows is what the applet writes into its own
+namespace (§"The frontend store"). An applet that wants a configurable
+label takes it through `params`, the way the slack applet takes
+`workspace`.
 
-`command` is split shell-style (the same `shlex` call the runner uses)
-and resolved through `binary_dir`, then the library's own `system/bin/`,
-then the inherited `PATH` — the same order a step's command resolves in,
-so a program put in `system/bin/` works for either kind of entry. A
-relative path with a `/` in it is relative to the data root, which is
-how an applet runs a package's program (`packages.md`).
-`params` is forwarded as
-`--params-file <path>` (a JSON file only the owner can read, deleted
-when the applet stops — params can hold tokens, and `ps` shows every
-user every command line), the working directory is the data root, and
-`env` is merged into the child — all as for a step, so there is one set
-of rules. The same goes for what an applet is handed of the server's
-own environment, except that it gets none of latchkey's `LATCHKEY_*`
-variables ([`step_protocol.md`](step_protocol.md) § "What your command
-receives").
+`command`, `params`, `env` and the working directory work as for a
+step ([`step_protocol.md`](step_protocol.md#what-your-command-receives)):
+the command is split shell-style and looked up in `binary_dir`, then the
+library's own `system/bin/`, then the inherited `PATH`, and a relative
+path with a `/` in it is relative to the data root (how an applet runs a
+package's program); `params` arrives as `--params-file <path>`, an
+owner-only JSON file deleted when the applet stops; the working
+directory is the data root; and `env` is merged into the child. An
+applet is handed the same short list of the server's own environment as
+a step, but none of latchkey's `LATCHKEY_*` variables.
 
 The child also gets four variables:
 
@@ -98,16 +92,11 @@ waits for that line and then scans the store, so the line is its signal
 that the write finished. An applet that announced first would race the
 scan and intermittently come up with no components.
 
-`-p 0` means "any port": the OS picks and the announcement reports
-which. The port travels child-to-gateway, not the other way, and that
-direction is load-bearing. A port the gateway picked would have to be
-bound here, released, and then raced for by the child — and the only
-readiness question left to ask would be "is anything accepting on that
-port?", which whoever else won the race answers just as convincingly.
-That is not hypothetical: under a loaded `bazelisk test //...` the
-gateway adopted a stranger's listener, scanned the store before its own
-applet had written a byte, and served an empty gallery with no error
-while the real child died of `EADDRINUSE`.
+`-p 0` means "any port": the OS picks, and the announcement says
+which. The port travels from child to gateway, never the other way: a
+port the gateway picked would have to be released and then raced for by
+the child, and "is anything accepting on that port?" is answered just as
+convincingly by whatever else won the race.
 
 The directory's last segment is the namespace, and it is the only
 channel by which a command learns which instance it is. Two instances
@@ -138,22 +127,18 @@ Without it, treat stdin as ordinary: an applet run by hand has a
 terminal there, or `/dev/null`, and reading it would swallow input or
 take an instant EOF as bad news.
 
-Honouring this is what stops an applet outliving the gateway. It is not
-merely tidy: an orphan keeps its port and its data root open, nothing
-ever reaps it, and they accumulate — a machine that had been running
-the app and its tests for a week was holding 186 of them. The
-gateway kills its applets on every exit it can still run code for; this
-is the one path where it cannot, so the applet has to notice by itself.
+Honouring this is what stops an applet outliving the gateway: an
+orphan keeps its port and its data root open, nothing reaps it, and
+orphans accumulate. The gateway kills its applets on every exit it can
+still run code for; a SIGKILL is the one it cannot, so the applet has to
+notice by itself.
 
 An applet written in Rust gets all of this from
-`datalib_parent_watch::exit_with_parent` — the same call `datalib-http`
-makes for *its* spawners (the desktop shell, the e2e suite), because a
-backend outliving a killed test runner is the same leak one level up.
-Two things it does that a hand-written watch tends to miss: it accepts
-a socket pair as well as a pipe, because that is what Node's
-`stdio: "pipe"` actually makes; and if the variable is set but stdin is
-neither, it refuses to start rather than run unwatched — a protection
-that is silently absent is the failure mode, not a fallback.
+`datalib_parent_watch::exit_with_parent`. Two things it does that a
+hand-written watch tends to miss: it accepts a socket pair as well as a
+pipe, because that is what Node's `stdio: "pipe"` makes; and if the
+variable is set but stdin is neither, it refuses to start rather than
+run unwatched.
 
 One trap if you write the exit path yourself: by the time EOF arrives,
 stderr is a pipe to a process that no longer exists, so writing to it
@@ -168,23 +153,17 @@ and no registration call.
 
 ## Applets are started eagerly and kept running
 
-Every configured applet starts at boot and stays up. Starting one on
-its first request cannot work now that the write and the serve are one
-invocation: components would only exist once something had already
-opened a card that used them, which is what the gallery needs them for.
+Every configured applet starts when the server does, and stays up, so
+a data root with twelve applets runs twelve processes. Starting one on
+its first request cannot work: an applet writes its components as it
+starts, and the gallery needs them before anything has opened a card
+that uses them.
 
-So a data root with twelve applets runs twelve processes. Idle shutdown
-would trade some of that back and is not built; if it arrives, a
-restarted applet simply rewrites the same files, since the write is
-idempotent.
-
-Starts run in parallel, so boot is bounded by the slowest applet rather
-than their sum, and each is capped at 20 seconds. The cap matters
-because this happens after the HTTP listener is already accepting:
-without it, one hanging applet would leave a browser tab whose requests
-queue forever with nothing logged. An applet that *exits* costs nothing
-like that long — closing stdout without announcing is end-of-story, and
-the gateway says so immediately.
+Starts run in parallel, so boot waits for the slowest applet rather than
+the sum, and each is capped at 20 seconds, since the HTTP listener is
+already accepting and a hanging applet would otherwise leave requests
+queued with nothing logged. An applet that *exits* without announcing
+is reported at once.
 
 ## The frontend store
 
@@ -214,16 +193,14 @@ Each component document does two things: it defines
 that qualified name called with `component_args` spelled as JSON
 literals — so `["slack_work"]` yields
 `comp.slack_work.channels("slack_work")`. `icon` is what the layouts
-and the gallery draw beside the card's name: a glyph name from
-`datalib/ui/src/cards/icons.ts`, a mark in `datalib/ui/src/assets/`
-(`"slack"`), or an image of the component's own as a `data:` URL — PNG,
+and the gallery draw beside the card's name: a glyph name (the list is
+`datalib/ui/src/cards/icons.ts` in the repo), a mark the app ships
+(`"slack"`), or an image of the component's own as a `data:` URL: PNG,
 JPEG, GIF, WebP or SVG (`"data:image/svg+xml;base64,…"`). It is drawn
-through `<img>`, so an SVG's scripts never run. A builtin card names its icon the same way, in
-`datalib/ui/src/cards/catalog.ts`; leaving it out draws the generic
-component glyph. `"dev_tool": true` says the component is a tool for
-working on the library rather than a view of its data, which puts its
-gallery entry under "Developer tools" (`cards.md` §"Titles, icons and
-edit mode").
+through `<img>`, so an SVG's scripts never run. Leaving it out draws the
+generic component glyph. `"dev_tool": true` says the component is a
+tool for working on the library rather than a view of its data, which
+puts its gallery entry under "Developer tools".
 
 **There is one mechanism.** Nothing that reads this store knows what an
 applet is. An applet's only privilege is being *called* to write a
@@ -234,9 +211,9 @@ applet and no config entry involved.
 
 **A component's card writes a date as `<time datetime="…">`** and the
 app draws it as the date chip a document draws, with its clicks
-(`chips.md` §"A date"; `ui/src/cards/appletDates.ts`). A component
-has none of the app's code, so this is how its dates follow the status
-bar's clock. A `datetime` the chip cannot read stays as written.
+([`chips.md`](chips.md#a-date)). A component has none of the app's code,
+so this is how its dates follow the status bar's clock. A `datetime`
+the chip cannot read stays as written.
 
 ### Why the name is a hash and the metadata is separate
 
@@ -402,14 +379,11 @@ cut off halfway, it could leave a store's uncommitted rows behind, so
 it lands whole however long the browser waited.
 
 The gateway forwards an applet's stderr line by line as it arrives and
-keeps the tail, rather than reading the pipe to EOF when the applet
-fails. That matters because the pipe is held by the child *and* by
-anything it spawned: a wrapper script whose own child is still alive
-would otherwise block the start path until that grandchild exited. An
-applet that exits without announcing is the one case where the tail is
-worth waiting for — its last words are the reason — so the start path
-waits for that reader to finish there, and only there, bounded by two
-seconds for the same grandchild reason.
+keeps the tail, rather than reading the pipe to its end when the applet
+fails: the pipe is held by anything the applet spawned too, so a wrapper
+script's still-living child would block the read. Only for an applet
+that exits without announcing does the start path wait for the tail,
+whose last words are the reason, and then for at most two seconds.
 
 ## An applet that contributes no components
 
@@ -422,14 +396,14 @@ still passes `--frontend-dir`, and the applet ignores it.
 It is also the applet the app cannot run without. A data root whose
 config does not declare it has no search, which is why the scaffold and
 the config examples all write it and `datalib-migrate-config` carries it
-through. The
-UI calls it directly at `/applet/unified_grid_and_search_index/…`; there is no `/api/`
-alias, and `datalib-http` does not know those routes exist. The
-aliases the gateway keeps are the prefixes from before the renames:
-`/applet/unified_index/…` and `/applet/unified_document_index/…` reach
-the same applet, for card scripts and agents written against them.
+through. The UI calls it directly at
+`/applet/unified_grid_and_search_index/…`; there is no `/api/` alias,
+and `datalib-http` does not know those routes exist. The gateway also
+answers the applet's earlier names, `/applet/unified_index/…` and
+`/applet/unified_document_index/…`, for card scripts and agents written
+against them.
 
-That is what makes the separation checkable rather than aspirational:
+That separation is checkable. From a checkout,
 
 ```sh
 bazel query 'somepath(//datalib/backend/http:datalib_http, \
@@ -445,33 +419,33 @@ writes the indexes, and by `datalib-applet`, which serves them.
 applet (`slack`, `unified_grid_and_search_index`, `unified_time_series_index`,
 `datalib_contacts` and `photos`), the same shape as `datalib-step`.
 Each one's routes are in [`docs/user/applets.md`](../user/applets.md).
-`photos` reads the `NormalizedPhoto` each render stored in the grid
-index, and says where a picture came from in `X-Datalib-Image-From`
-(`original` when no preview served). Its component's metadata says
-`"serves": ["photo"]`, which is how the UI finds the applet to draw a
-`datalib:photo/…` name with (`docs/dev/plans/photos_applet.md`). One
-more, `search`, is not an applet: it answers one `/search` with no
-server, through the same function the route calls (`answer_search`), so
-the command and the search box cannot drift apart.
-`unified_time_series_index` reads the points from each source's own
-store, at the commit the index recorded for it
-(`etl/time_series/src/read.rs`; `docs/dev/time_series.md` §"The
-index"). `datalib_contacts` is the one that writes: it is the only
-writer of the contacts store under `datalib_curated/` (`app_stores.md`),
-and like `unified_grid_and_search_index` it contributes endpoints only.
-Its routes are registered together with what each says about itself
-(`datalib_contacts/api.rs`), and `GET /` and `--help` list them. One
-binary rather than one per applet keeps the shared machinery in one
-place and ships one file instead of a growing list; adding an applet is
-a subcommand plus a module, not a new crate and five packaging edits.
+It ships beside `datalib-step`, so a config names it bare. One binary
+rather than one per applet keeps the shared machinery in one place;
+adding an applet is a subcommand plus a module.
 
-The Slack applet reads the
-cross-provider `grid_rows` table in a source's render store
-rather than linking the schema or provider crates, which keeps an
-applet a small program. It ships in `//datalib/backend:dist` alongside
-`datalib-step`, so a config can name it bare. The store is
-`datalib/backend/http/src/frontend.rs` (which knows nothing about
-applets) and the calling side is `datalib/backend/http/src/applets.rs`.
+- `photos` reads the `NormalizedPhoto` each render stored in the grid
+  index, and says where a picture came from in `X-Datalib-Image-From`
+  (`original` when no preview served). Its component's metadata says
+  `"serves": ["photo"]`, which is how the UI finds the applet to draw a
+  `datalib:photo/…` name with.
+- `unified_time_series_index` reads the points from each source's own
+  store, at the commit the index recorded for it.
+- `datalib_contacts` is the one that writes: it is the only writer of
+  the contacts store under `datalib_curated/`, and like
+  `unified_grid_and_search_index` it contributes endpoints only. Its
+  routes are registered with what each says about itself, and `GET /`
+  and `--help` list them.
+- `search` is not an applet: it answers one `/search` with no server,
+  through the same function the route calls, so the command and the
+  search box cannot drift apart.
+
+In the server, the store is `datalib/backend/http/src/frontend.rs`,
+which knows nothing about applets, and the calling side is
+`datalib/backend/http/src/applets.rs`.
+
+The Slack applet reads the cross-provider `grid_rows` table in a
+source's render store rather than linking the schema or provider
+crates, which keeps an applet a small program.
 
 Its three-level shape mirrors the Slack app, and follows from how the
 data is rendered: one document per *thread*, with every message in it

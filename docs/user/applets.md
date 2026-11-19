@@ -100,6 +100,29 @@ has the parameters.
 How a document names people, times and attachments, for an app that
 shows one: [showing a rendered document](rendered_documents.md).
 
+### What `/search` answers
+
+A page of `rows`: `limit=` rows from `offset=`, with `total` and the
+`next_offset` to send for the next page (null at the end). `sort=` and
+`within=` sort and narrow it as [the query
+language](searching.md#sorting-and-grouping) says. Each row carries:
+
+- **`link`**, where opening it goes, `datalib:doc/<page>#<section>`: its
+  document, at the row when it is one message of it.
+- **`snippet`**, the row's preview, or for free text the words it
+  matched.
+- **`score`**, when the query has free text. Free text made only of ids
+  and handles (an email address, `tel:+…`, a uuid) is looked up, not
+  ranked, and `score` says how the row answers to it: 5 its own id, 4 its
+  author or an addressee, 3 copied, mentioned, or what it is in, 2 its
+  title or a label, 1 a name it shows. Any other free text is ranked over
+  words, fields and meaning, one row a document, and `score` only orders
+  the rows.
+
+`query_echo` says how the query was read; `refused`, `query_echo.partial`
+and `errors` say what it could not do ([when the search says
+no](searching.md#when-the-search-says-no)).
+
 ### A container's children
 
 Everything in the index sits in a container: a message in its thread, a
@@ -187,7 +210,8 @@ ask '{"store": "system/runs/runs.sqlite",
 The request:
 
 - **`store`** is the file's path under the data root: a `.doltlite_db`
-  or `.sqlite` file in a step's tree (`<group>/<step>/…`), or one of
+  or `.sqlite` file in a step's tree (`<group>/<step>/…`) or an app's
+  (`datalib_curated/datalib_contacts/contacts.doltlite_db`), or one of
   `system/runs/runs.sqlite` (the log and every run's metrics),
   `system/supervisor.sqlite` (sync requests and each step's state),
   `system/feedback.doltlite_db`, `system/remote_media.doltlite_db`,

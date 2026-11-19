@@ -111,7 +111,8 @@ pub const DOCS: &[Doc] = &[
         topic: "apps",
         path: "docs/user/building_on_datalib.md",
         kind: Kind::Guide,
-        about: "building an app on Datalib: syncing, freshness, a step of your own",
+        about: "building an app on Datalib: syncing, freshness, reading the stores, a step of \
+                your own",
         text: include_str!("../../../../docs/user/building_on_datalib.md"),
     },
     Doc {
@@ -132,7 +133,8 @@ pub const DOCS: &[Doc] = &[
         topic: "applets",
         path: "docs/user/applets.md",
         kind: Kind::Guide,
-        about: "the servers the app runs: what each serves, and how to call them",
+        about: "the servers the app runs: what each serves, how to call them, SQL over HTTP \
+                against any store",
         text: include_str!("../../../../docs/user/applets.md"),
     },
     Doc {

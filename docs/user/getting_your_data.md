@@ -2,33 +2,30 @@
 
 One section per source, in alphabetical order, saying what the source
 mirrors and how to get a copy of your data where the pipeline can read
-it: either credentials stored in `latchkey`, or an export on disk. This
-doc is only about *access* — for the config file and running the sync,
-see the [first-time user guide](first_time_user.md), and for one
-fully-commented config entry per source see
-[`all_sources.toml`](config_examples/all_sources.toml).
+it: either credentials stored in `latchkey`, or an export on disk. For
+the config file and running the sync, see the
+[first-time user guide](first_time_user.md); for one fully-commented
+config entry per source, [`all_sources.toml`](config_examples/all_sources.toml).
 
-Each section opens with the source's `type` — the word that goes in the
-config and picks the code that runs — and where the data comes from.
-*Where* is one table on the source's ingest step, named under the type:
-`api` is the product's own API, `export` an unpacked export, `backup` a
-phone backup, `fswalk` a folder to scan. A type that is not one product
-spells its sources out — email's are `jmap`, `gmail`, `mbox` and
-`apple_mail`. A table
+Each section opens with the source's `type`, the word that goes in the
+config and picks the code that runs, and where the data comes from:
+one table on the ingest step, named under the type. `api` is the
+product's own API, `export` an unpacked export, `backup` a phone backup,
+`fswalk` a folder to scan; a type that is not one product names its
+ways in (email's are `jmap`, `gmail`, `mbox` and `apple_mail`). A table
 that reads files carries its own `path`.
 
-Conventions: exports land under `~/backups/`, and `latchkey` is the
-one the Datalib installer put on your `PATH` (it runs on the Node
-runtime `datalib-step pull-runtime` fetches; see the first-time guide). Adjust paths to taste and
-point the matching source in your config at them. Wherever a command
-takes a secret, it is written as `$(pbpaste)`: copy the secret to your
-clipboard, then run the command. Your shell history keeps the harmless
-`$(pbpaste)` text rather than the secret itself.
+Conventions: exports land under `~/backups/`; adjust to taste and point
+the source at them. `latchkey` is the one the Datalib installer put on
+your `PATH`. Wherever a command takes a secret, it is written as
+`$(pbpaste)`: copy the secret to your clipboard, then run the command,
+and your shell history keeps `$(pbpaste)` rather than the secret.
 
 The credentials `latchkey` stores are the same session your browser
 has. Anything that can run commands as you can use them to act as you
-on that service — see the warning in the first-time guide before
-storing any.
+on that service; read
+[who can use your sign-ins](first_time_user.md#who-can-use-your-sign-ins-and-why)
+before storing any.
 
 The `latchkey auth` commands here sign in on the machine you run them
 on. If `LATCHKEY_GATEWAY` is set in your environment, a latchkey gateway
@@ -123,11 +120,14 @@ latchkey services register babyconnect \
 latchkey auth browser babyconnect
 ```
 
+Once the session ends, signing in again needs you at the browser.
+
 Baby Connect answers one day at a time, so the first sync asks once for
 every day from your eldest child's birthday to today: about 365 requests
 a year of use. Set `since` and `until` on the `api` table (a day, an RFC
 3339 instant, or an offset such as `"-90d"`) to read less. Later syncs
-read only the days not yet read, and the last two again.
+read only the days not yet read, and the last two again, since a night's
+feeds are often logged the next morning: a daily sync is three requests.
 
 Baby Connect keeps each entry's time as a clock reading with no zone.
 Name the zone you logged in on the render step, and daylight saving is
@@ -140,7 +140,10 @@ time_zone = "America/Los_Angeles"
 
 Without it the times are read as UTC, and the source's Manage row says
 so. Changing it re-renders; it never downloads again.
-[The provider's INGEST.md](../../datalib/backend/etl/providers/baby_connect/INGEST.md) has the details.
+
+Not copied: the photos attached to an entry (the store lists them, the
+pictures are not downloaded). An entry deleted in the app after its day
+was read stays in the copy.
 
 ## Beeper
 
@@ -150,9 +153,9 @@ Chat, Slack and the rest Beeper bridges. The render step's `networks`
 picks which networks to show; unset, it shows them all.
 
 On macOS the directory is `~/Library/Application Support/BeeperTexts`;
-no credentials. Lightly used — expect rough edges. It keeps what the
-app's cache lets go, so it never notices a deletion (the provider's
-`INGEST.md` says why).
+no credentials. Lightly used — expect rough edges. The app's cache is
+all it reads, and keeping what that cache lets go is the point of
+mirroring it, so nothing is ever deleted from the copy.
 
 ## Calendar (CalDAV)
 
@@ -224,7 +227,10 @@ offset from the day of the sync as for [Calendar (CalDAV)](#calendar-caldav);
 a meeting that leaves it is dropped from the copy. Every sync
 lists the meetings whole, and reads a meeting's invitees again only
 when the meeting has changed.
-[The provider's INGEST.md](../../datalib/backend/etl/providers/calendar/INGEST.md) has the details.
+
+This source was built from Calendly's API reference and has not yet been
+run against a real account. If something comes out wrong, please file
+an issue.
 
 ## ChatGPT
 
@@ -258,16 +264,11 @@ connection** does not do this, and says `HTTP 401 token_expired`.
 If it still says `token_expired` right after a fresh login, look for
 a *second* service on the same address: `latchkey curl` picks the
 first registered service whose base URL matches, so an older
-registration for `https://chatgpt.com/` — a test one, say — is the
-credential every request actually carries, whatever you just stored
-under `chatgpt`. `latchkey services list` shows them; `latchkey
-services deregister <name>` removes the stale one.
-
-If you registered `chatgpt` before this guide said to, latchkey will
-have recorded it as a `set`-only service — `latchkey services info
-chatgpt` shows `authOptions` without `browser`, and a name that
-already exists cannot be re-registered. Run `latchkey services
-deregister chatgpt` first, then the two commands above.
+registration for `https://chatgpt.com/` carries its credential on every
+request. `latchkey services list` shows them; `latchkey services
+deregister <name>` removes the stale one. If `latchkey services info
+chatgpt` shows `authOptions` without `browser`, it was registered
+without the login flow: deregister it, then run the two commands above.
 
 To supply the token by hand instead (a machine with no browser, say),
 grab it from a logged-in tab via DevTools → **Console**:
@@ -320,7 +321,9 @@ conversation it predates.
 unpacked Claude data export on disk (`export`). Mirrors conversations
 across every org, and projects. The `api` route also mirrors the Cowork
 tasks run in the cloud, each as a conversation; `cowork = false` leaves
-them out.
+them out, and `cowork_session_ids` (ids or `https://claude.ai/cowork/…`
+links) fetches just the tasks it names. A task run on your computer is
+not read.
 
 `claude.ai` has no official API for your conversations, so the `api`
 route uses the session cookie your browser already has. Register the
@@ -338,10 +341,9 @@ the `sessionKey` row, and copy its **Value**. With it on the clipboard,
 run the staged `auth set` command. The first-time guide has the same
 steps with more hand-holding.
 
-The downloader fetches through `latchkey curl` and clears Cloudflare's
-managed challenge with the bundled Chrome-impersonating curl, so no
-`cf_clearance` cookie is needed — the `sessionKey` cookie is the entire
-auth surface.
+The bundled Chrome-impersonating curl clears Cloudflare's challenge, so
+no `cf_clearance` cookie is needed: the `sessionKey` cookie is all it
+takes.
 
 If you would rather not store a live session at all, request a data
 export from Claude's settings and give the `claude` source an `export`
@@ -938,10 +940,15 @@ latchkey auth set linear -H "Authorization: lin_api_…"
 An empty `api` table copies the whole workspace. To copy part of it,
 name teams by key or name in `teams` and projects by name in
 `projects`. An issue is copied when its team or its project is named,
-and most issues belong to no project, so name their teams. The first
-sync copies everything, newest first. Each sync after that reads only
-what changed since, and for a quiet workspace that takes seconds.
-[The provider's INGEST.md](../../datalib/backend/etl/providers/linear/INGEST.md) has the details.
+and most issues belong to no project, so name their teams. A name that
+matches nothing selects nothing and shows as a problem on the source.
+The first sync copies everything, newest first. Each sync after that
+reads only what changed since, and for a quiet workspace that takes
+seconds.
+
+Archived objects are copied too, and nothing is deleted from the copy:
+an object Linear deletes stays as it was last fetched. Files uploaded
+into Linear (`uploads.linear.app` links) are not copied.
 
 ## LinkedIn
 
@@ -963,8 +970,7 @@ Point `export.path` at that directory, and unzip each newer export over
 it or in its place.
 
 Connections come without photos: the export has none, and linkedin.com
-shows a profile only to someone signed in. Photos an earlier version
-fetched are kept.
+shows a profile only to someone signed in.
 
 ## Local media
 
@@ -977,8 +983,10 @@ download-only, nothing is rendered.
 Nothing but a path. Files are keyed on content hash, not path, so the
 same song synced to three folders is one row with three locations, and
 a second hash over just the signal (`payload_blake3`) survives
-retagging. Query the raw store directly; the provider's `INGEST.md`
-has the recipes.
+retagging. Query the raw store directly with `datalib-doltlite`:
+`media_files` is one row per path, `media_items` one per content hash,
+`media_visual` the camera, GPS and capture time, `media_playlists` and
+`media_playlist_entries` the playlists.
 
 ## Local PDFs
 
@@ -1152,54 +1160,61 @@ Or copy the API token yourself (**Settings** → **Integrations** →
 latchkey auth set todoist -H "Authorization: Bearer $(pbpaste)"
 ```
 
+The token can change your tasks as well as read them; Todoist has no
+read-only token. The download only reads.
+
 An empty `api` table copies everything. Completed tasks are read back
 to the day you joined Todoist, a quarter at a time; set `since` (a
 day, an RFC 3339 instant, or an offset from the sync such as `"-90d"`)
-to stop sooner, or `completed = false` to leave them out. A config that
-still says `completed_since` is renamed to `since` by the app. Each sync after the first reads only what changed.
-[The provider's INGEST.md](../../datalib/backend/etl/providers/todoist/INGEST.md) has the details.
+to stop sooner, or `completed = false` to leave them out. Each sync
+after the first reads only what changed; one with nothing new is a
+single request.
+
+Nothing is deleted from the copy: a task, project or comment you delete
+is kept, marked deleted, and left out of the documents. Not copied: the
+files attached to comments (their links are kept), comments on tasks
+completed before the first sync, and filters, reminders and the
+activity log. An archived project's own row may be missing; its
+completed tasks still come, in a document titled by the project's id.
 
 ## WhatsApp backups
 
 `type = "whatsapp"` — an Android `crypt15` backup (`backup.path`).
 Mirrors messages and media.
 
-The provider ingests the end-to-end-encrypted `msgstore.db.crypt15`
-database — the newest backup format, and the only one we support. The
-older password-based backups are *not* decryptable offline, so don't use
-that path.
+Only the end-to-end-encrypted `crypt15` format with a 64-digit key is
+read; a backup protected by a password cannot be decrypted offline.
 
-**Get the key.** This is the part that usually trips people up, and no
-root is needed. In WhatsApp, go to Settings → Chats → Chat backup →
-End-to-end encrypted backup. Turn it on and choose the **64-digit key**
-option (not a password). Write that key down — that *is* the key. If you
-already enabled E2EE with a password, turn it off and re-enable with the
-64-digit option, or you'll be stuck.
+**Get the key.** No root is needed. In WhatsApp, go to Settings → Chats
+→ Chat backup → End-to-end encrypted backup, turn it on and choose the
+**64-digit key** option, not a password. Write that key down. If you
+already turned it on with a password, turn it off and on again with the
+64-digit key. The sync reads the key from the
+`WHATSAPP_BACKUP_DECRYPTION_KEY` environment variable (`key_env_var`
+names another).
 
-The provider reads the 64-digit hex key from the
-`WHATSAPP_BACKUP_DECRYPTION_KEY` env var (override per source with
-`key_env_var`).
-
-**Pull the encrypted database.** Trigger a fresh local backup first
-(Settings → Chats → Chat backup → Back Up) so the file is current, then
-plug the phone in with USB debugging on and pull it off over `adb`:
-
-```sh
-adb pull /sdcard/Android/media/com.whatsapp/WhatsApp/Databases/msgstore.db.crypt15 .
-```
-
-Or copy it through MTP / a file manager. To also bring over media, pull
-the whole backup directory instead:
+**Pull the backup.** Trigger a fresh local backup first (Settings →
+Chats → Chat backup → Back Up) so it is current, then plug the phone in
+with USB debugging on and pull WhatsApp's whole folder off over `adb`
+(or copy it through MTP or a file manager):
 
 ```sh
 adb pull /sdcard/Android/media/com.whatsapp/WhatsApp/ ~/backups/WhatsApp/
 ```
 
+Point `backup.path` at that folder. It holds
+`Databases/msgstore.db.crypt15`, the messages, which is required;
+`Backups/wa.db.crypt15`, the names your phone shows for each contact
+(without it chats are named by phone number); and `Media/`, the
+attachments (without it they show as placeholders, and copying it in
+later fills them in). Profile photos are in no backup.
+
 The whole decrypted database is kept — every table, versioned across
 backups, the way the Lightroom and Apple Photos sources keep theirs —
 so a message you delete on the phone is still in an earlier commit of
-the store. Three tables of app bookkeeping are left out by default
-(`skip_churn`); [the provider's INGEST.md](../../datalib/backend/etl/providers/whatsapp/INGEST.md) says which and why.
+the store. Three tables WhatsApp rewrites on every backup (`props`,
+`backup_changes`, `frequent`) are left out by default (`skip_churn`),
+so a backup with no new messages makes no new commit.
 
 ## YoLink
 

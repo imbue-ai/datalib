@@ -22,6 +22,10 @@ A doc is printed for a reader with no repo, so its links change:
   which is many times the file's size.
 - A URL is left as written.
 
+An agent in a network sandbox reaches neither GitHub URL, so a doc here
+says what its reader needs to act and links out only for more: a
+contributor's file, a place to file an issue or download a release.
+
 A **guide** (`Kind::Guide`, a doc written for someone using Datalib)
 links only to docs here, or to a contributor file named in
 `GUIDE_LINKS_SERVED_RAW` in `src/tests.rs`. A doc an agent needs goes
