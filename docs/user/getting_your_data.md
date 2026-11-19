@@ -18,7 +18,7 @@ spells its sources out — email's are `jmap`, `gmail`, `mbox` and
 that reads files carries its own `path`.
 
 Conventions: exports land under `~/backups/`, and `latchkey` is the
-one the datalib installer put on your `PATH` (it runs on the Node
+one the Datalib installer put on your `PATH` (it runs on the Node
 runtime `datalib-step pull-runtime` fetches; see the first-time guide). Adjust paths to taste and
 point the matching source in your config at them. Wherever a command
 takes a secret, it is written as `$(pbpaste)`: copy the secret to your

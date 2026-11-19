@@ -1,6 +1,6 @@
-# Project Data Liberation ✊ - First-time dev guide
+# Datalib (Project Data Liberation ✊) — first-time dev guide
 
-This guide is for people who want to **build and hack on** datalib. If you
+This guide is for people who want to **build and hack on** Datalib. If you
 just want to *run* the released tools against your own data, start with the
 [**first-time user guide**](../user/first_time_user.md) instead.
 
@@ -142,7 +142,7 @@ bilingual `edges` UI.
 
 ### Run the desktop app
 
-The desktop app is the main way to use datalib. To build it from this
+The desktop app is the main way to use Datalib. To build it from this
 checkout and launch it (macOS):
 
 ```sh

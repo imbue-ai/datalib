@@ -76,7 +76,7 @@ does not count because it repeats `text`, and it is on nearly every message.
   mid-line, which markdown would read as a language name and an
   unclosed fence. A thread's title ends at a ```` ``` ````;
 - `<@U…>` is a chip link to the user, `[@Name](slack://user?team=T&id=U
-  "@Name (slack:T/U)")`, through `chip_link`, so datalib draws who that
+  "@Name (slack:T/U)")`, through `chip_link`, so Datalib draws who that
   is; inside code it is plain `@Name`, which code shows literally, and a
   thread's title, plain text, keeps `@Name` too;
 - `<#C…|name>`, `<!subteam^…>`, `<!here>` / `<!channel>` /

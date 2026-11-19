@@ -6,7 +6,7 @@ page is the map.
 
 ## One store
 
-Everything any datalib process says lands in one file,
+Everything any Datalib process says lands in one file,
 `<data_root>/system/runs/runs.sqlite` — plain SQLite in WAL mode, so
 `sqlite3` opens it and two writers share it through SQLite's own
 locking. The runner writes it during a run; `datalib-http` writes it
@@ -181,12 +181,12 @@ ends when the answer arrives and the line says `hidden`
 Levels are `trace` … `error`. The level a root logs at is
 `log_level` at the top of its `config.toml` — `trace` when it does
 not say, while the pipeline is being debugged — and it applies to
-datalib's own crates in every process of that root: the server reads
+Datalib's own crates in every process of that root: the server reads
 it at launch (a change takes a restart), the runner per run, and each
 step gets the resulting filter as `RUST_LOG`. Third-party crates
 follow it down to `info` and no further, and the noisy ones stay at
 `warn` (`datalib_log_filter`); the server's own `http.*` targets count
-as datalib's. A `RUST_LOG` set where a process was
+as Datalib's. A `RUST_LOG` set where a process was
 started wins over all of that. A library that logs through the `log` crate
 rather than `tracing` (html5ever does, on every token it parses) is
 stopped at that crate's own level gate, which a step sets to the most

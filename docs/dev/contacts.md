@@ -1,6 +1,6 @@
 # Contacts: who a handle is
 
-How datalib knows that the `riker@enterprise.org` in a mail, the
+How Datalib knows that the `riker@enterprise.org` in a mail, the
 `+1 202 555 0101` in a WhatsApp chat and the `U_RIKER` in a Slack
 thread are the same person, and draws them as one chip.
 
@@ -542,7 +542,7 @@ and label people and senders. Nothing it says is final, and the store
 writes down where a person agreed or did not, so a later agent can
 learn from it (`contacts/src/review.rs`). The label rules themselves
 (`contacts/src/labels.rs`) know nothing of contacts: the contacts app
-is where the pattern is proved before other parts of datalib label
+is where the pattern is proved before other parts of Datalib label
 things the same way.
 
 - **Who said so is on every row.** A link, a contact and a label each

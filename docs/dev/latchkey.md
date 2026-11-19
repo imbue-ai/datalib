@@ -1,4 +1,4 @@
-# latchkey: how datalib signs in
+# latchkey: how Datalib signs in
 
 Every source that reaches a web service signs in through
 [latchkey](https://github.com/imbue-ai/latchkey), a command-line tool
@@ -8,7 +8,7 @@ requests for us. A downloader never sees a token: it runs
 service needs. This page is what you need to know before touching a
 sign-in, the wizard's account row, or a provider's HTTP client.
 
-## How datalib runs it
+## How Datalib runs it
 
 - **One pinned version.** `LATCHKEY_VERSION` in
   `datalib/backend/runtime/src/node_runtime.rs` names it, and the
@@ -79,7 +79,7 @@ plus the URLs its credential is good for and how to get one.
 | kind | examples | where it comes from |
 |---|---|---|
 | **built-in** | `slack`, `google-gmail`, `google-calendar`, `github`, `fastmail`, `fastmail-dav`, `linear`, `notion`, `todoist` | ships inside latchkey |
-| **plugin** | `garmin` | a package under `<latchkey dir>/plugins/<name>/`. datalib vendors the ones it needs (`third-party/latchkey-garmin/`) and installs them on the first sign-in (`http/src/plugins.rs`); a copy without datalib's stamp is the person's own and is never touched. |
+| **plugin** | `garmin` | a package under `<latchkey dir>/plugins/<name>/`. Datalib vendors the ones it needs (`third-party/latchkey-garmin/`) and installs them on the first sign-in (`http/src/plugins.rs`); a copy without Datalib's stamp is the person's own and is never touched. |
 | **registered** | `claude-ai`, `chatgpt`, `babyconnect` | `latchkey services register`, run by the wizard on the first sign-in from the catalog entry's `credentialRegister`. latchkey refuses to re-register a name it already holds, so a registration someone made by hand stays theirs. |
 
 `latchkey services info <name>` reports a plugin as `built-in` and a
@@ -147,7 +147,7 @@ latchkey can hold several credentials for one service, one per
 name is the default account, which is where a credential goes when
 nobody names one. A source picks its account with
 `latchkey_settings.account` in its config, which becomes `--account` on
-every request. Leaving the setting out passes no flag at all, so datalib
+every request. Leaving the setting out passes no flag at all, so Datalib
 never sends `--account ""`.
 
 **Who picks the name depends on the service**, and only for a browser
@@ -209,14 +209,14 @@ off `detectsLoginAccount` and whether the service has a browser login):
 
 latchkey only ever puts a credential on an HTTP request it makes
 itself; it never hands the credential out. A protocol curl cannot hold
-a session for (IMAP, say) cannot go through it, and datalib does not
+a session for (IMAP, say) cannot go through it, and Datalib does not
 pull secrets out of latchkey to get around that.
 [`email_download_modes.md`](email_download_modes.md#5-why-there-is-no-imap-mode)
 has the long version.
 
 ## A gateway holds everything elsewhere
 
-Under Minds, datalib runs with `LATCHKEY_GATEWAY` set, and latchkey
+Under Minds, Datalib runs with `LATCHKEY_GATEWAY` set, and latchkey
 forwards `services info`, `auth browser` and `curl` to a latchkey
 running elsewhere. It refuses every command that changes local state:
 `ensure-browser`, `services register`, `auth set` and `auth clear`.
@@ -224,7 +224,7 @@ The wizard therefore offers no sign-in of its own there and says where
 to sign in instead, and no plugin is installed.
 
 Whether a forwarded `auth browser` works is up to the gateway, so
-nothing datalib says may assume either way. What is printed at run time
+nothing Datalib says may assume either way. What is printed at run time
 asks: a step's hint and a provider's error
 (`datalib_etl_web::latchkey::sign_in_advice`) read `LATCHKEY_GATEWAY`.
 What is written down once for everyone says both: a source's help page
@@ -342,7 +342,7 @@ to the child's stdin and nothing else changes.
 
 ## What latchkey is handed of the server's environment
 
-Every child datalib starts is handed only the variables it is listed
+Every child Datalib starts is handed only the variables it is listed
 for (`datalib_env::inherit_only`). latchkey, from the wizard, gets what
 any program needs (`HOME`, `PATH`, `TMPDIR`, the locale, proxy and
 certificate settings), every `LATCHKEY_*` variable, and what its

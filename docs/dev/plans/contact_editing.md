@@ -24,7 +24,7 @@ one commit. This plan is the **contact card**, where a person edits a
 contact at length, copies fields from what each source says about that
 person, and later publishes the result to a CardDAV address book.
 
-It is the first place in datalib where a person edits data rather than
+It is the first place in Datalib where a person edits data rather than
 mirrors it, so it also sets the pattern any later editable record
 follows: drafts, saving, seeing someone else's change, undo.
 

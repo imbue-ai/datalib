@@ -1,6 +1,6 @@
 # Chips: a link the app resolves, drawn as what it names
 
-A **chip** is how datalib shows something inline: a person, a source
+A **chip** is how Datalib shows something inline: a person, a source
 group, a pipeline step, a date. It has a name, a picture or a mark, and behind
 it a stable identifier the app looks up to learn what that thing is
 *now* — the contact a person linked, the name the config gives a
@@ -13,7 +13,7 @@ Start here to add a new kind of chip or a new place that draws them.
 What a document promises any viewer — the link a person is written as,
 the `<time>` a date is, the attachment addresses — is
 [showing a rendered document in your app](../user/rendered_documents.md),
-the contract an app builder reads; this page is how datalib's own
+the contract an app builder reads; this page is how Datalib's own
 viewer keeps it. What makes a *person* who they are — handles, each
 source's record, the contacts app — is [`contacts.md`](contacts.md).
 
@@ -31,7 +31,7 @@ source's record, the contacts app — is [`contacts.md`](contacts.md).
 
 **A chip is a markdown link whose href the app knows how to resolve.**
 In the markdown it is an ordinary link, so any markdown viewer shows a
-named link with a tooltip; datalib recognizes the href and draws a
+named link with a tooltip; Datalib recognizes the href and draws a
 chip. Nothing about how the chip looks is written into the file. The
 link carries only what the producer knew when it wrote it:
 
@@ -362,8 +362,8 @@ from the cell alone, and a new search shows the new title.
   Copy title and link, which puts a link on the clipboard —
   `<a href="datalib:doc/<uuid>">Captain's log</a>` for whatever pastes
   rich text, `Captain's log (datalib:doc/<uuid>)` as plain text. The
-  href is the document's name, which datalib reads; no app registers
-  the scheme, so outside datalib it is a name, not a link that opens
+  href is the document's name, which Datalib reads; no app registers
+  the scheme, so outside Datalib it is a name, not a link that opens
   anything. The rest of the title
   bar's menu (`documentMenu.ts`: open at the source, feedback) needs the
   document itself, which a chip does not hold.

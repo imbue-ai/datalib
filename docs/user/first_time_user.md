@@ -1,6 +1,6 @@
-# datalib (Project Data Liberation ✊) — first-time user guide
+# Datalib (Project Data Liberation ✊) — first-time user guide
 
-Liberate and own your data. Run powerful AI tools on it, on your terms.
+Datalib is about ***personal data sovereignty***. It liberates your data from silos and helps you run powerful AI tools on it, on your own terms.
 
 This guide installs the command-line tools and walks you through your
 first mirror. Two other ways in, if this one doesn't fit: the macOS
@@ -47,7 +47,7 @@ The sections on credentials (step 2) and on getting your data back out
 None. The release tarball carries the binaries, and the first sync
 fetches the one other thing a sync runs: a Node runtime with the
 Node program the tools shell out to — `latchkey`, which holds your
-credentials — at the exact versions datalib was built and tested with,
+credentials — at the exact versions Datalib was built and tested with,
 published beside the tarball on the same release and checked against
 the sha256 the tarball carries for it. It lands in
 `~/.cache/datalib/runtime`, one download per release. You do not need `node`,
@@ -84,7 +84,7 @@ it into `~/.local/lib/datalib` and links the tools into
 - `datalib-doltlite` — the shell for reading and exporting your stores
   (step 8).
 - `datalib-migrate-config` — rewrites a config file from an older
-  datalib (step 3).
+  Datalib (step 3).
 
 Also installed: `latchkey` (the credential tool, step 2, running on
 the fetched Node runtime), `datalib-file-inventory` (a standalone directory
@@ -120,8 +120,8 @@ Three optional knobs:
 
 The script checks the tarball against a hash written into the script
 itself, so it installs exactly what the script names, and the script
-comes from datalib's `main` branch. To see for yourself that a download
-was built by datalib's release workflow from the release's own commit,
+comes from Datalib's `main` branch. To see for yourself that a download
+was built by Datalib's release workflow from the release's own commit,
 and not uploaded by hand, ask for its *build
 provenance attestation*: a statement that workflow signed when it built
 the file. You need GitHub's CLI, `gh`, signed in to any account. Set
@@ -186,10 +186,10 @@ runtime it runs on.
 
 Every program you start on your computer runs *as you*, and macOS and
 Linux mostly treat all of them alike: what one of them can read, the
-others can too. That covers both halves of what datalib keeps:
+others can too. That covers both halves of what Datalib keeps:
 
 - **Your mirror** is ordinary files in your data root. Any program
-  running as you can read everything datalib has downloaded.
+  running as you can read everything Datalib has downloaded.
 - **Your sign-ins** are encrypted in `~/.latchkey`, but a program
   doesn't need to break that encryption to use them: it can run
   `latchkey curl …`, and latchkey adds your sign-in to the request for
@@ -215,7 +215,7 @@ used to start Chrome with its remote-debugging switch turned on and
 read your cookies through it, until Chrome stopped allowing that
 switch on your everyday profile.
 
-What that means for datalib today:
+What that means for Datalib today:
 
 - **latchkey's encryption key is in your keychain**, and a Node you
   have allowed can read it without asking. If macOS asks whether `node`
@@ -252,7 +252,7 @@ What that means for datalib today:
   without asking at all; the first release with this option is what
   answers both. It does not stop a program determined to steal from
   you, which can try to steer Datalib itself.
-- **What you can do now:** run datalib on a computer where you trust
+- **What you can do now:** run Datalib on a computer where you trust
   every program you run. Sign in with read-only access where the
   service offers it ([Fastmail](getting_your_data.md#fastmail) does,
   for example). Sign out of a service you stop syncing:
@@ -517,7 +517,7 @@ one source's entries, straight into `<data_root>/config.toml`:
 Each is compiled into `datalib-step` too, so a shell with no checkout
 prints it: `datalib-step help docs` names them.
 
-Upgrading from an earlier datalib? A `config.toml` written for one —
+Upgrading from an earlier Datalib? A `config.toml` written for one —
 steps naming a `datalib-step download …` command, a group `type`
 spelled for its method (`slack_api`, `claude_export`, `carddav`), or
 an ingest step whose params still say `sync` or `common.input_path` —
@@ -788,7 +788,7 @@ Something broken, missing, or confusing? **File an issue at
 <https://github.com/imbue-ai/datalib/issues>** — that is the preferred
 way to reach us, and every report is welcome. Two kinds are equally
 wanted: what exists and misbehaves (a typo in this guide, a sync that
-won't finish), and what would make datalib easier to wield for whatever
+won't finish), and what would make Datalib easier to wield for whatever
 you want to do with your data — a step that was harder than it should
 be, a use case it doesn't serve yet. For a bug, a copy of the error
 message and which source it happened on is plenty. **The tracker is

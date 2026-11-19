@@ -1,6 +1,6 @@
 # Entity ids: what `grid_rows.uuid` is, and what it is not
 
-Every searchable thing in datalib carries an id. That one string is
+Every searchable thing in Datalib carries an id. That one string is
 doing more jobs than it looks like:
 
 - the **primary key** of `grid_rows`;
@@ -91,7 +91,7 @@ when an older message arrives; a re-keyed document orphans its `/chat/`
 URL and every feedback row filed against it. Documents are also
 rewritten every sync their chat is touched, wherever their first message
 fell, so a time prefix buys them no adjacency — clustering at the left
-edge does. The same goes for a page datalib composes (a source's
+edge does. The same goes for a page Datalib composes (a source's
 timeseries, a storage report) and for a device row whose stamp is its
 latest reading. What carries a stamp is the record with a stamp of its
 own: a message, a comment, a PR, a page Notion dated, a PDF whose Info
@@ -140,7 +140,7 @@ and the render mints the entity id from that raw key;
 has the rule. A render that needs its raw key back (a bucket the
 driver named) keeps a map from id to key, as beeper's parse does.
 
-### Rows datalib itself mints
+### Rows Datalib itself mints
 
 Two kinds of row are about a source's data without being it:
 
@@ -187,7 +187,7 @@ from:
 
 | Column | Holds |
 |---|---|
-| `upstream_id` | The key the uuid was minted from: the upstream's own id where it has one, datalib's key for a row it composes |
+| `upstream_id` | The key the uuid was minted from: the upstream's own id where it has one, Datalib's key for a row it composes |
 | `upstream_entity_kind` | The `entity_kind` component — the upstream's vocabulary |
 | `upstream_account` | The account the record itself names; NULL when it names none. Not `account`, which is the login the mirror was fetched under |
 
@@ -302,7 +302,7 @@ back by render as the natural key.
 | github, gitlab | none — the repository / project leads the key: `{repo}#{number}` | PRs, MRs, comments, reviews, notes — the record's own `created_at` |
 | google_takeout | none — a Chat message id names its space, a Voice row id is the ingest's | messages, a Chat message's earlier versions |
 | linkedin | none — keyed on the profile URL, the post link, the raw row id; the one skills page on its kind | messages, shares, comments |
-| notion | none — page, discussion and comment ids are Notion UUIDs, the backpointer rather than the key; `notion_page_uuid` holds the page's datalib id; the table of contents is keyed `toc`, an anchor in it on the Notion id of what it lists | pages, comments — Notion's `created_time` |
+| notion | none — page, discussion and comment ids are Notion UUIDs, the backpointer rather than the key; `notion_page_uuid` holds the page's Datalib id; the table of contents is keyed `toc`, an anchor in it on the Notion id of what it lists | pages, comments — Notion's `created_time` |
 | pdf | none — keyed on the blake3, so two copies within a source are one row | documents and pages, when the Info dictionary dates the file |
 | perseus | none — keyed on the CTS locator and edition | none — a classical text has no stamp of its own |
 | signal | none — keyed on who a chat is with and who wrote a message (ACI, else PNI, else number; a group by its master key's hash), never the backup's own numbering | messages, on `date_sent` |

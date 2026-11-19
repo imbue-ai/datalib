@@ -150,7 +150,7 @@ rather than let a quiet lapse look like a quiet sensor. A `last_seen`
 column per device and per tier, compared against now, is the cheapest
 honest signal.
 
-**Nothing in datalib runs a sync on a clock.** A sync starts when the
+**Nothing in Datalib runs a sync on a clock.** A sync starts when the
 Manage screen's button is pressed or `datalib-dag` is run; the
 "scheduler" in `dag/` orders steps within one run. So "fetch every 15
 minutes" is, today, a `launchd`/`cron` entry invoking `datalib-dag

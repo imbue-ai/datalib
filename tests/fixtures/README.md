@@ -1,8 +1,8 @@
 # The TNG corpus
 
-datalib's test data is a made-up mirror of the crew of the USS
+Datalib's test data is a made-up mirror of the crew of the USS
 Enterprise-D, from *Star Trek: The Next Generation*. Every source
-datalib reads has a fixture in that world: Picard's email and Codex
+Datalib reads has a fixture in that world: Picard's email and Codex
 sessions, Data's ChatGPT account, the ship's air-quality monitors. Together they are the **TNG corpus**.
 
 It exists so that:

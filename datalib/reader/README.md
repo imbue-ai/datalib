@@ -1,7 +1,7 @@
 # imbue-datalib-reader
 
-Read the stores of a [datalib](https://github.com/imbue-ai/datalib) library
-from Python. A datalib store is a doltlite file: SQLite with git-shaped history
+Read the stores of a [Datalib](https://github.com/imbue-ai/datalib) library
+from Python. A Datalib store is a doltlite file: SQLite with git-shaped history
 kept inside it, which Python's own `sqlite3` module cannot open. This package
 carries the doltlite library and a small module that calls it.
 
@@ -60,11 +60,11 @@ extended result code in `code`. Each kind has its own class:
 - **It works under any Python 3.9 or later**, the builds `uv` fetches included.
   It starts no process, replaces no module and leaves no temp file, and
   `sqlite3` stays stock beside it.
-- **Select a payload as `json(payload)`.** A datalib `payload` column is
+- **Select a payload as `json(payload)`.** A Datalib `payload` column is
   SQLite's binary JSON (JSONB); selected bare it comes back as `bytes`, which
   `json.loads` refuses with a `UnicodeDecodeError`.
 - **Give each thread its own `Store`.**
-- **Take the version of your datalib**, which `datalib-dag --version` prints.
+- **Take the version of your Datalib**, which `datalib-dag --version` prints.
   Each version carries the library that release's binaries were built from.
 
 Wheels exist for Apple-silicon Macs on macOS 11 or later, and for Linux on x86_64

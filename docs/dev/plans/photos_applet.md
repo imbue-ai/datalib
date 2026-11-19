@@ -135,7 +135,7 @@ row per document):
 
 `image`, `latitude` and `longitude` are new `GridRow` columns, null on
 every other source. `image` is a name in the
-[datalib links](datalib_uris.md) sense, not an address: the row says
+[Datalib links](datalib_uris.md) sense, not an address: the row says
 *what* picture, and which server hands out its bytes is decided when it
 is drawn, so moving the bytes later moves no row. The same column can
 later carry an email's image attachment. Latitude and longitude are

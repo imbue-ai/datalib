@@ -1,6 +1,6 @@
 # How qmd behaves when driven from a step
 
-Measured facts about `qmd` 2.8.3, the last version datalib ran. Eleven
+Measured facts about `qmd` 2.8.3, the last version Datalib ran. Eleven
 facts, each measured on a mac against the TNG fixture's rendered tree
 (one qmd collection per group, exactly as the qmd steps registered
 them), with the recipe at the end so they can be re-measured, and a

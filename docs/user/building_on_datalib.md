@@ -1,16 +1,16 @@
-# Building an app on datalib
+# Building an app on Datalib
 
 This guide is for an app that reads a person's mail, chat or calendar
-through datalib instead of calling Gmail, Slack or Google Calendar
-itself. datalib keeps a local mirror of each source, and your app reads
+through Datalib instead of calling Gmail, Slack or Google Calendar
+itself. Datalib keeps a local mirror of each source, and your app reads
 the mirror. The app's job shrinks to three things: ask for a sync when
 it wants fresher data, read what is there, and, if it derives data of
-its own, do that as a step in datalib's pipeline so it runs whenever
+its own, do that as a step in Datalib's pipeline so it runs whenever
 the mirror moves.
 
 The payoff is real. The Today app (a list of what you owe people,
 built from Gmail, Slack and Google Calendar) moved its data gathering
-onto datalib. On the same 11 work items it went from 46 live API calls
+onto Datalib. On the same 11 work items it went from 46 live API calls
 in 17.1 s to 1 call in 1.7 s, and the records it saved were
 byte-identical to the ones the API path produced.
 
@@ -21,7 +21,7 @@ meets after that.
 
 ## Nothing syncs on its own: your app asks
 
-datalib has no schedule. Nothing in the config, the command line or
+Datalib has no schedule. Nothing in the config, the command line or
 the app (`datalib-http`) syncs on a timer; a sync happens when someone
 asks for one. So an app that wants fresh data asks, from cron, from
 launchd, or from its own loop:
@@ -641,7 +641,7 @@ ask. The full column list is in [raw_stores.md](raw_stores.md)
 ## Shared rate limits
 
 The mirror and your app spend the same allowance when they use the
-same account, and datalib does nothing to share it out. During a
+same account, and Datalib does nothing to share it out. During a
 first sync a download makes calls as fast as the service lets it, so
 your app's own calls can be refused.
 
@@ -697,7 +697,7 @@ downloads everything again.
 
 ## Your app's own writes
 
-datalib only reads. It never sends a message, files a label or makes
+Datalib only reads. It never sends a message, files a label or makes
 an event, so what your app does to a service reaches the mirror only
 through the next sync of that source. If your app needs to read its own
 write back from the mirror, ask for a sync of the source after the

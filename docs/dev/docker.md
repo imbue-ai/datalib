@@ -23,7 +23,7 @@ security model the walkthrough's bind-mount rules rest on.
   build time. There is no Node, npm or npx on the image's `PATH`;
   nothing is fetched from a registry at build or run time, and the first-use fetch
   a tarball install does (`runtime_fetch.md`) never fires here.
-  `DATALIB_NO_FETCH=1` is set, so nothing datalib would otherwise fetch
+  `DATALIB_NO_FETCH=1` is set, so nothing Datalib would otherwise fetch
   for itself (the runtime, the embedding model, a package) is fetched at run
   time: a missing piece is a failed step naming it
   ([`runtime_fetch.md`](runtime_fetch.md) § "When anything may be
@@ -43,7 +43,7 @@ security model the walkthrough's bind-mount rules rest on.
   (§ "Permissions and signals").
 
 Two variants are published: the image above, and **`<version>-cuda`**,
-the same image with NVIDIA's cuBLAS and datalib's CUDA module added, for
+the same image with NVIDIA's cuBLAS and Datalib's CUDA module added, for
 a machine with an NVIDIA GPU (§ "The CUDA variant"). The devcontainer
 CI runs in is a separate image
 (`.devcontainer/Dockerfile`, published by `devcontainer.yml`) and does
@@ -87,7 +87,7 @@ plain image it holds:
   image goes without.
 
 Both are NVIDIA's or link NVIDIA's code, whose use is governed by the
-CUDA Toolkit EULA, not datalib's MIT license:
+CUDA Toolkit EULA, not Datalib's MIT license:
 [`CUDA-NOTICE.md`](../../third-party/llama_cpp/CUDA-NOTICE.md), which the
 image carries in each of those directories' `licenses/`, beside NVIDIA's
 own `LICENSE` for the component there (`licenses/nvidia/cudart/`,

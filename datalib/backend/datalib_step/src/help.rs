@@ -688,9 +688,9 @@ mod tests {
     #[test]
     fn every_doc_prints_by_its_topic_with_no_relative_link_left() {
         for (word, title) in [
-            ("agent", "# datalib — agent user guide"),
+            ("agent", "# Datalib — agent user guide"),
             ("raw-stores", "# Reading the raw stores"),
-            ("apps", "# Building an app on datalib"),
+            ("apps", "# Building an app on Datalib"),
             ("search", "# Searching your mirror"),
             ("step-protocol", "# Writing a step command"),
         ] {

@@ -1,10 +1,10 @@
-# datalib — agent user guide
+# Datalib — agent user guide
 
-You are (probably) an AI agent helping a user run **datalib**: mirror
+You are (probably) an AI agent helping a user run **Datalib**: mirror
 their personal data (chats, email, messages, contacts, …) into a local
 store and do useful things with it. This doc maps the surfaces you'll
 touch — config, sync, querying, extending — and points to the deeper
-docs for each. It is about *using* datalib; for working on the datalib
+docs for each. It is about *using* Datalib; for working on the Datalib
 codebase itself, see [`AGENTS.md`](../AGENTS.md).
 
 From a shell, **`datalib-step help`** is the map: the steps from an
@@ -26,7 +26,7 @@ do; [getting your data](user/getting_your_data.md) is the per-source
 recipe for credentials and exports; and [running in
 Docker](user/docker.md) is the sandboxed way to try it, with a demo
 library already loaded. The README's source table and "what we are
-aiming for" say what datalib is for and where it is going, which is
+aiming for" say what Datalib is for and where it is going, which is
 the context for anything the user asks you to build on top of it.
 
 ## The mental model
@@ -156,7 +156,7 @@ one per typo. It also has `datalib-step` plan every built-in step's
 params, so a misspelled or misplaced option is reported at its line
 before a sync rather than when the step runs. Exit 0 when every entry
 loads and every step's params plan, 1 if the file is not a config at
-all (or the root was written by a newer datalib), 2 if some entries
+all (or the root was written by a newer Datalib), 2 if some entries
 were dropped or some step's params would be refused.
 
 `datalib-step examples <type>` prints each source's config stanzas:
@@ -315,7 +315,7 @@ several times what it holds. Freeing disk space gives it back:
 | free disk space | chunks no commit reaches, in every store | every commit of every store |
 | … and drop old versions on derived data | the same, and the older commits of each render store | every commit of every download store; the latest of each render store |
 
-The first loses nothing. Derived data is what datalib rebuilds from the
+The first loses nothing. Derived data is what Datalib rebuilds from the
 downloads: each source's rendered documents. Dropping its old versions
 loses their history, which nothing but the History card reads. The grid
 index is plain SQLite and is not touched.
@@ -351,7 +351,7 @@ server-sent-event stream that pushes a `root` frame whenever any of
 this moves.
 
 All of it is one file, `<data_root>/system/runs/runs.sqlite`: every
-line any datalib process wrote — the runner, each step, the server,
+line any Datalib process wrote — the runner, each step, the server,
 the applets. It is plain SQLite, so stock `sqlite3` reads it with no
 server up. `log` holds one row per line, `processes` says who wrote
 each (join on `process_id`), `runs` and `step_runs` hold each run and
@@ -375,7 +375,7 @@ is not null` lists the steps that failed. Every table and column is in
 If you are building an app that reads this data instead of calling the
 services (when to sync, how fresh the mirror is, deriving your own data
 as a step, when to ask the service after all), read [building on
-datalib](user/building_on_datalib.md).
+Datalib](user/building_on_datalib.md).
 
 Pick the surface that fits the question:
 
@@ -536,14 +536,14 @@ Pick the surface that fits the question:
   guides at `<origin>/agent/cards.md` and `<origin>/agent/config.md`
   are readable without it.
 
-## Building a tool or app on datalib
+## Building a tool or app on Datalib
 
-[Building on datalib](user/building_on_datalib.md) has the details.
+[Building on Datalib](user/building_on_datalib.md) has the details.
 Two decisions come first: whether to read the mirror at all, and where
 to keep what your app adds to it.
 
 **Decide what belongs on the mirror and what belongs on the API.**
-datalib is, for now, about getting your data out of its silos en masse.
+Datalib is, for now, about getting your data out of its silos en masse.
 It can also take a targeted part of a source: only recent history
 (`since`), particular Slack channels (`channels`), particular mail
 labels (`only_extract_labels`). Some things make less sense to build on
@@ -553,17 +553,17 @@ it:
   better querying the service's API directly. The mirror is only as
   fresh as its last sync.
 - An app that publishes (sends a message, files a label, makes an
-  event) must use the API to do so. datalib only reads.
+  event) must use the API to do so. Datalib only reads.
 
 Many apps successfully combine the two, say reading history in bulk
 from the mirror and using the API for the newest items and for every
-write. datalib is designed for this: a raw store re-uses the service's
+write. Datalib is designed for this: a raw store re-uses the service's
 identifiers, so an id from an API response finds its row in the mirror,
 and a row in the mirror names what to send the API. A few ids are
 normalized on the way in, such as Gmail's, which are padded to 16 hex
 digits; the "Which id is which" tables in [Reading the raw
 stores](user/raw_stores.md) give the mapping. [Building on
-datalib](user/building_on_datalib.md) § "When to ask the service
+Datalib](user/building_on_datalib.md) § "When to ask the service
 instead" lists, source by source, what the mirror does not hold, and §
 "Your app's own writes" says how a write reaches it.
 
@@ -597,7 +597,7 @@ have, but you can't recover history you never kept. `datalib-doltlite
 
 Where it lives depends on whether it can be rebuilt. Data computed from
 the mirror belongs in a step's own tree ([Building on
-datalib](user/building_on_datalib.md) § "Your app's derived data as a
+Datalib](user/building_on_datalib.md) § "Your app's derived data as a
 step"), which then runs whenever the mirror moves. Data nothing could
 rebuild, such as a person's notes, stays out of `<data_root>/<group>/`,
 because deleting a group deletes that directory. An app writing such
@@ -606,7 +606,7 @@ directory per app, which no reset or deletion of a source touches, or
 in a clearly marked folder of its own under the data root, with a name
 no group uses. Neither is for a step, which writes only its own tree.
 
-The contacts app is this pattern in datalib itself. Its store,
+The contacts app is this pattern in Datalib itself. Its store,
 `datalib_curated/datalib_contacts/contacts.doltlite_db`, is a doltlite
 file of its own that makes every write a commit, and no reset or removal
 of a source touches it. It adds who a handle is without changing any
@@ -615,7 +615,7 @@ raw store. Its rows refer to a person's handles
 person spans many sources. See [the contacts
 doc](dev/contacts.md) § "The contacts app".
 
-## Extending datalib
+## Extending Datalib
 
 - **Custom step commands** — the headline extension point. Any
   executable can be a pipeline step: declare it in `config.toml` with
@@ -666,7 +666,7 @@ Something broken, missing, or confusing? **File an issue at
 <https://github.com/imbue-ai/datalib/issues>** — that is the preferred
 channel, and every report is welcome. Two kinds are equally wanted:
 what exists and misbehaves (a one-line "this doc is wrong", a full
-bug), and what would make datalib easier to wield for whatever you and
+bug), and what would make Datalib easier to wield for whatever you and
 the user are trying to do with it — a surface that fought you, a query
 you had to work around, a use case it doesn't serve yet. Paste the
 `datalib-dag --check` output or the failing step's `step_finish` event

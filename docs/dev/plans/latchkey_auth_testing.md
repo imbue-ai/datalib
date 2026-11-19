@@ -24,7 +24,7 @@ Read from latchkey 3.16's source and measured on a mac the same day.
 - **latchkey hard-codes a visible browser window** for `auth browser`;
   the only lever is the executable `ensure-browser` records.
 - **latchkey's own credential check goes out as a plain curl**: it runs
-  through `LATCHKEY_CURL` without datalib's impersonation marker, so for
+  through `LATCHKEY_CURL` without Datalib's impersonation marker, so for
   a host behind Cloudflare's bot wall it would be refused whatever the
   credential.
 - **A `latchkey gateway` binds `localhost`**, which did not answer on

@@ -357,7 +357,7 @@ Two caveats to state honestly. The trigger comment says production
 indexing paths rebuild FTS entries in TypeScript "so CJK text can be
 normalized before it reaches the unicode61 tokenizer" — so a doc indexed
 by our path gets un-normalized CJK in FTS until the next full `qmd
-update` reconciles it. And this makes datalib a writer of qmd's tables,
+update` reconciles it. And this makes Datalib a writer of qmd's tables,
 which needs the same one-writer-at-a-time discipline the job queue
 provides (and is the reason the *applet* must not do it).
 

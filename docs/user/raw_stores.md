@@ -123,7 +123,7 @@ branch only when it **seals**: at the end of a run, and at checkpoints
 along the way. A read-only open lands on `main`, so you never see half
 of a batch. During a long first sync the store is readable from the
 first checkpoint on, and lags the download by up to one checkpoint
-interval (see [building on datalib](building_on_datalib.md) § "How
+interval (see [building on Datalib](building_on_datalib.md) § "How
 fresh is the mirror?").
 
 ## `payload` is JSON, stored as JSONB
@@ -262,7 +262,7 @@ document.
 One row per download run, for the sources that reach a service over the
 network (not Garmin, YoLink or contacts), and for few that read local
 files. The start of the newest `ok` row is how recent the source
-is as a whole: [building on datalib](building_on_datalib.md) § "How
+is as a whole: [building on Datalib](building_on_datalib.md) § "How
 fresh is the mirror?".
 
 | column | what it holds |
@@ -528,7 +528,7 @@ Where each email's `.eml` is in `blobs.sqlite`.
 Every message the service has named to the download (JMAP and Gmail
 API; not mbox), whether or not it has been fetched yet. A message
 listed here with no `emails` row, or held at an older version, is still
-owed: [building on datalib](building_on_datalib.md) § "How fresh is the
+owed: [building on Datalib](building_on_datalib.md) § "How fresh is the
 mirror?" has the query.
 
 | column | what it holds |

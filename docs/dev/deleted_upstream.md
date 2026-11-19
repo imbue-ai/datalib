@@ -1,7 +1,7 @@
 # Keeping what you deleted upstream
 
 By default a sync copies deletions: a conversation you delete on
-claude.ai disappears from your datalib copy on the next sync (it stays
+claude.ai disappears from your Datalib copy on the next sync (it stays
 in the store's doltlite history, but no longer renders or shows in
 search). A source that offers `when_deleted_upstream` lets you choose
 the other way:

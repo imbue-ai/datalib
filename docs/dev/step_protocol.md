@@ -38,7 +38,7 @@ outside any group is also legal — `id = "weather/ingest"` written
 verbatim, no `group` or `function` — and is the shape for a one-off
 executable that belongs to no source.
 
-`command = "datalib-step"` runs the step program datalib ships, which
+`command = "datalib-step"` runs the step program Datalib ships, which
 takes the function and the group's `type` from the environment below.
 That is the shape every source's own steps have, and it is only legal
 under a group. A step with no `command` at all is read as that one:
@@ -175,7 +175,7 @@ What that means from your side:
 * **You may be started while an input is still being written, and run
   again.** A producer that declares `streams_output` (below, under
   "checkpoint") lets the steps that read it start on each of its seals
-  while it carries on. The downloads datalib ships for Slack, mail,
+  while it carries on. The downloads Datalib ships for Slack, mail,
   Claude, ChatGPT, Notion, Google Drive, Linear, Todoist, Garmin, YoLink,
   GitHub, GitLab and Baby Connect all declare it, and so does every
   `render_markdown`. You are run again after each later seal, and
@@ -387,7 +387,7 @@ runner write it:
 - **A `problem` line** is a `ProblemRow` without the columns its writer
   fills: its id (minted from what the line says), its source (the
   step's group) and its stamps. `stage`, `scope_kind`, `outcome`,
-  `reason` and `severity` are datalib's own closed sets
+  `reason` and `severity` are Datalib's own closed sets
   (`datalib_problems`); `sample` says what happened; `item_uuid`,
   `field`, `path` and `rule` are optional.
 - **`scope_key`** is what the problem is about within your step:

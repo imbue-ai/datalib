@@ -541,7 +541,7 @@ number exists. The amalgamation could walk a table's chunks
 (`doltlite_chunk_walk.c`), but none of that is exposed to SQL.
 
 **Scope is `<name>/ingest`, not the whole tree.** `render_markdown` is
-datalib's own output, `system/disk_stats.sqlite` already tracks it per
+Datalib's own output, `system/disk_stats.sqlite` already tracks it per
 step, and measuring it from inside the thing that writes it would grow
 the store it just measured on every run.
 
@@ -550,7 +550,7 @@ store's size is not reproducible — rebuilding the TNG fixture from
 byte-identical inputs moves six of its sixteen sources by 1-22 bytes,
 in a different direction each time — and a bookkeeping mutation
 rewrites chunks with no row added. So byte sizes are reported but
-never compared (`introspect::counts_unchanged`), and datalib's own
+never compared (`introspect::counts_unchanged`), and Datalib's own
 tables (`doltlite_raw::SHARED_TABLES` — `sync_runs`, `sync_scope_state`
 and the like — and every `<table>_bookkeeping` sidecar) are left out of
 the report. Otherwise every run would rewrite the report and hand

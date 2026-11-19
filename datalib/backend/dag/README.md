@@ -33,7 +33,7 @@ verbatim. That is the only place a step id is written.
 Every step under a group gets the two halves and the type in its
 environment — `DATALIB_DAG_GROUP`, `DATALIB_DAG_FUNCTION`,
 `DATALIB_DAG_GROUP_TYPE` — beside the composed `DATALIB_DAG_STEP`. A
-step whose `command` is `datalib-step` runs the step program datalib
+step whose `command` is `datalib-step` runs the step program Datalib
 ships, which dispatches on that
 environment and writes the tree its id names; that is why a built-in
 step's function is the directory it writes (`ingest`, `render_markdown`,
