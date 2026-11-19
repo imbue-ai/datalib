@@ -181,11 +181,16 @@ test.describe("with only the session cookie", () => {
       await page.goto(`${baseURL}/?token=${process.env.DATALIB_TOKEN}`);
       const image = `http://127.0.0.1:${sender.address().port}/lagoon.png`;
       const md = await marketingEmailUuid(page);
-      await page.route(`**/applet/unified_grid_and_search_index/chat/${md}`, async (route) => {
-        const resp = await route.fetch();
-        const body = `<img alt="Temtibi Lagoon at sunset" src="${image}">`;
-        await route.fulfill({ response: resp, json: { ...(await resp.json()), body } });
-      });
+      const chat = `/applet/unified_grid_and_search_index/chat/${md}`;
+      await page.route(
+        (url) => url.pathname === chat,
+        async (route) => {
+          const resp = await route.fetch();
+          const md = `<img alt="Temtibi Lagoon at sunset" src="${image}">`;
+          const pieces = [{ uuid: null, md }];
+          await route.fulfill({ response: resp, json: { ...(await resp.json()), pieces } });
+        },
+      );
       await page.goto(`/chat/${md}`);
 
       const load = page.waitForResponse((r) =>

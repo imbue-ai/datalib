@@ -424,10 +424,15 @@ test.describe("Quark's prize email", () => {
     const w = watch(context);
     const uuid = await quarksUuid(page);
     const asSent = quarksHtml();
-    await page.route(`**/applet/unified_grid_and_search_index/chat/${uuid}`, async (route) => {
-      const resp = await route.fetch();
-      await route.fulfill({ response: resp, json: { ...(await resp.json()), body: asSent } });
-    });
+    const chat = `/applet/unified_grid_and_search_index/chat/${uuid}`;
+    await page.route(
+      (url) => url.pathname === chat,
+      async (route) => {
+        const resp = await route.fetch();
+        const pieces = [{ uuid: null, md: asSent }];
+        await route.fulfill({ response: resp, json: { ...(await resp.json()), pieces } });
+      },
+    );
     await page.goto(`/chat/${uuid}`);
     await expect(
       page.frameLocator("iframe.doc-frame").getByText("Claim your holosuite upgrade"),

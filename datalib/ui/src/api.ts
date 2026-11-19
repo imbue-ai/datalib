@@ -269,10 +269,9 @@ export type DocProblem = {
   muted: boolean;
 };
 
-/// One section of a document's body: the `data-section-uuid` it wraps,
-/// or null for a piece of the page's frame (title, a `<details>` opener),
-/// and its length in UTF-16 code units, as a JavaScript string counts.
-export type BodySection = { uuid: string | null; len: number };
+/// One piece of a document's body, in order: a message (`uuid`), or a
+/// piece of the page's frame (a title, a `<details>` opener).
+export type BodyPiece = { uuid: string | null; md: string };
 
 export type ChatResponse = {
   markdown_uuid: string;
@@ -287,13 +286,11 @@ export type ChatResponse = {
   /// Source column shows it; null when no grid row points at the doc.
   source_ref: Identity | null;
   /// The picture the document is, where it is one (`datalib:photo/…`):
-  /// such a document has no page, and `body` is empty.
+  /// such a document has no page, and `pieces` is empty.
   image?: string | null;
-  body: string;
-  /// Where each section of `body` lies, so each message renders as a
-  /// fragment of its own (`renderDocument.ts`). Absent when the renderer
-  /// declares no sections.
-  sections?: BodySection[];
+  /// The body as the renderer's pieces, so each message renders as a
+  /// fragment of its own (`renderDocument.ts`). Empty for a picture.
+  pieces: BodyPiece[];
   outgoing_edges: EdgeOut[];
   /// What render could not fully do to this document, errors first.
   problems: DocProblem[];
@@ -786,7 +783,7 @@ export async function fetchGroups<Row = SearchRow>(
 export function fetchChat(markdownUuid: string, signal?: AbortSignal): Promise<ChatResponse> {
   // A document's id names it alone — no disambiguation needed.
   return getJson<ChatResponse>(
-    `${UNIFIED_GRID_AND_SEARCH_INDEX}/chat/${encodeURIComponent(markdownUuid)}`,
+    `${UNIFIED_GRID_AND_SEARCH_INDEX}/chat/${encodeURIComponent(markdownUuid)}?pieces=true`,
     signal,
   );
 }

@@ -6,16 +6,18 @@
 // `<div style="display:none">`, and a copy of the next message's wrapper.
 //
 // Two guards stand between the payload and the next message: the UI renders
-// each message as a fragment of its own, from the sections the route sends,
+// each message as a fragment of its own, from the pieces the route sends,
 // and every wrapper has `contain: paint`. The first test has both on; each
 // control turns one off and shows the payload then does reach the next
 // message, so a green first test is the guards at work.
 
 import { test, expect, type Page } from "@playwright/test";
 
-/// What the document route sends, as far as these tests read it.
-type BodySection = { uuid: string | null; len: number };
-type ChatResponse = { body: string; sections?: BodySection[] } & Record<string, unknown>;
+/// What the document route sends the viewer, as far as these tests read it.
+type BodyPiece = { uuid: string | null; md: string };
+type ChatResponse = { pieces: BodyPiece[] } & Record<string, unknown>;
+
+const chatRoute = (uuid: string) => `/applet/unified_grid_and_search_index/chat/${uuid}`;
 
 const COVER = "Your session has expired. Enter your password to continue.";
 /// Inside the first message's wrapper, before its closing tag.
@@ -33,55 +35,48 @@ async function aConversation(page: Page): Promise<Doc> {
   const { rows } = (await resp.json()) as { rows: { markdown_uuid: string | null }[] };
   const uuids = [...new Set(rows.flatMap((r) => (r.markdown_uuid ? [r.markdown_uuid] : [])))];
   for (const uuid of uuids) {
-    const got = await page.request.get(`/applet/unified_grid_and_search_index/chat/${uuid}`);
+    const got = await page.request.get(`${chatRoute(uuid)}?pieces=true`);
     if (!got.ok()) continue;
     const chat = (await got.json()) as ChatResponse;
     const pair = twoMessagesInARow(chat);
     if (pair) return { uuid, chat, ...pair };
   }
-  throw new Error("the fixture must have a conversation of two messages that comes with sections");
+  throw new Error("the fixture must have a conversation of two messages side by side");
 }
 
 /// Two messages side by side, neither inside a fold, so the second is
 /// on screen once scrolled to.
 function twoMessagesInARow(chat: ChatResponse): { first: string; next: string } | null {
-  let at = 0;
   let depth = 0;
   let previous: string | null = null;
-  for (const s of chat.sections ?? []) {
-    const md = chat.body.slice(at, (at += s.len));
-    if (s.uuid === null) {
+  for (const { uuid, md } of chat.pieces) {
+    if (uuid === null) {
       if (md.startsWith("<details")) depth += 1;
       if (md.startsWith("</details>")) depth -= 1;
       previous = null;
     } else if (depth === 0 && previous) {
-      return { first: previous, next: s.uuid };
+      return { first: previous, next: uuid };
     } else {
-      previous = depth === 0 ? s.uuid : null;
+      previous = depth === 0 ? uuid : null;
     }
   }
   return null;
 }
 
-/// The document with the payload in its first message, sections adjusted.
+/// The document with the payload in its first message.
 function withPayload(doc: Doc): ChatResponse {
-  const sections = doc.chat.sections!;
-  let at = 0;
-  const pieces = sections.map((s) => ({ ...s, md: doc.chat.body.slice(at, (at += s.len)) }));
+  const pieces = doc.chat.pieces.map((p) => ({ ...p }));
   const first = pieces.find((p) => p.uuid === doc.first)!;
   const close = first.md.lastIndexOf("</div>");
   expect(close, "the first message is in a wrapper").toBeGreaterThan(0);
   first.md = first.md.slice(0, close) + payload(doc.next) + first.md.slice(close);
-  return {
-    ...doc.chat,
-    body: pieces.map((p) => p.md).join(""),
-    sections: pieces.map(({ uuid, md }): BodySection => ({ uuid, len: md.length })),
-  };
+  return { ...doc.chat, pieces };
 }
 
 async function open(page: Page, doc: Doc, served: ChatResponse): Promise<void> {
-  await page.route(`**/applet/unified_grid_and_search_index/chat/${doc.uuid}`, (route) =>
-    route.fulfill({ json: served }),
+  await page.route(
+    (url) => url.pathname === chatRoute(doc.uuid),
+    (route) => route.fulfill({ json: served }),
   );
   await page.goto(`/chat/${doc.uuid}`);
   await expect(page.frameLocator("iframe.doc-frame").locator("#p-cover")).toBeAttached({
@@ -117,12 +112,11 @@ test("a message's payload neither hides, replaces nor covers the next message", 
   await expect.poll(() => touchedAtNext(page, doc.next)).toBe(doc.next);
 });
 
-test("control: served without its sections, the payload hides the next message", async ({
-  page,
-}) => {
+test("control: served as one piece, the payload hides the next message", async ({ page }) => {
   const doc = await aConversation(page);
-  const { sections: _, ...whole } = withPayload(doc);
-  await open(page, doc, whole);
+  const served = withPayload(doc);
+  const whole = { uuid: null, md: served.pieces.map((p) => p.md).join("") };
+  await open(page, doc, { ...served, pieces: [whole] });
   const frame = page.frameLocator("iframe.doc-frame");
   await expect(frame.locator(`[data-section-uuid="${doc.next}"]`)).toHaveCount(2);
   await expect(frame.locator(`[data-section-uuid="${doc.next}"]`).last()).toBeHidden();

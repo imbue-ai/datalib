@@ -1,16 +1,15 @@
 import { describe, expect, it } from "vitest";
-import type { BodySection } from "../src/api";
+import type { BodyPiece as Piece } from "../src/api";
 import { renderDocument } from "../src/cards/renderDocument";
 
 /// A message is rendered as a fragment of its own when the document route
-/// says where it lies, so markup one message leaves open cannot hide or
-/// replace the next (docs/dev/data_architecture_parse_and_render.md
-/// §"One section cannot reach the next"). Each case is checked twice:
-/// with the sections, where the next message must come through whole,
-/// and without, where the same text does reach it — so a green run is
-/// the sections at work, not a body too tame to do harm.
-
-type Piece = { uuid: string | null; md: string };
+/// sends it as a piece of its own, so markup one message leaves open
+/// cannot hide or replace the next
+/// (docs/dev/data_architecture_parse_and_render.md §"One section cannot
+/// reach the next"). Each case is checked twice: as pieces, where the next
+/// message must come through whole, and joined into one string, where the
+/// same text does reach it — so a green run is the pieces at work, not a
+/// body too tame to do harm.
 
 const wrapper = (uuid: string, author: string, text: string) =>
   `<div id="m-${uuid}" data-section-uuid="${uuid}" class="msg msg--slack">\n\n` +
@@ -22,18 +21,10 @@ const TITLE: Piece = {
 };
 const PICARD: Piece = { uuid: "u2", md: wrapper("u2", "Picard", "Make it so.") };
 
-/// The body and the sections the route would send for these pieces.
-function routed(pieces: Piece[]): { body: string; sections: BodySection[] } {
-  return {
-    body: pieces.map((p) => p.md).join(""),
-    sections: pieces.map((p) => ({ uuid: p.uuid, len: p.md.length })),
-  };
-}
-
-function page(pieces: Piece[], withSections: boolean): HTMLElement {
-  const { body, sections } = routed(pieces);
+function page(pieces: Piece[], asPieces: boolean): HTMLElement {
   const root = document.createElement("div");
-  root.innerHTML = renderDocument(body, { sections: withSections ? sections : null }).html;
+  const body = asPieces ? pieces : pieces.map((p) => p.md).join("");
+  root.innerHTML = renderDocument(body).html;
   return root;
 }
 
@@ -125,19 +116,5 @@ describe("one message cannot reach the next", () => {
     const bare: Piece = { uuid: "u1", md: 'Latinum is up.\n\n<div style="display:none">\n\n' };
     const root = page([TITLE, bare, PICARD], true);
     expect(shown(root, "u2")).toEqual(WHOLE);
-  });
-
-  it("a layout that does not cover the body is not used", () => {
-    const { body } = routed([TITLE, PICARD]);
-    const errors: unknown[] = [];
-    const was = console.error;
-    console.error = (...args: unknown[]) => errors.push(args);
-    try {
-      const html = renderDocument(body, { sections: [{ uuid: "u2", len: 3 }] }).html;
-      expect(html).toContain("Make it so.");
-    } finally {
-      console.error = was;
-    }
-    expect(errors).toHaveLength(1);
   });
 });

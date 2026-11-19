@@ -345,7 +345,6 @@ async function edgePages() {
 ${list
   .map((c) => {
     const r = c.rendered;
-    const sections = r.sections?.map((s) => ({ uuid: s.uuid, len: s.md.length })) ?? null;
     const failing = c.fails_today
       ? `<p class="preview-failing">Fails today: ${escapeHtml(c.fails_today)}</p>\n`
       : "";
@@ -353,7 +352,7 @@ ${list
 <h3 class="preview-name">${escapeHtml(c.id)}</h3>
 <p class="preview-edge">${escapeHtml(c.edge)}</p>
 ${failing}<pre class="preview-typed">${escapeHtml(c.text.trim())}</pre>
-<div class="chat-body markdown-body">${renderDocument(r.body, { sections }).html}</div>
+<div class="chat-body markdown-body">${renderDocument(r.sections ?? r.body).html}</div>
 </div>`;
   })
   .join("\n")}

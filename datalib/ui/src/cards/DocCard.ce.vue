@@ -25,7 +25,7 @@ import { copyToClipboard } from "@/clipboard";
 import { oneAtATime, subscribeLive } from "@/live";
 import ChatBody from "./ChatBody.ce.vue";
 import { absoluteRemote, type RemoteRef } from "./remoteMedia";
-import { renderDocument } from "./renderDocument";
+import { bodyOf, renderDocument } from "./renderDocument";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import {
   buildContext,
@@ -230,7 +230,7 @@ const remoteContext = computed<RemoteContext>(() =>
 /// Every remote URL a body references, as written, each once.
 function remoteUrlsOf(doc: ChatResponse): string[] {
   const seen = new Set<string>();
-  return renderDocument(doc.body, { sections: doc.sections ?? null })
+  return renderDocument(doc.pieces)
     .remote.map((r) => r.url)
     .filter((u) => !seen.has(u) && (seen.add(u), true));
 }
@@ -519,7 +519,7 @@ async function onDocAction(id: DocumentAction) {
     case "copy-both":
       return copy(documentCopyText(doc));
     case "copy-markdown":
-      return copy(doc.body, "the Markdown");
+      return copy(bodyOf(doc), "the Markdown");
     case "feedback":
       return feedbackOn({ kind: "conversation", anchor: cardEl.value, conv: doc.markdown_uuid });
   }
@@ -790,15 +790,14 @@ watch(
             This is a photo. Add the photos applet to the config to see it.
           </p>
           <ChatBody
-            :body="chat.body"
-            :sections="chat.sections ?? null"
+            :pieces="chat.pieces"
             :markdown-uuid="chat.markdown_uuid"
             :selected-section-uuid="jumpTo ?? sectionUuid"
             :outgoing-edges="chat.outgoing_edges"
             :hover-anchor-uuid="hoverAnchor"
             @open-edge="onOpenEdge"
             @hover-edge="onHoverEdge"
-            @painted="shown('shown', { bytes: chat.body.length })"
+            @painted="shown('shown', { bytes: bodyOf(chat).length })"
             :remote-accept="remoteAccept"
             :remote-context="remoteContext"
             :source-id="chat.source_ref?.id ?? null"

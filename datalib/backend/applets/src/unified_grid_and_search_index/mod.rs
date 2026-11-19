@@ -15,7 +15,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-mod body_sections;
+mod body_pieces;
 mod children;
 pub(crate) mod columns;
 mod grouping;
@@ -38,7 +38,7 @@ mod sql;
 mod stored_text;
 pub(crate) mod warm;
 
-use body_sections::{body_sections, BodySection};
+use body_pieces::{body_pieces, BodyPiece};
 use datalib_columns::Identity;
 use datalib_schema::grid_rows::{GridRow, GridRowColumn};
 use datalib_unified_grid_and_search_index::db::datalib_source_id;
@@ -355,12 +355,11 @@ impl SearchResponse {
     }
 }
 
-/// Response shape for `/applet/unified_grid_and_search_index/chat/{markdown_uuid}`. The body is the raw
-/// Rendered markdown minus the YAML frontmatter — the UI runs markdown-it on
-/// it, one section at a time where `sections` says where they lie. We do
-/// **not** ship a structured `messages[]` array; per-message scrolling
-/// uses the `<div id="m-{uuid}" data-section-uuid="…">` wrappers the
-/// renderer emits in the body.
+/// Response shape for `/applet/unified_grid_and_search_index/chat/{markdown_uuid}`:
+/// the rendered markdown minus the YAML frontmatter, as one `body` or, asked
+/// with `?pieces=true`, as the renderer's `pieces`, each message its own.
+/// Per-message scrolling uses the `<div id="m-{uuid}" data-section-uuid="…">`
+/// wrappers the renderer draws.
 #[derive(Debug, Serialize)]
 pub struct ChatResponse {
     pub markdown_uuid: String,
@@ -375,16 +374,17 @@ pub struct ChatResponse {
     /// Source column shows it. `None` when no grid row points at it.
     pub source_ref: Option<Identity>,
     /// The picture the document is, where it is one (`datalib:photo/…`):
-    /// such a document has no page, so `body` is empty and the UI draws
+    /// such a document has no page, so it has no markdown and the UI draws
     /// it from the applet that serves the name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<String>,
-    pub body: String,
-    /// Where each section of `body` lies, so the UI renders each message
-    /// as a fragment of its own. Absent when the renderer declares no
-    /// sections, or the file changed since the index was read.
+    /// The markdown, unless `pieces` was asked for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sections: Option<Vec<BodySection>>,
+    pub body: Option<String>,
+    /// The markdown as the renderer's pieces in order, so the UI renders
+    /// each message as a fragment of its own; only when asked for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pieces: Option<Vec<BodyPiece>>,
     /// What render could not fully do to this document, errors first.
     /// Drawn above the body.
     pub problems: Vec<problems::DocProblem>,
@@ -941,9 +941,9 @@ async fn land(
             Default::default()
         });
         for (document, hit, landed) in work {
-            let text = texts.get(&document).map(|d| d.text.as_str());
+            let text = texts.get(&document).map(stored_text::Spelled::text);
             let found = idx
-                .land(&document, &hit, text, documents_only)
+                .land(&document, &hit, text.as_deref(), documents_only)
                 .map_or((document, String::new()), |(row, quoted)| {
                     (row.uuid, display_snippet(&quoted))
                 });
@@ -2016,14 +2016,20 @@ async fn list_docs(State(s): State<Index>) -> Result<Json<Vec<DocRow>>, StatusCo
     }
 }
 
+#[derive(Debug, Default, Deserialize)]
+pub struct ChatParams {
+    /// Answer with `pieces` rather than `body`.
+    #[serde(default)]
+    pieces: bool,
+}
+
 async fn chat(
     State(s): State<Index>,
     Path(markdown_uuid): Path<String>,
+    Query(p): Query<ChatParams>,
 ) -> Result<Json<ChatResponse>, StatusCode> {
-    // The document's markdown as its render store spells it, shipped to the
-    // UI as-is; structured metadata comes from grid_rows. Per-section
-    // anchors in the body (`<div id="m-{uuid}" data-section-uuid="…">`)
-    // let the UI scroll-and-highlight without a structured chat schema.
+    // The document's markdown as its render store spells it; structured
+    // metadata comes from grid_rows.
     let where_kept = s
         .repo
         .document_stores(std::slice::from_ref(&markdown_uuid))
@@ -2054,22 +2060,17 @@ async fn chat(
             StatusCode::INTERNAL_SERVER_ERROR
         })?
         .remove(&markdown_uuid);
-    let (body, sections) = match spelled {
+    let pieces = match spelled {
         // A picture's document is drawn by its applet, not from a page.
-        _ if meta.image.is_some() => (String::new(), None),
-        Some(doc) => {
-            let body = strip_frontmatter(&doc.text);
-            let sections = body_sections(&doc.text, doc.text.len() - body.len(), &doc.layout);
-            if sections.is_none() {
-                tracing::warn!(
-                    document = %markdown_uuid,
-                    "the front matter cuts into a message; the body goes out whole",
-                );
-            }
-            (body.to_string(), sections)
-        }
+        _ if meta.image.is_some() => Vec::new(),
+        Some(doc) => body_pieces(doc.sections),
         // The store at the commit the index read no longer holds it.
         None => return Err(StatusCode::NOT_FOUND),
+    };
+    let (body, pieces) = if p.pieces {
+        (None, Some(pieces))
+    } else {
+        (Some(body_pieces::joined(&pieces)), None)
     };
     // Synthesize page-level URLs for providers that don't carry one in
     // `source_url`. Claude/ChatGPT use the conversation UUID directly
@@ -2135,28 +2136,11 @@ async fn chat(
         source_ref,
         image: meta.image,
         body,
-        sections,
+        pieces,
         outgoing_edges,
         problems,
         errors,
     }))
-}
-
-/// Strip a leading YAML front-matter block: a `---` line, then everything
-/// up to the next line that is `---` by itself. Text trimming, not
-/// parsing; a line that only starts with `---` closes nothing.
-fn strip_frontmatter(text: &str) -> &str {
-    let Some(rest) = text.strip_prefix("---\n") else {
-        return text;
-    };
-    let mut at = 0;
-    for line in rest.split_inclusive('\n') {
-        at += line.len();
-        if line.trim_end_matches(['\n', '\r']) == "---" {
-            return &rest[at..];
-        }
-    }
-    text
 }
 
 #[cfg(test)]
@@ -2240,30 +2224,6 @@ mod tests {
             Kept::Sections(["stardate-2".to_string()].into())
         );
         assert_eq!(kept["ten-forward"], Kept::Whole);
-    }
-
-    /// Frontmatter trimming is text handling, not parsing — a body
-    /// without it is returned unchanged rather than treated as broken.
-    #[test]
-    fn strips_only_a_leading_frontmatter_block() {
-        assert_eq!(strip_frontmatter("---\ntitle: x\n---\nbody\n"), "body\n");
-        assert_eq!(strip_frontmatter("body only\n"), "body only\n");
-        assert_eq!(
-            strip_frontmatter("---\nunterminated\n"),
-            "---\nunterminated\n"
-        );
-        assert_eq!(strip_frontmatter("---\n---\n\nbody"), "\nbody");
-    }
-
-    /// Only a `---` line by itself closes the block; one that starts a
-    /// value used to, and the rest of the front matter became body
-    /// (#992).
-    #[test]
-    fn a_dash_run_inside_the_front_matter_closes_nothing() {
-        assert_eq!(
-            strip_frontmatter("---\ntitle: a\n---b\n---x: y\n---\n\nbody\n"),
-            "\nbody\n"
-        );
     }
 
     /// Commits one chat per `(uuid, created_at)` to the root's grid index,
@@ -2410,14 +2370,15 @@ mod tests {
         pool.close().await;
     }
 
-    /// The route sends the document as its render store spells it and says
-    /// where each message of the body begins, so the UI can render each as
-    /// a fragment of its own. It reads the store at the commit the index
-    /// read: a render the index has not read yet changes nothing until it
-    /// has, so the text always matches the grid's rows.
+    /// The route sends the document as its render store spells it, as the
+    /// renderer's pieces when asked, so the UI can render each message as a
+    /// fragment of its own, and joined as `body` otherwise. It reads the
+    /// store at the commit the index read: a render the index has not read
+    /// yet changes nothing until it has, so the text always matches the
+    /// grid's rows.
     // The render store's reader blocks in place, which needs worker threads.
     #[tokio::test(flavor = "multi_thread")]
-    async fn the_document_route_sends_where_each_message_lies() {
+    async fn the_document_route_sends_each_message_as_a_piece() {
         use datalib_etl_render::section::Section;
 
         let tmp = tempfile::tempdir().unwrap();
@@ -2445,28 +2406,23 @@ mod tests {
         render_and_index(root, vec![doc.clone()]).await;
 
         let s = index_over(root).await;
-        let Json(got) = chat(State(s.clone()), Path(uuid.to_string()))
-            .await
-            .unwrap();
-        let sent = got.sections.expect("the route sends the sections");
+        let got = pieces_of(&s, uuid).await;
         assert_eq!(
-            sent.iter().map(|b| b.uuid.as_deref()).collect::<Vec<_>>(),
+            got.iter().map(|p| p.uuid.as_deref()).collect::<Vec<_>>(),
             [None, Some("m1"), Some("m2")]
         );
-        let units: Vec<u16> = got.body.encode_utf16().collect();
-        let mut at = 0;
-        let pieces: Vec<String> = sent
-            .iter()
-            .map(|b| {
-                let piece = String::from_utf16(&units[at..at + b.len]).unwrap();
-                at += b.len;
-                piece
-            })
-            .collect();
-        assert_eq!(at, units.len(), "the sections cover the body");
-        assert_eq!(pieces[0], "\n# Ten Forward\n\n", "front matter dropped");
-        assert_eq!(pieces[1], sections[1].md);
-        assert_eq!(pieces[2], sections[2].md);
+        assert_eq!(got[0].md, "\n# Ten Forward\n\n", "front matter dropped");
+        assert_eq!(got[1].md, sections[1].md);
+        assert_eq!(got[2].md, sections[2].md);
+        let Json(whole) = chat(
+            State(s.clone()),
+            Path(uuid.to_string()),
+            Query(ChatParams::default()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(whole.body, Some(body_pieces::joined(&got)));
+        assert_eq!(whole.pieces, None, "pieces only when asked");
 
         let mut since = doc.clone();
         since.sections = vec![Section::unkeyed("---\n---\n\nrewritten since\n".into())];
@@ -2482,30 +2438,28 @@ mod tests {
         })
         .await
         .unwrap();
-        let Json(got) = chat(State(s.clone()), Path(uuid.to_string()))
-            .await
-            .unwrap();
-        assert_eq!(pieces_of(&got)[2], sections[2].md, "what the index read");
+        assert_eq!(
+            pieces_of(&s, uuid).await[2].md,
+            sections[2].md,
+            "what the index read"
+        );
 
         render_and_index(root, vec![since]).await;
-        let Json(got) = chat(State(s), Path(uuid.to_string())).await.unwrap();
-        assert_eq!(got.body, "\nrewritten since\n");
+        let got = pieces_of(&s, uuid).await;
+        assert_eq!(body_pieces::joined(&got), "\nrewritten since\n");
     }
 
-    /// The body cut where the route says each section lies.
-    fn pieces_of(got: &ChatResponse) -> Vec<String> {
-        let units: Vec<u16> = got.body.encode_utf16().collect();
-        let mut at = 0;
-        got.sections
-            .as_ref()
-            .expect("the route sends the sections")
-            .iter()
-            .map(|b| {
-                let piece = String::from_utf16(&units[at..at + b.len]).unwrap();
-                at += b.len;
-                piece
-            })
-            .collect()
+    /// The document's pieces, as the route answers them when asked.
+    async fn pieces_of(s: &Index, uuid: &str) -> Vec<BodyPiece> {
+        let Json(got) = chat(
+            State(s.clone()),
+            Path(uuid.to_string()),
+            Query(ChatParams { pieces: true }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(got.body, None, "no body beside the pieces");
+        got.pieces.expect("the route sends the pieces")
     }
 
     /// Read from the search index, a hit is the message holding the words,
