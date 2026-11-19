@@ -417,7 +417,7 @@ failure this is, which decides whether it retries:
 | `failure` | meaning | scheduler reaction |
 | --- | --- | --- |
 | `transient` | network blip, lock contention | retry, up to 3 attempts in all, 1s then 2s apart |
-| `rate_limited` | HTTP 429 and friends | fail fast: the transport's own retries, which honour `Retry-After`, are what ran out, and the next run resumes |
+| `rate_limited` | HTTP 429 and friends, after your own retries ran out | fail fast, and the next sync resumes: a limit seldom lifts in seconds, so retry with backoff, honouring `Retry-After`, before you report it (`datalib-step`'s HTTP layer does) |
 | `auth` | credentials need a human | fail fast |
 | `permission` | the OS would not let you read a path your settings name (macOS privacy) | fail fast; the app's Manage row offers "Choose folder again" |
 | `data` | bad input; retrying won't help | fail fast (the default when absent) |

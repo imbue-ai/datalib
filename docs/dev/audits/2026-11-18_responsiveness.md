@@ -32,6 +32,7 @@ was added to do them: no cache, no timer, no flag.
 |---|---|---|
 | 1 | a refresh after an index commit blurred the grid and dropped clicks | a refresh leaves the rows usable; only a search a person asked for shows the spinner |
 | 8, rate-limited retry | the runner re-ran a rate-limited step in full 1 s, then 2 s, after its own retries ran out | it fails at once, like `incomplete`, and the next run resumes (`step_protocol.md` §"Failure classification") |
+| 8, the data root measured every 5 s | the server measured every directory under the data root every 5 s for as long as anything ran, the embed and map steps included | it measures when a run starts and when it ends; sizes and their sparklines move at those two points, not during the run |
 | not listed above | the search grid's first search waited for `/api/accounts`, which reads `accounts.json`, a file nothing writes | the route, the map and its formatters are gone |
 
 Finding 9's filtered search was fixed on `main` instead, by #1892: the

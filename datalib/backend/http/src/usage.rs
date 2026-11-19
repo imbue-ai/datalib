@@ -6,12 +6,12 @@
 //! the free-space samples beside them, for `[run_history] disk_usage_days`:
 //! older ones are dropped when the server starts and whenever a run ends.
 //!
-//! **It walks only while a run is in flight, and has no timer.** Nothing else
-//! writes the data root, so between runs there is nothing to find, and an
-//! idle server measuring forever would read tens of gigabytes an hour to
-//! learn a number that cannot have moved. The cost is resolution, not
-//! correctness: a change made from outside datalib carries the instant it was
-//! next *measured*.
+//! **It walks when the server starts, when a run starts and when it ends,
+//! and when a page asks; it has no timer.** A walk of a large root takes
+//! minutes of disk reads, and repeating it all through a run that lasts
+//! hours competes with the run for the same disk. So a run's growth shows
+//! when it ends, not as it happens. The cost is resolution, not
+//! correctness: a change carries the instant it was next *measured*.
 //!
 //! **One walk, not one per tree.** Every declared tree is under the root, so
 //! [`measure`] totals the root and records each subtree's subtotal on the way
@@ -34,14 +34,8 @@ use tokio::sync::RwLock;
 
 use crate::watch::{RootEvent, RootFrame, Table};
 
-/// How often the root is walked *while a run is in flight*. Between
-/// runs it isn't walked at all — see the module docs.
-pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
-
-/// The floor on the spacing between two recorded samples of one series.
-/// Equal to [`SAMPLE_INTERVAL`] today, so in practice every changed
-/// measurement is recorded; it is stated separately because it is a
-/// rule about the *timeseries*, not about how often we happen to look.
+/// The floor on the spacing between two recorded samples of one series,
+/// so a burst of walks pages asked for at once records one point.
 pub const MIN_SAMPLE_GAP: Duration = Duration::from_secs(5);
 
 /// How much history the API hands out, and how much is kept in memory.
@@ -546,11 +540,8 @@ async fn forget_old_samples(repo: &DynAppRepo, root: &Path) {
     }
 }
 
-fn should_walk(running: bool, was_running: bool, since_last_walk: Duration) -> bool {
-    let started = running && !was_running;
-    let ended = !running && was_running;
-    let due = running && since_last_walk >= SAMPLE_INTERVAL;
-    started || ended || due
+fn should_walk(running: bool, was_running: bool) -> bool {
+    running != was_running
 }
 
 pub async fn run(
@@ -571,7 +562,6 @@ pub async fn run(
     sample_once(&monitor, &repo, root.clone(), None, &events).await;
 
     let mut was_running = false;
-    let mut last_walk = Instant::now();
     loop {
         match rx.recv().await {
             Ok(_) => {}
@@ -585,12 +575,10 @@ pub async fn run(
         }
         // This loop's own `storage` frame comes back through `rx` too;
         // it costs one pass through `should_walk`, which a frame never
-        // satisfies on its own — a walk needs a run to have started,
-        // ended, or been going for the interval.
+        // satisfies on its own: a walk needs a run to have started or ended.
         let running = sync.running();
-        if should_walk(running, was_running, last_walk.elapsed()) {
+        if should_walk(running, was_running) {
             sample_once(&monitor, &repo, root.clone(), None, &events).await;
-            last_walk = Instant::now();
         }
         if was_running && !running {
             forget_old_samples(&repo, &root).await;
@@ -823,28 +811,15 @@ command = "my-step"
         assert_eq!(disk_usage_days_of(&config), 7);
     }
 
-    /// When the loop walks, stated as a table.
+    /// The loop walks at a run's two edges and never between them: a
+    /// walk every few seconds through an hours-long run read the whole
+    /// root again each time, against the run's own disk.
     #[test]
     fn a_walk_is_owed_at_the_edges_of_a_run_and_never_between_them() {
-        let idle = Duration::ZERO;
-        let long = SAMPLE_INTERVAL * 2;
-
-        // Nothing running, however long it has been: no walk. This is
-        // the whole point of the gate.
-        assert!(!should_walk(false, false, idle));
-        assert!(!should_walk(false, false, long));
-
-        // A run starts: walk immediately, so the series has a point at
-        // the beginning rather than one interval into it.
-        assert!(should_walk(true, false, idle));
-
-        // Continuing: on the interval, not on every predicate poll.
-        assert!(!should_walk(true, true, idle));
-        assert!(should_walk(true, true, SAMPLE_INTERVAL));
-
-        // A run that began and ended inside one interval still gets
-        // both its edges — which is the pair a short sync depends on.
-        assert!(should_walk(false, true, idle));
+        assert!(!should_walk(false, false), "idle");
+        assert!(should_walk(true, false), "a run starts");
+        assert!(!should_walk(true, true), "a run goes on");
+        assert!(should_walk(false, true), "a run ends");
     }
 
     /// Refreshes coalesce on *finished* walks, not on recent ones.
