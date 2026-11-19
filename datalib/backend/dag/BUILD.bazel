@@ -98,6 +98,7 @@ rust_binary(
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing-subscriber",
     ],
@@ -124,6 +125,7 @@ rust_test(
     deps = [
         "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:libc",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
