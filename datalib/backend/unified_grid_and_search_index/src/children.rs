@@ -50,6 +50,83 @@ pub struct Found {
     pub via: Via,
 }
 
+/// Whose children a request lists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Parent {
+    /// A container or a row, by uuid.
+    Node(String),
+    /// A configured source, by id: what it holds that names no parent.
+    SourceTop(String),
+}
+
+impl Parent {
+    /// `source:<id>` names a source's top; anything else is a uuid.
+    pub fn parse(spelled: &str) -> Self {
+        match spelled.strip_prefix("source:") {
+            Some(id) => Parent::SourceTop(id.to_string()),
+            None => Parent::Node(spelled.to_string()),
+        }
+    }
+
+    /// What the reads bind as `?1`.
+    pub fn bound(&self) -> &str {
+        match self {
+            Parent::Node(uuid) => uuid,
+            Parent::SourceTop(id) => id,
+        }
+    }
+
+    /// As a request spells it.
+    pub fn spelled(&self) -> String {
+        match self {
+            Parent::Node(uuid) => uuid.clone(),
+            Parent::SourceTop(id) => format!("source:{id}"),
+        }
+    }
+}
+
+/// Which children a request lists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Only {
+    /// Rows, containers and what is filed, as they come.
+    All,
+    /// The containers a person browses or filters by (`is_place`), each
+    /// with whether more of them lie below it: a library's tree.
+    Places,
+}
+
+/// Whose children a request lists, and which.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Scope {
+    pub parent: Parent,
+    pub only: Only,
+}
+
+impl Scope {
+    pub fn all(parent: &str) -> Self {
+        Scope {
+            parent: Parent::parse(parent),
+            only: Only::All,
+        }
+    }
+
+    pub fn places(parent: &str) -> Self {
+        Scope {
+            parent: Parent::parse(parent),
+            only: Only::Places,
+        }
+    }
+
+    /// The ways this scope finds children, best first. A source's top has
+    /// nothing filed under it, and a place is always a container.
+    pub fn vias(&self) -> Vec<Via> {
+        Via::ALL
+            .into_iter()
+            .filter(|via| from(self, *via).is_some())
+            .collect()
+    }
+}
+
 /// What a request asks for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ask {
@@ -251,12 +328,18 @@ pub struct Child {
     pub preview: Option<String>,
     /// The document its row is in; `None` for a container with no row.
     pub markdown_uuid: Option<String>,
+    /// Listing places: whether places lie below it. Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub places_below: Option<bool>,
 }
 
+/// `places_below` names, listing places, every child with places below
+/// it; `None` when the listing is not of places.
 pub fn describe(
     keys: Vec<Key>,
     rows: &HashMap<String, RowFacts>,
     nodes: &HashMap<String, NodeFacts>,
+    places_below: Option<&HashSet<String>>,
 ) -> Vec<Child> {
     keys.into_iter()
         .map(|key| {
@@ -270,6 +353,7 @@ pub fn describe(
                 created_at: row.created_at,
                 preview: row.preview,
                 markdown_uuid: row.markdown_uuid,
+                places_below: places_below.map(|below| below.contains(&key.uuid)),
                 sort_key: key.sort_key,
                 uuid: key.uuid,
             }
@@ -298,28 +382,48 @@ pub enum Side {
 /// `?2, ?3` and the limit as `?4`. Rows and containers are read off the
 /// `(parent, sort_key, uuid)` indexes in order; what is filed takes its key
 /// from its row or container, so it is sorted after it is found.
-pub fn children_sql(via: Via, side: Side, at_is_after: bool) -> String {
+/// The read of `scope`'s children found `via`, past `?2`/`?3` on `side`,
+/// `?4` of them; `None` where the scope finds none that way.
+pub fn children_sql(scope: &Scope, via: Via, side: Side, at_is_after: bool) -> Option<String> {
     let (op, dir) = match (side, at_is_after) {
         (Side::Before, true) => ("<", "DESC"),
         (Side::Before, false) => ("<=", "DESC"),
         (Side::After, true) => (">=", "ASC"),
         (Side::After, false) => (">", "ASC"),
     };
-    let from = match via {
-        Via::Row => "grid_rows WHERE parent_uuid = ?1",
-        Via::Node => {
-            "data_nodes n WHERE parent_uuid = ?1 \
-             AND NOT EXISTS (SELECT 1 FROM grid_rows g WHERE g.uuid = n.uuid)"
-        }
-        Via::Filed => FILED,
-    };
+    let from = from(scope, via)?;
     // A container is carried by every document that names it, and so is
     // a filing; a row is one row.
     let distinct = if via == Via::Row { "" } else { "DISTINCT " };
-    format!(
+    Some(format!(
         "SELECT {distinct}sort_key, uuid FROM {from} AND (sort_key, uuid) {op} (?2, ?3) \
          ORDER BY sort_key {dir}, uuid {dir} LIMIT ?4"
-    )
+    ))
+}
+
+/// Where `scope`'s children found `via` are, up to a `WHERE` that more
+/// conditions can follow, `?1` its parent.
+fn from(scope: &Scope, via: Via) -> Option<&'static str> {
+    let top = matches!(scope.parent, Parent::SourceTop(_));
+    Some(match (via, scope.only, top) {
+        (Via::Row, Only::All, false) => "grid_rows WHERE parent_uuid = ?1",
+        (Via::Row, Only::All, true) => "grid_rows WHERE parent_uuid IS NULL AND source_id = ?1",
+        (Via::Node, Only::All, false) => {
+            "data_nodes n WHERE parent_uuid = ?1 \
+             AND NOT EXISTS (SELECT 1 FROM grid_rows g WHERE g.uuid = n.uuid)"
+        }
+        (Via::Node, Only::All, true) => {
+            "data_nodes n WHERE parent_uuid IS NULL AND source_id = ?1 \
+             AND NOT EXISTS (SELECT 1 FROM grid_rows g WHERE g.uuid = n.uuid)"
+        }
+        (Via::Node, Only::Places, false) => "data_nodes n WHERE parent_uuid = ?1 AND is_place = 1",
+        (Via::Node, Only::Places, true) => {
+            "data_nodes n WHERE parent_uuid IS NULL AND source_id = ?1 AND is_place = 1"
+        }
+        (Via::Filed, Only::All, false) => FILED,
+        (Via::Filed, Only::Places, false) => FILED_PLACES,
+        (Via::Row, Only::Places, _) | (Via::Filed, _, true) => return None,
+    })
 }
 
 /// What is filed under `?1`, each with the sort key of its row, or else
@@ -330,22 +434,41 @@ const FILED: &str = "(SELECT f.node_uuid AS uuid, \
        AS sort_key \
      FROM filings f WHERE f.under_uuid = ?1) WHERE 1";
 
-/// The sort key of `?2` among `?1`'s children, found the best way it is
-/// one; no row when it is not one.
-pub const CHILD_KEY_SQL: &str = "SELECT sort_key FROM ( \
-     SELECT 0 AS via, sort_key FROM grid_rows WHERE uuid = ?2 AND parent_uuid = ?1 \
-     UNION ALL \
-     SELECT * FROM (SELECT 1 AS via, sort_key FROM data_nodes n \
-       WHERE uuid = ?2 AND parent_uuid = ?1 \
-         AND NOT EXISTS (SELECT 1 FROM grid_rows g WHERE g.uuid = n.uuid) \
-       ORDER BY sort_key LIMIT 1) \
-     UNION ALL \
-     SELECT 2 AS via, sort_key FROM (SELECT f.node_uuid AS uuid, \
-       COALESCE((SELECT g.sort_key FROM grid_rows g WHERE g.uuid = f.node_uuid), \
-                (SELECT MIN(n.sort_key) FROM data_nodes n WHERE n.uuid = f.node_uuid), '') \
-         AS sort_key \
-       FROM filings f WHERE f.under_uuid = ?1 AND f.node_uuid = ?2 LIMIT 1)) \
-   ORDER BY via LIMIT 1";
+/// The places filed under `?1`, each with its container's sort key.
+const FILED_PLACES: &str = "(SELECT f.node_uuid AS uuid, \
+     (SELECT MIN(n.sort_key) FROM data_nodes n WHERE n.uuid = f.node_uuid) AS sort_key \
+     FROM filings f WHERE f.under_uuid = ?1 \
+       AND EXISTS (SELECT 1 FROM data_nodes n WHERE n.uuid = f.node_uuid AND n.is_place = 1)) \
+     WHERE 1";
+
+/// The sort key of `?2` among `scope`'s children, `?1` its parent, found
+/// the best way it is one; no row when it is not one.
+pub fn child_key_sql(scope: &Scope) -> String {
+    let each: Vec<String> = scope
+        .vias()
+        .into_iter()
+        .filter_map(|via| {
+            let from = from(scope, via)?;
+            Some(format!(
+                "SELECT * FROM (SELECT {} AS via, sort_key FROM {from} AND uuid = ?2 \
+                 ORDER BY sort_key LIMIT 1)",
+                via as u8
+            ))
+        })
+        .collect();
+    format!(
+        "SELECT sort_key FROM ({}) ORDER BY via LIMIT 1",
+        each.join(" UNION ALL ")
+    )
+}
+
+/// Which of the places in the JSON array `?1` have places below them,
+/// held or filed.
+pub const PLACES_BELOW_SQL: &str = "SELECT DISTINCT parent_uuid FROM data_nodes \
+     WHERE is_place = 1 AND parent_uuid IN (SELECT value FROM json_each(?1)) \
+     UNION SELECT DISTINCT f.under_uuid FROM filings f \
+     WHERE f.under_uuid IN (SELECT value FROM json_each(?1)) \
+       AND EXISTS (SELECT 1 FROM data_nodes n WHERE n.uuid = f.node_uuid AND n.is_place = 1)";
 
 /// What a page's rows say of them, for the uuids in the JSON array `?1`.
 pub const ROW_FACTS_SQL: &str = "SELECT uuid, kind, author, created_at, preview, markdown_uuid \
@@ -582,7 +705,12 @@ mod tests {
                 name: Some("Warp core".into()),
             },
         )]);
-        let out = describe(vec![Key::new("1", "t"), Key::new("2", "m")], &rows, &nodes);
+        let out = describe(
+            vec![Key::new("1", "t"), Key::new("2", "m")],
+            &rows,
+            &nodes,
+            None,
+        );
         assert!(out[0].container && out[0].kind == "Slack thread");
         assert_eq!(out[0].author.as_deref(), Some("Data"));
         assert!(!out[1].container && out[1].kind == "Message");

@@ -376,6 +376,57 @@ fn children_page_through_a_channel() {
     child.kill().ok();
 }
 
+/// A library's tree over the TNG fixture, a level at a time: the email
+/// source's top is its account, a place with places below it, and the
+/// account's places are its labels, with no thread or message among them.
+#[test]
+fn children_list_a_sources_places() {
+    let root = tempfile::tempdir().unwrap();
+    datalib_search_fixture::copy_grid_index(root.path());
+    let mut child = applet()
+        .env(super::DATA_ROOT_ENV, root.path())
+        .current_dir(root.path())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("start the applet");
+    let port = announced_port(&mut child);
+
+    let (status, body) = get(port, "/children/source:tng_email?places=true", Some(SECRET));
+    assert_eq!(status, 200, "{body}");
+    let top = body["children"].as_array().unwrap();
+    assert_eq!(top.len(), 1, "{body}");
+    assert_eq!(top[0]["kind"], "Email Account", "{body}");
+    assert_eq!(top[0]["places_below"], true, "{body}");
+    let account = top[0]["uuid"].as_str().unwrap();
+
+    let (status, body) = get(
+        port,
+        &format!("/children/{account}?places=true&limit=1000"),
+        Some(SECRET),
+    );
+    assert_eq!(status, 200, "{body}");
+    let places = body["children"].as_array().unwrap();
+    assert!(!places.is_empty(), "{body}");
+    for p in places {
+        assert_eq!(p["kind"], "Email Label", "{p}");
+        assert_eq!(p["container"], true, "{p}");
+        assert_eq!(p["places_below"], false, "{p}");
+    }
+
+    let (status, body) = get(port, &format!("/children/{account}"), Some(SECRET));
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        body["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["kind"] == "Email Thread"),
+        "without places=true the account lists its threads too: {body}"
+    );
+    assert!(body["children"][0].get("places_below").is_none(), "{body}");
+    child.kill().ok();
+}
+
 fn percent_encoded(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
