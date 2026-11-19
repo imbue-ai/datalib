@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { BodyPiece } from "../src/api";
+import type { BodyNode } from "../src/api";
 import { sectionEl } from "../src/cards/chatSections.js";
 import { bodyOf, renderDocument } from "../src/cards/renderDocument";
 
@@ -13,7 +13,7 @@ import { bodyOf, renderDocument } from "../src/cards/renderDocument";
 /// Bazel puts the corpus beside this file; outside Bazel it is missing and
 /// this suite fails rather than passing on nothing.
 
-type Section = BodyPiece;
+type Section = BodyNode;
 type Rendered = {
   file: string;
   body: string;

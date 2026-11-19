@@ -35,6 +35,10 @@ pub mod drawings {
     include!("drawings.rs");
 }
 
+pub mod folds {
+    include!("folds.rs");
+}
+
 pub mod search_terms {
     include!("search_terms.rs");
 }

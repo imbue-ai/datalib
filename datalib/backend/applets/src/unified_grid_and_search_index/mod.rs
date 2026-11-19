@@ -38,8 +38,9 @@ mod sql;
 mod stored_text;
 pub(crate) mod warm;
 
-use body_pieces::{body_pieces, BodyPiece};
+use body_pieces::body_pieces;
 use datalib_columns::Identity;
+use datalib_etl_render::section::Node;
 use datalib_schema::grid_rows::{GridRow, GridRowColumn};
 use datalib_unified_grid_and_search_index::db::datalib_source_id;
 use datalib_unified_grid_and_search_index::grid_columns::GridColumn;
@@ -381,10 +382,11 @@ pub struct ChatResponse {
     /// The markdown, unless `pieces` was asked for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
-    /// The markdown as the renderer's pieces in order, so the UI renders
-    /// each message as a fragment of its own; only when asked for.
+    /// The markdown as the renderer's pieces in order, each fold a node
+    /// around the pieces it holds, so the UI renders each message as a
+    /// fragment of its own; only when asked for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pieces: Option<Vec<BodyPiece>>,
+    pub pieces: Option<Vec<Node>>,
     /// What render could not fully do to this document, errors first.
     /// Drawn above the body.
     pub problems: Vec<problems::DocProblem>,
@@ -2401,13 +2403,18 @@ mod tests {
         let class = || "msg msg--claude".to_string();
         let sections = vec![
             Section::unkeyed("---\ntitle: \"Ten Forward\"\n---\n\n# Ten Forward\n\n".into()),
+            Section::fold_open("tool-group", "🛠 1 tool step"),
             Section::boxed(
                 "m1",
                 class(),
                 "Tea, Earl Grey 🫖 <div style=\"display:none\">\n\n",
             ),
+            Section::fold_close(),
             Section::boxed("m2", class(), "Make it so.\n\n"),
         ];
+        let body = datalib_etl_render::section::join(&sections)
+            .strip_prefix("---\ntitle: \"Ten Forward\"\n---\n")
+            .map(str::to_string);
         let mut doc = own_document(
             document_row(uuid, "2026-01-01T00:00:00Z", "Chat")
                 .build()
@@ -2418,18 +2425,31 @@ mod tests {
 
         let s = index_over(root).await;
         let got = pieces_of(&s, uuid).await;
+        let boxed = |uuid: &str, md: &str| Node::Piece {
+            uuid: Some(uuid.into()),
+            class: Some(class()),
+            md: md.into(),
+        };
         assert_eq!(
-            got.iter().map(|p| p.uuid.as_deref()).collect::<Vec<_>>(),
-            [None, Some("m1"), Some("m2")]
+            got,
+            vec![
+                Node::Piece {
+                    uuid: None,
+                    class: None,
+                    md: "\n# Ten Forward\n\n".into()
+                },
+                Node::Fold {
+                    fold: "tool-group".into(),
+                    summary: "🛠 1 tool step".into(),
+                    pieces: vec![boxed(
+                        "m1",
+                        "Tea, Earl Grey 🫖 <div style=\"display:none\">\n\n"
+                    )],
+                },
+                boxed("m2", "Make it so.\n\n"),
+            ],
+            "front matter dropped, a message what is inside its box, a fold around its pieces"
         );
-        assert_eq!(got[0].md, "\n# Ten Forward\n\n", "front matter dropped");
-        assert_eq!(got[0].class, None, "the frame is in no box");
-        assert_eq!(
-            got[1].md, "Tea, Earl Grey 🫖 <div style=\"display:none\">\n\n",
-            "a message is what is inside its box"
-        );
-        assert_eq!(got[2].class.as_deref(), Some("msg msg--claude"));
-        assert_eq!(got[2].drawn(), sections[2].md);
         let Json(whole) = chat(
             State(s.clone()),
             Path(uuid.to_string()),
@@ -2437,13 +2457,11 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(whole.body, Some(body_pieces::joined(&got)));
         assert_eq!(
-            whole.body.as_deref(),
-            datalib_etl_render::section::join(&sections)
-                .strip_prefix("---\ntitle: \"Ten Forward\"\n---\n"),
+            whole.body, body,
             "the body is the document, front matter dropped"
         );
+        assert_eq!(Some(body_pieces::joined(&got)), body);
         assert_eq!(whole.pieces, None, "pieces only when asked");
 
         let mut since = doc.clone();
@@ -2461,8 +2479,8 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            pieces_of(&s, uuid).await[2].drawn(),
-            sections[2].md,
+            Some(body_pieces::joined(&pieces_of(&s, uuid).await)),
+            body,
             "what the index read"
         );
 
@@ -2472,7 +2490,7 @@ mod tests {
     }
 
     /// The document's pieces, as the route answers them when asked.
-    async fn pieces_of(s: &Index, uuid: &str) -> Vec<BodyPiece> {
+    async fn pieces_of(s: &Index, uuid: &str) -> Vec<Node> {
         let Json(got) = chat(
             State(s.clone()),
             Path(uuid.to_string()),

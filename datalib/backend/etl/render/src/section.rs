@@ -3,6 +3,7 @@
 //! section without parsing its markdown.
 
 use datalib_schema::drawings::{self, DrawingRow};
+use datalib_schema::folds::FoldRow;
 use datalib_schema::providers::Provider;
 use datalib_schema::sections::{addressed_json, labels_json, Addressee, SectionRow};
 
@@ -21,6 +22,22 @@ pub struct Section {
     /// The class of the box `md` is drawn in ([`Section::boxed`]); `None`
     /// for a section in no box.
     pub class: Option<String>,
+    /// The fold it opens or closes ([`Section::fold_open`]); `None` for a
+    /// section that does neither.
+    pub fold: Option<Fold>,
+}
+
+/// A `<details>` a renderer opens around a run of sections, or closes.
+/// Every fold is drawn one way ([`draw_fold_open`], [`FOLD_CLOSE`]), so
+/// what reads it back knows it from its class and summary alone and the
+/// viewer can draw it around the pieces it holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fold {
+    /// Opens a fold drawn with `class` and `summary`, HTML the renderer
+    /// escaped.
+    Open { class: String, summary: String },
+    /// Closes the fold it is in.
+    Close,
 }
 
 /// What of a section the render store keeps in `sections`, for whatever
@@ -51,6 +68,7 @@ impl Section {
             md,
             kept: Kept::Whole,
             class: None,
+            fold: None,
         }
     }
 
@@ -98,6 +116,7 @@ impl Section {
             md,
             kept: Kept::Whole,
             class: None,
+            fold: None,
         }
     }
 
@@ -106,6 +125,43 @@ impl Section {
         Self {
             kept: Kept::Frame,
             ..Self::unkeyed(md)
+        }
+    }
+
+    /// Opens a fold around the sections after it, up to the
+    /// [`Section::fold_close`] that ends it: a `<details>` of `class`, its
+    /// `<summary>` saying `summary`, HTML the caller escaped. Layout, which
+    /// the store keeps only as drawn.
+    pub fn fold_open(class: &str, summary: &str) -> Self {
+        Self {
+            fold: Some(Fold::Open {
+                class: class.to_string(),
+                summary: summary.to_string(),
+            }),
+            ..Self::frame(draw_fold_open(class, summary))
+        }
+    }
+
+    /// Closes the fold it is in. Layout, as [`Section::fold_open`].
+    pub fn fold_close() -> Self {
+        Self {
+            fold: Some(Fold::Close),
+            ..Self::frame(FOLD_CLOSE.to_string())
+        }
+    }
+
+    /// `more` drawn after the section, in the same piece.
+    pub fn then(mut self, more: &str) -> Self {
+        self.md.push_str(more);
+        self
+    }
+
+    /// The section kept whole and framed, as a piece that says something
+    /// search reads, rather than as layout.
+    pub fn kept_whole(self) -> Self {
+        Self {
+            kept: Kept::Whole,
+            ..self
         }
     }
 }
@@ -169,6 +225,27 @@ pub fn drawn(markdown_uuid: &str, sections: &[Section]) -> Vec<DrawingRow> {
         .collect()
 }
 
+/// The folds the store keeps of a document's sections, each at its place
+/// among all of them.
+pub fn folds(markdown_uuid: &str, sections: &[Section]) -> Vec<FoldRow> {
+    sections
+        .iter()
+        .enumerate()
+        .filter_map(|(seq, s)| {
+            let (class, summary) = match s.fold.as_ref()? {
+                Fold::Open { class, summary } => (Some(class.clone()), Some(summary.clone())),
+                Fold::Close => (None, None),
+            };
+            Some(FoldRow {
+                markdown_uuid: markdown_uuid.to_string(),
+                seq: seq as i64,
+                class,
+                summary,
+            })
+        })
+        .collect()
+}
+
 /// One section of a document as the store spells it back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpelledSection {
@@ -177,12 +254,44 @@ pub struct SpelledSection {
     pub md: String,
     /// The class of the box `md` is drawn in, where it is in one.
     pub class: Option<String>,
+    /// The fold it opens or closes, where it does.
+    pub fold: Option<Fold>,
+}
+
+impl SpelledSection {
+    /// A section as the store would spell it back, for what has the
+    /// section in hand.
+    pub fn of(s: &Section) -> Self {
+        Self {
+            uuid: s.uuid.clone(),
+            md: s.md.clone(),
+            class: s.class.clone(),
+            fold: s.fold.clone(),
+        }
+    }
 }
 
 /// A document spelled back from what the store keeps of it, section by
 /// section in order. `None` when the rows cannot spell it: a drawing whose
 /// cut falls inside a character.
-pub fn spell(sections: &[SectionRow], drawn: &[DrawingRow]) -> Option<Vec<SpelledSection>> {
+pub fn spell(
+    sections: &[SectionRow],
+    drawn: &[DrawingRow],
+    folds: &[FoldRow],
+) -> Option<Vec<SpelledSection>> {
+    let fold_at: std::collections::HashMap<i64, Fold> = folds
+        .iter()
+        .map(|f| {
+            let fold = match (&f.class, &f.summary) {
+                (Some(class), summary) => Fold::Open {
+                    class: class.clone(),
+                    summary: summary.clone().unwrap_or_default(),
+                },
+                (None, _) => Fold::Close,
+            };
+            (f.seq, fold)
+        })
+        .collect();
     let mut by_seq: std::collections::BTreeMap<i64, (Option<&SectionRow>, Option<&DrawingRow>)> =
         std::collections::BTreeMap::new();
     for s in sections {
@@ -192,21 +301,151 @@ pub fn spell(sections: &[SectionRow], drawn: &[DrawingRow]) -> Option<Vec<Spelle
         by_seq.entry(d.seq).or_default().1 = Some(d);
     }
     by_seq
-        .into_values()
-        .map(|piece| match piece {
-            (Some(s), None) => Some(SpelledSection {
-                uuid: s.uuid.clone(),
-                md: s.text.clone(),
-                class: s.class.clone(),
-            }),
-            (s, Some(d)) => Some(SpelledSection {
-                uuid: s.and_then(|s| s.uuid.clone()),
-                md: d.spell(s.map(|s| s.text.as_str()))?,
-                class: s.and_then(|s| s.class.clone()),
-            }),
-            (None, None) => unreachable!("every entry has a row"),
+        .into_iter()
+        .map(|(seq, piece)| {
+            let fold = fold_at.get(&seq).cloned();
+            match piece {
+                (Some(s), None) => Some(SpelledSection {
+                    uuid: s.uuid.clone(),
+                    md: s.text.clone(),
+                    class: s.class.clone(),
+                    fold,
+                }),
+                (s, Some(d)) => Some(SpelledSection {
+                    uuid: s.and_then(|s| s.uuid.clone()),
+                    md: d.spell(s.map(|s| s.text.as_str()))?,
+                    class: s.and_then(|s| s.class.clone()),
+                    fold,
+                }),
+                (None, None) => unreachable!("every entry has a row"),
+            }
         })
         .collect()
+}
+
+/// A document's body as the viewer is sent it: each message in its box as
+/// what is inside the box, each other piece as written, and each fold as a
+/// node around the pieces it holds. Drawn back ([`Node::draw`]), the
+/// nodes are the sections they came from, joined.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(untagged)]
+pub enum Node {
+    Fold {
+        /// Its class.
+        fold: String,
+        summary: String,
+        pieces: Vec<Node>,
+    },
+    Piece {
+        uuid: Option<String>,
+        /// The class of its box, where it is in one; `md` is then what is
+        /// inside the box.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        class: Option<String>,
+        md: String,
+    },
+}
+
+impl Node {
+    /// The node as markdown, each box and fold drawn as render draws it.
+    pub fn draw(&self, out: &mut String) {
+        match self {
+            Node::Fold {
+                fold,
+                summary,
+                pieces,
+            } => {
+                out.push_str(&draw_fold_open(fold, summary));
+                for p in pieces {
+                    p.draw(out);
+                }
+                out.push_str(FOLD_CLOSE);
+            }
+            Node::Piece {
+                uuid: Some(uuid),
+                class: Some(class),
+                md,
+            } => out.push_str(&draw_box(uuid, class, md)),
+            Node::Piece { md, .. } => out.push_str(md),
+        }
+    }
+}
+
+/// The nodes `spelled` makes ([`Node`]). A fold whose drawing is not the
+/// one its class and summary make, or a close with no fold open, is kept
+/// as the piece it is, and a box likewise; neither happens to a document
+/// this build rendered.
+pub fn nodes(spelled: Vec<SpelledSection>) -> Vec<Node> {
+    let mut top: Vec<Node> = Vec::new();
+    let mut open: Vec<(String, String, Vec<Node>)> = Vec::new();
+    let place =
+        |open: &mut Vec<(String, String, Vec<Node>)>, top: &mut Vec<Node>, n: Node| match open
+            .last_mut()
+        {
+            Some((_, _, pieces)) => pieces.push(n),
+            None => top.push(n),
+        };
+    for s in spelled {
+        match &s.fold {
+            Some(Fold::Open { class, summary }) => {
+                if let Some(tail) = s.md.strip_prefix(&draw_fold_open(class, summary)) {
+                    let mut pieces = Vec::new();
+                    if !tail.is_empty() {
+                        pieces.push(Node::Piece {
+                            uuid: None,
+                            class: None,
+                            md: tail.to_string(),
+                        });
+                    }
+                    open.push((class.clone(), summary.clone(), pieces));
+                    continue;
+                }
+                tracing::warn!(%class, "a fold is not drawn the way its class and summary say; sent as a piece");
+            }
+            Some(Fold::Close) if s.md == FOLD_CLOSE => {
+                if let Some((fold, summary, pieces)) = open.pop() {
+                    let n = Node::Fold {
+                        fold,
+                        summary,
+                        pieces,
+                    };
+                    place(&mut open, &mut top, n);
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        let n = piece(s);
+        place(&mut open, &mut top, n);
+    }
+    while let Some((fold, summary, pieces)) = open.pop() {
+        let n = Node::Fold {
+            fold,
+            summary,
+            pieces,
+        };
+        place(&mut open, &mut top, n);
+    }
+    top
+}
+
+/// A section as a piece: a message in its box as what is inside it.
+fn piece(s: SpelledSection) -> Node {
+    if let (Some(uuid), Some(class)) = (&s.uuid, &s.class) {
+        if let Some(inside) = inside_box(uuid, class, &s.md) {
+            return Node::Piece {
+                md: inside.to_string(),
+                uuid: s.uuid,
+                class: s.class,
+            };
+        }
+        tracing::warn!(%uuid, %class, "a piece is not in the box it names; sent whole");
+    }
+    Node::Piece {
+        uuid: s.uuid,
+        class: None,
+        md: s.md,
+    }
 }
 
 /// The `.md` a list of sections spells.
@@ -326,6 +565,14 @@ pub fn draw_box(uuid: &str, class: &str, inside: &str) -> String {
     format!("{}\n\n{inside}{BOX_CLOSE}", box_open(uuid, class))
 }
 
+/// How a fold opens ([`Section::fold_open`]).
+pub fn draw_fold_open(class: &str, summary: &str) -> String {
+    format!("<details class=\"{class}\">\n<summary>{summary}</summary>\n\n")
+}
+
+/// How a fold closes, the blank line after it included.
+pub const FOLD_CLOSE: &str = "</details>\n\n";
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,7 +609,7 @@ mod tests {
             drawings[2].body_at, None,
             "a body not drawn verbatim is kept whole"
         );
-        let spelled = spell(&rows, &drawings).unwrap();
+        let spelled = spell(&rows, &drawings, &[]).unwrap();
         let joined: String = spelled.iter().map(|p| p.md.as_str()).collect();
         assert_eq!(joined, join(&sections));
         let uuids: Vec<Option<&str>> = spelled.iter().map(|p| p.uuid.as_deref()).collect();
@@ -496,7 +743,7 @@ mod tests {
             rows.iter().map(|r| r.class.as_deref()).collect::<Vec<_>>(),
             [Some("msg"), Some("msg")]
         );
-        let spelled = spell(&rows, &drawn("doc", &sections)).unwrap();
+        let spelled = spell(&rows, &drawn("doc", &sections), &[]).unwrap();
         assert_eq!(
             spelled
                 .iter()
@@ -508,5 +755,108 @@ mod tests {
             spelled.iter().map(|s| s.md.as_str()).collect::<String>(),
             join(&sections)
         );
+    }
+
+    /// A document of `sections` as the store keeps and spells it back.
+    fn kept(sections: &[Section]) -> Vec<SpelledSection> {
+        spell(
+            &stored("doc", sections),
+            &drawn("doc", sections),
+            &folds("doc", sections),
+        )
+        .unwrap()
+    }
+
+    /// Folds come back as nodes around the pieces they hold, nested as
+    /// they nest, a message as what is inside its box; drawn back, the
+    /// nodes are the document as rendered, byte for byte.
+    #[test]
+    fn folds_are_nodes_around_their_pieces() {
+        let sections = vec![
+            Section::frame("# Bridge\n\n".into()),
+            Section::fold_open("branch", "✎ Another version · 2 messages"),
+            Section::boxed("a", "msg".into(), "Engage.\n"),
+            Section::fold_open("tool-group", "🛠 1 tool step"),
+            Section::boxed("b", "msg".into(), "ls\n"),
+            Section::fold_close(),
+            Section::fold_close(),
+            Section::boxed("c", "msg".into(), "Make it so.\n"),
+        ];
+        let nodes = nodes(kept(&sections));
+        let box_of = |uuid: &str, md: &str| Node::Piece {
+            uuid: Some(uuid.into()),
+            class: Some("msg".into()),
+            md: md.into(),
+        };
+        assert_eq!(
+            nodes,
+            vec![
+                Node::Piece {
+                    uuid: None,
+                    class: None,
+                    md: "# Bridge\n\n".into()
+                },
+                Node::Fold {
+                    fold: "branch".into(),
+                    summary: "✎ Another version · 2 messages".into(),
+                    pieces: vec![
+                        box_of("a", "Engage.\n"),
+                        Node::Fold {
+                            fold: "tool-group".into(),
+                            summary: "🛠 1 tool step".into(),
+                            pieces: vec![box_of("b", "ls\n")],
+                        },
+                    ],
+                },
+                box_of("c", "Make it so.\n"),
+            ]
+        );
+        let mut drawn = String::new();
+        nodes.iter().for_each(|n| n.draw(&mut drawn));
+        assert_eq!(drawn, join(&sections));
+    }
+
+    /// A fold kept as text search reads, with more written after its
+    /// opening inside it (Drive's quote of what a thread is on), keeps that
+    /// as the fold's first piece.
+    #[test]
+    fn what_a_fold_opening_says_after_its_summary_is_its_first_piece() {
+        let sections = vec![
+            Section::fold_open("comment-thread", "💬 2 comments")
+                .then("> Captain&#39;s log\n\n")
+                .kept_whole(),
+            Section::boxed("a", "msg".into(), "Noted.\n"),
+            Section::fold_close().kept_whole(),
+        ];
+        assert_eq!(
+            stored("doc", &sections).len(),
+            3,
+            "kept as text search reads"
+        );
+        let nodes = nodes(kept(&sections));
+        let Node::Fold { pieces, .. } = &nodes[0] else {
+            panic!("{nodes:?}")
+        };
+        assert_eq!(
+            pieces[0],
+            Node::Piece {
+                uuid: None,
+                class: None,
+                md: "> Captain&#39;s log\n\n".into()
+            }
+        );
+        let mut drawn = String::new();
+        nodes.iter().for_each(|n| n.draw(&mut drawn));
+        assert_eq!(drawn, join(&sections));
+    }
+
+    /// A close with no fold open is the piece it is, not a fold.
+    #[test]
+    fn a_close_with_nothing_open_is_a_piece() {
+        let nodes = nodes(kept(&[
+            Section::fold_close(),
+            Section::boxed("a", "msg".into(), "x\n"),
+        ]));
+        assert!(matches!(&nodes[0], Node::Piece { md, .. } if md == FOLD_CLOSE));
     }
 }
