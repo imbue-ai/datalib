@@ -60,4 +60,6 @@ js_test(
         "HOME",
         "PLAYWRIGHT_BROWSERS_PATH",
     ],
+    # The browser is in the host's cache, which a remote executor has not got.
+    tags = ["no-remote-exec"],
 )
