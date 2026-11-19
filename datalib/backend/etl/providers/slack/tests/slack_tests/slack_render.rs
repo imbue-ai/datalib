@@ -30,11 +30,11 @@ fn renders_tng_fixture() {
         &mut on_done,
     )
     .expect("render");
-    // 6 channel threads + 5 DM threads (two 1:1 DMs and a group DM;
+    // 7 channel threads + 5 DM threads (two 1:1 DMs and a group DM;
     // each standalone message is its own thread bucket).
-    assert_eq!(summary.threads_total, 11);
-    assert_eq!(summary.threads_rendered, 11);
-    assert_eq!(docs.len(), 11);
+    assert_eq!(summary.threads_total, 12);
+    assert_eq!(summary.threads_rendered, 12);
+    assert_eq!(docs.len(), 12);
 
     let md_tree: BTreeMap<&str, String> = docs
         .iter()
@@ -50,10 +50,11 @@ fn renders_tng_fixture() {
     }
     assert_snapshot!("tng_md_tree", bundle);
 
-    // The fixture's forward, link preview, card and bot blocks are drawn
-    // (in the snapshot above); the away team's call is the one part left
-    // that nothing draws, and its document alone says so.
-    let not_shown: Vec<(&str, &str)> = docs
+    // Every forward, preview, card and block the fixture holds is drawn
+    // (in the snapshot above) but three: the away team's call, Worf's
+    // attachment of buttons alone, and the roster's input box. Each
+    // document holding one says so, naming it.
+    let mut not_shown: Vec<(&str, &str)> = docs
         .iter()
         .flat_map(|d| {
             d.problems
@@ -63,26 +64,33 @@ fn renders_tng_fixture() {
         .filter(|(_, p)| matches!(p.field.as_deref(), Some("blocks" | "attachments")))
         .map(|(doc, p)| (doc, p.sample.as_str()))
         .collect();
-    let away_team = ids::thread(
-        "slack_api",
-        "T_NCC1701D",
-        "G_AWAYTEAM",
-        "12604000904.000904",
-    )
-    .uuid;
-    assert_eq!(
-        not_shown,
-        [(
-            away_team.as_str(),
-            "1 message here holds what is not shown: call block"
-        )]
-    );
+    not_shown.sort();
+    let thread = |channel, ts| ids::thread("slack_api", "T_NCC1701D", channel, ts).uuid;
+    let call = thread("G_AWAYTEAM", "12604000904.000904");
+    let buttons = thread("G_AWAYTEAM", "12604000903.000903");
+    let roster = thread("D_RIKER", "12604000901.000901");
+    let mut expected = vec![
+        (
+            call.as_str(),
+            "1 message here holds what is not shown: call block",
+        ),
+        (
+            buttons.as_str(),
+            "1 message here holds what is not shown: attachment with nothing to show",
+        ),
+        (
+            roster.as_str(),
+            "1 message here holds what is not shown: input block",
+        ),
+    ];
+    expected.sort();
+    assert_eq!(not_shown, expected);
 
     // Emitted-document spot-check. This used to walk the tree counting
     // `*.grid_rows.json` files; the renderer no longer writes those, so
     // it checks what it hands to its callback — which is what both the
     // store and the index consume.
-    assert_eq!(docs.len(), 11, "one document per rendered thread");
+    assert_eq!(docs.len(), 12, "one document per rendered thread");
     assert!(!docs[0].rows.is_empty(), "and the rows it projected");
 }
 
