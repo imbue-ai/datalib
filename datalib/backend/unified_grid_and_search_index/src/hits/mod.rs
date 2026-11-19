@@ -8,5 +8,5 @@ pub mod snippet;
 pub mod vectors;
 
 pub use index_state::IndexSummary;
-pub use mapping::{CollectionScope, GridIndex, GridRowRef, SearchHit};
+pub use mapping::{CollectionScope, GridIndex, GridRowRef, Landed, SearchHit};
 pub use snippet::display_snippet;
