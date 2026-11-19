@@ -53,6 +53,11 @@ if [[ -d "$BIN_DIR" ]]; then
 fi
 [[ -n "${DATALIB_BINARY_DIR:-}" ]] && echo "binary dir: $DATALIB_BINARY_DIR"
 
+# The Library card's tree, built by Bazel; Vite's dev server resolves the
+# `vs-tree` import to it (datalib/ui/vite.config.ts).
+DATALIB_VS_TREE="$(rlocation _main/third-party/vscode-tree/dist/vs-tree.js)"
+export DATALIB_VS_TREE
+
 WORKSPACE="${BUILD_WORKSPACE_DIRECTORY:-}"
 if [[ -z "$WORKSPACE" ]]; then
   echo "ERROR: BUILD_WORKSPACE_DIRECTORY not set; run via 'bazelisk run //datalib:dev'" >&2

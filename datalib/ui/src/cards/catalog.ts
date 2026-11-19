@@ -157,6 +157,19 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     icon: "chart",
     gallery: "timeSeriesView()",
   },
+  libraryTreeView: {
+    title: "Library",
+    description:
+      "Your library as a tree, like an editor's file panel: each source, its accounts, labels, channels and folders, and what each holds beside it.",
+    icon: "book",
+    gallery: "libraryTreeView()",
+  },
+  // Not in the gallery: it needs the node to show, which the Library opens.
+  nodeView: {
+    title: "Library node",
+    description: "What one place in your library holds, read beside a preview.",
+    icon: "book",
+  },
   sourceView: {
     title: "Source",
     description: "One source: its status and actions, its documents, and its sync.",

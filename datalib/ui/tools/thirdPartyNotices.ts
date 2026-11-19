@@ -59,23 +59,42 @@ function readPackage(root: string): PackageInfo {
   };
 }
 
+/// A bundle Bazel built and copied into `vendor/` (vite.config.ts) is no
+/// npm package; it carries its notices in `<name>.LICENSE.txt` beside it.
+function vendoredBundle(file: string): PackageInfo | null {
+  if (path.basename(path.dirname(file)) !== "vendor" || !file.endsWith(".js")) return null;
+  const notices = file.replace(/\.js$/, ".LICENSE.txt");
+  if (!fs.existsSync(notices)) return null;
+  return {
+    name: path.basename(file, ".js"),
+    version: "",
+    license: "see the text below",
+    repository: "",
+    licenseText: fs.readFileSync(notices, "utf8").trim(),
+  };
+}
+
 export function thirdPartyNotices(): Plugin {
   return {
     name: "datalib:third-party-notices",
     apply: "build",
     generateBundle(_options, bundle) {
       const roots = new Set<string>();
+      const vendored = new Map<string, PackageInfo>();
       for (const output of Object.values(bundle)) {
         if (output.type !== "chunk") continue;
         for (const id of output.moduleIds) {
-          if (id.startsWith("\0") || !id.includes("/node_modules/")) continue;
+          if (id.startsWith("\0")) continue;
+          const bundled = vendoredBundle(id.split("?")[0]);
+          if (bundled) vendored.set(bundled.name, bundled);
+          if (!id.includes("/node_modules/")) continue;
           const root = packageRoot(id.split("?")[0]);
           if (root) roots.add(fs.realpathSync(root));
         }
       }
-      const packages = [...roots]
-        .map(readPackage)
-        .sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
+      const packages = [...[...roots].map(readPackage), ...vendored.values()].sort(
+        (a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version),
+      );
       const missing = packages.filter((p) => !p.licenseText && p.license === "UNKNOWN");
       if (missing.length) {
         this.error(`packages with no license: ${missing.map((p) => p.name).join(", ")}`);

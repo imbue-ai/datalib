@@ -9,9 +9,11 @@ you type a label. Which nodes are open, what is selected and how far
 it is scrolled come back out as plain data keyed by node id, and go
 back in on the next mount.
 
-Nothing in datalib uses it yet. It is built from this directory alone,
-with its own lockfile and nothing from the rest of the tree, so that it
-can move to a repository of its own.
+The UI's Library card draws the library with it
+(`docs/dev/cards.md` § "Prebuilt views", `libraryTreeView()`). It is
+built from this directory alone, with its own lockfile and nothing from
+the rest of the tree, so that it can move to a repository of its own;
+the UI takes the built file (`datalib/ui/BUILD.bazel`, `vendor_vs_tree`).
 
 ## Where the code comes from
 
@@ -56,9 +58,16 @@ tree.addEventListener('viewstatechange', () => save(tree.viewState));
 ```
 
 `viewState` is `{ expanded, focus, selection, scrollTop }`, the first
-three lists of node ids. The element sizes itself to its box, so give
-it one. Its colours are VS Code's light theme; `--vs-tree-fg`,
-`--vs-tree-bg`, `--vs-tree-hover` and `--vs-tree-focus` change them.
+three lists of node ids. `select` fires as the selection moves, and
+`open`, with the node, on a double-click or Enter. The element sizes
+itself to its box, so give it one.
+
+Its colours default to VS Code's light theme, and each is a CSS
+variable a page can set on the element: `--vs-tree-fg`, `--vs-tree-bg`,
+`--vs-tree-hover`, `--vs-tree-focus` (the focus outline),
+`--vs-tree-focus-bg`, `--vs-tree-selected-bg`, `--vs-tree-selected-fg`,
+`--vs-tree-inactive-selected-bg`, `--vs-tree-guide`,
+`--vs-tree-guide-faint`, and `--vs-tree-font`.
 
 ## Build and test
 
@@ -131,6 +140,10 @@ test, then whatever in `src/vs-tree.js` leaned on it.
 - `a_restore_reopens_under_a_closed_parent` — a node that was open
   under a closed parent is still in `viewState` after a remount, and
   opening the parent brings it back open.
+- `a_double_click_or_enter_opens_a_node` — either fires `open` with
+  the node.
+- `colours_follow_the_pages_variables` — a selected row takes
+  `--vs-tree-selected-bg` from the page.
 - `view_state_round_trips` — the open nodes, the selection and the
   scroll position read from one mount come back on the next, which asks
   once for the top level and once for each open node.

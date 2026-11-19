@@ -77,9 +77,13 @@ function freshCard() {
 
 // The element, as a page would use it. Resolves once the top level (and
 // whatever `viewState` opens) has loaded.
+const opened = [];
+
 function mountElement(viewState) {
   fetched.length = 0;
+  opened.length = 0;
   const tree = document.createElement('vs-tree');
+  tree.addEventListener('open', (e) => opened.push(e.detail.node.id));
   if (viewState) tree.viewState = viewState;
   const ready = new Promise((r) => tree.addEventListener('ready', r, { once: true }));
   tree.dataSource = dataSource;
@@ -120,6 +124,7 @@ window.harness = {
   mountElement,
   mountUpstream,
   fetched,
+  opened,
   pageErrors,
   find: (id) => {
     const walk = (list) => {

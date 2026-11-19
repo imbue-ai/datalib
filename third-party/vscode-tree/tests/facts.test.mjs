@@ -287,6 +287,29 @@ describe('vs-tree', () => {
     await page.close();
   });
 
+  test('a_double_click_or_enter_opens_a_node', async () => {
+    const { page } = await openHarness();
+    await page.evaluate(() => window.harness.mountElement());
+    await openRow(page, 'Starfleet', 'Slack');
+    await row(page, 'Slack').dblclick();
+    await waitFor(page, 'Slack opened', () => window.harness.opened.includes('src/slack'));
+    await row(page, 'Email').click();
+    await page.keyboard.press('Enter');
+    await waitFor(page, 'Email opened', () => window.harness.opened.includes('src/email'));
+    await page.close();
+  });
+
+  test('colours_follow_the_pages_variables', async () => {
+    const { page } = await openHarness();
+    await page.evaluate(() => window.harness.mountElement());
+    await page.evaluate(() => window.tree.style.setProperty('--vs-tree-selected-bg', 'rgb(1, 2, 3)'));
+    await row(page, 'Starfleet').click();
+    const selected = page.locator('vs-tree .monaco-list-row.selected').first();
+    await selected.waitFor({ timeout: 5000 });
+    assert.equal(await selected.evaluate((el) => getComputedStyle(el).backgroundColor), 'rgb(1, 2, 3)');
+    await page.close();
+  });
+
   test('view_state_round_trips', async () => {
     const { page } = await openHarness();
     await page.evaluate(() => window.harness.mountElement());
