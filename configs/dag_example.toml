@@ -1,33 +1,32 @@
 # DAG config (run with `datalib-dag`): two sources and the index.
 #
 # Three kinds of entry. A `[[groups]]` entry is one thing on the
-# Manage screen — a source is a group with a `type`, and the unified
-# index is a group without one. A `[[steps]]` entry is `group` +
+# Manage screen — a source is a group with a `type`, and the grid and
+# search index is a group without one. A `[[steps]]` entry is `group` +
 # `function`: what it does within its group. Its id is composed as
 # `<group>/<function>` and never written; that id is the directory the
 # step writes, and what another step's `inputs` name. An `[[applets]]`
 # entry is a server the app runs, filed under a group for display.
 #
-# Every step names the program it runs in `command` (see
-# docs/dev/step_protocol.md); the runner writes `params` to an
+# Every step names the program it runs in `command` (writing your own:
+# `datalib-step help step-protocol`); the runner writes `params` to an
 # owner-only JSON file it names with `--params-file`, appends `inputs`
 # as a `--inputs` JSON flag, and passes the composed id, the group, its
 # type and the function in the environment. Datalib's own steps run
 # `datalib-step`, which reads the function and the group's `type` from
-# that environment. The built-in functions are `ingest`
-# (bring the data in), `render_markdown` (turn the raw store into
-# markdown), `embed` (the embeddings of a source's part of the search
-# index, for search by meaning), and three under the unified grid and
-# search index: `unified_grid_and_search_index` over every render_markdown tree, which also
-# puts each source in the keyword search and keeps the vector cache to
-# what a chunk still names, and `embedding_map`, which lays out what the
-# `embed` steps embedded.
-# `params` is per-function — the ingest
-# step carries the provider's config, with where the data comes from
-# as one table whose name is read under the group's type (`api` is
-# the product's own API; `export`, `backup` and the like read files
-# and carry their own `path`), and the render step only render knobs
-# (none for most providers; e.g. perseus's `alignment_pairs`).
+# that environment. Its functions used below are `ingest` (bring the
+# data in), `render_markdown` (turn the raw store into documents in a
+# render store), `embed` (a source's part of the search by meaning),
+# and, under the grid and search index group,
+# `unified_grid_and_search_index` (every render into the grid and the
+# keyword search) and `embedding_map` (lays out what the `embed` steps
+# embedded). `datalib-step help` lists the rest.
+# `params` is per-function — the ingest step carries the provider's
+# config, with where the data comes from as one table whose name is
+# read under the group's type (`api` is the product's own API;
+# `export`, `backup` and the like read files and carry their own
+# `path`), and the render step only render knobs (none for most
+# providers).
 #
 # TOML shape: one `[[…]]` table per entry, with a step's `params` as
 # `[steps.params.…]` sub-tables. A table header ends the table it sits
@@ -36,20 +35,19 @@
 #
 # Editing a step re-runs it. The runner fingerprints each step over its
 # command, `params`, `env`, declared paths and its group's `type`, so
-# changing any of them
-# makes the step stale even when nothing it reads has moved — widen a
-# `since`, flip a render knob, and the next run rebuilds that step's
-# output. An optional `code_version = "..."` covers the remaining case:
-# a step whose behavior changed without its command line changing.
+# changing any of them makes the step stale even when nothing it reads
+# has moved — widen a `since`, flip a render knob, and the next run
+# rebuilds that step's output. An optional `code_version = "..."` covers
+# the remaining case: a step whose behavior changed without its command
+# line changing.
 #
-#   bazelisk build //datalib/backend:bin
-#   bazel-bin/datalib/backend/bin/datalib-dag configs/dag_example.toml
+#   datalib-dag <data_root>/config.toml
 #
-# (`//datalib/backend:bin` stages every binary under its public
-# dash-separated name in one directory — the same layout the installer
-# produces. `datalib-dag` falls back to its own directory when looking
-# up a step's `command`, so `datalib-step` is found with no flag. Use
-# `--binary-dir DIR` only to point at binaries staged somewhere else.)
+# `datalib-dag` looks up a step's `command` in its own directory first,
+# so `datalib-step` beside it is found with no flag; `--binary-dir DIR`
+# points at binaries staged somewhere else. (From a checkout, `bazelisk
+# build //datalib/backend:bin` stages them all in
+# `bazel-bin/datalib/backend/bin/`.)
 #
 # data_root defaults to the directory this file lives in; set it
 # explicitly for a real run. A relative one is taken from the directory
@@ -59,7 +57,7 @@ data_root = "~/tmp/dr-dag"
 # The lowest level of datalib's own log lines every process of this
 # root keeps — the server, the runner, each step: `trace`, `debug`,
 # `info`, `warn` or `error`. Omitted means `trace` (the log card still
-# opens at `info`); third-party crates never go below `debug`; a
+# opens at `info`); third-party crates never go below `info`; a
 # `RUST_LOG` in a process's environment wins over this.
 log_level = "trace"
 
@@ -112,18 +110,13 @@ max_sandboxes = 100
 
 # ── slack ──────────────────────────────────────────────────────────
 # A group has two names. Its `id` is the identity: unique, path-safe,
-# and the directory every step under it writes into — so changing it
-# moves data on disk and strands the paths the index recorded, which is
+# and the directory every step under it writes into — so changing it is
 # a migration rather than an edit. Its `name` is what a person types and
-# what every screen shows; optional, read only by the UI, and free to
-# change at any moment because nothing depends on it. The `type` says
-# what kind of data the group mirrors, and which provider the built-in
-# steps run; the steps under it are named for what they do (`ingest`
-# brings the data in, `render_markdown` renders it), and their ids —
-# the directories they write — are composed from the two. An optional
-# `description` says what this source is to you. Like the name it is
-# display text nothing depends on; search does not read it yet
-# (imbue-ai/datalib#409).
+# what every screen shows; optional, and free to change at any moment
+# because nothing depends on it. The `type` says what kind of data the
+# group mirrors, and which provider the built-in steps run. An optional
+# `description` says what this source is to you; like the name it is
+# display text, and search does not read it.
 [[groups]]
 id = "slack"
 name = "Work Slack"
@@ -145,11 +138,12 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["slack/ingest"]
 
-# A source's search by meaning. `unified_grid_and_search_index` puts every source it reads in
-# the keyword search; `embed` then embeds what that cut and is the slow
-# one. Turn it off on the Manage screen, or leave it out, and keyword
-# search still finds the source. `unified_grid_and_search_index`'s `not_searched`, below,
-# keeps a source out of search entirely.
+# A source's search by meaning. `unified_grid_and_search_index` puts
+# every source it reads in the keyword search; `embed` reads that index,
+# cuts the source's documents into chunks and embeds them, and is the
+# slow one. Turn it off on the Manage screen, or leave it out, and
+# keyword search still finds the source. `not_searched` on the index
+# step, below, keeps a source out of search entirely.
 [[steps]]
 group = "slack"
 function = "embed"
@@ -160,8 +154,7 @@ inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 # which turns a first embed of hours into minutes; a run that owes fewer
 # stays here. Leave it out and nothing of the source leaves this machine.
 # The text of each chunk goes to Modal: set it only on a source you would
-# let leave. docs/dev/security_posture.md § "What leaves the machine for
-# Modal".
+# let leave.
 # [steps.params]
 # embed_on_modal_from_n_chunks = 5000
 
@@ -198,8 +191,7 @@ inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 # is `render_markdown`, reading the source's ingest tree, with the two
 # commits under `params.diff` — both required, a diff is asked for and
 # never keeps itself up to date. Read by the fan-ins like any source.
-# The Manage screen's "Compare…" writes one; see
-# docs/dev/plans/completed/diff_renderer.md.
+# The Manage screen's "Compare…" writes one.
 [[groups]]
 id = "slack-diff"
 name = "Work Slack, this week's changes"
@@ -246,8 +238,8 @@ inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 # streams says `start = "after_inputs_settle"`: it waits until nothing
 # upstream of it is running or due, then runs once, and holds no writer
 # back while it does. None of these changes a step's fingerprint: they
-# say when it may run, not what it makes. See
-# datalib/backend/dag/README.md, "What keeps steps apart".
+# say when it may run, not what it makes. `datalib-step help runner`,
+# "What keeps steps apart: locks", has the rules.
 
 # ── shared fan-in steps ────────────────────────────────────────────
 # `inputs` names the steps these read: `*/render_markdown` is every
@@ -255,12 +247,12 @@ inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 # Name steps one by one instead (`"slack/render_markdown"`) to leave a
 # source out on purpose; the Pipeline table flags a render step nothing
 # consumes. `datalib-dag --check` prints what each pattern stood for.
-# The group has no `type`: it mirrors
-# nothing, it indexes what the others mirrored. `unified_grid_and_search_index` puts every
-# source it reads in the keyword search but those `params.not_searched`
-# lists (`params.not_searched = ["slack-diff"]`), and drops from search
-# any source it no longer reads. It also keeps only the vectors a chunk
-# still names, and reports what search holds of each source.
+# The group has no `type`: it mirrors nothing, it indexes what the
+# others mirrored. `unified_grid_and_search_index` puts every source it
+# reads in the keyword search but those `params.not_searched` lists
+# (`params.not_searched = ["slack-diff"]`), and drops from search any
+# source it no longer reads. It also drops the vectors no chunk still
+# names, and reports what search holds of each source.
 [[groups]]
 id = "unified_grid_and_search_index"
 
@@ -271,10 +263,9 @@ command = "datalib-step"
 inputs = ["*/render_markdown"]
 
 # The search's document embeddings laid out on a plane by UMAP, for the
-# map card (`umapView()`). It reads every source's `embed`, so it runs
-# after them. Each run starts from the last map, so
-# documents stay put as more arrive; resetting the step lays the map out
-# afresh.
+# map card. It reads every source's `embed`, so it runs after them. Each
+# run starts from the last map, so documents stay put as more arrive;
+# resetting the step lays the map out afresh.
 [[steps]]
 group = "unified_grid_and_search_index"
 function = "embedding_map"
@@ -306,8 +297,8 @@ inputs = ["*/embed"]
 # differ only in the argument their metadata carries, so each row calls
 # the shared component against its own backend.
 #
-# See docs/dev/applets.md for the contract a command has to honor. Note
-# that `user` is not available as an id: it names the namespace for
+# `datalib-step help writing-applets` has the contract a command has to
+# honor. Note that `user` is not available as an id: it names the namespace for
 # hand-written components, which a refresh never touches.
 [[applets]]
 group = "slack"

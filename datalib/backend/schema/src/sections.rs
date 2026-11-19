@@ -37,6 +37,11 @@ pub struct SectionRow {
     /// labels and mailboxes. A JSON list of strings; null for none.
     #[col(sql = "TEXT")]
     pub labels: Option<String>,
+    /// The class of the box the piece is drawn in, where it is in one:
+    /// a `<div>` naming the item, around what the piece says
+    /// (`Section::boxed`). Null for a piece in no box.
+    #[col(sql = "TEXT")]
+    pub class: Option<String>,
 }
 
 /// One person an item was addressed to, as the item names them.

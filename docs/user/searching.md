@@ -7,9 +7,7 @@ opens Advanced search, whose every setting writes the same
 words into the box), `datalib-applet search <data_root> '<query>'`
 from a shell (no app or server needed; it prints JSON), and
 `GET /applet/unified_grid_and_search_index/search?q=…` on a running
-`datalib-http`. This page is that language. `datalib-step help search`
-prints it, and a release ships it beside the binaries as
-`docs/user/searching.md`.
+`datalib-http`. This page is that language.
 
 ```sh
 datalib-applet search ~/datalib 'from:me after:2026-10-20'
@@ -75,19 +73,26 @@ languages: a question in German or Italian finds an English document,
 and the other way round, though often at a lower similarity, so lower the
 cutoff if a foreign question finds little. Words match what you typed, so
 across languages they find only what the two spellings share, such as a
-name. Meaning covers a source only once its `embed` step has run, so a source
-with that step turned off answers in the words it is written in. A line above
-the results says how many of the documents the search could have found have no
-vectors, and hovering says which sources they are in. From a shell or the API
-it is `query_echo.without_vectors`. While a sync is writing the index, meaning
-and that line answer from what the search last read, so a
-search stays quick; what the sync added counts once the index has been still
-for half a minute.
+name.
 
-A search covers the sources the document index holds. A source turned off can
-leave it after an upgrade changes how documents are stored, because a turned-off
-source does not re-render, and a warning on its row says so. Turn it on and sync
-it to bring it back; what it has already embedded is kept.
+### What a search covers
+
+A source's words are searchable once `unified_grid_and_search_index` has run
+after its render; until then words to rank by, and the quoted, `+` and `-`
+filters, find nothing there, and the answer says why. A source that step's `not_searched` lists is never searched. Meaning covers
+a source only once its own `embed` step has run, so a source with that step
+turned off is found by its words alone. A line above the results
+says how many of the documents the search could have found have no vectors,
+and hovering says which sources they are in; from a shell or the API it is
+`query_echo.without_vectors`. While a sync is writing the index, meaning and
+that line answer from what the search last read, so a search stays quick; what
+the sync added counts once the index has been still for half a minute.
+
+A turned-off source does not re-render, so it can drop out of search when an
+upgrade changes how documents are stored; a warning on its row says so. Turn
+it on and sync it to bring it back; what it has already embedded is kept.
+
+### Ids as free text
 
 An id, an address or a number typed as free text (`picard@enterprise.org`,
 `+12025550101`, a row's uuid) is a filter: every row that names it, in any
@@ -96,9 +101,7 @@ a uuid, dashed or not, and so does a link that ends in one: paste a Notion
 page's link to find the page. A source id that is not a uuid, such as a
 Gmail id, is not read this way; search for it with `id:` (below).
 
-A source's words are searchable once `unified_grid_and_search_index` has run after its
-render; until then words to rank by, and the quoted, `+` and `-` filters,
-find nothing there and the answer says why. A source `unified_grid_and_search_index` lists in `not_searched` is never searched.
+### The text a search reads
 
 What the words and the meaning search over is each item drawn plainly:
 who wrote it (with their address, where it is an email or a phone
@@ -147,9 +150,8 @@ Slack message is `<channel>#<ts>`, a GitHub comment
 `<owner>/<repo>#<id>`. Two sources can use the same id, so add
 `source:` when that matters.
 
-Pasting an id as free text (above) finds every row that names it, in
-any role. `id:` is the exact match: the rows whose source id is that
-value, and nothing else.
+`id:` is the exact match, unlike an id pasted as free text (above):
+the rows whose source id is that value, and nothing else.
 
 `datalib_document_id:` takes the id datalib gave a document (a thread,
 a conversation, a page) and keeps that document and every row in it,
@@ -316,11 +318,11 @@ the embedding model is still downloading on a first launch, you still get what
 your words match, with a line above the results saying what is missing,
 `query_echo.partial`.
 
-The answer's `refused` says why a query was not run: `tab=` or `--tab`, which a
-search no longer has, a key the search
+The answer's `refused` says why a query was not run: a key the search
 does not have, `is:` with a word it does not know, a `contact:` on a
-root without the contacts app, or `me` on a root whose index has not
-synced since it learned which handles are yours.
+root without the contacts app, `me` on a root whose index has not
+synced since it learned which handles are yours, or `tab=` / `--tab`
+(a search has one answer, every way of matching merged).
 
 Either way `datalib-applet search` prints what it has and the reason, and
 exits 1, so a script cannot take a refusal or a partial answer for an

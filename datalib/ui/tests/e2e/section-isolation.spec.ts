@@ -6,21 +6,21 @@
 // `<div style="display:none">`, and a copy of the next message's wrapper.
 //
 // Two guards stand between the payload and the next message: the UI renders
-// each message as a fragment of its own, from the pieces the route sends,
-// and every wrapper has `contain: paint`. The first test has both on; each
+// each message as a fragment of its own, in a box it draws, from the pieces
+// the route sends, and every box has `contain: paint`. The first test has both on; each
 // control turns one off and shows the payload then does reach the next
 // message, so a green first test is the guards at work.
 
 import { test, expect, type Page } from "@playwright/test";
 
 /// What the document route sends the viewer, as far as these tests read it.
-type BodyPiece = { uuid: string | null; md: string };
+type BodyPiece = { uuid: string | null; class?: string | null; md: string };
 type ChatResponse = { pieces: BodyPiece[] } & Record<string, unknown>;
 
 const chatRoute = (uuid: string) => `/applet/unified_grid_and_search_index/chat/${uuid}`;
 
 const COVER = "Your session has expired. Enter your password to continue.";
-/// Inside the first message's wrapper, before its closing tag.
+/// At the end of what is inside the first message's box.
 const payload = (next: string) =>
   `\n<div id="p-cover" style="position:fixed;inset:0;z-index:2147483647;background:#fff">${COVER}</div>\n\n` +
   `<div style="display:none">\n\n` +
@@ -63,15 +63,24 @@ function twoMessagesInARow(chat: ChatResponse): { first: string; next: string } 
   return null;
 }
 
-/// The document with the payload in its first message.
+/// The document with the payload at the end of its first message.
 function withPayload(doc: Doc): ChatResponse {
   const pieces = doc.chat.pieces.map((p) => ({ ...p }));
   const first = pieces.find((p) => p.uuid === doc.first)!;
-  const close = first.md.lastIndexOf("</div>");
-  expect(close, "the first message is in a wrapper").toBeGreaterThan(0);
-  first.md = first.md.slice(0, close) + payload(doc.next) + first.md.slice(close);
+  expect(first.class, "the first message is in a box").toBeTruthy();
+  first.md += payload(doc.next);
   return { ...doc.chat, pieces };
 }
+
+/// The pieces as one string, each box drawn as render draws it.
+const joined = (pieces: BodyPiece[]) =>
+  pieces
+    .map((p) =>
+      p.uuid && p.class
+        ? `<div id="m-${p.uuid}" data-section-uuid="${p.uuid}" class="${p.class}">\n\n${p.md}</div>\n\n`
+        : p.md,
+    )
+    .join("");
 
 async function open(page: Page, doc: Doc, served: ChatResponse): Promise<void> {
   await page.route(
@@ -105,9 +114,13 @@ test("a message's payload neither hides, replaces nor covers the next message", 
   const doc = await aConversation(page);
   await open(page, doc, withPayload(doc));
   const frame = page.frameLocator("iframe.doc-frame");
-  // Only the renderer's wrapper answers to the next message's id, and it shows.
-  await expect(frame.locator(`[data-section-uuid="${doc.next}"]`)).toHaveCount(1);
-  await expect(frame.locator(`[id="m-${doc.next}"]`)).toBeVisible();
+  // The next message's box is where the viewer drew it, and it shows; the
+  // copy of its wrapper is still there, inside the first message's box,
+  // where nothing that looks a message up by its id finds it first.
+  await expect(frame.locator(`body > [data-section-uuid="${doc.next}"]`)).toBeVisible();
+  await expect(
+    frame.locator(`body > [data-section-uuid="${doc.first}"] [data-section-uuid="${doc.next}"]`),
+  ).toHaveCount(1);
   // The cover stays inside the first message's box.
   await expect.poll(() => touchedAtNext(page, doc.next)).toBe(doc.next);
 });
@@ -115,7 +128,7 @@ test("a message's payload neither hides, replaces nor covers the next message", 
 test("control: served as one piece, the payload hides the next message", async ({ page }) => {
   const doc = await aConversation(page);
   const served = withPayload(doc);
-  const whole = { uuid: null, md: served.pieces.map((p) => p.md).join("") };
+  const whole = { uuid: null, md: joined(served.pieces) };
   await open(page, doc, { ...served, pieces: [whole] });
   const frame = page.frameLocator("iframe.doc-frame");
   await expect(frame.locator(`[data-section-uuid="${doc.next}"]`)).toHaveCount(2);

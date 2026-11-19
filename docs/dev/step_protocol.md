@@ -1,22 +1,22 @@
 # Writing a step command
 
 The sync engine (`datalib-dag`) runs a DAG of arbitrary commands. Any
-executable can be a step: the runner spawns it, feeds it what it
-declared in the config, and watches its stdout/stderr. Everything
-beyond "run a program and exit 0/non-0" is an *optional* protocol layer — a plain shell script is a valid step, and
-each layer you adopt buys better incrementality, progress reporting,
-or failure handling.
+executable can be a step: the runner spawns it, hands it what its config
+entry declares, and watches its stdout and stderr. A plain shell script
+that exits 0 or non-0 is a valid step. Everything beyond that is an
+optional protocol layer, and each layer you adopt buys better
+incrementality, progress reporting or failure handling.
 
-This doc is the contract from the command's point of view. The
-runner/scheduler side (staleness, retry, what a dropped entry costs)
-is in [the runner's README](../../datalib/backend/dag/README.md).
+This doc is the contract from the command's side. The runner's side
+(when a step is stale, retries, what a dropped config entry costs) is
+[the runner's README](../../datalib/backend/dag/README.md).
 
 ## The config entry
 
-The config is TOML. A step is one `[[steps]]` table, filed under a
-`[[groups]]` entry: the step names its group and the function it
-performs there, and its id — the one tree it writes — is composed as
-`<group>/<function>` rather than written.
+The config is TOML. A step is one `[[steps]]` table filed under a
+`[[groups]]` entry: it names its group and the function it performs
+there, and its id, which is also the one tree it writes, is
+`<group>/<function>`.
 
 ```toml
 [[groups]]
@@ -32,139 +32,126 @@ env = { WEATHER_DEBUG = "1" }              # extra child environment
 units = "metric"
 ```
 
-That step's id is `weather/ingest`, so it writes `<data_root>/weather/ingest/`
-and another step reads it with `inputs = ["weather/ingest"]`. A step
-outside any group is also legal — `id = "weather/ingest"` written
-verbatim, no `group` or `function` — and is the shape for a one-off
-executable that belongs to no source.
+That step's id is `weather/ingest`, so it writes
+`<data_root>/weather/ingest/`, and another step reads it with
+`inputs = ["weather/ingest"]`. A step outside any group writes its id
+verbatim (`id = "weather/ingest"`, no `group` or `function`): the shape
+for a one-off executable that belongs to no source.
 
-`command = "datalib-step"` runs the step program datalib ships, which
-takes the function and the group's `type` from the environment below.
-That is the shape every source's own steps have, and it is only legal
-under a group. A step with no `command` at all is read as that one:
-configs written before every step named its program left it out, and
-the app writes it in when it next reads one
-(`config_model.md` §"The retired shapes").
+`command = "datalib-step"` runs the step program datalib ships
+(§"How `datalib-step` fits"). It is legal only under a group, and a step
+with no `command` at all is read as that one.
 
 Sub-tables like `[steps.params]` must come after the step's plain keys:
-in TOML a table header ends the table it appears in, so everything
-below it belongs to `params` until the next header.
+in TOML a table header ends the table it appears in, so everything below
+it belongs to `params` until the next header.
 
-`command` is one string, split into an argv shell-style (quotes and
-backslash escapes work; there is **no** variable expansion, globbing,
-or piping — wrap in `sh -c '…'` if you need real shell). The first
-word resolves via `PATH`, with the runner's `--binary-dir` (default:
-the directory `datalib-dag` itself lives in; also settable as
-`binary_dir` in the config, above the first `[[steps]]`) first and the
-library's own `<data_root>/system/bin/` second, both ahead of the
-inherited `PATH`. The first is how `datalib-step` is found without an
-absolute path; the second is where a library's own programs go, so
-they travel with it; a launch copies a program the config runs from
-`~/.datalib/bin`, which every library once shared, into `system/bin/`
-(`http/src/library_bin.rs`). A first word
-that is a relative path with a `/` in it is relative to the data root,
-the step's working directory; that is how a step runs a package's
-program, `system/packages/<pin>/bin/…` (`packages.md`).
+`command` is one string, split into an argv shell-style: quotes and
+backslash escapes work, but there is **no** variable expansion, globbing
+or piping (wrap it in `sh -c '…'` for that). The first word is looked up
+in the runner's `--binary-dir` first (default: the directory
+`datalib-dag` itself is in; also settable as a top-level `binary_dir`
+in the config), then in the library's own `<data_root>/system/bin/`,
+then in the inherited `PATH`. The first is how `datalib-step` is found
+bare; the second is where a library's own programs go, so they travel
+with it. A first word that is a relative path with a `/` in it is
+relative to the data root, which is how a step runs a package's program,
+`system/packages/<pin>/bin/…`.
 
 ## What your command receives
 
-**Working directory** — the data root. All artifact paths are relative
+**Working directory**: the data root. All artifact paths are relative
 to it.
 
-**Appended flags** — the runner mechanically appends the entry's
-declared fields to your argv, each only when present/non-empty:
+**Appended flags**: the runner appends the entry's declared fields to
+your argv, each only when present and non-empty:
 
 | flag | value |
 | --- | --- |
-| `--params-file <path>` | a JSON file holding the entry's `params` subtree, converted TOML → JSON (TOML dates/times arrive as their string form) |
+| `--params-file <path>` | a JSON file holding the entry's `params` subtree, converted TOML → JSON (TOML dates and times arrive as their string form) |
 | `--inputs <json>` | the entry's `inputs`, as a JSON string array |
-| `--reset <part>` | only on a reset, and then this invocation is a reset, not a run: see § Reset |
-| `--migrate` | only on the first launch of a build, to a step that takes it, and then this invocation fetches nothing: see § Migrate |
-| `--compact`, `--collect` | only when disk is freed (`datalib-dag --free-disk-space`), to a step that takes them, and then this invocation runs nothing else: see § Compact and collect |
+| `--reset <part>` | only on a reset; this invocation is then a reset, not a run: see § Reset |
+| `--migrate` | only on the first launch of a build, and only to `datalib-step`: see § Migrate |
+| `--compact`, `--collect` | only when disk is freed, and only to `datalib-step`: see § Compact and collect |
 
-A verb (`--reset`, `--migrate`, `--compact`, `--collect`) rides on the command line rather than in
-the environment so that a command which has never heard of it refuses it
-instead of running a sync, and so that nothing the step starts inherits
-it.
+A verb (`--reset`, `--migrate`, `--compact`, `--collect`) rides on the
+command line rather than in the environment, so that a command which has
+never heard of it refuses it instead of running a sync, and nothing the
+step starts inherits it.
 
 So the entry above runs
 `fetch-weather --station KSFO --params-file <root>/system/params/weather_ingest.XXXX.json`,
-and that file holds `{"units":"metric"}`. The params travel in a file
-and not on the command line because they are where tokens and device
-ids live, and every user on the machine can read every process's
-command line with `ps`. The runner creates the file readable by its
-owner only and deletes it when the step exits, so read it early and
-don't keep the path. A command that takes no flags at all still works —
-declare no params and no inputs and it sees nothing extra (a `sh -c
-'script'` step receives whatever is appended as `$0`/positional args and
-can drop them). There is no `--outputs`: the one tree a step writes is
-its id, which arrives in the environment.
+and that file holds `{"units":"metric"}`. Params travel in a file, not
+on the command line, because they hold tokens and device ids, and every
+user on the machine can read every command line with `ps`. The file is
+readable by its owner only and deleted when the step exits, so read it
+early and don't keep the path. A step that declares no params and no
+inputs sees nothing extra (a `sh -c 'script'` step receives whatever is
+appended as `$0` and positional args, and can drop them). There is no
+`--outputs`: the one tree a step writes is its id, in the environment.
 
-**Environment** — the identity/context channel:
+**Environment**: who you are and what you read.
 
 | variable | meaning |
 | --- | --- |
 | `DATALIB_DAG_STEP` | this step's id, and the one tree it writes (`weather/ingest`) |
-| `DATALIB_DAG_RUN_ID` | the run this invocation belongs to — a UUID the loop mints for each busy period (the stretch from idle to busy and back, serving every request that arrives meanwhile), or whatever the caller passed to `datalib-dag` as `--run-id`. Every row in `system/runs/runs.sqlite` carries it; stamp it into anything you write that should be joinable back to the run. The built-in steps end every doltlite commit message with ` run=<id>` (`doltlite_raw::stamp_run`), which is how the Manage screen's commit history gets from a commit to its log |
-| `DATALIB_DAG_ATTEMPT` | which attempt this is, starting at `1`; a retry counts up |
+| `DATALIB_DAG_RUN_ID` | the run this invocation belongs to: a UUID the loop mints for each busy period (from idle to busy and back, serving every request that arrives meanwhile), or the `--run-id` given to `datalib-dag`. Every row of the run store carries it; stamp it into anything you write that should join back to the run. The built-in steps end every doltlite commit message with ` run=<id>`, which is how the Manage screen's commit history gets from a commit to its log |
+| `DATALIB_DAG_ATTEMPT` | which attempt this is, from `1`; a retry counts up |
 | `DATALIB_DAG_GROUP` | the group it is filed under (`weather`); unset for a step outside any group |
 | `DATALIB_DAG_GROUP_TYPE` | the group's `type`, when it declares one |
 | `DATALIB_DAG_SOURCE_GROUP` | under a diff group only (`type = "diff"`): the group its `source` names, whose raw store the step compares at two commits |
 | `DATALIB_DAG_SOURCE_GROUP_TYPE` | under a diff group only: that source group's `type`, which picks the renderer |
 | `DATALIB_DAG_FUNCTION` | what this step does within its group (`ingest`); unset for a step outside any group |
 | `DATALIB_DAG_DATA_ROOT` | absolute path of the data root (== cwd) |
-| `DATALIB_DAG_INPUTS` | resolved input artifacts, `\n`-separated, relative to the data root |
-| `DATALIB_DAG_CHANGED_INPUTS` | the subset of the above whose version moved since this step's last success, `\n`-separated; every input when there is no last success to compare against (a first run, or the step's own config changed). Empty only when nothing moved |
-| `DATALIB_DAG_FAILED_INPUTS` | the subset of `DATALIB_DAG_INPUTS` whose producer's most recent run did not succeed — it failed (`incomplete` included), was stopped, or was blocked — `\n`-separated; empty when every one succeeded or is running now. You are started anyway, on what each committed before it ended; whether to go on is yours to decide |
-| `DATALIB_READS` | a JSON object, input path → the version the runner started this invocation against, as `<fingerprint>:<version>` (§ "When you are started"); an input with no version yet is absent. A version for what you *read*, where the output's own would say less (an `embed` step reports a hash of this as its version) |
-| `DATALIB_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of sampling your own clock, so one run's outputs agree |
-| `DATALIB_DAG_CHECKPOINT_CADENCE` | set when the config has `checkpoint_cadence`: how many seconds to let pass before a run's first checkpoint. `datalib-step` doubles the wait after each one (the next comes once the run is twice as old as at the last), since every commit keeps the pages it touched; `0` means every consistent point and never grows |
-| `DATALIB_DAG_RENDER_PAGES` | set when the config has `render_pages`: `<buckets>,<blob_mb>`, either side empty when the config leaves it out — how many buckets a render reads together and how many MB of their blobs it loads at once |
-| `DATALIB_DAG_MODAL_MAX_SANDBOXES` | set when the config's `[modal]` has `max_sandboxes`: the most Modal Sandboxes an `embed` step that sends its chunks to Modal runs at once |
-| `RUST_LOG` | the run's log filter, in `tracing-subscriber`'s grammar, built from the config's `log_level` ([`logging.md`](logging.md) § "Where a line comes from"). A `RUST_LOG` already set where the runner was started is passed through instead. A step in another language may honor it or ignore it; what it prints is kept regardless |
+| `DATALIB_DAG_INPUTS` | the input trees, `\n`-separated, relative to the data root |
+| `DATALIB_DAG_CHANGED_INPUTS` | the inputs whose version moved since this step's last success, `\n`-separated. Every input when there is nothing to compare with (a first run, a reset, or the step's definition changed); empty only when nothing moved |
+| `DATALIB_DAG_FAILED_INPUTS` | the inputs whose producer's most recent run did not succeed (failed, `incomplete` included, stopped or blocked), `\n`-separated; empty when every one succeeded or is running now. You are started anyway, on what each committed; whether to go on is yours to decide |
+| `DATALIB_READS` | a JSON object, input path → the version the runner started you against, as `<fingerprint>:<version>` (§ "When you are started"); an input with no version yet is absent. Useful as a version for what you *read* (an `embed` step reports a hash of it) |
+| `DATALIB_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of your own clock, so one run's outputs agree |
+| `DATALIB_DAG_CHECKPOINT_CADENCE` | set when the config has `checkpoint_cadence`: how many seconds to let pass before a run's first checkpoint. `datalib-step` doubles the wait after each one; `0` means every consistent point |
+| `DATALIB_DAG_RENDER_PAGES` | set when the config has `render_pages`: `<buckets>,<blob_mb>`, either side empty when the config leaves it out: how many buckets a render reads together, and how many MB of their blobs it loads at once |
+| `DATALIB_DAG_MODAL_MAX_SANDBOXES` | set when the config's `[modal]` table has `max_sandboxes`: the most Modal Sandboxes an `embed` step that sends its chunks to Modal runs at once |
+| `RUST_LOG` | the run's log filter, in `tracing-subscriber`'s grammar, from the config's `log_level` ([`logging.md`](logging.md#where-a-line-comes-from)); a `RUST_LOG` already set where the runner started wins. A step in another language may ignore it; what it prints is kept either way |
 
 plus `PATH` (with the binary dir first), `PYTHONUNBUFFERED=1`, and
-anything in the entry's `env` table (which wins over the run-wide values
-on collision).
+anything in the entry's `env` table, which wins over the run-wide values.
 
-**Put a temp file where `TMPDIR` says.** In a protected library it names a
-folder inside the library, and your temp files hold what the library holds.
-Your language's temp-file call follows it in Rust and Node. macOS's own
-`mktemp` does not, so in a shell script write `mktemp "$TMPDIR/x.XXXXXX"`.
+**Put a temp file where `TMPDIR` says.** In a protected library it names
+a folder inside the library, and your temp files hold what the library
+holds. Rust's and Node's temp-file calls follow it; macOS's `mktemp`
+does not, so in a shell script write `mktemp "$TMPDIR/x.XXXXXX"`.
 
-**Nothing else of the runner's own environment reaches a step but a
-short list** (`datalib_env::inherit_only`): what any program needs to
-run (`HOME`, `TMPDIR`, the locale and time zone, proxy and certificate
-settings), latchkey's `LATCHKEY_*` variables and what latchkey reads,
-and how this build logs and finds its runtime. A variable the step's
-`params` name under a key ending in `_env_var`, at any depth
-(`key_env_var = "WHATSAPP_KEY"`), is handed too, and so is every name
-in `DATALIB_CHILD_ENV` (comma-separated) where the runner or the server
-was started. `datalib-step` is also handed `WHATSAPP_BACKUP_DECRYPTION_KEY`
-and `SIGNAL_BACKUP_PASSPHRASE`, which its WhatsApp and Signal sources
-read when the config names no variable. Anything else a person exported,
-another tool's token or the server's own API token, never reaches a
-step: a value a step needs goes in its `env`, or its name in
+**Of the runner's own environment, a step gets only a short list**: what
+any program needs to run (`HOME`, `TMPDIR`, the locale and time zone,
+proxy and certificate settings), latchkey's `LATCHKEY_*` variables and
+what latchkey reads, and how this build logs and finds its runtime. A
+variable the step's `params` name under a key ending in `_env_var`, at
+any depth (`key_env_var = "WHATSAPP_KEY"`), is handed on too, and so is
+every name listed (comma-separated) in `DATALIB_CHILD_ENV` where the
+runner or the server was started. `datalib-step` also gets
+`WHATSAPP_BACKUP_DECRYPTION_KEY` and `SIGNAL_BACKUP_PASSPHRASE`, which
+its WhatsApp and Signal sources read when the config names no variable.
+Nothing else a person exported reaches a step, the server's API token
+included: a value a step needs goes in its `env`, or its name in
 `DATALIB_CHILD_ENV`.
 
 ## The rules you must follow
 
-These are what the scheduler's correctness rests on:
+The scheduler's correctness rests on these:
 
-* **Write only under your own tree** — the one `DATALIB_DAG_STEP`
-  names. No two steps write one tree; the loader refuses a config where
-  two ids coincide or nest.
+* **Write only under your own tree**, the one `DATALIB_DAG_STEP` names.
+  No two steps write one tree; the loader refuses a config where two ids
+  coincide or nest.
 * **Be idempotent.** Retries and re-runs simply invoke you again; a
-  re-run over unchanged inputs must be safe (and ideally cheap).
-* **A commit is a correct state — never leave a torn tree on *any*
-  path**: success, failure, interrupt, or crash. Readers pin what you
-  committed and read it at once, so commit only at a boundary you
-  chose. Whatever you wrote after your last commit is discarded by the
-  next writer's `open`, never adopted; the next run refetches it from
-  your cursor, which is what idempotency is for.
+  re-run over unchanged inputs must be safe, and ideally cheap.
+* **A commit is a correct state: never leave a torn tree on *any*
+  path** (success, failure, interrupt or crash). Readers pin what you
+  committed and read it at once, so commit only at a boundary you chose.
+  Whatever you wrote after your last commit is discarded by the next
+  writer's `open`, never adopted; the next run fetches it again.
 
-Everything else — resume cursors, dedup indexes, bookkeeping — is
-private to you. Keep it under your own output trees.
+Everything else (resume cursors, dedup indexes, bookkeeping) is private
+to you. Keep it under your own tree.
 
 ## When you are started
 
@@ -173,52 +160,45 @@ README](../../datalib/backend/dag/README.md#what-the-loop-runs-and-what-makes-a-
 What that means from your side:
 
 * **You may be started while an input is still being written, and run
-  again.** A producer that declares `streams_output` (below, under
-  "checkpoint") lets the steps that read it start on each of its seals
+  again.** A producer that declares `streams_output` (§ stdout, under
+  `checkpoint`) lets the steps that read it start on each of its seals
   while it carries on. The downloads datalib ships for Slack, mail,
   Claude, ChatGPT, Notion, Google Drive, Linear, Todoist, Garmin, YoLink,
-  GitHub, GitLab and Baby Connect all declare it, and so does every
-  `render_markdown`. You are run again after each later seal, and
-  once more when the producer ends if it moved since your last run;
-  never twice at once. A step that sets `reads = "files"` is not
-  started while what it reads is being written.
-* **Or ask to start once it has all settled.** A step whose config entry
-  says `start = "after_inputs_settle"` is not started on seals: it
-  waits until nothing upstream of it is running or about to run, then
-  runs once, on what its producers ended with. Unlike `reads = "files"`
-  it holds no writer back while it runs; if a sync that starts
-  meanwhile moves what it read, it runs again once that sync has
-  settled. The default,
-  `start = "on_each_seal"`, is the behaviour above.
+  GitHub, GitLab and Baby Connect declare it, and so does every
+  `render_markdown`. You are run again after each later seal, and once
+  more when the producer ends if it moved since your last run; never
+  twice at once. A step that sets `reads = "files"` is not started while
+  what it reads is being written.
+* **Or start once it has all settled.** A step whose entry says
+  `start = "after_inputs_settle"` is not started on seals: it waits until
+  nothing upstream of it is running or about to run, then runs once on
+  what its producers ended with. Unlike `reads = "files"` it holds no
+  writer back while it runs; if a sync that starts meanwhile moves what
+  it read, it runs again once that sync has settled. The default is
+  `start = "on_each_seal"`.
 * **Read the commit you were started against, never `main`.**
-  `DATALIB_READS` holds, for each input, the version you were started
-  against, as `<fingerprint>:<version>`: a hash of the producing step's
-  definition, a colon, and the version that step reported. For a raw
-  store that version is a commit, so the commit is everything after
-  the first `:` (`${v#*:}` in a shell): the last one at which the
-  store's content moved. A sync that found nothing new still commits
-  its own record (`sync_runs`, its stamps), which moves `main` but not
-  the version, so you are not run for it. `main` may have moved on
-  since; when its content moved, the loop runs you again for it.
-* **`DATALIB_DAG_CHANGED_INPUTS` names what moved.** On a first run,
-  or when your definition changed since your last success, there is
-  nothing to compare with, and it names every input: do all your work.
-  So does a reset of your step. Empty only ever means nothing you read
-  moved.
+  `DATALIB_READS` holds each input's version as `<fingerprint>:<version>`:
+  a hash of the producing step's definition, a colon, and the version
+  that step reported. For a raw store that version is a commit, so the
+  commit is everything after the first `:` (`${v#*:}` in a shell): the
+  last one at which the store's content moved. A sync that found nothing
+  new still commits its own bookkeeping, which moves `main` but not the
+  version, so you are not run for it. `main` may have moved on since;
+  when its content moved, the loop runs you again.
+* **`DATALIB_DAG_CHANGED_INPUTS` names what moved.** When it names every
+  input (a first run, a reset, a changed definition), do all your work.
+  Empty only ever means nothing you read moved.
 * **A failed input is read at its last commit, and named.** What a
-  producer committed before it failed is a version like any other, and
-  you are started on it; `DATALIB_DAG_FAILED_INPUTS` names each input
-  whose producer's last run did not succeed, so you can tell a partial
-  input from a whole one and decide whether to go on. Only a step none
-  of whose inputs has ever published anything is held back
-  (`blocked`).
+  producer committed before it failed is a version like any other;
+  `DATALIB_DAG_FAILED_INPUTS` lets you tell a partial input from a whole
+  one. Only a step none of whose inputs has ever published anything is
+  held back (`blocked`).
 
 ## stdout: the event protocol (optional)
 
-stdout is parsed line by line as NDJSON. Lines that don't parse are
-forwarded as plain `info` logs, so `echo` output is captured, not
-lost. Parseable lines let you drive live progress in the runner and
-the Manage screen:
+stdout is parsed line by line as NDJSON. A line that does not parse is
+kept as a plain `info` log, so `echo` output is captured, not lost.
+Parseable lines drive live progress in the runner and the Manage screen:
 
 ```json
 {"event":"metric","step":"me","name":"rows_upserted_total","labels":{"table":"messages"},"value":1234}
@@ -227,195 +207,163 @@ the Manage screen:
 {"event":"log","step":"me","level":"info","msg":"hello","target":"me::fetch","fields":{"page":3}}
 ```
 
+The `step` field is required but its value does not matter: the runner
+re-tags every event with the real step id.
+
 **`metric` is a current value, never a delta.** Name the thing counted
 and send the total so far each time it moves; `labels` is optional and
-splits one name into series (`table=messages`).
+splits one name into series (`table=messages`). Absolute values make the
+runner's coalescing lossless: it keeps the newest value per series, and
+a dropped position costs nothing where a dropped increment would be lost
+work.
 
 **Name a series the way Prometheus would**, because `GET /metrics`
-serves it under that name (`docs/dev/logging.md` §"From outside the
-app") and reads its type off it:
+serves it under that name and reads its type off it
+([`logging.md`](logging.md#from-outside-the-app)):
 
 - A running total that only grows ends in **`_total`** and is served as
-  a counter: `rows_upserted_total`, `api_requests_total`. It may start
-  again from zero next run; a reader of a counter expects that. One
-  that goes down within a run is a gauge under a counter's name, and
-  the runner says so with a warning in your log.
-- A count of what the last pass did, which the next pass replaces, is
-  a gauge named for it: `last_pass_rows_inserted`.
-- Anything that can go down does not, and is served as a gauge:
-  `queued`, `items`.
-- A unit goes before that suffix, in base units: `fetched_bytes_total`,
+  a counter (`rows_upserted_total`). It may start again from zero next
+  run. One that goes down within a run gets a warning in your log.
+- A count of what the last pass did, which the next pass replaces, is a
+  gauge named for it: `last_pass_rows_inserted`.
+- Anything that can go down is a gauge: `queued`, `items`.
+- A unit goes before the suffix, in base units: `fetched_bytes_total`,
   `wait_seconds_total`.
 - Lower case, `_` between words, and a label for what varies
   (`{table=…}`) rather than a name per value.
 
-The one gauge the UI looks for is **`queued`** — how much work is ahead
-of you right now, which you usually know even when you cannot know the
-total. The Manage screen's Status column shows it while the step has
-work queued. Its ETA is the queue
-over the pace work has come off it lately: read off `done_total` when you
-use the `progress_*` form below, otherwise off the falls in your
-`queued`. Every series you report is charted over the run on the
-group's sync dashboard. You need not send a last `queued` of zero: when you end, however
-you end, the runner sets it to zero for you. When you end short of
-done — stopped, or failed, `incomplete` included — it keeps what your
-`queued` held as your **`owed`**, which the Manage row and `datalib-dag
-status` show once you are at rest; when you succeed you owe nothing,
-whatever it held. So a download that gives up with work left must end
-`incomplete`, not succeed. Absolute values are what
-make the runner's coalescing lossless: it keeps the newest value per
-series, and a dropped position costs nothing where a dropped increment
-would be lost work.
+**`queued`** is the gauge the UI reads for progress: how much work is
+ahead of you now, which you usually know even when you cannot know the
+total. The Manage screen's Status column shows it while you run, with an
+ETA from the pace work comes off it (from `done_total` if you use the
+`progress_*` form below, otherwise from the falls in `queued`). You need
+not send a last `queued` of zero: when you end, however you end, the
+runner sets it to zero. When you end short of done (stopped, or failed,
+`incomplete` included) it keeps what `queued` held as your **`owed`**,
+which the Manage row and `datalib-dag status` show; when you succeed you
+owe nothing. So a download that gives up with work left must end
+`incomplete`, not succeed. Every series you report is charted on the
+group's sync dashboard.
 
-Three names are read by name rather than just drawn. **`items`** is
-how many things your output store holds — messages, readings, events;
-whole store, not this run — and fills the Manage screen's Items column
-and its sparkline; **`documents`** is how many documents those items
-sit in, for that cell's hover; **`problems`**, with
-a `severity=error` or `severity=warning` label, is a grey count after
-a row's name — count the problems your step found, not ones it copied
-from an input, since the group's count is the sum of its steps'. (The
-red and yellow counts are problem rows, read where each step keeps
-them; §"Problems: what you could not do".) Report each one every run, zero
-included: the screen shows the newest value a step reported, so a
-count left out keeps last run's. A step that counts neither leaves no
-series, and draws a blank Items cell and no counts. They are
-`datalib_metrics::ITEMS`, `datalib_metrics::DOCUMENTS` and
-`datalib_problems::METRIC` in the
-tree; nothing else makes the reporter and the screen agree on the
-spelling.
+Three more are read by name. **`items`** is how many things your output
+store holds (messages, readings, events; the whole store, not this run),
+and fills the Manage screen's Items column and its sparkline;
+**`documents`** is how many documents those items sit in, for that
+cell's hover; **`problems`**, with a `severity=error` or
+`severity=warning` label, is a grey count after a row's name. Count the
+problems your step found, not ones it copied from an input, since the
+group's count is the sum of its steps'. (The red and yellow counts are
+problem rows: § "Problems: what you could not do".) Report each one
+every run, zero included: the screen shows the newest value a step
+reported, so a count left out keeps last run's. A step that reports
+none of them draws a blank Items cell and no counts.
 
-Two series you never send: the runner measures your memory itself.
-Every two seconds it adds up the resident memory of your process and
-every process below it, and reports the sum as **`rss_bytes`** and the
-highest reading this attempt as **`rss_peak_bytes`**; `rss_bytes` goes
-to zero when you exit (`dag/src/memory.rs`). A child you spawned whose
-parent then exited is no longer below you and drops out, so the sum is
-a floor. Nothing caps it. The peak also goes on your attempt's row in
-the run store's `processes`, as `peak_rss_bytes` (`logging.md`
-§"Every line has an author").
-
-The first sample is taken as you start, so a step that ends within two
-seconds would have only that reading. On macOS the runner also reads
-your own process's lifetime peak once you have exited, from the kernel,
-and raises `rss_peak_bytes` to it when it is higher. That figure is the
-peak *physical footprint*, the number Activity Monitor shows as Memory;
-it covers your process alone, not what you spawned. Linux keeps no peak
-past exit for anyone but the process that reaps you, so there a short
-step's peak is still its first reading.
-
-On macOS the runner starts you with `MallocLargeCache=0`. Without it
-the system allocator keeps freed large blocks for reuse and counts them
-in your footprint: a Claude Code first sync's ingest peaked at up to
-2.9 GB with the cache on and under 0.4 GB with it off, at the same CPU
-time. A step's `env` (or the run's) can set it back to `1`.
+Two series you never send: the runner samples the resident memory of
+your process and every process below it every two seconds, as
+**`rss_bytes`** (zero once you exit) and **`rss_peak_bytes`**, the
+highest this attempt; the peak also goes on your attempt's row in the
+run store. A child whose parent exited is no longer below you and drops
+out, so the sum is a floor. Nothing caps it. On macOS the runner also
+raises the peak to your process's own lifetime peak footprint once you
+exit, which catches a step shorter than one sample. On macOS the runner
+starts you with `MallocLargeCache=0`, so freed large blocks are not
+counted as yours (a Claude Code first sync peaked at 2.9 GB with it on
+and under 0.4 GB with it off); a step's `env` can set it back to `1`.
 
 A step that counts one thing and knows its total may use the shorter
-form instead, which the runner translates into the `done_total` and `queued`
-metrics for it:
+form, which the runner turns into the `done_total` and `queued` metrics:
 
 ```json
 {"event":"progress_length","step":"me","total":42}
 {"event":"progress_inc","step":"me","delta":1}
 ```
 
-`progress_message` is the step's own words — a phase, not a number.
+`progress_message` is the step's own words: a phase, not a number.
 `log`'s `target` and `fields` are optional; a plain `msg` is fine.
 
-A step that seals part of its output while still running says so with
-a `checkpoint` (P2 in [the runner's README](../../datalib/backend/dag/README.md#what-a-sink-owes-its-consumers)),
-and should say how many rows
-that seal added:
+A step that seals part of its output while still running says so with a
+`checkpoint`, and should say how many rows that seal added:
 
 ```json
 {"event":"checkpoint","step":"me","version":"a1b2c3","rows":340}
 ```
 
-A checkpoint alone does not let a consumer start early. A consumer may
-read your output while you are still writing it only if you say your
-output can be read that way: once, before your first checkpoint, print
+A checkpoint records your version, so a kill keeps what you sealed. It
+does not by itself let a consumer start early. A consumer may read your
+output while you are still writing only if you say it can be read that
+way: once, before your first checkpoint, print
 
 ```json
 {"event":"capabilities","step":"me","streams_output":true}
 ```
 
 Say it only if a reader of your output sees each seal whole and never
-half a write, as a reader pinned to a doltlite commit does. Without it, each checkpoint still records
-your version, so a kill keeps what you sealed, but every consumer waits
-for you to finish. A consumer that reads your files off disk rather than
-at a pinned commit waits for you to finish either way.
+half a write, as a reader pinned to a doltlite commit does ([the
+runner's README](../../datalib/backend/dag/README.md#what-a-sink-owes-its-consumers)).
+Without it every consumer waits for you to finish, and a consumer that
+reads your files off disk rather than at a pinned commit waits either
+way.
 
-`rows` is what the runner keeps each **consumer's** queue depth from —
-the `queued{from=<you>}` metric on every step that reads your output,
-counting up as you seal and down as they read — with no store opened
-to measure it. A step that cannot count leaves `rows` out; its
-consumers' queue then reads as unknown rather than wrong. A
-checkpoint you re-announce (which you should, until a consumer has
-run — one arriving while the consumer is mid-pass is dropped) counts
-once, and one that arrives after your outcome is ignored.
+`rows` is what the runner counts each consumer's queue from (the
+`queued{from=<you>}` metric on every step that reads your output, up as
+you seal and down as they read), with no store opened to measure it.
+Leave it out if you cannot count; the consumers' queue then reads as
+unknown rather than wrong. Re-announce a checkpoint until a consumer has
+run (one arriving while a consumer is mid-pass is dropped); a repeat
+counts once, and one that arrives after your outcome is ignored.
 
-The `step` field is required by the schema but its value doesn't
-matter — the runner re-tags every event with the authoritative step
-id (children of `datalib-step` label sub-work `parent/child`, which
-also just flows through).
-
-Everything above lands in `<data_root>/system/runs/runs.sqlite` — plain
-SQLite, one row per log line, the newest value per metric, every
-step's state — for this run and the ones before it, which is what the
-Manage screen reads. The store, its retention and how to read it:
-[`logging.md`](logging.md).
+Everything above lands in `<data_root>/system/runs/runs.sqlite`, plain
+SQLite: one row per log line, the newest value per metric, every step's
+state, for this run and the ones before it. That is what the Manage
+screen reads; how to read it yourself is [`logging.md`](logging.md).
 
 ### Problems: what you could not do
 
 A problem is one thing your step could not fully do: a record it could
 not fetch, a file it could not read. It is a row of the `problems`
-table (`datalib_problems::ProblemRow`), the same table in every store,
-and a reader finds a step's problems in the stores directly in its
-folder (`<data root>/<group>/<function>/`): each `.doltlite_db` as its
-`main` commit has it, and each plain `.sqlite` file
-(`datalib_step_problems::of_step`). `datalib-step`'s steps keep theirs
-in their own stores. A step with no store of its own keeps them in
-`problems.sqlite` there: it writes the file itself through
-`datalib_step_problems::StepFile`, or sends two lines and lets the
-runner write it:
+table, the same table in every store. A reader finds a step's problems
+in the stores directly in its folder (`<data root>/<group>/<function>/`):
+each `.doltlite_db` as its `main` commit has it, and each plain
+`.sqlite` file. A step with no store of its own keeps them in
+`problems.sqlite` there, and either writes that file itself or sends two
+kinds of line and lets the runner write it:
 
 ```json
 {"event":"problem","stage":"fetch","scope_kind":"entity","scope_key":"messages:C01/1712345678.000100","outcome":"dropped","reason":"fetch_failed","severity":"warning","sample":"HTTP 404","upstream_entity_kind":"message","upstream_id":"C01/1712345678.000100"}
 {"event":"covered","kind":"records","table":"messages","all_but":["C01/1712345999.000200"]}
 ```
 
-- **A `problem` line** is a `ProblemRow` without the columns its writer
-  fills: its id (minted from what the line says), its source (the
-  step's group) and its stamps. `stage`, `scope_kind`, `outcome`,
-  `reason` and `severity` are datalib's own closed sets
-  (`datalib_problems`); `sample` says what happened; `item_uuid`,
-  `field`, `path` and `rule` are optional.
+- **A `problem` line** is a row without the columns the writer fills:
+  its id, its source (the step's group) and its stamps. `stage`,
+  `scope_kind` (`entity` or `markdown`), `outcome`, `reason` and
+  `severity` are datalib's own closed sets; `sample` says what happened;
+  `severity`, `item_uuid`, `field`, `path` and `rule` are optional.
 - **`scope_key`** is what the problem is about within your step:
   `<table>:<id>` for a record, `file:<path>` for a file, or
-  `listing:<name>` or `phase:<name>` for a part of your run. It is
-  what `covered` matches.
+  `listing:<name>` or `phase:<name>` for a part of your run. It is what
+  `covered` matches.
 - **What it is about upstream** goes in `upstream_entity_kind`,
   `upstream_id` and `upstream_account`, the names a grid row carries;
   never an id some other step mints.
-- **`covered`** says what this run checked again, so what it covered
-  and did not find again can go: `all`, `listings` (every `listing:`
-  and `phase:` scope), `records` of one `table`, or `files` `under` a
-  folder. A `records` line with `only` vouches for exactly those
-  records; one with `all_but`, and a `files` line with it, for every
-  one but those. Both count even when your run fails. Without either,
-  and for `all` and `listings`, only a run that succeeds clears
+- **`covered`** says what this run checked again, so that a problem it
+  covered and did not find again goes: `all`, `listings` (every
+  `listing:` and `phase:` scope), `records` of one `table`, or `files`
+  `under` a folder. A `records` line with `only` vouches for exactly
+  those records; one with `all_but`, and a `files` line with it, for
+  every one but those. Both count even when your run fails. Without
+  either, and for `all` and `listings`, only a run that succeeds clears
   anything.
 
-The runner writes the problems as they arrive, at most a second after
-a line, so they show while you run, and clears when you end. A step
-that sends no `problem` or `covered` line has its file left alone. Run
-by hand (§"Running `datalib-step` by hand"), these lines are printed
-and kept nowhere; a step that wants them kept writes the file itself.
+The runner writes problems at most a second after their line, so they
+show while you run, and clears when you end. A step that sends no
+`problem` or `covered` line has its file left alone. Run by hand
+(§"Running `datalib-step` by hand"), these lines are printed and kept
+nowhere.
 
 ### The outcome line
 
-The last thing you may print is one `outcome` event — the content
-version of each output you produced:
+The last thing you may print is one `outcome` event: the content version
+of your output.
 
 ```json
 {"event":"outcome","outputs":[
@@ -423,51 +371,42 @@ version of each output you produced:
 ]}
 ```
 
-`rows` is optional and means the same as on a `checkpoint`: what this
-output gained since your last seal (or in all, if you never sealed) —
-finishing is the last seal, as far as a consumer's queue is concerned.
+`rows` is optional and means what it means on a `checkpoint`: what the
+output gained since your last seal, or in all if you never sealed.
 
-For your output there are two cases, and that is the whole protocol:
+There are two cases, and that is the whole protocol:
 
-* **`version`**: a content version you vouch for, such as a dolt commit
-  hash, a row-set hash or a cursor hash. Trusted verbatim, and compared
-  only for equality. The runner never opens your output to check it.
-* **nothing** (omit the path, or the whole outcome line): each success
+* **`version`**: a content version you vouch for, such as a doltlite
+  commit hash, a row-set hash or a cursor hash. Trusted verbatim and
+  compared only for equality; the runner never opens your output.
+* **nothing** (leave the path or the whole line out): each success
   counts as new, so every step that reads your output runs again after
-  it. Always safe, and wasteful when nothing changed; the runner says so
-  on the event stream (`info`: "reported no version for `<path>`, so
-  every step reading it runs again").
+  it. Always safe, and wasteful when nothing changed; the runner logs an
+  `info` line saying so.
 
 **The version must be a function of the output's content.** Two runs
 that leave the same data behind must report the same string, because
-that string is the entire signal for "did this change?": a step that
-did nothing this pass reports the version it reported last time, and
-its consumers skip. There is no separate "unchanged" flag to assert;
-unchanged is something the scheduler *derives* from two equal
-versions. A timestamp, a run id, or a counter is not a version: it
-moves every run and re-runs everything downstream, which is exactly
-what reporting nothing already gets you.
+that string is the whole signal for "did this change?": a step that did
+nothing this pass reports what it reported last time, and its consumers
+skip. A timestamp, a run id or a counter is not a version: it moves
+every run, which is what reporting nothing already gets you.
 
 **Spell one version the same way everywhere.** A checkpoint's `version`
 and the outcome's are compared as strings, so if you finish on the
 commit you last sealed, report it exactly as the checkpoint did, and
 your consumers do not run again for it. A doltlite store's head is a
-good version for both: it moves only when a commit changed something
+good version: it moves only when a commit changed something
 ([`doltlite.md`](doltlite.md#diffs)). A built-in ingest reports a
-better one, the last commit at which a table its readers read moved:
-its own bookkeeping commits on every run and should not wake them.
+better one, the last commit at which a table its readers read moved,
+since its own bookkeeping commits on every run.
 
-A step that did not run keeps the version recorded for its output last
-time, or `datalib_dag::version::UNKNOWN` if there is none.
-
-Reporting on any path but your own tree (`DATALIB_DAG_STEP`) is a
-contract violation and fails the step. Exit `0` means success; the
-outcome line is purely informational.
+Reporting on any path but your own tree is a contract violation and
+fails the step. Exit `0` means success; the outcome line only informs.
 
 ### Failure classification
 
-On a non-zero exit, an outcome line lets you tell the scheduler *what
-kind* of failure this is, which drives retry policy:
+On a non-zero exit, an outcome line can tell the scheduler what kind of
+failure this is, which decides whether it retries:
 
 ```json
 {"event":"outcome","failure":"rate_limited","outputs":[
@@ -481,81 +420,49 @@ kind* of failure this is, which drives retry policy:
 | `rate_limited` | HTTP 429 and friends | retry, as for `transient` |
 | `auth` | credentials need a human | fail fast |
 | `permission` | the OS would not let you read a path your settings name (macOS privacy) | fail fast; the app's Manage row offers "Choose folder again" |
-| `data` | bad input; retrying won't help | fail fast (default when absent) |
-| `cancelled` | you were interrupted | fail fast, exit code 130 convention |
+| `data` | bad input; retrying won't help | fail fast (the default when absent) |
+| `cancelled` | you were interrupted | fail fast; exit code 130 by convention |
 | `incomplete` | you gave up with work still owed, after committing what you got | fail fast: your own retries are what ran out, and the next run resumes |
 
-(`RetryPolicy` in `dag/src/scheduler.rs`.)
-
-`outputs` on a failure outcome reports partial progress you *did*
-commit. The scheduler records those versions, the next run resumes from
-them, and your dependents read them now: a commit is a correct state.
-That includes `cancelled`: a step that stops at a consistent point and
-commits should report where it got to. A failure that reports nothing
-moves nothing, since the runner cannot know your tree is whole.
+`outputs` on a failure reports what you *did* commit. The scheduler
+records it, your dependents read it now, and the next run resumes from
+it: a commit is a correct state. That includes `cancelled`: a step that
+stops at a consistent point and commits should report where it got to.
+A failure that reports nothing moves nothing, since the runner cannot
+know your tree is whole.
 
 ### Rendering a source with no data
 
-**A source that has never been downloaded is not a failure.** If your
-render step finds no raw store and no legacy tree, emit nothing and
-exit 0 — an empty output tree, not `failure: data`.
-
-This is the normal state of every source in a freshly scaffolded
-config: the user adds ten sources, authenticates one, and syncs it.
-Failing there is wrong: `data` means "a human must look at this", and
-the Manage row turns red for a source that has simply not been synced
-yet.
-
-An empty render is safe for the index: `unified_grid_and_search_index`
-reads each source's render store on its own and removes only the
-documents that store dropped, so rendering nothing contributes nothing
-rather than dropping another source's rows.
+**An input that has never been written is not a failure.** If your
+render step finds no raw store, emit nothing and exit 0: an empty output,
+not `failure: data`. That is the normal state of every source in a
+freshly scaffolded config, where a person adds ten sources and syncs
+one; a `data` failure would turn the Manage row red for a source that
+has simply not been synced. An empty render is safe for the index,
+which removes only the documents a render store dropped.
 
 Keep failing, loudly, when the data is *there but wrong*: a store that
-exists and can't be opened, a schema missing tables it should have, a
-row that won't parse. The distinction is **absent vs. malformed**, and
-only the second one is a `data` failure. In practice that falls out of
-the ordinary shape — return empty on the "nothing exists" branch and
-let every error below it propagate:
-
-```rust
-pub fn parse(path: &Path) -> Result<Parsed> {
-    let db_path = db_path_for(path);
-    if db_path.exists() {
-        return parse_doltlite(&db_path);   // a broken store still errors
-    }
-    if path.is_dir() {
-        return parse_json_dir(path);       // legacy tree
-    }
-    Ok(Parsed::default())                  // never downloaded — not an error
-}
-```
+exists and cannot be opened, a schema missing tables it should have, a
+row that will not parse. The line is **absent vs. malformed**: return
+empty on the "nothing exists" branch and let every error below it
+propagate.
 
 ## stdin: nothing to read
 
-**Your step is given `/dev/null` on stdin.** Read it and you get an
-immediate end-of-file; there is no input channel.
-Everything a step is told arrives as environment variables, the
-`--params-file`, and its declared inputs.
+**Your step is given `/dev/null` on stdin**, so a read gets an immediate
+end-of-file. Everything a step is told arrives in the environment, the
+`--params-file` and its declared inputs.
 
 ## fd 3: the runner's pipe, if you want it
 
-Every step is also handed a pipe on file descriptor 3. You can ignore it
-completely — it costs one open descriptor and nothing else. What it is
-for:
+Every step is also handed a pipe on file descriptor 3, and may ignore
+it. The runner holds the write end for exactly as long as it lives, so
+**end-of-file on fd 3 means the runner is gone**, even when it was
+SIGKILLed or taken by the OOM killer and could run no code to stop you.
+A step that does not watch it carries on with its store open and nobody
+recording how the run ended.
 
-The runner normally stops a step by signalling it: SIGINT, then
-SIGKILL fifteen seconds later if it is still there. Both need the runner
-to be alive to run that code. A runner that is itself SIGKILLed —
-or that aborts, or is taken by the OOM killer — runs nothing, and since
-nothing else ever signals a step, a step that waits to be told would
-carry on with its store open and nobody recording how the run ended.
-
-What survives a SIGKILL is the kernel closing the dead process' file
-descriptors. So the runner holds the write end of that pipe for exactly
-as long as it lives. **End-of-file on fd 3 means the runner is gone.**
-
-`DATALIB_PARENT_PIPE` holds the descriptor's number — read it rather
+`DATALIB_PARENT_PIPE` holds the descriptor's number; read it rather
 than hard-coding 3. In Rust it is one call at startup:
 
 ```rust
@@ -563,227 +470,165 @@ datalib_parent_watch::exit_with_parent(|| { /* stop; see below */ })?;
 ```
 
 In any other language, watch that descriptor for end-of-file yourself.
+It is not on stdin because a program that reads stdin expecting the
+immediate end-of-file of `/dev/null` would block forever on a pipe
+nobody writes to.
 
-### Why fd 3 and not stdin
-
-A step is whatever `command` says, and a program that reads stdin
-expecting the immediate end-of-file `/dev/null` gives would block
-forever on a pipe nobody writes to. So stdin is left alone and the pipe
-goes somewhere a program will only find if it looks. There is nothing to
-configure: the pipe is always there, and watching it is your program's
-business. (`datalib_parent_watch`'s crate doc has the general rule.)
-
-### What to do when it closes
-
-Take down what *you* spawned, not just yourself. The runner starts each
-step as its own process-group leader — so that a signal aimed at a step
-reaches a `node` the step wrapped — which makes `kill(0, SIGINT)`
-exactly "me and my children". That is what `datalib-step` does, and its
-ordinary SIGINT handler then seals and exits.
-
-A step that ignores fd 3 is simply one the runner cannot clean up after
-being SIGKILLed: it keeps running until something else stops it.
+When it closes, take down what *you* spawned, not just yourself. The
+runner starts each step as its own process-group leader, so
+`kill(0, SIGINT)` is exactly "me and my children". That is what
+`datalib-step` does, and its SIGINT handler then seals and exits.
 
 ## stderr: logging
 
-stderr is yours for humans: every line is captured into the event
-stream as an `info` log. So is every stdout line that is not an
-event. If you exit non-zero, the last few stderr lines a person could
-not find by reading "it failed" — plain lines, and the message of any
-structured `warn` or `error` line — become the step's error message;
-structured `info` lines stay in the log. The runner writes that
-message into the log too, as the step's last line at `error` level,
-and that line is where the Manage row's double-click opens the log.
-A step that exits after a cancel (`failure: cancelled`) is recorded
-as stopped, its message says so, and its line is a `warn`.
+stderr is yours for humans: every line is kept as an `info` log, and so
+is every stdout line that is not an event. If you exit non-zero, your
+last few stderr lines (plain lines, and the message of any structured
+`warn` or `error` line) become the step's error message, which the
+runner also writes as the step's last log line at `error` level; that
+line is where the Manage row's double-click opens the log. A step that
+exits after a cancel (`failure: cancelled`) is recorded as stopped, and
+its line is a `warn`.
 
-A step that reads a streaming producer runs once per seal it reads,
-and a pass of it that fails runs again once that producer seals again.
-The run then reports the last pass, but a failed pass that was run
-again is still reported: its message is an `error` line of its own
-(`pass 1 failed: …`), the Manage row counts it as a warning, and
-`datalib-dag`'s report says how many there were
-([dag README](../../datalib/backend/dag/README.md) §"What the loop
-runs, and what makes a step stale").
+A step that reads a streaming producer runs once per seal, and a pass
+that fails runs again on the producer's next seal. The run reports the
+last pass, but a failed pass that was run again still shows: as an
+`error` line of its own (`pass 1 failed: …`), as a warning on the Manage
+row, and in `datalib-dag`'s report.
 
-Each line records which pipe it came from (`stream`) and is
-timestamped as the runner reads it, and the two pipes are read
-concurrently, so the log is in arrival order across both.
+Each line records which pipe it came from and is timestamped as the
+runner reads it; the two pipes are read concurrently, so the log is in
+arrival order across both. **Flush per line**: a program that
+block-buffers a piped stdout (C's stdio, Python's by default) hands the
+runner its progress in 4 KB lumps, long after the stderr it belonged
+beside. The runner sets `PYTHONUNBUFFERED=1`; Rust's stdout is
+line-buffered and `sh` writes through.
 
-**Flush per line.** Arrival order is only as good as the child's
-buffering: a program that block-buffers its stdout when it is a pipe
-(C's stdio, Python's by default) hands the runner its progress in 4KB
-lumps, minutes after the stderr they belonged beside. The runner sets
-`PYTHONUNBUFFERED=1` for every child; Rust's stdout is line-buffered
-regardless and `sh` writes through. Anything else should flush after
-each line it wants seen on time.
+A tracing-JSON line (with a `level` field, as `tracing-subscriber`'s
+JSON format writes) is unwrapped: its `fields.message` becomes the
+line's text, its `timestamp`, `level`, `target` and thread become
+columns, and the rest rides along as `fields`. Its own timestamp wins
+over the arrival time, so write it with the local offset
+(`…T10:00:00+01:00`); a `Z` stamp is filed as `+00:00`. Every level is
+kept, `debug` and `trace` included.
 
-A structured tracing-JSON line (with a `level` field, as
-tracing-subscriber's JSON format writes) is unwrapped rather than
-quoted: its `fields.message` becomes the log's `msg`; its `timestamp`,
-`level`, `target` and thread (`threadName`, else `threadId`) become
-columns — the line's own timestamp wins over the runner's arrival time,
-offset included, so write it in the local offset
-(`…T10:00:00+01:00`): a `Z` stamp is filed as `+00:00` beside the
-runner's lines in the real one — and everything else it carried
-(`filename`, `line_number`, the remaining `fields`) rides along as
-`fields`. The Manage screen shows
-the sentence, not the envelope, and can still sort by thread.
-
-Every level is kept, `debug` and `trace` included: the runner stores a
-`DEBUG` envelope as a `debug` row rather than rounding it up to `info`.
-
-**Your attempt is a process.** Every line names the process that
-wrote it, and each attempt of a step is one: the runner records it at
-spawn and again at `wait(2)` with the `exit_code` or `signal` that
-ended it, and its commit — the runner's own when the step is the
-built-in program, none for a custom command — which is what a
-structured line's `filename` and `line_number` are relative to. What
-the runner itself says *about* your step is the runner's line, with
-your step as its subject. The model, the other kinds of process and
-the log card that reads them: [`logging.md`](logging.md).
+Every line names the process that wrote it, and each attempt of a step
+is one process, recorded at spawn and at exit with its exit code or
+signal. The model, and the log card that reads it:
+[`logging.md`](logging.md).
 
 ## Reset (optional)
 
-`datalib-dag --reset <step-id>[,<step-id>…]` (or the app's
-Reset, `POST /api/reset`) empties what a step wrote so the next run
-does its work from the start: the
-runner invokes the step once with `--reset store` appended,
-then forgets the step ever succeeded and records
-the version the reset reports, or a new one if it reports none, so
-everything reading the tree runs again. Empty that part of your tree, keep whatever
-history you keep, commit if you commit, exit 0, and do nothing else: no
-inputs are resolved and no sync follows unless `--sync` was also given.
-A command that does not know the verb exits non-zero and nothing is
-changed. `datalib-step` deletes every row of the tree's store in one
-commit, keeping the tables, plus a render tree's documents; the run log
-and the rest are still in the history. Keeping the tables is what lets
-a reader take the emptiness in as ordinary deletions: the app's Reset
-then syncs what reads the step, so its documents leave the grid. The app
-does not wait for a sync to end: the loop stops the step if it runs and
-resets it there and then ([the runner's
-README](../../datalib/backend/dag/README.md#resets-and-purges)). A reset
-also reports the metrics a run would (`problems`, and `documents` for a
-render step), counted off the emptied store: the Manage row shows a
-step's newest sample, and the reset step itself does not run again
-until the next sync.
+`datalib-dag --reset <step-id>[,<step-id>…]`, or the app's Reset
+(`POST /api/reset`), empties what a step wrote so its next run starts
+from scratch. The runner invokes the step once with `--reset store`
+appended, then forgets the step ever succeeded and records the version
+the reset reports (a new one if it reports none), so everything reading
+the tree runs again. Empty that part of your tree, keep whatever history
+you keep, commit if you commit, exit 0, and do nothing else: no inputs
+are resolved, and no sync follows unless `--sync` was also given. A
+command that does not know the verb exits non-zero and nothing changes.
 
-Nothing resets an ingest step's blob CAS, `blobs.sqlite`: a reset keeps
-the bytes, and the refetch lands on them. To get the space back, delete
-the file **and** reset the ingest step, together. Deleting the file
-alone leaves edge rows naming bytes that are gone, and the download
-does not fetch what its edge rows say it already has.
+`datalib-step` resets `ingest`, `render_markdown` and `embedding_map`
+and refuses the rest. For a download or a render it deletes every row of
+the step's store in one commit and keeps the tables, so the history
+still has the rows and a reader takes the emptiness
+in as ordinary deletions: the app's Reset then syncs what reads the
+step, and its documents leave the grid. A reset also reports the
+`problems` (and for a render, `documents`) counts of the emptied store,
+since the Manage row shows a step's newest sample. The app does not wait
+for a sync to end: the loop stops the step if it runs and resets it
+there and then ([the runner's
+README](../../datalib/backend/dag/README.md#resets-and-purges)).
+
+Nothing resets an ingest step's blob store, `blobs.sqlite`: a reset
+keeps the bytes, and the refetch lands on them. To get the space back,
+delete the file **and** reset the ingest step, together. Deleting the
+file alone leaves rows naming bytes that are gone, and the download
+does not fetch what it believes it already has.
 
 ## Migrate
 
-The first time a build runs on a root, before the loop takes any
-request, the process that holds the runner lock invokes every step that
-takes the verb once, producers before their readers, with `--migrate`
-appended ([the runner's README](../../datalib/backend/dag/README.md#upgrading-a-root)).
-The runner knows nothing of what a step wrote; the
-step decides, and answers in its outcome line:
+Only `datalib-step`'s own steps are sent this verb; a custom step never
+is. The first time a build runs on a root, before the loop takes any
+request, every such step is invoked once with `--migrate`, producers
+before their readers ([the runner's
+README](../../datalib/backend/dag/README.md#upgrading-a-root)). The
+runner knows nothing of what a step wrote; the step answers in its
+outcome line:
 
-* **nothing to do** — what it wrote is in this build's shape, or it has
-  written nothing yet: exit 0, report nothing.
-* **migrated** — it brought what it wrote to this build's shape in
-  place, fetching nothing: report the output's new version as a run
-  would. The runner records it and keeps the step's last success, so
-  what reads the output is stale.
-* **needs a rerun** — what it wrote is in a shape it cannot reach in
-  place: add `"needs_rerun": true` to the outcome. The runner holds the
-  step due until it next succeeds, and the app offers to run it; a sync
-  that does not reach it leaves it alone.
+* **nothing to do**: what it wrote is in this build's shape, or it has
+  written nothing yet. Exit 0, report nothing.
+* **migrated**: it brought what it wrote to this build's shape in place,
+  fetching nothing. Report the output's new version as a run would; the
+  runner keeps the step's last success, so what reads the output is
+  stale.
+* **needs a rerun**: what it wrote is in a shape it cannot reach in
+  place. Add `"needs_rerun": true` to the outcome. The runner holds the
+  step due until it next succeeds, and the app offers to run it.
 
 ```json
 {"event":"outcome","needs_rerun":true,"outputs":[]}
 ```
 
-Only `datalib-step`'s own steps take the verb today (the loader sets
-`StepSpec::migrates` for a step whose program is `datalib-step`). An ingest step
-first says it is updating the store and downloading nothing, as a line
-and as its status, because its name reads as a download. It then opens
-its raw store with the provider's migration ladder and closes it: every
-rung, the additive DDL and an old blob store's conversion run, and each
-is sealed to `main`. A render step and the grid index compare their
-store's `_datalib_meta.schema_hash` with this build's and answer
-`needs_rerun` when it differs; a derived store is rebuilt, never
-migrated. The grid index also answers `needs_rerun` when the search
-index's keyword tables are in another shape or a source's documents
-were drawn by another version, which its keyword pass reads again;
-`embed` and `embedding_map` have nothing to answer.
+An ingest says it is updating its store and downloading nothing, then
+opens its raw store through the provider's migration ladder, which seals
+each rung to `main`. A derived store (a render's, the grid index, the
+search index's keyword tables) is never migrated: in another shape it
+answers `needs_rerun`.
 
 ## Compact and collect
 
-`datalib-dag --free-disk-space`, or the app's `POST /api/free_disk_space`
-(the status bar's "Free up disk space…"), asks every step that takes the
-verbs to give back the disk its store holds, once each: with
-`--compact` appended when old versions of derived data are to be
-dropped (`--drop-old-versions-on-derived-data`,
-`"drop_old_versions_on_derived_data": true`), else `--collect`. Nothing
-that reads a store may be reading it while it is rewritten: the command line needs the root to
-itself, as `--reset` does, and the app's loop holds the steps it asks
-and every step that reads them until it is done (`dag/README.md`
-§"Resets and purges"). The step decides what the verb means for what it
-wrote, runs nothing else, and reports its version as a run would; the
-runner records it, so a step that kept its content and reports a
-content version moves nothing downstream. Report nothing when there is
-nothing to give back. As with Migrate, only `datalib-step`'s own steps
-take the verbs (`StepSpec::compacts`).
-
-A step that shrank a store also says how big it was, in bytes, before and
-after, which is what the app's free-space pill adds up:
+`datalib-dag --free-disk-space`, or the app's "Free up disk space…"
+(`POST /api/free_disk_space`), asks each of `datalib-step`'s steps once
+to give back the disk its store holds: with `--compact` when old
+versions of derived data may be dropped
+(`--drop-old-versions-on-derived-data`), else with `--collect`. Nothing
+may read a store while it is rewritten, so the command line needs the
+root to itself, as `--reset` does, and the app's loop holds the steps it
+asks, and every step that reads them, until it is done. The step runs
+nothing else and reports its version as a run would, so one that kept
+its content moves nothing downstream; it reports nothing when there is
+nothing to give back. A step that shrank a store also says its size in
+bytes before and after, which the app's free-space pill adds up:
 
 ```json
 {"event":"outcome","store_bytes":{"before":6600000000,"after":3100000000},"outputs":[...]}
 ```
 
-`--collect` is lossless: `datalib-step` runs `dolt_gc` on the step's
-doltlite store (`doltlite_raw::collect_garbage`), which deletes only
-chunks no commit, branch or tag reaches, so every commit stays readable.
-A store whose writer refills whole tables, or seals one commit over many
-transactions, can hold several times what its commits reach.
-
-`--compact` is lossy for a render store, whose history nothing reads:
-its history is folded into one commit, then collected
-(`doltlite_raw::fold_history`). Its version is its tree, which the fold
-keeps, so nothing runs again for it, and the grid index finds its cursor
-again by the tree it recorded (`grid_rows.md`). Every other store it
-collects, as `--collect` does: a raw store's history is the record of
-what upstream once held, and a time-series store's commits are what its
-index points at, so neither is ever folded. The History card of a
-compacted store shows one commit. The grid index is plain SQLite, so
-neither verb touches it.
-
-Either verb refuses a store whose size is more than the disk has free,
-since gc writes the compacted store before it drops the old one.
+`--collect` is lossless: it runs `dolt_gc` on the step's doltlite
+store, deleting only chunks no commit, branch or tag reaches.
+`--compact` is lossy for a render store only, whose history nothing
+reads: it folds the history into one commit and collects. The store's
+version is its tree, which the fold keeps, so nothing runs again. A raw
+store's history is the record of what upstream once held, and a
+time-series store's commits are what its index points at, so those are
+only collected. The grid index is plain SQLite, so neither verb touches
+it. Either verb refuses a store bigger than the disk's free space, since
+gc writes the compacted store before it drops the old one.
 
 ## Signals: graceful cancellation (optional)
 
-On cancellation (Ctrl-C, the UI's Stop, or the step turned off) the runner sends your
-process **SIGINT** and gives you fifteen seconds. The right response is
-to **stop at your next consistent point, commit there, and exit 130**
-with a `{"event":"outcome","failure":"cancelled"}` line: what you
-committed stands, and the next run resumes from your cursor. **Never
-commit from the signal handler itself** — a commit made wherever the
-signal happened to land publishes a half-written batch to every
-reader. If you do nothing, you are killed at the grace, and the next
-writer's `open` discards whatever you wrote after your last commit. So
-is anything you spawned that is still in your process group, even once
-you have exited: stop your children before you exit.
+On cancellation (Ctrl-C, the UI's Stop, or the step turned off) the
+runner sends your process group **SIGINT** and gives you fifteen
+seconds, then SIGKILL. **Stop at your next consistent point, commit
+there, and exit 130** with a `{"event":"outcome","failure":"cancelled"}`
+line: what you committed stands, and the next run resumes. **Never
+commit from the signal handler itself**: a commit made wherever the
+signal landed publishes a half-written batch to every reader. If you do
+nothing, you are killed at the grace and the next writer's `open`
+discards what you wrote after your last commit. The kill reaches
+anything still in your process group, even once you have exited, so
+stop your children before you exit.
 
-`datalib-step` does this for the built-in ingests, on SIGINT or
-SIGTERM (what a process manager sends a step run by hand): either one
-raises a stop flag (`datalib_etl::stop::StopFlag`, on `DownloadControl`) that
-the fetch loops read before starting a unit of work — a channel, a
-conversation, a batch of messages — that makes the seal path seal at
-the next consistent point whatever the cadence says, and that ends a
-backoff sleep and refuses to send a new request at the HTTP chokepoint.
-The run then returns as a shorter run, `finish` commits blobs then
-entities, and the step reports `cancelled`. A stopped run does not
-record its scope config as satisfied, so a widened filter interrupted
-part-way is backfilled by the next run rather than believed done.
-`unified_grid_and_search_index` reads the same flag between documents: it rolls back the
-source it is loading and keeps the ones it has already committed.
+`datalib-step` does this on SIGINT or SIGTERM: its fetch loops stop
+before the next unit of work (a channel, a conversation, a batch of
+messages), it seals at once whatever the cadence says, it ends a
+backoff sleep and sends no new request, and it reports `cancelled`. A
+stopped run does not record its scope as satisfied, so a widened filter
+interrupted part-way is backfilled by the next run.
+`unified_grid_and_search_index` checks between documents: it rolls back
+the source it is loading and keeps the ones already committed.
 
 ## Minimal examples
 
@@ -796,11 +641,11 @@ id = "notes/ingest"
 command = "sh -c 'mkdir -p notes/ingest && cp -R \"$HOME/notes/.\" notes/ingest/'"
 ```
 
-A python step using inputs + progress + outcome, which opens each
+A Python step using inputs, progress and an outcome, which opens each
 download that moved at the commit it was started against. It works under
 any Python, uv's included. Install
-[`imbue-datalib-reader`](doltlite.md#calling-the-library-directly) in that Python,
-then point `command` at it: `/path/to/python3 /path/to/step.py`.
+[`imbue-datalib-reader`](doltlite.md#calling-the-library-directly) in
+that Python, then point `command` at it: `/path/to/python3 /path/to/step.py`.
 
 ```python
 #!/usr/bin/env python3
@@ -851,32 +696,38 @@ emit({"event": "outcome",
 
 ## How `datalib-step` fits
 
-The built-in step types are one binary implementing this protocol,
-run with no arguments of its own. It reads `DATALIB_DAG_FUNCTION` to
-learn what to do — `ingest`, `render_markdown`, `render_time_series`,
-`render_occurrences`, `embed`, `unified_grid_and_search_index`,
-`embedding_map` or `time_series_index`; anything else is refused with
-the list — and `DATALIB_DAG_GROUP_TYPE` to learn which provider to run,
-which the three renders and `ingest` require and the rest ignore. It
-writes the tree `DATALIB_DAG_STEP` names, after checking that it is
-`<DATALIB_DAG_GROUP>/<DATALIB_DAG_FUNCTION>`; a render reads its raw
-store from the first entry of `DATALIB_DAG_INPUTS`. It reads the
-params file as the provider's **function-specific** config — the ingest
-step carries the provider's download config (`common` envelope, the method table
-block, …), the render step only the render knobs (nothing for most
-providers; perseus `alignment_pairs`, email
-`outlink_format`/`only_render_labels`) — honors `DATALIB_DAG_NOW`,
-`--reset`, `--migrate`, `--compact` and `--collect`, stops at its next consistent point
-on SIGINT and commits there, and emits versions where it has them (the
-index reports its generation; the versions are in the [runner's
-README](../../datalib/backend/dag/README.md#versions-reported-by-the-step)). Use it as the
-reference implementation.
+The built-in steps are one binary implementing this protocol, run with
+no arguments of its own; use it as the reference implementation. It
+reads `DATALIB_DAG_FUNCTION` to learn what to do (`ingest`,
+`render_markdown`, `render_time_series`, `render_occurrences`, `embed`,
+`unified_grid_and_search_index`, `embedding_map` or
+`time_series_index`; anything else is refused with the list) and
+`DATALIB_DAG_GROUP_TYPE` to learn which source type, which `ingest` and
+the three renders require. It checks that `DATALIB_DAG_STEP` is
+`<DATALIB_DAG_GROUP>/<DATALIB_DAG_FUNCTION>`, and a render reads its raw
+store from the first entry of `DATALIB_DAG_INPUTS`. Its params file is
+the step's own part of the config: the ingest step's holds the source's
+download settings, a render step's only render options (none for most
+sources; perseus `alignment_pairs`, email `outlink_format` and
+`only_render_labels`). It honours `DATALIB_DAG_NOW` and every verb
+above, stops at its next consistent point on SIGINT and commits there,
+and reports versions ([the runner's
+README](../../datalib/backend/dag/README.md#versions-reported-by-the-step)).
+
+The index functions have fixed ids: `unified_grid_and_search_index` and
+`embedding_map` are under the `unified_grid_and_search_index` group,
+`time_series_index` under `unified_time_series_index`. Search is the one
+exception to "write only under your own tree": every source's `embed`
+writes its chunks and vectors into one shared file,
+`unified_grid_and_search_index/search_index/inference_cache.sqlite`,
+which is why each holds the one-slot `embedder` lock. The rules are in
+[`config_model.md`](config_model.md#naming-rules).
 
 ### Running `datalib-step` by hand
 
 An app that embeds one download can run `datalib-step` itself, with no
-config and no loop, into a folder of its own. It needs the working
-directory set to that folder, and in the environment:
+config and no loop, into a folder of its own. Set the working directory
+to that folder, and in the environment:
 
 - `DATALIB_DAG_DATA_ROOT`, the same folder, absolute;
 - `DATALIB_DAG_GROUP` and `DATALIB_DAG_FUNCTION`, such as `slack` and
@@ -891,9 +742,8 @@ The params go in a JSON file passed as `--params-file`, shaped as the
 step's `params` table would be. The step checkpoints as it goes and
 writes the event protocol on stdout, as under the runner. What the
 runner adds is lost: nothing records its version, so no step that reads
-it knows to run, and no other process is told. A run killed part way
-leaves its `sync_runs` row `running` until the next run of that step
-marks it `interrupted`.
+it knows to run. A run killed part way leaves its `sync_runs` row
+`running` until the next run of that step marks it `interrupted`.
 
 Four things a hand run has to get right that the runner does for it:
 
@@ -906,21 +756,16 @@ Four things a hand run has to get right that the runner does for it:
   since its last seal is discarded, and the next run fetches it again.
 - **Leave `DATALIB_PARENT_PIPE` unset**, unless you hand it a pipe on
   that descriptor and keep the other end open. A process the applet
-  gateway started has it set to `0`, and a step that inherits it
+  gateway started has it set to `0`, and a step that inherits that
   watches its own stdin: `/dev/null` there makes it refuse to start, and
   a pipe that gets closed makes it exit without sealing.
 - **Don't run a step the app's loop also runs on that data root.** The
   store's lock refuses a second writer at open, naming the first
-  (`already has a writer: datalib-step (pid N)`). The two never write at
-  once, but whichever comes second fails. When that is the loop's run,
-  it is reported as a `data` failure, not retried, and its request
-  ends failed. Use a folder no loop serves, or turn the step off in the
-  loop (`datalib-dag turn-off`, `POST /api/steps/<id>/turn_off`) while
-  you run it.
+  (`already has a writer: datalib-step (pid N)`), so whichever comes
+  second fails. When that is the loop's run, it is a `data` failure, not
+  retried, and its request ends failed. Use a folder no loop serves, or
+  turn the step off in the loop (`datalib-dag turn-off`,
+  `POST /api/steps/<id>/turn_off`) while you run it.
 - **Give an absolute `DATALIB_DAG_DATA_ROOT`.** The step runs with the
   data root as its working directory, so a relative one is resolved a
   second time, beneath itself.
-
-The index functions' ids are fixed at `unified_grid_and_search_index/<function>`, and
-the search index's tables live in `unified_grid_and_search_index`'s file; the rules are in
-[`config_model.md`](config_model.md) § "Naming rules".

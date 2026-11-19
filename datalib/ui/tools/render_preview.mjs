@@ -151,7 +151,8 @@ for (const body of document.querySelectorAll(".chat-body")) {
   decorateLongMessages(body);
 }
 document.addEventListener("click", (ev) => {
-  const el = ev.target.closest?.("[data-section-uuid]");
+  let el = ev.target.closest?.("[data-section-uuid]");
+  while (el && !answers(document, el)) el = el.parentElement?.closest("[data-section-uuid]");
   if (!el || ev.target.closest("button, a, summary")) return;
   for (const s of document.querySelectorAll(".selected")) s.classList.remove("selected");
   el.classList.add("selected");

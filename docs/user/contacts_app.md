@@ -18,8 +18,8 @@ What a link gets you:
 
 The app also holds **labels** on people and senders (`real`: in when
 the person or sender is not spam, out when it is) and every link a person
-turned down. It is the one store under a data root that nothing can
-rebuild, so its history keeps every change.
+turned down. Nothing can rebuild it from the sources, so its history
+keeps every change.
 
 This page is for an agent asked to do that work. It is the steps; the
 tables and the rules behind them are in [the reference](../dev/contacts.md).
