@@ -2066,6 +2066,34 @@ export function scrollSectionToTop(el) {
 }
 
 /**
+ * The element that answers to `uuid`: the outermost one naming it. A
+ * message's box is drawn by the app around what the message says, so a
+ * copy of another message's `data-section-uuid` that a message carries
+ * sits inside a box and never answers in its place. An id nothing outside
+ * a box names (a reaction, a sentence) answers where it first appears.
+ * @param {ParentNode} root
+ * @param {string} uuid
+ * @returns {HTMLElement | null}
+ */
+export function sectionEl(root, uuid) {
+  const all = root.querySelectorAll(`[data-section-uuid="${uuid.replace(/["\\]/g, "\\$&")}"]`);
+  for (const el of all) {
+    if (!el.parentElement?.closest("[data-section-uuid]")) return /** @type {HTMLElement} */ (el);
+  }
+  return /** @type {HTMLElement | null} */ (all[0] ?? null);
+}
+
+/**
+ * Whether `el` is the element that answers to the id it names.
+ * @param {ParentNode} root
+ * @param {Element} el
+ */
+export function answers(root, el) {
+  const uuid = el.getAttribute("data-section-uuid");
+  return uuid !== null && sectionEl(root, uuid) === el;
+}
+
+/**
  * Open every `<details>` enclosing `el`. A tool step lives inside a
  * collapsed `.tool-group`, so "scroll to it" has nothing to scroll to
  * until the group is open. Walks the whole chain: groups nest.
@@ -2155,7 +2183,7 @@ export function injectCopyUuidButtons(root, { pageTitle = true } = {}) {
     )
       continue;
     const uuid = el.getAttribute("data-section-uuid") ?? "";
-    if (!uuid) continue;
+    if (!uuid || !answers(root, el)) continue;
     const btn = button(uuid, "Copy section ID");
     const host = metaHost(el);
     if (host) addHeaderControl(host, " · ", btn);
@@ -2338,7 +2366,8 @@ for (const body of document.querySelectorAll(".chat-body")) {
   decorateLongMessages(body);
 }
 document.addEventListener("click", (ev) => {
-  const el = ev.target.closest?.("[data-section-uuid]");
+  let el = ev.target.closest?.("[data-section-uuid]");
+  while (el && !answers(document, el)) el = el.parentElement?.closest("[data-section-uuid]");
   if (!el || ev.target.closest("button, a, summary")) return;
   for (const s of document.querySelectorAll(".selected")) s.classList.remove("selected");
   el.classList.add("selected");

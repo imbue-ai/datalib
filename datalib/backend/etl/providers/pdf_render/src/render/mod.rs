@@ -15,7 +15,7 @@ use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{close_open_blocks, escape_name_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets, Input, RawRange};
-use datalib_etl_render::section::{msg_div_open, Section, MSG_DIV_CLOSE};
+use datalib_etl_render::section::{msg_class, Section};
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 
 pub use convert::RENDER_VERSION;
@@ -368,15 +368,14 @@ fn pages_markdown(
             sections.push(Section::unkeyed(std::mem::take(&mut body)));
         }
         let uuid = page_uuid(p.number);
-        let mut page = msg_div_open(&uuid, grid_rows::PROVIDER);
-        page.push_str("\n\n");
         // pdf-inspector writes the page as markdown, the words in it as
         // the PDF had them.
-        page.push_str(&close_open_blocks(&p.text));
-        page.push('\n');
-        page.push_str(MSG_DIV_CLOSE);
-        page.push_str("\n\n");
-        sections.push(Section::keyed(&uuid, page));
+        let page = format!("{}\n", close_open_blocks(&p.text));
+        sections.push(Section::boxed(
+            &uuid,
+            msg_class(grid_rows::PROVIDER, &[]),
+            &page,
+        ));
         page_rows.push((p.number, p.text.clone()));
     }
     if !body.is_empty() {

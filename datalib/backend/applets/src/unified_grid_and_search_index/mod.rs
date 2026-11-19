@@ -2384,18 +2384,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         let uuid = "00000000-0000-4000-8000-0000000000d1";
-        let wrapper = |m: &str, text: &str| {
-            format!(
-                "<div id=\"m-{m}\" data-section-uuid=\"{m}\" class=\"msg msg--claude\">\n\n{text}\n\n</div>\n\n"
-            )
-        };
+        let class = || "msg msg--claude".to_string();
         let sections = vec![
             Section::unkeyed("---\ntitle: \"Ten Forward\"\n---\n\n# Ten Forward\n\n".into()),
-            Section::keyed(
+            Section::boxed(
                 "m1",
-                wrapper("m1", "Tea, Earl Grey 🫖 <div style=\"display:none\">"),
+                class(),
+                "Tea, Earl Grey 🫖 <div style=\"display:none\">\n\n",
             ),
-            Section::keyed("m2", wrapper("m2", "Make it so.")),
+            Section::boxed("m2", class(), "Make it so.\n\n"),
         ];
         let mut doc = own_document(
             document_row(uuid, "2026-01-01T00:00:00Z", "Chat")
@@ -2412,8 +2409,13 @@ mod tests {
             [None, Some("m1"), Some("m2")]
         );
         assert_eq!(got[0].md, "\n# Ten Forward\n\n", "front matter dropped");
-        assert_eq!(got[1].md, sections[1].md);
-        assert_eq!(got[2].md, sections[2].md);
+        assert_eq!(got[0].class, None, "the frame is in no box");
+        assert_eq!(
+            got[1].md, "Tea, Earl Grey 🫖 <div style=\"display:none\">\n\n",
+            "a message is what is inside its box"
+        );
+        assert_eq!(got[2].class.as_deref(), Some("msg msg--claude"));
+        assert_eq!(got[2].drawn(), sections[2].md);
         let Json(whole) = chat(
             State(s.clone()),
             Path(uuid.to_string()),
@@ -2422,6 +2424,12 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(whole.body, Some(body_pieces::joined(&got)));
+        assert_eq!(
+            whole.body.as_deref(),
+            datalib_etl_render::section::join(&sections)
+                .strip_prefix("---\ntitle: \"Ten Forward\"\n---\n"),
+            "the body is the document, front matter dropped"
+        );
         assert_eq!(whole.pieces, None, "pieces only when asked");
 
         let mut since = doc.clone();
@@ -2439,7 +2447,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            pieces_of(&s, uuid).await[2].md,
+            pieces_of(&s, uuid).await[2].drawn(),
             sections[2].md,
             "what the index read"
         );

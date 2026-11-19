@@ -9,7 +9,7 @@
 use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::html::{escape_md_inline, escape_name_inline, md_code_span};
 use datalib_etl_render::message::{chip_link, message_stamp_text_html, source_link};
-use datalib_etl_render::section::{msg_div_open, Section, MSG_DIV_CLOSE};
+use datalib_etl_render::section::{msg_class, Section};
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
 
@@ -130,8 +130,7 @@ fn push_comment(
 /// as its author wrote it. A review with no body is a bare approval, so
 /// its header says everything; a comment with none says it is empty.
 fn message(profile: &ForgeProfile, uuid: &str, header: Option<&str>, body: &str) -> Section {
-    let mut md = msg_div_open(uuid, profile.provider);
-    md.push_str("\n\n");
+    let mut md = String::new();
     if let Some(header) = header {
         md.push_str(header);
         md.push_str("\n\n");
@@ -143,9 +142,7 @@ fn message(profile: &ForgeProfile, uuid: &str, header: Option<&str>, body: &str)
     } else if header.is_none() {
         md.push_str("*(empty)*\n\n");
     }
-    md.push_str(MSG_DIV_CLOSE);
-    md.push_str("\n\n");
-    Section::keyed(uuid, md)
+    Section::boxed(uuid, msg_class(profile.provider, &[]), &md)
 }
 
 /// Who wrote something: a chip where the forge gave an account, else

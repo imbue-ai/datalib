@@ -8,7 +8,7 @@ use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::escape_name_inline;
 use datalib_etl_render::inputs::{changed_rows, Bucket, Input, Inputs};
-use datalib_etl_render::section::{msg_div_open_with, Section, MSG_DIV_CLOSE};
+use datalib_etl_render::section::{msg_class, Section};
 use datalib_etl_render::title::Title;
 use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
@@ -142,11 +142,11 @@ pub fn build(
     let escaped: Vec<String> = skills.iter().map(|(_, n)| escape_name_inline(n)).collect();
     for (index, ((row_id, _), name)) in skills.iter().zip(&escaped).enumerate() {
         let id = ids::skill(source_id, row_id);
-        let mut s = msg_div_open_with(&id.uuid, Provider::Linkedin, &["linkedin-skill"]);
-        s.push_str(&format!("\n\n{name}\n\n"));
-        s.push_str(MSG_DIV_CLOSE);
-        s.push_str("\n\n");
-        sections.push(Section::keyed(&id.uuid, s));
+        sections.push(Section::boxed(
+            &id.uuid,
+            msg_class(Provider::Linkedin, &["linkedin-skill"]),
+            &format!("{name}\n\n"),
+        ));
         let row = GridRow::builder()
             .uuid(id.uuid.clone())
             .provider(Provider::Linkedin)

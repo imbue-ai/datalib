@@ -158,8 +158,8 @@ gave its author**, as any mail client does, so a forged `From:` shows
 on the forged message and on no other. The source's name for the
 person is decided across everything they wrote, not by any one message
 ([`contacts.md`](contacts.md) §"In the UI"). The viewer knows a header
-by its place: `renderDocument.ts` renders each message's inside alone
-once its wrapper checks out, and `chipLinks.js` marks a link opening
+by its place: `renderDocument.ts` renders what is inside each message's
+box alone, and `chipLinks.js` marks a link opening
 that fragment's first line, an `h2`, with `data-chip-header`. Nothing a
 message carries comes before its header, and the sanitizer takes the
 attribute off any link the plugin did not sign. A body rendered whole,

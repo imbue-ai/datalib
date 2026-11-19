@@ -12,7 +12,7 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline, escape_name_inline};
 use datalib_etl_render::inputs::Inputs;
 use datalib_etl_render::message::{stamp_html, stamp_text_html, timestamp_html};
-use datalib_etl_render::section::{msg_div_open_with, Section, MSG_DIV_CLOSE};
+use datalib_etl_render::section::{msg_class, Section};
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
 use datalib_id::Identity;
@@ -298,8 +298,7 @@ impl Out<'_> {
         let text = str_of(e, "Txt");
         let note = str_of(e, "n");
 
-        let mut s = msg_div_open_with(&id.uuid, Provider::BabyConnect, &["baby-connect-entry"]);
-        s.push_str("\n\n");
+        let mut s = String::new();
         let mut line = Vec::new();
         if let Some((_, html)) = &time {
             line.push(html.clone());
@@ -322,9 +321,11 @@ impl Out<'_> {
             }
             s.push('\n');
         }
-        s.push_str(MSG_DIV_CLOSE);
-        s.push_str("\n\n");
-        self.sections.push(Section::keyed(&id.uuid, s));
+        self.sections.push(Section::boxed(
+            &id.uuid,
+            msg_class(Provider::BabyConnect, &["baby-connect-entry"]),
+            &s,
+        ));
 
         let body = [text, note]
             .into_iter()
