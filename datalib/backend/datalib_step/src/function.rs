@@ -67,13 +67,12 @@ impl Function {
                  search read, unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite, and put \
                  each searched source's documents in the search index's keyword (BM25) \
                  tables beside them. Goes under the `unified_grid_and_search_index` group; \
-                 inputs = [\"*/render_markdown\", \"*/render_time_series\", \
-                 \"*/render_occurrences\"]. `params.not_searched` lists the sources kept \
-                 out of search."
+                 inputs = [\"*/render_markdown\"]. `params.not_searched` lists the sources \
+                 kept out of search."
             }
             Function::Embed => {
-                "Embed the chunks of a source the search index has no vector for, for \
-                 search by meaning. The slow one: turn it off for a source with \
+                "Cut a source's documents into chunks and embed the ones the search index \
+                 has no vector for, for search by meaning. The slow one: turn it off for a source with \
                  `datalib-dag turn-off <config> <group>/embed`, and keyword search still \
                  works. One per source searched by meaning; \
                  inputs = [\"unified_grid_and_search_index/unified_grid_and_search_index\"]. Param \
