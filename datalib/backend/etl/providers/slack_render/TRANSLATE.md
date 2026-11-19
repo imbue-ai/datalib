@@ -72,7 +72,9 @@ too, and a `plain_text` object is escaped to read as typed.
   bot's `text` is the notification's one-line summary of its blocks
   ("This content can't be displayed." on some). They do so only when the
   message has no `rich_text` block and every block is drawn; otherwise
-  `text` stays, as the one account of the block that is not drawn.
+  `text` stays, as the one account of the block that is not drawn. A
+  thread whose root's blocks replace its text is titled by the first
+  text they show.
 - **Attachments** are each a blockquote, as Slack sets them off with a
   bar, any `pretext` above it. A forwarded or unfurled message
   (`is_share`, `is_msg_unfurl`) leads with its author, a person when
