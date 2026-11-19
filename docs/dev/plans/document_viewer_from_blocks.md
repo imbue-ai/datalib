@@ -1,7 +1,8 @@
 # The document viewer, drawn from blocks
 
-*Proposal (2026-11-19). Step 1 landed in #1889; step 2 is #1891.
-Nothing else is built. It picks up where
+*Proposal (2026-11-19). Steps 1 to 3 landed (#1889, #1891, #1902), with
+search quoting a hit from its one message (#1896); step 4 is built on
+the branch after them. Steps 5 to 7 are not built. It picks up where
 [`documents_to_blocks.md`](documents_to_blocks.md) step 5 stopped
 ("paging through what is read together comes after"), and chooses a
 layout by kind through the registry
@@ -194,16 +195,21 @@ page never ends inside a fold.
 
 Every renderer that draws a block's header draws it with
 `datalib_etl_render::message::MessageHeader`, as chat-common, Drive
-comments and Todoist already do. Still to move: GitHub and GitLab
-(`forge-render-common`), calendar events and Notion discussions. A
-word such as `COMMENTED` becomes a part of the header the function
-draws.
+comments and Todoist already do. Two drew their own: GitHub and GitLab
+(`forge-render-common`) and Notion's comments. A calendar event is a
+page, with no message header. `MessageHeader` takes a stamp kept as
+text, as those two keep theirs, and `tags`: words the source says beside
+the author, such as a review's `COMMENTED` or `reply`.
 
-- **Deletes:** `metaHost`'s three guesses, which become one selector;
-  each renderer's own header code.
-- **Re-render:** each of those sources, once, in its own change.
-- **Notices:** comments on a pull request and a Notion page, and a
-  calendar event, look like every other message.
+- **Deletes:** `metaHost`'s three guesses (the header, a `.msg-meta`
+  nobody draws any more, an italic first line), which become one rule:
+  the box's `##` line that carries the time. A section with no header
+  has its 🆔 at its top, set to the right. Each renderer's own header
+  code goes.
+- **Re-render:** GitHub, GitLab and Notion, once.
+- **Notices:** comments on a pull request and on a Notion page look like
+  every other message, and a pull request's description opens with its
+  author and time.
 
 ### Step 5: what is drawn into a header becomes a fact
 

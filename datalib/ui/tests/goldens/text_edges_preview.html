@@ -707,15 +707,6 @@ code.hljs {
   width: auto;
   height: auto;
 }
-.chat-body .msg-meta {
-  color: var(--datalib-muted, #94a3b8);
-  font-size: 0.85rem;
-  margin: 0 0 0.5rem;
-}
-.chat-body .msg-meta a {
-  color: inherit;
-  text-decoration: underline;
-}
 /* The chat-common message header.
    It is a real `## ` heading in the file; on screen it should read as
    Slack's one-line "Name  time", not as a document section, hence the
@@ -802,6 +793,17 @@ code.hljs {
   /* The full instant is in `title`; say so with the cursor. */
   cursor: help;
 }
+/* A word the source says about a message beside its author (a review's
+   `APPROVED`, `reply`): small and muted, as the time is. */
+.chat-body .msg-tag {
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: var(--datalib-muted, #94a3b8);
+  text-transform: lowercase;
+  padding: 0 0.35em;
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-radius: 999px;
+}
 /* A version of the conversation the account left (an edited prompt, a
    regenerated answer), folded in where it forked. Dashed, so it reads as
    beside the conversation rather than part of it. */
@@ -842,6 +844,12 @@ code.hljs {
 .chat-body details.tool-group .msg h2:has(> .msg-author, > a.chip) {
   font-size: 0.8em;
   opacity: 0.7;
+}
+/* A section with no header line has its 🆔 at its top, set to the right
+   rather than on a line of its own. */
+.chat-body [data-section-uuid] > button.copy-uuid:first-child {
+  float: right;
+  margin-left: 0.5em;
 }
 .chat-body button.copy-uuid {
   /* The 🆔 glyph is a saturated purple that outshouts the message it
@@ -1793,12 +1801,13 @@ tea, Earl Grey, hot
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e0001">Recalibrate the deflector (#1701)</h1>
 <p><em>open</em> — <a href="datalib:handle/github/glaforge" title="Geordi La Forge (github:glaforge)" class="chip" data-handle="github:glaforge">Geordi La Forge</a> — <code>?</code> → <code>?</code></p>
 <h2>Description</h2>
-<div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--github"><p>Recalibrates the deflector.</p>
+<div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--github"><h2><a href="datalib:handle/github/glaforge" title="Geordi La Forge (github:glaforge)" data-chip-header="" class="chip" data-handle="github:glaforge">Geordi La Forge</a> <time class="msg-ts" datetime="2369-04-15T08:30:00+00:00" title="2369-04-15 08:30:00 UTC">Tue Apr 15th, 2369 at 08:30</time></h2>
+<p>Recalibrates the deflector.</p>
 <div style="display: none;">
 </div></div><h2>Reviews</h2>
 <p><em>(no reviews)</em></p>
 <h2>General discussion</h2>
-<div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--github"><p><strong>@Picard</strong> · <time class="msg-ts" datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></p>
+<div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--github"><h2><span class="msg-author">@Picard</span> <time class="msg-ts" datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></h2>
 <p>Make it so.</p>
 </div><h2>Inline comments</h2>
 <p><em>(no inline comments)</em></p>
@@ -1818,7 +1827,8 @@ Fixes a subspace harmonic.
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e0001">Recalibrate the deflector (#1701)</h1>
 <p><em>open</em> — <a href="datalib:handle/github/glaforge" title="Geordi La Forge (github:glaforge)" class="chip" data-handle="github:glaforge">Geordi La Forge</a> — <code>?</code> → <code>?</code></p>
 <h2>Description</h2>
-<div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--github"><p>Bumps warp-field from 1.2 to 1.3.</p>
+<div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--github"><h2><a href="datalib:handle/github/glaforge" title="Geordi La Forge (github:glaforge)" data-chip-header="" class="chip" data-handle="github:glaforge">Geordi La Forge</a> <time class="msg-ts" datetime="2369-04-15T08:30:00+00:00" title="2369-04-15 08:30:00 UTC">Tue Apr 15th, 2369 at 08:30</time></h2>
+<p>Bumps warp-field from 1.2 to 1.3.</p>
 <details>
 <summary>Release notes</summary>
 <p>Fixes a subspace harmonic.</p>
@@ -1826,7 +1836,7 @@ Fixes a subspace harmonic.
 </div><h2>Reviews</h2>
 <p><em>(no reviews)</em></p>
 <h2>General discussion</h2>
-<div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--github"><p><strong>@Picard</strong> · <time class="msg-ts" datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></p>
+<div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--github"><h2><span class="msg-author">@Picard</span> <time class="msg-ts" datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></h2>
 <p>Make it so.</p>
 </div><h2>Inline comments</h2>
 <p><em>(no inline comments)</em></p>
@@ -1840,11 +1850,13 @@ Beam down at 0800 to survey the ruins.</pre>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e0001">Recalibrate the deflector (#1701)</h1>
 <p><em>open</em> — <a href="datalib:handle/github/glaforge" title="Geordi La Forge (github:glaforge)" class="chip" data-handle="github:glaforge">Geordi La Forge</a> — <code>?</code> → <code>?</code></p>
 <h2>Description</h2>
-<div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--github"><p>Beam down at 0800 to survey the ruins.</p>
+<div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--github"><h2><a href="datalib:handle/github/glaforge" title="Geordi La Forge (github:glaforge)" data-chip-header="" class="chip" data-handle="github:glaforge">Geordi La Forge</a> <time class="msg-ts" datetime="2369-04-15T08:30:00+00:00" title="2369-04-15 08:30:00 UTC">Tue Apr 15th, 2369 at 08:30</time></h2>
+
+<p>Beam down at 0800 to survey the ruins.</p>
 </div><h2>Reviews</h2>
 <p><em>(no reviews)</em></p>
 <h2>General discussion</h2>
-<div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--github"><p><strong>@Picard</strong> · <time class="msg-ts" datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></p>
+<div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--github"><h2><span class="msg-author">@Picard</span> <time class="msg-ts" datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></h2>
 <p>Make it so.</p>
 </div><h2>Inline comments</h2>
 <p><em>(no inline comments)</em></p>
@@ -1859,12 +1871,13 @@ Beam down at 0800 to survey the ruins.</pre>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e0001">Recalibrate the deflector (#1701)</h1>
 <p><em>open</em> — <a href="datalib:handle/github/glaforge" title="Geordi La Forge (github:glaforge)" class="chip" data-handle="github:glaforge">Geordi La Forge</a> — <code>?</code> → <code>?</code></p>
 <h2>Description</h2>
-<div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--github"><p>The viewscreen after the fix:</p>
+<div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--github"><h2><a href="datalib:handle/github/glaforge" title="Geordi La Forge (github:glaforge)" data-chip-header="" class="chip" data-handle="github:glaforge">Geordi La Forge</a> <time class="msg-ts" datetime="2369-04-15T08:30:00+00:00" title="2369-04-15 08:30:00 UTC">Tue Apr 15th, 2369 at 08:30</time></h2>
+<p>The viewscreen after the fix:</p>
 <img width="480" alt="viewscreen" data-remote-src="https://images.example.invalid/viewscreen.png" class="remote-blocked">
 </div><h2>Reviews</h2>
 <p><em>(no reviews)</em></p>
 <h2>General discussion</h2>
-<div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--github"><p><strong>@Picard</strong> · <time class="msg-ts" datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></p>
+<div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--github"><h2><span class="msg-author">@Picard</span> <time class="msg-ts" datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></h2>
 <p>Make it so.</p>
 </div><h2>Inline comments</h2>
 <p><em>(no inline comments)</em></p>
@@ -1877,11 +1890,12 @@ Beam down at 0800 to survey the ruins.</pre>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8000-8000-0000000e0001">Recalibrate the deflector (#1701)</h1>
 <p><em>open</em> — <a href="datalib:handle/github/glaforge" title="Geordi La Forge (github:glaforge)" class="chip" data-handle="github:glaforge">Geordi La Forge</a> — <code>?</code> → <code>?</code></p>
 <h2>Description</h2>
-<div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--github"><p>Press <kbd>Ctrl</kbd>+<kbd>S</kbd> to raise shields.<br>Coolant is H<sub>2</sub>O.</p>
+<div id="m-00000000-0000-8000-8000-0000000e0001" data-section-uuid="00000000-0000-8000-8000-0000000e0001" class="msg msg--github"><h2><a href="datalib:handle/github/glaforge" title="Geordi La Forge (github:glaforge)" data-chip-header="" class="chip" data-handle="github:glaforge">Geordi La Forge</a> <time class="msg-ts" datetime="2369-04-15T08:30:00+00:00" title="2369-04-15 08:30:00 UTC">Tue Apr 15th, 2369 at 08:30</time></h2>
+<p>Press <kbd>Ctrl</kbd>+<kbd>S</kbd> to raise shields.<br>Coolant is H<sub>2</sub>O.</p>
 </div><h2>Reviews</h2>
 <p><em>(no reviews)</em></p>
 <h2>General discussion</h2>
-<div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--github"><p><strong>@Picard</strong> · <time class="msg-ts" datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></p>
+<div id="m-00000000-0000-8000-8000-0000000e0002" data-section-uuid="00000000-0000-8000-8000-0000000e0002" class="msg msg--github"><h2><span class="msg-author">@Picard</span> <time class="msg-ts" datetime="2369-04-15T09:00:00+00:00" title="2369-04-15 09:00:00 UTC">Tue Apr 15th, 2369 at 09:00</time></h2>
 <p>Make it so.</p>
 </div><h2>Inline comments</h2>
 <p><em>(no inline comments)</em></p>
@@ -2043,24 +2057,16 @@ export function openEnclosingDetails(el) {
 }
 
 /**
- * Where a section's copy button goes: the chat-common message header
- * (the `## ` line whose author is a `.msg-author` span or a chip link,
- * then a `.msg-ts`),
- * else an explicit `.msg-meta` div, else the first `<p><em>…</em></p>`
- * some renderers emit as an italic meta line. Block sections have none
- * of the three and get the button at the top of the section.
+ * A section's header, where its controls go: the `## ` line every
+ * renderer writes for a message with an author and a time
+ * (`MessageHeader`), which always carries the `.msg-ts` time. A section
+ * with none, a page or a system note, gets its controls at its top.
  * @param {HTMLElement} el
  * @returns {HTMLElement | null}
  */
 export function metaHost(el) {
-  const header = el.querySelector(":scope > h2 > .msg-author, :scope > h2 > a.chip");
-  if (header?.parentElement) return header.parentElement;
-  const meta = el.querySelector(":scope > .msg-meta");
-  if (meta) return meta;
-  for (const p of el.querySelectorAll(":scope > p")) {
-    if (p.firstElementChild?.tagName === "EM" && p.children.length === 1) return p;
-  }
-  return null;
+  const h2 = el.querySelector(":scope > h2");
+  return h2?.querySelector(":scope > .msg-ts") ? /** @type {HTMLElement} */ (h2) : null;
 }
 
 /**
@@ -2111,7 +2117,7 @@ export function injectCopyUuidButtons(root, { pageTitle = true } = {}) {
   )) {
     if (
       el.querySelector(
-        ":scope > h2 .copy-uuid, :scope > .msg-meta .copy-uuid, :scope > p .copy-uuid, :scope > .copy-uuid",
+        ":scope > h2 .copy-uuid, :scope > .copy-uuid",
       )
     )
       continue;

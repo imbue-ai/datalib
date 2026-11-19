@@ -407,7 +407,7 @@ expression: snapshot
       "markdown_uuid": "00000000-0000-83c9-9b62-3a0c19713d6c",
       "modified_at": "2369-04-15T01:05:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.15",
+      "renderer_version": "rust-v1.16",
       "searchable": true,
       "source_id": "notion",
       "title": "Bridge Operations Handbook"
@@ -635,7 +635,7 @@ expression: snapshot
       "markdown_uuid": "00000000-0000-85ee-bff7-b3a1f5972355",
       "modified_at": "2369-04-15T00:01:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.15",
+      "renderer_version": "rust-v1.16",
       "searchable": false,
       "source_id": "notion",
       "title": "Notion TOC: Table-of-Contents (Datalib generated)"
@@ -755,7 +755,7 @@ expression: snapshot
       "markdown_uuid": "00000000-0000-86d5-851e-a6d36ec0864a",
       "modified_at": "2369-04-15T01:10:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.15",
+      "renderer_version": "rust-v1.16",
       "searchable": true,
       "source_id": "notion",
       "title": "Bridge Operations Handbook"
@@ -2063,7 +2063,7 @@ expression: snapshot
       "markdown_uuid": "0b75b842-ba60-80f0-ab79-7448df7f2124",
       "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.15",
+      "renderer_version": "rust-v1.16",
       "searchable": true,
       "source_id": "notion",
       "title": "Incident Log: Stardate 47988.1"
@@ -2075,7 +2075,7 @@ expression: snapshot
       "markdown_uuid": "0b75b842-ba60-8131-881b-f4b981d5c44a",
       "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.15",
+      "renderer_version": "rust-v1.16",
       "searchable": true,
       "source_id": "notion",
       "title": "Bridge Operations Handbook"
@@ -2087,7 +2087,7 @@ expression: snapshot
       "markdown_uuid": "0b75b842-ba60-88dd-b090-baf44d88db59",
       "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
-      "renderer_version": "rust-v1.15",
+      "renderer_version": "rust-v1.16",
       "searchable": true,
       "source_id": "notion",
       "title": "Shift Roster"
@@ -2099,7 +2099,7 @@ expression: snapshot
       "markdown_uuid": "0b75b9f9-4400-87fe-99ef-2db45ad92cb6",
       "modified_at": "2369-04-15T11:30:00Z",
       "provider": "github",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "searchable": true,
       "source_id": "github",
       "title": "Recalibrate replicator templates for Earl Grey, hot"
@@ -2111,7 +2111,7 @@ expression: snapshot
       "markdown_uuid": "0b75b9f9-4400-887d-bae6-937c2e6ee3a6",
       "modified_at": "2369-04-15T11:30:00.000Z",
       "provider": "gitlab",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "searchable": true,
       "source_id": "gitlab",
       "title": "Add Earl Grey, hot to replicator menu"
@@ -2123,7 +2123,7 @@ expression: snapshot
       "markdown_uuid": "0b75bad4-fe00-8155-aa7c-9db9f663482a",
       "modified_at": "2369-04-15T14:30:00.000Z",
       "provider": "gitlab",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "searchable": true,
       "source_id": "gitlab",
       "title": "Holodeck safety interlock regression test"
@@ -2135,7 +2135,7 @@ expression: snapshot
       "markdown_uuid": "0b75bad4-fe00-82b8-ab37-5a103480b51c",
       "modified_at": "2369-04-15T14:30:00Z",
       "provider": "github",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "searchable": true,
       "source_id": "github",
       "title": "Add holodeck safety interlock for live phaser fire"

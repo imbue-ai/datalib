@@ -36,22 +36,34 @@ Recalibrate replicator templates for Earl Grey, hot (#42)
 *closed* — jlpicard — `picard/earl-grey-temp` → `main`
 
 ## Description
+## jlpicard Tue Apr 15th, 2369 at 08:00
+
 Adjusts the steeping target to 85 degC. Tea is meant to be HOT.
 ## Reviews
-wtriker *(APPROVED)* · Tue Apr 15th, 2369 at 10:00
+## wtriker APPROVED Tue Apr 15th, 2369 at 10:00
 
 LGTM, Captain. Make it so.
 ## General discussion
-geordi-laforge · Tue Apr 15th, 2369 at 09:30
+## geordi-laforge Tue Apr 15th, 2369 at 09:30
 
 Did you account for water temperature drift on long-duration replicator runs?
 ## Inline comments
 
 ### `src/replicator/tea.c:17`
-wtriker · Tue Apr 15th, 2369 at 10:00
+
+--- chunk 1
+title: Recalibrate replicator templates for Earl Grey, hot | text: Source: GitHub
+Repository: enterprise-d/replicator-firmware
+Pull request: 42
+State: closed
+Author: jlpicard
+Branch: picard/earl-grey-temp
+Into: main
+
+## wtriker Tue Apr 15th, 2369 at 10:00
 
 Should be 85 degC, not 82. Earl Grey wants it HOT.
-jlpicard *(reply)* · Tue Apr 15th, 2369 at 10:05
+## jlpicard reply Tue Apr 15th, 2369 at 10:05
 
 Quite right, Number One. Fixed in the next push.
 
@@ -70,24 +82,36 @@ Add holodeck safety interlock for live phaser fire (#43)
 *open* — jlpicard — `picard/holodeck-safety` → `main`
 
 ## Description
+## jlpicard Tue Apr 15th, 2369 at 12:00
+
 Disables holodeck weapons fire when safeties are off, with audible warning.
 
 Fixes #41.
 ## Reviews
-data-soong *(COMMENTED)* · Tue Apr 15th, 2369 at 14:00
+## data-soong COMMENTED Tue Apr 15th, 2369 at 14:00
 
 I have run 47 simulations against this branch. Two edge cases warrant attention; see inline.
 ## General discussion
-worf-rozhenko · Tue Apr 15th, 2369 at 13:30
+## worf-rozhenko Tue Apr 15th, 2369 at 13:30
 
 Approved. Honor demands no compromise on safety.
+
+--- chunk 1
+title: Add holodeck safety interlock for live phaser fire | text: Source: GitHub
+Repository: enterprise-d/replicator-firmware
+Pull request: 43
+State: open
+Author: jlpicard
+Branch: picard/holodeck-safety
+Into: main
+
 ## Inline comments
 
 ### `src/holodeck/safety.c:200`
-data-soong · Tue Apr 15th, 2369 at 14:00
+## data-soong Tue Apr 15th, 2369 at 14:00
 
 If `safeties_engaged` is read after `weapons_armed` is set, there is a 12-microsecond window in which a discharge could occur. I recommend reordering the checks.
 ### `src/holodeck/safety.c:215`
-data-soong · Tue Apr 15th, 2369 at 14:00
+## data-soong Tue Apr 15th, 2369 at 14:00
 
 The audible warning loops indefinitely. Counsellor Troi has noted that this may induce undue anxiety in trainees; consider capping the loop at 10 cycles.
