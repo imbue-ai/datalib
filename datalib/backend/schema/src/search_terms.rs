@@ -20,12 +20,14 @@
 pub enum SearchTermKind {
     /// The row's own uuid.
     Id = 1,
-    /// The uuid of something the row is in: its conversation, its
-    /// document, its Notion page.
+    /// The uuid of something the row is in other than its document: its
+    /// conversation, its Notion page. A row inside a document answers to
+    /// the document's own `Id` through the document's row.
     Container = 2,
     /// The handle of the row's author.
     From = 3,
-    /// The title of the row's conversation or document.
+    /// The title of a document, on its own row; the rows inside it answer
+    /// to it through the document's row.
     Title = 4,
     /// A name the row shows: its channel, its account.
     Name = 5,
@@ -59,9 +61,10 @@ pub enum SearchTermKind {
     /// shown. What the grid's Subject cell draws as chips, and what `with:`
     /// finds a direct message by when its other party wrote nothing in it.
     Subject = 14,
-    /// The row's own id as its source spells it, where that is a uuid (a
-    /// Notion page's, for one): what an id or a link copied from the
-    /// source finds the row by.
+    /// The row's own id as its source gave it, where that is a uuid (a
+    /// Notion page's, for one), written lowercase with dashes however the
+    /// source spelled it: what an id or a link copied from the source
+    /// finds the row by.
     UpstreamId = 15,
     /// Where the row was: a place's name (a city, a landmark) or an H3
     /// cell it falls in. What `place:` finds a photo by.
@@ -164,9 +167,16 @@ impl SearchTermKind {
     }
 }
 
+/// The kinds of term a row inside a document answers to through the
+/// document's own row, where they are stored once: the document's id and
+/// its title. Every other kind is the row's own.
+pub const FROM_THE_DOCUMENT: &[SearchTermKind] = &[SearchTermKind::Id, SearchTermKind::Title];
+
 /// The columns of a `grid_rows` row its terms come from.
 #[derive(Debug, Clone, Default, PartialEq, Eq, sqlx::FromRow)]
 pub struct SearchTermSource {
+    /// The row's `rowid` in `grid_rows`, which its terms name it by.
+    pub row_id: i64,
     pub uuid: String,
     pub conversation_uuid: String,
     pub markdown_uuid: Option<String>,
@@ -177,15 +187,35 @@ pub struct SearchTermSource {
     pub author: Option<String>,
     pub channel: Option<String>,
     pub account: Option<String>,
-    pub touched_at_utc: Option<String>,
     pub supplied_terms: Option<String>,
 }
 
 impl SearchTermSource {
     /// The `SELECT` list that reads one from `grid_rows`.
-    pub const COLUMNS: &'static str = "uuid, conversation_uuid, markdown_uuid, notion_page_uuid, \
-         upstream_id, author_handle, conversation_name, author, channel, account, touched_at_utc, \
-         supplied_terms";
+    pub const COLUMNS: &'static str = "rowid AS row_id, uuid, conversation_uuid, markdown_uuid, \
+         notion_page_uuid, upstream_id, author_handle, conversation_name, author, channel, \
+         account, supplied_terms";
+
+    /// The document the row is inside, when it is not the document's own
+    /// row.
+    fn inside(&self) -> Option<&str> {
+        self.markdown_uuid
+            .as_deref()
+            .filter(|document| *document != self.uuid)
+    }
+}
+
+/// `value` as a term of `kind` stores it: an id that is a uuid lowercase
+/// with dashes, so a lookup is one comparison however it was typed or
+/// written; anything else as it is.
+pub fn stored_value(kind: SearchTermKind, value: &str) -> String {
+    let id = matches!(
+        kind,
+        SearchTermKind::Id | SearchTermKind::UpstreamId | SearchTermKind::Container
+    );
+    id.then(|| datalib_uuid_text::canonical(value))
+        .flatten()
+        .unwrap_or_else(|| value.to_string())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,38 +259,41 @@ pub fn decode_supplied(json: &str) -> Result<Vec<SearchTerm>, String> {
 }
 
 /// Every term `row` answers to, each `(kind, value)` once and in kind
-/// order. An id is a `Container` only when it is not the row's own, and
-/// an empty value is no term.
+/// order, ids as [`stored_value`] writes them. An id is a `Container` only
+/// when it is neither the row's own nor its document's, a row inside a
+/// document has no `Title` ([`FROM_THE_DOCUMENT`]), and an empty value is
+/// no term.
 pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
+    let inside = row.inside();
     let containers = [
         Some(row.conversation_uuid.as_str()),
         row.markdown_uuid.as_deref(),
         row.notion_page_uuid.as_deref(),
     ];
     let names = [row.channel.as_deref(), row.account.as_deref()];
-    // Only an upstream id shaped like a uuid is a term: a pasted id is read
-    // as a uuid or a handle (`query::identifier`), and `id:` reads the
-    // column.
+    // Only an upstream id that is a uuid is a term: a pasted id is read as
+    // a uuid or a handle (`query::identifier`), and `id:` reads the column.
     let upstream_id = row
         .upstream_id
         .as_deref()
-        .filter(|id| datalib_uuid_text::is_dashed(id));
+        .filter(|id| datalib_uuid_text::canonical(id).is_some());
+    let title = row
+        .conversation_name
+        .as_deref()
+        .filter(|_| inside.is_none());
     let candidates = std::iter::once((SearchTermKind::Id, Some(row.uuid.as_str())))
         .chain(std::iter::once((SearchTermKind::UpstreamId, upstream_id)))
         .chain(
             containers
                 .into_iter()
-                .filter(|id| *id != Some(row.uuid.as_str()))
+                .filter(|id| *id != Some(row.uuid.as_str()) && *id != inside)
                 .map(|id| (SearchTermKind::Container, id)),
         )
         .chain(std::iter::once((
             SearchTermKind::From,
             row.author_handle.as_deref(),
         )))
-        .chain(std::iter::once((
-            SearchTermKind::Title,
-            row.conversation_name.as_deref(),
-        )))
+        .chain(std::iter::once((SearchTermKind::Title, title)))
         .chain(std::iter::once((
             SearchTermKind::Author,
             row.author.as_deref(),
@@ -271,11 +304,9 @@ pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
         let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) else {
             continue;
         };
+        let value = stored_value(kind, value);
         if !out.iter().any(|t| t.kind == kind && t.value == value) {
-            out.push(SearchTerm {
-                kind,
-                value: value.to_string(),
-            });
+            out.push(SearchTerm { kind, value });
         }
     }
     out
@@ -285,18 +316,22 @@ pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
 /// is part of the grid index's shape, and an index in another shape is
 /// built again, so change it whenever either changes. A kind a render
 /// starts to supply needs no change: it arrives as its rows are written.
-pub const TERMS_SHAPE: &str = "10";
+pub const TERMS_SHAPE: &str = "11";
 
 /// The search terms' tables in the grid index, dictionary-encoded: each grid row once in
 /// `rows`, each distinct value once in `vals`, and a term is three
-/// integers. The two FTS5 indexes cover `vals` alone, linked by rowid:
+/// integers. A row's `row_id` is its `rowid` in `grid_rows`, which every
+/// index of `grid_rows` ends in, so a filter on a column and one on the
+/// terms both come out as row ids; `doc_row_id` is its document's own
+/// row, through which it answers to [`FROM_THE_DOCUMENT`]. The two FTS5 indexes cover `vals` alone, linked by rowid:
 /// `vals_fts` by word, keeping `@ . - _ + : /` inside a token so an id or
 /// a handle is one token (`docs/dev/doltlite.md` § "Full-text search
 /// (FTS5)"), and `vals_tri` by every run of three characters, so a value
 /// holding a bare word is looked up rather than read from every value.
 pub const TERMS_DDL: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS rows (row_id INTEGER PRIMARY KEY, \
-     uuid TEXT NOT NULL UNIQUE, touched_at_utc TEXT)",
+     uuid TEXT NOT NULL UNIQUE, doc_row_id INTEGER, is_document INTEGER NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS rows_by_doc ON rows (doc_row_id)",
     "CREATE TABLE IF NOT EXISTS vals (val_id INTEGER PRIMARY KEY, value TEXT NOT NULL UNIQUE)",
     "CREATE TABLE IF NOT EXISTS terms (val_id INTEGER NOT NULL, kind INTEGER NOT NULL, \
      row_id INTEGER NOT NULL, PRIMARY KEY (val_id, kind, row_id)) WITHOUT ROWID",
@@ -342,18 +377,31 @@ mod tests {
             .collect()
     }
 
+    /// A message's document and title are its document's, stored once on
+    /// the document's row; a container other than its document is its own.
     #[test]
-    fn a_message_answers_to_its_id_its_conversation_its_author_and_its_title() {
+    fn a_message_answers_to_its_id_its_author_and_any_other_container() {
         assert_eq!(
             pairs(&search_terms_of(&row())),
             [
                 ("id", "m-1"),
-                ("container", "c-1"),
                 ("from", "email:ann@example.com"),
-                ("title", "Away team roster"),
                 ("author", "Ann"),
             ]
         );
+        let in_a_thread = SearchTermSource {
+            conversation_uuid: "t-1".into(),
+            ..row()
+        };
+        assert_eq!(
+            pairs(&search_terms_of(&in_a_thread))[..2],
+            [("id", "m-1"), ("container", "t-1")]
+        );
+        let document = SearchTermSource {
+            uuid: "c-1".into(),
+            ..row()
+        };
+        assert!(pairs(&search_terms_of(&document)).contains(&("title", "Away team roster")));
     }
 
     /// A row's supplied terms are a set: in any order and with repeats they
@@ -385,20 +433,28 @@ mod tests {
     }
 
     /// A Notion page's id as Notion writes it is what a link to the page
-    /// carries; a key datalib composed is no term.
+    /// carries, in one spelling however the source wrote it; a key datalib
+    /// composed is no term.
     #[test]
     fn an_upstream_id_is_a_term_when_it_is_a_uuid() {
-        let page = SearchTermSource {
-            upstream_id: Some("b1d6e000-1701-4d00-8000-000000000001".into()),
-            ..row()
-        };
-        assert_eq!(
-            pairs(&search_terms_of(&page))[..2],
-            [
-                ("id", "m-1"),
-                ("upstream_id", "b1d6e000-1701-4d00-8000-000000000001")
-            ]
-        );
+        for written in [
+            "b1d6e000-1701-4d00-8000-000000000001",
+            "B1D6E000-1701-4D00-8000-000000000001",
+            "b1d6e00017014d008000000000000001",
+        ] {
+            let page = SearchTermSource {
+                upstream_id: Some(written.into()),
+                ..row()
+            };
+            assert_eq!(
+                pairs(&search_terms_of(&page))[..2],
+                [
+                    ("id", "m-1"),
+                    ("upstream_id", "b1d6e000-1701-4d00-8000-000000000001")
+                ],
+                "{written}"
+            );
+        }
         let period = SearchTermSource {
             upstream_id: Some("2369-04".into()),
             ..row()

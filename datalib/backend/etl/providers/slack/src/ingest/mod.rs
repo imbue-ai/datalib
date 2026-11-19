@@ -45,10 +45,10 @@ use files::{File, FileFetcher, FILE_BATCH};
 use frontier::{Frontier, Next, Walk};
 use involving::{InvolvingSearch, InvolvingTotals, Query};
 use reply_search::{ReplySearch, ReplySearchTotals, SEARCH_LAG};
-use schema_raw::{SlackAttachmentRow, UserRow, THREADS};
+use schema_raw::{BotRow, SlackAttachmentRow, UserRow, THREADS};
 use shapes::{
-    M_AUTH_TEST, M_BOOKMARKS, M_CHANNELS, M_COUNTS, M_HISTORY, M_REPLIES, M_SAVED, M_SEARCH,
-    M_USERS, M_USER_INFO,
+    M_AUTH_TEST, M_BOOKMARKS, M_BOT_INFO, M_CHANNELS, M_COUNTS, M_HISTORY, M_REPLIES, M_SAVED,
+    M_SEARCH, M_USERS, M_USER_INFO,
 };
 
 /// What a source with no `since` asks for: the whole history, since no
@@ -1226,6 +1226,48 @@ impl Fetcher<Value> for UserLookup<'_> {
     }
 }
 
+/// Owed bots, for [`owed::drain_into`]: one `bots.info` each.
+struct BotLookup<'a> {
+    db: &'a RawDb,
+    latchkey: &'a LatchkeySettings,
+}
+
+#[async_trait]
+impl Fetcher<Value> for BotLookup<'_> {
+    async fn fetch(
+        &self,
+        batch: Vec<Listed>,
+    ) -> std::result::Result<Vec<Fetched<Value>>, BatchError> {
+        let mut out = Vec::with_capacity(batch.len());
+        for listed in batch {
+            let mut p = BTreeMap::new();
+            p.insert("bot".to_string(), listed.key.clone());
+            let bot = call(M_BOT_INFO, &p, self.latchkey).await.and_then(|resp| {
+                resp.get("bot")
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("{M_BOT_INFO} {}: no `bot`", listed.key))
+            });
+            let outcome = match bot {
+                Ok(bot) => Outcome::Got(bot),
+                Err(e) if interrupted(&e) => return Err(BatchError::Batch(e)),
+                // A token that may not look bots up refuses every one.
+                Err(e) if refused(&e) => return Err(BatchError::Terminal(e)),
+                Err(e) => Outcome::Failed(format!("{e:#}")),
+            };
+            out.push(Fetched { listed, outcome });
+        }
+        Ok(out)
+    }
+
+    async fn store(
+        &self,
+        tx: &mut Transaction<'static, Sqlite>,
+        batch: &[Fetched<Value>],
+    ) -> Result<()> {
+        self.db.store_looked_up_bots(tx, batch).await
+    }
+}
+
 /// Users looked up per write into the walk's batch.
 const USER_FLUSH: usize = 50;
 
@@ -1260,6 +1302,35 @@ impl Mirror<'_> {
         owed::drain_into(&l, writes, owed, &lookup).await
     }
 
+    /// Every bot [`RawDb::bots_owed`] names, one `bots.info` each: a bot
+    /// is asked once, as Slack keeps no listing of them.
+    async fn fetch_bots_owed(&self, writes: &mut Batch<'_>) -> Result<owed::Drained> {
+        let owed = self.db.bots_owed(writes.tx().await?).await?;
+        if owed.is_empty() {
+            return Ok(owed::Drained::default());
+        }
+        self.bar
+            .doing(&format!("{M_BOT_INFO}: {} new bots", owed.len()));
+        let l = owed::Loop {
+            pool: self.db.pool(),
+            table: BotRow::TABLE,
+            phase: M_BOT_INFO,
+            stop: self.stop,
+            found: self.found,
+            sealer: self.sealer,
+            batch: 1,
+            concurrency: 1,
+            flush: USER_FLUSH,
+            flush_bytes: 0,
+            failures_in_a_row: 0,
+        };
+        let lookup = BotLookup {
+            db: self.db,
+            latchkey: self.latchkey,
+        };
+        owed::drain_into(&l, writes, owed, &lookup).await
+    }
+
     async fn look_up_authors(&self, writes: &mut Batch<'_>) -> Result<()> {
         let started = std::time::Instant::now();
         let users = self.fetch_users_owed(writes).await?;
@@ -1271,6 +1342,18 @@ impl Mirror<'_> {
                 left = users.left,
                 elapsed_ms = started.elapsed().as_millis() as u64,
                 "looked up the authors no user listing had named"
+            );
+        }
+        let started = std::time::Instant::now();
+        let bots = self.fetch_bots_owed(writes).await?;
+        if bots != owed::Drained::default() {
+            info!(
+                event = "slack_bots_looked_up",
+                got = bots.got,
+                failed = bots.failed,
+                left = bots.left,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                "looked up the bots stored messages name"
             );
         }
         Ok(())

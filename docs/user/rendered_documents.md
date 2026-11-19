@@ -20,7 +20,12 @@ The `unified_grid_and_search_index` applet serves the documents, and
   as JSON. `body` is the markdown, without its front matter; beside it
   are what the index knows of the document (`name`, `created_at`,
   `source_url`, `problems`, its links to other documents). Add
-  `?pieces=true` for the same markdown as `pieces` in place of `body`.
+  `?pieces=true` for the same markdown as `pieces` in place of `body`,
+  and `&limit=N` too for a page of at most `N` of its top-level pieces
+  (a fold counts as one): the first, or the one around a message
+  (`&at={uuid}`), or the one `&before=` or `&after=` a cursor the last
+  page gave as `before` or `after`. A cursor is good for the `version`
+  it came with; a page read at another version may not line up.
 
 Without the app running, `datalib-step markdown <data_root> --document
 <id>` prints one document's markdown, and `--out <dir>` writes every

@@ -68,12 +68,13 @@ Measured Tue Apr 15th, 2369 at 00:00.
 | Table | ingest | `slack/ingest/blobs.sqlite#cas_objects` |  | 0 rows | `00000000` |
 | Store | ingest | `slack/ingest/entities.doltlite_db` | <size> |  | `00000000` |
 | Table | ingest | `slack/ingest/entities.doltlite_db#bookmarks` |  | 2 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#bots` |  | 1 row | `00000000` |
 | Table | ingest | `slack/ingest/entities.doltlite_db#channel_read_states` |  | 6 rows | `00000000` |
 | Table | ingest | `slack/ingest/entities.doltlite_db#channels` |  | 6 rows | `00000000` |
 | Table | ingest | `slack/ingest/entities.doltlite_db#coverage` |  | 12 rows | `00000000` |
 | Table | ingest | `slack/ingest/entities.doltlite_db#coverage_checked` |  | 6 rows | `00000000` |
 | Table | ingest | `slack/ingest/entities.doltlite_db#involving` |  | 0 rows | `00000000` |
-| Table | ingest | `slack/ingest/entities.doltlite_db#messages` |  | 16 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#messages` |  | 17 rows | `00000000` |
 | Table | ingest | `slack/ingest/entities.doltlite_db#read_marks` |  | 6 rows | `00000000` |
 | Table | ingest | `slack/ingest/entities.doltlite_db#saved_items` |  | 3 rows | `00000000` |
 | Table | ingest | `slack/ingest/entities.doltlite_db#slack_attachments` |  | 1 row | `00000000` |
@@ -104,6 +105,27 @@ Set a course, Mr. Data. Warp factor five.
 title: #bridge | text: Worf — Wed 28 May 2369 15:25
 
 Long-range sensors confirm it, Captain: a Warbird, decloaking.
+
+
+=== slack 00000000-0000-84dc-9287-55606902e25c #engineering
+--- chunk 0
+title: #engineering | text: Sensor Array — Wed 28 May 2369 15:14
+
+**Long-range sensor sweep 🛰️ *complete***
+
+Sweep requested by @Jean-Luc Picard. Contact at **bearing 271 mark 4**.
+
+- **Range**
+  4.2 light-years
+- Class: D'deridex [cloaked]
+
+Image: Sweep 47988
+
+Video: Sweep replay (Holonet)
+
+Image: Q's calling card
+
+Sensor array 3 · Stardate 47988.1
 
 
 === slack 00000000-0000-8630-8d5e-f4aae259bc1c @William T. Riker
@@ -139,12 +161,27 @@ title: @William T. Riker | text: Jean-Luc Picard — Wed 28 May 2369 15:21
 
 Thank you, Number One. Make it so.
 
+> **Away team 47988**
+> @William T. Riker, @Worf, @Lt. Cmdr. Data
+>
+> Beam-down at 0900
+
 
 === slack 00000000-0000-8b0f-9140-61eaa37493ff #bridge
 --- chunk 0
 title: #bridge | text: Jean-Luc Picard — Wed 28 May 2369 15:18
 
 New combadge prototypes — thoughts?
+
+> Elizabeth Shelby · original message
+>
+> The Borg prototype combadges use _subspace_ relays. Spec attached.
+>
+> File: Borg combadge spec
+
+> Memory Alpha · **Combadge**
+
+> <https://starfleet.example/specs/combadge-2369>
 
 🖼 *[Delta shield prototype (not yet fetched)]*
 *(source: https://files.slack.com/files-pri/T_NCC1701D-F_DELTA_SHIELD/delta_shield.png)*
@@ -162,3 +199,5 @@ I recommend raising shields **now**, Captain.
 title: @William T. Riker, Worf | text: Worf — Wed 28 May 2369 15:21
 
 @Jean-Luc Picard, I must object to beaming down unarmed.
+
+> Phaser inventory: 6 type-2 phasers checked out

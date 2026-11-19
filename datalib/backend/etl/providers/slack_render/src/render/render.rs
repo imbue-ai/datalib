@@ -76,7 +76,11 @@ use datalib_schema::providers::Provider;
 ///     its author is now, not where they were when they wrote it.
 /// v23: a message's blocks and attachments are drawn — a forward, a link
 ///     preview, a bot's card — and only what is still not drawn is noted.
-pub const RENDER_VERSION: u32 = 23;
+/// v24: a bot's thread is titled by what its blocks show, and an image
+///     block whose address is not a web one keeps its label.
+/// v25: a bot's message is named by the name it posted under or its
+///     bot's, not "unknown".
+pub const RENDER_VERSION: u32 = 25;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -292,6 +296,7 @@ fn build_chat(
         team_id: bucket.messages.first().map_or("", |m| m.team_id.as_str()),
     };
     let channels = bucket.inputs.lookup("channels", &shared.channels);
+    let bots = bucket.inputs.lookup("bots", &shared.bots);
     let root: &Message = bucket
         .messages
         .iter()
@@ -345,7 +350,8 @@ fn build_chat(
         .messages
         .iter()
         .map(|m| {
-            let (mut item, parts) = build_item(source_id, m, root, team_url, labels, unread(m));
+            let (mut item, parts) =
+                build_item(source_id, m, root, team_url, labels, bots, unread(m));
             item.replies = replies_of(m, held_replies, &mut item.problems);
             not_shown.push(parts);
             item
@@ -355,7 +361,13 @@ fn build_chat(
 
     // "#channel: <root snippet>" preserves the old scannable H1; the
     // bare "#channel" remains the conversation_name (via `display`).
-    let title = format!("{cname}: {}", thread_title(&root.text, labels));
+    // A bot's `text` is only its notification's summary of the blocks
+    // the page shows instead.
+    let headline = cards::draw(&root.raw_json, labels).headline;
+    let title = format!(
+        "{cname}: {}",
+        thread_title(headline.as_deref().unwrap_or(&root.text), labels)
+    );
 
     NormalizedChat {
         named_after,
@@ -494,13 +506,10 @@ fn build_item(
     root: &Message,
     team_url: Option<&str>,
     labels: Labels<'_>,
+    bots: Lookup<'_, BTreeMap<String, String>>,
     unread: bool,
 ) -> (NormalizedChatItem, Vec<String>) {
-    let author_display = m
-        .user_id
-        .as_deref()
-        .and_then(|u| labels.users.get(u).cloned())
-        .unwrap_or_else(|| m.user_id.clone().unwrap_or_else(|| "unknown".into()));
+    let (author_display, author_kind) = author_of(m, labels.users, bots);
     let drawn = cards::draw(&m.raw_json, labels);
     let body = drawn.body(to_commonmark(m.text.trim_end(), labels));
     let attachments = build_attachments(&m.raw_json);
@@ -522,7 +531,7 @@ fn build_item(
             .user_id
             .as_deref()
             .and_then(|u| Handle::slack(&m.team_id, u)),
-        author_kind: AuthorKind::Named,
+        author_kind,
         author_display,
         date_ms,
         // A `ts` names no clock, and a profile's `tz` is where its
@@ -556,6 +565,37 @@ fn build_item(
         problems,
     };
     (item, drawn.not_shown)
+}
+
+/// Who wrote `m`: a user by their profile; else a bot by the name it
+/// posted under (`username`, which an integration sets per message, or
+/// its app's `bot_profile`), else by the name `bots.info` gave it; else
+/// whichever id the message carries. Nobody, where it carries none.
+fn author_of(
+    m: &Message,
+    users: Lookup<'_, BTreeMap<String, String>>,
+    bots: Lookup<'_, BTreeMap<String, String>>,
+) -> (String, AuthorKind) {
+    let named = |v: Option<&Value>| {
+        v.and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let raw = &m.raw_json;
+    let bot_id = named(raw.get("bot_id"));
+    m.user_id
+        .as_deref()
+        .and_then(|u| users.get(u).cloned())
+        .or_else(|| named(raw.get("username")))
+        .or_else(|| named(raw.pointer("/bot_profile/name")))
+        .or_else(|| bots.get(bot_id.as_deref()?).cloned())
+        .or_else(|| m.user_id.clone())
+        .or(bot_id)
+        .map_or_else(
+            || ("Unknown".to_string(), AuthorKind::Unknown),
+            |name| (name, AuthorKind::Named),
+        )
 }
 
 fn replies_of(m: &Message, held: u64, problems: &mut Vec<Problem>) -> Option<Replies> {
@@ -842,6 +882,63 @@ mod reaction_tests {
             .map(|i| i.date_offset_secs)
             .collect();
         assert_eq!(offsets, [None, None, None, None]);
+    }
+
+    /// A bot's message showed "unknown" for its author: most carry a
+    /// `bot_id` and no user. It is named by what it posted under, else by
+    /// what `bots.info` said, which the thread declares it read.
+    #[test]
+    fn a_bots_message_is_named_by_what_it_posted_under_or_its_bot() {
+        let users = BTreeMap::from([("U1".to_string(), "Jean-Luc Picard".to_string())]);
+        let bots = BTreeMap::from([("B_SENSORS".to_string(), "Sensor Array".to_string())]);
+        let inputs = Inputs::default();
+        let author = |user: Option<&str>, raw: Value| {
+            let m = Message {
+                user_id: user.map(str::to_string),
+                raw_json: raw,
+                ..reacted(json!([]))
+            };
+            let (name, kind) = author_of(
+                &m,
+                inputs.lookup("users", &users),
+                inputs.lookup("bots", &bots),
+            );
+            (name, kind == AuthorKind::Unknown)
+        };
+        let named = |s: &str| (s.to_string(), false);
+        assert_eq!(author(Some("U1"), json!({})), named("Jean-Luc Picard"));
+        assert_eq!(
+            author(
+                None,
+                json!({"bot_id": "B_SENSORS", "username": "Red Alert"})
+            ),
+            named("Red Alert"),
+            "an integration's per-message name is what Slack shows"
+        );
+        assert_eq!(
+            author(
+                None,
+                json!({"bot_id": "B_X", "bot_profile": {"name": "Holodeck"}})
+            ),
+            named("Holodeck")
+        );
+        assert_eq!(
+            author(None, json!({"bot_id": "B_SENSORS"})),
+            named("Sensor Array")
+        );
+        assert_eq!(author(None, json!({"bot_id": "B_GONE"})), named("B_GONE"));
+        assert_eq!(author(Some("U_NEW"), json!({})), named("U_NEW"));
+        assert_eq!(author(None, json!({})), ("Unknown".to_string(), true));
+        let declared: Vec<(String, String)> = inputs
+            .declared()
+            .into_iter()
+            .filter(|i| i.table == "bots")
+            .map(|i| (i.table, i.id))
+            .collect();
+        assert!(
+            declared.contains(&("bots".to_string(), "B_SENSORS".to_string())),
+            "a thread whose bot is renamed renders again: {declared:?}"
+        );
     }
 
     /// Only a root carries Slack's count, and one that is not a number
