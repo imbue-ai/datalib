@@ -68,6 +68,7 @@ Measured Tue Apr 15th, 2369 at 00:00.
 | Table | ingest | `slack/ingest/blobs.sqlite#cas_objects` |  | 0 rows | `00000000` |
 | Store | ingest | `slack/ingest/entities.doltlite_db` | <size> |  | `00000000` |
 | Table | ingest | `slack/ingest/entities.doltlite_db#bookmarks` |  | 2 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#bots` |  | 1 row | `00000000` |
 | Table | ingest | `slack/ingest/entities.doltlite_db#channel_read_states` |  | 6 rows | `00000000` |
 | Table | ingest | `slack/ingest/entities.doltlite_db#channels` |  | 6 rows | `00000000` |
 | Table | ingest | `slack/ingest/entities.doltlite_db#coverage` |  | 12 rows | `00000000` |
@@ -108,7 +109,7 @@ Long-range sensors confirm it, Captain: a Warbird, decloaking.
 
 === slack 00000000-0000-84dc-9287-55606902e25c #engineering
 --- chunk 0
-title: #engineering | text: unknown — Wed 28 May 2369 15:14
+title: #engineering | text: Sensor Array — Wed 28 May 2369 15:14
 
 **Long-range sensor sweep 🛰️ *complete***
 

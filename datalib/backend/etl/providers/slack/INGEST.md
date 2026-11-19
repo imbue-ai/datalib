@@ -48,6 +48,7 @@ a file download is retried, rate-limited and replayed like an API call.
 | `conversations.list`        | Enumerate channels                       |
 | `users.list`                | Enumerate workspace users                |
 | `users.info`                | One author no `users.list` has named yet |
+| `bots.info`                 | One bot a stored message names, asked once |
 | `conversations.history`     | Each channel's uncovered stretches + refresh window |
 | `conversations.replies`     | The replies of each thread the store owes |
 | `search.messages`           | Replies posted since the last search, to roots history will not read again; with `scope = "involves_me"`, the messages that involve the account |
@@ -629,6 +630,15 @@ or users, so each is found its own way.
   change. A lookup that fails is an attempt on the user's own row
   (`users:<id>`), asked again each run until it answers or a
   `users.list` names the user.
+- **Bots.** An app or an integration posts with a `bot_id` and, most
+  often, no user, and Slack keeps no listing of bots. Storing a message
+  adds a `bots` row with no payload for a bot not already there, and
+  `bots.info` is asked for each such row beside the authors' lookups,
+  once: a bot's name rarely changes. A lookup that fails is an attempt
+  on the bot's own row (`bots:<id>`), asked again the next run. A store
+  from before `bots` gets a row for each bot its messages name when it
+  is opened (rung 3 of `schema_raw::LADDER`). On one real workspace,
+  320,000 messages named 50 bots.
 
 A sweep marker only says "do not list again yet"; it is not progress.
 
