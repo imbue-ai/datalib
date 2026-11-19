@@ -15,7 +15,7 @@ use anyhow::Result;
 use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::inputs::{Bucket, Buckets, Input, RawRange};
+use datalib_etl_render::inputs::{Input, RawRange, RenderUnit, RenderUnits};
 use datalib_handle::Handle;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
@@ -50,7 +50,7 @@ pub struct ForgeProfile {
 #[derive(Debug, Clone)]
 pub struct ChangeRequest {
     pub uuid: String,
-    /// Its raw row's id: the bucket key every row of the document shares.
+    /// Its raw row's id: the render unit key every row of the document shares.
     pub row_id: String,
     /// The repository or project it belongs to.
     pub container: String,
@@ -130,12 +130,12 @@ pub struct Comment {
 #[derive(Debug, Default, Clone)]
 pub struct Parsed {
     /// The change requests to render this pass — narrowed to the
-    /// buckets the diff named, or every one on a cold start.
+    /// render units the diff named, or every one on a cold start.
     pub change_requests: Vec<ChangeRequest>,
     pub comments: Vec<Comment>,
     /// The commit everything was read at.
     pub head: Option<String>,
-    /// The buckets to render; `None` renders everything.
+    /// The render units to render; `None` renders everything.
     pub render: Option<HashSet<String>>,
     /// The signed-in user, by the handle their own posts carry.
     pub account: Option<Handle>,
@@ -143,7 +143,7 @@ pub struct Parsed {
 
 impl Parsed {
     /// Narrow to what changed since the cursor. A change request's row
-    /// id is its bucket key, so a changed one names itself — gone or
+    /// id is its render unit key, so a changed one names itself — gone or
     /// not; a changed comment names its change request, and a comment
     /// that went is the driver's to name.
     pub fn narrow(
@@ -181,7 +181,7 @@ pub struct RenderSummary {
     pub rendered: usize,
     /// Every change request rendered, with the rows it read, for the
     /// caller to declare.
-    pub buckets: Buckets,
+    pub render_units: RenderUnits,
 }
 
 /// The signed-in user as a source contact marked as the account, on a
@@ -237,7 +237,7 @@ pub fn render_all(
             markdown_uuid: cr.uuid.clone(),
             source_id: stanza.to_string(),
             upstream_cursor: None,
-            bucket_key: Some(cr.row_id.clone()),
+            render_unit_key: Some(cr.row_id.clone()),
             render_version: profile.render_version,
             rows,
             sections,
@@ -251,7 +251,7 @@ pub fn render_all(
             problems,
             front: markdown::front(profile, cr),
         })?;
-        summary.buckets.push(Bucket {
+        summary.render_units.push(RenderUnit {
             key: cr.row_id.clone(),
             inputs: inputs_of(profile, cr, &comments),
         });

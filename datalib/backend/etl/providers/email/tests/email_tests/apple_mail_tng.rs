@@ -199,7 +199,7 @@ async fn the_tng_mail_folder_is_copied_and_rendered() {
     let (docs, _) = super::jmap_mbox::render_paged(
         &store,
         PageSize {
-            buckets: 3,
+            render_units: 3,
             bytes: 1 << 30,
         },
     );

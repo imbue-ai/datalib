@@ -17,7 +17,7 @@ pub struct RenderCursorRow {
     #[col(sql = "VARCHAR(64)")]
     pub raw_commit: String,
     /// The render params (JSON) the documents were rendered with. A run
-    /// whose params differ renders every bucket again and keeps
+    /// whose params differ renders every render unit again and keeps
     /// `raw_commit` for the diff.
     #[col(sql = "TEXT")]
     pub params: String,

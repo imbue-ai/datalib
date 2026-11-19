@@ -131,7 +131,7 @@ pub struct ScanResult {
     /// conversation (first run, a non-doltlite db, or
     /// `dolt_diff_<table>` unavailable).
     pub render: Option<HashSet<String>>,
-    /// Bucket keys the driver found stale whose conversation row is
+    /// Render unit keys the driver found stale whose conversation row is
     /// gone — declared with nothing so their pages go.
     pub gone: Vec<String>,
     /// The HEAD commit hash at scan time, ready to stamp into the
@@ -726,13 +726,13 @@ async fn scan_diff(
     pin: &datalib_etl::pin::Pin,
     conversations: &[LoadedConversation],
 ) -> Result<ScanResult> {
-    let scan = datalib_etl::doltlite_raw::scan_buckets(
+    let scan = datalib_etl::doltlite_raw::scan_render_units(
         pool,
         range.cursor,
         pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
             fanout_query: None,
-            bucket_query: "
+            render_unit_query: "
                 SELECT DISTINCT conversation_id FROM (
                     SELECT coalesce(to_id, from_id) AS conversation_id
                       FROM dolt_diff_conversations
@@ -747,7 +747,7 @@ async fn scan_diff(
         },
     )
     .await?;
-    // The driver names buckets by the minted page uuid; the load wants
+    // The driver names render units by the minted page uuid; the load wants
     // the upstream id.
     let by_key: HashMap<String, &str> = conversations
         .iter()

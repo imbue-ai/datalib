@@ -323,8 +323,8 @@ mod tests {
             panic!("one feed")
         };
         // Two years, one document, oldest first.
-        let [doc] = chat.buckets.as_slice() else {
-            panic!("one document: {:?}", chat.buckets)
+        let [doc] = chat.render_units.as_slice() else {
+            panic!("one document: {:?}", chat.render_units)
         };
         assert_eq!(doc.markdown_uuid, chat.chat_uuid);
         let [review, photo, pin] = doc.items.as_slice() else {
@@ -386,7 +386,7 @@ mod tests {
             }}),
         )];
         let chats = build("gt", &reviews, &[], &[]);
-        let item = &chats[0].buckets[0].items[0];
+        let item = &chats[0].render_units[0].items[0];
         let text = item.text.as_deref().unwrap();
         assert!(
             text.ends_with(

@@ -62,7 +62,7 @@ impl SourceRender for PerseusRender {
             .iter()
             .map(|f| Input::new("file", f.clone()))
             .collect();
-        ctx.declare_bucket(&render::bucket_key(ctx.name), &inputs)?;
+        ctx.declare_render_unit(&render::render_unit_key(ctx.name), &inputs)?;
         let mut on_doc = |md| ctx.emit_doc(md);
         render::render_all(&parsed, &alignments, ctx.name, ctx.progress, &mut on_doc)
             .context("perseus render_all")?;

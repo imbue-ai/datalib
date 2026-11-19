@@ -131,7 +131,7 @@ fn render_open(
         }
     }
     let summary = render_all(&profile, &contacts, source_id, progress, on_doc_complete)?;
-    outcome.buckets.extend(summary.buckets);
+    outcome.render_units.extend(summary.render_units);
     Ok(outcome)
 }
 

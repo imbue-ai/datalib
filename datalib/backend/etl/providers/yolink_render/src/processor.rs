@@ -42,7 +42,7 @@ impl SourceRender for YolinkRender {
         }
         let parsed = parse(raw_path, ctx.raw_range())
             .with_context(|| format!("yolink parse {}", raw_path.display()))?;
-        ctx.declare_bucket(&page, &inputs())?;
+        ctx.declare_render_unit(&page, &inputs())?;
         let mut on_doc = |md| ctx.emit_doc(md);
         let s = render_all(&parsed, ctx.name, ctx.progress, &mut on_doc)
             .context("yolink render_all")?;

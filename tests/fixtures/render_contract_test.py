@@ -217,8 +217,8 @@ KNOWN_GAPS: dict[str, str] = {
     # A chat's uuid is minted from its jid's string, which the edit
     # changes in place, and the chat also looks up `wa_db_contacts` by
     # that string. The re-keyed chat therefore reads different lookup
-    # keys from the old one, so not every row the old bucket was built
-    # from is read by a bucket this run built, no row was removed, and
+    # keys from the old one, so not every row the old render unit was built
+    # from is read by a render unit this run built, no row was removed, and
     # the driver keeps the old chat's documents with a `no_document`
     # warning beside the new ones. Upstream never rewrites a jid row's
     # string; it is the chat's identity.
@@ -762,22 +762,22 @@ class RenderContractTest(unittest.TestCase):
         return root
 
     class Readers(NamedTuple):
-        """What the render store declares about one raw row: the buckets
+        """What the render store declares about one raw row: the render units
         that read it (`None` when the provider has declared nothing for
         the table — its scan is on its own then), how many documents
-        those buckets hold, and how many documents the last render
+        those render units hold, and how many documents the last render
         wrote, off its commit message — the only trace, since an
         unchanged rewrite leaves no diff."""
 
-        buckets: list[str] | None
+        render_units: list[str] | None
         documents: int
         rendered: int | None
 
     def _readers_of(self, source_dir: Path, table: str, row_id: str) -> Readers:
         """One spawn for all three: this runs twice per one-row mutation."""
         db = source_dir / "render_markdown" / "indexed_markdown.doltlite_db"
-        buckets_sql = (
-            "SELECT DISTINCT bucket_key FROM render_inputs "
+        render_units_sql = (
+            "SELECT DISTINCT render_unit_key FROM render_inputs "
             f"WHERE input_table = '{table}' AND input_id IN ('{row_id}', '*')"
         )
         got = self._split_by_sentinel(
@@ -785,16 +785,16 @@ class RenderContractTest(unittest.TestCase):
                 db,
                 f"SELECT '#declared'; SELECT COUNT(*) FROM render_inputs "
                 f"WHERE input_table = '{table}'; "
-                f"SELECT '#buckets'; {buckets_sql}; "
+                f"SELECT '#render_units'; {render_units_sql}; "
                 f"SELECT '#documents'; SELECT COUNT(*) FROM markdowns "
-                f"WHERE bucket_key IN ({buckets_sql}); "
+                f"WHERE render_unit_key IN ({render_units_sql}); "
                 "SELECT '#log'; SELECT message FROM dolt_log() ORDER BY date DESC LIMIT 1;",
             )
         )
         log = got["log"]
         m = re.match(r"render \S+: (\d+) document\(s\)", log[0]) if log else None
         return self.Readers(
-            buckets=None if got["declared"][0] == "0" else got["buckets"],
+            render_units=None if got["declared"][0] == "0" else got["render_units"],
             documents=int(got["documents"][0]),
             rendered=int(m.group(1)) if m else None,
         )
@@ -843,16 +843,16 @@ class RenderContractTest(unittest.TestCase):
             shutil.rmtree(inc)
             return False
         self._rows(db, f"SELECT dolt_commit('-Am', 'contract: {kind} {table}');")
-        # The buckets declared for the row and the documents under them
+        # The render units declared for the row and the documents under them
         # before the run; the edit may move a message into another
         # period, and an inserted row has readers only afterwards, so
-        # the count after the run — under whichever buckets declare the
+        # the count after the run — under whichever render units declare the
         # row then — is the other bound.
         readers = before = None
         if one_row is not None:
             declared = self._readers_of(inc / source, table, one_row)
-            if declared.buckets is not None:
-                readers, before = declared.buckets, declared.documents
+            if declared.render_units is not None:
+                readers, before = declared.render_units, declared.documents
         # What the store held before this run, for the insert: a copied
         # row that changes nothing in the output — an attachment edge no
         # payload points at, a reaction with no emoji row — was read by
@@ -886,13 +886,13 @@ class RenderContractTest(unittest.TestCase):
                     no_effect.append(f"{source}: {table}")
             elif readers is not None and before is not None and one_row is not None:
                 declared = self._readers_of(inc / source, table, one_row)
-                readers_after = declared.buckets or []
+                readers_after = declared.render_units or []
                 after, rendered = declared.documents, declared.rendered
                 lo, hi = min(before, after), max(before, after)
                 if rendered is None or not lo <= rendered <= hi:
                     failures.append(
                         f"{source}: {kind} {table}\n  one row changed; the store declared "
-                        f"{len(readers)} bucket(s) reading it, holding {before} document(s), "
+                        f"{len(readers)} render unit(s) reading it, holding {before} document(s), "
                         f"before the run and {len(readers_after)} holding {after} after; "
                         f"the run rendered {rendered}"
                     )

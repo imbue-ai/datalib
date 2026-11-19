@@ -9,7 +9,7 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{
     escape_md_block, escape_md_inline, escape_name_inline, md_code_span, md_link_dest,
 };
-use datalib_etl_render::inputs::{Bucket, Buckets};
+use datalib_etl_render::inputs::{RenderUnit, RenderUnits};
 use datalib_etl_render::message::{chip_link, stamp_text_html};
 use datalib_etl_render::section::Section;
 use datalib_etl_render::title::Title;
@@ -47,8 +47,8 @@ const EDGE_LABEL_CHARS: usize = 64;
 pub struct RenderSummary {
     pub events_rendered: usize,
     /// Every event rendered, with what it read — for
-    /// `RenderCtx::declare_bucket`.
-    pub buckets: Buckets,
+    /// `RenderCtx::declare_render_unit`.
+    pub render_units: RenderUnits,
 }
 
 pub fn render_all(
@@ -61,7 +61,7 @@ pub fn render_all(
     let mut summary = RenderSummary::default();
     progress.set_length(Some(events.len() as u64));
     for event in events {
-        summary.buckets.push(Bucket {
+        summary.render_units.push(RenderUnit {
             key: event.event_uuid.clone(),
             inputs: event.inputs.clone(),
         });
@@ -104,7 +104,7 @@ fn render_one(
         markdown_uuid: uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: event.modified_at.clone(),
-        bucket_key: Some(uuid.clone()),
+        render_unit_key: Some(uuid.clone()),
         render_version: profile.render_version,
         rows: row.into_iter().collect(),
         sections,

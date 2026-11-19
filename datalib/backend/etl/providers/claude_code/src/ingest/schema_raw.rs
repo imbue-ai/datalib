@@ -43,7 +43,7 @@ pub struct TranscriptRow {
 ///
 /// `transcript_id` is the one promoted column: the writer composes it
 /// (`<session_id>#<agent_id>` for a subagent) and the render's diff
-/// buckets on it. Everything else a reader wants — `sessionId`,
+/// groups its render units by it. Everything else a reader wants — `sessionId`,
 /// `type`, `timestamp`, `parentUuid`, `isSidechain` — is in the
 /// payload; query it as `payload->>'$.type'`.
 #[derive(Debug, Clone, WirePayloadRow)]

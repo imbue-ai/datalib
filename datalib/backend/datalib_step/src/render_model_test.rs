@@ -33,8 +33,8 @@ const NOW: &str = "2026-09-14T12:00:00+00:00";
 
 // ── the synthetic raw store and its reference renderer ──────────────
 
-/// Three tables, chosen for the three shapes every real bucket query has
-/// to handle: the bucket entity, rows that reach a bucket through a
+/// Three tables, chosen for the three shapes every real render unit query has
+/// to handle: the render unit entity, rows that reach a render unit through a
 /// foreign key, and a table every document reads but none owns.
 const RAW_DDL: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS parents (id TEXT PRIMARY KEY, title TEXT NOT NULL, author_id TEXT NOT NULL)",
@@ -65,7 +65,7 @@ struct Model {
 }
 
 /// Render knobs. `upper` changes every document, so a param change is
-/// only right if every bucket renders again.
+/// only right if every render unit renders again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Params {
     upper: bool,
@@ -161,9 +161,9 @@ fn expected(model: &Model, params: Params) -> BTreeMap<String, Doc> {
 
 // ── the synthetic provider: the reference renderer behind the framework ──
 
-/// What a real provider is: a scan, a load of the buckets the scan
-/// named, a removal for each named bucket that is gone, a document per
-/// bucket, and a report of the commit it read. Plus the knobs the test
+/// What a real provider is: a scan, a load of the render units the scan
+/// named, a removal for each named render unit that is gone, a document per
+/// render unit, and a report of the commit it read. Plus the knobs the test
 /// turns: the version and params it declares, and a point to fail at.
 struct SynthRender {
     raw_db: PathBuf,
@@ -177,19 +177,19 @@ struct SynthRender {
     unparsed: Mutex<Vec<Unparsed>>,
     /// Parents whose build fails, and how the renderer ends each one.
     broken: Mutex<BTreeMap<String, Broken>>,
-    /// A parent whose bucket also reads another parent's row, as a
+    /// A parent whose render unit also reads another parent's row, as a
     /// calendar series reads the rows of its changed occurrences.
     also_reads: Mutex<BTreeMap<String, String>>,
 }
 
-/// How a renderer ends a bucket it built nothing for.
+/// How a renderer ends a render unit it built nothing for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Broken {
     /// Declared with no inputs, as most renderers do when a build fails.
     DeclaredEmpty,
-    /// `fail_bucket`.
+    /// `fail_render_unit`.
     Failed,
-    /// `exclude_bucket`: left out on purpose.
+    /// `exclude_render_unit`: left out on purpose.
     Excluded,
 }
 
@@ -238,21 +238,21 @@ impl RenderProcessor for SynthRender {
         // The forward projection: only what a *new* row of a primary or
         // child table maps to. A changed author reaches its parents
         // through the inputs they declared; a removed row names its
-        // bucket the same way.
-        let scan = blocking(doltlite_raw::scan_buckets(
+        // render unit the same way.
+        let scan = blocking(doltlite_raw::scan_render_units(
             &pool,
             ctx.raw_cursor,
             &pin,
             &DiffScanSpec {
                 fanout_query: None,
-                bucket_query: "
-                    SELECT DISTINCT bucket FROM (
-                        SELECT to_id AS bucket FROM dolt_diff_parents
+                render_unit_query: "
+                    SELECT DISTINCT render_unit FROM (
+                        SELECT to_id AS render_unit FROM dolt_diff_parents
                          WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type IN ('added', 'modified')
                         UNION
                         SELECT to_parent_id FROM dolt_diff_children
                          WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type IN ('added', 'modified')
-                    ) WHERE bucket IS NOT NULL
+                    ) WHERE render_unit IS NOT NULL
                 ",
             },
         ))?;
@@ -267,7 +267,7 @@ impl RenderProcessor for SynthRender {
 
         // What to render: everything when either side says so, else the
         // union of the driver's stale set and the forward projection.
-        let render: Option<HashSet<String>> = match (ctx.stale_buckets, scan.render.as_ref()) {
+        let render: Option<HashSet<String>> = match (ctx.stale_render_units, scan.render.as_ref()) {
             (Some(stale), Some(forward)) => Some(stale.union(forward).cloned().collect()),
             _ => None,
         };
@@ -279,8 +279,8 @@ impl RenderProcessor for SynthRender {
         let also_reads = self.also_reads.lock().unwrap().clone();
         let docs = expected(&model, params);
         let mut rendered = 0usize;
-        // Every bucket this run looks at, present in the store or not: a
-        // stale bucket whose parent is gone is declared with the rows it
+        // Every render unit this run looks at, present in the store or not: a
+        // stale render unit whose parent is gone is declared with the rows it
         // asked for and emits nothing, which is how its documents go.
         let mut to_render: Vec<String> = model.parents.keys().cloned().collect();
         if let Some(r) = &render {
@@ -294,15 +294,15 @@ impl RenderProcessor for SynthRender {
             rendered += 1;
             match broken.get(&id) {
                 Some(Broken::DeclaredEmpty) => {
-                    ctx.declare_bucket(&id, &[])?;
+                    ctx.declare_render_unit(&id, &[])?;
                     continue;
                 }
                 Some(Broken::Failed) => {
-                    ctx.fail_bucket(&id, "synthetic build failure")?;
+                    ctx.fail_render_unit(&id, "synthetic build failure")?;
                     continue;
                 }
                 Some(Broken::Excluded) => {
-                    ctx.exclude_bucket(&id)?;
+                    ctx.exclude_render_unit(&id)?;
                     continue;
                 }
                 None => {}
@@ -319,7 +319,7 @@ impl RenderProcessor for SynthRender {
                     }
                 }
             }
-            ctx.declare_bucket(&id, &inputs)?;
+            ctx.declare_render_unit(&id, &inputs)?;
             let Some(doc) = docs.get(&id) else {
                 continue;
             };
@@ -406,7 +406,7 @@ fn to_rendered(id: &str, doc: &Doc, version: u32) -> RenderedMarkdown {
         markdown_uuid: id.to_string(),
         source_id: SOURCE.into(),
         upstream_cursor: None,
-        bucket_key: Some(id.to_string()),
+        render_unit_key: Some(id.to_string()),
         render_version: version,
         rows,
         sections: vec![datalib_etl_render::section::Section::unkeyed(
@@ -1025,7 +1025,7 @@ async fn incremental_render_equals_cold_render_under_random_histories() {
 /// not the whole source. Before, `authors` was a fan-out table and one
 /// rename rendered everything.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_changed_input_re_renders_only_the_buckets_that_declared_it() {
+async fn a_changed_input_re_renders_only_the_render_units_that_declared_it() {
     let td = tempfile::tempdir().unwrap();
     let mut world = World::new(td.path()).await;
     if !world.dolt {
@@ -1129,7 +1129,7 @@ async fn an_unreadable_raw_row_is_a_problem_until_it_reads() {
     world.index.close().await;
 }
 
-/// A steady-state run writes nothing: the diff names no bucket, the
+/// A steady-state run writes nothing: the diff names no render unit, the
 /// store's HEAD does not move, and the index reads nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_run_over_an_unchanged_store_moves_nothing() {
@@ -1221,7 +1221,7 @@ async fn a_raw_commit_with_nothing_to_render_moves_no_version() {
     assert_eq!(second.head, first, "nothing was rendered, so nothing moved");
 }
 
-// ── what a bucket that built nothing does to its documents ──────────
+// ── what a render unit that built nothing does to its documents ──────────
 
 fn parent(n: u32) -> Mutation {
     Mutation::InsertParent(
@@ -1250,12 +1250,12 @@ fn held(world: &World) -> BTreeMap<String, Doc> {
     render_store_at(&world.data_root, None).0
 }
 
-/// A build that failed declares its bucket with nothing, though the
+/// A build that failed declares its render unit with nothing, though the
 /// rows it was built from are all still upstream. That must not delete
-/// the bucket's document: it stays as it was, with a warning on it,
-/// until the bucket renders again.
+/// the render unit's document: it stays as it was, with a warning on it,
+/// until the render unit renders again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_bucket_declared_with_nothing_whose_rows_did_not_leave_keeps_its_document() {
+async fn a_render_unit_declared_with_nothing_whose_rows_did_not_leave_keeps_its_document() {
     use datalib_schema::problems::Severity;
     let td = tempfile::tempdir().unwrap();
     let mut world = World::new(td.path()).await;
@@ -1298,10 +1298,10 @@ async fn a_bucket_declared_with_nothing_whose_rows_did_not_leave_keeps_its_docum
     );
 }
 
-/// The other half: a bucket declared with nothing whose rows the diff
+/// The other half: a render unit declared with nothing whose rows the diff
 /// reports removed is gone, and so is its document.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_bucket_declared_with_nothing_whose_rows_left_loses_its_document() {
+async fn a_render_unit_declared_with_nothing_whose_rows_left_loses_its_document() {
     let td = tempfile::tempdir().unwrap();
     let mut world = World::new(td.path()).await;
     if !world.dolt {
@@ -1326,11 +1326,11 @@ async fn a_bucket_declared_with_nothing_whose_rows_left_loses_its_document() {
     );
 }
 
-/// A failed bucket's document survives a full walk — here a version
+/// A failed render unit's document survives a full walk — here a version
 /// bump, which also must not fail the step over the older version the
 /// kept document carries, nor make every later run a full walk.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_failed_bucket_survives_a_full_walk() {
+async fn a_failed_render_unit_survives_a_full_walk() {
     use datalib_schema::problems::Severity;
     let td = tempfile::tempdir().unwrap();
     let mut world = World::new(td.path()).await;
@@ -1356,11 +1356,11 @@ async fn a_failed_bucket_survives_a_full_walk() {
     assert_eq!(next.docs, 0, "the run after the walk is not another walk");
 }
 
-/// A version bump is a full walk, and common: a bucket declared with
+/// A version bump is a full walk, and common: a render unit declared with
 /// nothing on one keeps its document unless its rows left, as on a
 /// narrowed run, or every silent build failure deletes at the next bump.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_bucket_declared_with_nothing_keeps_its_document_through_a_full_walk() {
+async fn a_render_unit_declared_with_nothing_keeps_its_document_through_a_full_walk() {
     use datalib_schema::problems::Severity;
     let td = tempfile::tempdir().unwrap();
     let mut world = World::new(td.path()).await;
@@ -1386,10 +1386,10 @@ async fn a_bucket_declared_with_nothing_keeps_its_document_through_a_full_walk()
     assert_eq!(next.docs, 0, "the run after the walk is not another walk");
 }
 
-/// On a full walk too, a bucket declared with nothing whose rows the
+/// On a full walk too, a render unit declared with nothing whose rows the
 /// diff since the cursor reports removed is gone.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_bucket_declared_with_nothing_whose_rows_left_goes_on_a_full_walk() {
+async fn a_render_unit_declared_with_nothing_whose_rows_left_goes_on_a_full_walk() {
     let td = tempfile::tempdir().unwrap();
     let mut world = World::new(td.path()).await;
     if !world.dolt {
@@ -1411,12 +1411,12 @@ async fn a_bucket_declared_with_nothing_whose_rows_left_goes_on_a_full_walk() {
     assert!(!held(&world).contains_key("p1"));
 }
 
-/// Another bucket that already read every row of a bucket declared with
+/// Another render unit that already read every row of a render unit declared with
 /// nothing is not evidence it is gone: a calendar series reads all of a
 /// changed occurrence's rows, and the occurrence's failed build must
 /// not delete it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn rows_another_bucket_already_read_are_no_evidence() {
+async fn rows_another_render_unit_already_read_are_no_evidence() {
     use datalib_schema::problems::Severity;
     let td = tempfile::tempdir().unwrap();
     let mut world = World::new(td.path()).await;
@@ -1446,10 +1446,10 @@ async fn rows_another_bucket_already_read_are_no_evidence() {
     assert_eq!(report.problems.get(&Severity::Warning), Some(&1));
 }
 
-/// A re-key: a bucket new this run reads every row a bucket declared
+/// A re-key: a render unit new this run reads every row a render unit declared
 /// with nothing was built from, so those rows left it, and it goes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn rows_a_new_bucket_took_over_are_evidence() {
+async fn rows_a_new_render_unit_took_over_are_evidence() {
     let td = tempfile::tempdir().unwrap();
     let mut world = World::new(td.path()).await;
     if !world.dolt {
@@ -1478,10 +1478,10 @@ async fn rows_a_new_bucket_took_over_are_evidence() {
     assert!(held(&world).contains_key("p3"));
 }
 
-/// A bucket the renderer leaves out on purpose goes, though its rows
+/// A render unit the renderer leaves out on purpose goes, though its rows
 /// are all still upstream: the renderer's word is the evidence.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_excluded_bucket_loses_its_document() {
+async fn an_excluded_render_unit_loses_its_document() {
     let td = tempfile::tempdir().unwrap();
     let mut world = World::new(td.path()).await;
     if !world.dolt {
@@ -1550,11 +1550,11 @@ fn reverse_lookup_now(world: &World) -> (crate::render::ReverseLookup, BTreeSet<
     (lookup, diffed)
 }
 
-/// Every input the store says `buckets` were last built from.
-fn declared_inputs(world: &World, buckets: &[&str]) -> Vec<Input> {
+/// Every input the store says `render units` were last built from.
+fn declared_inputs(world: &World, render_units: &[&str]) -> Vec<Input> {
     let root = datalib_etl::layout::render_markdown_root(&world.data_root, SOURCE);
     let store = IndexedMarkdownStore::open(&root).unwrap();
-    let inputs = store.inputs_of(buckets).unwrap();
+    let inputs = store.inputs_of(render_units).unwrap();
     store.close();
     let mut all: Vec<Input> = inputs.into_values().flatten().collect();
     all.sort_by(|a, b| (&a.table, &a.id).cmp(&(&b.table, &b.id)));
@@ -1562,7 +1562,7 @@ fn declared_inputs(world: &World, buckets: &[&str]) -> Vec<Input> {
 }
 
 /// After `--reset <source>/ingest` empties the raw store, the reverse
-/// lookup names every bucket stale and every declared row removed
+/// lookup names every render unit stale and every declared row removed
 /// without diffing a table: each held rows at the cursor and holds none
 /// now, which says every row left. Diffing them cost time in proportion
 /// to every row that left (24s of 86s on a real Lightroom reset).
@@ -1640,11 +1640,11 @@ async fn an_emptied_table_is_not_diffed_beside_tables_that_changed() {
     );
 }
 
-/// A bucket that only looked up a key its table never had read nothing
+/// A render unit that only looked up a key its table never had read nothing
 /// that changed when the table empties, so it is not stale and lost no
 /// row. Telling it apart takes the diff, so the table gets one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_emptied_table_a_bucket_only_missed_in_is_diffed() {
+async fn an_emptied_table_a_render_unit_only_missed_in_is_diffed() {
     let td = tempfile::tempdir().unwrap();
     let mut world = World::new(td.path()).await;
     assert!(world.dolt, "this build links doltlite");

@@ -45,7 +45,7 @@ impl SourceRender for CodexRender {
             ctx.name,
             ctx.progress,
             &mut |md| ctx.emit_doc(md),
-            &mut |buckets| ctx.declare_buckets(buckets),
+            &mut |render_units| ctx.declare_render_units(render_units),
             ctx.raw_range(),
             ctx.page_size,
             self.max_tool_result_bytes,

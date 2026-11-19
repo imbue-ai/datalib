@@ -16,7 +16,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 /// SQL projection from Signal's `chat_item_attachments` edge to its
-/// CAS blake3. Render reads a batch of buckets' bytes through it.
+/// CAS blake3. Render reads a batch of render units' bytes through it.
 pub(crate) const ATTACHMENTS_PROJECTION_SQL: &str = "
     SELECT ref_id, blake3,
            NULL AS content_type, NULL AS upstream_name
@@ -33,7 +33,7 @@ pub struct ScanResult {
     /// the driver found stale through their declared inputs, plus the
     /// ones the diff named. `None` → cold start, render every chat.
     pub render: Option<HashSet<String>>,
-    /// Bucket keys the driver found stale whose `chats` row is gone —
+    /// Render unit keys the driver found stale whose `chats` row is gone —
     /// declared with nothing so their documents go.
     pub gone: Vec<String>,
     /// The HEAD commit hash at scan time, ready to stamp into the
@@ -57,16 +57,16 @@ pub struct ParsedSignal {
     /// with how many messages each has. Read whole every run, cold or
     /// incremental, and rendered by neither; the processor reports each.
     pub orphan_chats: Vec<(String, i64)>,
-    /// Chats indexed by `chat_id` for lookup from `DocBucket`. The
+    /// Chats indexed by `chat_id` for lookup from `DocRenderUnit`. The
     /// chats themselves carry no items — each item ends up in the
-    /// matching bucket in `docs`.
+    /// matching render unit in `docs`.
     pub chats: HashMap<String, ParsedChat>,
-    /// One bucket per chat that needs re-rendering: a chat survives
+    /// One render unit per chat that needs re-rendering: a chat survives
     /// Phase 1 iff `dolt_diff_*` reported any row of it as
     /// added/modified/removed since the last render cursor, and is then
     /// loaded whole in Phase 2. Ordered by chat_id so the rendered tree
     /// is deterministic.
-    pub docs: Vec<DocBucket>,
+    pub docs: Vec<DocRenderUnit>,
     /// Count of chats `dolt_diff` said were unchanged.
     pub docs_skipped: usize,
     /// Scan diagnostics propagated up to render so it can write the
@@ -76,7 +76,7 @@ pub struct ParsedSignal {
     /// row, its items and attachment edges from the load, its
     /// recipients as render looks them up.
     pub inputs: HashMap<String, Inputs>,
-    /// Where render reads the buckets' attachment bytes, a batch at a
+    /// Where render reads the render units' attachment bytes, a batch at a
     /// time. `None` when no store was read.
     pub blobs_at: Option<BlobsAt>,
 }
@@ -117,7 +117,7 @@ pub struct ParsedChat {
 
 /// One chat's items, its one rendered document.
 #[derive(Debug, Clone, Default)]
-pub struct DocBucket {
+pub struct DocRenderUnit {
     pub chat_id: String,
     pub items: Vec<ParsedChatItem>,
 }
@@ -245,14 +245,14 @@ async fn parse_open(
         Vec::new()
     } else {
         let marks = read_marks::load(&pool).await?;
-        load_buckets(&pool, &to_load_chats, &marks).await?
+        load_render_units(&pool, &to_load_chats, &marks).await?
     };
 
     let mut inputs: HashMap<String, Inputs> = HashMap::new();
-    for bucket in &docs {
-        let read = inputs.entry(bucket.chat_id.clone()).or_default();
-        read.read("chats", &bucket.chat_id);
-        for item in &bucket.items {
+    for render_unit in &docs {
+        let read = inputs.entry(render_unit.chat_id.clone()).or_default();
+        read.read("chats", &render_unit.chat_id);
+        for item in &render_unit.items {
             read.read("chat_items", &item.item_pk);
             if !item.outgoing {
                 read.read(read_marks::TABLE, &item.item_pk);
@@ -393,7 +393,7 @@ async fn scan_diff(
     source_id: &str,
     chats: &HashMap<String, ParsedChat>,
 ) -> Result<ScanResult> {
-    let scan = datalib_etl::doltlite_raw::scan_buckets(
+    let scan = datalib_etl::doltlite_raw::scan_render_units(
         pool,
         range.cursor,
         pin,
@@ -401,7 +401,7 @@ async fn scan_diff(
             // A recipient change reaches a chat through the inputs it
             // declared; nothing fans out.
             fanout_query: None,
-            bucket_query: "
+            render_unit_query: "
                 SELECT DISTINCT chat_id FROM (
                     SELECT coalesce(to_id, from_id) AS chat_id
                       FROM dolt_diff_chats
@@ -431,7 +431,7 @@ async fn scan_diff(
     if let (Some(forward), Some(from)) = (forward.as_mut(), range.cursor) {
         forward.extend(marked_since(pool, from, pin).await?);
     }
-    // The driver names buckets by the chat uuid; the load wants chat ids.
+    // The driver names render units by the chat uuid; the load wants chat ids.
     let by_uuid: HashMap<String, &str> = chats
         .keys()
         .map(|id| (super::ids::chat(source_id, id).uuid, id.as_str()))
@@ -469,11 +469,11 @@ async fn marked_since(
     .context("the chats of the moved read marks")
 }
 
-async fn load_buckets(
+async fn load_render_units(
     pool: &sqlx::SqlitePool,
     chat_ids: &HashSet<String>,
     marks: &BTreeMap<String, ReadMark>,
-) -> Result<Vec<DocBucket>> {
+) -> Result<Vec<DocRenderUnit>> {
     if chat_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -501,15 +501,15 @@ async fn load_buckets(
     .into_iter()
     .collect();
 
-    let mut bucket_idx: HashMap<String, usize> = HashMap::new();
-    let mut docs: Vec<DocBucket> = Vec::new();
+    let mut render_unit_idx: HashMap<String, usize> = HashMap::new();
+    let mut docs: Vec<DocRenderUnit> = Vec::new();
     for r in &irows {
         let chat_id: String = r.try_get("chat_id")?;
         let author_id: String = r.try_get("author_id")?;
         let date_sent: i64 = r.try_get("date_sent")?;
         let payload: String = r.try_get("payload")?;
-        let idx = *bucket_idx.entry(chat_id.clone()).or_insert_with(|| {
-            docs.push(DocBucket {
+        let idx = *render_unit_idx.entry(chat_id.clone()).or_insert_with(|| {
+            docs.push(DocRenderUnit {
                 chat_id: chat_id.clone(),
                 items: Vec::new(),
             });
@@ -766,7 +766,7 @@ mod load_tests {
     use std::str::FromStr;
 
     /// More chats to render than SQLite binds in one statement (#1156):
-    /// every chat still comes back as its own bucket.
+    /// every chat still comes back as its own render unit.
     #[tokio::test]
     async fn loads_more_chats_than_sqlite_binds_in_one_statement() {
         let pool = SqlitePoolOptions::new()
@@ -794,7 +794,9 @@ mod load_tests {
         .unwrap();
         let chats: HashSet<String> = (1..=n).map(|i| format!("c{i}")).collect();
 
-        let docs = load_buckets(&pool, &chats, &BTreeMap::new()).await.unwrap();
+        let docs = load_render_units(&pool, &chats, &BTreeMap::new())
+            .await
+            .unwrap();
 
         assert_eq!(docs.len(), n);
         assert!(docs.iter().all(|d| d.items.len() == 1));

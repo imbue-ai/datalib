@@ -13,7 +13,7 @@ use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
 use datalib_etl::doltlite_raw::Reader;
 use datalib_etl::read_marks::{self, ReadMark};
 use datalib_etl_render::inputs::{Inputs, RawRange};
-use datalib_etl_render::pages::{BucketPages, KeyColumn};
+use datalib_etl_render::pages::{KeyColumn, RenderUnitPages};
 use datalib_etl_render::processor::Unparsed;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
@@ -60,9 +60,9 @@ pub struct ScanResult {
 /// One thread as it sits between parse and render: the messages
 /// belonging to this thread plus the attachment bytes they reference.
 #[derive(Debug, Clone)]
-pub struct SlackThreadBucket {
+pub struct SlackThreadRenderUnit {
     /// The raw store's `thread_root_uuid`: `{team}#{channel}#{thread_ts}`,
-    /// the bucket key. The thread's entity id is minted from its parts.
+    /// the render unit key. The thread's entity id is minted from its parts.
     pub thread_key: String,
     pub messages: Vec<Message>,
     pub blobs: BlobBundle,
@@ -72,7 +72,7 @@ pub struct SlackThreadBucket {
     pub inputs: Inputs,
 }
 
-impl SlackThreadBucket {
+impl SlackThreadRenderUnit {
     /// The bytes its attachments take, as each message's `files[]` gives
     /// them: what loading its blobs costs.
     pub fn attachment_bytes(&self) -> u64 {
@@ -132,7 +132,7 @@ impl Shared {
 #[derive(Default)]
 pub struct ParsedSlack {
     pub shared: Shared,
-    pub threads: Vec<SlackThreadBucket>,
+    pub threads: Vec<SlackThreadRenderUnit>,
 }
 
 /// The raw store and its blob CAS, open for one render: what every
@@ -153,7 +153,7 @@ pub struct SlackStore {
 
 /// One page of threads, their messages loaded and no attachment bytes.
 pub struct Page {
-    pub threads: Vec<SlackThreadBucket>,
+    pub threads: Vec<SlackThreadRenderUnit>,
     /// On a narrowed run, the stale thread keys this page looked at,
     /// declared empty before the ones it renders. Empty on a full walk,
     /// whose threads all come from rows.
@@ -164,15 +164,15 @@ pub struct Page {
 
 impl SlackStore {
     /// The thread keys to render, a page of `page` at a time.
-    pub fn pages(&self, page: usize) -> BucketPages {
+    pub fn pages(&self, page: usize) -> RenderUnitPages {
         match &self.scan.render {
-            None => BucketPages::walk(THREAD_KEY, page),
-            Some(keys) => BucketPages::listed(keys.iter().cloned(), page),
+            None => RenderUnitPages::walk(THREAD_KEY, page),
+            Some(keys) => RenderUnitPages::listed(keys.iter().cloned(), page),
         }
     }
 
     /// The next page's threads, or `None` once every page is read.
-    pub fn next_page(&self, pages: &mut BucketPages) -> Result<Option<Page>> {
+    pub fn next_page(&self, pages: &mut RenderUnitPages) -> Result<Option<Page>> {
         block_on(async {
             let pool = self.reader.pool();
             let Some(keys) = pages.next(pool).await? else {
@@ -194,7 +194,7 @@ impl SlackStore {
     }
 
     /// Messages, in thread order, grouped into their threads.
-    fn group(&self, messages: Vec<LoadedMessageWithThread>) -> Vec<SlackThreadBucket> {
+    fn group(&self, messages: Vec<LoadedMessageWithThread>) -> Vec<SlackThreadRenderUnit> {
         let workspace = self.shared.workspace.as_ref();
         let team_id = workspace.map_or("unknown", |w| w.team_id.as_str());
         let mut by_thread: BTreeMap<String, (Vec<Message>, Inputs)> = BTreeMap::new();
@@ -224,7 +224,7 @@ impl SlackStore {
                         inputs.read("users", me);
                     }
                 }
-                SlackThreadBucket {
+                SlackThreadRenderUnit {
                     thread_key,
                     messages: msgs,
                     blobs: BlobBundle::default(),
@@ -235,13 +235,17 @@ impl SlackStore {
     }
 
     /// Copies of `batch` with their attachment bytes loaded.
-    pub fn load_blobs(&self, batch: &[&SlackThreadBucket]) -> Result<Vec<SlackThreadBucket>> {
+    pub fn load_blobs(
+        &self,
+        batch: &[&SlackThreadRenderUnit],
+    ) -> Result<Vec<SlackThreadRenderUnit>> {
         block_on(async {
-            let mut threads: Vec<SlackThreadBucket> = batch.iter().map(|b| (*b).clone()).collect();
+            let mut threads: Vec<SlackThreadRenderUnit> =
+                batch.iter().map(|b| (*b).clone()).collect();
             let refs = threads
                 .iter()
                 .enumerate()
-                .map(|(i, bucket)| (i, collect_attachment_ref_ids(&bucket.messages)));
+                .map(|(i, render_unit)| (i, collect_attachment_ref_ids(&render_unit.messages)));
             let mut blobs = BlobBundle::load_many(
                 self.reader.pool(),
                 self.cas.as_ref(),
@@ -249,9 +253,9 @@ impl SlackStore {
                 refs,
             )
             .await?;
-            for (i, bucket) in threads.iter_mut().enumerate() {
+            for (i, render_unit) in threads.iter_mut().enumerate() {
                 if let Some(b) = blobs.remove(&i) {
-                    bucket.blobs = b;
+                    render_unit.blobs = b;
                 }
             }
             Ok(threads)
@@ -353,24 +357,24 @@ async fn scan_diff(
     range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
 ) -> Result<ScanResult> {
-    let bucket_query = format!(
+    let render_unit_query = format!(
         "SELECT DISTINCT thread_root_uuid FROM ({CHANGED_MESSAGES_SQL}) \
          WHERE thread_root_uuid IS NOT NULL"
     );
-    let mut scan = datalib_etl::doltlite_raw::scan_buckets(
+    let mut scan = datalib_etl::doltlite_raw::scan_render_units(
         pool,
         range.cursor,
         pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
             fanout_query: None,
-            bucket_query: &bucket_query,
+            render_unit_query: &render_unit_query,
         },
     )
     .await?;
     if let (Some(from), Some(render)) = (range.cursor, scan.render.as_mut()) {
         render.extend(threads_a_moved_mark_crossed(pool, from, pin.commit()).await?);
     }
-    // The driver names stale buckets by the thread's entity id; the load
+    // The driver names stale render units by the thread's entity id; the load
     // wants the raw thread key the id was minted from.
     // Only a run that narrows maps them.
     let by_uuid: HashMap<String, String> = match (range.stale, &scan.render) {
@@ -864,18 +868,18 @@ pub fn parse_raw_json_dir(out_dir: &Path) -> Result<ParsedSlack> {
         }
     }
 
-    // Bucket by thread.
+    // Render unit by thread.
     let mut by_thread: BTreeMap<String, Vec<Message>> = BTreeMap::new();
     for (_, msg) in messages_by_key {
         let key = slack_thread_key(&msg.team_id, &msg.channel_id, &msg.effective_thread_ts);
         by_thread.entry(key).or_default().push(msg);
     }
-    let mut threads: Vec<SlackThreadBucket> = Vec::with_capacity(by_thread.len());
+    let mut threads: Vec<SlackThreadRenderUnit> = Vec::with_capacity(by_thread.len());
     for (thread_key, mut msgs) in by_thread {
         msgs.sort_by(|a, b| {
             (a.ts_iso.as_deref(), a.ts.as_str()).cmp(&(b.ts_iso.as_deref(), b.ts.as_str()))
         });
-        threads.push(SlackThreadBucket {
+        threads.push(SlackThreadRenderUnit {
             thread_key,
             messages: msgs,
             blobs: BlobBundle::default(),

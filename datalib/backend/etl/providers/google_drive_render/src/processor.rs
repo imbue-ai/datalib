@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_google_drive::ingest::{db_path_for, RawDb};
 use datalib_etl_google_drive_config::GoogleDriveRenderConfig;
-use datalib_etl_render::inputs::{Bucket, Inputs};
+use datalib_etl_render::inputs::{Inputs, RenderUnit};
 use datalib_etl_render::processor::{
     plan_source_render, ReadScope, RenderCtx, RenderProcessor, SourceRender,
 };
@@ -79,7 +79,7 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>) -> Result<String> {
     work.sort_by(|a, b| a.0.cmp(&b.0));
     ctx.progress.set_length(Some(listing.docs.len() as u64));
 
-    let mut buckets: Vec<Bucket> = Vec::new();
+    let mut render_units: Vec<RenderUnit> = Vec::new();
     for (file_id, capture) in work {
         ctx.progress.inc(1);
         let native = store::native(db, &capture).await?;
@@ -103,7 +103,7 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>) -> Result<String> {
         );
         ctx.emit_doc(md)
             .with_context(|| format!("store the document for {file_id}"))?;
-        buckets.push(Bucket {
+        render_units.push(RenderUnit {
             key: file_id,
             inputs: inputs.declared(),
         });
@@ -120,7 +120,7 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>) -> Result<String> {
         .keys()
         .filter(|id| !listing.captures.contains_key(*id));
     for id in listing.others.iter().chain(no_capture) {
-        ctx.exclude_bucket(id)?;
+        ctx.exclude_render_unit(id)?;
     }
     // A file whose listing entry is gone: its document goes once its rows
     // have, which the driver reads from the diff.
@@ -131,7 +131,7 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>) -> Result<String> {
         .filter(|id| !listing.listed.contains(*id))
         .collect();
     ctx.declare_empty(gone.iter().map(|s| s.as_str()))?;
-    let rendered = buckets.len();
-    ctx.finish(&buckets, head.as_deref())?;
+    let rendered = render_units.len();
+    ctx.finish(&render_units, head.as_deref())?;
     Ok(format!("rendered {rendered} Doc(s)"))
 }

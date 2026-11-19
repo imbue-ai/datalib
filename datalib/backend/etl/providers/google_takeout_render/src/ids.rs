@@ -66,7 +66,7 @@ pub fn message_reaction(source_id: &str, message_id: &str, reactor: &str, emoji:
     )
 }
 
-/// `chat_id` carries its `voice:` prefix, as the bucket does.
+/// `chat_id` carries its `voice:` prefix, as the render unit does.
 pub fn voice_conversation(source_id: &str, chat_id: &str) -> Identity {
     IDS.mint(
         source_id,

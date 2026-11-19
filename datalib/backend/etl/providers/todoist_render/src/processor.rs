@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
-use datalib_etl_render::inputs::{Bucket, Inputs};
+use datalib_etl_render::inputs::{Inputs, RenderUnit};
 use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
 use datalib_etl_todoist::ingest::{db_path_for, RawDb};
 use datalib_etl_todoist_config::TodoistRenderConfig;
@@ -62,7 +62,7 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>) -> Result<String> {
     let projects = store.project_ids();
     ctx.progress.set_length(Some(projects.len() as u64));
 
-    let mut buckets: Vec<Bucket> = Vec::new();
+    let mut render_units: Vec<RenderUnit> = Vec::new();
     let mut excluded = 0;
     for project in projects.iter().filter(|p| store.renders(p)) {
         ctx.progress.inc(1);
@@ -73,7 +73,7 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>) -> Result<String> {
             .get(project)
             .is_some_and(|p| flag(p, "is_deleted"))
         {
-            ctx.exclude_bucket(project)?;
+            ctx.exclude_render_unit(project)?;
             excluded += 1;
             continue;
         }
@@ -81,7 +81,7 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>) -> Result<String> {
         let md = build(ctx.name, &store, project, &inputs);
         ctx.emit_doc(md)
             .with_context(|| format!("store the document for project {project}"))?;
-        buckets.push(Bucket {
+        render_units.push(RenderUnit {
             key: project.clone(),
             inputs: inputs.declared(),
         });
@@ -95,8 +95,8 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>) -> Result<String> {
         .filter(|p| !projects.contains(p))
         .collect();
     ctx.declare_empty(gone.iter().map(|s| s.as_str()))?;
-    let rendered = buckets.len();
-    ctx.finish(&buckets, head.as_deref())?;
+    let rendered = render_units.len();
+    ctx.finish(&render_units, head.as_deref())?;
     Ok(format!(
         "rendered {rendered} project(s), {excluded} deleted"
     ))

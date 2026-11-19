@@ -1,4 +1,4 @@
-//! Slack render: convert parsed thread buckets into the shared
+//! Slack render: convert parsed thread render units into the shared
 //! `chat-common` normalized model and delegate the markdown / grid-row /
 //! grid-row plumbing to [`datalib_etl_chat_common::render::render_all`].
 
@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{Buckets, ChatRenderer, RenderProfile};
+use datalib_etl_chat_common::render::{ChatRenderer, RenderProfile, RenderUnits};
 use datalib_etl_chat_common::types::{
     own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, NormalizedReaction, Replies, UpstreamRef,
@@ -19,7 +19,7 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_handle::Handle;
 
 use super::mrkdwn::{mentioned_users, resolve_mentions, to_commonmark, Labels};
-use super::parse::{ParsedSlack, Shared, SlackStore, SlackThreadBucket};
+use super::parse::{ParsedSlack, Shared, SlackStore, SlackThreadRenderUnit};
 use super::{cards, emoji};
 use super::{ids, slack_link, ts_to_ms, Message};
 use datalib_etl_render::inputs::Lookup;
@@ -87,17 +87,17 @@ pub struct RenderSummary {
     pub threads_total: usize,
     pub threads_rendered: usize,
     /// Every thread rendered, by uuid — what the processor declares
-    /// through `RenderCtx::declare_bucket`.
-    pub buckets: Buckets,
+    /// through `RenderCtx::declare_render_unit`.
+    pub render_units: RenderUnits,
 }
 
 /// How one page of a store's render ended, for the processor to declare
 /// before the next page is read.
 pub struct PageEnd {
-    /// The stale threads this page looked at, by bucket key: declared
+    /// The stale threads this page looked at, by render unit key: declared
     /// with nothing first, so one with no message left goes.
     pub looked_at: Vec<String>,
-    pub buckets: Buckets,
+    pub render_units: RenderUnits,
     /// `messages` rows of the page that would not read as JSON.
     pub unparsed: Vec<Unparsed>,
 }
@@ -179,7 +179,7 @@ pub fn render_store(
         progress,
         on_doc_complete,
     );
-    let mut pages = store.pages(size.buckets);
+    let mut pages = store.pages(size.render_units);
     while let Some(page) = store.next_page(&mut pages)? {
         render_threads(
             &lookups,
@@ -199,7 +199,7 @@ pub fn render_store(
             .collect();
         on_page(PageEnd {
             looked_at,
-            buckets: renderer.take_buckets(),
+            render_units: renderer.take_render_units(),
             unparsed: page.unparsed,
         })?;
     }
@@ -234,7 +234,7 @@ pub fn render_all(
     Ok(RenderSummary {
         threads_total: parsed.threads.len(),
         threads_rendered: cc.docs_rendered,
-        buckets: cc.buckets,
+        render_units: cc.render_units,
     })
 }
 
@@ -243,7 +243,7 @@ pub fn render_all(
 /// ahead.
 fn render_threads(
     lookups: &Lookups<'_>,
-    threads: &[SlackThreadBucket],
+    threads: &[SlackThreadRenderUnit],
     blobs: Option<&SlackStore>,
     blob_bytes: u64,
     source_id: &str,
@@ -251,19 +251,19 @@ fn render_threads(
 ) -> Result<()> {
     let weights: Vec<u64> = threads.iter().map(|t| t.attachment_bytes()).collect();
     for range in batches(&weights, blob_bytes) {
-        let batch: Vec<&SlackThreadBucket> = threads[range].iter().collect();
+        let batch: Vec<&SlackThreadRenderUnit> = threads[range].iter().collect();
         let loaded;
-        let batch: Vec<&SlackThreadBucket> = match blobs {
+        let batch: Vec<&SlackThreadRenderUnit> = match blobs {
             Some(store) => {
                 loaded = store.load_blobs(&batch)?;
                 loaded.iter().collect()
             }
             None => batch,
         };
-        for bucket in batch {
-            let chat = build_chat(lookups, bucket, source_id);
+        for render_unit in batch {
+            let chat = build_chat(lookups, render_unit, source_id);
             renderer
-                .render_chat(&chat, &bucket.blobs)
+                .render_chat(&chat, &render_unit.blobs)
                 .context("slack chat-common render")?;
         }
     }
@@ -272,7 +272,7 @@ fn render_threads(
 
 fn build_chat(
     lookups: &Lookups<'_>,
-    bucket: &SlackThreadBucket,
+    render_unit: &SlackThreadRenderUnit,
     source_id: &str,
 ) -> NormalizedChat {
     let shared = lookups.shared;
@@ -288,20 +288,30 @@ fn build_chat(
         .as_ref()
         .and_then(|w| w.team_url.as_deref());
     // Every user and channel this thread resolves is recorded on the
-    // bucket as it is asked for, so the thread declares exactly what
+    // render unit as it is asked for, so the thread declares exactly what
     // it read.
     let labels = Labels {
-        users: bucket.inputs.lookup("users", &lookups.user_labels),
-        channels: bucket.inputs.lookup("channels", &lookups.channel_labels),
-        team_id: bucket.messages.first().map_or("", |m| m.team_id.as_str()),
+        users: render_unit.inputs.lookup("users", &lookups.user_labels),
+        channels: render_unit
+            .inputs
+            .lookup("channels", &lookups.channel_labels),
+        team_id: render_unit
+            .messages
+            .first()
+            .map_or("", |m| m.team_id.as_str()),
     };
-    let channels = bucket.inputs.lookup("channels", &shared.channels);
-    let bots = bucket.inputs.lookup("bots", &shared.bots);
-    let root: &Message = bucket
+    let channels = render_unit.inputs.lookup("channels", &shared.channels);
+    let bots = render_unit.inputs.lookup("bots", &shared.bots);
+    let root: &Message = render_unit
         .messages
         .iter()
         .find(|m| m.is_thread_root)
-        .unwrap_or_else(|| bucket.messages.first().expect("non-empty thread bucket"));
+        .unwrap_or_else(|| {
+            render_unit
+                .messages
+                .first()
+                .expect("non-empty thread render unit")
+        });
     // `#general` for a channel, `@Jean-Luc Picard` for a DM, and
     // `#<channel_id>` when the channel row never arrived — the same
     // fallback this line has always had. See `Channel::display`.
@@ -329,7 +339,7 @@ fn build_chat(
     // the account follows. The account's own messages are never
     // unread, whatever the mark says.
     let channel_mark = shared.read_marks.channels.get(&root.channel_id);
-    let thread_mark = shared.read_marks.threads.get(&bucket.thread_key);
+    let thread_mark = shared.read_marks.threads.get(&render_unit.thread_key);
     let unread = |m: &Message| {
         let conversation = if m.is_thread_root {
             channel_mark
@@ -344,9 +354,13 @@ fn build_chat(
         is_unread(&m.ts, from_me, marks, ids::ts_order)
     };
     // What the page shows under the root, a broadcast reply among them.
-    let held_replies = bucket.messages.iter().filter(|m| !m.is_thread_root).count() as u64;
-    let mut not_shown: Vec<Vec<String>> = Vec::with_capacity(bucket.messages.len());
-    let mut items: Vec<NormalizedChatItem> = bucket
+    let held_replies = render_unit
+        .messages
+        .iter()
+        .filter(|m| !m.is_thread_root)
+        .count() as u64;
+    let mut not_shown: Vec<Vec<String>> = Vec::with_capacity(render_unit.messages.len());
+    let mut items: Vec<NormalizedChatItem> = render_unit
         .messages
         .iter()
         .map(|m| {
@@ -400,22 +414,22 @@ fn build_chat(
         upstream_account: Some(root.team_id.clone()),
         org_uuid: Some(root.team_id.clone()),
         org_name: lookups.org_name.clone(),
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
             markdown_uuid: thread_uuid,
             source_ref: None,
             items,
         }],
         // Each author's profile, read the way their label was.
-        contacts: authors_of(bucket)
+        contacts: authors_of(render_unit)
             .filter_map(|uid| {
-                let user = bucket.inputs.lookup("users", &shared.users).get(uid)?;
+                let user = render_unit.inputs.lookup("users", &shared.users).get(uid)?;
                 let mut contact = user.contact(source_id)?;
                 contact.account = Some(uid) == self_user_id;
                 Some(contact)
             })
             .collect(),
-        inputs: bucket.inputs.declared(),
+        inputs: render_unit.inputs.declared(),
     }
 }
 
@@ -452,9 +466,9 @@ fn containers_of(
 }
 
 /// Each user who wrote in the thread, once, in the order they first did.
-fn authors_of(bucket: &SlackThreadBucket) -> impl Iterator<Item = &str> {
+fn authors_of(render_unit: &SlackThreadRenderUnit) -> impl Iterator<Item = &str> {
     let mut seen = std::collections::HashSet::new();
-    bucket
+    render_unit
         .messages
         .iter()
         .filter_map(|m| m.user_id.as_deref())
@@ -816,14 +830,14 @@ mod reaction_tests {
             account: None,
             org_name: None,
         };
-        let bucket = SlackThreadBucket {
+        let render_unit = SlackThreadRenderUnit {
             thread_key: "T1#C1#12604000100.000100".to_string(),
             messages: messages.to_vec(),
             blobs: Default::default(),
             inputs: Inputs::default(),
         };
-        let chat = build_chat(&lookups, &bucket, "src");
-        let items = &chat.buckets[0].items;
+        let chat = build_chat(&lookups, &render_unit, "src");
+        let items = &chat.render_units[0].items;
         let rows: Vec<usize> = items.iter().map(|item| item.problems.len()).collect();
         assert_eq!(rows, [0, 1, 0, 0, 0], "one row a document");
         let row = &items[1].problems[0];
@@ -864,7 +878,7 @@ mod reaction_tests {
             ts: ts.into(),
             ..reacted(json!([]))
         };
-        let bucket = SlackThreadBucket {
+        let render_unit = SlackThreadRenderUnit {
             thread_key: "T1#C1#1767603600.000100".to_string(),
             messages: vec![
                 by("U1", "1767603600.000100"),
@@ -875,8 +889,8 @@ mod reaction_tests {
             blobs: Default::default(),
             inputs: Inputs::default(),
         };
-        let chat = build_chat(&Lookups::new(&shared), &bucket, "src");
-        let offsets: Vec<_> = chat.buckets[0]
+        let chat = build_chat(&Lookups::new(&shared), &render_unit, "src");
+        let offsets: Vec<_> = chat.render_units[0]
             .items
             .iter()
             .map(|i| i.date_offset_secs)
@@ -1013,7 +1027,7 @@ mod tests {
         );
         let parsed = ParsedSlack {
             shared,
-            threads: vec![SlackThreadBucket {
+            threads: vec![SlackThreadRenderUnit {
                 thread_key: "T1#C1#12604000100.000100".into(),
                 messages: vec![
                     message("12604000100.000100", true),

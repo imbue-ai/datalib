@@ -11,7 +11,7 @@ use datalib_etl_contact_common::{
     card_node, chip_handle, render_all as cc_render_all, ContactDoc, ContactRenderProfile,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::inputs::{keys_reading, Bucket, Buckets, RawRange};
+use datalib_etl_render::inputs::{keys_reading, RawRange, RenderUnit, RenderUnits};
 use datalib_schema::data_nodes::DataNodeRow;
 use datalib_schema::problems::{Problem, Reason};
 
@@ -67,7 +67,7 @@ fn groups_by_member(contacts: &[ParsedContact]) -> Groups<'_> {
     out
 }
 
-/// Every bucket a pass looked at — named first with nothing, then the
+/// Every render unit a pass looked at — named first with nothing, then the
 /// rendered ones with what they read — for the processor to declare.
 pub fn render_all(
     parsed: &ParsedContacts,
@@ -75,7 +75,7 @@ pub fn render_all(
     progress: &Progress,
     range: RawRange<'_>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-) -> Result<Buckets> {
+) -> Result<RenderUnits> {
     let profile = |contact_kind: &str| ContactRenderProfile {
         provider: Provider::Contacts,
         source_label: humanize_source_label(source_id),
@@ -129,10 +129,10 @@ pub fn render_all(
         )
     });
     let render = range.narrow(forward.as_ref());
-    let mut buckets: Buckets = render
+    let mut render_units: RenderUnits = render
         .iter()
         .flatten()
-        .map(|key| Bucket {
+        .map(|key| RenderUnit {
             key: key.clone(),
             inputs: Vec::new(),
         })
@@ -144,9 +144,9 @@ pub fn render_all(
     for (kind, cards) in [("Contact", people), ("Contact group", groups)] {
         let cards: Vec<ContactDoc> = cards.into_iter().map(|(_, c)| c).collect();
         let summary = cc_render_all(&profile(kind), &cards, source_id, progress, on_doc_complete)?;
-        buckets.extend(summary.buckets);
+        render_units.extend(summary.render_units);
     }
-    Ok(buckets)
+    Ok(render_units)
 }
 
 /// The groups a card is filed under: each group card naming it, as that

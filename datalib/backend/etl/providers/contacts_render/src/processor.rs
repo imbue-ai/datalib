@@ -44,7 +44,7 @@ impl SourceRender for ContactsRender {
         };
 
         let mut on_doc = |md| ctx.emit_doc(md);
-        let buckets = render::render_all(
+        let render_units = render::render_all(
             &parsed,
             ctx.name,
             ctx.progress,
@@ -52,7 +52,7 @@ impl SourceRender for ContactsRender {
             &mut on_doc,
         )
         .context("contacts render_all")?;
-        ctx.finish(&buckets, parsed.head.as_deref())?;
+        ctx.finish(&render_units, parsed.head.as_deref())?;
         Ok("rendered".into())
     }
 }

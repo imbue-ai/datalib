@@ -10,7 +10,7 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{
     escape_attr, escape_name_inline, escape_name_text, escape_text, without_bidi_controls,
 };
-use datalib_etl_render::inputs::{Bucket, Buckets};
+use datalib_etl_render::inputs::{RenderUnit, RenderUnits};
 use datalib_etl_render::message::chip_link;
 use datalib_etl_render::photo::{photo_address, with_photo_url};
 use datalib_etl_render::section::Section;
@@ -62,8 +62,8 @@ pub struct RenderSummary {
     /// `datalib_etl_chat_common::render::RenderSummary::documents`.
     pub documents: Vec<String>,
     /// Every contact rendered, with what it read — what the processor
-    /// declares through `RenderCtx::declare_bucket`.
-    pub buckets: Buckets,
+    /// declares through `RenderCtx::declare_render_unit`.
+    pub render_units: RenderUnits,
 }
 
 pub fn render_all(
@@ -101,7 +101,7 @@ pub fn render_into(
 ) -> Result<()> {
     for doc in contacts {
         summary.documents.push(doc.doc_uuid.clone());
-        summary.buckets.push(Bucket {
+        summary.render_units.push(RenderUnit {
             key: doc.doc_uuid.clone(),
             inputs: doc.inputs.clone(),
         });
@@ -163,7 +163,7 @@ fn render_one(
             .modified_at
             .clone()
             .or_else(|| contact.created_at.clone()),
-        bucket_key: Some(m_uuid.clone()),
+        render_unit_key: Some(m_uuid.clone()),
         render_version: profile.render_version,
         rows: row.into_iter().collect(),
         sections,
