@@ -1,7 +1,9 @@
 //! datalib's names: a `datalib:<kind>/<id>` link saying what something is
 //! (docs/dev/plans/datalib_uris.md). `ui/src/uri.ts` is the same in the
 //! UI; both read and write `ui/tests/uri-fixtures.json` alike. The `doc`
-//! and `photo` kinds live here so far.
+//! and `photo` kinds live here so far. A `doc` link may carry its page's
+//! title as words before the uuid (`datalib:doc/Ten-Forward-<uuid>`), for
+//! a person to read; this reads past them and writes none.
 
 /// A name read back, or one to write.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,7 +55,8 @@ impl Name {
             return datalib_uuid_text::is_dashed(id).then(|| Name::photo(id));
         }
         let rest = rest.strip_prefix(DOC)?;
-        let (page, section) = rest.split_once('#').unwrap_or((rest, ""));
+        let (titled, section) = rest.split_once('#').unwrap_or((rest, ""));
+        let page = after_title(titled)?;
         if !datalib_uuid_text::is_dashed(page)
             || !(section.is_empty() || datalib_uuid_text::is_dashed(section))
         {
@@ -65,6 +68,18 @@ impl Name {
         })
     }
 }
+
+/// The uuid at the end of a page's part of the link, past any title
+/// written before it: words that end in a dash and hold nothing that would
+/// end the path or start another part of the link.
+fn after_title(titled: &str) -> Option<&str> {
+    let at = titled.len().saturating_sub(UUID_LEN);
+    let (words, page) = titled.split_at_checked(at)?;
+    let fits = words.is_empty() || (words.ends_with('-') && !words.contains(['/', '?', '#']));
+    fits.then_some(page)
+}
+
+const UUID_LEN: usize = 36;
 
 #[cfg(test)]
 mod tests {
@@ -80,6 +95,9 @@ mod tests {
         doc: Option<Doc>,
         #[serde(default)]
         photo: Option<String>,
+        /// What the UI wrote the link with; this writes no title.
+        #[serde(default)]
+        title: Option<String>,
     }
 
     #[derive(serde::Deserialize)]
@@ -100,7 +118,7 @@ mod tests {
                 })
                 .or(f.photo.map(|id| Name::Photo { id }));
             assert_eq!(Name::parse(&f.link), want, "{}: reading {}", f.name, f.link);
-            if let Some(name) = want {
+            if let Some(name) = want.filter(|_| f.title.is_none()) {
                 assert_eq!(name.write(), f.link, "{}: writing", f.name);
             }
         }

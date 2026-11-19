@@ -122,21 +122,23 @@ function addHeaderControl(host, separator, control) {
 }
 
 /**
- * Give every `[data-section-uuid]` a button that copies its uuid, and
- * the page title one that copies the document's — unless the page is
- * shown under a title bar that has one (`pageTitle: false`).
+ * Give every `[data-section-uuid]` a 🔗 button that copies a link to it,
+ * `datalib:doc/<page>#<section>`, and the page title one that copies the
+ * document's — unless the page is shown under a title bar that has one
+ * (`pageTitle: false`). The button keeps the uuid it names; the copy is
+ * written when it is clicked (`linkOfButton`).
  * @param {HTMLElement} root
  * @param {{ pageTitle?: boolean }} [opts]
  */
-export function injectCopyUuidButtons(root, { pageTitle = true } = {}) {
+export function injectCopyLinkButtons(root, { pageTitle = true } = {}) {
   const button = (uuid, label) => {
     const btn = root.ownerDocument.createElement("button");
     btn.type = "button";
-    btn.className = "copy-uuid";
+    btn.className = "copy-link";
     btn.dataset.uuid = uuid;
     btn.title = `${label} (${uuid})`;
     btn.setAttribute("aria-label", label);
-    btn.textContent = "🆔";
+    btn.textContent = "🔗";
     return btn;
   };
 
@@ -145,13 +147,13 @@ export function injectCopyUuidButtons(root, { pageTitle = true } = {}) {
   )) {
     if (
       el.querySelector(
-        ":scope > h2 .copy-uuid, :scope > .copy-uuid",
+        ":scope > h2 .copy-link, :scope > .copy-link",
       )
     )
       continue;
     const uuid = el.getAttribute("data-section-uuid") ?? "";
     if (!uuid || !answers(root, el)) continue;
-    const btn = button(uuid, "Copy section ID");
+    const btn = button(uuid, "Copy link to this message");
     const host = metaHost(el);
     if (host) addHeaderControl(host, " · ", btn);
     else el.prepend(btn);
@@ -162,10 +164,10 @@ export function injectCopyUuidButtons(root, { pageTitle = true } = {}) {
     // The id sits on the heading itself, or on a block whose heading is
     // a markdown `#` (a contact page's head, whose heading is a chip).
     const host = el.matches("h1") ? el : (el.querySelector("h1") ?? el);
-    if (host.querySelector(":scope > button.copy-uuid")) continue;
+    if (host.querySelector(":scope > button.copy-link")) continue;
     const uuid = el.getAttribute("data-page-title-uuid") ?? "";
     if (!uuid) continue;
-    addHeaderControl(host, " ", button(uuid, "Copy page ID"));
+    addHeaderControl(host, " ", button(uuid, "Copy link to this page"));
   }
 }
 

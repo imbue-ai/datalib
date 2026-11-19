@@ -39,5 +39,32 @@
     "name": "a page in capitals",
     "link": "datalib:doc/0190A5E1-0000-7000-8000-00000000000C",
     "doc": {"page": "0190A5E1-0000-7000-8000-00000000000C", "section": null}
-  }
+  },
+  {
+    "name": "a message on a page, the page's title before its id",
+    "link": "datalib:doc/Ten-Forward-00000000-0000-8000-a000-000000000001#0190a5e1-0000-7000-8000-00000000000c",
+    "title": "Ten Forward",
+    "doc": {"page": "00000000-0000-8000-a000-000000000001", "section": "0190a5e1-0000-7000-8000-00000000000c"}
+  },
+  {
+    "name": "a title written as words and dashes, accents dropped",
+    "link": "datalib:doc/Re-Cafe-Picard-s-Tea-Earl-Grey-hot-00000000-0000-8000-a000-000000000001",
+    "title": "Re: Café — Picard’s “Tea, Earl Grey, hot” ☕",
+    "doc": {"page": "00000000-0000-8000-a000-000000000001", "section": null}
+  },
+  {
+    "name": "a title of uuid-like words",
+    "link": "datalib:doc/abc-123-00000000-0000-8000-a000-000000000001",
+    "title": "abc 123",
+    "doc": {"page": "00000000-0000-8000-a000-000000000001", "section": null}
+  },
+  {
+    "name": "a title in another script leaves the id alone",
+    "link": "datalib:doc/00000000-0000-8000-a000-000000000001",
+    "title": "ブリッジ",
+    "doc": {"page": "00000000-0000-8000-a000-000000000001", "section": null}
+  },
+  {"name": "words run into the id", "link": "datalib:doc/Ten00000000-0000-8000-a000-000000000001", "doc": null},
+  {"name": "words with a slash", "link": "datalib:doc/a/b-00000000-0000-8000-a000-000000000001", "doc": null},
+  {"name": "words with a query", "link": "datalib:doc/a?b-00000000-0000-8000-a000-000000000001", "doc": null}
 ]

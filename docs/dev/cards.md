@@ -606,10 +606,15 @@ besides components:
   listener of the app's takes does nothing: no link follows itself,
   whatever shape it has (`chatLink.ts` `finishFrameClick`). Above it, a
   title bar that does not scroll (`cards/DocTitleBar.ce.vue`): the
-  source's mark, the title, the source's own page (↗), the ID, and a ⋯
-  menu — the same one on a right-click of the bar — whose entries are
-  `cards/documentMenu.ts`. The page title inside the body keeps its
-  text but not its own ID button or ↗, which the bar has.
+  source's mark, the title, the source's own page (↗), a 🔗 that copies
+  a link to the document, and a ⋯ menu — the same one on a right-click
+  of the bar — whose entries are `cards/documentMenu.ts`; Copy ID, for
+  the bare uuid, is there. Each message's header has its own 🔗, which
+  copies a link to the message. A link is
+  `datalib:doc/<Title>-<uuid>#<message>`: the title's words are for a
+  person to read, and a reader of the link skips them (`uri.ts`). The
+  page title inside the body keeps its text but not its own 🔗 or ↗,
+  which the bar has.
 - `documentPickerView()` — parameter-less gallery stand-in for
   `documentView`: lists every rendered document (`/applet/unified_grid_and_search_index/docs`) and
   replaces itself with `documentView("<uuid>")` on pick.
