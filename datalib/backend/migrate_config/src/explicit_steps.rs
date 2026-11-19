@@ -1409,20 +1409,44 @@ command = "datalib-step"
 inputs = ["*/render_markdown"]
 "#;
 
-    /// Every config this repo shipped in the old shape, brought through
-    /// the unattended rewrites before this one, rewrites into one the
-    /// runner loads whole, whose steps hold the locks, read the way and
-    /// take the verbs the old runner gave them. The one change is meant: a
-    /// fan-in with no inputs yet holds `index`, so it is right once a
-    /// source is added, where the old runner gave it `network`.
+    /// What the configs under [`SHIPPED`] cover, each as the repo shipped
+    /// it at `132202dbc`: every whole config, which together hold every
+    /// source type, a diff group, the embedding map, the settings that
+    /// move into `[env]` and declared locks; and the one-source stanzas a
+    /// rule singles out, each in the shape the provider documented.
+    const SHIPPED_FILES: &[&str] = &[
+        "calendar_config__minimal_ics.toml",  // render_occurrences
+        "configs__dag_example.toml",          // diff group, map, [env], locks
+        "datalib__docker__demo__config.toml", // the image's demo
+        "docs__user__config_examples__all_sources.toml", // every source type
+        "docs__user__config_examples__claude_only.toml",
+        "docs__user__config_examples__sample_config.toml",
+        "garmin_config__complete_api.toml", // render_time_series
+        "perseus_config__minimal_github.toml", // a render that reads files
+        "signal_config__minimal_backup.toml", // a backup secret to name
+        "slack_config__complete_api.toml",  // an embed reading the index step
+        "slack_config__minimal_api.toml",
+        "whatsapp_config__minimal_backup.toml", // a backup secret to name
+    ];
+
+    /// Every config in [`SHIPPED_FILES`], brought through the unattended
+    /// rewrites before this one, rewrites into one the runner loads whole,
+    /// whose steps hold the locks, read the way and take the verbs the old
+    /// runner gave them. The one change is meant: a fan-in with no inputs
+    /// yet holds `index`, so it is right once a source is added, where the
+    /// old runner gave it `network`.
     #[test]
     fn every_shipped_config_keeps_what_the_old_runner_gave_its_steps() {
-        let mut files: Vec<_> = std::fs::read_dir(SHIPPED)
+        let mut found: Vec<String> = std::fs::read_dir(SHIPPED)
             .unwrap_or_else(|e| panic!("{SHIPPED}: {e}"))
-            .map(|e| e.unwrap().path())
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
-        files.sort();
-        assert!(files.len() >= 94, "only {} fixtures", files.len());
+        found.sort();
+        assert_eq!(found, SHIPPED_FILES, "the fixtures on disk");
+        let files: Vec<std::path::PathBuf> = SHIPPED_FILES
+            .iter()
+            .map(|f| std::path::Path::new(SHIPPED).join(f))
+            .collect();
         let (explicit, before) = crate::UNATTENDED.split_last().unwrap();
         assert!(
             explicit.what.contains("datalib-step run"),
