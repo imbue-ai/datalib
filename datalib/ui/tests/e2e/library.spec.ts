@@ -40,9 +40,12 @@ test("a mailbox's labels are places, and a label lists the threads filed under i
   page,
 }) => {
   await openLibrary(page);
-  // A source with no places, a folder of PDFs, has nothing to open in the
-  // tree: it is shown beside it.
-  await expect(treeRow(page, "tng_pdfs").locator(".monaco-tl-twistie.collapsible")).toHaveCount(0);
+  // A folder of PDFs opens onto its folders; holodeck/ holds nothing
+  // rendered, so it is no place.
+  await treeRow(page, "tng_pdfs").click();
+  await expect(treeRow(page, "engineering")).toBeVisible();
+  await expect(treeRow(page, "archive")).toBeVisible();
+  await expect(treeRow(page, "holodeck")).toHaveCount(0);
   await treeRow(page, "tng_email").click();
   await treeRow(page, "Email Account").click();
   await expect(treeRow(page, "Inbox")).toBeVisible();

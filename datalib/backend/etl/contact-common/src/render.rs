@@ -15,12 +15,13 @@ use datalib_etl_render::message::chip_link;
 use datalib_etl_render::photo::{photo_address, with_photo_url};
 use datalib_etl_render::section::Section;
 use datalib_schema::data_nodes::{DataNodeRow, Lineage};
+use datalib_schema::filings::FilingRow;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
 use datalib_schema::providers::Provider;
 use datalib_schema::search_terms::{SearchTerm, SearchTermKind};
 
-use datalib_contact_schema::{ContactHandle, Medium, NormalizedContact, Photo};
+use datalib_contact_schema::{ContactHandle, ContactKind, Medium, NormalizedContact, Photo};
 use datalib_handle::Handle;
 
 use crate::types::ContactDoc;
@@ -142,7 +143,7 @@ fn render_one(
             )
         })
         .collect();
-    let (data_nodes, at) = tree(profile, doc, source_id);
+    let (data_nodes, filings, at) = tree(profile, doc, source_id);
     let mut row = build_grid_row(profile, doc, source_id, &mut problems);
     if let Some(row) = &mut row {
         row.set_supplied_terms(about_terms(contact));
@@ -172,7 +173,7 @@ fn render_one(
         // photo is served from.
         contacts: vec![with_photo_url(contact)],
         data_nodes,
-        filings: Vec::new(),
+        filings,
         photos: Vec::new(),
         problems,
         front: front(profile, doc, source_id),
@@ -182,15 +183,16 @@ fn render_one(
     Ok(())
 }
 
-/// The address book, then the card in it, read on its own; and where the
-/// card's row sits.
+/// The address book, then the card in it, read on its own, and the groups
+/// it is filed under, each a place in the book; and where the card's row
+/// sits.
 fn tree(
     profile: &ContactRenderProfile,
     doc: &ContactDoc,
     source_id: &str,
-) -> (Vec<DataNodeRow>, Lineage) {
+) -> (Vec<DataNodeRow>, Vec<FilingRow>, Lineage) {
     let md = &doc.doc_uuid;
-    let mut data_nodes = Vec::with_capacity(2);
+    let mut data_nodes = Vec::with_capacity(2 + doc.groups.len());
     let mut at = Lineage::top();
     if let Some(book) = &doc.address_book {
         let book = DataNodeRow {
@@ -201,17 +203,39 @@ fn tree(
         at = at.below(&book);
         data_nodes.push(book);
     }
-    let own = DataNodeRow::new(md, md, source_id, &profile.contact_kind)
+    data_nodes.push(card_node(profile, doc, source_id).under(&at));
+    let mut filings = Vec::with_capacity(doc.groups.len());
+    for group in &doc.groups {
+        let group = DataNodeRow {
+            markdown_uuid: md.clone(),
+            ..group.clone()
+        }
+        .under(&at);
+        filings.push(FilingRow::new(md, md, &group.uuid));
+        data_nodes.push(group);
+    }
+    (data_nodes, filings, at)
+}
+
+/// A card as a container, read on its own, not yet placed. A group's card
+/// is a place too: its members are filed under it. A provider describes a
+/// member's group with this, so every document naming the group says the
+/// same of it.
+pub fn card_node(profile: &ContactRenderProfile, doc: &ContactDoc, source_id: &str) -> DataNodeRow {
+    let md = &doc.doc_uuid;
+    let node = DataNodeRow::new(md, md, source_id, &profile.contact_kind)
         .named(Some(display_or_id(doc).to_string()))
         .upstream(
             profile.contact_entity_kind,
             doc.contact.key.clone(),
             doc.upstream_account.clone(),
         )
-        .read_together()
-        .under(&at);
-    data_nodes.push(own);
-    (data_nodes, at)
+        .read_together();
+    if doc.contact.kind == ContactKind::Group {
+        node.place()
+    } else {
+        node
+    }
 }
 
 fn display_or_id(doc: &ContactDoc) -> &str {
@@ -617,6 +641,7 @@ mod tests {
             doc_uuid: "11111111-1111-1111-1111-111111111111".to_string(),
             group_label: "LinkedIn Connections".to_string(),
             address_book: None,
+            groups: Vec::new(),
             member_handles: Vec::new(),
             upstream_account: None,
             inputs: Vec::new(),
@@ -723,6 +748,65 @@ mod tests {
         assert_eq!(row.parent_uuid.as_deref(), Some("book"));
         assert_eq!(row.place_uuid.as_deref(), Some("book"));
         assert_eq!(row.read_uuid, None);
+    }
+
+    /// A card is filed under each of its groups, a place in its address
+    /// book; a group's own card is a place, described as its members
+    /// describe it.
+    #[test]
+    fn a_card_is_filed_under_its_groups_and_a_group_is_a_place() {
+        let book = DataNodeRow::new("", "book", "linkedin", "Address book").place();
+        let mut group = mk_contact();
+        group.doc_uuid = "group-doc".into();
+        group.contact.kind = ContactKind::Group;
+        group.contact.names = vec!["Senior staff".into()];
+        group.address_book = Some(book.clone());
+        let group_node = card_node(&mk_profile(), &group, "linkedin");
+        assert!(group_node.is_place && group_node.read_together);
+
+        let mut member = mk_contact();
+        member.address_book = Some(book);
+        member.groups = vec![group_node.clone()];
+        let mut docs = Vec::new();
+        render_all(
+            &mk_profile(),
+            &[member.clone(), group],
+            "linkedin",
+            &Progress::noop(),
+            &mut |d| {
+                docs.push(d);
+                Ok(())
+            },
+        )
+        .unwrap();
+        let md = member.doc_uuid.as_str();
+        let filed: Vec<(&str, &str)> = docs[0]
+            .filings
+            .iter()
+            .map(|f| (f.node_uuid.as_str(), f.under_uuid.as_str()))
+            .collect();
+        assert_eq!(filed, vec![(md, "group-doc")]);
+        let carried = docs[0]
+            .data_nodes
+            .iter()
+            .find(|n| n.uuid == "group-doc")
+            .expect("the member's document carries its group");
+        let own = docs[1]
+            .data_nodes
+            .iter()
+            .find(|n| n.uuid == "group-doc")
+            .expect("the group's own card");
+        let described = |n: &DataNodeRow| {
+            (
+                n.kind.clone(),
+                n.name.clone(),
+                n.parent_uuid.clone(),
+                n.is_place,
+                n.read_together,
+            )
+        };
+        assert_eq!(described(carried), described(own));
+        assert_eq!(own.parent_uuid.as_deref(), Some("book"));
     }
 
     #[test]

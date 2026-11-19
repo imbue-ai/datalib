@@ -49,7 +49,9 @@ use datalib_etl_render::pages::batches;
 /// v14: a comment's time keeps Notion's `Z`: its clock is unknown.
 /// v15: a page's text is a block keyed by its row, its front matter
 ///      layout around it.
-pub const RENDER_VERSION: u32 = 15;
+/// v16: a page is a place as well as read together, so the pages under
+///      pages are a tree a person browses, as Notion's sidebar is.
+pub const RENDER_VERSION: u32 = 16;
 pub fn notion_url(page_id: &str) -> String {
     format!("https://www.notion.so/{}", page_id.replace('-', ""))
 }

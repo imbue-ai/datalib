@@ -311,8 +311,9 @@ fn render_one(
         created_at: t.doc_created_at.as_deref(),
         modified_at: t.doc_modified_at.as_deref(),
     };
-    let rows = grid_rows::rows_for_document(source_id, &meta, &page_rows);
-    let node = grid_rows::document_node(source_id, &meta);
+    let folders = grid_rows::folders(source_id, doc_uuid, &t.rel_path, &t.path_ids);
+    let rows = grid_rows::rows_for_document(source_id, &meta, &page_rows, &folders.at);
+    let node = grid_rows::document_node(source_id, &meta, &folders.at);
 
     RenderedMarkdown {
         searchable: true,
@@ -328,8 +329,8 @@ fn render_one(
         sections,
         edges: Vec::new(),
         contacts: Vec::new(),
-        data_nodes: vec![node],
-        filings: Vec::new(),
+        data_nodes: folders.nodes.into_iter().chain([node]).collect(),
+        filings: folders.filings,
         photos: Vec::new(),
         problems,
         front,

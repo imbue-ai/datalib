@@ -53,8 +53,8 @@ async function placesUnder(parent: string): Promise<TreeNode[]> {
 }
 
 /// Which sources hold places at their top: one place each tells, so a
-/// source without (a folder of pages, a set of PDFs) draws no arrow to
-/// open onto nothing, and is shown beside the tree instead.
+/// source without any draws no arrow to open onto nothing, and is shown
+/// beside the tree instead.
 async function sourcesWithPlaces(ids: string[]): Promise<Set<string>> {
   const held = await Promise.all(
     ids.map(async (id) => {

@@ -179,7 +179,7 @@ expression: snapshot
       "markdown_uuid": "00000000-0000-8140-88d9-42badf1b195b",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "drone.4.of.12@unimatrix01.borg"
@@ -203,7 +203,7 @@ expression: snapshot
       "markdown_uuid": "00000000-0000-8195-8ee2-d14cb601f004",
       "modified_at": "2371-01-02T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts-diff",
       "title": "Worf"
@@ -227,7 +227,7 @@ expression: snapshot
       "markdown_uuid": "00000000-0000-819d-aad9-cb628fc3bec0",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts-diff",
       "title": "Kalita"
@@ -275,7 +275,7 @@ expression: snapshot
       "markdown_uuid": "00000000-0000-81e2-8596-1ee8f9640d13",
       "modified_at": "2371-01-09T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Jean-Luc Picard"
@@ -335,7 +335,7 @@ expression: snapshot
       "markdown_uuid": "00000000-0000-825c-a3c4-1fb84e9bfce6",
       "modified_at": "2371-01-09T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts-diff",
       "title": "Jean-Luc Picard"
@@ -371,7 +371,7 @@ expression: snapshot
       "markdown_uuid": "00000000-0000-829a-bb9d-4c1b203d3251",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Senior Staff"
@@ -455,7 +455,7 @@ expression: snapshot
       "markdown_uuid": "00000000-0000-8429-b938-7d1e51384182",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts-diff",
       "title": "Ro Laren"
@@ -599,7 +599,7 @@ expression: snapshot
       "markdown_uuid": "00000000-0000-85d8-ac4b-9c4472cee5ea",
       "modified_at": "2371-01-02T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Worf"
@@ -719,7 +719,7 @@ expression: snapshot
       "markdown_uuid": "00000000-0000-86be-a0a0-341fa48bbc80",
       "modified_at": "2370-02-11T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts-diff",
       "title": "Data"
@@ -1175,7 +1175,7 @@ expression: snapshot
       "markdown_uuid": "00000000-0000-8a13-8568-fa91d9598906",
       "modified_at": null,
       "provider": "pdf",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "searchable": true,
       "source_id": "tng_pdfs",
       "title": "Hull Integrity Survey"
@@ -1331,7 +1331,7 @@ expression: snapshot
       "markdown_uuid": "00000000-0000-8acb-9e72-ef58e1a96813",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Seven of Nine"
@@ -1343,7 +1343,7 @@ expression: snapshot
       "markdown_uuid": "00000000-0000-8b00-b38c-a2a290dad572",
       "modified_at": "2370-08-22T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "William T. Riker"
@@ -1583,7 +1583,7 @@ expression: snapshot
       "markdown_uuid": "00000000-0000-8c51-a4b4-dde335468f6c",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Hugh"
@@ -1667,7 +1667,7 @@ expression: snapshot
       "markdown_uuid": "00000000-0000-8ccc-b967-791c3561a091",
       "modified_at": null,
       "provider": "pdf",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "searchable": true,
       "source_id": "tng_pdfs",
       "title": "warp_core_manual.pdf"
@@ -1763,7 +1763,7 @@ expression: snapshot
       "markdown_uuid": "00000000-0000-8d78-9232-e6b0deeebfb7",
       "modified_at": "2370-09-04T00:00:00+00:00",
       "provider": "contacts",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Geordi La Forge"
@@ -1979,7 +1979,7 @@ expression: snapshot
       "markdown_uuid": "00000000-0000-8f5b-ab9b-f6b9fbf217b5",
       "modified_at": null,
       "provider": "contacts",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Locutus of Borg"
@@ -2015,7 +2015,7 @@ expression: snapshot
       "markdown_uuid": "0b50f5ba-0c60-856f-8ff1-ea60e22c037d",
       "modified_at": null,
       "provider": "pdf",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "searchable": true,
       "source_id": "tng_pdfs",
       "title": "Captain's Log"
@@ -2027,7 +2027,7 @@ expression: snapshot
       "markdown_uuid": "0b50f5ba-0c60-8e25-aebf-920f19049521",
       "modified_at": null,
       "provider": "pdf",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "searchable": true,
       "source_id": "tng_pdfs",
       "title": "Captain's Log"
@@ -5354,6 +5354,36 @@ expression: snapshot
     },
     {
       "account": null,
+      "author": null,
+      "byte_size": null,
+      "channel": null,
+      "content_hash": "af1349b9f5f9a1a6",
+      "conversation_name": "archive",
+      "conversation_uuid": "00000000-0000-88f8-b1ff-c893230dad95",
+      "created_at": null,
+      "entire_chat": "",
+      "git_sha": null,
+      "item_count": null,
+      "kind": "Folder",
+      "markdown_uuid": null,
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 0,
+      "project": null,
+      "provider": "pdf",
+      "source_id": "tng_pdfs",
+      "source_label": "PDF",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "folder",
+      "upstream_id": "archive",
+      "uuid": "00000000-0000-88f8-b1ff-c893230dad95"
+    },
+    {
+      "account": null,
       "author": "Me",
       "byte_size": 18,
       "channel": null,
@@ -8051,6 +8081,36 @@ expression: snapshot
       "upstream_entity_kind": "post",
       "upstream_id": "6cc4d668-e9e0-5b20-a9f1-7185991ee598",
       "uuid": "00000000-0000-8f4d-b0a7-cfeb302ede83"
+    },
+    {
+      "account": null,
+      "author": null,
+      "byte_size": null,
+      "channel": null,
+      "content_hash": "af1349b9f5f9a1a6",
+      "conversation_name": "engineering",
+      "conversation_uuid": "00000000-0000-8f52-b89b-de803b47abaf",
+      "created_at": null,
+      "entire_chat": "",
+      "git_sha": null,
+      "item_count": null,
+      "kind": "Folder",
+      "markdown_uuid": null,
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 0,
+      "project": null,
+      "provider": "pdf",
+      "source_id": "tng_pdfs",
+      "source_label": "PDF",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "folder",
+      "upstream_id": "engineering",
+      "uuid": "00000000-0000-8f52-b89b-de803b47abaf"
     },
     {
       "account": null,
@@ -20225,7 +20285,7 @@ expression: snapshot
   ],
   "summary": {
     "documents_count": 178,
-    "grid_rows_count": 602,
+    "grid_rows_count": 604,
     "storage_rows_count": 260
   }
 }

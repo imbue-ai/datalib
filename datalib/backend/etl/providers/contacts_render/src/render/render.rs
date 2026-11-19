@@ -8,7 +8,7 @@ use anyhow::Result;
 use datalib_contact_schema::{ContactHandle, ContactKind, Detail, NormalizedContact, Photo};
 use datalib_etl::progress::Progress;
 use datalib_etl_contact_common::{
-    chip_handle, render_all as cc_render_all, ContactDoc, ContactRenderProfile,
+    card_node, chip_handle, render_all as cc_render_all, ContactDoc, ContactRenderProfile,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{keys_reading, Bucket, Buckets, RawRange};
@@ -39,7 +39,9 @@ use datalib_schema::providers::Provider;
 /// a group's members drawn as chips.
 /// 16: a card's photo is linked where the blob store holds it, and one
 /// the store lacks is a `blob_missing` problem.
-pub const RENDER_VERSION: u32 = 16;
+/// 17: a group's card is a place in its address book, and a card is filed
+/// under each group naming it and each of its categories.
+pub const RENDER_VERSION: u32 = 17;
 
 /// Every card by `(addressbook, UID)`, for a group to name its members.
 type Cards<'a> = HashMap<(&'a str, &'a str), &'a ParsedContact>;
@@ -99,6 +101,20 @@ pub fn render_all(
             )
         })
         .collect();
+    let group_profile = profile("Contact group");
+    let group_nodes: HashMap<(&str, &str), DataNodeRow> = parsed
+        .contacts
+        .iter()
+        .zip(&contacts)
+        .filter(|(c, _)| c.is_group)
+        .map(|(c, (_, doc))| {
+            let key = (c.addressbook.as_str(), c.uid.as_str());
+            (key, card_node(&group_profile, doc, source_id))
+        })
+        .collect();
+    for (c, (_, doc)) in parsed.contacts.iter().zip(contacts.iter_mut()) {
+        doc.groups = filed_under(c, source_id, &groups, &group_nodes);
+    }
 
     // What to render: the contacts the driver found stale, plus every
     // card of a row the diff named — one `contacts` row can hold several
@@ -131,6 +147,37 @@ pub fn render_all(
         buckets.extend(summary.buckets);
     }
     Ok(buckets)
+}
+
+/// The groups a card is filed under: each group card naming it, as that
+/// card describes itself, and each of its categories, a group with no card
+/// of its own, in its address book.
+fn filed_under(
+    contact: &ParsedContact,
+    source_id: &str,
+    groups: &Groups,
+    group_nodes: &HashMap<(&str, &str), DataNodeRow>,
+) -> Vec<DataNodeRow> {
+    let mut out: Vec<DataNodeRow> = groups
+        .get(&(contact.addressbook.as_str(), contact.uid.as_str()))
+        .into_iter()
+        .flatten()
+        .filter_map(|g| group_nodes.get(&(g.addressbook.as_str(), g.uid.as_str())))
+        .cloned()
+        .collect();
+    for name in contact.categories.iter().filter_map(|c| category_name(c)) {
+        let id = ids::category(source_id, &contact.addressbook, &name);
+        if out.iter().any(|n| n.uuid == id.uuid) {
+            continue;
+        }
+        out.push(
+            DataNodeRow::new("", id.uuid, source_id, "Contact group")
+                .named(Some(name))
+                .upstream(id.entity_kind, id.natural_key, None)
+                .place(),
+        );
+    }
+    out
 }
 
 fn normalize(
@@ -257,6 +304,8 @@ fn normalize(
             .upstream(ids::KIND_ADDRESSBOOK, book, None)
             .place()
         }),
+        // The groups are known once every card is: `render_all` files it.
+        groups: Vec::new(),
         member_handles,
         upstream_account: None,
         inputs,
