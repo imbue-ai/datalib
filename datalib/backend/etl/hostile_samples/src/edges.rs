@@ -15,7 +15,7 @@ use datalib_etl_chat_common::{
 };
 use datalib_etl_forge_render_common::{ChangeRequest, Comment, ForgeProfile, Parsed};
 use datalib_etl_render::inputs::Inputs;
-use datalib_etl_render::section::{join, Section};
+use datalib_etl_render::section::{inside_box, join, Section};
 use datalib_etl_slack_render::render::mrkdwn::{to_commonmark, Labels};
 use datalib_schema::plain_text::plain_text;
 use datalib_schema::providers::Provider;
@@ -105,8 +105,8 @@ struct Rendered {
     file: String,
     /// The document after its front matter: what the page draws.
     body: String,
-    /// The body's sections, as the route sends their layout; `None` when
-    /// the renderer declares none and the page draws the body whole.
+    /// The body's pieces, as the route sends them; `None` when the
+    /// renderer declares none and the page draws the body whole.
     sections: Option<Vec<SectionOut>>,
     /// The body as the grid's text (`plain_text`).
     grid_text: String,
@@ -117,6 +117,10 @@ struct Rendered {
 #[derive(Serialize)]
 struct SectionOut {
     uuid: Option<String>,
+    /// The class of its box, where it is in one; `md` is then what is
+    /// inside the box.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    class: Option<String>,
     md: String,
 }
 
@@ -216,9 +220,16 @@ fn pieces(sections: Vec<Section>) -> Pieces {
     (!sections.is_empty()).then(|| {
         sections
             .into_iter()
-            .map(|s| SectionOut {
-                uuid: s.uuid,
-                md: s.md,
+            .map(|s| {
+                let inside = match (&s.uuid, &s.class) {
+                    (Some(uuid), Some(class)) => inside_box(uuid, class, &s.md),
+                    _ => None,
+                };
+                SectionOut {
+                    md: inside.map_or_else(|| s.md.clone(), str::to_string),
+                    class: inside.and(s.class.clone()),
+                    uuid: s.uuid,
+                }
             })
             .collect()
     })

@@ -1,7 +1,7 @@
 # The document viewer, drawn from blocks
 
-*Proposal (2026-11-19). Step 1 is built on the branch that adds this
-plan; nothing else is. It picks up where
+*Proposal (2026-11-19). Step 1 landed in #1889; step 2 is built on the
+branch after it; nothing else is. It picks up where
 [`documents_to_blocks.md`](documents_to_blocks.md) step 5 stopped
 ("paging through what is read together comes after"), and chooses a
 layout by kind through the registry
@@ -118,25 +118,39 @@ the parameter the answer is `body` alone, as before.
 
 ### Step 2: the box is the viewer's
 
-Render keeps each message's wrapper as facts beside its drawing: its
-uuid, which it already has, and its classes. The drawing keeps what is
-inside the wrapper. The export draws the `<div>` from the facts, so its
-markdown is unchanged byte for byte; the viewer makes the box itself.
+Every renderer that wraps a block draws the wrapper the same way: an
+opening `<div id="m-{uuid}" data-section-uuid="{uuid}" class="…">`, a
+blank line, what is inside, `</div>`, a blank line. One constructor,
+`Section::boxed(uuid, class, inside)`, draws it for all of them, and the
+render store keeps the box's class in a column of `sections`. `/chat`
+sends a boxed piece as its class and what is inside the box; the viewer
+draws the box itself. Joined, with each box drawn around its inside, the
+pieces are still `body` byte for byte.
 
-- **Deletes:** both wrapper regexes and rendering the inside as a
-  second fragment (`renderMessage`); stripping copies of a message's id
-  from bodies (`reservedSections` in the sanitizer), since the viewer
-  finds a box among the boxes it made, never by searching the page;
-  `close_open_blocks` in chat-common's drawing, which only the export's
-  join still needs, and which moves there.
-- **Adds:** a column of classes per keyed piece.
-- **Re-render:** once (`LAYOUT_VERSION`).
+What is stored and indexed does not change: the drawing and the text
+keep the box, so no search text moves and nothing re-embeds. The read
+side takes the box off knowing exactly what was drawn, from the uuid and
+the class. Taking it out of storage too waits for step 5, when drawings
+give way to facts.
+
+- **Deletes:** both wrapper regexes in `renderDocument.ts`, and the
+  sanitizer pass over the wrapper alone; each renderer's own wrapper
+  code (`msg_div_open`, `MSG_DIV_CLOSE`, Perseus's, Garmin's, the time
+  series', Notion's).
+- **Adds:** one constructor, one nullable column, a `class` on a piece.
+- **Re-render:** once, as every change to the render store's shape
+  does.
 - **Notices:** nothing.
-- **Checked by:** the export snapshots, unchanged; a hostile body that
-  copies a wrapper still cannot answer to another message's id.
+- **Checked by:** every render snapshot, unchanged; the isolation tests,
+  whose hostile bodies still cannot close a box early or answer to
+  another message's id.
 
-The classes start as the renderer writes them (`msg msg--email unread
-first-unread`). Unread becoming a fact of its own is step 5's.
+Two things this step does not remove. Stripping copies of a message's
+id from inside a body (`reservedSections`) stays while anything finds a
+message by searching the page for its id; it goes when lookups go
+through the boxes the viewer made. `close_open_blocks` in chat-common
+stays while `body` joins messages into one string, which agents and the
+export still read.
 
 ### Step 3: folds are structure
 

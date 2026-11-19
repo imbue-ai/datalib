@@ -351,10 +351,15 @@ hands its document over as `Section`s (`etl/render/src/section.rs`):
 keyed pieces, one per message, each keyed by its `data-section-uuid`,
 and unkeyed ones (the front matter and title, the `<details>` opener
 and closer around a run of tool steps). Joined in order they are the
-document. The render store keeps them, and spelling a document back
-gives each piece's uuid or none and its text; the document route, asked
-with `?pieces=true`, sends them as they are, as `pieces`, and the UI
-never sees them joined.
+document. A message is drawn in its **box**, `<div id="m-{uuid}"
+data-section-uuid="{uuid}" class="…">`, and every renderer draws it
+one way, `Section::boxed`, so the store keeps the box's class
+(`sections.class`) and knows the box from the uuid and the class alone.
+The render store keeps the pieces, and spelling a document back gives
+each piece's uuid or none, its box's class and its text; the document
+route, asked with `?pieces=true`, sends them as `pieces`, a boxed one as
+its class and what is inside the box, and the UI never sees them
+joined.
 
 How the UI draws the pieces (`ui/src/cards/renderDocument.ts`):
 
@@ -363,26 +368,23 @@ How the UI draws the pieces (`ui/src/cards/renderDocument.ts`):
   message goes, so a `<details>` opened in one still closes in a later
   one. They hold only what the renderer writes itself; the title in
   them is escaped.
-- **Each keyed piece is rendered and sanitized alone.** One that opens
-  with the renderer's wrapper line (`<div id="m-{uuid}"
-  data-section-uuid="{uuid}" …>`, its uuid the piece's key) and ends
-  with `</div>` is drawn as that wrapper with the inside rendered as a
-  fragment of its own, so a `</div>` in a message cannot close the
-  wrapper early either.
-- **Only the renderer's wrapper answers to a message's id.** Inside a
-  piece, an `id="m-…"` or a `data-section-uuid` that names any message
-  of the document is taken off.
+- **Each keyed piece is rendered and sanitized alone.** The UI draws a
+  boxed one's box itself, around what is inside it rendered as a
+  fragment of its own, so a `</div>` in a message cannot close its box
+  early either.
+- **Only the box answers to a message's id.** Inside a piece, an
+  `id="m-…"` or a `data-section-uuid` that names any message of the
+  document is taken off; a keyed piece in no box keeps its own.
 - **A message draws only inside its own box.** `documentBody.css`
-  gives every wrapper `contain: paint`, so `position: fixed`, a
-  negative margin or a transform in one message cannot cover another.
+  gives every box `contain: paint`, so `position: fixed`, a negative
+  margin or a transform in one message cannot cover another.
 
 A renderer that keys none of its sections hands its page over as
 unkeyed pieces, drawn as one fragment, as every body was before; its
-wrappers still get `contain: paint`. Garmin, Perseus, Notion, Google
-Takeout's My Maps pages and the time-series pages key none.
-`grep -rln 'Section::keyed' datalib/backend/etl` lists the renderers
-that do. Teaching another one is keying its `RenderedMarkdown::sections`,
-and the next render stores them.
+boxes still get `contain: paint`. `grep -rlnE 'Section::(keyed|boxed)'
+datalib/backend/etl` lists the renderers that key theirs. Teaching
+another one is keying its `RenderedMarkdown::sections`, and the next
+render stores them.
 
 The cost is a sanitizer pass per message: in the unit tests' jsdom, a
 2,000-message conversation took about 0.7 s piece by piece against

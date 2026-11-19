@@ -340,19 +340,18 @@ fn thread_sections(
             .and_then(|v| v.as_str())
             .unwrap_or("(unknown)");
         let when = c.get("created_time").and_then(|v| v.as_str()).unwrap_or("");
-        // The id + data-section-uuid pair is what the UI walks to anchor
-        // per-message feedback; see AGENTS.md "Rendered markdown is write-only".
-        out.push_str(&format!(
-            "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--notion\">\n\n"
-        ));
         let who = match author_of(c) {
             Some(h) => chip_link(author, &h),
             None => format!("**{}**", escape_name_inline(author)),
         };
         out.push_str(&format!("{who} · {}\n\n", message_stamp_text_html(when)));
         out.push_str(&escape_md_block(&plain(c.get("rich_text"))));
-        out.push_str("\n\n</div>\n\n");
-        sections.push(Section::keyed(&uuid, std::mem::take(&mut out)));
+        out.push_str("\n\n");
+        sections.push(Section::boxed(
+            &uuid,
+            "msg msg--notion".to_string(),
+            &std::mem::take(&mut out),
+        ));
     }
     (front, sections)
 }

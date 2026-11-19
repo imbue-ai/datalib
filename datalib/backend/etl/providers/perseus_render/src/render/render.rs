@@ -252,14 +252,6 @@ fn book_title(book_n: &str) -> String {
     format!("{WORK_SHORT} Book {bn}")
 }
 
-fn section_div_open(section_uuid: &str) -> String {
-    format!(
-        "<div id=\"m-{section_uuid}\" data-section-uuid=\"{section_uuid}\" class=\"msg msg--perseus\">"
-    )
-}
-
-const SECTION_DIV_CLOSE: &str = "</div>";
-
 fn render_book_md(book: &Book) -> (Front, String) {
     let title = book_title(&book.n);
     let front = Front::new()
@@ -315,15 +307,15 @@ fn render_chapter_sections(
         } else {
             escape_md_block(text)
         };
-        let md = format!(
-            "{}\n\n### {}.{}.{}\n\n{}\n\n{SECTION_DIV_CLOSE}\n\n",
-            section_div_open(&s_uuid),
-            chapter.book_n,
-            chapter.n,
-            sec.n,
-            body
+        let inside = format!(
+            "### {}.{}.{}\n\n{}\n\n",
+            chapter.book_n, chapter.n, sec.n, body
         );
-        sections.push(DocSection::keyed(&s_uuid, md));
+        sections.push(DocSection::boxed(
+            &s_uuid,
+            "msg msg--perseus".to_string(),
+            &inside,
+        ));
     }
     (front, sections)
 }

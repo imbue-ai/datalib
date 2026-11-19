@@ -30,9 +30,13 @@ Keep at least the `<time>` and `<div>` elements and the attributes this
 page names.
 
 Render it a message at a time, too: `pieces` is a list of `{uuid, md}`
-that, joined in order, is `body`. A piece with a `uuid` is one message;
-render and sanitize it on its own, and a tag it leaves open is closed at
-its end instead of hiding the messages after it. The pieces without one
+in order. A piece with a `uuid` is one message; render and sanitize it
+on its own, and a tag it leaves open is closed at its end instead of
+hiding the messages after it. A message with a `class` is in a box
+(below): `md` is what is inside it, and the box is yours to draw, as
+`<div id="m-{uuid}" data-section-uuid="{uuid}" class="{class}">`, a
+blank line, `md`, `</div>` and a blank line. Joined in order, with each
+box drawn, the pieces are `body`. The pieces without one
 (the title, the folds around a run of tool steps) open and close
 elements between them, so render those together. Datalib's viewer does
 both in `ui/src/cards/renderDocument.ts`. A document whose source does

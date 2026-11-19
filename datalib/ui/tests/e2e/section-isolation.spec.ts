@@ -14,13 +14,13 @@
 import { test, expect, type Page } from "@playwright/test";
 
 /// What the document route sends the viewer, as far as these tests read it.
-type BodyPiece = { uuid: string | null; md: string };
+type BodyPiece = { uuid: string | null; class?: string | null; md: string };
 type ChatResponse = { pieces: BodyPiece[] } & Record<string, unknown>;
 
 const chatRoute = (uuid: string) => `/applet/unified_grid_and_search_index/chat/${uuid}`;
 
 const COVER = "Your session has expired. Enter your password to continue.";
-/// Inside the first message's wrapper, before its closing tag.
+/// At the end of what is inside the first message's box.
 const payload = (next: string) =>
   `\n<div id="p-cover" style="position:fixed;inset:0;z-index:2147483647;background:#fff">${COVER}</div>\n\n` +
   `<div style="display:none">\n\n` +
@@ -63,15 +63,24 @@ function twoMessagesInARow(chat: ChatResponse): { first: string; next: string } 
   return null;
 }
 
-/// The document with the payload in its first message.
+/// The document with the payload at the end of its first message.
 function withPayload(doc: Doc): ChatResponse {
   const pieces = doc.chat.pieces.map((p) => ({ ...p }));
   const first = pieces.find((p) => p.uuid === doc.first)!;
-  const close = first.md.lastIndexOf("</div>");
-  expect(close, "the first message is in a wrapper").toBeGreaterThan(0);
-  first.md = first.md.slice(0, close) + payload(doc.next) + first.md.slice(close);
+  expect(first.class, "the first message is in a box").toBeTruthy();
+  first.md += payload(doc.next);
   return { ...doc.chat, pieces };
 }
+
+/// The pieces as one string, each box drawn as render draws it.
+const joined = (pieces: BodyPiece[]) =>
+  pieces
+    .map((p) =>
+      p.uuid && p.class
+        ? `<div id="m-${p.uuid}" data-section-uuid="${p.uuid}" class="${p.class}">\n\n${p.md}</div>\n\n`
+        : p.md,
+    )
+    .join("");
 
 async function open(page: Page, doc: Doc, served: ChatResponse): Promise<void> {
   await page.route(
@@ -115,7 +124,7 @@ test("a message's payload neither hides, replaces nor covers the next message", 
 test("control: served as one piece, the payload hides the next message", async ({ page }) => {
   const doc = await aConversation(page);
   const served = withPayload(doc);
-  const whole = { uuid: null, md: served.pieces.map((p) => p.md).join("") };
+  const whole = { uuid: null, md: joined(served.pieces) };
   await open(page, doc, { ...served, pieces: [whole] });
   const frame = page.frameLocator("iframe.doc-frame");
   await expect(frame.locator(`[data-section-uuid="${doc.next}"]`)).toHaveCount(2);

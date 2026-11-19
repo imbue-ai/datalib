@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { renderDocument } from "../src/cards/renderDocument";
+import type { BodyPiece } from "../src/api";
+import { bodyOf, renderDocument } from "../src/cards/renderDocument";
 
 /// The text-edge library (`datalib/backend/etl/text_edges/`): each case's
 /// text, rendered by `render_hostile_samples` as the first of two
@@ -11,7 +12,7 @@ import { renderDocument } from "../src/cards/renderDocument";
 /// Bazel puts the corpus beside this file; outside Bazel it is missing and
 /// this suite fails rather than passing on nothing.
 
-type Section = { uuid: string | null; md: string };
+type Section = BodyPiece;
 type Rendered = {
   file: string;
   body: string;
@@ -161,7 +162,7 @@ describe("text edges", () => {
     "%s",
     (_, c) => {
       const r = c.rendered;
-      if (r.sections) expect(r.sections.map((s) => s.md).join("")).toBe(r.body);
+      if (r.sections) expect(bodyOf({ pieces: r.sections })).toBe(r.body);
       const found = problems(c, edges.baselines[c.enters]);
       if (c.fails_today) {
         expect(found, `${c.id} now holds; take off its fails_today (${c.fails_today})`).not.toEqual(

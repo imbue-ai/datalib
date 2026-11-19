@@ -140,8 +140,9 @@ async fn put_sections(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<(
     }
     for row in crate::section::stored(&md.markdown_uuid, &md.sections) {
         sqlx::query(
-            "INSERT INTO sections (markdown_uuid, seq, uuid, text, framed, addressed, labels) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO sections \
+             (markdown_uuid, seq, uuid, text, framed, addressed, labels, class) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&row.markdown_uuid)
         .bind(row.seq)
@@ -150,6 +151,7 @@ async fn put_sections(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<(
         .bind(row.framed)
         .bind(&row.addressed)
         .bind(&row.labels)
+        .bind(&row.class)
         .execute(&mut **conn)
         .await
         .with_context(|| format!("document {}: store section {}", md.markdown_uuid, row.seq))?;
@@ -983,7 +985,7 @@ impl IndexedMarkdownStore {
     ) -> Result<Option<Vec<crate::section::SpelledSection>>> {
         blocking(async {
             let sections: Vec<datalib_schema::sections::SectionRow> = sqlx::query_as(
-                "SELECT markdown_uuid, seq, uuid, text, framed, addressed, labels \
+                "SELECT markdown_uuid, seq, uuid, text, framed, addressed, labels, class \
                  FROM sections WHERE markdown_uuid = ? ORDER BY seq",
             )
             .bind(markdown_uuid)
