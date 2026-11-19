@@ -98,6 +98,7 @@ riker-thread
     participant email:picard@enterprise.org              supplied
     participant email:riker@enterprise.org               supplied
     participant email:troi@enterprise.org                supplied
+    upstream_id 1701d000-abcd-4e00-a000-0000000000ef     derived
 
 senior-staff-card
   columns

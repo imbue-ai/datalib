@@ -38,6 +38,37 @@ pub fn extract_uuid_suffix(value: &str) -> &str {
     }
 }
 
+/// The ways a source may write the uuid `value` is, whole: dashed or not,
+/// lowercase or capitals. Notion's links drop the dashes; Apple writes
+/// capitals. `None` for any other value, which a key matches as written.
+pub fn uuid_spellings(value: &str) -> Option<Vec<String>> {
+    let hex = if is_uuid_shape(value) {
+        value.replace('-', "")
+    } else if value.len() == 32 && value.bytes().all(|c| c.is_ascii_hexdigit()) {
+        value.to_string()
+    } else {
+        return None;
+    };
+    let hex = hex.to_ascii_lowercase();
+    let dashed = format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    );
+    let mut spellings = vec![
+        dashed.to_ascii_uppercase(),
+        dashed,
+        hex.to_ascii_uppercase(),
+        hex,
+    ];
+    spellings.sort();
+    spellings.dedup();
+    Some(spellings)
+}
+
 pub fn is_uuid_shape(s: &str) -> bool {
     if s.len() != 36 {
         return false;
@@ -627,6 +658,42 @@ mod tests {
     fn extract_uuid_suffix_leaves_a_word_split_mid_character_alone() {
         let word = format!("é{}", "a".repeat(35));
         assert_eq!(extract_uuid_suffix(&word), word);
+    }
+
+    #[test]
+    fn a_uuid_is_spelled_dashed_or_not_in_either_case() {
+        let all = [
+            "1701D000-ABCD-4E00-A000-0000000000EF",
+            "1701D000ABCD4E00A0000000000000EF",
+            "1701d000-abcd-4e00-a000-0000000000ef",
+            "1701d000abcd4e00a0000000000000ef",
+        ];
+        for typed in [
+            all[0],
+            all[1],
+            all[2],
+            all[3],
+            "1701D000-abcd-4E00-a000-0000000000eF",
+        ] {
+            assert_eq!(uuid_spellings(typed).unwrap(), all, "{typed}");
+        }
+        assert_eq!(
+            uuid_spellings("00000001-1701-4000-8000-000000000001").unwrap(),
+            [
+                "00000001-1701-4000-8000-000000000001",
+                "00000001170140008000000000000001"
+            ],
+            "digits alone have one case"
+        );
+        for not in [
+            "M-ncc1701-0042",
+            "1701d000-abcd",
+            "1701d000abcd4e00a0000000000000e",
+            "x1701d000abcd4e00a0000000000000ef",
+            "1701d000-abcd-4e00-a000-0000000000eg",
+        ] {
+            assert_eq!(uuid_spellings(not), None, "{not}");
+        }
     }
 
     #[test]
