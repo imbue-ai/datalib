@@ -115,6 +115,10 @@ fn chat_profile(provider: Provider, label: &str, thread: &str, message: &str) ->
     }
 }
 
+/// The id the thread's source gave it: a uuid, as a Notion page's or a
+/// Claude conversation's is.
+const RIKER_THREAD_ID: &str = "1701d000-abcd-4e00-a000-0000000000ef";
+
 /// Riker writes to Picard, copying Troi, in Picard's mailbox.
 fn riker_email() -> NormalizedChat {
     let mut item = message(
@@ -146,6 +150,7 @@ fn riker_email() -> NormalizedChat {
         Some("picard@enterprise.org"),
         item,
     );
+    thread.external_id = Some(RIKER_THREAD_ID.into());
     // The mailbox is Picard's, so his address is the account's own.
     let mut picard =
         NormalizedContact::new("mail", "email:picard@enterprise.org", ContactKind::Person);
@@ -628,6 +633,21 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         ),
         // A row by the id its source gave it: here an email's.
         ("id:M-ncc1701-0042", vec!["riker-email"]),
+        // A uuid however it is written: Notion's links drop the dashes.
+        (
+            "id:1701d000-abcd-4e00-a000-0000000000ef",
+            vec!["riker-thread"],
+        ),
+        ("id:1701d000abcd4e00a0000000000000ef", vec!["riker-thread"]),
+        (
+            "id:1701D000-ABCD-4E00-A000-0000000000EF",
+            vec!["riker-thread"],
+        ),
+        ("id:1701D000abcd4E00A0000000000000ef", vec!["riker-thread"]),
+        (
+            "account:picard@enterprise.org -id:1701D000ABCD4E00A0000000000000EF",
+            vec!["riker-email"],
+        ),
         // Keys combine with AND.
         ("with:picard kind:Email", vec!["riker-email"]),
     ] {
@@ -657,6 +677,10 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         // `id:` is the source's id, whole: not part of it, not datalib's.
         "id:ncc1701",
         "id:riker-email",
+        "id:1701d000-abcd",
+        // Only a uuid is read in another spelling; any other id is exact.
+        "id:m-ncc1701-0042",
+        "id:Mncc17010042",
         // The email column holds a card's first address only.
         "email:jean-luc@chateau-picard.example",
         // `email:` is that column, not a person's address: Riker has no

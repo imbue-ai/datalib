@@ -50,11 +50,13 @@ impl Name {
     pub fn parse(s: &str) -> Option<Self> {
         let rest = s.strip_prefix(SCHEME)?;
         if let Some(id) = rest.strip_prefix(PHOTO) {
-            return is_uuid(id).then(|| Name::photo(id));
+            return datalib_uuid_text::is_dashed(id).then(|| Name::photo(id));
         }
         let rest = rest.strip_prefix(DOC)?;
         let (page, section) = rest.split_once('#').unwrap_or((rest, ""));
-        if !is_uuid(page) || !(section.is_empty() || is_uuid(section)) {
+        if !datalib_uuid_text::is_dashed(page)
+            || !(section.is_empty() || datalib_uuid_text::is_dashed(section))
+        {
             return None;
         }
         Some(Name::Doc {
@@ -62,15 +64,6 @@ impl Name {
             section: (!section.is_empty()).then(|| section.to_string()),
         })
     }
-}
-
-/// Hex digits in the groups 8-4-4-4-12, in either case.
-fn is_uuid(s: &str) -> bool {
-    let groups: Vec<&str> = s.split('-').collect();
-    groups.iter().map(|g| g.len()).eq([8, 4, 4, 4, 12])
-        && groups
-            .iter()
-            .all(|g| g.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 #[cfg(test)]

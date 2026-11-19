@@ -340,14 +340,7 @@ fn uuid_of(bytes: &[u8]) -> Option<String> {
         return None;
     }
     let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    Some(format!(
-        "{}-{}-{}-{}-{}",
-        &hex[..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..]
-    ))
+    datalib_uuid_text::canonical(&hex)
 }
 
 async fn load_chats(pool: &sqlx::SqlitePool) -> Result<HashMap<String, ParsedChat>> {

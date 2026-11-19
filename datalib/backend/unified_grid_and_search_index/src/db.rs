@@ -3,7 +3,7 @@
 //! [`crate::dolt_repo::DoltRepo`].
 
 use crate::group::like_pattern;
-use crate::query::{extract_uuid_suffix, Field, FilterTerm, ParsedQuery};
+use crate::query::{Field, FilterTerm, ParsedQuery};
 use crate::terms_keys::{self, Cells, TermsKey, TermsValue};
 use datalib_query::table::{Column, FreeText, SearchTable};
 use datalib_schema::grid_rows::GridRowColumn;
@@ -91,19 +91,28 @@ pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
             });
             continue;
         }
+        // A uuid key takes its uuid at the end of a slug or a link too.
+        let value = key
+            .uuid
+            .then(|| datalib_uuid_text::at_end(&term.value))
+            .flatten()
+            .unwrap_or_else(|| term.value.clone());
+        let (is, is_not, bound) = match datalib_uuid_text::spellings(&value) {
+            Some(spellings) => (
+                "IN (SELECT value FROM json_each(?))",
+                "NOT IN (SELECT value FROM json_each(?))",
+                serde_json::to_string(&spellings).expect("strings serialize"),
+            ),
+            None => ("= ?", "!= ?", value),
+        };
         if term.negate {
             // Nullable columns: NULL would pass `col != ?` as unknown
             // and be dropped, which surprises users who didn't ask to
             // exclude unset values. Explicitly keep nulls.
-            clauses.push(format!("({col} IS NULL OR {col} != ?)"));
+            clauses.push(format!("({col} IS NULL OR {col} {is_not})"));
         } else {
-            clauses.push(format!("{col} = ?"));
+            clauses.push(format!("{col} {is}"));
         }
-        let bound = if key.uuid {
-            extract_uuid_suffix(&term.value).to_string()
-        } else {
-            term.value.clone()
-        };
         params.push(bound);
     }
 
@@ -527,5 +536,43 @@ mod tests {
             sql.contains("(diff_status IS NULL OR diff_status != ?)"),
             "{sql}"
         );
+    }
+
+    /// A uuid typed without dashes (a Notion link's) found nothing
+    /// stored with them.
+    #[test]
+    fn a_uuid_value_matches_each_of_its_spellings() {
+        let (sql, params) = build_where(&parse_query("id:1701D000abcd4e00A0000000000000ef"));
+        assert!(
+            sql.contains("upstream_id IN (SELECT value FROM json_each(?))"),
+            "{sql}"
+        );
+        let spellings: Vec<String> = serde_json::from_str(&params[0]).unwrap();
+        assert!(spellings.contains(&"1701d000-abcd-4e00-a000-0000000000ef".to_string()));
+        let (sql, _) = build_where(&parse_query("-id:1701d000-abcd-4e00-a000-0000000000ef"));
+        assert!(
+            sql.contains(
+                "(upstream_id IS NULL OR upstream_id NOT IN (SELECT value FROM json_each(?)))"
+            ),
+            "{sql}"
+        );
+        let (sql, params) = build_where(&parse_query("id:M-ncc1701-0042"));
+        assert!(sql.contains("upstream_id = ?"), "{sql}");
+        assert_eq!(params, vec!["M-ncc1701-0042".to_string()]);
+    }
+
+    /// A key that holds a uuid takes it at the end of a page's link, as
+    /// Notion writes it, without dashes.
+    #[test]
+    fn a_uuid_key_reads_its_uuid_off_a_link() {
+        let (sql, params) = build_where(&parse_query(
+            "notion_page:https://www.notion.so/Away-Team-1701d000abcd4e00a0000000000000ef?pvs=4",
+        ));
+        assert!(
+            sql.contains("notion_page_uuid IN (SELECT value FROM json_each(?))"),
+            "{sql}"
+        );
+        let spellings: Vec<String> = serde_json::from_str(&params[0]).unwrap();
+        assert!(spellings.contains(&"1701d000-abcd-4e00-a000-0000000000ef".to_string()));
     }
 }

@@ -38,6 +38,7 @@ rust_library(
         "//datalib/backend/query:datalib_query",
         "//datalib/backend/table:datalib_table",
         "//datalib/backend/time:datalib_time",
+        "//datalib/backend/uuid_text:datalib_uuid_text",
         "@datalib_crates//:blake3",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",

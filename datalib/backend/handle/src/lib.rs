@@ -210,7 +210,10 @@ impl Handle {
     /// A PNI is not accepted here: it names a number, not a person, and
     /// the number is the handle.
     pub fn signal_aci(aci: &str) -> Option<Self> {
-        Some(Self::of(HandleKind::SignalAci, &dashed_uuid(aci)?))
+        Some(Self::of(
+            HandleKind::SignalAci,
+            &datalib_uuid_text::canonical(aci.trim())?,
+        ))
     }
 
     /// A GitHub account by its login, lowercased, as GitHub matches it.
@@ -244,7 +247,10 @@ impl Handle {
     /// A Notion user by their id, a UUID spelled lowercase with dashes.
     /// Where Notion gives the user's address, the address is the handle.
     pub fn notion_user(id: &str) -> Option<Self> {
-        Some(Self::of(HandleKind::Notion, &dashed_uuid(id)?))
+        Some(Self::of(
+            HandleKind::Notion,
+            &datalib_uuid_text::canonical(id.trim())?,
+        ))
     }
 
     /// A person on Facebook by the name the export shows, its whitespace
@@ -537,28 +543,6 @@ fn is_shown_name(name: &str) -> bool {
         && !name
             .chars()
             .any(|c| c.is_control() || (is_hidden(c) && !matches!(c, '\u{200C}' | '\u{200D}')))
-}
-
-/// A UUID, 32 hex digits with or without dashes in any case, spelled
-/// lowercase with dashes.
-fn dashed_uuid(s: &str) -> Option<String> {
-    let hex: String = s
-        .trim()
-        .chars()
-        .filter(|c| *c != '-')
-        .map(|c| c.to_ascii_lowercase())
-        .collect();
-    if hex.len() != 32 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        return None;
-    }
-    Some(format!(
-        "{}-{}-{}-{}-{}",
-        &hex[..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..]
-    ))
 }
 
 /// Every byte but an unreserved one (RFC 3986) and `/` as `%XX`, so a

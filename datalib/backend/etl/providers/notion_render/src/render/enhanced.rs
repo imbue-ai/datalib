@@ -15,7 +15,6 @@ use std::sync::LazyLock;
 
 use datalib_etl::ids::normalize_id_token;
 use datalib_etl_notion::ingest::db::TreeRow;
-use datalib_etl_notion::ingest::format_uuid;
 use datalib_etl_notion::ingest::schema_raw::TreeKind;
 use datalib_etl_render::html::{
     code_span_parts, escape_attr, escape_md_inline, escape_name_inline, escape_name_text,
@@ -40,7 +39,7 @@ impl Context<'_> {
     /// Where a link to a Notion page or database goes, and its title: the
     /// page's document when this source renders it, else Notion.
     fn target(&self, url: &str) -> (String, Option<String>) {
-        let id = format_uuid(&normalize_id_token(url));
+        let id = normalize_id_token(url);
         match self.tree.get(&id) {
             Some(row) => {
                 let href = match row.kind {

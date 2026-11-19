@@ -24,6 +24,7 @@ rust_library(
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/time:datalib_time",
         "//datalib/backend/signal-backup:datalib_signal_backup",
+        "//datalib/backend/uuid_text:datalib_uuid_text",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",

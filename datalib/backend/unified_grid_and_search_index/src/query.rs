@@ -22,40 +22,6 @@ pub enum Field<C: 'static> {
     Terms(&'static TermsKey),
 }
 
-/// Notion-style slug+UUID parser. If `value` ends with a `-`-prefixed
-/// UUID-shaped suffix (8-4-4-4-12 lowercase hex), return that suffix; else
-/// return the input unchanged. The leading slug is non-load-bearing — it
-/// exists only to make URLs/tokens self-describing.
-pub fn extract_uuid_suffix(value: &str) -> &str {
-    let Some(candidate) = value.len().checked_sub(36).and_then(|at| value.get(at..)) else {
-        return value;
-    };
-    if is_uuid_shape(candidate) && (value.len() == 36 || value.as_bytes()[value.len() - 37] == b'-')
-    {
-        candidate
-    } else {
-        value
-    }
-}
-
-pub fn is_uuid_shape(s: &str) -> bool {
-    if s.len() != 36 {
-        return false;
-    }
-    let b = s.as_bytes();
-    for (i, &c) in b.iter().enumerate() {
-        let is_dash_pos = matches!(i, 8 | 13 | 18 | 23);
-        if is_dash_pos {
-            if c != b'-' {
-                return false;
-            }
-        } else if !c.is_ascii_hexdigit() {
-            return false;
-        }
-    }
-    true
-}
-
 /// One filter occurrence from the query string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilterTerm<C: 'static> {
@@ -598,37 +564,8 @@ mod tests {
         assert!(parsed.refusal().is_some(), "{parsed:?}");
     }
 
-    #[test]
-    fn extract_uuid_suffix_strips_slug() {
-        // Notion-style: slug-uuid.
-        assert_eq!(
-            extract_uuid_suffix("picard-jean-luc-00000001-1701-4d00-8000-000000000001"),
-            "00000001-1701-4d00-8000-000000000001"
-        );
-        // Bare UUID passes through.
-        assert_eq!(
-            extract_uuid_suffix("00000001-1701-4d00-8000-000000000001"),
-            "00000001-1701-4d00-8000-000000000001"
-        );
-        // No UUID-shaped suffix → unchanged.
-        assert_eq!(extract_uuid_suffix("plain-name"), "plain-name");
-        // Too-short string → unchanged.
-        assert_eq!(extract_uuid_suffix("short"), "short");
-        // Suffix is hex-shaped but missing the boundary dash before slug.
-        assert_eq!(
-            extract_uuid_suffix("xxx00000001-1701-4d00-8000-000000000001"),
-            "xxx00000001-1701-4d00-8000-000000000001"
-        );
-    }
-
     /// A word whose 36th byte from the end falls inside a character
     /// panicked on the byte slice; every free-text search reaches this.
-    #[test]
-    fn extract_uuid_suffix_leaves_a_word_split_mid_character_alone() {
-        let word = format!("é{}", "a".repeat(35));
-        assert_eq!(extract_uuid_suffix(&word), word);
-    }
-
     #[test]
     fn bare_text_defaults_to_hybrid_mode() {
         let q = parse_query("earl grey");

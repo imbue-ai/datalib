@@ -9,7 +9,6 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use datalib_schema::search_terms::SearchTermKind;
-use datalib_unified_grid_and_search_index::query::is_uuid_shape;
 use datalib_unified_grid_and_search_index::terms_keys::handle_of;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Connection};
@@ -82,36 +81,7 @@ fn identifier(word: &str) -> Option<String> {
     if word.contains('"') {
         return None;
     }
-    uuid_at_end(word).or_else(|| handle_of(word))
-}
-
-/// The uuid a word ends in, dashed and lowercase: a bare one, dashed or
-/// not, or the last part of a slug or a link (`Shift-Roster-<id>`,
-/// `https://…/p/<id>?pvs=4`, `…/chat/<id>`). Notion writes its ids
-/// without dashes; the search terms hold them dashed.
-fn uuid_at_end(word: &str) -> Option<String> {
-    let word = word.split(['?', '#']).next().unwrap_or(word);
-    let word = word.strip_suffix('/').unwrap_or(word);
-    let ends_in = |len: usize| {
-        let at = word.len().checked_sub(len)?;
-        let cut = at.checked_sub(1).map(|b| word.as_bytes()[b]);
-        matches!(cut, None | Some(b'-' | b'/'))
-            .then(|| word.get(at..))
-            .flatten()
-    };
-    if let Some(id) = ends_in(36).filter(|id| is_uuid_shape(id)) {
-        return Some(id.to_lowercase());
-    }
-    let hex = ends_in(32).filter(|h| h.bytes().all(|c| c.is_ascii_hexdigit()))?;
-    let hex = hex.to_lowercase();
-    Some(format!(
-        "{}-{}-{}-{}-{}",
-        &hex[..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..]
-    ))
+    datalib_uuid_text::at_end(word).or_else(|| handle_of(word))
 }
 
 /// One term an identifier matched.
