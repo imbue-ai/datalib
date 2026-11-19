@@ -1,6 +1,6 @@
 # Search: one filter, two rankers
 
-**Status: step 1 built (2026-11-19); steps 2 and 3 proposed.** Answers
+**Status: step 1 built (2026-11-19), and step 2's "no stemming" (2026-11-19); the rest of steps 2 and 3 proposed.** Answers
 [#1887](https://github.com/imbue-ai/datalib/issues/1887). Four tests
 reproduce what step 1 fixes; they are listed under "What goes wrong
 today". [`docs/user/searching.md`](../../user/searching.md) says what
