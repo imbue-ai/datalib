@@ -1,6 +1,6 @@
 # Search: one filter, two rankers
 
-**Status: step 1 built (2026-11-19), and step 2's "no stemming" (2026-11-19); the rest of steps 2 and 3 proposed.** Answers
+**Status: step 1 built (2026-11-19), and step 2's word forms (2026-11-19: no stemming, then stems for bare words beside exact words for quotes); the rest of steps 2 and 3 proposed.** Answers
 [#1887](https://github.com/imbue-ai/datalib/issues/1887). Four tests
 reproduce what step 1 fixes; they are listed under "What goes wrong
 today". [`docs/user/searching.md`](../../user/searching.md) says what
@@ -192,6 +192,15 @@ shape costs a rebuild, not a migration (AGENTS.md).
   is a word form with `semantic:off`, or in a source not embedded:
   measure it with `scripts/search_eval.py` before and after. Only the
   keyword tables are rebuilt; no chunk is embedded again.
+
+  **Measured, then reversed in part.** Without stems, 454 queries on a
+  real library with `semantic:off` went from 54% to 52% found in the
+  top 10, and lost 15 targets. With meaning on, 7 of those came back;
+  most of the other 8 were long descriptions of a passage in one long
+  page. So bare words (`+word` and `-word` too) match on a second
+  table, `search_stems` (`porter unicode61 remove_diacritics 2`), and a
+  quoted phrase on `search_fts`, words as written. The cost is the
+  second table.
 - **A uuid stored one way.** #1886 matches a uuid however it is typed by
   asking each key for four spellings (dashed or not, lowercase or
   capitals, `IN (SELECT value FROM json_each(?))`), and the pasted-id
@@ -227,8 +236,9 @@ a real library before deciding.
   Gmail, Slack, SQLite FTS5 and Postgres's `plainto_tsquery` (Lucene's
   default is any). They are not a filter: meaning still finds a document
   holding none of them. Unchanged from today.
-- **Meaning, not stemming, covers word forms**, and a quoted phrase is
-  exact: step 2.
+- **A bare word matches its other forms (porter stems), and a quoted
+  phrase is exact**: step 2. First built as no stemming at all, leaving
+  word forms to meaning; that lost recall with meaning off.
 - **No prefix matching.** The search runs on Enter.
 
 ## What changes in `searching.md`
