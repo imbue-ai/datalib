@@ -38,6 +38,14 @@ pub(crate) const DDL: [&str; 3] = [
 /// How many documents one bound JSON array names.
 const BATCH: usize = 5_000;
 
+pub(crate) const OWED_SQL: &str = "SELECT d.markdown_uuid, d.content_hash, \
+        c.start_byte, c.end_byte, c.first_section, c.last_section, c.hash \
+   FROM search_chunks c JOIN search_chunked d ON d.doc_id = c.doc_id \
+  WHERE d.source_id = ?1 \
+    AND NOT EXISTS (SELECT 1 FROM vectors v INDEXED BY vectors_keys \
+                     WHERE v.model = ?2 AND v.hash = c.hash) \
+  ORDER BY d.markdown_uuid, c.seq";
+
 /// One document's chunks as an `embed` cut them from the rendering
 /// `content_hash` names.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,6 +179,7 @@ impl InferenceCache {
     }
 
     /// Each filed chunk of `source_id` that `model` has no vector for,
+    /// asked of the cache's keys alone (`cache::KEYS`),
     /// with its document and the rendering it was cut from, in document
     /// order.
     pub async fn owed_chunks(
@@ -178,19 +187,12 @@ impl InferenceCache {
         model: &str,
         source_id: &str,
     ) -> Result<Vec<(String, String, FiledChunk)>> {
-        let rows: Vec<(String, String, i64, i64, i64, i64, String)> = sqlx::query_as(
-            "SELECT d.markdown_uuid, d.content_hash, \
-                    c.start_byte, c.end_byte, c.first_section, c.last_section, c.hash \
-               FROM search_chunks c JOIN search_chunked d ON d.doc_id = c.doc_id \
-              WHERE d.source_id = ?1 \
-                AND NOT EXISTS (SELECT 1 FROM vectors v WHERE v.model = ?2 AND v.hash = c.hash) \
-              ORDER BY d.markdown_uuid, c.seq",
-        )
-        .bind(source_id)
-        .bind(model)
-        .fetch_all(&self.pool)
-        .await
-        .context("read the chunks owed a vector")?;
+        let rows: Vec<(String, String, i64, i64, i64, i64, String)> = sqlx::query_as(OWED_SQL)
+            .bind(source_id)
+            .bind(model)
+            .fetch_all(&self.pool)
+            .await
+            .context("read the chunks owed a vector")?;
         rows.into_iter()
             .map(|(uuid, content_hash, start, end, first, last, hash)| {
                 Ok((uuid, content_hash, filed(start, end, first, last, hash)?))
