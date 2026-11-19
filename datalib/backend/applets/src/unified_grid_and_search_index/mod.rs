@@ -40,6 +40,7 @@ pub(crate) mod warm;
 
 use body_pieces::body_pieces;
 use datalib_columns::Identity;
+use datalib_etl_render::indexed_markdown::{DocumentPage, PageAsk};
 use datalib_etl_render::section::Node;
 use datalib_schema::grid_rows::{GridRow, GridRowColumn};
 use datalib_unified_grid_and_search_index::grid_columns::GridColumn;
@@ -384,6 +385,18 @@ pub struct ChatResponse {
     /// fragment of its own; only when asked for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pieces: Option<Vec<Node>>,
+    /// Asked for a page: the cursor to ask `before=` for the page above
+    /// it, or null when it starts the document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<i64>,
+    /// Asked for a page: the cursor to ask `after=` for the page below it,
+    /// or null when it ends the document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<i64>,
+    /// The commit of the render store the document was read at. A cursor
+    /// is good for this version; a page read at another may not line up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
     /// What render could not fully do to this document, errors first.
     /// Drawn above the body.
     pub problems: Vec<problems::DocProblem>,
@@ -1807,6 +1820,44 @@ pub struct ChatParams {
     /// Answer with `pieces` rather than `body`.
     #[serde(default)]
     pieces: bool,
+    /// With `pieces`: answer a page of at most this many of the document's
+    /// top-level nodes, rather than all of them.
+    limit: Option<usize>,
+    /// The page around this item's piece.
+    at: Option<String>,
+    /// The page ending just before this cursor.
+    before: Option<i64>,
+    /// The page from this cursor on.
+    after: Option<i64>,
+}
+
+const MAX_PAGE: usize = 1000;
+
+impl ChatParams {
+    /// The page asked for, if one is: `Err` names a request that cannot be
+    /// answered.
+    fn page(&self) -> Result<Option<(PageAsk, usize)>, &'static str> {
+        let Some(limit) = self.limit else {
+            return match (&self.at, self.before, self.after) {
+                (None, None, None) => Ok(None),
+                _ => Err("at, before and after page a document: give limit too"),
+            };
+        };
+        if !self.pieces {
+            return Err("a page of a document comes as pieces: give pieces=true");
+        }
+        if !(1..=MAX_PAGE).contains(&limit) {
+            return Err("limit takes 1 to 1000");
+        }
+        let ask = match (&self.at, self.before, self.after) {
+            (None, None, None) => PageAsk::Start,
+            (Some(uuid), None, None) => PageAsk::At(uuid.clone()),
+            (None, Some(cursor), None) => PageAsk::Before(cursor),
+            (None, None, Some(cursor)) => PageAsk::After(cursor),
+            _ => return Err("give one of at, before and after"),
+        };
+        Ok(Some((ask, limit)))
+    }
 }
 
 async fn chat(
@@ -1814,6 +1865,10 @@ async fn chat(
     Path(markdown_uuid): Path<String>,
     Query(p): Query<ChatParams>,
 ) -> Result<Json<ChatResponse>, StatusCode> {
+    let page = p.page().map_err(|why| {
+        tracing::warn!(document = %markdown_uuid, why, "a document asked for in a way it cannot be answered");
+        StatusCode::BAD_REQUEST
+    })?;
     // The document's markdown as its render store spells it; structured
     // metadata comes from grid_rows.
     let where_kept = s
@@ -1834,22 +1889,36 @@ async fn chat(
         .ok()
         .flatten()
         .unwrap_or_default();
+    let version = where_kept.get(&markdown_uuid).map(|k| k.commit.clone());
     let root = (*s.root).clone();
-    let spelled = tokio::task::spawn_blocking(move || stored_text::spell(&root, &where_kept))
-        .await
-        .map_err(|e| {
-            tracing::error!(document = %markdown_uuid, error = %e, "reading the document panicked");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?
-        .map_err(|e| {
-            tracing::error!(document = %markdown_uuid, error = %format!("{e:#}"), "could not read the document");
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?
-        .remove(&markdown_uuid);
-    let pieces = match spelled {
+    let document = markdown_uuid.clone();
+    let read = tokio::task::spawn_blocking(move || match page {
+        Some((ask, limit)) => stored_text::page(&root, &where_kept, &document, ask, limit),
+        None => Ok(stored_text::spell(&root, &where_kept)?
+            .remove(&document)
+            .map(|doc| DocumentPage {
+                sections: doc.sections,
+                from_top: true,
+                ..Default::default()
+            })),
+    })
+    .await
+    .map_err(|e| {
+        tracing::error!(document = %markdown_uuid, error = %e, "reading the document panicked");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?
+    .map_err(|e| {
+        tracing::error!(document = %markdown_uuid, error = %format!("{e:#}"), "could not read the document");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+    let (pieces, before, after) = match read {
         // A picture's document is drawn by its applet, not from a page.
-        _ if meta.image.is_some() => Vec::new(),
-        Some(doc) => body_pieces(doc.sections),
+        _ if meta.image.is_some() => (Vec::new(), None, None),
+        Some(page) => (
+            body_pieces(page.sections, page.from_top),
+            page.before,
+            page.after,
+        ),
         // The store at the commit the index read no longer holds it.
         None => return Err(StatusCode::NOT_FOUND),
     };
@@ -1923,6 +1992,9 @@ async fn chat(
         image: meta.image,
         body,
         pieces,
+        before,
+        after,
+        version,
         outgoing_edges,
         problems,
         errors,
@@ -2241,12 +2313,90 @@ mod tests {
         assert_eq!(body_pieces::joined(&got), "\nrewritten since\n");
     }
 
+    /// Asked a page at a time, the route walks a document in its own
+    /// order, by the cursors each page gives, and the pages joined are the
+    /// body; a fold comes whole, a page around an item holds it, and a
+    /// request that names two places is refused.
+    // The render store's reader blocks in place, which needs worker threads.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_document_route_answers_a_page_at_a_time() {
+        use datalib_etl_render::section::Section;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let uuid = "00000000-0000-4000-8000-0000000000d2";
+        let boxed = |u: &str| Section::boxed(u, "msg".into(), &format!("{u} said\n\n"));
+        let mut doc = own_document(
+            document_row(uuid, "2026-01-01T00:00:00Z", "Chat")
+                .build()
+                .unwrap(),
+        );
+        doc.sections = vec![
+            Section::unkeyed("---\ntitle: \"Ten Forward\"\n---\n\n# Ten Forward\n\n".into()),
+            boxed("m1"),
+            Section::fold_open("tool-group", "🛠 2 tool steps"),
+            boxed("m2"),
+            boxed("m3"),
+            Section::fold_close(),
+            boxed("m4"),
+        ];
+        render_and_index(root, vec![doc]).await;
+        let s = index_over(root).await;
+        let ask = |params: ChatParams| {
+            let s = s.clone();
+            async move { chat(State(s), Path(uuid.to_string()), Query(params)).await }
+        };
+        let page = |at: Option<&str>, after: Option<i64>| ChatParams {
+            pieces: true,
+            limit: Some(1),
+            at: at.map(str::to_string),
+            after,
+            ..Default::default()
+        };
+
+        let Json(whole) = ask(ChatParams::default()).await.unwrap();
+        let mut pages = vec![ask(page(None, None)).await.unwrap().0];
+        while let Some(after) = pages.last().unwrap().after {
+            pages.push(ask(page(None, Some(after))).await.unwrap().0);
+        }
+        assert_eq!(pages.len(), 4, "the title, m1, the fold whole, m4");
+        assert_eq!(pages[0].before, None);
+        assert!(pages[1].before.is_some());
+        assert!(
+            matches!(&pages[2].pieces.as_ref().unwrap()[0], Node::Fold { pieces, .. } if pieces.len() == 2)
+        );
+        let joined: String = pages
+            .iter()
+            .map(|p| body_pieces::joined(p.pieces.as_ref().unwrap()))
+            .collect();
+        assert_eq!(Some(joined), whole.body);
+        assert!(whole.version.is_some() && pages.iter().all(|p| p.version == whole.version));
+
+        let around = ask(page(Some("m3"), None)).await.unwrap().0;
+        assert!(matches!(&around.pieces.unwrap()[..], [Node::Fold { .. }]));
+
+        let both = ChatParams {
+            before: Some(1),
+            ..page(None, Some(2))
+        };
+        assert_eq!(ask(both).await.unwrap_err(), StatusCode::BAD_REQUEST);
+        let no_limit = ChatParams {
+            at: Some("m1".into()),
+            pieces: true,
+            ..Default::default()
+        };
+        assert_eq!(ask(no_limit).await.unwrap_err(), StatusCode::BAD_REQUEST);
+    }
+
     /// The document's pieces, as the route answers them when asked.
     async fn pieces_of(s: &Index, uuid: &str) -> Vec<Node> {
         let Json(got) = chat(
             State(s.clone()),
             Path(uuid.to_string()),
-            Query(ChatParams { pieces: true }),
+            Query(ChatParams {
+                pieces: true,
+                ..Default::default()
+            }),
         )
         .await
         .unwrap();

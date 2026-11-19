@@ -7,13 +7,14 @@
 
 use datalib_etl_render::section::{nodes, Node, SpelledSection};
 
-/// The nodes of a spelled document, its front matter dropped. Front matter
+/// The nodes of a spelled document, or of a page of one, its front matter
+/// dropped where the pieces start the document (`from_top`). Front matter
 /// is drawn at the head of the first piece of the frame; a document whose
 /// first piece is a message, or opens a fold, has none to drop.
-pub fn body_pieces(mut spelled: Vec<SpelledSection>) -> Vec<Node> {
+pub fn body_pieces(mut spelled: Vec<SpelledSection>, from_top: bool) -> Vec<Node> {
     if let Some(first) = spelled
         .first_mut()
-        .filter(|s| s.uuid.is_none() && s.fold.is_none())
+        .filter(|s| from_top && s.uuid.is_none() && s.fold.is_none())
     {
         first.md = strip_frontmatter(&first.md).to_string();
         if first.md.is_empty() {
@@ -76,7 +77,7 @@ mod tests {
             Section::boxed("a", "msg".into(), "Tea, Earl Grey 🫖\n\n"),
             Section::keyed("b", "<div>Make it so.</div>\n\n".into()),
         ];
-        let nodes = body_pieces(spelled(&sections));
+        let nodes = body_pieces(spelled(&sections), true);
         assert_eq!(
             nodes,
             [
@@ -97,17 +98,29 @@ mod tests {
     #[test]
     fn a_message_is_never_taken_for_front_matter() {
         let a = "---\nnot: front\n---\nbody\n";
-        let nodes = body_pieces(spelled(&[Section::keyed("a", a.into())]));
+        let nodes = body_pieces(spelled(&[Section::keyed("a", a.into())]), true);
         assert_eq!(nodes, [piece(Some("a"), None, a)]);
+    }
+
+    /// A page that does not start the document has no front matter, so a
+    /// piece of it that opens with a dash rule is left as it is.
+    #[test]
+    fn only_the_first_page_has_front_matter() {
+        let rule = "---\nnot: front\n---\nbody\n";
+        let nodes = body_pieces(spelled(&[Section::unkeyed(rule.into())]), false);
+        assert_eq!(nodes, [piece(None, None, rule)]);
     }
 
     /// Front matter alone leaves no empty piece behind.
     #[test]
     fn a_frame_piece_of_front_matter_alone_goes() {
-        let nodes = body_pieces(spelled(&[
-            Section::unkeyed("---\nt: x\n---\n".into()),
-            Section::keyed("a", "x".into()),
-        ]));
+        let nodes = body_pieces(
+            spelled(&[
+                Section::unkeyed("---\nt: x\n---\n".into()),
+                Section::keyed("a", "x".into()),
+            ]),
+            true,
+        );
         assert_eq!(nodes, [piece(Some("a"), None, "x")]);
     }
 
