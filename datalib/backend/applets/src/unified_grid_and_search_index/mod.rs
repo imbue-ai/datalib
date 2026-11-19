@@ -2574,17 +2574,16 @@ mod tests {
         assert_eq!(without.rows[0].uuid, m1, "the message without the word");
     }
 
-    /// Whether this process has a file open whose inode is `ino` and,
-    /// with `deleted`, that no name links to any more. A deleted file's
-    /// number is free for the next file created, by any test in this
-    /// process, so after a delete only the link count tells them apart.
-    fn held_open(ino: u64, deleted: bool) -> bool {
+    /// Whether any test in this process has the file `(dev, ino)` open.
+    /// The caller keeps a name linked to that file, so its number cannot
+    /// be handed to another test's file while it looks.
+    fn held_open((dev, ino): (u64, u64)) -> bool {
         use std::os::unix::fs::MetadataExt;
         std::fs::read_dir("/dev/fd")
             .unwrap()
             .flatten()
             .filter_map(|fd| std::fs::metadata(fd.path()).ok())
-            .any(|m| m.ino() == ino && (!deleted || m.nlink() == 0))
+            .any(|m| (m.dev(), m.ino()) == (dev, ino))
     }
 
     /// A reset deletes the grid index, and the next pass makes a new file
@@ -2611,11 +2610,11 @@ mod tests {
         assert_eq!(found(s.repo.rows_by_uuids(&uuids).await.unwrap()), [a, b]);
 
         let db = datalib_runtime::layout::grid_index_db(root);
-        let before = std::fs::metadata(&db).unwrap().ino();
-        assert!(
-            held_open(before, false),
-            "the first read left no reader open"
-        );
+        let before = std::fs::metadata(&db).map(|m| (m.dev(), m.ino())).unwrap();
+        assert!(held_open(before), "the first read left no reader open");
+        // Freed, the inode's number goes to the next file made on this
+        // disk, by any test; a second name keeps it ours.
+        std::fs::hard_link(&db, root.join("the deleted grid index")).unwrap();
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{suffix}", db.display()));
         }
@@ -2623,7 +2622,7 @@ mod tests {
 
         assert_eq!(found(s.repo.rows_by_uuids(&uuids).await.unwrap()), [c]);
         assert!(
-            !held_open(before, true),
+            !held_open(before),
             "the reader still holds the grid index a reset deleted"
         );
     }
