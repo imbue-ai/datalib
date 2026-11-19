@@ -1516,8 +1516,11 @@ impl IndexRepo for DoltRepo {
             .map_err(|e| RepoError::Internal(format!("encode document ids: {e}")))?;
         // Audited: `at.grid_rows` is a literal; the ids are bound.
         let rows = match sqlx::query(sqlx::AssertSqlSafe(format!(
+            // By uuid: an item's is time-prefixed, so a document's
+            // messages come in the order they were said.
             "SELECT uuid, kind, markdown_uuid, provider, is_document \
-             FROM {} WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
+             FROM {} WHERE markdown_uuid IN (SELECT value FROM json_each(?)) \
+             ORDER BY uuid",
             at.grid_rows
         )))
         .bind(wanted)
