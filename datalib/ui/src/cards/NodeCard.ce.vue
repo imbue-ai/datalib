@@ -1,10 +1,12 @@
 <script setup lang="ts">
-// `nodeView({ node, name })`: one node of the library's tree — a source's
-// top, a container — as a list of what it holds, newest at the bottom,
-// read a page at a time from `/children`. A picked row's document is read
-// beside the list, as the Search card's preview is; a level of containers
-// alone (an account's labels) is a list and nothing more. A double-click,
-// or Enter, opens the child: a container's own children, a row's document.
+// `nodeView({ node, name, doc })`: one node of the library's tree — a
+// source's top, a container — as a list of what it holds, newest at the
+// bottom, read a page at a time from `/children`. A picked row's document
+// is read beside the list, as the Search card's preview is; a level of
+// containers alone (an account's labels) is a list and nothing more. A
+// node that is itself a document (a Notion page) shows it there until a
+// row is picked, and alone when it holds nothing else. A double-click, or
+// Enter, opens the child: a container's own children, a row's document.
 // The rules are cards/library.ts.
 import { nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from "vue";
 import type { Child, ChildrenPage } from "@/api";
@@ -21,7 +23,12 @@ import {
   wantsPreview,
 } from "./library";
 
-const props = defineProps<{ ctx: CardCtx; node: string; name: string | null }>();
+const props = defineProps<{
+  ctx: CardCtx;
+  node: string;
+  name: string | null;
+  doc: string | null;
+}>();
 const api = useApi();
 
 const PAGE = 50;
@@ -56,7 +63,7 @@ function take(page: ChildrenPage, where: "first" | "earlier" | "later") {
     children.value = [...children.value, ...page.children];
     after.value = page.after;
   }
-  withPreview.value = wantsPreview(children.value);
+  withPreview.value = props.doc !== null || wantsPreview(children.value);
 }
 
 async function load() {
@@ -136,7 +143,7 @@ function showPreview(c: Child | null) {
   if (!previewEl.value) return;
   previewRoot ??= previewEl.value.attachShadow({ mode: "open" });
   previewRoot.replaceChildren();
-  const args = c && previewArgs(c);
+  const args = c ? previewArgs(c) : props.doc ? ([props.doc, null] as const) : null;
   if (!args) return;
   teardown = documentPreview(
     args[0],
@@ -172,7 +179,11 @@ onBeforeUnmount(() => teardown?.());
   <div class="nc">
     <p v-if="failed" class="nc-note nc-failed">{{ failed }}</p>
     <div class="nc-main">
-      <div class="nc-side" :class="{ 'is-alone': !withPreview }">
+      <div
+        v-show="loading || children.length > 0 || !doc"
+        class="nc-side"
+        :class="{ 'is-alone': !withPreview }"
+      >
         <button v-if="before" class="nc-more" @click="loadEarlier">Earlier</button>
         <ul
           ref="listEl"
@@ -211,7 +222,7 @@ onBeforeUnmount(() => teardown?.());
         <p v-if="picked && !previewArgs(picked)" class="nc-note">
           Double-click to open {{ childLabel(picked) }}.
         </p>
-        <p v-else-if="!picked" class="nc-note">Pick something to read it here.</p>
+        <p v-else-if="!picked && !doc" class="nc-note">Pick something to read it here.</p>
         <div ref="previewEl" class="nc-preview-body" />
       </div>
     </div>

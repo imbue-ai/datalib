@@ -127,7 +127,7 @@ export function searchSource(q: string): string {
 /// What a node card shows: a container's children, by uuid, or what a
 /// source holds at its top (`library.ts::sourceTop`). `name` titles it until the
 /// card reads one.
-export type NodeViewOpts = { node: string; name?: string | null };
+export type NodeViewOpts = { node: string; name?: string | null; doc?: string | null };
 
 /// The source of a node card.
 export function nodeSource(opts: NodeViewOpts): string {

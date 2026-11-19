@@ -7,6 +7,8 @@ import {
   isNodeId,
   nodeCardSource,
   kindsDiffer,
+  nodeCardProps,
+  nodeOpts,
   rowParts,
   placeNodes,
   previewArgs,
@@ -100,6 +102,46 @@ describe("placeNodes", () => {
   });
 });
 
+describe("a place that is a document", () => {
+  /** A Notion page is a place and a document: the tree carries the
+   *  document to the node card, which shows it, and a page opened from a
+   *  node card carries it too. A channel is no document and carries none. */
+  it("carries its document from the tree, and from a node card's list", () => {
+    const [channel, page] = placeNodes([
+      child({
+        uuid: "p",
+        kind: "Notion page",
+        name: "Shift Roster",
+        container: true,
+        markdown_uuid: "p",
+      }),
+      child({ uuid: "c", kind: "Slack Channel", name: "#bridge", container: true }),
+    ]);
+    expect(nodeOpts(page)).toEqual({ node: "p", name: "Shift Roster", doc: "p" });
+    expect(nodeOpts(channel)).toEqual({ node: "c", name: "#bridge" });
+    const listed = child({ uuid: "p", name: "Shift Roster", container: true, markdown_uuid: "p" });
+    expect(parseCardSource(childCardSource(listed)!).args).toEqual([
+      { node: "p", name: "Shift Roster", doc: "p" },
+    ]);
+  });
+
+  /** Card source comes from any link: `doc` names a document to read, so
+   *  only a uuid is taken. */
+  it("takes a document only by its uuid", () => {
+    const node = "00000000-0000-8570-90c4-e54c531f3fff";
+    expect(nodeCardProps({ node, name: "Roster", doc: node })).toEqual({
+      node,
+      name: "Roster",
+      doc: node,
+    });
+    expect(nodeCardProps({ node })).toEqual({ node, name: null, doc: null });
+    for (const doc of ["..", "source:notion", "x/y", 7]) {
+      expect(() => nodeCardProps({ node, doc: doc as string }), String(doc)).toThrow(/uuid/);
+    }
+    expect(() => nodeCardProps({ node: ".." })).toThrow(/needs the node/);
+  });
+});
+
 describe("childLabel", () => {
   it("is the name, else the first line of the text, else the kind", () => {
     expect(childLabel(child({ uuid: "1", name: "#bridge" }))).toBe("#bridge");
@@ -162,7 +204,7 @@ describe("what a node opens", () => {
     const doc = child({ uuid: "d", markdown_uuid: "d" });
     expect(previewArgs(doc)).toEqual(["d", null]);
     expect(childCardSource(child({ uuid: "x" }))).toBeNull();
-    expect(nodeCardSource({ id: "source:slack", label: "Slack" })).toBe(
+    expect(nodeCardSource({ id: "source:slack", label: "Slack", hasChildren: true })).toBe(
       'nodeView({"node":"source:slack","name":"Slack"})',
     );
   });

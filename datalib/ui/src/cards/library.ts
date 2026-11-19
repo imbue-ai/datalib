@@ -3,7 +3,7 @@
 // card lists a container's children (cards/LibraryCard.ce.vue,
 // cards/NodeCard.ce.vue).
 import type { Child, ManageRow } from "@/api";
-import { documentSource, nodeSource } from "./cardSources";
+import { documentSource, nodeSource, type NodeViewOpts } from "./cardSources";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /// A group id, as the config loader takes one: path segments of the
@@ -34,6 +34,9 @@ export type TreeNode = {
   kind?: string;
   description?: string;
   hasChildren: boolean;
+  /// The document the place is, when it is one: a Notion page, a contact
+  /// group's card.
+  doc?: string;
 };
 
 /// The library's top: each configured source, in the config's order, as a
@@ -74,6 +77,7 @@ export function placeNodes(children: Child[]): TreeNode[] {
       label: childLabel(c),
       kind: c.kind,
       hasChildren: c.places_below === true,
+      ...(c.markdown_uuid ? { doc: c.markdown_uuid } : {}),
     }));
 }
 
@@ -109,14 +113,44 @@ export function kindsDiffer(children: Child[]): boolean {
 }
 
 /// The card a node of the tree opens.
-export function nodeCardSource(node: { id: string; label: string }): string {
-  return nodeSource({ node: node.id, name: node.label });
+export function nodeCardSource(node: TreeNode): string {
+  return nodeSource(nodeOpts(node));
+}
+
+/// What a node card shows for a node of the tree.
+export function nodeOpts(node: TreeNode): NodeViewOpts {
+  return { node: node.id, name: node.label, ...(node.doc ? { doc: node.doc } : {}) };
+}
+
+/// A node card's arguments, as card source gave them, or why they will
+/// not do. `node` goes into a request's path and `doc` names a document
+/// to read, so each is taken only in the one shape it has.
+export function nodeCardProps(opts: Partial<NodeViewOpts> | undefined): {
+  node: string;
+  name: string | null;
+  doc: string | null;
+} {
+  if (!isNodeId(opts?.node)) {
+    throw new Error(
+      'nodeView needs the node it shows, by uuid or as "source:<group id>": nodeView({ node: "<uuid>" })',
+    );
+  }
+  const doc = opts.doc ?? null;
+  if (doc !== null && !(typeof doc === "string" && UUID.test(doc))) {
+    throw new Error(
+      'nodeView takes the document a node is by its uuid: nodeView({ node, doc: "<uuid>" })',
+    );
+  }
+  return { node: opts.node, name: typeof opts.name === "string" ? opts.name : null, doc };
 }
 
 /// The card a child of a node card opens: a container's own children, or
 /// the document a row is in, at the row when it is one of its messages.
 export function childCardSource(c: Child): string | null {
-  if (c.container) return nodeSource({ node: c.uuid, name: childLabel(c) });
+  if (c.container) {
+    const doc = c.markdown_uuid ? { doc: c.markdown_uuid } : {};
+    return nodeSource({ node: c.uuid, name: childLabel(c), ...doc });
+  }
   return previewArgs(c) && documentSource(...(previewArgs(c) as [string, string | null]));
 }
 

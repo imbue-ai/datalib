@@ -54,6 +54,19 @@ test("a mailbox's labels are places, and a label lists the threads filed under i
   await expect(nodeRows(page).filter({ hasText: "Mission Briefing" })).toHaveCount(1);
 });
 
+test("a Notion page is a place in the tree, and shows its own text beside it", async ({ page }) => {
+  await openLibrary(page);
+  await treeRow(page, "notion").click();
+  await treeRow(page, "Bridge Operations Handbook").click();
+  // A page under a page is a place as Notion's sidebar has it.
+  await expect(treeRow(page, "Shift Roster")).toBeVisible();
+  await treeRow(page, "Shift Roster").dblclick();
+  await expect(page.locator(".lib-pane-title")).toHaveText("Shift Roster");
+  // It holds nothing below it, so its own text is all the pane shows.
+  await expect(page.locator(".nc-preview-body .doc-bar-title")).toContainText("Shift Roster");
+  await expect(page.locator("[data-testid=node-children]")).toBeHidden();
+});
+
 test("what was open in the tree and beside it comes back after a reload", async ({ page }) => {
   await openLibrary(page);
   await treeRow(page, "slack").click();

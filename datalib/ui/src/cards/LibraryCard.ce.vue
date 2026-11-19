@@ -15,7 +15,7 @@ import { parseCardSource } from "./cardCall";
 import { nodeSource, type NodeViewOpts } from "./cardSources";
 import { nodeView } from "./libs/nodeView";
 import { iconUrl } from "@/config/icons";
-import { placeNodes, sourceNodes, type TreeNode } from "./library";
+import { nodeOpts, placeNodes, sourceNodes, type TreeNode } from "./library";
 
 const props = defineProps<{ ctx: CardCtx }>();
 const api = useApi();
@@ -156,8 +156,7 @@ onMounted(async () => {
   if (state.tree) el.viewState = state.tree;
   el.addEventListener("viewstatechange", save);
   el.addEventListener("open", (e) => {
-    const node = (e as CustomEvent<{ node: VsTreeNode }>).detail.node;
-    show({ node: node.id, name: node.label });
+    show(nodeOpts((e as CustomEvent<{ node: TreeNode }>).detail.node));
   });
   el.dataSource = dataSource;
   treeHost.value?.appendChild(el);
