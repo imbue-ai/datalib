@@ -1,4 +1,4 @@
-# Datalib — Project Data Liberation ✊
+# Datalib ✊
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/mission-dark.png">
