@@ -55,3 +55,15 @@ data, the config, the applet's command and its `/applet/…` URLs all
 still answer to both old names: `datalib_migrate_config::index_name`
 rewrites the config, and `datalib-http`'s `config_upgrade::move_index_dir`
 moves the folder at boot.
+
+## `datalib-pipeline` lives in `dag/`
+
+The runner's binary was called `datalib-dag` until 2026-11, when it was
+renamed `datalib-pipeline` and every action became a verb (`sync`,
+`check`, `reset`, `free-disk-space`, `serve`). The crate kept its name,
+`datalib_dag`, and its directory, `datalib/backend/dag/`, because "DAG"
+still describes the code; only what a person types changed. The step
+protocol's variables keep the old prefix too (`DATALIB_DAG_NOW`,
+`DATALIB_DAG_PARAMS`, …), since every custom step reads them. No
+`datalib-dag` alias was shipped: few people ran it on its own. Audits
+and completed plans written before the rename still say `datalib-dag`.

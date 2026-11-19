@@ -39,7 +39,7 @@ const needed = () =>
         </li>
       </ul>
       <p class="cli">
-        From a terminal, <code>datalib-dag --check {{ config.path }}</code>
+        From a terminal, <code>datalib-pipeline check {{ config.path }}</code>
         says the same.
       </p>
     </div>

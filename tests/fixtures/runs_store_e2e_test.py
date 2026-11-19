@@ -5,7 +5,7 @@ doltlite-linked SQLite that every binary in this tree carries. That
 leaves the actual claim untested: that a sync run from a terminal
 writes a file *any* tool can watch.
 
-So this runs the real `datalib-dag` binary and reads what it wrote with
+So this runs the real `datalib-pipeline` binary and reads what it wrote with
 Python's stdlib `sqlite3` — a wholly separate engine, in a separate
 process, that knows nothing about doltlite. If the store were ever
 written in doltlite's own CTLD format, stdlib sqlite3 could not open it
@@ -21,7 +21,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-# Pinned so the run's clock and id are predictable: `datalib-dag` uses
+# Pinned so the run's clock and id are predictable: `datalib-pipeline` uses
 # `--now` verbatim as the start time and `--run-id` verbatim as the run
 # id, which is what lets a reader tell whether the store's newest run
 # is the one it is looking at.
@@ -64,7 +64,7 @@ inputs = ["fake/raw"]
 class RunStoreEndToEnd(unittest.TestCase):
     def setUp(self) -> None:
         if len(sys.argv) < 2:
-            self.fail("usage: runs_store_e2e_test.py <datalib-dag>")
+            self.fail("usage: runs_store_e2e_test.py <datalib-pipeline>")
         self.dag = Path(sys.argv[1]).resolve()
         self.root = Path(tempfile.mkdtemp())
 
@@ -75,7 +75,8 @@ class RunStoreEndToEnd(unittest.TestCase):
         proc = subprocess.run(
             [
                 str(self.dag),
-                str(self.root / "config.toml"),
+                "sync",
+                str(self.root),
                 "--now",
                 NOW,
                 "--run-id",

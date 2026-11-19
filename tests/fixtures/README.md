@@ -86,7 +86,7 @@ render step for each, and syncs it. A fixture gets in one of four ways:
 
 The genrule runs every sync through `datalib-http`, driven over its API
 the way the web client drives it ([`sync_drivers.py`](sync_drivers.py)).
-`:ingested_tng_test` runs the same driver through `datalib-dag`, so
+`:ingested_tng_test` runs the same driver through `datalib-pipeline`, so
 both are covered over the same corpus.
 
 ## The fixtures
@@ -193,7 +193,7 @@ can agree by luck.
 | target | what it asserts |
 |---|---|
 | `:ingested_tng` itself | refuses to build if a source synced without error but left no rows in the index ([`check_ingested.py`](check_ingested.py)); `:check_ingested_test` proves that check fails |
-| `:ingested_tng_test` | row counts and per-source coverage, over three syncs of one root: fresh, unchanged, and after `--reset` |
+| `:ingested_tng_test` | row counts and per-source coverage, over three syncs of one root: fresh, unchanged, and after a `reset` |
 | `:render_contract_test` | for every table of every source's raw store: change it, render incrementally and from scratch, and get the same result |
 | `//datalib/backend/unified_grid_and_search_index:unified_grid_and_search_index_tests` | `fixture_db_snapshot`, an insta snapshot of the index's rows |
 | `//datalib/backend/datalib_step:step_tests` | `index_text`, the text search draws from each fixture document, as one snapshot per source |

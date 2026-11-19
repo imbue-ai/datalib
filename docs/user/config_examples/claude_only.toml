@@ -1,4 +1,4 @@
-# Minimal config in the format `datalib-dag` runs: one source (claude.ai
+# Minimal config in the format `datalib-pipeline` runs: one source (claude.ai
 # conversations) — a group and its three steps — plus the grid and search
 # index group with its shared index step and the app's applets.
 # `datalib-step help dag-example` walks through the format.

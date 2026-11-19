@@ -14,13 +14,13 @@ Build the binary directory and point the runner at a config:
 
 ```sh
 bazelisk build //datalib/backend:bin
-bazel-bin/datalib/backend/bin/datalib-dag configs/dag_example.toml
+bazel-bin/datalib/backend/bin/datalib-pipeline sync configs/dag_example.toml
 ```
 
 `//datalib/backend:bin` stages every shipped binary under its public
-dash-separated name (`datalib-dag`, `datalib-step`, `datalib-http`, …)
+dash-separated name (`datalib-pipeline`, `datalib-step`, `datalib-http`, …)
 in one directory — the same layout `scripts/install.sh` produces.
-`datalib-dag` puts its own directory at the front of every step's
+`datalib-pipeline` puts its own directory at the front of every step's
 `PATH`, so `datalib-step` is found with no flag. Pass `--binary-dir DIR`
 only when the binaries live somewhere else.
 

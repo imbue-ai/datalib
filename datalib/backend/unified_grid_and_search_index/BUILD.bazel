@@ -7,7 +7,7 @@ load(":search_fixture.bzl", "SEARCH_FIXTURE_DATA", "SEARCH_FIXTURE_ENV")
 #
 # Visibility is the point of this crate existing. Only the step that
 # writes the indexes and the applet that serves them may link it —
-# `datalib-http` and `datalib-dag` must not, which is what makes "core
+# `datalib-http` and `datalib-pipeline` must not, which is what makes "core
 # does not know about the unified grid and search index" checkable rather than a
 # convention.
 rust_library(

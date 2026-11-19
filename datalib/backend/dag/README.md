@@ -1,4 +1,4 @@
-# `datalib-dag` — the runner
+# `datalib-pipeline` — the runner
 
 Reads a `config.toml`, builds a DAG from it, and runs the steps. This file
 holds the rules you cannot recover by reading the code; the contract a
@@ -57,7 +57,7 @@ two parts, the second `render_markdown`. The loader expands it to those ids befo
 else sees the step (`src/input_pattern.rs`), so the graph, the fingerprint and
 the step's `DATALIB_DAG_INPUTS` hold ids only, and a source added to the file is read
 without its readers being edited. A pattern is still written in the config:
-the edges stay where a person can read them, and `--check` prints what each
+the edges stay where a person can read them, and `check` prints what each
 pattern stood for.
 
 Validation is correspondingly small: group ids are one segment and
@@ -96,8 +96,8 @@ sends them looking for an `inputs` entry that isn't there.
 
 The loop runs what open **requests** want. A request is a row in
 `system/supervisor.sqlite` naming its **roots** — the steps a Sync was
-pressed on, or every step with no inputs for `datalib-dag` with no
-`--sync` — and who opened it (`opened_by`). Its **scope** is the roots and everything
+pressed on, or every step with no inputs for a `datalib-pipeline sync`
+that names no step — and who opened it (`opened_by`). Its **scope** is the roots and everything
 downstream of them. Anyone may open one, or ask one to stop, or turn a
 step off: that is a row too. Only the process holding `runner-lock` runs the
 loop, and it hears of new rows because whoever writes one announces it
@@ -113,7 +113,7 @@ reaches it, and in exchange a per-source sync never does surprising work on
 someone else's chain. A step in scope that reads one outside it reads that
 step's recorded version. A step no open request wants is never started,
 and a run records nothing for it: its `last_run` stays as it was, so a
-`--sync slack` never moves email's "last synced".
+sync of Slack never moves email's "last synced".
 
 **Which step does what is one pure function**, `supervisor/tick.rs`: from
 the graph, the open requests, the steps turned off and the facts (each sink's
@@ -198,7 +198,7 @@ with the exit status and the end of its stderr). The loop counts the
 passes that failed and were run again, and reports the count as the
 step's `failed_passes` metric when the step finishes, zero included, so
 each run that invokes the step replaces the last one's: the Manage row
-adds it to the step's warnings, and `run_summary` and `datalib-dag`'s
+adds it to the step's warnings, and `run_summary` and `datalib-pipeline`'s
 report on stdout say it too. A pass that fails and is not run again is
 the step's last, and its failure is the step's.
 
@@ -264,7 +264,7 @@ A resume line under the pause line refuses the config, and
 
 - **nothing starts**, and every step that is due reads `waiting for disk
   space` (rule 9) and says so once on its log, the only place a one-shot
-  `datalib-dag` shows it;
+  `datalib-pipeline` shows it;
 - **everything running is stopped**, as a stop is: SIGINT, then a
   checkpoint and an exit. That is neither a failure nor a run (rule 4),
   so the step runs again once there is room, and each stopped step's log
@@ -291,7 +291,7 @@ for `datalib-step`, a raw store's tables, a render store's, the grid
 index's. The runner knows none of those shapes, nor when a program
 changed; each step answers for its own. **Each time the loop starts**,
 the process that holds `runner-lock` (the http server or a
-`datalib-dag serve` when it takes the lock, a `datalib-dag` sync when it
+`datalib-pipeline serve` when it takes the lock, a `datalib-pipeline` sync when it
 runs on its own) asks every step whose
 program's `[[programs]]` entry lists the `prepare` verb, producers
 first, before the loop takes any request: `Runner::prepare` invokes
@@ -572,13 +572,13 @@ naming no step) looks exactly like one it did.
   whose doltlite working set is shared across every connection on the
   branch, in any process ([`doltlite.md`](../../../docs/dev/doltlite.md#branches-head-and-the-working-set)); two loops on one root would interleave both. While `datalib-http` is up it holds this lock
   for its life and runs the loop in-process
-  (`supervisor/serve.rs`, which `datalib-dag serve` runs too), so every
-  `datalib-dag` sync is a client of it. A `datalib-dag` is never refused for the lock: a sync is a request
+  (`supervisor/serve.rs`, which `datalib-pipeline serve` runs too), so every
+  `datalib-pipeline` sync is a client of it. A `datalib-pipeline` is never refused for the lock: a sync is a request
   row in `system/supervisor.sqlite`, so it writes its row and follows it
   while whoever holds the lock runs it, trying the lock again whenever
   anything is announced, its release included, in case that loop ends
-  first. Only `--reset`, which empties
-  stores, needs the root to itself and is refused while a loop runs —
+  first. Only `reset`, which empties stores, and `free-disk-space`,
+  which rewrites them, need the root to themselves and is refused while a loop runs —
   always, with the app up; the app's resets are rows the loop carries out
   (§"Resets and purges").
 - **One server per data root** (`system/lock`), which `datalib-http`
@@ -586,7 +586,7 @@ naming no step) looks exactly like one it did.
   remote-media stores).
 
 They must be *different* files: a server that starts while a
-`datalib-dag` runs the loop holds the root as a server and waits for
+`datalib-pipeline` runs the loop holds the root as a server and waits for
 `runner-lock` — the UI's syncs are rows that loop serves meanwhile — and
 takes the loop over when it ends.
 
@@ -613,7 +613,7 @@ contents: a caller asking on a timer must not rewrite the file, and a
 root that never ran must not sprout one. It is racy by nature (the
 holder may let go a microsecond later), so build no invariant on it.
 Nor is it invisible: `flock(2)` cannot ask without taking, so the probe
-holds the lock for an instant. A `--reset` that finds the lock held
+holds the lock for an instant. A `reset` that finds the lock held
 therefore keeps trying for two seconds before it refuses, and a probe
 that found the lock free announces that it let go, so a sync that met
 the probe takes the lock at once.
@@ -660,7 +660,7 @@ zero when it succeeded or never counted, and the next run that invokes
 it replaces it (`runs_sink::owed_at_end`). A `queued{from=…}` is not
 owed: those are the producer's seals the step has not read, which its
 next run reads anyway. The Manage row of a step at rest draws it ("412
-owed"), and `datalib-dag status` lists it. A record the step reached and
+owed"), and `datalib-pipeline status` lists it. A record the step reached and
 failed is usually counted done, so the count can fall short of what the
 store owes by the records that failed, which are errors on the row.
 
@@ -727,7 +727,7 @@ that bug. The other, while a round is open, is a look at the disk every
 five seconds for the `[disk_space]` floor: nothing announces a disk
 filling or being freed.
 
-A `datalib-dag` running the loop with no server up, a sync or a
+A `datalib-pipeline` running the loop with no server up, a sync or a
 `serve`, has nobody watching the config, so it takes an edit on at its
 next busy period, not mid-sync.
 
@@ -736,11 +736,11 @@ period whenever a request or a wipe is open, requests asked to stop
 before any period took them closed as `stopped`, the record settled when
 the switches or the config move, then a wait for an announcement or the
 host's stop. `supervisor::serve::run` runs it after taking the lock and
-the prepare pass; the server and `datalib-dag serve` both call that, and
-the harness runs `run_idle` itself. A `datalib-dag` sync has no idle
+the prepare pass; the server and `datalib-pipeline serve` both call that, and
+the harness runs `run_idle` itself. A `datalib-pipeline` sync has no idle
 side: it serves until nothing is open, then exits.
 
-`datalib-dag serve` says on stderr, one NDJSON line each
+`datalib-pipeline serve` says on stderr, one NDJSON line each
 (`supervisor::serve::ServeEvent`), what its parent needs and no store
 holds: that it holds the lock (`holding`), the prepare pass
 (`prepare_plan`, `prepare_step`, `prepare_done`), each busy period
@@ -802,9 +802,9 @@ have not stopped yet or it is still going, 409 with the reason when refused. A c
 collection opens nothing downstream: each keeps every store's content, so
 no version moves.
 
-From the command line, `datalib-dag --free-disk-space` (with
+From the command line, `datalib-pipeline free-disk-space` (with
 `--drop-old-versions-on-derived-data`, a compaction) takes `runner-lock`
-itself, as `--reset` does, so it is refused while the app or another `datalib-dag` runs the loop. `Runner::shrink` asks the same steps and
+itself, as `reset` does, so it is refused while the app or another `datalib-pipeline` runs the loop. `Runner::shrink` asks the same steps and
 records the same versions; the binary measures each step's tree as a
 directory before and after, never its store, and prints what it gave
 back.
@@ -843,7 +843,7 @@ only on terminal states; a Manage row's Status is `steps.state`, read
 straight from it.
 
 The run id is `DATALIB_DAG_RUN_ID`, verbatim — a UUID v7 the host mints
-for one busy period of the loop (`datalib-dag` takes `--run-id` instead
+for one busy period of the loop (`datalib-pipeline` takes `--run-id` instead
 when given one). `supervisor::host::step_env` puts it in the
 child environment and `start_record` hands the same string to the run
 store (`system/runs/runs.sqlite`) *before* the loop starts, and `Runner`

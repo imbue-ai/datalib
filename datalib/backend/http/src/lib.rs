@@ -876,7 +876,7 @@ async fn agent_config_guide() -> (
 /// One entry in `GET /api/sync/sources`. Derived from the config file
 /// at the data root — the backend never persists this list to SQL. A
 /// source is any step with no declared inputs (a fringe step — the
-/// thing `--sync` can target), identified by its step id.
+/// thing a sync can name), identified by its step id.
 #[derive(Debug, Serialize)]
 pub struct SourceInfo {
     pub id: String,
@@ -890,7 +890,7 @@ fn load_dag_config(path: &std::path::Path) -> anyhow::Result<datalib_dag::config
 }
 
 /// The source step ids of a checked config: the steps with no declared
-/// `inputs`, which is exactly what `--sync` can target. Their real input is
+/// `inputs`, which is exactly what a sync can name. Their real input is
 /// outside the DAG — a remote service, a user-staged tree.
 fn source_ids(checked: &datalib_dag::config::ConfigCheck) -> Vec<String> {
     checked
@@ -2526,7 +2526,7 @@ mod tests {
         );
         // The `unified_grid_and_search_index` step has no source to read yet, so on a scaffolded
         // root it *is* the fringe. It is what
-        // `--sync` can target until the first source is added — and
+        // a sync can name until the first source is added — and
         // running it against nothing is a no-op, not an error.
         assert_eq!(
             source_ids(&checked),

@@ -3,7 +3,7 @@
 // stderr/stdout writes defined in clippy.toml.
 #![allow(clippy::disallowed_macros)]
 
-//! Live end-to-end golden bake for the `datalib-dag` pipeline.
+//! Live end-to-end golden bake for the `datalib-pipeline` pipeline.
 //!
 //! It runs only in snapshot-update mode, and [`require_update_mode`]
 //! says why. The snapshots are a diff to read, not a gate to pass; the
@@ -393,13 +393,13 @@ fn bin_dir() -> PathBuf {
     let r = runfiles::Runfiles::create().unwrap_or_else(|e| {
         panic!(
             "no runfiles tree ({e}); run this through bazel, or set \
-             DATALIB_BINARY_DIR to a directory holding datalib-dag + datalib-step"
+             DATALIB_BINARY_DIR to a directory holding datalib-pipeline + datalib-step"
         )
     });
     let dir = r
         .rlocation(REL)
         .unwrap_or_else(|| panic!("rlocation failed for {REL}"));
-    for name in ["datalib-dag", "datalib-step"] {
+    for name in ["datalib-pipeline", "datalib-step"] {
         assert!(
             dir.join(name).exists(),
             "{name} missing from the staged binary dir ({})",
@@ -540,10 +540,10 @@ fn manual_e2e_live_sync_golden() {
     let cfg_path = data_root.join("config.toml");
     std::fs::write(&cfg_path, &cfg_out).unwrap();
 
-    // `//datalib/backend:bin` stages datalib-dag and datalib-step side by
+    // `//datalib/backend:bin` stages datalib-pipeline and datalib-step side by
     // side under their public names, so the runner finds the step binary via
     // its own-directory fallback — no `--binary-dir` needed.
-    let bin = bin_dir().join("datalib-dag");
+    let bin = bin_dir().join("datalib-pipeline");
     eprintln!("[test] dag bin = {}", bin.display());
     eprintln!("[test] data_root = {}", data_root.display());
     eprintln!(
@@ -552,7 +552,7 @@ fn manual_e2e_live_sync_golden() {
     );
 
     let now = "2026-05-21T18:00:00Z";
-    let run1 = run_pipeline(&bin, &cfg_path, &run_root, now, &[]);
+    let run1 = run_pipeline(&bin, &cfg_path, &run_root, now, &["sync"]);
     assert!(
         run1.status.success(),
         "pipeline run 1 failed (exit {:?}). Last stderr:\n{}",
@@ -751,7 +751,7 @@ fn manual_e2e_live_sync_golden() {
     let stores_before_run2 = ingest_stores_at(&data_root);
 
     let now2 = "2026-05-21T18:05:00Z";
-    let run2 = run_pipeline(&bin, &cfg_path, &run_root, now2, &[]);
+    let run2 = run_pipeline(&bin, &cfg_path, &run_root, now2, &["sync"]);
     assert!(
         run2.status.success(),
         "pipeline run 2 failed (exit {:?}). Last stderr:\n{}",
@@ -807,13 +807,14 @@ fn manual_e2e_live_sync_golden() {
     let now3 = "2026-05-21T18:10:00Z";
     let reset_all = ingest_steps.join(",");
     let sync_all = ingest_steps.join(",");
-    let run3 = run_pipeline(
-        &bin,
-        &cfg_path,
-        &run_root,
-        now3,
-        &["--reset", &reset_all, "--sync", &sync_all],
+    let reset = run_pipeline(&bin, &cfg_path, &run_root, now3, &["reset", &reset_all]);
+    assert!(
+        reset.status.success(),
+        "pipeline run 3's reset failed (exit {:?}). Last stderr:\n{}",
+        reset.status.code(),
+        reset.stderr_tail(40)
     );
+    let run3 = run_pipeline(&bin, &cfg_path, &run_root, now3, &["sync", &sync_all]);
     assert!(
         run3.status.success(),
         "pipeline run 3 (reset) failed (exit {:?}). Last stderr:\n{}",
@@ -1175,7 +1176,7 @@ async fn content_table_names(pool: &sqlx::SqlitePool) -> Vec<String> {
     .collect()
 }
 
-/// One invocation of `datalib-dag`, with its stderr captured.
+/// One invocation of `datalib-pipeline`, with its stderr captured.
 struct PipelineRun {
     status: std::process::ExitStatus,
     stderr: String,
@@ -1201,10 +1202,15 @@ fn run_pipeline(
     cfg_path: &Path,
     run_root: &Path,
     now: &str,
-    extra_args: &[&str],
+    verb_and_args: &[&str],
 ) -> PipelineRun {
-    eprintln!("[test] run: {} --now {now} {extra_args:?}", bin.display());
+    eprintln!(
+        "[test] run: {} {verb_and_args:?} --now {now}",
+        bin.display()
+    );
+    let (verb, extra_args) = verb_and_args.split_first().expect("a verb");
     let out = Command::new(bin)
+        .arg(verb)
         .arg(cfg_path)
         .arg("--now")
         .arg(now)
@@ -1214,7 +1220,7 @@ fn run_pipeline(
         .env("DATALIB_CACHE_DIR", run_root.join("fingerprint_cache"))
         .stdin(std::process::Stdio::null())
         .output()
-        .expect("spawn datalib-dag");
+        .expect("spawn datalib-pipeline");
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
 
     // Persist the raw stream next to the run's data. We capture stderr
@@ -2011,7 +2017,7 @@ fn summarize_file(path: &Path) -> SnapValue {
 }
 
 /// The config as `datalib-http` would leave it. The bake runs
-/// `datalib-dag`, which loads a config but never upgrades one, so a shape
+/// `datalib-pipeline`, which loads a config but never upgrades one, so a shape
 /// the app rewrites on sight (the index group's old name) would fail the
 /// bake rather than be carried forward. A rewrite that refuses fails it
 /// here, by name, since the app would then run the config as it is. With

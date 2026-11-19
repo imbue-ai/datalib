@@ -185,7 +185,7 @@ Two layers.
 
 **The lower layer is a small, unopinionated pipeline runner.** A data
 store is a file in a folder. A data processor is a program, in whatever
-language you like. `datalib-dag` arranges those programs into a graph
+language you like. `datalib-pipeline` arranges those programs into a graph
 (a DAG), runs it, and re-runs only the steps whose inputs changed. Any
 executable that speaks a small NDJSON protocol can be a step — see
 [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md).

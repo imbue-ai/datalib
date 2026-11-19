@@ -39,7 +39,7 @@ A source's raw directory holds two files:
 **Stock `sqlite3` cannot open `entities.doltlite_db`** (`file is not a
 database`). Doltlite is SQLite with git-shaped history kept inside the
 file. Read it with **`datalib-doltlite`**, which ships beside
-`datalib-dag` (and in the Docker image) and takes
+`datalib-pipeline` (and in the Docker image) and takes
 `sqlite3`'s arguments. The examples assume sources whose ids are
 `gmail`, `slack` and `calendar`; put your own in. **Always pass
 `-readonly`**: a writable session's commits are overwritten by the
@@ -55,7 +55,7 @@ datalib-doltlite -readonly -json gmail/ingest/entities.doltlite_db \
 ```
 
 **From Python** (3.9 on, uv's builds included), install the reader at
-the version `datalib-dag --version` prints. It has wheels for
+the version `datalib-pipeline --version` prints. It has wheels for
 Apple-silicon Macs and for Linux on x86_64 and aarch64, glibc and musl.
 
 ```sh
@@ -187,8 +187,8 @@ Name both commits as arguments, as above: a filter on `from_commit` or
 `to_commit` does something else. More recipes, and what each costs,
 are in [`doltlite.md`](../dev/doltlite.md#what-changed-between-two-commits).
 
-A raw store's history is never folded away: `datalib-dag
---free-disk-space`, even with `--drop-old-versions-on-derived-data`,
+A raw store's history is never folded away: `datalib-pipeline
+free-disk-space`, even with `--drop-old-versions-on-derived-data`,
 keeps every commit of a download, so a cursor stays readable. A reset of
 the source empties the tables in a new commit, which reads as every row
 `removed`. If your cursor no longer resolves (the store was deleted and

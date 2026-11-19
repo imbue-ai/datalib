@@ -504,7 +504,7 @@ pub struct StepReport {
 }
 
 impl StepReport {
-    /// The step's line in `datalib-dag`'s report on stdout.
+    /// The step's line in `datalib-pipeline`'s report on stdout.
     pub fn line(&self) -> String {
         let error = self
             .error
@@ -2853,7 +2853,7 @@ mod tests {
     }
 
     /// The run record is the only thing that makes a run visible to
-    /// anyone who did not spawn it — a terminal `datalib-dag` and the
+    /// anyone who did not spawn it — a terminal `datalib-pipeline` and the
     /// UI's worker write the same file, so the UI can show either. Its
     /// id is the one the caller chose, so the run store (keyed by the
     /// same id) and the record describe the same run.

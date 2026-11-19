@@ -718,7 +718,7 @@ mod tests {
     }
 
     /// An `ingest` step whose params hold none of its provider's methods
-    /// is refused at plan time, where `datalib-dag --check` sees it. A
+    /// is refused at plan time, where `datalib-pipeline check` sees it. A
     /// step with no method used to plan an empty ingest wave and
     /// succeed, which read exactly like a working sync that found nothing.
     #[test]

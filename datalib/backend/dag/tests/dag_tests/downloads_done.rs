@@ -9,8 +9,8 @@ use std::path::Path;
 use std::process::Command;
 
 fn dag_bin() -> std::path::PathBuf {
-    std::path::absolute(std::env::var("DATALIB_DAG_BIN").expect("DATALIB_DAG_BIN is set"))
-        .expect("absolute DATALIB_DAG_BIN")
+    std::path::absolute(std::env::var("DATALIB_PIPELINE_BIN").expect("DATALIB_PIPELINE_BIN is set"))
+        .expect("absolute DATALIB_PIPELINE_BIN")
 }
 
 /// The query the guide gives, for one request and one step.
@@ -34,10 +34,9 @@ async fn a_download_reads_as_done_for_the_request_that_ran_it() {
     )
     .unwrap();
     let out = Command::new(dag_bin())
-        .arg(root.join("config.toml"))
-        .args(["--sync", "a/src"])
+        .args(["sync".as_ref(), root.as_os_str(), "a/src".as_ref()])
         .output()
-        .expect("run datalib-dag");
+        .expect("run datalib-pipeline");
     assert!(out.status.success(), "{out:?}");
 
     let pool = sqlx::sqlite::SqlitePoolOptions::new()

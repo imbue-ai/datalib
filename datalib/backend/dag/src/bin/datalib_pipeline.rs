@@ -1,4 +1,4 @@
-//! `datalib-dag` — run a DAG config file (see `datalib_dag::config`
+//! `datalib-pipeline` — run a DAG config file (see `datalib_dag::config`
 //! for the schema).
 
 use std::collections::HashMap;
@@ -53,10 +53,12 @@ async fn main() -> Result<()> {
     let stop_tx = Arc::new(stop_tx);
     let parent_stop = stop_tx.clone();
     datalib_parent_watch::exit_with_parent(move || {
-        datalib_parent_watch::report("datalib-dag: parent gone; stopping the round");
+        datalib_parent_watch::report("datalib-pipeline: parent gone; stopping the round");
         let _ = parent_stop.send(true);
         std::thread::sleep(PARENT_GONE_GRACE);
-        datalib_parent_watch::report("datalib-dag: steps still running after the grace, exiting");
+        datalib_parent_watch::report(
+            "datalib-pipeline: steps still running after the grace, exiting",
+        );
         subprocess::kill_children();
         std::process::exit(130);
     })
@@ -75,34 +77,60 @@ async fn main() -> Result<()> {
             std::process::exit(if e.use_stderr() { 1 } else { 0 });
         }
     };
-    let Cli {
-        verb,
-        config: config_path,
-        check: check_only,
-        sync: sync_only,
-        reset,
-        free_disk_space,
-        drop_old_versions_on_derived_data,
-        compact,
-        by,
+    let check_only = matches!(cli.verb, Verb::Check { .. });
+    let (config_path, sync_only, reset, shrink, by, run, run_id) = match cli.verb {
+        Verb::Serve { root, run } => {
+            return serve(
+                &datalib_dag::cli::config_path(&root),
+                run,
+                &stop_tx,
+                stop_rx,
+            )
+            .await;
+        }
+        Verb::Check { root } => (
+            root,
+            vec![],
+            vec![],
+            None,
+            String::new(),
+            Default::default(),
+            None,
+        ),
+        Verb::Sync {
+            root,
+            steps,
+            by,
+            run,
+            run_id,
+        } => (root, steps, vec![], None, by, run, run_id),
+        Verb::Reset {
+            root,
+            steps,
+            run,
+            run_id,
+        } => (root, vec![], steps, None, String::new(), run, run_id),
+        Verb::FreeDiskSpace {
+            root,
+            drop_old_versions_on_derived_data,
+            run,
+            run_id,
+        } => {
+            let how = if drop_old_versions_on_derived_data {
+                Shrink::Compact
+            } else {
+                Shrink::Collect
+            };
+            (root, vec![], vec![], Some(how), String::new(), run, run_id)
+        }
+        verb => return run_verb(verb).await,
+    };
+    let datalib_dag::cli::StepArgs {
         binary_dir,
         parallelism,
         now,
-        run_id,
-    } = cli;
-    if let Some(Verb::Serve {
-        config,
-        binary_dir,
-        parallelism,
-        now,
-    }) = verb
-    {
-        return serve(&config, binary_dir, parallelism, now, &stop_tx, stop_rx).await;
-    }
-    if let Some(verb) = verb {
-        return run_verb(verb).await;
-    }
-    let config_path = config_path.expect("clap requires a config when there is no verb");
+    } = run;
+    let config_path = datalib_dag::cli::config_path(&config_path);
     let trimmed = |ids: Vec<String>| -> Vec<String> {
         ids.into_iter().map(|s| s.trim().to_string()).collect()
     };
@@ -112,7 +140,7 @@ async fn main() -> Result<()> {
     let (checked, data_root) = load_config(&config_path)?;
 
     // Say what is wrong before doing anything, whether or not we are
-    // about to run. Printed to stderr so a `--check` used in a pipeline
+    // about to run. Printed to stderr so a `check` used in a pipeline
     // and a real run both put diagnostics in the same place, and
     // neither mixes them into the per-step report on stdout.
     if !checked.is_clean() {
@@ -155,33 +183,30 @@ async fn main() -> Result<()> {
     let cfg = checked.cfg;
     let graph = checked.graph;
 
-    if let Some(id) = sync_only.iter().find(|id| !graph.by_id.contains_key(*id)) {
+    if let Some(id) = sync_only
+        .iter()
+        .chain(&reset)
+        .find(|id| !graph.by_id.contains_key(*id))
+    {
         let mut known: Vec<&str> = graph.steps.iter().map(|s| s.id.as_str()).collect();
         known.sort();
         bail!(
-            "--sync {id:?}: no such step. Available: {}",
+            "no step {id:?} in this config; its steps: {}",
             known.join(", ")
         );
     }
 
-    // `--reset` empties stores and `--free-disk-space` rewrites them, so
+    // `reset` empties stores and `free-disk-space` rewrites them, so
     // each needs the root to itself: refused, not queued, while anyone
     // runs the loop.
-    let shrink = if compact || drop_old_versions_on_derived_data {
-        Some(Shrink::Compact)
-    } else if free_disk_space {
-        Some(Shrink::Collect)
-    } else {
-        None
-    };
     let alone = !reset.is_empty() || shrink.is_some();
     let reset_lock = if alone {
         Some(acquire_or_explain(
             &data_root,
             if shrink.is_some() {
-                "--free-disk-space"
+                "free-disk-space"
             } else {
-                "--reset"
+                "reset"
             },
         )?)
     } else {
@@ -212,14 +237,14 @@ async fn main() -> Result<()> {
                 _ = sigterm.recv() => {}
                 _ = sighup.recv() => {
                     datalib_parent_watch::report(
-                        "datalib-dag: terminal hung up; stopping the round",
+                        "datalib-pipeline: terminal hung up; stopping the round",
                     );
                     let _ = stop_tx.send(true);
                     // Async, so the runtime keeps draining what the
                     // steps say while they stop.
                     tokio::time::sleep(PARENT_GONE_GRACE).await;
                     datalib_parent_watch::report(
-                        "datalib-dag: steps still running after the grace, exiting",
+                        "datalib-pipeline: steps still running after the grace, exiting",
                     );
                     subprocess::kill_children();
                     std::process::exit(130);
@@ -240,7 +265,7 @@ async fn main() -> Result<()> {
 
     // The request this invocation stands for; none for a reset or a
     // compaction alone.
-    let own = if !alone || !sync_only.is_empty() {
+    let own = if !alone {
         let roots: Vec<String> = if sync_only.is_empty() {
             graph.fringe_ids().into_iter().map(str::to_string).collect()
         } else {
@@ -285,7 +310,7 @@ async fn main() -> Result<()> {
     {
         if let Some(dead) = &taken.closed_run {
             eprintln!(
-                "datalib-dag: closed run {dead} and {} of its steps, which a loop that died \
+                "datalib-pipeline: closed run {dead} and {} of its steps, which a loop that died \
                  left open",
                 taken.closed_invocations
             );
@@ -320,7 +345,7 @@ async fn main() -> Result<()> {
             } else {
                 datalib_runs::RunKind::Sync
             },
-            reason: "datalib-dag, from the command line".to_string(),
+            reason: "datalib-pipeline, from the command line".to_string(),
         };
         match host::start_record(&data_root, &cfg, &run_id, &now, started) {
             Some(store) => {
@@ -343,7 +368,7 @@ async fn main() -> Result<()> {
                 // nowhere at all.
                 #[allow(clippy::disallowed_macros)]
                 {
-                    eprintln!("datalib-dag: run store unavailable; nothing recorded this run");
+                    eprintln!("datalib-pipeline: run store unavailable; nothing recorded this run");
                 }
             }
         }
@@ -365,17 +390,17 @@ async fn main() -> Result<()> {
         for m in runner.prepare(&graph, &asked).await? {
             match &m.answer {
                 Ok(true) => eprintln!(
-                    "datalib-dag: {} needs to run again before it is up to date; --sync it",
+                    "datalib-pipeline: {} needs to run again before it is up to date; sync it",
                     m.step
                 ),
                 Ok(false) => {}
                 Err(PrepareError::Refused(why)) => eprintln!(
-                    "datalib-dag: {} refused to prepare, and is turned off until it no longer \
+                    "datalib-pipeline: {} refused to prepare, and is turned off until it no longer \
                      does: {why}",
                     m.step
                 ),
                 Err(PrepareError::Failed(error)) => {
-                    eprintln!("datalib-dag: could not prepare {}: {error}", m.step)
+                    eprintln!("datalib-pipeline: could not prepare {}: {error}", m.step)
                 }
             }
         }
@@ -408,7 +433,7 @@ async fn main() -> Result<()> {
             {
                 println!(
                     "\n{dropped_entries} config entr{} dropped and did not run; \
-                     see the diagnostics above, or run `datalib-dag --check {}`",
+                     see the diagnostics above, or run `datalib-pipeline check {}`",
                     if dropped_entries == 1 {
                         "y was"
                     } else {
@@ -447,7 +472,7 @@ enum Taken {
 /// was running may end between our look and our request landing, and then
 /// nobody is left to serve it but us. Its release is announced.
 async fn follow_or_lock(data_root: &Path, store: &Store, own: &str) -> Result<Taken> {
-    let mut listener = datalib_dag::supervisor::announce::Listener::new(store, "datalib-dag");
+    let mut listener = datalib_dag::supervisor::announce::Listener::new(store, "datalib-pipeline");
     let mut announced = false;
     loop {
         match datalib_dag::lock::try_acquire_runner(data_root) {
@@ -458,7 +483,7 @@ async fn follow_or_lock(data_root: &Path, store: &Store, own: &str) -> Result<Ta
                     #[allow(clippy::disallowed_macros)]
                     {
                         eprintln!(
-                            "datalib-dag: the loop on {} is already running{}; \
+                            "datalib-pipeline: the loop on {} is already running{}; \
                              following request {own} there",
                             data_root.display(),
                             e.holder().map(|h| format!(" ({h})")).unwrap_or_default()
@@ -482,7 +507,7 @@ async fn follow_or_lock(data_root: &Path, store: &Store, own: &str) -> Result<Ta
     }
 }
 
-/// `--free-disk-space`, and one line per step whose tree it shrank.
+/// `free-disk-space`, and one line per step whose tree it shrank.
 /// The trees are measured from outside, as directories, since the runner
 /// never opens a step's store. `true` when some step could not do it.
 async fn shrink_and_report(
@@ -575,14 +600,12 @@ fn exit_code(outcome: Option<RequestOutcome>, dropped_entries: usize) -> i32 {
     }
 }
 
-/// `datalib-dag serve`: the loop until a signal stops it. Its events go
+/// `datalib-pipeline serve`: the loop until a signal stops it. Its events go
 /// to stderr as NDJSON, its own log lines to the run store as a `dag`
 /// process outside any run.
 async fn serve(
     config_path: &Path,
-    binary_dir: Option<std::path::PathBuf>,
-    parallelism: Option<std::num::NonZeroUsize>,
-    now: Option<String>,
+    run: datalib_dag::cli::StepArgs,
     stop_tx: &Arc<tokio::sync::watch::Sender<bool>>,
     stop_rx: tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
@@ -671,9 +694,9 @@ async fn serve(
 
     let opts = datalib_dag::supervisor::serve::ServeOptions {
         root: data_root,
-        binary_dir,
-        now,
-        parallelism: parallelism.map(|n| n.get()),
+        binary_dir: run.binary_dir,
+        now: run.now,
+        parallelism: run.parallelism.map(|n| n.get()),
         extra_env: Default::default(),
     };
     datalib_dag::supervisor::serve::run(&opts, emit, stop_rx).await;
@@ -684,14 +707,20 @@ async fn serve(
 }
 
 async fn run_verb(verb: Verb) -> Result<()> {
-    let config_path = match &verb {
+    let root = match &verb {
         Verb::Init { data_root } => return init(data_root),
-        Verb::Serve { .. } => unreachable!("serve returned in main"),
-        Verb::Status { config, .. }
-        | Verb::Stop { config, .. }
-        | Verb::TurnOff { config, .. }
-        | Verb::TurnOn { config, .. } => config,
+        Verb::Status { root }
+        | Verb::Stop { root, .. }
+        | Verb::TurnOff { root, .. }
+        | Verb::TurnOn { root, .. } => root,
+        Verb::Check { .. }
+        | Verb::Sync { .. }
+        | Verb::Reset { .. }
+        | Verb::FreeDiskSpace { .. }
+        | Verb::Serve { .. } => unreachable!("main runs these itself"),
     };
+    let config_path = datalib_dag::cli::config_path(root);
+    let config_path = config_path.as_path();
     let (checked, data_root) = load_config(config_path)?;
     if checked.is_fatal() {
         bail!(
@@ -732,8 +761,12 @@ async fn run_verb(verb: Verb) -> Result<()> {
                 }
             }
         }
-        Verb::Init { .. } => unreachable!("init returned above"),
-        Verb::Serve { .. } => unreachable!("serve returned in main"),
+        Verb::Init { .. }
+        | Verb::Check { .. }
+        | Verb::Sync { .. }
+        | Verb::Reset { .. }
+        | Verb::FreeDiskSpace { .. }
+        | Verb::Serve { .. } => unreachable!("returned above"),
         Verb::TurnOn { step, .. } => match store.turned_off().await?.get(step) {
             None => vec![format!("{step} was not off")],
             Some(who) => {
@@ -761,7 +794,7 @@ fn load_config(path: &Path) -> Result<(config::ConfigCheck, std::path::PathBuf)>
             _ => "<data_root>".to_string(),
         };
         bail!(
-            "{} does not exist. `datalib-dag init {root}` writes a starter config there.",
+            "{} does not exist. `datalib-pipeline init {root}` writes a starter config there.",
             path.display()
         );
     }

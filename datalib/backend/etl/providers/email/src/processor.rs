@@ -44,7 +44,7 @@ pub fn plan_ingest(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn 
             takeout: config.takeout(),
             fetch: config.gmail_fetch(),
         }),
-        // Planning never touches the filesystem — `datalib-dag --check`
+        // Planning never touches the filesystem — `datalib-pipeline check`
         // and the schema tests run where the data is not — so whether the
         // path really is an mbox is checked when the download runs.
         None => match (&config.apple_mail, &config.mbox) {

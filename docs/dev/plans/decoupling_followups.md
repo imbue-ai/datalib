@@ -7,15 +7,15 @@ purpose, so it is not forgotten.
 
 ## The end state
 
-`datalib-http`, `datalib-dag` and `datalib-step` are three separate
+`datalib-http`, `datalib-pipeline` and `datalib-step` are three separate
 programs that happen to live in one repo. Each talks to the others only
 through a documented protocol, and none of them gives another one
 treatment a third-party program could not get the same way:
 
-- **`datalib-dag` ↔ a step program**: the step protocol
+- **`datalib-pipeline` ↔ a step program**: the step protocol
   (`docs/dev/step_protocol.md`). `datalib-step` is one program that
   speaks it.
-- **`datalib-http` ↔ `datalib-dag`**: the runner's files and
+- **`datalib-http` ↔ `datalib-pipeline`**: the runner's files and
   announcements (item 6). `datalib-http` is one client of the runner,
   like the CLI.
 - **`datalib-http` ↔ a step program**: whatever the app needs from a
@@ -31,16 +31,16 @@ does in each of items 1 to 5.
 
 ### 1. Checking a step's params before a sync
 
-**Now.** `datalib-dag --check` runs `datalib-step check-params` on a
+**Now.** `datalib-pipeline check` runs `datalib-step check-params` on a
 config that has built-in ingest or render steps
-(`datalib/backend/dag/src/bin/datalib_dag.rs:450-465`), and
+(`datalib/backend/dag/src/bin/datalib_pipeline.rs:450-465`), and
 `datalib-http` does the same on every save
 (`datalib/backend/http/src/params_check.rs:43`, `:55`). The redesign
 removes the runner's call and keeps `datalib-http`'s, for now.
 
 **What is wrong.** Only `datalib-step`'s steps get their params checked
 before they run; a custom step's mistake shows up only when it fails.
-A person who edits `config.toml` by hand and runs `datalib-dag --check`
+A person who edits `config.toml` by hand and runs `datalib-pipeline check`
 no longer sees a params error before the first sync.
 
 **Shape discussed.** A way for any program to check one step's params,
@@ -113,21 +113,21 @@ which is the protocol's own way. The end state: the wizard always
 writes the variable's name into the params, and the server hands
 nothing by name.
 
-## Where datalib-http and datalib-dag are not yet separate
+## Where datalib-http and datalib-pipeline are not yet separate
 
 ### 6. The server runs the loop in its own process
 
-**Now.** `datalib-http` does not start `datalib-dag`. It links the
+**Now.** `datalib-http` does not start `datalib-pipeline`. It links the
 runner's crate (`datalib/backend/http/BUILD.bazel:122`) and calls
 `datalib_dag::supervisor::serve::run` in-process
 (`run`, `datalib/backend/http/src/supervisor.rs`): the same loop
-`datalib-dag serve` runs. That takes the runner lock, closes what a dead
+`datalib-pipeline serve` runs. That takes the runner lock, closes what a dead
 loop left, runs the prepare pass, then serves every request and wipe
 until stopped. What the server needs and no store holds, the loop says
 as `ServeEvent`s, which the server turns into its `Upgrade` (the
 prepare pass `/api/config` reports) and its `busy` flag.
 
-**Wanted.** `datalib-http` starts `datalib-dag serve` as a child
+**Wanted.** `datalib-http` starts `datalib-pipeline serve` as a child
 process. It may keep linking the crate as a client library (config
 parsing, writing request rows, reading the record); what goes is the
 loop running in its process. It talks to the child only through:
@@ -157,7 +157,7 @@ loop running in its process. It talks to the child only through:
   process that check goes: any loop carries out a wipe row.
 - The tests that build a `SyncControl` directly
   (`datalib/backend/http/tests/http_tests/support.rs:30`) and need a
-  loop take the `datalib-dag` binary as a `data` dep.
+  loop take the `datalib-pipeline` binary as a `data` dep.
 - The log card reads "the server's lines"; the child's own lines are a
   `dag` process's, so check the card still shows the loop's.
 
@@ -201,7 +201,7 @@ rule to `AGENTS.md`, where every contributor reads it, and not before:
 a rule the tree does not yet follow would mislead the next person who
 reads it. The text:
 
-> **datalib-http, datalib-dag and datalib-step are decoupled.** They
+> **datalib-http, datalib-pipeline and datalib-step are decoupled.** They
 > are three separate programs that happen to live in one repo. Each
 > speaks to the others only through a documented protocol, and none
 > gives another treatment a third-party program could not get the same
@@ -225,7 +225,7 @@ in-process) is part of it.
 
 ### Why
 
-`datalib-dag` started as a batch runner, like `make`: read the config,
+`datalib-pipeline` started as a batch runner, like `make`: read the config,
 run what is stale once, report, exit. It is now a supervisor: the app's
 server holds it for its whole life, people open and stop syncs at any
 time, the config is edited while steps run, and a download's consumers
@@ -276,8 +276,8 @@ Paths are relative to the repo root.
   exits.
 - **Two hosts.** `supervisor::serve::run`
   (`datalib/backend/dag/src/supervisor/serve.rs`), which the server
-  calls in-process and `datalib-dag serve` runs, and the CLI's sync
-  command (`datalib/backend/dag/src/bin/datalib_dag.rs`). Each takes
+  calls in-process and `datalib-pipeline serve` runs, and the CLI's sync
+  command (`datalib/backend/dag/src/bin/datalib_pipeline.rs`). Each takes
   the lock, closes what a dead loop left (`host::take_over`,
   `host.rs:277`), runs the prepare pass, builds the step environment
   (`host::step_env`, `host.rs:116`), opens the run store and calls
@@ -286,7 +286,7 @@ Paths are relative to the repo root.
   - In the app, reset, purge, compact and collect are rows in the
     `wipes` table that the loop carries out (`carry_out_wipes`,
     `round.rs:933`).
-  - From the CLI, `--reset` and `--free-disk-space` take the lock
+  - From the CLI, `reset` and `free-disk-space` take the lock
     themselves and call `Runner::reset` and `Runner::shrink` directly
     (`datalib/backend/dag/src/scheduler.rs:150`, `:274`), outside any
     loop.
@@ -359,9 +359,9 @@ Paths are relative to the repo root.
    pass's run is still `RunKind::Migrate`.
 7. **Operations outside the loop.** The CLI's reset and shrink, and
    both hosts' prepare pass, call into the runner outside the loop and
-   need the root to themselves. So `--reset` and `--free-disk-space`
+   need the root to themselves. So `reset` and `free-disk-space`
    are refused while the app is up (`acquire_or_explain`,
-   `datalib/backend/dag/src/bin/datalib_dag.rs:542`), and maintenance
+   `datalib/backend/dag/src/bin/datalib_pipeline.rs:542`), and maintenance
    runs through two paths with their own tests. The prepare pass's
    progress is in the server's memory rather than the store, so item 6
    cannot carry it to a child process as it stands.
@@ -438,11 +438,11 @@ config as it is then. `DATALIB_DAG_NOW` is open question 1.
 - `datalib_dag::supervisor::run(root, stop)` does everything a host
   does now: take the lock, take over from a dead loop, queue the
   prepare job, and loop. The server calls it, and so does
-  `datalib-dag serve`.
-- Every other CLI verb is a client. `datalib-dag sync`, `reset` and
+  `datalib-pipeline serve`.
+- Every other CLI verb is a client. `datalib-pipeline sync`, `reset` and
   `free-disk-space` write a row and follow it to the end. When no
   loop is running, the CLI starts one inside its own process and stops
-  it once nothing is open. So `--reset` no longer needs the root to
+  it once nothing is open. So `reset` no longer needs the root to
   itself.
 - The prepare pass is a job that the loop queues each time it starts
   (open question 3).

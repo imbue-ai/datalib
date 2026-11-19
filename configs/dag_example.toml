@@ -1,4 +1,4 @@
-# DAG config (run with `datalib-dag`): two sources and the index.
+# DAG config (run with `datalib-pipeline`): two sources and the index.
 #
 # Three kinds of entry. A `[[groups]]` entry is one thing on the
 # Manage screen — a source is a group with a `type`, and the grid and
@@ -43,9 +43,9 @@
 # the remaining case: a step whose behavior changed without its command
 # line changing.
 #
-#   datalib-dag <data_root>/config.toml
+#   datalib-pipeline sync <data_root>
 #
-# `datalib-dag` looks up a step's `command` in its own directory first,
+# `datalib-pipeline` looks up a step's `command` in its own directory first,
 # so `datalib-step` beside it is found with no flag; `--binary-dir DIR`
 # points at binaries staged somewhere else. (From a checkout, `bazelisk
 # build //datalib/backend:bin` stages them all in
@@ -53,7 +53,7 @@
 #
 # data_root defaults to the directory this file lives in; set it
 # explicitly for a real run. A relative one is taken from the directory
-# `datalib-dag` is run in.
+# `datalib-pipeline` is run in.
 data_root = "~/tmp/dr-dag"
 
 # The lowest level of Datalib's own log lines every process of this
@@ -232,7 +232,7 @@ inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 # source's render, so a source added above is read with no edit here.
 # Name steps one by one instead (`"slack/render_markdown"`) to leave a
 # source out on purpose; the Pipeline table flags a render step nothing
-# consumes. `datalib-dag --check` prints what each pattern stood for.
+# consumes. `datalib-pipeline check` prints what each pattern stood for.
 # The group has no `type`: it mirrors nothing, it indexes what the
 # others mirrored. `unified_grid_and_search_index` puts every source it
 # reads in the keyword search but those `params.not_searched` lists

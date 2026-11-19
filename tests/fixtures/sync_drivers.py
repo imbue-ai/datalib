@@ -1,4 +1,4 @@
-"""Two ways to run the TNG fixture's syncs: `datalib-dag` from a
+"""Two ways to run the TNG fixture's syncs: `datalib-pipeline` from a
 terminal, or `datalib-http` driven over the API the way the web client
 drives it. Both take the same four calls, so `run_sync_pipeline.py`
 reads the same whichever door it goes through.
@@ -30,22 +30,16 @@ POLL_SECS = 0.2
 
 
 class CliDriver:
-    """`datalib-dag <config> --binary-dir … --now …`, one invocation per
-    call. The config lives beside the root as `dag.toml`."""
+    """`datalib-pipeline <verb> <config> … --binary-dir … --now …`, one
+    invocation per call. The config lives beside the root as `dag.toml`."""
 
     def __init__(
         self, dag_bin: Path, workspace: Path, bindir: Path, now: str, env: dict
     ):
         self.workspace = workspace
         self.config = workspace / "dag.toml"
-        self.argv = [
-            str(dag_bin),
-            str(self.config),
-            "--binary-dir",
-            str(bindir),
-            "--now",
-            now,
-        ]
+        self.dag_bin = str(dag_bin)
+        self.flags = ["--binary-dir", str(bindir), "--now", now]
         self.env = env
 
     def build_config(self, texts: list[str]) -> None:
@@ -53,12 +47,14 @@ class CliDriver:
             f"data_root = {json.dumps(str(self.workspace))}\n\n" + texts[-1]
         )
 
+    def _run(self, verb: str, steps: list[str]) -> None:
+        _run([self.dag_bin, verb, str(self.config), *steps, *self.flags], self.env)
+
     def sync(self, roots: list[str] | None = None) -> None:
-        extra = ["--sync", ",".join(roots)] if roots else []
-        _run([*self.argv, *extra], self.env)
+        self._run("sync", roots or [])
 
     def reset(self, targets: list[str]) -> None:
-        _run([*self.argv, "--reset", ",".join(targets)], self.env)
+        self._run("reset", targets)
 
     def close(self) -> None:
         pass

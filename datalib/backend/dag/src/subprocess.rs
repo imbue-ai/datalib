@@ -43,7 +43,7 @@ pub const ENV_READS: &str = datalib_env::DATALIB_READS;
 /// step so all stamped outputs agree. Steps that record times should
 /// prefer it over sampling their own clock.
 pub const ENV_NOW: &str = datalib_env::DATALIB_DAG_NOW;
-/// The verb `datalib-dag --compact` or `--collect` sends, to a step whose
+/// The verb `datalib-pipeline free-disk-space` sends (`--compact` or `--collect`), to a step whose
 /// program takes it: the step gives back disk its store holds and runs
 /// nothing else (`step_protocol.md` § Compact and collect). Collecting
 /// keeps every commit; compacting also folds away the history nothing

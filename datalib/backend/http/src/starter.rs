@@ -1,7 +1,7 @@
 //! The starter `config.toml` the app gives a new library: Datalib's
 //! grid and search index, with nothing to read yet, and the applets every
 //! app needs. `datalib-http --init` and the first-run screen write it.
-//! `datalib-dag init` writes a config with no steps instead.
+//! `datalib-pipeline init` writes a config with no steps instead.
 
 use std::io::Write;
 use std::path::Path;

@@ -226,7 +226,7 @@ const rowHeight = computed(() => Math.round(28 + 8 * density.value));
         The rest of the config loaded and still syncs.
         <template v-for="(r, i) in droppedRows" :key="r.id"
           >{{ i ? "; " : "" }}<code>{{ r.id }}</code> — {{ r.dropped?.message }}</template
-        >. You can also run <code>datalib-dag --check {{ configPath }}</code
+        >. You can also run <code>datalib-pipeline check {{ configPath }}</code
         >.
       </span>
       <button class="sx-btn" @click="openConfig">Show the config</button>

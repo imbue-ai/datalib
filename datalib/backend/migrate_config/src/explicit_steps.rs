@@ -713,7 +713,7 @@ const BACKUP_SECRETS: &[(&str, &str, &str)] = &[
 /// params name it (`docs/dev/step_protocol.md` § "What your command
 /// receives"). So a WhatsApp or Signal ingest that relied on the default
 /// gets the default written into its `[steps.params.backup]`, and keeps
-/// working when `datalib-dag` runs it from a terminal. A step whose
+/// working when `datalib-pipeline` runs it from a terminal. A step whose
 /// params are written another way is left alone: the app hands both
 /// variables to every step itself.
 fn name_backup_secrets(text: &str) -> Result<String> {

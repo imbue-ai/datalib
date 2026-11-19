@@ -7,8 +7,8 @@ use std::path::Path;
 use std::process::Command;
 
 fn dag_bin() -> std::path::PathBuf {
-    std::path::absolute(std::env::var("DATALIB_DAG_BIN").expect("DATALIB_DAG_BIN is set"))
-        .expect("absolute DATALIB_DAG_BIN")
+    std::path::absolute(std::env::var("DATALIB_PIPELINE_BIN").expect("DATALIB_PIPELINE_BIN is set"))
+        .expect("absolute DATALIB_PIPELINE_BIN")
 }
 
 /// Writes the root and `PATH` it was handed, under the root it was handed.
@@ -34,12 +34,12 @@ fn a_relative_data_root_in_the_config_reaches_each_step_absolute() {
 
     let out = Command::new(dag_bin())
         .current_dir(dir.path())
-        .arg("data/lib/config.toml")
+        .args(["sync", "data/lib/config.toml"])
         .output()
-        .expect("run datalib-dag");
+        .expect("run datalib-pipeline");
     assert!(
         out.status.success(),
-        "datalib-dag: {}",
+        "datalib-pipeline: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     let nested = root.join("data/lib/g/out/env");

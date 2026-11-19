@@ -15,7 +15,7 @@ pub const UNINDEXED_DIR: &str = "unindexed";
 
 /// The top-level tree holding the grid index and the search index. Owned
 /// end to end by the `unified_grid_and_search_index` applet and the steps
-/// that write it; nothing in `datalib-http` or `datalib-dag` reads what is
+/// that write it; nothing in `datalib-http` or `datalib-pipeline` reads what is
 /// under here.
 pub const UNIFIED_GRID_AND_SEARCH_INDEX_DIR: &str = "unified_grid_and_search_index";
 /// What [`UNIFIED_GRID_AND_SEARCH_INDEX_DIR`] was called before, newest
@@ -124,7 +124,7 @@ pub fn package_dir_rel(manifest_sha256: &str) -> String {
 
 // The top-level directories no step may write live with the code that
 // enforces them: `datalib_dag::config::RESERVED_DIRS`, checked on the
-// path every entry point already takes. `datalib-dag` deliberately
+// path every entry point already takes. `datalib-pipeline` deliberately
 // doesn't depend on this crate, so the policy lives where it is applied
 // and the path constants stay here.
 
@@ -276,11 +276,11 @@ pub fn restrict_data_root(data_root: &Path) -> std::io::Result<()> {
 /// --exclude-caches` (and others) recognize; see <https://bford.info/cachedir/>.
 /// The rest is a human hint. Only the per-group `ingest/` stores are
 /// precious — everything tagged here is 100% derived and rebuilt from them
-/// by re-running the pipeline (`datalib-dag`).
+/// by re-running the pipeline (`datalib-pipeline`).
 pub const CACHEDIR_TAG_BODY: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
     # This directory holds derived, rebuildable data (not a backup source).\n\
     # datalib regenerates it from the sibling/per-group ingest/ stores by\n\
-    # re-running the pipeline (datalib-dag). Safe for backups to skip.\n\
+    # re-running the pipeline (datalib-pipeline). Safe for backups to skip.\n\
     # See https://bford.info/cachedir/\n";
 
 /// Drop a `CACHEDIR.TAG` into `dir` (if `dir` exists and the tag is absent),

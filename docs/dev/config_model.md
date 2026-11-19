@@ -260,7 +260,7 @@ A bound is resolved once per run, against the run's `now`, and the
 download is handed an absolute value; so a relative window slides
 forward run by run. A day before 1970 reaches back past anything a
 source holds: Slack and Gmail ask from 1970 itself. An `until` before
-its `since` is refused by `datalib-dag --check` where neither the run's
+its `since` is refused by `datalib-pipeline check` where neither the run's
 clock nor its offset is needed to tell, and otherwise when a run
 resolves them. A method that cannot honor `until` has no such key, and
 naming one is refused as an unknown field.
@@ -337,7 +337,7 @@ line per step it would refuse. The server links no provider, so it asks:
 `PUT /api/config` and `POST /api/config/check`
 (`http/src/params_check.rs`) refuse to write a config a sync would
 refuse a step of, and show each answer as an ordinary `rejected`
-diagnostic at the misspelled key's line. `datalib-dag --check` does not
+diagnostic at the misspelled key's line. `datalib-pipeline check` does not
 ask: the runner knows no program, so it checks only what the runner
 itself reads. Another program's params are never asked about.
 
@@ -351,7 +351,7 @@ ingest step "Download" for an origin method and "Import" for a local
 one, and the wizard shows a source's sign-in controls only while the
 params it would write reach an origin.
 
-`datalib-dag --reset` is *not* gated on it: it empties the step's store
+`datalib-pipeline reset` is *not* gated on it: it empties the step's store
 whatever the method, and the next sync reads its files or its origin in
 full — the only "from scratch" button a user has. `datalib-step`'s
 ingest driver only logs the reach.
@@ -455,7 +455,7 @@ itself; everything past the loader, the step's own `--inputs` included,
 sees ids only. A pattern names the steps that can run: a source whose
 step the loader drops (its ingest has a bad key, say) drops out of the
 pattern, where an input naming it by id blocks the step that names it.
-`datalib-dag --check` prints what each pattern stood for.
+`datalib-pipeline check` prints what each pattern stood for.
 
 The index steps read by pattern: `unified_grid_and_search_index` reads
 `*/render_markdown`, `embedding_map` reads `*/embed`, and
@@ -560,7 +560,7 @@ one that reads it, is refused, and the card says why.
 
 `datalib-step topo-sort-config <root>/config.toml` puts a whole file in
 that order, keeping the old text as `config.toml.<UTC time>.bak`;
-`--check` only says whether it is. Each group, with its steps and
+`datalib-pipeline check` only says whether it is. Each group, with its steps and
 applets, goes after the groups it reads, and inside a group each step
 after the steps it reads. Nothing else moves, and the comments above an
 entry move with it. Where two groups read each other it orders the

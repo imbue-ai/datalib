@@ -10,7 +10,7 @@ A person sets Datalib up through the app: the source wizard says which
 fields matter, checks the connection, and writes a config that loads.
 An agent has a release tarball and a shell. What it gets there today:
 
-- `datalib-dag --help` is one hand-written usage string, read by a
+- `datalib-pipeline --help` is one hand-written usage string, read by a
   hand-rolled argument parser, so no test can say an example in it
   still parses.
 - `datalib-step --help` is clap's default. The binary knows every
@@ -21,7 +21,7 @@ An agent has a release tarball and a shell. What it gets there today:
 - What a source's params mean is written down twice already: the
   `///` comments on each `<p>_config` crate's serde structs, and the
   wizard's `datalib/ui/src/config/catalog.ts`. Neither reaches a shell.
-- `datalib-dag --check` checks a config's shape, not its params: the
+- `datalib-pipeline check` checks a config's shape, not its params: the
   runner does not link the providers. A misspelled Slack param is
   found when the step runs.
 
@@ -29,7 +29,7 @@ An agent has a release tarball and a shell. What it gets there today:
 
 The binaries document themselves, every example they show is checked
 by a test, and `datalib-step` — which knows the sources — is where an
-agent goes to learn about one. `datalib-dag` stays free of provider
+agent goes to learn about one. `datalib-pipeline` stays free of provider
 knowledge: it points at `datalib-step`, and calls it, as it already
 calls it for every step with no `command`. The step protocol
 ([`step_protocol.md`](../step_protocol.md)) does not change; a custom
@@ -37,8 +37,8 @@ step documents itself however its author likes.
 
 ### 2.1 Every `--help` is a door (PR 1)
 
-- `datalib-dag` and `datalib-migrate-config` move onto clap, so each
-  of `datalib-dag`'s verbs (`status`, `stop`, `turn-off`, `turn-on`)
+- `datalib-pipeline` and `datalib-migrate-config` move onto clap, so each
+  of `datalib-pipeline`'s verbs (`status`, `stop`, `turn-off`, `turn-on`)
   has its own `--help`, and every binary's parse is one a test can call.
 - Each binary's help ends with examples, kept as data
   (`datalib/backend/cli_help`). A test runs every one through that
@@ -59,7 +59,7 @@ datalib-step help <function>       what it does, where it goes, and how to run o
 datalib-step help <command>        one of datalib-step's commands (probe, …)
 ```
 
-The journey is config → credentials → `--check` → `probe` → sync →
+The journey is config → credentials → `check` → `probe` → sync →
 query. An example can only prove a stanza's shape; `datalib-step
 probe` is what says the credentials reach anything, so each source's
 page names it as the next step.
@@ -67,9 +67,9 @@ page names it as the next step.
 A source's page is its sections of `docs/user/getting_your_data.md`,
 compiled in; `//:lint_repo` already holds that doc to a section per
 type. A function's page says how to run one step: through
-`datalib-dag --sync`, never `datalib-step` by hand, since only the
+`datalib-pipeline sync`, never `datalib-step` by hand, since only the
 runner records what a step published; and, for the steps that can be
-rebuilt, `--reset` and `--sync` together. The `datalib-dag` commands
+rebuilt, `reset` and then `sync`. The `datalib-pipeline` commands
 these pages quote are tested against its parser, which lives in
 `datalib_dag::cli` for that reason.
 
@@ -114,7 +114,7 @@ them prints as the `datalib-step help` command for the other.
   a GitHub ref form the parser refuses.
 - `datalib-step check-params <config>` plans every built-in step's
   params and prints one JSON line per step a sync would refuse.
-  `datalib-dag --check` runs it (never a custom command) and reports
+  `datalib-pipeline check` runs it (never a custom command) and reports
   each at the misspelled key's line, or the step's, and exits 2.
   `PUT /api/config` and `POST /api/config/check` ask it too, and refuse
   to write such a config; the Manage editor shows the refusal with its

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs scripts/release/check_binaries.sh against stand-in binaries: text
-# files carrying the bazel-out paths a real one would, and a `datalib-dag`
+# files carrying the bazel-out paths a real one would, and a `datalib-pipeline`
 # that prints a version. Guards the two ways a release shipped wrong — the
 # app's fastbuild binaries through v0.47.0 and the unstamped v0.7.0 — and
 # the check passing because it found nothing to look at. RELEASE_SHELL
@@ -24,7 +24,7 @@ script="$(rlocation _main/scripts/release/check_binaries.sh)"
 shell="${RELEASE_SHELL:-bash}"
 
 # A directory of the five checked binaries, each naming `$out_dir`, with
-# `datalib-dag` reporting `$version`.
+# `datalib-pipeline` reporting `$version`.
 make_bins() {
     local dir="$1" out_dir="$2" version="$3" name
     rm -rf "$dir"
@@ -32,9 +32,9 @@ make_bins() {
     for name in datalib-step datalib-http datalib-applet datalib-doltlite; do
         printf 'junk\0bazel-out/%s/bin/third-party/doltlite/sqlite3.c\0junk' "$out_dir" > "$dir/$name"
     done
-    printf '#!/bin/sh\n# bazel-out/%s/bin/third-party/doltlite/sqlite3.c\necho "datalib-dag %s"\n' \
-        "$out_dir" "$version" > "$dir/datalib-dag"
-    chmod +x "$dir/datalib-dag"
+    printf '#!/bin/sh\n# bazel-out/%s/bin/third-party/doltlite/sqlite3.c\necho "datalib-pipeline %s"\n' \
+        "$out_dir" "$version" > "$dir/datalib-pipeline"
+    chmod +x "$dir/datalib-pipeline"
 }
 
 failures=0
@@ -84,6 +84,6 @@ rm "$d/datalib-doltlite"
 expect fail "a missing binary" "$d" 'datalib-doltlite is missing'
 
 make_bins "$d" darwin_arm64-opt dev
-expect fail "unstamped" "$d" "says 'datalib-dag dev'"
+expect fail "unstamped" "$d" "says 'datalib-pipeline dev'"
 
 [[ $failures -eq 0 ]] || { echo "$failures case(s) failed" >&2; exit 1; }

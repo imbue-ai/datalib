@@ -41,7 +41,7 @@ impl Function {
         s.parse().ok()
     }
 
-    // What `datalib-dag --reset` can empty; `reset.rs` refuses the rest
+    // What `datalib-pipeline reset` can empty; `reset.rs` refuses the rest
     // through this, and `datalib-step help` tells a function's page by it.
     pub fn resets(self) -> bool {
         matches!(
@@ -73,7 +73,7 @@ impl Function {
             Function::Embed => {
                 "Cut a source's documents into chunks and embed the ones the search index \
                  has no vector for, for search by meaning. The slow one: turn it off for a source with \
-                 `datalib-dag turn-off <config> <group>/embed`, and keyword search still \
+                 `datalib-pipeline turn-off <config> <group>/embed`, and keyword search still \
                  works. One per source searched by meaning; \
                  inputs = [\"unified_grid_and_search_index/unified_grid_and_search_index\"]. Param \
                  `embed_on_modal_from_n_chunks`: a run that owes at least that many \

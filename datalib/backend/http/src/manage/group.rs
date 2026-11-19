@@ -134,7 +134,7 @@ pub fn group_instant(children: &[ChildStamp]) -> Option<String> {
 }
 
 /// The steps a sync of the group starts at: its steps with no declared
-/// inputs, less any the loader dropped. `datalib-dag --sync` takes
+/// inputs, less any the loader dropped. `datalib-pipeline sync` takes
 /// exactly these, and everything downstream follows.
 pub fn group_seeds<T: Child>(children: &[T], is_dropped: impl Fn(&T) -> bool) -> Vec<String> {
     children

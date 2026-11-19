@@ -43,7 +43,7 @@ mode takes is in `../email_config/examples/complete_jmap.toml`.
 The state token from `Email/changes` is kept per account in
 `sync_scope_state`, so a run touches only the emails created, updated
 or destroyed since the last one (§"Incrementality"). To list and fetch
-the account again from nothing, reset the step (`datalib-dag --reset`).
+the account again from nothing, reset the step (`datalib-pipeline reset`).
 To mirror only some mailboxes, name them by their full label path
 (`Work/Projects`) in `only_extract_labels`.
 

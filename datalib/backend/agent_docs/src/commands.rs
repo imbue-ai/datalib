@@ -6,7 +6,7 @@ use crate::markdown::fenced_blocks;
 /// Every `datalib-*` program a release ships (`:dist` in
 /// `datalib/backend/BUILD.bazel`): what a doc's command may run.
 pub const PROGRAMS: &[&str] = &[
-    "datalib-dag",
+    "datalib-pipeline",
     "datalib-step",
     "datalib-http",
     "datalib-applet",
@@ -19,7 +19,7 @@ pub const PROGRAMS: &[&str] = &[
 /// The programs whose command lines in the docs a test parses, each in
 /// its own crate, with the parser the binary runs.
 pub const CHECKED_PROGRAMS: &[&str] = &[
-    "datalib-dag",
+    "datalib-pipeline",
     "datalib-step",
     "datalib-applet",
     "datalib-migrate-config",

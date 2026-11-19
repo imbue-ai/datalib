@@ -472,7 +472,7 @@ What that means here:
 - **Commit cadence is free until something runs `dolt_gc()`.** A sync
   runs it only in `sqlite_mirror` and `file_inventory`; every other store
   keeps every transaction's pages until a person frees disk
-  (`datalib-dag --free-disk-space`, which hands each step `--collect`,
+  (`datalib-pipeline free-disk-space`, which hands each step `--collect`,
   `doltlite_raw::collect_garbage`, or `--compact`:
   [`step_protocol.md`](../../../docs/dev/step_protocol.md) §"Compact and
   collect").
@@ -505,7 +505,7 @@ generated — not on its column names.
   store's rows may be the only copy — an export whose source is gone, a
   window upstream no longer serves — so nothing is dropped on the way
   in. The refusal names the two ways out: a rung on the provider's
-  migration ladder (below) or `datalib-dag --reset <source>/ingest`,
+  migration ladder (below) or `datalib-pipeline reset <data_root> <source>/ingest`,
   which empties every table without needing the DDL; an empty table
   has nothing to lose, so the next open rebuilds it to the new shape and
   the sync refills it. Derived stores (`open_derived`:

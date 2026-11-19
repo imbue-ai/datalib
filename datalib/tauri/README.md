@@ -13,7 +13,7 @@ unchanged — same code as the hosted packaging, two front doors.
 The backend is deliberately **not** linked in-process: the shell is a
 thin process manager, so there is no backend crate graph in this cargo
 workspace, no doltlite static-link plumbing, and no drift between what
-the web and desktop packagings run. `datalib-http`, `datalib-dag`,
+the web and desktop packagings run. `datalib-http`, `datalib-pipeline`,
 `datalib-step`, `datalib-applet`, `datalib-migrate-config`,
 `datalib-doltlite`, the two latchkey curl binaries and the `latchkey`
 launcher are Bazel-built (fully cached) and shipped under the .app's
@@ -56,7 +56,7 @@ pnpm install --frozen-lockfile --ignore-scripts && pnpm exec tauri build
 
 # Signed + notarized release build (.app + .dmg) — the same script the
 # release workflow's macos-app-* jobs run in CI, a phase each. It also stamps the
-# binaries (DATALIB_STAMP=1, i.e. `--config=release`, so `datalib-dag
+# binaries (DATALIB_STAMP=1, i.e. `--config=release`, so `datalib-pipeline
 # --version` names the tag rather than `dev`) and refuses a bundle whose
 # binaries are not optimized and stamped
 # (scripts/release/check_binaries.sh). Signing secrets come from
