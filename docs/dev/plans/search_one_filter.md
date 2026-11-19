@@ -1,6 +1,6 @@
 # Search: one filter, two rankers
 
-**Status: step 1 built (2026-11-19), and step 2's word forms (2026-11-19: no stemming, then stems for bare words beside exact words for quotes); the rest of steps 2 and 3 proposed.** Answers
+**Status: steps 1 and 2 built (2026-11-19); step 3 proposed.** Answers
 [#1887](https://github.com/imbue-ai/datalib/issues/1887). Four tests
 reproduce what step 1 fixes; they are listed under "What goes wrong
 today". [`docs/user/searching.md`](../../user/searching.md) says what
@@ -39,6 +39,34 @@ read of the table (1.5 s cold, 0.25 s warm, on a copy). With
 but in all eleven filter-key indexes that is 424 MB more of text, on
 indexes already 1,011 MB beside a 1,047 MB table. Step 2's integer ids
 make the same covering a few bytes an entry, so it waits for them.
+
+Step 2 as built differs from its description below in three ways.
+
+- **The search index keeps naming rows by uuid.** A row's id is its
+  `grid_rows` rowid, which `rows.row_id` now is; it holds while the row
+  is written in place, and a row removed and written again (a source
+  reset, then rendered anew) gets another. The keyword tables are
+  rewritten only when a document's text changes, so row ids there would
+  name the wrong rows after a reset. The filter reads integers
+  throughout and hands the rankers uuids, as before. Measured on a
+  clone of a real library: what `source:` keeps of an 82k-row source
+  went from 1.16 s (cold; 0.07 s warm) to 0.03 s, with no new index on
+  `grid_rows`.
+- **Which terms are the document's.** Of 957,854 rows inside documents,
+  every one held its document's title and named its document as a
+  container: 1.9M of 6.5M terms, gone. Participant and subject terms
+  were already on the document's row alone. Names (a channel, an
+  account) are the row's own and stay: 8 of 566,628 differ from their
+  document's.
+- **`id:` is not a terms key.** Every row has an upstream id and 117k of
+  1.2M are uuids; a term for each would add a million values to the
+  three value indexes. A uuid typed after `id:` reads its `UpstreamId`
+  term, which every uuid-shaped upstream id now has, in one spelling;
+  anything else compares the column as written. The column itself
+  stays as the source wrote it, since the row's uuid is minted from it
+  (`docs/dev/entity_ids.md`). `account` and `project` are stored with a
+  uuid in one spelling. In the real library no uuid was stored any other
+  way, so no answer there changes.
 
 ## The model
 

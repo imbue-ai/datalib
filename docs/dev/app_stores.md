@@ -18,7 +18,8 @@
                                                   data_nodes and filings (the tree the rows sit in) /
                                                   source_contacts (who each handle is, per source);
                                                   the search terms: every id, handle, title,
-                                                  label and name each row answers to, indexed
+                                                  label and name each row answers to, each
+                                                  row named by its `grid_rows` rowid, indexed
                                                   by word and by every three characters (so
                                                   `from:ike` is a lookup), and the names each
                                                   handle went by (`etl/render/src/search_terms.rs`); plain
