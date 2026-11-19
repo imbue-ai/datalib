@@ -34,14 +34,16 @@ the context for anything the user asks you to build on top of it.
 Everything lives under one **data root** directory. A sync is a DAG of
 steps run by `datalib-dag`: per source (a `[[groups]]` entry) a
 `<group>/ingest` step (bring the raw data in) and a
-`<group>/render_markdown` step (raw → markdown + a per-source index
-database), `grid_index` under the `unified_document_index` group (the SQL
-index), and, for a searched source, `<group>/keyword_index` and
-`<group>/embed`, which fill that source's collection of the search
-index. `unified_document_index/qmd_aggregator` runs after every source's pair
-and keeps the search index to the sources it names. A step's function
-is the directory it writes (the qmd steps are the exception: they all
-write the one index file under `unified_document_index/qmd_aggregator/`):
+`<group>/render_markdown` step (raw → each document's markdown and
+rows, in a per-source store), `unified_grid_and_search_index` under the `unified_grid_and_search_index` group (the SQL
+index, which also puts every source it reads in the keyword search but
+those its `params.not_searched` lists), and, for a source searched by
+meaning, `<group>/embed`, which embeds that source's part of the search
+index; `unified_grid_and_search_index` keeps only the embeddings the index still names. A
+step's function
+is the directory it writes (each `embed` is the exception: it writes
+its vectors to the one cache in
+`unified_grid_and_search_index/search_index/`):
 
 ```
 <data_root>/
@@ -49,11 +51,11 @@ write the one index file under `unified_document_index/qmd_aggregator/`):
 ├── <group>/ingest/                 # per-source raw stores (<group> is the source's id)
 │   ├── entities.doltlite_db        #   (doltlite = SQLite + git-shaped history)
 │   └── blobs.sqlite                #   attachment bytes by blake3 (plain SQLite)
-├── <group>/render_markdown/        # per-source markdown tree
-│   └── indexed_markdown.doltlite_db  #   its rows, edges + render problems
-├── unified_document_index/                  # derived; carries a CACHEDIR.TAG
-│   ├── grid_index/db.sqlite        # the grid_rows SQL index and each row's search terms (plain SQLite) — query this
-│   └── qmd_aggregator/qmd/index.sqlite  # semantic search index
+├── <group>/render_markdown/        # per-source render store
+│   └── indexed_markdown.doltlite_db  #   its documents, rows, edges + render problems
+├── unified_grid_and_search_index/                  # derived; carries a CACHEDIR.TAG
+│   ├── unified_grid_and_search_index/db.sqlite  # the grid_rows SQL index, each row's search terms and the search index (plain SQLite) — query this
+│   └── search_index/inference_cache.sqlite  # each chunk's vector, by its prompt's hash
 ├── datalib_curated/                # what a person curates, one directory per app; nothing rebuilds it
 └── system/                         # the server's own state
     ├── supervisor.sqlite           # sync requests, steps turned off, and the loop's record (plain SQLite)
@@ -64,7 +66,7 @@ write the one index file under `unified_document_index/qmd_aggregator/`):
     └── disk_stats.sqlite           # bytes on disk and free space, over time (plain SQLite)
 ```
 
-The split is by writer: `unified_document_index/` is produced by the pipeline
+The split is by writer: `unified_grid_and_search_index/` is produced by the pipeline
 and fully derived, `system/` is the server's own state.
 
 The binaries a release ships:
@@ -130,8 +132,8 @@ header, and a step's `params` sub-tables come after its plain keys — a
   signing in or asking for access happens wherever that gateway is managed.
 - **How far back (and ahead)**: every source that can mirror part of
   its history takes `since` in its method table (`[steps.params.api]`,
-  `[steps.params.gmail]`, `[steps.params.google]`, …), and a calendar
-  and Garmin also take `until`. Each is a day (`"2026-09-01"`), an
+  `[steps.params.gmail]`, `[steps.params.google]`, …), and a calendar,
+  Garmin and Baby Connect also take `until`. Each is a day (`"2026-09-01"`), an
   RFC 3339 instant, or an offset from the run's start (`"-30d"`,
   `"+21d"`; units `h`, `d`, `w`), so `since = "-30d"` keeps the last
   month without a daily edit. A record an offset slides past stays in
@@ -170,12 +172,13 @@ that can read it runs.
 for every way into the source, a minimal one (the least that syncs) and
 a complete one (every option set, each with a comment). With
 `--append <config>` it adds the minimal one to the config instead,
-above the index groups, and puts the source's steps in the `inputs` of
-the index steps that read them (`grid_index`, and the time-series
-index, which it adds when a time-series source is the first). A config
-with no document index gets one, with its applets, and a config
-without the `[[programs]]` and `[[locks]]` entries `datalib-step`'s
-steps need gets those. A
+above the index groups, where the index steps read it by pattern
+(`*/render_markdown`); in a config that names their inputs one by one
+it adds the source's steps there, and it adds the time-series index
+when a time-series source is the first. A config with no grid and
+search index gets one, with its applets, and a config without the
+`[[programs]]` and `[[locks]]` entries `datalib-step`'s steps need gets
+those. A
 source reached more than one way names the method (`--method gmail`),
 and `--id` gives the group an id of its own, for a second account. It
 refuses an id the config already has, and a result `datalib-dag
@@ -340,8 +343,12 @@ It prints each step's tree before and after. With the app up, `POST
 `"targets": ["lightroom/ingest"]` for one step only. It answers 204 when done, or 202 while it runs on; the steps it
 touches, and what reads them, wait meanwhile. Each store needs about its
 own size free on disk while it is rewritten, and takes minutes per ten
-gigabytes. The status bar's "Free up disk space…" (a right-click on the
-data root's size) asks the same.
+gigabytes. `GET /api/config`'s `free_space` says how far it has got:
+each step it asks, `waiting`, `running`, `done` with its store's
+`store_bytes` before and after, or `failed` with why; `running` turns
+false when it is over. The status bar's "Free up disk space…" (a
+right-click on the data root's size) asks the same, and a pill in the
+toolbar shows that progress.
 
 **Logs.** The run store is where to read what happened.
 `GET /api/runs` lists runs: a run is one stretch of the loop being busy,
@@ -397,22 +404,20 @@ Pick the surface that fits the question:
   datalib-applet search ~/datalib 'warp core semantic:off'
   ```
 
-  It exits 1, with each reason on stderr, when the answer is not the
-  search you asked for: a query it refused (`refused`), an error, a
-  free-text search qmd could not answer, or free text on a root with no
-  search index yet (a source's words are searchable once its
-  `keyword_index` step has run), or part of a search that could not
-  answer (`query_echo.partial`, with the rows the rest found). An empty
-  answer with exit 0 means nothing matched. Free text loads the embedding
+  It exits 1 when the answer is not the whole search you asked for (a
+  refusal, an error, a part that could not answer), with each reason on
+  stderr; an empty answer with exit 0 means nothing matched.
+  [Searching your mirror](user/searching.md) § "When the search says
+  no" has each case. Free text loads the embedding
   model and the vectors first, each command afresh, which on a large root
   takes tens of seconds; `semantic:off` in the query loads neither. A running
   app holds them loaded, so `GET …/search` has no such wait.
 - **SQL over everything** — the `grid_rows` union table in
-  `unified_document_index/grid_index/db.sqlite`: one row per
+  `unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`: one row per
   message/document/entity across all sources, with `provider`, `kind`,
   `created_at`, `modified_at`, `touched_at`, `author`, `channel`, `conversation_uuid`,
   `preview` (the first 240 characters of the row's text; the whole text
-  is in the rendered markdown), `entire_chat`, etc. `is_document = 1`
+  is in the document's markdown), `entire_chat`, etc. `is_document = 1`
   picks the one row per rendered document — the thread, the
   conversation, the PR, the page — and leaves out the messages inside
   them, which is usually the row count you meant.
@@ -422,11 +427,11 @@ Pick the surface that fits the question:
   `doltlite` in the docker image, and
   `bazelisk build //third-party/doltlite:doltlite` from a checkout).
   Its argv is `sqlite3`'s. **Always pass `-readonly`**: the index is
-  the `grid_index` step's to write, and a transaction a writable session
+  the `unified_grid_and_search_index` step's to write, and a transaction a writable session
   holds open stalls the sync:
 
   ```sh
-  datalib-doltlite -readonly unified_document_index/grid_index/db.sqlite \
+  datalib-doltlite -readonly unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
     "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
   ```
 
@@ -438,25 +443,32 @@ Pick the surface that fits the question:
   stock `sqlite3` cannot read at all, into plain SQLite:
 
   ```sh
-  datalib-doltlite -readonly unified_document_index/grid_index/db.sqlite .dump \
+  datalib-doltlite -readonly unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite .dump \
     | sqlite3 grid.sqlite
   ```
 
   A copy of a doltlite store carries the data, not the commit history —
   see [`docs/dev/doltlite.md`](dev/doltlite.md) for what that costs and
   for a single-table variant. A Python program that runs many queries
-  can keep a store open instead of starting the shell for each one: see
-  that doc's §"Reading a store from Python". If you would rather not
+  can keep a store open with `imbue-datalib-reader` instead of starting
+  the shell for each one: see that doc's §"Reading a store from Python".
+  If you would rather not
   touch the store at all, `datalib-http`'s endpoints below serve the
-  same rows.
+  same rows, and `POST /applet/unified_grid_and_search_index/sql` runs your
+  own `SELECT` against this or any other store, the raw stores and the
+  log included, a page at a time ([the applets](user/applets.md#reading-any-store-with-sql)).
 
   Column semantics: [`docs/dev/grid_rows.md`](dev/grid_rows.md).
   Cross-document links: [`docs/dev/edges.md`](dev/edges.md).
   doltlite recipes (history, diffs, a crashed writer):
   [`docs/dev/doltlite.md`](dev/doltlite.md).
-- **Markdown** — `<group>/render_markdown/` holds human-readable QMD
-  markdown per conversation/document. Read files directly, or serve
-  them via `GET /applet/unified_document_index/chat/{markdown_uuid}`.
+- **Markdown** — each conversation or document as human-readable
+  markdown: `datalib-step markdown <data root> --source <group> --document
+  <markdown_uuid>` prints one, `--out <folder>` writes every one as
+  `<folder>/<group>/<markdown_uuid>.md`, and `GET
+  /applet/unified_grid_and_search_index/chat/{markdown_uuid}` serves it.
+  The render store keeps every document; there are no `.md` files under
+  `<group>/render_markdown/` to read.
 - **Raw stores** — the per-source doltlite stores under
   `<group>/ingest/` keep what the service sent, when the rendered form
   isn't enough: Slack's and Google Calendar's JSON, Gmail's original
@@ -488,49 +500,35 @@ Pick the surface that fits the question:
   `start_time` is in the event's own. The columns:
   [Reading the raw stores](user/raw_stores.md) § "A calendar's
   occurrences".
-- **Semantic search** — the qmd index:
-
-  ```sh
-  rt=$(echo ${XDG_CACHE_HOME:-~/.cache}/datalib/runtime/*/)   # the fetched runtime; /opt/datalib/runtime in the image
-  INDEX_PATH=<data_root>/unified_document_index/qmd_aggregator/qmd/index.sqlite \
-      "$rt/node/bin/node" "$rt"/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js query "that thing about the boat"
-  ```
+- **Semantic search** — `datalib-applet search <data_root> '<words>'`
+  (above) searches by meaning as well as by words.
 - **HTTP API** — `datalib-http <data_root>` serves the UI plus:
-  `GET /applet/unified_document_index/search?q=…` (the query language,
-  `from:me` included, is [Searching your mirror](user/searching.md);
-  `GET …/search/keys` lists every key and `…/search/values?key=…&typed=…&q=…`
-  the values one takes, most rows first. A key the search does not
-  have is refused by name, in `refused`, rather than ignored. Free text
+  `GET /applet/unified_grid_and_search_index/search?q=…` (the query
+  language, `from:me` and the cutoff on meaning included, and what a
+  refusal or a partial answer says, are [Searching your
+  mirror](user/searching.md); `GET …/search/keys` lists every key and
+  `…/search/values?key=…&typed=…&q=…` the values one takes. Free text
   made only of uuids and handles (an email address, `tel:+…`,
-  `slack:T…/U…`) is looked up in the grid index's search terms, not sent to
-  qmd: every row that answers to each one, best match first, with
+  `slack:T…/U…`) is looked up in the grid index's search terms, not ranked
+  by text: every row that answers to each one, best match first, with
   `score` saying how (5 its own id, 4 its author or an addressee,
   3 someone copied or mentioned, or what it is in, 2 its title or a label, 1 a name
   it shows) and `snippet` naming the match.
-  Other free text has one answer: `score` is reciprocal rank fusion of the
+  Other free text's `score` is reciprocal rank fusion of the
   search terms (any word as the start of one), every document's text by BM25
-  (from qmd's keyword index, a document holding the words as typed first) and
-  the documents nearest the text by cosine over qmd's vectors, one row a
-  document. `semantic:off` in the query leaves out the vectors, and
-  `semantic:0.4` asks for that similarity where the default is 0.25: a word or
-  a field that matches counts however far off its meaning is. All are ranked
-  within the rows the other terms leave, so `from:`, `after:` or `source:`
-  narrow what is ranked rather than what is kept. `query_echo.without_vectors`
-  says on the first page how many of the documents those terms leave have no
-  vectors yet, in all and by source, and `query_echo.partial` what part of the
-  search could not answer when the rest did. `tab=` is gone, and refused. Each row's `link` is where opening it goes, `datalib:doc/<page>#<section>`: its page, at the row when it is a message of the page. It answers a page: `limit=` rows from `offset=`, with `total`
-  and the `next_offset`; `sort=created_at:desc,author` orders by grid
-  columns in turn, a row with no value last either way. `GET /applet/unified_document_index/search/groups?q=…&by=kind`
-  counts the groups, and `within=[["kind","Chat"]]` on `search` lists
-  one group), `GET /api/log?q=…` (the
-  runner's log lines in the same grammar — keys `run:`, `process:`,
-  `process_id:`, `step:`, `attempt:`, `level:`, `stream:`, `target:`,
-  `thread:`, `msg:`, and `commit:` by prefix; free text is a
-  substring of the line; `run:`, `process_id:`, `step:` and `attempt:`
-  narrow it to a run, a process or a step's attempt; the newest `limit=`
-  lines, oldest first, with `before_seq=` paging back and `after_seq=`
-  tailing),
-  `GET /applet/unified_document_index/docs`, `GET /applet/unified_document_index/chat/{uuid}`,
+  (over each message) and the documents nearest the text by cosine over
+  the search index's vectors, one row a document. Each row's `link` is
+  where opening it goes, `datalib:doc/<page>#<section>`: its page, at
+  the row when it is a message of the page. It answers a page: `limit=`
+  rows from `offset=`, with `total` and the `next_offset`; `sort=`,
+  `GET …/search/groups?q=…&by=kind` and `within=[["kind","Chat"]]` on
+  `search` sort and group as the search page's §"Sorting and grouping"
+  says), `GET /api/log?q=…` (the log lines in the same grammar, a page
+  at a time: [logging](dev/logging.md) §"Reading it"),
+  `GET /applet/unified_grid_and_search_index/docs`, `GET /applet/unified_grid_and_search_index/chat/{uuid}`,
+  `GET /applet/unified_grid_and_search_index/children/{uuid}?at=…` (what a
+  thread, channel or label holds, in order, a page each way around a
+  message, a moment or `now`: [the applets](user/applets.md#a-containers-children)),
   `GET /data/<group>/<function>/blob/<hash>` (an attachment or photo a
   page links), `GET /api/dag` (the derived step
   graph), and the config/sync endpoints above.

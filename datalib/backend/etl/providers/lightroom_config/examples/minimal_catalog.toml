@@ -13,9 +13,8 @@ command = "datalib-step run ingest lightroom"
 [steps.params.catalog]
 path = "~/Pictures/Lightroom/Enterprise.lrcat"
 
-# Lightroom renders no documents yet: query the raw store with
-# `datalib-doltlite`. This step writes the storage report every source
-# gets, which is what puts Lightroom in the grid.
+# Lightroom's render writes no markdown: it puts a grid row per photo
+# and video in the grid, and is what the photos applet draws from.
 [[steps]]
 id = "lightroom/render_markdown"
 command = "datalib-step run render_markdown lightroom"

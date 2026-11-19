@@ -28,8 +28,8 @@ const HEAD: &str = r#"# Every source datalib can mirror, one group per way in, r
 # This is a reference, not a turn-key config: running it would sync every
 # source at once, and most need credentials (through latchkey), a backup
 # pulled off a phone, or an export on disk; `datalib-step help <type>` says
-# how to sign one in or where its data comes from. Copy the groups you want,
-# and the index groups' inputs that name them.
+# how to sign one in or where its data comes from. Copy the groups you want:
+# the index groups read every source by pattern (`*/render_markdown`).
 #
 # Shape: each source is a `[[groups]]` entry with a `type`, and steps whose
 # `id` is `<group>/<function>`: the tree the step writes, and what another
@@ -37,10 +37,11 @@ const HEAD: &str = r#"# Every source datalib can mirror, one group per way in, r
 # `ingest` brings the data into `<group>/ingest` (its `params` hold one
 # method table, `[steps.params.api]`, `[steps.params.export]`, …, and the
 # options every method shares); `render_markdown` turns that raw store into
-# documents under `<group>/render_markdown`; `keyword_index` and `embed` put
-# them in the search index; a source whose data is also numbers over time
-# adds `render_time_series`. `reads` and `locks` say what a step may run
-# beside; the `[[programs]]` entry, which verbs `datalib-step` takes.
+# documents under `<group>/render_markdown`, which the grid index puts in
+# the keyword search; `embed` puts them in the search by meaning; a source
+# whose data is also numbers over time adds `render_time_series`. `reads`
+# and `locks` say what a step may run beside; the `[[programs]]` entry,
+# which verbs `datalib-step` takes.
 #
 # TOML shape: a table header ends the table it sits in, so within a step
 # the plain keys (`id`, `command`, `inputs`) come first and the params
@@ -57,13 +58,12 @@ const HEAD: &str = r#"# Every source datalib can mirror, one group per way in, r
 data_root = "~/datalib"
 "#;
 
-const DOCUMENT_INDEX: &str = "unified_document_index";
+const DOCUMENT_INDEX: &str = "unified_grid_and_search_index";
 const TIME_SERIES_INDEX: &str = "unified_time_series_index";
 
 struct Source {
     title: String,
     text: String,
-    steps: Vec<(String, String)>,
 }
 
 fn sources() -> Vec<Source> {
@@ -80,20 +80,9 @@ fn sources() -> Vec<Source> {
             } else {
                 format!("{t}-{}", m.path)
             };
-            let text = with_group_id(example.toml, t.as_str(), &id);
-            let steps = datalib_dag::config::check_text(&text)
-                .cfg
-                .steps
-                .iter()
-                .filter_map(|s| {
-                    let args = crate::step_entry::run_args(&s.command)?.ok()?;
-                    Some((s.id.clone(), args.function))
-                })
-                .collect();
             out.push(Source {
                 title: format!("{t} by `{}`", m.path),
-                text,
-                steps,
+                text: with_group_id(example.toml, t.as_str(), &id),
             });
         }
     }
@@ -101,16 +90,11 @@ fn sources() -> Vec<Source> {
 }
 
 /// The `[[steps]]` entry of the index step `group/function`, reading
-/// every source step of `functions`, one per line.
-fn index_step(sources: &[Source], group: &str, function: Function, functions: &[&str]) -> String {
-    let ids: Vec<String> = sources
-        .iter()
-        .flat_map(|s| &s.steps)
-        .filter(|(_, f)| functions.contains(&f.as_str()))
-        .map(|(id, _)| format!("  \"{id}\",\n"))
-        .collect();
-    crate::step_entry::entry(group, function, None, &[])
-        .replace("inputs = []\n", &format!("inputs = [\n{}]\n", ids.concat()))
+/// every source's steps of each of `functions` by pattern.
+fn index_step(group: &str, function: Function, functions: &[&str]) -> String {
+    let patterns: Vec<String> = functions.iter().map(|f| format!("*/{f}")).collect();
+    let patterns: Vec<&str> = patterns.iter().map(String::as_str).collect();
+    crate::step_entry::entry(group, function, None, &patterns)
 }
 
 fn rule(title: &str) -> String {
@@ -135,11 +119,10 @@ fn generate() -> String {
     out.push('\n');
     out.push_str(&rule("The indexes every source feeds"));
     out.push_str(&format!(
-        "\n# The SQL index behind the grid and search reads every source's documents;\n\
-         # the search index's aggregator reads every source's keyword index and\n\
-         # embeddings, and keeps the search index to the sources it names.\n\
-         [[groups]]\nid = \"{DOCUMENT_INDEX}\"\nname = \"Document Index\"\n\n\
-         {}\n\
+        "\n# The SQL index behind the grid and search reads every source's documents\n\
+         # into the grid and the keyword search; `params.not_searched` would keep a\n\
+         # source out of search.\n\
+         [[groups]]\nid = \"{DOCUMENT_INDEX}\"\nname = \"Grid and Search Index\"\n\n\
          {}\n\
          # The app's search, grid and document view.\n\
          [[applets]]\ngroup = \"{DOCUMENT_INDEX}\"\nid = \"{DOCUMENT_INDEX}\"\n\
@@ -155,19 +138,11 @@ fn generate() -> String {
          [[applets]]\ngroup = \"{TIME_SERIES_INDEX}\"\nid = \"{TIME_SERIES_INDEX}\"\n\
          command = \"datalib-applet {TIME_SERIES_INDEX}\"\n",
         index_step(
-            &sources,
             DOCUMENT_INDEX,
-            Function::GridIndex,
+            Function::UnifiedGridAndSearchIndex,
             &["render_markdown"]
         ),
         index_step(
-            &sources,
-            DOCUMENT_INDEX,
-            Function::QmdAggregator,
-            &["keyword_index", "embed"]
-        ),
-        index_step(
-            &sources,
             TIME_SERIES_INDEX,
             Function::TimeSeriesIndex,
             &["render_time_series"]

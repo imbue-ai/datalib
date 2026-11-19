@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Document card: fetches the unified_document_index applet's /chat/{markdownUuid} and renders it via
+// Document card: fetches the unified_grid_and_search_index applet's /chat/{markdownUuid} and renders it via
 // ChatBody. Fully determined by its props (which come from the card
 // source, e.g. `documentView("md-uuid", "section-uuid")`):
 // - a title bar that does not scroll (`DocTitleBar`) offers what the
@@ -25,7 +25,7 @@ import { copyToClipboard } from "@/clipboard";
 import { oneAtATime, subscribeLive } from "@/live";
 import ChatBody from "./ChatBody.ce.vue";
 import { absoluteRemote, type RemoteRef } from "./remoteMedia";
-import { renderDocument } from "./renderDocument";
+import { bodyOf, renderDocument } from "./renderDocument";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import {
   buildContext,
@@ -47,9 +47,9 @@ import { endWait, startWait, type Wait } from "@/telemetry";
 import DocTitleBar from "./DocTitleBar.ce.vue";
 import { sourceSource } from "./cardSources";
 import { documentCopyText, documentTitle, outlinkOf, type DocumentAction } from "./documentMenu";
-import { problemLabel } from "./problems";
+import { problemLabel, severityWord } from "./problems";
 import { ensureFrontend } from "./frontendRegistry";
-import { photoCardSource, photoImageUrl } from "./photos";
+import { photoCardSource } from "./photos";
 import { parsePhoto } from "@/uri";
 import { TOPIC_EDGE_HOVER, type CardCtx, type EdgeHoverPayload } from "./types";
 
@@ -57,8 +57,8 @@ const { allowRemote, checkRemote, fetchChat, forgetRemoteAllow } = useApi();
 
 const props = defineProps<{
   ctx: CardCtx;
-  // Addresses one rendered `.md` file — the file this card fetches
-  // and displays. Same value the applet's `/chat/{markdown_uuid}` takes.
+  // The document this card fetches and displays. Same value the
+  // applet's `/chat/{markdown_uuid}` takes.
   markdownUuid: string | null;
   // Section uuid inside the doc to highlight and scroll to. Matches
   // the renderer-emitted `data-section-uuid` attributes.
@@ -230,7 +230,7 @@ const remoteContext = computed<RemoteContext>(() =>
 /// Every remote URL a body references, as written, each once.
 function remoteUrlsOf(doc: ChatResponse): string[] {
   const seen = new Set<string>();
-  return renderDocument(doc.body)
+  return renderDocument(doc.pieces)
     .remote.map((r) => r.url)
     .filter((u) => !seen.has(u) && (seen.add(u), true));
 }
@@ -519,7 +519,7 @@ async function onDocAction(id: DocumentAction) {
     case "copy-both":
       return copy(documentCopyText(doc));
     case "copy-markdown":
-      return copy(doc.body, "the Markdown");
+      return copy(bodyOf(doc), "the Markdown");
     case "feedback":
       return feedbackOn({ kind: "conversation", anchor: cardEl.value, conv: doc.markdown_uuid });
   }
@@ -565,12 +565,12 @@ watch(
       // would read as a flicker, and a held image that then loaded as
       // a leak.
       const doc = await fetchChat(uuid);
-      // A photo has no page: as a card of its own it becomes the card of
-      // the applet that serves it; beside a list it shows its picture.
+      // A photo has no page: it becomes the card of the applet that
+      // serves it (a list draws that card in its preview itself).
       const photo = doc.image ? parsePhoto(doc.image) : null;
-      if (photo) {
+      if (photo && !props.preview) {
         await ensureFrontend();
-        const source = props.preview ? null : photoCardSource(photo);
+        const source = photoCardSource(photo);
         if (source) {
           props.ctx.host.setSource(source);
           return;
@@ -624,7 +624,6 @@ onMounted(() => {
 onBeforeUnmount(() => unsubscribeLive?.());
 
 const photoId = computed(() => (chat.value?.image ? parsePhoto(chat.value.image) : null));
-const photoSrc = computed(() => (photoId.value ? photoImageUrl(photoId.value, "full") : null));
 
 // Chrome title: generic while nothing is loaded (the uuid means
 // nothing to a human), the document's own name once the fetch lands.
@@ -663,11 +662,11 @@ watch(
           <li
             v-for="p in problems"
             :key="p.problem_uuid"
-            :class="['problem', `problem-${p.severity}`]"
+            :class="['problem', `problem-${p.severity}`, { 'problem-muted': p.muted }]"
             :data-problem-uuid="p.problem_uuid"
             :title="`${p.stage}: ${p.reason}, first seen ${p.first_seen_at_utc}`"
           >
-            <span class="problem-severity">{{ p.severity }}</span>
+            <span class="problem-severity">{{ severityWord(p.severity) }}</span>
             <span class="problem-text">
               <a
                 v-if="p.item_uuid"
@@ -679,6 +678,9 @@ watch(
               <template v-else>{{ problemLabel(p) }}</template>
               <code v-if="p.sample" class="problem-sample">{{ p.sample }}</code>
             </span>
+            <span v-if="p.muted" class="problem-muted-tag" title="Muted: it counts toward nothing"
+              >muted</span
+            >
           </li>
         </ul>
         <div
@@ -784,19 +786,18 @@ watch(
           </li>
         </ul>
         <div class="doc-body">
-          <img v-if="photoSrc" class="doc-photo" :src="photoSrc" :alt="chat.name ?? ''" />
-          <p v-else-if="photoId" class="empty">
+          <p v-if="photoId" class="empty">
             This is a photo. Add the photos applet to the config to see it.
           </p>
           <ChatBody
-            :body="chat.body"
+            :pieces="chat.pieces"
             :markdown-uuid="chat.markdown_uuid"
             :selected-section-uuid="jumpTo ?? sectionUuid"
             :outgoing-edges="chat.outgoing_edges"
             :hover-anchor-uuid="hoverAnchor"
             @open-edge="onOpenEdge"
             @hover-edge="onHoverEdge"
-            @painted="shown('shown', { bytes: chat.body.length })"
+            @painted="shown('shown', { bytes: bodyOf(chat).length })"
             :remote-accept="remoteAccept"
             :remote-context="remoteContext"
             :source-id="chat.source_ref?.id ?? null"
@@ -836,12 +837,6 @@ watch(
 </template>
 
 <style scoped>
-.doc-photo {
-  display: block;
-  max-width: 100%;
-  max-height: 70vh;
-  margin: 8px auto;
-}
 /* The title bar, which stays, over a column that scrolls: the banners
    at their own height, then the body, which scrolls inside its frame
    and takes what is left — never less than most of the pane, so a long
@@ -930,6 +925,15 @@ watch(
 .problem-text {
   flex: 1 1 auto;
   min-width: 0;
+}
+/* Muted from the problems grid: still listed, faded. */
+.problem-muted {
+  opacity: 0.6;
+}
+.problem-muted-tag {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  color: var(--datalib-muted);
 }
 .problem-jump {
   color: inherit;

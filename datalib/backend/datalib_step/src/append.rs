@@ -1,8 +1,8 @@
 //! `datalib-step examples <type> --append <config.toml>`: add one source's
 //! minimal stanza to a config, above the index groups, and add its steps
-//! to the `inputs` of the index steps that read them. A config without
-//! the document index (`datalib-dag init` writes one with no steps) gets
-//! it, and one without the `[[programs]]` and `[[locks]]` entries its
+//! to the `inputs` of the index steps that read them by id. A config
+//! without the grid and search index (`datalib-dag init` writes one with
+//! no steps) gets it, and one without the `[[programs]]` and `[[locks]]` entries its
 //! datalib-step steps need gets those. The rest of the file stays as
 //! written, comments included; the result is checked the way
 //! `datalib-dag --check` checks a config before it is written.
@@ -14,8 +14,9 @@ use std::path::Path;
 use datalib_dag::config::DagConfig;
 use datalib_dag::config_array::edit_string_array;
 use datalib_dag::config_order::entry_ranges;
+use datalib_dag::input_pattern::names;
 use datalib_obs::status_line;
-use datalib_runtime::layout::UNIFIED_DOCUMENT_INDEX_DIR;
+use datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR;
 use datalib_source_common::ExampleKind;
 use serde::Deserialize;
 
@@ -26,22 +27,19 @@ use crate::source_type::SourceType;
 use crate::step_entry::{self, TIME_SERIES_INDEX_GROUP};
 
 /// Which index step reads a source step of each function, as
-/// `(source function, index group, index function)`.
+/// `(source function, index group, index function)`. Each reads them by
+/// pattern (`*/render_markdown`), so a config that kept the pattern needs
+/// no edit to read a source added later.
 const FAN_INS: &[(Function, &str, Function)] = &[
     (
         Function::RenderMarkdown,
-        UNIFIED_DOCUMENT_INDEX_DIR,
-        Function::GridIndex,
-    ),
-    (
-        Function::KeywordIndex,
-        UNIFIED_DOCUMENT_INDEX_DIR,
-        Function::QmdAggregator,
+        UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
+        Function::UnifiedGridAndSearchIndex,
     ),
     (
         Function::Embed,
-        UNIFIED_DOCUMENT_INDEX_DIR,
-        Function::QmdAggregator,
+        UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
+        Function::EmbeddingMap,
     ),
     (
         Function::RenderTimeSeries,
@@ -50,7 +48,11 @@ const FAN_INS: &[(Function, &str, Function)] = &[
     ),
 ];
 
-const INDEX_GROUPS: &[&str] = &[UNIFIED_DOCUMENT_INDEX_DIR, TIME_SERIES_INDEX_GROUP];
+fn index_step_id() -> String {
+    format!("{UNIFIED_GRID_AND_SEARCH_INDEX_DIR}/{UNIFIED_GRID_AND_SEARCH_INDEX_DIR}")
+}
+
+const INDEX_GROUPS: &[&str] = &[UNIFIED_GRID_AND_SEARCH_INDEX_DIR, TIME_SERIES_INDEX_GROUP];
 
 #[derive(Deserialize)]
 struct View {
@@ -137,12 +139,15 @@ pub struct Appended {
     /// `(source step, index step)` for each input added.
     pub wired: Vec<(String, String)>,
     /// Source steps no index step in the config reads, with the one that
-    /// would have: a config with search turned off has no `qmd_aggregator`.
+    /// would have: a config with no map has no `embedding_map`.
     pub unread: Vec<(String, String)>,
-    /// The document index was added, since the config had none.
-    pub added_document_index: bool,
+    /// The grid and search index was added, since the config had none.
+    pub added_unified_index: bool,
     /// The time-series index was added, since the config had none.
     pub added_time_series_index: bool,
+    /// The config has the `unified_grid_and_search_index` step an `embed` reads, and the stanza has
+    /// none, so the source is found by its words alone until one is added.
+    pub found_by_words_alone: bool,
 }
 
 /// The minimal stanza for `t` by `method` (needed only when `t` has more
@@ -185,33 +190,43 @@ pub fn stanza(
     Ok((text, method))
 }
 
-/// The document index as datalib's app writes it into a new library: its
-/// group, the two fan-ins with nothing to read yet, and the applets every
-/// app needs.
-pub fn document_index_block() -> String {
-    let g = UNIFIED_DOCUMENT_INDEX_DIR;
+/// The grid and search index as datalib's app writes it into a new
+/// library: its group, the index step reading every source's render by
+/// pattern, and the applets every app needs.
+pub fn unified_index_block() -> String {
+    let g = UNIFIED_GRID_AND_SEARCH_INDEX_DIR;
     format!(
-        "# ── the unified document index ─────────────────────────────────────────\n\
-         # Every source feeds these two: the grid reads its rendered markdown,\n\
-         # the qmd aggregator its search steps. Sources go above this block.\n\
+        "# ── the unified grid and search index ──────────────────────────────────\n\
+         # Every source feeds this one: the grid reads its rendered markdown\n\
+         # and puts it in the keyword search. Sources go above this block.\n\
          \n\
-         [[groups]]\nid = \"{g}\"\nname = \"Document Index\"\n\n{}\n{}\n\
+         [[groups]]\nid = \"{g}\"\nname = \"Grid and Search Index\"\n\n{}\n\
          [[applets]]\ngroup = \"{g}\"\nid = \"{g}\"\ncommand = \"datalib-applet {g}\"\n\n\
          [[applets]]\ngroup = \"{g}\"\nid = \"datalib_contacts\"\n\
          command = \"datalib-applet datalib_contacts\"\n",
-        step_entry::entry(g, Function::GridIndex, None, &[]),
-        step_entry::entry(g, Function::QmdAggregator, None, &[]),
+        step_entry::entry(
+            g,
+            Function::UnifiedGridAndSearchIndex,
+            None,
+            &["*/render_markdown"]
+        ),
     )
 }
 
-/// The time-series index reading `inputs`, and the applet that serves it.
-fn time_series_index_block(inputs: &[&str]) -> String {
+/// The time-series index reading every source's time series by pattern,
+/// and the applet that serves it.
+fn time_series_index_block() -> String {
     let g = TIME_SERIES_INDEX_GROUP;
     format!(
         "# ── the time-series index: every source's time series, in one list ──\n\
          [[groups]]\nid = \"{g}\"\nname = \"Time Series Index\"\n\n{}\n\
          [[applets]]\ngroup = \"{g}\"\nid = \"{g}\"\ncommand = \"datalib-applet {g}\"\n",
-        step_entry::entry(g, Function::TimeSeriesIndex, None, inputs),
+        step_entry::entry(
+            g,
+            Function::TimeSeriesIndex,
+            None,
+            &["*/render_time_series"]
+        ),
     )
 }
 
@@ -249,24 +264,33 @@ pub fn append(config: &str, stanza: &str) -> Result<Appended, String> {
             "the config already has a group {group:?}; pass --id to give this one another"
         ));
     }
-    let has_document_index = have
+    let has_unified_index = have
         .groups
         .iter()
-        .any(|g| g.id == UNIFIED_DOCUMENT_INDEX_DIR)
+        .any(|g| g.id == UNIFIED_GRID_AND_SEARCH_INDEX_DIR)
         || have
             .steps
             .iter()
-            .any(|s| s.group_id().as_deref() == Some(UNIFIED_DOCUMENT_INDEX_DIR));
-    // Where the document index begins when this adds it: the comments
-    // above it in the file are not the index's, and stay above the stanza.
-    let (config, added_index_at) = if has_document_index {
+            .any(|s| s.group_id().as_deref() == Some(UNIFIED_GRID_AND_SEARCH_INDEX_DIR));
+    // Where the index begins when this adds it: the comments above it in
+    // the file are not the index's, and stay above the stanza.
+    let (config, added_index_at) = if has_unified_index {
         (config.to_string(), None)
     } else {
-        let with = with_block_at_end(config, &document_index_block());
-        let at = with.len() - document_index_block().trim_end().len() - 1;
+        let block = unified_index_block();
+        let with = with_block_at_end(config, &block);
+        let at = with.len() - block.trim_end().len() - 1;
         (with, Some(at))
     };
     let have: View = toml::from_str(&config).map_err(|e| e.message().to_string())?;
+
+    let config_has_search = have
+        .steps
+        .iter()
+        .any(|s| s.id.as_deref() == Some(index_step_id().as_str()));
+    let has = |function: Function| adding.steps.iter().any(|s| s.function() == Some(function));
+    let found_by_words_alone =
+        config_has_search && has(Function::RenderMarkdown) && !has(Function::Embed);
 
     let mut edits: Vec<(Range<usize>, String)> = Vec::new();
     let mut wired = Vec::new();
@@ -293,12 +317,21 @@ pub fn append(config: &str, stanza: &str) -> Result<Appended, String> {
             .find(|s| s.id.as_deref() == Some(index_id.as_str()));
         match index.and_then(|s| s.inputs.as_ref()) {
             Some(inputs) => {
-                let mut after = inputs.get_ref().clone();
-                after.extend(reads.iter().cloned());
-                edits.push((
-                    inputs.span(),
-                    edit_string_array(&config[inputs.span()], &after)?,
-                ));
+                // A pattern already there (`*/render_markdown`) reads the
+                // new step without an edit.
+                let unnamed: Vec<String> = reads
+                    .iter()
+                    .filter(|r| !inputs.get_ref().iter().any(|i| names(i, r)))
+                    .cloned()
+                    .collect();
+                if !unnamed.is_empty() {
+                    let mut after = inputs.get_ref().clone();
+                    after.extend(unnamed);
+                    edits.push((
+                        inputs.span(),
+                        edit_string_array(&config[inputs.span()], &after)?,
+                    ));
+                }
                 wired.extend(reads.into_iter().map(|r| (r, index_id.clone())));
             }
             None if index_group == TIME_SERIES_INDEX_GROUP
@@ -343,14 +376,7 @@ pub fn append(config: &str, stanza: &str) -> Result<Appended, String> {
     }
 
     if needs_time_series_index {
-        let all: View = toml::from_str(&text).map_err(|e| e.message().to_string())?;
-        let inputs: Vec<&str> = all
-            .steps
-            .iter()
-            .filter(|s| s.function() == Some(Function::RenderTimeSeries))
-            .filter_map(|s| s.id.as_deref())
-            .collect();
-        text = with_block_at_end(&text, &time_series_index_block(&inputs));
+        text = with_block_at_end(&text, &time_series_index_block());
     }
     let text = with_programs_and_locks(&text, stanza)?;
     Ok(Appended {
@@ -358,8 +384,9 @@ pub fn append(config: &str, stanza: &str) -> Result<Appended, String> {
         group,
         wired,
         unread,
-        added_document_index: !has_document_index,
+        added_unified_index: !has_unified_index,
         added_time_series_index: needs_time_series_index,
+        found_by_words_alone,
     })
 }
 
@@ -517,8 +544,8 @@ pub fn run_cli(word: &str, path: &Path, method: Option<&str>, id: Option<&str>) 
         "Added {t} by `{method}` to {shown} as group {group:?}. The previous file is {}.",
         bak.display()
     );
-    if appended.added_document_index {
-        status_line!("Added the document index, which the config did not have.");
+    if appended.added_unified_index {
+        status_line!("Added the grid and search index, which the config did not have.");
     }
     if appended.added_time_series_index {
         status_line!("Added the time-series index, which the config did not have.");
@@ -529,6 +556,13 @@ pub fn run_cli(word: &str, path: &Path, method: Option<&str>, id: Option<&str>) 
     for (step, index) in &appended.unread {
         status_line!(
             "  nothing reads {step}: the config has no {index}, so it is not indexed there"
+        );
+    }
+    if appended.found_by_words_alone {
+        status_line!(
+            "  search finds it by its words, not yet by its meaning: the minimal stanza has \
+             no `{group}/embed` step. Copy it from the complete stanza \
+             (`datalib-step examples {t} --method {method}`)."
         );
     }
     status_line!(
@@ -596,45 +630,52 @@ mod tests {
         s.inputs.clone()
     }
 
-    /// A config whose document index is already there, as the app's
-    /// starter has it.
+    /// A config whose grid and search index is already there, as the
+    /// app's starter has it.
     fn with_the_index() -> String {
-        let text = with_block_at_end(EMPTY, &document_index_block());
-        with_programs_and_locks(&text, "# ── the unified document index").unwrap()
+        let text = with_block_at_end(EMPTY, &unified_index_block());
+        with_programs_and_locks(&text, "# ── the unified grid and search index").unwrap()
     }
 
     /// The case the command exists for: a source added to a new root
-    /// reaches the grid. `datalib-dag init` writes no steps, so the
-    /// document index comes with the first source, and the `[[programs]]`
-    /// and `[[locks]]` entries its steps need.
+    /// reaches the grid. `datalib-dag init` writes no steps, so the grid
+    /// and search index comes with the first source, and the
+    /// `[[programs]]` and `[[locks]]` entries its steps need.
     #[test]
-    fn a_source_on_an_empty_config_brings_the_document_index() {
+    fn a_source_on_an_empty_config_brings_the_unified_index() {
         let (stanza, method) = stanza(SourceType::Slack, None, None).unwrap();
         assert_eq!(method, "api");
         let appended = append(EMPTY, &stanza).unwrap();
         checks_clean(&appended.text);
-        assert!(appended.added_document_index);
+        assert!(appended.added_unified_index);
         assert_eq!(
-            inputs_of(&appended.text, "unified_document_index/grid_index"),
+            inputs_of(
+                &appended.text,
+                "unified_grid_and_search_index/unified_grid_and_search_index"
+            ),
             ["slack/render_markdown"]
+        );
+        assert!(
+            appended.found_by_words_alone,
+            "the starter searches by meaning and the minimal stanza has no embed"
         );
         assert_eq!(
             appended.wired,
             [(
                 "slack/render_markdown".to_string(),
-                "unified_document_index/grid_index".to_string()
+                "unified_grid_and_search_index/unified_grid_and_search_index".to_string()
             )]
         );
         let cfg = datalib_dag::config::check_text(&appended.text).cfg;
         assert_eq!(cfg.programs.len(), 1);
         assert_eq!(cfg.programs[0].command, "datalib-step");
         let locks: Vec<&str> = cfg.locks.iter().map(|l| l.name.as_str()).collect();
-        assert_eq!(locks, ["index", "qmd_keyword"]);
+        assert_eq!(locks, ["index"]);
         assert_eq!(cfg.applets.len(), 2);
         let source_at = appended.text.find("[[groups]]\nid = \"slack\"").unwrap();
         let index_at = appended
             .text
-            .find("# ── the unified document index")
+            .find("# ── the unified grid and search index")
             .unwrap();
         assert!(source_at < index_at, "{}", appended.text);
         assert!(
@@ -644,8 +685,8 @@ mod tests {
         );
     }
 
-    /// On a config that has the index, the stanza goes above it and only
-    /// the index's `inputs` change.
+    /// On a config that has the index, the stanza goes above it, and the
+    /// index is untouched: its pattern reads the new source.
     #[test]
     fn a_source_on_a_config_with_the_index_is_wired_into_the_grid() {
         let config = with_the_index();
@@ -653,19 +694,17 @@ mod tests {
         let (stanza, _) = stanza(SourceType::Slack, None, None).unwrap();
         let appended = append(&config, &stanza).unwrap();
         checks_clean(&appended.text);
-        assert!(!appended.added_document_index);
-        let index_at = appended
-            .text
-            .find("# ── the unified document index")
-            .unwrap();
-        let was_at = config.find("# ── the unified document index").unwrap();
+        assert!(!appended.added_unified_index);
+        let marker = "# ── the unified grid and search index";
+        let index_at = appended.text.find(marker).unwrap();
+        let was_at = config.find(marker).unwrap();
+        assert_eq!(appended.text[index_at..], config[was_at..]);
         assert_eq!(
-            appended.text[index_at..].replacen(
-                "inputs = [\"slack/render_markdown\"]",
-                "inputs = []",
-                1
+            inputs_of(
+                &appended.text,
+                "unified_grid_and_search_index/unified_grid_and_search_index"
             ),
-            config[was_at..]
+            ["slack/render_markdown"]
         );
     }
 
@@ -698,11 +737,11 @@ inputs = [\"slack/ingest\"]
 reads = \"pinned\"
 
 [[groups]]
-id = \"unified_document_index\"
+id = \"unified_grid_and_search_index\"
 
 [[steps]]
-id = \"unified_document_index/grid_index\"
-command = \"datalib-step run grid_index\"
+id = \"unified_grid_and_search_index/unified_grid_and_search_index\"
+command = \"datalib-step run unified_grid_and_search_index\"
 reads = \"pinned\"
 locks = [\"index\"]
 inputs = [
@@ -724,8 +763,11 @@ inputs = [
             appended.text
         );
         assert_eq!(appended.group, "work-mail");
+        // No embedding_map here, and the minimal stanza has no embed for
+        // one to read; the `unified_grid_and_search_index` step searches it by its words.
         assert!(appended.unread.is_empty());
-        assert!(!appended.added_document_index);
+        assert!(!appended.added_unified_index);
+        assert!(appended.found_by_words_alone);
     }
 
     #[test]

@@ -1,12 +1,13 @@
-# JMAP Extract
+# Email: download
 
-`jmap-ingest` mirrors a JMAP mail account (RFC 8620 core + RFC 8621
-mail) into a single doltlite raw store. Generic across JMAP servers —
-tested against Fastmail (`api.fastmail.com`), works against any RFC
-8620–conformant server in principle (Stalwart, etc.). The `email`
-source's other two modes, the Gmail API and an mbox file, write the same
-raw schema; [`docs/dev/email_download_modes.md`](/docs/dev/email_download_modes.md)
-covers all three.
+The `email` source has four download modes writing one raw schema:
+JMAP, the Gmail API, an mbox and Apple Mail.
+[`docs/dev/email_download_modes.md`](/docs/dev/email_download_modes.md)
+says what each mode is and how they meet in one store. This file is
+the JMAP mode (RFC 8620 core + RFC 8621 mail, `[steps.params.jmap]`),
+tested against Fastmail and meant for any conformant server (Stalwart,
+etc.), and what every mode shares: listed, held and owed, whole
+threads, the problems a sync records, and the raw store's shape.
 
 Each phase upserts upstream payloads as JSONB into per-type tables;
 the full RFC 5322 `.eml` source of every email lands in the per-source
@@ -17,12 +18,12 @@ for the rationale behind the table shape.
 
 ## Auth
 
-`jmap-ingest` does not handle credentials directly — it shells out
-to [`latchkey curl`](https://github.com/imbue-ai/latchkey), which
-injects `Authorization: Bearer <token>` on every outbound request
-based on the request's URL host. For Fastmail, the steps are in
+Requests go out as `latchkey curl` ([`docs/dev/latchkey.md`](/docs/dev/latchkey.md)),
+which adds `Authorization: Bearer <token>` by the request's URL host.
+For Fastmail, the steps are in
 [`docs/user/getting_your_data.md`](/docs/user/getting_your_data.md)
-§"Fastmail".
+§"Fastmail", and which Fastmail credential reaches what is in
+[`docs/dev/fastmail.md`](/docs/dev/fastmail.md).
 
 For another JMAP server (Stalwart, etc.), register a latchkey service
 for its host and store its token (the service name is only a label;
@@ -35,42 +36,16 @@ latchkey auth set mail-example -H "Authorization: Bearer $(pbpaste)"
 
 Blob bytes come from the session's `downloadUrl`, which may be on a
 different host than the API (Fastmail's is `www.fastmailusercontent.com`);
-that host needs a credential too. Then run with
-`--hostname mail.example.com`; session discovery does the rest.
+that host needs a credential too. Then set `jmap.hostname =
+"mail.example.com"`; session discovery does the rest. Every key the
+mode takes is in `../email_config/examples/complete_jmap.toml`.
 
-## Run it
-
-```sh
-bazelisk run //datalib/backend/etl/providers/email:jmap_ingest -- \
-    --out ~/backups/fastmail \
-    --hostname api.fastmail.com
-```
-
-The store is `<out>/entities.doltlite_db`. Subsequent runs are
-incremental — the state token from `Email/changes` is persisted
-per-account in `sync_scope_state`, so only created / updated /
-destroyed emails since the last run get touched. To list and fetch the
-account again from nothing, reset the step (`datalib-dag --reset`).
-
-To restrict to specific mailboxes, name them by their full label path
-(`Work/Projects`), the way `only_extract_labels` does in a config:
-
-```sh
-jmap-ingest --hostname api.fastmail.com --out ~/backups/fastmail \
-    --only-mailbox-labels "Inbox,Work/Projects"
-```
-
-The first run's `Mailbox/get` lands in the `mailboxes` table:
-
-```sh
-bazelisk build //third-party/doltlite:doltlite
-bazel-bin/third-party/doltlite/doltlite -readonly ~/backups/fastmail/entities.doltlite_db \
-    "SELECT id, name, role FROM mailboxes ORDER BY name"
-```
-
-Stock `sqlite3` cannot open the file;
-[`docs/dev/doltlite.md`](/docs/dev/doltlite.md#getting-the-data-out-export-to-plain-sqlite)
-has the one-pipe export.
+The state token from `Email/changes` is kept per account in
+`sync_scope_state`, so a run touches only the emails created, updated
+or destroyed since the last one (§"Incrementality"). To list and fetch
+the account again from nothing, reset the step (`datalib-dag --reset`).
+To mirror only some mailboxes, name them by their full label path
+(`Work/Projects`) in `only_extract_labels`.
 
 ## API surface used
 
@@ -123,6 +98,15 @@ A run does three things with emails, in this order:
    scopes were listed whole, and lists every email again so that all of
    them are owed. No other error does this: an `Email/changes` that
    fails is a `problems` row, and the run goes on with what is stored.
+   Listing again costs an `Email/get` of every email's envelope, but no
+   `.eml` the store already holds is downloaded again.
+
+   **Fastmail keeps less than two weeks of changes.** On a
+   277k-email account, a state token 14 days old was refused with
+   `cannotCalculateChanges`, so an account not synced for two weeks is
+   listed again on its next run. At 50 emails to an `Email/get`, that
+   was an hour of requests, nearly all of it spent waiting on Fastmail's
+   answers (about a second each, ~40 KB): hence the batch size in step 3.
 2. **Enumerates what is not listed whole.** The scopes wanted are the
    mailboxes `only_extract_labels` admits, or `*`. `Email/query` walks
    the ones with no `listed_whole` row, listing each page's ids; an
@@ -133,8 +117,10 @@ A run does three things with emails, in this order:
    `only_extract_labels` is therefore an admitted mailbox with no row,
    and it is enumerated until an enumeration of it finishes. A label
    path that matches no mailbox is a `problems` row.
-3. **Fetches what is owed** with `owed::drain`, fifty to an
-   `Email/get`, one transaction per batch: the email rows, their thread
+3. **Fetches what is owed** with `owed::drain`, one `Email/get` at a
+   time, each naming as many emails as the session's `maxObjectsInGet`
+   allows, up to 500 (50 for a server that states none, which RFC 8620
+   requires it to); one transaction per batch: the email rows, their thread
    rows and the stamp they satisfy. An email the server answers
    `notFound` for, or that a label filter keeps out, is gone: its
    listing, its row and whatever was held for it go.
@@ -260,10 +246,8 @@ with nothing listed to go on with.
   `succeeded`, and render reads what was committed. The next run
   downloads the rest, and the row clears once a run gets through the
   phase.
-- The `.eml` bodies wait in memory for their flush (256 of them, or
-  32 MB), then go to the CAS and their edge rows are written; each
-  write is a point where the run may seal. A run that is killed keeps
-  what it had sealed.
+- A run that is killed keeps what it had sealed: each `.eml` flush
+  (above) is a point where it may seal.
 
 **Gmail API.**
 
@@ -377,6 +361,9 @@ of a thread whose newest message the filter keeps, drop a thread the
 filter no longer keeps, and count a message the filter drops toward
 its thread; `jmap_mbox.rs` and `mbox.rs`'s own tests do the same for an
 mbox.
+`jmap_start_over_prunes.rs` lists an account again: what upstream
+destroyed meanwhile goes, and each `Email/get` names as many emails as
+the session's `maxObjectsInGet` allows.
 
 **Most tests call a download function directly**, with options they
 build by hand, so they do not see how a config becomes those options
@@ -497,6 +484,29 @@ every other provider's attachment edge. That keeps `emails` single-writer, so
 re-upserting a changed envelope (flag or move churn) never clobbers a stored
 hash.
 
+### The render's label filter
+
+When the render step sets `only_render_labels`, a thread renders if any
+of its emails is filed under one of those mailboxes, and the whole
+thread renders. The filter is decided in SQL (`KEPT_THREADS` in
+`email_render/src/render/parse.rs`): a run loads the rows of the
+threads it keeps and nothing of the others. On a full walk the threads
+it keeps out are listed by key alone, so that any documents they still
+have go.
+
+A run renders every thread the filter keeps, not just the changed ones,
+only when the mailbox tree changes in a way that can move a thread
+into or out of the filter: a mailbox added or removed, or its name or
+parent changed (`MAILBOX_TREE_MOVED`). Any other change to a mailbox
+row re-renders only the threads that looked that mailbox up. This
+matters because only a mailbox's counts are kept out of `payload`
+(they go in the sidecar's `volatile_payload`); every other key the
+server returns is stored as it came. Fastmail adds keys of its own to a
+mailbox (`autoLearn`, `hidden`, `splits`, `purgeOlderThanDays` and
+others), and it has been seen to drop them from one mailbox between two
+syncs; fanning out on that would re-render every thread the filter
+keeps for a change no document shows.
+
 ### Tables
 
 | table | shape |
@@ -508,4 +518,4 @@ hash.
 | `email_mailboxes`, `email_keywords` | N:M join tables with a synthesized `id` PK, refreshed delete-then-insert per email upsert; no sidecars. Indexed on `email_id`, which that delete and render's load both look up by, and on the other side (`mailbox_id`, `keyword`). `email_keywords` never holds `$seen` |
 | `read_marks` | one row per email: whether it was read (`read`) and whether its thread is muted (`muted`), keyed by the email's id; written with the email, gone with it |
 | `email_blobs` | CAS edge carrying the `.eml` `blake3`, NULL until the bytes land |
-| `ingested_files` | unused: the shared per-file cursor table, declared but written by no mode |
+| `ingested_files` | the shared per-file stamps (`datalib_etl_files`): `email/mbox_read` (an mbox read through), `email/takeout_seed` (a Takeout seeded beside `gmail`) and `email/apple_mail` (Mail's message files); JMAP writes none |

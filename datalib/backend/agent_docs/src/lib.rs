@@ -44,7 +44,7 @@ pub struct Applet {
 
 pub const APPLETS: &[Applet] = &[
     Applet {
-        name: "unified_document_index",
+        name: "unified_grid_and_search_index",
         does: "search, the grid and the documents, and what each source knows about a handle",
         topic: "applets",
     },
@@ -113,6 +113,13 @@ pub const DOCS: &[Doc] = &[
         kind: Kind::Guide,
         about: "building an app on datalib: syncing, freshness, a step of your own",
         text: include_str!("../../../../docs/user/building_on_datalib.md"),
+    },
+    Doc {
+        topic: "documents",
+        path: "docs/user/rendered_documents.md",
+        kind: Kind::Guide,
+        about: "showing a rendered document in your app: people, times, attachments",
+        text: include_str!("../../../../docs/user/rendered_documents.md"),
     },
     Doc {
         topic: "search",
@@ -191,6 +198,13 @@ pub const DOCS: &[Doc] = &[
         about: "how handles, source contacts and the contacts app fit together, every route \
                 and table",
         text: include_str!("../../../../docs/dev/contacts.md"),
+    },
+    Doc {
+        topic: "chips",
+        path: "docs/dev/chips.md",
+        kind: Kind::Reference,
+        about: "how datalib's viewer draws a person, a group, a step or a date, and its clicks",
+        text: include_str!("../../../../docs/dev/chips.md"),
     },
     Doc {
         topic: "writing-applets",

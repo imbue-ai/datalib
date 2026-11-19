@@ -72,9 +72,6 @@ other language it is one line:
 secret = open(os.environ["DATALIB_APPLET_SECRET_FILE"]).read().strip()
 ```
 
-An applet written against `DATALIB_APPLET_SECRET`, the variable that used to
-hold the secret itself, finds it unset and has to change to this.
-
 `id` must be a valid JavaScript identifier. It is both the mount
 prefix (`/applet/<id>/`) and a namespace in card source
 (`comp.<id>.<name>`), whose grammar only reads identifiers, so a dotted
@@ -236,6 +233,12 @@ exactly like ones a user dropped in by hand. Writing the two files
 yourself into `system/frontend/user/` defines a component with no
 applet and no config entry involved.
 
+**A component's card writes a date as `<time datetime="…">`** and the
+app draws it as the date chip a document draws, with its clicks
+(`chips.md` §"A date"; `ui/src/cards/appletDates.ts`). A component
+has none of the app's code, so this is how its dates follow the status
+bar's clock. A `datetime` the chip cannot read stays as written.
+
 ### Why the name is a hash and the metadata is separate
 
 Addressing code by content buys two things. The browser keeps one
@@ -382,12 +385,13 @@ A request to an applet that is configured but not running answers
 `502` with a JSON `error` naming it — a different message from one
 that is not configured at all, since the two want different fixes.
 One that is running but sends nothing for 30 seconds answers `504`,
-`applet "<id>" did not answer within 30s`. The `unified_document_index` applet
+`applet "<id>" did not answer within 30s`. The `unified_grid_and_search_index` applet
 builds a search's whole answer before sending any of it, so a big
-search on a machine short of memory is the usual cause there. A hung
-qmd is not: a search waits at most 20 seconds on qmd to embed its text
-(`EMBED_DEADLINE`), then stops it and answers with a `qmd_error`. The
-next search starts a fresh qmd.
+search on a machine short of memory is the usual cause there. The
+embedding model is not: a search by meaning waits at most 20 seconds for
+the model to be verified (`EMBED_DEADLINE`), and a model still on its
+way answers with a `search_error` naming it. Once loaded, the model
+stays loaded in the applet for every later search.
 
 A read the caller gives up on is hung up on: when the browser cancels
 a `GET` (a search the person has typed past), the gateway closes its
@@ -410,7 +414,7 @@ seconds for the same grandchild reason.
 
 ## An applet that contributes no components
 
-`unified_document_index` is the other shape the contract allows: a server that
+`unified_grid_and_search_index` is the other shape the contract allows: a server that
 contributes **endpoints only**. The
 grid, the document view and the document picker are builtins in the app
 bundle, so there is nothing to write into a namespace — the gateway
@@ -420,17 +424,17 @@ It is also the applet the app cannot run without. A data root whose
 config does not declare it has no search, which is why the scaffold and
 the config examples all write it and `datalib-migrate-config` carries it
 through. The
-UI calls it directly at `/applet/unified_document_index/…`; there is no `/api/`
-alias, and `datalib-http` does not know those routes exist. The one
-alias the gateway keeps is the prefix from before the rename:
-`/applet/unified_index/…` reaches the same applet, for card scripts
-written against it.
+UI calls it directly at `/applet/unified_grid_and_search_index/…`; there is no `/api/`
+alias, and `datalib-http` does not know those routes exist. The
+aliases the gateway keeps are the prefixes from before the renames:
+`/applet/unified_index/…` and `/applet/unified_document_index/…` reach
+the same applet, for card scripts and agents written against them.
 
 That is what makes the separation checkable rather than aspirational:
 
 ```sh
 bazel query 'somepath(//datalib/backend/http:datalib_http, \
-                      //datalib/backend/unified_document_index:datalib_unified_document_index)'
+                      //datalib/backend/unified_grid_and_search_index:datalib_unified_grid_and_search_index)'
 ```
 
 comes back empty. The index crate is linked by `datalib-step`, which
@@ -439,34 +443,25 @@ writes the indexes, and by `datalib-applet`, which serves them.
 ## Reference implementation
 
 `datalib/backend/applets` — `datalib-applet`, one subcommand per
-applet (`slack`, `unified_document_index`, `unified_time_series_index`,
+applet (`slack`, `unified_grid_and_search_index`, `unified_time_series_index`,
 `datalib_contacts` and `photos`), the same shape as `datalib-step`.
-`photos` draws a photo or video by the uuid of its grid row, from the
-`NormalizedPhoto` its render stored in the grid index: `/photos` a page
-of them newest taken first, `/photo/<uuid>` one, `/photo/<uuid>/image?size=thumb|full`
-its picture from the source's own previews (else its original, with
-`X-Datalib-Image-From: original`), `/photo/<uuid>/original` the file in
-byte ranges. Its component's metadata says `"serves": ["photo"]`, which
-is how the UI finds the applet to draw a `datalib:photo/…` name with
-(`docs/dev/plans/photos_applet.md`). One more,
-`search`, is not an applet: it answers one `/search` with no server,
-through the same function the route calls (`answer_search`), so the
-command and the search box cannot drift apart.
-`unified_time_series_index` serves the time-series index read-only:
-`GET /time_series` lists the time series (`?source_id=`, `?q=`),
-`GET /time_series/<id>` is one, and `POST /points` with
-`{ids, from, to, budget}` answers each one's points in the range, or,
-past `budget` points, that many buckets of min, max and mean
-(`etl/time_series/src/read.rs`). It reads the points from each
-source's own store, at the commit the index recorded for it
-(`docs/dev/time_series.md` §"The index"). `datalib_contacts` is the one that writes: it is the
-only writer of the contacts store under `datalib_curated/`
-(`app_stores.md`), and like `unified_document_index` it contributes endpoints
-only, which the document view calls; one of them,
-`/photo/<contact_id>`, serves the photo a person put on a contact (and
-takes one with `PUT`, drops it with `DELETE`). Its routes are registered
-together with what each says about itself (`datalib_contacts/api.rs`), and
-`GET /` and `--help` list them. One
+Each one's routes are in [`docs/user/applets.md`](../user/applets.md).
+`photos` reads the `NormalizedPhoto` each render stored in the grid
+index, and says where a picture came from in `X-Datalib-Image-From`
+(`original` when no preview served). Its component's metadata says
+`"serves": ["photo"]`, which is how the UI finds the applet to draw a
+`datalib:photo/…` name with (`docs/dev/plans/photos_applet.md`). One
+more, `search`, is not an applet: it answers one `/search` with no
+server, through the same function the route calls (`answer_search`), so
+the command and the search box cannot drift apart.
+`unified_time_series_index` reads the points from each source's own
+store, at the commit the index recorded for it
+(`etl/time_series/src/read.rs`; `docs/dev/time_series.md` §"The
+index"). `datalib_contacts` is the one that writes: it is the only
+writer of the contacts store under `datalib_curated/` (`app_stores.md`),
+and like `unified_grid_and_search_index` it contributes endpoints only.
+Its routes are registered together with what each says about itself
+(`datalib_contacts/api.rs`), and `GET /` and `--help` list them. One
 binary rather than one per applet keeps the shared machinery in one
 place and ships one file instead of a growing list; adding an applet is
 a subcommand plus a module, not a new crate and five packaging edits.

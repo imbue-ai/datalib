@@ -85,7 +85,8 @@ rollback journal makes one write per file slow. `wanted`, in `changes_since`,
 says which files are this source's: a file it left out is not one it failed to
 read, and a file it named and did not read holds back every deletion, since a
 vanished file may have gone there. `agent_sessions`, `calendar`, `contacts`,
-`airvisual`, `pdf`, `whatsapp` and Takeout's feeds read this way.
+`airvisual`, `pdf`, `whatsapp`, email's Apple Mail copy and Takeout's
+feeds read this way.
 
 **A source that needs hashes before it reads calls `file_changes_scan::scan`**, which is
 `list` then `Listing::hashed`, hashing on every core. Three reasons to: it never
@@ -105,12 +106,11 @@ transaction, so a crash partway through keeps what landed and re-reads only
 the rest. A file stamped again with the same bytes keeps its stamp, so a
 source that reads an unchanged file again commits nothing for it.
 
-**A file that is gone takes its records with it.** `changes.removed` names
-every path the cursor has and the scan does not. A source whose rows are keyed
-by path (a `.vcf` file is one address book, an `.ics` file one calendar) reads
-`needs_reading_by_path()`, which counts a moved file as new at its new path,
-then deletes the rows of each path in `gone_by_path(&read)` and calls
-`forget_file` in the same transaction. The path is removed from the cursor
+**A file that is gone takes its records with it.** A source whose rows are
+keyed by path (a `.vcf` file is one address book, an `.ics` file one calendar)
+reads each file through `read_if_changed_by_path`, which reads a moved file as
+new at its new path, then deletes the rows of each path in
+`gone_by_path(&read)` and calls `forget_file` in the same transaction. The path is removed from the cursor
 only then, so a crash in between just retries. `gone_by_path` is empty
 whenever the walk reported an error, because a folder that failed to list
 looks the same as one whose files were deleted. Report `scan.walk_problems()`
@@ -137,7 +137,7 @@ all, or entries none of which it could read — is an error: nothing is
 stored or deleted, and the file is not marked read. A file missing from
 the scan deletes nothing either: for an export,
 a product left out of the request looks exactly like that. Takeout's
-folder feeds hold to the same rule one level up (`product_exported`).
+folder feeds hold to the same rule one level up (`Scan::any_under`).
 
 **A file as the root is that file.** `scan` of a file walks only that
 file's folder, one level deep, and keeps that one name: its `rel` is the
@@ -197,7 +197,7 @@ holds back while one is unread, since that file may hold anything.
 The walk lists folders on every core and takes each file's stat with its
 folder's listing where the platform can (`getattrlistbulk` on macOS). Measured
 on 1.2M files in 13.6k folders, warm: about 13s one stat at a time on one core,
-2.85s now. Skipping the listing of an unchanged folder, as `file_inventory`'s walker
+2.85s this way. Skipping the listing of an unchanged folder, as `file_inventory`'s walker
 does, saves almost nothing here: the listing is the cheap part, and a folder's
 mtime does not move when a file in it is written in place, so its files still
 need their stats. Asking macOS what changed instead would skip those stats, and

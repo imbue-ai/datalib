@@ -17,7 +17,7 @@ pub const DIFF_GROUP_TYPE: &str = "diff";
 /// The words after `run` in a step's command.
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 pub struct RunArgs {
-    /// What the step does: `ingest`, `render_markdown`, `grid_index`, …
+    /// What the step does: `ingest`, `render_markdown`, `embed`, …
     /// The second part of its id, which is `<group>/<function>`.
     pub function: String,
     /// Its group's `type`: the provider (`slack`, `email`, …), or `diff`.

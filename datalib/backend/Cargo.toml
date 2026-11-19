@@ -16,7 +16,7 @@
 
 [package]
 name = "datalib-crates"
-version = "0.51.0"
+version = "0.55.0"
 edition = "2021"
 rust-version = "1.83"
 publish = false
@@ -35,7 +35,7 @@ anyhow = "1.0"
 async-trait = "0.1"
 axum = "0.8"
 base64 = "0.23"
-blake3 = { version = "1", default-features = false, features = ["mmap", "pure", "rayon", "std"] }
+blake3 = { version = "1", default-features = false, features = ["mmap", "rayon", "std"] }
 candle-core = "0.11"
 candle-nn = "0.11"
 candle-transformers = "0.11"
@@ -66,6 +66,7 @@ jiff = { version = "0.2", default-features = false, features = ["std", "tzdb-bun
 kamadak-exif = "0.6"
 libc = "0.2"
 lofty = "0.25"
+log = "0.4"
 lopdf = { version = "0.45", default-features = false }
 mail-parser = "1.0"
 md-5 = "0.11"

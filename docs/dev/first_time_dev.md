@@ -15,18 +15,18 @@ brew install bazelisk
 # it on the Python the repo pins. The build and the tests do not use it.
 brew install uv
 
-# That is all: Node, qmd and latchkey are Bazel inputs, so the build
+# That is all: Node and latchkey are Bazel inputs, so the build
 # needs nothing in your home directory. The binaries shell out to
-# latchkey and qmd through a staged `runtime/` tree (the dev launchers
+# latchkey through a staged `runtime/` tree (the dev launchers
 # stage one; see "Re-run ingestion" below), never through a host Node.
-# A sync's first `embed` step fetches the pinned embedding model,
-# sha256-verified, into qmd's cache (`~/.cache/qmd/models`).
+# A sync's first search-index pass fetches the pinned embedding model,
+# sha256-verified, into the shared cache (`~/.cache/qmd/models`).
 ```
 
 ### Linux iteration via devcontainer
 
-If you're debugging a Linux-only build issue (e.g. one the macOS host masks
-because clang is more permissive than gcc), `.devcontainer/` ships the
+If you're debugging a Linux-only build issue (glibc, GNU tools, the
+hermetic LLVM toolchain Linux builds with), `.devcontainer/` ships the
 Ubuntu image CI runs `bazel test //...` in. Open in VS Code via
 "Reopen in Container", or from the CLI:
 
@@ -38,6 +38,47 @@ devcontainer exec --workspace-folder . bazelisk build //datalib/backend:dist -c 
 Caches (bazel output base, disk cache, npm cache) live in named volumes
 so rebuilds aren't cold.
 
+### Claude Code cloud environments
+
+A Claude Code session on the web runs in a VM built from Anthropic's
+Ubuntu 24.04 image, which cannot be swapped for ours. What it lacks is
+installed by [`scripts/cloud_env_setup.sh`](../../scripts/cloud_env_setup.sh):
+bazelisk and the few packages the devcontainer adds. In the
+environment's settings on claude.ai/code:
+
+- **Setup script**: paste that file's text. The VM is snapshotted after
+  it runs, and the snapshot is reused until the pasted text changes, so
+  a change to the file reaches the environment only when it is pasted
+  again.
+- **Network access**: Limited, with "Allow package managers" on, and
+  these added to the allowed domains: `bcr.bazel.build`,
+  `releases.bazel.build`, `mirror.bazel.build`, `nodejs.org`,
+  `huggingface.co`, `*.huggingface.co`, `*.hf.co`, and
+  `imbue.buildbuddy.io` for the cache. GitHub, crates.io, PyPI, npm and
+  `static.rust-lang.org` are allowed already. The list comes from the
+  URLs in `MODULE.bazel` and its lockfile. A fetch that fails naming
+  another host means that host belongs on the list.
+- **Environment variables**: `BUILDBUDDY_API_KEY=<your key>`, for the
+  contributor cache. At the start of every session the SessionStart hook
+  in [`.claude/settings.json`](../../.claude/settings.json) runs
+  [`scripts/cloud_session_start.sh`](../../scripts/cloud_session_start.sh),
+  which writes `.bazelrc.user` from it the way CI's `prepare-bazel`
+  does. Without the variable the hook does nothing, and the first build
+  in a session compiles everything on the VM's 4 vCPUs.
+
+**Keep an environment that holds a key to yourself.** Anyone who uses
+an environment can read its variables. One you create is personal; the
+"Who can use it" row is what shares it with the whole organization, so
+leave it alone. Inside the VM the key is as exposed as on a laptop: any
+build script can read `.bazelrc.user`
+([`security_posture.md`](security_posture.md)).
+
+The VM has about 4 vCPUs, 16 GB of memory and 30 GB of disk. The hook
+turns bazel's local disk cache off, since BuildBuddy is the cache and
+the disk is small.
+`//datalib/ui:e2e_test` needs Playwright's browsers, which the script
+does not install.
+
 ## What's in the repo
 
 Two coupled projects that mirror personal data into a queryable local store:
@@ -45,31 +86,13 @@ Two coupled projects that mirror personal data into a queryable local store:
 - **`datalib/backend/`** — Rust workspace that downloads + ingests LLM
   chat exports and other sources (Claude, ChatGPT, Slack, GitHub, GitLab,
   Notion, and more — see the [README](../../README.md) table) into a
-  doltlite DB, renders one Markdown file per conversation, builds a qmd
+  doltlite DB, renders each document's markdown into a store, builds a
   search index, and serves the result over axum / Tauri.
 - **`datalib/ui/`** — Vue 3 UI that searches and views the mirrored
   data, packaged as a Tauri desktop app and a Docker image.
 
-```
-.
-├── MODULE.bazel              Bzlmod root
-├── BUILD.bazel               :all_tests aggregator, :precommit, :lint
-├── docs/                     dev/ architecture notes · user/ guides + config_examples
-├── tests/fixtures/           the TNG fixture pipeline (the ingested_tng genrule)
-└── datalib/
-    ├── backend/              Rust crates (Bazel); Cargo.toml lists their third-party deps
-    │   ├── schema/           render schema: grid_rows / edges / markdowns structs
-    │   ├── app_schema/       app-state schema: feedback / disk usage / remote media / runs
-    │   ├── core/             the app stores + deeplink grammar
-    │   ├── etl/              shared ingest machinery; etl/render/ the render framework
-    │   ├── etl/providers/*/  per-provider ingest / render / config crates
-    │   ├── qmd_indexer/      the qmd index's operations, over qmd's SDK
-    │   ├── dag/              datalib-dag DAG runner (sync orchestrator)
-    │   ├── datalib_step/     datalib-step built-in step commands
-    │   └── http/             axum binary
-    ├── ui/                   Vue 3 + Vite + Pinia + Vue Router + Vitest
-    └── tauri/                Tauri shell (out of Bazel)
-```
+Where each crate and directory is, and what belongs in it:
+[`AGENTS.md`](../../AGENTS.md) §"Repo layout".
 
 ## Building & testing
 
@@ -205,8 +228,8 @@ as a subprocess. Datalib's own steps write
 `command = "datalib-step run <function> <type>"`
 (`//datalib/backend/datalib_step:datalib_step`) — `ingest`
 brings a source's data into its raw store, `render_markdown` renders
-markdown + its store, and `grid_index` loads every render store into
-`<root>/unified_document_index/grid_index/db.sqlite`. See
+markdown + its store, and `unified_grid_and_search_index` loads every render store into
+`<root>/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`. See
 [`step_protocol.md`](step_protocol.md) for the step contract and
 [`datalib/backend/dag/README.md`](../../datalib/backend/dag/README.md)
 for the runner's rules.
@@ -249,8 +272,8 @@ fetched: [`step_protocol.md`](step_protocol.md) §"Running
 `datalib-step` by hand". Use a root no app is serving; on one the app
 serves, `datalib-dag <config> --sync <step>` is the way.
 
-A sync also spawns `latchkey` and `qmd`, which the binaries run from a
-`runtime/` tree (Node plus both package trees, lockfile-pinned by
+A sync also spawns `latchkey`, which the binaries run from a
+`runtime/` tree (Node plus latchkey's package tree, lockfile-pinned by
 Bazel) found beside themselves or through `DATALIB_RUNTIME_DIR` — a
 release install fetches it instead, see `runtime_fetch.md`. The
 `bazel run //datalib:serve|dev|dev_tng` launchers stage one for you;
@@ -267,56 +290,60 @@ live registry instead — a dev-only escape hatch that warns once per
 process per package, because the transitive packages are unpinned and
 their install scripts run.
 
-### QMD search index (default-on, incremental)
+### Search index (default-on, incremental)
 
-Three kinds of step build the qmd search index. Each source's
-`keyword_index` registers the source's qmd collection and brings its
-keyword index in line with its rendered tree; its `embed` embeds what
-that collection is missing, after putting the pinned, sha256-verified
-embedding model in place through `datalib_qmd_models`, so qmd never
-fetches a model itself. `unified_document_index/qmd_aggregator` reads every
-source's pair, so it runs after them: it retires the collection of any
-source it does not name and reports what each holds. All three drive qmd's
-SDK from the staged runtime tree (above) through
-`datalib/backend/qmd_indexer/`, with
-`XDG_CACHE_HOME=<root>/unified_document_index/qmd_aggregator`, so the one index lands
-at `<root>/unified_document_index/qmd_aggregator/qmd/index.sqlite` (each collection
-scans `<root>` with the `<group>/render_markdown/**/*.md` mask),
-alongside the per-source `<group>/render_markdown/` trees and
-`unified_document_index/grid_index/db.sqlite`. This is what a search matches
-words and meaning against (see `datalib/backend/unified_document_index/src/qmd/`).
+Two kinds of step build the search index
+([`datalib/backend/search_index`](../../datalib/backend/search_index)).
+`unified_grid_and_search_index`, after the grid, brings each searched source's documents in
+the index in line with its render store: it writes each changed
+document's words into `search_*` tables of the grid index's file,
+`unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`,
+SQLite's FTS5 ranked by BM25, with no embedding model. Each source's
+`embed` cuts each of its documents the keyword index holds into chunks,
+when the document changed since it last did, and files them in the
+inference cache,
+`unified_grid_and_search_index/search_index/inference_cache.sqlite`, then
+embeds every chunk there with no vector, in process
+(`datalib/backend/embedder`, llama.cpp). It puts the pinned,
+sha256-verified embedding model in place through
+`datalib_embedding_models` only when it has something to cut or embed.
+`unified_grid_and_search_index` also sweeps the vectors no chunk names,
+and reports what each source holds. This is what a search matches words and meaning against (see
+`datalib/backend/unified_grid_and_search_index/src/search_index.rs`).
 
 Design notes:
 
-- **Incremental**. qmd's `documents` table is unique on `(collection,
-  path)` and records each file's content hash, and `content_vectors` is
-  keyed by that hash, so a re-run only
-  rechunks files whose bytes changed and only re-embeds content hashes with
-  no existing vector row. Deletes are detected (rows marked `active=0`) and
-  orphaned content is cleaned.
-- **First run is slow** — embedding all chunks for a fresh `<root>` takes
-  several minutes on CPU (a one-time cost, roughly 5–10 minutes per thousand
-  unembedded chunks). Each `embed` step reports its progress in bytes; an
-  embed is resumable, so stopping and re-running is safe, and turning one
-  source's `embed` off leaves the rest running. Once the backlog drains,
-  re-runs are no-ops (a couple of seconds).
-- **Models cache**: qmd's embedding model (~300 MB) is shared across data
-  roots via a symlink at `<root>/unified_document_index/qmd_aggregator/qmd/models ->
-  ~/.cache/qmd/models` (qmd's own default, `$XDG_CACHE_HOME/qmd/models`
-  when that is set, so a standalone `qmd` run shares the same cache).
+- **Incremental**. A document is indexed, and cut into chunks, under its
+  render's content hash, so a keyword pass and an embed each redo only
+  documents whose render changed, and a vector is kept under the hash of
+  exactly what the model was shown, so an embed embeds only chunks whose
+  prompt is new. The chunks sit beside the vectors, so emptying the
+  keyword index for a new shape cuts nothing again.
+- **First run is slow**: embedding every chunk of a fresh root takes
+  minutes on CPU. An embed is resumable, so stopping and re-running is
+  safe, and turning one source's `embed` off leaves the rest running.
+  Once the backlog drains, re-runs are no-ops.
+- **Chunks are cut in the model's tokens**: 900 a chunk, so every prompt
+  fits the 2,048 the model reads. An embed reads the tokenizer from the
+  model file without its weights, and only when a document needs cutting;
+  a chunk filed earlier is shown to the model from its span, with no
+  tokenizer (`search_index/src/chunk.rs`).
+- **Models cache**: the embedding model (~300 MB) is shared across data
+  roots in `~/.cache/qmd/models` (`$XDG_CACHE_HOME/qmd/models` when that
+  is set), unless a root has its own `unified_grid_and_search_index/models`.
   Override with `datalib-step --models-dir`; `datalib-step pull-models`
-  fetches them ahead of time.
+  fetches it ahead of time.
 
 ### Manual integration tests (live provider APIs)
 
-Several provider crates ship a `*_live` snapshot test that hits the real
-service API through `latchkey`:
-`//datalib/backend/etl/providers/claude:claude_live`, plus the
-sibling `chatgpt_live`, `github_live`, `gitlab_live` and `notion_live`
-targets. Each downloads a small known fixture (e.g. one conversation),
-then asserts a curated stable view against committed
-[insta](https://insta.rs) snapshots. `email:gmail_live` is the one that
-does not: it downloads and checks the store it wrote, with no golden.
+Several provider crates ship a `*_live` target that hits the real
+service API through `latchkey` (`git grep -n 'name = ".*_live"' --
+'*.bazel'` lists them). `claude_live`, `chatgpt_live`, `github_live`,
+`gitlab_live` and `notion_live` each download a small known fixture
+(e.g. one conversation), then assert a curated stable view against
+committed [insta](https://insta.rs) snapshots. The others
+(`email:gmail_live`, `calendar_live`, `google_drive_live`,
+`todoist_live`) check what they downloaded with no golden.
 They are `bazel run` targets, not tests, so `bazel test //...` never
 runs them. They need `latchkey` creds for the service and
 `LATCHKEY_CURL` pointing at the router curl (which hands
@@ -379,7 +406,9 @@ which applies the same 7-day burn-in.
 
 ## What Bazel does not own
 
-- The Tauri shell and its bundler (`pnpm tauri` / `cargo tauri`); only
-  `datalib/tauri/src/launcher.rs` is compiled under Bazel, to run its tests.
+- The Tauri shell and its bundler (`pnpm tauri` / `cargo tauri`); Bazel
+  compiles only the shell's files that are kept free of `tauri`, to run
+  their tests ([`datalib/tauri/README.md`](../../datalib/tauri/README.md)
+  names them).
 - The Docker image, built from the release tarball
   ([`docker.md`](docker.md)).

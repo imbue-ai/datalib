@@ -24,36 +24,38 @@ always means the server restarted and minted a new one.
 
 ## The model
 
-The sync pipeline is driven by `<root>/config.toml`. `[[groups]]` is
-what a person sees as one thing: an `id` (one directory name), a
-`name`, and for a source a `type`. `[[steps]]` is the pipeline: each
-step has an `id` — the one tree it writes, whose first part is its
-group — the `command` it runs, and the `inputs` it reads. Datalib's
-own steps run `datalib-step run <function> [<type>]` (the functions
-`ingest`, `render_markdown`, `keyword_index`, `embed`, `grid_index`,
-`qmd_aggregator` and `embedding_map`), with an id of
-`<group>/<function>` and the group's `type` as `<type>`; a custom step
-names its own program. `[[applets]]` is the app surface — long-lived
-servers that contribute card components and the endpoints behind
-them, filed under a group but declaring no inputs because they read
-what steps wrote. This guide is about groups and steps; for applets
-see `datalib-step help applets`. Edges are the declared `inputs`, which
-name steps by id — file order does not matter to the runner. It does
-to a person: the Sources screen lists groups and steps in file order,
-and writes them in the order data flows, each source above the
-`unified_document_index` group and each step below the steps it reads.
-Write yours the same way. A step with no `inputs` is a **source step**
-(where a sync normally starts); every source feeds the two fan-in steps
-under the `unified_document_index` group.
+The sync pipeline is driven by `<root>/config.toml`, which holds three
+kinds of entry. `[[groups]]` is what a person sees as one thing: an
+`id` (one directory name), a `name`, and for a source a `type`.
+`[[steps]]` is the pipeline: each step has an `id` — the one tree it
+writes, whose first part is its group — the `command` it runs, and the
+`inputs` it reads. Datalib's own steps run `datalib-step run <function>
+[<type>]` (the functions `ingest`, `render_markdown`,
+`render_time_series`, `render_occurrences`, `embed`,
+`unified_grid_and_search_index`, `embedding_map` and
+`time_series_index`), with an id of `<group>/<function>` and the
+group's `type` as `<type>`; a custom step names its own program.
+`[[applets]]` is the app surface — long-lived servers that contribute
+card components and the endpoints behind them, filed under a group but
+declaring no inputs because they read what steps wrote. This guide is
+about groups and steps; for applets see `datalib-step help applets`.
+Edges are the declared `inputs`, which name steps by id — file order
+does not matter to the runner. It does to a person: the Sources screen
+lists groups and steps in file order, and writes them in the order data
+flows, each source above the `unified_grid_and_search_index` group and
+each step below the steps it reads. Write yours the same way. A step
+with no `inputs` is a **source step** (where a sync normally starts);
+every source feeds the fan-in step under the
+`unified_grid_and_search_index` group.
 
 Each `datalib-step` step also says how it reads its inputs and which
 locks it holds, because the runner works out nothing from the program's
 name: copy `reads` and `locks` exactly as below. `locks` keeps the
-steps that write the one search index from running at once, and every
-lock a step holds needs a `[[locks]]` entry. The `[[programs]]` entry
-says which requests (a reset, the check at each start, freeing disk)
-`datalib-step` understands. A config the app wrote already has all
-three entries at the top:
+embeddings from loading the model twice at once, and the index steps to
+a budget of their own, and every lock a step holds needs a `[[locks]]`
+entry. The `[[programs]]` entry says which requests (a reset, the check
+at each start, freeing disk) `datalib-step` understands. A config the
+app wrote already has all three entries at the top:
 
 ```toml
 [[programs]]
@@ -65,11 +67,7 @@ name = "index"
 slots = 2
 
 [[locks]]
-name = "qmd_keyword"
-slots = 1
-
-[[locks]]
-name = "qmd_embed"
+name = "embedder"
 slots = 1
 
 # One source = a group with a `type`, plus an ingest step and a
@@ -96,43 +94,31 @@ command = "datalib-step run render_markdown slack"
 inputs = ["slack/ingest"]
 reads = "pinned"
 
-# The source's own part of free-text search: its keyword index, then
-# its embeddings (the slow one). Leave both out, here and in
-# `qmd_aggregator` below, to keep it out of search.
-[[steps]]
-id = "slack/keyword_index"
-command = "datalib-step run keyword_index slack"
-inputs = ["slack/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# The source's search by meaning: the embeddings of what
+# `unified_grid_and_search_index` put in the keyword search (the slow
+# one). Leave it out and keyword search still finds the source.
 [[steps]]
 id = "slack/embed"
 command = "datalib-step run embed slack"
-inputs = ["slack/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
-# The shared fan-in steps. Add a source's render step id to
-# `grid_index`'s inputs, and its `keyword_index` and `embed` to
-# `qmd_aggregator`'s, which runs after them and drops from search any
-# source it does not name.
+# The shared fan-in step. It reads every source's render by pattern, so
+# a source added above needs no edit here: `*/render_markdown` is every
+# source's render. `unified_grid_and_search_index` puts every source it reads in the
+# keyword search but those it lists in `params.not_searched`, and keeps
+# only the embeddings a chunk still names. Name renders one by one
+# instead to leave a source out of the grid on purpose.
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-id = "unified_document_index/grid_index"
-command = "datalib-step run grid_index"
-inputs = ["slack/render_markdown"]
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "datalib-step run unified_grid_and_search_index"
+inputs = ["*/render_markdown"]
 reads = "pinned"
 locks = ["index"]
-
-[[steps]]
-id = "unified_document_index/qmd_aggregator"
-command = "datalib-step run qmd_aggregator"
-inputs = ["slack/keyword_index", "slack/embed"]
-reads = "pinned"
-locks = ["qmd_keyword"]
 ```
 
 Any top-level keys (`data_root`, `binary_dir`) must be written *above*
@@ -194,7 +180,7 @@ entries it names. (A `warning` drops nothing and does not block a PUT.)
 
 `app_ready` on `GET /api/config` is the separate question of whether the
 app can serve anything at all: false when the file is not a config,
-when it declares no `unified_document_index` applet, or when the data root was
+when it declares no `unified_grid_and_search_index` applet, or when the data root was
 written by a newer datalib. The UI blocks on it.
 
 The config is always TOML in the shape above — the server reads and
@@ -203,21 +189,20 @@ writes no other. A config in the oldest retired shape (steps with a
 refused, and the diagnostic says so; tell the user to rewrite it once
 with
 `datalib-migrate-config <data_root> --force`. There is no API for it,
-and you should not try to translate the file yourself. Every later
-retired shape the server rewrites itself as soon as it reads the file,
-keeping the old one as `config.toml.bak`, so re-read the config after
-writing one. That includes steps written as `group` + `function`, a
-bare `command = "datalib-step"`, and the top-level
-`checkpoint_cadence`, `render_pages` and `embed_contexts`, which become
-variables in `[env]`. A `qmd_index`
-step is another: the server rewrites it into `qmd_aggregator` and each
-source's own `keyword_index` and `embed` steps as soon as it reads the
-file, keeping the old one as `config.toml.bak`, so re-read the config
-after writing one. The same goes for an index group still named
-`unified_index`: the server renames it, its steps and its applet to
-`unified_document_index`. And for an id with capitals in it: every
-group, step and applet id is lower case, since each names a folder,
-and the server lowercases one it finds and moves its folder.
+and you should not try to translate the file yourself. Every other
+older shape the server rewrites itself as soon as it reads the file,
+keeping the old text as `config.toml.bak`, so re-read the config after
+writing one: steps written as `group` + `function`, a bare `command =
+"datalib-step"`, the top-level `checkpoint_cadence`, `render_pages` and
+`[modal]` (which become variables in `[env]`), a `qmd_index`,
+`keyword_index` or `qmd_aggregator` step (each source's `embed` and
+`unified_grid_and_search_index` do that work, and a source that was not
+keyword-indexed is listed in the index step's `params.not_searched`), a
+`grid_index` step (the index step's old function), the index group under
+an earlier name (`unified_index`, `unified_document_index`), a lock
+named `qmd_embed` (now `embedder`), and an id with capitals in it (every
+id is lower case, since each names a folder, and the server moves the
+folder too). `datalib-step help config-model` lists every rewrite.
 
 ## Adding your own step commands
 
@@ -240,9 +225,9 @@ with their output captured into the run's log (the Manage tab shows it).
 
 Steps run with the data root as their working directory and write the
 one tree their id names, which is what downstream steps' `inputs` name
-— a new source should ultimately produce rendered markdown under
-`<group>/render_markdown`, and that id added to the index steps' `inputs`,
-so the shared index steps pick it up.
+— a new source should ultimately keep its rendered documents in
+`<group>/render_markdown`, which the index step's `*/render_markdown`
+then reads with no edit.
 
 ## Checking your work
 
@@ -257,5 +242,4 @@ so the shared index steps pick it up.
 - `POST <origin>/api/requests` with `{"roots": ["<step id>", …]}` syncs
   those steps and everything downstream of them (`{}` syncs every
   source). A source step always runs, any other only if it is out of
-  date, and nothing upstream of a root runs but a render whose store is
-  in a shape this build no longer writes, which runs before what reads it.
+  date, and nothing upstream of a root runs.

@@ -31,3 +31,21 @@ pub const TIME_SERIES_INDEX_GROUP: &str = "unified_time_series_index";
 pub struct CheckpointCadence {
     pub at_most_every_secs: f64,
 }
+
+/// Which index step reads every source's step of a function, as
+/// `(source function, index group, index function)`. The index step reads
+/// them by pattern (`*/render_markdown`), so a source added later is read
+/// without its entry being touched.
+pub const FAN_INS: &[(&str, &str, &str)] = &[
+    (
+        "render_markdown",
+        "unified_grid_and_search_index",
+        "unified_grid_and_search_index",
+    ),
+    ("embed", "unified_grid_and_search_index", "embedding_map"),
+    (
+        "render_time_series",
+        TIME_SERIES_INDEX_GROUP,
+        "time_series_index",
+    ),
+];

@@ -15,5 +15,6 @@ pub mod parse;
 #[allow(clippy::module_inception)]
 pub mod render;
 pub mod toc;
+mod tree;
 
 pub use parse::{parse_api_dir, ParsedNotion};

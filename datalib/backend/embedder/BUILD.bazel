@@ -1,0 +1,113 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+# Text to vectors in process, with llama.cpp (//third-party/llama_cpp)
+# running a GGUF embedding model, for the search index
+# (docs/dev/plans/search_index_from_ram.md).
+cc_library(
+    name = "embedder_shim",
+    srcs = ["csrc/embedder.cpp"],
+    hdrs = ["csrc/embedder.h"],
+    copts = [
+        "-O2",
+        "-fPIC",
+    ],
+    cxxopts = ["-std=c++17"],
+    deps = ["@llama_cpp//:llama"],
+)
+
+rust_library(
+    name = "datalib_embedder",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_embedder",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        ":embedder_shim",
+        "//datalib/backend/env:datalib_env",
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:anyhow",
+    ],
+)
+
+# The TNG fixture's vectors (`//tests/fixtures:ingested_tng_vectors`). It
+# links the embedder alone, so nothing but the embedder, the model and
+# the prompts makes Bazel embed again.
+rust_binary(
+    name = "embed_prompts",
+    srcs = ["tools/embed_prompts.rs"],
+    edition = "2021",
+    visibility = ["//tests/fixtures:__pkg__"],
+    deps = [
+        ":datalib_embedder",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
+    ],
+)
+
+# Holds a machine's GPU to its CPU (tools/gpu_check.rs). Built in CI with
+# libggml-cuda.so (.github/workflows/cuda.yml), run where there is a GPU.
+rust_binary(
+    name = "gpu_check",
+    srcs = ["tools/gpu_check.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_embedder",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
+    ],
+)
+
+rust_test(
+    name = "embedder_unittests",
+    size = "small",
+    crate = ":datalib_embedder",
+    edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
+)
+
+# The embedding behaviour datalib depends on (README.md), one test per
+# fact. Run it after every llama.cpp or model bump; a fact that moved fails
+# by name.
+rust_test(
+    name = "embedding_facts",
+    size = "medium",
+    srcs = ["tests/embedding_facts.rs"],
+    data = ["//third-party/embedding_models:embeddinggemma"],
+    edition = "2021",
+    env = {
+        "EMBED_MODEL_RLOC": "$(rlocationpath //third-party/embedding_models:embeddinggemma)",
+    },
+    tags = ["cpu:2"],
+    deps = [
+        ":datalib_embedder",
+        "@datalib_crates//:runfiles",
+    ] + select({
+        "@platforms//os:linux": ["@datalib_crates//:libc"],
+        "//conditions:default": [],
+    }),
+)
+
+# The embedder against qmd's own answers on the same texts, captured once
+# (tests/qmd_cpu_golden.json), on the pinned model.
+rust_test(
+    name = "parity_test",
+    size = "medium",
+    srcs = ["tests/parity.rs"],
+    data = [
+        "tests/qmd_cpu_golden.json",
+        "//third-party/embedding_models:embeddinggemma",
+    ],
+    edition = "2021",
+    env = {
+        "EMBED_MODEL_RLOC": "$(rlocationpath //third-party/embedding_models:embeddinggemma)",
+        "QMD_GOLDEN_RLOC": "$(rlocationpath tests/qmd_cpu_golden.json)",
+    },
+    tags = ["cpu:2"],
+    deps = [
+        ":datalib_embedder",
+        "//datalib/backend/search_index:datalib_search_index",
+        "@datalib_crates//:runfiles",
+        "@datalib_crates//:serde_json",
+    ],
+)

@@ -115,7 +115,7 @@ Reach for the simplest existing provider that's shaped like yours,
    render side. See
    [Every provider documents itself, in the same place](#every-provider-documents-itself-in-the-same-place).
 
-The grid index needs no per-provider change: the `grid_index` step
+The grid index needs no per-provider change: the `unified_grid_and_search_index` step
 (`build_grid_index` in `etl/render/src/grid_index.rs`) picks up the new
 source's render store on its next run.
 
@@ -209,8 +209,8 @@ Prefer measurements over adjectives, and say which input you measured on
 so the next person can reproduce the number rather than wonder whether
 it went stale.
 
-Not every provider meets this yet: `contacts`, `linkedin`, `perseus`,
-`signal` and `sms_backup_restore` have no `INGEST.md`, and only a few
+Not every provider meets this yet: `contacts`, `linkedin`, `perseus`
+and `sms_backup_restore` have no `INGEST.md`, and only a few
 render crates have a `TRANSLATE.md`. `ls
 datalib/backend/etl/providers/*/*.md` is the current state. Adding one
 to a provider you are already working in is a welcome thing to do.
@@ -298,11 +298,13 @@ leave the system clean. A single GC pass should reclaim the source's
 raw store, its blob CAS, its `<group>/render_markdown/` tree, and its
 `grid_rows` rows — without disturbing other sources.
 
-**Open**: nothing does this, and we haven't decided what it should
-mean. There is no GC at all — not for the blob side either. If a user
-removes Slack from their config, what is the expected sequence of
-operations, and what reclaims the CAS bytes no edge table points at any
-more?
+**Open**: only the index does its part: a source its step no longer
+reads loses its rows, problems and cursor there (`retire_source` in
+`etl/render/src/grid_index.rs`). Nothing reclaims the raw store, the
+blob CAS or the render tree, and we haven't decided what it should
+mean. If a user removes Slack from their config, what is the expected
+sequence of operations, and what reclaims the CAS bytes no edge table
+points at any more?
 
 ### Multi-account / multi-instance within a provider type
 

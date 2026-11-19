@@ -189,7 +189,13 @@ step gets the resulting filter as `RUST_LOG`. Third-party crates
 follow it down to `info` and no further, and the noisy ones stay at
 `warn` (`datalib_log_filter`); the server's own `http.*` targets count
 as datalib's. A `RUST_LOG` set where a process was
-started wins over all of that. The store keeps every level it is
+started wins over all of that. A library that logs through the `log` crate
+rather than `tracing` (html5ever does, on every token it parses) is
+stopped at that crate's own level gate, which a step sets to the most
+verbose level any directive allows a library
+(`datalib_obs::init`), so a line the filter would refuse costs one
+comparison rather than a trip through it; none of our crates uses
+`log`, which is what makes that safe. The store keeps every level it is
 handed — `debug` is where a doltlite commit or a batch of rows goes —
 and the log card opens at `min_level:info`, so the lower levels are
 there when asked for and not otherwise. Little emits `trace` today:
@@ -219,9 +225,17 @@ which never end, keep sqlx's own `warn`.
 
 **A migration says so from its start.** A step asked to migrate first
 says `migrate: updating the raw store for this build; nothing is
-downloaded`, as a line and as its status, and each rung says `migrating
-the store: <its name>` before it runs and `migrated`, with its `ms`,
-after.
+downloaded`, as a line and as its status. Each rung then says, before
+it runs, where the climb starts and ends and how big the store is —
+`migrating the store (13.0 GB) from version 7 to 9, now version 8:
+<its name>` — and `migrated`, with its `ms`, after. A rung written as
+several statements says `migrating: statement 3 of 4: <what it does>`
+before each, and its status is the rung's line with `; statement 3 of
+4: <what it does>` after it. Every one of these is the step's status too, so the
+Manage row says which rung and statement is running
+(`datalib_store_meta::ladder::report_to`, set by `datalib-step`). The
+migrate run lists every step it will ask as `pending` before it asks
+the first, like any other run.
 
 **A render says where its time went.** Every render ends with one line
 of its `total_ms` and `write_ms`. A Claude Code or Codex render also
@@ -233,9 +247,8 @@ says `where the render's time went`, in `load_ms` (the store's answer),
 
 - **Anything about a record** — a fetch that failed, a render that
   could not project a field — goes through `problems`
-  ([`etl/README.md`](/datalib/backend/etl/README.md#problems-flow-downstream-with-the-data)), which
-  travels with the data and reaches the Manage counts and the document
-  banner. A `warn!` reaches nobody who is not reading the log, so do
+  ([`etl/README.md`](../../datalib/backend/etl/README.md#problems-stay-in-the-step-that-found-them)),
+  which reaches the Manage counts and the document banner. A `warn!` reaches nobody who is not reading the log, so do
   not write one beside a problem: the step logs what is new, once, at
   its end — one `problems_recorded` line per kind of problem (stage,
   reason, rule, field) with its `count`, at its loudest row's severity
@@ -243,17 +256,34 @@ says `where the render's time went`, in `load_ms` (the store's answer),
   `sample` or key, which hold the record's own contents. A row that says
   what it said last run is not news: it stays on the Manage row and says
   nothing in the log. A writer that stores a row it made, new or changed
-  (`ProblemRow::is_news`), calls `datalib_problems::note_recorded`; one
-  that copies another step's rows does not. `ingested_tng_test` checks
+  (`ProblemRow::is_news`), calls `datalib_problems::note_recorded`.
+  `ingested_tng_test` checks
   the counts against the rows.
 - **A number** — rows written, requests made, queue depth — is a
   `metric` event, not a sentence with a number in it. The Manage
   screen's queue and ETA (in its Status column) and the sync dashboard's charts come from
   `metric_samples`.
-- **A secret.** The request log drops `?token=`; a line you write must
-  not carry a credential either. Do it by construction, not by scrubbing
-  a pattern out afterwards: print a URL as a `ShownUrl` (scheme, host,
-  path), since a signed URL carries its credential in the query.
+
+## What a line may carry
+
+The log is the person's own and stays on their machine, under their
+data root, beside the mirror it describes. So a line may carry whatever
+helps someone work out what happened: a search they typed, a file path,
+a record's subject, an account's name. Leaving such things out makes a
+failure harder to diagnose and protects nothing that the data root does
+not already hold.
+
+- **Never a secret**: a token, a password, a cookie, an API key. Do it
+  by construction, not by scrubbing a pattern out afterwards: print a
+  URL as a `ShownUrl` (scheme, host, path), since a signed URL carries
+  its credential in the query. The request log drops `?token=`.
+- **The home directory is written `~`** in every line's message and
+  fields and in a step's error (`runs/src/redact.rs`), where lines enter
+  the store, so you need not do it yourself. It only matches a whole
+  path prefix: `/Users/alice` stays when the home is `/Users/al`.
+
+Because a log can hold a person's data, it is theirs to share, not
+ours: before a log goes into a public issue, the person reads it first.
 
 ## Reading it
 
@@ -348,6 +378,11 @@ What it serves (`http/src/prometheus.rs`):
   source that has not synced in a day.
 - **`datalib_tree_bytes{tree=…}`** and **`datalib_root_bytes`**: what
   the usage sampler last measured.
+- **`datalib_disk_free_bytes`**, **`datalib_disk_size_bytes`**,
+  **`datalib_disk_pause_below_bytes`**, **`datalib_disk_resume_at_bytes`**
+  and **`datalib_disk_low`**: the data root's disk and the config's
+  `[disk_space]` floor (`datalib/backend/dag/README.md` §"When the disk
+  runs low"); `datalib_disk_low` is 1 while the steps are held.
 - **`datalib_applet_rss_bytes{applet=…}`** and
   **`datalib_applet_rss_peak_bytes{applet=…}`**: the resident memory of
   each running applet and every process below it, read every five
@@ -415,7 +450,7 @@ producer), never a record's contents. Log lines do not go out this way.
   is then that. Say what it came to, once, at the end.
 - **Say a standing fact once.** What is still true on the next pass is a
   `problems` row, which a person sees as long as it holds; the log says
-  when it became true. `is_news` in `etl/render/src/grid_index.rs` is how.
+  when it became true. `ProblemRow::is_news` (`datalib_problems`) is how.
 - **Say what happened, not who is saying it.** The `target` column
   already names the module; `"opening the store"`, not
   `"doltlite_raw::open: opening {store}"`. A fan-in that runs once per

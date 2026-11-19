@@ -51,6 +51,12 @@ it (`Changed: <date>`) through `edges`, so the preview pane walks either
 way. An occurrence of a series the store does not hold — an invitation
 to one date of someone else's meeting — stands alone and says so.
 
+**Where a row sits** (`docs/dev/grid_rows.md` §"`parent_uuid`…"). The
+calendar is a place, keyed by upstream's id for it (a CalDAV collection,
+a Google calendar id), which a rename keeps; each event is read together
+inside it. A changed occurrence sits in the calendar beside its series:
+the links between the two are `Link` edges, not parents.
+
 ## Dates in the grid
 
 `created_at` is **when the event happens**: the start's instant, so
@@ -82,16 +88,20 @@ id too — both are the upstream kind `event`.
 `EventTime` keeps a time the way its source wrote it and resolves the
 instant only when asked (`when.rs`):
 
-- A `TZID` is looked up in the IANA time zone database through
-  `datalib_time::NamedZone`, which reads the copy bundled into the
-  binary (`jiff-tzdb`) and never the host's. A mac, a Linux container
-  with no `/usr/share/zoneinfo` and Windows then agree, and the rules
-  are as current as the `jiff-tzdb` in `Cargo.lock`. When IANA moves a
-  zone's clocks (British Columbia kept -07:00 from November 2026), run
+- A `TZID` is looked up through `datalib_time::NamedZone::get`, which
+  reads the IANA time zone database bundled into the binary
+  (`jiff-tzdb`) and never the host's. A mac, a Linux container with no
+  `/usr/share/zoneinfo` and Windows then agree, and the rules are as
+  current as the `jiff-tzdb` in `Cargo.lock`. When IANA moves a zone's
+  clocks (British Columbia kept -07:00 from November 2026), run
   `cargo update -p jiff-tzdb` in `datalib/backend` and build, which
-  repins `MODULE.bazel.lock`. A name the database does not know — an
-  Outlook zone, a typo — is not guessed: the start is nulled on the
-  grid row and a `problems` row says why; the page still shows the wall-clock time and the name.
+  repins `MODULE.bazel.lock`. The same lookup takes a Windows zone name,
+  which Outlook and Exchange write (`Pacific Standard Time`), and a bare
+  offset (`GMT-0700`, whose `VTIMEZONE` is that offset all year). Any
+  other name — Outlook's `Customized Time Zone`, a typo — is not
+  guessed, and the `VTIMEZONE` beside it is not read: the start is
+  nulled on the grid row and a `problems` row says why; the page still
+  shows the wall-clock time and the name.
 - A floating time (no zone) is read in the calendar's own zone, else as
   UTC with a `problems` row recording the guess.
 - An all-day date is its midnight UTC. `after:2026-09-13` then finds an

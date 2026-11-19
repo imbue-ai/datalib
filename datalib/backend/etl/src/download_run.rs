@@ -88,10 +88,17 @@ impl<'p> DownloadRun<'p> {
                     serde_json::to_value(d).unwrap_or(Value::Null),
                 );
             }
-            if !cursor_moves.is_empty() {
+            let (listed, counted) = scope_state::summarize(cursor_moves);
+            if !listed.is_empty() {
                 map.insert(
                     "cursors".into(),
-                    serde_json::to_value(&cursor_moves).unwrap_or(Value::Null),
+                    serde_json::to_value(&listed).unwrap_or(Value::Null),
+                );
+            }
+            if !counted.is_empty() {
+                map.insert(
+                    "cursors_by_kind".into(),
+                    serde_json::to_value(&counted).unwrap_or(Value::Null),
                 );
             }
             if let Err(e) = result {

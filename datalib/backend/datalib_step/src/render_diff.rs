@@ -5,7 +5,6 @@
 //! one ordinary render tree. `docs/dev/plans/completed/diff_renderer.md`.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -15,7 +14,7 @@ use datalib_etl_render::diff::{diff_document, Counts};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
 use datalib_etl_render::processor::{BucketEnd, Input, RenderCtx, RenderProcessor};
-use datalib_etl_render::section::{join, Section};
+use datalib_etl_render::section::Section;
 use datalib_schema::render_cursor::RenderCursorRow;
 
 use crate::dispatch::{PlannedSource, Wave};
@@ -293,7 +292,6 @@ pub fn render_diff_source(
                 // Named by the scan, rendered the same: a raw change the
                 // renderer does not show. Not a document of this diff.
                 unchanged_docs += 1;
-                let _ = fs::remove_file(&base.md.md_path);
                 continue;
             }
             totals.added += diff.counts.added;
@@ -306,24 +304,26 @@ pub fn render_diff_source(
             // own row keeps its uuid. `upstream_id` is the backpointer to
             // the real thing, which is what a person copying it wants.
             let doc = RenderedMarkdown {
+                searchable: true,
+                content_hash: None,
                 markdown_uuid: uuid.to_string(),
                 source_id: name.clone(),
                 upstream_cursor: base.md.upstream_cursor.clone(),
                 bucket_key: base.md.bucket_key.clone(),
-                md_path: base.md.md_path.clone(),
                 render_version: base.md.render_version,
                 rows: diff.rows,
                 sections: diff.sections,
+                front: base.md.front.clone(),
                 edges: base.md.edges.clone(),
                 // The people are the source's; a diff row only compares.
                 contacts: Vec::new(),
+                data_nodes: Vec::new(),
+                filings: Vec::new(),
                 photos: Vec::new(),
                 problems: base.md.problems.clone(),
             };
-            fs::write(&doc.md_path, join(&doc.sections))
-                .with_context(|| format!("write {}", doc.md_path.display()))?;
             store
-                .put_document(&data_root, &doc)
+                .put_document(&doc)
                 .with_context(|| format!("store diff document {}", doc.markdown_uuid))?;
             emitted.insert(doc.markdown_uuid.clone());
             docs += 1;
@@ -371,7 +371,6 @@ pub fn render_diff_source(
     // pair produced and this one did not is swept.
     let sealed = seal_run(
         &store,
-        &data_root,
         RunEnd {
             source_id: &name,
             sweep: true,
@@ -453,7 +452,6 @@ fn collect(
     max_documents: usize,
 ) -> Result<Side> {
     let mut side = Side::default();
-    let mut sectionless_sources: BTreeSet<String> = BTreeSet::new();
     let mut on_doc = |md: RenderedMarkdown| -> Result<()> {
         if side.capped
             || (side.docs.len() >= max_documents && !side.docs.contains_key(&md.markdown_uuid))
@@ -465,12 +463,7 @@ fn collect(
             }
             .into());
         }
-        let sections = if md.sections.is_empty() {
-            sectionless_sources.insert(md.source_id.clone());
-            whole_document_sections(&md)?
-        } else {
-            md.sections.clone()
-        };
+        let sections = md.sections.clone();
         side.docs
             .insert(md.markdown_uuid.clone(), Collected { md, sections });
         Ok(())
@@ -511,13 +504,6 @@ fn collect(
         futures::executor::block_on(proc.run(&ctx))
             .with_context(|| format!("processor {} at {pin}", proc.id()))?;
     }
-    for source in sectionless_sources {
-        tracing::warn!(
-            source,
-            "diff: this renderer declares no sections; its documents diff as one block, \
-             with no added or removed section bands"
-        );
-    }
     if side.capped {
         return Err(DiffTooLarge {
             pin: pin.to_string(),
@@ -526,24 +512,6 @@ fn collect(
         .into());
     }
     Ok(side)
-}
-
-/// A renderer that declares no sections: its document is the frontmatter,
-/// unkeyed, and the rest keyed by the document itself.
-fn whole_document_sections(md: &RenderedMarkdown) -> Result<Vec<Section>> {
-    let text = fs::read_to_string(&md.md_path)
-        .with_context(|| format!("read back {}", md.md_path.display()))?;
-    let body_at = text
-        .strip_prefix("---\n")
-        .and_then(|rest| rest.find("\n---\n").map(|n| 4 + n + 5))
-        .unwrap_or(0);
-    let (front, body) = text.split_at(body_at);
-    let mut out = Vec::with_capacity(2);
-    if !front.is_empty() {
-        out.push(Section::unkeyed(front.to_string()));
-    }
-    out.push(Section::keyed(&md.markdown_uuid, body.to_string()));
-    Ok(out)
 }
 
 #[cfg(test)]
@@ -599,16 +567,20 @@ mod tests {
             async fn run(&self, ctx: &RenderCtx<'_>) -> Result<String> {
                 for i in 0..self.0 {
                     let emitted = ctx.emit_doc(RenderedMarkdown {
+                        searchable: true,
+                        content_hash: None,
                         markdown_uuid: format!("d{i}"),
                         source_id: "s".into(),
                         upstream_cursor: None,
                         bucket_key: None,
-                        md_path: std::path::PathBuf::from(format!("/nonexistent/d{i}.md")),
                         render_version: 1,
                         rows: vec![],
                         sections: vec![Section::keyed(&format!("d{i}"), "x\n".into())],
+                        front: Default::default(),
                         edges: vec![],
                         contacts: Vec::new(),
+                        data_nodes: Vec::new(),
+                        filings: Vec::new(),
                         photos: Vec::new(),
                         problems: vec![],
                     });
@@ -671,32 +643,5 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("unknown field"), "{err}");
-    }
-
-    #[test]
-    fn a_sectionless_document_splits_at_its_frontmatter() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("d.md");
-        fs::write(&path, "---\ntitle: t\n---\n\n# T\n\nbody\n").unwrap();
-        let md = RenderedMarkdown {
-            markdown_uuid: "d".into(),
-            source_id: "s".into(),
-            upstream_cursor: None,
-            bucket_key: None,
-            md_path: path,
-            render_version: 1,
-            rows: vec![],
-            sections: vec![],
-            edges: vec![],
-            contacts: Vec::new(),
-            photos: Vec::new(),
-            problems: vec![],
-        };
-        let sections = whole_document_sections(&md).unwrap();
-        assert_eq!(sections.len(), 2);
-        assert_eq!(sections[0].md, "---\ntitle: t\n---\n");
-        assert_eq!(sections[1].uuid.as_deref(), Some("d"));
-        assert_eq!(sections[1].md, "\n# T\n\nbody\n");
-        assert_eq!(join(&sections), "---\ntitle: t\n---\n\n# T\n\nbody\n");
     }
 }

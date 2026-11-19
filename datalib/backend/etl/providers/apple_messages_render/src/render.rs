@@ -14,7 +14,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::doltlite_raw;
-use datalib_etl::periodize::Period;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::changed_chats;
 use datalib_etl_chat_common::render::{RenderProfile, ENTITY_KIND_CONVERSATION};
@@ -27,7 +26,7 @@ use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Inputs, RawRange};
 use datalib_handle::Handle;
-use datalib_id::{composite_key, entity_id_str, IdNamespace};
+use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::problems::{Problem, Reason};
 use datalib_schema::providers::Provider;
 use datalib_time::RecordStampPrecision;
@@ -42,15 +41,18 @@ use crate::typedstream::attributed_body_text;
 /// v5: a `+1` number without ten digits after the 1 has no handle.
 /// v6: a message someone else sent is to the account (`to:me`).
 /// v7: a body that cannot be decoded is a problem on its message.
-pub const RENDER_VERSION: u32 = 7;
+/// v8: a body archived as an NSMutableAttributedString decodes; a
+///     message in no chat is a problem.
+/// v9: a chat is one document, keyed on the chat's own uuid, rather than
+///     one per month; an inline reply is a reply edge to its thread's
+///     first message.
+pub const RENDER_VERSION: u32 = 9;
 
 pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;
 
 pub const KIND_MESSAGE: &str = "message";
 /// A tapback: a message row in `chat.db`, keyed on its own guid.
 pub const KIND_REACTION: &str = "reaction";
-/// One period of a chat: keyed on `(chat_guid, period_key)`.
-pub const KIND_DOCUMENT: &str = "document";
 
 /// The tables whose diff names a changed chat: the chat itself, a
 /// message, or a join that puts a message in a chat or a file on a
@@ -104,33 +106,69 @@ fn profile() -> RenderProfile {
 
 pub use datalib_etl_chat_common::RenderOutcome;
 
+/// What one pass rendered, and the messages it had to leave out.
+pub struct Rendered {
+    pub outcome: RenderOutcome,
+    pub dropped: Vec<Dropped>,
+}
+
+/// The table [`Dropped`] names rows of. Every pass reads all of it, so a
+/// pass's list is whole for it.
+pub const DROPPED_FROM: &str = "message";
+
+/// A `message` row no chat holds, so no page shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dropped {
+    pub rowid: i64,
+    /// The chat a `chat_message_join` row names that the `chat` table
+    /// lacks; `None` when no join row names the message at all.
+    pub missing_chat: Option<i64>,
+}
+
+impl Dropped {
+    pub fn entity_id(&self) -> String {
+        format!("{DROPPED_FROM}:{}", self.rowid)
+    }
+
+    pub fn problem(&self) -> Problem {
+        let why = match self.missing_chat {
+            Some(chat) => format!(
+                "chat_message_join puts it in chat {chat}, which the chat table does not have"
+            ),
+            None => "no chat_message_join row puts it in a chat".to_string(),
+        };
+        Problem::explained(Reason::NoIdentity, None, &why)
+    }
+}
+
 pub fn render(
     raw_dir: &Path,
-    out_root: &Path,
     source_id: &str,
-    period: Period,
     progress: &Progress,
     range: RawRange<'_>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-) -> Result<RenderOutcome> {
+) -> Result<Rendered> {
     let db_path = doltlite_raw::db_path_for(raw_dir);
     if !db_path.exists() {
-        return Ok(RenderOutcome::default());
+        return Ok(Rendered {
+            outcome: RenderOutcome::default(),
+            dropped: Vec::new(),
+        });
     }
-    let (all_chats, forward, new_head) = tokio::task::block_in_place(|| {
+    let loaded = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
             // No commit means nothing has been committed to render, which
             // is emptiness rather than a reason to read the working set.
             let Some(reader) = doltlite_raw::open_reader(&db_path, range.pin).await? else {
-                return Ok((Vec::new(), None, None));
+                return Ok(Loaded::default());
             };
             // chat.db's tables arrive with the first mirror; a store
             // opened before one succeeded has nothing to render yet.
             if !doltlite_raw::table_exists(reader.pool(), "handle").await? {
                 reader.close().await;
-                return Ok((Vec::new(), None, None));
+                return Ok(Loaded::default());
             }
-            let loaded = load(reader.pool(), source_id, period, range, reader.pin()).await;
+            let loaded = load(reader.pool(), source_id, range, reader.pin()).await;
             // Closed, not dropped: the next open of this store is a
             // second connection until this one is actually gone.
             reader.close().await;
@@ -138,36 +176,50 @@ pub fn render(
         })
     })?;
 
+    let Loaded {
+        chats: all_chats,
+        forward,
+        head: new_head,
+        dropped,
+    } = loaded;
     let mut changed = changed_chats(all_chats, range, forward.as_ref(), |guid| {
         chat_uuid(source_id, guid)
     });
     let summary = datalib_etl_chat_common::render_all(
         &profile(),
         &changed.chats,
-        out_root,
         source_id,
         &HashMap::new(),
         progress,
         on_doc_complete,
     )?;
     changed.buckets.extend(summary.buckets);
-    Ok(RenderOutcome {
-        rendered: summary.docs_rendered,
-        skipped: changed.skipped,
-        new_head,
-        scan_elapsed: None,
-        buckets: changed.buckets,
+    Ok(Rendered {
+        outcome: RenderOutcome {
+            rendered: summary.docs_rendered,
+            skipped: changed.skipped,
+            new_head,
+            scan_elapsed: None,
+            buckets: changed.buckets,
+        },
+        dropped,
     })
 }
 
-type Loaded = (Vec<NormalizedChat>, Option<HashSet<String>>, Option<String>);
+#[derive(Default)]
+struct Loaded {
+    /// Every chat at the pinned commit.
+    chats: Vec<NormalizedChat>,
+    /// The guids of the chats the diff since the cursor names; `None`
+    /// renders everything.
+    forward: Option<HashSet<String>>,
+    head: Option<String>,
+    dropped: Vec<Dropped>,
+}
 
-/// Every chat at the pinned commit, the guids of the chats the diff
-/// since the cursor names (`None` renders everything), and the commit.
 async fn load(
     pool: &SqlitePool,
     source_id: &str,
-    period: Period,
     range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
 ) -> Result<Loaded> {
@@ -198,6 +250,7 @@ async fn load(
             participants: Vec::new(),
             items: Vec::new(),
             reactions: Vec::new(),
+            replies: Vec::new(),
             inputs,
         });
     }
@@ -220,17 +273,23 @@ async fn load(
     }
 
     let mut chat_of_message: HashMap<i64, usize> = HashMap::new();
+    let mut missing_chat_of_message: HashMap<i64, i64> = HashMap::new();
     let joins = sqlx::query("SELECT chat_id, message_id FROM chat_message_join")
         .fetch_all(pool)
         .await
         .context("select chat_message_join")?;
     for r in &joins {
         let (chat_id, message_id): (i64, i64) = (r.get("chat_id"), r.get("message_id"));
-        if let Some(&idx) = chat_idx.get(&chat_id) {
-            chats[idx]
-                .inputs
-                .read("chat_message_join", &format!("{chat_id}|{message_id}"));
-            chat_of_message.insert(message_id, idx);
+        match chat_idx.get(&chat_id) {
+            Some(&idx) => {
+                chats[idx]
+                    .inputs
+                    .read("chat_message_join", &format!("{chat_id}|{message_id}"));
+                chat_of_message.insert(message_id, idx);
+            }
+            None => {
+                missing_chat_of_message.insert(message_id, chat_id);
+            }
         }
     }
 
@@ -274,19 +333,31 @@ async fn load(
             });
     }
 
-    let messages = sqlx::query(
+    // An older `chat.db` predates inline replies.
+    let thread_originator =
+        if doltlite_raw::column_exists(pool, "message", "thread_originator_guid").await? {
+            "thread_originator_guid"
+        } else {
+            "NULL AS thread_originator_guid"
+        };
+    let messages = sqlx::query(sqlx::AssertSqlSafe(format!(
+        // Safe: the one interpolation is one of two literals above.
         "SELECT ROWID, guid, text, attributedBody, date, is_from_me, is_read, handle_id, item_type, \
                 group_action_type, group_title, associated_message_guid, \
-                associated_message_type, associated_message_emoji \
-           FROM message ORDER BY date, ROWID",
-    )
+                associated_message_type, associated_message_emoji, {thread_originator} \
+           FROM message ORDER BY date, ROWID"
+    )))
     .fetch_all(pool)
     .await
     .context("select message")?;
+    let mut dropped = Vec::new();
     for r in &messages {
         let rowid: i64 = r.get("ROWID");
         let Some(&idx) = chat_of_message.get(&rowid) else {
-            tracing::debug!(message_rowid = rowid, "message: in no chat; dropping");
+            dropped.push(Dropped {
+                rowid,
+                missing_chat: missing_chat_of_message.get(&rowid).copied(),
+            });
             continue;
         };
         let chat = &mut chats[idx];
@@ -354,12 +425,17 @@ async fn load(
         };
         let mut problems = Vec::new();
         let text = body_text(r.get("text"), r.get("attributedBody"), &mut problems);
+        if let Some(target) = r.get::<Option<String>, _>("thread_originator_guid") {
+            chat.replies.push((chat.items.len(), target));
+        }
         chat.items.push(NormalizedChatItem {
+            reply_to: None,
             message_uuid: message_uuid(source_id, &guid, date_ms),
             author_handle,
             author_kind,
             author_display,
             date_ms,
+            date_offset_secs: None,
             text,
             kind,
             attachments,
@@ -385,11 +461,12 @@ async fn load(
     let forward = changed_rows(pool, range, pin, FORWARD_TABLES)
         .await?
         .map(|changed| forward_chats(&changed, &chats, &chat_idx, &chat_of_message));
-    let out = chats
-        .into_iter()
-        .map(|c| c.finish(source_id, period))
-        .collect();
-    Ok((out, forward, Some(pin.commit().to_string())))
+    Ok(Loaded {
+        chats: chats.into_iter().map(|c| c.finish(source_id)).collect(),
+        forward,
+        head: Some(pin.commit().to_string()),
+        dropped,
+    })
 }
 
 /// The guids of the chats the diff names, at the pinned commit. A chat
@@ -424,6 +501,10 @@ struct ChatBuild {
     participants: Vec<String>,
     items: Vec<NormalizedChatItem>,
     reactions: Vec<Tapback>,
+    /// Each inline reply, by its index in `items`, and the guid of the
+    /// first message of the thread it was sent in, which is all `chat.db`
+    /// records of what it answers.
+    replies: Vec<(usize, String)>,
     inputs: Inputs,
 }
 
@@ -434,7 +515,7 @@ struct Tapback {
 }
 
 impl ChatBuild {
-    fn finish(mut self, source_id: &str, period: Period) -> NormalizedChat {
+    fn finish(mut self, source_id: &str) -> NormalizedChat {
         // Tapbacks, in date order: an add lands on its message, a
         // removal takes the same person's same tapback off it again.
         let index: HashMap<String, usize> = self
@@ -459,29 +540,18 @@ impl ChatBuild {
             }
         }
 
-        let mut by_period: HashMap<String, Vec<NormalizedChatItem>> = HashMap::new();
-        for item in self.items {
-            let key = match item.date_ms {
-                Some(ms) => period.key_for_ms(ms),
-                None => period.key_for_undated(),
-            };
-            by_period.entry(key).or_default().push(item);
+        for (i, target) in &self.replies {
+            if let Some(&t) = index.get(target) {
+                self.items[*i].reply_to = Some(self.items[t].message_uuid.clone());
+            }
         }
-        let mut keys: Vec<String> = by_period.keys().cloned().collect();
-        keys.sort();
-        let buckets = keys
-            .into_iter()
-            .map(|period_key| {
-                let key = composite_key(&[&self.guid, &period_key]);
-                NormalizedDoc {
-                    markdown_uuid: uuid(source_id, KIND_DOCUMENT, &key, None),
-                    source_ref: Some(UpstreamRef::new(KIND_DOCUMENT, key)),
-                    items: by_period.remove(&period_key).unwrap_or_default(),
-                    period_key,
-                    orphan_reactions: Vec::new(),
-                }
-            })
-            .collect();
+        let chat_uuid = chat_uuid(source_id, &self.guid);
+        let whole = NormalizedDoc {
+            markdown_uuid: chat_uuid.clone(),
+            source_ref: None,
+            items: self.items,
+            orphan_reactions: Vec::new(),
+        };
         let title = self.display_name.filter(|s| !s.trim().is_empty());
         // A chat with no name of its own is called by its people.
         let named_after = match title {
@@ -503,7 +573,9 @@ impl ChatBuild {
             named_after,
             contacts: Vec::new(),
             inputs: self.inputs.declared(),
-            chat_uuid: chat_uuid(source_id, &self.guid),
+            containers: Vec::new(),
+            filed_under: Vec::new(),
+            chat_uuid,
             external_id: Some(self.guid.clone()),
             id: self.guid,
             display,
@@ -515,7 +587,7 @@ impl ChatBuild {
             source_url: None,
             org_uuid: None,
             org_name: None,
-            buckets,
+            buckets: vec![whole],
         }
     }
 }

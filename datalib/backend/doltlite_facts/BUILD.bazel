@@ -72,3 +72,22 @@ py_test(
     main = "python_reader_test.py",
     deps = [requirement("doltlite")],
 )
+
+# What SQLite's vec1 vector search does in doltlite (docs/dev/doltlite.md
+# § "Vector search: vec1"), through the test-only shell that has it; the
+# shipped shell is here to show it has none.
+rust_test(
+    name = "vec1_facts_test",
+    size = "small",
+    srcs = ["vec1_facts.rs"],
+    data = [
+        "//third-party/doltlite:doltlite",
+        "//third-party/doltlite:doltlite_vec1",
+    ],
+    edition = "2021",
+    env = {
+        "DOLTLITE_BIN": "$(rootpath //third-party/doltlite:doltlite)",
+        "DOLTLITE_VEC1_BIN": "$(rootpath //third-party/doltlite:doltlite_vec1)",
+    },
+    deps = ["@datalib_crates//:tempfile"],
+)

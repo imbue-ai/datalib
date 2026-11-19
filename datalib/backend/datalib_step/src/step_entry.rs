@@ -15,9 +15,10 @@ pub const PROGRAM: &str = "datalib-step";
 pub const VERBS: &[&str] = &["reset", "prepare", "compact", "collect"];
 
 /// The locks datalib-step's steps hold beyond the runner's own, with
-/// their slots. `qmd_keyword` and `qmd_embed` keep two writers off the
-/// one qmd index file; `index` bounds how many index steps run at once.
-pub const LOCKS: &[(&str, usize)] = &[("index", 2), ("qmd_keyword", 1), ("qmd_embed", 1)];
+/// their slots. `index` bounds how many index steps run at once;
+/// `embedder` keeps one embedding model loaded at a time, and two embeds
+/// off the search index's vectors at once.
+pub const LOCKS: &[(&str, usize)] = &[("index", 2), ("embedder", 1)];
 
 /// The group the time-series index is filed under, and the tree it writes.
 pub const TIME_SERIES_INDEX_GROUP: &str = "unified_time_series_index";
@@ -64,7 +65,7 @@ pub fn command(function: Function, group_type: Option<&str>, source_type: Option
 pub fn reads(function: Function, group_type: Option<&str>) -> Option<&'static str> {
     match function {
         Function::Ingest => None,
-        Function::KeywordIndex | Function::Embed | Function::EmbeddingMap => Some("files"),
+        Function::Embed | Function::EmbeddingMap => Some("files"),
         Function::RenderMarkdown if group_type == Some("perseus") => Some("files"),
         _ => Some("pinned"),
     }
@@ -74,8 +75,7 @@ pub fn reads(function: Function, group_type: Option<&str>) -> Option<&'static st
 /// or `None` for the runner's default.
 pub fn lock(function: Function, group_type: Option<&str>) -> Option<&'static str> {
     match function {
-        Function::QmdAggregator | Function::KeywordIndex => Some("qmd_keyword"),
-        Function::Embed => Some("qmd_embed"),
+        Function::Embed => Some("embedder"),
         Function::Ingest => None,
         _ if group_type.is_none() => Some("index"),
         _ => None,
@@ -125,7 +125,7 @@ mod tests {
     fn a_command_round_trips_through_its_words() {
         for (f, t, s) in [
             (Function::Ingest, Some("slack"), None),
-            (Function::GridIndex, None, None),
+            (Function::UnifiedGridAndSearchIndex, None, None),
             (Function::RenderMarkdown, Some("diff"), Some("slack")),
         ] {
             let parsed = run_args(&command(f, t, s)).unwrap().unwrap();

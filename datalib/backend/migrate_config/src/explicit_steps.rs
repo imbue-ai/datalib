@@ -8,7 +8,8 @@
 //! `locks` the runner used to give it; the file gets a `[[programs]]`
 //! entry for `datalib-step`, the `[[locks]]` its steps hold, and an
 //! `[env]` table in place of `checkpoint_cadence`, `render_pages` and
-//! `embed_contexts`; a group loses its `source`.
+//! `[modal]`; `embed_contexts` and `embed_search_index`, which no step
+//! reads any more, are taken out; a group loses its `source`.
 //!
 //! A text edit, like `step_commands.rs`: every comment and key the file
 //! holds survives, and the comments above a top-level key that moves into
@@ -30,6 +31,7 @@ const STEP_VERBS: &str = r#"["reset", "prepare", "compact", "collect"]"#;
 
 const QMD_KEYWORD: &str = "qmd_keyword";
 const QMD_EMBED: &str = "qmd_embed";
+const EMBEDDER: &str = "embedder";
 const INDEX: &str = "index";
 
 /// The locks the runner used to declare in every config, which a step
@@ -46,13 +48,21 @@ pub(crate) const RETIRED_DEFAULT_LOCKS: &[(&str, usize, &str)] = &[
         1,
         "Whatever embeds into qmd's index: two at once race on its vectors.",
     ),
+    (
+        EMBEDDER,
+        1,
+        "One embed at a time: each loads the model and writes the search index.",
+    ),
     (INDEX, 2, "The fan-ins that read every source."),
 ];
 
 /// The top-level keys that become `[env]` variables.
 const CHECKPOINT_CADENCE: &str = "checkpoint_cadence";
 const RENDER_PAGES: &str = "render_pages";
+const MODAL: &str = "modal";
+/// The top-level keys no step reads any more, which are taken out.
 const EMBED_CONTEXTS: &str = "embed_contexts";
+const EMBED_SEARCH_INDEX: &str = "embed_search_index";
 
 /// The functions of `datalib-step` that read their inputs' files off disk
 /// rather than at a pinned commit, `None` matching any group type.
@@ -83,7 +93,11 @@ struct View {
     #[serde(default)]
     render_pages: Option<Spanned<toml::Value>>,
     #[serde(default)]
+    modal: Option<Spanned<toml::Value>>,
+    #[serde(default)]
     embed_contexts: Option<Spanned<toml::Value>>,
+    #[serde(default)]
+    embed_search_index: Option<Spanned<toml::Value>>,
 }
 
 #[derive(Deserialize)]
@@ -262,7 +276,7 @@ fn plan_step(s: &StepView, groups: &BTreeMap<&str, &GroupView>) -> Result<StepPl
     let lock = match (&s.locks, is_step_program, function) {
         (Some(_), _, _) => None,
         (None, true, Some("qmd_aggregator" | "keyword_index")) => Some(QMD_KEYWORD),
-        (None, true, Some("embed")) => Some(QMD_EMBED),
+        (None, true, Some("embed")) => Some(EMBEDDER),
         (None, true, Some(f)) => (group_type.is_none() && f != INGEST).then_some(INDEX),
         (None, true, None) => None,
         (None, false, _) => (has_inputs && group_type.is_none()).then_some(INDEX),
@@ -282,7 +296,9 @@ pub fn is_retired(text: &str) -> Result<bool> {
         || view.groups.iter().any(|g| g.get_ref().source.is_some())
         || view.checkpoint_cadence.is_some()
         || view.render_pages.is_some()
-        || view.embed_contexts.is_some())
+        || view.modal.is_some()
+        || view.embed_contexts.is_some()
+        || view.embed_search_index.is_some())
 }
 
 fn quote(s: &str) -> String {
@@ -427,11 +443,11 @@ fn is_inline(text: &str, span: &Range<usize>) -> bool {
     text[span.start..].starts_with('{')
 }
 
-/// One top-level key that becomes an `[env]` variable: the variable, its
-/// value, the comments that described it, and where it was.
+/// One top-level key that becomes an `[env]` variable, or is taken out:
+/// the variable and its value when it has one, the comments that
+/// described it, and where it was.
 struct Moved {
-    var: &'static str,
-    value: String,
+    var: Option<(&'static str, String)>,
     comments: Vec<String>,
     gone: Range<usize>,
 }
@@ -440,7 +456,7 @@ fn number(v: &toml::Value) -> Option<f64> {
     v.as_float().or_else(|| v.as_integer().map(|i| i as f64))
 }
 
-fn env_value(key: &str, v: &toml::Value) -> Result<(&'static str, String)> {
+fn env_value(key: &str, v: &toml::Value) -> Result<Option<(&'static str, String)>> {
     let bad = || anyhow::anyhow!("`{key}` is {v}, which this rewrite cannot read");
     match key {
         CHECKPOINT_CADENCE => {
@@ -452,10 +468,10 @@ fn env_value(key: &str, v: &toml::Value) -> Result<(&'static str, String)> {
                 .get("at_most_every_secs")
                 .and_then(number)
                 .ok_or_else(bad)?;
-            Ok((
+            Ok(Some((
                 datalib_env::DATALIB_STEP_CHECKPOINT_CADENCE,
                 secs.to_string(),
-            ))
+            )))
         }
         RENDER_PAGES => {
             let t = v.as_table().ok_or_else(bad)?;
@@ -468,15 +484,22 @@ fn env_value(key: &str, v: &toml::Value) -> Result<(&'static str, String)> {
                     Some(n) => Ok(n.as_integer().ok_or_else(bad)?.to_string()),
                 }
             };
-            Ok((
+            Ok(Some((
                 datalib_env::DATALIB_STEP_RENDER_PAGES,
                 format!("{},{}", side("buckets")?, side("blob_mb")?),
-            ))
+            )))
         }
-        _ => Ok((
-            datalib_env::DATALIB_STEP_EMBED_CONTEXTS,
-            v.as_integer().ok_or_else(bad)?.to_string(),
-        )),
+        MODAL => {
+            let t = v.as_table().ok_or_else(bad)?;
+            if t.keys().any(|k| k != "max_sandboxes") {
+                return Err(bad());
+            }
+            Ok(t.get("max_sandboxes")
+                .map(|n| n.as_integer().ok_or_else(bad))
+                .transpose()?
+                .map(|n| (datalib_env::DATALIB_STEP_MODAL_MAX_SANDBOXES, n.to_string())))
+        }
+        _ => Ok(None),
     }
 }
 
@@ -500,14 +523,13 @@ fn is_table(unit: &str, name: &str) -> bool {
 }
 
 fn moved_key(text: &str, key: &'static str, v: &Spanned<toml::Value>) -> Result<Moved> {
-    let (var, value) = env_value(key, v.get_ref())?;
+    let var = env_value(key, v.get_ref())?;
     if let Some(unit) = entry_ranges(text)
         .into_iter()
         .find(|r| is_table(&text[r.clone()], key))
     {
         return Ok(Moved {
             var,
-            value,
             comments: comment_lines(&text[unit.clone()]),
             gone: unit,
         });
@@ -532,7 +554,6 @@ fn moved_key(text: &str, key: &'static str, v: &Spanned<toml::Value>) -> Result<
     }
     Ok(Moved {
         var,
-        value,
         comments: comment_lines(&text[start..key_start]),
         gone: start..end,
     })
@@ -592,7 +613,9 @@ pub fn rewrite(text: &str) -> Result<String> {
     for (key, v) in [
         (CHECKPOINT_CADENCE, &view.checkpoint_cadence),
         (RENDER_PAGES, &view.render_pages),
+        (MODAL, &view.modal),
         (EMBED_CONTEXTS, &view.embed_contexts),
+        (EMBED_SEARCH_INDEX, &view.embed_search_index),
     ] {
         if let Some(v) = v {
             moved.push(moved_key(text, key, v)?);
@@ -606,14 +629,17 @@ pub fn rewrite(text: &str) -> Result<String> {
     let mut env_lines = String::new();
     for m in &moved {
         edits.push((m.gone.clone(), String::new()));
-        if written_env.contains(m.var) {
+        let Some((var, value)) = &m.var else {
+            continue;
+        };
+        if written_env.contains(var) {
             continue;
         }
         for c in &m.comments {
             env_lines.push_str(c);
             env_lines.push('\n');
         }
-        env_lines.push_str(&format!("{} = {}\n", m.var, quote(&m.value)));
+        env_lines.push_str(&format!("{var} = {}\n", quote(value)));
     }
     let mut tail = Vec::new();
     if !env_lines.is_empty() {
@@ -771,6 +797,10 @@ max_runs = 7
 [render_pages]
 buckets = 100
 
+# a few Sandboxes
+[modal]
+max_sandboxes = 10
+
 [[groups]]
 id = "picard"
 type = "slack"
@@ -790,15 +820,9 @@ inputs = ["picard/ingest"]
 
 [[steps]]
 group = "picard"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["picard/render_markdown"]
-
-[[steps]]
-group = "picard"
 function = "embed"
 command = "datalib-step"
-inputs = ["picard/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[groups]]
 id = "picard-diff"
@@ -830,25 +854,19 @@ command = "/opt/datalib/datalib-step"
 inputs = ["data/ingest"]
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
+group = "unified_grid_and_search_index"
+function = "unified_grid_and_search_index"
 command = "datalib-step"
 inputs = []
 
 [[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
-command = "datalib-step"
-inputs = ["picard/keyword_index", "picard/embed"]
-
-[[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "embedding_map"
 command = "datalib-step"
-inputs = ["unified_document_index/qmd_aggregator"]
+inputs = ["*/embed"]
 
 [[steps]]
 group = "picard"
@@ -870,7 +888,7 @@ id = "reports/mine"
 command = "my-reporter"
 inputs = ["picard/render_markdown"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 [checkpoint_cadence]
 at_most_every_secs = 2.5
@@ -1010,8 +1028,8 @@ key_env_var = "WORK_PHONE_KEY"
             "{out}"
         );
         assert_eq!(
-            command("unified_document_index/grid_index").as_deref(),
-            Some("datalib-step run grid_index")
+            command("unified_grid_and_search_index/unified_grid_and_search_index").as_deref(),
+            Some("datalib-step run unified_grid_and_search_index")
         );
     }
 
@@ -1041,9 +1059,8 @@ key_env_var = "WORK_PHONE_KEY"
         let out = after();
         let reads = |id| key(&step(&out, id), "reads").map(str::to_string);
         for id in [
-            "picard/keyword_index",
             "picard/embed",
-            "unified_document_index/embedding_map",
+            "unified_grid_and_search_index/embedding_map",
             "data/render_markdown",
         ] {
             assert_eq!(reads(id).as_deref(), Some("files"), "{id}");
@@ -1051,9 +1068,8 @@ key_env_var = "WORK_PHONE_KEY"
         for id in [
             "picard/render_markdown",
             "picard-diff/render_markdown",
-            "unified_document_index/qmd_aggregator",
             // A fan-in with no inputs yet gets it too, for when it has some.
-            "unified_document_index/grid_index",
+            "unified_grid_and_search_index/unified_grid_and_search_index",
             "picard/export",
             "reports/weekly",
         ] {
@@ -1070,16 +1086,17 @@ key_env_var = "WORK_PHONE_KEY"
         let out = after();
         let held = |id| locks(&step(&out, id));
         let one = |l: &str| Some(vec![l.to_string()]);
-        assert_eq!(held("picard/keyword_index"), one(QMD_KEYWORD));
+        assert_eq!(held("picard/embed"), one(EMBEDDER));
         assert_eq!(
-            held("unified_document_index/qmd_aggregator"),
-            one(QMD_KEYWORD)
+            held("unified_grid_and_search_index/unified_grid_and_search_index"),
+            one(INDEX)
         );
-        assert_eq!(held("picard/embed"), one(QMD_EMBED));
-        assert_eq!(held("unified_document_index/grid_index"), one(INDEX));
-        assert_eq!(held("unified_document_index/embedding_map"), one(INDEX));
+        assert_eq!(
+            held("unified_grid_and_search_index/embedding_map"),
+            one(INDEX)
+        );
         assert_eq!(held("reports/weekly"), one(INDEX));
-        assert_eq!(held("reports/mine"), one(QMD_EMBED));
+        assert_eq!(held("reports/mine"), one(EMBEDDER));
         for id in [
             "picard/ingest",
             "picard/render_markdown",
@@ -1120,7 +1137,7 @@ key_env_var = "WORK_PHONE_KEY"
             .iter()
             .map(|l| (l.name.as_str(), l.slots))
             .collect();
-        assert_eq!(declared, [(QMD_KEYWORD, 1), (QMD_EMBED, 1), (INDEX, 2)]);
+        assert_eq!(declared, [(EMBEDDER, 1), (INDEX, 2)]);
         let env: Vec<(&str, &str)> = check
             .cfg
             .env
@@ -1131,11 +1148,17 @@ key_env_var = "WORK_PHONE_KEY"
             env,
             [
                 ("DATALIB_STEP_CHECKPOINT_CADENCE", "2.5"),
-                ("DATALIB_STEP_EMBED_CONTEXTS", "2"),
+                ("DATALIB_STEP_MODAL_MAX_SANDBOXES", "10"),
                 ("DATALIB_STEP_RENDER_PAGES", "100,"),
             ]
         );
-        for gone in ["embed_contexts", "[render_pages]", "[checkpoint_cadence]"] {
+        for gone in [
+            "embed_contexts",
+            "one context is plenty",
+            "[render_pages]",
+            "[checkpoint_cadence]",
+            "[modal]",
+        ] {
             assert!(!out.contains(gone), "{gone}: {out}");
         }
     }
@@ -1176,7 +1199,7 @@ key_env_var = "WORK_PHONE_KEY"
             out.contains(
                 "[env]\nDATALIB_STEP_CHECKPOINT_CADENCE = \"2.5\"\n\
                  # smaller pages for a small machine\nDATALIB_STEP_RENDER_PAGES = \"100,\"\n\
-                 # one context is plenty on a mac\nDATALIB_STEP_EMBED_CONTEXTS = \"2\"\n"
+                 # a few Sandboxes\nDATALIB_STEP_MODAL_MAX_SANDBOXES = \"10\"\n"
             ),
             "{out}"
         );
@@ -1211,6 +1234,8 @@ key_env_var = "WORK_PHONE_KEY"
             "[[steps]]\nid = \"g/ingest\"\ncommand = \"datalib-step\"\n",
             "[[steps]]\nid = \"g/ingest\"\n",
             "embed_contexts = 1\n",
+            "embed_search_index = true\n",
+            "[modal]\nmax_sandboxes = 1\n",
             "[render_pages]\nblob_mb = 5\n",
             "[checkpoint_cadence]\nat_most_every_secs = 1\n",
             "[[groups]]\nid = \"d\"\ntype = \"diff\"\nsource = \"g\"\n",
@@ -1220,7 +1245,7 @@ key_env_var = "WORK_PHONE_KEY"
         for current in [
             "[[steps]]\nid = \"g/ingest\"\ncommand = \"datalib-step run ingest slack\"\n",
             "[[steps]]\nid = \"g/x\"\ncommand = \"my-tool\"\n",
-            "[env]\nDATALIB_STEP_EMBED_CONTEXTS = \"1\"\n",
+            "[env]\nDATALIB_STEP_MODAL_MAX_SANDBOXES = \"1\"\n",
         ] {
             assert!(!is_retired(current).unwrap(), "{current}");
         }
@@ -1259,24 +1284,19 @@ key_env_var = "WORK_PHONE_KEY"
         assert!(err.contains("datalib-migrate-config"), "{err}");
     }
 
-    /// What the runner gave a step, by the rules it had at the commit
-    /// before this rewrite (`git show <that commit>:<path>`).
+    /// What the runner gave a step, by the rules it had at the last commit
+    /// before this rewrite, `132202dbc` (`git show 132202dbc:<path>`).
     mod old_runner {
         use super::super::*;
 
-        /// `UNPINNED_BUILTINS`, `datalib/backend/dag/src/config.rs:1939-1944`.
+        /// `UNPINNED_BUILTINS`, `datalib/backend/dag/src/config.rs:2045-2049`.
         const UNPINNED: &[(Option<&str>, &str)] = &[
-            (None, "keyword_index"),
             (None, "embed"),
             (None, "embedding_map"),
             (Some("perseus"), "render_markdown"),
         ];
-        /// `BUILTIN_LOCKS`, `datalib/backend/dag/src/config.rs:1949-1953`.
-        const LOCKS: &[(&str, &str)] = &[
-            ("qmd_aggregator", "qmd_keyword"),
-            ("keyword_index", "qmd_keyword"),
-            ("embed", "qmd_embed"),
-        ];
+        /// `BUILTIN_LOCKS`, `datalib/backend/dag/src/config.rs:2054`.
+        const LOCKS: &[(&str, &str)] = &[("embed", "embedder")];
 
         #[derive(Deserialize)]
         pub struct Old {
@@ -1324,8 +1344,8 @@ key_env_var = "WORK_PHONE_KEY"
             }
         }
 
-        /// `spec_of`, `datalib/backend/dag/src/config.rs:2017-2032`, and
-        /// `default_for`, `datalib/backend/dag/src/supervisor/locks.rs:93-101`.
+        /// `spec_of`, `datalib/backend/dag/src/config.rs:2079-2140`, and
+        /// `default_for`, `datalib/backend/dag/src/supervisor/locks.rs:84-92`.
         pub fn gave(s: &OldStep, old: &Old) -> Gave {
             let runs = crate::retired::names_datalib_step(s.command.as_deref());
             let group_type = match (&s.group, &s.function) {
@@ -1375,11 +1395,26 @@ key_env_var = "WORK_PHONE_KEY"
 
     const SHIPPED: &str = "datalib/backend/migrate_config/testdata/shipped_before_explicit_steps";
 
-    /// Every config this repo shipped in the old shape rewrites into one
-    /// the runner loads whole, whose steps hold the locks, read the way
-    /// and take the verbs the old runner gave them. The one change is
-    /// meant: a fan-in with no inputs yet holds `index`, so it is right
-    /// once a source is added, where the old runner gave it `network`.
+    const INDEX_STEP: &str = "unified_grid_and_search_index/unified_grid_and_search_index";
+    const INDEX_GROUP_LINE: &str = "id = \"unified_grid_and_search_index\"";
+    /// The index group and step of the starter config at `132202dbc`.
+    const INDEX_ENTRIES: &str = r#"
+[[groups]]
+id = "unified_grid_and_search_index"
+
+[[steps]]
+group = "unified_grid_and_search_index"
+function = "unified_grid_and_search_index"
+command = "datalib-step"
+inputs = ["*/render_markdown"]
+"#;
+
+    /// Every config this repo shipped in the old shape, brought through
+    /// the unattended rewrites before this one, rewrites into one the
+    /// runner loads whole, whose steps hold the locks, read the way and
+    /// take the verbs the old runner gave them. The one change is meant: a
+    /// fan-in with no inputs yet holds `index`, so it is right once a
+    /// source is added, where the old runner gave it `network`.
     #[test]
     fn every_shipped_config_keeps_what_the_old_runner_gave_its_steps() {
         let mut files: Vec<_> = std::fs::read_dir(SHIPPED)
@@ -1387,10 +1422,26 @@ key_env_var = "WORK_PHONE_KEY"
             .map(|e| e.unwrap().path())
             .collect();
         files.sort();
-        assert!(files.len() >= 90, "only {} fixtures", files.len());
+        assert!(files.len() >= 94, "only {} fixtures", files.len());
+        let (explicit, before) = crate::UNATTENDED.split_last().unwrap();
+        assert!(
+            explicit.what.contains("datalib-step run"),
+            "{}",
+            explicit.what
+        );
         for path in files {
-            let text = std::fs::read_to_string(&path).unwrap();
             let name = path.display();
+            let mut text = std::fs::read_to_string(&path).unwrap();
+            // A provider's example is one source; its `embed` reads the
+            // index step every library has, which the example leaves out.
+            if text.contains(&format!("\"{INDEX_STEP}\"")) && !text.contains(INDEX_GROUP_LINE) {
+                text.push_str(INDEX_ENTRIES);
+            }
+            for r in before {
+                if let Some(next) = (r.run)(&text).unwrap_or_else(|e| panic!("{name}: {e:#}")) {
+                    text = next;
+                }
+            }
             assert!(is_retired(&text).unwrap(), "{name}");
             let out = crate::upgrade_explicit_steps(&text)
                 .unwrap_or_else(|e| panic!("{name}: {e:#}"))

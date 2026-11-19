@@ -116,3 +116,11 @@ rust_test(
         "@datalib_crates//:tokio",
     ],
 )
+
+# The capture-time case generators (tests/capture_time/README.md), this
+# package's contribution to `//:python_sources`, which lints them.
+filegroup(
+    name = "python_sources",
+    srcs = glob(["tests/capture_time/*.py"], allow_empty = False),
+    visibility = ["//visibility:public"],
+)

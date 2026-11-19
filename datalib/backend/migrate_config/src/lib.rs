@@ -14,27 +14,39 @@
 //! params — and, after it, `lowercase_ids.rs`: every id that names a
 //! folder becomes lower case; then `qmd_steps.rs`: the `qmd_index` fan-in becomes
 //! `qmd_aggregator`, downstream of each source's own qmd steps; then
-//! `document_index.rs`: the `unified_index` group, its steps and its
-//! applet become `unified_document_index`; then `time_series_steps.rs`:
+//! `index_name.rs`: the `unified_index` or `unified_document_index`
+//! group, its steps and its applet become `unified_grid_and_search_index`; then `time_series_steps.rs`:
 //! a source with time series gets its `render_time_series` step and the
 //! config its time-series index; then `time_series_embeds.rs`: a
 //! time-series source loses its `embed` step; then `step_commands.rs`: a
 //! step of datalib's own names `datalib-step` as its `command`; then
 //! `todoist_since.rs`: a Todoist ingest's `completed_since` becomes
-//! `since`; and last `explicit_steps.rs`: each step writes its `id`, its
-//! whole `datalib-step run …` command, and the locks and `reads` the
-//! runner used to work out for it, and the file its `[[programs]]`,
-//! `[[locks]]` and `[env]`. Those last eight rewrites are also the ones
-//! `datalib-http` makes by itself (`upgrade_lowercase_ids`,
-//! `upgrade_qmd_steps`, `upgrade_document_index`,
-//! `upgrade_time_series_steps`, `upgrade_time_series_embeds`,
-//! `upgrade_step_commands`, `upgrade_todoist_since`,
-//! `upgrade_explicit_steps`). Every one before `explicit_steps.rs` reads
-//! the shape from before it.
+//! `since`; then `conversation_settings.rs`: the ChatGPT and Claude
+//! ingests' API settings take the names they share; then
+//! `keyword_fold.rs` and `aggregator_drop.rs`: the search's own steps
+//! fold into the index step; then `index_step_name.rs`: the index step's
+//! function, `grid_index`, becomes `unified_grid_and_search_index`; then
+//! `input_patterns.rs`: the index steps read every source by pattern,
+//! which finds them by their current functions; then `unread_inputs.rs`:
+//! the index step stops naming the `render_time_series` and
+//! `render_occurrences` steps it does not read; then `lock_names.rs`:
+//! the `qmd_embed` lock is `embedder` and `qmd_keyword` goes; and last
+//! `explicit_steps.rs`: each step writes its `id`, its whole
+//! `datalib-step run …` command, and the locks and `reads` the runner
+//! used to work out for it, and the file its `[[programs]]`, `[[locks]]`
+//! and `[env]`. Every rewrite after `convert.rs` is also one
+//! `datalib-http` makes by itself ([`UNATTENDED`]), and every one before
+//! `explicit_steps.rs` reads the shape from before it.
 
+pub mod aggregator_drop;
+pub mod conversation_settings;
 pub mod convert;
-pub mod document_index;
 pub mod explicit_steps;
+pub mod index_name;
+pub mod index_step_name;
+pub mod input_patterns;
+pub mod keyword_fold;
+pub mod lock_names;
 pub mod lowercase_ids;
 pub mod qmd_steps;
 mod retired;
@@ -42,6 +54,7 @@ pub mod step_commands;
 pub mod time_series_embeds;
 pub mod time_series_steps;
 pub mod todoist_since;
+pub mod unread_inputs;
 
 use std::path::{Path, PathBuf};
 
@@ -68,7 +81,7 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if qmd_steps::is_retired(text)? {
         return Ok(LegacyFormat::QmdIndex);
     }
-    if document_index::is_retired(text)? {
+    if index_name::is_retired(text)? {
         return Ok(LegacyFormat::UnifiedIndex);
     }
     if time_series_steps::is_retired(text)? {
@@ -82,6 +95,24 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     }
     if todoist_since::is_retired(text)? {
         return Ok(LegacyFormat::TodoistCompletedSince);
+    }
+    if conversation_settings::is_retired(text)? {
+        return Ok(LegacyFormat::ConversationSettingNames);
+    }
+    if keyword_fold::is_retired(text)? {
+        return Ok(LegacyFormat::KeywordIndexSteps);
+    }
+    if aggregator_drop::is_retired(text)? {
+        return Ok(LegacyFormat::AggregatorStep);
+    }
+    if index_step_name::is_retired(text)? {
+        return Ok(LegacyFormat::GridIndexStep);
+    }
+    if unread_inputs::is_retired(text)? {
+        return Ok(LegacyFormat::UnreadGridInputs);
+    }
+    if lock_names::is_retired(text)? {
+        return Ok(LegacyFormat::SearchLockNames);
     }
     if explicit_steps::is_retired(text)? {
         return Ok(LegacyFormat::InferredByTheRunner);
@@ -98,12 +129,18 @@ pub fn convert(text: &str) -> Result<String> {
         | LegacyFormat::TimeSeriesEmbed
         | LegacyFormat::ImplicitStepCommand
         | LegacyFormat::TodoistCompletedSince
+        | LegacyFormat::ConversationSettingNames
+        | LegacyFormat::KeywordIndexSteps
+        | LegacyFormat::AggregatorStep
+        | LegacyFormat::GridIndexStep
+        | LegacyFormat::UnreadGridInputs
+        | LegacyFormat::SearchLockNames
         | LegacyFormat::InferredByTheRunner => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = lowercase_ids::rewrite(&out)?;
     let out = qmd_steps::rewrite(&out)?;
-    let out = document_index::rewrite(&out)?;
+    let out = index_name::rewrite(&out)?;
     let out = if time_series_steps::is_retired(&out)? {
         time_series_steps::rewrite(&out)?
     } else {
@@ -112,6 +149,13 @@ pub fn convert(text: &str) -> Result<String> {
     let out = time_series_embeds::rewrite(&out)?;
     let out = step_commands::rewrite(&out)?;
     let out = todoist_since::rewrite(&out)?;
+    let out = conversation_settings::rewrite(&out)?;
+    let out = keyword_fold::rewrite(&out)?;
+    let out = aggregator_drop::rewrite(&out)?;
+    let out = index_step_name::rewrite(&out)?;
+    let out = input_patterns::rewrite(&out)?;
+    let out = unread_inputs::rewrite(&out)?;
+    let out = lock_names::rewrite(&out)?;
     let out = if explicit_steps::is_retired(&out)? {
         explicit_steps::rewrite(&out)?
     } else {
@@ -146,17 +190,17 @@ pub fn upgrade_qmd_steps(text: &str) -> Result<Option<String>> {
 }
 
 /// The rewrite `datalib-http` makes unattended, to a config whose index
-/// group is still `unified_index`. `None` when there is nothing to do.
+/// group still has one of its earlier names. `None` when there is nothing to do.
 /// Refused, as [`upgrade_qmd_steps`] is, when the result would not load
 /// every entry the original did, each under its new id.
-pub fn upgrade_document_index(text: &str) -> Result<Option<String>> {
-    if !document_index::is_retired(text).unwrap_or(false) {
+pub fn upgrade_index_name(text: &str) -> Result<Option<String>> {
+    if !index_name::is_retired(text).unwrap_or(false) {
         return Ok(None);
     }
-    let out = document_index::rewrite(text)?;
+    let out = index_name::rewrite(text)?;
     refuse_a_loss(text, &out, |e| {
         let (kind, id) = e.split_once(' ').unwrap_or(("", e));
-        match document_index::renamed(id) {
+        match index_name::renamed(id) {
             Some(new) => format!("{kind} {new}"),
             None => e.to_string(),
         }
@@ -248,21 +292,264 @@ pub fn upgrade_explicit_steps(text: &str) -> Result<Option<String>> {
     Ok(Some(out))
 }
 
-/// What the loader makes of `text` once `explicit_steps.rs` has brought
-/// it to the shape the runner reads, which every other rewrite's text is
-/// a step short of.
+/// What the loader makes of `text` once [`folded`] and then
+/// `explicit_steps.rs` have brought it to the shape the runner reads,
+/// which every other rewrite's text is a step or more short of.
 pub(crate) fn check_as_current(text: &str) -> datalib_dag::config::ConfigCheck {
-    let current = match explicit_steps::is_retired(text) {
-        Ok(true) => explicit_steps::rewrite(text).ok(),
+    let folded = folded(text);
+    let current = match explicit_steps::is_retired(&folded) {
+        Ok(true) => explicit_steps::rewrite(&folded).ok(),
         _ => None,
     };
-    datalib_dag::config::check_text(current.as_deref().unwrap_or(text))
+    datalib_dag::config::check_text(current.as_deref().unwrap_or(&folded))
+}
+
+/// Fold each source's `keyword_index` into `grid_index`
+/// (`keyword_fold.rs`). Refused, as [`upgrade_qmd_steps`] is, when the
+/// result would not load every entry the original did. The loader refuses
+/// a `keyword_index` already, so the steps it takes out were not loaded.
+pub fn upgrade_keyword_fold(text: &str) -> Result<Option<String>> {
+    if !keyword_fold::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = keyword_fold::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
+    Ok(Some(out))
+}
+
+/// Take each `qmd_aggregator` out (`aggregator_drop.rs`). Refused, as
+/// [`upgrade_qmd_steps`] is, when the result would not load every entry
+/// the original did. The loader refuses the step already.
+pub fn upgrade_aggregator_drop(text: &str) -> Result<Option<String>> {
+    if !aggregator_drop::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = aggregator_drop::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
+    Ok(Some(out))
+}
+
+/// Rename `qmd_embed` to `embedder` and drop `qmd_keyword`, in steps'
+/// `locks` and in `[[locks]]` entries (`lock_names.rs`). Refused, as
+/// [`upgrade_qmd_steps`] is, when the result would not load every entry
+/// the original did.
+pub fn upgrade_lock_names(text: &str) -> Result<Option<String>> {
+    if !lock_names::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = lock_names::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
+    Ok(Some(out))
+}
+
+/// Write a pattern (`*/render_markdown`) in each index step's `inputs`
+/// where it names every step of that function (`input_patterns.rs`).
+/// Refused, as [`upgrade_qmd_steps`] is, when the result would not load
+/// every entry the original did.
+pub fn upgrade_input_patterns(text: &str) -> Result<Option<String>> {
+    if !input_patterns::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = input_patterns::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
+    Ok(Some(out))
+}
+
+/// Take the `render_time_series` and `render_occurrences` inputs out of
+/// the index step (`unread_inputs.rs`). Refused, as [`upgrade_qmd_steps`]
+/// is, when the result would not load every entry the original did.
+pub fn upgrade_unread_inputs(text: &str) -> Result<Option<String>> {
+    if !unread_inputs::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = unread_inputs::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
+    Ok(Some(out))
+}
+
+/// Give the ChatGPT and Claude ingests' API settings the names they
+/// share (`conversation_settings.rs`). Refused, as [`upgrade_qmd_steps`]
+/// is, when the result would not load every entry the original did.
+pub fn upgrade_conversation_settings(text: &str) -> Result<Option<String>> {
+    if !conversation_settings::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = conversation_settings::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
+    Ok(Some(out))
+}
+
+/// Give the index step its group's name, `unified_grid_and_search_index`
+/// (`index_step_name.rs`). Refused, as [`upgrade_qmd_steps`] is, when the
+/// result would not load every entry the original did. The loader refuses
+/// a `grid_index` already, so the step it renames was not loaded.
+pub fn upgrade_index_step_name(text: &str) -> Result<Option<String>> {
+    if !index_step_name::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = index_step_name::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
+    Ok(Some(out))
 }
 
 /// Refuse `out` when it loads fewer entries than `text`, or loses one
 /// `text` loaded, as `follow` names it after the rewrite.
 fn refuse_a_loss(text: &str, out: &str, follow: impl Fn(&str) -> String) -> Result<()> {
     refuse_a_loss_but(text, out, follow, &[])
+}
+
+/// `text` as the later rewrites in [`UNATTENDED`] that take out a step the
+/// loader refuses leave it: its `keyword_index` steps folded into the
+/// index step, its `qmd_aggregator` taken out and its `grid_index`
+/// renamed, or as it is where one has nothing to do or refuses. A rewrite
+/// of an older shape still writes those steps; whether it loses an entry
+/// is judged in the shape the chain ends in.
+pub(crate) fn folded(text: &str) -> String {
+    let folded = keyword_fold::rewrite(text).unwrap_or_else(|_| text.to_string());
+    let folded = aggregator_drop::rewrite(&folded).unwrap_or(folded);
+    index_step_name::rewrite(&folded).unwrap_or(folded)
+}
+
+/// One rewrite `datalib-http` makes without asking: what the old shape
+/// has, for the log, what the rewrite does, and the rewrite.
+pub struct Rewrite {
+    pub why: &'static str,
+    pub what: &'static str,
+    pub run: fn(&str) -> Result<Option<String>>,
+}
+
+/// Every unattended rewrite, in the order they are made. `datalib-http`
+/// runs these on its config, and a config the repo ships or documents is
+/// tested to need none of them.
+pub const UNATTENDED: [Rewrite; 15] = [
+    Rewrite {
+        why: "has an id with capitals in it",
+        what: "every group, step and applet id, and every function, is lower case, \
+               since each names a folder and a Mac's disk ignores letter case",
+        run: upgrade_lowercase_ids,
+    },
+    Rewrite {
+        why: "still has a `qmd_index` step",
+        what: "`qmd_index` is now `qmd_aggregator`, reading each source's own \
+               keyword_index and embed steps",
+        run: upgrade_qmd_steps,
+    },
+    Rewrite {
+        why: "still names its index group `unified_index` or `unified_document_index`",
+        what: "the index group, its steps and its applet are now \
+               `unified_grid_and_search_index`, named for the grid and the search it holds",
+        run: upgrade_index_name,
+    },
+    Rewrite {
+        why: "has a source with time series and no time-series index",
+        what: "each source with time series has a `render_time_series` step, read by \
+               the new `unified_time_series_index` group's `time_series_index`",
+        run: upgrade_time_series_steps,
+    },
+    Rewrite {
+        why: "has a time-series source with an `embed` step",
+        what: "a time-series source's markdown is summaries of numbers, which its \
+               keyword index already finds; its `embed` step is taken out",
+        run: upgrade_time_series_embeds,
+    },
+    Rewrite {
+        why: "has a step that does not name its program",
+        what: "every step names its program in `command`; datalib's own steps run \
+               `datalib-step`",
+        run: upgrade_step_commands,
+    },
+    Rewrite {
+        why: "has a Todoist source whose window is `completed_since`",
+        what: "Todoist's window is `since`, which takes the grammar every source's \
+               `since` does",
+        run: upgrade_todoist_since,
+    },
+    Rewrite {
+        why: "has a ChatGPT or Claude source whose API settings have their old names",
+        what: "ChatGPT's `max_pages`, `limit` and `sleep_between` are `max_listing_pages`, \
+               `max_conversations_per_run` and `seconds_between_requests`, and Claude's \
+               `refresh_most_recent_n_chat_count` is `refetch_newest_conversations`, \
+               the names both sources share",
+        run: upgrade_conversation_settings,
+    },
+    Rewrite {
+        why: "has a `keyword_index` step",
+        what: "`grid_index` puts every source it reads in the keyword search but those its \
+               `not_searched` lists, which names each source that had no `keyword_index`; \
+               each `embed` and the aggregator read `grid_index` instead",
+        run: upgrade_keyword_fold,
+    },
+    Rewrite {
+        why: "has a `qmd_aggregator` step",
+        what: "`grid_index` keeps the vector cache to what a chunk names and reports what \
+               search holds; the aggregator is taken out, and the embedding map reads every \
+               `embed`",
+        run: upgrade_aggregator_drop,
+    },
+    Rewrite {
+        why: "has an index step whose function is `grid_index`",
+        what: "the index step is `unified_grid_and_search_index`, named for its group and \
+               the grid and the search it fills; each input that named it names the new id",
+        run: upgrade_index_step_name,
+    },
+    Rewrite {
+        why: "has an index step that names every source's step by id",
+        what: "an index step reads every source's step of a function by pattern \
+               (`*/render_markdown`), so a source added later is read without editing it",
+        run: upgrade_input_patterns,
+    },
+    Rewrite {
+        why: "has an index step that names a time-series or occurrences step",
+        what: "the index step no longer names the `render_time_series` and \
+               `render_occurrences` steps: their problems are read in their own stores, so \
+               the inputs only made it run again after each of them",
+        run: upgrade_unread_inputs,
+    },
+    Rewrite {
+        why: "names the `qmd_embed` or `qmd_keyword` lock",
+        what: "every embed holds the `embedder` lock, which was `qmd_embed`; \
+               `qmd_keyword` is gone, since only the index step writes the grid index's file, \
+               and a step that named it holds its default lock",
+        run: upgrade_lock_names,
+    },
+    Rewrite {
+        why: "has a step whose program's arguments, locks and reads the runner worked out",
+        what: "every step writes its `id` and its whole `datalib-step run …` command, \
+               and the locks and `reads` it holds; the runner no longer knows \
+               datalib-step's steps from any other program's",
+        run: upgrade_explicit_steps,
+    },
+];
+
+/// What [`upgrade_unattended`] made of a config.
+pub struct Unattended {
+    /// The text after every rewrite that applied.
+    pub text: String,
+    /// The `what` of each rewrite that changed the text.
+    pub done: Vec<&'static str>,
+    /// The `why` of each rewrite that refused, and its reason. The text
+    /// is left as that rewrite found it.
+    pub refused: Vec<(&'static str, anyhow::Error)>,
+}
+
+/// Run [`UNATTENDED`] over `text`, each on the last one's result.
+pub fn upgrade_unattended(text: &str) -> Unattended {
+    let mut out = Unattended {
+        text: text.to_string(),
+        done: Vec::new(),
+        refused: Vec::new(),
+    };
+    for rewrite in &UNATTENDED {
+        match (rewrite.run)(&out.text) {
+            Ok(Some(next)) => {
+                out.text = next;
+                out.done.push(rewrite.what);
+            }
+            Ok(None) => {}
+            Err(e) => out.refused.push((rewrite.why, e)),
+        }
+    }
+    out
 }
 
 /// [`refuse_a_loss`], for a rewrite whose job is to take out `meant`.
@@ -721,7 +1008,8 @@ inputs = ["slack/render_markdown"]
         );
         assert!(
             out.contains(
-                "id = \"unified_document_index/grid_index\"\ncommand = \"datalib-step run grid_index\""
+                "id = \"unified_grid_and_search_index/unified_grid_and_search_index\"\n\
+                 command = \"datalib-step run unified_grid_and_search_index\""
             ),
             "{out}"
         );
@@ -748,8 +1036,8 @@ inputs = ["slack/render_markdown"]
         assert!(diags.is_empty(), "{diags:?}\n{out}");
         let by_id = |id: &str| cfg.applets.iter().find(|a| a.id == id).unwrap().clone();
         assert_eq!(
-            by_id("unified_document_index").group.as_deref(),
-            Some("unified_document_index")
+            by_id("unified_grid_and_search_index").group.as_deref(),
+            Some("unified_grid_and_search_index")
         );
         assert_eq!(by_id("slack_view").group.as_deref(), Some("slack"));
         assert_eq!(cfg.groups.len(), 2);
@@ -770,14 +1058,9 @@ inputs = ["slack/render_markdown"]
             !out.contains("\"raw\"") && !out.contains("rendered_md"),
             "{out}"
         );
-        assert!(
-            out.contains("command = \"datalib-step run qmd_aggregator\""),
-            "{out}"
-        );
-        assert!(
-            out.contains("inputs = [\"slack/render_markdown\"]"),
-            "{out}"
-        );
+        assert!(!out.contains("qmd_aggregator"), "{out}");
+        assert!(out.contains("\"*/render_markdown\""), "{out}");
+        assert!(!out.contains("keyword_index"), "{out}");
         let (cfg, diags) = datalib_dag::config::parse_graded(&out);
         assert!(diags.is_empty(), "{diags:?}\n{out}");
         assert_eq!(cfg.groups.len(), 2);
@@ -871,13 +1154,14 @@ inputs = ["mail/render_markdown"]
     }
 
     /// A rewrite nobody reviews must not cost an entry the original ran.
-    /// Here a custom step reads the `qmd_index` step itself, which the
-    /// rewrite renames, so the custom step's input names nothing and the
-    /// loader drops it. The original drops no step, but the rewrite adds
-    /// two, so a count of the loaded entries does not see the loss.
+    /// Here a custom step already writes under `mail/embed/`, so the embed
+    /// step the rewrite adds nests with it, and the loader drops the
+    /// custom step, which sits below it once the file is sorted. The
+    /// original drops one entry too (`qmd_index`), so a count of the
+    /// dropped entries does not see the loss.
     #[test]
     fn the_unattended_upgrade_refuses_a_rewrite_that_drops_an_entry() {
-        let extra = "exports/qmd_report";
+        let extra = "mail/embed/extra";
         let clash = format!(
             "{SHARED_QMD_INDEX}\n[[steps]]\nid = \"{extra}\"\ncommand = \"x\"\ninputs = [\"unified_index/qmd_index\"]\n"
         );
@@ -917,25 +1201,54 @@ inputs = ["mail/render_markdown"]
         );
     }
 
+    /// A ChatGPT source written with the old setting names is renamed by
+    /// the server, every entry still loading, and then has nothing left to
+    /// do. `datalib-step` refuses the old keys (the config crates' tests).
+    #[test]
+    fn a_chatgpt_source_with_the_old_setting_names_is_upgraded() {
+        let before = "[[groups]]\nid = \"gpt\"\ntype = \"chatgpt\"\n\n[[steps]]\n\
+                      group = \"gpt\"\nfunction = \"ingest\"\ncommand = \"datalib-step\"\n\
+                      [steps.params.api]\nlimit = 10\n";
+        let loads = |text: &str| {
+            let check = check_as_current(text);
+            check.cfg.steps.iter().any(|s| s.id == "gpt/ingest")
+        };
+        let out = upgrade_conversation_settings(before).unwrap().unwrap();
+        assert!(out.contains("\nmax_conversations_per_run = 10\n"), "{out}");
+        assert!(loads(&out), "{out}");
+        assert_eq!(upgrade_conversation_settings(&out).unwrap(), None);
+        assert_eq!(
+            convert(before).unwrap(),
+            explicit_steps::rewrite(&out).unwrap()
+        );
+    }
+
     /// The server runs the unattended rewrites in turn; each one after the
     /// first carries on from what the one before wrote, and then has
     /// nothing left to do.
     #[test]
     fn the_unattended_upgrades_chain_to_the_current_shape() {
         let out = upgrade_qmd_steps(SHARED_QMD_INDEX).unwrap().unwrap();
-        let out = upgrade_document_index(&out).unwrap().unwrap();
+        let out = upgrade_index_name(&out).unwrap().unwrap();
         let out = upgrade_step_commands(&out).unwrap().unwrap();
         assert_eq!(upgrade_step_commands(&out).unwrap(), None);
+        let out = upgrade_keyword_fold(&out).unwrap().unwrap();
+        let out = upgrade_aggregator_drop(&out).unwrap().unwrap();
+        let out = upgrade_index_step_name(&out).unwrap().unwrap();
+        assert_eq!(upgrade_index_step_name(&out).unwrap(), None);
+        let out = upgrade_input_patterns(&out).unwrap().unwrap_or(out);
         let check = check_as_current(&out);
         assert!(check.is_clean(), "{:?}\n{out}", check.diagnostics);
         assert!(check
             .cfg
             .steps
             .iter()
-            .any(|s| s.id == "unified_document_index/qmd_aggregator"));
+            .any(|s| s.id == "unified_grid_and_search_index/unified_grid_and_search_index"));
+        assert!(!out.contains("grid_index"), "{out}");
+        assert!(!out.contains("qmd_aggregator"), "{out}");
         assert!(!out.contains("\"unified_index"), "{out}");
-        assert_eq!(upgrade_document_index(&out).unwrap(), None);
-        assert_eq!(upgrade_document_index("not [ toml").unwrap(), None);
+        assert_eq!(upgrade_index_name(&out).unwrap(), None);
+        assert_eq!(upgrade_index_name("not [ toml").unwrap(), None);
         let out = upgrade_explicit_steps(&out).unwrap().unwrap();
         assert_eq!(upgrade_explicit_steps(&out).unwrap(), None);
         assert!(datalib_dag::config::check_text(&out).is_clean(), "{out}");
@@ -946,15 +1259,100 @@ inputs = ["mail/render_markdown"]
     /// clash the loader settles by dropping one of them, so the rename is
     /// refused rather than made.
     #[test]
-    fn the_document_index_upgrade_refuses_a_rename_that_drops_a_step() {
+    fn the_index_name_upgrade_refuses_a_rename_that_drops_a_step() {
         let current = upgrade_qmd_steps(SHARED_QMD_INDEX).unwrap().unwrap();
         let clash = format!(
-            "{current}\n[[steps]]\nid = \"unified_document_index/qmd_aggregator\"\n\
+            "{current}\n[[steps]]\ngroup = \"unified_index\"\nfunction = \"grid_index\"\n\
+             inputs = [\"mail/render_markdown\"]\n\n\
+             [[steps]]\nid = \"unified_grid_and_search_index/unified_grid_and_search_index\"\n\
              command = \"x\"\ninputs = [\"mail/render_markdown\"]\n"
         );
-        assert!(check_as_current(&clash).is_clean());
-        let err = upgrade_document_index(&clash).unwrap_err().to_string();
+        let loads = |text: &str| {
+            let check = check_as_current(text);
+            check
+                .cfg
+                .steps
+                .iter()
+                .any(|s| s.id == "unified_grid_and_search_index/unified_grid_and_search_index")
+        };
+        assert!(loads(&clash), "the custom step runs before the rename");
+        let err = upgrade_index_name(&clash).unwrap_err().to_string();
         assert!(err.contains("would not load"), "{err}");
+    }
+
+    /// The unattended pass names what it did, and does nothing to a config
+    /// already in the current shape: the second pass over its own result
+    /// is empty.
+    #[test]
+    fn the_unattended_pass_names_each_rewrite_and_leaves_a_current_config_alone() {
+        let old = "[[groups]]\nid = \"mail\"\ntype = \"email\"\n\n\
+                   [[steps]]\ngroup = \"mail\"\nfunction = \"ingest\"\n";
+        let first = upgrade_unattended(old);
+        assert!(first.refused.is_empty());
+        assert_eq!(first.done, [UNATTENDED[5].what, UNATTENDED[14].what]);
+        assert!(
+            first
+                .text
+                .contains("command = \"datalib-step run ingest email\""),
+            "{}",
+            first.text
+        );
+        let second = upgrade_unattended(&first.text);
+        assert!(second.done.is_empty() && second.refused.is_empty());
+        assert_eq!(second.text, first.text);
+    }
+
+    /// A config from before #1766 had the index step name the time-series
+    /// and occurrences renders, by pattern or by id. The unattended pass
+    /// takes exactly those inputs out, leaves every other line alone, and
+    /// then has nothing left to do; the tool names the shape too. A config
+    /// whose index step is still `grid_index` is renamed first, and loses
+    /// the same inputs in the same pass.
+    #[test]
+    fn the_unattended_pass_takes_out_the_inputs_the_index_step_does_not_read() {
+        let current = "[[groups]]\nid = \"riker\"\ntype = \"garmin\"\n\n\
+                       [[steps]]\ngroup = \"riker\"\nfunction = \"ingest\"\ncommand = \"datalib-step\"\n\n\
+                       [[steps]]\ngroup = \"riker\"\nfunction = \"render_markdown\"\n\
+                       command = \"datalib-step\"\ninputs = [\"riker/ingest\"]\n\n\
+                       [[steps]]\ngroup = \"riker\"\nfunction = \"render_time_series\"\n\
+                       command = \"datalib-step\"\ninputs = [\"riker/ingest\"]\n\n\
+                       [[groups]]\nid = \"unified_grid_and_search_index\"\n\n\
+                       [[steps]]\ngroup = \"unified_grid_and_search_index\"\n\
+                       function = \"unified_grid_and_search_index\"\n\
+                       command = \"datalib-step\"\ninputs = [\"*/render_markdown\"]\n\n\
+                       [[groups]]\nid = \"unified_time_series_index\"\n\n\
+                       [[steps]]\ngroup = \"unified_time_series_index\"\nfunction = \"time_series_index\"\n\
+                       command = \"datalib-step\"\ninputs = [\"*/render_time_series\"]\n";
+        let old = current.replace(
+            "inputs = [\"*/render_markdown\"]",
+            "inputs = [\"*/render_markdown\", \"riker/render_time_series\", \"*/render_occurrences\"]",
+        );
+        assert_eq!(detect(&old).unwrap(), LegacyFormat::UnreadGridInputs);
+        let first = upgrade_unattended(&old);
+        assert!(first.refused.is_empty());
+        let current = explicit_steps::rewrite(current).unwrap();
+        assert_eq!(first.done, [UNATTENDED[12].what, UNATTENDED[14].what]);
+        assert_eq!(first.text, current);
+        assert_eq!(convert(&old).unwrap(), current);
+        let second = upgrade_unattended(&first.text);
+        assert!(second.done.is_empty() && second.refused.is_empty());
+
+        let older = old.replace(
+            "function = \"unified_grid_and_search_index\"",
+            "function = \"grid_index\"",
+        );
+        let both = upgrade_unattended(&older);
+        assert!(both.refused.is_empty(), "{:?}", both.refused);
+        assert_eq!(
+            both.done,
+            [
+                UNATTENDED[10].what,
+                UNATTENDED[12].what,
+                UNATTENDED[14].what
+            ]
+        );
+        assert_eq!(both.text, current);
+        assert_eq!(convert(&older).unwrap(), current);
     }
 
     #[test]

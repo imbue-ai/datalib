@@ -63,4 +63,46 @@ pub struct EdgeRow {
     /// consumers can filter or style by it.
     #[col(sql = "VARCHAR(64)")]
     pub label: Option<String>,
+    /// What the edge means, an [`EdgeKind`] stored as its number.
+    #[col(sql = "INTEGER")]
+    pub kind: i64,
+}
+
+/// What an edge means. Stored as a number, since an index holds one per
+/// reply: each variant's number is fixed and never reused, and a number
+/// this build does not know parses to `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::VariantArray)]
+pub enum EdgeKind {
+    /// A link a renderer drew between two places: an edition's chapter
+    /// to its counterpart, a sentence to its translation.
+    Link = 0,
+    /// The source says the item at `src` answers the one at `dst`: a
+    /// quote-reply, an email's `In-Reply-To`, a review comment's reply.
+    ReplyTo = 1,
+}
+
+impl EdgeKind {
+    pub fn as_i64(self) -> i64 {
+        self as i64
+    }
+
+    pub fn parse(n: i64) -> Option<Self> {
+        use strum::VariantArray;
+        Self::VARIANTS.iter().copied().find(|k| k.as_i64() == n)
+    }
+}
+
+#[cfg(test)]
+mod edge_kind_tests {
+    use super::*;
+
+    /// The numbers are on disk in every store: a renumbered variant would
+    /// silently change what stored edges mean.
+    #[test]
+    fn each_edge_kind_keeps_its_number() {
+        assert_eq!(EdgeKind::Link.as_i64(), 0);
+        assert_eq!(EdgeKind::ReplyTo.as_i64(), 1);
+        assert_eq!(EdgeKind::parse(1), Some(EdgeKind::ReplyTo));
+        assert_eq!(EdgeKind::parse(99), None);
+    }
 }

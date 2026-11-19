@@ -1,10 +1,9 @@
 //! The `problems` table: one row per thing a step could not fully do to
-//! one record, kept in the store the step owns and copied downstream
-//! with the data until it reaches the unified document index and the screen.
+//! one record, kept in the store the step owns, where a reader finds it.
 //! Every closed vocabulary here is an enum: the row binds them as text
 //! and a reader parses them back, never comparing the column to a
-//! literal. How the rows travel, and what reads them: `etl/README.md`
-//! §"Problems flow downstream with the data".
+//! literal. Where the rows are, and what reads them: `etl/README.md`
+//! §"Problems stay in the step that found them".
 
 mod recorded;
 pub use recorded::{log_recorded, note_recorded};
@@ -71,7 +70,19 @@ closed_vocabulary! {
         Render,
         /// Building the `grid_rows` row.
         GridRow,
+        /// Reading a source's time series (`render_time_series`).
+        TimeSeries,
+        /// Listing a calendar's occurrences (`render_occurrences`).
+        Occurrences,
     }
+}
+
+impl Stage {
+    /// The stages a step other than the download and the render records
+    /// in a store of its own, each that step's alone. `unified_grid_and_search_index` copies
+    /// each one's rows apart from the render store's, so neither copy
+    /// erases the other's.
+    pub const OWN_STORE: [Stage; 2] = [Stage::TimeSeries, Stage::Occurrences];
 }
 
 closed_vocabulary! {
@@ -132,6 +143,12 @@ closed_vocabulary! {
         /// A configured entry that exists but this credential cannot
         /// read. → the same.
         Forbidden,
+        /// A setting the config gives that the run did not use, because
+        /// another one it gives takes its place (`since` beside
+        /// `conv_uuids`). → nothing is lost, but the config says more
+        /// than the mirror does; reported every run until it is
+        /// corrected.
+        Ignored,
         /// A bucket a render looked at produced no document, though the
         /// rows it was last built from are still upstream. → the
         /// document an earlier run rendered is kept, possibly stale,
@@ -157,6 +174,50 @@ closed_vocabulary! {
         /// `scope_key` is the raw-store entity id, because the failure
         /// happened before we knew which document the record was for.
         Entity,
+    }
+}
+
+/// The scope key of a row the grid index records itself: a source's
+/// render store it could not read. Every other row in the index is a copy.
+pub const INDEX_OWN_SCOPE_KEY: &str = "render_store";
+
+/// Which step's Manage count a row in the grid index is in: each step
+/// counts only the rows it found itself (`problem_mutes/README.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CountedBy {
+    /// The source's download: a fetch-stage row.
+    Download,
+    /// The source's render: every other row of the source.
+    Render,
+    /// The source's `render_time_series`: a time-series-stage row.
+    TimeSeries,
+    /// The source's `render_occurrences`: an occurrences-stage row.
+    Occurrences,
+    /// The grid index, about a render store it could not read.
+    Index,
+}
+
+impl CountedBy {
+    pub fn of(stage: Stage, scope_kind: ScopeKind, scope_key: &str) -> Self {
+        match (stage, scope_kind) {
+            (_, ScopeKind::Entity) if scope_key == INDEX_OWN_SCOPE_KEY => CountedBy::Index,
+            (Stage::Fetch, _) => CountedBy::Download,
+            (Stage::TimeSeries, _) => CountedBy::TimeSeries,
+            (Stage::Occurrences, _) => CountedBy::Occurrences,
+            _ => CountedBy::Render,
+        }
+    }
+
+    /// The stages whose rows are this step's alone; empty for the render,
+    /// whose rows are every stage the others leave, and for the index,
+    /// whose one row is a render-stage row named by its key.
+    pub fn own_stages(self) -> &'static [Stage] {
+        match self {
+            CountedBy::Download => &[Stage::Fetch],
+            CountedBy::TimeSeries => &[Stage::TimeSeries],
+            CountedBy::Occurrences => &[Stage::Occurrences],
+            CountedBy::Render | CountedBy::Index => &[],
+        }
     }
 }
 
@@ -220,6 +281,21 @@ impl<'a> Scope<'a> {
     }
 }
 
+static STEP_SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Set once by `datalib-step`, from its group: the source every problem
+/// this process's step finds is about. A download's writers mint their
+/// rows under it, since none of them is handed the source.
+pub fn set_step_source(source_id: &str) {
+    let _ = STEP_SOURCE.set(source_id.to_string());
+}
+
+/// The source [`set_step_source`] named; empty where nothing set it, as
+/// in a library's own tests.
+pub fn step_source() -> &'static str {
+    STEP_SOURCE.get().map_or("", String::as_str)
+}
+
 pub fn sample_of(s: &str) -> String {
     const MAX: usize = 80;
     if s.len() <= MAX {
@@ -247,7 +323,8 @@ pub struct Problem {
     /// name it for the rule, not for the value it happened to see.
     pub rule: Option<String>,
     /// First 80 characters of the offending value — see [`sample_of`] —
-    /// or, from [`Problem::explained`], the writer's explanation whole.
+    /// or, from [`Problem::explained`] and [`Problem::lossy_explained`],
+    /// the writer's explanation whole.
     pub sample: String,
     /// `None` takes [`Severity::default_for`] the outcome.
     pub severity: Option<Severity>,
@@ -303,6 +380,20 @@ impl Problem {
             rule: Some(rule.into()),
             sample: sample_of(sample),
             severity: None,
+        }
+    }
+
+    /// A deliberate lossy rule that fired on a whole source or record
+    /// rather than on one value, so its sample is the explanation, kept
+    /// whole as [`Problem::explained`] keeps one.
+    pub fn lossy_explained(
+        rule: impl Into<String>,
+        field: Option<String>,
+        explanation: &str,
+    ) -> Self {
+        Self {
+            rule: Some(rule.into()),
+            ..Self::explained(Reason::DeliberateLoss, field, explanation)
         }
     }
 
@@ -396,6 +487,15 @@ pub struct ProblemRow {
     /// left by an older renderer is identifiable. `None` off a fetch.
     #[col(sql = "INT")]
     pub render_version: Option<i64>,
+    /// The upstream record the problem is about, as the step that found
+    /// it named it: the values a grid row carries under the same names,
+    /// which is how a reader finds the row a problem is about.
+    #[col(sql = "VARCHAR(64)")]
+    pub upstream_entity_kind: Option<String>,
+    #[col(sql = "VARCHAR(255)")]
+    pub upstream_id: Option<String>,
+    #[col(sql = "VARCHAR(255)")]
+    pub upstream_account: Option<String>,
 }
 
 impl ProblemRow {
@@ -441,6 +541,9 @@ impl ProblemRow {
             changed_at_utc: String::new(),
             tz_offset: None,
             render_version: render_version.map(i64::from),
+            upstream_entity_kind: None,
+            upstream_id: None,
+            upstream_account: None,
         }
     }
 
@@ -513,6 +616,9 @@ impl ProblemRow {
             changed_at_utc: r.try_get("changed_at_utc")?,
             tz_offset: r.try_get("tz_offset")?,
             render_version: r.try_get("render_version")?,
+            upstream_entity_kind: r.try_get("upstream_entity_kind")?,
+            upstream_id: r.try_get("upstream_id")?,
+            upstream_account: r.try_get("upstream_account")?,
         })
     }
 }
@@ -635,6 +741,17 @@ mod tests {
         assert_eq!(p.rule.as_deref(), Some("pdf.strip_repeated_chrome"));
     }
 
+    /// An explanation longer than a value's sample stays whole, with
+    /// the rule a lossy problem carries.
+    #[test]
+    fn a_lossy_explanation_is_kept_whole() {
+        let why = "x".repeat(200);
+        let p = Problem::lossy_explained("rule", None, &why);
+        assert_eq!(p.sample, why);
+        assert_eq!(p.reason, Reason::DeliberateLoss);
+        assert_eq!(p.rule.as_deref(), Some("rule"));
+    }
+
     /// The id is a function of what names the problem: the same
     /// problem twice is one row, two problems on one record are two,
     /// and the sample — which changes with the data's wording — is not
@@ -684,6 +801,40 @@ mod tests {
         );
     }
 
+    /// A mute takes a row off the count of the step that found it, so a
+    /// fetch row the render copied must still be the download's.
+    #[test]
+    fn each_row_is_counted_by_the_step_that_found_it() {
+        assert_eq!(
+            CountedBy::of(Stage::Fetch, ScopeKind::Entity, "emails:1"),
+            CountedBy::Download
+        );
+        assert_eq!(
+            CountedBy::of(Stage::Fetch, ScopeKind::Markdown, "md-1"),
+            CountedBy::Download
+        );
+        assert_eq!(
+            CountedBy::of(Stage::GridRow, ScopeKind::Markdown, "md-1"),
+            CountedBy::Render
+        );
+        assert_eq!(
+            CountedBy::of(Stage::Parse, ScopeKind::Entity, "e-1"),
+            CountedBy::Render
+        );
+        assert_eq!(
+            CountedBy::of(Stage::Render, ScopeKind::Entity, INDEX_OWN_SCOPE_KEY),
+            CountedBy::Index
+        );
+        assert_eq!(
+            CountedBy::of(Stage::TimeSeries, ScopeKind::Entity, "activities:1"),
+            CountedBy::TimeSeries
+        );
+        assert_eq!(
+            CountedBy::of(Stage::Occurrences, ScopeKind::Entity, "events:1"),
+            CountedBy::Occurrences
+        );
+    }
+
     #[test]
     fn metric_labels_round_trip_through_the_run_stores_spelling() {
         let (k, v) = Severity::Warning.metric_label();
@@ -709,6 +860,6 @@ mod tests {
         ] {
             assert!(ddl.contains(col), "{ddl}");
         }
-        assert_eq!(COLUMNS[0].1.len(), 17);
+        assert_eq!(COLUMNS[0].1.len(), 20);
     }
 }

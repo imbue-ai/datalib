@@ -39,7 +39,7 @@ pub struct DagConfig {
     #[serde(default)]
     pub binary_dir: Option<PathBuf>,
     /// The containers steps and applets are filed under. A source is a group
-    /// with a `type`; the unified document index is a group without one.
+    /// with a `type`; the unified grid and search index is a group without one.
     #[serde(default)]
     pub groups: Vec<GroupEntry>,
     /// A config with no steps yet is valid — it just runs nothing.
@@ -893,6 +893,10 @@ struct RawConfig {
     render_pages: Option<toml::Spanned<toml::Value>>,
     #[serde(default)]
     embed_contexts: Option<toml::Spanned<toml::Value>>,
+    #[serde(default)]
+    embed_search_index: Option<toml::Spanned<toml::Value>>,
+    #[serde(default)]
+    modal: Option<toml::Spanned<toml::Value>>,
 }
 
 /// One entry on its way in: where it sits in the file, and what it
@@ -989,9 +993,55 @@ struct Accepted {
     /// what the config declares.
     lock_specs: Vec<crate::supervisor::locks::LockSpec>,
     groups: Vec<GroupEntry>,
+    /// Each step with its patterns expanded over every step this pass
+    /// kept, and its spec.
     steps: Vec<(StepEntry, StepSpec)>,
+    /// The same steps with their `inputs` as written, for
+    /// [`check_text`] to expand again over what the graph keeps.
+    written: Vec<WrittenStep>,
+    expansions: Vec<crate::input_pattern::Expansion>,
     applets: Vec<AppletEntry>,
     diagnostics: Vec<Diagnostic>,
+}
+
+/// Steps with their inputs expanded and their specs, and what each pattern
+/// stood for.
+type Resolved = (
+    Vec<(StepEntry, StepSpec)>,
+    Vec<crate::input_pattern::Expansion>,
+);
+
+/// A step the entry rules kept, with its `inputs` as written and the spec
+/// built from them.
+#[derive(Clone)]
+struct WrittenStep {
+    entry: StepEntry,
+    spec: StepSpec,
+}
+
+/// `steps` with every pattern in their `inputs` expanded to the ids in
+/// `universe` it names, and their specs reading those ids.
+fn resolve_inputs(steps: &[WrittenStep], universe: &[&str]) -> Resolved {
+    let mut out = Vec::with_capacity(steps.len());
+    let mut expansions = Vec::new();
+    for w in steps {
+        let (inputs, found) = crate::input_pattern::expand(&w.entry.id, &w.entry.inputs, universe);
+        expansions.extend(found);
+        let mut spec = w.spec.clone();
+        // An expansion only puts ids of steps the entry rules kept in a
+        // pattern's place, and those ids parsed once already.
+        spec.inputs = inputs
+            .iter()
+            .map(|i| crate::ArtifactPath::parse(i))
+            .collect::<Result<_>>()
+            .expect("an accepted step's inputs parse with their patterns expanded");
+        let entry = StepEntry {
+            inputs,
+            ..w.entry.clone()
+        };
+        out.push((entry, spec));
+    }
+    (out, expansions)
 }
 
 /// Every rule decidable without the graph, applied entry by entry, dropping
@@ -1019,7 +1069,7 @@ fn accept_entries(c: Candidates, text: Option<&str>) -> Accepted {
     let (verbs_by_program, program_diags) = accept_programs(&c.programs);
     diags.extend(program_diags);
     let by_id: BTreeMap<&str, &GroupEntry> = groups.iter().map(|g| (g.id.as_str(), g)).collect();
-    let (steps, step_diags) = accept_steps(
+    let (written, step_diags) = accept_steps(
         c.steps,
         &by_id,
         &dropped_groups,
@@ -1029,6 +1079,8 @@ fn accept_entries(c: Candidates, text: Option<&str>) -> Accepted {
         text,
     );
     diags.extend(step_diags);
+    let universe: Vec<&str> = written.iter().map(|w| w.entry.id.as_str()).collect();
+    let (steps, expansions) = resolve_inputs(&written, &universe);
 
     let (applets, applet_diags) = accept_applets(c.applets, &package_dirs, text);
     diags.extend(applet_diags);
@@ -1055,6 +1107,8 @@ fn accept_entries(c: Candidates, text: Option<&str>) -> Accepted {
         lock_specs,
         groups,
         steps,
+        written,
+        expansions,
         applets,
         diagnostics: diags,
     }
@@ -1310,8 +1364,8 @@ fn accept_steps(
     packages: &BTreeMap<&str, String>,
     programs: &BTreeMap<String, BTreeSet<crate::step::Verb>>,
     text: Option<&str>,
-) -> (Vec<(StepEntry, StepSpec)>, Vec<Diagnostic>) {
-    let mut accepted: Vec<(StepEntry, StepSpec)> = Vec::with_capacity(candidates.len());
+) -> (Vec<WrittenStep>, Vec<Diagnostic>) {
+    let mut accepted: Vec<WrittenStep> = Vec::with_capacity(candidates.len());
     let mut diags = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
 
@@ -1437,7 +1491,10 @@ fn accept_steps(
             continue;
         }
         seen.insert(id);
-        accepted.push((c.entry, spec));
+        accepted.push(WrittenStep {
+            entry: c.entry,
+            spec,
+        });
     }
     (accepted, diags)
 }
@@ -1497,6 +1554,7 @@ fn spec_of(
     spec.reads_pinned = e.reads == Some(Reads::Pinned);
     spec.waits_for_settled_inputs = e.start == Some(StartWhen::AfterInputsSettle);
     spec.locks = e.locks.as_ref().map(StepLocks::held);
+    spec.inputs_written = !e.inputs.is_empty();
     for i in &e.inputs {
         spec.inputs.push(crate::ArtifactPath::parse(i)?);
     }
@@ -1621,6 +1679,9 @@ struct Entries {
     /// than that it never existed — different sentences, different entries
     /// to fix.
     dropped: BTreeSet<String>,
+    /// The kept steps with their `inputs` as written.
+    written: Vec<WrittenStep>,
+    expansions: Vec<crate::input_pattern::Expansion>,
     diagnostics: Vec<Diagnostic>,
 }
 
@@ -1684,6 +1745,8 @@ fn entries_of(text: &str) -> Entries {
                 lock_specs: crate::supervisor::locks::defaults(),
                 spans: BTreeMap::new(),
                 dropped: BTreeSet::new(),
+                written: Vec::new(),
+                expansions: Vec::new(),
                 diagnostics: vec![d],
             };
         }
@@ -1697,6 +1760,8 @@ fn entries_of(text: &str) -> Entries {
         ("checkpoint_cadence", &raw.checkpoint_cadence),
         ("render_pages", &raw.render_pages),
         ("embed_contexts", &raw.embed_contexts),
+        ("embed_search_index", &raw.embed_search_index),
+        ("modal", &raw.modal),
     ] {
         if let Some(v) = value {
             diags.push(
@@ -1832,6 +1897,8 @@ fn entries_of(text: &str) -> Entries {
         lock_specs: accepted.lock_specs,
         spans,
         dropped,
+        written: accepted.written,
+        expansions: accepted.expansions,
         diagnostics: diags,
     }
 }
@@ -1865,6 +1932,9 @@ pub struct ConfigCheck {
     pub cfg: DagConfig,
     /// The graph built from `cfg`. Empty when the file is not a config.
     pub graph: Graph,
+    /// Every pattern a step's `inputs` wrote (`*/render_markdown`), and
+    /// the ids it stood for; `cfg` and `graph` hold the ids only.
+    pub expansions: Vec<crate::input_pattern::Expansion>,
     /// One per problem, in file order — the order someone fixing them reads.
     /// Sort by [`Severity`] for worst-first; its `Ord` is blast radius.
     pub diagnostics: Vec<Diagnostic>,
@@ -1914,6 +1984,12 @@ impl ConfigCheck {
 /// silently breaks.
 pub fn check_text(text: &str) -> ConfigCheck {
     let mut entries = entries_of(text);
+    if let Some((steps, expansions)) = without_broken_matches(&entries.written, &entries.dropped) {
+        let (cfg_steps, specs): (Vec<_>, Vec<_>) = steps.into_iter().unzip();
+        entries.cfg.steps = cfg_steps;
+        entries.specs = specs;
+        entries.expansions = expansions;
+    }
     let (mut graph, mut graph_diags) =
         Graph::build_graded(std::mem::take(&mut entries.specs), &entries.dropped);
     graph.locks = std::mem::take(&mut entries.lock_specs);
@@ -1941,8 +2017,59 @@ pub fn check_text(text: &str) -> ConfigCheck {
         text: text.to_string(),
         cfg: entries.cfg,
         graph,
+        expansions: entries.expansions,
         diagnostics: entries.diagnostics,
     }
+}
+
+/// What `datalib-dag --check` prints for the patterns: one line each,
+/// the step, the pattern and what it read.
+pub fn expansion_lines(expansions: &[crate::input_pattern::Expansion]) -> Vec<String> {
+    expansions
+        .iter()
+        .map(|e| {
+            let ids = if e.ids.is_empty() {
+                "(no step)".to_string()
+            } else {
+                e.ids.join(", ")
+            };
+            format!("  {} reads {} = {ids}", e.step, e.pattern)
+        })
+        .collect()
+}
+
+/// A pattern stands for the steps that can run, so one broken source does
+/// not block every step that reads its function by pattern, as it blocks a
+/// step that names it. The steps the graph drops with every pattern left
+/// out are the broken ones; the patterns are expanded again without them.
+/// `None` when no pattern matched a broken step.
+fn without_broken_matches(
+    written: &[WrittenStep],
+    dropped_earlier: &BTreeSet<String>,
+) -> Option<Resolved> {
+    let all: Vec<&str> = written.iter().map(|w| w.entry.id.as_str()).collect();
+    let (_, expansions) = resolve_inputs(written, &all);
+    if expansions.is_empty() {
+        return None;
+    }
+    let (named_only, _) = resolve_inputs(written, &[]);
+    let (probe, _) = Graph::build_graded(
+        named_only.into_iter().map(|(_, spec)| spec).collect(),
+        dropped_earlier,
+    );
+    let broken: BTreeSet<&str> = all
+        .iter()
+        .copied()
+        .filter(|id| !probe.by_id.contains_key(*id))
+        .collect();
+    let hit = expansions
+        .iter()
+        .any(|e| e.ids.iter().any(|id| broken.contains(id.as_str())));
+    if !hit {
+        return None;
+    }
+    let runnable: Vec<&str> = all.into_iter().filter(|id| !broken.contains(id)).collect();
+    Some(resolve_inputs(written, &runnable))
 }
 
 impl DagConfig {
@@ -2076,7 +2203,7 @@ mod tests {
                 {group_lines}
 
                 [[groups]]
-                id = "unified_document_index"
+                id = "unified_grid_and_search_index"
 
                 [[steps]]
                 id = "mail/ingest"
@@ -2296,12 +2423,12 @@ mod tests {
     /// steps' ids *are* those trees, so anything else claiming one is an
     /// ordinary duplicate.
     #[test]
-    fn the_index_steps_own_unified_document_index_by_being_it() {
+    fn the_index_steps_own_unified_grid_and_search_index_by_being_it() {
         let cfg: DagConfig = toml::from_str(
             r#"steps = [
                  {id = "slack/rendered_md", command = "r"},
-                 {id = "unified_document_index/grid", command = "a", inputs = ["slack/rendered_md"]},
-                 {id = "unified_document_index/qmd", command = "b", inputs = ["slack/rendered_md"]},
+                 {id = "unified_grid_and_search_index/grid", command = "a", inputs = ["slack/rendered_md"]},
+                 {id = "unified_grid_and_search_index/qmd", command = "b", inputs = ["slack/rendered_md"]},
                ]"#,
         )
         .unwrap();
@@ -2312,8 +2439,8 @@ mod tests {
         // special-case list involved.
         let clash: DagConfig = toml::from_str(
             r#"steps = [
-                 {id = "unified_document_index/grid", command = "a"},
-                 {id = "unified_document_index/grid", command = "b"},
+                 {id = "unified_grid_and_search_index/grid", command = "a"},
+                 {id = "unified_grid_and_search_index/grid", command = "b"},
                ]"#,
         )
         .unwrap();
@@ -2540,19 +2667,22 @@ id = "pdfs/ingest"
 command = "fetch-pdfs"
 
 [[steps]]
-id = "unified_document_index/grid_index"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
 command = "index-it"
 inputs = ["pdfs/ingest"]
 
 [[applets]]
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 "#,
         );
         // The broken step is gone and named; everything else loaded.
         assert_eq!(
             ids(&check),
-            vec!["pdfs/ingest", "unified_document_index/grid_index"]
+            vec![
+                "pdfs/ingest",
+                "unified_grid_and_search_index/unified_grid_and_search_index"
+            ]
         );
         assert_eq!(check.cfg.applets.len(), 1, "the applet must survive");
         assert_eq!(
@@ -2583,8 +2713,14 @@ command = "datalib-applet unified_document_index"
     #[test]
     fn nested_ids_are_two_writers_on_one_tree() {
         for (first, second) in [
-            ("unified_document_index", "unified_document_index/grid"),
-            ("unified_document_index/grid", "unified_document_index"),
+            (
+                "unified_grid_and_search_index",
+                "unified_grid_and_search_index/grid",
+            ),
+            (
+                "unified_grid_and_search_index/grid",
+                "unified_grid_and_search_index",
+            ),
         ] {
             let check = check_text(&format!(
                 "[[steps]]\nid = \"{first}\"\ncommand = \"a\"\n\n\
@@ -2619,31 +2755,27 @@ command = "datalib-applet unified_document_index"
     }
 
     /// Applet ids and step ids are separate namespaces, and the scaffold
-    /// depends on it: `unified_document_index` the applet sits beside
-    /// `unified_document_index/grid_index` the step.
+    /// depends on it: `unified_grid_and_search_index` the applet sits beside
+    /// `unified_grid_and_search_index/unified_grid_and_search_index` the step.
     #[test]
     fn the_scaffold_shape_loads_clean() {
         let check = check_text(
             r#"
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-id = "unified_document_index/grid_index"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
 command = "index-grid"
 
-[[steps]]
-id = "unified_document_index/qmd_aggregator"
-command = "index-qmd"
-
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 "#,
         );
         assert!(check.is_clean(), "{:?}", check.diagnostics);
-        assert_eq!(check.graph.steps.len(), 2);
+        assert_eq!(check.graph.steps.len(), 1);
     }
 
     /// Malformed TOML is the one shape with nothing to salvage.
@@ -2687,7 +2819,7 @@ command = "b"
 inputs = ["slack/raw"]
 
 [[steps]]
-id = "unified_document_index/grid"
+id = "unified_grid_and_search_index/grid"
 command = "c"
 inputs = ["slack/rendered_md", "pdfs/raw"]
 "#,
@@ -2698,7 +2830,7 @@ inputs = ["slack/rendered_md", "pdfs/raw"]
             Some(Severity::Blocked)
         );
         assert_eq!(
-            sev_of(&check.diagnostics, "unified_document_index/grid"),
+            sev_of(&check.diagnostics, "unified_grid_and_search_index/grid"),
             Some(Severity::Blocked)
         );
 
@@ -2724,7 +2856,7 @@ inputs = ["slack/rendered_md", "pdfs/raw"]
         let cascaded = check
             .diagnostics
             .iter()
-            .find(|d| d.id() == Some("unified_document_index/grid"))
+            .find(|d| d.id() == Some("unified_grid_and_search_index/grid"))
             .unwrap();
         assert!(
             cascaded.message.contains("was itself dropped"),
@@ -2895,8 +3027,8 @@ id = "system/sneaky"
 command = "b"
 
 [[applets]]
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 
 [[applets]]
 id = "2fa"
@@ -2905,7 +3037,7 @@ command = "x"
         );
         assert_eq!(ids(&check), vec!["good/raw"]);
         assert_eq!(check.cfg.applets.len(), 1);
-        assert_eq!(check.cfg.applets[0].id, "unified_document_index");
+        assert_eq!(check.cfg.applets[0].id, "unified_grid_and_search_index");
         assert_eq!(
             sev_of(&check.diagnostics, "system/sneaky"),
             Some(Severity::Rejected)
@@ -2986,6 +3118,150 @@ command = "x"
 // --- Groups ----------------------------------------------------------------
 
 #[cfg(test)]
+mod pattern_tests {
+    use super::*;
+
+    const CONFIG: &str = r#"
+[[groups]]
+id = "slack"
+
+[[steps]]
+id = "slack/fetch"
+command = "fetch slack"
+
+[[steps]]
+id = "slack/render"
+command = "render"
+inputs = ["slack/fetch"]
+
+[[groups]]
+id = "mail"
+
+[[steps]]
+id = "mail/fetch"
+command = "fetch mail"
+
+[[steps]]
+id = "mail/render"
+command = "render"
+inputs = ["mail/fetch"]
+
+[[steps]]
+id = "index/all"
+command = "index"
+inputs = ["*/render"]
+"#;
+
+    fn inputs_of(check: &ConfigCheck, id: &str) -> Vec<String> {
+        check
+            .cfg
+            .steps
+            .iter()
+            .find(|s| s.id == id)
+            .unwrap_or_else(|| panic!("{id} did not load: {}", check.render("c.toml".as_ref())))
+            .inputs
+            .clone()
+    }
+
+    /// `*/render` reads every group's `render`, in the file's order, and
+    /// everything past the loader sees the ids: the entry, the graph's
+    /// edges and `--check`'s report.
+    #[test]
+    fn a_pattern_reads_every_step_of_its_last_part() {
+        let check = check_text(CONFIG);
+        assert!(check.is_clean(), "{}", check.render("c.toml".as_ref()));
+        assert_eq!(
+            inputs_of(&check, "index/all"),
+            ["slack/render", "mail/render"]
+        );
+        let spec = &check.graph.steps[check.graph.by_id["index/all"]];
+        let edges: Vec<&str> = spec.inputs.iter().map(|i| i.as_str()).collect();
+        assert_eq!(edges, ["slack/render", "mail/render"]);
+        assert_eq!(
+            expansion_lines(&check.expansions),
+            ["  index/all reads */render = slack/render, mail/render"]
+        );
+    }
+
+    /// A group added to the file is read without touching the fan-in's
+    /// entry, which is the point of writing a pattern.
+    #[test]
+    fn a_group_added_later_is_read_without_editing_the_fan_in() {
+        let added = CONFIG.replace(
+            "[[steps]]\nid = \"index/all\"",
+            "[[steps]]\nid = \"notes/render\"\ncommand = \"render\"\n\n\
+             [[steps]]\nid = \"index/all\"",
+        );
+        let check = check_text(&added);
+        assert_eq!(
+            inputs_of(&check, "index/all"),
+            ["slack/render", "mail/render", "notes/render"]
+        );
+    }
+
+    /// One group whose fetch was refused takes its own render with it, and
+    /// nothing else: the fan-in that reads renders by pattern still runs,
+    /// over the group that works. Named by id, the same broken render
+    /// blocks the fan-in, as it always has.
+    #[test]
+    fn a_broken_step_does_not_block_what_reads_it_by_pattern() {
+        let broken = CONFIG.replace(
+            "id = \"mail/fetch\"\ncommand = \"fetch mail\"",
+            "id = \"mail/fetch\"\ncommand = \"fetch mail\"\nbogus = 1",
+        );
+        let check = check_text(&broken);
+        assert_eq!(inputs_of(&check, "index/all"), ["slack/render"]);
+        assert!(check
+            .diagnostics
+            .iter()
+            .all(|d| d.id() != Some("index/all")));
+        assert_eq!(
+            check
+                .diagnostics
+                .iter()
+                .find(|d| d.id() == Some("mail/render"))
+                .map(|d| d.severity),
+            Some(Severity::Blocked)
+        );
+
+        let named = broken.replace(
+            r#"inputs = ["*/render"]"#,
+            r#"inputs = ["slack/render", "mail/render"]"#,
+        );
+        let check = check_text(&named);
+        assert_eq!(
+            check
+                .diagnostics
+                .iter()
+                .find(|d| d.id() == Some("index/all"))
+                .map(|d| d.severity),
+            Some(Severity::Blocked)
+        );
+    }
+
+    /// A fan-in whose pattern matches nothing reads nothing, and it is still
+    /// no source: it holds `cpu`, not a `network` slot a download waits for.
+    #[test]
+    fn a_fan_in_with_nothing_to_read_holds_no_network_slot() {
+        let text = format!(
+            "{CONFIG}\n[[steps]]\nid = \"map/all\"\ncommand = \"map\"\ninputs = [\"*/embed\"]\n"
+        );
+        let check = check_text(&text);
+        assert!(check.is_clean(), "{}", check.render("c.toml".as_ref()));
+        let spec = &check.graph.steps[check.graph.by_id["map/all"]];
+        assert!(spec.inputs.is_empty(), "{:?}", spec.inputs);
+        assert!(!spec.is_source());
+        assert_eq!(
+            crate::supervisor::locks::held_by(spec),
+            [(
+                crate::supervisor::locks::CPU.to_string(),
+                crate::supervisor::locks::Hold::Shared
+            )]
+        );
+    }
+}
+
+#[cfg(test)]
 mod group_tests {
     use super::*;
 
@@ -3012,17 +3288,17 @@ command = "render-slack"
 inputs = ["work-slack/ingest"]
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-id = "unified_document_index/grid_index"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
 command = "index-grid"
 inputs = ["work-slack/render_markdown"]
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 "#;
 
     /// Groups and the steps under them load clean, and each step's group
@@ -3036,7 +3312,7 @@ command = "datalib-applet unified_document_index"
         assert_eq!(
             ids,
             vec![
-                "unified_document_index/grid_index",
+                "unified_grid_and_search_index/unified_grid_and_search_index",
                 "work-slack/ingest",
                 "work-slack/render_markdown"
             ]
@@ -3045,7 +3321,7 @@ command = "datalib-applet unified_document_index"
         assert_eq!(check.cfg.groups[0].name.as_deref(), Some("Work Slack"));
         assert_eq!(
             check.cfg.applets[0].group.as_deref(),
-            Some("unified_document_index")
+            Some("unified_grid_and_search_index")
         );
         assert!(check.graph.by_id.contains_key("work-slack/render_markdown"));
         let render = &check.graph.steps[check.graph.by_id["work-slack/render_markdown"]];
@@ -3082,7 +3358,7 @@ command = "datalib-applet unified_document_index"
             assert_eq!(check.diagnostics[0].severity, Severity::Rejected);
             assert!(!usable_group_id(bad), "{bad:?}");
         }
-        for good in ["a", "work-slack", "a.b_c", "unified_document_index"] {
+        for good in ["a", "work-slack", "a.b_c", "unified_grid_and_search_index"] {
             let check = check_text(&format!(
                 "[[groups]]\nid = \"{good}\"\n[[steps]]\nid = \"{good}/raw\"\n\
                  command = \"x\"\n"
@@ -3151,24 +3427,12 @@ command = "datalib-applet unified_document_index"
         assert_eq!(check.diagnostics.len(), 1, "{:?}", check.diagnostics);
     }
 
-    /// A group whose only step was rejected is not empty — somebody filled
-    /// it, and the entry to fix is the step.
-    #[test]
-    fn a_group_whose_step_was_rejected_is_not_called_empty() {
-        let check = check_text(
-            "[[groups]]\nid = \"g\"\n\n\
-             [[steps]]\nid = \"g/raw\"\ncommand = \"x\"\ntitle = 1\n",
-        );
-        assert_eq!(check.diagnostics.len(), 1);
-        assert_eq!(check.diagnostics[0].id(), Some("g/raw"));
-    }
-
     /// An applet's group is a filing, so a wrong one is advice rather than a
     /// reason to take the grid down.
     #[test]
     fn an_applet_under_an_undeclared_group_only_warns() {
         let check = check_text(
-            "[[applets]]\ngroup = \"nope\"\nid = \"unified_document_index\"\ncommand = \"x\"\n",
+            "[[applets]]\ngroup = \"nope\"\nid = \"unified_grid_and_search_index\"\ncommand = \"x\"\n",
         );
         assert_eq!(check.cfg.applets.len(), 1);
         assert_eq!(check.diagnostics.len(), 1);
@@ -3548,6 +3812,8 @@ mod protocol_tests {
             ),
             ("[render_pages]\nbuckets = 200\n", "render_pages"),
             ("embed_contexts = 4\n", "embed_contexts"),
+            ("embed_search_index = true\n", "embed_search_index"),
+            ("[modal]\nmax_sandboxes = 10\n", "modal"),
         ] {
             let check = check_text(&format!("{text}\n[[steps]]\nid = \"a\"\ncommand = \"x\"\n"));
             assert!(!check.is_fatal(), "{key}: {:?}", check.diagnostics);

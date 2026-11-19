@@ -137,10 +137,6 @@ const VOLATILE_KEYS: &[&str] = &[
     // items fetched; on a live API they jitter with whatever new
     // activity has happened. Snapshot the structure, not the values.
     "stats",
-    // qmd's `status` text embeds the index file path, byte sizes, and
-    // a relative "updated N seconds ago" — none of which reproduce
-    // across runs. Snapshot presence, not contents.
-    "qmd_status",
     // Per-row bookkeeping in the doltlite raw stores. Stamped to
     // "now" on every fetch attempt, so they churn on every run even
     // when the upstream payload is byte-identical.
@@ -306,9 +302,9 @@ const ROW_COUNT_ONLY_STEPS: &[(&str, &str)] = &[
 ///   of rows whose values the provider's own fixtures pin; here the
 ///   count says the step read the files, and the rendered plots say
 ///   what it made of them.
-/// - `render_inputs` and the agent transcripts' `records` repeat, row
-///   by row, what the `.md` files and `grid_rows` beside them already
-///   show.
+/// - `render_inputs`, `sections`, `drawings` and the agent transcripts'
+///   `records` repeat, row by row, what the documents' `.md` snapshots, the
+///   `index_text` snapshots and `grid_rows` beside them already show.
 ///
 /// Notion's `tree` and `listed_pages` are the first kind, and the one
 /// pair here that is also a tripwire. A roots source walks down from its
@@ -345,6 +341,8 @@ const ROW_COUNT_ONLY_TABLES: &[(&str, &str)] = &[
     ("claude_code", "records"),
     ("codex", "records"),
     ("*", "render_inputs"),
+    ("*", "sections"),
+    ("*", "drawings"),
 ];
 
 /// The step a store sits in: the `<sub>` of
@@ -499,9 +497,10 @@ fn require_update_mode() {
 fn manual_e2e_live_sync_golden() {
     require_update_mode();
 
-    let src_config = match std::env::var("DATALIB_TEST_CONFIG") {
-        Ok(p) => PathBuf::from(p),
-        Err(_) => e2e_dir()
+    let explicit = std::env::var("DATALIB_TEST_CONFIG").ok();
+    let src_config = match &explicit {
+        Some(p) => PathBuf::from(p),
+        None => e2e_dir()
             .expect(
                 "set DATALIB_MANUAL_E2E_DIR to the external test-data dir \
                  (holding dag.toml + sources/ + snapshots/), or set \
@@ -516,7 +515,11 @@ fn manual_e2e_live_sync_golden() {
          DATALIB_TEST_CONFIG to a config explicitly.",
         src_config.display()
     );
-    let cfg_text = std::fs::read_to_string(&src_config).expect("read config");
+    let cfg_text = upgraded_config(
+        &src_config,
+        std::fs::read_to_string(&src_config).expect("read config"),
+        explicit.is_none(),
+    );
 
     // Persist the run dir pytest-`tmp_path`-style (see `persistent_run_root`)
     // rather than a self-deleting tempdir, so you can always peek at the last
@@ -582,7 +585,7 @@ fn manual_e2e_live_sync_golden() {
     // Layout invariant: data_root is a flat set of group dirs plus the one
     // reserved `system/` dir — never the old top-level `raw/` or
     // `rendered_md/`, and the aggregate index DB lives under the
-    // `unified_document_index` group. Guards against a regression to the
+    // `unified_grid_and_search_index` group. Guards against a regression to the
     // pre-grouping layout.
     assert!(
         !data_root.join("raw").exists() && !data_root.join("rendered_md").exists(),
@@ -590,9 +593,9 @@ fn manual_e2e_live_sync_golden() {
     );
     assert!(
         data_root
-            .join("unified_document_index/grid_index/db.sqlite")
+            .join("unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite")
             .is_file(),
-        "backend index DB must live at unified_document_index/grid_index/db.sqlite"
+        "backend index DB must live at unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite"
     );
     // Only the genuinely-derived index dirs are tagged as rebuildable cache so
     // `--exclude-caches` backups skip them (the per-group `render_markdown/` tags
@@ -601,18 +604,19 @@ fn manual_e2e_live_sync_golden() {
     // history, not rebuildable from raw.
     assert!(
         data_root
-            .join("unified_document_index/CACHEDIR.TAG")
+            .join("unified_grid_and_search_index/CACHEDIR.TAG")
             .is_file(),
-        "unified_document_index/ must carry a CACHEDIR.TAG marking the index tree as derived cache"
+        "unified_grid_and_search_index/ must carry a CACHEDIR.TAG marking the index tree as derived cache"
     );
     assert!(
         !data_root.join("system/CACHEDIR.TAG").exists(),
         "system/ (operational history) must NOT be tagged as cache"
     );
 
-    // Snapshot each group's `ingest/` and `render_markdown/` trees, mirroring
-    // the on-disk per-group layout. `system/` and the `unified_document_index` group
-    // (the aggregate index + qmd) are skipped — see the module header.
+    // Snapshot each group's stores, mirroring the on-disk per-group layout:
+    // `ingest/`, `render_markdown/`, a time-series source's
+    // `render_time_series/` and the time-series index's `time_series_index/`.
+    // `system/` and the grid and search index are skipped.
     let mut stanzas: Vec<String> = std::fs::read_dir(&data_root)
         .expect("read data_root")
         .filter_map(|e| e.ok())
@@ -624,18 +628,22 @@ fn manual_e2e_live_sync_golden() {
 
     let mut manifest: Vec<String> = Vec::new();
     for stanza in &stanzas {
-        for sub in ["ingest", "render_markdown"] {
+        for sub in TREE_SNAPSHOTS {
             let dir = data_root.join(stanza).join(sub);
             snapshot_tree(&dir, &format!("{stanza}/{sub}"), &mut manifest);
         }
     }
+    for stanza in &stanzas {
+        snapshot_documents(&data_root, stanza, &mut manifest);
+    }
+    snapshot_index_text(&data_root, &cfg_out, &mut manifest);
     manifest.sort();
 
     // Prune snapshots orphaned when the set of produced files changes.
     // insta's `INSTA_UNREFERENCED=delete` is a cargo-insta feature that does
     // not fire under `bazel run` and would not scan our external snapshot
     // tree anyway. Update mode only.
-    prune_orphan_snapshots(&manifest);
+    prune_orphan_snapshots(&manifest, &data_root);
 
     // Manifest pins which files we expect to find. Catches additions /
     // removals without having to diff every per-file snapshot.
@@ -646,37 +654,29 @@ fn manual_e2e_live_sync_golden() {
         assert_snapshot!("manifest", manifest.join("\n"));
     });
 
-    // The index is where a problem ends up: a fetch-stage row is copied
-    // raw → render → index, so this one table shows every problem the
-    // run left visible to the grid, under the id it was first minted
-    // with. The rest of the index is the union of the render stores
-    // snapshotted above and is deliberately not dumped again.
-    insta::with_settings!({
-        snapshot_path => snap_base().join("unified_document_index").display().to_string(),
-        prepend_module_to_snapshot => false,
-        sort_maps => true,
-        description => "unified_document_index/grid_index/db.sqlite#problems",
-    }, {
-        assert_json_snapshot!("problems", index_problems(&data_root));
-    });
+    // The index itself is the union of the render stores snapshotted
+    // above and is not dumped again. A step's problems stay in its own
+    // stores (etl/README.md § "Problems stay in the step that found
+    // them"), so each store's dump above shows them.
 
-    // The qmd index: the per-source split the qmd steps exist for.
+    // The search index: what each searched source holds, and what its
+    // embed step left.
     insta::with_settings!({
-        snapshot_path => snap_base().join("unified_document_index").display().to_string(),
+        snapshot_path => snap_base().join("unified_grid_and_search_index").display().to_string(),
         prepend_module_to_snapshot => false,
         sort_maps => true,
-        description => "the qmd index: documents and embedding left, per source",
+        description => "the search index: documents and chunks left to embed, per source",
     }, {
-        assert_json_snapshot!("qmd_collections", qmd_collections_report(&data_root, &cfg_out));
+        assert_json_snapshot!("search_index", search_index_report(&data_root, &cfg_out));
     });
 
     // The search terms: what each row answers to when an id or a handle is
     // pasted into the search. Derived from `grid_rows`, so a change here
     // with no change above is a change in the derivation.
     insta::with_settings!({
-        snapshot_path => snap_base().join("unified_document_index").display().to_string(),
+        snapshot_path => snap_base().join("unified_grid_and_search_index").display().to_string(),
         prepend_module_to_snapshot => false,
-        description => "unified_document_index/grid_index/db.sqlite#terms, one term a line: kind, value, uuid",
+        description => "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite#terms, one term a line: kind, value, uuid",
     }, {
         assert_snapshot!("search_terms", search_terms(&data_root));
     });
@@ -760,7 +760,6 @@ fn manual_e2e_live_sync_golden() {
     );
     let summary2 = run2.run_summary().expect("run 2 run_summary");
     assert_step_statuses_ok(&summary2);
-    assert_qmd_steps_follow_their_render(&summary2);
 
     // Run 1's problems are all still standing minutes later, and a problem
     // recorded again unchanged keeps its row, stamps and all, so run 2
@@ -1272,134 +1271,114 @@ fn assert_step_statuses_ok(summary: &Value) {
     );
 }
 
-/// Every source with a keyword index holds one document per markdown file
-/// qmd reads from its render tree, a source with an `embed` step has
-/// nothing left to embed, and one without still has all of it left: the
-/// embed stayed in its own collection.
-fn qmd_collections_report(data_root: &Path, cfg_text: &str) -> Value {
-    let cfg: toml::Value = toml::from_str(cfg_text).expect("config parses");
-    let steps = cfg
-        .get("steps")
-        .and_then(toml::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let groups_with = |function: &str| -> std::collections::BTreeSet<String> {
-        steps
-            .iter()
-            .filter_map(|s| s.get("id").and_then(toml::Value::as_str))
-            .filter_map(|id| id.split_once('/'))
-            .filter(|(_, f)| *f == function)
-            .map(|(g, _)| g.to_string())
-            .collect()
-    };
-    let embedded = groups_with("embed");
-    let qmd = datalib_qmd_indexer::Qmd::pinned().expect("resolve qmd");
-    let collections = datalib_qmd_indexer::Index::open(data_root, qmd)
-        .and_then(|index| index.collections())
-        .expect("read the qmd index's collections");
+/// Every searched source holds one document per searchable document in
+/// its render store, a source with an `embed` step
+/// has nothing left to embed, and one without still has all of it left: the
+/// embed stayed in its own source.
+fn search_index_report(data_root: &Path, cfg_text: &str) -> Value {
+    let embedded = groups_with(cfg_text, "embed");
+    let keyword: Vec<String> = searched_groups(cfg_text).into_iter().collect();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build tokio runtime for the search index read");
+    let held = rt
+        .block_on(datalib_search_index::holdings(data_root, &keyword))
+        .expect("read what the search index holds");
+    assert_eq!(
+        held.len(),
+        keyword.len(),
+        "the search index was never made, though {} sources are searched",
+        keyword.len()
+    );
 
     let mut report = serde_json::Map::new();
-    for group in groups_with("keyword_index") {
-        let c = collections
-            .iter()
-            .find(|c| c.name == group)
-            .unwrap_or_else(|| panic!("no qmd collection for {group}, which has a keyword_index"));
-        let on_disk = markdown_qmd_reads(&data_root.join(&group).join("render_markdown"));
+    for h in held {
+        let rendered = searchable_documents(&data_root.join(&h.source).join("render_markdown"));
         assert_eq!(
-            c.documents, on_disk,
-            "{group}: the qmd collection holds {} documents; its render tree has {on_disk} \
-             markdown files qmd reads",
-            c.documents
+            h.documents as u64, rendered,
+            "{}: the search index holds {} documents; its render store has {rendered} \
+             searchable ones",
+            h.source, h.documents
         );
-        let embeds = embedded.contains(&group);
+        let embeds = embedded.contains(&h.source);
         if embeds {
             assert_eq!(
-                c.needs_embedding, 0,
-                "{group} has an embed step, yet {} of its contents are not embedded",
-                c.needs_embedding
+                h.not_embedded, 0,
+                "{} has an embed step, yet {} of its documents are not embedded",
+                h.source, h.not_embedded
             );
-        } else if c.documents > 0 {
+        } else if h.documents > 0 {
             assert!(
-                c.needs_embedding > 0,
-                "{group} has no embed step, yet all of it is embedded: an embed reached \
-                 beyond its own collection"
+                h.not_embedded > 0,
+                "{} has no embed step, yet all of it is embedded: an embed reached \
+                 beyond its own source",
+                h.source
             );
         }
         report.insert(
-            group,
+            h.source,
             serde_json::json!({
-                "documents": c.documents,
+                "documents": h.documents,
                 "embed_step": embeds,
-                "needs_embedding": c.needs_embedding,
+                "documents_not_embedded": h.not_embedded,
             }),
         );
     }
     Value::Object(report)
 }
 
-/// The markdown files qmd indexes under `dir`: its glob skips hidden paths
-/// and a few build directories (`reindexCollection`), and it drops a file
-/// with no text.
-fn markdown_qmd_reads(dir: &Path) -> u64 {
-    const SKIPPED: &[&str] = &["node_modules", "vendor", "dist", "build"];
-    WalkDir::new(dir)
+/// The groups that have a step of `function` in the config.
+fn groups_with(cfg_text: &str, function: &str) -> std::collections::BTreeSet<String> {
+    let cfg: toml::Value = toml::from_str(cfg_text).expect("config parses");
+    cfg.get("steps")
+        .and_then(toml::Value::as_array)
         .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file() && e.path().extension().is_some_and(|x| x == "md"))
-        .filter(|e| {
-            !e.path().strip_prefix(dir).unwrap().components().any(|c| {
-                let seg = c.as_os_str().to_string_lossy();
-                seg.starts_with('.') || SKIPPED.contains(&seg.as_ref())
-            })
-        })
-        .filter(|e| std::fs::read_to_string(e.path()).is_ok_and(|t| !t.trim().is_empty()))
-        .count() as u64
+        .flatten()
+        .filter_map(|s| s.get("id").and_then(toml::Value::as_str))
+        .filter_map(|id| id.split_once('/'))
+        .filter(|(_, f)| *f == function)
+        .map(|(g, _)| g.to_string())
+        .collect()
 }
 
-/// Run 2's qmd work is only where a render moved: a source's
-/// `keyword_index` reads only its render and its `embed` only that, so a
-/// source whose render did not move skips both, whatever other sources did.
-fn assert_qmd_steps_follow_their_render(summary: &Value) {
-    let steps = summary
+/// The sources `unified_grid_and_search_index` puts in the search: every one with a render,
+/// but those its `params.not_searched` lists.
+fn searched_groups(cfg_text: &str) -> std::collections::BTreeSet<String> {
+    let cfg: toml::Value = toml::from_str(cfg_text).expect("config parses");
+    let not_searched: Vec<String> = cfg
         .get("steps")
-        .and_then(Value::as_array)
-        .expect("run_summary.steps");
-    let find = |id: &str| {
-        steps
-            .iter()
-            .find(|s| s.get("step").and_then(Value::as_str) == Some(id))
-    };
-    let status = |s: &Value| {
-        s.get("status")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string()
-    };
-    let moved = |id: &str| {
-        find(id).is_some_and(|s| {
-            s.get("outputs").and_then(Value::as_array).is_some_and(|o| {
-                o.iter()
-                    .any(|x| x.get("changed") == Some(&Value::Bool(true)))
-            })
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|s| {
+            s.get("id")
+                .and_then(toml::Value::as_str)
+                .and_then(|id| id.split_once('/'))
+                .is_some_and(|(_, f)| f == "unified_grid_and_search_index")
         })
+        .filter_map(|s| s.get("params")?.get("not_searched")?.as_array().cloned())
+        .flatten()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect();
+    groups_with(cfg_text, "render_markdown")
+        .into_iter()
+        .filter(|g| !not_searched.contains(g))
+        .collect()
+}
+
+/// The documents the search covers in the render store under `dir`: every
+/// one its renderer did not keep for the grid alone.
+fn searchable_documents(dir: &Path) -> u64 {
+    let Some(store) =
+        datalib_etl_render::indexed_markdown::IndexedMarkdownStore::open_for_reading(dir, None)
+            .expect("open a render store")
+    else {
+        return 0;
     };
-    for step in steps {
-        let id = step.get("step").and_then(Value::as_str).unwrap_or("");
-        let Some(group) = id
-            .strip_suffix("/keyword_index")
-            .or_else(|| id.strip_suffix("/embed"))
-        else {
-            continue;
-        };
-        if moved(&format!("{group}/render_markdown")) {
-            continue;
-        }
-        assert_eq!(
-            status(step),
-            "skipped_up_to_date",
-            "{id} ran in run 2 though {group}'s render did not move"
-        );
-    }
+    let rows = store.markdown_rows().expect("read the documents");
+    store.close();
+    rows.iter().filter(|r| r.searchable).count() as u64
 }
 
 fn step_id_list(summary: &Value) -> String {
@@ -1474,21 +1453,6 @@ async fn latest_sync_run(path: &Path) -> Value {
         "status": status,
         "summary": summary,
     })
-}
-
-/// The unified document index's `problems` table, volatile stamps redacted, ordered
-/// by `problem_uuid` like every dumped table.
-fn index_problems(data_root: &Path) -> Value {
-    let db = data_root.join("unified_document_index/grid_index/db.sqlite");
-    let mut dump = dump_store(&db);
-    let mut rows = match &mut dump {
-        Value::Object(map) => map
-            .remove("problems")
-            .unwrap_or_else(|| panic!("{}: no `problems` table", db.display())),
-        other => panic!("{}: dump is not an object: {other}", db.display()),
-    };
-    strip_volatile(&mut rows);
-    rows
 }
 
 /// Every term in the grid index's search terms, decoded from its dictionary, one
@@ -1584,7 +1548,8 @@ fn read_contact_specs(path: &Path) -> Vec<ContactSpec> {
 /// Every handle the specs link is an author in the index, so each link
 /// lands on documents rather than on nothing.
 fn assert_handles_indexed(data_root: &Path, specs: &[ContactSpec], after: &str) {
-    let db = data_root.join("unified_document_index/grid_index/db.sqlite");
+    let db =
+        data_root.join("unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite");
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -1717,7 +1682,8 @@ fn contacts_for_snapshot(mut dump: Value, contacts: &[MadeContact]) -> Value {
 /// Whole-table bookkeeping that legitimately changes across a reset, so it
 /// is excluded from the content-stability comparison: the store's record
 /// of itself, of its runs and cursors, of the spans a walk has looked at
-/// (whose newest end is the run's clock), of the token each listed
+/// (whose newest end is the run's clock) and when it last found nothing
+/// newer, of the token each listed
 /// message was last named under (Gmail's is account-wide, so any new mail
 /// restamps every row a re-list names), and of the files or scans a
 /// file-backed ingest has already been through.
@@ -1726,6 +1692,7 @@ const NON_CONTENT_TABLES: &[&str] = &[
     "sync_runs",
     "sync_scope_state",
     "coverage",
+    "coverage_checked",
     "listed_messages",
     "problems",
     "ingested_files",
@@ -1741,6 +1708,107 @@ const NON_CONTENT_TABLES: &[&str] = &[
 /// moves to a bookkeeping sidecar or out of the payload; the check
 /// then holds that table to the byte. Empty is the goal.
 const KNOWN_STAMP_LEAKS: &[(&str, &str)] = &[];
+
+/// Every document `stanza`'s render store holds, as the store spells it
+/// (what the viewer shows and `datalib-step markdown` exports), at
+/// `<stanza>/render_markdown/<id>.md`, beside the store's own snapshot.
+/// Which documents search covers is that snapshot's `markdowns.searchable`.
+fn snapshot_documents(data_root: &Path, stanza: &str, manifest: &mut Vec<String>) {
+    let dir = data_root.join(stanza).join("render_markdown");
+    if !dir.is_dir() {
+        return;
+    }
+    let Some(store) =
+        datalib_etl_render::indexed_markdown::IndexedMarkdownStore::open_for_reading(&dir, None)
+            .expect("open a render store")
+    else {
+        return;
+    };
+    let texts = store.document_texts().expect("read the documents");
+    store.close();
+    for (uuid, s) in texts {
+        let key = format!("{stanza}/render_markdown/{uuid}.md");
+        manifest.push(key.clone());
+        let s = normalize_str(&s);
+        insta::with_settings!({
+            snapshot_path => snap_base().join(stanza).join("render_markdown").display().to_string(),
+            prepend_module_to_snapshot => false,
+            description => key,
+        }, {
+            assert_snapshot!(format!("{uuid}.md"), s);
+        });
+    }
+}
+
+/// Every searchable document's text as the search index embeds it, chunk
+/// by chunk, beside its rendered page: `<source>/index_text/<id>.txt`,
+/// for each source `unified_grid_and_search_index` searches.
+/// Drawn by `datalib-step index-text --chunks`, the call the keyword and
+/// embed passes make, so a change to what search reads (the envelope line,
+/// a flattened link, where a chunk is cut, the prompt) is a diff here even
+/// when the page looks the same.
+fn snapshot_index_text(data_root: &Path, cfg_text: &str, manifest: &mut Vec<String>) {
+    let searched = searched_groups(cfg_text);
+    let out = Command::new(bin_dir().join("datalib-step"))
+        .arg("index-text")
+        .arg(data_root)
+        .arg("--chunks")
+        .output()
+        .expect("run datalib-step index-text");
+    assert!(
+        out.status.success(),
+        "datalib-step index-text failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8(out.stdout).expect("index-text writes UTF-8");
+    let docs = index_text_documents(&text);
+    assert!(
+        !docs.is_empty(),
+        "index-text drew no document, though the bake renders searchable sources"
+    );
+    for (source, uuid, body) in docs {
+        if !searched.contains(&source) {
+            continue;
+        }
+        let key = format!("{source}/index_text/{uuid}.txt");
+        manifest.push(key.clone());
+        insta::with_settings!({
+            snapshot_path => snap_base().join(&source).join("index_text").display().to_string(),
+            prepend_module_to_snapshot => false,
+            description => key,
+        }, {
+            assert_snapshot!(format!("{uuid}.txt"), normalize_str(&body));
+        });
+    }
+}
+
+/// `index-text`'s output split at each `=== <source> <id> <title>` header,
+/// the header kept as the document's first line.
+fn index_text_documents(text: &str) -> Vec<(String, String, String)> {
+    let mut docs: Vec<(String, String, String)> = Vec::new();
+    for line in text.split_inclusive('\n') {
+        let header = line
+            .strip_prefix("=== ")
+            .and_then(|rest| {
+                let mut parts = rest.splitn(3, ' ');
+                Some((parts.next()?, parts.next()?))
+            })
+            .filter(|(_, uuid)| {
+                uuid.len() == 36 && uuid.chars().filter(|c| *c == '-').count() == 4
+            });
+        match header {
+            Some((source, uuid)) => {
+                docs.push((source.to_string(), uuid.to_string(), line.to_string()))
+            }
+            None => {
+                if let Some(doc) = docs.last_mut() {
+                    doc.2.push_str(line);
+                }
+            }
+        }
+    }
+    docs
+}
 
 /// Walk `root` and emit one snapshot per file. Each snapshot lives at
 /// `<snap_base()>/<top>/<rel_dir>/<filename>.snap` (i.e. under
@@ -1807,13 +1875,36 @@ fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {
 /// Delete per-stanza `.snap` files that no longer correspond to a manifest
 /// key — orphans from a run whose produced paths have since changed. No-op
 /// outside update mode, which must never mutate the version-controlled golden.
-fn prune_orphan_snapshots(manifest: &[String]) {
+/// The step trees snapshotted file by file, under each group.
+const TREE_SNAPSHOTS: [&str; 4] = [
+    "ingest",
+    "render_markdown",
+    "render_time_series",
+    "time_series_index",
+];
+
+/// Deletes the snapshots this bake no longer writes: a tree snapshot whose
+/// file is gone, and a top-level folder whose group is gone from the data
+/// root, which is what a renamed group leaves.
+fn prune_orphan_snapshots(manifest: &[String], data_root: &Path) {
     if !insta_update_mode() {
         return;
     }
     let base = snap_base();
     if !base.is_dir() {
         return;
+    }
+    for entry in std::fs::read_dir(&base)
+        .expect("read snapshot tree")
+        .flatten()
+    {
+        let name = entry.file_name();
+        let written_later = name == datalib_contacts::CURATED_DIR;
+        if entry.path().is_dir() && !written_later && !data_root.join(&name).is_dir() {
+            std::fs::remove_dir_all(entry.path()).unwrap_or_else(|e| {
+                panic!("delete orphan snapshots {}: {e}", entry.path().display())
+            });
+        }
     }
     let keys: std::collections::HashSet<&str> = manifest.iter().map(String::as_str).collect();
     for entry in WalkDir::new(&base) {
@@ -1826,13 +1917,13 @@ fn prune_orphan_snapshots(manifest: &[String]) {
             continue;
         }
         // Snapshot path mirrors the data layout, so only the per-group
-        // tree snaps are manifest-keyed — hence pruning only under an
-        // `ingest/`, `render_markdown/` or `render_occurrences/` segment.
+        // tree snaps are manifest-keyed — hence pruning only under one of
+        // `TREE_SNAPSHOTS`, `render_occurrences/` or `index_text/`.
         let rel = p.strip_prefix(&base).unwrap().to_string_lossy().to_string();
         let key = rel.strip_suffix(".snap").unwrap_or(&rel);
-        let is_tree_snap = key
-            .split('/')
-            .any(|seg| matches!(seg, "ingest" | "render_markdown" | "render_occurrences"));
+        let is_tree_snap = key.split('/').any(|seg| {
+            TREE_SNAPSHOTS.contains(&seg) || matches!(seg, "render_occurrences" | "index_text")
+        });
         if is_tree_snap && !keys.contains(key) {
             std::fs::remove_file(p)
                 .unwrap_or_else(|e| panic!("delete orphan snapshot {}: {e}", p.display()));
@@ -1917,6 +2008,35 @@ fn summarize_file(path: &Path) -> SnapValue {
             }
         }
     }
+}
+
+/// The config as `datalib-http` would leave it. The bake runs
+/// `datalib-dag`, which loads a config but never upgrades one, so a shape
+/// the app rewrites on sight (the index group's old name) would fail the
+/// bake rather than be carried forward. A rewrite that refuses fails it
+/// here, by name, since the app would then run the config as it is. With
+/// `write_back`, the data repo's `dag.toml` takes the upgrade, so its diff
+/// shows it and git keeps what it replaced.
+fn upgraded_config(path: &Path, text: String, write_back: bool) -> String {
+    let up = datalib_migrate_config::upgrade_unattended(&text);
+    assert!(
+        up.refused.is_empty(),
+        "{}: the app would leave this config as it is: {}",
+        path.display(),
+        up.refused
+            .iter()
+            .map(|(why, e)| format!("it {why}, and the rewrite refused: {e:#}"))
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
+    if up.done.is_empty() {
+        return text;
+    }
+    eprintln!("[test] upgraded {}: {}", path.display(), up.done.join("; "));
+    if write_back {
+        std::fs::write(path, &up.text).expect("write the upgraded config back");
+    }
+    up.text
 }
 
 fn rewrite_config(text: &str) -> String {
@@ -2367,7 +2487,6 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
         "finished_at_utc",
         "duration_secs",
         "data_root",
-        "qmd_status",
         "last_attempt_at_utc",
         "first_seen_at_utc",
         "changed_at_utc",

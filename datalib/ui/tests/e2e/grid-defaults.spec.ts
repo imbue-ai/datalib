@@ -7,7 +7,7 @@ import { GRID, gridSettled, SEARCH_ROWS, type GridApi } from "./grid-helpers";
 
 async function total(request: APIRequestContext, q: string): Promise<number> {
   const r = await request.get(
-    `/applet/unified_document_index/search?q=${encodeURIComponent(q)}&limit=1`,
+    `/applet/unified_grid_and_search_index/search?q=${encodeURIComponent(q)}&limit=1`,
   );
   expect(r.ok()).toBe(true);
   return ((await r.json()) as { total: number }).total;

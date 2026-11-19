@@ -11,26 +11,31 @@ mod check_params;
 mod compact;
 mod config_backup;
 mod dispatch;
+mod embed_prompts;
 mod embedding_map;
 mod events;
 mod exit_watchdog;
 mod function;
-mod grid_index;
 mod help;
 mod hints;
+mod index_steps;
+mod index_text;
 mod ingest;
 mod introspect;
+mod markdown;
 mod methods;
+mod modal;
 mod occurrences;
+mod old_markdown;
 mod prepare;
 mod probe;
 mod published;
-mod qmd_index;
 mod render;
 mod render_diff;
 #[cfg(test)]
 mod render_model_test;
 mod reset;
+mod search_index;
 mod source;
 mod source_docs;
 mod source_type;
@@ -38,6 +43,7 @@ mod step_entry;
 mod synth;
 mod time_series;
 mod topo_sort_config;
+mod unified_grid_and_search_index;
 
 #[cfg(test)]
 mod agent_docs_test;
@@ -66,7 +72,7 @@ const CHECKPOINT_CADENCE_ENV: &str = datalib_env::DATALIB_STEP_CHECKPOINT_CADENC
 const LONG_ABOUT: &str = "\
 The step program datalib ships: a step whose config entry says `command = \
 \"datalib-step run <function> <type>\"` runs it, and it performs that function \
-(ingest, render_markdown, grid_index, …) for that type of source. To run one \
+(ingest, render_markdown, unified_grid_and_search_index, …) for that type of source. To run one \
 step in a data root, `datalib-dag <config> --sync <group>/<function>` runs \
 it, and every step that reads it after it, and records what it published. \
 `datalib-step help <function>` shows how for each. Run by hand, with the \
@@ -96,6 +102,10 @@ const EXAMPLES: &[Example] = &[
         command: "datalib-step examples slack",
     },
     Example {
+        what: "the stanzas for one of a source's ways in, to read before adding it",
+        command: "datalib-step examples email --method gmail",
+    },
+    Example {
         what: "add a source's least config to a config, wired into the index steps that read it",
         command: "datalib-step examples slack --append ~/datalib/config.toml",
     },
@@ -116,7 +126,7 @@ const EXAMPLES: &[Example] = &[
         command: "datalib-step probe email --method gmail --list labels",
     },
     Example {
-        what: "put the Node runtime for qmd and latchkey in place before the first sync",
+        what: "put the Node runtime for latchkey in place before the first sync",
         command: "datalib-step pull-runtime",
     },
     Example {
@@ -126,6 +136,10 @@ const EXAMPLES: &[Example] = &[
     Example {
         what: "fetch the search index's embedding models before the first embed",
         command: "datalib-step pull-models",
+    },
+    Example {
+        what: "embed the prompts piped to stdin, one {\"hash\", \"prompt\"} object a line, as the embed step would; vectors come out on stdout",
+        command: "datalib-step embed-prompts",
     },
     Example {
         what: "say which datalib-step steps' params a sync would refuse (the app runs this on save)",
@@ -170,7 +184,8 @@ struct Run {
     /// `DATALIB_HTTP_PLAYBACK` for every provider transport.
     #[arg(long)]
     playback_root: Option<PathBuf>,
-    /// `embed` only: directory where qmd caches its embedding model.
+    /// `unified_grid_and_search_index` and `embed`: the directory holding the embedding
+    /// model, whose tokenizer cuts the chunks and whose weights embed them.
     #[arg(long)]
     models_dir: Option<PathBuf>,
     /// Appended by `datalib-dag --reset`: empty what the step wrote and do
@@ -214,7 +229,8 @@ enum Cmd {
     /// One source's config stanzas: for each of its ingest methods, the
     /// least a config needs and one that sets every option, with how to
     /// add one to a config, rename its group and wire it into the index.
-    /// With `--append`, adds the least one to a config instead.
+    /// `--method` prints one method's; `--append` adds the least one to a
+    /// config instead.
     Examples {
         /// Source type (`slack`, `email`, …).
         source_type: String,
@@ -225,9 +241,10 @@ enum Cmd {
         /// as `<file>.<UTC time>.bak`, one per append.
         #[arg(long, value_name = "CONFIG")]
         append: Option<PathBuf>,
-        /// With --append: which ingest method's stanza, for a source with
-        /// more than one (`gmail`, `jmap` or `mbox` for email).
-        #[arg(long, requires = "append")]
+        /// Which ingest method's stanzas, for a source with more than one
+        /// (`gmail`, `jmap` or `mbox` for email): without --append, print
+        /// only that method's; with it, append that method's minimal one.
+        #[arg(long)]
         method: Option<String>,
         /// With --append: the group's id, in place of the type's name. It
         /// is the folder under the data root its data goes in.
@@ -264,23 +281,44 @@ enum Cmd {
         /// The config file: `<data root>/config.toml`.
         path: PathBuf,
     },
-    /// Utility (not a pipeline step): put qmd's pinned GGUF models in
+    /// Utility (not a pipeline step): put the pinned GGUF models in
     /// place, sha256-verified — what an `embed` step does before
     /// it embeds, runnable ahead of time (an image build, a first-run
     /// warmup). Needs no data root.
     PullModels {
-        /// Where the models go; default is qmd's own cache,
+        /// Where the models go; default is the shared cache qmd used,
         /// `$XDG_CACHE_HOME/qmd/models` or `~/.cache/qmd/models`.
         #[arg(long)]
         models_dir: Option<PathBuf>,
     },
-    /// Utility (not a pipeline step): put the Node runtime for qmd and
-    /// latchkey in place — the tree beside the binaries when one is
-    /// shipped, else the release asset `runtime.manifest` names,
-    /// fetched sha256-verified into `$XDG_CACHE_HOME/datalib/runtime`
-    /// (`~/.cache/datalib/runtime` by default) — run `qmd --version`
-    /// through it and read the latchkey it holds. What every sync does on
-    /// its first `qmd` or `latchkey`, runnable ahead of time. Needs no
+    /// Utility (not a pipeline step): embed prompts read from stdin, one
+    /// `{"hash", "prompt"}` JSON object a line, and write one
+    /// `{"hash", "vector", "cut"}` object a line to stdout, in order,
+    /// through the embedder the `embed` step uses. Needs no data root.
+    EmbedPrompts {
+        /// The model's directory, put in place as `pull-models` does;
+        /// default is the same shared cache.
+        #[arg(long, conflicts_with = "model")]
+        models_dir: Option<PathBuf>,
+        /// A model file to load as it is, with no check that it is the
+        /// pinned one.
+        #[arg(long)]
+        model: Option<PathBuf>,
+        /// Run on the CPU even where there is a GPU.
+        #[arg(long)]
+        cpu: bool,
+        /// Prompts and tokens per call to the model, as `8:2048`; default
+        /// is the device's own.
+        #[arg(long, value_parser = parse_batching)]
+        batching: Option<datalib_embedder::Batching>,
+    },
+    /// Utility (not a pipeline step): put the Node runtime for latchkey in
+    /// place — the tree beside the binaries when one is shipped, else the
+    /// release asset `runtime.manifest` names, fetched sha256-verified
+    /// into `$XDG_CACHE_HOME/datalib/runtime` (`~/.cache/datalib/runtime`
+    /// by default) — run `node --version` through it and read the
+    /// latchkey it holds. What every sync does on its first `latchkey`,
+    /// runnable ahead of time. Needs no
     /// data root and no latchkey key. Every install on the machine shares
     /// that cache, which keeps one release's runtime and removes the rest;
     /// to try a release beside another, set `XDG_CACHE_HOME` for it.
@@ -292,6 +330,16 @@ enum Cmd {
         #[arg(long)]
         into: Option<PathBuf>,
     },
+    /// Utility (not a pipeline step): put the CUDA module in place — the
+    /// one in `lib/` beside the binary, else the release asset
+    /// `runtime.manifest` names, fetched sha256-verified into
+    /// `$XDG_CACHE_HOME/datalib/cuda` (`~/.cache/datalib/cuda` by default)
+    /// — and say where it is and whether this machine has the NVIDIA
+    /// driver to run it. What an `embed` on a machine with an NVIDIA GPU
+    /// does first, runnable ahead of time, and here even without the
+    /// driver, for which an embed never fetches. x86_64 gnu Linux only.
+    /// Needs no data root.
+    PullCuda,
     /// Utility (not a pipeline step): rewrite a config file in the order
     /// data flows — each step below the steps it reads, each group's
     /// entries together — moving an entry only when it has to, and
@@ -304,6 +352,50 @@ enum Cmd {
         /// Only say whether it is in order: exit 1 if not, and write nothing.
         #[arg(long)]
         check: bool,
+    },
+    /// Utility (not a pipeline step): each document's markdown as its
+    /// source's render store spells it, the text the viewer shows. With
+    /// `--out`, one file per document at `<out>/<source>/<id>.md`, for an
+    /// export or another tool; without, printed: one document's text alone,
+    /// or each as `=== <source> <id>` and its text. Reads the render stores
+    /// and writes nothing under the data root.
+    Markdown {
+        /// The data root.
+        data_root: PathBuf,
+        /// Only this source (its group id).
+        #[arg(long)]
+        source: Option<String>,
+        /// Only this document (its id).
+        #[arg(long)]
+        document: Option<String>,
+        /// Read the source's render store as it was at this commit.
+        #[arg(long, requires = "source")]
+        at: Option<String>,
+        /// The folder to write the documents into.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
+    /// Utility (not a pipeline step): print what the search index draws
+    /// of each document, by the call the keyword and embed passes make:
+    /// for each, `=== <source> <id> <title>`, then each piece as `---
+    /// <item>` and its text. Reads the render stores and writes nothing.
+    IndexText {
+        /// The data root.
+        data_root: PathBuf,
+        /// Only this source (its group id).
+        #[arg(long)]
+        source: Option<String>,
+        /// Only this document (its id), with --source.
+        #[arg(long, requires = "source")]
+        document: Option<String>,
+        /// Read the source's render store as it was at this commit, to see
+        /// what a sync changed: draw it at two commits and diff them.
+        #[arg(long, requires = "source")]
+        at: Option<String>,
+        /// Print the chunks as they are embedded, each `--- chunk <n>
+        /// <hash>` and its prompt, instead of the pieces.
+        #[arg(long)]
+        chunks: bool,
     },
     /// Dev utility (not a pipeline step): build HTTP playback fixtures
     /// for one source from a raw fixture tree (`--params-file` naming a
@@ -376,6 +468,36 @@ async fn main() {
     let cli = Cli::parse();
     match &cli.cmd {
         Cmd::Help { topic } => std::process::exit(print_help(topic)),
+        Cmd::Markdown {
+            data_root,
+            source,
+            document,
+            at,
+            out,
+        } => std::process::exit(markdown::run_cli(
+            data_root,
+            &markdown::Ask {
+                source: source.as_deref(),
+                document: document.as_deref(),
+                at: at.as_deref(),
+                out: out.as_deref(),
+            },
+        )),
+        Cmd::IndexText {
+            data_root,
+            source,
+            document,
+            at,
+            chunks,
+        } => std::process::exit(index_text::run_cli(
+            data_root,
+            &index_text::Ask {
+                source: source.as_deref(),
+                document: document.as_deref(),
+                at: at.as_deref(),
+                chunks: *chunks,
+            },
+        )),
         Cmd::Examples {
             source_type,
             append: Some(config),
@@ -387,9 +509,14 @@ async fn main() {
             method.as_deref(),
             id.as_deref(),
         )),
-        Cmd::Examples { source_type, .. } => {
-            std::process::exit(print_page(help::examples_page(source_type)))
-        }
+        Cmd::Examples {
+            source_type,
+            method,
+            ..
+        } => std::process::exit(print_page(help::examples_page(
+            source_type,
+            method.as_deref(),
+        ))),
         _ => {}
     }
     // A probe run by hand says on stderr only what went wrong; the
@@ -399,10 +526,14 @@ async fn main() {
         obs.log_level.get_or_insert_with(|| "warn".to_string());
     }
     let _obs_guard = datalib_obs::init(&obs, "datalib-step").ok();
-    // Before the first `qmd` or `latchkey` spawn, wherever it comes
+    // Before the first `latchkey` spawn, wherever it comes
     // from: a release tarball without `runtime/` beside its binaries
     // fetches the one its manifest names, once per machine.
     datalib_fetch::enable_runtime_fetch();
+    // And before the first embed: a gnu x86_64 tarball has no CUDA module
+    // beside its binaries, and fetches the one its manifest names where
+    // there is an NVIDIA driver.
+    datalib_fetch::enable_cuda_fetch();
 
     // `probe` is answered before any of the step machinery below: it
     // owns no tree, claims no outputs and must leave stdout holding
@@ -427,16 +558,16 @@ async fn main() {
     if let Cmd::PullModels { models_dir } = &cli.cmd {
         let dir = models_dir
             .clone()
-            .unwrap_or_else(datalib_qmd_indexer::default_models_dir);
+            .unwrap_or_else(datalib_embedding_models::shared_models_dir);
         // Off the async runtime: the fetch is blocking I/O, and reqwest's
         // blocking client refuses to be dropped on a runtime thread.
         let ensure = {
             let dir = dir.clone();
             tokio::task::spawn_blocking(move || {
-                datalib_qmd_models::ensure_models(
+                datalib_embedding_models::ensure_models(
                     &dir,
-                    datalib_qmd_models::PINNED_MODELS,
-                    datalib_qmd_models::Fetch::from_env(),
+                    datalib_runtime::models::EMBED_MODELS,
+                    datalib_embedding_models::Fetch::from_env(),
                 )
             })
             .await
@@ -444,7 +575,8 @@ async fn main() {
         };
         match ensure {
             Ok(outcomes) => {
-                for (model, outcome) in datalib_qmd_models::PINNED_MODELS.iter().zip(&outcomes) {
+                for (model, outcome) in datalib_runtime::models::EMBED_MODELS.iter().zip(&outcomes)
+                {
                     datalib_obs::status_line!(
                         "{:?}: {}",
                         outcome,
@@ -453,8 +585,34 @@ async fn main() {
                 }
                 let all_present = outcomes
                     .iter()
-                    .all(|o| *o != datalib_qmd_models::Outcome::Missing);
+                    .all(|o| *o != datalib_embedding_models::Outcome::Missing);
                 std::process::exit(if all_present { 0 } else { 1 });
+            }
+            Err(e) => {
+                datalib_obs::status_line!("error: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
+    // `embed-prompts` likewise; its stdout holds only vectors.
+    if let Cmd::EmbedPrompts {
+        models_dir,
+        model,
+        cpu,
+        batching,
+    } = &cli.cmd
+    {
+        let (models_dir, model, cpu, batching) =
+            (models_dir.clone(), model.clone(), *cpu, *batching);
+        let embedded = tokio::task::spawn_blocking(move || {
+            embed_prompts_cli(models_dir, model, cpu, batching)
+        })
+        .await
+        .expect("embed-prompts task panicked");
+        match embedded {
+            Ok(n) => {
+                datalib_obs::status_line!("embedded {n} prompts");
+                std::process::exit(0);
             }
             Err(e) => {
                 datalib_obs::status_line!("error: {e:#}");
@@ -469,6 +627,21 @@ async fn main() {
         let out = tokio::task::spawn_blocking(move || pull_runtime(into.as_deref()))
             .await
             .expect("pull-runtime task panicked");
+        match out {
+            Ok(report) => {
+                datalib_obs::status_line!("{report}");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                datalib_obs::status_line!("error: {e:#}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if let Cmd::PullCuda = &cli.cmd {
+        let out = tokio::task::spawn_blocking(pull_cuda)
+            .await
+            .expect("pull-cuda task panicked");
         match out {
             Ok(report) => {
                 datalib_obs::status_line!("{report}");
@@ -497,6 +670,10 @@ async fn main() {
     // The step's own commit, before anything else it says, so the run
     // store files every line of this process against the right source.
     emitter.declare_version();
+    // A store's migration rung can run for many minutes; whatever verb
+    // opened the store, the step's row says which rung and statement.
+    let rung_progress = emitter.progress();
+    datalib_store_meta::ladder::report_to(move |msg| rung_progress.set_message(msg));
     // Read before anything runs, so a failed step can still say what it
     // published; an env that does not parse fails the step below.
     let step_env = match &cli.cmd {
@@ -653,15 +830,20 @@ async fn run(
         // there for why it cannot come through the outcome path.
         Cmd::Probe { .. } => unreachable!("probe is answered in main"),
         Cmd::Help { .. } => unreachable!("help is answered in main"),
+        Cmd::IndexText { .. } => unreachable!("index-text is answered in main"),
+        Cmd::Markdown { .. } => unreachable!("markdown is answered in main"),
         Cmd::Examples { .. } => unreachable!("examples is answered in main"),
         Cmd::CheckParams { .. } => unreachable!("check-params is answered in main"),
         Cmd::PullModels { .. } => unreachable!("pull-models is answered in main"),
+        Cmd::EmbedPrompts { .. } => unreachable!("embed-prompts is answered in main"),
         Cmd::PullRuntime { .. } => unreachable!("pull-runtime is answered in main"),
+        Cmd::PullCuda => unreachable!("pull-cuda is answered in main"),
         Cmd::TopoSortConfig { .. } => {
             unreachable!("topo-sort-config is answered in main")
         }
         Cmd::Run(run) => {
             let env = step_env.expect("`run` reads its step env in main")?;
+            datalib_schema::problems::set_step_source(&env.group);
             if run.reset {
                 return reset::run(&env, data_root, emitter).await;
             }
@@ -669,10 +851,10 @@ async fn run(
                 return prepare::run(&env, data_root, emitter).await;
             }
             if run.compact {
-                return compact::run(&env, data_root, compact::Verb::Compact).await;
+                return compact::run(&env, data_root, compact::Verb::Compact, emitter).await;
             }
             if run.collect {
-                return compact::run(&env, data_root, compact::Verb::Collect).await;
+                return compact::run(&env, data_root, compact::Verb::Collect, emitter).await;
             }
             let params = source::params_from_env()?;
             run_function(
@@ -744,25 +926,28 @@ async fn run_function(
             hints::emit_hint_on_failure(emitter, source_type, &res);
             res
         }
-        Function::GridIndex => {
-            writes_the_index_tree(&env, &grid_index::out_rel())?;
-            grid_index::run(data_root, &env, Some(now), emitter, &control.stop).await
-        }
-        Function::QmdAggregator => {
-            writes_the_index_tree(&env, &qmd_index::aggregator_rel())?;
-            qmd_index::run_aggregator(data_root, &env, emitter, &control.stop).await
-        }
-        Function::KeywordIndex => {
-            qmd_index::run_keyword(data_root, &env, emitter, &control.stop).await
+        Function::UnifiedGridAndSearchIndex => {
+            writes_the_index_tree(&env, &unified_grid_and_search_index::out_rel())?;
+            let params = unified_grid_and_search_index::Params::from_json(params)?;
+            unified_grid_and_search_index::run(
+                data_root,
+                &env,
+                &params,
+                Some(now),
+                emitter,
+                &control.stop,
+            )
+            .await
         }
         Function::Embed => {
-            qmd_index::run_embed(data_root, &env, models_dir, emitter, &control.stop).await
+            index_steps::run_embed(data_root, &env, params, models_dir, emitter, &control.stop)
+                .await
         }
         Function::EmbeddingMap => {
             writes_the_index_tree(&env, &embedding_map::out_rel())?;
             embedding_map::run(data_root, now, emitter).await
         }
-        Function::RenderTimeSeries => time_series::run_render(&env, data_root, emitter).await,
+        Function::RenderTimeSeries => time_series::run_render(&env, data_root, now, emitter).await,
         Function::RenderOccurrences => {
             occurrences::run(&env, data_root, now, params, emitter).await
         }
@@ -780,29 +965,45 @@ async fn run_function(
     }
 }
 
-/// Put the runtime in place — resolving qmd fetches it on a miss, now
-/// that the fetcher is enabled, or `into` names where — then run
-/// `qmd --version` through it, so the report names the tree that will
-/// serve the next sync and proves its Node starts. Both tools, because a
-/// tree can hold one and not the other; the .app's post-bundle check
-/// (`datalib/tauri/check-app.sh`) runs this.
+/// Put the runtime in place — resolving latchkey fetches it on a miss,
+/// now that the fetcher is enabled, or `into` names where — then run
+/// `node --version` through it, so the report names the tree that will
+/// serve the next sync and proves its Node starts, and read the latchkey
+/// it holds. The .app's post-bundle check (`datalib/tauri/check-app.sh`)
+/// runs this.
 fn pull_runtime(into: Option<&Path>) -> Result<String> {
     use datalib_runtime::node_runtime as nr;
-    use datalib_runtime::qmd::{DEFAULT_QMD_VERSION, QMD_ENTRY_REL};
     let root = match into {
         Some(dir) => install_runtime(dir)?,
         None => {
-            datalib_runtime::qmd::qmd_command(DEFAULT_QMD_VERSION)?;
+            nr::latchkey_command()?;
             nr::runtime_root().context("no runtime root after a successful resolution")?
         }
     };
-    let qmd = nr::command_in(&root, "qmd", DEFAULT_QMD_VERSION, QMD_ENTRY_REL)
-        .with_context(|| format!("{} holds no qmd {DEFAULT_QMD_VERSION}", root.display()))?;
-    let qmd = version_through_runtime(qmd)?;
+    let node = nr::node_in(&root).with_context(|| format!("{} holds no node", root.display()))?;
+    let node = version_through_runtime(node)?;
     let latchkey = latchkey_version(&root)?;
     Ok(format!(
-        "runtime: {}\nqmd --version: {qmd}\nlatchkey: {latchkey}",
+        "runtime: {}\nnode --version: {node}\nlatchkey: {latchkey}",
         root.display()
+    ))
+}
+
+/// The CUDA module in place, as an embed on a machine with a driver finds
+/// it, but whether or not this one has the driver. Not loaded: without
+/// the driver and cuBLAS it cannot be.
+fn pull_cuda() -> Result<String> {
+    use datalib_runtime::cuda_module::{find, DRIVER_LIBRARY};
+    let module = find(true).map_err(anyhow::Error::msg)?;
+    let driver = if datalib_embedder::can_load(DRIVER_LIBRARY) {
+        "present"
+    } else {
+        "absent: an embed here runs on the CPU"
+    };
+    Ok(format!(
+        "cuda module: {}
+NVIDIA driver ({DRIVER_LIBRARY}): {driver}",
+        module.display()
     ))
 }
 
@@ -915,7 +1116,7 @@ fn print_page(page: Result<String, String>) -> i32 {
     }
 }
 
-/// The index steps have one reader each — the `unified_document_index` applet
+/// The index steps have one reader each — the `unified_grid_and_search_index` applet
 /// — which finds them from the data root alone, so their trees are
 /// fixed. A config that files them under another group would have
 /// the runner tracking a tree nothing ever writes.
@@ -923,7 +1124,7 @@ fn writes_the_index_tree(env: &StepEnv, expected: &str) -> Result<()> {
     anyhow::ensure!(
         env.step == expected,
         "`{}` writes {expected:?} and nothing else, but this step's id is {:?}: declare it \
-         under the `unified_document_index` group",
+         under the `unified_grid_and_search_index` group",
         env.function,
         env.step
     );
@@ -932,7 +1133,7 @@ fn writes_the_index_tree(env: &StepEnv, expected: &str) -> Result<()> {
 
 /// SIGINT this process' own group — itself and whatever it spawned,
 /// because the runner starts every step as its own group leader, so this
-/// reaches a `node qmd embed` the step would otherwise leave behind.
+/// reaches a `latchkey curl` the step would otherwise leave behind.
 fn interrupt_own_group() {
     // `report`, not `eprintln!`: by now stderr is a pipe to the dead
     // runner, and `eprintln!` panics on the failed write — which would
@@ -950,6 +1151,53 @@ fn interrupt_own_group() {
     }
     datalib_parent_watch::report("the runner is gone; stopping this step and what it spawned");
     unsafe { libc::kill(0, libc::SIGINT) };
+}
+
+fn parse_batching(s: &str) -> Result<datalib_embedder::Batching, String> {
+    let (prompts, tokens) = s.split_once(':').ok_or("PROMPTS:TOKENS, as 8:2048")?;
+    Ok(datalib_embedder::Batching {
+        prompts: prompts.parse().map_err(|e| format!("prompts: {e}"))?,
+        tokens: tokens.parse().map_err(|e| format!("tokens: {e}"))?,
+    })
+}
+
+fn embed_prompts_cli(
+    models_dir: Option<PathBuf>,
+    model: Option<PathBuf>,
+    cpu: bool,
+    batching: Option<datalib_embedder::Batching>,
+) -> anyhow::Result<usize> {
+    let open = move || {
+        let model = match model {
+            Some(file) => file,
+            None => {
+                let dir = models_dir.unwrap_or_else(datalib_embedding_models::shared_models_dir);
+                index_steps::ensure_embed_model(&dir, datalib_embedding_models::Fetch::from_env())?;
+                search_index::model_file(&dir)
+            }
+        };
+        let device = if cpu {
+            datalib_embedder::Device::Cpu
+        } else {
+            datalib_embedder::Device::Best
+        };
+        let batching = batching.unwrap_or_else(|| {
+            datalib_embedder::Batching::for_device(&datalib_embedder::device_for(device))
+        });
+        let e = datalib_embedder::Embedder::open_with(&model, device, 0, batching)?;
+        let b = e.batching();
+        datalib_obs::status_line!(
+            "embedding on {} ({}), {} prompts / {} tokens per call",
+            e.device(),
+            datalib_embedder::cuda_module_report().unwrap_or("no CUDA module looked for"),
+            b.prompts,
+            b.tokens
+        );
+        Ok(e)
+    };
+    let stdin = std::io::stdin().lock();
+    let stdout = std::io::stdout().lock();
+    embed_prompts::run(stdin, stdout, open)
 }
 
 #[cfg(test)]
@@ -976,8 +1224,13 @@ mod cli_tests {
         assert_eq!(run.args.group_type.as_deref(), Some("diff"));
         assert_eq!(run.args.source_type.as_deref(), Some("slack"));
         assert!(run.prepare && !run.reset);
-        let cli =
-            super::Cli::try_parse_from(["datalib-step", "run", "grid_index", "--reset"]).unwrap();
+        let cli = super::Cli::try_parse_from([
+            "datalib-step",
+            "run",
+            "unified_grid_and_search_index",
+            "--reset",
+        ])
+        .unwrap();
         let super::Cmd::Run(run) = cli.cmd else {
             panic!("not run")
         };

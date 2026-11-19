@@ -11,8 +11,9 @@ use datalib_etl_airvisual_config::AirvisualDevice;
 use datalib_etl_airvisual_render::render::parse::{inputs, parse};
 use datalib_etl_airvisual_render::render::render::render_all;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_render::section::join;
 
 const STANZA: &str = "ship-air";
 
@@ -30,8 +31,7 @@ async fn count(pool: &sqlx::SqlitePool, sql: &'static str) -> i64 {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_tng_fixture_ingests_and_renders() {
     let td = tempfile::tempdir().unwrap();
-    let root = td.path();
-    let raw_path = root.join(STANZA).join("raw");
+    let raw_path = td.path().join(STANZA).join("raw");
     std::fs::create_dir_all(&raw_path).unwrap();
     let db = RawDb::open(&db_path_for(&raw_path)).await.unwrap();
     let cache = FingerprintCache::open(&td.path().join("fp.sqlite"))
@@ -179,7 +179,7 @@ async fn the_tng_fixture_ingests_and_renders() {
         emitted.push(md);
         Ok(())
     };
-    let summary = render_all(&parsed, root, STANZA, &Progress::noop(), &mut on_doc).unwrap();
+    let summary = render_all(&parsed, STANZA, &Progress::noop(), &mut on_doc).unwrap();
     assert_eq!(
         (summary.devices, summary.plots),
         (2, 5),
@@ -188,9 +188,7 @@ async fn the_tng_fixture_ingests_and_renders() {
     assert_eq!(emitted.len(), 1);
     assert_eq!(emitted[0].rows.len(), 3);
 
-    let page_dir = root.join(STANZA).join("render_markdown");
-    let page = doc_md_path(&page_dir, &emitted[0].markdown_uuid);
-    let md = std::fs::read_to_string(&page).unwrap();
+    let md = join(&emitted[0].sections);
     assert!(md.contains("### Ten Forward"), "{md}");
     assert!(md.contains("### Sickbay"), "{md}");
     assert!(md.contains("serial `TENFWD10X`"), "{md}");

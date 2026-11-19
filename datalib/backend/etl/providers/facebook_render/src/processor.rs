@@ -123,7 +123,6 @@ impl Owner {
 /// rendering.
 pub struct Source<'a> {
     pub raw_dir: &'a Path,
-    pub out_dir: &'a Path,
     pub name: &'a str,
     pub range: RawRange<'a>,
     /// How many bytes of media a render loads at once.
@@ -315,7 +314,6 @@ fn render_loaded(
     ] {
         let mut renderer = ChatRenderer::new(
             &profile,
-            source.out_dir,
             source.name,
             chats.iter().map(|c| c.buckets.len()).sum(),
             progress,
@@ -328,7 +326,6 @@ fn render_loaded(
     let s = contact_render_all(
         &friends_profile(&loaded.owner),
         &loaded.friends,
-        source.out_dir,
         source.name,
         progress,
         on_doc,
@@ -425,7 +422,6 @@ impl SourceRender for FacebookRender {
         let mut on_doc = |md| ctx.emit_doc(md);
         let source = Source {
             raw_dir: raw_path,
-            out_dir: ctx.root,
             name: ctx.name,
             range: ctx.raw_range(),
             blob_bytes: ctx.page_size.bytes,
@@ -454,7 +450,6 @@ mod tests {
     fn render(raw: &Path) -> Result<Outcome> {
         let source = Source {
             raw_dir: raw,
-            out_dir: raw,
             name: "facebook",
             range: RawRange {
                 cursor: None,

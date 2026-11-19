@@ -10,7 +10,13 @@
 // no reload. `watch.rs` reports the write as `config_changed`; `App.vue`
 // re-checks on it.
 import { test, expect, type Page } from "@playwright/test";
-import { MENU_DISABLED, cardOf, nameCell, rowMenuEntry } from "./grid-helpers";
+import {
+  MENU_DISABLED,
+  cardOf,
+  expectSyncEverything,
+  nameCell,
+  rowMenuEntry,
+} from "./grid-helpers";
 import { readFileSync, writeFileSync } from "node:fs";
 
 // Declared locally rather than pulling in @types/node — same reason as
@@ -74,17 +80,18 @@ test("a broken entry costs that entry, and nothing else", async ({ page, request
 
   // The applet the whole app runs on is untouched — the assertion that
   // would have failed before #209, and the one that matters most.
-  const search = await request.get("/applet/unified_document_index/search?q=&limit=1");
+  const search = await request.get("/applet/unified_grid_and_search_index/search?q=&limit=1");
   expect(search.status()).toBe(200);
 
   await page.goto("/data_sources");
+  await expectSyncEverything(page);
   // No gate, and the app is fully navigable.
   await expect(gate(page)).toHaveCount(0);
   await expect(toolbar(page)).toBeVisible();
 
   // The dropped entry is on its own row, saying why — not missing, and
   // not wearing a status from some earlier run.
-  const row = page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="broken/ingest"]');
+  const row = page.locator('.tg-grid .slick-row[data-key="broken/ingest"]');
   await expect(row).toBeVisible();
   await expect(row.locator('[col-id="status"] .tg-status')).toHaveAttribute(
     "title",
@@ -102,6 +109,7 @@ test("a config warning drops nothing, and the System row counts it", async ({ pa
   writeConfig(`${original}\n[[groups]]\nid = "lonely"\n`);
 
   await page.goto("/data_sources");
+  await expectSyncEverything(page);
   await expect(gate(page)).toHaveCount(0);
   const warning = nameCell(page, "system").locator(".tg-chip-warning");
   await expect(warning).toHaveText("1");
@@ -122,10 +130,11 @@ test("a step naming a group the config lacks says so on its Edit button", async 
   writeConfig(`${original}\n[[steps]]\nid = "ghost/ingest"\ncommand = "datalib-step run ingest"\n`);
 
   await page.goto("/data_sources");
+  await expectSyncEverything(page);
   await expect(gate(page)).toHaveCount(0);
   const edit = await rowMenuEntry(
     page,
-    page.locator('.tg-grid .slick-row:not([data-pinned])[data-key="ghost/ingest"]'),
+    page.locator('.tg-grid .slick-row[data-key="ghost/ingest"]'),
     "Edit settings…",
   ).open();
   await expect(edit).toHaveClass(MENU_DISABLED);
@@ -140,6 +149,7 @@ test("a file that is not a config blocks the app, and unblocks it live", async (
   request,
 }) => {
   await page.goto("/data_sources");
+  await expectSyncEverything(page);
   await expect(toolbar(page)).toBeVisible();
   await expect(gate(page)).toHaveCount(0);
   // The Manage table's element, marked: the cards wait behind the gate
@@ -184,8 +194,12 @@ test("a file that is not a config blocks the app, and unblocks it live", async (
   ).toBeVisible();
 });
 
-test("a config with no unified_document_index applet blocks too", async ({ page, request }) => {
+test("a config with no unified_grid_and_search_index applet blocks too", async ({
+  page,
+  request,
+}) => {
   await page.goto("/data_sources");
+  await expectSyncEverything(page);
   await expect(toolbar(page)).toBeVisible();
 
   // Valid TOML, a valid config, and useless: every view in the app is
@@ -197,7 +211,7 @@ test("a config with no unified_document_index applet blocks too", async ({ page,
 
   await expect(gate(page)).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "This config declares no Document Index" }),
+    page.getByRole("heading", { name: "This config declares no Grid and Search Index" }),
   ).toBeVisible();
   await expect(toolbar(page)).toHaveCount(0);
 

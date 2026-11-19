@@ -349,8 +349,7 @@ onBeforeUnmount(() => unsubscribe?.());
         Each commit in {{ storeNote }}, newest first; open one for what it did to each table.
         <span v-if="opts.source">Select two commits and right-click to compare them.</span>
         <span v-if="truncated.length">
-          Only the newest commits are shown for <code>{{ truncated.join(", ") }}</code
-          >.
+          Only the newest commits are shown for <code>{{ truncated.join(", ") }}</code>.
         </span>
         <!-- A failed refresh leaves the log already read in place, and
              whatever was opened in it. -->

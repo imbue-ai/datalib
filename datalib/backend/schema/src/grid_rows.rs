@@ -37,7 +37,10 @@ use serde::{Deserialize, Serialize};
     index = "grid_rows_by_project:project,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_notion_page:notion_page_uuid,touched_at_utc,is_document,uuid",
     index = "grid_rows_by_diff_status:diff_status,touched_at_utc,is_document,uuid",
-    index = "grid_rows_by_is_document:is_document,touched_at_utc,uuid",
+    index = "grid_rows_by_upstream_id:upstream_id,touched_at_utc,is_document,uuid",
+    // Its last two columns are what a search narrowed to documents reads,
+    // so it reads no row (`DOCUMENTS_INDEX` in unified_grid_and_search_index).
+    index = "grid_rows_by_is_document:is_document,touched_at_utc,uuid,source_id,markdown_uuid",
     // `place:<cell>` and `near:<cell>` are ranges of this column
     // (datalib/backend/h3/README.md).
     index = "grid_rows_by_h3:h3",
@@ -45,7 +48,7 @@ use serde::{Deserialize, Serialize};
     search(
         order = "touched_at_utc desc, is_document desc, uuid desc",
         range = "touched_at_utc",
-        qmd
+        ranked
     )
 )]
 pub struct GridRow {
@@ -171,14 +174,37 @@ pub struct GridRow {
     /// The row's subject: the conversation, thread, page, event or card it
     /// belongs to, carried onto every child row so a grid row stands alone
     /// without a join. For a document's own row this is its own title.
-    /// Searched by name as `subject:`; `convo:` names it by id.
+    /// Searched by name as `subject:`; `datalib_document_id:` names it by id.
     #[col(sql = "TEXT", search = "subject", alias = "conversation")]
     pub conversation_name: Option<String>,
     /// The parent thread, so the preview pane knows what to open. Equals
     /// `uuid` for thread-level rows.
-    #[col(sql = "VARCHAR(96)", search = "convo", uuid)]
+    #[col(sql = "VARCHAR(96)", search = "datalib_document_id", uuid)]
     pub conversation_uuid: String,
-    /// Zero-based position within the conversation, in the order the QMD
+    /// The container this row lives in, a `data_nodes.uuid`: the chat, thread,
+    /// page or session that holds it. Null where no container holds it.
+    /// Its siblings are the rows and data_nodes with the same parent.
+    #[col(sql = "VARCHAR(96)")]
+    pub parent_uuid: Option<String>,
+    /// How the row sorts among its parent's children: its
+    /// `created_at_utc` where it has a time, upstream's own order where
+    /// the source orders children without one. Never a position we count,
+    /// so a row that arrives late lands without moving its siblings.
+    /// `""` when it has neither, which sorts first. Never null: a page of
+    /// children is read past a `(sort_key, uuid)` row value, and a
+    /// comparison with a null in it is never true, so the row would be
+    /// on no page.
+    #[col(sql = "VARCHAR(40)")]
+    pub sort_key: String,
+    /// The nearest container above it that is read together (a thread, a
+    /// chat, a page): what a search groups it under and the viewer opens.
+    #[col(sql = "VARCHAR(96)")]
+    pub read_uuid: Option<String>,
+    /// The nearest container above it that is a place (a channel, a
+    /// mailbox, a workspace): what a person browses or filters by.
+    #[col(sql = "VARCHAR(96)")]
+    pub place_uuid: Option<String>,
+    /// Zero-based position within the conversation, in the order the rendered markdown
     /// renders messages. Null for thread-level rows.
     #[col(sql = "INT")]
     pub message_index: Option<i64>,
@@ -189,36 +215,21 @@ pub struct GridRow {
     /// Contents column shows when there is no search term. Cut from the
     /// body the producer hands the builder (`GridRowBuilder::body`); the
     /// body itself is not stored here — the rendered markdown holds it,
-    /// and free-text search goes through qmd's index of that markdown.
+    /// and free-text search goes through the search index of that markdown.
     #[col(sql = "TEXT")]
     pub preview: String,
     /// blake3 of the whole body, hex. A change past the preview still
     /// changes the row, so a diff and doltlite's own dedup both see it.
     #[col(sql = "VARCHAR(64)")]
     pub content_hash: String,
-    /// The rendered Markdown file for this row's thread, relative to the
-    /// data root, so the preview pane can load it with no glob and no
-    /// frontmatter scan. Set on every row; child rows inherit their parent's.
-    ///
-    /// Shape, and the byte-equality invariant against `markdowns.md_path`,
-    /// are in `docs/dev/grid_rows.md`. Getting the prefix wrong silently
-    /// drops the row from free-text results.
-    ///
-    /// Prefer `markdowns.md_path` (via `markdown_uuid`) when you want the
-    /// file itself: same path, one writer, and the column `/api/chat`
-    /// resolves through.
-    ///
-    /// `source_id` is derived from it at index time: the source the row is
-    /// filed under, which the `source:` filter matches
-    /// (`GridRow::derived_source_id`).
-    #[col(sql = "VARCHAR(512)")]
-    #[derived(
-        name = "source_id",
-        sql = "VARCHAR(96)",
-        search = "source",
-        alias = "source_id"
-    )]
-    pub qmd_path: Option<String>,
+    /// The id of the configured source the row is filed under: its
+    /// group's directory under the data root, never the name a person gave
+    /// it. A storage row is filed under `datalib` whatever source it
+    /// measures ([`filed_under`]). Set when the row is written
+    /// (`grid_index::apply_one`), not by a renderer; the `source:` filter
+    /// compares it.
+    #[col(sql = "VARCHAR(96)", search = "source", alias = "source_id")]
+    pub source_id: Option<String>,
     /// Canonical link back to the provider's own web UI. Null for providers
     /// with no stable public link.
     #[col(sql = "VARCHAR(1024)")]
@@ -240,7 +251,9 @@ pub struct GridRow {
     /// holds by construction, with `stamp` the row's `created_at_utc` or
     /// nothing — which makes the backpointer verifiable rather than
     /// decorative.
-    #[col(sql = "VARCHAR(128)")]
+    ///
+    /// Searched as `id:`, whole and as written.
+    #[col(sql = "VARCHAR(128)", search = "id")]
     pub upstream_id: Option<String>,
     /// What sort of upstream thing this row is, in the provider's own
     /// vocabulary (`conversation`, `message`, `thinking_block`, `pr`,

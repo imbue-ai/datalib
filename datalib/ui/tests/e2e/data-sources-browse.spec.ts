@@ -19,6 +19,7 @@ import {
   searchAndSettle,
   searchHeader,
   TABLE_ROWS,
+  expectSyncEverything,
 } from "./grid-helpers";
 
 const ROWS = TABLE_ROWS;
@@ -28,8 +29,10 @@ const SEARCH = '[data-testid="search-input"]';
 /// … — see `materialize_tng_root.sh`), so the positive cases browse
 /// what is already there. The negative case is not in the fixture: a
 /// `media` source with no `render_markdown` step, as a config written
-/// before download-only providers got one still has.
-const GROUPS = `
+/// before download-only providers got one still has. Its folder is the
+/// scan tree the materializer puts in the root: a save checks the params
+/// a sync would get, and an ingest has to say where it reads from.
+const groups = (config: string) => `
 [[groups]]
 id = "media"
 type = "media"
@@ -37,7 +40,16 @@ type = "media"
 [[steps]]
 id = "media/ingest"
 command = "datalib-step run ingest media"
+
+[steps.params.fswalk]
+path = "${dataRoot(config)}/file_inventory_scan"
 `;
+
+function dataRoot(config: string): string {
+  const root = /^data_root = "(.*)"$/m.exec(config)?.[1];
+  if (!root) throw new Error(`no data_root in the saved config:\n${config}`);
+  return root;
+}
 
 /// The painted values of one column of the search grid, retried until
 /// the grid has them.
@@ -53,7 +65,7 @@ function columnValues(page: Page, colId: string) {
 
 async function openManage(page: Page) {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
   await page.locator(ROWS).first().waitFor({ timeout: 10_000 });
 }
 
@@ -92,7 +104,7 @@ let original = "";
 test.beforeEach(async ({ page, request }) => {
   await openManage(page);
   original = await savedConfig(request);
-  await writeConfig(page, `${original.replace(/\s*$/, "")}\n${GROUPS}`);
+  await writeConfig(page, `${original.replace(/\s*$/, "")}\n${groups(original)}`);
 });
 
 test.afterEach(async ({ page }) => {
@@ -183,7 +195,7 @@ test("the index group browses every source", async ({ page }) => {
   await openManage(page);
   // No source filter: the index group's browse is every source's
   // documents at once, the grid the app opens on.
-  await browse(page, "unified_document_index", "is:document");
+  await browse(page, "unified_grid_and_search_index", "is:document");
 
   // The column that separates sources is the one that earns its place
   // here — the opposite of a per-source browse: the rows come from more

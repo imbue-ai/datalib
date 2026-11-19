@@ -38,3 +38,11 @@ rust_test(
         "@datalib_crates//:tokio",
     ],
 )
+
+rust_test(
+    name = "blake3_simd_test",
+    size = "small",
+    srcs = ["tests/blake3_simd.rs"],
+    edition = "2021",
+    deps = ["@datalib_crates//:blake3"],
+)

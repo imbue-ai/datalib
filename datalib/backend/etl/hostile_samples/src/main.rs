@@ -12,9 +12,11 @@
 //! own private text paths (Facebook posts, Claude's tool results, a
 //! time-series page's facts) are not reached here and keep their own
 //! tests.
+//!
+//! It also renders the text-edge library, `etl/text_edges/cases.toml`
+//! (`edges.rs`), for `text_edges.test.ts` to judge the same way.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use datalib_contact_schema::{ContactKind, Detail, NormalizedContact};
@@ -32,13 +34,17 @@ use datalib_etl_chat_common::{
 };
 use datalib_etl_contact_common::{ContactDoc, ContactRenderProfile};
 use datalib_etl_forge_render_common::{ChangeRequest, Comment, ForgeProfile, Parsed};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html;
 use datalib_etl_render::inputs::Inputs;
 use datalib_etl_render::message::MessageHeader;
+use datalib_etl_render::section::join;
 use datalib_etl_render::title::Title;
 use datalib_etl_slack_render::render::mrkdwn::{to_commonmark, Labels};
 use datalib_schema::providers::Provider;
 use serde::Serialize;
+
+mod edges;
 
 /// HTML and markdown in one string, tagged so each field's copy can be
 /// told apart on the page: a tag, a link, an image, a table cell, a
@@ -69,6 +75,7 @@ fn slack_encoded(typed: &str) -> String {
 struct Corpus {
     documents: Vec<Document>,
     escapes: Vec<Escape>,
+    edges: edges::Edges,
 }
 
 #[derive(Serialize)]
@@ -136,17 +143,17 @@ fn main() -> Result<()> {
     let Some(out) = std::env::args().nth(1) else {
         bail!("usage: render_hostile_samples <out.json>");
     };
-    let scratch = tempfile::tempdir()?;
     let mut documents = Vec::new();
     documents.extend(header_and_title());
-    documents.extend(chat_common(scratch.path())?);
-    documents.extend(calendar(scratch.path())?);
-    documents.extend(contacts(scratch.path())?);
-    documents.extend(forge(scratch.path())?);
+    documents.extend(chat_common()?);
+    documents.extend(calendar()?);
+    documents.extend(contacts()?);
+    documents.extend(forge()?);
     documents.extend(slack());
     let corpus = Corpus {
         documents,
         escapes: escapes(),
+        edges: edges::edges()?,
     };
     std::fs::write(&out, serde_json::to_string_pretty(&corpus)?)
         .with_context(|| format!("write {out}"))?;
@@ -161,6 +168,7 @@ fn header_and_title() -> Vec<Document> {
         author: &author,
         handle: None,
         date_ms: Some(12_602_794_200_000),
+        offset_secs: None,
         source_url: None,
     }
     .render();
@@ -187,18 +195,14 @@ fn header_and_title() -> Vec<Document> {
     ]
 }
 
-fn read_docs(paths: &[PathBuf], root: &Path, family: &str) -> Result<Vec<(String, String)>> {
-    paths
-        .iter()
-        .map(|p| {
-            let md = std::fs::read_to_string(p).with_context(|| format!("read {}", p.display()))?;
-            let rel = p.strip_prefix(root).unwrap_or(p).display().to_string();
-            Ok((format!("{family}: {rel}"), md))
-        })
+/// Each document as `(name, markdown)`, named by its family and uuid.
+fn named(docs: Vec<RenderedMarkdown>, family: &str) -> Vec<(String, String)> {
+    docs.into_iter()
+        .map(|d| (format!("{family}: {}", d.markdown_uuid), join(&d.sections)))
         .collect()
 }
 
-fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
+fn chat_common() -> Result<Vec<Document>> {
     let mut f = Fields::default();
     let profile = RenderProfile {
         provider: Provider::Signal,
@@ -212,11 +216,13 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         text_format: TextFormat::Plain,
     };
     let item = |uuid: &str, author: String, text: Option<String>| NormalizedChatItem {
+        reply_to: None,
         message_uuid: uuid.to_string(),
         author_handle: None,
         author_kind: AuthorKind::Named,
         author_display: author,
         date_ms: Some(12_602_794_200_000),
+        date_offset_secs: None,
         text,
         kind: ItemKind::Text,
         attachments: vec![],
@@ -287,6 +293,8 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         contacts: Vec::new(),
         inputs: Vec::new(),
         id: "hostile-chat".into(),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: "00000000-0000-8000-8000-0000000000c1".into(),
         display: f.hostile("chat display"),
         title: Some(f.hostile("chat title")),
@@ -299,7 +307,6 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {
-            period_key: "all".to_string(),
             markdown_uuid: "00000000-0000-8000-8000-0000000000d1".into(),
             source_ref: None,
             items: vec![said, system, files],
@@ -313,17 +320,15 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
             }],
         }],
     };
-    let out = scratch.join("chat");
-    let mut paths = Vec::new();
+    let mut docs = Vec::new();
     datalib_etl_chat_common::render_all(
         &profile,
         &[chat],
-        &out,
         "hostile",
         &HashMap::new(),
         &Progress::noop(),
         &mut |doc| {
-            paths.push(doc.md_path);
+            docs.push(doc);
             Ok(())
         },
     )?;
@@ -344,7 +349,7 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         "orphan reaction emoji",
         "orphan reactor",
     ];
-    Ok(read_docs(&paths, &out, "chat-common")?
+    Ok(named(docs, "chat-common")
         .into_iter()
         .map(|(name, md)| Document {
             name,
@@ -354,7 +359,7 @@ fn chat_common(scratch: &Path) -> Result<Vec<Document>> {
         .collect())
 }
 
-fn calendar(scratch: &Path) -> Result<Vec<Document>> {
+fn calendar() -> Result<Vec<Document>> {
     let mut f = Fields::default();
     let at = |v: &str| EventTime::from_ical(v, Some("America/Los_Angeles")).expect("a time");
     let event = NormalizedEvent {
@@ -372,6 +377,8 @@ fn calendar(scratch: &Path) -> Result<Vec<Document>> {
         },
         calendar_uuid: "00000000-0000-8000-8000-0000000000e3".into(),
         calendar_label: f.hostile("calendar label"),
+        calendar_entity_kind: "calendar",
+        calendar_upstream_id: "bridge".into(),
         calendar_time_zone: Some("America/Los_Angeles".into()),
         upstream_id: f.hostile("event upstream id"),
         upstream_entity_kind: "event",
@@ -421,16 +428,14 @@ fn calendar(scratch: &Path) -> Result<Vec<Document>> {
         account: None,
         render_version: 1,
     };
-    let out = scratch.join("calendar");
-    let mut paths = Vec::new();
+    let mut docs = Vec::new();
     datalib_etl_calendar_common::render_all(
         &profile,
         &[event],
-        &out,
         "hostile",
         &Progress::noop(),
         &mut |doc| {
-            paths.push(doc.md_path);
+            docs.push(doc);
             Ok(())
         },
     )?;
@@ -446,7 +451,7 @@ fn calendar(scratch: &Path) -> Result<Vec<Document>> {
         "booking question",
         "booking answer",
     ];
-    Ok(read_docs(&paths, &out, "calendar-common")?
+    Ok(named(docs, "calendar-common")
         .into_iter()
         .map(|(name, md)| Document {
             name,
@@ -456,7 +461,7 @@ fn calendar(scratch: &Path) -> Result<Vec<Document>> {
         .collect())
 }
 
-fn contacts(scratch: &Path) -> Result<Vec<Document>> {
+fn contacts() -> Result<Vec<Document>> {
     let mut f = Fields::default();
     let mut contact =
         NormalizedContact::new("hostile", f.hostile("contact key"), ContactKind::Person);
@@ -474,6 +479,7 @@ fn contacts(scratch: &Path) -> Result<Vec<Document>> {
         contact,
         doc_uuid: "00000000-0000-8000-8000-0000000000f1".into(),
         group_label: f.hostile("contact group"),
+        address_book: None,
         member_handles: Vec::new(),
         upstream_account: None,
         inputs: Vec::new(),
@@ -487,16 +493,14 @@ fn contacts(scratch: &Path) -> Result<Vec<Document>> {
         account: None,
         render_version: 1,
     };
-    let out = scratch.join("contacts");
-    let mut paths = Vec::new();
+    let mut docs = Vec::new();
     datalib_etl_contact_common::render_all(
         &profile,
         &[doc],
-        &out,
         "hostile",
         &Progress::noop(),
         &mut |doc| {
-            paths.push(doc.md_path);
+            docs.push(doc);
             Ok(())
         },
     )?;
@@ -509,7 +513,7 @@ fn contacts(scratch: &Path) -> Result<Vec<Document>> {
         "detail value",
         "contact member",
     ];
-    Ok(read_docs(&paths, &out, "contact-common")?
+    Ok(named(docs, "contact-common")
         .into_iter()
         .map(|(name, md)| Document {
             name,
@@ -519,7 +523,7 @@ fn contacts(scratch: &Path) -> Result<Vec<Document>> {
         .collect())
 }
 
-fn forge(scratch: &Path) -> Result<Vec<Document>> {
+fn forge() -> Result<Vec<Document>> {
     let mut f = Fields::default();
     let profile = ForgeProfile {
         provider: Provider::Github,
@@ -540,6 +544,7 @@ fn forge(scratch: &Path) -> Result<Vec<Document>> {
         uuid: "00000000-0000-8000-8000-000000000101".into(),
         row_id: "r".into(),
         container: "o/repo".into(),
+        container_node: None,
         number: 7,
         title: f.hostile("change request title"),
         // Authored markdown, shown as markdown.
@@ -583,16 +588,14 @@ fn forge(scratch: &Path) -> Result<Vec<Document>> {
         comments: vec![comment],
         ..Default::default()
     };
-    let out = scratch.join("forge");
-    let mut paths = Vec::new();
+    let mut docs = Vec::new();
     datalib_etl_forge_render_common::render_all(
         &profile,
         &parsed,
-        &out,
         "hostile",
         &Progress::noop(),
         &mut |doc| {
-            paths.push(doc.md_path);
+            docs.push(doc);
             Ok(())
         },
     )?;
@@ -607,7 +610,7 @@ fn forge(scratch: &Path) -> Result<Vec<Document>> {
         "comment created at",
         "comment state",
     ];
-    Ok(read_docs(&paths, &out, "forge-render-common")?
+    Ok(named(docs, "forge-render-common")
         .into_iter()
         .map(|(name, md)| Document {
             name,

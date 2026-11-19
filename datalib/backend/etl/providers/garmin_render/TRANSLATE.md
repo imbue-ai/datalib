@@ -1,8 +1,7 @@
 # Garmin render
 
 The render step of a `garmin` group turns the raw store into these
-markdown documents, each filed by its id under
-`<data_root>/<group>/render_markdown/` ([`grid_rows.md`](../../../../../docs/dev/grid_rows.md) §"`qmd_path` and `source_id`"). A
+markdown documents, each kept by its id in the group's render store. A
 chart on a page is a `data-time-series` element naming time series from
 §"Time series", which the document view draws
 (`docs/dev/time_series.md` §"Charts in documents"):
@@ -28,6 +27,9 @@ midnight with the offset from that day's summary, and is empty without
 one. A personal record whose `typeId` is not in the table in
 `src/render/records.rs` is shown as `Record type N` with its raw value
 rather than guessed at.
+
+Each document is read together at the top of the source, and every
+other row it holds (a device, a day, a listing) sits in it.
 
 The minute-by-minute series (heart rate, stress, Body Battery,
 respiration, steps) are mirrored but not drawn. The activities' FIT
@@ -61,8 +63,9 @@ The `render_time_series` step writes the same data as time series into
   keeps its decimals. `speed` and `altitude` are left out when the
   file has `enhanced_speed` and `enhanced_altitude`, which carry the
   same readings. A file that is held but cannot be read costs that
-  activity's time series and counts as a warning on the step's Manage
-  row.
+  activity's time series and is a warning row, stage `time_series`, in
+  the `problems` table of the step's own store, which the step's Manage
+  row counts.
 
 A time series with no points is not written. Its id is minted from the
 source id, the word `account` and the field's key, or for an

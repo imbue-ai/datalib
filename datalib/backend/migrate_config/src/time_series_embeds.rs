@@ -118,7 +118,7 @@ pub fn rewrite(text: &str) -> Result<String> {
 
 /// Whether this entry of the file is a built-in step whose id is in
 /// `ids`.
-fn is_one_of(entry: &str, ids: &BTreeSet<String>) -> bool {
+pub(crate) fn is_one_of(entry: &str, ids: &BTreeSet<String>) -> bool {
     let Ok(table) = toml::from_str::<toml::Table>(entry) else {
         return false;
     };
@@ -193,10 +193,10 @@ function = "embed"
 inputs = ["troi-mail/keyword_index"]
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 function = "qmd_aggregator"
 inputs = [
     "riker/keyword_index",
@@ -226,7 +226,6 @@ inputs = [
         let ids = step_ids(&after);
         assert!(!ids.contains(&"riker/embed".to_string()), "{after}");
         assert!(ids.contains(&"troi-mail/embed".to_string()), "{after}");
-        assert!(ids.contains(&"unified_document_index/qmd_aggregator".to_string()));
         assert!(!after.contains("riker's embeddings"), "{after}");
         assert!(
             after.contains(

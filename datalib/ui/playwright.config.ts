@@ -1,4 +1,4 @@
-import { defineConfig } from "@playwright/test";
+import { defineConfig, type Project } from "@playwright/test";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
   appendFileSync,
@@ -9,6 +9,7 @@ import {
   openSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -49,6 +50,19 @@ function ensureFixtureRoot(): string {
 }
 const fixtureRoot = ensureFixtureRoot();
 
+// Which part of the suite this run is: `chromium` (the shared fixture
+// root), `sandboxes` (the config-mutating specs, a root apiece) or
+// `webkit`. Bazel runs each as a test of its own (`datalib/ui/BUILD.bazel`),
+// so each has its own timeout; unset runs all three, as `bazel run
+// //datalib/ui:e2e` does. A part starts only the backends its projects use.
+const PARTS = ["chromium", "sandboxes", "webkit"] as const;
+type Part = (typeof PARTS)[number];
+const partEnv = process.env.DATALIB_TEST_E2E_PART;
+if (partEnv && !(PARTS as readonly string[]).includes(partEnv)) {
+  throw new Error(`DATALIB_TEST_E2E_PART=${partEnv} is not one of ${PARTS.join(", ")}`);
+}
+const runs = (part: Part): boolean => !partEnv || partEnv === part;
+
 // A second backend on an empty data root, for the first-run onboarding spec.
 // It has to be its own server: the onboarding screen is gated on the root
 // having no `config.toml`, and there is no way back to that state from a
@@ -80,6 +94,12 @@ const ONBOARDING_ROOT = onboardingRoot();
 
 const binDir =
   process.env.DATALIB_TEST_E2E_BIN_DIR || path.join(workspaceDir, "bazel-bin/datalib/backend/bin");
+// Every root's steps name `command = "datalib-step"` bare, as the wizard
+// writes them, and the first launch of a build spawns each one to
+// migrate. A release finds it because it sits beside `datalib-http`;
+// here the server binary is alone in bazel-bin, so a backend is told
+// where the dash-named binaries are, the way `dev.sh` tells it.
+const FINDS_STEPS = { DATALIB_BINARY_DIR: binDir };
 
 // The tree the onboarding spec points its PDF source at. Built here
 // rather than in the spec so the spec never has to touch the
@@ -128,7 +148,10 @@ type Sandbox = { spec: string; root: string; url: string };
 
 // A root holding nothing but the index group and the applet that serves
 // it: the fixture root minus its sources, the pre-built index and the
-// markdown trees. The streaming spec needs this rather than the
+// markdown trees. It shares the fixture root's embedding model, which
+// the `unified_grid_and_search_index` step cuts search text with, so
+// nothing fetches one.
+// The streaming spec needs this rather than the
 // fixture root because its sources replay the *same* conversations the
 // fixture already indexed under other ids, and entity ids are
 // provider-global — so against the fixture the index sees every one of
@@ -143,25 +166,31 @@ function bareRoot(prefix: string): string {
     `data_root = "${root}"
 
 [[groups]]
-id = "unified_document_index"
-name = "Document Index"
+id = "unified_grid_and_search_index"
+name = "Grid and Search Index"
 
 [[locks]]
 name = "index"
 slots = 2
 
 [[steps]]
-id = "unified_document_index/grid_index"
-command = "datalib-step run grid_index"
-inputs = []
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "datalib-step run unified_grid_and_search_index"
+inputs = ["*/render_markdown"]
 reads = "pinned"
 locks = ["index"]
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "'${APPLET_BIN}' unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "'${APPLET_BIN}' unified_grid_and_search_index"
 `,
+  );
+  const index = path.join(root, "unified_grid_and_search_index");
+  mkdirSync(index, { recursive: true });
+  symlinkSync(
+    path.join(fixtureRoot, "unified_grid_and_search_index", "models"),
+    path.join(index, "models"),
   );
   return root;
 }
@@ -225,9 +254,6 @@ const SANDBOX_ENV: Record<string, Record<string, string>> = {
         DATALIB_HTTP_PLAYBACK_HOLD: playbackHold("DATALIB_TEST_E2E_SYNC_PLAYBACK_HOLD"),
       }
     : {},
-  // Freeing disk runs `datalib-step` on every step, so this root's
-  // server has to find it.
-  "free-disk-space": { DATALIB_BINARY_DIR: binDir },
   // Its stand-in for a sender's host is on this machine.
   "remote-images-load": { DATALIB_REMOTE_MEDIA_ALLOW_PRIVATE: "1" },
 };
@@ -251,7 +277,7 @@ function playbackHold(envName: string): string {
 function sandboxRoots(): Sandbox[] {
   const existing = process.env.DATALIB_TEST_E2E_SANDBOXES;
   if (existing) return JSON.parse(existing) as Sandbox[];
-  const made = CONFIG_MUTATING.map((spec) => ({
+  const made = (runs("sandboxes") ? CONFIG_MUTATING : []).map((spec) => ({
     spec,
     root: (ROOT_OF[spec] ?? materializeRoot)(`datalib-e2e-${spec}-`),
     url: "",
@@ -391,19 +417,15 @@ function awaitAnnouncements(pending: Pending[]): Server[] {
   }));
 }
 
-/// Cached in env like everything else the parent process builds: a
-/// worker re-importing this config must attach to the running backends,
-/// not start a second set of its own.
-function servers(): Server[] {
-  const existing = process.env.DATALIB_TEST_E2E_SERVERS;
-  if (existing) return JSON.parse(existing) as Server[];
-  const pending = [
-    spawnBackend("fixture", fixtureRoot),
-    spawnBackend("empty", EMPTY_ROOT),
-    // The one server whose PATH carries the dash-named binaries. The
-    // scaffold config names `datalib-dag`, its steps and the
-    // `unified_document_index` applet bare, so PATH is how all three are found —
-    // the installed-user arrangement, which the other two never exercise.
+function spawnFirstRunBackends(): Pending[] {
+  return [
+    spawnBackend("empty", EMPTY_ROOT, FINDS_STEPS),
+    // The one server that finds the dash-named binaries on its PATH
+    // rather than through `DATALIB_BINARY_DIR`. The scaffold config
+    // names `datalib-dag`, its steps and the `unified_grid_and_search_index`
+    // applet bare, so PATH is how all three are found — the arrangement
+    // of an install whose binaries are on PATH but not beside the server,
+    // which no other backend here exercises.
     spawnBackend("onboarding", ONBOARDING_ROOT, {
       PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
       // Signal's download step reads its passphrase from the
@@ -413,8 +435,30 @@ function servers(): Server[] {
       // install has from the user's shell.
       SIGNAL_BACKUP_PASSPHRASE: FIXTURE_SIGNAL_AEP,
     }),
+  ];
+}
+
+/// Cached in env like everything else the parent process builds: a
+/// worker re-importing this config must attach to the running backends,
+/// not start a second set of its own.
+function servers(): Server[] {
+  const existing = process.env.DATALIB_TEST_E2E_SERVERS;
+  if (existing) return JSON.parse(existing) as Server[];
+  // The first-run and onboarding specs are in `chromium`, and the
+  // sandbox specs bring backends of their own.
+  const onlySandboxes = !runs("chromium") && !runs("webkit");
+  const pending = [
+    ...(onlySandboxes ? [] : [spawnBackend("fixture", fixtureRoot, FINDS_STEPS)]),
+    ...(runs("chromium") ? spawnFirstRunBackends() : []),
+    // No sandbox spec searches by meaning, and every sandbox's applet
+    // loading the model at once kept a 4-vCPU runner at a load of 40 for
+    // the part's first two minutes, past the first specs' 5 s expects.
     ...SANDBOX_ROOTS.map((s) =>
-      spawnBackend(`sandbox-${s.spec}`, s.root, SANDBOX_ENV[s.spec] ?? {}),
+      spawnBackend(`sandbox-${s.spec}`, s.root, {
+        ...FINDS_STEPS,
+        DATALIB_SEARCH_NO_WARM: "1",
+        ...(SANDBOX_ENV[s.spec] ?? {}),
+      }),
     ),
   ];
   let started: Server[];
@@ -437,11 +481,16 @@ function serverUrl(name: string): string {
   return found.url;
 }
 
-const BACKEND_URL = serverUrl("fixture");
-const EMPTY_URL = serverUrl("empty");
-process.env.DATALIB_TEST_E2E_EMPTY_URL = EMPTY_URL;
-const ONBOARDING_URL = serverUrl("onboarding");
-process.env.DATALIB_TEST_E2E_ONBOARDING_URL = ONBOARDING_URL;
+// `undefined` in a part that started no such backend, and so has no
+// spec that asks for one.
+function maybeServerUrl(name: string): string | undefined {
+  return SERVERS.some((s) => s.name === name) ? serverUrl(name) : undefined;
+}
+const BACKEND_URL = maybeServerUrl("fixture");
+const EMPTY_URL = maybeServerUrl("empty");
+if (EMPTY_URL) process.env.DATALIB_TEST_E2E_EMPTY_URL = EMPTY_URL;
+const ONBOARDING_URL = maybeServerUrl("onboarding");
+if (ONBOARDING_URL) process.env.DATALIB_TEST_E2E_ONBOARDING_URL = ONBOARDING_URL;
 const SANDBOXES: Sandbox[] = SANDBOX_ROOTS.map((s) => ({
   ...s,
   url: serverUrl(`sandbox-${s.spec}`),
@@ -455,6 +504,96 @@ const REPORT_DIR = process.env.TEST_UNDECLARED_OUTPUTS_DIR
 const ARTIFACT_DIR = process.env.TEST_TMPDIR
   ? path.join(process.env.TEST_TMPDIR, "playwright-artifacts")
   : path.join(here, "test-results");
+
+// ── the projects, picked by part ─────────────────────────────────────
+const WARMUP: Project = {
+  // The search model's cold start, owned and named — see
+  // tests/e2e/search-warmup.setup.ts for why it can't be left to
+  // whichever spec sorts first. `testMatch` here overrides the
+  // top-level `*.spec.ts` pattern, so this file and only this file
+  // runs in the project.
+  name: "warmup",
+  testMatch: /search-warmup\.setup\.ts/,
+  use: { browserName: "chromium" },
+};
+const CHROMIUM: Project = {
+  name: "chromium",
+  use: { browserName: "chromium" },
+  dependencies: ["warmup"],
+  // Everything that does not rewrite the config, against the one
+  // shared read-only fixture root. The rest get a project apiece
+  // below, pointed at a root of their own.
+  testIgnore: CONFIG_MUTATING.map((spec) => new RegExp(`${spec}\\.spec\\.ts`)),
+};
+// One project per config-mutating spec, doing one job: pointing
+// `baseURL` at that spec's own backend, so the spec itself can go
+// on saying `page.goto("/data_sources")`.
+//
+// A project gets workers of its own, so each spec's first test also
+// launches a browser, and the first four launch together. On CI those
+// first tests have taken about 25 s of the default 30 while waiting
+// only five for the sources card, which needs longer then
+// (`CARD_DRAWN`). `timeout` gives their hooks room; a test that sets its
+// own keeps it.
+const SANDBOX_PROJECTS: Project[] = SANDBOXES.map((s) => ({
+  name: `chromium-${s.spec}`,
+  testMatch: new RegExp(`${s.spec}\\.spec\\.ts`),
+  timeout: 60_000,
+  use: { browserName: "chromium", baseURL: s.url },
+}));
+const WEBKIT: Project = {
+  // The desktop app runs in a WKWebView, and WebKit's layout has twice
+  // shipped an invisible AG Grid: it resolves a child's percentage
+  // `height` against the parent's *specified* height, so `height: 100%`
+  // under a flex-sized parent computes to `auto` and the grid collapses.
+  // Rows stay in the DOM, so every count assertion passes while nothing
+  // is painted — see `expectGridPainted`. So this project runs what
+  // renders or scrolls; a spec that checks only query routing or URL
+  // state runs in chromium alone.
+  name: "webkit",
+  use: { browserName: "webkit" },
+  dependencies: ["warmup"],
+  testMatch: [
+    // Explore / GridCard — the search grid.
+    /grid-populated\.spec\.ts/,
+    /grid-card-fit\.spec\.ts/,
+    /grid-context-menu\.spec\.ts/,
+    /contents-cell-clamp\.spec\.ts/,
+    /row-click-scroll\.spec\.ts/,
+    /row-msg-index-alignment\.spec\.ts/,
+    /score-sort-order\.spec\.ts/,
+    /selected-message-outline\.spec\.ts/,
+    // Clicks, modifier clicks and Tab: where the engines' focus differs.
+    /grid-selection\.spec\.ts/,
+    /index-columns\.spec\.ts/,
+    // The search field, a CodeMirror editor: the desktop app's typing.
+    /search-field\.spec\.ts/,
+    /column-reveal\.spec\.ts/,
+    // A chart mounted into the document frame by the app's own code.
+    /document-charts\.spec\.ts/,
+    /gallery\.spec\.ts/,
+    // The sandboxed DACTAL iframe: an opaque origin loading module
+    // scripts, which WebKit and Chromium have disagreed about.
+    /dactal-sandbox\.spec\.ts/,
+    // The document frame that runs no script; the desktop app is WebKit.
+    /document-sandbox\.spec\.ts/,
+    // Which requests are a link from another site is the browser's say.
+    /links-from-elsewhere\.spec\.ts/,
+    // A chip's clicks in that frame: a right-click's auxclick and the
+    // menu drawn over the frame.
+    /chip-menu\.spec\.ts/,
+    // A message header's layout: line-clamp and sticky positioning.
+    /chat-header-layout\.spec\.ts/,
+    // /data_sources — the sources card's Pipeline table, and the
+    // commit-history grid it opens in a modal.
+    /data-sources-grid\.spec\.ts/,
+    /data-sources-history\.spec\.ts/,
+    // The run-log panel's grid, menu and drag-to-group bar.
+    /run-log\.spec\.ts/,
+    // WebKit alone activates a <label> after a drag-select in it.
+    /wizard-help-select\.spec\.ts/,
+  ],
+};
 
 export default defineConfig({
   testDir: "tests/e2e",
@@ -503,83 +642,9 @@ export default defineConfig({
     extraHTTPHeaders: { authorization: `Bearer ${API_TOKEN}` },
   },
   projects: [
-    {
-      // The qmd cold start, owned and named — see
-      // tests/e2e/qmd-warmup.setup.ts for why it can't be left to
-      // whichever spec sorts first. `testMatch` here overrides the
-      // top-level `*.spec.ts` pattern, so this file and only this file
-      // runs in the project.
-      name: "warmup",
-      testMatch: /qmd-warmup\.setup\.ts/,
-      use: { browserName: "chromium" },
-    },
-    {
-      name: "chromium",
-      use: { browserName: "chromium" },
-      dependencies: ["warmup"],
-      // Everything that does not rewrite the config, against the one
-      // shared read-only fixture root. The rest get a project apiece
-      // below, pointed at a root of their own.
-      testIgnore: CONFIG_MUTATING.map((spec) => new RegExp(`${spec}\\.spec\\.ts`)),
-    },
-    // One project per config-mutating spec, doing one job: pointing
-    // `baseURL` at that spec's own backend, so the spec itself can go
-    // on saying `page.goto("/data_sources")`.
-    ...SANDBOXES.map((s) => ({
-      name: `chromium-${s.spec}`,
-      testMatch: new RegExp(`${s.spec}\\.spec\\.ts`),
-      use: { browserName: "chromium" as const, baseURL: s.url },
-    })),
-    {
-      // The desktop app runs in a WKWebView, and WebKit's layout has twice
-      // shipped an invisible AG Grid: it resolves a child's percentage
-      // `height` against the parent's *specified* height, so `height: 100%`
-      // under a flex-sized parent computes to `auto` and the grid collapses.
-      // Rows stay in the DOM, so every count assertion passes while nothing
-      // is painted — see `expectGridPainted`. So this project runs what
-      // renders or scrolls; a spec that checks only query routing or URL
-      // state runs in chromium alone.
-      name: "webkit",
-      use: { browserName: "webkit" },
-      dependencies: ["warmup"],
-      testMatch: [
-        // Explore / GridCard — the search grid.
-        /grid-populated\.spec\.ts/,
-        /grid-card-fit\.spec\.ts/,
-        /grid-context-menu\.spec\.ts/,
-        /contents-cell-clamp\.spec\.ts/,
-        /row-click-scroll\.spec\.ts/,
-        /row-msg-index-alignment\.spec\.ts/,
-        /score-sort-order\.spec\.ts/,
-        /selected-message-outline\.spec\.ts/,
-        /qmd-index-columns\.spec\.ts/,
-        // The search field, a CodeMirror editor: the desktop app's typing.
-        /search-field\.spec\.ts/,
-        /column-reveal\.spec\.ts/,
-        // A chart mounted into the document frame by the app's own code.
-        /document-charts\.spec\.ts/,
-        /gallery\.spec\.ts/,
-        // The sandboxed DACTAL iframe: an opaque origin loading module
-        // scripts, which WebKit and Chromium have disagreed about.
-        /dactal-sandbox\.spec\.ts/,
-        // The document frame that runs no script; the desktop app is WebKit.
-        /document-sandbox\.spec\.ts/,
-        // Which requests are a link from another site is the browser's say.
-        /links-from-elsewhere\.spec\.ts/,
-        // A chip's clicks in that frame: a right-click's auxclick and the
-        // menu drawn over the frame.
-        /chip-menu\.spec\.ts/,
-        // A message header's layout: line-clamp and sticky positioning.
-        /chat-header-layout\.spec\.ts/,
-        // /data_sources — the sources card's Pipeline table, and the
-        // commit-history grid it opens in a modal.
-        /data-sources-grid\.spec\.ts/,
-        /data-sources-history\.spec\.ts/,
-        // The run-log panel's grid, menu and drag-to-group bar.
-        /run-log\.spec\.ts/,
-        // WebKit alone activates a <label> after a drag-select in it.
-        /wizard-help-select\.spec\.ts/,
-      ],
-    },
+    ...(runs("chromium") || runs("webkit") ? [WARMUP] : []),
+    ...(runs("chromium") ? [CHROMIUM] : []),
+    ...(runs("sandboxes") ? SANDBOX_PROJECTS : []),
+    ...(runs("webkit") ? [WEBKIT] : []),
   ],
 });

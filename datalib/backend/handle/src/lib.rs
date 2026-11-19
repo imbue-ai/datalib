@@ -210,7 +210,10 @@ impl Handle {
     /// A PNI is not accepted here: it names a number, not a person, and
     /// the number is the handle.
     pub fn signal_aci(aci: &str) -> Option<Self> {
-        Some(Self::of(HandleKind::SignalAci, &dashed_uuid(aci)?))
+        Some(Self::of(
+            HandleKind::SignalAci,
+            &datalib_uuid_text::canonical(aci.trim())?,
+        ))
     }
 
     /// A GitHub account by its login, lowercased, as GitHub matches it.
@@ -244,7 +247,10 @@ impl Handle {
     /// A Notion user by their id, a UUID spelled lowercase with dashes.
     /// Where Notion gives the user's address, the address is the handle.
     pub fn notion_user(id: &str) -> Option<Self> {
-        Some(Self::of(HandleKind::Notion, &dashed_uuid(id)?))
+        Some(Self::of(
+            HandleKind::Notion,
+            &datalib_uuid_text::canonical(id.trim())?,
+        ))
     }
 
     /// A person on Facebook by the name the export shows, its whitespace
@@ -436,15 +442,44 @@ impl Handle {
         Self::slack(team?, user?)
     }
 
+    /// The handle a display name spells out, when it is one rather than
+    /// a name: an address, a number in international form, a handle's
+    /// URI or its stored form. A name that spells someone's identifier
+    /// draws whoever it labels as that someone (`"picard@enterprise.org"
+    /// <q@continuum.test>`).
+    pub fn spelled_by(name: &str) -> Option<Self> {
+        let name = name.trim();
+        // The stored form first: `email:x@y` is an address too, of the
+        // local part `email:x`.
+        Self::parse(name)
+            .or_else(|| Self::from_uri(name))
+            .or_else(|| Self::email(name))
+            .or_else(|| Self::tel(name))
+    }
+
     /// The handle beside the name a source showed, as a person writes
     /// one: `Will Riker <riker@enterprise.org>`, `Will Riker
     /// (+15550123456)`, `Data (slack:T01/U02)`. The identifier alone when
-    /// the name is empty or is the identifier. A chip link's title and
+    /// the name is empty or is the identifier, and the name as it is when
+    /// it already ends with the identifier in that form (an email's
+    /// `From: Will Riker <riker@enterprise.org>`). A chip link's title and
     /// its copied text; `copyText` in `ui/src/cards/contacts.ts` mirrors it.
     pub fn describe(&self, shown: &str) -> String {
         let shown = shown.trim();
         if shown.is_empty() || shown == self.value() || shown == self.as_str() {
             return self.value().to_string();
+        }
+        let beside = match self.kind() {
+            HandleKind::Email => format!("<{}>", self.value()),
+            HandleKind::Tel => format!("({})", self.value()),
+            _ => format!("({})", self.as_str()),
+        };
+        let tail = shown
+            .len()
+            .checked_sub(beside.len())
+            .and_then(|at| shown.get(at..));
+        if tail.is_some_and(|t| t.eq_ignore_ascii_case(&beside)) {
+            return shown.to_string();
         }
         match self.kind() {
             HandleKind::Email => format!("{shown} <{}>", self.value()),
@@ -508,28 +543,6 @@ fn is_shown_name(name: &str) -> bool {
         && !name
             .chars()
             .any(|c| c.is_control() || (is_hidden(c) && !matches!(c, '\u{200C}' | '\u{200D}')))
-}
-
-/// A UUID, 32 hex digits with or without dashes in any case, spelled
-/// lowercase with dashes.
-fn dashed_uuid(s: &str) -> Option<String> {
-    let hex: String = s
-        .trim()
-        .chars()
-        .filter(|c| *c != '-')
-        .map(|c| c.to_ascii_lowercase())
-        .collect();
-    if hex.len() != 32 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
-        return None;
-    }
-    Some(format!(
-        "{}-{}-{}-{}-{}",
-        &hex[..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..]
-    ))
 }
 
 /// Every byte but an unreserved one (RFC 3986) and `/` as `%XX`, so a
@@ -604,6 +617,34 @@ impl fmt::Display for Handle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_spells_a_handle_only_when_it_is_one() {
+        let email = Handle::email("picard@enterprise.org");
+        for spelled in [
+            " picard@enterprise.org ",
+            "mailto:picard@enterprise.org",
+            "email:picard@enterprise.org",
+        ] {
+            assert_eq!(Handle::spelled_by(spelled), email, "{spelled:?}");
+        }
+        assert_eq!(
+            Handle::spelled_by("+1 202 555 0101"),
+            Handle::tel("+12025550101")
+        );
+        assert_eq!(
+            Handle::spelled_by("slack:T01/U02"),
+            Handle::slack("T01", "U02")
+        );
+        for name in [
+            "Jean-Luc Picard",
+            "Q",
+            "2025550101",
+            "Picard <picard@enterprise.org>",
+        ] {
+            assert_eq!(Handle::spelled_by(name), None, "{name:?}");
+        }
+    }
 
     #[test]
     fn email_is_lowercased_and_trimmed() {
@@ -1006,6 +1047,11 @@ mod tests {
             "riker@enterprise.org"
         );
         assert_eq!(email.describe("  "), "riker@enterprise.org");
+        // An email's sender is shown as its `From:` reads, address and all.
+        assert_eq!(
+            email.describe("Will Riker <Riker@Enterprise.org>"),
+            "Will Riker <Riker@Enterprise.org>"
+        );
         let tel = Handle::tel("+15550123456").unwrap();
         assert_eq!(tel.describe("Will Riker"), "Will Riker (+15550123456)");
         let slack = Handle::slack("T01", "U02").unwrap();

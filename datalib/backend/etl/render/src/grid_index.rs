@@ -3,8 +3,8 @@
 //!
 //! Two entry points, which are the same write path from two sides.
 //! [`apply_one`] writes one rendered document; [`build_grid_index`] stacks
-//! every source's store into the unified document index, which is the `grid_index` DAG
-//! step's whole job.
+//! every source's store into the unified grid and search index, which is
+//! the `unified_grid_and_search_index` DAG step's whole job.
 //!
 //! A re-render replaces a document's rows rather than accumulating them,
 //! writing only those that differ, and the search terms of what it wrote
@@ -27,7 +27,9 @@ use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::doltlite_raw::StoreKind;
 use datalib_etl::stop::StopFlag;
 use datalib_photo_schema::NormalizedPhoto;
+use datalib_schema::data_nodes::{DataNodeRow, CHILDREN_INDEXES, DDL as DATA_NODES_DDL};
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
+use datalib_schema::filings::{FilingRow, DDL as FILINGS_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL, INDEXES as GRID_ROWS_INDEXES};
 use datalib_schema::markdowns::DDL as MARKDOWNS_TABLE_DDL;
 use datalib_schema::problems::{ProblemRow, Severity, DDL as PROBLEMS_DDL};
@@ -42,6 +44,8 @@ use sqlx::Row;
 use tokio::sync::Mutex;
 
 use crate::section::Section;
+
+mod node_rows;
 
 /// Serializes concurrent writers against one doltlite index pool, and
 /// optionally batches every write into one transaction.
@@ -69,6 +73,10 @@ pub struct WriteLock {
     /// search terms last followed them; `None` in a render store, which
     /// holds no terms.
     changed: Option<std::sync::Mutex<Vec<String>>>,
+    /// How a batch starts. The grid index's file has other writers (the
+    /// search index's steps), and a batch that read before its first write
+    /// would fail rather than wait if one of them committed meanwhile.
+    begin: &'static str,
 }
 
 struct WriteLockInner {
@@ -111,6 +119,7 @@ impl WriteLock {
             acquisitions: AtomicU64::new(0),
             written: std::sync::Mutex::new(std::collections::HashSet::new()),
             changed: None,
+            begin: "BEGIN",
         }
     }
 
@@ -119,6 +128,7 @@ impl WriteLock {
     pub fn for_index(pool: SqlitePool) -> Self {
         Self {
             changed: Some(std::sync::Mutex::new(Vec::new())),
+            begin: "BEGIN IMMEDIATE",
             ..Self::new(pool)
         }
     }
@@ -165,7 +175,7 @@ impl WriteLock {
             .acquire()
             .await
             .context("WriteLock: acquire conn for BEGIN")?;
-        sqlx::query("BEGIN")
+        sqlx::query(sqlx::AssertSqlSafe(self.begin))
             .execute(&mut *conn)
             .await
             .context("WriteLock: BEGIN")?;
@@ -288,10 +298,11 @@ pub struct GridIndexSummary {
     /// Documents dropped because the source that owned them stopped holding
     /// them. Only a cursor-driven run can be non-zero here.
     pub markdowns_removed: usize,
-    /// Problem rows copied in from the render stores this run read.
-    pub problems_copied: usize,
     /// Search terms written for the rows this run changed.
     pub terms_written: usize,
+    /// Sources whose load or removal changed so much of the index that
+    /// the search indexes were dropped and made again around it.
+    pub search_indexes_remade: usize,
     /// Transactions that changed what a reader sees.
     pub seals: usize,
     /// Sources whose render store this build could not read, left as the
@@ -303,10 +314,7 @@ pub struct GridIndexSummary {
     pub sources_failed: Vec<(String, String)>,
 }
 
-/// The scope key of the one problem the index records itself: a
-/// source's render store it could not read. Every other row in the
-/// index is a copy of a source's.
-pub const UNREADABLE_STORE_KEY: &str = "render_store";
+pub use datalib_schema::problems::INDEX_OWN_SCOPE_KEY as UNREADABLE_STORE_KEY;
 
 /// What a row the index recorded itself is about, in words; `None` for
 /// any other key.
@@ -339,43 +347,21 @@ pub async fn own_problem_counts(
     Ok(out)
 }
 
-/// One source's `problems`, replaced whole when they differ from what the
-/// index holds; `true` when they did. The stamps come through unchanged:
-/// `first_seen_at_utc` is when the problem was first seen where it
-/// happened, not when the index first copied it.
-pub(crate) async fn replace_source_problems(
+/// Drop every row the index holds for `source_id`: its own row about a
+/// render store it could not read, now read, and the copies an older
+/// build made of the source's problems, which a reader now finds in the
+/// steps' own stores. Whether anything went.
+pub(crate) async fn clear_source_problems(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     source_id: &str,
-    rows: &[ProblemRow],
 ) -> Result<bool> {
-    let held = sqlx::query("SELECT * FROM problems WHERE source_id = ? ORDER BY problem_uuid")
-        .bind(source_id)
-        .fetch_all(&mut **conn)
-        .await
-        .context("read the source's problems")?
-        .iter()
-        .map(ProblemRow::from_row)
-        .collect::<Result<Vec<_>>>()?;
-    let mut incoming = rows.to_vec();
-    incoming.sort_by(|a, b| a.problem_uuid.cmp(&b.problem_uuid));
-    if held == incoming {
-        return Ok(false);
-    }
-    sqlx::query("DELETE FROM problems WHERE source_id = ?")
+    let gone = sqlx::query("DELETE FROM problems WHERE source_id = ?")
         .bind(source_id)
         .execute(&mut **conn)
         .await
-        .context("clear the source's problems")?;
-    let sql = datalib_etl::bulk::insert_sql::<ProblemRow>();
-    for row in rows {
-        // Audited: `sql` is built from `ProblemRow`'s associated consts,
-        // never from row data; all values bound.
-        row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql.clone())))
-            .execute(&mut **conn)
-            .await
-            .with_context(|| format!("insert problem {}", row.problem_uuid))?;
-    }
-    Ok(true)
+        .context("clear the source's problems")?
+        .rows_affected();
+    Ok(gone > 0)
 }
 
 /// A render store that lacks a table or column this build reads, though
@@ -455,10 +441,10 @@ async fn record_unreadable_store(
 pub fn schema_hash() -> String {
     datalib_store_meta::schema_hash(
         index_ddl()
-            .chain(GRID_ROWS_INDEXES.iter().map(|(_table, ddl)| *ddl))
+            .chain(remade_indexes())
             .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
-            // What the terms derive, which no DDL shows.
-            .chain([TERMS_SHAPE]),
+            // What the terms and the node rows derive, which no DDL shows.
+            .chain([TERMS_SHAPE, node_rows::NODE_ROWS_SHAPE]),
     )
 }
 
@@ -475,6 +461,14 @@ pub(crate) const DOCUMENT_LOOKUP_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS source_photos_by_photo ON source_photos (photo_uuid)",
 ];
 
+/// What [`crate::search_terms::write_people`] reads the grid's authors
+/// from, so a pass reads two short columns rather than every row's text
+/// (#1803). Only the index's: never dropped for a remake, since the query
+/// names it, and out of [`schema_hash`], since it changes no row and
+/// adding it must not rebuild the index.
+pub(crate) const AUTHORS_INDEX: &str =
+    "CREATE INDEX IF NOT EXISTS grid_rows_by_author ON grid_rows (author_handle, author)";
+
 /// Tables an older build made in every store that holds documents.
 /// `supplied_search_terms` kept each row's supplied terms apart from the
 /// row, owned by document; a row that moved left them behind (#1202).
@@ -488,6 +482,8 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
         .map(|(_table, ddl)| *ddl)
         .chain(std::iter::once(MARKDOWNS_DDL))
         .chain(EDGES_DDL.iter().map(|(_table, ddl)| *ddl))
+        .chain(DATA_NODES_DDL.iter().map(|(_table, ddl)| *ddl))
+        .chain(FILINGS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(SOURCE_CONTACTS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(SOURCE_CONTACT_HANDLES_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(SOURCE_PHOTOS_DDL.iter().map(|(_table, ddl)| *ddl))
@@ -502,10 +498,10 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
 /// here: every render store has a `grid_rows` too, and only the index the
 /// grid reads wants to pay for the search indexes on every write.
 pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
-    let search = GRID_ROWS_INDEXES.iter().map(|(_table, ddl)| *ddl);
     for ddl in index_ddl()
-        .chain(search)
+        .chain(remade_indexes())
         .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
+        .chain([AUTHORS_INDEX])
     {
         sqlx::query(ddl)
             .execute(pool)
@@ -515,13 +511,22 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-/// The search bar's indexes are left out of a build into an empty index
+/// The indexes only reads use: the search bar's, and those that list a
+/// container's children.
+fn remade_indexes() -> impl Iterator<Item = &'static str> {
+    GRID_ROWS_INDEXES
+        .iter()
+        .map(|(_table, ddl)| *ddl)
+        .chain(CHILDREN_INDEXES.iter().copied())
+}
+
+/// The read indexes are left out of a build into an empty index
 /// and made once at its end, and remade around a source's rewrite of a
 /// large share of the index. Kept up row by row, each changed row costs
 /// a page in every one of them, more pages than SQLite's cache holds;
 /// built at the end they are sorted and contiguous.
 async fn drop_search_indexes(conn: &mut sqlx::SqliteConnection) -> Result<()> {
-    for (_table, ddl) in GRID_ROWS_INDEXES {
+    for ddl in remade_indexes() {
         let name = index_name(ddl).with_context(|| format!("no index name in {ddl}"))?;
         // Audited: `name` is parsed out of our own static index DDL.
         sqlx::query(sqlx::AssertSqlSafe(format!("DROP INDEX IF EXISTS {name}")))
@@ -533,8 +538,8 @@ async fn drop_search_indexes(conn: &mut sqlx::SqliteConnection) -> Result<()> {
 }
 
 async fn create_search_indexes(conn: &mut sqlx::SqliteConnection) -> Result<()> {
-    for (_table, ddl) in GRID_ROWS_INDEXES {
-        sqlx::query(*ddl)
+    for ddl in remade_indexes() {
+        sqlx::query(ddl)
             .execute(&mut *conn)
             .await
             .with_context(|| format!("create index: {ddl}"))?;
@@ -553,9 +558,10 @@ fn remakes_search_indexes(changed: usize, applied: usize, applying: usize, held_
 }
 
 /// Where a load decides about the search indexes: how many rows the
-/// index held when it began.
+/// index held, and had changed, when it began.
 struct RemakeProbe {
     held_rows: i64,
+    changed_before: usize,
 }
 
 impl RemakeProbe {
@@ -565,7 +571,10 @@ impl RemakeProbe {
             .fetch_one(&mut **guard.conn())
             .await
             .context("measure the index before a large load")?;
-        Ok(Self { held_rows })
+        Ok(Self {
+            held_rows,
+            changed_before: write_lock.changed_rows(),
+        })
     }
 
     /// Drop the search indexes if the load so far says to; whether it did.
@@ -575,10 +584,48 @@ impl RemakeProbe {
         applied: usize,
         applying: usize,
     ) -> Result<bool> {
-        let changed = write_lock.changed_rows();
+        let changed = write_lock.changed_rows() - self.changed_before;
         if !remakes_search_indexes(changed, applied, applying, self.held_rows) {
             return Ok(false);
         }
+        self.drop_for_remake(write_lock, applied, applying, changed)
+            .await
+    }
+
+    /// Drop the search indexes if removing `markdown_uuids` takes enough
+    /// of the index's rows; whether it did. Removals are counted exactly,
+    /// not projected: their rows are already in the index.
+    async fn decide_removal(
+        &self,
+        write_lock: &WriteLock,
+        markdown_uuids: &[String],
+    ) -> Result<bool> {
+        let rows: i64 = {
+            let mut guard = write_lock.acquire().await?;
+            sqlx::query_scalar(
+                "SELECT count(*) FROM grid_rows \
+                 WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
+            )
+            .bind(serde_json::to_string(markdown_uuids)?)
+            .fetch_one(&mut **guard.conn())
+            .await
+            .context("count the rows a removal takes")?
+        };
+        let removing = markdown_uuids.len();
+        if !remakes_search_indexes(rows.max(0) as usize, removing, removing, self.held_rows) {
+            return Ok(false);
+        }
+        self.drop_for_remake(write_lock, removing, removing, rows.max(0) as usize)
+            .await
+    }
+
+    async fn drop_for_remake(
+        &self,
+        write_lock: &WriteLock,
+        applied: usize,
+        applying: usize,
+        changed: usize,
+    ) -> Result<bool> {
         let mut guard = write_lock.acquire().await?;
         let conn = guard.conn();
         // Inside the source's transaction, so a reader keeps the indexed
@@ -611,44 +658,88 @@ fn index_name(ddl: &str) -> Option<&str> {
         .next()
 }
 
-/// The `grid_index` step's handle on the index: the one way to open it
+/// The `unified_grid_and_search_index` step's handle on the index: the one way to open it
 /// for writing. One connection, never recycled, as every pool here
 /// (`etl/README.md` § "Connection pools"). A reader that looks before the
 /// generation row is made reads the index as not built yet.
 ///
-/// An index written in another shape is deleted and made new: every row
-/// in it is a function of a render store, so a rebuild costs one local
-/// read of them, where altering it in place would leave a new column
-/// empty in the rows the cursors never revisit.
+/// An index written in another shape loses its tables and is made new:
+/// every row in it is a function of a render store, so a rebuild costs
+/// one local read of them, where altering it in place would leave a new
+/// column empty in the rows the cursors never revisit. The search index's
+/// tables share the file and are its own to keep or empty
+/// (`datalib_search_index`), so they stay.
 pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
     retire_old_files(db_path)?;
     if let Some(dir) = db_path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let mut pool = connect(db_path).await?;
-    match datalib_store_meta::read(&pool).await {
-        Ok(Some(meta)) if meta.schema_hash != schema_hash() => {
-            pool.close().await;
-            tracing::info!(
-                path = %db_path.display(),
-                "the grid index was written in another shape; building it again"
-            );
-            remove_index_files(db_path)?;
-            pool = connect(db_path).await?;
-        }
-        Ok(_) => {}
-        Err(e) => {
-            pool.close().await;
-            return Err(e).context("read the grid index's shape");
-        }
-    }
-    match set_up(&pool).await {
+    let pool = connect(db_path).await?;
+    let ready = match empty_if_another_shape(&pool).await {
+        Ok(()) => set_up(&pool).await,
+        Err(e) => Err(e),
+    };
+    match ready {
         Ok(()) => Ok(pool),
         Err(e) => {
             pool.close().await;
             Err(e)
         }
     }
+}
+
+/// Drops the grid's own tables when they were written in another shape,
+/// under the write lock: the search index's tables share the file, and
+/// stay.
+async fn empty_if_another_shape(pool: &SqlitePool) -> Result<()> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let have = datalib_store_meta::schema_hash_in(&mut tx)
+        .await
+        .context("read the grid index's shape")?;
+    if have.is_some_and(|h| h != schema_hash()) {
+        tracing::info!("the grid index was written in another shape; building it again");
+        drop_own_tables(&mut tx).await?;
+    }
+    tx.commit().await?;
+    // Hands the dropped pages back to the disk where the file was made
+    // with incremental auto-vacuum; a no-op where it was not.
+    sqlx::query("PRAGMA incremental_vacuum")
+        .execute(pool)
+        .await
+        .context("give the grid index's dropped pages back")?;
+    Ok(())
+}
+
+/// Every table in the file but `_datalib_meta` and the search index's,
+/// virtual tables first so their shadow tables go with them. Includes any
+/// an older shape had that this one does not.
+async fn drop_own_tables(conn: &mut sqlx::SqliteConnection) -> Result<()> {
+    let theirs = format!(
+        "{}%",
+        datalib_search_index::TABLE_PREFIX.replace('_', "\\_")
+    );
+    for virtual_only in [true, false] {
+        let names: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'table' \
+               AND name NOT LIKE 'sqlite_%' AND name <> '_datalib_meta' \
+               AND name NOT LIKE ? ESCAPE '\\' \
+               AND (NOT ? OR sql LIKE 'CREATE VIRTUAL TABLE%')",
+        )
+        .bind(&theirs)
+        .bind(virtual_only)
+        .fetch_all(&mut *conn)
+        .await
+        .context("list the grid index's tables")?;
+        for name in names {
+            // A name read from this file's own schema, quoted as an identifier.
+            let sql = format!("DROP TABLE IF EXISTS \"{}\"", name.replace('"', "\"\""));
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .execute(&mut *conn)
+                .await
+                .with_context(|| format!("drop the grid index's {name}"))?;
+        }
+    }
+    Ok(())
 }
 
 async fn connect(db_path: &Path) -> Result<SqlitePool> {
@@ -666,7 +757,13 @@ async fn connect(db_path: &Path) -> Result<SqlitePool> {
         // upsert, a delete of several rows — so it can undo that one
         // statement; in a temp file that was most of a load's time.
         .pragma("temp_store", "memory")
-        .busy_timeout(Duration::from_secs(30));
+        .pragma(
+            "journal_size_limit",
+            datalib_core::plain_sqlite::WAL_SIZE_LIMIT_BYTES,
+        )
+        // The step's keyword pass writes the search index's tables in this
+        // file too, a batch of documents at a time.
+        .busy_timeout(Duration::from_secs(5 * 60));
     sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
         .idle_timeout(None)
@@ -694,19 +791,6 @@ async fn set_up(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await
     .context("start the grid index's generation")?;
-    Ok(())
-}
-
-/// The index file and its log. A `-wal` left beside a new file would be
-/// read into it.
-fn remove_index_files(db_path: &Path) -> Result<()> {
-    for suffix in ["", "-wal", "-shm"] {
-        let path = PathBuf::from(format!("{}{suffix}", db_path.display()));
-        match fs::remove_file(&path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            other => other.with_context(|| format!("remove {}", path.display()))?,
-        }
-    }
     Ok(())
 }
 
@@ -743,11 +827,11 @@ fn retire_old_files(db_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Copy the WAL back into the index and empty it, then close. Doltlite,
-/// which our binaries link, never does this by itself
-/// (`docs/dev/doltlite.md`), and while the search applet holds the file
-/// open, closing the writer's connection does not either: the `-wal`
-/// would keep every page any pass wrote.
+/// Copy the WAL back into the index and empty it, then close. A
+/// checkpoint by itself leaves the `-wal` at the size its largest
+/// transaction gave it (`docs/dev/doltlite.md`), and while the search
+/// applet holds the file open, closing the writer's connection does not
+/// empty it either.
 pub async fn close_index(pool: SqlitePool) -> Result<()> {
     let checkpoint: Result<(i64, i64, i64), sqlx::Error> =
         sqlx::query_as("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -779,7 +863,7 @@ async fn bump_generation(conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>) ->
 }
 
 /// Write the terms of what `write_lock` changed outside a pass — with
-/// [`apply_one`] and [`delete_markdown`] outside a transaction, as tests
+/// [`apply_one`] and [`delete_markdowns`] outside a transaction, as tests
 /// and dev tools do — and raise the generation, so readers see it moved.
 pub async fn seal(write_lock: &WriteLock) -> Result<i64> {
     let mut guard = write_lock.acquire().await?;
@@ -826,9 +910,7 @@ fn doc_kind_for(grid_kind: &str) -> &'static str {
     }
 }
 
-/// One markdown's payload as handed from render to the indexer,
-/// constructed once the md and its blobs are durably on disk so that render
-/// and index commit per-document atomically.
+/// One document as handed from render to the render store and the index.
 #[derive(Debug, Clone)]
 pub struct RenderedMarkdown {
     pub markdown_uuid: String,
@@ -843,23 +925,35 @@ pub struct RenderedMarkdown {
     /// provider declares through `RenderCtx::declare_bucket`. `None`
     /// from a renderer that does not declare buckets yet.
     pub bucket_key: Option<String>,
-    /// Absolute path to the rendered `.md`; `qmd_path` is this with the
-    /// out-dir prefix stripped.
-    pub md_path: PathBuf,
     pub render_version: u32,
-    /// Empty means there is no document: the store drops it, `.md` and
-    /// all, keeping only its `problems`.
+    /// Empty means there is no document: the store drops it, keeping only
+    /// its `problems`.
     pub rows: Vec<GridRow>,
-    /// The document piece by piece, in order, each piece keyed by the
+    /// The document section by section, in order, each keyed by the
     /// `data-section-uuid` it wraps or unkeyed when it wraps none —
-    /// concatenated they are the `.md`'s bytes. Empty from a renderer
-    /// that has not been taught sections, and when read back from the
-    /// store, which never holds the markdown.
+    /// concatenated they are the document's markdown. Empty when read
+    /// back from the store for indexing.
     pub sections: Vec<Section>,
+    /// Whether the search indexes it: false for a document kept for the
+    /// grid alone (Notion's table of contents), which only repeats what
+    /// other documents say at a size that would cost real embedding time.
+    pub searchable: bool,
+    /// The `content_hash` the store holds for this document, when it is
+    /// read back; `None` from a renderer, whose sections give it.
+    pub content_hash: Option<String>,
+    /// Its front matter as facts: what its first section draws, kept as
+    /// data (`markdowns.front`).
+    pub front: crate::front_matter::Front,
     /// Outgoing edges (`src_markdown_uuid == markdown_uuid`). Empty for
     /// renderers that don't emit edges; the DELETE still runs, so stale rows
     /// from a previous render get cleaned up.
     pub edges: Vec<EdgeRow>,
+    /// The containers this document's rows live in, from its own up to the
+    /// top of the source; owned by the document like its contacts, so a
+    /// channel named by many threads has a row under each.
+    pub data_nodes: Vec<DataNodeRow>,
+    /// What its rows and containers are filed under besides their parent.
+    pub filings: Vec<FilingRow>,
     /// The people this document describes or mentions, as its source
     /// describes them; owned by the document like its edges.
     pub contacts: Vec<NormalizedContact>,
@@ -873,66 +967,33 @@ pub struct RenderedMarkdown {
     pub problems: Vec<datalib_schema::problems::ProblemRow>,
 }
 
-/// Bumped when [`doc_md_path`] files documents somewhere else; every
-/// source carries it in its render params, so a bump renders them all
-/// again and each moved file's old copy is deleted as its document is
-/// written.
-pub const DOC_LAYOUT: u32 = 1;
-
-/// Where a document's markdown goes: [`doc_file_rel`] under its source's
-/// `render_markdown/`, so a search hit's path names its document.
-///
-/// [`doc_file_rel`]: datalib_schema::grid_rows::doc_file_rel
-pub fn doc_md_path(render_root: &Path, markdown_uuid: &str) -> PathBuf {
-    render_root.join(datalib_schema::grid_rows::doc_file_rel(markdown_uuid))
-}
-
-/// [`doc_md_path`] for a document free-text search should not return: one
-/// that only repeats what other documents say, at a size that would cost
-/// real embedding time. Its grid row and its link work as usual.
-pub fn unindexed_doc_md_path(render_root: &Path, markdown_uuid: &str) -> PathBuf {
-    doc_md_path(
-        &render_root.join(datalib_etl::layout::UNINDEXED_DIR),
-        markdown_uuid,
-    )
-}
-
-/// Why a document cannot be indexed where it was written: a file not
-/// named for its id, or a row naming another file. `None` when it can.
-fn misfiled(md: &RenderedMarkdown, qmd_path: &str) -> Option<String> {
-    use datalib_schema::grid_rows::markdown_uuid_of_path;
-    if markdown_uuid_of_path(qmd_path) != Some(md.markdown_uuid.as_str()) {
+/// Why a document cannot be indexed: it names no source, or it holds a
+/// row of another document. `None` when it can.
+fn misfiled(md: &RenderedMarkdown) -> Option<String> {
+    if md.source_id.is_empty() {
         return Some(format!(
-            "document {} is written to {qmd_path}, not to the file its id names \
-             (`datalib_etl_render::grid_index::doc_md_path`)",
+            "document {} names no source: its renderer must set \
+             `RenderedMarkdown::source_id` to its group's id",
             md.markdown_uuid
         ));
     }
     md.rows
         .iter()
-        .find(|r| r.qmd_path.as_deref() != Some(qmd_path))
+        .find(|r| r.markdown_uuid.as_deref() != Some(md.markdown_uuid.as_str()))
         .map(|r| {
             format!(
-                "row {} of document {} names {:?} as its file, not {qmd_path}",
-                r.uuid, md.markdown_uuid, r.qmd_path
+                "row {} of document {} names {:?} as its document",
+                r.uuid, md.markdown_uuid, r.markdown_uuid
             )
         })
 }
 
-/// Write one rendered document into the index unconditionally. `out_dir`
-/// is stripped off `md_path` to produce a portable `qmd_path`.
-pub async fn apply_one(
-    write_lock: &WriteLock,
-    out_dir: &Path,
-    md: &RenderedMarkdown,
-) -> Result<usize> {
-    let qmd_rel = md
-        .md_path
-        .strip_prefix(out_dir)
-        .unwrap_or(&md.md_path)
-        .to_string_lossy()
-        .to_string();
-    apply_markdown(write_lock, md, &qmd_rel).await
+/// Write one rendered document into the index unconditionally. Every
+/// document reaches a render store or the grid index through here, so its
+/// names are settled and its rows filed under their source here
+/// ([`crate::names`]).
+pub async fn apply_one(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<usize> {
+    apply_markdown(write_lock, &crate::names::settled(md)).await
 }
 
 /// Every source under the data root with a render store: the directory
@@ -974,7 +1035,7 @@ pub async fn build_grid_index(
 }
 
 /// Stack the render stores of exactly `sources` into the index — the
-/// `grid_index` DAG step's whole job. The step passes the groups its
+/// `unified_grid_and_search_index` DAG step's whole job. The step passes the groups its
 /// declared inputs name, so a source dropped from the config stops being
 /// read on the next run even while its tree is still on disk, and its
 /// documents leave the index — and a directory that is not in the config
@@ -1045,7 +1106,6 @@ pub async fn build_grid_index_for(
         let read = match read_source(
             &stanza,
             &rendered_root,
-            out_dir,
             cursors.get(&stanza),
             indexed.get(&stanza),
             &mut pass,
@@ -1070,7 +1130,6 @@ pub async fn build_grid_index_for(
         }
         let applied = apply_source(
             &write_lock,
-            out_dir,
             &stanza,
             read,
             (!building).then_some(held),
@@ -1101,7 +1160,9 @@ pub async fn build_grid_index_for(
         unnamed.dedup();
         for source in unnamed {
             let documents = indexed.get(source).map_or(0, HashSet::len);
-            retire_source(&write_lock, source, indexed.get(source)).await?;
+            let remade =
+                retire_source(&write_lock, source, indexed.get(source), held, &progress).await?;
+            summary.search_indexes_remade += usize::from(remade);
             summary.markdowns_removed += documents;
             summary.seals += 1;
             tracing::info!(
@@ -1137,34 +1198,41 @@ pub async fn build_grid_index_for(
 
 /// Take a source the graph no longer names out of the index, in one
 /// transaction and one seal: its documents, its problems and its cursor,
-/// so a source added back later is read whole.
+/// so a source added back later is read whole. `true` when the removal
+/// dropped the search indexes and made them again.
 async fn retire_source(
     write_lock: &WriteLock,
     source: &str,
     documents: Option<&HashSet<String>>,
-) -> Result<()> {
+    held: usize,
+    progress: &impl Fn(&str),
+) -> Result<bool> {
     write_lock
         .begin_transaction()
         .await
         .with_context(|| format!("begin the transaction retiring {source}"))?;
     let res = async {
+        let documents: Vec<String> = documents.into_iter().flatten().cloned().collect();
+        let remade = remove_documents(write_lock, source, &documents, Some(held), progress).await?;
         let mut guard = write_lock.acquire().await?;
         let conn = guard.conn();
-        let mut gone = Vec::new();
-        for markdown_uuid in documents.into_iter().flatten() {
-            gone.extend(delete_document_rows(conn, markdown_uuid).await?);
+        node_rows::bring_in_line(conn, write_lock, source)
+            .await
+            .with_context(|| format!("drop {source}'s node rows"))?;
+        if remade {
+            create_search_indexes(conn).await?;
         }
-        crate::search_terms::write_rows(conn, &gone).await?;
-        replace_source_problems(conn, source, &[]).await?;
+        crate::search_terms::write_rows(conn, &write_lock.take_changed()).await?;
+        clear_source_problems(conn, source).await?;
         sqlx::query("DELETE FROM source_cursors WHERE source_id = ?")
             .bind(source)
             .execute(&mut **conn)
             .await
             .with_context(|| format!("clear {source}'s cursor"))?;
-        bump_generation(conn).await
+        Ok((bump_generation(conn).await?, remade))
     }
     .await;
-    let generation = match res {
+    let (generation, remade) = match res {
         Ok(generation) => generation,
         Err(e) => {
             let _ = write_lock.rollback_transaction().await;
@@ -1182,7 +1250,7 @@ async fn retire_source(
         counts = %SealCounts { read: 0, loaded: 0, removed, rows: 0 }.message(source),
         "sealed the index"
     );
-    Ok(())
+    Ok(remade)
 }
 
 /// The people the terms name, read from every source at once: once a
@@ -1238,9 +1306,6 @@ enum SourceRead {
         /// Documents the index holds for this source that the store no
         /// longer does.
         removed: Vec<String>,
-        /// Its problems at the pin. The copy is wholesale: the pinned store
-        /// is the complete truth about that source's problems.
-        problems: Vec<ProblemRow>,
         /// The commit read and its tree. `None` when `dolt_log()` did not
         /// answer, and an unwritten cursor cold-starts the next pass — the
         /// safe direction.
@@ -1253,7 +1318,6 @@ enum SourceRead {
 fn read_source(
     stanza: &str,
     rendered_root: &Path,
-    out_dir: &Path,
     cursor: Option<&Cursor>,
     indexed: Option<&HashSet<String>>,
     pass: &mut PassCounts,
@@ -1273,7 +1337,7 @@ fn read_source(
         );
         return Ok(None);
     };
-    let read = read_open_store(&store, stanza, out_dir, cursor, indexed, pass);
+    let read = read_open_store(&store, stanza, cursor, indexed, pass);
     store.close();
     match read {
         Err(e) if written_in_another_shape(&e) => {
@@ -1293,7 +1357,6 @@ fn read_source(
 fn read_open_store(
     store: &crate::indexed_markdown::IndexedMarkdownStore,
     stanza: &str,
-    out_dir: &Path,
     cursor: Option<&Cursor>,
     indexed: Option<&HashSet<String>>,
     pass: &mut PassCounts,
@@ -1358,11 +1421,8 @@ fn read_open_store(
         }
     }
     let docs = store
-        .documents_matching(out_dir, scan.render.as_ref(), &pin)
+        .documents_matching(scan.render.as_ref(), &pin)
         .with_context(|| format!("read documents from {stanza}"))?;
-    let problems = store
-        .problems_at_pin()
-        .with_context(|| format!("read problems from {stanza}"))?;
     let present: HashSet<&str> = docs.iter().map(|d| d.markdown_uuid.as_str()).collect();
     let removed = match &scan.render {
         // An id the diff named that the store no longer has is a deletion.
@@ -1395,7 +1455,6 @@ fn read_open_store(
     Ok(SourceRead::Read {
         docs,
         removed,
-        problems,
         head,
     })
 }
@@ -1408,7 +1467,6 @@ fn read_open_store(
 #[allow(clippy::too_many_arguments)]
 async fn apply_source(
     write_lock: &WriteLock,
-    out_dir: &Path,
     stanza: &str,
     read: SourceRead,
     held: Option<usize>,
@@ -1423,7 +1481,7 @@ async fn apply_source(
         .await
         .with_context(|| format!("begin the index transaction for {stanza}"))?;
     let res = async {
-        let (docs, removed, problems, head) = match read {
+        let (docs, removed, head) = match read {
             SourceRead::Unreadable => {
                 let row = unreadable_store_problem(stanza, OLDER_SHAPE, Severity::Warning);
                 let mut guard = write_lock.acquire().await?;
@@ -1441,35 +1499,23 @@ async fn apply_source(
             SourceRead::Read {
                 docs,
                 removed,
-                problems,
                 head,
-            } => (docs, removed, problems, head),
+            } => (docs, removed, head),
         };
         summary.markdowns_total += docs.len();
+        let removed_remade = remove_documents(write_lock, stanza, &removed, held, progress)
+            .await
+            .with_context(|| format!("delete the documents {stanza} dropped"))?;
+        summary.markdowns_removed += removed.len();
         // Too few documents to change a sixteenth of the index, whatever
         // they hold, are not worth measuring.
         let probe = match held {
-            Some(held) if docs.len() * 16 >= held && docs.len() > 1 => {
+            Some(held) if !removed_remade && docs.len() * 16 >= held && docs.len() > 1 => {
                 Some(RemakeProbe::start(write_lock).await?)
             }
             _ => None,
         };
-        for gone in &removed {
-            delete_markdown(write_lock, gone)
-                .await
-                .with_context(|| format!("delete {gone} dropped by {stanza}"))?;
-            summary.markdowns_removed += 1;
-        }
-        let loaded = load_source(
-            write_lock,
-            out_dir,
-            stanza,
-            &docs,
-            probe.as_ref(),
-            progress,
-            stop,
-        )
-        .await?;
+        let loaded = load_source(write_lock, stanza, &docs, probe.as_ref(), progress, stop).await?;
         let Some(Loaded {
             markdowns,
             rows,
@@ -1478,10 +1524,18 @@ async fn apply_source(
         else {
             return Ok(None);
         };
+        let remade = remade || removed_remade;
+        summary.search_indexes_remade += usize::from(remade);
         summary.markdowns_loaded += markdowns;
         summary.rows_inserted += rows;
         let mut guard = write_lock.acquire().await?;
         let conn = guard.conn();
+        if !docs.is_empty() || !removed.is_empty() {
+            let (kept, dropped) = node_rows::bring_in_line(conn, write_lock, stanza)
+                .await
+                .with_context(|| format!("write {stanza}'s node rows"))?;
+            tracing::debug!(source = %stanza, kept, dropped, "node rows in line");
+        }
         if remade {
             let started = Instant::now();
             create_search_indexes(conn).await?;
@@ -1493,10 +1547,9 @@ async fn apply_source(
         }
         summary.terms_written +=
             crate::search_terms::write_rows(conn, &write_lock.take_changed()).await?;
-        let problems_moved = replace_source_problems(conn, stanza, &problems)
+        let problems_moved = clear_source_problems(conn, stanza)
             .await
-            .with_context(|| format!("copy {stanza}'s problems into the index"))?;
-        summary.problems_copied += problems.len();
+            .with_context(|| format!("clear {stanza}'s problems from the index"))?;
         // Last and in the same transaction: a failure above rolls back to
         // both the old rows and the old cursor.
         if let Some((store_commit, store_tree)) = head {
@@ -1583,7 +1636,7 @@ impl SealCounts {
 
     fn message(self, source: &str) -> String {
         format!(
-            "datalib-step grid_index: source={source} markdowns_read={} \
+            "datalib-step unified_grid_and_search_index: source={source} markdowns_read={} \
              markdowns_loaded={} markdowns_removed={} rows_inserted={}",
             self.read, self.loaded, self.removed, self.rows
         )
@@ -1597,12 +1650,53 @@ struct Loaded {
     remade: bool,
 }
 
+/// Delete the documents a source no longer has, all at once. When they
+/// hold a sixteenth of the index's rows the search indexes are dropped
+/// first, as for a large load: kept up row by row, each deleted row
+/// costs a page in every one of them. `true` when they were dropped; the
+/// caller remakes them before its transaction commits. `held` is `None`
+/// in a build that makes the search indexes at its end.
+async fn remove_documents(
+    write_lock: &WriteLock,
+    stanza: &str,
+    markdown_uuids: &[String],
+    held: Option<usize>,
+    progress: &impl Fn(&str),
+) -> Result<bool> {
+    if markdown_uuids.is_empty() {
+        return Ok(false);
+    }
+    // Too few documents to hold a sixteenth of the index are not worth
+    // measuring.
+    let remade = match held {
+        Some(held) if markdown_uuids.len() * 16 >= held => {
+            RemakeProbe::start(write_lock)
+                .await?
+                .decide_removal(write_lock, markdown_uuids)
+                .await?
+        }
+        _ => false,
+    };
+    progress(&format!(
+        "{stanza}: removing {} document(s)",
+        markdown_uuids.len()
+    ));
+    let started = Instant::now();
+    delete_markdowns(write_lock, markdown_uuids).await?;
+    tracing::info!(
+        source = %stanza,
+        documents = markdown_uuids.len(),
+        took_ms = started.elapsed().as_millis() as u64,
+        "removed the documents this source no longer has"
+    );
+    Ok(remade)
+}
+
 /// Apply one source's documents. `None` when the stop came first. With
 /// a `probe`, a twentieth of the way in it decides whether the rest is
 /// written without the search indexes.
 async fn load_source(
     write_lock: &WriteLock,
-    out_dir: &Path,
     stanza: &str,
     docs: &[RenderedMarkdown],
     probe: Option<&RemakeProbe>,
@@ -1625,7 +1719,7 @@ async fn load_source(
             problems: Vec::new(),
             ..md.clone()
         };
-        rows += apply_one(write_lock, out_dir, &md)
+        rows += apply_one(write_lock, &md)
             .await
             .with_context(|| format!("load {} from {stanza}", md.markdown_uuid))?;
         progress(&format!("{stanza}: loaded {}/{}", i + 1, docs.len()));
@@ -1700,51 +1794,61 @@ async fn write_source_cursor(
     Ok(())
 }
 
-/// Remove a document and everything hanging off it: the three deletes
+/// Remove documents and everything hanging off them: the deletes
 /// `apply_markdown` runs before re-inserting, without the insert. Only
 /// reachable because the index diffs rather than re-reads — a deleted
 /// conversation used to stay in the grid forever.
-pub async fn delete_markdown(write_lock: &WriteLock, markdown_uuid: &str) -> Result<()> {
+pub async fn delete_markdowns(write_lock: &WriteLock, markdown_uuids: &[String]) -> Result<()> {
     let mut guard = write_lock.acquire().await?;
-    let gone = delete_document_rows(guard.conn(), markdown_uuid).await?;
+    let gone = delete_document_rows(guard.conn(), markdown_uuids).await?;
     write_lock.note_changed(gone);
     Ok(())
 }
 
-/// The rows a document owns: its grid rows, its outgoing edges and its
-/// `markdowns` row. Not its `problems`, which say why a document
+/// The statements that remove a set of documents' rows, the set bound
+/// once as a JSON array. A statement per document instead costs a
+/// round trip each, and a source that empties holds hundreds of
+/// thousands of them.
+pub(crate) const DELETE_DOCUMENT_GRID_ROWS: &str =
+    "DELETE FROM grid_rows WHERE markdown_uuid IN (SELECT value FROM json_each(?)) RETURNING uuid";
+pub(crate) const DELETE_DOCUMENTS: &[&str] = &[
+    "DELETE FROM edges WHERE src_markdown_uuid IN (SELECT value FROM json_each(?))",
+    "DELETE FROM data_nodes WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
+    "DELETE FROM filings WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
+    "DELETE FROM source_contacts WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
+    "DELETE FROM source_contact_handles WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
+    "DELETE FROM source_photos WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
+    "DELETE FROM markdowns WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
+];
+
+/// The rows the documents own: their grid rows, their outgoing edges and
+/// their `markdowns` rows. Not their `problems`, which say why a document
 /// is the way it is and outlive one that ends with nothing. Returns the
 /// grid rows it deleted.
 pub(crate) async fn delete_document_rows(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
-    markdown_uuid: &str,
+    markdown_uuids: &[String],
 ) -> Result<Vec<String>> {
-    let gone = sqlx::query_scalar("DELETE FROM grid_rows WHERE markdown_uuid = ? RETURNING uuid")
-        .bind(markdown_uuid)
+    if markdown_uuids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let set = serde_json::to_string(markdown_uuids)?;
+    let gone = sqlx::query_scalar(DELETE_DOCUMENT_GRID_ROWS)
+        .bind(&set)
         .fetch_all(&mut **conn)
         .await
-        .with_context(|| format!("delete {markdown_uuid}'s rows from the index"))?;
-    for sql in [
-        "DELETE FROM edges WHERE src_markdown_uuid = ?",
-        "DELETE FROM source_contacts WHERE markdown_uuid = ?",
-        "DELETE FROM source_contact_handles WHERE markdown_uuid = ?",
-        "DELETE FROM source_photos WHERE markdown_uuid = ?",
-        "DELETE FROM markdowns WHERE markdown_uuid = ?",
-    ] {
+        .with_context(|| format!("delete {} document(s)' rows", markdown_uuids.len()))?;
+    for &sql in DELETE_DOCUMENTS {
         sqlx::query(sql)
-            .bind(markdown_uuid)
+            .bind(&set)
             .execute(&mut **conn)
             .await
-            .with_context(|| format!("delete {markdown_uuid} from the index"))?;
+            .with_context(|| format!("delete {} document(s): {sql}", markdown_uuids.len()))?;
     }
     Ok(gone)
 }
 
-async fn apply_markdown(
-    write_lock: &WriteLock,
-    md: &RenderedMarkdown,
-    qmd_path: &str,
-) -> Result<usize> {
+async fn apply_markdown(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<usize> {
     // Inside `begin_transaction` every guard hands back the same connection,
     // so the per-doc statements accumulate in one batch; otherwise each takes
     // a fresh connection and auto-commits.
@@ -1757,7 +1861,7 @@ async fn apply_markdown(
     // rest, or a stale `bucket_key` and title would outlive the render
     // that replaced them. The problems recording why stay.
     if md.rows.is_empty() {
-        let gone = delete_document_rows(conn, &md.markdown_uuid).await?;
+        let gone = delete_document_rows(conn, std::slice::from_ref(&md.markdown_uuid)).await?;
         write_lock.note_changed(gone);
         tracing::info!(
             document = %md.markdown_uuid,
@@ -1766,7 +1870,7 @@ async fn apply_markdown(
         return Ok(0);
     }
     let canonical = document_row(&md.rows, &md.markdown_uuid)?;
-    if let Some(why) = misfiled(md, qmd_path) {
+    if let Some(why) = misfiled(md) {
         bail!("{why}");
     }
 
@@ -1791,7 +1895,14 @@ async fn apply_markdown(
     write_lock.note_changed(gone);
 
     for row in &md.rows {
-        put_grid_row(conn, write_lock, row).await?;
+        let row = GridRow {
+            source_id: Some(datalib_schema::grid_rows::filed_under(
+                &row.provider,
+                &md.source_id,
+            )),
+            ..row.clone()
+        };
+        put_grid_row(conn, write_lock, &row).await?;
     }
 
     // Each markdown owns the edges whose `src_markdown_uuid` matches, so a
@@ -1804,6 +1915,22 @@ async fn apply_markdown(
         .context("delete prior edges")?;
     for edge in &md.edges {
         insert_edge(conn, edge).await?;
+    }
+    for sql in [
+        "DELETE FROM data_nodes WHERE markdown_uuid = ?",
+        "DELETE FROM filings WHERE markdown_uuid = ?",
+    ] {
+        sqlx::query(sql)
+            .bind(&md.markdown_uuid)
+            .execute(&mut **conn)
+            .await
+            .context("delete prior containers")?;
+    }
+    for node in &md.data_nodes {
+        insert_node(conn, &md.markdown_uuid, node).await?;
+    }
+    for filing in &md.filings {
+        insert_filing(conn, &md.markdown_uuid, filing).await?;
     }
     for sql in [
         "DELETE FROM source_contacts WHERE markdown_uuid = ?",
@@ -1826,7 +1953,7 @@ async fn apply_markdown(
     for photo in &md.photos {
         insert_source_photo(conn, &md.markdown_uuid, photo).await?;
     }
-    upsert_markdown(conn, md, canonical, qmd_path)
+    upsert_markdown(conn, md, canonical)
         .await
         .context("upsert markdowns")?;
     write_lock.note_written(&md.markdown_uuid);
@@ -1874,16 +2001,14 @@ async fn upsert_markdown(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     md: &RenderedMarkdown,
     canonical: &GridRow,
-    qmd_path: &str,
 ) -> Result<()> {
     let kind = doc_kind_for(&canonical.kind);
     let version_str = format!("{RENDERER_VERSION}.{}", md.render_version);
-    // Fall back to the canonical row's provider when build_grid_index
-    // rebuilds from disk without the config-level name.
-    let source_id = if md.source_id.is_empty() {
-        canonical.provider.clone()
+
+    let content_hash = if md.sections.is_empty() {
+        md.content_hash.clone()
     } else {
-        md.source_id.clone()
+        Some(crate::section::content_hash(&md.sections))
     };
 
     sqlx::query("DELETE FROM markdowns WHERE markdown_uuid = ?")
@@ -1894,21 +2019,24 @@ async fn upsert_markdown(
     sqlx::query(
         "INSERT INTO markdowns \
          (markdown_uuid, source_id, provider, kind, title, created_at, modified_at, \
-          item_count, md_path, upstream_cursor, renderer_version, bucket_key) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          item_count, upstream_cursor, renderer_version, bucket_key, content_hash, front, \
+          searchable) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&md.markdown_uuid)
-    .bind(&source_id)
+    .bind(&md.source_id)
     .bind(&canonical.provider)
     .bind(kind)
     .bind(&canonical.conversation_name)
     .bind(canonical.created_at.as_deref())
     .bind(canonical.modified_at.as_deref())
     .bind(canonical.item_count)
-    .bind(qmd_path)
     .bind(md.upstream_cursor.as_deref())
     .bind(&version_str)
     .bind(&md.bucket_key)
+    .bind(content_hash)
+    .bind((!md.front.is_empty()).then(|| md.front.to_json()))
+    .bind(md.searchable)
     .execute(&mut **conn)
     .await
     .context("insert markdowns row")?;
@@ -1981,8 +2109,9 @@ async fn insert_edge(
 ) -> Result<()> {
     sqlx::query(
         "INSERT INTO edges \
-         (edge_uuid, src_markdown_uuid, src_anchor_uuid, dst_markdown_uuid, dst_anchor_uuid, label) \
-         VALUES (?, ?, ?, ?, ?, ?)",
+         (edge_uuid, src_markdown_uuid, src_anchor_uuid, dst_markdown_uuid, dst_anchor_uuid, \
+          label, kind) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&edge.edge_uuid)
     .bind(&edge.src_markdown_uuid)
@@ -1990,9 +2119,75 @@ async fn insert_edge(
     .bind(&edge.dst_markdown_uuid)
     .bind(&edge.dst_anchor_uuid)
     .bind(&edge.label)
+    .bind(edge.kind)
     .execute(&mut **conn)
     .await
     .with_context(|| format!("insert edge {}", edge.edge_uuid))?;
+    Ok(())
+}
+
+/// One container under the document that carries it. A renderer that
+/// names another document as the carrier has a bug: the row would
+/// outlive the document that wrote it.
+async fn insert_node(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
+    markdown_uuid: &str,
+    node: &DataNodeRow,
+) -> Result<()> {
+    if node.markdown_uuid != markdown_uuid {
+        bail!(
+            "document {markdown_uuid} carries container {} under document {}",
+            node.uuid,
+            node.markdown_uuid
+        );
+    }
+    sqlx::query(
+        "INSERT OR REPLACE INTO data_nodes \
+         (markdown_uuid, uuid, source_id, kind, name, parent_uuid, sort_key, read_together, \
+          is_place, read_uuid, place_uuid, upstream_entity_kind, upstream_id, upstream_account) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&node.markdown_uuid)
+    .bind(&node.uuid)
+    .bind(&node.source_id)
+    .bind(&node.kind)
+    .bind(&node.name)
+    .bind(&node.parent_uuid)
+    .bind(&node.sort_key)
+    .bind(node.read_together)
+    .bind(node.is_place)
+    .bind(&node.read_uuid)
+    .bind(&node.place_uuid)
+    .bind(&node.upstream_entity_kind)
+    .bind(&node.upstream_id)
+    .bind(&node.upstream_account)
+    .execute(&mut **conn)
+    .await
+    .with_context(|| format!("insert container {}", node.uuid))?;
+    Ok(())
+}
+
+async fn insert_filing(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
+    markdown_uuid: &str,
+    filing: &FilingRow,
+) -> Result<()> {
+    if filing.markdown_uuid != markdown_uuid {
+        bail!(
+            "document {markdown_uuid} carries a filing of {} under document {}",
+            filing.node_uuid,
+            filing.markdown_uuid
+        );
+    }
+    sqlx::query(
+        "INSERT OR IGNORE INTO filings (markdown_uuid, node_uuid, under_uuid) VALUES (?, ?, ?)",
+    )
+    .bind(&filing.markdown_uuid)
+    .bind(&filing.node_uuid)
+    .bind(&filing.under_uuid)
+    .execute(&mut **conn)
+    .await
+    .with_context(|| format!("file {} under {}", filing.node_uuid, filing.under_uuid))?;
     Ok(())
 }
 
@@ -2113,8 +2308,11 @@ pub(crate) async fn assert_searched_by_index(pool: &SqlitePool, statements: &[&'
             .iter()
             .map(|r| r.get::<String, _>("detail"))
             .collect();
+        // The set a statement matches is bound as a JSON array and read
+        // whole; the table it looks the set up in must not be.
         assert!(
-            plan.iter().all(|d| !d.starts_with("SCAN")),
+            plan.iter()
+                .all(|d| !d.starts_with("SCAN") || d.starts_with("SCAN json_each")),
             "{sql} scans its table: {plan:?}"
         );
     }
@@ -2152,14 +2350,29 @@ mod open_index_tests {
         let pool = open_index(&td.path().join("db.sqlite"))
             .await
             .expect("open_index");
-        assert_searched_by_index(
-            &pool,
-            &[
-                "DELETE FROM grid_rows WHERE markdown_uuid = ?",
-                "DELETE FROM edges WHERE src_markdown_uuid = ?",
-            ],
-        )
-        .await;
+        let mut statements = vec![DELETE_DOCUMENT_GRID_ROWS];
+        statements.extend(DELETE_DOCUMENTS);
+        assert_searched_by_index(&pool, &statements).await;
+        pool.close().await;
+    }
+
+    /// One pass loads a whole source in one transaction, and a checkpoint
+    /// alone leaves the `-wal` that large; the limit cuts it back. A
+    /// re-index left a live grid index's `-wal` at 4 GB.
+    #[tokio::test]
+    async fn the_grid_index_cuts_its_wal_back() {
+        let td = tempfile::tempdir().unwrap();
+        let pool = open_index(&td.path().join("db.sqlite"))
+            .await
+            .expect("open_index");
+        let limit: i64 = sqlx::query_scalar("PRAGMA journal_size_limit")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            limit.to_string(),
+            datalib_core::plain_sqlite::WAL_SIZE_LIMIT_BYTES
+        );
         pool.close().await;
     }
 }
@@ -2205,11 +2418,15 @@ mod insert_round_trip_tests {
             channel: Some("bridge".into()),
             conversation_name: Some("Klingon Diplomatic Greeting".into()),
             conversation_uuid: "conv-1701".into(),
+            parent_uuid: Some("parent-everything".into()),
+            sort_key: "2026-06-02T20:00:00Z".into(),
+            read_uuid: Some("read-everything".into()),
+            place_uuid: Some("place-everything".into()),
             message_index: Some(3),
             entire_chat: "/chat/conv-1701".into(),
             preview: "Tea. Earl Grey. Hot.".into(),
             content_hash: content_hash("Tea. Earl Grey. Hot."),
-            qmd_path: Some("chats/conv-1701.md".into()),
+            source_id: Some("claude_web".into()),
             source_url: Some("https://claude.ai/chat/conv-1701".into()),
             git_sha: Some("0123456789abcdef".into()),
             upstream_id: Some("upstream-1701".into()),
@@ -2305,7 +2522,7 @@ mod write_lock_tests {
     //! and the losers time out. No artificial sleeps — the contention is real,
     //! from the same code path production uses.
     use super::*;
-    use datalib_schema::grid_rows::{content_hash, doc_file_rel, GridRow};
+    use datalib_schema::grid_rows::{content_hash, GridRow};
     use datalib_schema::providers::Provider;
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
@@ -2337,11 +2554,15 @@ mod write_lock_tests {
             channel: None,
             conversation_name: Some(format!("Conv {uuid}")),
             conversation_uuid: uuid.clone(),
+            parent_uuid: None,
+            sort_key: String::new(),
+            read_uuid: None,
+            place_uuid: None,
             message_index: None,
             entire_chat: format!("/chat/{uuid}"),
             preview: format!("body for {uuid}"),
             content_hash: content_hash(&format!("body for {uuid}")),
-            qmd_path: Some(format!("chats/{}", doc_file_rel(&uuid))),
+            source_id: Some("test".into()),
             source_url: None,
             git_sha: None,
             upstream_id: None,
@@ -2361,16 +2582,20 @@ mod write_lock_tests {
             h3: None,
         };
         RenderedMarkdown {
+            searchable: true,
+            content_hash: None,
             markdown_uuid: uuid.clone(),
             source_id: "test".into(),
             upstream_cursor: None,
             bucket_key: None,
-            md_path: PathBuf::from("/tmp/chats").join(doc_file_rel(&uuid)),
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
+            front: Default::default(),
             edges: Vec::new(),
             contacts: Vec::new(),
+            data_nodes: Vec::new(),
+            filings: Vec::new(),
             photos: Vec::new(),
             problems: Vec::new(),
         }
@@ -2390,15 +2615,13 @@ mod write_lock_tests {
     }
 
     async fn apply_in_parallel(write_lock: &StdArc<WriteLock>, n_tasks: usize, per_task: usize) {
-        let out_dir = PathBuf::from("/tmp");
         let mut handles = Vec::with_capacity(n_tasks);
         for task in 0..n_tasks {
             let lock = write_lock.clone();
-            let out_dir = out_dir.clone();
             handles.push(tokio::spawn(async move {
                 for idx in 0..per_task {
                     let md = mk_md(task, idx);
-                    apply_one(lock.as_ref(), &out_dir, &md)
+                    apply_one(lock.as_ref(), &md)
                         .await
                         .unwrap_or_else(|e| panic!("apply_one task={task} idx={idx}: {e:#}"));
                 }
@@ -2525,11 +2748,10 @@ mod write_lock_tests {
         super::init_schema(&pool).await.expect("init_schema");
 
         let lock = WriteLock::new(pool.clone());
-        let out_dir = PathBuf::from("/tmp");
 
         lock.begin_transaction().await.unwrap();
         for idx in 0..5 {
-            apply_one(&lock, &out_dir, &mk_md(0, idx)).await.unwrap();
+            apply_one(&lock, &mk_md(0, idx)).await.unwrap();
         }
         lock.rollback_transaction().await.unwrap();
 
@@ -2551,16 +2773,15 @@ mod write_lock_tests {
         let pool = open_pool(&dir.path().join("empty.doltlite_db"), 2).await;
         super::init_schema(&pool).await.expect("init_schema");
         let lock = WriteLock::new(pool.clone());
-        let out_dir = PathBuf::from("/tmp");
 
         let mut md = mk_md(0, 0);
         md.bucket_key = Some("mr!17".into());
-        apply_one(&lock, &out_dir, &md).await.unwrap();
+        apply_one(&lock, &md).await.unwrap();
 
         let mut moved = mk_md(0, 0);
         moved.bucket_key = Some("mr!17~new".into());
         moved.rows.clear();
-        let inserted = apply_one(&lock, &out_dir, &moved).await.unwrap();
+        let inserted = apply_one(&lock, &moved).await.unwrap();
         assert_eq!(inserted, 0);
 
         let buckets: Vec<Option<String>> =
@@ -2613,8 +2834,8 @@ mod shape_tests {
     async fn holding_one_document(db: &Path) -> SqlitePool {
         let pool = open_index(db).await.unwrap();
         sqlx::query(
-            "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind) \
-             VALUES ('md-1', 'claude_web', 'claude', 'Chat')",
+            "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, searchable) \
+             VALUES ('md-1', 'claude_web', 'claude', 'Chat', 1)",
         )
         .execute(&pool)
         .await
@@ -2645,6 +2866,91 @@ mod shape_tests {
 
         let pool = open_index(&db).await.unwrap();
         assert_eq!(documents(&pool).await, 0);
+    }
+
+    fn search_doc(uuid: &str) -> datalib_search_index::IndexDoc {
+        datalib_search_index::IndexDoc {
+            source_id: "claude_web".into(),
+            markdown_uuid: uuid.into(),
+            content_hash: format!("hash-{uuid}"),
+            title: "Ten Forward".into(),
+            head: None,
+            sections: vec![datalib_search_index::IndexSection {
+                uuid: Some("m1".into()),
+                text: "the warp core is stable".into(),
+                lead: None,
+            }],
+        }
+    }
+
+    /// The search index shares the file: a change of the grid's shape
+    /// makes the grid's tables new and leaves the search index's rows,
+    /// which cost a re-index of every source to make again.
+    #[tokio::test]
+    async fn a_change_of_the_grids_shape_keeps_the_search_index() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("db.sqlite");
+        let pool = holding_one_document(&db).await;
+        let search = datalib_search_index::Index::open(&db).await.unwrap();
+        search.put(&[search_doc("md-1")]).await.unwrap();
+        search.close().await;
+        sqlx::query("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        crate::grid_index::close_index(pool).await.unwrap();
+
+        let pool = open_index(&db).await.unwrap();
+        assert_eq!(documents(&pool).await, 0);
+        crate::grid_index::close_index(pool).await.unwrap();
+        let search = datalib_search_index::Index::open(&db).await.unwrap();
+        assert_eq!(search.indexed("claude_web").await.unwrap().len(), 1);
+        search.close().await;
+    }
+
+    /// A grid batch takes the file's write lock when it starts. One that
+    /// took it at its first write would fail outright, not wait, when the
+    /// search index committed a batch after the grid's batch first read.
+    #[tokio::test]
+    async fn a_grid_batch_holds_the_file_from_its_start() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("db.sqlite");
+        let pool = holding_one_document(&db).await;
+        let search = datalib_search_index::Index::open(&db).await.unwrap();
+        let lock = crate::grid_index::WriteLock::for_index(pool.clone());
+        lock.begin_transaction().await.unwrap();
+        {
+            let mut guard = lock.acquire().await.unwrap();
+            let n: i64 = sqlx::query_scalar("SELECT count(*) FROM markdowns")
+                .fetch_one(&mut **guard.conn())
+                .await
+                .unwrap();
+            assert_eq!(n, 1);
+        }
+        {
+            let docs = [search_doc("md-2")];
+            let put = search.put(&docs);
+            tokio::pin!(put);
+            let waited =
+                tokio::time::timeout(std::time::Duration::from_millis(500), &mut put).await;
+            assert!(
+                waited.is_err(),
+                "the search index wrote inside the grid's batch"
+            );
+            {
+                let mut guard = lock.acquire().await.unwrap();
+                sqlx::query("DELETE FROM markdowns")
+                    .execute(&mut **guard.conn())
+                    .await
+                    .unwrap();
+            }
+            lock.commit_transaction().await.unwrap();
+            put.await.unwrap();
+        }
+        assert_eq!(documents(&pool).await, 0);
+        assert_eq!(search.indexed("claude_web").await.unwrap().len(), 1);
+        search.close().await;
+        crate::grid_index::close_index(pool).await.unwrap();
     }
 
     #[tokio::test]
@@ -2692,12 +2998,11 @@ mod source_cursor_tests {
     use tempfile::tempdir;
 
     use crate::grid_index::{
-        build_grid_index, build_grid_index_for, discover_sources, doc_md_path, load_source_cursors,
+        build_grid_index, build_grid_index_for, discover_sources, load_source_cursors, misfiled,
         RenderedMarkdown,
     };
     use crate::indexed_markdown::IndexedMarkdownStore;
     use datalib_etl::stop::StopFlag;
-    use datalib_schema::grid_rows::doc_file_rel;
     use datalib_schema::grid_rows::GridRow;
     use datalib_schema::providers::Provider;
 
@@ -2707,7 +3012,7 @@ mod source_cursor_tests {
             .unwrap()
     }
 
-    fn doc(root: &Path, source: &str, uuid: &str, text: &str) -> RenderedMarkdown {
+    fn doc(source: &str, uuid: &str, text: &str) -> RenderedMarkdown {
         let row = GridRow::builder()
             .uuid(uuid)
             .provider(Provider::Test)
@@ -2717,30 +3022,51 @@ mod source_cursor_tests {
             .entire_chat(format!("/chat/{uuid}"))
             .body(text)
             .markdown_uuid(Some(uuid.to_string()))
-            .qmd_path(Some(format!(
-                "{source}/render_markdown/{}",
-                doc_file_rel(uuid)
-            )))
             .created_at(Some("2026-01-01T00:00:00+00:00".to_string()))
             .is_document(true)
             .item_count(Some(1))
             .build()
             .unwrap();
         RenderedMarkdown {
+            searchable: true,
+            content_hash: None,
             markdown_uuid: uuid.to_string(),
             source_id: source.to_string(),
             // Fingerprint follows the text, the way a renderer's does.
             upstream_cursor: None,
             bucket_key: None,
-            md_path: doc_md_path(&rendered_root(root, source), uuid),
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
+            front: Default::default(),
             edges: Vec::new(),
             contacts: Vec::new(),
+            data_nodes: Vec::new(),
+            filings: Vec::new(),
             photos: Vec::new(),
             problems: Vec::new(),
         }
+    }
+
+    /// A document must name its source and hold only its own rows; a
+    /// renderer that forgets its group's id would otherwise file every row
+    /// under nothing.
+    #[test]
+    fn misfiled_says_what_a_document_got_wrong() {
+        let good = doc("enterprise", "d-1", "Engage.");
+        assert_eq!(misfiled(&good), None);
+
+        let nameless = RenderedMarkdown {
+            source_id: String::new(),
+            ..good.clone()
+        };
+        let why = misfiled(&nameless).expect("refused");
+        assert!(why.contains("names no source"), "{why}");
+
+        let mut stray = good.clone();
+        stray.rows[0].markdown_uuid = Some("d-2".to_string());
+        let why = misfiled(&stray).expect("refused");
+        assert!(why.contains("as its document"), "{why}");
     }
 
     fn rendered_root(root: &Path, source: &str) -> std::path::PathBuf {
@@ -2750,7 +3076,7 @@ mod source_cursor_tests {
     fn render(root: &Path, source: &str, docs: &[RenderedMarkdown]) {
         let store = IndexedMarkdownStore::open(&rendered_root(root, source)).unwrap();
         for d in docs {
-            store.put_document(root, d).unwrap();
+            store.put_document(d).unwrap();
         }
         store.commit("test render").unwrap();
         store.close();
@@ -2758,20 +3084,17 @@ mod source_cursor_tests {
 
     fn unrender(root: &Path, source: &str, uuid: &str) {
         let store = IndexedMarkdownStore::open(&rendered_root(root, source)).unwrap();
-        store.remove_document(root, uuid).unwrap();
+        store.remove_documents(&[uuid.to_string()]).unwrap();
         store.commit("test unrender").unwrap();
         store.close();
     }
 
-    /// A document under a bucket other than itself, whose `.md` actually
-    /// exists on disk — the shape a periodizing renderer produces, and
-    /// the one the deletion path has to handle.
-    fn doc_in_bucket(root: &Path, source: &str, uuid: &str, bucket: &str) -> RenderedMarkdown {
-        let mut md = doc(root, source, uuid, "body");
+    /// A document under a bucket other than itself: the shape the
+    /// deletion path has to handle.
+    fn doc_in_bucket(source: &str, uuid: &str, bucket: &str) -> RenderedMarkdown {
+        let mut md = doc(source, uuid, "body");
         md.rows[0].conversation_uuid = bucket.to_string();
         md.bucket_key = Some(bucket.to_string());
-        std::fs::create_dir_all(md.md_path.parent().unwrap()).unwrap();
-        std::fs::write(&md.md_path, "# rendered\n").unwrap();
         md
     }
 
@@ -2783,12 +3106,8 @@ mod source_cursor_tests {
         let td = tempdir().unwrap();
         let root = td.path();
         let pool = index_pool(root).await;
-        render(root, "kept", &[doc(root, "kept", "md-k", "kept body")]);
-        render(
-            root,
-            "dropped",
-            &[doc(root, "dropped", "md-d", "dropped body")],
-        );
+        render(root, "kept", &[doc("kept", "md-k", "kept body")]);
+        render(root, "dropped", &[doc("dropped", "md-d", "dropped body")]);
 
         let listed = ["kept".to_string(), "not-rendered-yet".to_string()];
         build_grid_index_for(&pool, root, &listed, |_| {}, None, &StopFlag::new())
@@ -2805,6 +3124,37 @@ mod source_cursor_tests {
         assert_eq!(index_row_count(&pool).await, 2);
     }
 
+    /// The hash of a document's text goes from the renderer through the
+    /// render store to the index, for the search index to tell a changed
+    /// document by.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_documents_hash_reaches_the_index() {
+        use crate::section::{join, Section};
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        let mut d = doc("ten-forward", "md-s", "two messages");
+        d.sections = vec![
+            Section::unkeyed("---\n---\n\n# Ten Forward\n\n".into()),
+            Section::keyed(
+                "m1",
+                "<div data-section-uuid=\"m1\">\n\nTea, Earl Grey\n\n</div>\n\n".into(),
+            ),
+        ];
+        render(root, "ten-forward", &[d.clone()]);
+        build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        let hash: Option<String> =
+            sqlx::query_scalar("SELECT content_hash FROM markdowns WHERE markdown_uuid = 'md-s'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let text = join(&d.sections);
+        assert_eq!(
+            hash,
+            Some(blake3::hash(text.as_bytes()).to_hex().to_string())
+        );
+    }
+
     /// A source taken out of the graph leaves the index with its cursor,
     /// so a renamed source does not show every document twice and one
     /// added back is read whole.
@@ -2813,12 +3163,8 @@ mod source_cursor_tests {
         let td = tempdir().unwrap();
         let root = td.path();
         let pool = index_pool(root).await;
-        render(root, "kept", &[doc(root, "kept", "md-k", "kept body")]);
-        render(
-            root,
-            "dropped",
-            &[doc(root, "dropped", "md-d", "dropped body")],
-        );
+        render(root, "kept", &[doc("kept", "md-k", "kept body")]);
+        render(root, "dropped", &[doc("dropped", "md-d", "dropped body")]);
         let both = ["dropped".to_string(), "kept".to_string()];
         build_grid_index_for(&pool, root, &both, |_| {}, None, &StopFlag::new())
             .await
@@ -2860,14 +3206,9 @@ mod source_cursor_tests {
         let root = td.path();
         let pool = index_pool(root).await;
         let conv = "conv-1";
-        let jan = doc_in_bucket(root, "src", "md-jan", conv);
-        let feb = doc_in_bucket(root, "src", "md-feb", conv);
-        let other = doc_in_bucket(root, "src", "md-other", "conv-2");
-        let (jan_md, feb_md, other_md) = (
-            jan.md_path.clone(),
-            feb.md_path.clone(),
-            other.md_path.clone(),
-        );
+        let jan = doc_in_bucket("src", "md-jan", conv);
+        let feb = doc_in_bucket("src", "md-feb", conv);
+        let other = doc_in_bucket("src", "md-other", "conv-2");
         render(root, "src", &[jan, feb, other]);
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         assert_eq!(index_row_count(&pool).await, 3);
@@ -2885,18 +3226,9 @@ mod source_cursor_tests {
             vec!["md-feb".to_string(), "md-jan".to_string()],
             "both of the bucket's periods, and only those"
         );
-        for uuid in &gone {
-            store.remove_document(root, uuid).unwrap();
-        }
+        store.remove_documents(&gone).unwrap();
         store.commit("test: conversation gone upstream").unwrap();
         store.close();
-
-        assert!(!jan_md.exists(), "the rendered markdown must go too");
-        assert!(!feb_md.exists());
-        assert!(
-            other_md.exists(),
-            "an untouched conversation keeps its file"
-        );
 
         // And the index picks the removal up from the store's own diff,
         // which is the only way it ever learns about one.
@@ -2931,13 +3263,13 @@ mod source_cursor_tests {
         let root = td.path();
         let pool = index_pool(root).await;
         let sources = ["fresh".to_string(), "stale".to_string()];
-        render(root, "fresh", &[doc(root, "fresh", "md-f", "fresh body")]);
-        render(root, "stale", &[doc(root, "stale", "md-s", "stale body")]);
+        render(root, "fresh", &[doc("fresh", "md-f", "fresh body")]);
+        render(root, "stale", &[doc("stale", "md-s", "stale body")]);
         build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
             .await
             .unwrap();
 
-        render(root, "fresh", &[doc(root, "fresh", "md-f2", "more")]);
+        render(root, "fresh", &[doc("fresh", "md-f2", "more")]);
         into_older_shape(root, "stale").await;
         // As after the index rebuilds itself for a new build: no cursors,
         // so every store is read whole.
@@ -2968,7 +3300,7 @@ mod source_cursor_tests {
         );
 
         // Its next render rebuilds the store in the current shape.
-        render(root, "stale", &[doc(root, "stale", "md-s", "stale body")]);
+        render(root, "stale", &[doc("stale", "md-s", "stale body")]);
         let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
             .await
             .unwrap();
@@ -2991,16 +3323,12 @@ mod source_cursor_tests {
         let pool = index_pool(root).await;
         // "broken" sorts first, so a pass that stops on it reaches nothing.
         let sources = ["broken".to_string(), "fresh".to_string()];
-        render(
-            root,
-            "broken",
-            &[doc(root, "broken", "md-b", "broken body")],
-        );
+        render(root, "broken", &[doc("broken", "md-b", "broken body")]);
         build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
             .await
             .unwrap();
 
-        render(root, "fresh", &[doc(root, "fresh", "md-f", "fresh body")]);
+        render(root, "fresh", &[doc("fresh", "md-f", "fresh body")]);
         let store = crate::indexed_markdown::path_for(&rendered_root(root, "broken"));
         std::fs::write(&store, b"not a doltlite store").unwrap();
         let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
@@ -3026,11 +3354,7 @@ mod source_cursor_tests {
         assert_eq!(severity, "error");
 
         std::fs::remove_file(&store).unwrap();
-        render(
-            root,
-            "broken",
-            &[doc(root, "broken", "md-b", "broken body")],
-        );
+        render(root, "broken", &[doc("broken", "md-b", "broken body")]);
         let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
             .await
             .unwrap();
@@ -3053,7 +3377,7 @@ mod source_cursor_tests {
         let root = td.path();
         let pool = index_pool(root).await;
         let sources = ["born".to_string(), "fresh".to_string()];
-        render(root, "fresh", &[doc(root, "fresh", "md-f", "fresh body")]);
+        render(root, "fresh", &[doc("fresh", "md-f", "fresh body")]);
         let store = crate::indexed_markdown::path_for(&rendered_root(root, "born"));
         std::fs::create_dir_all(store.parent().unwrap()).unwrap();
         std::fs::write(&store, b"").unwrap();
@@ -3099,6 +3423,133 @@ mod source_cursor_tests {
         .unwrap()
     }
 
+    /// The grid holds each document's containers as the store does, and a
+    /// re-render that names none takes them out of the grid too.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_grid_carries_each_documents_containers() {
+        use datalib_schema::data_nodes::DataNodeRow;
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        let sources = ["s".to_string()];
+        let mut d = doc("s", "md-a", "body");
+        d.data_nodes = vec![DataNodeRow::new("md-a", "md-a", "s", "Chat").read_together()];
+        d.filings = vec![datalib_schema::filings::FilingRow::new(
+            "md-a", "md-a", "label",
+        )];
+        render(root, "s", &[d]);
+        build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+            .await
+            .unwrap();
+        let count = |table: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(format!(
+                    "SELECT count(*) FROM {table}"
+                )))
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        assert_eq!((count("data_nodes").await, count("filings").await), (1, 1));
+
+        render(root, "s", &[doc("s", "md-a", "body again")]);
+        build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+            .await
+            .unwrap();
+        assert_eq!((count("data_nodes").await, count("filings").await), (0, 0));
+    }
+
+    /// A data node no document holds a row for (a channel, the workspace
+    /// above it) gets a row of its own, from what its carriers say. The row
+    /// stays while any document carries its node and goes with the last; a
+    /// node that is a document's row gets no second one.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_node_without_a_row_gets_one_while_a_document_carries_it() {
+        use datalib_schema::data_nodes::{DataNodeRow, Lineage};
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        let sources = ["s".to_string()];
+        let carrying = |uuid: &str| {
+            let mut d = doc("s", uuid, "body");
+            let workspace = DataNodeRow::new(uuid, "ws", "s", "Workspace")
+                .named(Some("Enterprise".to_string()))
+                .place();
+            let at = Lineage::top().below(&workspace);
+            let channel = DataNodeRow::new(uuid, "chan", "s", "Channel")
+                .named(Some("bridge".to_string()))
+                .place()
+                .under(&at);
+            let at = at.below(&channel);
+            let chat = DataNodeRow::new(uuid, uuid, "s", "Chat").read_together();
+            d.data_nodes = vec![workspace, channel, chat.under(&at)];
+            d
+        };
+        let build = || async {
+            build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+                .await
+                .unwrap();
+        };
+        let node_rows = || async {
+            sqlx::query_as::<
+                _,
+                (
+                    String,
+                    String,
+                    Option<String>,
+                    Option<String>,
+                    Option<String>,
+                ),
+            >(
+                "SELECT uuid, kind, conversation_name, parent_uuid, source_id FROM grid_rows \
+                 WHERE markdown_uuid IS NULL ORDER BY uuid",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+        };
+        let rows_of_md_a = || async {
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM grid_rows WHERE uuid = 'md-a'")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        };
+
+        render(root, "s", &[carrying("md-a"), carrying("md-b")]);
+        build().await;
+        let s = || Some("s".to_string());
+        assert_eq!(
+            node_rows().await,
+            [
+                (
+                    "chan".to_string(),
+                    "Channel".to_string(),
+                    Some("bridge".to_string()),
+                    Some("ws".to_string()),
+                    s()
+                ),
+                (
+                    "ws".to_string(),
+                    "Workspace".to_string(),
+                    Some("Enterprise".to_string()),
+                    None,
+                    s()
+                ),
+            ]
+        );
+        assert_eq!(rows_of_md_a().await, 1);
+
+        unrender(root, "s", "md-a");
+        build().await;
+        assert_eq!(node_rows().await.len(), 2, "md-b still carries both");
+
+        unrender(root, "s", "md-b");
+        build().await;
+        assert_eq!(node_rows().await, []);
+    }
+
     /// A store from a build before #962 lacked `source_contacts`, failed
     /// the diff, and kept every other source out of the grid. The next
     /// table added to the render DDL is the same store again, so this
@@ -3112,13 +3563,13 @@ mod source_cursor_tests {
             let pool = index_pool(root).await;
             // "damaged" sorts first, so a pass that stops on it reaches nothing.
             let sources = ["damaged".to_string(), "fresh".to_string()];
-            render(root, "damaged", &[doc(root, "damaged", "md-d", "kept")]);
+            render(root, "damaged", &[doc("damaged", "md-d", "kept")]);
             build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
                 .await
                 .unwrap();
 
-            render(root, "fresh", &[doc(root, "fresh", "md-f", "fresh body")]);
-            render(root, "damaged", &[doc(root, "damaged", "md-d2", "more")]);
+            render(root, "fresh", &[doc("fresh", "md-f", "fresh body")]);
+            render(root, "damaged", &[doc("damaged", "md-d2", "more")]);
             alter_store(
                 root,
                 "damaged",
@@ -3158,12 +3609,12 @@ mod source_cursor_tests {
             let root = td.path();
             let pool = index_pool(root).await;
             let sources = ["old".to_string()];
-            render(root, "old", &[doc(root, "old", "md-1", "one")]);
+            render(root, "old", &[doc("old", "md-1", "one")]);
             build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
                 .await
                 .unwrap();
 
-            render(root, "old", &[doc(root, "old", "md-2", "two")]);
+            render(root, "old", &[doc("old", "md-2", "two")]);
             alter_store(root, "old", change, "another build's shape").await;
             let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
                 .await
@@ -3173,7 +3624,7 @@ mod source_cursor_tests {
             assert_eq!(rows_of(&pool, "old").await, ["md-1"], "{change}");
 
             // Its next render writes this build's shape, and it reads again.
-            render(root, "old", &[doc(root, "old", "md-2", "two")]);
+            render(root, "old", &[doc("old", "md-2", "two")]);
             let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
                 .await
                 .unwrap();
@@ -3201,7 +3652,7 @@ mod source_cursor_tests {
         render(
             root,
             "src",
-            &[doc(root, "src", "md-1", "a"), doc(root, "src", "md-2", "b")],
+            &[doc("src", "md-1", "a"), doc("src", "md-2", "b")],
         );
 
         let first = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
@@ -3235,7 +3686,7 @@ mod source_cursor_tests {
         let root = td.path();
         let pool = index_pool(root).await;
         let empty = generation(&pool).await;
-        render(root, "src", &[doc(root, "src", "md-1", "a")]);
+        render(root, "src", &[doc("src", "md-1", "a")]);
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         let first = generation(&pool).await;
         assert_ne!(first, empty, "the first pass loaded a document");
@@ -3250,7 +3701,7 @@ mod source_cursor_tests {
         render(
             root,
             "src",
-            &[doc(root, "src", "md-1", "a"), doc(root, "src", "md-2", "b")],
+            &[doc("src", "md-1", "a"), doc("src", "md-2", "b")],
         );
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         assert_ne!(
@@ -3292,7 +3743,7 @@ mod source_cursor_tests {
         let root = td.path();
         for source in ["a", "b"] {
             let docs: Vec<_> = (1..=3)
-                .map(|i| doc(root, source, &format!("md-{source}{i}"), "body"))
+                .map(|i| doc(source, &format!("md-{source}{i}"), "body"))
                 .collect();
             render(root, source, &docs);
         }
@@ -3342,7 +3793,7 @@ mod source_cursor_tests {
         let pool = index_pool(root).await;
         let docs = |text: &str| -> Vec<RenderedMarkdown> {
             (1..=4)
-                .map(|i| doc(root, "src", &format!("md-{i}"), text))
+                .map(|i| doc("src", &format!("md-{i}"), text))
                 .collect()
         };
         render(root, "src", &docs("before"));
@@ -3366,6 +3817,63 @@ mod source_cursor_tests {
         assert_eq!(auto_vacuum, 2);
     }
 
+    /// Guards a reset of a source that held most of the index: its
+    /// render emptied, and the index deleted its documents one at a time
+    /// with every search index kept up row by row, since only documents
+    /// loaded counted toward remaking them. A large removal, and a large
+    /// source taken out of the graph, remake them like a large load.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn removing_most_of_the_index_remakes_its_search_indexes() {
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        let many: Vec<_> = (1..=20)
+            .map(|i| doc("big", &format!("md-big{i}"), "big"))
+            .collect();
+        render(root, "big", &many);
+        render(root, "small", &[doc("small", "md-small", "small")]);
+        let both = ["big".to_string(), "small".to_string()];
+        build_grid_index_for(&pool, root, &both, |_| {}, None, &StopFlag::new())
+            .await
+            .unwrap();
+        assert_eq!(index_row_count(&pool).await, 21);
+
+        let store = IndexedMarkdownStore::open(&rendered_root(root, "big")).unwrap();
+        let gone: Vec<String> = many.iter().map(|d| d.markdown_uuid.clone()).collect();
+        store.remove_documents(&gone[..19]).unwrap();
+        store.commit("test: most of big is gone").unwrap();
+        store.close();
+        let emptied = build_grid_index_for(&pool, root, &both, |_| {}, None, &StopFlag::new())
+            .await
+            .unwrap();
+        assert_eq!(emptied.markdowns_removed, 19);
+        assert_eq!(emptied.search_indexes_remade, 1, "{emptied:?}");
+        assert_eq!(missing_search_indexes(&pool).await, Vec::<&str>::new());
+        assert_eq!(index_row_count(&pool).await, 2);
+
+        let retired = build_grid_index_for(
+            &pool,
+            root,
+            &["small".to_string()],
+            |_| {},
+            None,
+            &StopFlag::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(retired.markdowns_removed, 1);
+        assert_eq!(retired.search_indexes_remade, 1, "{retired:?}");
+        assert_eq!(missing_search_indexes(&pool).await, Vec::<&str>::new());
+        assert_eq!(index_row_count(&pool).await, 1);
+        let terms: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM rows WHERE uuid NOT IN (SELECT uuid FROM grid_rows)",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(terms, 0, "no removed row keeps its search terms");
+    }
+
     /// A stop used to be ignored until the step's grace ran out and killed
     /// it, throwing away every source loaded so far with the one
     /// transaction they shared. A stop partway through the second source
@@ -3378,7 +3886,7 @@ mod source_cursor_tests {
         let pool = index_pool(root).await;
         for source in ["a", "b"] {
             let docs: Vec<_> = (1..=3)
-                .map(|i| doc(root, source, &format!("md-{source}{i}"), "body"))
+                .map(|i| doc(source, &format!("md-{source}{i}"), "body"))
                 .collect();
             render(root, source, &docs);
         }
@@ -3437,14 +3945,12 @@ mod source_cursor_tests {
         let td = tempdir().unwrap();
         let root = td.path();
         let pool = index_pool(root).await;
-        render(root, "src", &[doc(root, "src", "md-1", "a")]);
+        render(root, "src", &[doc("src", "md-1", "a")]);
 
         // A second document left in the working set, the way a render that is
         // still running (or was killed) leaves one.
         let store = IndexedMarkdownStore::open(&rendered_root(root, "src")).unwrap();
-        store
-            .put_document(root, &doc(root, "src", "md-2", "b"))
-            .unwrap();
+        store.put_document(&doc("src", "md-2", "b")).unwrap();
         store.close();
 
         let summary = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
@@ -3465,7 +3971,7 @@ mod source_cursor_tests {
         let td = tempdir().unwrap();
         let root = td.path();
         let pool = index_pool(root).await;
-        render(root, "src", &[doc(root, "src", "md-1", "a")]);
+        render(root, "src", &[doc("src", "md-1", "a")]);
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
 
         let cursors = load_source_cursors(&pool).await.unwrap();
@@ -3500,7 +4006,7 @@ mod source_cursor_tests {
             .await
             .unwrap();
         let first: String = sqlx::query_scalar(
-            "SELECT commit_hash FROM dolt_log() WHERE message = 'Initialize data repository'",
+            "SELECT commit_hash FROM dolt_log() WHERE message LIKE 'Initialize data repository%'",
         )
         .fetch_one(&pool)
         .await
@@ -3533,9 +4039,9 @@ mod source_cursor_tests {
         render(
             root,
             "src",
-            &[doc(root, "src", "md-1", "a"), doc(root, "src", "md-2", "b")],
+            &[doc("src", "md-1", "a"), doc("src", "md-2", "b")],
         );
-        render(root, "src", &[doc(root, "src", "md-2", "b-again")]);
+        render(root, "src", &[doc("src", "md-2", "b-again")]);
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         let before = load_source_cursors(&pool).await.unwrap()["src"].clone();
 
@@ -3546,7 +4052,7 @@ mod source_cursor_tests {
         assert_ne!(after.commit, before.commit);
         assert_eq!(after.tree, before.tree);
 
-        render(root, "src", &[doc(root, "src", "md-1", "a-changed")]);
+        render(root, "src", &[doc("src", "md-1", "a-changed")]);
         let s = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         assert_eq!(s.markdowns_total, 1, "one document read, not two");
     }
@@ -3561,12 +4067,12 @@ mod source_cursor_tests {
         render(
             root,
             "src",
-            &[doc(root, "src", "md-1", "a"), doc(root, "src", "md-2", "b")],
+            &[doc("src", "md-1", "a"), doc("src", "md-2", "b")],
         );
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
 
         // md-2 changes; md-1 does not.
-        render(root, "src", &[doc(root, "src", "md-2", "b-changed")]);
+        render(root, "src", &[doc("src", "md-2", "b-changed")]);
         let s = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         assert_eq!(s.markdowns_total, 1, "one document read, not two");
         assert_eq!(s.markdowns_loaded, 1);
@@ -3589,7 +4095,7 @@ mod source_cursor_tests {
         render(
             root,
             "src",
-            &[doc(root, "src", "md-1", "a"), doc(root, "src", "md-2", "b")],
+            &[doc("src", "md-1", "a"), doc("src", "md-2", "b")],
         );
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         assert_eq!(index_row_count(&pool).await, 2);
@@ -3605,18 +4111,17 @@ mod source_cursor_tests {
         assert_eq!(left, "md-1");
     }
 
-    /// Problems flow downstream with the data: a source's `problems`
-    /// are copied into the index whole, stamps included, and a render
-    /// that fixes the document clears them there too — even on an
-    /// incremental run that only read the changed document.
+    /// The index keeps no copy of a source's problems: a reader finds
+    /// them in the render store itself. A copy an older build left goes
+    /// on the next pass that reads the source.
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_sources_problems_are_copied_into_the_index_and_cleared_when_fixed() {
+    async fn the_index_keeps_no_copy_of_a_sources_problems() {
+        use datalib_etl::bulk::BulkUpsertable as _;
         use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
         let td = tempdir().unwrap();
         let root = td.path();
         let pool = index_pool(root).await;
-        let mut bad = doc(root, "src", "md-1", "a");
-        bad.problems.push(ProblemRow::new(
+        let problem = ProblemRow::new(
             "src",
             Stage::GridRow,
             Scope::Markdown("md-1"),
@@ -3624,35 +4129,30 @@ mod source_cursor_tests {
             Outcome::Nulled,
             Problem::field("created_at", Reason::CoercionFailed, "yesterday"),
             Some(1),
-        ));
-        render(root, "src", &[bad, doc(root, "src", "md-2", "b")]);
-        let s = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
-        assert_eq!(s.problems_copied, 1);
-        let (uuid, first_seen): (String, String) =
-            sqlx::query_as("SELECT problem_uuid, first_seen_at_utc FROM problems")
+        );
+        let mut bad = doc("src", "md-1", "a");
+        bad.problems.push(problem.clone());
+        render(root, "src", &[bad, doc("src", "md-2", "b")]);
+        build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        let count = || async {
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM problems")
                 .fetch_one(&pool)
                 .await
-                .unwrap();
-        assert!(
-            !first_seen.is_empty(),
-            "the render store's stamp came through"
-        );
-        assert!(
-            super::own_problem_counts(&pool).await.unwrap().is_empty(),
-            "a copy is counted by the source's step, not the index"
-        );
+                .unwrap()
+        };
+        assert_eq!(count().await, 0, "the render store's row was not copied");
 
-        // Fixed: the same document renders clean. The index only reads
-        // md-1 this run (the cursor names the changed document), and
-        // the copy is still whole-source, so the row goes.
-        render(root, "src", &[doc(root, "src", "md-1", "a fixed")]);
-        let s = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
-        assert_eq!(s.markdowns_loaded, 1, "only the changed document was read");
-        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM problems")
-            .fetch_one(&pool)
+        problem
+            .stamped(None, "2370-01-01T00:00:00.000000+00:00", None)
+            .bind_into(sqlx::query(sqlx::AssertSqlSafe(
+                datalib_etl::bulk::insert_sql::<ProblemRow>(),
+            )))
+            .execute(&pool)
             .await
             .unwrap();
-        assert_eq!(left, 0, "{uuid} should be gone from the index");
+        render(root, "src", &[doc("src", "md-2", "b again")]);
+        build_grid_index(&pool, root, |_| {}, None).await.unwrap();
+        assert_eq!(count().await, 0, "an older build's copy went");
     }
 
     /// An unusable cursor must fall back to reading the store whole, not to
@@ -3664,7 +4164,7 @@ mod source_cursor_tests {
         let td = tempdir().unwrap();
         let root = td.path();
         let pool = index_pool(root).await;
-        render(root, "src", &[doc(root, "src", "md-1", "a")]);
+        render(root, "src", &[doc("src", "md-1", "a")]);
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
 
         // A commit and a tree from no history anyone has.
@@ -3697,11 +4197,11 @@ mod source_cursor_tests {
         render(
             root,
             "src",
-            &[doc(root, "src", "md-1", "a"), doc(root, "src", "md-2", "b")],
+            &[doc("src", "md-1", "a"), doc("src", "md-2", "b")],
         );
         let first = build_grid_index(&pool, root, |_| {}, None).await.unwrap();
 
-        render(root, "src", &[doc(root, "src", "md-2", "b, changed")]);
+        render(root, "src", &[doc("src", "md-2", "b, changed")]);
         sqlx::query("DELETE FROM source_cursors")
             .execute(&pool)
             .await
@@ -3723,14 +4223,12 @@ mod source_cursor_tests {
         let td = tempdir().unwrap();
         let root = td.path();
         let pool = index_pool(root).await;
-        let mut md = doc(root, "src", "md-1", "a");
+        let mut md = doc("src", "md-1", "a");
         let mut child = md.rows[0].clone();
         child.is_document = false;
         md.rows.push(child);
         let lock = crate::grid_index::WriteLock::new(pool.clone());
-        let err = crate::grid_index::apply_one(&lock, root, &md)
-            .await
-            .unwrap_err();
+        let err = crate::grid_index::apply_one(&lock, &md).await.unwrap_err();
         assert!(
             format!("{err:#}").contains("two of its rows have the uuid md-1"),
             "{err:#}"
@@ -3750,9 +4248,9 @@ mod source_cursor_tests {
         render(
             root,
             "src",
-            &[doc(root, "src", "md-1", "a"), doc(root, "src", "md-2", "b")],
+            &[doc("src", "md-1", "a"), doc("src", "md-2", "b")],
         );
-        render(root, "other", &[doc(root, "other", "md-3", "c")]);
+        render(root, "other", &[doc("other", "md-3", "c")]);
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         assert_eq!(index_row_count(&pool).await, 3);
 
@@ -3787,7 +4285,7 @@ mod source_cursor_tests {
         let td = tempdir().unwrap();
         let root = td.path();
         let holding = |doc_uuid: &str| {
-            let mut md = doc(root, "src", doc_uuid, doc_uuid);
+            let mut md = doc("src", doc_uuid, doc_uuid);
             let mut message = md.rows[0].clone();
             message.uuid = "msg-u".to_string();
             message.is_document = false;

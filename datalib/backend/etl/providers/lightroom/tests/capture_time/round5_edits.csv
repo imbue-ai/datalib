@@ -1,0 +1,9 @@
+name,capture_time,touch,asks
+A01,2024-07-01T14:00:00.000+02:00,capture,clock only: does it show and sort as 14:00?
+A11,2024-07-01T14:00:00.000+02:00,capture_offset,offset in captureTime: kept through a session and Lightroom's own edits?
+A05,2024-07-01T05:00:00.000-07:00,xmp,offset into the XMP only: kept? does Lightroom notice the XMP changed?
+D08,2024-07-03T05:00:00.000-07:00,capture+xmp+original,"the whole fix: a Berlin clock abroad, put into San Francisco time"
+E05X,2024-07-04T14:00:00.000+02:00,capture+xmp+original,"a video's whole fix: UTC clock to Berlin time"
+V01,2024-07-05T14:00:00.000+02:00,capture,a video's clock only
+F10,2024-08-02T06:00:00.000+09:00,capture+xmp+days+original,"the date changes, day columns moved: which day does the Library date filter put it under?"
+F12,2024-08-02T06:00:00.000+09:00,capture+xmp+original,"the date changes, day columns left: which day does the filter put it under?"

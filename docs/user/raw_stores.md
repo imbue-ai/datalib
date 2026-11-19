@@ -42,7 +42,7 @@ A source's raw directory holds two files:
 **Stock `sqlite3` cannot open `entities.doltlite_db`** (`file is not a
 database`). Doltlite is SQLite with git-shaped history kept inside the
 file. Read it with **`datalib-doltlite`**, which ships beside
-`datalib-dag` (as plain `doltlite` in the Docker image) and takes
+`datalib-dag` (and in the Docker image) and takes
 `sqlite3`'s arguments. The examples assume sources whose ids are
 `gmail`, `slack` and `calendar`; put your own in. **Always pass
 `-readonly`**: a writable session's commits are overwritten by the
@@ -57,16 +57,39 @@ datalib-doltlite -readonly -json gmail/ingest/entities.doltlite_db \
   "SELECT id, subject, received_at FROM emails LIMIT 5"
 ```
 
-From a program, the simplest route is to run `datalib-doltlite
--readonly -json` as a subprocess and parse its output. That costs a
-process start and a store open per query, so a Python program that runs
-many can keep the store open instead, under any Python, uv's included.
-`uv add imbue-datalib-reader` installs the library, `libdoltlite`, with a short
-module that calls it.
+**From Python**, under any version from 3.9 on, uv's builds included, install
+the reader at the version `datalib-dag --version` prints, and keep the store
+open:
+
+```sh
+uv add imbue-datalib-reader==<version>   # or pip install
+```
+
+```python
+from datalib_reader import Store
+
+with Store("gmail/ingest/entities.doltlite_db") as store:
+    rows = store.query("SELECT id, subject FROM emails WHERE subject LIKE ?", "%invoice%")
+```
+
+`query` returns a list of rows, each a tuple that also answers by column name (`row["subject"]`), and a write fails. **Select a payload as
+`json(payload)`**: a bare `payload` comes back as JSONB `bytes`, which
+`json.loads` refuses with a `UnicodeDecodeError` ([below](#payload-is-json-stored-as-jsonb)).
+
+```python
+import json
+payload = json.loads(store.query("SELECT json(payload) FROM emails LIMIT 1")[0][0])
+```
+
+It has wheels for
+Apple-silicon Macs and for Linux on x86_64 and aarch64, glibc and musl.
 [Reading a store from Python](../dev/doltlite.md#reading-a-store-from-python)
-has how to use it. It also says when to `import doltlite` instead, which makes the standard `sqlite3` module run on doltlite:
-only for code that needs that module or SQLAlchemy, and not under the builds
-`uv python install` fetches.
+has the rest, and says when to `import doltlite` instead, which makes the
+standard `sqlite3` module run on doltlite: only for code that needs that module
+or SQLAlchemy, and not under the builds `uv python install` fetches.
+
+**From anything else**, run `datalib-doltlite -readonly -json` as a subprocess
+and parse its output. That costs a process start and a store open per query.
 
 For a tool that
 speaks only SQLite, one pipe writes a plain SQLite copy with the same
@@ -107,7 +130,8 @@ fresh is the mirror?").
 
 Most tables keep the record as the service sent it in a `payload`
 column. It is stored as SQLite's binary JSON (JSONB), so selecting it
-bare prints bytes. Ask for `json(payload)` to see the text, and use
+bare prints bytes, and from Python returns `bytes` that `json.loads`
+cannot decode. Ask for `json(payload)` to get the text, and use
 SQLite's JSON functions on it directly:
 
 ```sql
@@ -213,14 +237,14 @@ document.
 | column | what it holds |
 |---|---|
 | `problem_uuid` | a stable id for this problem, the same each time it recurs |
-| `source_id` | empty here; the render step fills it when it copies the row |
+| `source_id` | the source's id, its group |
 | `stage` | which stage found it: `fetch` in a raw store |
 | `severity` | `error`, `warning` or `info` |
 | `outcome` | what became of the record: `dropped` (not in the mirror), `nulled` (in it, missing something), `ok` |
 | `reason` | why: `fetch_failed`, `over_size_limit`, `not_found`, `forbidden`, … |
 | `scope_kind` | `entity` in a raw store |
 | `scope_key` | what it is about, as `<table>:<id>` for a record (`emails:018f…`), or `listing:…`, `phase:…` |
-| `item_uuid` | empty here; render fills it with the document's row |
+| `item_uuid` | empty here; the app's problems list fills it from what render recorded of the record's grid row |
 | `field` | the field it is about, when it is one field |
 | `path` | where in the payload, as a JSON pointer, when known |
 | `rule` | the rule that fired, when the loss was deliberate |
@@ -229,6 +253,9 @@ document.
 | `changed_at_utc` | when it last changed, in UTC |
 | `tz_offset` | the offset for the two stamps |
 | `render_version` | empty here; set on rows a render records |
+| `upstream_entity_kind` | the kind of upstream record the problem is about, as a grid row names it, where the download said; empty otherwise |
+| `upstream_id` | that record's upstream id, likewise |
+| `upstream_account` | the upstream account it is in, likewise |
 
 ### `sync_runs`
 
@@ -246,7 +273,7 @@ fresh is the mirror?".
 | `tz_offset` | the offset for the two stamps |
 | `config` | the step's params as that run saw them, JSON |
 | `status` | `running`, then how it ended: `ok` if it read everything it set out to; `partial` if it ended early, told to stop, giving up on a service that stopped answering, or over a budget such as `message_budget`; `error` if it failed; `interrupted` if it was killed before it could say, set when the next run starts. Rows written before `partial` existed say `ok` for a run that ended early |
-| `summary` | what it did, JSON (counts, and why it stopped early if it did) |
+| `summary` | what it did, JSON (counts, and why it stopped early if it did). `cursors` lists each sync position the run moved, before and after; where more than five of one kind moved (a first Slack run checks every closed DM), they are one entry in `cursors_by_kind` instead: the kind, how many moved, how many are new, and three examples |
 
 ### `sync_scope_state`
 
@@ -279,11 +306,11 @@ the files and settings match the stamp, the run skips the read.
 | `last_finished_at_utc` | when the read that took it in finished, in UTC |
 | `tz_offset` | the offset for that stamp |
 
-## Gmail, Fastmail and mbox (`email`)
+## Gmail, Fastmail, Apple Mail and mbox (`email`)
 
-All three ways into mail write one schema. Fastmail and other JMAP
-servers send JMAP's own objects; the Gmail API and mbox files are made
-to look like them, so `payload` is a JMAP-shaped **envelope**: who,
+Every way into mail writes one schema. Fastmail and other JMAP
+servers send JMAP's own objects; the Gmail API, Apple Mail and mbox
+files are made to look like them, so `payload` is a JMAP-shaped **envelope**: who,
 when, subject, labels. **There is no body in the envelope.** The message
 itself, headers, body and attachments, is the original RFC 5322 `.eml`,
 stored whole in `blobs.sqlite`. To show a line of a message without
@@ -304,8 +331,25 @@ API spells an id from Gmail's first months with only 15 digits, and the
 mirror adds the leading zero. `listed_messages.id` and
 `thread_members.id` keep the API's own spelling. `label_ids` is set
 only on a message the Gmail API has answered for, so it is NULL for
-Fastmail, for an mbox, and for a message a Takeout seeded until the
+Fastmail, for Apple Mail, for an mbox, and for a message a Takeout seeded until the
 next sync asks Gmail for its labels.
+
+**From the mirror's spelling to the API's, and back.** The Gmail API and
+Gmail's URLs write an id without leading zeros; the mirror pads it to
+16 digits. In SQL:
+
+```sql
+-- the API's spelling of each message's id and thread id
+SELECT id, ltrim(id, '0') AS api_id, ltrim(thread_id, '0') AS api_thread_id
+  FROM emails;
+-- a message by the id the API gave, bound to the ?
+SELECT * FROM emails WHERE id = substr('0000000000000000' || lower(?), -16);
+```
+
+To open a message in Gmail, link to
+`https://mail.google.com/mail/u/0/#search/rfc822msgid:` followed by its
+`message_id`, percent-encoded: the link the app's own ↗ uses. `u/0` is
+the first Google account the browser is signed in to.
 
 **Getting the message.** Join `email_blobs` on the email, then
 `cas_objects` in `blobs.sqlite` on its `blake3`. The row's
@@ -342,7 +386,7 @@ asks whether a message is in the inbox.
 
 **Traps.**
 
-- **`received_at` is not Gmail's receipt time.** For Gmail and mbox it
+- **`received_at` is not Gmail's receipt time.** For Gmail, Apple Mail and mbox it
   is the message's own `Date:` header (Gmail's receipt time only when
   the header is missing or unreadable), and `sent_at` is the same
   value. For JMAP it is when the server received the message. Either
@@ -533,6 +577,19 @@ user, channel or message JSON from `users.list`,
 | a message's `ts` in a conversation | `messages.ts`; the row's `id` is `<team id>#<channel id>#<ts>` |
 | a thread (its root's `ts`) | `messages.thread_root_uuid`, equal to the root's `messages.id` |
 | a file id `F…` | `slack_attachments.file_id` |
+
+**A message's permalink**, as Slack's `chat.getPermalink` builds it: on
+the workspace's own host, and for a reply, with the thread it is in.
+
+```sql
+SELECT m.id,
+       rtrim(w.team_url, '/') || '/archives/' || m.channel_id
+         || '/p' || replace(m.ts, '.', '')
+         || CASE WHEN m.thread_ts IS NOT NULL AND m.thread_ts != m.ts
+                 THEN '?thread_ts=' || m.thread_ts || '&cid=' || m.channel_id
+                 ELSE '' END AS permalink
+  FROM messages m JOIN workspaces w ON w.id = m.team_id;
+```
 
 `workspaces.self_user_id` is the account the mirror signs in as, which
 is how to tell "me" from everyone else. A direct message is a
@@ -983,8 +1040,11 @@ The days the rows cover. One row.
 
 An event whose occurrences could not be worked out, and why: a `TZID`
 the zone database does not know, a rule part this build does not follow
-(`BYWEEKNO`, a sub-daily `FREQ`), no start. Nothing is guessed; the
-Manage row counts them as warnings.
+(`BYWEEKNO`, a sub-daily `FREQ`), no start. Nothing is guessed. Each
+event here is also a warning in the store's `problems`, with the
+columns a raw store's has (§ "What every raw store has"), `stage`
+`occurrences` and the raw row as `scope_key`; that is the row the
+problems list shows and the Manage row counts.
 
 | column | what it holds |
 |---|---|

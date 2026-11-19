@@ -28,6 +28,9 @@ problems
     changed_at_utc
     tz_offset
     render_version
+    upstream_entity_kind
+    upstream_id
+    upstream_account
 sync_runs
     run_id
     started_at_utc
@@ -121,6 +124,36 @@ conversations
     name
     updated_at
 conversations_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
+cowork_events
+    id
+    payload
+    session_id
+    sequence_num
+cowork_events_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
+cowork_sessions
+    id
+    payload
+    org_uuid
+    org_name
+    title
+    last_event_at
+cowork_sessions_bookkeeping
     id
     fetched_at_utc
     attempt_count
@@ -1871,7 +1904,7 @@ media_blobs_bookkeeping
     tz_offset
     held_version
 
-== unified_document_index/grid ==
+== unified_grid_and_search_index/grid ==
 edges
     edge_uuid
     src_markdown_uuid
@@ -1879,6 +1912,7 @@ edges
     dst_markdown_uuid
     dst_anchor_uuid
     label
+    kind
 grid_rows
     uuid
     provider
@@ -1906,11 +1940,14 @@ grid_rows
     channel
     conversation_name
     conversation_uuid
+    parent_uuid
+    sort_key
+    read_uuid
+    place_uuid
     message_index
     entire_chat
     preview
     content_hash
-    qmd_path
     source_id
     source_url
     git_sha
@@ -1938,10 +1975,12 @@ markdowns
     created_at
     modified_at
     item_count
-    md_path
     upstream_cursor
     renderer_version
     bucket_key
+    content_hash
+    front
+    searchable
 problems
     problem_uuid
     source_id
@@ -1960,6 +1999,9 @@ problems
     changed_at_utc
     tz_offset
     render_version
+    upstream_entity_kind
+    upstream_id
+    upstream_account
 render_cursor
     source_id
     raw_commit

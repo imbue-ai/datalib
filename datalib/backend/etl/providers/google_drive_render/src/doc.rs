@@ -6,7 +6,9 @@
 
 use std::collections::HashMap;
 
-use datalib_etl_render::html::{escape_md_inline, md_code_block, md_code_span, md_link_dest};
+use datalib_etl_render::html::{
+    escape_md_inline, escape_name_inline, md_code_block, md_code_span, md_link_dest,
+};
 use datalib_etl_render::message::chip_link;
 use datalib_handle::Handle;
 use serde_json::Value;
@@ -173,7 +175,7 @@ impl Cx<'_> {
                 .and_then(Value::as_str)
                 .unwrap_or("Untitled tab");
             self.out.blocks.push(Block {
-                md: format!("# {}", escape_md_inline(title)),
+                md: format!("# {}", escape_name_inline(title)),
                 text: title.to_string(),
                 kind: BlockKind::Plain,
             });
@@ -346,7 +348,7 @@ impl Cx<'_> {
                 let shown = name.or(email).unwrap_or("");
                 let md = match email.and_then(Handle::email) {
                     Some(h) => chip_link(shown, &h),
-                    None => escape_md_inline(shown),
+                    None => escape_name_inline(shown),
                 };
                 runs.push(Run::markup(md, shown.to_string()));
             } else if let Some(link) = e.get("richLink") {
@@ -359,8 +361,8 @@ impl Cx<'_> {
                     .or(uri)
                     .unwrap_or("");
                 let md = match uri {
-                    Some(uri) => format!("[{}]({})", escape_md_inline(title), md_link_dest(uri)),
-                    None => escape_md_inline(title),
+                    Some(uri) => format!("[{}]({})", escape_name_inline(title), md_link_dest(uri)),
+                    None => escape_name_inline(title),
                 };
                 runs.push(Run::markup(md, title.to_string()));
             } else if let Some(date) = e.get("dateElement") {

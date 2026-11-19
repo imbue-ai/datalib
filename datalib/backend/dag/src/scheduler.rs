@@ -210,6 +210,18 @@ impl Runner {
         Ok((i, version))
     }
 
+    /// Every step a pass will ask, written to the run's record as pending
+    /// before the first is asked, so a reader can say how many are left.
+    /// A step the pass never reaches leaves no row when the run ends.
+    pub fn plan(&self, graph: &Graph, steps: &[StepId]) {
+        let planned = steps
+            .iter()
+            .filter_map(|s| graph.by_id.get(s))
+            .map(|&i| crate::events::PlannedStep::of(&graph.steps[i]))
+            .collect();
+        self.sink.emit(&Event::RunPlan { steps: planned });
+    }
+
     /// Ask each named step to make what it wrote usable by its program,
     /// fetching nothing: each is invoked once with `--prepare` appended
     /// (`step_protocol.md` § Verbs). What a step can bring to its
@@ -279,19 +291,21 @@ impl Runner {
         Ok(out)
     }
 
-    /// `step` invoked once with `how`'s flag, and the version it reports.
+    /// `step` invoked once with `how`'s flag: the version it reports, and
+    /// its store's size before and after when it had one.
     pub(crate) async fn shrink_one(
         &self,
         graph: &Graph,
         step: &StepId,
         how: Shrink,
-    ) -> std::result::Result<Option<String>, String> {
+    ) -> std::result::Result<(Option<String>, Option<crate::step::StoreBytes>), String> {
         let (i, outcome) = self
             .invoke_once(graph, step, how.verb())
             .await
             .map_err(|e| e.to_string())?;
-        reported_version(&graph.steps[i], &graph.fingerprints[i], &outcome.outputs)
-            .map_err(|e| format!("{e:#}"))
+        let version = reported_version(&graph.steps[i], &graph.fingerprints[i], &outcome.outputs)
+            .map_err(|e| format!("{e:#}"))?;
+        Ok((version, outcome.store_bytes))
     }
 
     /// One invocation of `step` with `verb` appended to its argv, outside
@@ -950,6 +964,7 @@ mod tests {
                         outputs: vec![ArtifactState::versioned(&pat, version)],
                         exit: None,
                         needs_rerun: false,
+                        store_bytes: None,
                     })
                 }
             }),
@@ -978,11 +993,11 @@ mod tests {
     }
 
     /// The fan-in index step: concatenates every input tree's files
-    /// into `unified_document_index/grid/index.txt`. Its inputs are named, not
+    /// into `unified_grid_and_search_index/grid/index.txt`. Its inputs are named, not
     /// globbed. Counts invocations and remembers `changed_inputs`.
     fn index(runs: Arc<AtomicU32>, seen_changed: Arc<Mutex<Vec<String>>>) -> StepSpec {
         StepSpec::new(
-            "unified_document_index/grid",
+            "unified_grid_and_search_index/grid",
             StepRun::in_process(move |ctx: StepCtx| {
                 let runs = runs.clone();
                 let seen_changed = seen_changed.clone();
@@ -1039,7 +1054,7 @@ mod tests {
                     "email/raw",
                     "slack/rendered_md",
                     "email/rendered_md",
-                    "unified_document_index/grid",
+                    "unified_grid_and_search_index/grid",
                 ]
                 .into_iter()
                 .map(|k| (k, Arc::new(AtomicU32::new(0))))
@@ -1063,7 +1078,7 @@ mod tests {
                 ),
                 render("email", self.runs["email/rendered_md"].clone()),
                 index(
-                    self.runs["unified_document_index/grid"].clone(),
+                    self.runs["unified_grid_and_search_index/grid"].clone(),
                     self.index_changed_inputs.clone(),
                 ),
             ])
@@ -1112,6 +1127,7 @@ mod tests {
                         outputs: vec![ArtifactState::versioned(&pat, "final")],
                         exit: None,
                         needs_rerun: false,
+                        store_bytes: None,
                     })
                 }
             }),
@@ -1154,6 +1170,7 @@ mod tests {
                     outputs: vec![ArtifactState::versioned(&pat, version)],
                     exit: None,
                     needs_rerun: false,
+                    store_bytes: None,
                 })
             }),
         )
@@ -1187,6 +1204,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "c1")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }
@@ -1196,7 +1214,7 @@ mod tests {
         let graph = Graph::build(vec![
             producer,
             counting_consumer(
-                "unified_document_index/grid",
+                "unified_grid_and_search_index/grid",
                 "src/rendered_md",
                 passes.clone(),
             ),
@@ -1241,6 +1259,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "final").with_rows(5)],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -1249,7 +1268,11 @@ mod tests {
         };
         let graph = Graph::build(vec![
             producer,
-            counting_consumer("unified_document_index/grid", "slack/raw", passes.clone()),
+            counting_consumer(
+                "unified_grid_and_search_index/grid",
+                "slack/raw",
+                passes.clone(),
+            ),
         ])
         .unwrap();
 
@@ -1270,7 +1293,7 @@ mod tests {
                     name,
                     labels,
                     value,
-                } if step == "unified_document_index/grid"
+                } if step == "unified_grid_and_search_index/grid"
                     && name == "queued"
                     && labels.get("from").map(String::as_str) == Some("slack/raw") =>
                 {
@@ -1310,7 +1333,11 @@ mod tests {
         let passes = Arc::new(AtomicU32::new(0));
         let graph = Graph::build(vec![
             streaming_producer("slack", 3, passes.clone()),
-            counting_consumer("unified_document_index/grid", "slack/raw", passes.clone()),
+            counting_consumer(
+                "unified_grid_and_search_index/grid",
+                "slack/raw",
+                passes.clone(),
+            ),
         ])
         .unwrap();
 
@@ -1344,7 +1371,7 @@ mod tests {
     /// hop, exactly as a checkpoint is. Without that a chain streams one
     /// hop only -- the first consumer runs early, but nothing downstream of
     /// it moves until it goes terminal, which is after the producer has
-    /// finished. For `ingest -> render -> grid_index` that meant no row
+    /// finished. For `ingest -> render -> unified_grid_and_search_index` that meant no row
     /// reached the grid until the download was over.
     #[tokio::test]
     async fn an_early_pass_that_produced_output_dispatches_its_own_consumers() {
@@ -1389,6 +1416,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -1400,7 +1428,7 @@ mod tests {
             producer,
             middle,
             counting_consumer(
-                "unified_document_index/grid",
+                "unified_grid_and_search_index/grid",
                 "slack/rendered",
                 sink_passes.clone(),
             ),
@@ -1431,7 +1459,7 @@ mod tests {
         let ended = |events: &[Event]| {
             events.iter().any(|e| {
                 matches!(e, Event::PassEnd { step, .. } | Event::StepFinish { step, .. }
-                    if step == "unified_document_index/grid")
+                    if step == "unified_grid_and_search_index/grid")
             })
         };
 
@@ -1461,7 +1489,7 @@ mod tests {
                             let events = rec.0.lock().unwrap();
                             events.iter().any(|e| {
                                 matches!(e, Event::StepFinish { step, .. }
-                                    if step == "unified_document_index/grid")
+                                    if step == "unified_grid_and_search_index/grid")
                             })
                         };
                         finished_early.store(finished, Ordering::SeqCst);
@@ -1471,6 +1499,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -1482,7 +1511,7 @@ mod tests {
             producer,
             middle,
             counting_consumer(
-                "unified_document_index/grid",
+                "unified_grid_and_search_index/grid",
                 "slack/rendered",
                 sink_passes.clone(),
             ),
@@ -1528,13 +1557,18 @@ mod tests {
                     outputs: vec![ArtifactState::versioned(&pat, "final")],
                     exit: None,
                     needs_rerun: false,
+                    store_bytes: None,
                 })
             }),
         );
         producer.streams_output = false;
         let graph = Graph::build(vec![
             producer,
-            counting_consumer("unified_document_index/grid", "slack/raw", passes.clone()),
+            counting_consumer(
+                "unified_grid_and_search_index/grid",
+                "slack/raw",
+                passes.clone(),
+            ),
         ])
         .unwrap();
 
@@ -1560,7 +1594,7 @@ mod tests {
         );
     }
 
-    /// At most one instance of a step in flight. `grid_index` is a fan-in
+    /// At most one instance of a step in flight. `unified_grid_and_search_index` is a fan-in
     /// that every source pokes, so two producers checkpointing at once is
     /// the ordinary case — and a second dispatch would put two writers on
     /// one tree, which single-writer-per-file forbids everywhere here.
@@ -1576,7 +1610,7 @@ mod tests {
             let max_seen = max_seen.clone();
             let passes = passes.clone();
             StepSpec::new(
-                "unified_document_index/grid",
+                "unified_grid_and_search_index/grid",
                 StepRun::in_process(move |ctx: StepCtx| {
                     let (concurrent, max_seen, passes) =
                         (concurrent.clone(), max_seen.clone(), passes.clone());
@@ -1616,6 +1650,7 @@ mod tests {
                         outputs: vec![ArtifactState::versioned(&pat, "final")],
                         exit: None,
                         needs_rerun: false,
+                        store_bytes: None,
                     })
                 }),
             )
@@ -1700,6 +1735,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -1710,7 +1746,7 @@ mod tests {
         let slack = producer("slack", always, Arc::new(AtomicBool::new(false)));
         let email = producer("email", in_pass.clone(), email_sealed.clone());
 
-        let grid_index = {
+        let index_step = {
             let (passes, concurrent, max_seen, in_pass, email_sealed) = (
                 passes.clone(),
                 concurrent.clone(),
@@ -1719,7 +1755,7 @@ mod tests {
                 email_sealed.clone(),
             );
             StepSpec::new(
-                "unified_document_index/grid",
+                "unified_grid_and_search_index/grid",
                 StepRun::in_process(move |ctx: StepCtx| {
                     let (passes, concurrent, max_seen, in_pass, email_sealed) = (
                         passes.clone(),
@@ -1754,7 +1790,7 @@ mod tests {
             .input("email/rendered_md")
         };
 
-        let graph = Graph::build(vec![slack, email, grid_index]).unwrap();
+        let graph = Graph::build(vec![slack, email, index_step]).unwrap();
         let rec = Arc::new(Recorder::default());
         let mut r = runner(root.path());
         r.sink = rec.clone();
@@ -1864,6 +1900,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -1871,7 +1908,7 @@ mod tests {
             .streams_output()
         };
 
-        let grid_index = {
+        let index_step = {
             let (passes, concurrent, max_seen, in_pass, sealed) = (
                 passes.clone(),
                 concurrent.clone(),
@@ -1880,7 +1917,7 @@ mod tests {
                 sealed.clone(),
             );
             StepSpec::new(
-                "unified_document_index/grid",
+                "unified_grid_and_search_index/grid",
                 StepRun::in_process(move |ctx: StepCtx| {
                     let (passes, concurrent, max_seen, in_pass, sealed) = (
                         passes.clone(),
@@ -1915,7 +1952,7 @@ mod tests {
         let graph = Graph::build(vec![
             producer("slack", slack_saw.clone()),
             producer("email", email_saw.clone()),
-            grid_index,
+            index_step,
         ])
         .unwrap();
         let rec = Arc::new(Recorder::default());
@@ -1956,7 +1993,7 @@ mod tests {
                         name,
                         labels,
                         value,
-                    } if step == "unified_document_index/grid"
+                    } if step == "unified_grid_and_search_index/grid"
                         && name == "queued"
                         && labels.get("from").map(String::as_str) == Some(producer) =>
                     {
@@ -1987,7 +2024,7 @@ mod tests {
                         name,
                         labels,
                         value,
-                    } if step == "unified_document_index/grid"
+                    } if step == "unified_grid_and_search_index/grid"
                         && name == datalib_metrics::DEQUEUED
                         && labels.get("from").map(String::as_str) == Some(producer) =>
                     {
@@ -2051,7 +2088,7 @@ mod tests {
             ));
         }
         specs.push(counting_consumer(
-            "unified_document_index/grid",
+            "unified_grid_and_search_index/grid",
             "slack/raw",
             passes.clone(),
         ));
@@ -2071,7 +2108,7 @@ mod tests {
         );
     }
 
-    /// The `render -> grid_index` shape specifically: several producers
+    /// The `render -> unified_grid_and_search_index` shape specifically: several producers
     /// that both checkpoint *and* finish at about the same moment.
     ///
     /// Two different code paths can make the fan-in ready — a checkpoint
@@ -2110,6 +2147,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "final")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -2117,11 +2155,11 @@ mod tests {
             .streams_output()
         };
 
-        let grid_index = {
+        let index_step = {
             let (concurrent, max_seen, passes) =
                 (concurrent.clone(), max_seen.clone(), passes.clone());
             StepSpec::new(
-                "unified_document_index/grid",
+                "unified_grid_and_search_index/grid",
                 StepRun::in_process(move |ctx: StepCtx| {
                     let (concurrent, max_seen, passes) =
                         (concurrent.clone(), max_seen.clone(), passes.clone());
@@ -2146,7 +2184,7 @@ mod tests {
         let graph = Graph::build(vec![
             render("slack", barrier.clone()),
             render("email", barrier),
-            grid_index,
+            index_step,
         ])
         .unwrap();
         let report = tokio::time::timeout(Duration::from_secs(10), runner(root.path()).run(&graph))
@@ -2170,14 +2208,14 @@ mod tests {
         let idx = report
             .steps
             .iter()
-            .find(|s| s.id == "unified_document_index/grid")
+            .find(|s| s.id == "unified_grid_and_search_index/grid")
             .unwrap();
         assert!(idx.status.is_ok(), "{:?}", idx.status);
         // And the pass that followed the first one read *both* finals:
         // the second producer's finish arrived while the fan-in was busy
         // with the first's, and held-back is not the same as dropped.
         let st = crate::supervisor::record::recorded(root.path()).await;
-        let read = &st.steps["unified_document_index/grid"].reads;
+        let read = &st.steps["unified_grid_and_search_index/grid"].reads;
         for producer in ["slack/rendered_md", "email/rendered_md"] {
             assert!(
                 read.get(producer).is_some_and(|v| v.ends_with(":final")),
@@ -2189,7 +2227,7 @@ mod tests {
     /// A producer *finishing* should start the fan-in, not just a
     /// checkpoint from one.
     ///
-    /// With several renders feeding `grid_index`, the fast ones are done
+    /// With several renders feeding `unified_grid_and_search_index`, the fast ones are done
     /// long before the slow one. Waiting for `remaining_deps` to reach zero
     /// means none of their documents reach the grid until the slowest
     /// source finishes — which for a mirror with one big source is nearly
@@ -2218,6 +2256,7 @@ mod tests {
                     outputs: vec![ArtifactState::versioned(&pat, "fast-v1")],
                     exit: None,
                     needs_rerun: false,
+                    store_bytes: None,
                 })
             }),
         )
@@ -2248,6 +2287,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "slow-v1")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -2255,11 +2295,11 @@ mod tests {
             .streams_output()
         };
 
-        let grid_index = {
+        let index_step = {
             let (slow_done, ran_early, passes) =
                 (slow_done.clone(), ran_early.clone(), passes.clone());
             StepSpec::new(
-                "unified_document_index/grid",
+                "unified_grid_and_search_index/grid",
                 StepRun::in_process(move |ctx: StepCtx| {
                     let (slow_done, ran_early, passes) =
                         (slow_done.clone(), ran_early.clone(), passes.clone());
@@ -2280,7 +2320,7 @@ mod tests {
             .input("slow/rendered_md")
         };
 
-        let graph = Graph::build(vec![fast, slow, grid_index]).unwrap();
+        let graph = Graph::build(vec![fast, slow, index_step]).unwrap();
         let report = tokio::time::timeout(Duration::from_secs(15), runner(root.path()).run(&graph))
             .await
             .expect("the fan-in never ran, so the slow producer never returned")
@@ -2310,6 +2350,7 @@ mod tests {
                         outputs: vec![ArtifactState::versioned(&pat, version)],
                         exit: None,
                         needs_rerun: false,
+                        store_bytes: None,
                     })
                 }
             }),
@@ -2321,7 +2362,7 @@ mod tests {
     }
 
     /// A source's own steps finish while another source is still running,
-    /// and the fan-in that reads them all finishes last. The qmd steps had
+    /// and the fan-in that reads them all finishes last. The search steps had
     /// a fan-in upstream of them, and every source's search steps read
     /// Running until the slowest source in the sync was done.
     #[tokio::test]
@@ -2359,6 +2400,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "slow-v1")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -2370,7 +2412,7 @@ mod tests {
             slow,
             quick("slow/keyword", &["slow/render"]),
             quick(
-                "unified_document_index/qmd",
+                "unified_grid_and_search_index/qmd",
                 &["fast/keyword", "slow/keyword"],
             ),
         ])
@@ -2397,7 +2439,7 @@ mod tests {
             .collect();
         assert_eq!(
             finishes.last().map(String::as_str),
-            Some("unified_document_index/qmd"),
+            Some("unified_grid_and_search_index/qmd"),
             "{finishes:?}"
         );
     }
@@ -2443,6 +2485,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "slow-v1")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -2500,6 +2543,7 @@ mod tests {
                         outputs: vec![ArtifactState::versioned(&pat, "stable")],
                         exit: None,
                         needs_rerun: false,
+                        store_bytes: None,
                     })
                 }),
             )
@@ -2511,7 +2555,7 @@ mod tests {
                 producer("b"),
                 producer("c"),
                 counting_consumer(
-                    "unified_document_index/grid",
+                    "unified_grid_and_search_index/grid",
                     "a/rendered_md",
                     passes.clone(),
                 )
@@ -2537,7 +2581,7 @@ mod tests {
         let idx = r2
             .steps
             .iter()
-            .find(|s| s.id == "unified_document_index/grid")
+            .find(|s| s.id == "unified_grid_and_search_index/grid")
             .unwrap();
         assert!(
             matches!(idx.status, StepStatus::SkippedUpToDate),
@@ -2589,6 +2633,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "early-final")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -2618,6 +2663,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "late-final")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }),
@@ -2632,7 +2678,7 @@ mod tests {
                 saw_late.clone(),
             );
             StepSpec::new(
-                "unified_document_index/grid",
+                "unified_grid_and_search_index/grid",
                 StepRun::in_process(move |ctx: StepCtx| {
                     let (consumer_running, late_done, saw_late) = (
                         consumer_running.clone(),
@@ -2714,6 +2760,7 @@ mod tests {
                             outputs: vec![ArtifactState::versioned(&pat, "v-final")],
                             exit: None,
                             needs_rerun: false,
+                            store_bytes: None,
                         })
                     }
                 }
@@ -2723,7 +2770,11 @@ mod tests {
 
         let graph = Graph::build(vec![
             producer,
-            counting_consumer("unified_document_index/grid", "slack/raw", passes.clone()),
+            counting_consumer(
+                "unified_grid_and_search_index/grid",
+                "slack/raw",
+                passes.clone(),
+            ),
         ])
         .unwrap();
         let report = runner(root.path()).run(&graph).await.unwrap();
@@ -2737,7 +2788,7 @@ mod tests {
         let consumer = report
             .steps
             .iter()
-            .find(|s| s.id == "unified_document_index/grid")
+            .find(|s| s.id == "unified_grid_and_search_index/grid")
             .unwrap();
         assert!(
             matches!(consumer.status, StepStatus::Succeeded { .. }),
@@ -2759,7 +2810,7 @@ mod tests {
             "slack/rendered_md",
             "email/raw",
             "email/rendered_md",
-            "unified_document_index/grid",
+            "unified_grid_and_search_index/grid",
         ] {
             assert_eq!(fx.run_count(id), 1, "{id} should have run once");
             assert!(
@@ -2768,7 +2819,10 @@ mod tests {
                 rep1.step(id).status
             );
         }
-        let idx = fx.root.path().join("unified_document_index/grid/index.txt");
+        let idx = fx
+            .root
+            .path()
+            .join("unified_grid_and_search_index/grid/index.txt");
         assert_eq!(
             std::fs::read_to_string(&idx).unwrap(),
             "EMAIL V1\nSLACK V1\n"
@@ -2784,7 +2838,7 @@ mod tests {
         assert_eq!(fx.run_count("slack/rendered_md"), 1, "render must skip");
         assert_eq!(fx.run_count("email/rendered_md"), 1, "render must skip");
         assert_eq!(
-            fx.run_count("unified_document_index/grid"),
+            fx.run_count("unified_grid_and_search_index/grid"),
             1,
             "index must skip"
         );
@@ -2793,7 +2847,7 @@ mod tests {
             StepStatus::SkippedUpToDate
         );
         assert_eq!(
-            rep2.step("unified_document_index/grid").status,
+            rep2.step("unified_grid_and_search_index/grid").status,
             StepStatus::SkippedUpToDate
         );
     }
@@ -2917,7 +2971,7 @@ mod tests {
             ),
             failing,
             StepSpec::new(
-                "unified_document_index/grid",
+                "unified_grid_and_search_index/grid",
                 StepRun::in_process(|_ctx| async { Ok(StepOutcome::default()) }),
             )
             .input("email/rendered_md"),
@@ -2928,7 +2982,7 @@ mod tests {
         let st = crate::supervisor::record::recorded(fx.root.path()).await;
         let run = st.current_run.unwrap();
         assert_eq!(run.states["email/rendered_md"], "failed");
-        assert_eq!(run.states["unified_document_index/grid"], "blocked");
+        assert_eq!(run.states["unified_grid_and_search_index/grid"], "blocked");
 
         let failed = st.steps["email/rendered_md"].last_run.as_ref().unwrap();
         assert_eq!(failed.status, "failed");
@@ -2937,7 +2991,7 @@ mod tests {
 
         // A step that never ran still gets a record — "blocked, and on
         // what" is the answer the table needs.
-        let blocked = st.steps["unified_document_index/grid"]
+        let blocked = st.steps["unified_grid_and_search_index/grid"]
             .last_run
             .as_ref()
             .unwrap();
@@ -2978,7 +3032,7 @@ mod tests {
             ),
             stopping,
             StepSpec::new(
-                "unified_document_index/grid",
+                "unified_grid_and_search_index/grid",
                 StepRun::in_process(|_ctx| async { Ok(StepOutcome::default()) }),
             )
             .input("email/rendered_md"),
@@ -2991,7 +3045,7 @@ mod tests {
         let st = crate::supervisor::record::recorded(fx.root.path()).await;
         let run = st.current_run.unwrap();
         assert_eq!(run.states["email/rendered_md"], "stopped");
-        assert_eq!(run.states["unified_document_index/grid"], "blocked");
+        assert_eq!(run.states["unified_grid_and_search_index/grid"], "blocked");
         let stopped = st.steps["email/rendered_md"].last_run.as_ref().unwrap();
         assert_eq!(stopped.status, "stopped");
         assert_eq!(stopped.attempts, 1, "a cancel is not retried");
@@ -3082,7 +3136,7 @@ mod tests {
         assert_eq!(fx.run_count("slack/rendered_md"), 2, "slack chain reruns");
         assert_eq!(fx.run_count("email/rendered_md"), 1, "email chain skips");
         assert_eq!(
-            fx.run_count("unified_document_index/grid"),
+            fx.run_count("unified_grid_and_search_index/grid"),
             2,
             "fan-in reruns"
         );
@@ -3091,7 +3145,10 @@ mod tests {
             *fx.index_changed_inputs.lock().unwrap(),
             vec!["slack/rendered_md".to_string()]
         );
-        let idx = fx.root.path().join("unified_document_index/grid/index.txt");
+        let idx = fx
+            .root
+            .path()
+            .join("unified_grid_and_search_index/grid/index.txt");
         assert_eq!(
             std::fs::read_to_string(&idx).unwrap(),
             "EMAIL V1\nSLACK V2\n"
@@ -3123,14 +3180,17 @@ mod tests {
             "email/rendered_md is in no request"
         );
         assert_eq!(fx.run_count("slack/rendered_md"), 2);
-        assert_eq!(fx.run_count("unified_document_index/grid"), 2);
+        assert_eq!(fx.run_count("unified_grid_and_search_index/grid"), 2);
         // The index saw only the synced chain as changed, and the
         // output still carries email's OLD content.
         assert_eq!(
             *fx.index_changed_inputs.lock().unwrap(),
             vec!["slack/rendered_md".to_string()]
         );
-        let idx = fx.root.path().join("unified_document_index/grid/index.txt");
+        let idx = fx
+            .root
+            .path()
+            .join("unified_grid_and_search_index/grid/index.txt");
         assert_eq!(
             std::fs::read_to_string(&idx).unwrap(),
             "EMAIL V1\nSLACK V2\n"
@@ -3313,10 +3373,14 @@ mod tests {
         // ...so nothing is poisoned, and the fan-in still indexes the
         // chain the user asked to sync.
         assert!(rep.all_ok(), "{rep:#?}");
-        assert_eq!(fx.run_count("unified_document_index/grid"), 1);
+        assert_eq!(fx.run_count("unified_grid_and_search_index/grid"), 1);
         assert_eq!(
-            std::fs::read_to_string(fx.root.path().join("unified_document_index/grid/index.txt"))
-                .unwrap(),
+            std::fs::read_to_string(
+                fx.root
+                    .path()
+                    .join("unified_grid_and_search_index/grid/index.txt")
+            )
+            .unwrap(),
             "SLACK V1\n"
         );
     }
@@ -3353,7 +3417,7 @@ mod tests {
             ),
             failing_email_render,
             index(
-                fx.runs["unified_document_index/grid"].clone(),
+                fx.runs["unified_grid_and_search_index/grid"].clone(),
                 fx.index_changed_inputs.clone(),
             ),
         ])
@@ -3382,15 +3446,19 @@ mod tests {
         );
         // The index was blocked in run 1 (email.render failed), so this
         // is its first run: slack reaches it, email contributes nothing.
-        assert_eq!(fx.run_count("unified_document_index/grid"), 1);
+        assert_eq!(fx.run_count("unified_grid_and_search_index/grid"), 1);
 
         // Run 3 (full): the pending render is picked back up.
         let rep3 = runner(fx.root.path()).run(&g).await.unwrap();
         assert!(rep3.all_ok(), "{rep3:#?}");
         assert_eq!(fx.run_count("email/rendered_md"), 1, "full run recovers it");
         assert_eq!(
-            std::fs::read_to_string(fx.root.path().join("unified_document_index/grid/index.txt"))
-                .unwrap(),
+            std::fs::read_to_string(
+                fx.root
+                    .path()
+                    .join("unified_grid_and_search_index/grid/index.txt")
+            )
+            .unwrap(),
             "EMAIL V1\nSLACK V1\n"
         );
     }
@@ -3423,7 +3491,7 @@ mod tests {
             aborted_email_download,
             render("email", fx.runs["email/rendered_md"].clone()),
             index(
-                fx.runs["unified_document_index/grid"].clone(),
+                fx.runs["unified_grid_and_search_index/grid"].clone(),
                 fx.index_changed_inputs.clone(),
             ),
         ])
@@ -3450,7 +3518,7 @@ mod tests {
         assert!(rep2.all_ok(), "{rep2:#?}");
         assert!(rep2.is_absent("email/raw"), "email/raw is in no request");
         // The chain that was asked for still reaches the index.
-        assert_eq!(fx.run_count("unified_document_index/grid"), 1);
+        assert_eq!(fx.run_count("unified_grid_and_search_index/grid"), 1);
 
         // Run 3, identical: "we don't know" compares equal to itself,
         // so the fan-in is not dirtied every single run. This is the
@@ -3462,7 +3530,7 @@ mod tests {
             .unwrap();
         assert!(rep3.all_ok(), "{rep3:#?}");
         assert_eq!(
-            fx.run_count("unified_document_index/grid"),
+            fx.run_count("unified_grid_and_search_index/grid"),
             1,
             "an unversioned unselected input must not re-dirty the fan-in"
         );
@@ -3637,6 +3705,7 @@ mod tests {
                             .collect(),
                         exit: None,
                         needs_rerun: false,
+                        store_bytes: None,
                     })
                 }),
             )
@@ -3694,7 +3763,7 @@ mod tests {
             ),
             render("email", fx.runs["email/rendered_md"].clone()),
             index(
-                fx.runs["unified_document_index/grid"].clone(),
+                fx.runs["unified_grid_and_search_index/grid"].clone(),
                 fx.index_changed_inputs.clone(),
             ),
         ])
@@ -3718,12 +3787,12 @@ mod tests {
         // ...and so did the fan-in, over what email committed.
         assert!(
             matches!(
-                rep.step("unified_document_index/grid").status,
+                rep.step("unified_grid_and_search_index/grid").status,
                 StepStatus::Succeeded { .. }
             ),
             "{rep:#?}"
         );
-        assert_eq!(fx.run_count("unified_document_index/grid"), 1);
+        assert_eq!(fx.run_count("unified_grid_and_search_index/grid"), 1);
     }
 
     /// A step stopped mid-request can come back `transient`. Retrying it

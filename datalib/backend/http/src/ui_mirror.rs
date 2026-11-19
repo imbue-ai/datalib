@@ -52,6 +52,14 @@ mod tests {
                 "ConnectPhase in datalib/backend/http/src/connect.rs",
             ),
             union::<crate::watch::Table>("LiveTable", "Table in datalib/backend/http/src/watch.rs"),
+            union::<datalib_dag::supervisor::pass::PassState>(
+                "PassState",
+                "PassState in datalib/backend/dag/src/supervisor/pass.rs",
+            ),
+            union::<datalib_dag::supervisor::store::WipeKind>(
+                "WipeKind",
+                "WipeKind in datalib/backend/dag/src/supervisor/store.rs",
+            ),
         ] {
             out.push_str(&block);
             out.push('\n');

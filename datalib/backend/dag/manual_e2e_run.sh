@@ -114,8 +114,8 @@ echo "[manual-e2e] LATCHKEY_CURL=$LATCHKEY_CURL" >&2
 
 # ── The Node runtime latchkey runs from ─────────────────────────────────
 #
-# The binaries spawn `latchkey` (and `qmd`) from a `runtime/` tree of
-# pinned Node plus the package trees, found beside themselves or through
+# The binaries spawn `latchkey` from a `runtime/` tree of pinned Node
+# plus its package tree, found beside themselves or through
 # DATALIB_RUNTIME_DIR (docs/dev/runtime_fetch.md). A checkout build has
 # neither a tree beside the binaries nor the manifest a release uses to
 # fetch one, and the `npx` fallback is opt-in — so without this every

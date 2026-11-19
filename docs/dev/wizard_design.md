@@ -18,6 +18,12 @@ of those beside this before adding or changing an entry.
 4. **Advanced options**, closed. It holds the ID first, then the
    entry's advanced fields, then Rendering, Description and the TOML.
 
+A source whose data a built-in applet shows (Lightroom's photos) names
+it in `applet`, and the basic part ends with a box that turns it on:
+checked for a new source, as the config has it for an edit. The applets
+that are not a source at all are listed in the picker's own group,
+"Apps that read every source" (`builtinApplets.ts`).
+
 `SourceWizard.vue` draws all of it from the entry. An entry declares
 `fields` (what is written) and `sections` (how it is asked); a field no
 section names is drawn in Advanced options under its own label.

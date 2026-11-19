@@ -149,7 +149,7 @@ export type ViewLibs = {
   }) => CardRender;
   documentView: (markdownUuid?: string | null, sectionUuid?: string | null) => CardRender;
   // Parameter-less gallery stand-in for documentView: lists every
-  // rendered document (the unified_document_index applet's /docs) and, on
+  // rendered document (the unified_grid_and_search_index applet's /docs) and, on
   // pick, replaces this card
   // with `documentView("<uuid>")` via host.setSource.
   documentPickerView: () => CardRender;
@@ -176,8 +176,9 @@ export type ViewLibs = {
   perseusView: () => CardRender;
   // Visualize the sync pipeline's step DAG, with live run states.
   sourceDagView: () => CardRender;
-  // The typed table viewer over any endpoint that declares its columns
-  // (`{columns, rows}`), e.g. `tableView({ url: "/api/manage/rows" })`.
+  // The typed table viewer over one of the app's tables that declare
+  // their columns (`{columns, rows}`; cards/tableUrls.ts lists them),
+  // e.g. `tableView({ url: "/api/manage/rows" })`.
   // See cards/TableGrid.ce.vue for the column-type vocabulary.
   tableView: (opts: { url: string }) => CardRender;
   // The Manage screen as a card: every source and step config.toml

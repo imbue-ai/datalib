@@ -23,21 +23,13 @@ command = "datalib-step"
 inputs = ["beeper/ingest"]
 
 [steps.params]
-period = "month"                     # span of each page: month (default), day, year,
-                                     # or all (one page per chat)
 networks = ["signal", "googlechat"]  # which networks to render; omit for every one
                                      # (the ingest mirrors them all either way)
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "beeper"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["beeper/render_markdown"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 group = "beeper"
 function = "embed"
 command = "datalib-step"
-inputs = ["beeper/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]

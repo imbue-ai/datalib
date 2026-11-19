@@ -22,11 +22,11 @@ instead from `bazel run //:precommit` and as a plain step in
      grid within each tier's table).
  10. No workflow step initializes an empty bash array: expanding one
      is "unbound variable" on the macOS runners' bash 3.2.
- 11. No doc, config or script tells anyone to run latchkey or
-     `@tobilu/qmd` through a package runner (`npx`, `npm exec`,
-     `pnpm dlx`, `yarn dlx`, `bunx`) without an exact version: a runner
-     resolves anything else at run time, and those two commands are the
-     ones a person pastes a live session cookie into.
+ 11. No doc, config or script tells anyone to run latchkey through a
+     package runner (`npx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `bunx`)
+     without an exact version: a runner resolves anything else at run
+     time, and latchkey is what a person pastes a live session cookie
+     into.
  12. Every sqlx SQLite pool turns off `idle_timeout` and `max_lifetime`,
      and none is built by a shortcut that takes sqlx's defaults: either
      setting gives the pool a maintenance task, and sqlx 0.9's can spin
@@ -116,7 +116,13 @@ ALLOWED_NO_SANDBOX: dict[str, str] = {
     # Wrappers that intentionally run against the source tree, not the
     # sandbox, so they can reuse .venv / node_modules / target / the
     # ms-playwright browser cache.
-    "datalib/ui:e2e_test": (
+    "datalib/ui:e2e_chromium_test": (
+        "shells out to host pnpm + reuses ~/Library/Caches/ms-playwright"
+    ),
+    "datalib/ui:e2e_sandboxes_test": (
+        "shells out to host pnpm + reuses ~/Library/Caches/ms-playwright"
+    ),
+    "datalib/ui:e2e_webkit_test": (
         "shells out to host pnpm + reuses ~/Library/Caches/ms-playwright"
     ),
     "datalib/ui:e2e_auth_test": (
@@ -253,6 +259,8 @@ def _scan(root: Path) -> set[str]:
 # all three; this check is what makes forgetting one an error.
 PYTHON_LINT_ROOTS: tuple[str, ...] = (
     "datalib/backend/doltlite_facts",
+    "datalib/backend/etl/providers/lightroom/tests/capture_time",
+    "datalib/backend/lightroom_retime/tests",
     "datalib/reader",
     "scripts",
     "tests/fixtures",
@@ -400,7 +408,10 @@ _RELEASE_WRITE_GRANTS = {
     "publish-release": {"contents"},
     "macos-app-sign": {"id-token"},
     "docker-image": {"packages"},
+    "docker-image-cuda": {"packages"},
     "docker-publish": {"packages"},
+    "docker-publish-cuda": {"packages"},
+    "attest": {"id-token", "attestations", "packages"},
 }
 # Publishes on a tag, so what holds for a release holds for it.
 _READER_WORKFLOW = ".github/workflows/reader-wheels.yml"
@@ -960,10 +971,10 @@ def _check_manual_targets_still_build(root: Path) -> int:
     return 1
 
 
-# --- Check 11: no floating `npx -y latchkey` / `npx -y @tobilu/qmd` ----
+# --- Check 11: no floating `npx -y latchkey` --------------------------
 #
-# The code pins both (`LATCHKEY_VERSION`, `DEFAULT_QMD_VERSION` in
-# datalib/backend/runtime), the installer puts a `latchkey` launcher on
+# The code pins it (`LATCHKEY_VERSION` in
+# datalib/backend/runtime/src/node_runtime.rs), the installer puts a `latchkey` launcher on
 # the PATH, and the app renders the pinned form in every hint it shows.
 # The docs were the one place the version floated (#140): `npx -y
 # latchkey auth set … $(pbpaste)` hands a session cookie to whatever npm
@@ -980,7 +991,7 @@ def _check_manual_targets_still_build(root: Path) -> int:
 _PACKAGE_RUNNER = re.compile(
     r"(?<![\w-])(?:npx|bunx|bun\s+x|npm\s+exec|npm\s+x|pnpm\s+dlx|yarn\s+dlx)\b"
 )
-_PINNED_PACKAGES = ("latchkey", "@tobilu/qmd")
+_PINNED_PACKAGES = ("latchkey",)
 _EXACT_VERSION = re.compile(
     r"\d+\.\d+\.\d+|<[A-Za-z_]+>|\{[A-Za-z_]+\}|\$\{?[A-Za-z_]+\}?"
 )
@@ -1022,7 +1033,7 @@ def _unpinned(package: str) -> bool:
 
 
 def floating_npx(line: str) -> bool:
-    """Whether `line` runs latchkey or qmd through a runner at no exact version."""
+    """Whether `line` runs latchkey through a runner at no exact version."""
     for runner in _PACKAGE_RUNNER.finditer(line):
         rest = line[runner.end() :]
         end = _COMMAND_ENDS.search(rest)
@@ -1063,14 +1074,14 @@ def _check_no_floating_npx(root: Path) -> int:
             if floating_npx(line):
                 hits.append(f"  {rel}:{lineno}: {line.strip()}")
     if not hits:
-        print("OK: no floating `npx -y latchkey` / `npx -y @tobilu/qmd`.")
+        print("OK: no floating `npx -y latchkey`.")
         return 0
     print(
         "ERROR: a command that resolves `latest` from npm at run time:\n\n"
         + "\n".join(hits)
         + "\n\n  Write `latchkey …` (the launcher the installer puts on the PATH)\n"
-        "  or pin it exactly: `npx -y latchkey@<LATCHKEY_VERSION>`. The pins live in\n"
-        "  datalib/backend/runtime/src/node_runtime.rs and runtime/src/qmd.rs.",
+        "  or pin it exactly: `npx -y latchkey@<LATCHKEY_VERSION>`. The pin lives in\n"
+        "  datalib/backend/runtime/src/node_runtime.rs.",
         file=sys.stderr,
     )
     return 1
@@ -1410,7 +1421,7 @@ _PLACEHOLDER_RUN = re.compile(
 # `?` runs sized by something that is not data, with the reason.
 _RUN_ALLOWED: dict[tuple[str, str], str] = {
     (
-        "datalib/backend/applets/src/unified_document_index/problems.rs",
+        "datalib/backend/applets/src/unified_grid_and_search_index/problems.rs",
         "columns.len()",
     ): ("one row's VALUES, one `?` per column of a table the code declares"),
     ("datalib/backend/etl/render/src/search_terms.rs", "per_row"): (
@@ -1556,8 +1567,10 @@ def _check_no_playback_set_var(root: Path) -> int:
 # HTML — set as markup, parsed into a document or a fragment, or made a
 # frame's document — or a module imported from a computed URL, is
 # allowed only where the entry below says why the string is not data
-# someone else wrote. And every SlickGrid says `enableHtmlRendering:
-# false`, or a cell's formatter output is drawn as HTML.
+# someone else wrote. And every SlickGrid spreads `TEXT_ONLY_GRID`
+# (datalib/ui/src/grid/textOnly.ts), or a cell's formatter output is
+# drawn as HTML; nothing else turns HTML rendering on or swaps the
+# grid's sanitizer.
 _UI_EVAL = re.compile(
     r"(?<![\w$.])Function\s*\(|\bnew\s+Function\b|\beval\s*\("
     r"|\bset(?:Timeout|Interval)\s*\(\s*[\"'`]"
@@ -1572,7 +1585,9 @@ _UI_HTML_OR_IMPORT = re.compile(
     re.IGNORECASE,
 )
 _UI_SLICKGRID = re.compile(r"\bnew\s+SlickVanillaGridBundle\b")
-_UI_SLICKGRID_TEXT_ONLY = re.compile(r"\benableHtmlRendering\s*:\s*false\b")
+_UI_SLICKGRID_TEXT_ONLY = re.compile(r"\.\.\.TEXT_ONLY_GRID\b")
+_UI_SLICKGRID_TEXT_ONLY_HOME = "datalib/ui/src/grid/textOnly.ts"
+_UI_SLICKGRID_HTML_OPTION = re.compile(r"\benableHtmlRendering\s*:|\bsanitizer\s*:")
 _UI_SINK_ALLOWED = {
     "datalib/ui/src/cards/ChatBody.ce.vue": "a document body, through the "
     "sanitizer, into the document frame, whose CSP has script-src 'none'",
@@ -1595,15 +1610,20 @@ def _check_no_ui_code_sinks(root: Path) -> int:
         for lineno, line in enumerate(text.splitlines(), 1):
             if line.strip().startswith(("//", "*", "/*")):
                 continue
-            sink = _UI_EVAL.search(line) or (
-                rel not in _UI_SINK_ALLOWED and _UI_HTML_OR_IMPORT.search(line)
+            sink = (
+                _UI_EVAL.search(line)
+                or (rel not in _UI_SINK_ALLOWED and _UI_HTML_OR_IMPORT.search(line))
+                or (
+                    rel != _UI_SLICKGRID_TEXT_ONLY_HOME
+                    and _UI_SLICKGRID_HTML_OPTION.search(line)
+                )
             )
             if sink:
                 hits.append(f"  {rel}:{lineno}: {line.strip()}")
         grids = len(_UI_SLICKGRID.findall(text))
         if grids > len(_UI_SLICKGRID_TEXT_ONLY.findall(text)):
             hits.append(
-                f"  {rel}: {grids} SlickGrid(s), not each with `enableHtmlRendering: false`"
+                f"  {rel}: {grids} SlickGrid(s), not each spreading `TEXT_ONLY_GRID`"
             )
     if not hits:
         print(

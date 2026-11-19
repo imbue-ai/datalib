@@ -7,3 +7,4 @@ pub mod ids;
 pub mod posts;
 pub mod processor;
 pub mod render;
+pub mod skills;

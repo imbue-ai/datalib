@@ -9,10 +9,10 @@
 # links each binary into ${DATALIB_INSTALL_DIR:-$HOME/.local/bin}.
 #
 # Whole, because the tarball is more than binaries: `runtime.manifest`
-# beside them names the release's Node runtime (Node plus the `qmd` and
-# `latchkey` package trees), which the binaries fetch, sha256-checked,
-# into ~/.cache/datalib/runtime on their first use — so a sync runs
-# both tools with no Node, npm or npx on the host, and this script
+# beside them names the release's Node runtime (Node plus the `latchkey`
+# package tree), which the binaries fetch, sha256-checked, into
+# ~/.cache/datalib/runtime on their first use — so a sync runs latchkey
+# with no Node, npm or npx on the host, and this script
 # installs nothing but the tarball. The symlinks are what puts the
 # binaries on PATH; they canonicalize their own path before looking
 # beside it, so the link is transparent to them.
@@ -25,7 +25,8 @@
 #                             `latest` also means that one). Any other tag is
 #                             checked only against the checksum beside it
 #   DATALIB_LIBC          Linux only: 'gnu' or 'musl' (default:
-#                             auto-detected; see libc detection below)
+#                             auto-detected; see libc detection below).
+#                             Set, it is used as given
 #
 # Supported platforms (one published release tarball each):
 #   macOS arm64          -> aarch64-apple-darwin
@@ -46,14 +47,14 @@ VERSION="${DATALIB_VERSION:-latest}"
 # their own (docs/dev/security_posture.md). So this is as trusted as a merge to
 # `main`, and nothing later can change what it installs.
 # scripts/release/pin_release.py writes these.
-PINNED_VERSION="v0.51.0"
+PINNED_VERSION="v0.55.0"
 pinned_sha256() {
     case "$1" in
-        aarch64-apple-darwin) echo 40564755c655b40cfc6f543d7ce9af5b7f02ff482b8aed59e112680dcb3c39a8 ;;
-        aarch64-unknown-linux-gnu) echo e27ddf069ce3e3898334b135e86433cd4b3d377c333f0298e467c3e180f02e48 ;;
-        aarch64-unknown-linux-musl) echo 874774fd6d0f75ac1cd38ecb0f6f72c59ca1dbed4d19f8f794e90ad4002c4dc8 ;;
-        x86_64-unknown-linux-gnu) echo 85f093e82f006ee6f5947dcd880ad3c726cb0a8c17ec437cf80eb5fd96143d48 ;;
-        x86_64-unknown-linux-musl) echo 24bcea4d7e2026f3070bc25442e9ee9d5d613790aa7f754dacfa853eee2297ea ;;
+        aarch64-apple-darwin) echo 1e6faf0be4f4ecb12c987e021b8666cf185a2a8f0a9b9819683754c42736f71d ;;
+        aarch64-unknown-linux-gnu) echo 0cb7ee981a877e757b73cb94f8026a9115f2369137216fd51473d49902ee7557 ;;
+        aarch64-unknown-linux-musl) echo 2458edfa20bd48af4b3d64a5f8231147ab443539184cab1a095dde9f9d9f9788 ;;
+        x86_64-unknown-linux-gnu) echo 1e82feea185e169aa0df1d8d3e120f34d6a0827d3194741af9db066f45d9e0e5 ;;
+        x86_64-unknown-linux-musl) echo a6bee1a8568d96797841433a80d4c3f4a753cbdcf31f3d085baf64f58e06065b ;;
         *) echo "" ;;
     esac
 }
@@ -70,9 +71,12 @@ err() { printf 'datalib-install: error: %s\n' "$1" >&2; exit 1; }
 # can't run the gnu builds, so pick the fully-static musl tarball
 # there. Every musl system ships its dynamic loader at
 # /lib/ld-musl-<arch>.so.1 — its presence is the detection signal.
-# glibc hosts default to the gnu build (the long-standing default);
-# set DATALIB_LIBC=musl to force the static build anywhere — it
-# runs on any Linux of the right arch regardless of libc.
+# A glibc host gets the gnu build when its glibc is at least
+# GLIBC_FLOOR, the oldest the gnu builds run on (Ubuntu 24.04's;
+# docs/dev/release_steps.md §"The Linux floor"), and the musl build
+# below it. Set DATALIB_LIBC=musl to force the static build anywhere —
+# it runs on any Linux of the right arch regardless of libc.
+GLIBC_FLOOR="2.39"
 os="$(uname -s)"
 arch="$(uname -m)"
 case "${os}/${arch}" in
@@ -91,6 +95,31 @@ case "${os}/${arch}" in
                     break
                 fi
             done
+        fi
+        if [ -z "${DATALIB_LIBC:-}" ] && [ "${libc}" = "gnu" ]; then
+            # `getconf GNU_LIBC_VERSION` prints `glibc 2.39`.
+            host_glibc="$(getconf GNU_LIBC_VERSION 2>/dev/null || true)"
+            host_glibc="${host_glibc#glibc }"
+            host_major="${host_glibc%%.*}"
+            host_minor="${host_glibc#*.}"
+            host_minor="${host_minor%%.*}"
+            case "${host_major}.${host_minor}" in
+                *[!0-9.]* | .* | *.)
+                    say "could not tell this host's glibc version; installing the glibc build,"
+                    say "which needs glibc ${GLIBC_FLOOR} or newer. If datalib-step then fails with"
+                    say "'GLIBC_2.xx not found', install again with DATALIB_LIBC=musl."
+                    ;;
+                *)
+                    if [ "${host_major}" -lt "${GLIBC_FLOOR%%.*}" ] || {
+                        [ "${host_major}" -eq "${GLIBC_FLOOR%%.*}" ] \
+                            && [ "${host_minor}" -lt "${GLIBC_FLOOR#*.}" ]
+                    }; then
+                        say "this host has glibc ${host_major}.${host_minor}, older than the ${GLIBC_FLOOR} the glibc build"
+                        say "needs; installing the fully-static musl build instead"
+                        libc="musl"
+                    fi
+                    ;;
+            esac
         fi
         case "${libc}" in
             gnu | musl) ;;
@@ -198,10 +227,10 @@ say "unpacked into ${LIB_DIR}"
 say "setting it up? start with \`datalib-step help\` (the agent guide: ${LIB_DIR}/docs/agent_user.md)"
 say "linked:${installed} -> ${INSTALL_DIR}"
 if [ -f "${LIB_DIR}/runtime.manifest" ]; then
-    say "the Node runtime for qmd and latchkey is fetched on first use (once per release,"
+    say "the Node runtime for latchkey is fetched on first use (once per release,"
     say "sha256-checked, into ${XDG_CACHE_HOME:-~/.cache}/datalib/runtime); \`datalib-step pull-runtime\` does it now."
 else
-    say "note: this tarball names no Node runtime; semantic search and latchkey need"
+    say "note: this tarball names no Node runtime; latchkey needs"
     say "      DATALIB_RUNTIME_DIR pointed at one, or DATALIB_ALLOW_NPX=1 with Node on the host."
 fi
 

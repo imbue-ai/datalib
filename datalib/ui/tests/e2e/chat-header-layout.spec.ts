@@ -116,6 +116,38 @@ for (const scheme of ["light", "dark"] as const) {
     expect((await visibleRows()).shown).toBe(RECIPIENTS);
   });
 
+  /** A clamped message was its own scroll container, so its header
+   * stuck 0.5rem below where it sits and its opaque fill cut the tops
+   * off the recipients' chips. */
+  test(`a clamped message's header leaves its recipients line whole (${scheme})`, async ({
+    page,
+  }) => {
+    const email = await openPreview(page, scheme);
+    await page.locator("#linked").click();
+    await expect(email).toHaveClass(/msg--clamped/);
+    const firstName = email.locator(".msg-recipients a.chip").first();
+    await expect(firstName).toHaveClass(/handle-resolved/);
+
+    await firstName.scrollIntoViewIfNeeded();
+    const { headerBottom, nameTop, topOfName } = await firstName.evaluate((chip) => {
+      const h = chip.closest(".msg")!.querySelector(":scope > h2")!;
+      const r = chip.getBoundingClientRect();
+      return {
+        headerBottom: h.getBoundingClientRect().bottom,
+        nameTop: r.top,
+        // What a reader sees one pixel into the chip's top edge.
+        topOfName: chip.contains(
+          chip.ownerDocument.elementFromPoint(r.left + r.width / 2, r.top + 1),
+        ),
+      };
+    });
+    expect(
+      headerBottom,
+      `the header ends at ${headerBottom}, below the first name's top at ${nameTop}`,
+    ).toBeLessThanOrEqual(nameTop);
+    expect(topOfName, "the header is drawn over the first name's top edge").toBe(true);
+  });
+
   test(`a long message's pinned header hides what scrolls under it (${scheme})`, async ({
     page,
   }) => {

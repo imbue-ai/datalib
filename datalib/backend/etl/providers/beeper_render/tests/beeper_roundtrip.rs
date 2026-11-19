@@ -1,6 +1,6 @@
 //! The TNG fixture mirrored the way the ingest step mirrors it and
-//! rendered the way the render step renders it: a document per room and
-//! month, a reaction filed under its target's month, attachments read
+//! rendered the way the render step renders it: a document per room, a
+//! reply an edge to the message it answers, attachments read
 //! back out of the blob store, the network filter, the bridges' own
 //! message ids kept, and a cache read again committing only what changed.
 
@@ -13,10 +13,12 @@ use datalib_etl::run_problems;
 use datalib_etl::stop::StopFlag;
 use datalib_etl_beeper::ingest::{self, RawDb};
 use datalib_etl_beeper_render::render::parse::{parse, ParsedBeeper};
-use datalib_etl_beeper_render::render::{render_all, Period, RenderSummary};
+use datalib_etl_beeper_render::render::{ids, render_all, RenderSummary};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_render::section::join;
 use datalib_etl_sqlite_mirror::mirror;
+use datalib_schema::edges::EdgeKind;
 
 const DATA_IMAGE: &str = "$tng-data-003:ba_TNG.local-signal.localhost";
 const SCHEMATIC: &str = "media/localhostlocal-signal/TNGART01";
@@ -25,7 +27,6 @@ struct Fixture {
     _dir: tempfile::TempDir,
     beeper: PathBuf,
     raw: PathBuf,
-    out: PathBuf,
 }
 
 impl Fixture {
@@ -37,7 +38,6 @@ impl Fixture {
         let raw = dir.path().join("ingest");
         std::fs::create_dir_all(&raw).expect("mkdir ingest");
         Self {
-            out: dir.path().join("render_markdown"),
             _dir: dir,
             beeper,
             raw,
@@ -61,7 +61,7 @@ impl Fixture {
     }
 
     fn parse(&self, networks: Option<&[String]>) -> Result<ParsedBeeper> {
-        parse(&self.raw, "tng", Period::Month, networks, RawRange::cold())
+        parse(&self.raw, "tng", networks, RawRange::cold())
     }
 
     fn render(&self) -> Result<(RenderSummary, Vec<RenderedMarkdown>)> {
@@ -69,7 +69,6 @@ impl Fixture {
         let mut docs = Vec::new();
         let summary = render_all(
             &parsed,
-            &self.out,
             "tng",
             &Progress::noop(),
             &mut |d| {
@@ -127,18 +126,20 @@ fn bridged(doc: &RenderedMarkdown, network: &str) -> bool {
     doc.rows.iter().any(|r| r.source_label == label)
 }
 
-/// The markdown of the one document bridged to `network` whose title ends
-/// with `period`, as `(2024-03)`; any of its documents for `""`.
-fn md_of(docs: &[RenderedMarkdown], network: &str, period: &str) -> String {
+/// The markdown of the document bridged to `network` that contains
+/// `needle`; any of its documents for `""`.
+fn md_of(docs: &[RenderedMarkdown], network: &str, needle: &str) -> String {
     docs.iter()
         .filter(|d| bridged(d, network))
-        .map(|d| std::fs::read_to_string(&d.md_path).expect("read rendered markdown"))
-        .find(|md| period.is_empty() || md.contains(&format!(" ({period})")))
-        .unwrap_or_else(|| panic!("no {network} document for {period:?}"))
+        .map(|d| join(&d.sections))
+        .find(|md| md.contains(needle))
+        .unwrap_or_else(|| panic!("no {network} document holding {needle:?}"))
 }
 
+const DATA_ROOM: &str = "!tng-data:ba_TNG.local-signal.localhost";
+
 #[tokio::test(flavor = "multi_thread")]
-async fn each_room_renders_a_document_per_month() -> Result<()> {
+async fn each_room_renders_one_document() -> Result<()> {
     let fx = Fixture::new();
     fx.ingest().await?;
 
@@ -146,34 +147,47 @@ async fn each_room_renders_a_document_per_month() -> Result<()> {
     // Data, Crusher, the bridge crew, Riker, #bridge; the `$space` thread
     // is no room.
     assert_eq!(parsed.rooms.len(), 5);
-    // Riker/2024-03, #bridge/2024-03, Data/2024-03, Data/2024-04,
-    // Crusher/2024-04, bridge crew/2364-04.
-    assert_eq!(parsed.docs.len(), 6);
-    let data = |month: &str| {
-        parsed
-            .docs
-            .iter()
-            .find(|d| d.period_key == month && d.room_uuid.contains("tng-data"))
-            .unwrap_or_else(|| panic!("no Data document for {month}"))
-    };
-    // The 🤔 landed in April on the March image, and files with it.
-    let reactions = &data("2024-03").reactions_by_target[DATA_IMAGE];
+    assert_eq!(parsed.docs.len(), 5);
+    let data = parsed
+        .docs
+        .iter()
+        .find(|d| d.room_uuid == DATA_ROOM)
+        .expect("Data's room");
+    let reactions = &data.reactions_by_target[DATA_IMAGE];
     let emoji: Vec<_> = reactions
         .iter()
         .filter_map(|r| r.reaction_emoji.as_deref())
         .collect();
     assert_eq!(emoji, ["❤️", "🤔"]);
-    assert!(data("2024-04").reactions_by_target.is_empty());
 
     let (summary, docs) = fx.render()?;
-    assert_eq!(summary.docs_rendered, 6);
+    assert_eq!(summary.docs_rendered, 5);
+    // Data's room runs from March into April, and is one document under
+    // the room's own uuid.
+    let room_uuid = ids::room("tng", DATA_ROOM).uuid;
+    let data_docs: Vec<_> = docs
+        .iter()
+        .filter(|d| d.rows.iter().any(|r| r.uuid == room_uuid))
+        .collect();
+    assert_eq!(data_docs.len(), 1);
+    assert_eq!(data_docs[0].markdown_uuid, room_uuid);
+    let months: std::collections::BTreeSet<_> = data_docs[0]
+        .rows
+        .iter()
+        .filter_map(|r| r.created_at.as_deref())
+        .map(|t| &t[..7])
+        .collect();
+    assert_eq!(
+        months.into_iter().collect::<Vec<_>>(),
+        ["2024-03", "2024-04"]
+    );
     assert_eq!(summary.blobs_materialized, 2);
-    let slack = md_of(&docs, "Slack", "2024-03");
+    let slack = md_of(&docs, "Slack", "");
     assert!(
         slack.contains("href=\"https://slack.com/app_redirect?channel=C0BRIDGE&amp;team=T1701D\""),
         "{slack}"
     );
-    let march = md_of(&docs, "Signal", "2024-03");
+    let march = md_of(&docs, "Signal", DATA_ROOM);
     assert!(march.contains("❤️ [Mr. Data](tel:+15551234001"), "{march}");
     assert!(march.contains("🤔 [Mr. Data](tel:+15551234001"), "{march}");
     assert!(march.contains("![iconian-schematic.png]"), "{march}");
@@ -201,7 +215,7 @@ async fn render_shows_only_the_networks_it_names() -> Result<()> {
     let parsed = fx.parse(Some(&["signal".to_string()]))?;
     assert_eq!(parsed.rooms.len(), 3);
     assert!(parsed.rooms.values().all(|r| r.network == "signal"));
-    assert_eq!(parsed.docs.len(), 4);
+    assert_eq!(parsed.docs.len(), 3);
     Ok(())
 }
 
@@ -284,7 +298,7 @@ async fn what_the_app_evicts_is_kept() -> Result<()> {
     assert_eq!(fx.ingest().await?, None, "an eviction changes nothing");
 
     let (summary, _) = fx.render()?;
-    assert_eq!(summary.docs_rendered, 6);
+    assert_eq!(summary.docs_rendered, 5);
     assert_eq!(summary.blobs_materialized, 2);
     Ok(())
 }
@@ -311,7 +325,7 @@ async fn a_file_cached_later_is_copied_by_the_next_run() -> Result<()> {
     std::fs::rename(&schematic, &kept)?;
     fx.ingest().await?;
     assert_eq!(fx.render()?.0.blobs_materialized, 1);
-    let march = md_of(&fx.render()?.1, "Signal", "2024-03");
+    let march = md_of(&fx.render()?.1, "Signal", DATA_ROOM);
     assert!(march.contains("iconian-schematic.png"), "{march}");
 
     std::fs::rename(&kept, &schematic)?;
@@ -389,14 +403,14 @@ async fn people_are_written_by_their_handles() -> Result<()> {
     let fx = Fixture::new();
     fx.ingest().await?;
     let (_, docs) = fx.render()?;
-    let slack = md_of(&docs, "Slack", "2024-03");
+    let slack = md_of(&docs, "Slack", "");
     assert!(
         slack.contains("slack://user?team=T1701D&amp;id=U0WORF")
             || slack.contains("slack://user?team=T1701D&id=U0WORF"),
         "{slack}"
     );
     assert!(slack.contains("id=U0PICARD"), "{slack}");
-    let data = md_of(&docs, "Signal", "2024-03");
+    let data = md_of(&docs, "Signal", DATA_ROOM);
     assert!(data.contains("(tel:+15551234001"), "{data}");
     let riker = md_of(&docs, "Google Chat", "");
     assert!(riker.contains("(mailto:riker@enterprise.org"), "{riker}");
@@ -404,8 +418,7 @@ async fn people_are_written_by_their_handles() -> Result<()> {
 }
 
 /// Each person with a handle is a source contact, with their avatar
-/// linked where the blob store holds it when the app had cached it and
-/// nothing written beside the page; a chat with no name of its own is
+/// linked where the blob store holds it when the app had cached it; a chat with no name of its own is
 /// called by its other person.
 #[tokio::test(flavor = "multi_thread")]
 async fn people_are_contacts_with_their_avatars() -> Result<()> {
@@ -415,11 +428,11 @@ async fn people_are_contacts_with_their_avatars() -> Result<()> {
     let contact = |network: &str, key: &str| {
         docs.iter()
             .filter(|d| bridged(d, network))
-            .flat_map(|d| d.contacts.iter().map(move |c| (d, c)))
-            .find(|(_, c)| c.key == key)
+            .flat_map(|d| d.contacts.iter())
+            .find(|c| c.key == key)
             .unwrap_or_else(|| panic!("no contact {key} bridged to {network}"))
     };
-    let (doc, worf) = contact("Slack", "slack:T1701D/U0WORF");
+    let worf = contact("Slack", "slack:T1701D/U0WORF");
     assert_eq!(worf.names, ["Worf"]);
     let url = worf.photo_url.as_deref().expect("Worf's avatar is served");
     let hash = url
@@ -428,17 +441,49 @@ async fn people_are_contacts_with_their_avatars() -> Result<()> {
         .map(|(_, hash)| hash)
         .expect("linked at its blob-store address");
     assert_eq!(hash.len(), 64, "{url}");
-    assert!(!doc.md_path.parent().unwrap().join("blobs").exists());
 
-    let (_, data) = contact("Signal", "tel:+15551234001");
+    let data = contact("Signal", "tel:+15551234001");
     assert!(
         data.photo_url.is_some(),
         "Data's on-device avatar is served"
     );
-    let (_, riker) = contact("Google Chat", "email:riker@enterprise.org");
+    let riker = contact("Google Chat", "email:riker@enterprise.org");
     assert_eq!(riker.photo_url, None, "Riker has no avatar");
 
-    let data_march = md_of(&docs, "Signal", "2024-03");
-    assert!(data_march.contains(">Mr. Data (2024-03)"), "{data_march}");
+    let data_md = md_of(&docs, "Signal", DATA_ROOM);
+    assert!(data_md.contains(">Mr. Data</"), "{data_md}");
+    Ok(())
+}
+
+/// A message that answers another is a reply edge from it to the one it
+/// answers; before, only its "in reply to" line said so.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reply_is_an_edge_to_the_message_it_answers() -> Result<()> {
+    let fx = Fixture::new();
+    fx.ingest().await?;
+    let (_, docs) = fx.render()?;
+    let slack = docs.iter().find(|d| bridged(d, "Slack")).expect("#bridge");
+    let uuid_of = |event: &str| {
+        slack
+            .rows
+            .iter()
+            .find(|r| r.upstream_id.as_deref() == Some(event))
+            .map(|r| r.uuid.clone())
+            .unwrap_or_else(|| panic!("no row for {event}"))
+    };
+    let replies: Vec<_> = slack
+        .edges
+        .iter()
+        .filter(|e| e.kind == EdgeKind::ReplyTo.as_i64())
+        .map(|e| (e.src_anchor_uuid.clone(), e.dst_anchor_uuid.clone()))
+        .collect();
+    assert_eq!(
+        replies,
+        [(
+            Some(uuid_of("$tng-slack-002:beeper.com")),
+            Some(uuid_of("$tng-slack-001:beeper.com"))
+        )]
+    );
+    assert!(md_of(&docs, "Slack", "").contains("↪ in reply to"));
     Ok(())
 }

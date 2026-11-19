@@ -14,19 +14,19 @@ An API-fetched payload goes through
 out of the store; an export-ingested one is already that shape. Either
 way one parser reads it (`src/render/parse.rs`).
 
-A conversation's messages are a tree, because an edited prompt or a
-retried answer starts a branch: each names its `parent_message_uuid`.
-The page reads the branch ending at `current_leaf_message_uuid`, the
-one the user last saw, and every other version is folded in, collapsed,
-where it forked (chat-common's `branches::reading_order`; see its
-README). A conversation with no usable leaf (a bulk export may carry
-none) reads every message in `(created_at, message_uuid)` order.
+A conversation's messages are a tree of branches: each names its
+`parent_message_uuid`. The page reads the branch ending at
+`current_leaf_message_uuid` and folds the other versions in where they
+forked ([chat-common §"Branches"](../../chat-common/README.md#branches-the-versions-a-conversation-left-fold-in-where-they-forked)).
+A conversation with no usable leaf (a bulk export may carry none) reads
+every message in `(created_at, message_uuid)` order.
 
 Each message becomes one item whose `kind` comes from its sender: `User
 Input` for `human`, `LLM Response` for `assistant` (authored by the
 conversation's `model`), `Tool Call` for anything else. Its body is the
-message's `text` blocks, so search prose is not polluted by thinking
-or tool traffic; then a numbered **Sources** list of every page those
+`text` blocks after its last `thinking`, `tool_use` or `tool_result`
+block, so search prose is not polluted by thinking or tool traffic;
+then a numbered **Sources** list of every page any of its `text`
 blocks' `citations` name, once each by url; then each `attachments[]`
 entry's extracted text as a quoted block, headed by its file name, or
 "Pasted text" when the name is empty (a paste is an attachment with
@@ -34,7 +34,9 @@ none). Downloadable `files[]` are materialized by chat-common from the
 ingest's `claude_attachments` edges.
 
 Every `thinking`, `tool_use` and `tool_result` block is an item of its
-own, placed just before its message's answer:
+own, and so is each `text` block written before the last of them ("I'll
+read the file first."), with the message's author and kind. They keep
+their block order, just before the message's answer:
 
 | block | `kind` | aside | body |
 |---|---|---|---|
@@ -44,6 +46,24 @@ own, placed just before its message's answer:
 
 A block's id is keyed on the upstream `tool_use` id where it has one,
 else on `(message_uuid, block_index)` (`src/render/ids.rs`).
+
+## Cowork tasks
+
+A Cowork task stored as a session (`cowork_sessions` and its
+`cowork_events`) is turned into a conversation by
+`cowork::to_export_shape` in the download crate, and from there renders
+exactly as a conversation does. Each prompt the person typed is a
+`human` message, without the `<system-reminder>` blocks the app attaches
+to it, and with the files attached to it (`file_attachments`) as its
+`files`, which render draws from their bytes as it does a chat's. What Claude did until the next prompt is one `assistant`
+message: its `thinking` (a block sent as its signature alone is left
+out), `text` and `tool_use` blocks, each `tool_result` beside its call
+and named after it. Every block of a reply is dated when the reply
+ended, as claude.ai dates a task it has made a chat, so the steps read
+before the answer. The harness's own events (`system`,
+`control_request`, `result` and the like) and a subagent's inner turns
+(those with a `parent_tool_use_id`) are not drawn; the raw store keeps
+them. A task claude.ai has made a chat is a conversation already.
 
 ## Projects
 
@@ -59,8 +79,9 @@ with a visible marker; the raw store keeps all of it. A conversation's
 Ids are minted in `src/render/ids.rs` under `IdNamespace::Claude`,
 scoped to the group, never Anthropic's UUIDs passed through
 (`docs/dev/entity_ids.md`). The document keeps the upstream UUID as
-`external_id` and links back to `https://claude.ai/chat/<uuid>` or
-`https://claude.ai/project/<uuid>`. The account is the account's email.
+`external_id` and links back to `https://claude.ai/chat/<uuid>`,
+`https://claude.ai/cowork/<id>` or `https://claude.ai/project/<uuid>`.
+The account is the account's email.
 
 [`RENDER_VERSION`](src/render/render.rs) is bumped whenever this
 crate's output changes.
@@ -68,5 +89,6 @@ crate's output changes.
 ## Tests
 
 `claude/:claude_tests` (its `claude_render` module) snapshots the
-render of `../claude/tests/fixtures/claude_export/`;
+render of `../claude/tests/fixtures/claude_export/`, and its `cowork`
+module the page of the fixture's Cowork task;
 `:claude_tests.update` rewrites the snapshots.

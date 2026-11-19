@@ -40,8 +40,8 @@ trap 'rm -rf "$ROOT"' EXIT INT TERM
 echo "Perseus data root: $ROOT" >&2
 
 # Render-only DAG config: no download step, so the render step reads
-# the TEI XMLs directly from `input_path`. We build the qmd index here
-# even though we won't use the search bar, because the `unified_document_index`
+# the TEI XMLs directly from `input_path`. We build the search index here
+# even though we won't use the search bar, because the `unified_grid_and_search_index`
 # applet serves the grid off both indexes and paying for it once is
 # easier than special-casing it out.
 #
@@ -61,11 +61,7 @@ name = "index"
 slots = 2
 
 [[locks]]
-name = "qmd_keyword"
-slots = 1
-
-[[locks]]
-name = "qmd_embed"
+name = "embedder"
 slots = 1
 
 [[groups]]
@@ -79,53 +75,29 @@ reads = "files"
 [steps.params.common]
 input_path = "$PERSEUS_FIXTURE_DIR"
 
-[[steps]]
-id = "perseus/keyword_index"
-command = "datalib-step run keyword_index perseus"
-inputs = ["perseus/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
-[[steps]]
-id = "perseus/embed"
-command = "datalib-step run embed perseus"
-inputs = ["perseus/keyword_index"]
-reads = "files"
-locks = ["qmd_embed"]
-
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-id = "unified_document_index/grid_index"
-command = "datalib-step run grid_index"
-inputs = ["perseus/render_markdown"]
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "datalib-step run unified_grid_and_search_index"
+inputs = ["*/render_markdown"]
 reads = "pinned"
 locks = ["index"]
 
 [[steps]]
-id = "unified_document_index/qmd_aggregator"
-command = "datalib-step run qmd_aggregator"
-inputs = ["perseus/keyword_index", "perseus/embed"]
-reads = "pinned"
-locks = ["qmd_keyword"]
+id = "perseus/embed"
+command = "datalib-step run embed perseus"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]
 
 # Serves the grid, the document view and the document picker.
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 EOF
-
-# Mirror the model-cache symlink that materialize_tng_root.sh sets up,
-# so qmd-indexer can find the GGUF weights without re-downloading them
-# on every launch. Path matches qmd's own default; the cache itself is
-# populated externally (per README's first-time setup).
-SHARED_MODELS="${HOME:-.}/.cache/qmd/models"
-if [[ -d "$SHARED_MODELS" ]]; then
-  mkdir -p "$ROOT/qmd"
-  ln -sfn "$SHARED_MODELS" "$ROOT/qmd/models"
-fi
 
 # Deterministic `--now` so re-runs of this script don't bump the
 # row's rendered_at and confuse the user when comparing across

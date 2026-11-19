@@ -24,13 +24,19 @@ pub fn file(path: &Path) -> SqliteConnectOptions {
 /// `path` at a doltlite revision: a branch, a tag or a commit
 /// (docs/dev/doltlite.md#opening-a-revision-by-path).
 pub fn revision(path: &Path, rev: &str) -> SqliteConnectOptions {
+    SqliteConnectOptions::new().filename(revision_name(path, rev))
+}
+
+/// The name SQLite opens for `path` at `rev`, for a caller of the C API.
+pub fn revision_name(path: &Path, rev: &str) -> PathBuf {
     let mut name = literal(path).into_os_string();
     name.push("@");
     name.push(rev);
-    SqliteConnectOptions::new().filename(name)
+    name.into()
 }
 
-fn literal(path: &Path) -> PathBuf {
+/// The name SQLite opens for `path` itself, for a caller of the C API.
+pub fn literal(path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
     } else {

@@ -1,0 +1,19 @@
+# The Mail app on this Mac: every account in it that holds mail, read
+# from ~/Library/Mail. No sign-in; macOS asks you to choose the folder, or
+# to give the app Full Disk Access, before anything can read it.
+[[groups]]
+id = "email"
+name = "Apple Mail"
+type = "email"
+
+[[steps]]
+id = "email/ingest"
+command = "datalib-step run ingest email"
+
+[steps.params.apple_mail]
+
+[[steps]]
+id = "email/render_markdown"
+command = "datalib-step run render_markdown email"
+inputs = ["email/ingest"]
+reads = "pinned"

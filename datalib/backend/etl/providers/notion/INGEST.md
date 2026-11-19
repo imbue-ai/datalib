@@ -38,11 +38,9 @@ stores page objects; the trash pass says which of them are in Notion's
 trash; each loop then fetches what the store lists and does not yet
 hold, through `datalib_etl_web::owed`: the databases and blocks a page
 sits under, a page's body, an attachment's bytes, a page's comments, a
-commented block, a user. What a table holds
-is `held_version` in its `_bookkeeping` sidecar, written in the
-transaction that wrote the content; what is owed is the difference,
-asked of the store each run and never stored. Nothing is marked done
-(docs/dev/data_architecture_ingestion.md, "What is left to fetch").
+commented block, a user. What is owed is worked out the way every
+network source works it out
+([`data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md#what-is-left-to-fetch-listed-minus-held)).
 
 **Listing.** A mirror is what sits under its roots. With `api.roots`
 set, the roots are the pages and databases it names; with it empty —
@@ -401,7 +399,10 @@ came, and drops the search mark, so the first run lists the workspace
 whole once — listing requests only; nothing held is fetched again.
 Rung 2 gives every page held its `tree` row, since a search walk past
 it would not list it again; its databases and blocks are fetched by the
-next run's first loop.
+next run's first loop. Rung 3 makes a held body owed again when it has
+a hole that matters (§"Truncation: two cases, one attribute tells them
+apart"), so a body stored before holes were
+filled in place is read once more.
 
 ## Where a page sits
 
@@ -456,10 +457,10 @@ rows included. It is `render/toc.rs` in the render crate, read from `tree`.
 - **Its row counts no item.** Its `item_count` is 0, so it adds nothing
   to the source's Items column. Its dates are the earliest and latest
   `created_time` of the pages listed.
-- **Not in free-text search.** It is filed under `render_markdown/unindexed/`,
-  which qmd ignores: it only repeats the titles of the pages it lists, and on
-  a whole workspace it runs to megabytes that would have to be embedded. Its
-  grid row is still found by its title.
+- **Not in free-text search.** Its renderer hands it over with
+  `searchable` false, which the search index skips: it only repeats the titles of the pages it
+  lists, and on a whole workspace it runs to megabytes that would have to be
+  embedded. Its grid row is still found by its title.
 - **Its anchors.** A database or an unmirrored page has no document, so
   its entry links Notion and is wrapped in a `span` with a
   `data-section-uuid`. The path above a page links `/chat/<toc>#<anchor>`,

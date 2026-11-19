@@ -12,7 +12,6 @@ filegroup(
 
 exports_files([
     "check_cargo_lock_versions.sh",
-    "check_qmd_model_cache_path.sh",
     "check_version_consistency.sh",
     "fetch_pinned.py",
     "insta_update.sh",
@@ -37,11 +36,11 @@ STAGE_RUNTIME_DATA = [
     "//:scripts/release/stage_runtime_asset.sh",
     "//:scripts/stage_runtime.sh",
     "//datalib/backend/runtime:src/node_runtime.rs",
-    "//datalib/backend/runtime:src/qmd.rs",
     "//datalib/tauri:bundled_node",
     "//third-party:bundled_licenses",
     "//third-party/latchkey/runtime:latchkey_tree",
-    "//third-party/qmd/runtime:qmd_tree",
+    "//third-party/modal:LICENSE",
+    "//third-party/modal/runtime:modal_tree",
 ]
 
 STAGE_TARBALL_DATA = [
@@ -102,6 +101,7 @@ sh_test(
     srcs = ["check_install.sh"],
     data = [
         "//:scripts/install.sh",
+        "//:scripts/release/check_glibc_floor.sh",
         "//:scripts/release/pin_release.py",
         "//:scripts/release/publish_release.py",
     ],
@@ -127,6 +127,22 @@ sh_test(
     name = "check_binaries_bash32_test",
     srcs = ["check_binaries_test.sh"],
     data = ["//:scripts/release/check_binaries.sh"],
+    env = {"RELEASE_SHELL": "/bin/bash"},
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+sh_test(
+    name = "check_glibc_floor_test",
+    srcs = ["check_glibc_floor_test.sh"],
+    data = ["//:scripts/release/check_glibc_floor.sh"],
+    deps = ["@bazel_tools//tools/bash/runfiles"],
+)
+
+sh_test(
+    name = "check_glibc_floor_bash32_test",
+    srcs = ["check_glibc_floor_test.sh"],
+    data = ["//:scripts/release/check_glibc_floor.sh"],
     env = {"RELEASE_SHELL": "/bin/bash"},
     target_compatible_with = ["@platforms//os:macos"],
     deps = ["@bazel_tools//tools/bash/runfiles"],
@@ -159,24 +175,6 @@ sh_test(
 sh_binary(
     name = "release_steps_docker",
     srcs = ["release_steps_docker.sh"],
-)
-
-# Asserts that the vendored qmd snapshot and `default_models_dir()`
-# agree on `~/.cache/qmd/models` (the upstream qmd default) — the path
-# the SHIPPED app downloads models to. See
-# check_qmd_model_cache_path.sh for the full rationale. Pairs with the
-# rust-side unit test
-# //datalib/backend/qmd_indexer:qmd_indexer_unittests.
-sh_test(
-    name = "qmd_model_cache_path_test",
-    size = "small",
-    srcs = ["check_qmd_model_cache_path.sh"],
-    data = [
-        "//datalib/backend/runtime:src/qmd.rs",
-        "//third-party/qmd:package.json",
-        "//third-party/qmd:src/llm.ts",
-    ],
-    deps = ["@bazel_tools//tools/bash/runfiles"],
 )
 
 # --- Hermetic Python lint -------------------------------------------
@@ -229,15 +227,12 @@ py_test(
         "//:.github/workflows/release.yml",
         "//:MODULE.bazel",
         "//:requirements.txt",
+        "//:scripts/cloud_env_setup.sh",
         "//datalib/backend/runtime:src/node_runtime.rs",
-        "//datalib/backend/runtime:src/qmd.rs",
         "//datalib/tauri:rust-toolchain.toml",
-        "//datalib/ui:pnpm-lock.yaml",
-        "//tests/fixtures:BUILD.bazel",
         "//third-party/doltlite:BUILD.bazel",
-        "//third-party/qmd:package.json",
         "//third-party/latchkey/runtime:package.json",
-        "//third-party/qmd/runtime:package.json",
+        "//third-party/modal/runtime:package.json",
     ],
     main = "check_version_pins.py",
 )
@@ -305,17 +300,17 @@ py_test(
     main = "step_protocol_example_test.py",
 )
 
-# The qmd model pins (repo, revision, file, sha256) live in the build's
+# The model pins (repo, revision, file, sha256) live in the build's
 # fetch rule and in the Rust table the shipped binaries verify against.
 py_test(
-    name = "qmd_model_pins_test",
+    name = "model_pins_test",
     size = "small",
-    srcs = ["check_qmd_model_pins.py"],
+    srcs = ["check_model_pins.py"],
     data = [
-        "//datalib/backend/runtime:src/qmd.rs",
-        "//third-party/qmd_models:BUILD.bazel",
+        "//datalib/backend/runtime:src/models.rs",
+        "//third-party/embedding_models:BUILD.bazel",
     ],
-    main = "check_qmd_model_pins.py",
+    main = "check_model_pins.py",
 )
 
 # cargo-about (the release's third-party notices) must accept every

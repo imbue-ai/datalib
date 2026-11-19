@@ -140,6 +140,15 @@ library and opens this screen, and the library's name opens a menu of
 the other libraries to switch to (`library_menu`, `library_switch`, `libraries_show`, granted to the
 app's page by `capabilities/switch-libraries.json`).
 
+The screen can delete a library, so it runs under a content security
+policy of its own (`app.security.csp` in `tauri.conf.json`): its own
+script and style and the shell's IPC, nothing else. A library's page is
+served by the backend and has the policy the backend sends. The screen
+calls the shell through `window.__TAURI_INTERNALS__.invoke`, the call
+`@tauri-apps/api` makes too; `withGlobalTauri` stays off, so no page,
+a library's included, gets `window.__TAURI__`.
+`//datalib/tauri:webview_policy_test` checks both.
+
 `src/launcher.rs` holds every decision the screen makes — which
 libraries it lists, whether a directory is a data library at all,
 where a new one goes and what is already there — and is
@@ -151,8 +160,9 @@ bundled doltlite shell) is kept free of `tauri` the same way, for
 `//datalib/tauri:raw_store_test`, `src/protected.rs` (the protected
 folder, below) for `//datalib/tauri:protected_test`,
 `src/backend_output.rs` (the backend's URL and output) for
-`//datalib/tauri:backend_output_test`, and `src/navigation.rs` (where a window may go) for
-`//datalib/tauri:navigation_test`. Those
+`//datalib/tauri:backend_output_test`, `src/navigation.rs` (where a window may go) for
+`//datalib/tauri:navigation_test`, and `src/zoom.rs` (the zoom level) for
+`//datalib/tauri:zoom_test`. Those
 targets are the only way any of this crate's logic reaches `bazelisk
 test //...`, since the shell is a standalone cargo workspace Bazel does
 not build. Anything in those files that reaches for `tauri` breaks its
@@ -200,9 +210,9 @@ can whatever that Terminal runs. An app gets into its own
 group container without asking when the group's name starts with the
 Team ID that signed it, so only the Imbue-signed app can use this; a
 build from source is asked too, or refused. The option is marked
-experimental, and is meant to stop an agent running shell commands as
-you from reading the library or using its sign-ins, not a program set
-on stealing from you.
+experimental; who it defends against, and who not, is in
+[`security_posture.md`](../../docs/dev/security_posture.md) §"What we
+defend".
 
 > **The keychain does not protect a protected library's sign-ins. Only
 > the folder does.** A library's keychain item lets in the app's Node,
@@ -303,7 +313,9 @@ What is still to be checked, on a Mac
 Terminal, `ls` of the folder and
 each of `Resources/binaries/` run directly get a prompt naming
 Terminal rather than getting in; one Allow for Terminal lets in
-everything that Terminal runs until it quits. Run those checks from a
+everything that Terminal runs until it quits, and an Allow given for another
+app's folder lets it in too: Terminal, allowed into Docker's group container,
+then listed this one with no second dialog (macOS 26.7.2). Run those checks from a
 Terminal without Full Disk Access: one that holds it got in with no
 prompt (macOS 26.7.2), so it proves nothing. A person can list what they have
 granted with the query in `docs/user/first_time_user.md`, "Which apps
@@ -335,8 +347,8 @@ have you let in?".
   closed at, via `tauri-plugin-window-state`, which keeps it in
   `.window-state.json` under the app's config directory. It cannot be
   made narrower than 720px, so the toolbar's search box stays in view.
-- No blocking model download at startup: qmd's models are fetched on
-  first need by the steps and the search applet (`datalib_qmd_models`),
+- No blocking model download at startup: the embedding model is fetched on
+  first need by the steps and the search applet (`datalib_embedding_models`),
   the same as the web packaging — the shell passes nothing besides
   `--no-open` and the `--url-stdout` handshake.
 - There is no `datalib:` link handler; the shell does not link

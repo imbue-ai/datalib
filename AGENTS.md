@@ -47,6 +47,7 @@ merge conflict waiting to happen.
 - [`datalib/backend/etl/macros/README.md`](datalib/backend/etl/macros/README.md) — the four table derives.
 - [`docs/dev/data_architecture_ingestion.md`](docs/dev/data_architecture_ingestion.md), [`…_practices.md`](docs/dev/data_architecture_ingestion_practices.md) — download: principles, then how to build a provider. A provider's own quirks are in the `INGEST.md` beside its code, where it has one.
 - [`docs/dev/data_architecture_parse_and_render.md`](docs/dev/data_architecture_parse_and_render.md) — render: projection to `GridRow` + markdown, incrementality.
+- [`docs/dev/deleted_upstream.md`](docs/dev/deleted_upstream.md) — `when_deleted_upstream`: keeping your copy of what you deleted upstream for privacy, and how a source offers it.
 - [`docs/dev/latchkey.md`](docs/dev/latchkey.md) — how a web source signs in: the three kinds of latchkey service, who names an account, the keychain, the gateway. Read before touching a sign-in.
 - [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md) — JMAP, Gmail API, mbox.
 - [`docs/dev/grid_rows.md`](docs/dev/grid_rows.md) — the `grid_rows` union table and how to add a column.
@@ -70,10 +71,11 @@ merge conflict waiting to happen.
 - [`docs/dev/first_time_dev.md`](docs/dev/first_time_dev.md) — build and run from source.
 - [`docs/dev/style.md`](docs/dev/style.md) — how code is shaped: functional core, imperative shell; how to audit the docs and the code for drift and copies.
 - [`docs/dev/testing.md`](docs/dev/testing.md) — the test suites, insta `.update` targets; [`coverage.md`](docs/dev/coverage.md). Writing or fixing a Playwright spec: read its §"Writing a spec that does not flake" first.
+- [`tests/fixtures/README.md`](tests/fixtures/README.md) — the TNG corpus: the made-up data every source is tested on, where each fixture lives, and how they become one synced library.
 - [`docs/dev/ci.md`](docs/dev/ci.md) — CI, its caches and BuildBuddy, and reading a run.
 - [`docs/dev/release_steps.md`](docs/dev/release_steps.md) — how a release is assembled, and testing its steps from a mac.
 - [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md), [`runtime_fetch.md`](docs/dev/runtime_fetch.md), [`docker.md`](docs/dev/docker.md) — what ships beside the binaries: the Chrome-impersonating curl, the Node runtime, the container image.
-- [`docs/dev/qmd_behaviour.md`](docs/dev/qmd_behaviour.md), [`qmd_vendored.md`](docs/dev/qmd_vendored.md) — measured facts about qmd; `third-party/qmd` is a reference snapshot, not what we run.
+- [`docs/dev/qmd_behaviour.md`](docs/dev/qmd_behaviour.md) — measured facts about qmd; the shared model cache's path still follows it.
 - [`docs/dev/history.md`](docs/dev/history.md) — facts about the tree git cannot tell you. Add a paragraph when you learn one.
 - [`docs/dev/security_posture.md`](docs/dev/security_posture.md) — who we guard against, what stops them and what does not. **Start here** before changing a secret, a release job or a safety check, or adding anything a protected library writes outside its folder.
 
@@ -82,6 +84,7 @@ merge conflict waiting to happen.
 - [`docs/user/first_time_user.md`](docs/user/first_time_user.md), [`docs/user/getting_your_data.md`](docs/user/getting_your_data.md), [`docs/user/config_examples/`](docs/user/config_examples/).
 - [`docs/user/searching.md`](docs/user/searching.md) — the search's query language, `from:me` and what it covers; compiled into `datalib-step help search`, so a change to the search changes it.
 - [`docs/user/applets.md`](docs/user/applets.md), [`docs/user/contacts_app.md`](docs/user/contacts_app.md) — what the running app serves, and an agent's way into the contacts app; compiled in the same way, so a change to a route changes them.
+- [`docs/user/rendered_documents.md`](docs/user/rendered_documents.md) — what a rendered document promises any viewer: the link a person is, the `<time>` a date is, the attachment addresses. Compiled in as `help documents`, so a change to those shapes changes it.
 - [`datalib/backend/agent_docs/README.md`](datalib/backend/agent_docs/README.md) — every doc `datalib-step help` prints, how its links print, and the checks on its TOML and commands (`toml fragment`). Read before editing a doc an agent is sent to.
 
 ## Keep a forward path for existing data
@@ -105,7 +108,7 @@ it properly — then bring the existing data along:
   `datalib-http`'s config upgrade when it can be made without asking,
   otherwise in `datalib-migrate-config` (`docs/dev/config_model.md`
   §"The retired shapes").
-- **A derived store** (a render store, the grid or qmd index) can be
+- **A derived store** (a render store, the grid or search index) can be
   rebuilt from the raw stores; a change that costs a re-render or
   re-index is fine.
 
@@ -242,11 +245,11 @@ datalib/
                    and their writers — a source's `render_time_series`
                    and the `time_series_index` — and the applet's reads.
     etl/providers/ <p>/ (ingest) + <p>_render/ (render) + <p>_config/
-                   (config schema) per provider. Twelve of the
+                   (config schema) per provider. Fourteen of the
                    file-backed ones scan a local tree through
                    etl/files/src/file_changes_scan.rs (claude_code and codex by way
                    of etl/agent_sessions/; file_inventory has its own walker
-                   over etl/files/src/fswalk.rs); four mirror a SQLite
+                   over etl/files/src/fswalk.rs); five mirror a SQLite
                    file through etl/sqlite_mirror/; three render time
                    series (airvisual, yolink, garmin); lightroom renders
                    a row per photo and writes no markdown. file_inventory,
@@ -262,28 +265,48 @@ datalib/
                    and answer, alone.
     migrate_config/ `datalib-migrate-config`: rewrites a config in any
                    retired shape into the current one.
+    lightroom_retime/ `datalib-lightroom-retime`: applies a file of
+                   capture-time edits to a Lightroom catalog, the one
+                   thing here that writes a catalog. Not shipped.
     runtime/       the data-root layout, which build this is
                    (`build_id`), the bundled-Node resolver (the `npx`
-                   fallback is opt-in and loud) and the qmd model
-                   pins. No dependencies, so anything can link it.
-    qmd_indexer/   `Index`: the qmd index's operations — register the
-                   collections, keyword-index or embed one source — over
-                   qmd's SDK. Tested against the real qmd.
-    qmd_models/    puts qmd's pinned GGUFs in place, sha256-verified,
-                   so qmd never fetches one itself. Linked by the step
-                   and the applet.
+                   fallback is opt-in and loud), where the CUDA module
+                   is and the embedding model pins. No first-party
+                   dependencies, so anything can link it.
+    embedding_models/ puts the pinned embedding model in place,
+                   sha256-verified. Linked by the step and the applet.
+    search_index/  the search index: keyword rows per message in
+                   `search_*` tables of the grid index's file, and the
+                   inference cache: each document's chunks keyed by their
+                   prompt's hash, and the vectors, holding no text
+                   (docs/dev/plans/search_index_from_ram.md).
+    embedder/      text to vectors in process: llama.cpp
+                   (third-party/llama_cpp) behind a small C shim, on
+                   Metal on a mac, CUDA as a module on gnu Linux. Tested
+                   against a golden of qmd's answers; README.md has the
+                   facts, each a test in `embedding_facts`.
     store_meta/    `_datalib_meta`, the table every store carries naming
                    the build that wrote it and the shape it is in.
-    blob_store/    the blob store's shape: the one part of a step's data
-                   `datalib-http` reads, and its reader.
+    sql_guard/     reads SQL a caller wrote, and nothing else: a
+                   read-only open over SQLite's C API, the authorizer,
+                   deadline and one-statement check, parameters by name
+                   or position; behind the search applet's `POST /sql`.
+    blob_store/    the blob store's shape and its reader: the one table
+                   of a step's data `datalib-http` serves.
     core/          the app stores plus re-exports of `runtime`.
-    query/         the search-bar grammar every grid shares; no deps.
+    query/         the search-bar grammar every grid shares; no
+                   first-party deps.
     h3/            `datalib_h3`: where a thing is, as H3 cells over `h3o`;
                    a location is its finest cell, a cell a range of them.
                    README.md has the facts, each a test in `h3_facts`.
+    html_entities/ reads `&amp;`-style character references back to text,
+                   over quick-xml's HTML5 table; the one decoder.
     handle/        `Handle`: one identifier for a person (`email:`, `tel:`,
                    `slack:`), normalized; what renders write as
-                   `data-handle`. No first-party deps.
+                   `data-handle`. Its one first-party dep is uuid_text.
+    uuid_text/     a uuid read however it is written (dashed or not,
+                   either case, at the end of a slug or a link) and
+                   written lowercase with dashes; the one reader. No deps.
     contact_schema/ `NormalizedContact`: a person as one source describes
                    them. Only the shape; contact-common renders it.
     photo_schema/  `NormalizedPhoto`: a photo or video as one source
@@ -294,9 +317,20 @@ datalib/
                    Only the shape.
     contacts/      the contacts app's store under `datalib_curated/`;
                    the `datalib_contacts` applet is its one writer.
-    unified_document_index/ the grid index, the qmd index, the query language over
-                   them. Linked by datalib-step and datalib-applet —
-                   never by datalib-http or datalib-dag.
+    problems/      `datalib_problems`: the `problems` table every store
+                   carries, one row per thing a step could not fully do
+                   to one record, and its vocabulary.
+    step_problems/ reads a step's problems where the step keeps them,
+                   and the `problems.sqlite` a step with no store of its
+                   own keeps them in.
+    problem_mutes/ the problem rows a person muted, under
+                   `datalib_curated/`; the
+                   `unified_grid_and_search_index` applet is its one
+                   writer, `datalib-http` reads it.
+    unified_grid_and_search_index/ the grid index, the search index's
+                   query side, the query language over them. Linked by
+                   datalib-step and datalib-applet — never by
+                   datalib-http or datalib-dag.
     applets/       `datalib-applet`: the applet host, and `datalib-applet
                    search`, the search box with no server.
     history/       a doltlite store's commit log; its one first-party dep
@@ -333,34 +367,43 @@ separate crates").
 
 `datalib-dag <config.toml>` runs a DAG of subprocess steps. A `[[groups]]`
 entry is one thing on the Manage screen (a source is a group with a
-`type`; the unified document index is a group without one); a `[[steps]]` entry is
-an `id` — the one tree it writes, whose first part is its group — and
-the `command` it runs; `inputs` name steps by that id and are the
-edges; an `[[applets]]` entry is a server the gateway spawns. Datalib's
-own steps run `datalib-step run <function> [<type>]` (so their ids are
-`<group>/<function>`) and write out the `reads` and `locks` they need;
-the `[[programs]]` entry for `datalib-step` lists the verbs it takes
-(`--reset`, `--prepare`, `--compact`, `--collect`), and the runner sends
-no verb a program does not list.
+`type`); a `[[steps]]` entry is an `id` — the one tree it writes, whose
+first part is its group — and the `command` it runs; `inputs` name steps
+by that id, or every step of one function by a pattern
+(`*/render_markdown`), and are the edges; an `[[applets]]` entry is a
+server the gateway spawns. Datalib's own steps run `datalib-step run
+<function> [<type>]` (so their ids are `<group>/<function>`) and write
+out the `reads` and `locks` they need; the `[[programs]]` entry for
+`datalib-step` lists the verbs it takes (`--reset`, `--prepare`,
+`--compact`, `--collect`), and the runner sends no verb a program does
+not list. What each is made of:
+[`config_model.md`](docs/dev/config_model.md) §"Three kinds of entry".
 
 Each source has an `ingest` step and (most) a `render_markdown` step, and
-`grid_index` under `unified_document_index` reads every render tree its `inputs`
-name into the SQL index the grid reads. A searched source fills its own
-collection of the qmd index (free-text search) with two more steps of
-its own, `keyword_index` and then `embed`, so the slow embedding can be
-turned off or run by hand per source. `qmd_aggregator` reads every
-source's pair: it retires the collection of any source it does not name
-and reports on the whole, and removing it turns search off.
-`embedding_map` reads the aggregator and lays the embeddings out on a
-plane for the map card (`datalib/backend/embedding_map/README.md`).
+`unified_grid_and_search_index` under `unified_grid_and_search_index` reads every render tree its `inputs`
+name (`*/render_markdown`, every source's) into the SQL index the grid
+reads. It then puts each source in the keyword search, the `search_*`
+tables in the same file, but those its `params.not_searched` lists. A
+source searched by meaning has one more step of its own, `embed`, which
+reads `unified_grid_and_search_index`, cuts the source's documents into
+chunks and fills their vectors in
+`unified_grid_and_search_index/search_index/inference_cache.sqlite`, so
+the slow embedding can be turned off or run by hand per source; nothing
+else loads the embedding model. `unified_grid_and_search_index` also
+sweeps the vectors no chunk names and reports what search holds of each
+source. `embedding_map` reads every `embed` and lays the embeddings out
+on a plane for the map card
+(`datalib/backend/embedding_map/README.md`).
 A source whose data is also time series (Garmin, YoLink, AirVisual) has a
 `render_time_series` step beside its `render_markdown`, and
 `time_series_index` under `unified_time_series_index` indexes every
 such store without copying its points (`docs/dev/time_series.md`). The document index is
-queried by the `unified_document_index` applet; `datalib-http`
+queried by the `unified_grid_and_search_index` applet; `datalib-http`
 reads the stores' commit logs (`history/`) and never their rows, except
 a step's blob store, whose one table it serves at `/data/…`
-(`datalib/backend/blob_store/README.md`). A render
+(`datalib/backend/blob_store/README.md`), and every step's `problems`,
+each read where its step keeps it, which it counts, less the muted
+ones, for the Manage counts (`datalib/backend/problem_mutes/README.md`). A render
 store is readable at every commit: the documents between two checkpoints
 share one transaction. The loop's record — each step's state now, its
 last run and success, each sink's version — is in
@@ -374,7 +417,7 @@ the loop `datalib-dag` runs, in-process (`http/src/supervisor.rs`), holding
 there (`POST /api/requests`, `/api/steps/<id>/turn_off`); the Manage tab
 edits the config; a root with no config gets the launcher and the
 first-run screen, which writes datalib's starter config
-(`http/src/starter.rs`: the document index and the applets).
+(`http/src/starter.rs`: the grid and search index and the applets).
 `datalib-dag init` writes a config with no steps instead.
 
 ## Ingest and render are separate crates
@@ -408,21 +451,28 @@ it should not have.
 ## The grid_rows union table
 
 The grid is one denormalized table, `grid_rows` (the `GridRow` struct in
-`datalib/backend/schema/src/grid_rows.rs`), which `grid_index` fills
-from every source's render store and the `unified_document_index` applet reads
+`datalib/backend/schema/src/grid_rows.rs`), which `unified_grid_and_search_index` fills
+from every source's render store and the `unified_grid_and_search_index` applet reads
 with one SELECT — no per-provider branches in the query path.
 `docs/dev/grid_rows.md` has the checklist for adding a column.
 
-## QMDs are write-only
+## Rendered markdown is never parsed back
 
-The render step emits markdown files; the backend serves them
-**verbatim** and never parses them back. Structured fields come from
+The render step hands each document over as markdown, section by
+section, and its render store keeps it; there are no `.md` files. The
+backend serves a document **verbatim**, as the store spells it, and
+never parses it back. Structured fields come from
 `grid_rows`. Per-section anchors come from the
 `<div id="m-{uuid}" data-section-uuid="{uuid}" class="msg …">` wrappers
 the renderer emits — those two attributes are load-bearing
-(`ui/src/feedback/context.ts::messageAncestor`). A new renderer needs
-that pair and nothing else. If you find yourself writing a QMD parser in
-the backend, stop — add the field to `grid_rows` instead.
+(`ui/src/feedback/context.ts::messageAncestor`). Where each message
+begins comes from the projection too: a renderer hands its document over
+as `RenderedMarkdown::sections`, and the render store keeps their
+layout
+([`data_architecture_parse_and_render.md`](docs/dev/data_architecture_parse_and_render.md)
+§"One section cannot reach the next"). If you find yourself writing a
+markdown parser in the backend, stop — add the field to `grid_rows`
+instead.
 
 ## Doltlite: one writer per file, readers pinned
 
@@ -439,10 +489,7 @@ sqlite3-shell drop-in version-locked to the tree; from a test take it as
 a `data` dep. [`docs/dev/doltlite.md`](docs/dev/doltlite.md) is the one
 place for what the engine does, with the recipes;
 `docs/dev/app_stores.md` maps which store lives where and who owns it.
-Every fact there is a test in `//datalib/backend/doltlite_facts:doltlite_facts_test`,
-`//datalib/backend/etl:doltlite_two_process_test` or, for the PyPI
-wheels, `//datalib/backend/doltlite_facts:python_package_test`,
-`:python_reader_test` and `//datalib/reader:reader_wheel_test`, so a doltlite
+Every fact in `doltlite.md` is a test, named at its top, so a doltlite
 bump that moves one fails by name.
 
 The rules, none optional. How our code enforces them is in
@@ -453,10 +500,9 @@ The rules, none optional. How our code enforces them is in
   half-written rows, and doltlite itself only makes a second writer
   wait its turn, never refuses it
   ([locks and writers](docs/dev/doltlite.md#locks-and-writers)). Our
-  per-file lock refuses it. `datalib-http` owns feedback, usage and
-  remote media; the applet only reads. (The grid index is not doltlite:
-  it is plain SQLite in WAL mode, which keeps no history and needs none
-  of these rules, and the `grid_index` step is its one writer.) A download takes its store as an input
+  per-file lock refuses it; `app_stores.md` names each store's one
+  writer. (The grid index is plain SQLite, not doltlite, and needs none
+  of these rules.) A download takes its store as an input
   (`FetchOptions.db: RawDb`) and never opens one.
 - **A writer works on `datalib_writer`, never on `main`**, and
   fast-forwards `main` when it seals, so a reader never sees a
@@ -470,7 +516,7 @@ The rules, none optional. How our code enforces them is in
 - **A reader opens read-only and reads one commit**, one of
   [three ways](docs/dev/doltlite.md#three-ways-to-read-one-commit):
   `dolt_at_<t>('<hash>')`, a held read transaction, or a detached
-  read-only open of `<file>@<hash>`. Render and `grid_index` read their
+  read-only open of `<file>@<hash>`. Render and `unified_grid_and_search_index` read their
   input stores the last way (`doltlite_raw::open_reader`), so their
   queries name the tables themselves. A process that *moves a ref*,
   even on its own branch, is a writer.
@@ -569,8 +615,8 @@ uv export --no-emit-project --no-emit-workspace --format requirements-txt -o req
 ```
 
 then add `requirement("newpkg")` to the relevant `BUILD.bazel`. Python is
-only used for fixture / test tooling and scripts; everything shipping is
-Rust, but for the one standard-library module in `datalib/reader/`.
+only used for fixture / test tooling and scripts; nothing that ships is
+Python but the one standard-library module in `datalib/reader/`.
 
 A version bump also changes the wheel hashes `MODULE.bazel.lock` keeps
 under `facts`, and a local build can keep the old ones: Bazel's hidden
@@ -582,16 +628,15 @@ changed its facts"). Delete that file, then `bazelisk build --nobuild //...`.
 
 **"Build green" means `bazelisk test //...` passes — nothing less.** A
 narrower invocation is fine for the inner loop, but don't call the tree
-green based on one; say what you actually ran. The CI gate is that plus
-the repo hygiene lint, which runs first and skips the tests if it fails:
+green based on one; say what you actually ran. Before pushing, run the
+whole local gate (what it runs, and with which flags:
+[`testing.md`](docs/dev/testing.md#source-of-truth-bazelisk-test-)):
 
 ```bash
 bazelisk run //:precommit          # the one command to run before pushing
 ```
 
-That is `//:lint_repo`, `//:lint`, a `bazelisk build //...` (which runs
-the rustfmt and clippy aspects over every crate) and every hermetic
-test. Measured on one warm mac:
+Measured on one warm mac:
 
 | loop | command | cost |
 |---|---|---|
@@ -605,12 +650,12 @@ aspects run only on the tests named, not the libraries they link.
 **Those tag filters belong on that line and nowhere else** — on the full
 run, `-external` silently drops the Playwright suite.
 
-**Bazel is the only supported driver.** `cargo test` / `pnpm test` bypass
-its cache and sandbox and can disagree with CI. Anything that reads
-`bazel-bin/tests/fixtures/ingested/*` is reading a genrule output; go
-through bazel so the fixture is rebuilt first. Insta snapshots are
-updated through sibling `.update` targets (`docs/dev/testing.md`).
-Coverage: `docs/dev/coverage.md`. Why a run was slow: `docs/dev/ci.md`.
+**Bazel is the only supported driver**: `cargo test` / `pnpm test`
+bypass its cache and sandbox and can disagree with CI, and anything
+under `bazel-bin/tests/fixtures/ingested/` is a genrule output only
+bazel rebuilds. Insta snapshots, coverage and slow runs:
+[`testing.md`](docs/dev/testing.md), [`coverage.md`](docs/dev/coverage.md),
+[`ci.md`](docs/dev/ci.md).
 
 **A green suite cannot show a sync that is right but slow**: work
 redone, fetches made one at a time, an ETA that never moves, files
@@ -622,9 +667,9 @@ layout, sync a real root and read its run store
 
 **A test never `sleep`s to order two writers, or to give something
 time to happen; it waits for the thing it is about to assert.** A
-sleep that is long enough on a warm mac is short on a loaded CI runner
-(the one on `2cbcc398` was), and a sleep that is long enough on CI
-makes every local run slower than it needs to be. Poll the row, the
+sleep that is long enough on a warm mac is short on a loaded CI runner,
+and a sleep that is long enough on CI makes every local run slower than
+it needs to be. Poll the row, the
 file, the endpoint — with a deadline, so a hang is a failure that
 names what never arrived rather than a timeout with no message. In the
 Playwright suite, where most of our flakes have been, the rules are in
@@ -645,7 +690,7 @@ Three neighbours of the same mistake:
   add a process-local counter to the pid. An environment variable is
   the same trap — one test's `set_var` is every test's, and outlives
   it. Prefer passing the value in (`models_dir_under` in
-  `qmd_indexer`); where the variable itself is what's under test, take
+  `embedding_models`); where the variable itself is what's under test, take
   a lock and restore on drop (`EnvGuard` in `node_runtime.rs`).
 - **A test that takes more than a third of its timeout on CI is a
   flake waiting to happen** once the runner is busy. Tag it `cpu:N`
@@ -697,11 +742,10 @@ still works) and the column a person sees is "Source".
 ## A local file or folder: ask `file_changes_scan` what changed
 
 **Don't walk a folder or re-read an input yourself to learn whether it
-changed; ask `datalib_etl_files::file_changes_scan`.** A listing reads no file: a shared
-fingerprint cache vouches for each file's hash per host, so an unchanged input
-costs a `stat`, and a source that reads a changed file gets its hash with its
-bytes rather than reading it twice. `file_checkpoint` keeps this source's
-`path → blake3` cursor to diff against. The recipe is `datalib/backend/etl/files/README.md` §"Answering "did it change?"
+changed; ask `datalib_etl_files::file_changes_scan`.** An unchanged
+input costs a `stat`, and a changed one is read once, its hash with its
+bytes; `file_checkpoint` keeps this source's `path → blake3` cursor to
+diff against. The recipe is `datalib/backend/etl/files/README.md` §"Answering "did it change?"
 for a file-backed source"; `lightroom`'s `ingest/sync.rs` is a small example.
 
 ## A network source owes what upstream listed and the store does not hold
@@ -769,12 +813,13 @@ upstream (block types, MIME types), free-form display text
 | who names a latchkey account a browser login adds | `AccountNaming` | `http/src/connect.rs` |
 | what kind of trouble a sign-in or probe ran into | `IssueKind` | `probe/src/issue.rs` (`datalib_probe`) |
 | a probe the wizard polls | `ProbeState` | `http/src/probe.rs` |
-| how the prepare pass at a start stands with one step | `MigrateState` | `http/src/supervisor.rs` |
+| how a pass (the prepare pass at a start, a wipe that frees disk) stands with one step | `PassState` | `dag/src/supervisor/pass.rs` |
 | the list a picker loads | `ProbeList` | `probe/src/lib.rs` (`datalib_probe`) |
 | the `grid_rows.provider` tag | `Provider` | `schema/src/providers.rs` |
 | what a step could not fully do to a record | `Outcome`, `Reason`, `ScopeKind`, `Severity`, `Stage` | `problems/src/lib.rs` (`datalib_problems`) |
 | a configured entry upstream does not have; a listing or phase a run could not do | `ProblemReason`, `RunProblemKind` | `etl/src/download_problems.rs` |
 | how a diff group's row differs between two renders | `DiffStatus` | `schema/src/diff_status.rs` |
+| what an edge means, stored as its number | `EdgeKind` | `schema/src/edges.rs` (`datalib_schema`) |
 | what a term is to its grid row | `SearchTermKind` | `schema/src/search_terms.rs` (`datalib_schema`) |
 | a config's source type | `SourceType` | `datalib_step/src/source_type.rs` |
 | whether an ingest method reaches a service or reads files | `Reach` | `source_common/src/lib.rs` |
@@ -787,6 +832,7 @@ upstream (block types, MIME types), free-form display text
 | which picture of a photo the applet serves | `Size` | `applets/src/photos/pictures.rs` |
 | what a call to a contacts-app route means | `RouteKind` | `applets/src/datalib_contacts/api.rs` |
 | who made a link or a label: a person, or an agent waiting for one | `DecidedHow` | `contacts/src/lib.rs` (`datalib_contacts`) |
+| who muted a problem row: a person, or an agent | `MutedHow` | `problem_mutes/src/lib.rs` (`datalib_problem_mutes`) |
 | what a contact's field says | `FieldKind` | `contacts/src/lib.rs` (`datalib_contacts`) |
 
 The TypeScript side gets the ones the UI switches on as string-literal
@@ -818,18 +864,17 @@ log when it fires.
 
 **An error or a warning about a record goes through `problems`, never
 only to the log.** A record a download could not fetch goes through
-`record_object_attempt` / `record_object_error`. Everything else a
+`record_object_attempt` / `record_object_error`; everything else a
 download could not do goes into the one `RunProblems` its `fetch` is
-handed (`run_problems::collecting`): a record that failed before we had
-a row for it, a configured entry upstream does not have, a listing or
-phase the run could not do as a whole. Each report says what the run
-covered, and only that is cleared. A record render could not fully
-project goes on its document's `RenderedMarkdown::problems`, or
-through `RenderCtx::report_*` when there is no document yet. The rows
-travel with the data to the index, and that is where a person sees
-them: the Manage row's count (the `problems{severity=…}` metrics each
-step reports) and the banner above the document. A `warn!` alone
-reaches nobody.
+handed (`run_problems::collecting`;
+[`data_architecture_ingestion.md`](docs/dev/data_architecture_ingestion.md)
+§"Error handling"). A record render could not fully project goes on its
+document's `RenderedMarkdown::problems`, or through
+`RenderCtx::report_*` when there is no document yet. Each step keeps
+its rows in its own stores, and a person sees them there, as the Manage
+row's count and the banner above the document
+([`etl/README.md`](datalib/backend/etl/README.md) §"Problems stay in
+the step that found them"). A `warn!` alone reaches nobody.
 
 ## Dynamic SQL needs `AssertSqlSafe` and a reason
 
@@ -838,7 +883,7 @@ runtime is wrapped in `sqlx::AssertSqlSafe(...)` — an assertion *you*
 make — with a comment saying why it is safe. Two patterns cover almost
 everything: a `?` run sized from `chunk.len()` with every value bound, and
 table/column names that are `&'static str` at every callsite. Anything
-from upstream data is quoted (`lightroom`'s `plan::quote_ident`) or
+from upstream data is quoted (`doltlite_raw::quote_ident`) or
 bound. **A set of values to match is one bound JSON array**,
 `IN (SELECT value FROM json_each(?))`, never a `?` per value: SQLite
 binds at most 32,766 values per statement, and only a real user's data
@@ -885,6 +930,14 @@ Where such a column needs to sort it gets a derived UTC twin
 (`created_at_utc` + `created_offset`) rather than being rewritten. If you
 find yourself writing `strftime("%Y-%m-%dT%H:%M:%SZ")`, stop —
 `isoformat()` in Python, `to_rfc3339()` here.
+
+**`Z` means the clock is unknown; `+00:00` means it was UTC** (RFC
+9557). `-00:00`, RFC 3339's old spelling of "unknown", is read and never
+written. A rendered time whose source names no clock (a Unix stamp, a
+service's own `Z`) is written `Z` (`datalib_time::with_unknown_offset`);
+a stamp we mint, whose clock we know, never ends in `Z`. Why, and which
+clock each source's messages are on:
+[`rendered_documents.md`](docs/user/rendered_documents.md#a-time).
 
 ## Auth (web API)
 

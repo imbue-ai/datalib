@@ -1,7 +1,7 @@
 # chat-common — one markdown layout for every chat provider
 
 Fourteen providers' render crates hand this crate a `NormalizedChat`
-and get back a rendered `.md` plus the `grid_rows` that go with it
+and get back a rendered document plus the `grid_rows` that go with it
 (`claude_code` and `codex` through `agent_sessions_render`). This file covers
 the parts of that markdown you have to know about before changing it.
 
@@ -10,16 +10,17 @@ the parts of that markdown you have to know about before changing it.
 Every message starts with a line like:
 
 ```markdown
-## <span class="msg-author">Picard</span> <time class="msg-ts" datetime="2364-04-11T00:00:00+00:00" title="2364-04-11 00:00:00 UTC">Sat Apr 11th, 2364 at 00:00</time>
+## <span class="msg-author">Picard</span> <time class="msg-ts" datetime="2364-04-11T00:00:00Z" title="2364-04-11 00:00:00 UTC">Sat Apr 11th, 2364 at 00:00</time>
 ```
 
 **Keep the `##`.** It is not there to be a heading on screen — the UI
 styles it down to a one-line "name, then a small grey time". It is
-there because qmd, the semantic index, cuts a chunk at the best break
-point near its size limit and scores an `h2` far above the blank line
-it would otherwise settle for. Replace the heading with a plain `<div>`
-and every chat's chunk boundaries quietly get worse, with nothing
-failing to tell you.
+there because the UI's styles find a message's header by it
+(`.msg h2` in `documentBody.css`, the sticky header of a long message
+among them), and because it is where a message starts for anyone
+reading the file. The search index does not read it: it draws each
+message from its body and its row, under a line naming who and when
+(`search_index/src/text.rs`).
 
 The visible time is short; the full instant is in the `title`
 attribute, one hover away. It is deliberately absolute rather than
@@ -40,17 +41,13 @@ The text stays what the source showed; the href is the handle as a URI
 (`Handle::to_uri`: `mailto:`, `tel:`, Slack's `slack://user?team=…&id=…`,
 and `datalib:handle/<kind>/<value>` for a kind with no scheme of its
 own, a Signal account id);
-the title is the hover any other markdown viewer shows. The UI's
-markdown-it marks a link it can resolve as a chip
-(`ui/src/cards/chipLinks.js`), asks the contacts app, if one is
-configured, and the index whom the handle belongs to, and draws a chip
-in place of the link (`ui/src/cards/contacts.ts`), whose own title
-says what every source knows of the person. The href is load-bearing, like
+the title is the hover any other markdown viewer shows. The app draws
+the link as the person's chip. The href is load-bearing, like
 `data-section-uuid`: it is how a contact linked after this file was
 written still finds the author. An author with no handle is a plain
 `<span class="msg-author">`. How a handle becomes a person is
-`docs/dev/contacts.md`; the design, and why a chip may appear anywhere
-in a body, is `docs/dev/chips.md`.
+`docs/dev/contacts.md`; how a chip is drawn, and why one may appear
+anywhere in a body, is `docs/dev/chips.md`.
 
 An item with `recipients` (an email's To, Cc and Bcc) gets one more line
 straight under the header, a paragraph rather than an HTML block
@@ -130,11 +127,11 @@ someone may want to read.
 
 A provider that knows the account has not read a message upstream sets
 `unread` on its item. The wrapper then carries an `unread` class, and
-the first unread item in the document also carries `first-unread`,
-which the UI draws a "New" rule above (`ChatBody.ce.vue`). Nothing
-reaches the text: the rule is CSS, so qmd's chunks are the same either
-way. `false` means read *or* unknown; a provider that cannot tell leaves
-it there.
+the first unread item in the document also carries `first-unread`, which
+the UI draws a "New" rule above (`ChatBody.ce.vue`). Nothing reaches the
+text: the rule is CSS, so the file and the search's chunks are the same
+either way. `false` means read *or* unknown; a provider that cannot tell
+leaves it there.
 
 Read state has one shape, `ReadMark` (`datalib_etl::read_marks`):
 `Through(item)` on a conversation or thread, everything up to that item
@@ -186,8 +183,8 @@ item: what upstream counts and how many the mirror holds. The item
 then ends with one line, `<span class="msg-replies">12 replies · 9 not
 mirrored yet</span>`, the second half only while some are missing, so a
 reader can tell a thread nobody answered from one whose answers are
-still to be fetched. It is text, so qmd and an agent reading the file
-see it too; it is not in the item's grid text, which is what was said.
+still to be fetched. It is text, so an agent reading the file sees it
+too; it is not in the item's grid text, which is what was said.
 Slack is the one provider that sets it
 (`slack_render/TRANSLATE.md`).
 
@@ -231,20 +228,14 @@ worth knowing about before you invent a third:
   "Google Chat Message"), so it groups its chats by network and calls
   `render_all` once per group.
 - **`NormalizedDoc::orphan_reactions`** carries reactions to a message
-  the mirror does not have. A period-bucketed provider is expected to
-  file a reaction under its *target's* period rather than its own — a
-  reaction to a March message belongs in the March document however
-  late it arrived, and beeper's parse resolves that against every event
-  in the store. What is left is the case nothing can place: the target
-  was never downloaded. Only beeper produces these, and the TNG fixture
+  the mirror does not have: the target was never downloaded. Only beeper produces these, and the TNG fixture
   has none; the one test that renders one is
   `every_timestamp_carries_the_full_instant` in `src/render.rs`.
 
-One `NormalizedChat` per *bucket* rather than per chat is the idiom for
-a period-bucketed source (beeper, signal): attachment bundles are keyed
-by `NormalizedChat::id`, and those sources load a bundle per bucket.
-Nothing downstream notices — each document is filed by its own id
-either way, and the chat-level grid row was already one per document.
+A chat is one document whose id is the chat's own. A document that is
+part of a chat rather than all of it, as a sub-agent's transcript is of
+a session, is a container inside the chat, read on its own;
+`render.rs`'s `tree_of` places it, and every row, in the chat's tree.
 
 ## `LAYOUT_VERSION`
 
@@ -292,13 +283,26 @@ becomes markup (`docs/dev/data_architecture_parse_and_render.md`
 escapes every field it writes — the author, a label, a reactor, a file
 name, a system note — and an item's `text` according to the profile's
 `text_format`: `Plain` for what a person typed (a text message, a
-LinkedIn message), `Markdown` for an assistant's reply or for markdown
-the provider built itself, having escaped the plain text it put inside
-(Facebook's posts, Beeper's reply line, an email). The grid's search
+LinkedIn message), `Markdown` for markdown the provider built itself,
+having escaped the plain text it put inside (Facebook's posts, Beeper's
+reply line), or markdown someone else wrote, which goes in as written,
+HTML included (an assistant's reply and the prompt before it, an
+email's `text/html` part after htmd). The chat's title and names, and
+each item's author, recipients, reactors, attachment filenames and
+labels, lose their bidi controls first (`without_bidi_controls`). Each
+item is a section of its own, so
+the page renders it alone. The grid's search
 text is `text` as given either way. Front-matter values go through
 `yaml_scalar`. `datalib/ui/tests/hostile_text.test.ts` renders a
 document whose every plain field holds HTML and markdown through the
 app's own markdown-it and sanitizer, and checks each reads as typed.
+
+A `Markdown` body is pasted into a page of many messages, so a block it
+leaves open would run on through every message after it: an assistant's
+reply cut off inside a code block, a prompt that opens ```` ``` ```` or
+`<pre>` and never closes it. `close_open_blocks` closes any fence, or
+any HTML block that only a closing tag or marker ends, at the end of
+the body.
 
 What markdown does reach the page, `ui/src/cards/sanitize.ts` runs
 through DOMPurify: scripts, event handlers, `javascript:` URLs and form
@@ -314,6 +318,13 @@ only when it is exactly an attachment's blob-store address,
 `/data/<group>/<function>/blob/<hash>`, or a part of an email stored
 there, `…/blob/<hash>/part/<hash>`. Anything else on this origin,
 relative references included, is dropped.
+
+Nor can one message reach the next: the UI renders and sanitizes each
+message as a fragment of its own, from the sections this crate hands
+over (`docs/dev/data_architecture_parse_and_render.md` §"One section
+cannot reach the next"). Keep the pieces honest: a message is one
+`Section::boxed`, and the `<details>` openers and closers are unkeyed
+pieces of their own.
 
 The sanitizer is not the boundary, though. The page draws the body in a
 frame whose policy is `script-src 'none'` (`ui/src/cards/docFrame.ts`),

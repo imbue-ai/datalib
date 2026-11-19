@@ -1,20 +1,20 @@
-//! `render_all` — one `.md` + one [`GridRow`] per contact, handed to
+//! `render_all` — one document + one [`GridRow`] per contact, handed to
 //! the `on_doc_complete` callback the orchestrator threads through.
 //! Provider-agnostic: everything provider-specific arrives via
 //! [`ContactRenderProfile`] + the [`ContactDoc`]s.
 
-use std::fs;
-use std::path::Path;
-
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::yaml_scalar;
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
-use datalib_etl_render::html::{escape_attr, escape_md_inline, escape_text};
+use datalib_etl_render::front_matter::Front;
+use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::{
+    escape_attr, escape_name_inline, escape_name_text, escape_text, without_bidi_controls,
+};
 use datalib_etl_render::inputs::{Bucket, Buckets};
 use datalib_etl_render::message::chip_link;
 use datalib_etl_render::photo::{photo_address, with_photo_url};
-use datalib_etl_render::section::{join, Section};
+use datalib_etl_render::section::Section;
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
 use datalib_schema::providers::Provider;
@@ -68,7 +68,6 @@ pub struct RenderSummary {
 pub fn render_all(
     profile: &ContactRenderProfile,
     contacts: &[ContactDoc],
-    out_dir: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -82,7 +81,6 @@ pub fn render_all(
         &mut summary,
         profile,
         contacts,
-        out_dir,
         source_id,
         progress,
         on_doc_complete,
@@ -96,7 +94,6 @@ pub fn render_into(
     summary: &mut RenderSummary,
     profile: &ContactRenderProfile,
     contacts: &[ContactDoc],
-    out_dir: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -108,10 +105,9 @@ pub fn render_into(
             inputs: doc.inputs.clone(),
         });
         // Nothing here fails on the card's account — a row that will not
-        // validate is recorded as a problem — so what is left is the disk
-        // and the sink, and either failing is the run's to report, not
-        // one card's.
-        render_one(profile, doc, out_dir, source_id, on_doc_complete)
+        // validate is recorded as a problem — so what is left is the
+        // sink, and its failing is the run's to report, not one card's.
+        render_one(profile, doc, source_id, on_doc_complete)
             .with_context(|| format!("render contact {}", doc.doc_uuid))?;
         summary.contacts_rendered += 1;
         progress.inc(1);
@@ -122,28 +118,14 @@ pub fn render_into(
 fn render_one(
     profile: &ContactRenderProfile,
     doc: &ContactDoc,
-    out_dir: &Path,
     source_id: &str,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
     let m_uuid = &doc.doc_uuid;
     let contact = &doc.contact;
-    let md_path = doc_md_path(
-        &datalib_etl::layout::render_markdown_root(out_dir, source_id),
-        m_uuid,
-    );
-    let page_dir = md_path.parent().expect("a document's file has a folder");
-    fs::create_dir_all(page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
 
     let photo = contact.photo.as_ref().and_then(photo_address);
     let sections = render_markdown(profile, doc, source_id, photo.as_deref());
-    fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
-
-    let md_rel = md_path
-        .strip_prefix(out_dir)
-        .unwrap_or(&md_path)
-        .to_string_lossy()
-        .into_owned();
 
     let mut problems: Vec<ProblemRow> = doc
         .problems
@@ -160,14 +142,20 @@ fn render_one(
             )
         })
         .collect();
-    let mut row = build_grid_row(profile, doc, source_id, &md_rel, &mut problems);
+    let (data_nodes, at) = tree(profile, doc, source_id);
+    let mut row = build_grid_row(profile, doc, source_id, &mut problems);
     if let Some(row) = &mut row {
         row.set_supplied_terms(about_terms(contact));
+        row.parent_uuid = at.parent_uuid;
+        row.read_uuid = at.read_uuid;
+        row.place_uuid = at.place_uuid;
     }
 
     // `row` reaches the index through `on_doc_complete` below; the
     // renderer writes no projection of its own any more.
     on_doc_complete(RenderedMarkdown {
+        searchable: true,
+        content_hash: None,
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: contact
@@ -175,7 +163,6 @@ fn render_one(
             .clone()
             .or_else(|| contact.created_at.clone()),
         bucket_key: Some(m_uuid.clone()),
-        md_path,
         render_version: profile.render_version,
         rows: row.into_iter().collect(),
         sections,
@@ -184,12 +171,47 @@ fn render_one(
         // can then say who any of their handles is, and where their
         // photo is served from.
         contacts: vec![with_photo_url(contact)],
+        data_nodes,
+        filings: Vec::new(),
         photos: Vec::new(),
         problems,
+        front: front(profile, doc, source_id),
     })
     .with_context(|| format!("on_doc_complete {m_uuid}"))?;
 
     Ok(())
+}
+
+/// The address book, then the card in it, read on its own; and where the
+/// card's row sits.
+fn tree(
+    profile: &ContactRenderProfile,
+    doc: &ContactDoc,
+    source_id: &str,
+) -> (Vec<DataNodeRow>, Lineage) {
+    let md = &doc.doc_uuid;
+    let mut data_nodes = Vec::with_capacity(2);
+    let mut at = Lineage::top();
+    if let Some(book) = &doc.address_book {
+        let book = DataNodeRow {
+            markdown_uuid: md.clone(),
+            ..book.clone()
+        }
+        .under(&at);
+        at = at.below(&book);
+        data_nodes.push(book);
+    }
+    let own = DataNodeRow::new(md, md, source_id, &profile.contact_kind)
+        .named(Some(display_or_id(doc).to_string()))
+        .upstream(
+            profile.contact_entity_kind,
+            doc.contact.key.clone(),
+            doc.upstream_account.clone(),
+        )
+        .read_together()
+        .under(&at);
+    data_nodes.push(own);
+    (data_nodes, at)
 }
 
 fn display_or_id(doc: &ContactDoc) -> &str {
@@ -351,6 +373,26 @@ fn summary(contact: &NormalizedContact) -> String {
     lines.join("\n")
 }
 
+/// The document's front matter. A stamp we don't have is omitted, never
+/// written empty; the grid row is `None` to match.
+fn front(profile: &ContactRenderProfile, doc: &ContactDoc, source_id: &str) -> Front {
+    let contact = &doc.contact;
+    let mut front = Front::new()
+        .plain("markdown_uuid", &doc.doc_uuid)
+        .plain("source_id", source_id)
+        .plain("provider", profile.provider)
+        .text("group", &doc.group_label);
+    if !contact.key.is_empty() {
+        front = front.text("external_id", &contact.key);
+    }
+    if let Some(dn) = contact.name() {
+        front = front.name("title", dn);
+    }
+    front
+        .text_if("created_at", contact.created_at.as_deref())
+        .text_if("modified_at", contact.modified_at.as_deref())
+}
+
 fn render_markdown(
     profile: &ContactRenderProfile,
     doc: &ContactDoc,
@@ -359,29 +401,7 @@ fn render_markdown(
 ) -> Vec<Section> {
     let m_uuid = &doc.doc_uuid;
     let contact = &doc.contact;
-    let mut out = String::with_capacity(512);
-
-    out.push_str("---\n");
-    out.push_str(&format!("markdown_uuid: {m_uuid}\n"));
-    out.push_str(&format!("source_id: {source_id}\n"));
-    out.push_str(&format!("provider: {}\n", profile.provider));
-    out.push_str(&format!("group: {}\n", yaml_scalar(&doc.group_label)));
-    if !contact.key.is_empty() {
-        out.push_str(&format!("external_id: {}\n", yaml_scalar(&contact.key)));
-    }
-    if let Some(dn) = contact.name() {
-        out.push_str(&format!("title: {}\n", yaml_scalar(dn)));
-    }
-    // A stamp we don't have is omitted, never written empty; the grid
-    // row is `None` to match.
-    if let Some(ts) = &contact.created_at {
-        out.push_str(&format!("created_at: {}\n", yaml_scalar(ts)));
-    }
-    if let Some(ts) = &contact.modified_at {
-        out.push_str(&format!("modified_at: {}\n", yaml_scalar(ts)));
-    }
-    out.push_str("---\n\n");
-    let frontmatter = Section::unkeyed(out);
+    let frontmatter = Section::unkeyed(front(profile, doc, source_id).draw());
 
     // The page body — the head, the fields, a group's members — is the
     // one section the contact's grid row names.
@@ -407,13 +427,13 @@ fn head(doc: &ContactDoc, photo: Option<&str>) -> String {
     if let Some(src) = photo {
         out.push_str(&format!(
             "<div class=\"contact-photo\">\n\n![{}]({src})\n\n</div>\n\n",
-            escape_md_inline(name)
+            escape_name_inline(name)
         ));
     }
     out.push_str("<div class=\"contact-who\">\n\n");
     let heading = match head_handle(contact) {
         Some(handle) => chip_link(name, &handle),
-        None => escape_md_inline(name),
+        None => escape_name_inline(name),
     };
     out.push_str(&format!("# {heading}"));
     if let Some(url) = &contact.source_url {
@@ -432,14 +452,19 @@ fn head(doc: &ContactDoc, photo: Option<&str>) -> String {
     if !role.is_empty() {
         out.push_str(&format!(
             "<p class=\"contact-role\">{}</p>\n\n",
-            lines_html(&role.join(" · "))
+            lines_html(&without_bidi_controls(&role.join(" · ")))
         ));
     }
     if !contact.groups.is_empty() {
         let pills: Vec<String> = contact
             .groups
             .iter()
-            .map(|g| format!("<span class=\"contact-group\">{}</span>", escape_text(g)))
+            .map(|g| {
+                format!(
+                    "<span class=\"contact-group\">{}</span>",
+                    escape_name_text(g)
+                )
+            })
             .collect();
         out.push_str(&format!(
             "<p class=\"contact-groups\">{}</p>\n\n",
@@ -481,11 +506,11 @@ fn fields(contact: &NormalizedContact) -> String {
             .map(|q| {
                 format!(
                     " <span class=\"contact-qualifier\">{}</span>",
-                    escape_text(q)
+                    escape_name_text(q)
                 )
             })
             .unwrap_or_default();
-        let dt = format!("<dt>{}{qualifier}</dt>", escape_text(&row.label));
+        let dt = format!("<dt>{}{qualifier}</dt>", escape_name_text(&row.label));
         let line = match (&row.handle, &row.href) {
             (Some(handle), _) => format!(
                 "{dt}<dd class=\"chip-identifiers\">\n\n{}\n\n</dd>\n",
@@ -513,7 +538,7 @@ fn members(doc: &ContactDoc) -> String {
     for (i, name) in doc.contact.members.iter().enumerate() {
         let line = match doc.member_handles.get(i).and_then(Option::as_ref) {
             Some(handle) => chip_link(name, handle),
-            None => escape_md_inline(name),
+            None => escape_name_inline(name),
         };
         out.push_str(&format!("- {line}\n"));
     }
@@ -536,7 +561,6 @@ fn build_grid_row(
     profile: &ContactRenderProfile,
     doc: &ContactDoc,
     source_id: &str,
-    md_rel: &str,
     problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
     let contact = &doc.contact;
@@ -561,7 +585,6 @@ fn build_grid_row(
         .conversation_uuid(doc.doc_uuid.clone())
         .entire_chat(format!("/contact/{}", doc.doc_uuid))
         .body(summary(contact))
-        .qmd_path(Some(md_rel.to_string()))
         .source_url(contact.source_url.clone())
         .upstream_id(Some(contact.key.clone()).filter(|k| !k.is_empty()))
         .upstream_entity_kind(Some(profile.contact_entity_kind.to_string()))
@@ -574,6 +597,7 @@ fn build_grid_row(
 mod tests {
     use super::*;
     use datalib_contact_schema::{ContactHandle, ContactKind, Detail};
+    use datalib_etl_render::section::join;
 
     fn mk_contact() -> ContactDoc {
         let mut contact = NormalizedContact::new(
@@ -592,6 +616,7 @@ mod tests {
             contact,
             doc_uuid: "11111111-1111-1111-1111-111111111111".to_string(),
             group_label: "LinkedIn Connections".to_string(),
+            address_book: None,
             member_handles: Vec::new(),
             upstream_account: None,
             inputs: Vec::new(),
@@ -648,6 +673,56 @@ mod tests {
             account: Some("jlp@enterprise.test".to_string()),
             render_version: 1,
         }
+    }
+
+    /// A card is read on its own inside its address book, a place, and
+    /// its row sits where the card does.
+    #[test]
+    fn a_card_sits_in_its_address_book() {
+        let mut doc = mk_contact();
+        doc.address_book = Some(
+            DataNodeRow::new("", "book", "linkedin", "Address book")
+                .upstream("addressbook", "acct!/books/bridge/", None)
+                .place(),
+        );
+        let mut docs = Vec::new();
+        render_all(
+            &mk_profile(),
+            &[doc.clone()],
+            "linkedin",
+            &Progress::noop(),
+            &mut |d| {
+                docs.push(d);
+                Ok(())
+            },
+        )
+        .unwrap();
+        let rendered = &docs[0];
+        let md = doc.doc_uuid.as_str();
+        let data_nodes: Vec<(&str, &str, Option<&str>, bool, bool)> = rendered
+            .data_nodes
+            .iter()
+            .map(|n| {
+                (
+                    n.markdown_uuid.as_str(),
+                    n.uuid.as_str(),
+                    n.parent_uuid.as_deref(),
+                    n.is_place,
+                    n.read_together,
+                )
+            })
+            .collect();
+        assert_eq!(
+            data_nodes,
+            vec![
+                (md, "book", None, true, false),
+                (md, md, Some("book"), false, true),
+            ]
+        );
+        let row = &rendered.rows[0];
+        assert_eq!(row.parent_uuid.as_deref(), Some("book"));
+        assert_eq!(row.place_uuid.as_deref(), Some("book"));
+        assert_eq!(row.read_uuid, None);
     }
 
     #[test]
@@ -782,14 +857,8 @@ mod tests {
     #[test]
     fn grid_row_carries_uuid_url_and_searchtext() {
         let mut problems = Vec::new();
-        let row = build_grid_row(
-            &mk_profile(),
-            &mk_contact(),
-            "linkedin",
-            "render_markdown/x.md",
-            &mut problems,
-        )
-        .expect("valid contact grid row");
+        let row = build_grid_row(&mk_profile(), &mk_contact(), "linkedin", &mut problems)
+            .expect("valid contact grid row");
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(row.uuid, "11111111-1111-1111-1111-111111111111");
         assert_eq!(row.kind, "Contact");
@@ -824,13 +893,11 @@ mod tests {
     }
 
     /// A stored photo is linked at its blob-store address, on the page
-    /// and as the contact's URL in the index, and nothing is written
-    /// beside the page. A photo no browser draws is still on its page but gives the chip no
-    /// URL, and a contact with no photo carries none, so the chip draws
+    /// and as the contact's URL in the index. A photo no browser draws is
+    /// still on its page but gives the chip no URL, and a contact with no photo carries none, so the chip draws
     /// an initial.
     #[test]
     fn a_stored_photo_is_linked_where_its_blob_store_holds_it() {
-        let dir = tempfile::tempdir().unwrap();
         let address = format!("/data/linkedin/ingest/blob/{}", "ab".repeat(32));
         let mut with_photo = mk_contact();
         with_photo.contact.photo = Some(stored("image/png"));
@@ -847,7 +914,6 @@ mod tests {
         render_all(
             &mk_profile(),
             &[with_photo, without, opaque],
-            dir.path(),
             "linkedin",
             &Progress::default(),
             &mut sink,
@@ -858,20 +924,16 @@ mod tests {
             .map(|r| r.contacts[0].photo_url.clone())
             .collect();
         assert_eq!(urls, [Some(address.clone()), None, None]);
-        let page = |r: &RenderedMarkdown| std::fs::read_to_string(&r.md_path).unwrap();
+        let page = |r: &RenderedMarkdown| join(&r.sections);
         assert!(page(&got[0]).contains(&format!("]({address})")));
         assert!(page(&got[2]).contains(&format!("]({address})")));
         assert!(!page(&got[1]).contains("contact-photo"));
-        for r in &got {
-            assert!(!r.md_path.parent().unwrap().join("blobs").exists());
-        }
     }
 
     /// A problem the provider found with the card, such as a photo its
     /// blob store lacks, reaches the index on the card's document.
     #[test]
     fn the_cards_own_problems_are_on_its_document() {
-        let dir = tempfile::tempdir().unwrap();
         let mut doc = mk_contact();
         doc.problems = vec![datalib_schema::problems::Problem::field(
             "photo",
@@ -882,7 +944,6 @@ mod tests {
         render_all(
             &mk_profile(),
             &[doc],
-            dir.path(),
             "linkedin",
             &Progress::default(),
             &mut |r| {
@@ -908,7 +969,7 @@ mod tests {
         ];
         doc.contact.note = Some("Plays the trombone".into());
         doc.contact.groups = vec!["Bridge".into()];
-        let row = build_grid_row(&mk_profile(), &doc, "linkedin", "x.md", &mut Vec::new())
+        let row = build_grid_row(&mk_profile(), &doc, "linkedin", &mut Vec::new())
             .expect("valid contact grid row");
         assert_eq!(row.email.as_deref(), Some("riker@enterprise.org"));
         assert_eq!(row.phone.as_deref(), Some("(555) 010-1234"));
@@ -931,7 +992,7 @@ mod tests {
             Handle::facebook_name("Will Riker").unwrap(),
         )];
         doc.contact.details = vec![Detail::new("Friends since", "2364-01-05")];
-        let row = build_grid_row(&mk_profile(), &doc, "facebook", "x.md", &mut Vec::new())
+        let row = build_grid_row(&mk_profile(), &doc, "facebook", &mut Vec::new())
             .expect("valid contact grid row");
         assert_eq!(row.preview, "2364-01-05");
     }
@@ -999,16 +1060,58 @@ mod tests {
         );
     }
 
+    /// A right-to-left override in a card's name, role, group, field
+    /// label or member reordered the page around it (`Orders exe.live`
+    /// for `Orders evil.exe`). The page shows none of them; a note, the
+    /// card's body, keeps its own.
+    #[test]
+    fn a_cards_names_lose_their_bidi_controls() {
+        const RLO: &str = "\u{202E}";
+        let mut doc = mk_contact();
+        doc.contact.names = vec![format!("Jean-Luc {RLO}Picard")];
+        doc.contact.org = Some(format!("Star{RLO}fleet"));
+        doc.contact.groups = vec![format!("Bridge {RLO}werC")];
+        doc.contact.details = vec![Detail::new(format!("Ship{RLO}"), "Enterprise")];
+        doc.contact.members = vec![format!("Will {RLO}Riker"), format!("Q{RLO}")];
+        doc.member_handles = vec![Handle::email("riker@enterprise.org"), None];
+        doc.contact.note = Some(format!("Orders {RLO}exe.live"));
+        let mut docs = Vec::new();
+        render_all(
+            &mk_profile(),
+            &[doc],
+            "linkedin",
+            &Progress::default(),
+            &mut |d| {
+                docs.push(d);
+                Ok(())
+            },
+        )
+        .unwrap();
+        let md = join(&docs[0].sections);
+        let note = format!("<dt>Note</dt><dd>Orders {RLO}exe.live</dd>");
+        assert!(md.contains(&note), "the note is the card's own: {md}");
+        let rest = md.replace(&note, "");
+        assert!(!rest.contains(RLO), "{rest}");
+        for name in [
+            "Jean-Luc Picard",
+            "Starfleet",
+            "Bridge werC",
+            "<dt>Ship</dt>",
+            "[Will Riker](mailto:riker@enterprise.org \"Will Riker <riker@enterprise.org>\")",
+            "- Q\n",
+        ] {
+            assert!(md.contains(name), "{name:?} is missing: {md}");
+        }
+    }
+
     /// The sink's answer is the run's answer: a document it refuses fails
     /// the render rather than being logged and left out.
     #[test]
     fn a_sink_that_refuses_fails_the_render() {
-        let dir = tempfile::tempdir().unwrap();
         let mut refuse = |_: RenderedMarkdown| -> Result<()> { anyhow::bail!("no room") };
         let err = render_all(
             &mk_profile(),
             &[mk_contact()],
-            dir.path(),
             "linkedin",
             &Progress::default(),
             &mut refuse,

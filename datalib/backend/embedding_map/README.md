@@ -1,33 +1,31 @@
 # The embedding map
 
-The map card (`umapView()`) shows every document qmd has embedded as a
+The map card (`umapView()`) shows every document the search index has embedded as a
 point on a plane, placed so that documents with similar content sit near
 each other. This crate computes where the points go. It is pure
 computation: the `embedding_map` function in `datalib-step`
 (`datalib_step/src/embedding_map.rs`) reads the vectors and writes the
-result, and the `unified_document_index` applet serves it joined to the grid.
+result, and the `unified_grid_and_search_index` applet serves it joined to the grid.
 
 ```
-unified_document_index/qmd_aggregator/qmd/index.sqlite     qmd's chunk vectors
-        │  datalib_unified_document_index::qmd::vectors — one unit vector per document
+search_* tables + search_index/inference_cache.sqlite   each chunk and its vector
+        │  datalib_search_index::read::Held::document_vectors — one unit vector per document
         ▼
 datalib_embedding_map::layout                 this crate
         │
         ▼
-unified_document_index/embedding_map/embedding_map.json   path → (x, y), one file
-        │  applets/src/unified_document_index/map.rs — joined to grid_rows by path
+unified_grid_and_search_index/embedding_map/embedding_map.json   document → (x, y), one file
+        │  applets/src/unified_grid_and_search_index/map.rs — joined to grid_rows by document
         ▼
 the map card                                  datalib/ui/src/cards/UmapCard.ce.vue
 ```
 
 ## What happens in one run
 
-1. **One vector per document.** qmd embeds each document in chunks and
-   stores the vectors unnormalised. Each chunk is scaled to unit length,
-   a document's chunks are averaged, and the average is scaled again.
-   How the vectors are read out of qmd's SQLite file without the
-   sqlite-vec extension is written up at the top of
-   `unified_document_index/src/qmd/vectors.rs`.
+1. **One vector per document.** The embed step embeds each document in
+   chunks. Each chunk's vector is scaled to unit length, a document's
+   chunks are averaged, and the average is scaled again
+   (`search_index/src/read.rs`, `Held::document_vectors`).
 2. **Nearest neighbours.** Each document's 15 nearest by cosine distance
    (fewer in a smaller corpus), exactly, by brute force: one matrix
    product per block of 256 documents. That is 1.7s for 18.7k documents

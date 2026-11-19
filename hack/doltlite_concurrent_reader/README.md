@@ -41,4 +41,4 @@ declares `streams_output`, reading each seal as it lands
 ([`datalib/backend/dag/README.md`](../../datalib/backend/dag/README.md)
 § "What keeps steps apart: locks"; the reader side is
 `doltlite_raw::open_reader`, which opens the commit read-only and
-detached — [`docs/dev/doltlite.md`](../../docs/dev/doltlite.md#three-ways-to-read-one-commit)).
+detached).

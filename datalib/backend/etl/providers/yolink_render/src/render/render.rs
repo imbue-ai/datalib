@@ -2,7 +2,6 @@
 //! through the sensor page every time-series source shares.
 
 use std::fmt::Write as _;
-use std::path::Path;
 
 use anyhow::Result;
 use datalib_etl::progress::Progress;
@@ -62,7 +61,6 @@ pub fn device_uuid(source_id: &str, device: &str) -> String {
 
 pub fn render_all(
     parsed: &ParsedYolink,
-    root: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -77,7 +75,6 @@ pub fn render_all(
     datalib_etl_timeseries_render::page::render_all(
         &PROFILE,
         &page,
-        root,
         source_id,
         progress,
         on_doc_complete,

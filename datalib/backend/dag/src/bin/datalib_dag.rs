@@ -134,6 +134,9 @@ async fn main() -> Result<()> {
                     n => format!(", {n} entr{} dropped", if n == 1 { "y" } else { "ies" }),
                 },
             );
+            for line in config::expansion_lines(&checked.expansions) {
+                println!("{line}");
+            }
         }
         // Same door as `PUT /api/config`: a warning drops nothing, so it
         // is printed above and does not fail the check.
@@ -348,6 +351,7 @@ async fn main() -> Result<()> {
         // (dag/README.md §"Upgrading a root"); the http server does the
         // same when it takes the lock.
         let asked = datalib_dag::supervisor::upgrade::steps_to_ask(&graph);
+        runner.plan(&graph, &asked);
         #[allow(clippy::disallowed_macros)]
         for m in runner.prepare(&graph, &asked).await? {
             match &m.answer {

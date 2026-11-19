@@ -1,10 +1,14 @@
 //! Slack mrkdwn → CommonMark converter. Port of `src/ingest/providers/
 //! slack/mrkdwn.py`.
 
+use datalib_html_entities::decode;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-use datalib_etl_render::html::{code_span_parts, escape_md_inline, escape_md_syntax, md_link_dest};
+use datalib_etl_render::html::{
+    code_span_parts, escape_md_inline, escape_md_syntax, escape_name_inline, md_code_block,
+    md_link_dest,
+};
 use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::message::chip_link;
 use datalib_handle::Handle;
@@ -58,7 +62,7 @@ pub fn resolve_mentions(text: &str, labels: Labels<'_>) -> String {
             format!("#{}", channel_label(caps, labels, slack_encode))
         })
         .into_owned();
-    decode_entities(&emojize(&replaced))
+    decode(&emojize(&replaced)).into_owned()
 }
 
 /// The people a message's text mentions (`<@U…>`), each once, in the
@@ -75,16 +79,9 @@ pub fn mentioned_users(text: &str, team_id: &str) -> Vec<Handle> {
     out
 }
 
-/// The three entities Slack escapes in message text (per its
-/// Formatting reference), back to the characters typed.
-fn decode_entities(text: &str) -> String {
-    text.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
-}
-
-/// Plain text as Slack writes it in a message: [`decode_entities`]'s
-/// inverse.
+/// Plain text as Slack writes it in a message, escaping the three
+/// characters its Formatting reference names; every other `&` it writes
+/// is `&amp;`, so `datalib_html_entities::decode` reads it back exactly.
 fn slack_encode(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -97,7 +94,7 @@ fn slack_encode(text: &str) -> String {
 fn user_label(caps: &Captures<'_>, labels: Labels<'_>, name: fn(&str) -> String) -> String {
     let uid = &caps[1];
     match caps.get(2) {
-        Some(label) => name(&decode_entities(label.as_str())),
+        Some(label) => name(&decode(label.as_str())),
         None => labels
             .users
             .get(uid)
@@ -113,14 +110,14 @@ fn user_mention(caps: &Captures<'_>, labels: Labels<'_>) -> String {
     let shown = format!("@{}", emojize(&user_label(caps, labels, str::to_string)));
     match Handle::slack(labels.team_id, &caps[1]) {
         Some(handle) => chip_link(&shown, &handle),
-        None => escape_md_inline(&shown),
+        None => escape_name_inline(&shown),
     }
 }
 
 fn channel_label(caps: &Captures<'_>, labels: Labels<'_>, name: fn(&str) -> String) -> String {
     let cid = &caps[1];
     match caps.get(2).map(|m| m.as_str()).filter(|l| !l.is_empty()) {
-        Some(label) => name(&decode_entities(label)),
+        Some(label) => name(&decode(label)),
         None => labels
             .channels
             .get(cid)
@@ -149,7 +146,7 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
         format!("{NAME_OPEN}{}{NAME_CLOSE}", names.len() - 1)
     };
 
-    let mut out = escape_typed_markdown(text);
+    let mut out = escape_typed_markdown(&fence_code_blocks(text));
 
     // A mention is a chip link in text, and `@Name` in code, which shows
     // what it holds literally.
@@ -177,7 +174,7 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
     out = SUBTEAM_REF
         .replace_all(&out, |caps: &Captures<'_>| {
             let name = caps.get(1).map(|m| m.as_str()).unwrap_or("group");
-            hold(format!("@{}", md_name(&decode_entities(name))))
+            hold(format!("@{}", md_name(&decode(name))))
         })
         .into_owned();
 
@@ -187,7 +184,7 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
 
     out = URL_REF
         .replace_all(&out, |caps: &Captures<'_>| {
-            let url = decode_entities(&caps[1]);
+            let url = decode(&caps[1]);
             match caps.get(2).map(|m| m.as_str()) {
                 Some(label) if !label.is_empty() && label != &caps[1] => {
                     format!(
@@ -238,6 +235,40 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
                 .unwrap_or_default()
         })
         .into_owned()
+}
+
+/// Slack's ``` block as a CommonMark fence. Slack lets the code start
+/// on the opening line and end on the closing one, and puts the block
+/// mid-line; markdown wants each fence on a line of its own, and reads
+/// what follows an opening fence as the code's language.
+fn fence_code_blocks(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 8);
+    let mut after_block = false;
+    for (part, is_code) in code_parts_whole_constructs(text) {
+        let block = is_code
+            .then(|| part.strip_prefix("```")?.strip_suffix("```"))
+            .flatten()
+            .filter(|code| !code.starts_with('`') && !code.ends_with('`'));
+        let Some(code) = block else {
+            if after_block && !part.starts_with('\n') {
+                out.push('\n');
+                out.push_str(part.trim_start_matches([' ', '\t']));
+            } else {
+                out.push_str(&part);
+            }
+            after_block = false;
+            continue;
+        };
+        let code = code.strip_prefix('\n').unwrap_or(code);
+        let code = code.strip_suffix('\n').unwrap_or(code);
+        out.truncate(out.trim_end_matches([' ', '\t']).len());
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str(&md_code_block("", code));
+        after_block = true;
+    }
+    out
 }
 
 /// Brackets a held name's index: private-use characters, which Slack
@@ -330,7 +361,7 @@ fn decode_entities_where_literal(text: &str) -> String {
         .into_iter()
         .map(|(part, is_code)| {
             if is_code {
-                decode_entities(part)
+                decode(part).into_owned()
             } else {
                 part.to_string()
             }
@@ -632,6 +663,28 @@ mod tests {
             to_commonmark("hi! there", lbl),
             "hi! there",
             "a lone `!` is left alone"
+        );
+    }
+
+    /// Slack's ``` block may hold code on its own opening and closing
+    /// lines. Passed through, markdown read `Kitchen` as the fence's
+    /// language and never closed it, so the rest of the thread showed as
+    /// code.
+    #[test]
+    fn a_code_block_on_the_fence_lines_is_closed() {
+        let lbl = no_labels();
+        assert_eq!(
+            to_commonmark("```Kitchen\nPassword: a1```\nafter", lbl),
+            "```\nKitchen\nPassword: a1\n```\nafter"
+        );
+        assert_eq!(
+            to_commonmark("see ```x = 1``` then *this*", lbl),
+            "see\n```\nx = 1\n```\nthen **this**"
+        );
+        assert_eq!(
+            to_commonmark("```a ```` b```", lbl),
+            "`````\na ```` b\n`````",
+            "a fence is longer than any backtick run inside it"
         );
     }
 

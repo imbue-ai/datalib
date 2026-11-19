@@ -90,11 +90,11 @@ class FloatingNpxTest(unittest.TestCase):
             "bun x latchkey auth list",
             "npm exec latchkey -- auth list",
             "npm exec -- latchkey auth list",
-            "yarn dlx @tobilu/qmd status",
+            "yarn dlx latchkey auth list",
             "npx -y -p latchkey latchkey auth list",
             "npx --package=latchkey@next latchkey curl https://slack.test",
             "npx -y latchkey",
-            "run: npx -y @tobilu/qmd",
+            "run: npx -y latchkey auth list",
         ]:
             with self.subTest(line=line):
                 self.assertTrue(floating_npx(line))
@@ -106,7 +106,7 @@ class FloatingNpxTest(unittest.TestCase):
             'cmd = f"npx -y latchkey@{LATCHKEY_VERSION} auth list"',
             'npx -y "latchkey@${LATCHKEY_VERSION}" auth list',
             "npx -y -p latchkey@3.21.0 latchkey auth list",
-            "npx -y @tobilu/qmd@2.8.3 status",
+            "yarn dlx latchkey@3.21.0 auth list",
             "latchkey auth browser slack",
             "npx -y vite build",
             "pnpm exec vue-tsc",
@@ -168,9 +168,23 @@ jobs:
     permissions:
       contents: read
       packages: write
+  docker-image-cuda:
+    permissions:
+      contents: read
+      packages: write
   docker-publish:
     permissions:
       contents: read
+      packages: write
+  docker-publish-cuda:
+    permissions:
+      contents: read
+      packages: write
+  attest:
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
       packages: write
 """
 
@@ -203,6 +217,20 @@ jobs:
         self.assertEqual(
             release_grant_problems(text),
             ["job macos-app-compile grants id-token: write"],
+        )
+
+    def test_attesting_from_a_build_job_is_refused(self) -> None:
+        """A build script there could sign bytes of its own as this workflow."""
+        text = self.GOOD.replace(
+            "    runs-on: x\n",
+            "    permissions:\n      id-token: write\n      attestations: write\n    runs-on: x\n",
+        )
+        self.assertEqual(
+            release_grant_problems(text),
+            [
+                "job runtime grants attestations: write",
+                "job runtime grants id-token: write",
+            ],
         )
 
     def test_a_build_in_a_job_holding_a_grant_is_refused(self) -> None:

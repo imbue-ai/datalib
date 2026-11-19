@@ -5,8 +5,6 @@
 pub mod ids;
 pub mod parse;
 
-use std::path::Path;
-
 use anyhow::Result;
 use datalib_etl::progress::Progress;
 use datalib_etl_forge_render_common::{render_all, ForgeProfile};
@@ -25,7 +23,10 @@ pub use parse::parse_api_dir;
 ///     handle.
 /// v8: a change request the signed-in user took part in marks their
 ///     handle as the account's own, so search reads it as `me`.
-pub const RENDER_VERSION: u32 = 8;
+/// v9: the description and each comment are a message of their own, and
+///     their HTML goes in as written.
+/// v10: a comment's time keeps the forge's `Z`: its clock is unknown.
+pub const RENDER_VERSION: u32 = 10;
 
 pub const PROFILE: ForgeProfile = ForgeProfile {
     provider: Provider::Github,
@@ -45,10 +46,9 @@ pub const PROFILE: ForgeProfile = ForgeProfile {
 
 pub fn render_github(
     parsed: &Parsed,
-    root: &Path,
     stanza: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
-    render_all(&PROFILE, parsed, root, stanza, progress, on_doc_complete)
+    render_all(&PROFILE, parsed, stanza, progress, on_doc_complete)
 }

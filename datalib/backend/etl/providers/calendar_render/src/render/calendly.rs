@@ -50,6 +50,8 @@ pub fn normalize(
         shape: EventShape::Single,
         calendar_uuid: cal.uuid.clone(),
         calendar_label: cal.label.clone(),
+        calendar_entity_kind: ids::KIND_CALENDAR,
+        calendar_upstream_id: cal.upstream_id.clone(),
         calendar_time_zone: cal.time_zone.clone(),
         upstream_id: identity.natural_key.clone(),
         upstream_entity_kind: identity.entity_kind,
@@ -276,6 +278,7 @@ mod tests {
     fn cal() -> CalendarInfo {
         CalendarInfo {
             uuid: "cal".into(),
+            upstream_id: "cal".into(),
             label: "Calendly".into(),
             time_zone: Some("America/Los_Angeles".into()),
         }

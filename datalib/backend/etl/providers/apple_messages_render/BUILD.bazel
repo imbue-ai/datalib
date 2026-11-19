@@ -25,7 +25,6 @@ rust_library(
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
-        "@datalib_crates//:tracing",
     ],
 )
 
@@ -59,6 +58,7 @@ rust_test(
         "//datalib/backend/etl/providers/apple_messages_config:datalib_etl_apple_messages_config",
         "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/etl/sqlite_mirror:datalib_etl_sqlite_mirror",
+        "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/source_common:datalib_source_common",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",

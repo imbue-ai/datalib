@@ -443,13 +443,13 @@ group = "slack"
 function = "render_markdown"
 inputs = ["slack/ingest"]
 
-# ── the unified document index ──
+# ── the unified grid and search index ──
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
+group = "unified_grid_and_search_index"
+function = "unified_grid_and_search_index"
 inputs = ["slack/render_markdown"]
 "#;
 
@@ -483,10 +483,10 @@ command = "serve-it"
         assert_eq!(sort_config(&spaced).unwrap(), None);
     }
 
-    /// The shape the wizard wrote before it kept the order, and the TNG
-    /// fixture still writes: every source's qmd steps after the
-    /// aggregator that reads them. Each goes back beside its source, the
-    /// aggregator after them, and the comments stay with their entries.
+    /// The shape the wizard wrote before it kept the order: every source's
+    /// steps after the index step that reads them. Each goes back beside
+    /// its source, the index after them, and the comments stay with their
+    /// entries.
     #[test]
     fn gathers_a_sources_steps_and_puts_the_index_after_them() {
         let text = r#"data_root = "~/datalib"
@@ -516,30 +516,30 @@ type = "slack"
 group = "notes"
 function = "render_markdown"
 
-# ── the unified document index ──
+# ── the unified grid and search index ──
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
-inputs = ["slack/keyword_index", "notes/keyword_index"]
+group = "unified_grid_and_search_index"
+function = "embedding_map"
+inputs = ["slack/embed", "notes/embed"]
 
 # slack's search
 [[steps]]
 group = "slack"
-function = "keyword_index"
+function = "embed"
 inputs = ["slack/render_markdown"]
 
 [[steps]]
 group = "notes"
-function = "keyword_index"
+function = "embed"
 inputs = ["notes/render_markdown"]
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 "#;
         let sorted = sort_config(text).unwrap().expect("out of order");
         assert_eq!(
@@ -547,28 +547,30 @@ command = "datalib-applet unified_document_index"
             [
                 "slack/ingest",
                 "slack/render_markdown",
-                "slack/keyword_index",
+                "slack/embed",
                 "notes/render_markdown",
-                "notes/keyword_index",
-                "unified_document_index/qmd_aggregator",
+                "notes/embed",
+                "unified_grid_and_search_index/embedding_map",
             ]
         );
         assert_eq!(
             groups(&sorted),
-            ["slack", "notes", "unified_document_index"]
+            ["slack", "notes", "unified_grid_and_search_index"]
         );
         assert!(flows_down(&sorted));
         assert!(sorted.starts_with("data_root = \"~/datalib\"\n\n# ── slack ──\n"));
         // A comment travels with the entry under it, a sub-table with its step.
         let at = |s: &str| sorted.find(s).unwrap();
-        assert!(at("# slack's search") < at("group = \"slack\"\nfunction = \"keyword_index\""));
+        assert!(at("# slack's search") < at("group = \"slack\"\nfunction = \"embed\""));
         assert!(
             at("# slack's search")
                 > at("function = \"render_markdown\"\ninputs = [\"slack/ingest\"]")
         );
         assert!(at("channels = [\"general\"]") < at("function = \"render_markdown\""));
-        assert!(at("# ── the unified document index ──") < at("function = \"qmd_aggregator\""));
-        assert!(at("# ── notes ──") < at("# ── the unified document index ──"));
+        assert!(
+            at("# ── the unified grid and search index ──") < at("function = \"embedding_map\"")
+        );
+        assert!(at("# ── notes ──") < at("# ── the unified grid and search index ──"));
         // Sorting again changes nothing.
         assert_eq!(sort_config(&sorted).unwrap(), None);
     }
@@ -577,21 +579,21 @@ command = "datalib-applet unified_document_index"
     /// below it; the index goes to the end, with its banner.
     #[test]
     fn moves_an_index_written_first_to_the_end() {
-        let text = r#"# ── the unified document index ──
+        let text = r#"# ── the unified grid and search index ──
 # The banner.
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
+group = "unified_grid_and_search_index"
+function = "unified_grid_and_search_index"
 inputs = ["slack/render_markdown"]
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 
 # Sources go below.
 
@@ -605,14 +607,14 @@ group = "slack"
 function = "render_markdown"
 "#;
         let sorted = sort_config(text).unwrap().expect("out of order");
-        assert_eq!(groups(&sorted), ["slack", "unified_document_index"]);
+        assert_eq!(groups(&sorted), ["slack", "unified_grid_and_search_index"]);
         assert!(sorted.starts_with("# Sources go below.\n\n# ── slack ──\n"));
         assert!(sorted.contains(
-            "# ── the unified document index ──\n# The banner.\n\n[[groups]]\nid = \"unified_document_index\""
+            "# ── the unified grid and search index ──\n# The banner.\n\n[[groups]]\nid = \"unified_grid_and_search_index\""
         ));
         assert!(sorted
             .trim_end()
-            .ends_with("command = \"datalib-applet unified_document_index\""));
+            .ends_with("command = \"datalib-applet unified_grid_and_search_index\""));
     }
 
     /// A `[` at the start of a line inside a multi-line string or array

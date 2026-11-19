@@ -33,15 +33,7 @@ Deliberately NOT in scope
   exactly when it earns a family here.
 * Properties that need something built or run. `//third-party/doltlite:
   cli_version_test` runs the CLI and compares what it reports. Text
-  comparison can't do that, and it stays where it is. There used to be a
-  second one here, `//third-party/qmd/runtime:node_abi_test`, which
-  compared a live Node's ABI against the `node-v<abi>` in better-sqlite3
-  prebuilt URLs; qmd 2.8.3 moved to better-sqlite3 13, whose prebuilts
-  ship inside the npm tarball and are selected by platform rather than
-  by ABI, so both the URLs and the test are gone.
-* `.devcontainer/Dockerfile`'s qmd: the devcontainer does not install
-  it — Bazel's own tree (`//third-party/qmd/runtime`) is what the build
-  and the tests run, and the app's `npx` fallback names the pin itself.
+  comparison can't do that, and it stays where it is.
 """
 
 from __future__ import annotations
@@ -68,34 +60,6 @@ class Family:
 
 FAMILIES: list[Family] = [
     Family(
-        name="qmd",
-        why=(
-            "qmd is invoked from several places that must agree, or "
-            "first-run behavior silently diverges between dev and prod. "
-            "A bump once updated one of two same-named Rust constants and "
-            "missed the other, so search ran qmd 2.1.0 against a "
-            "2.5.3-built index for six weeks. The Rust constant names the "
-            "directory scripts/stage_runtime.sh stages, and the resolver "
-            "looks the tree up by it."
-        ),
-        canonical="datalib/backend/runtime/src/qmd.rs",
-        sites=[
-            (
-                "datalib/backend/runtime/src/qmd.rs",
-                r'^pub const DEFAULT_QMD_VERSION: &str = "([^"]+)"',
-            ),
-            ("tests/fixtures/BUILD.bazel", r'^QMD_VERSION = "([^"]+)"'),
-            # The vendored upstream snapshot, read by
-            # //tools:qmd_model_cache_path_test for the cache-path check.
-            ("third-party/qmd/package.json", r'"version"\s*:\s*"([^"]+)"'),
-            # The Bazel-managed package tree that replaced `npx -y`.
-            (
-                "third-party/qmd/runtime/package.json",
-                r'"@tobilu/qmd"\s*:\s*"([^"]+)"',
-            ),
-        ],
-    ),
-    Family(
         name="latchkey",
         why=(
             "The Rust constant is what the shipped binaries spawn and "
@@ -119,6 +83,27 @@ FAMILIES: list[Family] = [
             (
                 "third-party/latchkey/runtime/package.json",
                 r'"latchkey"\s*:\s*"([^"]+)"',
+            ),
+        ],
+    ),
+    Family(
+        name="modal",
+        why=(
+            "The Rust constant names the directory scripts/stage_runtime.sh "
+            "stages Modal's SDK under and the one the embed step's driver "
+            "imports from; the package.json is what Bazel builds the tree "
+            "from. If they disagree, the step looks for an SDK the runtime "
+            "does not hold."
+        ),
+        canonical="datalib/backend/runtime/src/node_runtime.rs",
+        sites=[
+            (
+                "datalib/backend/runtime/src/node_runtime.rs",
+                r'^pub const MODAL_SDK_VERSION: &str = "([^"]+)"',
+            ),
+            (
+                "third-party/modal/runtime/package.json",
+                r'"modal"\s*:\s*"([^"]+)"',
             ),
         ],
     ),
@@ -182,18 +167,18 @@ FAMILIES: list[Family] = [
         ],
     ),
     Family(
-        name="playwright",
+        name="bazelisk",
         why=(
-            "The devcontainer preinstalls the browser bundle for a "
-            "specific Playwright version. If the UI lockfile resolves a "
-            "different one, `//datalib/ui:e2e_test` runs a Playwright "
-            "whose browsers were never staged and fails on a cold "
-            "container with a download attempt."
+            "The Claude Code cloud environment's setup script installs "
+            "the bazelisk the devcontainer does. A version moved in one "
+            "and not the other gives cloud sessions and CI different "
+            "build drivers. Each site keeps its own sha256 pins beside "
+            "the version, so a bump moves those too."
         ),
-        canonical="datalib/ui/pnpm-lock.yaml",
+        canonical=".devcontainer/Dockerfile",
         sites=[
-            (".devcontainer/Dockerfile", r"^ARG PLAYWRIGHT_VERSION=(\S+)"),
-            ("datalib/ui/pnpm-lock.yaml", r"^  '@playwright/test@([\d.]+)':"),
+            (".devcontainer/Dockerfile", r"^ARG BAZELISK_VERSION=(\S+)"),
+            ("scripts/cloud_env_setup.sh", r"^BAZELISK_VERSION=(\S+)"),
         ],
     ),
     Family(

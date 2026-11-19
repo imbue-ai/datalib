@@ -29,11 +29,28 @@ export function problemLabel(p: Pick<DocProblem, "field" | "reason" | "rule">): 
       return `${what} is not there upstream`;
     case "forbidden":
       return `${what} cannot be read with this credential`;
+    case "ignored":
+      return `${what} is set, but another setting takes its place, so it does nothing`;
     case "no_document":
       return "this document did not render again, though its rows are still upstream; this is the last rendering";
     case "noted":
       return `${what}: a finding, nothing lost`;
     default:
       return `${what}: ${p.reason as string}`;
+  }
+}
+
+/** How a severity reads on its chip, as the problems table writes it:
+ *  short and loud, as a log level does. */
+export function severityWord(severity: string): string {
+  switch (severity) {
+    case "error":
+      return "ERROR";
+    case "warning":
+      return "WARN";
+    case "info":
+      return "INFO";
+    default:
+      return severity;
   }
 }

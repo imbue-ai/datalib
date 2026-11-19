@@ -1,0 +1,166 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== tng_email 00000000-0000-80b3-8c56-6d41b85ab9c6 Captain's Log — Stardate 80124.1
+--- chunk 0
+title: Captain's Log — Stardate 80124.1 | text: Jean-Luc Picard <picard@enterprise.starfleet> to Starfleet Command <command@starfleet.gov>; bcc Deanna Troi <troi@enterprise.starfleet> — Wed 7 Jan 2026 14:00
+
+Labels: Important, Sent
+
+Captain's log, stardate 80124.1. The Enterprise has arrived at the
+Neutral Zone. Long-range scans have detected three Romulan warbirds
+holding position at the edge of sensor range. I have ordered yellow
+alert and dispatched a coded message to Starfleet Command.
+
+We continue our investigation.
+
+— Picard
+
+
+=== tng_email 00000000-0000-85ec-8481-370bffc3afe9 You've won a holosuite upgrade!
+--- chunk 0
+title: You've won a holosuite upgrade! | text: Quark's Bar <prizes@quarks.example> to Jean-Luc Picard <picard@enterprise.starfleet> — Thu 8 Jan 2026 09:00
+
+Labels: Category Promotions, Inbox
+
+Congratulations, Captain! Claim your prize before the Nagus does.
+
+Claim your holosuite upgrade
+
+Review your account
+
+Unsubscribe
+
+Ask Quark
+
+ Your prize 
+
+— Quark, proprietor
+
+
+=== tng_email 00000000-0000-8781-ba6c-a1937ea67209 tng_email storage
+--- chunk 0
+title: tng_email storage | text: Source: tng_email
+
+# tng_email — storage
+
+Measured Tue Apr 15th, 2369 at 00:00.
+
+| Kind | Step | What | Size | Count | Id |
+| Source Size | ingest | `tng_email/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `tng_email/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `tng_email/ingest/blobs.sqlite#cas_objects` |  | 8 rows | `00000000` |
+| Store | ingest | `tng_email/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#accounts` |  | 1 row | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#email_blobs` |  | 8 rows | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#email_keywords` |  | 3 rows | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#email_mailboxes` |  | 11 rows | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#emails` |  | 8 rows | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#ingested_files` |  | 2 rows | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#listed_messages` |  | 0 rows | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#listed_whole` |  | 0 rows | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#mailboxes` |  | 3 rows | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#read_marks` |  | 8 rows | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#thread_members` |  | 0 rows | `00000000` |
+| Table | ingest | `tng_email/ingest/entities.doltlite_db#threads` |  | 6 rows | `00000000` |
+
+=== tng_email 00000000-0000-89ac-8ef1-ba5e79d09b76 Your bar tab
+--- chunk 0
+title: Your bar tab | text: Quark's Bar <prizes@quarks.example> to Jean-Luc Picard <picard@enterprise.starfleet> — Fri 9 Jan 2026 21:00
+
+Labels: Inbox
+
+Captain, your tab is attached. Prompt payment is appreciated.
+
+— Quark, proprietor
+
+### Attachments
+
+- bar_tab.xsl
+
+
+=== tng_email 00000000-0000-8a58-a8a4-0d3e51a39a59 Your shore leave awaits!
+--- chunk 0
+title: Your shore leave awaits! | text: Risa Tourism Board <hello@risa.tourism> to Jean-Luc Picard <picard@enterprise.starfleet> — Tue 6 Jan 2026 08:00
+
+Labels: Category Promotions, Inbox
+
+Temtibi Lagoon is waiting for you.
+
+# Greetings Captain Picard!
+
+Temtibi Lagoon at sunset
+
+Risa is the **jewel of the Alpha Quadrant**. Book your next shore leave today and save 30%.
+
+Redeem your offer
+
+— The Risa Tourism Board
+
+Risa Tourism Board Follow
+
+
+=== tng_email 00000000-0000-8ce7-94d1-18948b029452 Mission Briefing — Sector 001
+--- chunk 0
+title: Mission Briefing — Sector 001 | text: Starfleet Command <command@starfleet.gov> to Jean-Luc Picard <picard@enterprise.starfleet>; cc William Riker <riker@enterprise.starfleet> — Mon 5 Jan 2026 09:00
+
+Labels: Starred, Important, Inbox
+
+Captain Picard,
+
+You are hereby ordered to proceed at maximum warp to the Romulan Neutral
+Zone. Investigate reports of unusual subspace activity near outpost 23.
+
+Per General Order 12, you have full discretion. Make it so.
+
+— Admiral Hayes
+
+
+--- chunk 1
+title: Mission Briefing — Sector 001 | text: Jean-Luc Picard <picard@enterprise.starfleet> to William Riker <riker@enterprise.starfleet> — Mon 5 Jan 2026 10:30
+
+Labels: Inbox, Sent
+
+Number One,
+
+Set a course for the Neutral Zone, warp 9. Brief the senior staff at
+1400 hours. I want Mr. Data running long-range scans the moment we
+cross into the buffer region.
+
+Engage.
+
+— Picard
+
+
+--- chunk 2
+title: Mission Briefing — Sector 001 | text: Geordi La Forge <laforge@enterprise.starfleet> to Jean-Luc Picard <picard@enterprise.starfleet>; cc William Riker <riker@enterprise.starfleet> — Mon 5 Jan 2026 11:15
+
+Labels: Inbox
+
+Captain,
+
+Warp core diagnostics attached. We can sustain warp 9 for approximately
+twelve hours before we need to drop out for a coolant cycle. I would
+recommend a brief stop at Starbase 173 if the mission allows.
+
+— Geordi
+
+### Attachments
+
+- warp_diagnostics.txt
+
+
+=== tng_email 00000000-0000-8e37-8bef-9f0edb66b8be Bridge status display
+--- chunk 0
+title: Bridge status display | text: LCARS Status <lcars@enterprise.starfleet> to Jean-Luc Picard <picard@enterprise.starfleet> — Wed 7 Jan 2026 09:00
+
+Labels: Inbox
+
+Bridge status display below:
+
+LCARS
+
+Ping @Geordi La Forge <laforge@enterprise.starfleet> if the glyph fails.
+
+End of report.

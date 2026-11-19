@@ -9,7 +9,7 @@
 use super::status::{compare_stamps, StatusView};
 
 /// The grid's row id for a group. An applet may share its group's id —
-/// the `unified_document_index` applet sits under the `unified_document_index` group — so
+/// the `unified_grid_and_search_index` applet sits under the `unified_grid_and_search_index` group — so
 /// a group row needs a key no entry can have.
 pub fn group_row_key(group_id: &str) -> String {
     format!("group:{group_id}")
@@ -69,17 +69,26 @@ pub struct ChildStatus {
 
 /// The status a group row shows, and which child it is read from.
 /// Running if any child is running; then waiting, failed, queued,
-/// stopped, in that order; otherwise the last step in pipeline order —
-/// the one whose state says how far the group's data got. A child
-/// turned off is passed over (an embed step turned off says nothing
-/// about the source), so the group reads Off only when every child is.
-/// A group with only applets reads its last applet. `children` must
-/// already be in pipeline order.
+/// stopped, in that order; otherwise the last step in pipeline order
+/// that has run — the one whose state says how far the group's data got.
+/// A child turned off is passed over (an embed step turned off says
+/// nothing about the source), so the group reads Off only when every
+/// child is; so is one that has never run while a sibling has (an embed
+/// step added after the source synced does not unsay that sync), so the
+/// group reads Never run only when nothing under it has run. A group
+/// with only applets reads its last applet. `children` must already be
+/// in pipeline order.
 pub fn group_status(children: &[ChildStatus]) -> Option<(StatusView, String)> {
     let on: Vec<&ChildStatus> = children.iter().filter(|c| c.status.key != "off").collect();
     if on.is_empty() {
         return children.first().map(read);
     }
+    let ran: Vec<&ChildStatus> = on
+        .iter()
+        .copied()
+        .filter(|c| c.status.key != "never_run")
+        .collect();
+    let on = if ran.is_empty() { on } else { ran };
     for key in ["running", "waiting", "failed", "queued", "stopped"] {
         if let Some(child) = on.iter().find(|c| c.status.key == key) {
             return Some(read(child));
@@ -207,13 +216,13 @@ mod tests {
     }
     use ChildKind::{Applet, Step};
 
-    /// The scaffold files the `unified_document_index` applet under the
-    /// `unified_document_index` group; both are rows, and the grid keys rows by id.
+    /// The scaffold files the `unified_grid_and_search_index` applet under the
+    /// `unified_grid_and_search_index` group; both are rows, and the grid keys rows by id.
     #[test]
     fn group_row_key_cannot_collide_with_an_applet_that_shares_the_groups_id() {
         assert_ne!(
-            group_row_key("unified_document_index"),
-            "unified_document_index"
+            group_row_key("unified_grid_and_search_index"),
+            "unified_grid_and_search_index"
         );
     }
 
@@ -229,20 +238,26 @@ mod tests {
     #[test]
     fn pipeline_order_keeps_config_order_between_steps_that_do_not_read_each_other() {
         let out = pipeline_order(&[
-            step("u/grid_index", &["a/render_markdown"]),
-            step("u/qmd_aggregator", &["a/render_markdown"]),
+            step("u/unified_grid_and_search_index", &["a/render_markdown"]),
+            step("u/embedding_map", &["a/render_markdown"]),
         ]);
-        assert_eq!(ids(&out), ["u/grid_index", "u/qmd_aggregator"]);
+        assert_eq!(
+            ids(&out),
+            ["u/unified_grid_and_search_index", "u/embedding_map"]
+        );
     }
 
     #[test]
     fn pipeline_order_trails_the_applets_which_are_never_scheduled() {
         let out = pipeline_order(&[
             applet("u"),
-            step("u/qmd_aggregator", &[]),
-            step("u/grid_index", &[]),
+            step("u/embedding_map", &[]),
+            step("u/unified_grid_and_search_index", &[]),
         ]);
-        assert_eq!(ids(&out), ["u/qmd_aggregator", "u/grid_index", "u"]);
+        assert_eq!(
+            ids(&out),
+            ["u/embedding_map", "u/unified_grid_and_search_index", "u"]
+        );
     }
 
     #[test]
@@ -345,6 +360,29 @@ mod tests {
         assert_eq!(got.1, "s/ingest");
     }
 
+    /// The demo, baked without its embed steps, read "Never run" on every
+    /// source beside "Synced seconds ago": a step that has never run
+    /// unsaid the sync its siblings had finished.
+    #[test]
+    fn group_status_passes_over_a_child_that_has_never_run() {
+        let got = group_status(&[
+            child("s/ingest", "succeeded", Step, None),
+            child("s/render_markdown", "succeeded", Step, None),
+            child("s/embed", "never_run", Step, None),
+        ])
+        .unwrap();
+        assert_eq!(got.0.key, "succeeded");
+        assert_eq!(got.1, "s/render_markdown");
+
+        let nothing_yet = group_status(&[
+            child("s/ingest", "never_run", Step, None),
+            child("s/embed", "never_run", Step, None),
+        ])
+        .unwrap();
+        assert_eq!(nothing_yet.0.key, "never_run");
+        assert_eq!(nothing_yet.1, "s/embed");
+    }
+
     /// A source at rest with its embed step turned off read "Off", as
     /// though the whole source were, when everything it runs had
     /// succeeded.
@@ -352,13 +390,12 @@ mod tests {
     fn group_status_passes_over_a_child_that_is_turned_off() {
         let got = group_status(&[
             child("s/ingest", "succeeded", Step, None),
-            child("s/render_markdown", "succeeded", Step, None),
-            child("s/keyword_index", "skipped_up_to_date", Step, None),
+            child("s/render_markdown", "skipped_up_to_date", Step, None),
             child("s/embed", "off", Step, None),
         ])
         .unwrap();
         assert_eq!(got.0.key, "skipped_up_to_date");
-        assert_eq!(got.1, "s/keyword_index");
+        assert_eq!(got.1, "s/render_markdown");
 
         let failed = group_status(&[
             child("s/ingest", "failed", Step, None),
@@ -382,12 +419,12 @@ mod tests {
     #[test]
     fn group_status_reads_the_last_step_not_a_trailing_applet() {
         let got = group_status(&[
-            child("u/grid_index", "succeeded", Step, None),
-            child("u/qmd_aggregator", "skipped_up_to_date", Step, None),
+            child("u/unified_grid_and_search_index", "succeeded", Step, None),
+            child("u/embedding_map", "skipped_up_to_date", Step, None),
             child("u", "succeeded", Applet, None),
         ])
         .unwrap();
-        assert_eq!(got.1, "u/qmd_aggregator");
+        assert_eq!(got.1, "u/embedding_map");
     }
 
     #[test]
@@ -502,7 +539,13 @@ mod tests {
 
     #[test]
     fn group_seeds_is_empty_for_a_group_whose_steps_all_read_something() {
-        let got = group_seeds(&[step("u/grid_index", &["a/render_markdown"])], |_| false);
+        let got = group_seeds(
+            &[step(
+                "u/unified_grid_and_search_index",
+                &["a/render_markdown"],
+            )],
+            |_| false,
+        );
         assert!(got.is_empty());
     }
 

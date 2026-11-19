@@ -38,6 +38,10 @@ pub struct User {
     pub title: Option<String>,
     /// `profile.image_192`: their avatar, where Slack serves it.
     pub avatar_url: Option<String>,
+    /// `tz`: the IANA zone their profile is set to (`Europe/Paris`), as
+    /// of the last time Slack listed them. A message records no clock of
+    /// its own, so this is the clock its time is shown on.
+    pub tz: Option<String>,
 }
 
 impl User {

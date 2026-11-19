@@ -25,15 +25,18 @@
 #                           (third-party/emoji-data)
 #   latchkey-garmin/        the MIT license of the Garmin latchkey plugin
 #                           datalib-http embeds (third-party/latchkey-garmin)
+#   llama.cpp/              the MIT licenses of llama.cpp and of llamafile's
+#                           matrix kernels, which datalib-step links to embed
+#                           (third-party/llama_cpp)
 #   node/LICENSE            the notice of the Node runtime the binaries
 #                           fetch on first use (runtime.manifest)
 #
-# The last six come out of Bazel (//third-party:bundled_licenses and
+# The last seven come out of Bazel (//third-party:bundled_licenses and
 # //datalib/ui:dist), and so does cargo-about itself (a pinned release,
 # //third-party/cargo-about). It needs `cargo` on PATH and fetches crate
-# sources itself, so it needs the network on a cold machine. The qmd and latchkey trees in the runtime asset keep
-# each package's own LICENSE file inside node_modules and are not
-# repeated here.
+# sources itself, so it needs the network on a cold machine. The latchkey
+# tree in the runtime asset keeps each package's own LICENSE file inside
+# node_modules, and they are not repeated here.
 
 set -euo pipefail
 
@@ -107,14 +110,17 @@ directory is those notices.
 | `doltlite/` | DoltLite (Apache-2.0), the SQLite fork linked into every binary; SQLite itself is public domain |
 | `emoji-data/` | emoji-data (MIT), whose table of Slack's emoji names `datalib-step` embeds |
 | `latchkey-garmin/` | latchkey-garmin (MIT), the latchkey plugin `datalib-http` embeds and installs for Garmin |
+| `llama.cpp/` | llama.cpp and ggml (MIT), and llamafile's matrix kernels (MIT, Mozilla), which `datalib-step` links to embed text |
 | `node/LICENSE` | the Node.js runtime `runtime.manifest` names, fetched on first use |
 
 The runtime asset itself carries the same Node notice beside its
-binary, and the `qmd` and `latchkey` package trees in it carry each
-package's own license file inside `node_modules/`.
+binary. The `latchkey` and `modal` package trees in it carry each
+package's own license file inside `node_modules/`, but for `modal`
+itself, whose npm package has none: its Apache-2.0 license is
+`modal/<version>/LICENSE`.
 EOF
 
-for f in README.md rust-crates.md ui-bundle.md doltlite/LICENSE.md emoji-data/LICENSE node/LICENSE curl-impersonate/LICENSE-curl latchkey-garmin/LICENSE; do
+for f in README.md rust-crates.md ui-bundle.md doltlite/LICENSE.md emoji-data/LICENSE node/LICENSE curl-impersonate/LICENSE-curl latchkey-garmin/LICENSE llama.cpp/LICENSE llama.cpp/LICENSE-llamafile-sgemm; do
     [[ -s "$dest/$f" ]] || fail "missing or empty: $dest/$f"
 done
 log "notices assembled at $dest"

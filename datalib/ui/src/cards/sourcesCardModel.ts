@@ -4,13 +4,14 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { TOPIC_CONFIG_WRITTEN, type CardCtx } from "./types";
 import {
-  UNIFIED_DOCUMENT_INDEX,
+  UNIFIED_GRID_AND_SEARCH_INDEX,
   installPackage,
   type ManageResponse,
   type ManageRow,
   type PackageLookup,
   type PackageView,
 } from "@/api";
+import { builtinApplet, setApplet } from "@/config/builtinApplets";
 import {
   addPackage,
   addSourceApplets,
@@ -33,11 +34,11 @@ import {
   patchSource,
   sourceStepsOf,
   removedWith,
-  setQmdSteps,
+  setSearchSteps,
   setTimeSeriesStep,
   setOccurrencesStep,
-  qmdIndexingOf,
-  type QmdIndexing,
+  searchIndexingOf,
+  type SearchIndexing,
   unwireFromFanIns,
   wireIntoFanIns,
   entryForStep,
@@ -63,7 +64,7 @@ import { confirmAction, isDesktopApp, revealActionLabel } from "@/desktop";
 
 export const SOURCES_HELP = `
 <p>Every top-level row is a <b>group</b> <code>config.toml</code> declares: a source
-(Work Slack, Personal mail), or the unified document index that makes them searchable. Open
+(Work Slack, Personal mail), or the unified grid and search index that makes them searchable. Open
 its chevron for the <b>steps</b> that do the work — fetch, render, index — and the
 <b>applets</b> the app spawns to serve it. Actions that don’t apply to a kind are
 disabled and say why.</p>
@@ -94,7 +95,9 @@ running if any step is, else waiting, failed, queued, off or stopped if any is, 
 the last step’s in pipeline order. <b>Last synced</b> and
 <b>Last success</b> are the fetch step’s. <b>Remove</b> takes the steps and applets
 with it.</p>
-<p>Rows come in the order <code>config.toml</code> lists them. Click a header to sort by
+<p>Rows come in the order <code>config.toml</code> lists them, with <b>Applets</b> — the
+applets filed under no group, such as the Photos card — and then <b>System</b> after
+every group. Click a header to sort by
 that column; a third click puts the config's order back. <b>Drag a group</b> by the grip
 at its left to move it: the move is written to <code>config.toml</code>, with everything
 under the group kept beside it. Groups move only while the table is in the config's
@@ -270,7 +273,7 @@ export function useSourcesCard(ctx: CardCtx) {
     group: ConfiguredGroup;
     entry: CatalogEntry;
     steps: SourceSteps;
-    qmdIndexing: QmdIndexing;
+    searchIndexing: SearchIndexing;
     /// The config as it was when the form opened, for the form to show
     /// what saving would change and what it would keep.
     text: string;
@@ -295,6 +298,11 @@ export function useSourcesCard(ctx: CardCtx) {
   /// id — the cost is that the group's measured folder then counts the
   /// custom tree too. An applet id lives in another namespace and may
   /// coincide.
+  /// Every `[[applets]]` entry's id, for the wizard's apps and offers.
+  const appletIds = computed(
+    () => new Set(sources.value.filter((s) => s.kind === "applet").map((s) => s.id)),
+  );
+
   const takenIds = computed(
     () =>
       new Set([
@@ -335,8 +343,8 @@ export function useSourcesCard(ctx: CardCtx) {
 
   function decorate(r: ManageRow, groups: Map<string, ManageRow>): Row {
     const browsing = withBrowse(r, groups, canReveal);
-    // `system/` is not a config entry: nothing to edit.
-    if (r.kind === "system") {
+    // `system/` and the Applets heading are not config entries: nothing to edit.
+    if (r.kind === "system" || r.kind === "section") {
       return { ...browsing, editBlocked: "Not a config entry.", editGroup: null };
     }
     if (r.kind === "group") {
@@ -454,12 +462,14 @@ export function useSourcesCard(ctx: CardCtx) {
   }
 
   /// Double-clicking a status opens the log it came from; a problems count,
-  /// the problems, or on System, whose count is the config's warnings, the
-  /// config.
+  /// exactly the problems it counts, or on System, whose count is the
+  /// config's warnings, the config. A count of only what the log holds
+  /// opens the log.
   function onCellDoubleClicked(data: Row, field: string) {
     if (field === "problems" && data.kind === "system") openConfig();
-    else if (field === "problems") actions.openProblems(data, `${UNIFIED_DOCUMENT_INDEX}/problems`);
-    else if (field === "status") void actions.openStepLog(data);
+    else if (field === "problems" && data.problems_query)
+      actions.openProblems(data, `${UNIFIED_GRID_AND_SEARCH_INDEX}/problems`);
+    else if (field === "problems" || field === "status") void actions.openStepLog(data);
   }
 
   /// The row whose name the menu's Rename is opening, the one edit a
@@ -550,7 +560,11 @@ export function useSourcesCard(ctx: CardCtx) {
     if (text === null) return;
     const name = (id: string) =>
       rows.value.find((r) => r.kind === "group" && r.id === id)?.name.label ?? id;
-    const against = moveAgainstDataFlow(text, row.id, before?.id ?? null);
+    // Below the last group come rows no group can be put before — an
+    // entry outside any group, the Applets heading, System: dropping there
+    // is dropping at the bottom.
+    const beforeId = before?.kind === "group" ? before.id : null;
+    const against = moveAgainstDataFlow(text, row.id, beforeId);
     if (against) {
       say(
         false,
@@ -562,13 +576,13 @@ export function useSourcesCard(ctx: CardCtx) {
     }
     let next: string;
     try {
-      next = moveGroup(text, row.id, before?.id ?? null);
+      next = moveGroup(text, row.id, beforeId);
     } catch (e) {
       say(false, (e as Error).message);
       return;
     }
     if (next === text) return;
-    const where = before ? `above ${before.name.label}` : "to the bottom";
+    const where = beforeId && before ? `above ${before.name.label}` : "to the bottom";
     await writeConfig(next, `Moved ${row.name.label} ${where}.`);
   }
 
@@ -742,8 +756,10 @@ export function useSourcesCard(ctx: CardCtx) {
     const steps = sourceStepsOf(group.id, sources.value);
     const entry = groupEntry(group, steps);
     if (!entry) return;
-    const qmdIndexing = steps.render ? qmdIndexingOf(sources.value, group.id) : "keyword_and_embed";
-    editing.value = { group, entry, steps, qmdIndexing, text: configText.value };
+    const searchIndexing = steps.render
+      ? searchIndexingOf(sources.value, group.id)
+      : "keyword_and_embed";
+    editing.value = { group, entry, steps, searchIndexing, text: configText.value };
     wizardKey.value++;
     wizardOpen.value = true;
   }
@@ -757,7 +773,8 @@ export function useSourcesCard(ctx: CardCtx) {
     groupBody: string | null;
     stepsBody: string;
     renderId: string | null;
-    qmdIndexing: QmdIndexing;
+    searchIndexing: SearchIndexing;
+    applet: { id: string; on: boolean } | null;
   }) {
     const text = await configToEdit();
     if (text === null) return;
@@ -797,18 +814,23 @@ export function useSourcesCard(ctx: CardCtx) {
     // The fan-ins name their inputs, so a render step added without this
     // renders happily and is never indexed. Idempotent, so re-saving an
     // edit doesn't duplicate the entry. Free-text search is the one index
-    // the wizard asks about: the source's own qmd steps, added or taken out.
+    // the wizard asks about: the source in or out of the `unified_grid_and_search_index` step's
+    // `not_searched`, and its `embed`, added or taken out.
     if (payload.renderId) {
       next = wireIntoFanIns(next, payload.renderId);
-      next = setQmdSteps(next, payload.id, payload.qmdIndexing);
+      next = setSearchSteps(next, payload.id, payload.searchIndexing);
     } else {
-      next = setQmdSteps(next, payload.id, "none");
+      next = setSearchSteps(next, payload.id, "none");
     }
     next = setTimeSeriesStep(next, payload.id, payload.entry.type, payload.entry.package);
     next = setOccurrencesStep(next, payload.id, payload.entry.type);
     // A package source's applets come with it, and leave with its group.
     const pkg = payload.entry.package;
     if (!current && pkg) next = addSourceApplets(next, payload.id, pkg.dir, pkg.applets);
+    if (payload.applet) {
+      const offered = builtinApplet(payload.applet.id);
+      if (offered) next = setApplet(next, offered, payload.applet.on);
+    }
 
     // Banners are for a person, so they say the name; the id is what the
     // config and the disk use.
@@ -816,6 +838,16 @@ export function useSourcesCard(ctx: CardCtx) {
     const ok = await writeConfig(next, current ? `Saved ${shown}.` : `Added ${shown}.`);
     if (!ok) return;
     closeWizard();
+  }
+
+  /// An app from the picker turned on or off: its one `[[applets]]`
+  /// entry, added or taken out.
+  async function onWizardApp(payload: { id: string; on: boolean }) {
+    const app = builtinApplet(payload.id);
+    const text = await configToEdit();
+    if (!app || text === null) return;
+    const what = `${payload.on ? "Turned on" : "Turned off"} the ${app.label}.`;
+    if (await writeConfig(setApplet(text, app, payload.on), what)) closeWizard();
   }
 
   // ── Packages (docs/dev/packages.md). The build is fetched before the
@@ -1149,9 +1181,11 @@ export function useSourcesCard(ctx: CardCtx) {
     wizardOpen,
     wizardKey,
     takenIds,
+    appletIds,
     editing,
     closeWizard,
     onWizardSubmit,
+    onWizardApp,
     asking,
     packagesOpen,
     addPackageEntry,

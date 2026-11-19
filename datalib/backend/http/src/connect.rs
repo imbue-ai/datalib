@@ -978,7 +978,7 @@ pub async fn connect_status(
 const EPHEMERAL_BROWSER_ENV: &str = "LATCHKEY_EPHEMERAL_BROWSER";
 
 /// Why a latchkey command failed. latchkey's own message is kept and
-/// shown: every error latchkey 3.21.0 prints is one of its typed
+/// shown: every error latchkey 3.22.1 prints is one of its typed
 /// messages, none of which repeats a header or token it was handed. (The
 /// one that quotes its input, `auth prepare`'s JSON parse error, cannot
 /// happen: `oauth_client.rs` always hands it valid JSON.)

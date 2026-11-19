@@ -1,18 +1,20 @@
 //! The `runtime.manifest` a release tarball carries beside its binaries:
-//! which runtime asset(s) of the same release to fetch, their sha256 and
-//! size, and where. The tarball's own sha256 is what the installer
-//! verifies, so the manifest is as pinned as the binaries, and the
-//! bytes it names are refused unless they hash as it says.
+//! which assets of the same release to fetch on first use, each with its
+//! sha256, size and URL. The tarball's own sha256 is what the installer verifies, so
+//! the manifest is as pinned as the binaries, and the bytes it names are
+//! refused unless they hash as it says.
 //!
 //! One asset per line, whitespace-separated, `#` starts a comment:
 //!
 //! ```text
-//! cpu  runtime-x86_64-unknown-linux-gnu.tar.gz       <sha256> <bytes> <url>
-//! cuda runtime-x86_64-unknown-linux-gnu-cuda.tar.gz  <sha256> <bytes> <url>
+//! cpu   runtime-x86_64-unknown-linux-gnu.tar.gz    <sha256> <bytes> <url>
+//! cuda  ggml-cuda-x86_64-unknown-linux-gnu.tar.gz  <sha256> <bytes> <url>
 //! ```
 //!
-//! `release.yml` writes it; `scripts/stage_runtime.sh` says what the
-//! assets hold.
+//! `cpu` is always there; `cuda` only in the x86_64 gnu tarball.
+//! `scripts/release/stage_tarball.sh` writes it; `scripts/stage_runtime.sh`
+//! and `scripts/release/stage_cuda.sh` say what each asset holds. A shipped binary reads only the manifest its own release
+//! put beside it.
 
 use std::fmt;
 
@@ -21,11 +23,11 @@ pub const MANIFEST_FILE: &str = "runtime.manifest";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssetKind {
-    /// Node plus the qmd and latchkey trees with this platform's CPU
-    /// binding of node-llama-cpp. Always present; the tree qmd runs from.
+    /// Node plus the latchkey tree: the tree every Node tool runs from.
     Cpu,
-    /// The CUDA bindings alone, unpacked over the CPU tree on a machine
-    /// that has an NVIDIA driver. Linux x86_64 only.
+    /// llama.cpp's CUDA backend, `lib/libggml-cuda.so`, which the
+    /// embedder loads where there is an NVIDIA GPU
+    /// (`datalib_runtime::cuda_module`).
     Cuda,
 }
 
@@ -56,8 +58,8 @@ pub struct RuntimeAsset {
 }
 
 impl RuntimeAsset {
-    /// The directory a fetched asset is filed under, and the CUDA
-    /// overlay's marker name: the first twelve hex digits of its sha256.
+    /// The directory a fetched asset is filed under: the first twelve hex
+    /// digits of its sha256.
     pub fn dir_name(&self) -> &str {
         &self.sha256[..12]
     }
@@ -110,25 +112,33 @@ impl Manifest {
         self.cuda.as_ref()
     }
 
-    /// Render in the file's own format — what `release.yml` writes and
-    /// what a test writes to stand in for a release.
+    /// Render in the file's own format — what `stage_tarball.sh` writes
+    /// and what a test writes to stand in for a release.
     pub fn render(&self) -> String {
-        let mut out = String::new();
-        for asset in std::iter::once(&self.cpu).chain(self.cuda.iter()) {
-            out.push_str(&format!(
-                "{} {} {} {} {}\n",
-                asset.kind.as_str(),
-                asset.name,
-                asset.sha256,
-                asset.bytes,
-                asset.url
-            ));
-        }
-        out
+        std::iter::once(&self.cpu)
+            .chain(&self.cuda)
+            .map(|asset| {
+                format!(
+                    "{} {} {} {} {}\n",
+                    asset.kind.as_str(),
+                    asset.name,
+                    asset.sha256,
+                    asset.bytes,
+                    asset.url
+                )
+            })
+            .collect()
     }
 
-    pub fn new(cpu: RuntimeAsset, cuda: Option<RuntimeAsset>) -> Self {
-        Self { cpu, cuda }
+    pub fn new(cpu: RuntimeAsset) -> Self {
+        Self { cpu, cuda: None }
+    }
+
+    pub fn with_cuda(self, cuda: RuntimeAsset) -> Self {
+        Self {
+            cuda: Some(cuda),
+            ..self
+        }
     }
 }
 
@@ -202,20 +212,48 @@ mod tests {
     const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     #[test]
-    fn parses_cpu_and_optional_cuda() {
+    fn parses_the_cpu_asset() {
         let text = format!(
             "# written by release.yml\n\
-             cpu runtime-x.tar.gz {SHA_A} 100 https://example.com/r.tar.gz\n\
-             \n\
-             cuda runtime-x-cuda.tar.gz {SHA_B} 200 https://example.com/c.tar.gz # gpu\n"
+             cpu runtime-x.tar.gz {SHA_A} 100 https://example.com/r.tar.gz # node\n\
+             \n"
         );
         let m = Manifest::parse(&text).unwrap();
         assert_eq!(m.cpu().name, "runtime-x.tar.gz");
         assert_eq!(m.cpu().bytes, 100);
         assert_eq!(m.cpu().dir_name(), "aaaaaaaaaaaa");
-        assert_eq!(m.cuda().unwrap().url, "https://example.com/c.tar.gz");
+        assert_eq!(m.cpu().url, "https://example.com/r.tar.gz");
         // Round-trips through its own renderer.
         assert_eq!(Manifest::parse(&m.render()).unwrap(), m);
+    }
+
+    #[test]
+    fn parses_a_cuda_asset_beside_the_cpu_one() {
+        let text = format!(
+            "cpu runtime-x.tar.gz {SHA_A} 100 https://example.com/r.tar.gz\n\
+             cuda ggml-cuda-x.tar.gz {SHA_B} 200 https://example.com/c.tar.gz\n"
+        );
+        let m = Manifest::parse(&text).unwrap();
+        let cuda = m.cuda().unwrap();
+        assert_eq!(cuda.kind, AssetKind::Cuda);
+        assert_eq!(cuda.name, "ggml-cuda-x.tar.gz");
+        assert_eq!(cuda.dir_name(), "bbbbbbbbbbbb");
+        assert_eq!(Manifest::parse(&m.render()).unwrap(), m);
+        let cpu_only = Manifest::new(m.cpu().clone()).render();
+        assert_eq!(Manifest::parse(&cpu_only).unwrap().cuda(), None);
+    }
+
+    #[test]
+    fn a_cuda_asset_alone_or_twice_is_refused() {
+        let cuda = format!("cuda c.tar.gz {SHA_B} 1 https://x/\n");
+        assert!(Manifest::parse(&cuda)
+            .unwrap_err()
+            .what
+            .contains("no `cpu`"));
+        let twice = format!("cpu a.tar.gz {SHA_A} 1 https://x/\n{cuda}{cuda}");
+        let err = Manifest::parse(&twice).unwrap_err();
+        assert_eq!(err.line, 3);
+        assert!(err.what.contains("second `cuda`"));
     }
 
     #[test]

@@ -163,7 +163,7 @@ fn a_writer_opens_and_commits_under_a_reader_that_is_already_open() {
     assert_eq!(errors(&writer), Vec::<String>::new(), "writer errors");
 }
 
-/// A reader that keeps re-opening — the shape `grid_index` has under
+/// A reader that keeps re-opening — the shape `unified_grid_and_search_index` has under
 /// streaming, one open/pin/diff/read/close per source per pass — for as long
 /// as a writer commits as fast as it can. Every reader step is a read, so the
 /// writer must never see `commit conflict`.
@@ -691,7 +691,7 @@ fn three_branch_readers_refreshing_every_20ms_never_refuse_a_seal() {
     });
 }
 
-/// A render checkpoint or a `grid_index` pass holds a SQL transaction for
+/// A render checkpoint or a `unified_grid_and_search_index` pass holds a SQL transaction for
 /// its whole batch, and doltlite's graph lock with it. A reader's refresh
 /// is a write, so it waits for the batch; with a writer that starts the next
 /// batch straight after sealing, it misses most gaps (1 s batches: refreshes
@@ -935,6 +935,13 @@ fn detached_readers_of_an_older_commit_read_ranges_while_the_writer_seals() {
             "every window opened the first commit it saw"
         );
     }
+}
+
+/// The search applet's `/sql` reads: arbitrary statements behind
+/// `datalib_sql_guard`'s authorizer and deadline, on detached opens.
+#[test]
+fn detached_readers_running_guarded_sql_never_make_the_writers_commit_fail() {
+    detached_readers_reading(3, 500, 0, &["--guarded"]);
 }
 
 /// A detached open takes no write lock, so a writer holding its batch open
@@ -1197,7 +1204,7 @@ fn a_seal_a_killed_writer_committed_but_never_published_is_published_by_the_next
     );
 }
 
-/// The rows `grid_index` loads on a pass, as a reader in another process
+/// The rows `unified_grid_and_search_index` loads on a pass, as a reader in another process
 /// sees them at each step of that pass. The writer deletes every row and
 /// loads a different number back inside one SQL transaction, `COMMIT`s
 /// it, then `dolt_commit`s; the reader holds one read-only connection --

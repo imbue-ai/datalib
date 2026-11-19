@@ -13,7 +13,8 @@ config and picks the code that runs — and where the data comes from.
 *Where* is one table on the source's ingest step, named under the type:
 `api` is the product's own API, `export` an unpacked export, `backup` a
 phone backup, `fswalk` a folder to scan. A type that is not one product
-spells its sources out — email's are `jmap`, `gmail` and `mbox`. A table
+spells its sources out — email's are `jmap`, `gmail`, `mbox` and
+`apple_mail`. A table
 that reads files carries its own `path`.
 
 Conventions: exports land under `~/backups/`, and `latchkey` is the
@@ -34,7 +35,31 @@ on. If `LATCHKEY_GATEWAY` is set in your environment, a latchkey gateway
 holds the credentials instead, and those commands may be refused or sign
 in somewhere else: sign in, or ask for access, wherever that gateway is
 managed. Either way, `datalib-step probe <type>` says whether the
-sign-in works.
+sign-in works; for a type reached more than one way, name the way with
+`--method` (`datalib-step probe calendar --method google`).
+
+## Apple Mail
+
+`type = "email"` with an `apple_mail` table — every account of the Mail
+app on a Mac, read from Mail's own folder, `~/Library/Mail`. Copies
+every message Mail has downloaded, with its mailboxes (a Gmail account's
+labels among them), whether it was read, flagged or answered, and its
+attachments. No sign-in, and nothing is fetched from the mail server: a
+message or attachment Mail has not downloaded yet is copied by the sync
+after Mail has it, and until then the source shows a warning counting
+them.
+
+macOS protects Mail's folder. In the app, choose it with the picker in
+the "Apple Mail" form — that is what grants Datalib access (Cmd-Shift-G
+in the dialog reaches `~/Library/Mail`). A terminal running
+`datalib-dag` needs Full Disk Access instead (System Settings → Privacy
+& Security).
+
+Each account is copied under its own id, made from the name of its folder
+under `~/Library/Mail/V10`; a message sent to two of your accounts is
+copied once for each. To copy just one account, set `apple_mail.account`
+to its folder's name. Mail keeps no Gmail ids, so a Gmail account copied
+through Mail and through [Gmail](#gmail) is two separate copies.
 
 ## Apple Messages
 
@@ -55,7 +80,7 @@ reports "Operation not permitted" is missing that, not the file.
 
 The whole database is mirrored table for table with its history, so a
 message deleted on the Mac is still in an earlier commit of the store.
-Every chat renders as a page a month.
+Every chat renders as one page, however long it runs.
 
 ## Apple Photos
 
@@ -75,6 +100,47 @@ Photos' own schema, table for table, with only changed rows stored on
 each run. The originals sit beside it at
 `<library>/originals/<X>/<UUID>.<ext>`; a [local media](#local-media) source pointed
 at that folder gives you their EXIF and content hashes.
+
+## Baby Connect
+
+`type = "baby_connect"` — the [Baby Connect](https://www.baby-connect.com)
+web app through latchkey (`api`). Copies every entry logged for each of
+your children: feeds, sleeps, diapers, medicine, growth, milestones,
+diary entries, and the notes typed with any of them. Each child's month
+becomes one document, its days in order.
+
+Baby Connect has no API, so the download makes the two requests its own
+web page makes, signed in with the page's session cookies. Register the
+service once, then sign in in the browser that opens; latchkey keeps the
+two cookies the session is made of:
+
+```sh
+latchkey services register babyconnect \
+  --base-api-url="https://app.babyconnect.com/" \
+  --login-url="https://app.babyconnect.com/login" \
+  --login-flow=cookie-capture \
+  --login-flow-params='{"cookieKeys": ["seacloud1", "srf"]}'
+latchkey auth browser babyconnect
+```
+
+Baby Connect answers one day at a time, so the first sync asks once for
+every day from your eldest child's birthday to today: about 365 requests
+a year of use. Set `since` and `until` on the `api` table (a day, an RFC
+3339 instant, or an offset such as `"-90d"`) to read less. Later syncs
+read only the days not yet read, and the last two again.
+
+Baby Connect keeps each entry's time as a clock reading with no zone.
+Name the zone you logged in on the render step, and daylight saving is
+applied for each date:
+
+```toml fragment
+[steps.params]
+time_zone = "America/Los_Angeles"
+```
+
+Without it the times are read as UTC, and the source's Manage row says
+so. Changing it re-renders; it never downloads again.
+[The provider's INGEST.md](../../datalib/backend/etl/providers/baby_connect/INGEST.md) has the details.
 
 ## Beeper
 
@@ -125,6 +191,14 @@ that fall in it. Each is a day (`"2026-09-01"`) or an offset from the
 day of the sync (`since = "-2d"`, `until = "+21d"`), which moves with
 it. A windowed calendar is listed whole every run, and an event the
 window no longer reaches leaves the mirror.
+
+**To sync a calendar often, leave the window out.** Neither Google nor
+CalDAV can pick a listing up where the last one stopped once it is
+bounded by dates, so a window costs the whole listing every run; a
+busy calendar takes seconds and several requests each time. Without
+`since` and `until`, a run after the first asks only for what changed.
+To see just the days around now, read the `render_occurrences` step's
+table, which is windowed already, rather than windowing the download.
 
 ## Calendly
 
@@ -244,7 +318,9 @@ conversation it predates.
 
 `type = "claude"` — web API through latchkey (`api`), **or** an
 unpacked Claude data export on disk (`export`). Mirrors conversations
-across every org, and projects.
+across every org, and projects. The `api` route also mirrors the Cowork
+tasks run in the cloud, each as a conversation; `cowork = false` leaves
+them out.
 
 `claude.ai` has no official API for your conversations, so the `api`
 route uses the session cookie your browser already has. Register the
@@ -324,9 +400,10 @@ connection** lists them to pick from.
 
 `type = "email"` — a Google Takeout `.mbox` on disk (`mbox`), **or** a
 JMAP server other than Fastmail through latchkey (`jmap`). Mirrors mail
-messages and their attachments. [Gmail](#gmail) and
-[Fastmail](#fastmail) have sections of their own; this one is the
+messages and their attachments. [Gmail](#gmail), [Fastmail](#fastmail)
+and [Apple Mail](#apple-mail) have sections of their own; this one is the
 other two routes into the same source.
+
 
 **A Takeout `.mbox`.** Google Takeout's **Mail** product is a single
 `.mbox` file; see [Google Takeout](#google-takeout) for requesting one.
@@ -427,8 +504,6 @@ nothing else; `calendars` narrows it to the calendars you name.
 
 `type = "contacts"` — Fastmail's address books over CardDAV, through
 latchkey (`fastmail`). Rendered the way [Contacts (CardDAV)](#contacts-carddav) says.
-Saying that several handles are one person is [the contacts
-app](contacts_app.md), which needs no source.
 
 The same `fastmail-dav` login as [Fastmail Calendar](#fastmail-calendar):
 an app password (Settings → Privacy & Security → Integrations → App
@@ -539,8 +614,9 @@ The first time, latchkey needs an OAuth client to sign in with:
 
 Use a `gmail` table on the ingest step. Incremental sync is driven by
 Gmail's own change history, so deletions and label changes show up as
-events. Google's quota caps throughput at about 100 messages a minute,
-and a slow link or large messages bring it lower, so a large mailbox
+events. The download stays under Google's per-minute quota, about 80
+messages a minute (`quota_units_per_minute`), and a slow link or large
+messages bring it lower, so a large mailbox
 backfills over several runs. With a Takeout
 of the same account, the first sync downloads only what is newer than
 it: put the folder holding the Takeout's `.zip` or `.tgz` parts (or,
@@ -668,7 +744,8 @@ The first time, latchkey needs an OAuth client to sign in with:
 [your own Google OAuth client](#your-own-google-oauth-client).
 
 The `google` table needs nothing else; `calendars` narrows it to the
-calendars you name. Behind a latchkey gateway, its permissions have to
+calendars you name, and `since` and `until` to a stretch of days, at
+the cost [Calendar (CalDAV)](#calendar-caldav) describes. Behind a latchkey gateway, its permissions have to
 allow reading the calendar list (`/users/me/calendarList`) as well as
 the events: every sync reads the list first.
 
@@ -678,7 +755,7 @@ the events: every sync reads the list first.
 export (`export`, with `google_chat = true`). Mirrors your Google Chat
 DMs, spaces and bots with their attachments, rendered to markdown.
 
-Request a Takeout with **Chat** ticked and unpack it — see
+Request a Takeout with **Chat** ticked — see
 [Google Takeout](#google-takeout), which is the source this is one
 feed of. The Add source form ticks it; in a hand-written config, set
 `google_chat = true` beside `export.path`.
@@ -740,11 +817,13 @@ file with a long history then fetches every revision.
 
 `type = "google_takeout"` — an unpacked Takeout tree on disk
 (`export`). Mirrors Google Chat and Voice messages; Maps reviews, saved
-places and photos; YouTube watch history and subscriptions; and Gemini
-Apps activity, each prompt with Gemini's response and the files and
-images either one carried. Everything is rendered to markdown: a
-conversation as a page per month, and Gemini, YouTube and Maps as a
-page per year (subscriptions are one list). Voice bills and greetings
+places, saved lists and photos, and My Maps maps; YouTube watch history
+and subscriptions; Play Books highlights, notes and bookmarks; and
+Gemini Apps activity, each prompt with Gemini's response and the files
+and images either one carried. Everything is rendered to markdown: a
+conversation, and each of Gemini, YouTube and Maps, as one page
+(subscriptions are one list), and each saved list, My Maps map and
+Play Books book as a page of its own. Voice bills and greetings
 are kept in the raw store only.
 
 Self-service export at <https://takeout.google.com>. Deselect all, then
@@ -755,7 +834,8 @@ Keep one export per folder: a folder holding parts of two exports is
 refused. An export you have already unpacked works too: point the
 source at its `Takeout` folder.
 
-Useful products: **Chat**, **Voice**, **Maps**, **YouTube history** and
+Useful products: **Chat**, **Voice**, **Maps**, **Saved** (Maps'
+lists), **My Maps**, **YouTube history**, **Play Books** and
 **Gemini** (read by this source), and **Mail**
 (a single `.mbox`, read by the [email](#email-mbox-or-jmap) source instead). The
 Add source form ticks every product; untick what you want left out. In
@@ -778,7 +858,7 @@ the folder (or, unpacking by hand, unpack every part).
 export (`export`, with `google_voice = true`). Mirrors your texts,
 voicemails and call records, rendered to markdown.
 
-Request a Takeout with **Voice** ticked and unpack it — see
+Request a Takeout with **Voice** ticked — see
 [Google Takeout](#google-takeout), which is the source this is one
 feed of. Set `google_voice = true` beside `export.path`; the spam
 folder stays out unless `google_voice_include_spam = true`.
@@ -866,7 +946,10 @@ what changed since, and for a quiet workspace that takes seconds.
 ## LinkedIn
 
 `type = "linkedin"` — LinkedIn's "Get a copy of your data" export
-(`export`). Mirrors messages, and connections as contacts.
+(`export`). Mirrors messages, your posts and comments, the skills on
+your profile, and connections as contacts. The rest of the export is
+stored but not searchable, and a note on the source's Manage row
+names those tables.
 
 **Settings & Privacy** → **Data privacy** → **Get a copy of your
 data**, request the full archive, and unzip it when the email arrives

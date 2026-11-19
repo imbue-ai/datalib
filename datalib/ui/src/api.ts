@@ -7,7 +7,9 @@ import type {
   ConnectPhase,
   ConnectState,
   DagRunState,
+  PassState,
   RunKind,
+  WipeKind,
 } from "./generated/enums";
 import type { FeedbackContext } from "./feedback/context";
 import { ApiError, errorDetail, FailureError } from "./apiError";
@@ -17,7 +19,7 @@ import { pushToast } from "./toasts";
 // Rust enums into `./generated/enums`, and re-exported here so callers
 // keep one import. A variant added in Rust reaches these without a hand
 // edit; `bazel run //datalib/backend/http:ui_enums.update` regenerates.
-export type { ChipKind, ColumnType, ConnectPhase, ConnectState, DagRunState };
+export type { ChipKind, ColumnType, ConnectPhase, ConnectState, DagRunState, PassState, WipeKind };
 
 // `DiffStatus` in datalib_schema, hand-kept in step.
 export type DiffStatus = "added" | "removed" | "modified" | "unchanged";
@@ -26,7 +28,7 @@ export type SearchRow = {
   uuid: string;
   conversation_uuid: string;
   // FK into the markdowns table — every grid row knows which rendered
-  // .md it lives inside. Drives `{UNIFIED_DOCUMENT_INDEX}/chat/{markdown_uuid}` lookups
+  // .md it lives inside. Drives `{UNIFIED_GRID_AND_SEARCH_INDEX}/chat/{markdown_uuid}` lookups
   // when the user clicks a row in the preview pane.
   markdown_uuid: string | null;
   message_index: number | null;
@@ -68,7 +70,7 @@ export type SearchRow = {
   // own mark (Gmail, not Mail).
   source_ref?: Identity;
   // The **id** of the configured source this row came from: the group's
-  // directory under the data root (the first segment of its qmd_path).
+  // directory under the data root.
   // Empty when the row has no rendered document. The name a person gave
   // that group lives in config.toml, not here — the grid joins the two
   // client-side so renaming never needs a re-index.
@@ -125,7 +127,7 @@ export type SearchRow = {
   // The row's picture, as a `datalib:photo/<id>` name (`uri.ts`). Null on
   // a row with none of its own.
   image: string | null;
-  // QMD rank score. Present when the row came from a free-text (qmd)
+  // Rank score. Present when the row came from a ranked free-text
   // search; omitted for a query of structured terms alone.
   score?: number;
   // Where opening the row goes: `datalib:doc/<page>#<section>` (`uri.ts`).
@@ -137,12 +139,12 @@ export type SearchRow = {
 // keys (free_text, filters, resolved_type, …) that we ignore; typing
 // only what we consume keeps the contract narrow.
 export type QueryEcho = {
-  // Set when a free-text search failed in qmd; the response then has no
+  // Set when a free-text search failed to rank; the response then has no
   // rows, and the grid says why in a banner.
-  qmd_error?: string | null;
-  // True when free text was asked before any sync built a qmd index: no
+  search_error?: string | null;
+  // True when free text was asked before any sync built a search index: no
   // rows, and not a failure.
-  qmd_index_missing?: boolean;
+  search_index_missing?: boolean;
   // What part of the search could not answer, when the rest did.
   partial?: string | null;
   // How many documents the search could find have no vectors; on a search
@@ -160,9 +162,9 @@ export type RowsSpec = {
   // `link` field where it has one (`uri.ts`), else the first of `fields`
   // the row has a value in, at the section its `anchor` field names.
   document: { fields: string[]; anchor: string; link?: string };
-  // qmd ranks free text, best first; `like` matches a substring and keeps
+  // The search index ranks free text, best first; `like` matches a substring and keeps
   // the rows' order.
-  free_text: "qmd" | "like";
+  free_text: "ranked" | "like";
 };
 
 /// One page of a paged table's rows: the search's, or the problems'.
@@ -191,11 +193,17 @@ export type RowsResponse<Row> = RowsSpec & {
   // Why the query cannot be read as typed (the search's alone). Not an
   // error: mid-keystroke it is usually a filter not finished yet.
   refused?: string[];
+  // The search's alone: which of the ids the request named in `among` are
+  // among its rows. Absent when it named none.
+  among?: string[];
+  // The problems' alone: each row carries `muted` (`yes` or `no`), and
+  // `POST <url>/mute` mutes or unmutes rows (`muteProblems`).
+  mutes?: boolean;
 };
 
 export type SearchResponse = RowsResponse<SearchRow> & { query_echo: QueryEcho };
 
-// QMDs are write-only output. The backend ships the body verbatim
+// Rendered markdown is write-only output. The backend ships the body verbatim
 // (frontmatter stripped) and the UI runs markdown-it on it. Per-section
 // scrolling/highlighting uses the `<div data-section-uuid="…">`
 // wrappers the renderer emits (one per message, plus nested ones for
@@ -203,7 +211,7 @@ export type SearchResponse = RowsResponse<SearchRow> & { query_echo: QueryEcho }
 // the same as the grid row's `uuid` column.
 // One row from the `edges` table joined with the destination
 // markdown's title. The backend produces this list on every
-// `{UNIFIED_DOCUMENT_INDEX}/chat/{uuid}` response — see `EdgeRowOut` in
+// `{UNIFIED_GRID_AND_SEARCH_INDEX}/chat/{uuid}` response — see `EdgeRowOut` in
 // `datalib/backend/core/src/repo.rs`. `src_anchor_uuid`/
 // `dst_anchor_uuid` reference values the renderer emits as
 // `data-section-uuid` attributes in the body; null means the
@@ -221,7 +229,8 @@ export type EdgeOut = {
 /// The words a problem's closed vocabularies take. Mirrors
 /// `datalib_problems`; change both halves together.
 export type ProblemSeverity = "error" | "warning" | "info";
-export type ProblemStage = "fetch" | "parse" | "render" | "grid_row";
+export type ProblemStage =
+  "fetch" | "parse" | "render" | "grid_row" | "time_series" | "occurrences";
 export type ProblemOutcome = "dropped" | "nulled" | "ok";
 export type ProblemReason =
   | "undeserializable"
@@ -236,6 +245,7 @@ export type ProblemReason =
   | "over_size_limit"
   | "not_found"
   | "forbidden"
+  | "ignored"
   | "no_document"
   | "silent"
   | "noted";
@@ -255,7 +265,14 @@ export type DocProblem = {
   /// dropped record has no section to jump to.
   item_uuid: string | null;
   first_seen_at_utc: string;
+  /// A person muted it: still listed, and counted nowhere.
+  muted: boolean;
 };
+
+/// One piece of a document's body, in order: a message (`uuid`), or a
+/// piece of the page's frame (a title, a `<details>` opener). A message
+/// in a box names the box's `class`, and `md` is what is inside it.
+export type BodyPiece = { uuid: string | null; class?: string | null; md: string };
 
 export type ChatResponse = {
   markdown_uuid: string;
@@ -270,9 +287,11 @@ export type ChatResponse = {
   /// Source column shows it; null when no grid row points at the doc.
   source_ref: Identity | null;
   /// The picture the document is, where it is one (`datalib:photo/…`):
-  /// such a document has no page, and `body` is empty.
+  /// such a document has no page, and `pieces` is empty.
   image?: string | null;
-  body: string;
+  /// The body as the renderer's pieces, so each message renders as a
+  /// fragment of its own (`renderDocument.ts`). Empty for a picture.
+  pieces: BodyPiece[];
   outgoing_edges: EdgeOut[];
   /// What render could not fully do to this document, errors first.
   problems: DocProblem[];
@@ -282,7 +301,7 @@ export type ChatResponse = {
 
 // One rendered document (a `markdowns` row), as listed by the applet
 // for the document-picker card. `markdown_uuid` is the same UUID
-// `documentView(...)` / `{UNIFIED_DOCUMENT_INDEX}/chat/{uuid}` take.
+// `documentView(...)` / `{UNIFIED_GRID_AND_SEARCH_INDEX}/chat/{uuid}` take.
 export type DocEntry = {
   markdown_uuid: string;
   title: string | null;
@@ -383,20 +402,20 @@ export function appletAbsent(id: string, status: number, body: string): boolean 
   }
 }
 
-// --- The unified_document_index applet --------------------------------------------
-export const UNIFIED_DOCUMENT_INDEX = "/applet/unified_document_index";
+// --- The unified_grid_and_search_index applet --------------------------------------------
+export const UNIFIED_GRID_AND_SEARCH_INDEX = "/applet/unified_grid_and_search_index";
 
 // Newest-first listing of rendered documents (capped server-side).
 export function fetchDocs(signal?: AbortSignal): Promise<DocEntry[]> {
-  return getJson<DocEntry[]>(`${UNIFIED_DOCUMENT_INDEX}/docs`, signal);
+  return getJson<DocEntry[]>(`${UNIFIED_GRID_AND_SEARCH_INDEX}/docs`, signal);
 }
 
 // --- The embedding map ------------------------------------------------------
-// `unified_document_index/embedding_map`, joined to the grid by the applet
-// (applets/src/unified_document_index/map.rs). Hand-kept in step with it.
+// `unified_grid_and_search_index/embedding_map`, joined to the grid by the applet
+// (applets/src/unified_grid_and_search_index/map.rs). Hand-kept in step with it.
 
 /// The step that writes the map, as `config.toml` composes its id.
-export const EMBEDDING_MAP_STEP = "unified_document_index/embedding_map";
+export const EMBEDDING_MAP_STEP = "unified_grid_and_search_index/embedding_map";
 
 export type MapPoint = {
   markdown_uuid: string;
@@ -419,7 +438,7 @@ export type EmbeddingMapResponse = {
   present: boolean;
   made_at: string | null;
   seed: { kept: number; near_neighbours: number; fresh: number } | null;
-  /// Documents qmd has not embedded yet, so not on the map.
+  /// Documents not embedded yet, so not on the map.
   unembedded: number;
   /// Points whose document the grid no longer has.
   unplaced: number;
@@ -428,7 +447,10 @@ export type EmbeddingMapResponse = {
 };
 
 export async function fetchEmbeddingMap(signal?: AbortSignal): Promise<EmbeddingMapResponse> {
-  const r = await getJson<EmbeddingMapResponse>(`${UNIFIED_DOCUMENT_INDEX}/embedding_map`, signal);
+  const r = await getJson<EmbeddingMapResponse>(
+    `${UNIFIED_GRID_AND_SEARCH_INDEX}/embedding_map`,
+    signal,
+  );
   for (const e of r.errors ?? []) pushToast(e);
   return r;
 }
@@ -437,15 +459,15 @@ export async function fetchEmbeddingMap(signal?: AbortSignal): Promise<Embedding
 export async function fetchMapMatches(q: string, signal?: AbortSignal): Promise<Set<string>> {
   const params = new URLSearchParams({ q });
   const r = await getJson<{ markdown_uuids: string[]; errors?: string[] }>(
-    `${UNIFIED_DOCUMENT_INDEX}/embedding_map/matches?${params.toString()}`,
+    `${UNIFIED_GRID_AND_SEARCH_INDEX}/embedding_map/matches?${params.toString()}`,
     signal,
   );
   for (const e of r.errors ?? []) pushToast(e);
   return new Set(r.markdown_uuids);
 }
 
-// --- qmd index state -------------------------------------------------------
-export type QmdDocState = {
+// --- search index state ----------------------------------------------------
+export type DocIndexState = {
   indexed: boolean | null;
   embedded: boolean | null;
   // Present when either field is null, or when an otherwise-fine
@@ -453,33 +475,33 @@ export type QmdDocState = {
   note?: string;
 };
 
-export type QmdStateResponse = {
+export type IndexStateResponse = {
   // False for a data root that has never synced — there is no
   // index.sqlite, so every document is legitimately un-indexed.
   index_present: boolean;
   summary: { documents: number; embedded: number };
   // markdown_uuid → state. Every requested uuid appears.
-  docs: Record<string, QmdDocState>;
+  docs: Record<string, DocIndexState>;
   errors?: string[];
 };
 
-// Ask which of these rendered documents the qmd index holds. POST
+// Ask which of these rendered documents the search index holds. POST
 // because the uuid list is as long as the grid's result set; the
 // backend dedupes and caps it.
-export async function fetchQmdState(
+export async function fetchIndexState(
   markdownUuids: string[],
   signal?: AbortSignal,
-): Promise<QmdStateResponse> {
-  const r = await fetch(`${UNIFIED_DOCUMENT_INDEX}/qmd_state`, {
+): Promise<IndexStateResponse> {
+  const r = await fetch(`${UNIFIED_GRID_AND_SEARCH_INDEX}/index_state`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ markdown_uuids: markdownUuids }),
     signal,
   });
   if (!r.ok) {
-    throw new Error(`POST ${UNIFIED_DOCUMENT_INDEX}/qmd_state → ${r.status}`);
+    throw new Error(`POST ${UNIFIED_GRID_AND_SEARCH_INDEX}/index_state → ${r.status}`);
   }
-  const data = (await r.json()) as QmdStateResponse;
+  const data = (await r.json()) as IndexStateResponse;
   if (data.errors && data.errors.length > 0) {
     for (const e of data.errors) pushToast(e);
   }
@@ -530,7 +552,7 @@ export function fetchAccounts(signal?: AbortSignal): Promise<AccountsMap> {
 /// same body, like a walk of the data root (`…/refresh`).
 type GetOptions = { toast?: boolean; method?: "GET" | "POST" };
 
-type Answer = { ok: boolean; status: number; body: string };
+type Answer = { ok: boolean; status: number; type: string | null; body: string };
 
 /// GETs asked in one task share one request: the cards a live frame
 /// reaches, or a card's sections mounting together, all ask in the same
@@ -541,7 +563,12 @@ const askedThisTask = new Map<string, Promise<Answer>>();
 function sharedGet(url: string): Promise<Answer> {
   let answer = askedThisTask.get(url);
   if (!answer) {
-    answer = fetch(url).then(async (r) => ({ ok: r.ok, status: r.status, body: await r.text() }));
+    answer = fetch(url).then(async (r) => ({
+      ok: r.ok,
+      status: r.status,
+      type: r.headers.get("Content-Type"),
+      body: await r.text(),
+    }));
     askedThisTask.set(url, answer);
     queueMicrotask(() => askedThisTask.delete(url));
   }
@@ -567,7 +594,7 @@ async function getJson<T>(
       if (toast) pushToast(err.message);
       throw err;
     }
-    return JSON.parse(a.body) as T;
+    return jsonBody<T>(url, a.type, a.body, toast);
   }
   let r: Response;
   try {
@@ -591,7 +618,19 @@ async function getJson<T>(
     if (toast) pushToast(err.message);
     throw err;
   }
-  return (await r.json()) as T;
+  return jsonBody<T>(url, r.headers.get("Content-Type"), await r.text(), toast);
+}
+
+// Only a body that says it is JSON is read as JSON: some same-origin
+// paths serve what a stranger sent, and a link can name any path.
+function jsonBody<T>(url: string, type: string | null, body: string, toast: boolean): T {
+  const media = (type ?? "").split(";")[0].trim().toLowerCase();
+  if (media !== "application/json") {
+    const err = new Error(`${url}: the answer is ${media || "untyped"}, not JSON`);
+    if (toast) pushToast(err.message);
+    throw err;
+  }
+  return JSON.parse(body) as T;
 }
 
 /// A key a search bar takes, and what its values are
@@ -616,7 +655,7 @@ export type KeyValues = {
 export type ValueSuggestion = { value: string; count?: number; label?: string };
 
 /// The keys the search bar at `base` takes: `${base}/keys`, for `base` a
-/// table's search (`/applet/unified_document_index/search`, `/api/log`).
+/// table's search (`/applet/unified_grid_and_search_index/search`, `/api/log`).
 export function fetchSearchKeys(base: string, signal?: AbortSignal): Promise<SearchKeySpec[]> {
   return getJson<SearchKeySpec[]>(`${base}/keys`, signal, { toast: false });
 }
@@ -641,7 +680,7 @@ export async function fetchHealth(signal?: AbortSignal): Promise<Health> {
 }
 
 /// Which page of a search, and in what order: `sort` is a column id and
-/// a direction (`created_at:desc`), or none for newest first (qmd's rank
+/// a direction (`created_at:desc`), or none for newest first (the search's rank
 /// for free text). `through` names a row the page must reach, however
 /// far past `offset` it is. `within` narrows it to one group,
 /// `[[column, value], …]` as JSON.
@@ -651,9 +690,12 @@ export type SearchPageSpec = {
   sort?: string | null;
   through?: string | null;
   within?: string | null;
+  /// Record ids the answer says are or are not among the search's rows,
+  /// wherever they fall (`RowsResponse.among`).
+  among?: string[];
 };
 
-export const SEARCH = `${UNIFIED_DOCUMENT_INDEX}/search`;
+export const SEARCH = `${UNIFIED_GRID_AND_SEARCH_INDEX}/search`;
 
 export function fetchSearch(
   q: string,
@@ -680,6 +722,7 @@ export async function fetchRows<Row>(
   if (spec.sort) params.set("sort", spec.sort);
   if (spec.through) params.set("through", spec.through);
   if (spec.within) params.set("within", spec.within);
+  if (spec.among?.length) params.set("among", JSON.stringify(spec.among));
   const r = await getJson<RowsResponse<Row>>(`${url}?${params.toString()}`, signal, options);
   // Backend returned 200 but is telling us something went sideways
   // (schema mismatch, fallback path errored, etc.). Surface each entry
@@ -689,6 +732,18 @@ export async function fetchRows<Row>(
     for (const e of r.errors) pushToast(e);
   }
   return r;
+}
+
+/// Mutes or unmutes problem rows, by id, at a problems table's `url`
+/// (`RowsResponse.mutes`). A muted row stays in the table and counts
+/// toward nothing: not a Manage row's count, not the Dashboard's Needs you.
+export async function muteProblems(url: string, ids: string[], muted: boolean): Promise<void> {
+  const r = await fetch(`${url}/mute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ problem_uuids: ids, muted }),
+  });
+  if (!r.ok) throw new Error(`POST ${url}/mute → ${r.status}: ${await r.text()}`);
 }
 
 /// One group of a table's rows: its value in each grouped column, how
@@ -701,8 +756,8 @@ export type GroupsResponse<Row = SearchRow> = {
   truncated: boolean;
   at: string | null;
   // Only the search has these two.
-  qmd_error?: string | null;
-  qmd_index_missing?: boolean;
+  search_error?: string | null;
+  search_index_missing?: boolean;
   errors: string[];
   refused?: string[];
 };
@@ -727,11 +782,9 @@ export async function fetchGroups<Row = SearchRow>(
 }
 
 export function fetchChat(markdownUuid: string, signal?: AbortSignal): Promise<ChatResponse> {
-  // One UUID per rendered `.md` file — no disambiguation needed.
-  // Provider-specific sharding (beeper's per-period files) is already
-  // encoded in the markdown_uuid scheme.
+  // A document's id names it alone — no disambiguation needed.
   return getJson<ChatResponse>(
-    `${UNIFIED_DOCUMENT_INDEX}/chat/${encodeURIComponent(markdownUuid)}`,
+    `${UNIFIED_GRID_AND_SEARCH_INDEX}/chat/${encodeURIComponent(markdownUuid)}?pieces=true`,
     signal,
   );
 }
@@ -783,7 +836,7 @@ export type ConfigResponse = {
   diagnostics: Diagnostic[];
   // Whether the app can serve its own views at all. False when the
   // file is not a config, or when it loads without a usable
-  // `unified_document_index` applet — that applet serves the grid, search and
+  // `unified_grid_and_search_index` applet — that applet serves the grid, search and
   // the document view, so without it every view is a 502 — or when
   // the root was written by a newer datalib (`newer_root`). A root
   // with no config is `exists: false` and the first-run screen's
@@ -802,10 +855,19 @@ export type ConfigResponse = {
   // The launch's upgrade (dag/README.md §"Upgrading a root"): the raw
   // stores being migrated, then what is offered for a re-render.
   upgrade: Upgrade;
+  // The newest "Free up disk space" since the server started, while it
+  // runs and after; null when there has been none.
+  free_space: FreeSpace | null;
 };
 
-/// Mirrors `supervisor::MigrateState`.
-export type MigrateState = "waiting" | "running" | "done" | "failed";
+/// How a pass over the steps stands with one of them. A step that shrank
+/// its store says how big it was before and after.
+export type PassRow = {
+  step: string;
+  state: PassState;
+  error: string | null;
+  store_bytes?: { before: number; after: number };
+};
 
 export type Upgrade = {
   // The migrate pass is running: nothing syncs until it is done.
@@ -813,10 +875,23 @@ export type Upgrade = {
   // The server has run its pass, or found it had none to run.
   settled: boolean;
   // Every step the pass asks, in the order it asks them.
-  steps: { step: string; state: MigrateState; error: string | null }[];
+  steps: PassRow[];
   // The steps that answered that they need to run again: the roots of
   // the re-render the app offers. Empty while migrating.
   rerender: string[];
+};
+
+/// Mirrors `supervisor::FreeSpace` (dag/README.md §"Resets and purges").
+export type FreeSpace = {
+  id: string;
+  // `compact` when old versions of rendered documents go too.
+  kind: WipeKind;
+  // The loop is still on it.
+  running: boolean;
+  // Why it was not done, once it is over.
+  error: string | null;
+  // Every step it asks, in order; empty until the loop takes it up.
+  steps: PassRow[];
 };
 
 export type NewerRoot = {
@@ -1165,9 +1240,10 @@ export function fetchPipelineDisk(signal?: AbortSignal): Promise<DiskFree> {
   return getJson<DiskFree>("/api/pipeline/disk", signal);
 }
 
-// `system` is the one row the config never named: `system/`, the run
-// log and the app's own stores.
-export type ManageRowKind = "group" | "step" | "applet" | "system";
+// `system` and `section` are the rows the config never named: `system/`,
+// the run log and the app's own stores; and the Applets heading over the
+// applets filed under no group.
+export type ManageRowKind = "group" | "step" | "applet" | "system" | "section";
 export type ManagePhase = "ingest" | "render" | "index" | "other";
 
 // ── The column-type vocabulary ─────────────────────────────────────
@@ -1190,6 +1266,12 @@ export type ColumnSpec = {
   // On an identity column: the row field of chips drawn after the label,
   // as bare counts. Double-clicking them is a double-click on that field.
   badges?: string;
+  // Pixels the column starts at, where its type's usual width is wrong.
+  width?: number;
+  // Hidden while every row holds the same value in it.
+  hide_when_uniform?: boolean;
+  // The producer cannot order its rows by it, so it offers no sort.
+  unsorted?: boolean;
 };
 
 /// Something resolved before it was sent: the id the producer joins on,
@@ -1200,8 +1282,9 @@ export type Identity = {
   label: string;
   icon?: string | null;
   detail?: string | null;
-  /// The group or step this names, as a chip's URI (`datalib:group/slack`),
-  /// when the viewer should draw it as a chip it can resolve and open.
+  /// The group, step or document this names, as a chip's URI
+  /// (`datalib:group/slack`, `datalib:doc/<uuid>`), when the viewer should
+  /// draw it as a chip it can open.
   entity?: string | null;
 };
 
@@ -1300,14 +1383,22 @@ export type ManageRow = {
   /// ended: work the next sync starts on. A group's is its first step
   /// that owes.
   owed: Quantity;
-  /// Errors and warnings the step's store holds, as of its last run:
-  /// a red and a yellow chip, each only when above zero. A group shows
-  /// its last counting step's.
+  /// The error and warning rows of the problems list the step found,
+  /// less the muted ones: a red and a yellow chip, each only when above
+  /// zero; and a grey one for what only its log holds. A group sums its
+  /// steps'.
   problems: Chip[];
+  /// The problems grid's query for exactly the rows the red and yellow
+  /// chips count; null when they count none.
+  problems_query: string | null;
   /// The items the step's store holds, as of the run it last counted
   /// in, with the series behind them. No value — drawn blank — for
   /// every row but a render step and the group above it.
   items: Timeseries;
+  /// What its Modal Sandboxes cost, in millionths of a dollar at list
+  /// price, over the runs the run store keeps. Blank for every row but
+  /// an `embed` step that used Modal and the group above it.
+  spend: Timeseries;
   last_synced: string | null;
   last_success: string | null;
   disk: Timeseries;

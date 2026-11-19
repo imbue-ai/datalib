@@ -299,7 +299,7 @@ than it looks. Measured against the live API:
 
 | `oldest=` | answer |
 |---|---|
-| `-62135596800.000000` (a pre-epoch stamp) | an empty page, so the mirror held nothing (#1048) |
+| `-62135596800.000000` (a pre-epoch stamp) | an empty page, so the mirror held nothing |
 | `0.000000` | `invalid_ts_oldest` |
 | `0.0` | `invalid_ts_oldest` |
 | `0` | ok |
@@ -486,14 +486,9 @@ it, goes through one SQL transaction at a time
 (`datalib_etl::raw_store::Batch`): history pages, threads and file
 edges through `owed::write_answer_into`, the sweep markers, and the
 users through `owed::drain_into`. The transaction commits when a seal
-is due, and at the end of the run. Every read the walk makes goes
-through it too, since it holds the store's one connection.
-
-A doltlite `COMMIT` writes a fresh copy of every page of the tree it
-touched, and the copies it replaced stay in the file, since nothing
-runs `dolt_gc()` on a raw store ([`docs/dev/doltlite.md`](../../../../../docs/dev/doltlite.md)
-§"What a write costs"). A transaction per page of history and per
-thread therefore grew the store several times over what it keeps.
+is due, and at the end of the run. Why one transaction, and what it
+asks of the code around it:
+[`etl/README.md`](../../README.md#what-a-write-costs-the-transaction-is-the-unit-and-the-key-decides-the-size).
 Measured on a synthetic workspace through playback (20 channels of
 1,000 messages in pages of 200, a thread of 4 replies on every 20th
 message; no media, no seal due mid-run):
@@ -503,17 +498,14 @@ message; no media, no seal due mid-run):
 | a transaction per page and per thread (1,100) | 84.8 MB | +29 KB | 1.7 s |
 | one transaction | 16.5 MB | +29 KB | 1.6 s to 2.1 s |
 
-Committing more often bought nothing: the rows between two seals are no
-safer for it, since a writer's open discards whatever no seal reached.
 A stop still ends the run at a seal, and what is owed is still a query
 over the store, so a run cut off anywhere is finished by the next
 (`tests/slack_tests/every_cut.rs`). What a run killed between seals
 fetched, the next run fetches again.
 
-An open transaction holds its writes in memory, at about twice their
-size, and a long first sync's seals come hours apart. So the
-transaction also commits, without a seal, once the messages written
-into it weigh `TRANSACTION_BYTES` (32 MB of their JSON).
+A long first sync's seals come hours apart, so the transaction also
+commits, without a seal, once the messages written into it weigh
+`TRANSACTION_BYTES` (32 MB of their JSON): the batch's `byte_limit`.
 
 The listings and searches before the walk (users, channels, the
 account's own state, the reply and involves-me searches) still commit

@@ -3,7 +3,7 @@
 # Prove a built Datalib.app can run the tools it bundles: spawn the
 # bundled `datalib-step pull-runtime`, which resolves the runtime the
 # way the shipped binaries do (the `runtime/` beside `binaries/`) and
-# runs `qmd --version` through it and reads the latchkey it holds; then run
+# runs `node --version` through it and reads the latchkey it holds; then run
 # the bundled `latchkey ensure-browser` the way the wizard's "Latchkey
 # auth" button does, which is what loads playwright. Run after
 # `tauri build`, on the .app it produced, because the bundler's copy of
@@ -39,7 +39,7 @@ case "$report" in
         echo "check-app: the tools ran, but not from the .app's own runtime ($resources/runtime)" >&2
         exit 1 ;;
 esac
-echo ">>> check-app: $app runs its bundled qmd and latchkey" >&2
+echo ">>> check-app: $app runs its bundled node and latchkey" >&2
 
 # The sources are `ensure_browser_args()` in datalib/backend/http/src/connect.rs.
 # A scratch latchkey directory, so the person's own browser config is

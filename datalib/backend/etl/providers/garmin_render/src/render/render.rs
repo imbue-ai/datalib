@@ -6,18 +6,18 @@
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
-use std::fs;
-use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::yaml_scalar;
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
+use datalib_etl_render::front_matter::Front;
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::escape_md_inline;
 use datalib_etl_render::message::stamp_text_html;
+use datalib_etl_render::section::{Pieces, Section};
 use datalib_etl_render::title::Title;
 use datalib_etl_timeseries_render::text::{iso, short_ts, stamp};
 use datalib_id::{entity_id_str, IdNamespace};
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
 use datalib_schema::providers::Provider;
@@ -126,11 +126,9 @@ pub struct RenderSummary {
     pub items: usize,
 }
 
-/// Where documents are written, and the one bucket they all go in.
+/// Where documents go, and the one bucket they all go in.
 struct Out<'a> {
-    root: &'a Path,
     source_id: &'a str,
-    dir: PathBuf,
     bucket: String,
     on_doc: &'a mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 }
@@ -139,33 +137,29 @@ impl Out<'_> {
     fn emit(
         &mut self,
         m_uuid: &str,
-        body: String,
-        build_rows: impl FnOnce(&str, &mut Vec<ProblemRow>) -> Vec<GridRow>,
+        (front, sections): (Front, Vec<Section>),
+        build_rows: impl FnOnce(&mut Vec<ProblemRow>) -> Vec<GridRow>,
     ) -> Result<()> {
-        let md_path = doc_md_path(&self.dir, m_uuid);
-        let parent = md_path.parent().expect("a document's file has a folder");
-        fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
-        fs::write(&md_path, body).with_context(|| format!("write {}", md_path.display()))?;
-        let md_rel = md_path
-            .strip_prefix(self.root)
-            .unwrap_or(&md_path)
-            .to_string_lossy()
-            .into_owned();
         let mut problems: Vec<ProblemRow> = Vec::new();
-        let rows = build_rows(&md_rel, &mut problems);
+        let mut rows = build_rows(&mut problems);
+        let data_nodes = place(self.source_id, m_uuid, &mut rows);
         (self.on_doc)(RenderedMarkdown {
+            searchable: true,
+            content_hash: None,
             markdown_uuid: m_uuid.to_string(),
             source_id: self.source_id.to_string(),
             // Not the raw HEAD: it moves on every ingest, and a row whose
             // content did not change may carry nothing per-run.
             upstream_cursor: None,
             bucket_key: Some(self.bucket.clone()),
-            md_path,
             render_version: RENDER_VERSION,
             rows,
-            sections: Vec::new(),
+            sections,
+            front,
             edges: Vec::new(),
             contacts: Vec::new(),
+            data_nodes,
+            filings: Vec::new(),
             photos: Vec::new(),
             problems,
         })
@@ -173,18 +167,39 @@ impl Out<'_> {
     }
 }
 
-/// Front matter and the title: what every document opens with.
-fn head(m_uuid: &str, source_id: &str, title: &str, created_at: Option<&str>) -> String {
-    let mut out = String::with_capacity(8 * 1024);
-    out.push_str("---\n");
-    let _ = writeln!(out, "markdown_uuid: {m_uuid}");
-    let _ = writeln!(out, "source_id: {source_id}");
-    out.push_str("provider: garmin\n");
-    let _ = writeln!(out, "title: {}", yaml_scalar(title));
-    if let Some(ts) = created_at {
-        let _ = writeln!(out, "created_at: {}", yaml_scalar(ts));
+/// Each document is read together at the top of the source, and every
+/// other row it holds (a device, a day, a listing) sits in it. The
+/// document is the container its own row describes.
+fn place(source_id: &str, m_uuid: &str, rows: &mut [GridRow]) -> Vec<DataNodeRow> {
+    let Some(doc) = rows.iter().find(|r| r.uuid == m_uuid) else {
+        return Vec::new();
+    };
+    let mut node = DataNodeRow::new(m_uuid, m_uuid, source_id, doc.kind.clone())
+        .named(doc.conversation_name.clone())
+        .read_together();
+    if let (Some(kind), Some(id)) = (&doc.upstream_entity_kind, &doc.upstream_id) {
+        node = node.upstream(kind.clone(), id.clone(), doc.upstream_account.clone());
     }
-    out.push_str("---\n\n");
+    let inside = Lineage::top().below(&node);
+    for row in rows.iter_mut().filter(|r| r.uuid != m_uuid) {
+        row.parent_uuid = inside.parent_uuid.clone();
+        row.read_uuid = inside.read_uuid.clone();
+        row.place_uuid = inside.place_uuid.clone();
+    }
+    vec![node]
+}
+
+/// Front matter, and the text every document opens with: it drawn and
+/// the title.
+fn head(m_uuid: &str, source_id: &str, title: &str, created_at: Option<&str>) -> (Front, String) {
+    let front = Front::new()
+        .plain("markdown_uuid", m_uuid)
+        .plain("source_id", source_id)
+        .plain("provider", Provider::Garmin)
+        .name("title", title)
+        .text_if("created_at", created_at);
+    let mut out = String::with_capacity(8 * 1024);
+    out.push_str(&front.draw());
     out.push_str(
         &Title {
             suffix: None,
@@ -194,14 +209,16 @@ fn head(m_uuid: &str, source_id: &str, title: &str, created_at: Option<&str>) ->
         }
         .render(),
     );
-    out
+    (front, out)
 }
 
-fn section_open(out: &mut String, uuid: &str) {
-    let _ = writeln!(
-        out,
-        "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--garmin\">\n"
-    );
+fn whole((front, body): (Front, String)) -> (Front, Vec<Section>) {
+    (front, vec![Section::unkeyed(body)])
+}
+
+/// The class of a Garmin section's box.
+fn boxed_class() -> String {
+    "msg msg--garmin".to_string()
 }
 
 /// The raw store's HEAD moves on every ingest (the bookkeeping stamps
@@ -210,21 +227,10 @@ fn section_open(out: &mut String, uuid: &str) {
 /// records as no change.
 pub fn render_all(
     parsed: &ParsedGarmin,
-    root: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
-    let page_dir = datalib_etl::layout::render_markdown_root(root, source_id);
-    fs::create_dir_all(&page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
-    // Where an earlier build wrote its Plotly pages; a chart is now drawn
-    // from the time-series store.
-    match fs::remove_dir_all(page_dir.join("plots")) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            return Err(e).context("remove the retired plots/");
-        }
-        _ => {}
-    }
     let families: Vec<Family> = Family::ALL
         .into_iter()
         .filter(|f| daily::has_any(&parsed.days, *f))
@@ -244,15 +250,13 @@ pub fn render_all(
 
     let m_uuid = document_uuid(source_id);
     let mut out = Out {
-        root,
         source_id,
-        dir: page_dir,
         bucket: m_uuid.clone(),
         on_doc: on_doc_complete,
     };
-    let body = render_markdown(parsed, source_id, &m_uuid);
-    out.emit(&m_uuid, body, |md_rel, problems| {
-        build_grid_rows(parsed, source_id, &m_uuid, md_rel, problems)
+    let doc = render_markdown(parsed, source_id, &m_uuid);
+    out.emit(&m_uuid, doc, |problems| {
+        build_grid_rows(parsed, source_id, &m_uuid, problems)
     })?;
     progress.inc(1);
 
@@ -327,7 +331,7 @@ fn render_family(
     let modified_at = day_iso(days, last);
 
     let charts = time_series::family_charts(source_id, family, days);
-    let mut body = head(&m_uuid, source_id, &title, created_at.as_deref());
+    let (front, mut body) = head(&m_uuid, source_id, &title, created_at.as_deref());
     let _ = writeln!(body, "**{}:** {latest}\n", stamp_text_html(last));
     for ids in &charts {
         let _ = writeln!(body, "{}\n", time_series_chart(ids));
@@ -343,7 +347,7 @@ fn render_family(
         "{title}\n{last}: {latest}\n{} days since {first}",
         with_data.len()
     );
-    out.emit(&m_uuid, body, |md_rel, problems| {
+    out.emit(&m_uuid, whole((front, body)), |problems| {
         GridRow::builder()
             .uuid(m_uuid.clone())
             .provider(Provider::Garmin)
@@ -358,7 +362,6 @@ fn render_family(
             .conversation_uuid(m_uuid.clone())
             .entire_chat(format!("/chat/{m_uuid}"))
             .body(text)
-            .qmd_path(Some(md_rel.to_string()))
             .markdown_uuid(Some(m_uuid.clone()))
             .upstream_id(Some(family.slug().to_string()))
             .upstream_entity_kind(Some(KIND_METRIC_PAGE.to_string()))
@@ -378,12 +381,14 @@ fn render_daily_log(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resu
     let m_uuid = daily_log_uuid(source_id);
     let first = days.keys().next().cloned();
     let last = days.keys().next_back().cloned();
-    let mut body = head(
+    let (front, opening) = head(
         &m_uuid,
         source_id,
         &title,
         first.as_deref().and_then(|d| day_iso(days, d)).as_deref(),
     );
+    let mut body = Pieces::new();
+    body.push_str(&opening);
     if days.is_empty() {
         body.push_str("*(no per-day metrics mirrored yet)*\n\n");
     }
@@ -393,16 +398,19 @@ fn render_daily_log(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resu
             .into_iter()
             .filter_map(|f| daily::family_line(f, day).map(|l| (f, l)))
             .collect();
-        section_open(&mut body, &day_uuid(source_id, date));
-        let _ = writeln!(body, "### {}\n", stamp_text_html(date));
+        let uuid = day_uuid(source_id, date);
+        let mut piece = String::new();
+        let _ = writeln!(piece, "### {}\n", stamp_text_html(date));
         for (family, line) in &by_family {
-            let _ = writeln!(body, "- **{}:** {line}", family.title());
+            let _ = writeln!(piece, "- **{}:** {line}", family.title());
         }
-        body.push_str("\n</div>\n\n");
+        piece.push('\n');
+        body.boxed(&uuid, boxed_class(), &piece);
         lines.push((date, by_family));
     }
     let count = lines.len();
-    out.emit(&m_uuid, body, |md_rel, problems| {
+    let doc = (front, body.into_sections());
+    out.emit(&m_uuid, doc, |problems| {
         let mut rows: Vec<GridRow> = GridRow::builder()
             .uuid(m_uuid.clone())
             .provider(Provider::Garmin)
@@ -417,7 +425,6 @@ fn render_daily_log(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resu
             .conversation_uuid(m_uuid.clone())
             .entire_chat(format!("/chat/{m_uuid}"))
             .body(format!("{title}\n{count} days"))
-            .qmd_path(Some(md_rel.to_string()))
             .markdown_uuid(Some(m_uuid.clone()))
             .upstream_id(Some(source_id.to_string()))
             .upstream_entity_kind(Some(KIND_DAILY_LOG.to_string()))
@@ -442,7 +449,6 @@ fn render_daily_log(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resu
                     .message_index(Some(idx as i64))
                     .entire_chat(format!("/chat/{m_uuid}"))
                     .body(format!("{date}\n{}", text.join("\n")))
-                    .qmd_path(Some(md_rel.to_string()))
                     .upstream_id(Some((*date).clone()))
                     .upstream_entity_kind(Some(KIND_DAY.to_string()))
                     .markdown_uuid(Some(m_uuid.clone()))
@@ -467,13 +473,13 @@ fn render_activity(
     let device = a
         .device_id()
         .and_then(|id| device_names.get(id.as_str()).map(|n| n.to_string()));
-    let mut body = head(&m_uuid, source_id, &name, created_at.as_deref());
+    let (front, mut body) = head(&m_uuid, source_id, &name, created_at.as_deref());
     if a.fit_blake3.is_some() {
         let ids = time_series::activity_chart(source_id, &a.id);
         let _ = writeln!(body, "{}\n", time_series_chart(&ids));
     }
     activities::body(&mut body, a, device.as_deref());
-    out.emit(&m_uuid, body, |md_rel, problems| {
+    out.emit(&m_uuid, whole((front, body)), |problems| {
         GridRow::builder()
             .uuid(m_uuid.clone())
             .provider(Provider::Garmin)
@@ -488,7 +494,6 @@ fn render_activity(
             .conversation_uuid(m_uuid.clone())
             .entire_chat(format!("/chat/{m_uuid}"))
             .body(activities::row_text(a))
-            .qmd_path(Some(md_rel.to_string()))
             .markdown_uuid(Some(m_uuid.clone()))
             .upstream_id(Some(a.id.clone()))
             .upstream_entity_kind(Some(KIND_ACTIVITY.to_string()))
@@ -510,7 +515,9 @@ fn render_listings(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resul
         .map(|a| (a.id.as_str(), a.name()))
         .collect();
     let activity_name = |id: &str| names.get(id).cloned();
-    let mut body = head(&m_uuid, source_id, &title, None);
+    let (front, opening) = head(&m_uuid, source_id, &title, None);
+    let mut body = Pieces::new();
+    body.push_str(&opening);
     let mut lines = Vec::new();
     for (kind, heading, row_kind) in records::KINDS {
         let items: Vec<_> = parsed.items.iter().filter(|i| i.kind == *kind).collect();
@@ -520,13 +527,15 @@ fn render_listings(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resul
         let _ = writeln!(body, "## {heading}\n");
         for item in items {
             let (name, said) = item.line(activity_name);
-            section_open(&mut body, &item_uuid(source_id, &item.id));
-            let _ = write!(body, "**{}**", escape_md_inline(&name));
+            let uuid = item_uuid(source_id, &item.id);
+            let mut piece = String::new();
+            let _ = write!(piece, "**{}**", escape_md_inline(&name));
             if !said.is_empty() {
-                let _ = write!(body, " · {}", escape_md_inline(&said));
+                let _ = write!(piece, " · {}", escape_md_inline(&said));
             }
-            body.push('\n');
-            body.push_str("\n</div>\n\n");
+            piece.push('\n');
+            piece.push('\n');
+            body.boxed(&uuid, boxed_class(), &piece);
             lines.push((item, *row_kind, name, said));
         }
     }
@@ -534,7 +543,8 @@ fn render_listings(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resul
         body.push_str("*(no records, badges, gear, workouts or goals mirrored yet)*\n\n");
     }
     let count = lines.len();
-    out.emit(&m_uuid, body, |md_rel, problems| {
+    let doc = (front, body.into_sections());
+    out.emit(&m_uuid, doc, |problems| {
         let mut rows: Vec<GridRow> = GridRow::builder()
             .uuid(m_uuid.clone())
             .provider(Provider::Garmin)
@@ -547,7 +557,6 @@ fn render_listings(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resul
             .conversation_uuid(m_uuid.clone())
             .entire_chat(format!("/chat/{m_uuid}"))
             .body(format!("{title}\n{count} entries"))
-            .qmd_path(Some(md_rel.to_string()))
             .markdown_uuid(Some(m_uuid.clone()))
             .upstream_id(Some(source_id.to_string()))
             .upstream_entity_kind(Some(KIND_LISTINGS.to_string()))
@@ -568,7 +577,6 @@ fn render_listings(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resul
                     .message_index(Some(idx as i64))
                     .entire_chat(format!("/chat/{m_uuid}"))
                     .body(format!("{name}\n{said}"))
-                    .qmd_path(Some(md_rel.to_string()))
                     .upstream_id(Some(item.id.clone()))
                     .upstream_entity_kind(Some(KIND_ITEM.to_string()))
                     .markdown_uuid(Some(m_uuid.clone()))
@@ -580,19 +588,21 @@ fn render_listings(out: &mut Out<'_>, parsed: &ParsedGarmin, who: &str) -> Resul
     Ok(count)
 }
 
-fn render_markdown(parsed: &ParsedGarmin, source_id: &str, m_uuid: &str) -> String {
+fn render_markdown(parsed: &ParsedGarmin, source_id: &str, m_uuid: &str) -> (Front, Vec<Section>) {
     let title = page_title(parsed, source_id);
     let created_at = parsed
         .latest_weigh_in()
         .and_then(|w| iso(w.timestamp_gmt_ms));
-    let mut out = head(m_uuid, source_id, &title, created_at.as_deref());
+    let (front, opening) = head(m_uuid, source_id, &title, created_at.as_deref());
+    let mut out = Pieces::new();
+    out.push_str(&opening);
     render_weight_section(&mut out, parsed, source_id);
     render_device_section(&mut out, parsed, source_id);
     render_store_section(&mut out, parsed);
-    out
+    (front, out.into_sections())
 }
 
-fn render_weight_section(out: &mut String, parsed: &ParsedGarmin, source_id: &str) {
+fn render_weight_section(out: &mut Pieces, parsed: &ParsedGarmin, source_id: &str) {
     out.push_str("## Weight\n\n");
     let Some(latest) = parsed.latest_weigh_in() else {
         out.push_str("*(no weigh-ins mirrored yet)*\n\n");
@@ -639,7 +649,7 @@ fn render_weight_section(out: &mut String, parsed: &ParsedGarmin, source_id: &st
     out.push('\n');
 }
 
-fn render_device_section(out: &mut String, parsed: &ParsedGarmin, source_id: &str) {
+fn render_device_section(out: &mut Pieces, parsed: &ParsedGarmin, source_id: &str) {
     out.push_str("## Devices\n\n");
     if parsed.devices.is_empty() {
         out.push_str("*(no devices registered)*\n\n");
@@ -647,10 +657,10 @@ fn render_device_section(out: &mut String, parsed: &ParsedGarmin, source_id: &st
     }
     for d in &parsed.devices {
         let uuid = device_uuid(source_id, &d.id);
-        section_open(out, &uuid);
-        let _ = writeln!(out, "### {}\n", escape_md_inline(&d.name));
+        let mut piece = String::new();
+        let _ = writeln!(piece, "### {}\n", escape_md_inline(&d.name));
         let _ = writeln!(
-            out,
+            piece,
             "*device {}{}*\n",
             escape_md_inline(&d.id),
             d.last_sync
@@ -658,13 +668,13 @@ fn render_device_section(out: &mut String, parsed: &ParsedGarmin, source_id: &st
                 .map(|s| format!(" · last synced {}", escape_md_inline(s)))
                 .unwrap_or_default()
         );
-        out.push_str("</div>\n\n");
+        out.boxed(&uuid, boxed_class(), &piece);
     }
 }
 
 /// Counts only — nothing here should change when the store is merely
 /// re-committed, so the page stays byte-identical across no-op runs.
-fn render_store_section(out: &mut String, parsed: &ParsedGarmin) {
+fn render_store_section(out: &mut Pieces, parsed: &ParsedGarmin) {
     out.push_str("## Store\n\n");
     out.push_str("| | |\n| --- | --- |\n");
     let _ = writeln!(out, "| Weigh-ins | {} |", parsed.weigh_ins.len());
@@ -694,7 +704,6 @@ fn build_grid_rows(
     parsed: &ParsedGarmin,
     source_id: &str,
     m_uuid: &str,
-    md_rel: &str,
     problems: &mut Vec<ProblemRow>,
 ) -> Vec<GridRow> {
     let title = page_title(parsed, source_id);
@@ -730,7 +739,6 @@ fn build_grid_rows(
         .conversation_uuid(m_uuid.to_string())
         .entire_chat(format!("/chat/{m_uuid}"))
         .body(text)
-        .qmd_path(Some(md_rel.to_string()))
         .markdown_uuid(Some(m_uuid.to_string()))
         .upstream_id(Some(source_id.to_string()))
         .upstream_entity_kind(Some(KIND_PAGE.to_string()))
@@ -751,7 +759,6 @@ fn build_grid_rows(
                 .message_index(Some(idx as i64))
                 .entire_chat(format!("/chat/{m_uuid}"))
                 .body(format!("{} (device {})", d.name, d.id))
-                .qmd_path(Some(md_rel.to_string()))
                 .upstream_id(Some(d.id.clone()))
                 .upstream_entity_kind(Some(KIND_DEVICE.to_string()))
                 .markdown_uuid(Some(m_uuid.to_string()))
@@ -807,9 +814,15 @@ mod tests {
             days: Default::default(),
             unparsed: Vec::new(),
         };
-        let mut out = String::new();
-        render_device_section(&mut out, &parsed, "garmin");
-        render_weight_section(&mut out, &parsed, "garmin");
+        let mut pieces = Pieces::new();
+        render_device_section(&mut pieces, &parsed, "garmin");
+        render_weight_section(&mut pieces, &parsed, "garmin");
+        let sections = pieces.into_sections();
+        assert_eq!(
+            sections[1].uuid.as_deref(),
+            Some(device_uuid("garmin", "<i>1</i>").as_str())
+        );
+        let out = datalib_etl_render::section::join(&sections);
         assert!(!out.contains("<script>") && !out.contains("<b>"), "{out}");
         assert!(
             out.contains("### &lt;script&gt;x&lt;/script&gt; &amp; co\n"),
@@ -825,6 +838,36 @@ mod tests {
         assert_ne!(document_uuid("garmin"), document_uuid("garmin-2"));
         assert_ne!(device_uuid("g", "1"), device_uuid("g", "2"));
         assert_ne!(document_uuid("1"), device_uuid("1", "1"));
+    }
+
+    /// A document is read together and its own row sits at the top; a
+    /// device's row sits inside it.
+    #[test]
+    fn a_documents_other_rows_sit_in_it() {
+        let row = |uuid: &str, doc: bool| {
+            GridRow::builder()
+                .uuid(uuid.to_string())
+                .provider(Provider::Garmin)
+                .kind("k")
+                .source_label("Garmin")
+                .is_document(doc)
+                .conversation_uuid("page".to_string())
+                .entire_chat("/chat/page".to_string())
+                .body("b".to_string())
+                .upstream_id(Some("g".to_string()))
+                .upstream_entity_kind(Some(KIND_PAGE.to_string()))
+                .markdown_uuid(Some("page".to_string()))
+                .build()
+                .unwrap()
+        };
+        let mut rows = vec![row("page", true), row("device", false)];
+        let data_nodes = place("garmin", "page", &mut rows);
+        assert_eq!(data_nodes.len(), 1);
+        assert!(data_nodes[0].read_together && data_nodes[0].parent_uuid.is_none());
+        assert_eq!(data_nodes[0].upstream_id.as_deref(), Some("g"));
+        assert_eq!(rows[0].parent_uuid, None);
+        assert_eq!(rows[1].parent_uuid.as_deref(), Some("page"));
+        assert_eq!(rows[1].read_uuid.as_deref(), Some("page"));
     }
 
     #[test]

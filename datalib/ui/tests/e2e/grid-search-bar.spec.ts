@@ -16,7 +16,7 @@ import {
 } from "./grid-helpers";
 
 async function searchUuids(request: APIRequestContext, params: string): Promise<string[]> {
-  const r = await request.get(`/applet/unified_document_index/search?${params}`);
+  const r = await request.get(`/applet/unified_grid_and_search_index/search?${params}`);
   expect(r.ok()).toBe(true);
   return ((await r.json()) as { rows: { uuid: string }[] }).rows.map((row) => row.uuid);
 }
@@ -44,15 +44,19 @@ test("a shift-click sorts by a second column too", async ({ page, request }) => 
   expect(await topRows(page, 10)).toEqual(expected);
 });
 
-/// A column dropped on the search bar keeps the rows with a value in it,
-/// as a term a person can read and edit: the Author column's is `from:*`.
+/// A column header dropped on the search bar keeps the rows with a value
+/// in it, as a term a person can read and edit: the Author column's is
+/// `from:*`. The search card's box is in the toolbar, out of the card's
+/// reach, so the row above its results takes the drop.
 test("a column dropped on the search bar keeps the rows with a value in it", async ({
   page,
   request,
 }) => {
   // Counted off every row, not asked of the term under test.
   const all = (
-    (await (await request.get("/applet/unified_document_index/search?q=&limit=100000")).json()) as {
+    (await (
+      await request.get("/applet/unified_grid_and_search_index/search?q=&limit=100000")
+    ).json()) as {
       rows: { author: string; author_handle: string | null }[];
     }
   ).rows;
@@ -61,18 +65,48 @@ test("a column dropped on the search bar keeps the rows with a value in it", asy
   expect(withAuthor, "some rows have none").toBeLessThan(all.length);
 
   await openGrid(page);
-  await page.evaluate(() =>
-    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.dropOnSearch("author_ref"),
-  );
+  const searchRow = page.locator(".view-row");
+  await searchHeader(page, "author_ref").dragTo(searchRow);
   await expect(page.getByTestId("search-input")).toHaveAttribute("data-query", "from:*");
   await expect(page.locator(".grid-column .status")).toContainText(`(of ${withAuthor})`);
+  // The column is still in the grid.
+  await expect(searchHeader(page, "author_ref")).toBeVisible();
 
   // A column the search has no term for says so, and the query stays.
-  await page.evaluate(() =>
-    (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.dropOnSearch("snippet"),
-  );
+  await searchHeader(page, "snippet").dragTo(searchRow);
   await expect(page.locator(".datalib-toast", { hasText: "cannot filter by" })).toBeVisible();
   await expect(page.getByTestId("search-input")).toHaveAttribute("data-query", "from:*");
+});
+
+/// A column pinned from its header menu is still pinned after a reload:
+/// the card keeps the pin in its layout, and carries it across the
+/// grid's own re-layouts, which rebuild columns without it. Under e2e the
+/// layout is kept in this tab's session storage, which a reload keeps.
+test("a column pinned from its header menu stays pinned across a reload", async ({ page }) => {
+  const source = searchHeader(page, "source_ref");
+  // The columns the saved layout pins, read off every card's `cols`.
+  const savedPins = () =>
+    page.evaluate(() => {
+      const tree = sessionStorage.getItem("datalib-layout") ?? "";
+      return [...tree.matchAll(/cols(?:=|%3D)([A-Za-z0-9_-]+)/g)].flatMap((m) => {
+        const json = decodeURIComponent(escape(atob(m[1].replace(/-/g, "+").replace(/_/g, "/"))));
+        const layout = JSON.parse(json) as { cols: { id: string; pinned?: string }[] };
+        return layout.cols.filter((c) => c.pinned).map((c) => `${c.id}:${c.pinned}`);
+      });
+    });
+
+  await openGrid(page);
+  await source.hover();
+  await source.locator(".slick-header-menu-button").click();
+  await page.locator(".slick-header-menu .slick-menu-item", { hasText: "Column Pinning" }).hover();
+  await page.locator(".slick-menu-item", { hasText: "Pin to Left" }).click();
+  await expect(source).toHaveClass(/\bslick-column-pinned-left\b/);
+  await expect.poll(savedPins).toEqual(["source_ref:left"]);
+
+  await page.reload();
+  await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
+  await gridSettled(page);
+  await expect(source).toHaveClass(/\bslick-column-pinned-left\b/);
 });
 
 /// Every column but Score and Contents has a search key, so a cell's
@@ -114,7 +148,7 @@ test("a cell's right-click keeps only its value, in any column", async ({ page }
 test("a page landing while the menu is open leaves it open", async ({ page }) => {
   const held: Route[] = [];
   let holding = true;
-  await page.route("**/applet/unified_document_index/search?**", (r) => {
+  await page.route("**/applet/unified_grid_and_search_index/search?**", (r) => {
     const offset = Number(new URL(r.request().url()).searchParams.get("offset") ?? 0);
     if (holding && offset > 0) held.push(r);
     else void r.continue();

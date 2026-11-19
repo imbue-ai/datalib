@@ -1,35 +1,43 @@
 # The image `bazel test //...` runs in on CI, and the devcontainer a
-# contributor opens the repo in. Built from `ubuntu:24.04` directly — it
+# contributor opens the repo in. Built from `ubuntu:26.04` directly — it
 # used to inherit the prod runtime image, which bought it a Node it only
 # needs at build time and cost it a publish that could only run after
 # a release's prod-image job, so the CI image went unpublished for four
 # releases while that job failed on an unrelated doc check (#469).
 #
 # What the build needs from the host is short, because Bazel brings its
-# own Node, Python, Rust, qmd, doltlite and models: a C/C++ toolchain
+# own Node, Python, Rust, doltlite and models: a C/C++ toolchain
 # and the libraries two build scripts link, `python3` for the fixture
 # scripts, `rsync` for the e2e wrapper, the stock `sqlite3` CLI for the
 # beeper extract, and Playwright's browsers with their OS libraries.
-# Node, latchkey and bun are here for the person, not the build: the
-# app falls back to `npx -y latchkey@<pin>` for auth, and qmd's own dev
-# loop is `bun`.
+# Node and latchkey are here for the person, not the build: the app
+# falls back to `npx -y latchkey@<pin>` for auth.
 #
 # Published by `.github/workflows/devcontainer.yml` — on every `v*`
 # tag, and on demand — as
 # `ghcr.io/imbue-ai/datalib_devcontainer:sha-<commit>`, `:X.Y.Z` and
 # `:latest`. It does not wait on any other release job.
 #
-# Node and bun come out of their official images rather than from
+# Node comes out of its official image rather than from
 # `curl | bash` installers: a digest-pinned image is verified by Docker
 # on pull, the way the uv binary below already arrives. The tag is
 # documentation; the digest is what is fetched. A bump moves both, and
 # the version check after each COPY fails the build if only one moved.
 ARG NODE_VERSION=22.23.4
 ARG NODE_IMAGE_DIGEST=sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da
-ARG BUN_VERSION=1.4.0
-ARG BUN_IMAGE_DIGEST=sha256:e0ee68d16ccb9927bf02aa7dd8fd4bf3369ee6d46da04faa72b05ce8bfd135f6
 FROM node:${NODE_VERSION}-bookworm-slim@${NODE_IMAGE_DIGEST} AS node_dist
-FROM oven/bun:${BUN_VERSION}-slim@${BUN_IMAGE_DIGEST} AS bun_dist
+
+# The Playwright version the UI's lockfile resolves, read out in a stage
+# of its own. The lockfile names it twice, under `packages:` and
+# `snapshots:`, so it is deduplicated before checking there is one. This stage reruns on every lockfile change, but it writes
+# only the version, and BuildKit keys a COPY by the content it copies: the
+# browser install below reruns only when that version moves.
+FROM ubuntu:26.04 AS playwright_version
+COPY datalib/ui/pnpm-lock.yaml /pnpm-lock.yaml
+RUN sed -n "s/^  '@playwright\/test@\([^']*\)':$/\1/p" /pnpm-lock.yaml | sort -u > /playwright-version \
+    && [ "$(wc -l < /playwright-version)" -eq 1 ] \
+    && grep -qxE '[0-9]+\.[0-9]+\.[0-9]+' /playwright-version \
+    || { echo "expected one '@playwright/test@X.Y.Z' entry in datalib/ui/pnpm-lock.yaml, found: $(cat /playwright-version)" >&2; exit 1; }
 
 FROM ubuntu:26.04
 
@@ -82,15 +90,8 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && test "$(node --version)" = "v${NODE_VERSION}" \
     || { echo "node is $(node --version), not v${NODE_VERSION}: NODE_IMAGE_DIGEST and NODE_VERSION moved apart" >&2; exit 1; } \
     && npm --version
-ARG LATCHKEY_VERSION=3.21.0
+ARG LATCHKEY_VERSION=3.24.0
 RUN npm install -g "latchkey@${LATCHKEY_VERSION}" && npm cache clean --force
-
-# bun — qmd's own dev workflow (`bun install`, `bun src/cli/qmd.ts`).
-ARG BUN_VERSION
-COPY --from=bun_dist /usr/local/bin/bun /usr/local/bin/bun
-RUN ln -s /usr/local/bin/bun /usr/local/bin/bunx \
-    && test "$(bun --version)" = "${BUN_VERSION}" \
-    || { echo "bun is $(bun --version), not ${BUN_VERSION}: BUN_IMAGE_DIGEST and BUN_VERSION moved apart" >&2; exit 1; }
 
 # Playwright's browsers + their OS libraries, for `//datalib/ui:e2e_test`.
 # Both engines the suite drives: Chromium runs the bulk of it, WebKit the
@@ -100,19 +101,20 @@ RUN ln -s /usr/local/bin/bun /usr/local/bin/bunx \
 # `--with-deps` needs root and a package index, which a test action has
 # neither of — so both engines are baked here and that call is a no-op.
 #
-# PLAYWRIGHT_VERSION MUST match the resolved `playwright` version in
-# `datalib/ui/pnpm-lock.yaml` (`//tools:version_pins_test`); a mismatch
-# means Bazel's Playwright looks for a browser revision that isn't here.
+# The version is the one `datalib/ui/pnpm-lock.yaml` resolves, read by the
+# `playwright_version` stage above, so it has no pin of its own to drift:
+# a different version would leave Bazel's Playwright looking for a
+# browser revision that isn't here.
 #
 # The cache lands at /root/.cache/ms-playwright. GitHub forces
 # HOME=/github/home for container steps, so `test.yml` points the suite
 # at it with `--test_env=PLAYWRIGHT_BROWSERS_PATH`.
-ARG PLAYWRIGHT_VERSION=1.64.1
-RUN npx -y "playwright@${PLAYWRIGHT_VERSION}" install --with-deps chromium webkit \
+COPY --from=playwright_version /playwright-version /opt/playwright-version
+RUN npx -y "playwright@$(cat /opt/playwright-version)" install --with-deps chromium webkit \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 
 # uv — `//:lint` drives ruff / pyright through it. The static binary from
-# astral's image, the same way Node and bun arrive above.
+# astral's image, the same way Node arrives above.
 COPY --from=ghcr.io/astral-sh/uv:0.11.20 /uv /uvx /bin/
 
 # bazelisk reads `.bazelversion` and downloads the matching bazel. Its

@@ -1,10 +1,10 @@
-// The unified document index grid's "Source" column, and the `source:`
+// The unified grid and search index grid's "Source" column, and the `source:`
 // filter behind it.
 //
 // The column answers which *configured source* a row came from, led by
 // the mark of the service it mirrors. Two Slack workspaces share the
 // mark and are two sources. The value on the row is the source's id
-// (derived server-side from `qmd_path`); the text in the cell is the
+// (`grid_rows.source_id`); the text in the cell is the
 // `name` that source's steps declare in config.toml, joined
 // client-side. That join is the thing worth an end-to-end test — it
 // crosses the backend, the config file and the grid, and it is the
@@ -17,6 +17,7 @@ import {
   searchAndSettle,
   MANAGE_WITH_CONFIG,
   savedConfig,
+  expectSyncEverything,
 } from "./grid-helpers";
 
 const SOURCE_CELLS = '.grid-box .slick-row [col-id="source_ref"]';
@@ -36,7 +37,7 @@ async function openGrid(page: Page) {
 /// which PUTs through the same validating endpoint everything else uses.
 async function writeConfig(page: Page, text: string): Promise<void> {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
   await fillConfigEditor(page, text);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible();
@@ -50,7 +51,7 @@ let original = "";
 
 test.beforeEach(async ({ page, request }) => {
   await page.goto(MANAGE_WITH_CONFIG);
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
   original = await savedConfig(request);
 });
 
@@ -63,7 +64,7 @@ test("the Source column shows the configured name, and source: filters by id", a
   request,
 }) => {
   // Two config writes plus five searches, any of which may land after
-  // an applet restart and pay a qmd model load — see `SEARCH_SETTLE`.
+  // an applet restart and pay a model load — see `SEARCH_SETTLE`.
   test.setTimeout(210_000);
 
   // --- With no name in the config, the column falls back to the id --
@@ -71,7 +72,7 @@ test("the Source column shows the configured name, and source: filters by id", a
   // paints only the rows in view, and which those are is the sort's
   // business, not this test's.
   const slackRow = (await (
-    await request.get("/applet/unified_document_index/search?q=source:slack&limit=1")
+    await request.get("/applet/unified_grid_and_search_index/search?q=source:slack&limit=1")
   ).json()) as { rows: { uuid: string }[] };
   expect(slackRow.rows.length, "the fixture has slack rows").toBe(1);
   await openGrid(page);
@@ -84,8 +85,8 @@ test("the Source column shows the configured name, and source: filters by id", a
   expect(cellText.trim()).toBe("slack");
 
   // --- `source:` narrows to one source --------------------------
-  // Every visible cell must read `slack` — the filter is a whole-segment
-  // prefix test on qmd_path, not a substring match on anything.
+  // Every visible cell must read `slack` — the filter is equality on
+  // `source_id`, not a substring match on anything.
   await searchAndSettle(page, "source:slack");
   await expect(page.locator(SOURCE_CELLS).first()).toBeVisible();
   await expect.poll(() => distinctSourceCells(page)).toEqual(["slack"]);

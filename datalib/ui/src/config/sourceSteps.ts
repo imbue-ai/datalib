@@ -24,6 +24,7 @@ import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 
 import { NAME_IT_HELP } from "./accountNaming";
 import { formatBytes, parseByteSize } from "./byteSize";
+import { expandInputs, namesStep, patternFunction } from "./inputPattern";
 import { catalogForStep } from "./catalog";
 import type { Answer, CatalogEntry, Field, FieldPhase, PackageOrigin, Preset } from "./catalog";
 import { editStringArray, quote } from "./tomlText";
@@ -62,8 +63,11 @@ export type ConfiguredStep = {
   /// The `command` it declares; null when it declares none, which the
   /// loader refuses.
   command: string | null;
-  /// The ids this step declares as inputs.
+  /// The ids this step reads: its `inputs`, each pattern expanded.
   inputs: string[];
+  /// The patterns among its `inputs` as written (`*/embed`), which also
+  /// name a step not in the file yet.
+  patterns?: string[];
   params: Record<string, unknown>;
   /// [start, end) character offsets covering this entry's TOML tables,
   /// for splice-based edit and delete.
@@ -97,8 +101,7 @@ function groupedName(
   if (fn === "render_time_series") return `${group.name} (render time series)`;
   if (fn === "render_occurrences") return `${group.name} (render occurrences)`;
   if (phase === "render") return `${group.name} (render markdown)`;
-  if (fn === "keyword_index") return `${group.name} (QMD keyword index)`;
-  if (fn === "embed") return `${group.name} (QMD embedding index)`;
+  if (fn === "embed") return `${group.name} (Semantic indexing)`;
   return defaultName(id);
 }
 
@@ -110,10 +113,8 @@ const PHASE_BY_FUNCTION: Record<string, StepPhase> = {
   render_markdown: "render",
   render_time_series: "render",
   render_occurrences: "render",
-  grid_index: "index",
+  unified_grid_and_search_index: "index",
   time_series_index: "index",
-  qmd_aggregator: "index",
-  keyword_index: "index",
   embed: "index",
   embedding_map: "index",
 };
@@ -128,10 +129,9 @@ function phaseOfFunction(fn: string | null): StepPhase {
 /// that lives here rather than in anyone's config file. A `name =` someone did
 /// set still wins, and the id stays visible beside the name in the grid.
 const DEFAULT_NAMES: Record<string, string> = {
-  "unified_document_index/grid_index": "Document Index (table)",
-  "unified_document_index/qmd_aggregator": "Document Index (QMD)",
-  "unified_document_index/embedding_map": "Document Index (map)",
-  unified_document_index: "Document Index (Applet)",
+  "unified_grid_and_search_index/unified_grid_and_search_index": "Grid and Search Index (table)",
+  "unified_grid_and_search_index/embedding_map": "Grid and Search Index (map)",
+  unified_grid_and_search_index: "Grid and Search Index (Applet)",
   "unified_time_series_index/time_series_index": "Time Series Index",
   unified_time_series_index: "Time Series Index (Applet)",
   datalib_contacts: "Contacts (Applet)",
@@ -390,6 +390,14 @@ export function listSteps(text: string): ConfiguredStep[] {
     });
   }
 
+  // A pattern (`*/render_markdown`) is read as the ids it names, as the
+  // loader reads it; the text keeps the pattern.
+  const ids = steps.map((s) => s.id);
+  for (const s of steps) {
+    s.patterns = s.inputs.filter((i) => patternFunction(i) !== null);
+    s.inputs = expandInputs(s.id, s.inputs, ids);
+  }
+
   const applets: ConfiguredStep[] = [];
   if (Array.isArray(root.applets)) {
     const appletRanges = ranges(ast, "applets");
@@ -444,7 +452,7 @@ export function splitStepId(id: string): { group: string | null; fn: string | nu
     : { group: id.slice(0, slash), fn: id.slice(slash + 1) };
 }
 
-/// `datalib-applet unified_document_index` → `unified_document_index`. Null for anything
+/// `datalib-applet unified_grid_and_search_index` → `unified_grid_and_search_index`. Null for anything
 /// else, which is legitimate — an applet may be any executable.
 function appletType(command: string): string | null {
   const words = command.trim().split(/\s+/);
@@ -500,7 +508,12 @@ export function paramsAreRepresentable(
 /// Keys a hand-written config may still carry that no longer do anything
 /// (`datalib-dag --check` warns at each). Saving the form drops them,
 /// which is what the warning asks for.
-const INERT = new Set(["common.always_clear_before_ingest", "export.fetch_photos"]);
+const INERT = new Set([
+  "backup.period",
+  "common.always_clear_before_ingest",
+  "export.fetch_photos",
+  "period",
+]);
 
 /// A descriptor's presets for one phase. Same default as a field's:
 /// absent means `download`.
@@ -961,19 +974,17 @@ export function buildStep(opts: {
 
 /// The functions whose `datalib-step` reads its inputs' files as they
 /// are, so no producer of an input may run beside it.
-const READS_FILES = new Set(["keyword_index", "embed", "embedding_map"]);
+const READS_FILES = new Set(["embed", "embedding_map"]);
 
-/// The lock a `datalib-step` function holds: the one qmd index file every
-/// source's keyword index and embeddings write.
+/// The lock a `datalib-step` function holds: every embed loads the model
+/// and writes the search index's vectors, so one runs at a time.
 const LOCK_OF_FUNCTION: Record<string, string> = {
-  qmd_aggregator: "qmd_keyword",
-  keyword_index: "qmd_keyword",
-  embed: "qmd_embed",
+  embed: "embedder",
 };
 
 /// The locks a step the wizard writes may hold, and the slots each
 /// `[[locks]]` entry declares.
-export const LOCK_SLOTS: Record<string, number> = { qmd_keyword: 1, qmd_embed: 1, index: 2 };
+export const LOCK_SLOTS: Record<string, number> = { embedder: 1, index: 2 };
 
 /// `reads` and `locks` for a step, by the rules `datalib-http`'s config
 /// upgrade writes (docs/dev/plans/dag_and_step_decoupling.md §"Existing
@@ -1154,18 +1165,17 @@ function setGroupLine(text: string, groupId: string, key: string, line: string |
 }
 
 /// The fan-in steps, by function: the SQL index the grid reads, which
-/// consumes rendered markdown; the qmd aggregator, which runs after each
-/// source's own qmd steps; the map, which reads the aggregator; and the
-/// time-series index, which reads each source's time series. A source
-/// can be in one and not another.
-export type FanInFunction = "grid_index" | "qmd_aggregator" | "embedding_map" | "time_series_index";
+/// consumes rendered markdown; the map, which reads every source's
+/// `embed`; and the time-series index, which reads each source's time
+/// series. A source can be in one and not another.
+export type FanInFunction = "unified_grid_and_search_index" | "embedding_map" | "time_series_index";
 
 /// The groups the fan-ins are filed under: the document index and the
 /// time-series index.
-const FAN_IN_GROUPS = ["unified_document_index", "unified_time_series_index"];
+const FAN_IN_GROUPS = ["unified_grid_and_search_index", "unified_time_series_index"];
 
 /// The fan-ins a render step feeds.
-const RENDER_FAN_INS: FanInFunction[] = ["grid_index"];
+const RENDER_FAN_INS: FanInFunction[] = ["unified_grid_and_search_index"];
 
 /// One `[[steps]]` table and its body: up to the next line opening a
 /// table — its own `[steps.params…]` sub-table, or the next entry.
@@ -1207,12 +1217,13 @@ function editFanInInputs(
 /// rendered markdown, or into just the one `only` names — which is how
 /// an embed step reaches the map.
 ///
-/// The fan-ins name their inputs by id, so a source added without this renders
-/// happily and is never indexed — invisible in search, with nothing on screen
-/// to say why.
+/// A fan-in that reads by pattern (`*/render_markdown`) already names the
+/// step and is left as it is. One that names its inputs by id needs this,
+/// or the source renders happily and is never indexed — invisible in
+/// search, with nothing on screen to say why.
 export function wireIntoFanIns(text: string, stepId: string, only?: FanInFunction): string {
   return editFanInInputs(text, only ? [only] : RENDER_FAN_INS, (ids) =>
-    ids.includes(stepId) ? ids : [...ids, stepId],
+    ids.some((i) => namesStep(i, stepId)) ? ids : [...ids, stepId],
   );
 }
 
@@ -1233,7 +1244,7 @@ export function fanInFunctionOf(step: ConfiguredStep): string | null {
 }
 
 /// The source types whose data is also time series. Mirrors
-/// `datalib_dag::config::TIME_SERIES_SOURCE_TYPES`; hand-kept in step with it.
+/// `SourceType::renders_time_series` in datalib-step; hand-kept in step with it.
 export const TIME_SERIES_TYPES = ["garmin", "yolink", "airvisual"];
 
 const TIME_SERIES_GROUP = "unified_time_series_index";
@@ -1280,7 +1291,7 @@ export function setTimeSeriesStep(
       group: TIME_SERIES_GROUP,
       fn: "time_series_index",
       type: null,
-      inputs: [],
+      inputs: ["*/render_time_series"],
     });
     next = withDeclarations(
       `${next.replace(/\s*$/, "")}\n\n[[groups]]\nid = ${quote(TIME_SERIES_GROUP)}\n` +
@@ -1298,8 +1309,8 @@ export function setTimeSeriesStep(
 export const OCCURRENCE_TYPES = ["calendar"];
 
 /// Give a source of a type with occurrences its `render_occurrences`
-/// step, which lists every occurrence in a window of days. Nothing
-/// reads it but the person or the agent who asks, so it joins no index.
+/// step, which lists every occurrence in a window of days. Its rows are
+/// read by the person or the agent who asks; no index reads it.
 export function setOccurrencesStep(text: string, group: string, type: string): string {
   if (!OCCURRENCE_TYPES.includes(type)) return text;
   const id = `${group}/render_occurrences`;
@@ -1315,21 +1326,29 @@ export function setOccurrencesStep(text: string, group: string, type: string): s
   );
 }
 
-/// A source's own qmd steps, as `[[steps]]` blocks: its keyword index,
-/// which reads its render, and its embeddings, which read the keyword
-/// index. `type` is the group's, and `sourceType` the compared source's
-/// for a comparison.
-export function buildQmdSteps(
+/// The step that puts every source it reads in the keyword search.
+const UNIFIED_GRID_AND_SEARCH_INDEX_STEP =
+  "unified_grid_and_search_index/unified_grid_and_search_index";
+
+/// A source's own search step, as a `[[steps]]` block: its embeddings,
+/// which read the `unified_grid_and_search_index` step, whose keyword pass
+/// cuts what they embed. `type` is the group's, and `sourceType` the
+/// compared source's for a comparison.
+export function buildEmbedStep(
   group: string,
   type: string | null,
   sourceType?: string | null,
-): { id: string; body: string }[] {
-  const keywordId = `${group}/keyword_index`;
-  const block = (fn: string, inputs: string[]) => ({
-    id: `${group}/${fn}`,
-    body: stepToml({ group, fn, type, sourceType, inputs }),
-  });
-  return [block("keyword_index", [stepIdFor(group, "render")]), block("embed", [keywordId])];
+): { id: string; body: string } {
+  return {
+    id: `${group}/embed`,
+    body: stepToml({
+      group,
+      fn: "embed",
+      type,
+      sourceType,
+      inputs: [UNIFIED_GRID_AND_SEARCH_INDEX_STEP],
+    }),
+  };
 }
 
 /// The compared source's type a comparison's steps run with, read off
@@ -1343,67 +1362,87 @@ function sourceTypeIn(steps: ConfiguredStep[], group: string): string | null {
   return null;
 }
 
-/// How far into qmd a source's markdown goes: not at all, a keyword
-/// index, or a keyword index and the embeddings that read it. There is
-/// no embeddings-only: the embed step reads the keyword index.
-export type QmdIndexing = "none" | "keyword" | "keyword_and_embed";
+/// How far into search a source goes: not at all, by its words, or by its
+/// words and its meaning. There is no meaning alone: the embeddings are
+/// of what the keyword pass cut.
+export type SearchIndexing = "none" | "keyword" | "keyword_and_embed";
 
-/// Which of a source's qmd steps the config has, as a `QmdIndexing`.
-export function qmdIndexingOf(steps: ConfiguredStep[], group: string): QmdIndexing {
-  const has = (fn: string) => steps.some((s) => s.id === `${group}/${fn}`);
-  if (!has("keyword_index")) return "none";
-  return has("embed") ? "keyword_and_embed" : "keyword";
+/// The sources the `unified_grid_and_search_index` step keeps out of search
+/// (`params.not_searched`).
+function notSearched(steps: ConfiguredStep[]): string[] {
+  const listed = steps.find((s) => s.kind === "step" && s.id === UNIFIED_GRID_AND_SEARCH_INDEX_STEP)
+    ?.params?.not_searched;
+  return Array.isArray(listed) ? listed.filter((g): g is string => typeof g === "string") : [];
 }
 
-/// Give a source the qmd steps `asked` for — those it lacks — and a place
-/// in the aggregator's inputs, and take away the ones it does not ask
-/// for, with every step that reads them. Never an `embed` step for a
-/// type that may not have one (`embedAllowed`). Only where the config has the
-/// aggregator: search is off without one, and the aggregator is what
-/// retires a source's collection once it goes.
-export function setQmdSteps(text: string, group: string, asked: QmdIndexing): string {
-  const all = listSteps(text);
-  const type = listGroups(text).find((g) => g.id === group)?.type ?? null;
-  const [keyword, embed] = buildQmdSteps(
-    group,
-    type,
-    type === DIFF_TYPE ? sourceTypeIn(all, group) : null,
+/// How far into search the config puts a source, as a `SearchIndexing`.
+export function searchIndexingOf(steps: ConfiguredStep[], group: string): SearchIndexing {
+  const hasIndexStep = steps.some(
+    (s) => s.kind === "step" && s.id === UNIFIED_GRID_AND_SEARCH_INDEX_STEP,
   );
+  if (!hasIndexStep || notSearched(steps).includes(group)) return "none";
+  return steps.some((s) => s.id === `${group}/embed`) ? "keyword_and_embed" : "keyword";
+}
+
+/// Put `group` in the `unified_grid_and_search_index` step's `not_searched`, or take it out.
+function setNotSearched(text: string, group: string, out: boolean): string {
+  const steps = listSteps(text).filter((s) => s.kind === "step");
+  const at = steps.findIndex((s) => s.id === UNIFIED_GRID_AND_SEARCH_INDEX_STEP);
+  if (at < 0) return text;
+  const had = notSearched(steps);
+  const want = out ? (had.includes(group) ? had : [...had, group]) : had.filter((g) => g !== group);
+  if (want.length === had.length) return text;
+  const ref = { array: "steps", index: at };
+  const path = ["params", "not_searched"];
+  return want.length
+    ? setIn(text, ref, path, `[${want.map(quote).join(", ")}]`)
+    : deleteIn(text, ref, path);
+}
+
+/// Put a source in search as far as `asked` says: out of the `unified_grid_and_search_index` step's
+/// `not_searched` for its words, and an `embed` step for its meaning, or back. Never an `embed`
+/// step for a type that may not have one (`embedAllowed`), nor where the config has no
+/// `unified_grid_and_search_index` step for it to read; taking one away takes every step that reads
+/// it.
+export function setSearchSteps(text: string, group: string, asked: SearchIndexing): string {
+  const type = listGroups(text).find((g) => g.id === group)?.type;
   const indexing = asked === "keyword_and_embed" && !embedAllowed(type) ? "keyword" : asked;
-  const aggregated = all.some((s) => s.kind === "step" && fanInFunctionOf(s) === "qmd_aggregator");
-  const wanted =
-    !aggregated || indexing === "none" ? [] : indexing === "keyword" ? [keyword] : [keyword, embed];
-  const unwanted = [keyword, embed].filter((b) => !wanted.includes(b)).map((b) => b.id);
-  const gone = [...all.filter((s) => unwanted.includes(s.id)), ...readersOf(unwanted, all)];
-  let next = gone.length ? removeSteps(text, gone) : text;
-  const missing = wanted.filter((b) => !all.some((s) => s.id === b.id));
-  if (missing.length) next = insertEntries(next, missing.map((b) => b.body).join("\n\n"));
-  for (const b of [keyword, embed]) {
-    next = wanted.includes(b)
-      ? wireIntoFanIns(next, b.id, "qmd_aggregator")
-      : unwireFromFanIns(next, b.id, "qmd_aggregator");
+  let next = setNotSearched(text, group, indexing === "none");
+  const steps = listSteps(next);
+  const hasIndexStep = steps.some(
+    (s) => s.kind === "step" && s.id === UNIFIED_GRID_AND_SEARCH_INDEX_STEP,
+  );
+  const embed = buildEmbedStep(
+    group,
+    type ?? null,
+    type === DIFF_TYPE ? sourceTypeIn(steps, group) : null,
+  );
+  const has = steps.some((s) => s.id === embed.id);
+  if (hasIndexStep && indexing === "keyword_and_embed") {
+    if (!has) next = wireIntoFanIns(insertEntries(next, embed.body), embed.id, "embedding_map");
+  } else if (has) {
+    const gone = [...steps.filter((s) => s.id === embed.id), ...readersOf([embed.id], steps)];
+    next = unwireFromFanIns(removeSteps(next, gone), embed.id, "embedding_map");
   }
   return next;
 }
 
 /// What has to leave the config with `ids`: every step that reads one of
-/// them ([`readersOf`]), and, when the qmd aggregator is among them, every
-/// source's own qmd steps — search is off without it, and nothing would
-/// retire what they index.
+/// them ([`readersOf`]), and a source's `embed` when its render goes: it
+/// embeds that render's documents, though it reads the `unified_grid_and_search_index` step.
+/// Each `embed` reads the `unified_grid_and_search_index` step, so that step takes them all
+/// with it.
 export function removedWith(ids: string[], all: ConfiguredStep[]): ConfiguredStep[] {
-  const aggregatorGoes = all.some(
-    (s) => ids.includes(s.id) && s.kind === "step" && fanInFunctionOf(s) === "qmd_aggregator",
+  const readers = readersOf(ids, all);
+  const going = new Set([...ids, ...readers.map((s) => s.id)]);
+  const unrendered = all.filter(
+    (s) =>
+      s.kind === "step" &&
+      s.function === "embed" &&
+      !going.has(s.id) &&
+      going.has(`${s.group}/render_markdown`),
   );
-  const qmdSteps = aggregatorGoes
-    ? all.filter(
-        (s) =>
-          s.kind === "step" &&
-          !ids.includes(s.id) &&
-          (s.function === "keyword_index" || s.function === "embed"),
-      )
-    : [];
-  const readers = readersOf([...ids, ...qmdSteps.map((s) => s.id)], all);
-  return [...qmdSteps, ...readers];
+  return [...readers, ...unrendered];
 }
 
 /// Every step that reads one of `ids`, directly or through another, other
@@ -1428,9 +1467,9 @@ export function readersOf(ids: string[], all: ConfiguredStep[]): ConfiguredStep[
 }
 
 /// The group every source feeds.
-const INDEX_GROUP = "unified_document_index";
+const INDEX_GROUP = "unified_grid_and_search_index";
 
-/// Add entries — a source, a comparison, a source's qmd steps — where the
+/// Add entries — a source, a comparison, a source's search steps — where the
 /// file keeps reading in the order data flows: each step below the steps
 /// it reads, a source's entries together. That is beside its own group's
 /// entries when the group is already in the file, and otherwise after the
@@ -1528,10 +1567,22 @@ function placeFor(text: string, body: string): number | null {
   const addedIds = new Set(added.map((s) => s.id));
   const reads = new Set(added.flatMap((s) => s.inputs).filter((id) => !addedIds.has(id)));
   const earliest = Math.max(0, ...steps.filter((s) => reads.has(s.id)).map((s) => s.end));
+  const isIndex = (s: ConfiguredStep) => s.group === INDEX_GROUP || fanInFunctionOf(s) !== null;
+  // A source's entries go above the index that reads them all; one that
+  // reads the index itself (an `embed`) goes below it, above whatever
+  // reads it in turn.
+  const readsIndex = steps.some((s) => reads.has(s.id) && isIndex(s));
+  const readsAdded = (s: ConfiguredStep) =>
+    s.inputs.some((id) => addedIds.has(id)) ||
+    (s.patterns ?? []).some((p) => [...addedIds].some((id) => namesStep(p, id)));
+  // The map reads every embed, though one written as a list only names a
+  // new one once it is wired in.
+  const embeds = added.some((s) => s.function === "embed");
   const readers = [
-    ...steps.filter((s) => s.group === INDEX_GROUP || fanInFunctionOf(s) !== null),
-    ...steps.filter((s) => s.inputs.some((id) => addedIds.has(id))),
-    ...groups.filter((g) => g.id === INDEX_GROUP),
+    ...(readsIndex ? [] : steps.filter(isIndex)),
+    ...steps.filter(readsAdded),
+    ...(embeds ? steps.filter((s) => fanInFunctionOf(s) === "embedding_map") : []),
+    ...(readsIndex ? [] : groups.filter((g) => g.id === INDEX_GROUP)),
   ];
   const latest = Math.min(text.length, ...readers.map((r) => extendOverComments(text, r.start)));
   const own = new Set(added.map((s) => s.group).filter((g) => g !== null));
@@ -1541,7 +1592,8 @@ function placeFor(text: string, body: string): number | null {
         ...steps.filter((s) => s.group !== null && own.has(s.group)),
         ...groups.filter((g) => own.has(g.id)),
       ];
-  const at = beside.length ? Math.max(...beside.map((e) => e.end)) : latest;
+  const besideAt = beside.length ? Math.max(...beside.map((e) => e.end)) : null;
+  const at = besideAt !== null && besideAt >= earliest ? besideAt : latest;
   return earliest <= at && at <= latest ? at : null;
 }
 
@@ -1647,7 +1699,10 @@ function declaredEntries(text: string): string {
 /// The group a move would put on the wrong side of it, when it would:
 /// above a group whose steps it reads, or below one that reads it. The
 /// file reads in the order data flows (`datalib_dag::config_order`, which
-/// `datalib-step topo-sort-config` restores), and a drag keeps it so.
+/// `datalib-step topo-sort-config` restores), and a drag keeps it so. A
+/// source's `embed` reads the index group that reads the source, so a
+/// source group's reads of an index group are left out, or no source
+/// could move.
 export function moveAgainstDataFlow(
   text: string,
   groupId: string,
@@ -1655,12 +1710,14 @@ export function moveAgainstDataFlow(
 ): { reads: string } | { readBy: string } | null {
   const steps = listSteps(text).filter((s) => s.kind === "step");
   const groupOfStep = new Map(steps.map((s) => [s.id, s.group]));
+  const fanInGroups = new Set(steps.filter((s) => fanInFunctionOf(s) !== null).map((s) => s.group));
   const reads = (id: string) =>
     new Set(
       steps
         .filter((s) => s.group === id)
         .flatMap((s) => s.inputs.map((i) => groupOfStep.get(i)))
-        .filter((g): g is string => !!g && g !== id),
+        .filter((g): g is string => !!g && g !== id)
+        .filter((g) => fanInGroups.has(id) || !fanInGroups.has(g)),
     );
   const order = listGroups(text)
     .map((g) => g.id)
@@ -1835,6 +1892,7 @@ const RESERVED_IDS = new Set([
   "datalib_curated",
   "unified_index",
   "unified_document_index",
+  "unified_grid_and_search_index",
   "unified_time_series_index",
 ]);
 

@@ -17,6 +17,9 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
+use super::pass::{PassRow, PassState};
+use crate::step::StoreBytes;
+
 /// Where this build's tables stand. A store at a higher version was
 /// written by a newer build, whose columns this one would not fill.
 const SCHEMA_VERSION: u32 = 5;
@@ -31,7 +34,7 @@ const RENAMED_COLUMNS: [(&str, &str, &str); 3] = [
     ("steps", "paused_by", "turned_off_by"),
 ];
 
-const DDL: [&str; 3] = [
+const DDL: [&str; 4] = [
     "CREATE TABLE IF NOT EXISTS requests (
         id TEXT PRIMARY KEY,
         roots TEXT NOT NULL,
@@ -61,6 +64,19 @@ const DDL: [&str; 3] = [
         tz_offset TEXT NOT NULL,
         closed_at_utc TEXT,
         error TEXT
+    )",
+    // How a compaction or a collection stands with each step it asks, in
+    // the order it asks them: what the app's pill counts. `state` is a
+    // `PassState` word.
+    "CREATE TABLE IF NOT EXISTS wipe_steps (
+        wipe_id TEXT NOT NULL,
+        ord INTEGER NOT NULL,
+        step TEXT NOT NULL,
+        state TEXT NOT NULL,
+        error TEXT,
+        before_bytes INTEGER,
+        after_bytes INTEGER,
+        PRIMARY KEY (wipe_id, ord)
     )",
 ];
 
@@ -501,6 +517,42 @@ impl Store {
     }
 
     /// Carry what the loop keeps per step over to the step's new id, for
+    /// the one step `old` now called `new`: whether it is turned off, its
+    /// last success and what it read then, its tree's version, and every
+    /// other step's record of having read that version. The run history
+    /// keeps the id it ran under. A row the new id already has is left as
+    /// it is. Returns how many rows moved.
+    pub async fn rename_step(&self, old: &str, new: &str) -> Result<u64> {
+        // `reads` is JSON keyed by input path, so a key is the id in quotes.
+        let (old_key, new_key) = (format!("\"{old}\""), format!("\"{new}\""));
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let mut moved = 0;
+        for (table, column) in [("turned_off", "step"), ("steps", "step"), ("sinks", "path")] {
+            // Safe: `table` and `column` are literals from the list above.
+            let rename = sqlx::AssertSqlSafe(format!(
+                "UPDATE OR IGNORE {table} SET {column} = ? WHERE {column} = ?"
+            ));
+            moved += sqlx::query(rename)
+                .bind(new)
+                .bind(old)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+        }
+        sqlx::query("UPDATE steps SET reads = replace(reads, ?, ?) WHERE instr(reads, ?) > 0")
+            .bind(&old_key)
+            .bind(&new_key)
+            .bind(&old_key)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        if moved > 0 {
+            self.announce(&format!("renamed {old} to {new}"));
+        }
+        Ok(moved)
+    }
+
+    /// Carry what the loop keeps per step over to the step's new id, for
     /// every step under the group `old` now named `new`: whether it is
     /// turned off, its last success and what it read then, and its tree's
     /// version. The run history keeps the ids it ran under. A row the new
@@ -617,6 +669,109 @@ impl Store {
     }
 }
 
+impl Store {
+    /// The loop's to call, before it asks the first step: every step the
+    /// wipe asks, waiting.
+    pub async fn begin_wipe_steps(&self, wipe: &str, steps: &[&str]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM wipe_steps WHERE wipe_id = ?")
+            .bind(wipe)
+            .execute(&mut *tx)
+            .await?;
+        for (ord, step) in steps.iter().enumerate() {
+            sqlx::query("INSERT INTO wipe_steps (wipe_id, ord, step, state) VALUES (?, ?, ?, ?)")
+                .bind(wipe)
+                .bind(ord as i64)
+                .bind(step)
+                .bind(PassState::Waiting.as_str())
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        self.announce(&format!("{WIPE_MOVED} {wipe}"));
+        Ok(())
+    }
+
+    /// The loop's to call, as each step it asked moves.
+    pub async fn set_wipe_step(
+        &self,
+        wipe: &str,
+        ord: usize,
+        state: PassState,
+        error: Option<&str>,
+        bytes: Option<StoreBytes>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE wipe_steps SET state = ?, error = ?, before_bytes = ?, after_bytes = ? \
+             WHERE wipe_id = ? AND ord = ?",
+        )
+        .bind(state.as_str())
+        .bind(error)
+        .bind(bytes.map(|b| b.before as i64))
+        .bind(bytes.map(|b| b.after as i64))
+        .bind(wipe)
+        .bind(ord as i64)
+        .execute(&self.pool)
+        .await?;
+        self.announce(&format!("{WIPE_MOVED} {wipe}"));
+        Ok(())
+    }
+
+    /// In the order the wipe asks them. A state this build does not know
+    /// reads as waiting.
+    pub async fn wipe_steps(&self, wipe: &str) -> Result<Vec<PassRow>> {
+        let rows = sqlx::query(
+            "SELECT step, state, error, before_bytes, after_bytes FROM wipe_steps \
+             WHERE wipe_id = ? ORDER BY ord",
+        )
+        .bind(wipe)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|r| {
+                let state: String = r.try_get("state")?;
+                let before: Option<i64> = r.try_get("before_bytes")?;
+                let after: Option<i64> = r.try_get("after_bytes")?;
+                Ok(PassRow {
+                    step: r.try_get("step")?,
+                    state: PassState::parse(&state).unwrap_or(PassState::Waiting),
+                    error: r.try_get("error")?,
+                    store_bytes: before.zip(after).map(|(b, a)| StoreBytes {
+                        before: b as u64,
+                        after: a as u64,
+                    }),
+                })
+            })
+            .collect()
+    }
+
+    /// The newest compaction or collection opened at or after
+    /// `since_utc`, open or closed.
+    pub async fn latest_shrink_since(&self, since_utc: &str) -> Result<Option<WipeRow>> {
+        let row = sqlx::query(
+            "SELECT id, kind, targets, opened_by, closed_at_utc, error FROM wipes \
+             WHERE kind IN (?, ?) AND opened_at_utc >= ? \
+             ORDER BY opened_at_utc DESC, id DESC LIMIT 1",
+        )
+        .bind(WipeKind::Compact.as_str())
+        .bind(WipeKind::Collect.as_str())
+        .bind(since_utc)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(wipe_of).transpose()
+    }
+}
+
+/// What the store announces when a wipe's steps move, ahead of the wipe's
+/// id: how a listener tells progress from the rest of the record.
+pub const WIPE_MOVED: &str = "wipe moved";
+
+/// The clock the store stamps with, as UTC text: what
+/// [`Store::latest_shrink_since`] compares against.
+pub fn now_utc() -> String {
+    now_split().0
+}
+
 fn wipe_of(r: &sqlx::sqlite::SqliteRow) -> Result<WipeRow> {
     let kind: String = r.try_get("kind")?;
     let targets: String = r.try_get("targets")?;
@@ -731,7 +886,7 @@ mod tests {
             .unwrap();
 
         let moved = store
-            .rename_group_steps("unified_index", "unified_document_index")
+            .rename_group_steps("unified_index", "unified_grid_and_search_index")
             .await
             .unwrap();
         assert_eq!(moved, 3);
@@ -739,7 +894,7 @@ mod tests {
         assert_eq!(
             off,
             [
-                "unified_document_index/embedding_map",
+                "unified_grid_and_search_index/embedding_map",
                 "unified_index_extra/x"
             ]
         );
@@ -747,20 +902,76 @@ mod tests {
             .fetch_one(store.pool())
             .await
             .unwrap();
-        assert_eq!(step, "unified_document_index/embedding_map");
-        assert_eq!(reads, r#"{"unified_document_index/qmd_aggregator":"v1"}"#);
+        assert_eq!(step, "unified_grid_and_search_index/embedding_map");
+        assert_eq!(
+            reads,
+            r#"{"unified_grid_and_search_index/qmd_aggregator":"v1"}"#
+        );
         let sink: String = sqlx::query_scalar("SELECT path FROM sinks")
             .fetch_one(store.pool())
             .await
             .unwrap();
-        assert_eq!(sink, "unified_document_index/grid_index");
+        assert_eq!(sink, "unified_grid_and_search_index/grid_index");
         assert_eq!(
             store
-                .rename_group_steps("unified_index", "unified_document_index")
+                .rename_group_steps("unified_index", "unified_grid_and_search_index")
                 .await
                 .unwrap(),
             0
         );
+        store.close().await;
+    }
+
+    /// A renamed step keeps its switch, its last success and its tree's
+    /// version, a reader's record of that version follows it, and a step
+    /// whose id merely starts with the old one is not moved.
+    #[tokio::test]
+    async fn renaming_a_step_carries_its_rows_over() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        let (old, new) = ("u/grid_index", "u/unified_grid_and_search_index");
+        store.turn_off(old, "test").await.unwrap();
+        store.turn_off("u/grid_index_extra", "test").await.unwrap();
+        for (step, reads) in [
+            (old, r#"{"a/render_markdown":"v1"}"#),
+            ("a/embed", r#"{"u/grid_index":"v2"}"#),
+        ] {
+            sqlx::query(
+                "INSERT INTO steps (step, succeeded, fingerprint, reads) VALUES (?, 1, 'f', ?)",
+            )
+            .bind(step)
+            .bind(reads)
+            .execute(store.pool())
+            .await
+            .unwrap();
+        }
+        sqlx::query("INSERT INTO sinks (path, version) VALUES (?, 'v2')")
+            .bind(old)
+            .execute(store.pool())
+            .await
+            .unwrap();
+
+        assert_eq!(store.rename_step(old, new).await.unwrap(), 3);
+        let off: Vec<String> = store.turned_off().await.unwrap().into_keys().collect();
+        assert_eq!(off, ["u/grid_index_extra", new]);
+        let steps: Vec<(String, String)> =
+            sqlx::query_as("SELECT step, reads FROM steps ORDER BY step")
+                .fetch_all(store.pool())
+                .await
+                .unwrap();
+        assert_eq!(
+            steps,
+            [
+                ("a/embed".to_string(), format!(r#"{{"{new}":"v2"}}"#)),
+                (new.to_string(), r#"{"a/render_markdown":"v1"}"#.to_string()),
+            ]
+        );
+        let sink: String = sqlx::query_scalar("SELECT path FROM sinks")
+            .fetch_one(store.pool())
+            .await
+            .unwrap();
+        assert_eq!(sink, new);
+        assert_eq!(store.rename_step(old, new).await.unwrap(), 0);
         store.close().await;
     }
 

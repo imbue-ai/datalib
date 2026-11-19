@@ -8,7 +8,9 @@
 # the checksum file was missing or no tool could read it. And guards what it
 # installs by default: the pinned release, checked against the pinned hash,
 # whatever the release's own checksum file says. The pin is written by what the
-# release procedure runs.
+# release procedure runs. And guards which libc's build a Linux host gets: a
+# glibc older than the gnu build's floor gets the musl one, since v0.52.0's
+# gnu build would not start on Ubuntu 24.04's 2.39.
 
 # --- begin runfiles.bash initialization v3 ---
 # Copy-pasted from the Bazel Bash runfiles library v3.
@@ -26,6 +28,8 @@ installer="$(rlocation _main/scripts/install.sh)"
 [[ -f "$installer" ]] || { echo "ERROR: install.sh not in runfiles at $installer" >&2; exit 1; }
 pin_release="$(rlocation _main/scripts/release/pin_release.py)"
 [[ -f "$pin_release" ]] || { echo "ERROR: pin_release.py not in runfiles at $pin_release" >&2; exit 1; }
+glibc_check="$(rlocation _main/scripts/release/check_glibc_floor.sh)"
+[[ -f "$glibc_check" ]] || { echo "ERROR: check_glibc_floor.sh not in runfiles at $glibc_check" >&2; exit 1; }
 
 work="$(mktemp -d "${TEST_TMPDIR:-/tmp}/install.XXXXXX")"
 lib="$work/lib"
@@ -59,7 +63,12 @@ case "$1" in
     *) cp "$FAKE_TARBALL" "$dest" ;;
 esac
 STUB
-chmod +x "$stubs/uname" "$stubs/curl"
+cat > "$stubs/getconf" <<'STUB'
+#!/bin/sh
+[ "$1" = GNU_LIBC_VERSION ] && [ -n "$FAKE_GLIBC" ] || exit 1
+echo "$FAKE_GLIBC"
+STUB
+chmod +x "$stubs/uname" "$stubs/curl" "$stubs/getconf"
 
 stage="$work/datalib-0.0.0-x86_64-unknown-linux-gnu"
 mkdir -p "$stage/docs" "$stage/lib"
@@ -83,10 +92,12 @@ echo "$(good_sum | cut -d' ' -f1)  datalib-x86_64-unknown-linux-gnu.tar.gz" > "$
 urls="$work/urls"
 script="$installer"
 version=v0.0.1  # a tag the script does not pin, so its checksum file decides
+libc=gnu
+glibc="glibc 2.39"
 run_installer() { # PATH to run under, then the directories to install into
     : > "$urls"
     env PATH="$1" HOME="$work/home" FAKE_TARBALL="$tarball" FAKE_SIDECAR="$sidecar" FAKE_URL_LOG="$urls" \
-        DATALIB_LIBC=gnu DATALIB_VERSION="$version" \
+        FAKE_GLIBC="$glibc" DATALIB_LIBC="$libc" DATALIB_VERSION="$version" \
         DATALIB_LIB_DIR="$2" DATALIB_INSTALL_DIR="$3" /bin/sh "$script" > "$work/install.log" 2>&1
 }
 
@@ -190,5 +201,35 @@ version=""
 pin_to "$wrong_hash"
 echo "$good_sidecar" > "$sidecar"
 expect_refused "checksum mismatch" "a tarball the pin does not name, with a checksum file that agrees with it"
+
+# --- which libc's build a Linux host gets ---
+floor() { sed -n 's/^GLIBC_FLOOR="\(.*\)"$/\1/p' "$1"; }
+[[ -n "$(floor "$installer")" && "$(floor "$installer")" == "$(floor "$glibc_check")" ]] \
+    || complain "install.sh's GLIBC_FLOOR '$(floor "$installer")' is not check_glibc_floor.sh's '$(floor "$glibc_check")'"
+
+script="$installer"
+version=v0.0.1
+echo "$good_sidecar" > "$sidecar"
+gnu_url="https://github.com/imbue-ai/datalib/releases/download/v0.0.1/datalib-x86_64-unknown-linux-gnu.tar.gz"
+musl_url="https://github.com/imbue-ai/datalib/releases/download/v0.0.1/datalib-x86_64-unknown-linux-musl.tar.gz"
+expect_fetched() { # the libc env, the host's glibc, the URL it must fetch first, the case
+    libc="$1" glibc="$2"
+    rm -rf "$work/libc"
+    run_installer "$stubs:$PATH" "$work/libc/lib" "$work/libc/bin" || true
+    [[ "$(sed -n 1p "$urls")" == "$3" ]] || complain "$4: fetched $(sed -n 1p "$urls"), not $3: $(cat "$work/install.log")"
+}
+if ! compgen -G "/lib/ld-musl-*.so.1" > /dev/null; then
+    expect_fetched "" "glibc 2.39" "$gnu_url" "glibc at the floor"
+    expect_fetched "" "glibc 2.43" "$gnu_url" "glibc above the floor"
+    expect_fetched "" "glibc 3.0" "$gnu_url" "a newer major glibc"
+    expect_fetched "" "glibc 2.36" "$musl_url" "glibc below the floor"
+    grep -q "older than the 2.39 the glibc build" "$work/install.log" \
+        || complain "the musl fallback said nothing: $(cat "$work/install.log")"
+    expect_fetched "" "" "$gnu_url" "glibc version unknown"
+    grep -q "install again with DATALIB_LIBC=musl" "$work/install.log" \
+        || complain "an unknown glibc gave no workaround: $(cat "$work/install.log")"
+fi
+expect_fetched gnu "glibc 2.36" "$gnu_url" "DATALIB_LIBC=gnu below the floor is used as given"
+expect_fetched musl "glibc 2.43" "$musl_url" "DATALIB_LIBC=musl"
 
 exit "$failed"

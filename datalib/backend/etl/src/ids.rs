@@ -7,7 +7,10 @@
 pub fn normalize_id_token(s: &str) -> String {
     let trimmed = s.trim();
     if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
-        return trimmed.to_string();
+        return datalib_uuid_text::canonical(trimmed).unwrap_or_else(|| trimmed.to_string());
+    }
+    if let Some(id) = datalib_uuid_text::at_end(trimmed) {
+        return id;
     }
     let no_frag = trimmed.split('#').next().unwrap_or(trimmed);
     let no_query = no_frag.split('?').next().unwrap_or(no_frag);
@@ -16,15 +19,6 @@ pub fn normalize_id_token(s: &str) -> String {
         .rsplit('/')
         .next()
         .unwrap_or(no_query);
-    if last.len() >= 32 {
-        let tail = &last[last.len() - 32..];
-        if tail.chars().all(|c| c.is_ascii_hexdigit()) {
-            let before = last.as_bytes().get(last.len().wrapping_sub(33));
-            if last.len() == 32 || before == Some(&b'-') {
-                return tail.to_string();
-            }
-        }
-    }
     last.to_string()
 }
 
@@ -35,20 +29,25 @@ mod tests {
     #[test]
     fn passthrough_for_bare_ids() {
         assert_eq!(
-            normalize_id_token("fb3f094f-2bef-4b62-8137-1383b4f3a1e4"),
-            "fb3f094f-2bef-4b62-8137-1383b4f3a1e4"
+            normalize_id_token("1701c000-a000-4000-8000-00000000c001"),
+            "1701c000-a000-4000-8000-00000000c001"
         );
         assert_eq!(
-            normalize_id_token("f9a3f309bde54852944042374cc01dc5"),
-            "f9a3f309bde54852944042374cc01dc5"
+            normalize_id_token("1701d000a0004000800000000000d007"),
+            "1701d000-a000-4000-8000-00000000d007"
+        );
+        // A token that only holds a uuid is left as written.
+        assert_eq!(
+            normalize_id_token("g-p-1701d000a0004000800000000000d007"),
+            "g-p-1701d000a0004000800000000000d007"
         );
     }
 
     #[test]
     fn strips_claude_url() {
         assert_eq!(
-            normalize_id_token("https://claude.ai/chat/fb3f094f-2bef-4b62-8137-1383b4f3a1e4"),
-            "fb3f094f-2bef-4b62-8137-1383b4f3a1e4"
+            normalize_id_token("https://claude.ai/chat/1701c000-a000-4000-8000-00000000c001"),
+            "1701c000-a000-4000-8000-00000000c001"
         );
     }
 
@@ -56,9 +55,9 @@ mod tests {
     fn strips_chatgpt_url_with_query() {
         assert_eq!(
             normalize_id_token(
-                "https://chatgpt.com/c/6a0de88e-d104-83ea-9f3a-dad7a9c734a8?model=gpt-5"
+                "https://chatgpt.com/c/1701c000-a000-4000-8000-00000000c002?model=gpt-5"
             ),
-            "6a0de88e-d104-83ea-9f3a-dad7a9c734a8"
+            "1701c000-a000-4000-8000-00000000c002"
         );
     }
 
@@ -66,13 +65,13 @@ mod tests {
     fn strips_notion_url_with_title() {
         assert_eq!(
             normalize_id_token(
-                "https://www.notion.so/myws/Roadmap-f9a3f309bde54852944042374cc01dc5"
+                "https://www.notion.so/myws/Roadmap-1701d000a0004000800000000000d007"
             ),
-            "f9a3f309bde54852944042374cc01dc5"
+            "1701d000-a000-4000-8000-00000000d007"
         );
         assert_eq!(
-            normalize_id_token("https://www.notion.so/f9a3f309bde54852944042374cc01dc5#h1"),
-            "f9a3f309bde54852944042374cc01dc5"
+            normalize_id_token("https://www.notion.so/1701d000a0004000800000000000d007#h1"),
+            "1701d000-a000-4000-8000-00000000d007"
         );
     }
 }

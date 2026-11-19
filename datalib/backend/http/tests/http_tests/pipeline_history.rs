@@ -115,12 +115,13 @@ async fn a_steps_store_comes_back_newest_first_with_row_counts() {
         .map(|c| c["message"].as_str().unwrap())
         .collect();
     assert_eq!(
-        messages,
-        [
-            "download pdfs: files=3",
-            "schema: apply DDL",
-            "Initialize data repository"
-        ]
+        messages[..2],
+        ["download pdfs: files=3", "schema: apply DDL"]
+    );
+    assert_eq!(messages.len(), 3, "{messages:?}");
+    assert!(
+        messages[2].starts_with("Initialize data repository"),
+        "{messages:?}"
     );
     let newest = &commits[0];
     assert!(

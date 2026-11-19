@@ -84,6 +84,8 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
         contacts: owner.contact().into_iter().collect(),
         inputs: inputs.declared(),
         id: id.clone(),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: album.uuid.clone(),
         display: name.to_string(),
         title: None,
@@ -97,7 +99,6 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
         org_name: None,
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
-            period_key: "all".to_string(),
             markdown_uuid: album.uuid,
             source_ref: None,
             items,

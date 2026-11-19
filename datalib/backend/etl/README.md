@@ -72,42 +72,57 @@ file-backed provider's tests do exactly that.
 Every object row gets a sidecar row in the same transaction; use
 `ensure_object_row` to seed both.
 
-## Problems flow downstream with the data
+## Problems stay in the step that found them
 
 Every store a step owns holds a `problems` table (`datalib_problems`,
 in every raw store's `SHARED_DDL`): one row per thing the step could
 not fully do to one record, with a severity, a deterministic id and a
 sweep key. The owner sweeps it — per document in a render store, per
-entity in a raw store — and each consumer that reads a store pinned
-copies that store's rows for the source **wholesale** into its own,
-then adds its own: render copies the raw store's fetch-stage rows
-(minting them again under the source's id, which a download does not
-know, and filling in `item_uuid` — see below), `grid_index` copies
-every render store's into the index. The
-pinned store is the complete truth about its source's problems at that
-commit, so the copy is the sweep and there is nothing to diff. Stamps
-travel with the row. The step then reports whole-store counts as
-`problems{severity=…}` metrics, which the Manage screen reads — of the
-rows it found itself: render leaves the download's copied rows out and
-`grid_index` every source's, counting only a render store it could not
-read. So a download's warning is counted on the Download row alone,
-and a group's count is the sum of its steps'. An `info` row is counted
-nowhere: nothing failed, and the problems grid is where it is seen. A
-download reports them at every seal as well, right after it has written
-the problems its run has found so far (`run_problems::collecting_sealed`),
-and again when it ends, failed or not: a checkpoint's rows, its
-problems and its count move together.
+entity in a raw store — and nothing copies it. A reader finds a step's
+problems in the stores directly in its folder, each read as its `main`
+commit has it, which is what the step last sealed
+(`datalib_step_problems::of_step`); a step with no store of its own
+keeps a `problems.sqlite` there instead (`docs/dev/step_protocol.md`
+§"Problems: what you could not do"). So a download's problem is seen at
+its next seal, whether or not the source's render runs. Stamps are the
+row's own.
 
-A download's problem names only its raw entity (`<table>:<id>`): the
-grid row it is about has an id minted under the source's id, which the
-download never sees. So render asks each processor
-(`RenderProcessor::item_of_entity`) which row that entity is or belongs
-to — a Slack attachment belongs to its message — and fills in
-`item_uuid` only when the render store holds that row. A filled
-`item_uuid` therefore always opens something: the problems table links
-the row's document, and the document's banner lists the problem. A
-provider without the hook leaves `item_uuid` empty, and `scope_key` is
-the only pointer.
+A download mints its rows under its source's id, which `datalib-step`
+names once from its group (`datalib_problems::step_source`); a run first
+mints again, under it, the rows an older build wrote naming none
+(`doltlite_raw::adopt_sourceless_problems`). A download's problem names
+only its raw entity (`<table>:<id>`) and, where it knows them, the
+upstream record (`upstream_entity_kind`, `upstream_id`,
+`upstream_account`); the grid row it is about is not stored on it.
+Render knows that row: for each record the download's problems name,
+it asks its processors which row the record is or belongs to
+(`RenderProcessor::item_of_entity`, else `upstream_of_entity` and the
+row with that upstream key) and, where its store holds that row, keeps
+the pair in its store's `entity_items`. A reader fills in a download
+problem's `item_uuid` from its source's `entity_items`
+(`datalib_step_problems::link`), so the problem opens the row's
+document and that document's banner lists it. Until render has run,
+the problem shows unlinked.
+
+Two steps besides the render keep problems of their own, each under a
+stage no other step writes (`datalib_problems::Stage::OWN_STORE`):
+`render_time_series`, a file whose time series could not be read
+(`time_series`), and `render_occurrences`, an event whose occurrences
+could not be listed (`occurrences`). Each finds every one of them again
+on each run, so its rows replace the store's whole
+(`datalib_step_problems::replace`), keeping the stamps of the
+unchanged. `unified_grid_and_search_index` keeps only its own rows, about a render store
+it could not read, and drops a source's when it reads that store again.
+
+The Manage screen counts every step's error and warning rows, read
+where each step keeps them, less the ones a person muted. Which step a
+row counts toward, and why a count opens exactly the rows it counted,
+is [`problem_mutes/README.md`](../problem_mutes/README.md). A reader
+keeps each file's rows until the file changes, so a refresh reopens
+only what moved. A step still reports whole-store counts of the rows
+it found itself as `problems{severity=…}` metrics, and those are what
+a step that writes no rows (a package's own program) is drawn from, in
+grey.
 
 ## Volatile fields: split them out, don't diff them
 
@@ -140,12 +155,24 @@ signal, sort it instead.
 
 ## JSONB payloads
 
-`payload` columns store JSON as SQLite JSONB. Inserts wrap the bound text in
-`jsonb(?)`; reads select `json(payload)` so Rust still gets text for
-`serde_json`. Ad-hoc CLI queries need `json(payload)` too.
+`payload` columns store JSON as SQLite JSONB, a BLOB on disk; the Rust
+side still binds and reads text. Inserts wrap the bound text in
+`jsonb(?)`; reads select `json(payload)` so `serde_json` gets text, and
+an ad-hoc CLI query needs `json(payload)` too. Three things are easy to
+get wrong:
 
-`sync_runs.config` / `summary` stay plain TEXT — tiny, single-row, and worth
-being greppable.
+- `ON CONFLICT … DO UPDATE SET payload = excluded.payload` carries the
+  JSONB through the upsert already: don't wrap it again.
+- `dr::load_payloads()` unwraps for you; a hand-written SELECT that
+  returns `payload` calls `json()` itself.
+- `sync_runs.config` / `summary` stay plain TEXT — tiny, single-row, and
+  worth being greppable.
+
+Dropping the `jsonb()` wrapper falls back to text storage with no other
+visible difference, so a provider's tests assert the encoding:
+`SELECT typeof(payload)` must be `blob`. Six providers' tests do
+(email, github, gitlab, google_drive, notion, slack); a new one should
+too.
 
 ## Naming the file to open
 
@@ -175,7 +202,7 @@ about the tree ([locks and writers](/docs/dev/doltlite.md#locks-and-writers)).
 So every open here pins `max_connections(1)` and disables
 `idle_timeout` and `max_lifetime`: sqlx would otherwise retire the very
 connection whose session state is load-bearing, and its replacement
-starts on the default branch — an file_inventory scan on a non-`main` branch
+starts on the default branch — a file_inventory scan on a non-`main` branch
 would silently start writing to `main` after 30 minutes and report
 success.
 
@@ -232,11 +259,11 @@ a refusal that depends on the machine's speed; a second *live* writer in
 the same process is refused after the wait.
 
 Per file, not per root, so two sources with nothing in common can be
-written by two runners at once (#247): the lock says who owns *this*
+written by two runners at once: the lock says who owns *this*
 store, and nothing about the others.
 
-`datalib-file-inventory` and the provider `*_ingest` binaries write through
-`RawDb::open`, so they take the lock; `datalib-dirtree-diff` reads the
+`datalib-file-inventory` writes through `RawDb::open`, so it takes the
+lock; `datalib-dirtree-diff` reads the
 stores it is given through `datalib_pin::open_reader` and writes only
 its own scratch. `datalib-doltlite` is the raw shell and takes no lock
 of *ours*: run it `-readonly` against a store a sync may be writing.
@@ -371,10 +398,8 @@ file and its first commit, and under streaming a consumer opens there
 often enough to matter. The `pin.rs` `Pin` refuses `HEAD` by name.
 
 This is the detached open, one of
-[three ways to read one commit](/docs/dev/doltlite.md#three-ways-to-read-one-commit).
-The one long-lived reader, the search applet, holds a read transaction
-instead (`DoltRepo::pinned`), and moves to the newest `main` with
-`COMMIT; BEGIN` rather than reopening.
+[three ways to read one commit](/docs/dev/doltlite.md#three-ways-to-read-one-commit),
+and the one every reader of a doltlite store here uses.
 
 **The allowlist.** The two-process test measures what a reader may do
 beside a live writer — `dolt_hashof`, `sqlite_master`,
@@ -385,7 +410,9 @@ table, `BEGIN`/`COMMIT` around plain reads (the held read transaction),
 `dolt_branches`, a read-only open of `<file>@<hash>` with a
 `COUNT(*)`, a `_datalib_meta` read and the rows of a key range with
 their blobs, at a commit the writer has since moved past (the
-time-series applet's read) — and that list is the allowlist. Any other
+time-series applet's read), and on a detached open, any `SELECT`
+`datalib_sql_guard` lets through (the search applet's `/sql`) — and
+that list is the allowlist. Any other
 statement a reader adds is presumed guilty until
 `doltlite_two_process_test` has run with it. Looking like a read is not
 enough: a read-only `dolt_status` once failed the writer's commit and
@@ -442,9 +469,13 @@ What that means here:
   `docs/dev/data_architecture_ingestion_practices.md` § "Key a table
   for what one run writes together" and `docs/dev/entity_ids.md`
   § "The layout".
-- **Commit cadence is free until something runs `dolt_gc()`**, and only
-  `sqlite_mirror` and `file_inventory` do today. Without gc every store keeps
-  every transaction's pages regardless.
+- **Commit cadence is free until something runs `dolt_gc()`.** A sync
+  runs it only in `sqlite_mirror` and `file_inventory`; every other store
+  keeps every transaction's pages until a person frees disk
+  (`datalib-dag --free-disk-space`, which hands each step `--collect`,
+  `doltlite_raw::collect_garbage`, or `--compact`:
+  [`step_protocol.md`](../../../docs/dev/step_protocol.md) §"Compact and
+  collect").
 - **A squash deletes commit hashes.** Folding old commits into one
   (`dolt_reset('--soft', <base>)` then `dolt_commit`) lets the next gc
   reclaim what only they reached, but a consumer whose cursor named one
@@ -506,6 +537,14 @@ pub const LADDER: &[Migration] = &[Migration {
     }),
 }];
 ```
+
+**A long rung says which statement it is on.** A rung that touches
+every row of a big store can run for many minutes, and a person
+watching has only the step's status to go on. The open already says
+which rung, from which version to which, and the store's size; a rung
+of several statements runs them through `doltlite_raw::run_statements`,
+each a `Statement { what, sql }`, so the status also says which one
+(email's `SEEN_INTO_READ_MARKS`).
 
 A rung may read the old shape through `dolt_at_<table>('HEAD')` and
 write the new one, and it clears a cursor table itself (`DELETE FROM
@@ -569,19 +608,20 @@ every `open` would cost bytes whether or not anything was ingested.
 
 ## `_datalib_meta`: which build wrote this store
 
-`open` writes six rows into `_datalib_meta` before the schema commit:
+`open` writes seven rows into `_datalib_meta` before the schema commit:
 `datalib_version`, `git_hash`, `doltlite_version`, `schema_hash`
 (`recorded_shape`: blake3 over `_datalib_meta`'s DDL and the DDL the
 store was opened with, leaving out the lookup indexes
 `open_derived_indexed` was handed, which change no row), `schema_version` (the
-migration ladder position, `0` until there is a ladder) and
+migration ladder position, `0` until there is a ladder),
+`shared_schema_version` (the shared ladder's, above) and
 `store_kind`. Only a row whose value moved is rewritten, so an
 unchanged store costs no commit, and a schema commit that did move
 one is titled `schema: apply DDL (datalib <version>)`. The table is in
 `SHARED_TABLES`, so it is neither mirrored nor diffed nor counted.
 `datalib_store_meta::read` is how anyone asks; `None` means the store
 predates the table. A reader of a derived store asks it once per pass
-rather than probing for each table: `grid_index` compares a render
+rather than probing for each table: `unified_grid_and_search_index` compares a render
 store's `schema_hash` with `indexed_markdown::schema_hash`, the same
 value the scheduler fingerprints, and leaves a store in any other shape
 as the index had it, with a warning. `docs/dev/plans/completed/schema_migrations.md`
@@ -592,7 +632,9 @@ is the record of the program this was the first step of.
 Every entity table is written the same way — `INSERT INTO <t> (id, …cols)
 VALUES (…) ON CONFLICT(id) DO UPDATE SET <every non-id col> = excluded.<col>`.
 No `COALESCE`-style per-column policies: each write is complete, and the
-newest upstream state is by definition the truth.
+newest upstream state is by definition the truth
+([`data_architecture_ingestion.md`](../../../docs/dev/data_architecture_ingestion.md)
+§"One writer per row" has the argument).
 
 A provider declares its row struct and its `BulkUpsertable` impl next to the
 DDL in `schema_raw.rs`, then calls `bulk_upsert_in_tx`, which chunks the rows,
@@ -613,7 +655,7 @@ test that reads an unchanged input twice and asserts the second
 `commit_run` returns `None`.
 
 `insert_sql` exists for the one path where upserting would be wrong. In
-`grid_index`, a primary-key collision is a *finding* — two sources minting
+`unified_grid_and_search_index`, a primary-key collision is a *finding* — two sources minting
 the same `grid_rows.uuid` is a correctness emergency — so that path wants the
 generated column list and binds without the `ON CONFLICT` clause, and lets
 the error surface so it can name the other document.
@@ -649,6 +691,54 @@ in a `.chunks(SQL_CHUNK)` loop (`push_placeholders`). The older chunked
 sized by anything other than `chunk.len()`. A helper that takes a slice
 and trusts its callers to chunk it counts as unsized, because nothing
 checks that they do.
+
+## Indexes: the planner has no statistics, so test the plan
+
+No store here runs `ANALYZE`, so SQLite's planner knows nothing about
+how many rows match a value. When a lookup could use either of two
+one-column indexes, it rates them the same, and which one it takes
+depends on the order they were created in, not on which is selective.
+Every test passes either way, because a fixture of a few rows is fast
+under any plan. A real store is not:
+
+- **#1165.** `email_keywords` and `email_mailboxes` had no index on
+  `email_id`, the column every lookup uses, so each email written
+  scanned both tables: a full sync quadratic in the mailbox's size.
+- **#1679.** A migration rung asked, for each email,
+  `EXISTS (… k.email_id = e.id AND k.keyword = '$seen')`. The planner
+  answered it from the *keyword* index and walked every `$seen` row once
+  per email: over an hour, unfinished, on 276k emails. Written as a set,
+  `e.id IN (SELECT email_id FROM email_keywords WHERE keyword = '$seen')`,
+  the same statement takes a few seconds.
+
+So:
+
+- **Match a set as a set.** A statement over every row of one table that
+  asks whether each row is in another (has a keyword, has a label) is
+  `x IN (SELECT … WHERE …)`, which SQLite builds once. An `EXISTS` or
+  scalar subquery that names the outer row runs once per row, and its
+  plan is the planner's guess.
+- **A lookup that has to run per row** goes by the primary key, or by an
+  index whose columns cover every equality in the `WHERE`, so there is
+  only one good choice to make.
+- **Pin the index with `INDEXED BY` when two indexes really could fit.**
+  SQLite then uses exactly that index, and it errors if the index has
+  been renamed or dropped instead of quietly picking another: it fails
+  loudly. On the store in #1679, the old statement with `INDEXED BY
+  email_keywords_by_email` took 6.6 s instead of hours. It does not
+  check that the index fits the `WHERE`: one that does not is walked
+  whole, without an error, so the plan test below still applies.
+- **Don't reach for `ANALYZE`.** Its statistics are a guess drawn from
+  whatever rows a store held when it ran, so two libraries can plan one
+  statement two ways, and a plan can change as the rows do. Which index
+  a statement needs is known when it is written; say so in the SQL.
+- **Test the plan, not the time.** Run `EXPLAIN QUERY PLAN` on the
+  statement over the table's real DDL and assert what it must not do.
+  Two templates in `providers/email/src/ingest/schema_raw.rs`:
+  `the_email_id_lookups_are_searched_by_index` refuses a `SCAN` of the
+  table, and `the_read_mark_rungs_never_search_a_table_per_email`
+  refuses a table searched under a `CORRELATED` subquery. Keep the
+  statements in a constant the code runs and the test reads.
 
 ## Blob CAS and per-provider edge tables
 

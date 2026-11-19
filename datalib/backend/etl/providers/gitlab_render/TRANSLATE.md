@@ -1,6 +1,6 @@
 # GitLab Translate
 
-The render step for a `gitlab` source reads the raw store `gitlab-ingest`
+The render step for a `gitlab` source reads the raw store its `ingest` step
 writes and emits **one markdown document per merge request**, plus that
 document's `grid_rows`. The document and its rows are the shared forge
 shape GitHub uses, described in
@@ -21,6 +21,9 @@ GitLab `ForgeProfile` (`src/render/mod.rs`). What differs:
   and the like are GitLab's audit log, not conversation.
 - **Rows**: the MR's own row is `kind = "GitLab MR"`; a note's is
   `"GitLab Discussion Note"` or `"GitLab Inline Note"`.
+- **The project** is the place, keyed by the MR's `project_id`, which a
+  rename or a move keeps. A note after a discussion's first is a
+  `ReplyTo` edge to that first note.
 
 ## Tests
 

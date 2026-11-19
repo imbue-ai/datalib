@@ -1,252 +1,227 @@
-# Fake test data — Star Trek: TNG edition
+# The TNG corpus
 
-Hand-curated, obviously-fake input fixtures that mirror the on-disk shape of
-the three real backup sources Sculptor ingests. These are checked in so that:
+datalib's test data is a made-up mirror of the crew of the USS
+Enterprise-D, from *Star Trek: The Next Generation*. Every source
+datalib reads has a fixture in that world: Picard's email and Codex
+sessions, Data's ChatGPT account, the ship's air-quality monitors. Together they are the **TNG corpus**.
 
-1. A fresh `git clone` can run the ingest end-to-end without anyone's real
-   export.
-2. Integration tests have known row counts, attachment shapes, and message
-   threads to assert against.
-3. Demos / screenshots produce content that is unmistakably fictional.
+It exists so that:
 
-## Layout
+1. A fresh clone can run every source end to end without anyone's real
+   data. Nothing from a real mirror goes into the repo
+   ([`AGENTS.md`](../../AGENTS.md) §"Real data stays out of the repo"),
+   so a test, a screenshot or a demo uses this instead.
+2. Tests have known rows, threads and attachments to assert against.
+3. Anything drawn from it is plainly fictional.
 
-```
-fixtures/
-├── claude_export/          source-of-truth shape for `provider: claude, kind: export_dir, provenance: export`
-│   ├── users.json             list[Account]
-│   ├── conversations.json     list[Conversation] (each with embedded chat_messages)
-│   └── projects/<uuid>.json   per-project metadata
-│
-├── claude_export/             same parser, but provenance: api — adds _source, model, settings, platform, is_starred, current_leaf_message_uuid; richer block types (thinking, tool_use, tool_result)
-│   ├── users.json
-│   └── conversations.json
-│
-├── chatgpt_api/               `provider: chatgpt, kind: chatgpt_api_dir, provenance: api`
-│   ├── me.json                user record
-│   ├── conversations.json     listing index
-│   └── conversations/<id>.json   per-conversation node tree (message mapping with parent/children)
-│
-├── github_api/                event-store JSONL.
-│   └── <entity>/{created,updated}/events.jsonl
-│   Entities: self_identity, pull_request, issue_comment, pr_review,
-│   pr_review_comment. Repo: `enterprise-d/replicator-firmware`. Two PRs
-│   (#42 Earl-Grey-temp merged; #43 holodeck-safety open) with threaded
-│   review comments — #42 has a Riker → Picard reply pair anchored to
-│   src/replicator/tea.c:17 to exercise `in_reply_to_id` tree-rebuilding.
-│
-├── gitlab_api/                event-store JSONL.
-│   └── <entity>/{created,updated}/events.jsonl
-│   Entities: self_identity, merge_request, discussion. Project:
-│   `enterprise-d/holodeck`. Two MRs (!17 merged; !18 open) with a mix
-│   of position-anchored discussions (line-level diff threads with
-│   `position.new_path`/`new_line`) and free-form discussions
-│   (`individual_note: true`) so consumers see both shapes.
-│
-├── notion_web/                event-store JSONL.
-    └── <entity>/{created,updated}/events.jsonl
-    Mirrors Notion's native recordMap tables 1:1 (one entity per
-    `KNOWN_TABLES` entry in `notion_web.py`). Workspace:
-    "USS Enterprise-D Operations". Covers all 14 Notion tables and
-    every block `type` the downloader emits — see the variation table
-    below.
-│
-└── (yolink lives with its provider:
-    datalib/backend/etl/providers/yolink/tests/fixtures/yolink_tng/tng.json)
-    A *spec*, not a capture: `yolink-make-fixture` expands it into a
-    doltlite raw store, and the pipeline then runs only the render step
-    over it. YoLink's downloader shells out to `curl` for signed-URL
-    CSVs, so it has no playback tape to replay — a limitation of this
-    harness, not of the source; see `run_sync_pipeline.py`'s
-    `PRESEEDED_RAW`. Four Enterprise-D sensors, 288 five-minute samples
-    each over 2369-04-14, deterministic values (sine + hash jitter, no
-    RNG).
-```
+Each fixture lives beside the provider it tests, under
+`datalib/backend/etl/providers/<provider>/tests/fixtures/`. This
+directory holds what turns them into one synced library: the pipeline
+driver, the generators, and the tests over the result.
 
-None of github_api / gitlab_api / notion_web is wired into the ingest
-pipeline yet — these are checked-in samples that mirror the on-disk
-shape of the downloaders' output, available for future parser tests
-and UI mocks.
+## Start here
 
-## Coverage of source variation
-
-Aim: at least one example of every shape we've seen in real backups.
-
-| Variation                      | Where                                             |
-|--------------------------------|---------------------------------------------------|
-| Multiple accounts              | `claude_export/users.json` (Picard, La Forge)  |
-| Conversation in a project      | `c0000001` (Holodeck Program Library)             |
-| Conversation w/o project       | `c0000002`                                        |
-| Multi-turn thread w/ parent IDs| every fixture                                     |
-| `attachments[]` (extracted)    | `c0000002` message `20000001` (CSV telemetry)     |
-| `files[]` (image)              | `c0000004` message `40000001`                     |
-| Block type `text`              | all fixtures                                      |
-| Block type `thinking`          | `c0000003` message `30000002`                     |
-| Block type `tool_use`          | `c0000003` message `30000002`                     |
-| Block type `tool_result`       | `c0000003` message `30000002`                     |
-| ChatGPT `model_editable_context` (system) | `68fa0001` first message              |
-| ChatGPT `text` content_type    | `68fa0001`                                        |
-| ChatGPT `code` content_type    | `68fa0002` message `msg-fake-poly-0002`           |
-| Starred / not starred          | `c0000003` (starred), `c0000004` (not)            |
-| Multiple senders               | every conversation                                |
-| Notion `space` + `team`        | `notion_web/notion_space/`, `notion_team/`        |
-| Notion `notion_user` (7 crew)  | `notion_web/notion_user/`                         |
-| Notion `space_view` / `space_user` / `user_root` / `user_settings` / `sidebar_section` | `notion_web/` (one each) |
-| Notion block type `page` (nested) | `notion_block/` root + `Engineering Wiki` + `Warp Core Maintenance` subpage |
-| Notion `collection_view_page`  | `b10cb10c-...0003` (Mission Logs DB)              |
-| Notion inline `collection_view` block | `b10cb10c-...0006`                         |
-| Notion `collection` w/ rich schema (title, status, person, date, multi_select, last_edited_time, button) | `notion_collection/` |
-| Notion `collection_view` (board + table) | `notion_collection_view/` (two views)   |
-| Notion DB rows (parent_table=collection) | `b10cb10c-...0100` / `...0101`         |
-| Block types text/header/sub_header/sub_sub_header/bulleted_list/numbered_list/to_do/toggle/quote/callout/code/divider/image/file/embed/table/table_row/column_list/column | `notion_block/created/events.jsonl` |
-| Rich text marks (bold/italic/code/link/user-mention/page-mention/date) | `b10cb10c-...0014`                |
-| To-do checked + unchecked      | `b10cb10c-...001a` / `...001b`                    |
-| Toggle with nested child       | `b10cb10c-...001c` → `...001d`                    |
-| Discussion (unresolved + resolved) | `notion_discussion/` (two)                    |
-| Comment thread (Riker → Picard reply pair) | `notion_comment/` (`c00ffee1` → `c00ffee2`) |
-| Activity type `commented`      | `ac710001-...0001`                                |
-| Activity type `edited-block-value` (before/after) | `ac710001-...0002`             |
-| Notion `updated` stream (version bump) | `notion_block/updated/events.jsonl` (root page title changed v10→v11) |
-| Render-only source (no download step) | `yolink` — raw store seeded by `yolink-make-fixture` |
-| Timeseries render (one page of charts) | `yolink/render_markdown/index.md`, its `data-time-series` elements |
-| Time series in the Time series card | `garmin`, `yolink`, `ship-air` — each a `render_time_series` store, all read by `unified_time_series_index`, shipped in `time_series.tar` |
-| Non-SI unit converted where it is drawn | `sickbay_plasma_fridge` reports `temperature_f`, stored as `[degF]` and charted beside °C |
-| Two metrics of one quantity on two charts | `deck_12_water_main` — per-sample consumption, and the totalizer on a chart of its own |
-
-## Star Trek: TNG dramatis personae
-
-| Account UUID                              | Persona             |
-|-------------------------------------------|---------------------|
-| `00000001-1701-4d00-8000-000000000001`    | Jean-Luc Picard     |
-| `00000002-1701-4d00-8000-000000000002`    | Geordi La Forge     |
-| `00000003-1701-4d00-8000-000000000003`    | Beverly Crusher     |
-| `user-FAKE0DATAANDROID0POSITRONIC1`       | Lt. Cmdr. Data (ChatGPT) |
-| `00000004-1701-4d00-8000-000000000004`    | Lt. Worf            |
-| `00000005-1701-4d00-8000-000000000005`    | Lt. Cmdr. Geordi La Forge (Notion) |
-| `00000006-1701-4d00-8000-000000000006`    | Dr. Beverly Crusher (Notion) |
-| `00000007-1701-4d00-8000-000000000007`    | Cmdr. Deanna Troi (Notion) |
-| `5face1d0-1701-4d00-8000-000000000001`    | Workspace: USS Enterprise-D Operations (Notion space) |
-
-UUIDs follow the pattern `XXXXXXXX-1701-4d00-8000-...` so they sort
-predictably and scream "test data" in any debugger output.
-
-YoLink's fixture names compartments rather than people:
-
-| Device                  | Kind                   | Reports                                   |
-|-------------------------|------------------------|-------------------------------------------|
-| `ten_forward_cooler`    | `temperature_humidity` | ~3 °C drinks chiller                       |
-| `stasis_unit_alpha`     | `temperature_humidity` | ~-18.5 °C sample freezer                   |
-| `sickbay_plasma_fridge` | `temperature_humidity` | ~44.6 **°F** — the unit-conversion case    |
-| `deck_12_water_main`    | `watermeter`           | gallons, per-sample + lifetime totalizer   |
-
-`sickbay_plasma_fridge` is the one fixture device that could not exist
-upstream today: `ingest/mod.rs` pins each device kind to a fixed CSV
-header and rejects a ℉ value under a ℃ header, so nothing writes a
-`temperature_f` row. The fixture writes it directly, deliberately, so
-the render side's ℉ → ℃ conversion has end-to-end coverage and the
-"two devices, two units, one axis" case has a real example. Its
-`fake_device_id` is likewise a stand-in — the real column holds half of
-a per-device read credential, which never belongs in a fixture.
-
-## Cached "ingested" artifact
-
-These source JSONs are also fed through the full ingest+render+dump
-pipeline by a Bazel genrule, producing two byte-stable artifacts that
-downstream tests (Rust, UI integration, Python consumers) can depend on
-without re-running the pipeline:
-
-```
-bazelisk build //tests/fixtures:ingested_tng
-# bazel-bin/tests/fixtures/ingested/backend_index.sqlite
-# bazel-bin/tests/fixtures/ingested/qmd.tar
-# bazel-bin/tests/fixtures/ingested/time_series.tar
-```
-
-**Determinism**: the genrule pins `--now` to a fixed TNG-era timestamp,
-the orchestrator inserts rows in primary-key order, and the tar
-normalizes mtime/uid/gid.
-
-A clean rebuild is not byte-identical. Measure it by running the full
-pipeline into two fresh roots more than a clock second apart — two runs
-inside the same second can agree by luck:
-
-| | byte-stable? |
+| to… | run |
 |---|---|
-| `grid_rows` / `markdowns` / `edges` **contents** | **yes** |
-| `backend_index.sqlite` **file** | no |
-| the render stores in `qmd.tar` | no |
-| rendered `.md` trees | yes, except yolink's `index.md` (below) |
+| see the corpus in the app | `bazelisk run //datalib:dev_tng` ([`first_time_dev.md`](../../docs/dev/first_time_dev.md) §"Quickest first run") |
+| build the synced corpus | `bazelisk build //tests/fixtures:ingested_tng` |
+| sync it from scratch and check it | `bazelisk test //tests/fixtures:ingested_tng_test` |
 
-**The table contents are the property worth relying on, and they hold.**
-Dump them (`.mode json`, `SELECT * … ORDER BY 1`) and two independent
-runs agree byte for byte. `//datalib/backend/unified_document_index:fixture_db_snapshot_test`
-is an insta snapshot of exactly that, which is why it can exist at all.
+`dev_tng` builds a data root from the corpus in a temporary directory
+and opens the app on it. Browsing and search work. Syncing a source
+does not: the root holds the rendered documents but not the raw stores
+they came from.
 
-The **files** cannot be byte-stable, and no amount of `--now` pinning
-will change that. The index mints a random id for itself
-(`store_generation`), so a reader can tell a rebuilt index from the one
-it read. The render stores are doltlite: its own "Initialize data
-repository" commit and the
-shared layer's "schema: apply DDL" (`doltlite_raw::open`) both take the
-wall clock ([`doltlite.md`](/docs/dev/doltlite.md#plain-sqlite-files-and-sqlite-compatibility)),
-and commit hashes chain, so every later hash moves with them.
-A source can pin its own commit — `yolink-make-fixture` passes
-`--now` through to `dolt_commit --date` — but not those two. This is a
-property of the store format, not a bug to fix here.
+## Conventions
 
-One thing leaks that instability into a file that otherwise would be
-stable:
+- **Picard holds the account** in most sources. His email address is
+  `picard@enterprise.starfleet`, his Claude Code projects are under
+  `/Users/picard/`, and he is usually "me" in a chat. Some sources
+  belong to another officer (Data's ChatGPT account) or to the ship
+  (YoLink's sensors, the AirVisual monitors).
+- **"Now" is `2369-04-15T00:00:00+00:00`.** The pipeline pins its
+  clock there, so anything measured from now (a "since" window, a
+  stamp the pipeline writes) lands on the same date every build.
+- **Ids say they are fake.** Hand-written UUIDs follow
+  `XXXXXXXX-1701-4d00-8000-…` (1701 is the ship's registry number),
+  and ChatGPT's user id is `user-FAKE0DATAANDROID0POSITRONIC1`.
+- **Keys are public constants.** The Signal backup passphrase and the
+  WhatsApp root key are 64 zeros. They are not secrets; a fixed key
+  lets the real decryption code run on made-up backups.
+- **Shapes are real; content is not.** A fixture copies the keys,
+  tables and quirks of a real export or API answer, and fills them with
+  TNG content. The header of each generator, or the provider's
+  `INGEST.md`, says what real data its shapes were read from.
+- **Some images keep their own licence.** The photos on the contact
+  cards are actors' photos from Wikimedia Commons, credited in
+  [`carddav_tng/README.md`](../../datalib/backend/etl/providers/contacts/tests/fixtures/carddav_tng/README.md).
 
-* **`yolink/render_markdown/index.md`**, in its "Store" section only: the
-  page reports the store's HEAD and commit log, which *is* the content —
-  a page describing a store legitimately changes when the store's
-  identity does. Its `markdowns` row carries nothing HEAD-derived, so
-  the row stays stable while the page moves.
+## How a fixture reaches the index
 
+[`run_sync_pipeline.py`](run_sync_pipeline.py) turns every fixture into
+a source in one data root, writes a config with a download step and a
+render step for each, and syncs it. A fixture gets in one of four ways:
 
-Bazel keys its action cache on *inputs*, so the residue costs
-reproducibility and cross-machine cache sharing, not day-to-day rebuild
-churn.
+- **Recorded API answers.** For a source that talks to a web service,
+  `datalib-step synthesize <type>` reads the fixture and writes the
+  HTTP exchanges the download would make as playback tapes. The
+  download then runs its real code against those tapes instead of the
+  network. Garmin's and Google Drive's fixtures are a JSON spec the
+  synthesizer expands; the others are the answers themselves.
+- **Files read where they lie.** For a source that reads an export or
+  a local folder, the download step reads the fixture directory
+  directly, as it would read a person's own. The Google Takeout,
+  LinkedIn and Facebook exports are copied into the workspace first,
+  because a sandbox's inputs are links and those readers follow none.
+- **A spec expanded into a backup.** Signal's and WhatsApp's fixtures
+  are a JSON spec; `signal-make-fixture` and `whatsapp-make-fixture`
+  turn each into an encrypted backup, which the download then decrypts.
+  Beeper's is SQL and media, which
+  [`make_beeper_texts.py`](make_beeper_texts.py) lays out as a Beeper
+  Texts data directory.
+- **A store written for it.** YoLink fetches its data with a plain
+  `curl`, which the playback tapes cannot stand in for, so
+  `yolink-make-fixture` writes its raw store from a spec and the
+  pipeline runs only its render step (`PRESEEDED_RAW` in the driver).
 
-**Reading the doltlite_db.** Stock libsqlite3 cannot open it. Link
-doltlite (via `//third-party/doltlite:sqlite3`) and a plain `SELECT`
-works, read-only; a consumer that speaks only stock SQLite wants the
-export in [`docs/dev/doltlite.md`](/docs/dev/doltlite.md#getting-the-data-out-export-to-plain-sqlite).
+The genrule runs every sync through `datalib-http`, driven over its API
+the way the web client drives it ([`sync_drivers.py`](sync_drivers.py)).
+`:ingested_tng_test` runs the same driver through `datalib-dag`, so
+both are covered over the same corpus.
 
-```rust
-let pool = datalib_pin::open_reader(&db_path).await?;
-let n: i64 = sqlx::query_scalar("SELECT count(*) FROM grid_rows")
-    .fetch_one(&pool).await?;
-```
+## The fixtures
 
-**Constraints**: the genrule is fully hermetic. No host `dolt` install
-is needed; the sync binary statically links doltlite via
-`//third-party/doltlite:sqlite3`.
+`P` is `datalib/backend/etl/providers`. Every fixture in the first
+table is in `:ingested_tng`.
 
-## Maintenance
+| source type | fixture | how it gets in |
+|---|---|---|
+| `claude` | `P/claude/tests/fixtures/claude_export/` | recorded API answers |
+| `chatgpt` | `P/chatgpt/tests/fixtures/chatgpt_api/` | recorded API answers |
+| `slack` | `P/slack/tests/fixtures/slack_api/`, then `slack_api_v2/` | recorded API answers; `v2` is the workspace one sync later |
+| `github` | `P/github/tests/fixtures/github_api/` | recorded API answers |
+| `gitlab` | `P/gitlab/tests/fixtures/gitlab_api/` | recorded API answers |
+| `notion` | `P/notion/tests/fixtures/notion_web/` | recorded API answers |
+| `garmin` | `P/garmin/tests/fixtures/garmin_tng/tng.json` | spec → recorded API answers |
+| `google_drive` | `P/google_drive/tests/fixtures/google_drive_tng/tng.json` | spec → recorded API answers |
+| `contacts` | `P/contacts/tests/fixtures/carddav_tng/`, then `carddav_tng_v2/` | files; `v2` is the address books one sync later |
+| `email` | `P/email/tests/fixtures/mbox/star_trek.mbox` | files (a Google Takeout mbox) |
+| `google_takeout` | `P/google_takeout/tests/fixtures/Takeout/` | files |
+| `linkedin` | `P/linkedin/tests/fixtures/linkedin_tng/` | files |
+| `sms_backup_restore` | `P/sms_backup_restore/tests/fixtures/sms_backup_restore_tng/` | files |
+| `facebook` | `P/facebook/tests/fixtures/facebook_tng/` | files |
+| `pdf` | `P/pdf/tests/fixtures/pdf_tng/` | files, written by [`make_pdf_fixtures.py`](make_pdf_fixtures.py) |
+| `claude_code` | `P/claude_code/tests/fixtures/claude_code_tng/` | files, written by [`make_claude_code_fixtures.py`](make_claude_code_fixtures.py) |
+| `codex` | `P/codex/tests/fixtures/codex_tng/` | files, written by [`make_codex_fixtures.py`](make_codex_fixtures.py) |
+| `calendar` | `P/calendar/tests/fixtures/calendar_tng/` | files (two `.ics` calendars) |
+| `airvisual` | `P/airvisual/tests/fixtures/airvisual_tng/` | files (two monitors' data folders) |
+| `signal` | `P/signal/tests/fixtures/signal_tng/tng.json` | spec → encrypted backup |
+| `whatsapp` | `P/whatsapp/tests/fixtures/whatsapp_tng/tng.json` | spec → encrypted backup |
+| `beeper` | `P/beeper/tests/fixtures/beeper_tng/` | SQL and media → a Beeper Texts directory |
+| `yolink` | `P/yolink/tests/fixtures/yolink_tng/tng.json` | spec → raw store; render only |
 
-These fixtures are **hand-edited** at every layer. When you change
-any provider parser or `GridRow`:
+These TNG fixtures are used by their own provider's tests and are not
+in `:ingested_tng`:
 
-1. Run `uv run pytest tests/test_fixtures.py` —
-   the parser tests will break first if a new required field is added.
-2. Update the relevant JSON files here with realistic-but-fake values
-   that match the new shape.
-3. If you add a new block type / content_type / attachment kind in
-   real-life data, add an example to the table above and a fixture
-   entry — so demos and integration tests cover it.
-4. UI mocks live at `datalib/ui/tests/mocks/`. Keep them aligned
-   with whatever the HTTP backend (`datalib/backend/http`) returns
-   on the matching route.
+| source type | fixture | what it is |
+|---|---|---|
+| `chatgpt` | `P/chatgpt/tests/fixtures/chatgpt_export/` | ChatGPT's data export, split into parts as the real one is |
+| `calendar` | `P/calendar/tests/fixtures/calendar_split_tng/` | one calendar before and after a recurring series is split |
+| `media` | `P/media/tests/fixtures/media_tng/` | photos, music and video, written by [`make_media_fixtures.py`](make_media_fixtures.py) |
+| `file_inventory` | `P/file_inventory/tests/fixtures/file_inventory_tng/` | a folder to list; `materialize_tng_root` also drops it into the root as `file_inventory_scan/` |
+| `email` | `//datalib/backend/etl/providers/email:tng_apple_mail` | an Apple Mail folder, built by [`make_apple_mail_folder.py`](make_apple_mail_folder.py) |
+| `apple_messages` | `//datalib/backend/etl/providers/apple_messages:tng_chat_db` | a Messages `chat.db`, built by [`make_apple_messages_db.py`](make_apple_messages_db.py) |
+| `apple_photos` | `//datalib/backend/etl/providers/apple_photos:tng_library` | a Photos library, built by [`make_apple_photos_library.py`](make_apple_photos_library.py) |
+| `lightroom` | `//datalib/backend/etl/sqlite_mirror:tng_catalog` | a Lightroom catalog, built by [`make_lightroom_catalog.py`](make_lightroom_catalog.py) |
 
-**Golden snapshots.** There are none; `tests/` holds only `fixtures/`.
+One fixture is not TNG: `P/perseus/tests/fixtures/perseus_tiny/` is a
+page of Thucydides in Greek and English, for the bilingual view
+(`bazelisk run //datalib:dev_perseus`).
 
-What does assert on the fixture today: `:ingested_tng_test` (row counts,
-per-provider coverage, three-run idempotence), each provider's own insta
-snapshots under `datalib/backend/etl/providers/*/`, and
-`//datalib/ui:e2e_test` against a materialized root.
+**Two kinds of generator.** The `make_*.py` scripts named "written by"
+above were run by hand and their output is checked in; rerun one with
+`uv run python tests/fixtures/<script>` after changing it. Those named
+"built by" run as Bazel genrules on every build and nothing they make is
+checked in. Both live here, not beside their provider, because
+`tests/fixtures` is one of the directories `//:lint_repo` lints as
+Python (`PYTHON_LINT_ROOTS` in `scripts/lint_repo.py`). The header of
+each one lists the cases its output exists to cover.
 
-There is no codegen / regen script for the source JSON — those
-fixtures are not derived from anything. The trade-off is per-layer flexibility (e.g. the UI
-mock can show a row that is not in the ingestion fixture) at the cost
-of having to update each layer when the schema changes.
+## What the build makes
+
+`bazelisk build //tests/fixtures:ingested_tng` writes, under
+`bazel-bin/tests/fixtures/ingested/`:
+
+| file | what it is |
+|---|---|
+| `backend_index.sqlite` | the grid index, a plain SQLite file |
+| `rendered.tar` | every source's render tree: markdown, render stores, blobs |
+| `rendered_md.tar` | the markdown alone, for the UI's render preview |
+| `time_series.tar` | the time-series stores and their index |
+| `config_body.toml` | every source as a render-only group, for `materialize_tng_root` |
+
+Three more genrules build the search index over it, in steps that Bazel
+can cache apart, because embedding is the slow one:
+`:ingested_tng_search_index` (`search_index.sqlite`,
+`search_prompts.tsv`), `:ingested_tng_vectors` (`vectors.tsv`) and
+`:ingested_tng_inference_cache` (`inference_cache.sqlite`).
+[`materialize_tng_root.sh`](materialize_tng_root.sh) puts all of it
+together into a data root, and is the one script both `dev_tng` and the
+Playwright suite use.
+
+**Reading what it made.** `backend_index.sqlite` opens in any SQLite.
+The render stores in `rendered.tar` are doltlite files, which stock
+`sqlite3` cannot open; turn one into a plain SQLite file with
+`datalib-doltlite -readonly <store>.doltlite_db .dump | sqlite3 out.sqlite`
+([`doltlite.md`](../../docs/dev/doltlite.md#getting-the-data-out-export-to-plain-sqlite)).
+
+**What is stable from build to build.** The rows are; the files are
+not. Dump `grid_rows`, `markdowns` and `edges` from two clean builds and
+they match byte for byte. The files differ: the index gives itself a
+random id (`store_generation`) so a reader can tell a rebuilt index
+from the one it read, and doltlite stamps two of its own commits with
+the wall clock, so every commit hash after them moves
+([`doltlite.md`](../../docs/dev/doltlite.md#plain-sqlite-files-and-sqlite-compatibility)).
+The rendered documents are stable too, except the "Store" section of
+YoLink's page, which reports the store's commit log. Test the rows, not
+the files. To check stability yourself, build into
+two fresh roots more than a second apart: two builds in the same second
+can agree by luck.
+
+## What checks it
+
+| target | what it asserts |
+|---|---|
+| `:ingested_tng` itself | refuses to build if a source synced without error but left no rows in the index ([`check_ingested.py`](check_ingested.py)); `:check_ingested_test` proves that check fails |
+| `:ingested_tng_test` | row counts and per-source coverage, over three syncs of one root: fresh, unchanged, and after `--reset` |
+| `:render_contract_test` | for every table of every source's raw store: change it, render incrementally and from scratch, and get the same result |
+| `//datalib/backend/unified_grid_and_search_index:unified_grid_and_search_index_tests` | `fixture_db_snapshot`, an insta snapshot of the index's rows |
+| `//datalib/backend/datalib_step:step_tests` | `index_text`, the text search draws from each fixture document, as one snapshot per source |
+| each provider's own tests | its parse and render snapshots, over its own fixture |
+| `//datalib/ui:e2e_test` | the Playwright suite, against a root from `materialize_tng_root` |
+| `:tng_fuzz_test` (manual) | random clicks and killed steps, then a full sync compared with a sync from nothing |
+
+Snapshots are updated through `.update` targets, such as
+`//datalib/backend/unified_grid_and_search_index:unified_grid_and_search_index_tests.update`
+and `//datalib/backend/datalib_step:index_text.update`
+([`testing.md`](../../docs/dev/testing.md)).
+
+## Changing the corpus
+
+**Changing a fixture.** Edit it beside its provider, or edit its
+generator and rerun it. Keep it fictional and in the TNG world. Then run
+the `.update` targets above and read the snapshot diff: a change to
+`index_text` is a change to what search indexes.
+
+**Adding a source to `:ingested_tng`.** In order:
+
+1. A `tng_fixture` filegroup in the provider's `BUILD.bazel`, added to
+   `:source_json` here.
+2. The fixture's path appended to the `:ingested_tng` genrule's command
+   **and** to `_TNG_FIXTURE_ARGS`. Append; don't renumber. The driver
+   reads its arguments by position, and those two lists must agree.
+3. An entry in the driver's `sources` table, and a line for the new
+   argument in its docstring.
+
+`check_ingested.py` fails the build until the new source has rows in
+the index, so a source that syncs but indexes nothing cannot slip in.

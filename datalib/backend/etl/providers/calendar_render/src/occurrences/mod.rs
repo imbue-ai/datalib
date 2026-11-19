@@ -18,7 +18,6 @@ use datalib_etl_calendar_common::occurrences::{self, Occurrence, Series, Window}
 use datalib_etl_calendar_common::when::Zone;
 use datalib_etl_calendar_common::EventTime;
 use datalib_etl_render::inputs::RawRange;
-use datalib_time::NamedZone;
 use serde_json::{json, Value};
 
 use crate::render::parse::{self, Parsed};
@@ -66,6 +65,33 @@ pub struct Unlisted {
 pub struct Listed {
     pub rows: Vec<OccurrenceRow>,
     pub unlisted: Vec<Unlisted>,
+}
+
+impl Listed {
+    /// A problem row for each event whose occurrences could not be
+    /// listed: a warning, since its occurrences are left out and the
+    /// rest are not. Two reasons for one event are one row
+    /// (`datalib_step_problems::replace`).
+    pub fn problems(&self, source_id: &str) -> Vec<datalib_schema::problems::ProblemRow> {
+        use datalib_schema::problems::{
+            Outcome, Problem, ProblemRow, Reason, Scope, Severity, Stage,
+        };
+        self.unlisted
+            .iter()
+            .map(|u| {
+                ProblemRow::new(
+                    source_id,
+                    Stage::Occurrences,
+                    Scope::Entity(&u.event_row),
+                    None,
+                    Outcome::Dropped,
+                    Problem::explained(Reason::RenderFailed, None, &u.reason)
+                        .severity(Severity::Warning),
+                    None,
+                )
+            })
+            .collect()
+    }
 }
 
 /// Every occurrence the raw store at `raw_path` holds in `window`, read
@@ -309,7 +335,7 @@ fn google_time(t: &EventTime, zone: Option<Value>) -> Value {
 /// `singleEvents=true` lists. A time already on that clock keeps its
 /// spelling.
 fn on_calendar_clock(payload: &mut Value, calendar_zone: Option<&str>) {
-    let Some(tz) = calendar_zone.and_then(NamedZone::get) else {
+    let Some(tz) = calendar_zone.and_then(datalib_time::NamedZone::get) else {
         return;
     };
     for key in ["start", "end", "originalStartTime"] {

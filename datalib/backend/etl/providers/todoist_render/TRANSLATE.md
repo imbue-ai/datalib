@@ -2,11 +2,11 @@
 
 The raw store keeps each Todoist object as the API sent it
 ([`../todoist/INGEST.md`](../todoist/INGEST.md)). This crate turns each
-**project** into one markdown document, filed by its id like every
-document ([`grid_rows.md`](../../../../../docs/dev/grid_rows.md) §"`qmd_path` and `source_id`"), and gives the
-project, each task and each comment a grid row. Every table is read
-whole at the render's pin (`src/store.rs`); an account's tasks are few
-enough that reading them all costs less than working out which to read.
+**project** into one markdown document, kept by its id in the render
+store like every document, and gives the project, each task and each
+comment a grid row. Every table is read whole at the render's pin
+(`src/store.rs`); an account's tasks are few enough that reading them
+all costs less than working out which to read.
 
 ## What becomes what
 
@@ -36,10 +36,11 @@ enough that reading them all costs less than working out which to read.
 Each task and comment is a section with its own
 `data-section-uuid`, so a grid row opens at its place in the page.
 
-Task text, descriptions and comments are Todoist markdown, so their
-links and emphasis stay; HTML in them is escaped
-(`escape_html_outside_code`), since Todoist shows it as text. A
-project's and a section's names are plain text and escaped as such.
+Task text, descriptions and comments are Todoist markdown and go in as
+written, HTML included; each is a section of its own, and the app's
+sanitizer contains the rest
+([`chat-common/README.md`](../../chat-common/README.md#plain-text-is-escaped-the-ui-sanitizes-the-rest)).
+A project's and a section's names are plain text and escaped as such.
 
 ### Which row says what about a task
 
@@ -92,6 +93,15 @@ Ids are minted through `datalib_id` under the `todoist` namespace
 download problem naming the project finds its document; a task by its
 id and `added_at`; a comment by its id and `posted_at`, task and
 project comments as two kinds.
+
+**Where a row sits** (`grid_rows.md` §"`parent_uuid`…"). A project is
+read together and a place, inside the project above it (`parent_id`);
+a project's document carries every project above it. A section is a
+container in its project, keyed by its id. A task sits in its parent
+task where Todoist names one in the project, else in its section, else
+in the project; a comment sits in its task, or in the project. Sections
+and tasks sort among their siblings by Todoist's own order
+(`section_order`, `child_order`), not by time.
 
 ## Incrementality
 

@@ -1,6 +1,6 @@
 # GitHub Translate
 
-The render step for a `github` source reads the raw store `github-ingest`
+The render step for a `github` source reads the raw store its `ingest` step
 writes and emits **one markdown document per pull request**, plus that
 document's `grid_rows`. The document and its rows are built by
 `datalib/backend/etl/forge-render-common/`, which GitLab shares; this
@@ -9,14 +9,10 @@ crate reads the raw tables into it (`src/render/parse.rs`), mints the ids
 (`src/render/mod.rs`).
 
 ```
-<root>/<source_id>/render_markdown/<xx>/<markdown_uuid>.md
-                            # the PR's document, filed by its id
 <root>/<source_id>/render_markdown/indexed_markdown.doltlite_db
-                            # its rows: one for the PR + one per comment
+                            # the PR's document, kept by its id, and its
+                            # rows: one for the PR + one per comment
 ```
-
-`<xx>` is the id's last two characters
-([`grid_rows.md`](../../../../../docs/dev/grid_rows.md) §"`qmd_path` and `source_id`").
 
 ## Markdown layout
 
@@ -51,10 +47,18 @@ over its body as a blockquote.
 - Then one row per comment, in the document's order (Reviews → General
   → Inline by `(path, line)`), with `message_index` counting from 0.
 
-Every row shares the PR's `qmd_path`, `conversation_uuid` and
+Every row shares the PR's `conversation_uuid` and
 `markdown_uuid`. `upstream_id` is (repo, PR number) for the PR's row and
 (repo, comment or review id) for the rest. A row that will not validate
 is dropped and recorded as a problem rather than failing the render.
+
+**Where a row sits** (`grid_rows.md` §"`parent_uuid`…"). The repository
+is a place, keyed by the id GitHub gives it on the PR's `base.repo`,
+which a rename keeps (its full name where the payload has no id). The
+PR is read together inside it, and its own row is the container's: the
+description is that row's text, so it has no row of its own. Every
+comment sits in the PR. A review comment's `in_reply_to_id` is a
+`ReplyTo` edge to the comment it answers, not a parent.
 
 ## Run it
 

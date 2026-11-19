@@ -63,15 +63,16 @@ messages on any other account is counted in a row per kind of account,
 (`hungryserv`, and `$space` and the like, which are not bridges), a warning for a
 bridge the list does not know. A thread with no messages is not reported.
 
-## Documents are room × period
+## A document is a room
 
-A document is one room's events in one period: `month` by default, or
-`day`, `year` or `all`, set by the render step's `period` param. A
-reaction is filed under its target's period however late it arrived;
-one whose target is not in the store at all is an orphan reaction. A
-reply is drawn as a quoted "in reply to" line naming the upstream id it
-points at. A `HIDDEN` event gets a one-line system note, so a room made
-only of those still renders.
+A document is one room's events, under the room's own uuid. A reaction
+is drawn under the message it targets; one whose target is not in the
+store at all is an orphan reaction. A reply (`inReplyToID`) is drawn as
+a quoted "in reply to" line naming the upstream id it points at, and is
+a reply edge to that message when the store holds it. A `HIDDEN` event
+gets a one-line system note, so a room made only of those still renders.
+A retired `period` param on the render step is dropped before the
+params are read, and `datalib-dag --check` warns at its line.
 
 Each document declares the `threads`, `participants`,
 `mx_room_messages` and `mx_reactions` rows it read, so a room whose

@@ -33,7 +33,7 @@ names! { STEP_PROTOCOL:
 names! { DATALIB_STEP_KNOBS:
     DATALIB_STEP_CHECKPOINT_CADENCE,
     DATALIB_STEP_RENDER_PAGES,
-    DATALIB_STEP_EMBED_CONTEXTS,
+    DATALIB_STEP_MODAL_MAX_SANDBOXES,
 }
 
 names! { APPLET_PROTOCOL:
@@ -67,6 +67,11 @@ pub const DATALIB_PROTECTED_LIBRARY: &str = "DATALIB_PROTECTED_LIBRARY";
 /// custom step or applet that reads one of its own, or a test harness.
 pub const DATALIB_CHILD_ENV: &str = "DATALIB_CHILD_ENV";
 
+/// How many threads the embedder computes on where its caller leaves that
+/// to llama.cpp, which otherwise takes four on any machine. Tests set it
+/// (`.bazelrc`), since several of them share CI's cores.
+pub const DATALIB_EMBED_THREADS: &str = "DATALIB_EMBED_THREADS";
+
 /// A child process, for what of this process's environment it is handed
 /// ([`hands_down`]). Nothing else is: the server's API token, a latchkey
 /// key meant for latchkey, a key one source reads, a variable a person
@@ -80,6 +85,9 @@ pub enum Child {
     Applet,
     /// latchkey itself, run by the server's sign-in wizard.
     Latchkey,
+    /// The `embed` step's driver of Modal's SDK, run on the bundled Node
+    /// (`datalib_step::modal`).
+    Modal,
 }
 
 /// What every child needs to run at all: where programs, home and
@@ -123,8 +131,9 @@ const EVERY_CHILD: &[&str] = &[
     "NPX_BIN",
     "DATALIB_GIT_HASH",
     "DATALIB_POOL_ACQUIRE_SECS",
+    "DATALIB_MODELS_NO_FETCH",
     "DATALIB_QMD_MODELS_NO_FETCH",
-    "QMD_LLAMA_GPU",
+    "DATALIB_NO_FETCH",
     // Bazel's, so a child of a test finds its runfiles and keeps out of
     // the host's caches.
     "RUNFILES_DIR",
@@ -146,8 +155,8 @@ const LATCHKEY_ALSO: &[&str] = &[
 ];
 
 /// What a step reads beyond what latchkey does: where the fingerprint
-/// cache is, replayed HTTP in tests, and the URL prefix a Minds
-/// workspace routes some requests through.
+/// cache is, replayed HTTP in tests, the URL prefix a Minds workspace
+/// routes some requests through, and how many threads `embed` takes.
 const STEP_ALSO: &[&str] = &[
     "DATALIB_CACHE_DIR",
     "DATALIB_HTTP_PLAYBACK",
@@ -156,11 +165,29 @@ const STEP_ALSO: &[&str] = &[
     "DATALIB_HTTP_PLAYBACK_HOLD_SEALED",
     "DATALIB_HTTP_PLAYBACK_OFFLINE",
     "MINDS_VIA_DESKTOP_URL_PREFIX",
+    DATALIB_EMBED_THREADS,
 ];
 
 /// What an applet reads beyond every child's: the search's pinned now,
-/// in tests.
-const APPLET_ALSO: &[&str] = &["DATALIB_SEARCH_NOW"];
+/// and whether it warms the search by meaning at launch, both for tests;
+/// how many threads its embedder takes.
+const APPLET_ALSO: &[&str] = &[
+    "DATALIB_SEARCH_NOW",
+    "DATALIB_SEARCH_NO_WARM",
+    DATALIB_EMBED_THREADS,
+];
+
+/// What Modal's SDK signs in with and is pointed by, beyond every child's.
+/// A step is not handed these: a sync's runner passes them on only when
+/// [`DATALIB_CHILD_ENV`] names them.
+const MODAL_ALSO: &[&str] = &[
+    "MODAL_TOKEN_ID",
+    "MODAL_TOKEN_SECRET",
+    "MODAL_PROFILE",
+    "MODAL_CONFIG_PATH",
+    "MODAL_ENVIRONMENT",
+    "MODAL_SERVER_URL",
+];
 
 /// Whether `child` is handed the variable `name` from this process's
 /// environment. `also` names more, from wherever the caller learned of
@@ -174,6 +201,7 @@ pub fn hands_down(name: &str, child: Child, also: &[String]) -> bool {
             Child::Step => latchkey(name) || STEP_ALSO.contains(&name),
             Child::Latchkey => latchkey(name),
             Child::Applet => APPLET_ALSO.contains(&name),
+            Child::Modal => MODAL_ALSO.contains(&name),
         }
 }
 
@@ -221,6 +249,40 @@ pub fn inherit_only(cmd: &mut std::process::Command, child: Child, also: &[Strin
 mod tests {
     use super::*;
 
+    /// Modal's sign-in reaches its driver and nothing else: not a step,
+    /// whatever program it runs, and not latchkey; the driver gets no
+    /// latchkey key.
+    #[test]
+    fn modal_s_sign_in_reaches_only_its_driver() {
+        for name in ["MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET", "MODAL_CONFIG_PATH"] {
+            assert!(hands_down(name, Child::Modal, &[]), "{name}");
+            for other in [Child::Step, Child::Applet, Child::Latchkey] {
+                assert!(!hands_down(name, other, &[]), "{name} to {other:?}");
+            }
+        }
+        assert!(hands_down("HOME", Child::Modal, &[]));
+        assert!(hands_down("HTTPS_PROXY", Child::Modal, &[]));
+        assert!(!hands_down("LATCHKEY_ENCRYPTION_KEY", Child::Modal, &[]));
+    }
+
+    /// The e2e suite turns the applet's launch warming off for its sandbox
+    /// backends; dropped on the way down, the variable would leave every
+    /// one of them loading the model at once.
+    #[test]
+    fn the_search_warming_switch_reaches_the_applet() {
+        assert!(hands_down("DATALIB_SEARCH_NO_WARM", Child::Applet, &[]));
+        assert!(!hands_down("DATALIB_SEARCH_NO_WARM", Child::Step, &[]));
+    }
+
+    /// Tests cap the embedder's threads; dropped on the way down, a step's
+    /// `embed` and the search applet would each spin four threads again.
+    #[test]
+    fn the_embedder_thread_cap_reaches_steps_and_applets() {
+        assert!(hands_down(DATALIB_EMBED_THREADS, Child::Step, &[]));
+        assert!(hands_down(DATALIB_EMBED_THREADS, Child::Applet, &[]));
+        assert!(!hands_down(DATALIB_EMBED_THREADS, Child::Latchkey, &[]));
+    }
+
     fn step_protocol_doc() -> String {
         const REL: &str = "docs/dev/step_protocol.md";
         let r = runfiles::Runfiles::create().expect("runfiles tree");
@@ -256,7 +318,7 @@ mod tests {
     /// latchkey and steps and never an applet.
     #[test]
     fn a_child_is_handed_only_what_it_is_listed_for() {
-        for child in [Child::Step, Child::Applet, Child::Latchkey] {
+        for child in [Child::Step, Child::Applet, Child::Latchkey, Child::Modal] {
             assert!(hands_down("PATH", child, &[]));
             assert!(hands_down("LC_ALL", child, &[]));
             assert!(!hands_down("DATALIB_TOKEN", child, &[]));

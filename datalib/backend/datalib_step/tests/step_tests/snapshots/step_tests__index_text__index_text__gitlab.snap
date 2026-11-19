@@ -1,0 +1,93 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== gitlab 00000000-0000-8b91-8399-3668763e7fba gitlab storage
+--- chunk 0
+title: gitlab storage | text: Source: gitlab
+
+# gitlab — storage
+
+Measured Tue Apr 15th, 2369 at 00:00.
+
+| Kind | Step | What | Size | Count | Id |
+| Source Size | ingest | `gitlab/ingest` | <size> | 2 files | `00000000` |
+| Store | ingest | `gitlab/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `gitlab/ingest/entities.doltlite_db#coverage` |  | 3 rows | `00000000` |
+| Table | ingest | `gitlab/ingest/entities.doltlite_db#discussions` |  | 4 rows | `00000000` |
+| Table | ingest | `gitlab/ingest/entities.doltlite_db#listed_change_requests` |  | 2 rows | `00000000` |
+| Table | ingest | `gitlab/ingest/entities.doltlite_db#merge_requests` |  | 2 rows | `00000000` |
+| Table | ingest | `gitlab/ingest/entities.doltlite_db#self_identity` |  | 1 row | `00000000` |
+
+=== gitlab 0b75b9f9-4400-887d-bae6-937c2e6ee3a6 Add Earl Grey, hot to replicator menu
+--- chunk 0
+title: Add Earl Grey, hot to replicator menu | text: Source: GitLab
+Project: enterprise-d/holodeck
+Merge request: 17
+State: merged
+Author: Jean-Luc Picard
+Branch: picard/earl-grey
+Into: main
+
+Add Earl Grey, hot to replicator menu (!17)
+
+*merged* — Jean-Luc Picard — `picard/earl-grey` → `main`
+
+## Description
+Tea. Earl Grey. Hot.
+## General discussion
+Jean-Luc Picard *(reply)* · Tue Apr 15th, 2369 at 10:05
+
+Adopted. Make it so.
+Worf · Tue Apr 15th, 2369 at 10:30
+
+I will set the standard temperature to be served warm in case of crisis. Klingon ambassadors will not accept tepid beverages.
+## Inline comments
+
+### `src/replicator/menu.rs:88`
+William T. Riker · Tue Apr 15th, 2369 at 10:00
+
+Use `enum Tea { EarlGrey, Chamomile, ... }` here rather than a string match — it'll catch typos at compile time.
+
+=== gitlab 0b75bad4-fe00-8155-aa7c-9db9f663482a Holodeck safety interlock regression test
+--- chunk 0
+title: Holodeck safety interlock regression test | text: Source: GitLab
+Project: enterprise-d/holodeck
+Merge request: 18
+State: opened
+Author: Jean-Luc Picard
+Branch: picard/safety-regression
+Into: main
+
+Holodeck safety interlock regression test (!18)
+
+*opened* — Jean-Luc Picard — `picard/safety-regression` → `main`
+
+## Description
+Adds a regression test that asserts holodeck weapons cannot fire while safeties are engaged. Closes #41.
+## General discussion
+Geordi La Forge *(reply)* · Tue Apr 15th, 2369 at 14:10
+
+Agreed — I can wire that into the simulator harness if Data writes the assertion.
+Jean-Luc Picard *(reply)* · Tue Apr 15th, 2369 at 14:20
+
+Concur. Make it so.
+Beverly Crusher · Tue Apr 15th, 2369 at 14:30
+
+Please ensure the medical override path is preserved — Sickbay must be able to disable safeties on a holodeck program in a triage scenario.
+
+--- chunk 1
+title: Holodeck safety interlock regression test | text: Source: GitLab
+Project: enterprise-d/holodeck
+Merge request: 18
+State: opened
+Author: Jean-Luc Picard
+Branch: picard/safety-regression
+Into: main
+
+## Inline comments
+
+### `tests/safety.rs:42`
+Lt. Cmdr. Data · Tue Apr 15th, 2369 at 14:00
+
+The assertion only checks the safety flag *before* arming. We should also assert that arming the weapon while safeties are engaged returns Err(SafetyEngaged).

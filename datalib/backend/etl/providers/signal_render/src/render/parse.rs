@@ -6,7 +6,6 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use datalib_etl::periodize::Period;
 use datalib_etl::read_marks;
 use datalib_etl_chat_common::unread::{is_unread, Marks, ReadMark};
 use datalib_etl_chat_common::BlobsAt;
@@ -62,13 +61,11 @@ pub struct ParsedSignal {
     /// chats themselves carry no items — each item ends up in the
     /// matching bucket in `docs`.
     pub chats: HashMap<String, ParsedChat>,
-    /// One bucket per `(chat_id, period_key)` pair that needs
-    /// re-rendering. A chat survives Phase 1 iff `dolt_diff_*`
-    /// reported any row of it as added/modified/removed since the
-    /// last render cursor — every period of that chat is then
-    /// loaded in Phase 2. Buckets whose chat didn't change are
-    /// entirely absent from `docs`. Ordered by chat_id then
-    /// period_key so the rendered tree is deterministic.
+    /// One bucket per chat that needs re-rendering: a chat survives
+    /// Phase 1 iff `dolt_diff_*` reported any row of it as
+    /// added/modified/removed since the last render cursor, and is then
+    /// loaded whole in Phase 2. Ordered by chat_id so the rendered tree
+    /// is deterministic.
     pub docs: Vec<DocBucket>,
     /// Count of chats `dolt_diff` said were unchanged.
     pub docs_skipped: usize,
@@ -77,8 +74,7 @@ pub struct ParsedSignal {
     pub scan: ScanResult,
     /// Every raw row each loaded chat reads, by `chat_id` — its `chats`
     /// row, its items and attachment edges from the load, its
-    /// recipients as render looks them up. One per chat, not per
-    /// period: the bucket the driver sweeps is the chat.
+    /// recipients as render looks them up.
     pub inputs: HashMap<String, Inputs>,
     /// Where render reads the buckets' attachment bytes, a batch at a
     /// time. `None` when no store was read.
@@ -119,12 +115,10 @@ pub struct ParsedChat {
     pub recipient_id: String,
 }
 
-/// One rendered-markdown bucket: a slice of a chat covering a single
-/// period key (`2024-03`, `2024-03-15`, `2024`, or `all`).
+/// One chat's items, its one rendered document.
 #[derive(Debug, Clone, Default)]
 pub struct DocBucket {
     pub chat_id: String,
-    pub period_key: String,
     pub items: Vec<ParsedChatItem>,
 }
 
@@ -151,6 +145,10 @@ pub struct ParsedChatItem {
     /// one whose ACI this build could not read, so the rest keep their
     /// places.
     pub mentions: Vec<Option<String>>,
+    /// The `date_sent` of the message this one quotes, where it quotes
+    /// one: Signal's quote names its target by that stamp and the
+    /// author's number in that backup.
+    pub quotes_sent: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -166,31 +164,21 @@ pub struct ParsedAttachment {
 }
 
 pub fn parse_raw_dir(input: &Path) -> Result<ParsedSignal> {
-    parse(input, Period::Month, "signal", RawRange::cold())
+    parse(input, "signal", RawRange::cold())
 }
 
-pub fn parse(
-    input: &Path,
-    period: Period,
-    source_id: &str,
-    range: RawRange<'_>,
-) -> Result<ParsedSignal> {
+pub fn parse(input: &Path, source_id: &str, range: RawRange<'_>) -> Result<ParsedSignal> {
     let db_path = datalib_etl::doltlite_raw::db_path_for(input);
     if !db_path.is_file() {
         return Ok(ParsedSignal::default());
     }
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current()
-            .block_on(async move { parse_async(&db_path, period, source_id, range).await })
+            .block_on(async move { parse_async(&db_path, source_id, range).await })
     })
 }
 
-async fn parse_async(
-    db_path: &Path,
-    period: Period,
-    source_id: &str,
-    range: RawRange<'_>,
-) -> Result<ParsedSignal> {
+async fn parse_async(db_path: &Path, source_id: &str, range: RawRange<'_>) -> Result<ParsedSignal> {
     // Opened at the driver's commit, else HEAD. No commit means nothing
     // has been committed here to render: emptiness, not a reason to read
     // the working set.
@@ -201,7 +189,7 @@ async fn parse_async(
         return Ok(ParsedSignal::default());
     };
     let commit = reader.pin().commit().to_string();
-    let parsed = parse_open(&reader, period, source_id, range).await;
+    let parsed = parse_open(&reader, source_id, range).await;
     // Closed, not dropped: render opens this store again for the bytes.
     reader.close().await;
     let mut parsed = parsed?;
@@ -214,7 +202,6 @@ async fn parse_async(
 
 async fn parse_open(
     reader: &datalib_etl::doltlite_raw::Reader,
-    period: Period,
     source_id: &str,
     range: RawRange<'_>,
 ) -> Result<ParsedSignal> {
@@ -258,7 +245,7 @@ async fn parse_open(
         Vec::new()
     } else {
         let marks = read_marks::load(&pool).await?;
-        load_buckets(&pool, period, &to_load_chats, &marks).await?
+        load_buckets(&pool, &to_load_chats, &marks).await?
     };
 
     let mut inputs: HashMap<String, Inputs> = HashMap::new();
@@ -353,14 +340,7 @@ fn uuid_of(bytes: &[u8]) -> Option<String> {
         return None;
     }
     let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
-    Some(format!(
-        "{}-{}-{}-{}-{}",
-        &hex[..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..]
-    ))
+    datalib_uuid_text::canonical(&hex)
 }
 
 async fn load_chats(pool: &sqlx::SqlitePool) -> Result<HashMap<String, ParsedChat>> {
@@ -420,7 +400,7 @@ async fn scan_diff(
         &datalib_etl::doltlite_raw::DiffScanSpec {
             // A recipient change reaches a chat through the inputs it
             // declared; nothing fans out.
-            global_fanout_tables: &[],
+            fanout_query: None,
             bucket_query: "
                 SELECT DISTINCT chat_id FROM (
                     SELECT coalesce(to_id, from_id) AS chat_id
@@ -489,55 +469,25 @@ async fn marked_since(
     .context("the chats of the moved read marks")
 }
 
-/// Period::All bucket key — kept in one place so the SQL and Rust
-/// paths agree.
-const PERIOD_ALL_BUCKET_KEY: &str = "all";
-
-/// Build the SQL fragment that derives the bucket key from
-/// `date_sent` for a given [`Period`]. For non-`All` periods this
-/// is a `strftime` over `date_sent / 1000` (sqlite expects
-/// unix-seconds). For `Period::All` it's a literal string so every
-/// chat_item lands in one bucket.
-fn period_key_sql(period: Period) -> String {
-    if matches!(period, Period::All) {
-        format!("'{PERIOD_ALL_BUCKET_KEY}'")
-    } else {
-        format!(
-            "strftime('{fmt}', date_sent / 1000, 'unixepoch')",
-            fmt = period.strftime_fmt(),
-        )
-    }
-}
-
 async fn load_buckets(
     pool: &sqlx::SqlitePool,
-    period: Period,
     chat_ids: &HashSet<String>,
     marks: &BTreeMap<String, ReadMark>,
 ) -> Result<Vec<DocBucket>> {
     if chat_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let period_key_expr = period_key_sql(period);
-    let sql = format!(
-        "SELECT id,
-                chat_id,
-                author_id,
-                date_sent,
-                {period_key_expr} AS period_key,
-                json(payload) AS payload
+    let chat_ids_json = serde_json::to_string(chat_ids)?;
+    let irows = sqlx::query(
+        "SELECT id, chat_id, author_id, date_sent, json(payload) AS payload
            FROM chat_items
           WHERE chat_id IN (SELECT value FROM json_each(?))
-          ORDER BY chat_id, period_key, date_sent"
-    );
-    // Audited: `period_key_expr` comes from `period_key_sql(period)` over the
-    // `Period` enum; the chat ids are bound as one JSON array.
-    let chat_ids_json = serde_json::to_string(chat_ids)?;
-    let irows = sqlx::query(sqlx::AssertSqlSafe(sql))
-        .bind(&chat_ids_json)
-        .fetch_all(pool)
-        .await
-        .context("read chat_items")?;
+          ORDER BY chat_id, date_sent",
+    )
+    .bind(&chat_ids_json)
+    .fetch_all(pool)
+    .await
+    .context("read chat_items")?;
     let edges: HashMap<String, String> = sqlx::query_as(
         "SELECT a.id, a.ref_id
            FROM chat_item_attachments a
@@ -551,19 +501,16 @@ async fn load_buckets(
     .into_iter()
     .collect();
 
-    let mut bucket_idx: HashMap<(String, String), usize> = HashMap::new();
+    let mut bucket_idx: HashMap<String, usize> = HashMap::new();
     let mut docs: Vec<DocBucket> = Vec::new();
     for r in &irows {
         let chat_id: String = r.try_get("chat_id")?;
         let author_id: String = r.try_get("author_id")?;
         let date_sent: i64 = r.try_get("date_sent")?;
-        let period_key: String = r.try_get("period_key")?;
         let payload: String = r.try_get("payload")?;
-        let key = (chat_id.clone(), period_key.clone());
-        let idx = *bucket_idx.entry(key).or_insert_with(|| {
+        let idx = *bucket_idx.entry(chat_id.clone()).or_insert_with(|| {
             docs.push(DocBucket {
                 chat_id: chat_id.clone(),
-                period_key: period_key.clone(),
                 items: Vec::new(),
             });
             docs.len() - 1
@@ -574,6 +521,7 @@ async fn load_buckets(
             outgoing,
             attachments,
             mentions,
+            quotes_sent,
         } = decode_chat_item(&payload);
         let unread = is_unread(
             &item_pk,
@@ -610,6 +558,7 @@ async fn load_buckets(
             unread,
             attachments,
             mentions,
+            quotes_sent,
         });
     }
     Ok(docs)
@@ -623,6 +572,7 @@ struct Decoded {
     /// One per `StandardMessage.attachments` slot, in order.
     attachments: Vec<AttachmentMeta>,
     mentions: Vec<Option<String>>,
+    quotes_sent: Option<i64>,
 }
 
 /// What a message's payload says about one attachment slot.
@@ -657,11 +607,16 @@ fn decode_chat_item(payload: &str) -> Decoded {
                 }
             });
             let attachments = sm.attachments.iter().map(attachment_meta).collect();
+            let quotes_sent = sm
+                .quote
+                .and_then(|q| q.target_sent_timestamp)
+                .and_then(|t| i64::try_from(t).ok());
             Decoded {
                 text,
                 outgoing,
                 attachments,
                 mentions,
+                quotes_sent,
             }
         }
         _ => Decoded {
@@ -839,9 +794,7 @@ mod load_tests {
         .unwrap();
         let chats: HashSet<String> = (1..=n).map(|i| format!("c{i}")).collect();
 
-        let docs = load_buckets(&pool, Period::All, &chats, &BTreeMap::new())
-            .await
-            .unwrap();
+        let docs = load_buckets(&pool, &chats, &BTreeMap::new()).await.unwrap();
 
         assert_eq!(docs.len(), n);
         assert!(docs.iter().all(|d| d.items.len() == 1));

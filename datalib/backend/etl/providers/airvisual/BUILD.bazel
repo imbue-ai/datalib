@@ -3,7 +3,7 @@ load("//tools:insta.bzl", "insta_update")
 
 # Two TNG-themed Pros' data folders, in the share's own layout: an
 # archive per clock change, a pre-clock file, a corrupt/restored pair,
-# a live month ending in NULs. Used by :airvisual_fixture_e2e and the
+# a live month ending in NULs. Used by :airvisual_tests (fixture_e2e) and the
 # central fixture pipeline at //tests/fixtures:ingested_tng.
 filegroup(
     name = "tng_fixture",

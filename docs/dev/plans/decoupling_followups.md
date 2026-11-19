@@ -50,6 +50,17 @@ Cross-step rules, such as "`qmd_aggregator` must read every
 not go through it: the step that can see the problem reports it as a
 warning when it runs.
 
+**Also lost: the warnings for params that do nothing.** The runner used
+to warn, at the line, about a `datalib-step` step's params that no
+longer do anything: `period` and `backup.period` (a chat is one
+document now), `common.always_clear_before_ingest`, linkedin's
+`export.fetch_photos` and email's `gmail.request_concurrency`. The
+list was the runner's (`INERT_PARAM_PATHS` in `config.rs` before this
+change); `datalib-step` still drops those keys before it parses
+(`INERT_PARAM_PATHS` in `datalib/backend/datalib_step/src/methods.rs`),
+so the step runs, but nothing tells the person the line can go. The
+same check-params door is where they belong, as warnings.
+
 ### 2. Checking a connection
 
 The wizard's "Check connection" and a picker's "Load" run

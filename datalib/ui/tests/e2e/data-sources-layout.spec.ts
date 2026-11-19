@@ -7,24 +7,32 @@
 // of its own (`CONFIG_MUTATING`).
 
 import { test, expect, type Page } from "@playwright/test";
-import { TABLE_ROWS } from "./grid-helpers";
+import { TABLE_ROWS, expectSyncEverything } from "./grid-helpers";
 
 const header = (page: Page, colId: string) =>
   page.locator(`.tg-grid .slick-header-column[col-id="${colId}"]`);
 
 async function openSources(page: Page) {
   await page.goto("/data_sources");
-  await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
+  await expectSyncEverything(page);
   await expect(page.locator(TABLE_ROWS)).not.toHaveCount(0, { timeout: 10_000 });
 }
 
-/// Run a whole sync from the card and wait for it to end — without the
-/// reload `settleRunner` does, which would throw away the layout under
-/// test. Waits on the request itself (the banner goes when it closes,
-/// which can be before anything looks for it) and on the card having
-/// read its rows at least twice meanwhile, so the grid really was handed
-/// new answers.
-async function syncEverything(page: Page) {
+/// Run a sync and wait for it to end — without the reload
+/// `settleRunner` does, which would throw away the layout under test.
+/// Waits on the request itself (the banner goes when it closes, which
+/// can be before anything looks for it) and on the card having read its
+/// rows meanwhile, so the grid really was handed new answers. A sync
+/// this short is one read: the card reads its rows one request at a
+/// time (`refreshRows` in `sourcesCardModel.ts`), so a burst of changes
+/// lands in one answer.
+///
+/// One source, opened the way the card's buttons open one. A sync of
+/// every source on this root runs every render, the index and every
+/// embed, which on a busy runner outlasts any wait here. Garmin's render
+/// is over in a second: the materialized root holds no raw store, so it
+/// fails, and its row's status and time change all the same.
+async function syncOneStep(page: Page) {
   type Request = { id: string; state: string };
   const requests = async () =>
     (await (await page.request.get("/api/requests")).json()) as Request[];
@@ -33,16 +41,22 @@ async function syncEverything(page: Page) {
   page.on("response", (r) => {
     if (r.url().includes("/api/manage/rows") && r.ok()) reads++;
   });
-  await page.getByRole("button", { name: "Sync everything" }).click();
+  const opened = await page.request.post("/api/requests", {
+    data: { roots: ["garmin/render_time_series"] },
+  });
+  expect(opened.ok(), await opened.text()).toBe(true);
   await expect
     .poll(
       async () => {
         const mine = (await requests()).filter((r) => !before.has(r.id));
-        return mine.length > 0 && mine.every((r) => r.state !== "open") && reads >= 2;
+        const ended = mine.length > 0 && mine.every((r) => r.state !== "open");
+        return ended && reads >= 1
+          ? "ended"
+          : `requests: ${JSON.stringify(mine.map((r) => r.state))}, rows read ${reads} times`;
       },
       { timeout: 60_000, intervals: [200], message: "the sync never ended" },
     )
-    .toBe(true);
+    .toBe("ended");
   // The last answer is painted a frame after it arrives.
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))));
 }
@@ -77,7 +91,7 @@ test("a dragged column width outlives a sync", async ({ page }) => {
   const dragged = (await col.boundingBox())!.width;
   expect(dragged).toBeLessThan(before - 40);
 
-  await syncEverything(page);
+  await syncOneStep(page);
   expect((await col.boundingBox())!.width).toBe(dragged);
 });
 
@@ -108,6 +122,6 @@ test("a header sort outlives a sync", async ({ page }) => {
   await expect.poll(() => groupOrder(page)).not.toEqual(declared);
   const sorted = await groupOrder(page);
 
-  await syncEverything(page);
+  await syncOneStep(page);
   expect(await groupOrder(page)).toEqual(sorted);
 });

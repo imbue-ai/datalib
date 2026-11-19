@@ -13,8 +13,8 @@
 # This is a reference, not a turn-key config: running it would sync every
 # source at once, and most need credentials (through latchkey), a backup
 # pulled off a phone, or an export on disk; `datalib-step help <type>` says
-# how to sign one in or where its data comes from. Copy the groups you want,
-# and the index groups' inputs that name them.
+# how to sign one in or where its data comes from. Copy the groups you want:
+# the index groups read every source by pattern (`*/render_markdown`).
 #
 # Shape: each source is a `[[groups]]` entry with a `type`, and steps whose
 # `id` is `<group>/<function>`: the tree the step writes, and what another
@@ -22,10 +22,11 @@
 # `ingest` brings the data into `<group>/ingest` (its `params` hold one
 # method table, `[steps.params.api]`, `[steps.params.export]`, …, and the
 # options every method shares); `render_markdown` turns that raw store into
-# documents under `<group>/render_markdown`; `keyword_index` and `embed` put
-# them in the search index; a source whose data is also numbers over time
-# adds `render_time_series`. `reads` and `locks` say what a step may run
-# beside; the `[[programs]]` entry, which verbs `datalib-step` takes.
+# documents under `<group>/render_markdown`, which the grid index puts in
+# the keyword search; `embed` puts them in the search by meaning; a source
+# whose data is also numbers over time adds `render_time_series`. `reads`
+# and `locks` say what a step may run beside; the `[[programs]]` entry,
+# which verbs `datalib-step` takes.
 #
 # TOML shape: a table header ends the table it sits in, so within a step
 # the plain keys (`id`, `command`, `inputs`) come first and the params
@@ -52,90 +53,35 @@ name = "index"
 slots = 2
 
 [[locks]]
-name = "qmd_keyword"
-slots = 1
-
-[[locks]]
-name = "qmd_embed"
+name = "embedder"
 slots = 1
 
 # --- The indexes every source feeds -------------------------------------
 
-# The SQL index behind the grid and search reads every source's documents;
-# the search index's aggregator reads every source's keyword index and
-# embeddings, and keeps the search index to the sources it names.
+# The SQL index behind the grid and search reads every source's documents
+# into the grid and the keyword search; `params.not_searched` would keep a
+# source out of search.
 [[groups]]
-id = "unified_document_index"
-name = "Document Index"
+id = "unified_grid_and_search_index"
+name = "Grid and Search Index"
 
 [[steps]]
-id = "unified_document_index/grid_index"
-command = "datalib-step run grid_index"
-inputs = [
-  "airvisual/render_markdown",
-  "apple_messages/render_markdown",
-  "apple_photos/render_markdown",
-  "beeper/render_markdown",
-  "calendar-google/render_markdown",
-  "calendar-fastmail/render_markdown",
-  "calendar-caldav/render_markdown",
-  "calendar-calendly/render_markdown",
-  "calendar-ics/render_markdown",
-  "chatgpt-api/render_markdown",
-  "chatgpt-export/render_markdown",
-  "claude-api/render_markdown",
-  "claude-export/render_markdown",
-  "claude_code/render_markdown",
-  "codex/render_markdown",
-  "contacts-fastmail/render_markdown",
-  "contacts-carddav/render_markdown",
-  "contacts-vcf/render_markdown",
-  "email-jmap/render_markdown",
-  "email-gmail/render_markdown",
-  "email-mbox/render_markdown",
-  "facebook/render_markdown",
-  "file_inventory/render_markdown",
-  "garmin/render_markdown",
-  "github/render_markdown",
-  "gitlab/render_markdown",
-  "google_drive/render_markdown",
-  "google_takeout/render_markdown",
-  "lightroom-catalog/render_markdown",
-  "lightroom-backups/render_markdown",
-  "linear/render_markdown",
-  "linkedin/render_markdown",
-  "media/render_markdown",
-  "notion/render_markdown",
-  "pdf/render_markdown",
-  "perseus/render_markdown",
-  "signal/render_markdown",
-  "slack/render_markdown",
-  "sms_backup_restore/render_markdown",
-  "todoist/render_markdown",
-  "whatsapp/render_markdown",
-  "yolink/render_markdown",
-]
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "datalib-step run unified_grid_and_search_index"
+inputs = ["*/render_markdown"]
 reads = "pinned"
 locks = ["index"]
 
-[[steps]]
-id = "unified_document_index/qmd_aggregator"
-command = "datalib-step run qmd_aggregator"
-inputs = [
-]
-reads = "pinned"
-locks = ["qmd_keyword"]
-
 # The app's search, grid and document view.
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 
 # The contacts app: your own record of who a handle is, which the person
 # chips and search read. `datalib-step help contacts-app`.
 [[applets]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 id = "datalib_contacts"
 command = "datalib-applet datalib_contacts"
 
@@ -148,11 +94,7 @@ name = "Time Series Index"
 [[steps]]
 id = "unified_time_series_index/time_series_index"
 command = "datalib-step run time_series_index"
-inputs = [
-  "airvisual/render_time_series",
-  "garmin/render_time_series",
-  "yolink/render_time_series",
-]
+inputs = ["*/render_time_series"]
 reads = "pinned"
 locks = ["index"]
 
@@ -196,23 +138,12 @@ command = "datalib-step run render_markdown airvisual"
 inputs = ["airvisual/ingest"]
 reads = "pinned"
 
-# The readings as time series, for the charts. Add this step to
-# `unified_time_series_index/time_series_index`'s inputs.
+# The readings as time series, for the charts.
 [[steps]]
 id = "airvisual/render_time_series"
 command = "datalib-step run render_time_series airvisual"
 inputs = ["airvisual/ingest"]
 reads = "pinned"
-
-# Keyword (BM25) search over the page. Add it to
-# `unified_document_index/qmd_aggregator`'s inputs. A time-series source
-# takes no `embed` step: its pages are summaries of numbers.
-[[steps]]
-id = "airvisual/keyword_index"
-command = "datalib-step run keyword_index airvisual"
-inputs = ["airvisual/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
 
 # --- apple_messages by `messages` ---------------------------------------
 
@@ -254,21 +185,14 @@ command = "datalib-step run render_markdown apple_messages"
 inputs = ["apple_messages/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "apple_messages/keyword_index"
-command = "datalib-step run keyword_index apple_messages"
-inputs = ["apple_messages/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "apple_messages/embed"
 command = "datalib-step run embed apple_messages"
-inputs = ["apple_messages/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- apple_photos by `library` ------------------------------------------
 
@@ -318,6 +242,60 @@ command = "datalib-step run render_markdown apple_photos"
 inputs = ["apple_photos/ingest"]
 reads = "pinned"
 
+# --- baby_connect by `api` ----------------------------------------------
+
+# Your Baby Connect history, signed in through latchkey (by browser), with
+# every option set.
+[[groups]]
+id = "baby_connect"
+name = "Baby Connect"
+type = "baby_connect"
+
+[[steps]]
+id = "baby_connect/ingest"
+command = "datalib-step run ingest baby_connect"
+
+# When to give up on failed requests. The download retries and backs off
+# on its own; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "beverly@enterprise.test"
+
+# Baby Connect answers one day at a time. `since` and `until` bound the
+# days read: a day ("2368-01-01"), an RFC 3339 instant, or an offset back
+# from each sync ("-90d"). Without them the read starts at the eldest
+# child's birthday and ends today.
+[steps.params.api]
+since = "2368-01-01"
+until = "2372-12-31"
+
+# One document per child: every entry, with its notes. Baby
+# Connect keeps a time as a clock reading with no zone; `time_zone` (an IANA
+# name) says where the clock was, daylight saving included. Unset reads the
+# times as UTC, and the Manage row says so.
+[[steps]]
+id = "baby_connect/render_markdown"
+command = "datalib-step run render_markdown baby_connect"
+inputs = ["baby_connect/ingest"]
+reads = "pinned"
+
+[steps.params]
+time_zone = "America/Los_Angeles"
+
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
+[[steps]]
+id = "baby_connect/embed"
+command = "datalib-step run embed baby_connect"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]
+
 # --- beeper by `texts` --------------------------------------------------
 
 # The Beeper Texts desktop app's local data, with every option set, and
@@ -344,26 +322,17 @@ inputs = ["beeper/ingest"]
 reads = "pinned"
 
 [steps.params]
-period = "month"                     # span of each page: month (default), day, year,
-                                     # or all (one page per chat)
 networks = ["signal", "googlechat"]  # which networks to render; omit for every one
                                      # (the ingest mirrors them all either way)
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "beeper/keyword_index"
-command = "datalib-step run keyword_index beeper"
-inputs = ["beeper/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "beeper/embed"
 command = "datalib-step run embed beeper"
-inputs = ["beeper/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- calendar by `google` -----------------------------------------------
 
@@ -410,21 +379,14 @@ command = "datalib-step run render_markdown calendar"
 inputs = ["calendar-google/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "calendar-google/keyword_index"
-command = "datalib-step run keyword_index calendar"
-inputs = ["calendar-google/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "calendar-google/embed"
 command = "datalib-step run embed calendar"
-inputs = ["calendar-google/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # Every occurrence of every event in a window of days around now, one row
 # each, the way Google's `singleEvents=true` lists them, in
@@ -487,21 +449,14 @@ command = "datalib-step run render_markdown calendar"
 inputs = ["calendar-fastmail/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "calendar-fastmail/keyword_index"
-command = "datalib-step run keyword_index calendar"
-inputs = ["calendar-fastmail/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "calendar-fastmail/embed"
 command = "datalib-step run embed calendar"
-inputs = ["calendar-fastmail/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # Every occurrence of every event in a window of days around now, one row
 # each, the way Google's `singleEvents=true` lists them, in
@@ -564,21 +519,14 @@ command = "datalib-step run render_markdown calendar"
 inputs = ["calendar-caldav/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "calendar-caldav/keyword_index"
-command = "datalib-step run keyword_index calendar"
-inputs = ["calendar-caldav/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "calendar-caldav/embed"
 command = "datalib-step run embed calendar"
-inputs = ["calendar-caldav/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # Every occurrence of every event in a window of days around now, one row
 # each, the way Google's `singleEvents=true` lists them, in
@@ -637,21 +585,14 @@ command = "datalib-step run render_markdown calendar"
 inputs = ["calendar-calendly/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "calendar-calendly/keyword_index"
-command = "datalib-step run keyword_index calendar"
-inputs = ["calendar-calendly/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "calendar-calendly/embed"
 command = "datalib-step run embed calendar"
-inputs = ["calendar-calendly/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # Every meeting in a window of days around now, one row each, in
 # render_occurrences/occurrences.doltlite_db, the way the other calendar
@@ -694,21 +635,14 @@ command = "datalib-step run render_markdown calendar"
 inputs = ["calendar-ics/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "calendar-ics/keyword_index"
-command = "datalib-step run keyword_index calendar"
-inputs = ["calendar-ics/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "calendar-ics/embed"
 command = "datalib-step run embed calendar"
-inputs = ["calendar-ics/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # Every occurrence of every event in a window of days around now, one row
 # each, the way Google's `singleEvents=true` lists them, in
@@ -737,6 +671,12 @@ type = "chatgpt"
 id = "chatgpt-api/ingest"
 command = "datalib-step run ingest chatgpt"
 
+[steps.params]
+# What becomes of the copy of a conversation you delete on chatgpt.com:
+# "delete_local_copy" (the default) deletes it here too; "keep_local_copy"
+# keeps it, so you can delete it upstream for privacy and still have it.
+when_deleted_upstream = "keep_local_copy"
+
 # When to give up on rate limits. The download always honours a 429's
 # Retry-After and backs off; these only decide when to stop.
 [steps.params.common.download_params]
@@ -749,15 +689,20 @@ maximum_sequential_failed_requests = 50        # the default
 account = "picard"
 
 [steps.params.api]
-since = "2025-01-01"   # only conversations updated at or after this (a day, RFC 3339,
-                       # or "-30d" from the sync); move it back later to backfill;
-                       # default: all
-max_pages = 20         # stop listing after this many pages (100 conversations each);
-                       # default: no cap
-limit = 100            # fetch at most this many conversations per run; default: no cap
-sleep_between = 0.5    # seconds to wait between requests (0 to 3600); default: none
-conv_uuids = ["https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789"]
-                       # only these conversations, by id or pasted link; omit for all
+since = "2025-01-01"              # only conversations updated at or after this (a day,
+                                  # RFC 3339, or "-30d" from the sync); move it back later
+                                  # to backfill; default: all
+max_listing_pages = 20            # stop listing after this many pages (100 conversations
+                                  # each); a listing cut short deletes nothing; default: all
+max_conversations_per_run = 100   # fetch at most this many per run, the never-fetched
+                                  # first; default: every one that changed
+refetch_newest_conversations = 3  # fetch the 3 most recently updated conversations
+                                  # again every run; unset fetches only what changed
+seconds_between_requests = 0.5    # wait between requests (0 to 3600); default: none
+conv_uuids = [                    # only these conversations, by id or pasted link, and
+  "https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789",  # no listing, so every
+]                                 # setting above but the wait is ignored, with a
+                                  # warning; omit for all
 
 # Start from a data export of this same account: the `.zip`, or the
 # folder it was unzipped into. It fills in every conversation the store
@@ -774,21 +719,14 @@ command = "datalib-step run render_markdown chatgpt"
 inputs = ["chatgpt-api/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "chatgpt-api/keyword_index"
-command = "datalib-step run keyword_index chatgpt"
-inputs = ["chatgpt-api/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "chatgpt-api/embed"
 command = "datalib-step run embed chatgpt"
-inputs = ["chatgpt-api/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- chatgpt by `export` ------------------------------------------------
 
@@ -807,6 +745,12 @@ type = "chatgpt"
 id = "chatgpt-export/ingest"
 command = "datalib-step run ingest chatgpt"
 
+[steps.params]
+# What becomes of the copy of a conversation a newer export no longer holds:
+# "delete_local_copy" (the default) deletes it here too; "keep_local_copy"
+# keeps it, so you can delete it upstream for privacy and still have it.
+when_deleted_upstream = "keep_local_copy"
+
 [steps.params.export]
 path = "~/Downloads/chatgpt-export.zip"  # the .zip, or the folder it was unzipped into
 
@@ -816,21 +760,14 @@ command = "datalib-step run render_markdown chatgpt"
 inputs = ["chatgpt-export/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "chatgpt-export/keyword_index"
-command = "datalib-step run keyword_index chatgpt"
-inputs = ["chatgpt-export/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "chatgpt-export/embed"
 command = "datalib-step run embed chatgpt"
-inputs = ["chatgpt-export/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- claude by `api` ----------------------------------------------------
 
@@ -845,6 +782,12 @@ type = "claude"
 [[steps]]
 id = "claude-api/ingest"
 command = "datalib-step run ingest claude"
+
+[steps.params]
+# What becomes of the copy of a conversation you delete on claude.ai:
+# "delete_local_copy" (the default) deletes it here too; "keep_local_copy"
+# keeps it, so you can delete it upstream for privacy and still have it.
+when_deleted_upstream = "keep_local_copy"
 
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
@@ -861,15 +804,24 @@ account = "enterprise"
 since = "2025-01-01"                  # only conversations updated on or after this (a day,
                                       # RFC 3339, or "-30d" from the sync); move it back to
                                       # backfill; unset is all
-refresh_most_recent_n_chat_count = 3  # fetch the 3 most recently updated conversations
+max_conversations_per_run = 100       # fetch at most this many per run, the never-fetched
+                                      # first; default: every one that changed
+refetch_newest_conversations = 3      # fetch each org's 3 most recently updated conversations
                                       # again every run; unset fetches only what changed
-conv_uuids = [                        # only these conversations, by id or pasted link;
-  "https://claude.ai/chat/550e8400-e29b-41d4-a716-446655440000",  # default [] is all
-]
+seconds_between_requests = 0.5        # wait between requests (0 to 3600); default: none
+conv_uuids = [                        # only these conversations, by id or pasted link, and
+  "https://claude.ai/chat/550e8400-e29b-41d4-a716-446655440000",  # no listing, so every
+]                                     # setting above but the wait is ignored, with a
+                                      # warning; default [] is all
 projects = true                       # also mirror Claude Projects: description, instructions
                                       # and knowledge documents; default true
 project_uuids = [                     # only these projects, by id or pasted link;
   "6ba7b810-9dad-11d1-80b4-00c04fd430c8",                         # default [] is all
+]
+cowork = true                         # also mirror Cowork tasks run in the cloud, each as a
+                                      # conversation; default true
+cowork_session_ids = [                # only these Cowork tasks, by id or pasted link;
+  "https://claude.ai/cowork/cse_01AbCdEfGhJkMnPqRsTuVw",          # default [] is all
 ]
 
 [[steps]]
@@ -882,21 +834,14 @@ reads = "pinned"
 max_project_doc_bytes = 131072  # cut a project knowledge document's text at this many
                                 # bytes on the project's page; default 131072 (128 KiB)
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "claude-api/keyword_index"
-command = "datalib-step run keyword_index claude"
-inputs = ["claude-api/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "claude-api/embed"
 command = "datalib-step run embed claude"
-inputs = ["claude-api/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- claude by `export` -------------------------------------------------
 
@@ -912,6 +857,12 @@ type = "claude"
 id = "claude-export/ingest"
 command = "datalib-step run ingest claude"
 
+[steps.params]
+# What becomes of the copy of a conversation a newer export no longer holds:
+# "delete_local_copy" (the default) deletes it here too; "keep_local_copy"
+# keeps it, so you can delete it upstream for privacy and still have it.
+when_deleted_upstream = "keep_local_copy"
+
 [steps.params.export]
 path = "~/Downloads/claude-export"  # the folder holding `conversations.json`
 
@@ -925,21 +876,14 @@ reads = "pinned"
 max_project_doc_bytes = 131072  # cut a project knowledge document's text at this many
                                 # bytes on the project's page; default 131072 (128 KiB)
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "claude-export/keyword_index"
-command = "datalib-step run keyword_index claude"
-inputs = ["claude-export/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "claude-export/embed"
 command = "datalib-step run embed claude"
-inputs = ["claude-export/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- claude_code by `sessions` ------------------------------------------
 
@@ -972,21 +916,14 @@ reads = "pinned"
 [steps.params]
 max_tool_result_bytes = 16384  # the default
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "claude_code/keyword_index"
-command = "datalib-step run keyword_index claude_code"
-inputs = ["claude_code/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "claude_code/embed"
 command = "datalib-step run embed claude_code"
-inputs = ["claude_code/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- codex by `sessions` ------------------------------------------------
 
@@ -1019,21 +956,14 @@ reads = "pinned"
 [steps.params]
 max_tool_result_bytes = 16384  # the default
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "codex/keyword_index"
-command = "datalib-step run keyword_index codex"
-inputs = ["codex/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "codex/embed"
 command = "datalib-step run embed codex"
-inputs = ["codex/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- contacts by `fastmail` ---------------------------------------------
 
@@ -1077,21 +1007,14 @@ command = "datalib-step run render_markdown contacts"
 inputs = ["contacts-fastmail/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "contacts-fastmail/keyword_index"
-command = "datalib-step run keyword_index contacts"
-inputs = ["contacts-fastmail/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "contacts-fastmail/embed"
 command = "datalib-step run embed contacts"
-inputs = ["contacts-fastmail/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- contacts by `carddav` ----------------------------------------------
 
@@ -1135,21 +1058,14 @@ command = "datalib-step run render_markdown contacts"
 inputs = ["contacts-carddav/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "contacts-carddav/keyword_index"
-command = "datalib-step run keyword_index contacts"
-inputs = ["contacts-carddav/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "contacts-carddav/embed"
 command = "datalib-step run embed contacts"
-inputs = ["contacts-carddav/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- contacts by `vcf` --------------------------------------------------
 
@@ -1181,21 +1097,14 @@ command = "datalib-step run render_markdown contacts"
 inputs = ["contacts-vcf/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "contacts-vcf/keyword_index"
-command = "datalib-step run keyword_index contacts"
-inputs = ["contacts-vcf/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "contacts-vcf/embed"
 command = "datalib-step run embed contacts"
-inputs = ["contacts-vcf/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- email by `jmap` ----------------------------------------------------
 
@@ -1248,21 +1157,14 @@ outlink_format = "fastmail"     # each message's `↗` link opens it in Fastmail
 only_render_labels = ["Inbox"]  # render only threads with a message under these labels
                                 # (exact paths, like `only_extract_labels`); default [] is all
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "email-jmap/keyword_index"
-command = "datalib-step run keyword_index email"
-inputs = ["email-jmap/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "email-jmap/embed"
 command = "datalib-step run embed email"
-inputs = ["email-jmap/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- email by `gmail` ---------------------------------------------------
 
@@ -1334,21 +1236,14 @@ outlink_format = "gmail"        # each message's `↗` link opens it in Gmail; o
 only_render_labels = ["Inbox"]  # render only threads with a message under these labels
                                 # (exact paths, like `only_extract_labels`); default [] is all
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "email-gmail/keyword_index"
-command = "datalib-step run keyword_index email"
-inputs = ["email-gmail/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "email-gmail/embed"
 command = "datalib-step run embed email"
-inputs = ["email-gmail/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- email by `mbox` ----------------------------------------------------
 
@@ -1391,21 +1286,63 @@ outlink_format = "gmail"        # each message's `↗` link opens it in Gmail; o
 only_render_labels = ["Inbox"]  # render only threads with a message under these labels
                                 # (exact paths, like `only_extract_labels`); default [] is all
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "email-mbox/keyword_index"
-command = "datalib-step run keyword_index email"
-inputs = ["email-mbox/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "email-mbox/embed"
 command = "datalib-step run embed email"
-inputs = ["email-mbox/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
+
+# --- email by `apple_mail` ----------------------------------------------
+
+# The Mail app on this Mac, with every option set, and searchable. No
+# sign-in. Mail's own index says what each account holds, so a message
+# deleted in Mail leaves the mirror on the next sync.
+[[groups]]
+id = "email-apple_mail"
+name = "Apple Mail"
+type = "email"
+
+[[steps]]
+id = "email-apple_mail/ingest"
+command = "datalib-step run ingest email"
+
+# Mirror only messages in these mailboxes, named as Mail shows them, with
+# a nested one as its full path. Several add up. The default, [], is all.
+[steps.params]
+only_extract_labels = ["Inbox", "Starfleet/Reports"]
+whole_threads = true  # also keep the rest of the thread of a message the mailboxes keep; default true
+
+# Without `account`, every account in Mail that holds mail is copied, each
+# under its own account id. `account` copies just that one, and the rest
+# name its account row (they need `account`).
+[steps.params.apple_mail]
+path = "~/Library/Mail"                          # Mail's folder (the default), or a copy of it
+account = "1F0B8A52-0000-4000-8000-00000000E1D0"  # copy only this account: its folder under ~/Library/Mail/V10; default every account
+account_id = "picard_mail"                       # the account's id; default made from Mail's
+display_name = "Picard's mail"                   # the account's name; default its account_id
+email_address = "picard@example.com"             # the account's address; unset by default
+is_personal = true                               # a personal (not work) account; default true
+
+[[steps]]
+id = "email-apple_mail/render_markdown"
+command = "datalib-step run render_markdown email"
+inputs = ["email-apple_mail/ingest"]
+reads = "pinned"
+
+[steps.params]
+only_render_labels = ["Inbox"]  # render only threads with a message in these mailboxes; default [] is all
+
+# Search by meaning: the embeddings of what the grid index's keyword
+# pass cut of this source. Leave it out and keyword search still finds it.
+[[steps]]
+id = "email-apple_mail/embed"
+command = "datalib-step run embed email"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]
 
 # --- facebook by `export` -----------------------------------------------
 
@@ -1430,21 +1367,14 @@ command = "datalib-step run render_markdown facebook"
 inputs = ["facebook/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "facebook/keyword_index"
-command = "datalib-step run keyword_index facebook"
-inputs = ["facebook/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "facebook/embed"
 command = "datalib-step run embed facebook"
-inputs = ["facebook/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- file_inventory by `fswalk` -----------------------------------------
 
@@ -1524,22 +1454,12 @@ command = "datalib-step run render_markdown garmin"
 inputs = ["garmin/ingest"]
 reads = "pinned"
 
-# Its numbers as time series, for charts and the time-series index: add
-# `garmin/render_time_series` to `unified_time_series_index/time_series_index`'s inputs.
+# Its numbers as time series, for charts and the time-series index.
 [[steps]]
 id = "garmin/render_time_series"
 command = "datalib-step run render_time_series garmin"
 inputs = ["garmin/ingest"]
 reads = "pinned"
-
-# Free-text search by keyword (BM25). Add it to
-# `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "garmin/keyword_index"
-command = "datalib-step run keyword_index garmin"
-inputs = ["garmin/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
 
 # --- github by `api` ----------------------------------------------------
 
@@ -1581,21 +1501,14 @@ command = "datalib-step run render_markdown github"
 inputs = ["github/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "github/keyword_index"
-command = "datalib-step run keyword_index github"
-inputs = ["github/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "github/embed"
 command = "datalib-step run embed github"
-inputs = ["github/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- gitlab by `api` ----------------------------------------------------
 
@@ -1638,21 +1551,14 @@ command = "datalib-step run render_markdown gitlab"
 inputs = ["gitlab/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "gitlab/keyword_index"
-command = "datalib-step run keyword_index gitlab"
-inputs = ["gitlab/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "gitlab/embed"
 command = "datalib-step run embed gitlab"
-inputs = ["gitlab/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- google_drive by `api` ----------------------------------------------
 
@@ -1704,21 +1610,14 @@ command = "datalib-step run render_markdown google_drive"
 inputs = ["google_drive/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "google_drive/keyword_index"
-command = "datalib-step run keyword_index google_drive"
-inputs = ["google_drive/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "google_drive/embed"
 command = "datalib-step run embed google_drive"
-inputs = ["google_drive/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- google_takeout by `export` -----------------------------------------
 
@@ -1758,21 +1657,14 @@ command = "datalib-step run render_markdown google_takeout"
 inputs = ["google_takeout/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "google_takeout/keyword_index"
-command = "datalib-step run keyword_index google_takeout"
-inputs = ["google_takeout/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "google_takeout/embed"
 command = "datalib-step run embed google_takeout"
-inputs = ["google_takeout/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- lightroom by `catalog` ---------------------------------------------
 
@@ -1811,9 +1703,8 @@ gc = false           # collect unreachable chunks each run: a smaller store,
 [steps.params.catalog]
 path = "~/Pictures/Lightroom/Enterprise.lrcat"
 
-# Lightroom renders no documents yet: query the raw store with
-# `datalib-doltlite`. This step writes the storage report every source
-# gets, which is what puts Lightroom in the grid.
+# Lightroom's render writes no markdown: it puts a grid row per photo
+# and video in the grid, and is what the photos applet draws from.
 [[steps]]
 id = "lightroom-catalog/render_markdown"
 command = "datalib-step run render_markdown lightroom"
@@ -1860,9 +1751,8 @@ gc = false           # collect unreachable chunks each run: a smaller store,
 [steps.params.backups]
 path = "~/Pictures/Lightroom/Backups"
 
-# Lightroom renders no documents yet: query the raw store with
-# `datalib-doltlite`. This step writes the storage report every source
-# gets, which is what puts Lightroom in the grid.
+# Lightroom's render writes no markdown: it puts a grid row per photo
+# and video in the grid, and is what the photos applet draws from.
 [[steps]]
 id = "lightroom-backups/render_markdown"
 command = "datalib-step run render_markdown lightroom"
@@ -1931,21 +1821,14 @@ command = "datalib-step run render_markdown linkedin"
 inputs = ["linkedin/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "linkedin/keyword_index"
-command = "datalib-step run keyword_index linkedin"
-inputs = ["linkedin/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "linkedin/embed"
 command = "datalib-step run embed linkedin"
-inputs = ["linkedin/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- media by `fswalk` --------------------------------------------------
 
@@ -2029,21 +1912,14 @@ command = "datalib-step run render_markdown notion"
 inputs = ["notion/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "notion/keyword_index"
-command = "datalib-step run keyword_index notion"
-inputs = ["notion/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "notion/embed"
 command = "datalib-step run embed notion"
-inputs = ["notion/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- pdf by `fswalk` ----------------------------------------------------
 
@@ -2081,21 +1957,14 @@ command = "datalib-step run render_markdown pdf"
 inputs = ["pdf/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "pdf/keyword_index"
-command = "datalib-step run keyword_index pdf"
-inputs = ["pdf/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "pdf/embed"
 command = "datalib-step run embed pdf"
-inputs = ["pdf/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- perseus by `github` ------------------------------------------------
 
@@ -2141,21 +2010,14 @@ alignment_pairs = [["perseus-grc2", "perseus-eng4"]]
 # [steps.params.common]
 # input_path = "~/Downloads/perseus-tei"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "perseus/keyword_index"
-command = "datalib-step run keyword_index perseus"
-inputs = ["perseus/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "perseus/embed"
 command = "datalib-step run embed perseus"
-inputs = ["perseus/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- signal by `backup` -------------------------------------------------
 
@@ -2188,24 +2050,14 @@ command = "datalib-step run render_markdown signal"
 inputs = ["signal/ingest"]
 reads = "pinned"
 
-[steps.params]
-period = "month"  # span of each rendered doc: month (default), day, year or all
-
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "signal/keyword_index"
-command = "datalib-step run keyword_index signal"
-inputs = ["signal/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "signal/embed"
 command = "datalib-step run embed signal"
-inputs = ["signal/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- slack by `api` -----------------------------------------------------
 
@@ -2278,21 +2130,14 @@ command = "datalib-step run render_markdown slack"
 inputs = ["slack/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "slack/keyword_index"
-command = "datalib-step run keyword_index slack"
-inputs = ["slack/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "slack/embed"
 command = "datalib-step run embed slack"
-inputs = ["slack/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- sms_backup_restore by `backup` -------------------------------------
 
@@ -2323,21 +2168,14 @@ command = "datalib-step run render_markdown sms_backup_restore"
 inputs = ["sms_backup_restore/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "sms_backup_restore/keyword_index"
-command = "datalib-step run keyword_index sms_backup_restore"
-inputs = ["sms_backup_restore/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "sms_backup_restore/embed"
 command = "datalib-step run embed sms_backup_restore"
-inputs = ["sms_backup_restore/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- todoist by `api` ---------------------------------------------------
 
@@ -2380,21 +2218,14 @@ command = "datalib-step run render_markdown todoist"
 inputs = ["todoist/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "todoist/keyword_index"
-command = "datalib-step run keyword_index todoist"
-inputs = ["todoist/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "todoist/embed"
 command = "datalib-step run embed todoist"
-inputs = ["todoist/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- whatsapp by `backup` -----------------------------------------------
 
@@ -2431,21 +2262,14 @@ command = "datalib-step run render_markdown whatsapp"
 inputs = ["whatsapp/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "whatsapp/keyword_index"
-command = "datalib-step run keyword_index whatsapp"
-inputs = ["whatsapp/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "whatsapp/embed"
 command = "datalib-step run embed whatsapp"
-inputs = ["whatsapp/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # --- yolink by `api` ----------------------------------------------------
 
@@ -2500,20 +2324,9 @@ command = "datalib-step run render_markdown yolink"
 inputs = ["yolink/ingest"]
 reads = "pinned"
 
-# Its numbers as time series, for charts and the time-series index: add
-# `yolink/render_time_series` to `unified_time_series_index/time_series_index`'s inputs.
+# Its numbers as time series, for charts and the time-series index.
 [[steps]]
 id = "yolink/render_time_series"
 command = "datalib-step run render_time_series yolink"
 inputs = ["yolink/ingest"]
 reads = "pinned"
-
-# Free-text search by keyword (BM25). Add it to
-# `unified_document_index/qmd_aggregator`'s inputs. A time-series source
-# takes no `embed` step: its pages are summaries of numbers.
-[[steps]]
-id = "yolink/keyword_index"
-command = "datalib-step run keyword_index yolink"
-inputs = ["yolink/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]

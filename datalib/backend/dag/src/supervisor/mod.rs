@@ -7,6 +7,7 @@ pub mod announce;
 pub mod host;
 pub mod inputs;
 pub mod locks;
+pub mod pass;
 pub mod record;
 pub mod reload;
 pub mod round;

@@ -9,9 +9,8 @@
   },
   "app": {
     "windows": [],
-    "withGlobalTauri": true,
     "security": {
-      "csp": null
+      "csp": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     }
   },
   "bundle": {

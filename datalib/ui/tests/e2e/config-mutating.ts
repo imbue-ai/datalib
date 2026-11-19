@@ -23,4 +23,6 @@ export const CONFIG_MUTATING = [
   // Links handles to contacts in the contacts app's store, on a root
   // that has the app (`contactsRoot` in playwright.config.ts).
   "contacts",
+  // Mutes problem rows, in a store under the root's `datalib_curated/`.
+  "problem-mutes",
 ] as const;

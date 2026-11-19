@@ -1,8 +1,9 @@
 //! axum router for the Datalib HTTP API.
 //!
-//! Dolt is the source of truth. **QMDs are write-only output**: `/api/chat`
-//! serves the file body verbatim, sans frontmatter, and the UI renders it. We
-//! never parse a QMD back into structured data — structured fields come from
+//! Dolt is the source of truth. **Rendered markdown is write-only output**: the
+//! applet's `/chat` serves it verbatim, sans frontmatter, as the render store
+//! spells it, and the UI renders it. We
+//! never parse rendered markdown back into structured data — structured fields come from
 //! `grid_rows`.
 //!
 //! `config.toml` is the only config this side reads, in the shape the
@@ -362,6 +363,23 @@ fn routes(state: AppState) -> Router {
         ))
         // Outside the token gate, so a refused request is logged too.
         .layer(axum::middleware::from_fn(request_log::record))
+        .layer(axum::middleware::from_fn(send_no_referrer))
+}
+
+/// A link in a rendered message leads to its sender's site, and a
+/// `Referer` would tell that site the app's address and that the message
+/// was opened. Set on every response, so a page an applet answers or the
+/// desktop shell loads carries it too.
+async fn send_no_referrer(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response<Body> {
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        header::REFERRER_POLICY,
+        axum::http::HeaderValue::from_static("no-referrer"),
+    );
+    response
 }
 
 async fn accounts(State(s): State<AppState>) -> Json<serde_json::Value> {
@@ -523,9 +541,11 @@ async fn proxy_impl(
         Err(e) => return applet_error(StatusCode::BAD_REQUEST, &format!("read body: {e}")),
     };
     let target = format!("{path}{query}");
-    // Card scripts written before the rename still call the old prefix.
+    // Card scripts and agents written before a rename still call an old prefix.
     let id = match id.as_str() {
-        "unified_index" => UNIFIED_DOCUMENT_INDEX_APPLET.to_string(),
+        "unified_index" | "unified_document_index" => {
+            UNIFIED_GRID_AND_SEARCH_INDEX_APPLET.to_string()
+        }
         _ => id,
     };
     let registry = s.applets.clone();
@@ -882,13 +902,16 @@ fn source_ids(checked: &datalib_dag::config::ConfigCheck) -> Vec<String> {
 }
 
 /// The applet id that serves the grid, search and the document view.
-const UNIFIED_DOCUMENT_INDEX_APPLET: &str = "unified_document_index";
+const UNIFIED_GRID_AND_SEARCH_INDEX_APPLET: &str = "unified_grid_and_search_index";
 /// The contacts app's applet id: its mount prefix, and the row whose
 /// Browse opens its table.
 pub(crate) const CONTACTS_APPLET: &str = "datalib_contacts";
 
 fn configured_source_count(fringe: &[String]) -> usize {
-    let prefix = format!("{}/", datalib_core::layout::UNIFIED_DOCUMENT_INDEX_DIR);
+    let prefix = format!(
+        "{}/",
+        datalib_core::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR
+    );
     fringe.iter().filter(|id| !id.starts_with(&prefix)).count()
 }
 
@@ -916,7 +939,7 @@ pub struct ConfigResponse {
     pub diagnostics: Vec<datalib_dag::Diagnostic>,
     /// Whether the app can serve its own views at all. False in three
     /// cases: the file is not a config, or it declares no usable
-    /// `unified_document_index` applet — one screen for both, because they have
+    /// `unified_grid_and_search_index` applet — one screen for both, because they have
     /// one consequence: that applet serves the grid, search and the
     /// document view, so without it every view is a 502 — or the root
     /// was written by a newer datalib (`newer_root` says which stores),
@@ -938,6 +961,9 @@ pub struct ConfigResponse {
     /// The launch's upgrade: the steps being asked to migrate, and the ones
     /// that answered they need to run again, which the page offers to run.
     pub upgrade: UpgradeView,
+    /// The newest "Free up disk space" since this server started, while
+    /// it runs and after: how each step it asks stands.
+    pub free_space: Option<supervisor::FreeSpace>,
 }
 
 /// `dag/README.md` §"Upgrading a root", as the page needs it.
@@ -1013,12 +1039,16 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
                 && c.cfg
                     .applets
                     .iter()
-                    .any(|a| a.id == UNIFIED_DOCUMENT_INDEX_APPLET)
+                    .any(|a| a.id == UNIFIED_GRID_AND_SEARCH_INDEX_APPLET)
                 && newer_root.is_none(),
         ),
         None => (false, None, 0, Vec::new(), false),
     };
     let pass = s.sync.upgrade();
+    let free_space = s.sync.free_space().await.unwrap_or_else(|e| {
+        tracing::warn!("config: could not read the free-space pass: {e:#}");
+        None
+    });
     let rerender = match &checked {
         Some(c) if !pass.migrating => rerun_offer(&c.graph, &s.sync).await,
         _ => Vec::new(),
@@ -1035,6 +1065,7 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
         source_count,
         latchkey_cli: datalib_core::node_runtime::latchkey_cli_hint(),
         upgrade: UpgradeView { pass, rerender },
+        free_space,
     })
 }
 
@@ -1221,6 +1252,7 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
         source_count: 0,
         latchkey_cli: datalib_core::node_runtime::latchkey_cli_hint(),
         upgrade: UpgradeView::default(),
+        free_space: None,
     })
 }
 
@@ -1413,13 +1445,18 @@ pub struct DagRecord {
     pub steps: std::collections::BTreeMap<String, datalib_dag::supervisor::record::StepRecord>,
     /// step id → what it has reported in the run in flight.
     pub progress: std::collections::HashMap<String, DagStepProgress>,
-    /// step id → the errors and warnings its store held the last time
-    /// it counted, in whichever run that was, and the passes of its last
-    /// run that failed and were run again.
+    /// step id → what it last reported of its problems, and the passes of
+    /// its last run that failed and were run again.
     pub problems: std::collections::HashMap<String, manage::ProblemCounts>,
+    /// The grid index's error and warning rows, by whose they are and
+    /// whether muted: what a row's red and yellow numbers are.
+    pub problem_rows: manage::IndexCounts,
     /// step id → the Items cell: what its store held the last time it
     /// counted, and the series behind that. Only render steps report it.
     pub items: std::collections::HashMap<String, datalib_columns::Timeseries>,
+    /// step id → the Modal spend cell: what its Sandboxes cost over the
+    /// runs the store keeps. Only an `embed` that used Modal reports it.
+    pub spend: std::collections::HashMap<String, datalib_columns::Timeseries>,
     /// step id → what its own queue still held when its last run ended.
     pub owed: std::collections::HashMap<String, manage::Owed>,
     /// How long each read took, for the line a slow Manage answer writes.
@@ -1469,6 +1506,13 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         &datalib_runs::latest_metric(root, datalib_problems::METRIC).await,
         &datalib_runs::latest_metric(root, datalib_metrics::FAILED_PASSES).await,
     );
+    // Read-only, from the index and the mutes store (problem_mutes/README.md).
+    let problem_rows = datalib_problem_mutes::counts(root)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("could not count the problems in the index, so none are drawn: {e:#}");
+            None
+        });
     let (since, _) = datalib_time::IsoOffsetTimestamp::now_local()
         .bump_micros(-(manage::ITEMS_WINDOW.as_micros() as i64))
         .to_utc_and_offset();
@@ -1476,6 +1520,11 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         &datalib_runs::latest_metric(root, datalib_metrics::ITEMS).await,
         &datalib_runs::latest_metric(root, datalib_metrics::DOCUMENTS).await,
         &datalib_runs::metric_history(root, datalib_metrics::ITEMS, &since).await,
+    );
+    let spend = manage::spend_by_step(
+        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_COST).await,
+        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_SANDBOXES).await,
+        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_SANDBOX_SECONDS).await,
     );
     let owed =
         manage::owed_by_step(&datalib_runs::latest_metric(root, datalib_metrics::OWED).await);
@@ -1491,7 +1540,9 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         steps: state.steps,
         progress,
         problems,
+        problem_rows,
         items,
+        spend,
         owed,
         took,
     }
@@ -1527,7 +1578,9 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
         steps: records,
         progress,
         problems: _,
+        problem_rows: _,
         items: _,
+        spend: _,
         owed: _,
         took: _,
     } = dag_record(&s.root, &s.sync).await;
@@ -2168,7 +2221,7 @@ async fn log_lines(
             return Err((
                 StatusCode::BAD_REQUEST,
                 "ask for the lines after_seq or before_seq a line, not both".to_string(),
-            ))
+            ));
         }
     };
     let q = datalib_runs::LogQuery {
@@ -2471,22 +2524,22 @@ mod tests {
             "scaffold rejected: {}\n---\n{text}",
             checked.render(std::path::Path::new("scaffold"))
         );
-        // The fan-ins have no inputs to name yet, so on a scaffolded
-        // root they *are* the fringe. They are what `--sync` can target
-        // until the first source is added — and running them against
-        // nothing is a no-op, not an error.
+        // The `unified_grid_and_search_index` step has no source to read yet, so on a scaffolded
+        // root it *is* the fringe. It is what
+        // `--sync` can target until the first source is added — and
+        // running it against nothing is a no-op, not an error.
         assert_eq!(
             source_ids(&checked),
-            [
-                "unified_document_index/grid_index",
-                "unified_document_index/qmd_aggregator"
-            ]
+            ["unified_grid_and_search_index/unified_grid_and_search_index"]
         );
         // And it declares the applet without which the app has no
         // views at all — the thing `app_ready` reports on — and the
         // contacts app, which a new root gets on by default.
         let applets: Vec<&str> = checked.cfg.applets.iter().map(|a| a.id.as_str()).collect();
-        assert_eq!(applets, [UNIFIED_DOCUMENT_INDEX_APPLET, CONTACTS_APPLET]);
+        assert_eq!(
+            applets,
+            [UNIFIED_GRID_AND_SEARCH_INDEX_APPLET, CONTACTS_APPLET]
+        );
     }
 
     /// A scaffolded root has no *sources*, even though its two index
@@ -2498,10 +2551,7 @@ mod tests {
         let fringe = fringe_of(STARTER_CONFIG);
         assert_eq!(
             fringe,
-            [
-                "unified_document_index/grid_index",
-                "unified_document_index/qmd_aggregator"
-            ]
+            ["unified_grid_and_search_index/unified_grid_and_search_index"]
         );
         assert_eq!(configured_source_count(&fringe), 0);
     }
@@ -2558,7 +2608,7 @@ mod tests {
             .cfg
             .applets
             .iter()
-            .any(|a| a.id == UNIFIED_DOCUMENT_INDEX_APPLET));
+            .any(|a| a.id == UNIFIED_GRID_AND_SEARCH_INDEX_APPLET));
 
         // …and the PUT refuses it anyway, naming every problem so the
         // caller needs one round-trip rather than one per mistake.

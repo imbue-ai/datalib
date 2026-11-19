@@ -13,6 +13,7 @@ use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
 use datalib_etl_render::pages::PageSize;
+use datalib_etl_render::section::join;
 
 const STANZA: &str = "claude-code";
 const SESSION_1: &str = "91ad7d3f-2915-5956-995d-cba3754abadc";
@@ -132,11 +133,9 @@ async fn the_tng_fixture_ingests_and_renders() {
         .unwrap();
     db.close().await;
 
-    let out_root = root.join("render");
     let mut docs: Vec<RenderedMarkdown> = Vec::new();
     let outcome = render(
         &raw_path,
-        &out_root,
         STANZA,
         &Progress::default(),
         &mut |md| {
@@ -164,7 +163,7 @@ async fn the_tng_fixture_ingests_and_renders() {
             .unwrap_or_else(|| panic!("no document titled like {needle:?}"))
     };
     let s1 = by_title("Deflector dish drift");
-    let md = std::fs::read_to_string(&s1.md_path).unwrap();
+    let md = join(&s1.sections);
     assert!(md.contains("Tool use: Bash"), "{md}");
     assert!(
         md.contains("Tool result: Read"),
@@ -203,11 +202,11 @@ async fn the_tng_fixture_ingests_and_renders() {
 
     let agent = by_title("subagent of Deflector dish drift");
     assert!(title_of(agent).starts_with("Scan the emitter logs"));
-    let md = std::fs::read_to_string(&agent.md_path).unwrap();
+    let md = join(&agent.sections);
     assert!(md.contains("Tool use: Grep"));
 
     let s2 = by_title("cold Earl Grey");
-    let md = std::fs::read_to_string(&s2.md_path).unwrap();
+    let md = join(&s2.sections);
     assert!(md.contains("Tool result: Bash (error)"));
     assert!(md.contains("1 image(s) not shown"));
     assert!(md.contains("claude-sonnet-5"));
@@ -309,13 +308,11 @@ async fn a_render_reads_a_page_at_a_time_and_only_what_changed() {
             .unwrap();
         db.close().await;
     };
-    let out_root = td.path().join("render");
     let render_with = |range: RawRange<'_>, progress: Progress| {
         let mut titles: Vec<String> = Vec::new();
         let mut pages: Vec<usize> = Vec::new();
         let outcome = render(
             &raw_path,
-            &out_root,
             STANZA,
             &progress,
             &mut |md| {

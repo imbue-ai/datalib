@@ -1,0 +1,497 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== google-takeout 00000000-0000-811b-999e-be378270a4c8 Jean-Luc Picard
+--- chunk 0
+title: Jean-Luc Picard | text: Jean-Luc Picard <+12025550101> — Sun 1 Mar 2364 17:00
+
+Number One, report to the bridge.
+
+
+--- chunk 1
+title: Jean-Luc Picard | text: Me — Sun 1 Mar 2364 17:01
+
+On my way, Captain.
+Riker out.
+
+
+--- chunk 2
+title: Jean-Luc Picard | text: Jean-Luc Picard <+12025550101> — Sun 1 Mar 2364 17:03
+
+Here is the sensor reading.
+
+Jean-Luc Picard - Text - 2364-03-01T09_00_00Z-1-1.jpg
+
+
+--- chunk 3
+title: Jean-Luc Picard | text: Jean-Luc Picard <+12025550101> — Mon 2 Mar 2364 18:00
+
+**Voicemail:** Number One, the away team is ready. Make it so.
+
+🔊 Jean-Luc Picard - Voicemail - 2364-03-02T10_00_00Z.mp3 — 22 B
+
+
+=== google-takeout 00000000-0000-819a-843b-b8b8c4ffdc90 +12025550190
+--- chunk 0
+title: +12025550190 | text: Ferengi Commerce Authority <+12025550190> — Wed 4 Mar 2364 20:00
+
+**Voicemail:** Greetings, valued customer. You have won a free holodeck program.
+
+🔊  - Voicemail - 2364-03-04T12_00_00Z.mp3 — 23 B
+
+
+=== google-takeout 00000000-0000-825b-8782-6b584a2e75c1 YouTube history
+--- chunk 0
+title: YouTube history | text: Me — Thu 4 Jun 2026 18:48
+
+Watched Encounter at Farpoint · Captain's Log Official
+
+
+--- chunk 1
+title: YouTube history | text: Me — Sat 6 Jun 2026 04:00
+
+Watched The Measure of a Man · Lt. Cmdr. Data
+
+
+--- chunk 2
+title: YouTube history | text: Me — Sat 6 Jun 2026 16:00
+
+Watched Sins of the Father · Brüder 1234
+
+
+=== google-takeout 00000000-0000-842f-b9a6-cc14dbeb0fbc The Art of Diplomacy
+--- chunk 0
+title: The Art of Diplomacy | text: Me
+
+By Jean-Luc Picard
+
+
+--- chunk 1
+title: The Art of Diplomacy | text: Me — Sun 12 Jan 2364 17:41
+
+> Make it so.
+
+The captain's motto.
+
+
+--- chunk 2
+title: The Art of Diplomacy | text: Me — Wed 5 Feb 2364 02:00
+
+> There is a way out of every box, a solution to every puzzle; it's just a matter of finding it.
+
+
+--- chunk 3
+title: The Art of Diplomacy | text: Me — Fri 21 Feb 2364 06:15
+
+> Chapter 7: The Cardassian Question
+
+
+=== google-takeout 00000000-0000-84b4-80af-50ab120b27f4 Google Maps
+--- chunk 0
+title: Google Maps | text: Me — Sun 4 Jan 2026 08:00
+
+**Mount Seleya**
+
+
+--- chunk 1
+title: Google Maps | text: Me — Sat 14 Feb 2026 08:00
+
+**Risa Beach Resort**
+
+Risa
+
+
+--- chunk 2
+title: Google Maps | text: Me — Sun 1 Mar 2026 08:00
+
+**Quark's Bar, Deep Space Nine**
+
+
+--- chunk 3
+title: Google Maps | text: Me — Sat 11 Apr 2026 10:00
+
+★★☆☆☆
+
+The station at Farpoint was not what it seemed.
+
+
+--- chunk 4
+title: Google Maps | text: Me — Sat 2 May 2026 12:00
+
+**Resort Lounge** ★★★★☆
+
+Risa
+
+Lovely beaches. The horga'hn shop was crowded.
+
+
+--- chunk 5
+title: Google Maps | text: Me — Wed 3 Jun 2026 19:30
+
+**Ten Forward** ★★★★★
+
+Deck 10, USS Enterprise-D
+
+Excellent place to relax after duty shift. Synthehol is acceptable; the view of warp transit is unmatched.
+
+- **Service:** ★★★★★
+- **Price per person:** Replicated, free
+- **Recommended dishes:** Tea, Earl Grey, hot; Gagh
+- **Anything else?:** Ask Guinan for the green drink.
+
+
+--- chunk 6
+title: Google Maps | text: Me — Thu 4 Jun 2026 19:30
+
+View from Picard's usual table
+
+Ten Forward bar
+
+
+=== google-takeout 00000000-0000-858d-8592-42d8db3d75d5 Lieutenant Commander Geordi La Forge, Chief Engineer
+--- chunk 0
+title: Lieutenant Commander Geordi La Forge, Chief Engineer | text: Lieutenant Commander Geordi La Forge, Chief Engineer <+12025550153> — Thu 5 Mar 2364 17:30
+
+Placed call — Lieutenant Commander Geordi La Forge, Chief Engineer
+
+
+=== google-takeout 00000000-0000-877c-9cdc-4597c96ff7ac google-takeout storage
+--- chunk 0
+title: google-takeout storage | text: Source: google-takeout
+
+# google-takeout — storage
+
+Measured Tue Apr 15th, 2369 at 00:00.
+
+| Kind | Step | What | Size | Count | Id |
+| Source Size | ingest | `google-takeout/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `google-takeout/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `google-takeout/ingest/blobs.sqlite#cas_objects` |  | 12 rows | `00000000` |
+| Store | ingest | `google-takeout/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#chat_attachments` |  | 4 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#chat_groups` |  | 3 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#chat_messages` |  | 6 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#chat_users` |  | 1 row | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#gemini_activity` |  | 3 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#gemini_attachments` |  | 3 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#ingested_files` |  | 28 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#maps_photos` |  | 1 row | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#maps_reviews` |  | 3 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#maps_saved_lists` |  | 5 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#maps_saved_places` |  | 3 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#my_maps_placemarks` |  | 4 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#play_books_annotations` |  | 4 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#voice_attachments` |  | 5 rows | `00000000` |
+
+--- chunk 1
+title: google-takeout storage | text: Source: google-takeout
+
+ `google-takeout/ingest/entities.doltlite_db#my_maps_placemarks` |  | 4 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#play_books_annotations` |  | 4 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#voice_attachments` |  | 5 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#voice_bills` |  | 2 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#voice_greetings` |  | 1 row | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#voice_messages` |  | 11 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#youtube_subscriptions` |  | 3 rows | `00000000` |
+| Table | ingest | `google-takeout/ingest/entities.doltlite_db#youtube_watch_history` |  | 3 rows | `00000000` |
+
+=== google-takeout 00000000-0000-8841-8b6d-116feade3563 Jean-Luc Picard, William Riker
+--- chunk 0
+title: Jean-Luc Picard, William Riker | text: Jean-Luc Picard <picard@enterprise.starfleet> — Tue 11 Feb 2025 11:33
+
+Number One, set a course for Earth.
+
+
+--- chunk 1
+title: Jean-Luc Picard, William Riker | text: Jean-Luc Picard <picard@enterprise.starfleet> — Tue 11 Feb 2025 11:33
+
+Labels: Starred
+
+Number One, set a course for Risa.
+
+🔗 Risa
+
+*Edited Tue Feb 11th, 2025 at 11:35*
+
+
+--- chunk 2
+title: Jean-Luc Picard, William Riker | text: William Riker <riker@enterprise.starfleet> — Wed 5 Mar 2025 21:34
+
+> **Jean-Luc Picard**:
+>
+> Number One, set a course for Risa.
+
+Aye, sir.
+
+📄 Duty roster
+
+📎 course-laid-in.txt — 58 B
+
+🖼 *[risa-shore-leave.png (not yet fetched)]*
+
+
+=== google-takeout 00000000-0000-885c-86c6-d4a3cb9a45c2 Away team favourites
+--- chunk 0
+title: Away team favourites | text: Me
+
+Places the away team keeps going back to
+
+
+--- chunk 1
+title: Away team favourites | text: Me
+
+**Mount Seleya**
+
+Bring water
+
+
+--- chunk 2
+title: Away team favourites | text: Me
+
+**Mount Seleya**
+
+Second climb
+
+
+=== google-takeout 00000000-0000-886c-849f-4206f438cee1 Tales of the Picard Maneuver
+--- chunk 0
+title: Tales of the Picard Maneuver | text: Me
+
+By William Riker · Narrated by Data
+
+
+--- chunk 1
+title: Tales of the Picard Maneuver | text: Me — Thu 30 Jan 2364 15:20
+
+*Chapter 3, 12:04*
+
+
+=== google-takeout 00000000-0000-88ab-b54c-6183150810df Gemini
+--- chunk 0
+title: Gemini | text: Me — Sat 14 Feb 2026 18:48
+
+Tell me about the Prime Directive. Is it ever waived?
+
+📎 Prime Directive summary.txt — 97 B
+
+
+--- chunk 1
+title: Gemini | text: Gemini — Sat 14 Feb 2026 18:48
+
+The Prime Directive (General Order 1) prohibits Starfleet personnel from interfering with the natural development of pre-warp civilizations.
+
+> "No interference with the internal development of alien civilizations."
+
+Captains have set it aside, but never without a court of inquiry after.
+
+
+--- chunk 2
+title: Gemini | text: Me — Tue 3 Mar 2026 16:15
+
+Make this saucer sketch look like the Enterprise-D at warp.
+
+saucer-sketch.jpg
+
+
+--- chunk 3
+title: Gemini | text: Gemini — Tue 3 Mar 2026 16:15
+
+Here is the Enterprise-D at warp.
+
+2364030112000000001-ncc1701d0e5f6a7b.jpeg
+
+
+--- chunk 4
+title: Gemini | text: Me — Sun 5 Apr 2026 17:15
+
+How does a warp coil work?
+
+
+--- chunk 5
+title: Gemini | text: Gemini — Sun 5 Apr 2026 17:15
+
+A warp coil generates an asymmetric subspace field around the ship, allowing faster-than-light travel without local time dilation.
+
+*   **Verterium cortenide** windings shape the field.
+*   The coils fire in sequence, front to back.
+
+
+=== google-takeout 00000000-0000-8911-b4f4-e7022a921136 Away missions
+--- chunk 0
+title: Away missions | text: Me
+
+Every planet the Enterprise-D sent an away team to.
+
+
+--- chunk 1
+title: Away missions | text: Me
+
+Labels: Shore leave
+
+**Risa**
+
+Horga'hn optional.  
+Bring sunscreen.
+
+📍 37.7749295, -122.4194155
+
+🖼 https://memory-alpha.example/risa.jpg
+
+
+--- chunk 2
+title: Away missions | text: Me
+
+Labels: Shore leave
+
+**Ten Forward**
+
+📍 51.5, -0.1
+
+
+--- chunk 3
+title: Away missions | text: Me
+
+Labels: Patrol routes
+
+**Neutral Zone sweep**
+
+Long-range sensors only.
+
+〰 3 points
+
+
+--- chunk 4
+title: Away missions | text: Me
+
+Labels: Patrol routes
+
+**Romulan border**
+
+〰 4 points
+
+
+=== google-takeout 00000000-0000-89f3-bd53-77e4883722ea Group Conversation
+--- chunk 0
+title: Group Conversation | text: Wesley Crusher <+12025550142> — Fri 6 Mar 2364 17:00
+
+The warp field equations check out.
+
+
+--- chunk 1
+title: Group Conversation | text: Jean-Luc Picard <+12025550101> — Fri 6 Mar 2364 17:02
+
+Well done, Ensign.
+
+
+=== google-takeout 00000000-0000-8a29-a97a-3aa759a898ef Wesley Crusher
+--- chunk 0
+title: Wesley Crusher | text: Wesley Crusher <+12025550142> — Tue 3 Mar 2364 19:00
+
+Missed call — Wesley Crusher
+
+
+=== google-takeout 00000000-0000-8a5c-92c1-f761ed74e325 +12025550147
+--- chunk 0
+title: +12025550147 | text: +12025550147 — Thu 5 Mar 2364 16:00
+
+Placed call — +12025550147
+
+
+=== google-takeout 00000000-0000-8c4c-ac1c-6428fa2456b3 Shore leave
+--- chunk 0
+title: Shore leave | text: Me
+
+**Ten Forward**
+
+Guinan's bar, Deck 10.
+Ask for the green drink.
+
+
+--- chunk 1
+title: Shore leave | text: Me
+
+**Risa**
+
+
+--- chunk 2
+title: Shore leave | text: Me
+
+**Holodeck 3**
+
+Reserved for Dixon Hill programs
+
+
+=== google-takeout 00000000-0000-8cce-a52f-e56db2f9fc70 YouTube subscriptions
+--- chunk 0
+title: YouTube subscriptions | text: Me
+
+Captain's Log Official
+
+
+--- chunk 1
+title: YouTube subscriptions | text: Me
+
+Lt. Cmdr. Data
+
+
+--- chunk 2
+title: YouTube subscriptions | text: Me
+
+Riker, William T.
+
+
+=== google-takeout 00000000-0000-8e5f-8eb1-967f63ffb4eb Ten Forward regulars
+--- chunk 0
+title: Ten Forward regulars | text: Guinan <guinan@tenforward.example> — Fri 7 Mar 2025 20:00
+
+Who wants to hear about the Nexus?
+
+
+--- chunk 1
+title: Ten Forward regulars | text: Data <data@enterprise.starfleet> — Fri 7 Mar 2025 20:05
+
+I would.
+
+📎 nexus-draft.txt — 18 B
+
+
+--- chunk 2
+title: Ten Forward regulars | text: Data <data@enterprise.starfleet> — Fri 7 Mar 2025 20:05
+
+Labels: Starred
+
+↪ *In the thread Guinan started*
+
+I would. I have attached my notes.
+
+*Edited Fri Mar 7th, 2025 at 20:06*
+
+📎 nexus notes — 33 B
+
+📎 nexus-draft.txt — 18 B
+
+
+--- chunk 3
+title: Ten Forward regulars | text: William Riker <riker@enterprise.starfleet> — Sat 8 Mar 2025 21:00
+
+Jam session tonight: https://youtu.be/tngJazz01
+
+*Sent via Trombone Bot*
+
+
+--- chunk 4
+title: Ten Forward regulars | text: Guinan <guinan@tenforward.example> — Sun 9 Mar 2025 19:00
+
+📹 https://meet.google.com/tng-tenf-wrd
+
+*Call ended*
+
+
+=== google-takeout 00000000-0000-8ee7-a23a-b6a9b64eb3fb Lieutenant Worf, Son of Mogh, Chief of Security
+--- chunk 0
+title: Lieutenant Worf, Son of Mogh, Chief of Security | text: Lieutenant Worf, Son of Mogh, Chief of Security <+12025550160> — Sat 7 Mar 2364 15:15
+
+**Voicemail:** Commander, the away team is ready.
+
+🔊 Lieutenant Worf, Son of Mogh, Chief of Security - Voi.mp3 — 23 B

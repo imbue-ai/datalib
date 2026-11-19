@@ -57,6 +57,29 @@ The two `http_archive`s must name the same doltlite release;
 `//tools:version_pins_test` checks that they and `DOLTLITE_VERSION`
 agree.
 
+## BLAKE3's SIMD kernels
+
+doltlite names every chunk it stores by its BLAKE3 hash, and hashes
+again on the way back in to check what it read. The amalgamation
+embeds BLAKE3 1.8.5 with its dispatcher, which asks the CPU at run time
+which kernel it can run, and its SIMD kernels: SSE2, SSE4.1, AVX2 and
+AVX-512 on x86_64, each compiled for its own instructions inside the
+one file, and NEON on aarch64. An x86 CPU without AVX2 still runs: the
+dispatcher picks the widest kernel it has. It names every BLAKE3 symbol
+`doltlite_<name>`, so the Rust `blake3` crate's own kernels, under the
+plain names, never meet it in a static musl link. Nothing here compiles
+a kernel: `:sqlite3`, `libdoltlite` and the reader wheels
+(`scripts/release/compile_reader_library.sh`) each compile the one file.
+
+The kernels matter. On the portable code alone, a 1.46 GB Lightroom
+catalog's ingest spent over 40% of its writer thread hashing.
+
+`:blake3_kernels_test` checks doltlite's hashing against BLAKE3's own
+test vectors, that the dispatcher has a SIMD kernel to pick, and that
+`@blake3_c`, which supplies the vectors and the header the test
+declares BLAKE3's functions with, is the version the amalgamation
+embeds.
+
 ## How caching works
 
 Each arrow above is a Bazel action with its own cache entry:
@@ -98,23 +121,29 @@ Steps:
    - `doltlite-autoconf-X.Y.Z.tar.gz` — for its pre-generated `shell.c`
      only. The amalgamation is library-only (no `main()`), so the CLI
      has to come from here.
-3. Check the chunk-store format before anything else: grep
+3. Check the BLAKE3 the new amalgamation embeds: grep
+   `BLAKE3_VERSION_STRING` in it, and move `@blake3_c` in
+   `MODULE.bazel` to that version (`:blake3_kernels_test` fails until
+   they agree, and fails too if the release stops dispatching a SIMD
+   kernel).
+4. Check the chunk-store format before anything else: grep
    `CHUNK_STORE_VERSION` in the old and new `doltlite.c`. A different
    number means every existing `.doltlite_db` is refused at open — a
    migration, not a bump ([`docs/dev/doltlite.md` § Versions](../../docs/dev/doltlite.md#versions-the-storage-format-and-what-each-pin-brought)).
-4. Compute both sha256s:
+5. Compute both sha256s:
    ```sh
    curl -fsSL <url> | shasum -a 256
    ```
-5. Update `urls` + `sha256` + `strip_prefix` in **both** `MODULE.bazel`
+6. Update `urls` + `sha256` + `strip_prefix` in **both** `MODULE.bazel`
    `http_archive`s, and the version line in the comment above them.
-6. Bump the `DOLTLITE_VERSION` constant at the top of `BUILD.bazel`.
+7. Bump the `DOLTLITE_VERSION` constant at the top of `BUILD.bazel`.
    It feeds `-DDOLTLITE_VERSION` into both the library and the CLI.
-7. `bazelisk test //tools:version_pins_test
-   //third-party/doltlite:cli_version_test` — the pins agree, and the
+8. `bazelisk test //tools:version_pins_test
+   //third-party/doltlite:cli_version_test
+   //third-party/doltlite:blake3_kernels_test` — the pins agree, and the
    CLI links and its dolt-SQL surface works. Not every release
    reaches PyPI (0.50.5–0.50.7 never did); pick one that did.
-8. Run what holds the engine facts:
+9. Run what holds the engine facts:
    `//datalib/backend/doltlite_facts:doltlite_facts_test` (one test per
    single-process fact, a module per section of `doltlite.md`) and
    `//datalib/backend/etl:doltlite_two_process_test` (a writer and a
@@ -130,7 +159,7 @@ Steps:
    brought.
    A failed count assertion elsewhere may be upstream getting *more*
    right; check before calling it a regression.
-9. Then `bazelisk test //...`: every store open goes through the new
+10. Then `bazelisk test //...`: every store open goes through the new
    engine.
 
 ## Files in this package
@@ -139,6 +168,8 @@ Steps:
 |-----------------------------|------------------------------------------------------------------------|
 | `BUILD.bazel`               | `DOLTLITE_VERSION` + shared defines, `rename_amalgamation` genrule, `sqlite3` cc_library, `doltlite` CLI cc_binary, `libdoltlite` shared library, `library_copts` (the flags, for the reader wheels' compile), `cli_version_test`. |
 | `amalgamation.BUILD`        | BUILD file injected into the `@doltlite_amalgamation//` external repo. |
+| `blake3.BUILD`              | BUILD file injected into the `@blake3_c//` external repo: BLAKE3's header and test vectors, for `blake3_kernels_test`. |
+| `blake3_kernels_test.c`     | doltlite's BLAKE3 against BLAKE3's test vectors, with a SIMD kernel to dispatch to. |
 | `autoconf.BUILD`            | BUILD file injected into the `@doltlite_autoconf//` external repo; exports `shell.c`. |
 | `cli_version_test.sh`       | Smoke-tests the built CLI: that it links, runs, and has a real dolt-SQL surface. Its `--version` check compares `DOLTLITE_VERSION` with itself, so pin drift is `//tools:version_pins_test`'s job. |
 | `libsqlite3-sys.patch`      | Absolutize `$(BINDIR)`-derived paths inside libsqlite3-sys's build.rs. |

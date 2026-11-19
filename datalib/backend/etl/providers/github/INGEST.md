@@ -1,9 +1,8 @@
-# GitHub Extract
+# GitHub: download
 
-`github-ingest` mirrors GitHub pull requests and their conversation
-from `api.github.com` into one doltlite raw store,
-`<out>/entities.doltlite_db` (`<data_root>/<source_id>/ingest/` under a
-sync). Every table keeps GitHub's payload untouched; the schema is in
+The ingest step of a `github` source mirrors GitHub pull requests and
+their conversation from `api.github.com` into one doltlite raw store,
+`<data_root>/<source_id>/ingest/entities.doltlite_db`. Every table keeps GitHub's payload untouched; the schema is in
 `src/ingest/schema_raw.rs`.
 
 | table | endpoint |
@@ -33,16 +32,17 @@ nothing (`src/probe.rs`).
 
 ## Discovery scopes
 
-Each `--scope` (default: `author:@me`, `commenter:@me`, `mentions:@me`)
-goes through the search-issues API as `is:pr <scope>`, bounded by
+Each scope in `DEFAULT_SCOPES` (`author:@me`, `commenter:@me`,
+`mentions:@me`; a config cannot change them) goes through the
+search-issues API as `is:pr <scope>`, bounded by
 `updated:` to the stretch that scope has not looked at yet. The union
 of the results is what is listed. `mentions:@me` is the cheap way to
 catch incoming review pings on PRs the user otherwise wouldn't touch.
 
 ## What is owed
 
-Nothing is marked done (docs/dev/data_architecture_ingestion.md, "What is left to fetch"). Three facts are
-stored, and what to fetch is worked out from them each run:
+Three facts are stored, and what to fetch is worked out from them each
+run ([`data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md#what-is-left-to-fetch-listed-minus-held)):
 
 - **Listed.** Every search result is a row of `listed_change_requests`:
   the PR's key (`<owner>/<repo>#<n>`) and the `updated_at` the search
@@ -99,8 +99,8 @@ many results share one `updated_at` as one search answers, ends with a
 asks again. A search GitHub reports as `incomplete_results` covers
 nothing, so the next run asks again.
 
-`--full` searches every scope with no bound and fetches everything
-listed, whatever the store holds.
+`FetchOptions::full_sync`, which only tests set, searches every scope
+with no bound and fetches everything listed, whatever the store holds.
 
 A store written before the listing existed is carried over on open
 (rung 1 of `schema_raw::LADDER`): every stored PR is listed at the
@@ -147,14 +147,13 @@ A run that was stopped records none of this: once a stop is asked
 for, every request fails at once, and that says nothing about GitHub.
 What it listed before the stop is stored, and the next run fetches it.
 
-## Single-PR mode
+## Named pull requests
 
-`--pull-request owner/repo#NUM` (or a github.com PR URL;
-repeatable) skips discovery entirely, fetching just
-those PRs whatever the store holds: nothing is listed or covered, and
+`api.pull_requests` (`owner/repo#NUM` or a github.com PR URL, one per
+entry) skips discovery entirely, fetching just those PRs whatever the
+store holds: nothing is listed or covered, and
 a PR an earlier run could not fetch whole waits for the next discovery
-run. A give-up of the retry loop is a `phase:fetch` row. The config's
-`api.pull_requests` list does the same.
+run. A give-up of the retry loop is a `phase:fetch` row.
 
 ## Config
 
@@ -164,10 +163,8 @@ The `api` block of a `github` source (`github_config`):
 
 ## Run it
 
-```sh
-bazelisk build //third-party/latchkey-curl-shims
-export LATCHKEY_CURL=$PWD/bazel-bin/third-party/latchkey-curl-shims/latchkey-curl-router
-bazelisk run //datalib/backend/etl/providers/github:github_ingest -- \
-    --out /tmp/github-mirror \
-    --pull-request <owner>/<repo>#<num>
-```
+Outside a sync, run `datalib-step run ingest github` by hand with the
+step's params as JSON in `DATALIB_DAG_PARAMS`, such as
+`{"api": {"pull_requests": ["<owner>/<repo>#<num>"]}}`
+([`first_time_dev.md`](/docs/dev/first_time_dev.md) §"One source's
+download, with no config").

@@ -22,7 +22,7 @@ import { readFileSync } from "node:fs";
 declare const process: { env: Record<string, string | undefined> };
 
 async function openADocument(page: Page): Promise<void> {
-  const resp = await page.request.get("/applet/unified_document_index/search?q=&limit=2000");
+  const resp = await page.request.get("/applet/unified_grid_and_search_index/search?q=&limit=2000");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as {
     rows: { markdown_uuid: string | null; provider: string }[];
@@ -229,7 +229,7 @@ function quarksHtml(): string {
 }
 
 async function quarksUuid(page: Page): Promise<string> {
-  const resp = await page.request.get("/applet/unified_document_index/search?q=&limit=2000");
+  const resp = await page.request.get("/applet/unified_grid_and_search_index/search?q=&limit=2000");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as {
     rows: { markdown_uuid: string | null; conversation_name: string }[];
@@ -424,10 +424,15 @@ test.describe("Quark's prize email", () => {
     const w = watch(context);
     const uuid = await quarksUuid(page);
     const asSent = quarksHtml();
-    await page.route(`**/applet/unified_document_index/chat/${uuid}`, async (route) => {
-      const resp = await route.fetch();
-      await route.fulfill({ response: resp, json: { ...(await resp.json()), body: asSent } });
-    });
+    const chat = `/applet/unified_grid_and_search_index/chat/${uuid}`;
+    await page.route(
+      (url) => url.pathname === chat,
+      async (route) => {
+        const resp = await route.fetch();
+        const pieces = [{ uuid: null, md: asSent }];
+        await route.fulfill({ response: resp, json: { ...(await resp.json()), pieces } });
+      },
+    );
     await page.goto(`/chat/${uuid}`);
     await expect(
       page.frameLocator("iframe.doc-frame").getByText("Claim your holosuite upgrade"),
@@ -520,7 +525,7 @@ test.describe("Quark's prize email", () => {
 // the sandbox policy. Each test turns one more off.
 
 async function barTabHref(page: Page): Promise<string> {
-  const resp = await page.request.get("/applet/unified_document_index/search?q=&limit=2000");
+  const resp = await page.request.get("/applet/unified_grid_and_search_index/search?q=&limit=2000");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as {
     rows: { markdown_uuid: string | null; conversation_name: string }[];

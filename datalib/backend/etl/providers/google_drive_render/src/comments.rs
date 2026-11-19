@@ -6,7 +6,7 @@
 
 use datalib_etl_render::html::{escape_md_block, escape_text};
 use datalib_etl_render::message::MessageHeader;
-use datalib_etl_render::section::{msg_div_open, Section, MSG_DIV_CLOSE};
+use datalib_etl_render::section::{msg_class, Section};
 use std::collections::BTreeMap;
 
 use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact, Seen};
@@ -77,7 +77,7 @@ pub fn threads(source_id: &str, rows: &[(String, Value)], me: Option<&Handle>) -
                 quote: c
                     .pointer("/quotedFileContent/value")
                     .and_then(Value::as_str)
-                    .map(decode_entities)
+                    .map(|q| datalib_html_entities::decode(q).into_owned())
                     .filter(|q| !q.trim().is_empty()),
                 resolved: c.get("resolved").and_then(Value::as_bool) == Some(true),
                 messages,
@@ -207,13 +207,16 @@ pub fn sections(t: &Thread) -> Vec<Section> {
     }
     let mut out = vec![Section::unkeyed(open)];
     for m in &t.messages {
-        let mut s = msg_div_open(&m.id.uuid, Provider::GoogleDrive);
-        s.push_str("\n\n");
+        let mut s = String::new();
         s.push_str(
             &MessageHeader {
                 author: &m.author,
                 handle: m.handle.as_ref(),
                 date_ms: m.created.as_deref().and_then(datalib_time::record_stamp_ms),
+                offset_secs: m
+                    .created
+                    .as_deref()
+                    .and_then(datalib_time::written_offset_secs),
                 source_url: None,
             }
             .render(),
@@ -226,9 +229,11 @@ pub fn sections(t: &Thread) -> Vec<Section> {
         if let Some(note) = m.note {
             s.push_str(&format!("*{note}*\n\n"));
         }
-        s.push_str(MSG_DIV_CLOSE);
-        s.push_str("\n\n");
-        out.push(Section::keyed(&m.id.uuid, s));
+        out.push(Section::boxed(
+            &m.id.uuid,
+            msg_class(Provider::GoogleDrive, &[]),
+            &s,
+        ));
     }
     out.push(Section::unkeyed("</details>\n\n".to_string()));
     out
@@ -260,48 +265,6 @@ pub fn authors(source_id: &str, threads: &[Thread], me: Option<&Handle>) -> Vec<
         });
     }
     by_handle.into_values().map(|(c, _)| c).collect()
-}
-
-/// A quote as Drive sends it, HTML-escaped, back to the text it was.
-fn decode_entities(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(i) = rest.find('&') {
-        out.push_str(&rest[..i]);
-        rest = &rest[i..];
-        let Some(end) = rest[..rest.len().min(12)].find(';') else {
-            out.push('&');
-            rest = &rest[1..];
-            continue;
-        };
-        let name = &rest[1..end];
-        let decoded = match name {
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "quot" => Some('"'),
-            "apos" => Some('\''),
-            "nbsp" => Some('\u{a0}'),
-            _ => name
-                .strip_prefix("#x")
-                .or_else(|| name.strip_prefix("#X"))
-                .and_then(|h| u32::from_str_radix(h, 16).ok())
-                .or_else(|| name.strip_prefix('#').and_then(|d| d.parse().ok()))
-                .and_then(char::from_u32),
-        };
-        match decoded {
-            Some(c) => {
-                out.push(c);
-                rest = &rest[end + 1..];
-            }
-            None => {
-                out.push('&');
-                rest = &rest[1..];
-            }
-        }
-    }
-    out.push_str(rest);
-    out
 }
 
 #[cfg(test)]
@@ -492,14 +455,6 @@ mod tests {
                 ),
                 ("google:name/Worf".to_string(), vec!["Worf".to_string()], 1),
             ]
-        );
-    }
-
-    #[test]
-    fn entities_decode_and_a_stray_ampersand_stays() {
-        assert_eq!(
-            decode_entities("a &amp; b &#39;c&#x27; &lt;d&gt; & e &bogus; f"),
-            "a & b 'c' <d> & e &bogus; f"
         );
     }
 }

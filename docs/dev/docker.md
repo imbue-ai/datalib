@@ -18,25 +18,36 @@ security model the walkthrough's bind-mount rules rest on.
   `latchkey` launcher, with `lib/libdoltlite.so` left in that tree; plus
   the release's `runtime-<triple>.tar.gz`
   asset unpacked beside them as `runtime/` — the Node runtime plus the
-  lockfile-pinned `qmd` and `latchkey` package trees the binaries
+  lockfile-pinned `latchkey` package tree the binaries
   resolve beside themselves, checked against its published sha256 at
   build time. There is no Node, npm or npx on the image's `PATH`;
   nothing is fetched from a registry at build or run time, and the first-use fetch
-  a tarball install does (`runtime_fetch.md`) never fires here;
-- qmd's three models pre-fetched into `/root/.cache/qmd/models` by
-  `datalib-step pull-models`, each from its pinned HuggingFace revision
-  and sha256-verified, so a first sync never stalls on a multi-gigabyte
-  download;
+  a tarball install does (`runtime_fetch.md`) never fires here.
+  `DATALIB_NO_FETCH=1` is set, so nothing datalib would otherwise fetch
+  for itself (the runtime, the embedding model, a package) is fetched at run
+  time: a missing piece is a failed step naming it
+  ([`runtime_fetch.md`](runtime_fetch.md) § "When anything may be
+  fetched");
+- the embedding model (about 330 MB), the one model search loads,
+  put in `/root/.cache/qmd/models` by `datalib-step pull-models` at
+  build time from its pinned HuggingFace revision and sha256-verified,
+  so search by meaning works with nothing fetched. The query-expansion
+  and reranker models are pinned too but nothing loads them, so nothing
+  fetches or ships them;
 - the demo data library at `/opt/datalib/demo`, ingested and rendered
   at image build time from the TNG fixtures under
   `/opt/datalib/demo-sources` (see below);
 - `tini` as PID 1 and [`entrypoint.sh`](../../datalib/docker/entrypoint.sh),
-  which provisions latchkey's encryption key.
+  which provisions latchkey's encryption key;
+- a user, `datalib` (uid and gid 1000), that everything runs as
+  (§ "Permissions and signals").
 
-The `:<version>-slim` variant is the same image without the qmd
-models. It is amd64 only and not tagged `latest`. The devcontainer CI
-runs in is a separate image (`.devcontainer/Dockerfile`, published by
-`devcontainer.yml`) and does not build on either.
+Two variants are published: the image above, and **`<version>-cuda`**,
+the same image with NVIDIA's cuBLAS and datalib's CUDA module added, for
+a machine with an NVIDIA GPU (§ "The CUDA variant"). The devcontainer
+CI runs in is a separate image
+(`.devcontainer/Dockerfile`, published by `devcontainer.yml`) and does
+not build on it.
 
 Published for `linux/amd64` and `linux/arm64` from
 [`datalib/docker/Dockerfile`](../../datalib/docker/Dockerfile) by the
@@ -46,12 +57,75 @@ on every `v*` tag: each architecture builds on a runner of its own, with
 nothing emulated, and pushes by digest, then one job gives the two a tag.
 The image is not built from source: it consumes the
 Linux gnu tarballs the same release just produced, so what a user pulls
-is byte-for-byte what `curl | sh` installs on a glibc host. A failed mac
+is byte-for-byte what `curl | sh` installs on a glibc host at or above
+the floor ([`release_steps.md`](release_steps.md) §"The Linux floor";
+the image's own Ubuntu is newer, which costs nothing). A failed mac
 job does not stop the image, so `:latest` can be ahead of the release
 ([`release_steps.md`](release_steps.md) §"What one failed job costs").
 The user's page names the image by digest, not by a tag, and each release
 carries that digest as its `docker-image.digest` asset
 ([`security_posture.md`](security_posture.md)).
+
+## The CUDA variant
+
+`ghcr.io/imbue-ai/datalib:<version>-cuda` (and `latest-cuda`), for
+`linux/amd64` only, is what a person with an NVIDIA GPU runs, with
+`docker run --gpus all`, and what embedding on Modal runs
+([`plans/embed_on_modal.md`](plans/embed_on_modal.md)). On top of the
+plain image it holds:
+
+- **`/opt/datalib/lib/libggml-cuda.so`**, the release's
+  `ggml-cuda-x86_64-unknown-linux-gnu.tar.gz` asset unpacked, which
+  `datalib-step` loads from `lib/` beside itself when there is a GPU
+  ([`embedder/README.md`](../../datalib/backend/embedder/README.md)
+  § "Measured by hand");
+- **cuBLAS 12** (`libcublas.so.12`, `libcublasLt.so.12`) in
+  `/usr/local/lib/datalib-cuda/cublas`, on `LD_LIBRARY_PATH`. NVIDIA's
+  container runtime passes a container the driver (`libcuda.so.1`) and
+  nothing else, so without cuBLAS inside, `--gpus all` would still embed
+  on the CPU. It is about 580 MB compressed, which is why the plain
+  image goes without.
+
+Both are NVIDIA's or link NVIDIA's code, whose use is governed by the
+CUDA Toolkit EULA, not datalib's MIT license:
+[`CUDA-NOTICE.md`](../../third-party/llama_cpp/CUDA-NOTICE.md), which the
+image carries in each of those directories' `licenses/`, beside NVIDIA's
+own `LICENSE` for the component there (`licenses/nvidia/cudart/`,
+`licenses/nvidia/cublas/`), copied from the archive Bazel fetched it in
+(`@llama_cpp//:nvidia_licenses`).
+
+**They sit below the release, so that a pull of the next version can
+reuse them.** The Dockerfile's `CUDA` build argument picks a stage
+between the OS layers and the tarball: `none`, or `12`, which adds the
+two archives with `ADD --link`, which builds a layer apart from the
+layers under it. A layer is reused only if its digest is the same, and
+its digest is the hash of every byte of the layer, directory times
+included. So `scripts/release/stage_docker_context.sh` roots each
+archive at `/` (`cuda/rootfs-cuda-libs.tar` holds
+`usr/local/lib/datalib-cuda/…`, `cuda/rootfs-ggml-cuda.tar` holds
+`opt/datalib/…`), every entry dated 1970 as `stage_cuda.sh` dates its
+own. Added to a directory instead (`ADD … /opt/datalib/`), BuildKit
+makes the destination and its parents itself and stamps them with the
+build's clock, so each build gets new digests for the same bytes:
+measured with BuildKit v0.34.2, two builds from a cold cache a few
+minutes apart gave different layers, over the same Ubuntu and over
+different ones, and the rooted archives gave the same two layers both
+times (583 MB and 105 MB compressed). The comparison is of what a
+registry holds after a push, which is what a pull compares; a `--load`
+into the local Docker store says nothing about it.
+`.github/workflows/cuda.yml` builds the variant up to its demo
+(`--target app`) twice from a cold cache, the second time over Ubuntu
+24.04, pushes both to a registry on the runner, and fails if the two
+CUDA layers' digests differ (`scripts/release/cuda_layer_digests.py`).
+It runs on every change that could move them.
+A machine with no GPU runs the variant on the
+CPU, as the plain image does: `docker-publish-cuda` checks the
+walkthrough against it on a runner that has none.
+
+Published by the `cuda`, `docker-image-cuda` and `docker-publish-cuda`
+jobs, apart from the plain image's, so the plain image neither waits for
+the CUDA build nor fails with it. Each release carries its digest as
+`docker-image-cuda.digest`.
 
 ## The demo library
 
@@ -65,13 +139,15 @@ and grid-indexes them. That run is also the one end-to-end smoke test
 of the shipped pipeline: a tarball whose binaries cannot ingest the
 fixtures fails the image build.
 
-The image carries half of the search index. Each source's
-`keyword_index` (qmd's BM25 index, a couple of seconds for the whole
-demo) runs at image time, so a free-text search answers the moment the
-container starts. Its `embed` steps and `qmd_aggregator` sit below a
-`BUILD-TIME CUT` marker that the Dockerfile drops for its run and keeps
-in the shipped file, so the first sync in a container adds the
-embeddings. The slim build has no models to embed with.
+The image carries the whole search index: every step in the demo
+config runs at image time, `unified_grid_and_search_index`'s keyword pass and each
+source's `embed` included, so search by words and by meaning
+both answer the moment the container starts.
+
+The demo config is in the shape `datalib-http` leaves as written, so a
+container start does not rewrite it and leave a `config.toml.bak`:
+`config_examples_test.rs` in `datalib-step` holds it, and every other
+config the repo ships or documents, to that.
 
 ## Checking the walkthrough against an image
 
@@ -125,9 +201,12 @@ start:
 
 - if `LATCHKEY_ENCRYPTION_KEY` is already in the environment, use it
   (for ephemeral, no-persistence runs);
-- else read `/root/.latchkey/encryption_key` from the bind mount,
+- else read `/root/.latchkey/encryption_key` from the bind mount
+  (`$LATCHKEY_DIRECTORY` when that is set),
   generating it (`openssl rand -base64 32`, mode `0600`) on the first
   run against that folder;
+- if the key is there but this user cannot read it (an earlier image
+  wrote it as root), stop and print the `chown` that fixes it;
 - if the folder is read-only and has no key, warn and use an ephemeral
   key, so credentials written that run are unreadable next run.
 
@@ -148,12 +227,37 @@ which has no browser.
 
 ## Permissions and signals
 
-The container runs as root so that `/root/.latchkey` and `/data` have
-a predictable owner. On a Linux host, files written into bind mounts
-are therefore owned by `uid 0`; Docker Desktop on macOS maps them to
-your user. `--user "$(id -u):$(id -g)"` is possible but moves `HOME`,
-and with it the pre-baked model cache and latchkey's store, so prefer a
-`chown` afterwards.
+Nothing in the container runs as root. The image's `USER` is
+`datalib`, uid and gid 1000, so the parsers that read a stranger's mail
+and PDFs hold no more than the folders it owns: the data root, the
+credential store, the demo library and its own home. The binaries and
+the runtime under `/opt/datalib` are root's and read-only to it.
+
+Its home stays `/root`, which is only a path: every `docker run` a
+person has written mounts `/root/.latchkey`, and the image puts the
+embedding model in `/root/.cache/qmd/models`, the shared cache
+(`datalib_embedding_models::shared_models_dir`) every data root reads
+under that home.
+
+uid 1000 is the first user on most Linux desktops, so a folder such a
+user mounts is already writable. Docker Desktop on macOS maps ownership
+to the Mac user, and nothing needs doing there. Otherwise the mounted
+folders must be writable by uid 1000, which is one command with no
+`sudo`, since it runs in the image:
+
+```sh
+docker run --rm --user 0 --entrypoint chown -v "$DATA_ROOT:/data" "$IMG" -R 1000:1000 /data
+```
+
+The same command brings forward a data root or a credential store an
+earlier image wrote as root. The entrypoint looks for that on every
+start: it warns when the top three levels of `/data` hold anything it
+cannot write (a read-only mount is left alone), and it refuses to start
+when the latchkey key is there but unreadable, since going on would mean
+a new key that cannot open what is stored. Each message prints that
+command. Running the image with `--user "$(id -u):$(id -g)"` instead is
+not supported: that user cannot write the image's home, where the file
+fingerprint cache lives.
 
 PID 1 is [tini](https://github.com/krallin/tini), so `docker stop`
 delivers SIGTERM cleanly to `datalib-dag`, which forwards it to its

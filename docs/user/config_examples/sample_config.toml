@@ -1,38 +1,30 @@
 # Sample config in the format `datalib-dag` runs: each source is a
 # `[[groups]]` entry with a `type` plus its steps (`ingest`,
-# `render_markdown` and its two search steps), and the two shared index
-# steps under the `unified_document_index` group, which every source's
-# rendered markdown feeds. A step's `id` is `<group>/<function>`, and
-# `inputs` name steps by that id. Each step's `command` runs
-# `datalib-step run <function>`, followed by the group's `type` for a
-# step under a source. See configs/dag_example.toml for a walkthrough
-# of the format and all_sources.toml (next to this file) for every
-# supported source.
+# `render_markdown` and `embed`), and the shared index step under the
+# `unified_grid_and_search_index` group, which every source's rendered
+# documents feed. A step's `id` is `<group>/<function>`, and `inputs`
+# name steps by that id. Each step's `command` runs `datalib-step run
+# <function>`, the program datalib ships, followed by the group's `type`
+# for a step under a source.
+# `datalib-step help dag-example` walks through the format, and
+# `datalib-step help all-sources` shows every source.
 
 # Where the downloaded data gets written. Top-level keys have to come
 # before the first [[…]] header — everything after a table header
 # belongs to that table.
 data_root = "~/datalib"
 
-# Shared fan-in steps: the SQL index behind the grid UI, fed by every
-# source's rendered markdown, and the qmd aggregator, which runs after
-# every source's own search steps.
+# The shared fan-in step: the SQL index behind the grid and the keyword
+# search, fed by every source's rendered documents.
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-id = "unified_document_index/grid_index"
-command = "datalib-step run grid_index"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "datalib-step run unified_grid_and_search_index"
 reads = "pinned"
 locks = ["index"]
-inputs = ["gmail-takeout/render_markdown", "slack/render_markdown", "claude-api/render_markdown"]
-
-[[steps]]
-id = "unified_document_index/qmd_aggregator"
-command = "datalib-step run qmd_aggregator"
-reads = "pinned"
-locks = ["qmd_keyword"]
-inputs = ["gmail-takeout/keyword_index", "gmail-takeout/embed", "slack/keyword_index", "slack/embed", "claude-api/keyword_index", "claude-api/embed"]
+inputs = ["*/render_markdown"]
 
 # Google Takeout Gmail export. The `mbox` table is the method: it puts
 # the email provider in file-backed mode, reading the file at its
@@ -55,24 +47,17 @@ reads = "pinned"
 inputs = ["gmail-takeout/ingest"]
 
 [[steps]]
-id = "gmail-takeout/keyword_index"
-command = "datalib-step run keyword_index email"
-reads = "files"
-locks = ["qmd_keyword"]
-inputs = ["gmail-takeout/render_markdown"]
-
-[[steps]]
 id = "gmail-takeout/embed"
 command = "datalib-step run embed email"
 reads = "files"
-locks = ["qmd_embed"]
-inputs = ["gmail-takeout/keyword_index"]
+locks = ["embedder"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
-# Slack workspace mirror. Credentials come from `latchkey` at runtime
-# (see the "Register Slack with latchkey" section in the first-time
-# user guide). `channels` restricts the sync to the listed channels;
-# omit it (or set `all_channels = true`) to mirror every channel the
-# account can see. `media = true` pulls file attachments into blobs.
+# Slack workspace mirror. Credentials come from `latchkey` at runtime;
+# `datalib-step help slack` says how to sign in. `channels` restricts
+# the sync to the listed channels; omit it (or set `all_channels =
+# true`) to mirror every channel the account can see. `media = true`
+# pulls file attachments into blobs.
 [[groups]]
 id = "slack"
 type = "slack"
@@ -113,24 +98,17 @@ reads = "pinned"
 inputs = ["slack/ingest"]
 
 [[steps]]
-id = "slack/keyword_index"
-command = "datalib-step run keyword_index slack"
-reads = "files"
-locks = ["qmd_keyword"]
-inputs = ["slack/render_markdown"]
-
-[[steps]]
 id = "slack/embed"
 command = "datalib-step run embed slack"
 reads = "files"
-locks = ["qmd_embed"]
-inputs = ["slack/keyword_index"]
+locks = ["embedder"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
-# Anthropic / claude.ai conversation mirror. Credentials come from
-# `latchkey` at runtime (see the "Register Claude web with latchkey"
-# section in the first-time user guide). An empty `api` table fetches
-# every conversation across every org the account can see; uncomment
-# the knobs below to bound the work on incremental re-runs.
+# Claude (claude.ai) conversation mirror. Credentials come from
+# `latchkey` at runtime; `datalib-step help claude` says how to sign in.
+# An empty `api` table fetches every conversation, project and Cowork
+# task across every org the account can see; uncomment the knobs below
+# to bound the work.
 [[groups]]
 id = "claude-api"
 type = "claude"
@@ -139,10 +117,11 @@ type = "claude"
 id = "claude-api/ingest"
 command = "datalib-step run ingest claude"
 [steps.params.api]
-# refresh_most_recent_n_chat_count = 3   # force-refetch top-N by updated_at
+# refetch_newest_conversations = 3   # fetch the 3 newest again every sync
 # since = "2025-01-01"      # only sync conversations updated at/after this
 # projects = false          # skip Claude Projects (default: on)
 # project_uuids = [...]     # or: mirror only these projects (UUIDs or URLs)
+# cowork = false            # skip Cowork tasks (default: on)
 
 [[steps]]
 id = "claude-api/render_markdown"
@@ -151,32 +130,25 @@ reads = "pinned"
 inputs = ["claude-api/ingest"]
 
 [[steps]]
-id = "claude-api/keyword_index"
-command = "datalib-step run keyword_index claude"
-reads = "files"
-locks = ["qmd_keyword"]
-inputs = ["claude-api/render_markdown"]
-
-[[steps]]
 id = "claude-api/embed"
 command = "datalib-step run embed claude"
 reads = "files"
-locks = ["qmd_embed"]
-inputs = ["claude-api/keyword_index"]
+locks = ["embedder"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
-# The app's own surface: `unified_document_index` serves the grid, the document
+# The app's own surface: `unified_grid_and_search_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is
 # an applet rather than a built-in so the backend does not have to know
 # what a grid row is.
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 
 # The contacts app: your own record of who a handle is, which the person
 # chips and search read. `datalib-step help contacts-app`.
 [[applets]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 id = "datalib_contacts"
 command = "datalib-applet datalib_contacts"
 
@@ -185,14 +157,9 @@ command = "datalib-applet datalib_contacts"
 command = "datalib-step"
 verbs = ["reset", "prepare", "compact", "collect"]
 
-# Whatever writes qmd's keyword index: two at once can lose a document.
+# One embed at a time: each loads the model and writes the search index.
 [[locks]]
-name = "qmd_keyword"
-slots = 1
-
-# Whatever embeds into qmd's index: two at once race on its vectors.
-[[locks]]
-name = "qmd_embed"
+name = "embedder"
 slots = 1
 
 # The fan-ins that read every source.

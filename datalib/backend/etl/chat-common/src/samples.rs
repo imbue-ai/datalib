@@ -17,6 +17,8 @@ use datalib_etl::progress::Progress;
 use datalib_schema::providers::Provider;
 use datalib_time::RecordStampPrecision;
 
+use datalib_etl_render::section::join;
+
 use crate::render::{render_all, RenderProfile, TextFormat, ENTITY_KIND_CONVERSATION};
 use crate::types::{
     AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem, NormalizedDoc,
@@ -50,19 +52,20 @@ pub fn sample_chats() -> Vec<NormalizedChat> {
     ]
 }
 
-/// Render every sample into `out_dir` as a source named `samples`, and
-/// return the `.md` paths in corpus order.
+/// Render every sample, write each as `<id>.md` into `out_dir`, and
+/// return the paths in corpus order.
 pub fn write_samples(out_dir: &Path) -> Result<Vec<String>> {
     let mut paths = Vec::new();
     render_all(
         &sample_profile(),
         &sample_chats(),
-        out_dir,
         "samples",
         &HashMap::new(),
         &Progress::noop(),
         &mut |doc| {
-            paths.push(doc.md_path.to_string_lossy().into_owned());
+            let path = out_dir.join(format!("{}.md", doc.markdown_uuid));
+            std::fs::write(&path, join(&doc.sections))?;
+            paths.push(path.to_string_lossy().into_owned());
             Ok(())
         },
     )?;
@@ -71,11 +74,13 @@ pub fn write_samples(out_dir: &Path) -> Result<Vec<String>> {
 
 fn text(uuid: &str, author: &str, at: i64, body: &str) -> NormalizedChatItem {
     NormalizedChatItem {
+        reply_to: None,
         message_uuid: uuid.to_string(),
         author_handle: None,
         author_kind: AuthorKind::Named,
         author_display: author.to_string(),
         date_ms: Some(at),
+        date_offset_secs: None,
         text: Some(body.to_string()),
         kind: ItemKind::Text,
         attachments: vec![],
@@ -110,6 +115,8 @@ fn chat(id: &str, display: &str, items: Vec<NormalizedChatItem>) -> NormalizedCh
         contacts: Vec::new(),
         inputs: Vec::new(),
         id: id.to_string(),
+        containers: Vec::new(),
+        filed_under: Vec::new(),
         chat_uuid: id.to_string(),
         display: display.to_string(),
         title: Some(display.to_string()),
@@ -122,7 +129,6 @@ fn chat(id: &str, display: &str, items: Vec<NormalizedChatItem>) -> NormalizedCh
         org_uuid: None,
         org_name: None,
         buckets: vec![NormalizedDoc {
-            period_key: "all".to_string(),
             markdown_uuid: id.to_string(),
             source_ref: None,
             items,

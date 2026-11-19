@@ -15,12 +15,13 @@ use sqlx::{Row, Sqlite, Transaction};
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
+use datalib_etl_claude_config::WhenDeletedUpstream;
 use datalib_etl_web::owed::{self, Listed};
 use datalib_time::IsoOffsetTimestamp;
 
 use super::schema_raw::{
-    full_ddl, ConversationAttachmentRow, ConversationRow, ProjectDocRow, ProjectRow, ATTACHMENTS,
-    LADDER, PROJECTS,
+    full_ddl, ConversationAttachmentRow, ConversationRow, CoworkEventRow, CoworkSessionRow,
+    ProjectDocRow, ProjectRow, ATTACHMENTS, COWORK_EVENTS, COWORK_SESSIONS, LADDER, PROJECTS,
 };
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -247,37 +248,7 @@ impl RawDb {
             updated_at: c.updated_at.clone(),
         };
         bulk_upsert_entity_in_tx(tx, &[row]).await?;
-        let mut keep: HashSet<String> = HashSet::new();
-        for file_uuid in c.files.iter().filter_map(file_uuid_of) {
-            let id = ConversationAttachmentRow::pk_recipe(&c.uuid, file_uuid);
-            sqlx::query(
-                "INSERT INTO claude_attachments (id, conversation_uuid, file_uuid, blake3) \
-                 VALUES (?, ?, ?, NULL) ON CONFLICT(id) DO NOTHING",
-            )
-            .bind(&id)
-            .bind(&c.uuid)
-            .bind(file_uuid)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("list attachment {id}"))?;
-            sqlx::query(
-                "INSERT INTO claude_attachments_bookkeeping (id, attempt_count) VALUES (?, 0) \
-                 ON CONFLICT(id) DO NOTHING",
-            )
-            .bind(&id)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("list attachment {id} in its sidecar"))?;
-            keep.insert(id);
-        }
-        datalib_etl::prune::prune_scope_in_tx(
-            tx,
-            ATTACHMENTS,
-            &[("conversation_uuid", &c.uuid)],
-            &keep,
-        )
-        .await?;
-        Ok(())
+        list_attachments_in_tx(tx, &c.uuid, &c.files).await
     }
 
     /// claude.ai no longer has the conversation: its row and its edges
@@ -301,15 +272,54 @@ impl RawDb {
             .with_context(|| format!("forget conversation {uuid}"))?;
         Ok(())
     }
+}
 
-    /// Every attachment a stored conversation names, at the version its
-    /// conversation is held at: the bytes are owed once per fetch of the
-    /// conversation, and a file claude.ai no longer serves is asked for
-    /// again only when the conversation changes.
+/// The attachment edges of `owner` (a conversation or a Cowork task),
+/// one per file it names and no other: an edge is listed by its owner,
+/// and its bytes are what the attachment loop owes.
+async fn list_attachments_in_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    owner: &str,
+    files: &[Value],
+) -> Result<()> {
+    let mut keep: HashSet<String> = HashSet::new();
+    for file_uuid in files.iter().filter_map(file_uuid_of) {
+        let id = ConversationAttachmentRow::pk_recipe(owner, file_uuid);
+        sqlx::query(
+            "INSERT INTO claude_attachments (id, conversation_uuid, file_uuid, blake3) \
+             VALUES (?, ?, ?, NULL) ON CONFLICT(id) DO NOTHING",
+        )
+        .bind(&id)
+        .bind(owner)
+        .bind(file_uuid)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("list attachment {id}"))?;
+        sqlx::query(
+            "INSERT INTO claude_attachments_bookkeeping (id, attempt_count) VALUES (?, 0) \
+             ON CONFLICT(id) DO NOTHING",
+        )
+        .bind(&id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("list attachment {id} in its sidecar"))?;
+        keep.insert(id);
+    }
+    datalib_etl::prune::prune_scope_in_tx(tx, ATTACHMENTS, &[("conversation_uuid", owner)], &keep)
+        .await?;
+    Ok(())
+}
+
+impl RawDb {
+    /// Every attachment a stored conversation or Cowork task names, at
+    /// the version its owner is held at: the bytes are owed once per
+    /// fetch of the owner, and a file claude.ai no longer serves is asked
+    /// for again only when the owner changes.
     pub async fn attachments_listed(&self) -> Result<Vec<Listed>> {
         let rows: Vec<(String, Option<String>)> = sqlx::query_as(
-            "SELECT a.id, b.held_version FROM claude_attachments a \
+            "SELECT a.id, coalesce(b.held_version, c.held_version) FROM claude_attachments a \
              LEFT JOIN conversations_bookkeeping b ON b.id = a.conversation_uuid \
+             LEFT JOIN cowork_sessions_bookkeeping c ON c.id = a.conversation_uuid \
              ORDER BY a.conversation_uuid, a.file_uuid",
         )
         .fetch_all(self.pool())
@@ -351,9 +361,10 @@ impl RawDb {
         Ok(())
     }
 
-    /// Delete this org's conversations that a **complete** listing of that
-    /// org did not name, with their attachment edges and the fetch
-    /// problems of both.
+    /// This org's conversations that a **complete** listing of that org
+    /// did not name: deleted with their attachment edges and the fetch
+    /// problems of both, or, with `keep_local_copy`, kept and counted.
+    /// Answers `(deleted, kept)`.
     ///
     /// Scoped to one `org_uuid`, and that scope is load-bearing twice over.
     /// An org whose listing 403'd was never enumerated, so it must not be
@@ -370,21 +381,20 @@ impl RawDb {
         &self,
         org_uuid: &str,
         keep: &HashSet<String>,
-    ) -> Result<usize> {
+        when: WhenDeletedUpstream,
+    ) -> Result<(usize, usize)> {
         let held: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE org_uuid = ?")
             .bind(org_uuid)
             .fetch_one(self.pool())
             .await
             .context("count org conversations for prune")?;
-        let gone = self
-            .prune_conversations_in(&[("org_uuid", org_uuid)], keep)
+        let unlisted = self
+            .prune_conversations_in(&[("org_uuid", org_uuid)], keep, when)
             .await?;
-        datalib_etl::prune::record(
-            &format!("claude org {org_uuid} conversations"),
-            held as usize,
-            gone,
-        );
-        Ok(gone)
+        let collection = format!("claude org {org_uuid} conversations");
+        datalib_etl::prune::record(&collection, held as usize, unlisted.deleted.len());
+        datalib_etl::prune::record_kept(&collection, unlisted.kept.len());
+        Ok((unlisted.deleted.len(), unlisted.kept.len()))
     }
 
     /// Delete the stubs of conversations whose every fetch failed — no
@@ -409,7 +419,13 @@ impl RawDb {
             .into_iter()
             .filter(|id| !gone.contains(id))
             .collect();
-        let n = self.prune_conversations_in(&[], &keep).await?;
+        // A stub holds nothing to keep, so it goes whatever
+        // `when_deleted_upstream` says.
+        let n = self
+            .prune_conversations_in(&[], &keep, WhenDeletedUpstream::DeleteLocalCopy)
+            .await?
+            .deleted
+            .len();
         datalib_etl::prune::record("claude conversation stubs", stubs.len(), n);
         Ok(n)
     }
@@ -418,14 +434,21 @@ impl RawDb {
         &self,
         scope: &[(&str, &str)],
         keep: &HashSet<String>,
-    ) -> Result<usize> {
+        when: WhenDeletedUpstream,
+    ) -> Result<datalib_etl::prune::Unlisted> {
         let mut tx = self.pool().begin().await.context("begin prune tx")?;
-        let gone =
-            datalib_etl::prune::prune_scope_in_tx(&mut tx, "conversations", scope, keep).await?;
-        datalib_etl::prune::delete_owned_in_tx(&mut tx, ATTACHMENTS, "conversation_uuid", &gone)
-            .await?;
+        let unlisted =
+            datalib_etl::prune::follow_deletions_in_tx(&mut tx, when, "conversations", scope, keep)
+                .await?;
+        datalib_etl::prune::delete_owned_in_tx(
+            &mut tx,
+            ATTACHMENTS,
+            "conversation_uuid",
+            &unlisted.deleted,
+        )
+        .await?;
         tx.commit().await.context("commit prune tx")?;
-        Ok(gone.len())
+        Ok(unlisted)
     }
 
     /// The conversation as stored, `None` for one never fetched.
@@ -442,21 +465,228 @@ impl RawDb {
             .transpose()
     }
 
-    /// The org a stored conversation was fetched from; `None` for one the
-    /// bulk export filed, which names no org.
+    /// The org a stored conversation or Cowork task was fetched from;
+    /// `None` for a conversation the bulk export filed, which names no
+    /// org.
     pub async fn org_of_conversation(&self, id: &str) -> Result<Option<String>> {
-        let org: Option<Option<String>> =
-            sqlx::query_scalar("SELECT org_uuid FROM conversations WHERE id = ?")
-                .bind(id)
-                .fetch_optional(self.pool())
-                .await
-                .context("select one conversation's org")?;
+        let org: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT org_uuid FROM conversations WHERE id = ?1 \
+                 UNION ALL SELECT org_uuid FROM cowork_sessions WHERE id = ?1 LIMIT 1",
+        )
+        .bind(id)
+        .fetch_optional(self.pool())
+        .await
+        .context("select one conversation's org")?;
         Ok(org.flatten())
     }
 
     pub async fn load_conversations(&self) -> Result<Vec<LoadedConversation>> {
         load_conversations_from(self.pool()).await
     }
+
+    // ── Cowork tasks ───────────────────────────────────────────────
+
+    /// A Cowork task and its whole log: the log was read whole, so an
+    /// event it no longer has goes.
+    pub async fn store_cowork_session(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        s: &CoworkSession,
+    ) -> Result<()> {
+        let row = CoworkSessionRow {
+            id_and_payload: WirePayload {
+                id: s.id.clone(),
+                payload: serde_json::to_string(&s.session).context("serialize cowork session")?,
+            },
+            org_uuid: Some(s.org_uuid.clone()),
+            org_name: Some(s.org_name.clone()),
+            title: s
+                .session
+                .get("title")
+                .and_then(Value::as_str)
+                .map(String::from),
+            last_event_at: s
+                .session
+                .get("last_event_at")
+                .and_then(Value::as_str)
+                .map(String::from),
+        };
+        bulk_upsert_entity_in_tx(tx, &[row]).await?;
+        let mut events: Vec<CoworkEventRow> = Vec::with_capacity(s.events.len());
+        for e in &s.events {
+            events.push(CoworkEventRow {
+                id_and_payload: WirePayload {
+                    id: super::cowork::event_key(&s.id, e),
+                    payload: serde_json::to_string(e).context("serialize cowork event")?,
+                },
+                session_id: Some(s.id.clone()),
+                sequence_num: super::cowork::sequence_of(e),
+            });
+        }
+        bulk_upsert_entity_in_tx(tx, &events).await?;
+        let keep: HashSet<String> = events.iter().map(|e| e.id_and_payload.id.clone()).collect();
+        datalib_etl::prune::prune_scope_in_tx(tx, COWORK_EVENTS, &[("session_id", &s.id)], &keep)
+            .await?;
+        list_attachments_in_tx(tx, &s.id, &super::cowork::files_of(&s.events)).await
+    }
+
+    /// The files a stored Cowork task's person attached, for the
+    /// attachment loop.
+    pub async fn cowork_files(&self, id: &str) -> Result<Vec<Value>> {
+        let payloads: Vec<String> = sqlx::query_scalar(
+            "SELECT json(payload) FROM cowork_events WHERE session_id = ? AND payload IS NOT NULL",
+        )
+        .bind(id)
+        .fetch_all(self.pool())
+        .await
+        .context("load one cowork task's events")?;
+        let events = payloads
+            .iter()
+            .map(|p| serde_json::from_str(p).context("parse a stored cowork event"))
+            .collect::<Result<Vec<Value>>>()?;
+        Ok(super::cowork::files_of(&events))
+    }
+
+    /// claude.ai no longer has the task: its row and its log go.
+    pub async fn forget_cowork_session(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        id: &str,
+    ) -> Result<()> {
+        datalib_etl::prune::delete_owned_in_tx(tx, COWORK_EVENTS, "session_id", &[id.to_string()])
+            .await?;
+        datalib_etl::prune::delete_owned_in_tx(
+            tx,
+            ATTACHMENTS,
+            "conversation_uuid",
+            &[id.to_string()],
+        )
+        .await?;
+        sqlx::query("DELETE FROM cowork_sessions WHERE id = ?")
+            .bind(id)
+            .execute(&mut **tx)
+            .await
+            .with_context(|| format!("forget cowork session {id}"))?;
+        Ok(())
+    }
+
+    /// This org's Cowork tasks a complete listing of it did not name:
+    /// deleted with their logs, or kept with `keep_local_copy`. A task
+    /// claude.ai turns into a chat leaves the listing too, and is then
+    /// mirrored as that chat. Answers `(deleted, kept)`.
+    pub async fn prune_org_cowork(
+        &self,
+        org_uuid: &str,
+        keep: &HashSet<String>,
+        when: WhenDeletedUpstream,
+    ) -> Result<(usize, usize)> {
+        let held: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM cowork_sessions WHERE org_uuid = ?")
+                .bind(org_uuid)
+                .fetch_one(self.pool())
+                .await
+                .context("count org cowork sessions for prune")?;
+        let mut tx = self.pool().begin().await.context("begin cowork prune tx")?;
+        let unlisted = datalib_etl::prune::follow_deletions_in_tx(
+            &mut tx,
+            when,
+            COWORK_SESSIONS,
+            &[("org_uuid", org_uuid)],
+            keep,
+        )
+        .await?;
+        datalib_etl::prune::delete_owned_in_tx(
+            &mut tx,
+            COWORK_EVENTS,
+            "session_id",
+            &unlisted.deleted,
+        )
+        .await?;
+        datalib_etl::prune::delete_owned_in_tx(
+            &mut tx,
+            ATTACHMENTS,
+            "conversation_uuid",
+            &unlisted.deleted,
+        )
+        .await?;
+        tx.commit().await.context("commit cowork prune tx")?;
+        let collection = format!("claude org {org_uuid} cowork sessions");
+        datalib_etl::prune::record(&collection, held as usize, unlisted.deleted.len());
+        datalib_etl::prune::record_kept(&collection, unlisted.kept.len());
+        Ok((unlisted.deleted.len(), unlisted.kept.len()))
+    }
+}
+
+/// One Cowork task as fetched, ready to store.
+#[derive(Debug, Clone)]
+pub struct CoworkSession {
+    pub id: String,
+    pub org_uuid: String,
+    pub org_name: String,
+    /// The session, canonicalized.
+    pub session: Value,
+    pub events: Vec<Value>,
+}
+
+/// One Cowork task as it sits between download and render: the session
+/// and its log in order.
+#[derive(Debug, Clone)]
+pub struct LoadedCoworkSession {
+    pub id: String,
+    pub org_uuid: Option<String>,
+    pub org_name: Option<String>,
+    pub session: Value,
+    pub events: Vec<Value>,
+}
+
+/// Every stored Cowork task with its log, two queries in all.
+pub async fn load_cowork_sessions_from(pool: &SqlitePool) -> Result<Vec<LoadedCoworkSession>> {
+    let rows = sqlx::query(
+        "SELECT id, org_uuid, org_name, json(payload) AS payload FROM cowork_sessions \
+          WHERE payload IS NOT NULL ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .context("load cowork sessions")?;
+    let mut by_id: HashMap<String, LoadedCoworkSession> = HashMap::new();
+    let mut order = Vec::with_capacity(rows.len());
+    for r in &rows {
+        let Some(session) = row_payload(r, COWORK_SESSIONS)? else {
+            continue;
+        };
+        let id: String = r.try_get("id")?;
+        order.push(id.clone());
+        by_id.insert(
+            id.clone(),
+            LoadedCoworkSession {
+                id,
+                org_uuid: r.try_get("org_uuid")?,
+                org_name: r.try_get("org_name")?,
+                session,
+                events: Vec::new(),
+            },
+        );
+    }
+    let events = sqlx::query(
+        "SELECT id, session_id, json(payload) AS payload FROM cowork_events \
+          WHERE payload IS NOT NULL ORDER BY session_id, sequence_num, id",
+    )
+    .fetch_all(pool)
+    .await
+    .context("load cowork events")?;
+    for r in &events {
+        let session_id: Option<String> = r.try_get("session_id")?;
+        let Some(s) = session_id.and_then(|id| by_id.get_mut(&id)) else {
+            continue;
+        };
+        if let Some(e) = row_payload(r, COWORK_EVENTS)? {
+            s.events.push(e);
+        }
+    }
+    Ok(order
+        .into_iter()
+        .filter_map(|id| by_id.remove(&id))
+        .collect())
 }
 
 /// The marker's stamp is the run's pinned now, kept as UTC with the
@@ -684,7 +914,10 @@ mod tests {
     }
 
     fn later(minutes: i64) -> datalib_time::IsoOffsetTimestamp {
-        datalib_time::IsoOffsetTimestamp::from(now().inner() + chrono::Duration::minutes(minutes))
+        datalib_time::IsoOffsetTimestamp::try_from(
+            now().inner() + chrono::Duration::minutes(minutes),
+        )
+        .unwrap()
     }
 
     fn make_user(id: &str, email: &str, name: &str) -> UserRow {

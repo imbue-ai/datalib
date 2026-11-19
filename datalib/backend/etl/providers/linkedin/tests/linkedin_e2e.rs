@@ -11,8 +11,10 @@ use datalib_etl_linkedin_render::connections;
 use datalib_etl_linkedin_render::posts;
 use datalib_etl_linkedin_render::processor::Source;
 use datalib_etl_linkedin_render::render;
+use datalib_etl_linkedin_render::skills;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_render::section::join;
 
 fn build_export(root: &Path) -> Result<()> {
     // Who the export belongs to. The primary address is deliberately not
@@ -85,6 +87,11 @@ fn build_export(root: &Path) -> Result<()> {
         root.join("guide_messages.csv"),
         "CONVERSATION ID,CONVERSATION TITLE,FROM,SENDER PROFILE URL,TO,DATE,CONTENT\n\
          guide-1,Coaching,Guide,,You,2026-03-01 09:00:00 UTC,Welcome aboard.\n",
+    )?;
+
+    fs::write(
+        root.join("Skills.csv"),
+        "Name\nDiplomacy\nStarship Command\n",
     )?;
 
     // A CSV that isn't in KNOWN_FILES — should still ingest (with a WARN).
@@ -166,8 +173,8 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         // committed state only.
         datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test: linkedin fetch").await?;
 
-        // 7 CSVs + 1 articles batch = 8 "files".
-        assert_eq!(summary.files, 8, "files (7 csv + articles)");
+        // 8 CSVs + 1 articles batch = 9 "files".
+        assert_eq!(summary.files, 9, "files (8 csv + articles)");
         assert_eq!(summary.parse_errors, 0, "no parse errors");
 
         // Member-id suffix stripped: table is `comments`, not
@@ -233,8 +240,6 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         // render() uses block_in_place internally, so it must run on a
         // multi-threaded runtime worker (this `block_on`), not a
         // spawn_blocking thread.
-        let out_dir = tmp.path().join("out");
-        fs::create_dir_all(&out_dir)?;
         // The export names its owner in `Email Addresses.csv`; every row
         // of every feed carries that on `account`.
         let account =
@@ -245,7 +250,6 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         );
         let source = Source {
             raw_dir: &raw_dir,
-            out_dir: &out_dir,
             name: "linkedin",
             account: account.label.as_deref(),
             owner: account.handle.as_ref(),
@@ -296,7 +300,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             .iter()
             .find(|d| d.rows.iter().any(|r| r.source_url.as_deref() == Some(ugc)))
             .expect("ugcPost thread rendered");
-        let md_a = fs::read_to_string(&thread_a.md_path)?;
+        let md_a = join(&thread_a.sections);
         assert!(
             md_a.contains("Excited to share our new treemap viz!"),
             "post body in thread"
@@ -338,7 +342,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             .iter()
             .find(|d| d.rows.iter().any(|r| r.source_url.as_deref() == Some(act)))
             .expect("external-post comment thread rendered");
-        let md_c = fs::read_to_string(&thread_c.md_path)?;
+        let md_c = join(&thread_c.sections);
         assert!(md_c.contains("Great point, Jean-Luc!"), "comment body");
         assert!(
             md_c.to_lowercase()
@@ -372,7 +376,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         assert_eq!(thread_d.rows.len(), 3, "chat row + placeholder + comment");
         // ...and the markdown says so in words rather than printing a
         // date that isn't real.
-        let md_d = fs::read_to_string(&thread_d.md_path)?;
+        let md_d = join(&thread_d.sections);
         assert!(
             md_d.contains("(no timestamp)"),
             "undated items say so in the transcript: {md_d}"
@@ -395,7 +399,7 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
                     .any(|r| r.source_url.as_deref() == Some(quoted_urn))
             })
             .expect("backslash-quoted comment thread rendered");
-        let md_e = fs::read_to_string(&thread_e.md_path)?;
+        let md_e = join(&thread_e.sections);
         assert!(
             md_e.contains("&quot;tea, Earl Grey&quot;") || md_e.contains("\"tea, Earl Grey\""),
             "escaped quotes render as quotes: {md_e}"
@@ -410,6 +414,31 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
                 .as_deref()
                 .is_none_or(|u| u.starts_with("https://")))),
             "no thread minted from a message fragment"
+        );
+
+        // ── skills → one page ────────────────────────────────────
+        let mut skill_docs: Vec<RenderedMarkdown> = Vec::new();
+        {
+            let mut on_doc = |d: RenderedMarkdown| {
+                skill_docs.push(d);
+                Ok(())
+            };
+            skills::render_skills(&source, &Progress::noop(), &mut on_doc)
+                .context("render_skills")?;
+        }
+        assert_eq!(skill_docs.len(), 1, "one skills page");
+        let md_skills = join(&skill_docs[0].sections);
+        assert!(
+            md_skills.contains("Diplomacy") && md_skills.contains("Starship Command"),
+            "every skill on the page: {md_skills}"
+        );
+        assert_eq!(skill_docs[0].rows.len(), 3, "the page and a row per skill");
+        assert!(
+            skill_docs[0]
+                .rows
+                .iter()
+                .all(|r| r.account.as_deref() == Some("data@enterprise.starfleet.test")),
+            "every skill row names the export's owner as its account"
         );
 
         // ── connections → contacts ───────────────────────────────
@@ -474,26 +503,20 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         assert_eq!(photo.bytes, b"PNG bytes for Picard");
         assert_eq!(photo.content_type.as_deref(), Some("image/png"));
 
-        let out2 = tmp.path().join("out2");
-        fs::create_dir_all(&out2)?;
-        let source2 = Source {
-            out_dir: &out2,
-            ..source
-        };
         let mut with_photo: Vec<RenderedMarkdown> = Vec::new();
         {
             let mut on_doc = |d: RenderedMarkdown| {
                 with_photo.push(d);
                 Ok(())
             };
-            connections::render_connections(&source2, &Progress::noop(), &mut on_doc)
+            connections::render_connections(&source, &Progress::noop(), &mut on_doc)
                 .context("render_connections with photo")?;
         }
         let picard_doc = with_photo
             .iter()
             .find(|d| d.markdown_uuid == picard_uuid)
             .expect("picard re-rendered");
-        let md = fs::read_to_string(&picard_doc.md_path)?;
+        let md = join(&picard_doc.sections);
         let address = format!(
             "/blob/{}",
             datalib_etl::blob_cas::blake3_hex(b"PNG bytes for Picard")
@@ -503,10 +526,6 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
         assert!(
             photo_url.starts_with("/data/") && photo_url.ends_with(&address),
             "{photo_url}"
-        );
-        assert!(
-            !picard_doc.md_path.parent().unwrap().join("blobs").exists(),
-            "nothing is written beside the page"
         );
         db.close().await;
 

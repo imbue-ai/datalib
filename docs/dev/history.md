@@ -22,3 +22,36 @@ paragraph. Dated audits live in [`audits/`](audits/).
 The root `.mailmap` maps both to their owners so `shortlog` and `blame`
 read right. History was left as it is on purpose — rewriting `main` is
 off the table (see "Git: prefer merges over rebases" in `AGENTS.md`).
+
+## blake3 is built with its SIMD code, so never with `pure`
+
+blake3's `pure` feature leaves out its C and assembly kernels: NEON on
+arm64, AVX-512 on x86-64 (SSE and AVX2 survive there as Rust). On an
+Apple M4 that halves hashing speed, and blake3 hashes every file the
+fingerprint cache vouches for and every blob in the store. `pure` was
+dropped on purpose in `175b51b3e` (Sep 30, 2026) and came back by
+accident in `7966e3a6d` (Oct 9), when the per-crate `Cargo.toml` files
+were folded into one; a profile of an ingest found it a month later.
+The hashes are the same either way, so no stored hash moved.
+`//datalib/backend/etl/files:blake3_simd_test` now fails to link
+without the kernel. Turning NEON on surfaced a clash CI does not build:
+doltlite embeds blake3's portable C, and on aarch64 the blake3 crate
+exports `blake3_compress_in_place_portable` too, so the static musl
+link saw it twice. doltlite's amalgamation also turned its own SIMD
+kernels off, so it hashed every chunk with the portable code. For a
+while our build renamed doltlite's BLAKE3 symbols and compiled its
+kernels itself; since doltlite 0.51.13 the amalgamation does both
+(`third-party/doltlite/README.md` §"BLAKE3's SIMD kernels").
+
+## The index group's three names
+
+The untyped group that holds the grid and the search index was
+`unified_index`, then `unified_document_index`, and is now
+`unified_grid_and_search_index` (Nov 2026). It was renamed the second
+time because the search index's tables had moved into the grid
+index's file, so the group was no longer only a document index. Older
+plans, audits and commit messages use the names of their day. The
+data, the config, the applet's command and its `/applet/…` URLs all
+still answer to both old names: `datalib_migrate_config::index_name`
+rewrites the config, and `datalib-http`'s `config_upgrade::move_index_dir`
+moves the folder at boot.

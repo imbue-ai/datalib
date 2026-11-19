@@ -39,7 +39,6 @@ chats.
    inputs = ["beeper/ingest"]
    reads = "pinned"
    [steps.params]
-   # period = "month"                     # or "day", "year", "all"
    # networks = ["signal", "googlechat"]  # unset: every network
    ```
 

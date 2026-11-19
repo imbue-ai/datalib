@@ -19,9 +19,7 @@ fn applet_command() -> String {
 fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str)]) {
     use datalib_etl_render::grid_index::RenderedMarkdown;
     use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
-    use datalib_schema::grid_rows::{doc_file_rel, GridRow};
-
-    let file = doc_file_rel(md);
+    use datalib_schema::grid_rows::GridRow;
 
     let mk = |uuid: String, index: Option<i64>, author: Option<&str>, text: &str, when: &str| {
         GridRow::builder()
@@ -43,7 +41,6 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
             .entire_chat(format!("/chat/{md}"))
             .body(text)
             .markdown_uuid(Some(md.to_string()))
-            .qmd_path(file.clone())
             .build()
             .unwrap()
     };
@@ -62,23 +59,24 @@ fn seed_doc(tree: &Path, md: &str, channel: &str, msgs: &[(i64, &str, &str, &str
 
     let store = IndexedMarkdownStore::open(tree).unwrap();
     store
-        .put_document(
-            tree,
-            &RenderedMarkdown {
-                markdown_uuid: md.to_string(),
-                source_id: "slack".into(),
-                upstream_cursor: None,
-                bucket_key: None,
-                md_path: tree.join(&file),
-                render_version: 1,
-                rows,
-                sections: Vec::new(),
-                edges: Vec::new(),
-                contacts: Vec::new(),
-                photos: Vec::new(),
-                problems: Vec::new(),
-            },
-        )
+        .put_document(&RenderedMarkdown {
+            searchable: true,
+            content_hash: None,
+            markdown_uuid: md.to_string(),
+            source_id: "slack".into(),
+            upstream_cursor: None,
+            bucket_key: None,
+            render_version: 1,
+            rows,
+            sections: Vec::new(),
+            front: Default::default(),
+            edges: Vec::new(),
+            contacts: Vec::new(),
+            data_nodes: Vec::new(),
+            filings: Vec::new(),
+            photos: Vec::new(),
+            problems: Vec::new(),
+        })
         .unwrap();
     // The applet reads at HEAD, as the render step leaves it.
     store.commit("test").unwrap();

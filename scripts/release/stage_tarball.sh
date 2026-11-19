@@ -2,16 +2,17 @@
 # The `build` job's "Stage tarball" step of release.yml, minus the
 # upload: lay out `datalib-<version>-<triple>/` from the binaries bazel
 # built, with the `latchkey` launcher, the commit hash, the manifest of
-# the runtime asset the binaries fetch on first use, every doc
+# the assets the binaries fetch on first use, every doc
 # `datalib-step help` prints and the third-party notices;
 # then tar it. Writes `datalib-<triple>.tar.gz` and its `.sha256` sidecar
 # into the current directory and prints the tarball's name.
 #
 #   RELEASE_ASSETS_DIR=<dir> scripts/release/stage_tarball.sh <ref-name> <triple>
 #
-# RELEASE_ASSETS_DIR holds the runtime assets the manifest names, with their
-# .sha256 sidecars: the `runtime` job's artifact in release.yml, since the
-# release is still a draft a read-only token cannot see.
+# RELEASE_ASSETS_DIR holds the assets the manifest names, with their
+# .sha256 sidecars: the `runtime` job's artifact in release.yml (and, for
+# x86_64 gnu, the `cuda` job's), since the release is still a draft a
+# read-only token cannot see.
 #
 # The binaries are read from `bazel-bin` as `//datalib/backend:bin` laid
 # them out — one list of shipped names, kept there — so the caller has
@@ -118,9 +119,11 @@ while read -r topic path; do
 done < "$stage/.docs"
 rm -f "$stage/.docs"
 
-# `runtime.manifest`: which runtime asset of THIS release the binaries
-# fetch on first use, with its sha256 and size read back from what the
-# `runtime` job staged. The musl legs name their gnu sibling's
+# `runtime.manifest`: which assets of THIS release the binaries fetch on
+# first use, with each one's sha256 and size read back from what the
+# `runtime` and `cuda` jobs staged: the Node runtime, and for x86_64 gnu
+# alone the CUDA module, which the embedder fetches only where there is
+# an NVIDIA driver (docs/dev/runtime_fetch.md § "The CUDA module"). The musl legs name their gnu sibling's
 # asset: the Node in it is a glibc build (nodejs.org ships no musl
 # one), and a musl datalib on a glibc host — the common case — runs it
 # fine; a musl host is refused by the resolver with the reason named.
@@ -142,10 +145,10 @@ manifest_line() { # kind, asset name
 }
 log "writing runtime.manifest for runtime-${runtime_triple}"
 {
-    echo "# The Node runtime these binaries fetch on first use — docs/dev/runtime_fetch.md"
+    echo "# What these binaries fetch on first use — docs/dev/runtime_fetch.md"
     manifest_line cpu "runtime-${runtime_triple}.tar.gz"
-    if [[ "$runtime_triple" == "x86_64-unknown-linux-gnu" ]]; then
-        manifest_line cuda "runtime-${runtime_triple}-cuda.tar.gz"
+    if [[ "$triple" == x86_64-unknown-linux-gnu ]]; then
+        manifest_line cuda "ggml-cuda-${triple}.tar.gz"
     fi
 } > "$stage/runtime.manifest"
 cat "$stage/runtime.manifest" >&2

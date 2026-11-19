@@ -2,20 +2,22 @@ load("@rules_python//python:defs.bzl", "py_binary", "py_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
 exports_files([
-    ".bazelrc",  # read by //tools:qmd_model_cache_path_test
     "LICENSE",  # in the reader wheel, read by //datalib/reader:reader_wheel_test
     ".github/workflows/release.yml",  # its rustc pin, read by //tools:version_pins_test
     "MODULE.bazel",  # read by //tools:version_pins_test
     "pyproject.toml",  # ruff + pyright config, read by //tools:ruff_test
     "requirements.txt",
+    "scripts/cloud_env_setup.sh",  # its bazelisk pin, read by //tools:version_pins_test
     # Run by //tools:install_test.
     "scripts/install.sh",
     "scripts/release/pin_release.py",
     "scripts/release/publish_release.py",
-    # Run by //tools:stage_runtime_test, //tools:stage_tarball_test and
-    # //tools:check_binaries_test: release.yml's steps, as scripts.
+    # Run by //tools:stage_runtime_test, //tools:stage_tarball_test,
+    # //tools:check_binaries_test and //tools:check_glibc_floor_test:
+    # release.yml's steps, as scripts.
     "scripts/latchkey-wrapper.sh",
     "scripts/release/check_binaries.sh",
+    "scripts/release/check_glibc_floor.sh",
     "scripts/release/make_reader_wheel.py",
     "scripts/release/stage_runtime_asset.sh",
     "scripts/release/stage_tarball.sh",
@@ -45,6 +47,8 @@ filegroup(
     name = "python_sources",
     srcs = glob(["scripts/**/*.py"]) + [
         "//datalib/backend/doltlite_facts:python_sources",
+        "//datalib/backend/etl/providers/lightroom:python_sources",
+        "//datalib/backend/lightroom_retime:python_sources",
         "//datalib/reader:python_sources",
         "//tests/fixtures:python_sources",
         "//tools:python_sources",
@@ -125,6 +129,22 @@ py_test(
     ],
     imports = ["scripts"],
     main = "scripts/search_eval_test.py",
+)
+
+# devcontainer.yml's prune: what it deletes, and that a pinned image is not.
+py_test(
+    name = "prune_devcontainer_test",
+    size = "small",
+    srcs = [
+        "scripts/prune_devcontainer.py",
+        "scripts/prune_devcontainer_test.py",
+    ],
+    data = [
+        ".github/workflows/cargo-update.yml",
+        ".github/workflows/test.yml",
+    ],
+    imports = ["scripts"],
+    main = "scripts/prune_devcontainer_test.py",
 )
 
 # release.yml's steps that are Python, and the one the release procedure runs.

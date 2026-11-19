@@ -10,6 +10,7 @@ pub const ID_NAMESPACE: IdNamespace = IdNamespace::Notion;
 
 pub const KIND_PAGE: &str = "page";
 pub const KIND_DISCUSSION: &str = "discussion";
+pub const KIND_DATABASE: &str = "database";
 pub const KIND_COMMENT: &str = "comment";
 pub const KIND_TOC: &str = "table_of_contents";
 pub const KIND_TOC_ENTRY: &str = "table_of_contents_entry";
@@ -38,6 +39,11 @@ pub fn page(source_id: &str, page_id: &str, created_time: Option<&str>) -> Ident
 /// No stamp: a thread's `created_at` is its first comment's.
 pub fn discussion(source_id: &str, discussion_id: &str) -> Identity {
     IDS.mint(source_id, KIND_DISCUSSION, discussion_id.to_string(), None)
+}
+
+/// No stamp: a database is a container, and its rows carry the times.
+pub fn database(source_id: &str, database_id: &str) -> Identity {
+    IDS.mint(source_id, KIND_DATABASE, database_id.to_string(), None)
 }
 
 pub fn comment(source_id: &str, comment_id: &str, created_time: Option<&str>) -> Identity {
@@ -73,6 +79,7 @@ mod tests {
         for got in [
             page("src", "p", AT),
             discussion("src", "d"),
+            database("src", "db"),
             comment("src", "c", AT),
             toc("src"),
             toc_entry("src", "db"),

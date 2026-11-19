@@ -43,7 +43,6 @@ impl SourceRender for NotionRender {
         let mut on_doc = |md| ctx.emit_doc(md);
         let s = render_from_store(
             &parsed,
-            ctx.root,
             ctx.name,
             ctx.progress,
             &mut on_doc,

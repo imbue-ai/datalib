@@ -41,7 +41,9 @@ use super::parse::{DocBucket, ParsedBeeper};
 /// v8: the account's own person is marked as the account, so search
 ///     reads their handles as `me`.
 /// v9: chats on an account no bridge here reads are on record.
-pub const RENDER_VERSION: u32 = 9;
+/// v10: a room is one document, under the room's own uuid; a reply is a
+///      reply edge to the message it answers.
+pub const RENDER_VERSION: u32 = 10;
 
 #[derive(Debug, Default, Clone)]
 pub struct RenderSummary {
@@ -54,12 +56,11 @@ pub struct RenderSummary {
     pub unrendered: Vec<Unrendered>,
 }
 
-/// Entry point. Renders every `(room, period)` bucket the parser
+/// Entry point. Renders every room the parser
 /// produced, calling `on_doc_complete` once per document, its
 /// attachment bytes read a batch of at most `blob_bytes` at a time.
 pub fn render_all(
     parsed: &ParsedBeeper,
-    out_dir: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -71,7 +72,6 @@ pub fn render_all(
         .with_context(|| format!("open the blob store beside {}", raw_db_path.display()))?;
     let rendered = render_open(
         parsed,
-        out_dir,
         source_id,
         progress,
         on_doc_complete,
@@ -88,7 +88,6 @@ pub fn render_all(
 
 fn render_open(
     parsed: &ParsedBeeper,
-    out_dir: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -111,7 +110,6 @@ fn render_open(
     for network in networks {
         let mut renderer = ChatRenderer::new(
             &network.profile,
-            out_dir,
             source_id,
             network.chats.len(),
             progress,

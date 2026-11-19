@@ -29,8 +29,8 @@ use datalib_etl_codex::ingest::parse::is_typed_message;
 use datalib_schema::providers::Provider;
 
 use datalib_etl_agent_sessions_render::{
-    clamp, details, fenced, item, json_block, project_of, render_paged, str_of, PagedOutcome,
-    ReadClock, SessionRender,
+    clamp, details, fenced, item, json_block, parent_session_node, project_node, project_of,
+    render_paged, str_of, PagedOutcome, ReadClock, SessionRender,
 };
 
 use crate::ids;
@@ -39,7 +39,11 @@ use crate::ids;
 ///     them.
 /// v4: an answer's author is its model's chip (`ai_model:` handle).
 /// v5: a tool's result is the harness's, not authored by the tool's name.
-pub const RENDER_VERSION: u32 = 5;
+/// v6: an HTML tag in a prompt, a reply or a harness message shows as typed.
+/// v7: a prompt, a reply or a harness message is markdown as written
+///     again, HTML included.
+/// v8: a thread sits in its project, and a sub-agent's in its parent thread.
+pub const RENDER_VERSION: u32 = 8;
 
 /// Who the harness's own rows are by: its notes, a tool's result. A tool's
 /// name is not a person, and `from:` must not find it as one.
@@ -60,12 +64,13 @@ fn profile() -> RenderProfile {
     }
 }
 
+const PROJECT_KIND: &str = "Codex Project";
+
 /// Renders the threads this run has to, a page at a time; `on_buckets`
 /// hears each page's buckets before the next is read.
 #[allow(clippy::too_many_arguments)]
 pub fn render(
     raw_dir: &Path,
-    out_root: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -83,7 +88,6 @@ pub fn render(
         range,
         size,
         RenderTarget {
-            out_root,
             source_id,
             progress,
             on_doc_complete,
@@ -277,9 +281,21 @@ fn build_chat(
         (false, _) => own_title.clone(),
     };
     let id = ids::thread(source_id, tid);
+    let project = str_of(meta, "cwd")
+        .map(|cwd| project_node(source_id, PROJECT_KIND, ids::project(source_id, cwd)));
+    let parent = str_of(meta, "parent_thread_id").map(|parent| {
+        parent_session_node(
+            source_id,
+            &profile().chat_kind,
+            ids::thread(source_id, parent),
+            parent_title,
+        )
+    });
     NormalizedChat {
         named_after: Vec::new(),
         id: tid.to_string(),
+        containers: project.into_iter().chain(parent).collect(),
+        filed_under: Vec::new(),
         chat_uuid: id.uuid.clone(),
         display,
         title: Some(own_title),
@@ -293,7 +309,6 @@ fn build_chat(
         org_name: None,
         buckets: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
-            period_key: "all".to_string(),
             markdown_uuid: id.uuid,
             // One document per thread, keyed on the thread's own id and
             // kind, so the row's backpointer is the chat's.
@@ -860,5 +875,124 @@ mod tests {
         assert!(fenced_json_or_text("{\"a\":1}", 1024).starts_with("```json"));
         assert!(fenced_json_or_text("not json", 1024).starts_with("```\nnot json"));
         assert_eq!(fenced_json_or_text("{}", 1024), "");
+    }
+}
+
+#[cfg(test)]
+mod tree_tests {
+    use super::*;
+    use datalib_etl_agent_sessions_render::titles;
+    use serde_json::json;
+
+    const SRC: &str = "codex";
+
+    /// What chat-common makes of `chats`: each document's data_nodes and rows.
+    fn rendered(chats: &[NormalizedChat]) -> Vec<RenderedMarkdown> {
+        let mut docs = Vec::new();
+        datalib_etl_chat_common::render::render_all(
+            &profile(),
+            chats,
+            SRC,
+            &HashMap::new(),
+            &Progress::noop(),
+            &mut |d| {
+                docs.push(d);
+                Ok(())
+            },
+        )
+        .unwrap();
+        docs
+    }
+
+    /// Each node's (uuid, parent, read together, place).
+    fn tree(doc: &RenderedMarkdown) -> Vec<(String, Option<String>, bool, bool)> {
+        doc.data_nodes
+            .iter()
+            .map(|n| {
+                (
+                    n.uuid.clone(),
+                    n.parent_uuid.clone(),
+                    n.read_together,
+                    n.is_place,
+                )
+            })
+            .collect()
+    }
+
+    /// The project, a place keyed on the working directory; the session,
+    /// read together inside it; a sub-agent's transcript, read on its own
+    /// inside the session, its messages in it. The session's document and
+    /// the sub-agent's agree on the session.
+    fn assert_project_session_subagent(
+        docs: &[RenderedMarkdown],
+        project: &str,
+        session: &str,
+        subagent: &str,
+    ) {
+        let doc = |uuid: &str| docs.iter().find(|d| d.markdown_uuid == uuid).unwrap();
+        let s = |x: &str| x.to_string();
+        let project_node = (s(project), None, false, true);
+        let session_node = (s(session), Some(s(project)), true, false);
+        assert_eq!(
+            tree(doc(session)),
+            [project_node.clone(), session_node.clone()]
+        );
+        assert_eq!(
+            tree(doc(subagent)),
+            [
+                project_node,
+                session_node,
+                (s(subagent), Some(s(session)), true, false)
+            ]
+        );
+        let sub = doc(subagent);
+        let project_row = &sub.data_nodes[0];
+        assert_eq!(project_row.name.as_deref(), Some("enterprise"));
+        assert_eq!(
+            project_row.upstream_id.as_deref(),
+            Some("/Users/picard/src/enterprise")
+        );
+        let messages: Vec<_> = sub.rows.iter().filter(|r| r.uuid != subagent).collect();
+        assert!(!messages.is_empty());
+        for row in messages {
+            assert_eq!(row.parent_uuid.as_deref(), Some(subagent));
+            assert_eq!(row.read_uuid.as_deref(), Some(subagent));
+            assert_eq!(row.place_uuid.as_deref(), Some(project));
+        }
+    }
+
+    #[test]
+    fn a_subagent_sits_in_its_thread_in_its_project() {
+        let meta = |tid: &str, parent: Option<&str>| {
+            (
+                tid.to_string(),
+                json!({
+                    "thread_id": tid, "parent_thread_id": parent, "title": "Deflector",
+                    "cwd": "/Users/picard/src/enterprise",
+                    "started_at": "2364-04-11T10:00:00.000Z",
+                }),
+            )
+        };
+        let answer = |tid: &str| -> RecordRow {
+            (
+                format!("{tid}#1"),
+                tid.to_string(),
+                1,
+                json!({
+                    "timestamp": "2364-04-11T10:00:05.000Z", "type": "response_item",
+                    "payload": {"type": "message", "role": "assistant",
+                                "content": [{"type": "output_text", "text": "Done."}]},
+                }),
+            )
+        };
+        let transcripts = vec![meta("t1", None), meta("t2", Some("t1"))];
+        let records = vec![answer("t1"), answer("t2")];
+        let chats = build_chats(SRC, &transcripts, &records, &titles(&transcripts), 1024);
+        assert_project_session_subagent(
+            &rendered(&chats),
+            &ids::project(SRC, "/Users/picard/src/enterprise").uuid,
+            &ids::thread(SRC, "t1").uuid,
+            &ids::thread(SRC, "t2").uuid,
+        );
     }
 }

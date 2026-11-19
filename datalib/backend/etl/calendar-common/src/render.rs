@@ -1,20 +1,20 @@
-//! `render_all` — one `.md`, one grid row and its edges per event,
+//! `render_all` — one document, one grid row and its edges per event,
 //! handed to the render driver's callback. Everything provider-specific
 //! arrives in the [`CalendarRenderProfile`] and the events.
 
-use std::fs;
-use std::path::Path;
-
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::yaml_scalar;
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
-use datalib_etl_render::html::{escape_md_block, escape_md_inline, md_code_span, md_link_dest};
+use datalib_etl_render::front_matter::Front;
+use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::{
+    escape_md_block, escape_md_inline, escape_name_inline, md_code_span, md_link_dest,
+};
 use datalib_etl_render::inputs::{Bucket, Buckets};
 use datalib_etl_render::message::{chip_link, stamp_text_html};
-use datalib_etl_render::section::{join, Section};
+use datalib_etl_render::section::Section;
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
@@ -54,7 +54,6 @@ pub struct RenderSummary {
 pub fn render_all(
     profile: &CalendarRenderProfile,
     events: &[NormalizedEvent],
-    out_dir: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -66,7 +65,7 @@ pub fn render_all(
             key: event.event_uuid.clone(),
             inputs: event.inputs.clone(),
         });
-        let doc = render_one(profile, event, out_dir, source_id)
+        let doc = render_one(profile, event, source_id)
             .with_context(|| format!("render event {}", event.event_uuid))?;
         on_doc_complete(doc).with_context(|| format!("on_doc_complete {}", event.event_uuid))?;
         summary.events_rendered += 1;
@@ -78,17 +77,9 @@ pub fn render_all(
 fn render_one(
     profile: &CalendarRenderProfile,
     event: &NormalizedEvent,
-    out_dir: &Path,
     source_id: &str,
 ) -> Result<RenderedMarkdown> {
     let uuid = &event.event_uuid;
-    let md_path = doc_md_path(
-        &datalib_etl::layout::render_markdown_root(out_dir, source_id),
-        uuid,
-    );
-    let page_dir = md_path.parent().expect("a document's file has a folder");
-    fs::create_dir_all(page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
-
     let mut problems: Vec<ProblemRow> = event
         .problems
         .iter()
@@ -96,27 +87,34 @@ fn render_one(
         .collect();
     let start = resolve_start(event, source_id, profile, &mut problems);
 
+    let front = front(profile, event, source_id, start.as_deref());
     let sections = render_markdown(profile, event, source_id, start.as_deref());
-    fs::write(&md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
-    let md_rel = md_path
-        .strip_prefix(out_dir)
-        .unwrap_or(&md_path)
-        .to_string_lossy()
-        .into_owned();
-    let row = build_grid_row(profile, event, source_id, &md_rel, start, &mut problems);
+    let data_nodes = tree(profile, event, source_id);
+    let row = build_grid_row(
+        profile,
+        event,
+        source_id,
+        start,
+        &Lineage::top().below(&data_nodes[0]),
+        &mut problems,
+    );
     Ok(RenderedMarkdown {
+        searchable: true,
+        content_hash: None,
         markdown_uuid: uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: event.modified_at.clone(),
         bucket_key: Some(uuid.clone()),
-        md_path,
         render_version: profile.render_version,
         rows: row.into_iter().collect(),
         sections,
         edges: edges(event),
         contacts: Vec::new(),
+        data_nodes,
+        filings: Vec::new(),
         photos: Vec::new(),
         problems,
+        front,
     })
 }
 
@@ -252,6 +250,29 @@ fn repeats_lines(event: &NormalizedEvent) -> Vec<String> {
     rules.iter().map(|r| rrule::describe(r, tz)).collect()
 }
 
+/// The document's front matter.
+fn front(
+    profile: &CalendarRenderProfile,
+    event: &NormalizedEvent,
+    source_id: &str,
+    start_instant: Option<&str>,
+) -> Front {
+    let mut front = Front::new()
+        .plain("markdown_uuid", &event.event_uuid)
+        .plain("source_id", source_id)
+        .plain("provider", profile.provider)
+        .plain("kind", kind_of(event))
+        .text("calendar", &event.calendar_label)
+        .name("title", title_of(event))
+        .text("external_id", &event.upstream_id);
+    if let Some(s) = start_instant {
+        front = front.plain("start", s);
+    }
+    front
+        .text_if("created", event.created.as_deref())
+        .text_if("modified_at", event.modified_at.as_deref())
+}
+
 fn render_markdown(
     profile: &CalendarRenderProfile,
     event: &NormalizedEvent,
@@ -259,31 +280,7 @@ fn render_markdown(
     start_instant: Option<&str>,
 ) -> Vec<Section> {
     let uuid = &event.event_uuid;
-    let mut fm = String::with_capacity(512);
-    fm.push_str("---\n");
-    fm.push_str(&format!("markdown_uuid: {uuid}\n"));
-    fm.push_str(&format!("source_id: {source_id}\n"));
-    fm.push_str(&format!("provider: {}\n", profile.provider));
-    fm.push_str(&format!("kind: {}\n", kind_of(event)));
-    fm.push_str(&format!(
-        "calendar: {}\n",
-        yaml_scalar(&event.calendar_label)
-    ));
-    fm.push_str(&format!("title: {}\n", yaml_scalar(title_of(event))));
-    fm.push_str(&format!(
-        "external_id: {}\n",
-        yaml_scalar(&event.upstream_id)
-    ));
-    if let Some(s) = start_instant {
-        fm.push_str(&format!("start: {s}\n"));
-    }
-    if let Some(ts) = &event.created {
-        fm.push_str(&format!("created: {}\n", yaml_scalar(ts)));
-    }
-    if let Some(ts) = &event.modified_at {
-        fm.push_str(&format!("modified_at: {}\n", yaml_scalar(ts)));
-    }
-    fm.push_str("---\n\n");
+    let fm = front(profile, event, source_id, start_instant).draw();
 
     let mut out = String::with_capacity(2048);
     out.push_str(
@@ -318,15 +315,15 @@ fn render_markdown(
             "Occurrence of",
             format!(
                 "{}, originally {}",
-                escape_md_inline(&of),
+                escape_name_inline(&of),
                 time_html(original_start, event.calendar_time_zone.as_deref())
             ),
         ));
     }
     if let Some(l) = &event.location {
-        facts.push(("Where", escape_md_inline(l)));
+        facts.push(("Where", escape_name_inline(l)));
     }
-    facts.push(("Calendar", escape_md_inline(&event.calendar_label)));
+    facts.push(("Calendar", escape_name_inline(&event.calendar_label)));
     if let Some(s) = event.status.as_deref().filter(|s| *s != "confirmed") {
         facts.push(("Status", escape_md_inline(&capitalize(s))));
     }
@@ -418,7 +415,7 @@ fn render_markdown(
                     .title
                     .as_deref()
                     .filter(|t| Some(*t) != event.title.as_deref())
-                    .map(|t| format!(" — {}", escape_md_inline(t)))
+                    .map(|t| format!(" — {}", escape_name_inline(t)))
                     .unwrap_or_default();
                 out.push_str(&format!(
                     "- {} → {now}{title}\n",
@@ -448,7 +445,7 @@ fn render_markdown(
         for l in &event.links {
             out.push_str(&format!(
                 "- [{}]({})\n",
-                escape_md_inline(&l.label),
+                escape_name_inline(&l.label),
                 md_link_dest(&l.url)
             ));
         }
@@ -462,8 +459,8 @@ fn build_grid_row(
     profile: &CalendarRenderProfile,
     event: &NormalizedEvent,
     source_id: &str,
-    md_rel: &str,
     start: Option<String>,
+    at: &Lineage,
     problems: &mut Vec<ProblemRow>,
 ) -> Option<GridRow> {
     // What the event is, when and where, and what it says, before the
@@ -525,17 +522,46 @@ fn build_grid_row(
         .conversation_uuid(event.event_uuid.clone())
         .entire_chat(format!("/chat/{}", event.event_uuid))
         .body(text.join("\n"))
-        .qmd_path(Some(md_rel.to_string()))
         .source_url(event.source_url.clone())
         .upstream_id(Some(event.upstream_id.clone()))
         .upstream_entity_kind(Some(event.upstream_entity_kind.to_string()))
         .markdown_uuid(Some(event.event_uuid.clone()))
+        .lineage(at)
         .build_or_record(
             source_id,
             &event.event_uuid,
             profile.render_version,
             problems,
         )
+}
+
+/// The calendar, a place, and the event in it, read on its own. A
+/// changed occurrence sits in the calendar beside its series, which it
+/// links.
+fn tree(
+    profile: &CalendarRenderProfile,
+    event: &NormalizedEvent,
+    source_id: &str,
+) -> Vec<DataNodeRow> {
+    let md = &event.event_uuid;
+    let calendar = DataNodeRow::new(md, &event.calendar_uuid, source_id, "Calendar")
+        .named(Some(event.calendar_label.clone()))
+        .upstream(
+            event.calendar_entity_kind,
+            event.calendar_upstream_id.clone(),
+            profile.account.clone(),
+        )
+        .place();
+    let own = DataNodeRow::new(md, md, source_id, kind_of(event))
+        .named(Some(title_of(event).to_string()))
+        .upstream(
+            event.upstream_entity_kind,
+            event.upstream_id.clone(),
+            profile.account.clone(),
+        )
+        .read_together()
+        .under(&Lineage::top().below(&calendar));
+    vec![calendar, own]
 }
 
 /// A series points at each of its changed occurrences, and an occurrence
@@ -545,6 +571,7 @@ fn edges(event: &NormalizedEvent) -> Vec<EdgeRow> {
     let edge = |dst: &str, label: String| {
         let label: String = label.chars().take(EDGE_LABEL_CHARS).collect();
         EdgeRow {
+            kind: datalib_schema::edges::EdgeKind::Link.as_i64(),
             edge_uuid: datalib_id::edge_id(src, None, dst, None, Some(&label)),
             src_markdown_uuid: src.clone(),
             src_anchor_uuid: None,
@@ -584,7 +611,7 @@ fn edges(event: &NormalizedEvent) -> Vec<EdgeRow> {
 fn person_md(name: Option<&str>, email: Option<&str>) -> Option<String> {
     match email.and_then(Handle::email) {
         Some(h) => Some(chip_link(name.unwrap_or(""), &h)),
-        None => person_line(name, email).map(|s| escape_md_inline(&s)),
+        None => person_line(name, email).map(|s| escape_name_inline(&s)),
     }
 }
 
@@ -679,6 +706,7 @@ mod tests {
     use crate::types::{
         Attendee, EventLink, GuestAnswers, OccurrenceRef, Person, QuestionAnswer, SeriesRef,
     };
+    use datalib_etl_render::section::join;
 
     const SERIES: &str = "11111111-1111-8111-8111-111111111111";
     const MOVED: &str = "22222222-2222-8222-8222-222222222222";
@@ -693,6 +721,8 @@ mod tests {
             shape,
             calendar_uuid: "33333333-3333-8333-8333-333333333333".into(),
             calendar_label: "Bridge".into(),
+            calendar_entity_kind: "calendar",
+            calendar_upstream_id: "bridge".into(),
             calendar_time_zone: Some("America/Los_Angeles".into()),
             upstream_id: "bridge#staff".into(),
             upstream_entity_kind: "event",
@@ -752,6 +782,43 @@ mod tests {
         }
     }
 
+    /// An event is read on its own inside its calendar, a place keyed by
+    /// upstream's id for it; the series link stays a link, not a reply.
+    #[test]
+    fn an_event_sits_in_its_calendar() {
+        let doc = render_one(&profile(), &series(), "tng_calendar").unwrap();
+        type Node<'a> = (&'a str, Option<&'a str>, bool, bool, Option<&'a str>);
+        let data_nodes: Vec<Node<'_>> = doc
+            .data_nodes
+            .iter()
+            .map(|n| {
+                (
+                    n.uuid.as_str(),
+                    n.parent_uuid.as_deref(),
+                    n.is_place,
+                    n.read_together,
+                    n.upstream_id.as_deref(),
+                )
+            })
+            .collect();
+        let cal = "33333333-3333-8333-8333-333333333333";
+        assert_eq!(
+            data_nodes,
+            vec![
+                (cal, None, true, false, Some("bridge")),
+                (SERIES, Some(cal), false, true, Some("bridge#staff")),
+            ]
+        );
+        let row = &doc.rows[0];
+        assert_eq!(row.parent_uuid.as_deref(), Some(cal));
+        assert_eq!(row.place_uuid.as_deref(), Some(cal));
+        assert_eq!(row.read_uuid, None);
+        assert!(doc
+            .edges
+            .iter()
+            .all(|e| e.kind == datalib_schema::edges::EdgeKind::Link.as_i64()));
+    }
+
     /// Everything an invite carries is text: the title, the place, a
     /// guest's name, a link's label, the zone a changed time is in.
     #[test]
@@ -795,6 +862,71 @@ mod tests {
             )),
             "{body}"
         );
+    }
+
+    /// A right-to-left override in an invite's title, organizer, guest,
+    /// place, calendar or link label reordered the page around it
+    /// (`Orders exe.live` for `Orders evil.exe`). The page shows none of
+    /// them; the description, the invite's body, keeps its own.
+    #[test]
+    fn an_invites_names_lose_their_bidi_controls() {
+        const RLO: &str = "\u{202E}";
+        let mut event = series();
+        event.title = Some(format!("Orders {RLO}exe.live"));
+        event.calendar_label = format!("Bridge {RLO}werC");
+        event.location = Some(format!("Ten {RLO}Forward"));
+        event.description = Some(format!("Agenda {RLO}evil"));
+        event.organizer.as_mut().unwrap().name = Some(format!("Jean-Luc {RLO}Picard"));
+        event.attendees.push(Attendee {
+            person: Person {
+                name: Some(format!("Q{RLO}")),
+                email: None,
+            },
+            response: None,
+            optional: false,
+            resource: false,
+        });
+        event.links = vec![EventLink {
+            label: format!("Join {RLO}call"),
+            url: "https://e.invalid/join".into(),
+        }];
+        if let EventShape::Series { changed, .. } = &mut event.shape {
+            changed[0].title = Some(format!("moved {RLO}here"));
+        }
+        let mut docs = Vec::new();
+        render_all(
+            &profile(),
+            &[event],
+            "tng_calendar",
+            &Progress::default(),
+            &mut |d| {
+                docs.push(d);
+                Ok(())
+            },
+        )
+        .unwrap();
+        let md = join(&docs[0].sections);
+        let (_, body) = md
+            .split_once("---\n\n")
+            .expect("front matter, then the body");
+        let description = format!("## Description\n\nAgenda {RLO}evil\n");
+        assert!(
+            body.contains(&description),
+            "the description is the invite's own: {body}"
+        );
+        let rest = body.replace(&description, "");
+        assert!(!rest.contains(RLO), "{rest}");
+        for shown in [
+            "Orders exe.live",
+            "Bridge werC",
+            "Ten Forward",
+            "[Jean-Luc Picard](mailto:picard@enterprise.test \"Jean-Luc Picard <picard@enterprise.test>\")",
+            "| Q |",
+            "[Join call]",
+            " — moved here",
+        ] {
+            assert!(body.contains(shown), "{shown:?} is missing: {body}");
+        }
     }
 
     #[test]
@@ -867,8 +999,8 @@ mod tests {
             &profile(),
             &series(),
             "tng_calendar",
-            "x/index.md",
             start,
+            &Lineage::top(),
             &mut problems,
         )
         .expect("valid row");
@@ -935,8 +1067,8 @@ mod tests {
             &profile(),
             &event,
             "tng_calendar",
-            "x/index.md",
             None,
+            &Lineage::top(),
             &mut problems,
         )
         .expect("valid row");
@@ -982,7 +1114,7 @@ mod tests {
     #[test]
     fn an_unknown_zone_nulls_the_start_and_says_why() {
         let mut e = series();
-        e.start = EventTime::from_ical("20260105T090000", Some("Pacific Standard Time"));
+        e.start = EventTime::from_ical("20260105T090000", Some("Customized Time Zone"));
         let mut problems = Vec::new();
         assert_eq!(
             resolve_start(&e, "tng_calendar", &profile(), &mut problems),
@@ -995,12 +1127,10 @@ mod tests {
     /// The sink's answer is the run's answer.
     #[test]
     fn a_sink_that_refuses_fails_the_render() {
-        let dir = tempfile::tempdir().unwrap();
         let mut refuse = |_: RenderedMarkdown| -> Result<()> { anyhow::bail!("no room") };
         let err = render_all(
             &profile(),
             &[series()],
-            dir.path(),
             "tng_calendar",
             &Progress::default(),
             &mut refuse,

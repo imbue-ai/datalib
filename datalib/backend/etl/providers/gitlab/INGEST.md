@@ -1,10 +1,11 @@
-# GitLab Extract
+# GitLab: download
 
-`gitlab-ingest` mirrors GitLab merge requests and their discussion
-threads from `gitlab.com/api/v4` into one doltlite raw store,
-`<out>/entities.doltlite_db`. The sync — what is listed, looked at and
-held, what is owed, the fetch loop, pruning deleted children, `--full`
-— is the one GitHub uses, and so is what a failure costs; read
+The ingest step of a `gitlab` source mirrors GitLab merge requests and
+their discussion threads from `gitlab.com/api/v4` into one doltlite raw
+store, `<data_root>/<source_id>/ingest/entities.doltlite_db`. The sync —
+what is listed, looked at and held, what is owed, the fetch loop,
+pruning deleted children — is the one GitHub uses
+(`datalib/backend/etl/forge-ingest-common/`), and so is what a failure costs; read
 [`../github/INGEST.md`](../github/INGEST.md) §"What is owed" and
 §"When part of a sync fails" for them, with `merge_requests:<project>!<iid>`
 for the row on an MR and `listing:search <scope>` for a scope. What
@@ -42,8 +43,8 @@ One latchkey service: `gitlab` (PRIVATE-TOKEN). Latchkey injects the
 
 ## Discovery scopes
 
-Each `--scope` (default: `created_by_me`, `assigned_to_me`, `reviewer`)
-queries the global `/merge_requests` endpoint with
+Each scope in `DEFAULT_SCOPES` (`created_by_me`, `assigned_to_me`,
+`reviewer`; a config cannot change them) queries the global `/merge_requests` endpoint with
 `scope=<scope>&state=all`, bounded by `updated_after` and
 `updated_before` to the stretch that scope has not looked at.
 `reviewer` becomes `reviewer_id=<your user id>`, since GitLab has no
@@ -54,13 +55,12 @@ does. Incoming review pings are covered by the author / assignee /
 reviewer trio; a bare @mention on someone else's MR would need
 `/todos?action=mentioned`, which is not fetched.
 
-## Single-MR mode
+## Named merge requests
 
-`--merge-request namespace/project!IID` (or a
-`https://gitlab.com/<project>/-/merge_requests/<iid>` URL; repeatable)
-skips discovery and pulls just those MRs and their discussions,
-whatever the store holds. The config's `api.merge_requests` list does
-the same.
+`api.merge_requests` (`namespace/project!IID` or a
+`https://gitlab.com/<project>/-/merge_requests/<iid>` URL, one per
+entry) skips discovery and pulls just those MRs and their discussions,
+whatever the store holds.
 
 ## Config
 
@@ -69,10 +69,6 @@ The `api` block of a `gitlab` source (`gitlab_config`):
 
 ## Run it
 
-```sh
-bazelisk build //third-party/latchkey-curl-shims
-export LATCHKEY_CURL=$PWD/bazel-bin/third-party/latchkey-curl-shims/latchkey-curl-router
-bazelisk run //datalib/backend/etl/providers/gitlab:gitlab_ingest -- \
-    --out /tmp/gitlab-mirror \
-    --merge-request <group>/<project>!<iid>
-```
+As for GitHub (its `INGEST.md` §"Run it"), with `datalib-step run
+ingest gitlab` and `{"api": {"merge_requests":
+["<group>/<project>!<iid>"]}}`.

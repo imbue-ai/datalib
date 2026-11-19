@@ -1,6 +1,6 @@
 {
   "airvisual": {
-    "schema_hash": "fabce8a18fc8bb3d3ee471ebeea4dd46f0e8f42623a08160e7aa3cbf4a6be04c",
+    "schema_hash": "0ee31d7f0195e505cdbc58f37d4be98bd92e1dce17e6f9dcc60a562e09e34e4e",
     "schema_version": 0,
     "shared_schema_version": 1,
     "sql": [
@@ -9,44 +9,61 @@
       "CREATE TABLE airvisual_samples( device_id TEXT NOT NULL, ts_ms INTEGER NOT NULL, pm25_ugm3 REAL NULL, pm10_ugm3 REAL NULL, pm1_ugm3 REAL NULL, aqi_us REAL NULL, aqi_cn REAL NULL, outdoor_aqi_us REAL NULL, outdoor_aqi_cn REAL NULL, temperature_c REAL NULL, humidity_pct REAL NULL, co2_ppm REAL NULL, voc_ppb REAL NULL, source_file TEXT NOT NULL, PRIMARY KEY(device_id, ts_ms))",
       "CREATE TABLE airvisual_unplaced_samples( id TEXT PRIMARY KEY, payload TEXT NULL, device_id TEXT NOT NULL, source_file TEXT NOT NULL, line_no INTEGER NOT NULL, device_ts_s INTEGER NOT NULL)",
       "CREATE TABLE ingested_files( scope TEXT NOT NULL, rel_path TEXT NOT NULL, blake3 TEXT NOT NULL, size_bytes INTEGER NOT NULL, last_finished_at_utc TEXT NOT NULL, tz_offset TEXT NULL, PRIMARY KEY(scope, rel_path))",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
   },
   "apple_messages": {
-    "schema_hash": "ca15ba9fe928ba424bc1edc0358b5086b427a62e6c9711f3158745e7b74258c2",
+    "schema_hash": "a24d528ec24cf364ff6db19467ee6983845e271b98c51ffa74b4f1399fb944c5",
     "schema_version": 0,
     "shared_schema_version": 1,
     "sql": [
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
   },
   "apple_photos": {
-    "schema_hash": "ca15ba9fe928ba424bc1edc0358b5086b427a62e6c9711f3158745e7b74258c2",
+    "schema_hash": "a24d528ec24cf364ff6db19467ee6983845e271b98c51ffa74b4f1399fb944c5",
     "schema_version": 0,
     "shared_schema_version": 1,
     "sql": [
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
   },
+  "baby_connect": {
+    "schema_hash": "e5fee51331f639f00a4d65ad91fef5fe415dc02e8d00d64436e22d8d68c8c3d4",
+    "schema_version": 0,
+    "shared_schema_version": 1,
+    "sql": [
+      "CREATE TABLE coverage(scope TEXT NOT NULL, lo TEXT NOT NULL, hi TEXT NOT NULL, PRIMARY KEY(scope, lo))",
+      "CREATE TABLE entries( id TEXT PRIMARY KEY, payload TEXT NULL)",
+      "CREATE TABLE entries_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE TABLE kids( id TEXT PRIMARY KEY, payload TEXT NULL)",
+      "CREATE TABLE kids_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
+      "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
+      "CREATE TABLE users( id TEXT PRIMARY KEY, payload TEXT NULL)",
+      "CREATE TABLE users_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)"
+    ]
+  },
   "beeper": {
-    "schema_hash": "233c25b9a42a6388af2c3b89a6c5028a1dfe5b783ec00c5b341acace98e7dd11",
+    "schema_hash": "f08ff425d122e619923dc2b812298175fb216e3a6e22ef27dbe7792ba65609ac",
     "schema_version": 1,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE beeper_media_files( rel_path TEXT PRIMARY KEY, blake3 TEXT NOT NULL, size_bytes INTEGER NOT NULL, CHECK(length(blake3) = 64))",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
   },
   "calendar": {
-    "schema_hash": "c1be6cfa0a2d9d892cc40061a84908d0bb085cf24e4d654edd521e96b540d404",
+    "schema_hash": "3f166df783a1490937864f3fb610ddc5d05914b00fcb248cb9a9aa5337966bbe",
     "schema_version": 1,
     "shared_schema_version": 1,
     "sql": [
@@ -71,13 +88,13 @@
       "CREATE INDEX ics_objects_by_calendar ON ics_objects(calendar_id)",
       "CREATE INDEX ics_objects_by_href ON ics_objects(calendar_id, href)",
       "CREATE TABLE ingested_files( scope TEXT NOT NULL, rel_path TEXT NOT NULL, blake3 TEXT NOT NULL, size_bytes INTEGER NOT NULL, last_finished_at_utc TEXT NOT NULL, tz_offset TEXT NULL, PRIMARY KEY(scope, rel_path))",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
   },
   "chatgpt": {
-    "schema_hash": "24ea1ae6a2fa5380e8de2747dfbdbd95dde78eba1715f99a6d7a6f7edc0ae9f0",
+    "schema_hash": "54d32089f2a68fa810d9a66501aaf4babdeac389add3b4bfee013f45dcfcfd9f",
     "schema_version": 1,
     "shared_schema_version": 1,
     "sql": [
@@ -91,13 +108,13 @@
       "CREATE TABLE ingested_files( scope TEXT NOT NULL, rel_path TEXT NOT NULL, blake3 TEXT NOT NULL, size_bytes INTEGER NOT NULL, last_finished_at_utc TEXT NOT NULL, tz_offset TEXT NULL, PRIMARY KEY(scope, rel_path))",
       "CREATE TABLE me( id TEXT PRIMARY KEY, payload TEXT NULL, email TEXT NULL, name TEXT NULL)",
       "CREATE TABLE me_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
   },
   "claude": {
-    "schema_hash": "d01c4036cfad6d8d7d12243dfa014b1db025e4b6580fd131c262d248bb96e61d",
+    "schema_hash": "967d2fd87a19871a9dd082e5e01dcb6bab0478502166bdf74de0dc96c9c0442e",
     "schema_version": 1,
     "shared_schema_version": 1,
     "sql": [
@@ -109,9 +126,14 @@
       "CREATE TABLE conversations_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX conversations_org ON conversations(org_uuid)",
       "CREATE INDEX conversations_updated ON conversations(updated_at)",
+      "CREATE TABLE cowork_events( id TEXT PRIMARY KEY, payload TEXT NULL, session_id TEXT NULL, sequence_num INTEGER NULL)",
+      "CREATE TABLE cowork_events_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE INDEX cowork_events_session ON cowork_events(session_id)",
+      "CREATE TABLE cowork_sessions( id TEXT PRIMARY KEY, payload TEXT NULL, org_uuid TEXT NULL, org_name TEXT NULL, title TEXT NULL, last_event_at TEXT NULL)",
+      "CREATE TABLE cowork_sessions_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE orgs( id TEXT PRIMARY KEY, payload TEXT NULL, name TEXT NULL)",
       "CREATE TABLE orgs_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE project_docs( id TEXT PRIMARY KEY, payload TEXT NULL, project_uuid TEXT NULL, file_name TEXT NULL, created_at TEXT NULL)",
       "CREATE TABLE project_docs_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE project_docs_listings(id TEXT PRIMARY KEY)",
@@ -127,12 +149,12 @@
     ]
   },
   "claude_code": {
-    "schema_hash": "3e80eb0bef43a90bbd7830893bad13bee917470e7010ef9cf5ac8046a782b359",
+    "schema_hash": "8c66a290aff900d3af44af86dde8c5a6606482df7d97dc29fbcc6f11e8e945bb",
     "schema_version": 0,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE ingested_files( scope TEXT NOT NULL, rel_path TEXT NOT NULL, blake3 TEXT NOT NULL, size_bytes INTEGER NOT NULL, last_finished_at_utc TEXT NOT NULL, tz_offset TEXT NULL, PRIMARY KEY(scope, rel_path))",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE records( id TEXT PRIMARY KEY, payload TEXT NULL, transcript_id TEXT NOT NULL)",
       "CREATE INDEX records_transcript ON records(transcript_id)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
@@ -141,12 +163,12 @@
     ]
   },
   "codex": {
-    "schema_hash": "4896d227c5f35b04dc1daf50be2aca9431156a3832280c2b9b936574f137be49",
+    "schema_hash": "81320773a6bde31cf0cb577e29685f9e0acca9a912469e0e8232a518d31e7e52",
     "schema_version": 0,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE ingested_files( scope TEXT NOT NULL, rel_path TEXT NOT NULL, blake3 TEXT NOT NULL, size_bytes INTEGER NOT NULL, last_finished_at_utc TEXT NOT NULL, tz_offset TEXT NULL, PRIMARY KEY(scope, rel_path))",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE records( id TEXT PRIMARY KEY, payload TEXT NULL, transcript_id TEXT NOT NULL, line_no INTEGER NOT NULL)",
       "CREATE INDEX records_transcript ON records(transcript_id)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
@@ -155,7 +177,7 @@
     ]
   },
   "contacts": {
-    "schema_hash": "0904923692fea9aee45b1d3caf62a25712785f6272e845f36d94b0c10f3e82b3",
+    "schema_hash": "3f694506c65fff549a49ae20be0bea73f5c9babcede63541b85b0382afdca669",
     "schema_version": 4,
     "shared_schema_version": 1,
     "sql": [
@@ -179,13 +201,13 @@
       "CREATE INDEX dav_resources_by_collection ON dav_resources(collection)",
       "CREATE TABLE dav_unconfirmed( collection TEXT NOT NULL, href TEXT NOT NULL, PRIMARY KEY(collection, href))",
       "CREATE TABLE ingested_files( scope TEXT NOT NULL, rel_path TEXT NOT NULL, blake3 TEXT NOT NULL, size_bytes INTEGER NOT NULL, last_finished_at_utc TEXT NOT NULL, tz_offset TEXT NULL, PRIMARY KEY(scope, rel_path))",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
   },
   "email": {
-    "schema_hash": "81140d6084c4a30094c656a8162a54bf512428cde0d7ccfc94be3fc7b7070c5c",
+    "schema_hash": "ed3595e34b0583507363ed83279e459e883dd5eda28bc6b32765064c830a5de0",
     "schema_version": 9,
     "shared_schema_version": 1,
     "sql": [
@@ -212,7 +234,7 @@
       "CREATE TABLE mailboxes( id TEXT PRIMARY KEY, payload TEXT NULL, account_id TEXT NOT NULL, name TEXT NULL, parent_id TEXT NULL, role TEXT NULL, sort_order INTEGER NULL)",
       "CREATE TABLE mailboxes_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX mailboxes_by_account ON mailboxes(account_id)",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE read_marks( id TEXT PRIMARY KEY, read_through TEXT NULL, read INTEGER NULL, muted INTEGER NULL)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
@@ -223,7 +245,7 @@
     ]
   },
   "facebook": {
-    "schema_hash": "b157be8f630c11b6710f51a960d3554d4beec7ff7001638f3505d2b221ef5fcd",
+    "schema_hash": "d8457a901259c8f664975523840cb94a2cb695298be34a6319fc926e1465eff4",
     "schema_version": 1,
     "shared_schema_version": 1,
     "sql": [
@@ -232,19 +254,19 @@
       "CREATE TABLE media_blobs_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX media_blobs_by_owner_id ON media_blobs(owner_id)",
       "CREATE INDEX media_blobs_by_uri ON media_blobs(uri, blake3)",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
   },
   "file_inventory": {
-    "schema_hash": "87372fbb260f0582540ec47f7ffd1673c5182a575c9eb96ca5eefcdd74468dcd",
+    "schema_hash": "c84f0621a86f85c7d70e9e755d1044b3611eb3a3d1c9800d314814a6f1fb4831",
     "schema_version": 0,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE dirs( id TEXT PRIMARY KEY, size INTEGER NOT NULL, entries INTEGER NOT NULL, blake3 BLOB NOT NULL, identity_uuid TEXT NULL)",
       "CREATE TABLE files( id TEXT PRIMARY KEY, kind TEXT NOT NULL, size INTEGER NOT NULL, blake3 BLOB NOT NULL, symlink_target TEXT NULL)",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE scan_meta( id TEXT PRIMARY KEY, abs_path TEXT NOT NULL, os TEXT NOT NULL, case_sensitive INTEGER NOT NULL, inode_stable INTEGER NOT NULL, options_fingerprint TEXT NOT NULL, scanner_version TEXT NOT NULL)",
       "CREATE TABLE scan_meta_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
@@ -252,7 +274,7 @@
     ]
   },
   "garmin": {
-    "schema_hash": "c8fa7355fbeac6988e8d307ab8c8a760e9e760eff5f8e5b098e244ec653943b4",
+    "schema_hash": "2a709721e21642929e0504ae7496805ac4f2050d36a2aa4e9da2fbec9c621ed1",
     "schema_version": 1,
     "shared_schema_version": 1,
     "sql": [
@@ -283,13 +305,13 @@
       "CREATE TABLE garmin_wellness_files_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX garmin_wellness_files_by_calendar_date ON garmin_wellness_files(calendar_date)",
       "CREATE INDEX garmin_wellness_files_by_file_kind ON garmin_wellness_files(file_kind, blake3)",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
   },
   "github": {
-    "schema_hash": "690f01a259ab3b1c86c07334b97b1bebe5a274a5915633188e861868d4f6d2c1",
+    "schema_hash": "bb1604a47c5ffc8c2921a746bb39eba9d50a6b68b60b443e6530ca733e1230f2",
     "schema_version": 1,
     "shared_schema_version": 1,
     "sql": [
@@ -304,7 +326,7 @@
       "CREATE TABLE pr_reviews( id TEXT PRIMARY KEY, payload TEXT NULL, repo_full_name TEXT NOT NULL, pr_number INTEGER NOT NULL, state TEXT NULL, commit_id TEXT NULL, user_login TEXT NULL, submitted_at TEXT NULL, html_url TEXT NULL)",
       "CREATE TABLE pr_reviews_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX pr_reviews_by_pr ON pr_reviews(repo_full_name, pr_number)",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE pull_requests( id TEXT PRIMARY KEY, payload TEXT NULL, repo_full_name TEXT NOT NULL, pr_number INTEGER NOT NULL, state TEXT NULL, html_url TEXT NULL, head_sha TEXT NULL, base_sha TEXT NULL, head_ref TEXT NULL, base_ref TEXT NULL, updated_at TEXT NULL, merged_at TEXT NULL)",
       "CREATE TABLE pull_requests_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX pull_requests_by_repo ON pull_requests(repo_full_name, pr_number)",
@@ -315,7 +337,7 @@
     ]
   },
   "gitlab": {
-    "schema_hash": "ff864303d8b64cb9896d8c386de3a7dfb3eb21cd3ce0860a75891bce112d35e0",
+    "schema_hash": "6efb6d2f29f92e80426b8bdbc9279e65726552a99a61df91845129d13d8ca8c4",
     "schema_version": 1,
     "shared_schema_version": 1,
     "sql": [
@@ -327,7 +349,7 @@
       "CREATE TABLE merge_requests( id TEXT PRIMARY KEY, payload TEXT NULL, project_full_path TEXT NOT NULL, mr_iid INTEGER NOT NULL, state TEXT NULL, web_url TEXT NULL, head_sha TEXT NULL, base_sha TEXT NULL, start_sha TEXT NULL, source_branch TEXT NULL, target_branch TEXT NULL, updated_at TEXT NULL, merged_at TEXT NULL)",
       "CREATE TABLE merge_requests_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX merge_requests_by_proj ON merge_requests(project_full_path, mr_iid)",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE self_identity( id TEXT PRIMARY KEY, payload TEXT NULL, username TEXT NULL, web_url TEXT NULL)",
       "CREATE TABLE self_identity_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
@@ -335,7 +357,7 @@
     ]
   },
   "google_drive": {
-    "schema_hash": "5b671f5a5c3514d9901bbca1b0e3b3867a1a8c6272e4f2e8e9b7009c926b5079",
+    "schema_hash": "293f83500ab0f5c1de4e7f9d952859640d7a6e401e468a6eb35b68a87e095cbd",
     "schema_version": 0,
     "shared_schema_version": 1,
     "sql": [
@@ -351,7 +373,7 @@
       "CREATE INDEX comments_by_file ON comments(file_id)",
       "CREATE TABLE files( id TEXT PRIMARY KEY, payload TEXT NULL)",
       "CREATE TABLE files_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE revision_exports( id TEXT PRIMARY KEY, revision_id TEXT NOT NULL, part TEXT NOT NULL, blake3 TEXT NULL, CHECK(blake3 IS NULL OR length(blake3) = 64))",
       "CREATE TABLE revision_exports_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX revision_exports_by_part ON revision_exports(part, blake3)",
@@ -364,7 +386,7 @@
     ]
   },
   "google_takeout": {
-    "schema_hash": "061066f1cebce7b850d691b8bc5814094bd1334bca73a11286d791100458438d",
+    "schema_hash": "a2070d3b402b952bf831743c55cc4202fa1d0a85eb76239bc0132e557f41b5e4",
     "schema_version": 4,
     "shared_schema_version": 1,
     "sql": [
@@ -397,7 +419,7 @@
       "CREATE TABLE my_maps_placemarks_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE play_books_annotations( id TEXT PRIMARY KEY, payload TEXT NULL, file TEXT NOT NULL, when_ts TEXT NULL)",
       "CREATE TABLE play_books_annotations_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
       "CREATE TABLE voice_attachments( id TEXT PRIMARY KEY, message_id TEXT NOT NULL, ref_name TEXT NOT NULL, blake3 TEXT NULL, CHECK(blake3 IS NULL OR length(blake3) = 64))",
@@ -417,17 +439,17 @@
     ]
   },
   "lightroom": {
-    "schema_hash": "ca15ba9fe928ba424bc1edc0358b5086b427a62e6c9711f3158745e7b74258c2",
+    "schema_hash": "a24d528ec24cf364ff6db19467ee6983845e271b98c51ffa74b4f1399fb944c5",
     "schema_version": 0,
     "shared_schema_version": 1,
     "sql": [
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
   },
   "linear": {
-    "schema_hash": "7b8de704f5bf720780e04e78a88acc1c6a23a8cfa260cdfe5224dea6daceda09",
+    "schema_hash": "e2eb9279cf1d0dbf817848aa04b728b45c673ce24298fea810616c1442b9bbca",
     "schema_version": 0,
     "shared_schema_version": 1,
     "sql": [
@@ -448,7 +470,7 @@
       "CREATE TABLE issue_labels_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE issues( id TEXT PRIMARY KEY, payload TEXT NULL)",
       "CREATE TABLE issues_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE project_milestones( id TEXT PRIMARY KEY, payload TEXT NULL)",
       "CREATE TABLE project_milestones_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE project_statuses( id TEXT PRIMARY KEY, payload TEXT NULL)",
@@ -468,17 +490,17 @@
     ]
   },
   "linkedin": {
-    "schema_hash": "ca15ba9fe928ba424bc1edc0358b5086b427a62e6c9711f3158745e7b74258c2",
+    "schema_hash": "a24d528ec24cf364ff6db19467ee6983845e271b98c51ffa74b4f1399fb944c5",
     "schema_version": 0,
     "shared_schema_version": 1,
     "sql": [
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
   },
   "media": {
-    "schema_hash": "d631fac880a61a68587f6d72fef40e833fde09400f0f0c476f5eab99404107b3",
+    "schema_hash": "ac30f0a24094ce7143dc19339a86158635949d61aae82ac72886a171f488e285",
     "schema_version": 0,
     "shared_schema_version": 1,
     "sql": [
@@ -501,13 +523,13 @@
       "CREATE TABLE media_scan_meta( id TEXT PRIMARY KEY, abs_root TEXT NOT NULL)",
       "CREATE TABLE media_scan_meta_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE media_visual( blake3 TEXT PRIMARY KEY, width INTEGER NULL, height INTEGER NULL, orientation INTEGER NULL, captured_at TEXT NULL, camera_make TEXT NULL, camera_model TEXT NULL, lens_model TEXT NULL, iso INTEGER NULL, exposure_time TEXT NULL, f_number REAL NULL, focal_length_mm REAL NULL, gps_lat REAL NULL, gps_lon REAL NULL, gps_altitude_m REAL NULL, title TEXT NULL, caption TEXT NULL, frame_rate REAL NULL, video_codec TEXT NULL, audio_codec TEXT NULL)",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
   },
   "notion": {
-    "schema_hash": "20189a30d548f58583577718876f74ca53a9c812276c283f462a283b70212a21",
+    "schema_hash": "074340908b5e5653a0c32697f1f14f913d3debe39bc1b336d75e91118ec4b59f",
     "schema_version": 3,
     "shared_schema_version": 1,
     "sql": [
@@ -531,7 +553,7 @@
       "CREATE TABLE pages_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX pages_last_edited ON pages(last_edited_time)",
       "CREATE INDEX pages_parent ON pages(parent_id)",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
       "CREATE TABLE tree( id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NULL, parent_type TEXT NULL, parent_id TEXT NULL, created_time TEXT NULL)",
@@ -541,7 +563,7 @@
     ]
   },
   "pdf": {
-    "schema_hash": "cc8a8c33f7b75030da6061be16a511ef4c42ad89a2c945c898466c1c0404fc13",
+    "schema_hash": "78f20cdba6a8c620d05b2604bdf517ae8de6e79a13094d826441627e6a641770",
     "schema_version": 0,
     "shared_schema_version": 1,
     "sql": [
@@ -555,13 +577,13 @@
       "CREATE TABLE pdf_paths_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE pdf_scan_meta( id TEXT PRIMARY KEY, abs_root TEXT NOT NULL)",
       "CREATE TABLE pdf_scan_meta_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
   },
   "signal": {
-    "schema_hash": "5dbf43fea48aeba581191c11f21099fb78952f2d4b209850849ce2fd948620f9",
+    "schema_hash": "0536686d2fd33bb44122896e1f4b5db469e73a0b2626752fa0cec9b191fe36fb",
     "schema_version": 1,
     "shared_schema_version": 1,
     "sql": [
@@ -578,7 +600,7 @@
       "CREATE TABLE chats_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX chats_by_recipient ON chats(recipient_id)",
       "CREATE TABLE ingested_backups( fingerprint TEXT PRIMARY KEY, blake3 TEXT NOT NULL, snapshot_dir TEXT NULL, total_byte_size INTEGER NULL, ingested_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE read_marks( id TEXT PRIMARY KEY, read_through TEXT NULL, read INTEGER NULL, muted INTEGER NULL)",
       "CREATE TABLE recipients( id TEXT PRIMARY KEY, payload TEXT NULL, identifier TEXT NULL, display_name TEXT NULL)",
       "CREATE TABLE recipients_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
@@ -587,7 +609,7 @@
     ]
   },
   "slack": {
-    "schema_hash": "85cfdae3ef162b90109acdfe7d2af5804aae9ca7fe4f138cba4c907aa4e44542",
+    "schema_hash": "1e61d8277ce99e09fc164e58955606630e8aca55e6139255b7a348067b5c5815",
     "schema_version": 2,
     "shared_schema_version": 1,
     "sql": [
@@ -606,7 +628,7 @@
       "CREATE TABLE messages_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX messages_by_channel_ts ON messages(channel_id, ts)",
       "CREATE INDEX messages_by_thread ON messages(thread_root_uuid)",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE read_marks( id TEXT PRIMARY KEY, read_through TEXT NULL, read INTEGER NULL, muted INTEGER NULL)",
       "CREATE TABLE saved_items( id TEXT PRIMARY KEY, payload TEXT NULL, item_type TEXT NOT NULL, item_id TEXT NOT NULL, ts TEXT NULL)",
       "CREATE TABLE saved_items_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
@@ -626,12 +648,12 @@
     ]
   },
   "sms_backup_restore": {
-    "schema_hash": "036be2e89e0f3794f3ea1b3a07e792930f35823b82aa978f56e5327ccf3648f9",
+    "schema_hash": "a71ac286d2402f4914c4cc3fe643c1437ca808f42dda63c83abadfb4df2ad5c0",
     "schema_version": 1,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE ingested_files( scope TEXT NOT NULL, rel_path TEXT NOT NULL, blake3 TEXT NOT NULL, size_bytes INTEGER NOT NULL, last_finished_at_utc TEXT NOT NULL, tz_offset TEXT NULL, PRIMARY KEY(scope, rel_path))",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE read_marks( id TEXT PRIMARY KEY, read_through TEXT NULL, read INTEGER NULL, muted INTEGER NULL)",
       "CREATE TABLE sms_attachments( id TEXT PRIMARY KEY, message_id TEXT NOT NULL, ref_name TEXT NOT NULL, blake3 TEXT NULL, CHECK(blake3 IS NULL OR length(blake3) = 64))",
       "CREATE TABLE sms_attachments_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
@@ -646,7 +668,7 @@
     ]
   },
   "todoist": {
-    "schema_hash": "c7273fe9170646fa8276eb4d3b81192b0e7c92918451104c842b9c169e8ad745",
+    "schema_hash": "11450ad3f42da7e2041af3ad1cf639dd4b079277a1d69d5561b4739dc9cb949e",
     "schema_version": 0,
     "shared_schema_version": 1,
     "sql": [
@@ -661,7 +683,7 @@
       "CREATE TABLE labels_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE notes( id TEXT PRIMARY KEY, payload TEXT NULL)",
       "CREATE TABLE notes_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE project_notes( id TEXT PRIMARY KEY, payload TEXT NULL)",
       "CREATE TABLE project_notes_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE projects( id TEXT PRIMARY KEY, payload TEXT NULL)",
@@ -676,11 +698,11 @@
     ]
   },
   "whatsapp": {
-    "schema_hash": "23c0b6a636904f6b5ebc860d38f0263224c1dbe25e74f9c7fa5fadd165b9e3b1",
+    "schema_hash": "7436c7754f45e1e5e5eb9ba86537e74e8c6a035380826a2a172a8d3a44a44f7c",
     "schema_version": 0,
     "shared_schema_version": 1,
     "sql": [
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
       "CREATE TABLE wa_db_contacts( jid TEXT PRIMARY KEY, rows TEXT NOT NULL)",
@@ -688,12 +710,12 @@
     ]
   },
   "yolink": {
-    "schema_hash": "aecb1e2c64a8e3e6e07ba642eb735a1c0a358ab82ea4e7eebd912f9e984af484",
+    "schema_hash": "d51ec12e715b59ddf94f26c89c5888c3358db912c53f375d39da5c3ea610fbc1",
     "schema_version": 1,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE coverage(scope TEXT NOT NULL, lo TEXT NOT NULL, hi TEXT NOT NULL, PRIMARY KEY(scope, lo))",
-      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, PRIMARY KEY(problem_uuid))",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
       "CREATE TABLE yolink_devices( id TEXT PRIMARY KEY, family_device_id TEXT NOT NULL, kind TEXT NOT NULL, start_ms INTEGER NOT NULL)",

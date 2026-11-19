@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { logSource, personSource, searchSource, sourceSource } from "./cardSources";
+import { documentSource, logSource, personSource, searchSource, sourceSource } from "./cardSources";
 import type { ManageRow } from "@/api";
 import {
   CHIP_ACTIONS,
@@ -16,6 +16,12 @@ import {
 } from "./chipActions";
 import { people, type NormalizedContact } from "./contacts";
 import { timeView } from "@/config/timeView";
+import { copyRichToClipboard } from "@/clipboard";
+
+vi.mock("@/clipboard", () => ({
+  copyToClipboard: vi.fn(async () => true),
+  copyRichToClipboard: vi.fn(async () => true),
+}));
 
 const SLACK: Chip = { ref: { kind: "entity", uri: "datalib:group/slack" }, shownAs: "slack" };
 const INGEST: Chip = {
@@ -27,6 +33,11 @@ const RIKER: Chip = {
   shownAs: "Will Riker",
 };
 const CONTACT: Chip = { ref: { kind: "contact", id: "c1" }, shownAs: "Will Riker" };
+const LOG_PAGE = "6c8f2f43-1d3c-4a5e-9b5e-0d3f6a1b2c3d";
+const LOG: Chip = {
+  ref: { kind: "document", uri: `datalib:doc/${LOG_PAGE}` },
+  shownAs: "Captain's log",
+};
 
 function host(extra: Omit<Partial<ChipHost>, "openCard"> = {}) {
   return { ...extra, openCard: vi.fn<(source: string) => void>() };
@@ -42,6 +53,7 @@ describe("chipMenuOf", () => {
       [RIKER, false],
       [RIKER, true],
       [CONTACT, false],
+      [LOG, false],
     ] as const) {
       const ids = chipMenuOf(chip, canLink).map((e) => e.id);
       const order = ids.map((id) => CHIP_ACTIONS.indexOf(id as ChipAction));
@@ -54,6 +66,7 @@ describe("chipMenuOf", () => {
     expect(chipMenuOf(SLACK, false)[0].id).toBe("open");
     expect(chipMenuOf(INGEST, false)[0].id).toBe("open");
     expect(chipMenuOf(RIKER, false)[0].id).toBe("open");
+    expect(chipMenuOf(LOG, false)[0].id).toBe("open");
   });
 });
 
@@ -68,6 +81,15 @@ describe("chipOf", () => {
     expect(chipElAt(inner)).toBe(a);
     expect(chipOf(a)).toEqual(SLACK);
     expect(chipElAt(document.createElement("span"))).toBeNull();
+  });
+
+  it("reads a document chip", () => {
+    const a = document.createElement("a");
+    a.className = "chip";
+    a.dataset.doc = `datalib:doc/${LOG_PAGE}`;
+    a.dataset.shownAs = "Captain's log";
+    expect(chipElAt(a)).toBe(a);
+    expect(chipOf(a)).toEqual(LOG);
   });
 });
 
@@ -85,6 +107,19 @@ describe("runChipAction", () => {
       [logSource({ step: "slack/ingest", jumpToEnd: true })],
     ]);
     expect(chipCardSource(CONTACT.ref, null)).toBeNull();
+    const doc = host();
+    await runChipAction("open", LOG, doc);
+    expect(doc.openCard.mock.calls).toEqual([[documentSource(LOG_PAGE)]]);
+  });
+
+  /** A document chip's "Copy title and link" pastes as a link where
+   *  rich text is taken, and as the title and its name elsewhere. */
+  it("copies a document as a link by its title", async () => {
+    await runChipAction("copy-both", LOG, host());
+    expect(vi.mocked(copyRichToClipboard)).toHaveBeenCalledWith(
+      `Captain's log (datalib:doc/${LOG_PAGE})`,
+      `<a href="datalib:doc/${LOG_PAGE}">Captain&#39;s log</a>`,
+    );
   });
 
   it("searches in the surface's own search where it has one, else beside it", async () => {

@@ -1195,3 +1195,25 @@ async fn a_reset_stops_a_step_a_sync_reaches_downstream() {
     assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
     h.finish().await;
 }
+
+/// A fan-in whose pattern matches nothing, as `*/embed` does where no
+/// source is searched by meaning, is not a source: Sync all builds it
+/// once and then leaves it alone, rather than running it on every sync.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fan_in_whose_pattern_matches_nothing_runs_only_when_stale() {
+    let mut h = Harness::new(&[source("a/ingest"), reads("index/map", &["*/embed"])]).await;
+    let first = h.sync_all().await;
+    h.started("a/ingest").await;
+    h.run("a/ingest", "ok v1").await;
+    h.started("index/map").await;
+    h.run("index/map", "ok m1").await;
+    assert_eq!(h.closed(&first).await, RequestOutcome::Done);
+
+    h.tell("index/map", "ok m2");
+    let again = h.sync_all().await;
+    h.started("a/ingest").await;
+    h.run("a/ingest", "ok v2").await;
+    assert_eq!(h.closed(&again).await, RequestOutcome::Done);
+    assert_eq!(h.state().await.started("index/map"), 1);
+    h.finish().await;
+}

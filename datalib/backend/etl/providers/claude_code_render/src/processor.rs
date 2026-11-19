@@ -42,7 +42,6 @@ impl SourceRender for ClaudeCodeRender {
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
         let outcome = crate::render::render(
             raw_path,
-            ctx.root,
             ctx.name,
             ctx.progress,
             &mut |md| ctx.emit_doc(md),

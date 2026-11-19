@@ -52,6 +52,14 @@ Step A → step B iff B names A's id in its `inputs`. A step's id is also the
 one tree it writes, so an input is simultaneously a step reference and an
 artifact path, and nothing has to be matched against anything.
 
+One input may name many steps: `*/render_markdown` is every step whose id has
+two parts, the second `render_markdown`. The loader expands it to those ids before anything
+else sees the step (`src/input_pattern.rs`), so the graph, the fingerprint and
+the step's `DATALIB_DAG_INPUTS` hold ids only, and a source added to the file is read
+without its readers being edited. A pattern is still written in the config:
+the edges stay where a person can read them, and `--check` prints what each
+pattern stood for.
+
 Validation is correspondingly small: group ids are one segment and
 unique, every part of a step id is a usable directory name, step ids
 are unique and un-nested, no step writes under `system/` or
@@ -71,6 +79,13 @@ assembly is told what the config pass already threw out so its message
 can tell "you named a step that does not exist" from "the step you named
 is broken"; the commonest case of all is a render step whose fetch step
 was rejected for a bad key.
+
+A pattern does not cascade. It stands for the steps that can run, so a step
+dropped for its own reasons, or for an input it names by id, falls out of
+every pattern that would have named it (`without_broken_matches` in
+`src/config.rs`). One broken source then costs its own steps and not the grid
+that reads every render by pattern; named by id, it still blocks the step
+that names it.
 
 Cycle reporting separates the ring from what merely hangs below it. Kahn's
 algorithm cannot: it leaves behind everything it could not order, ring and
@@ -138,7 +153,10 @@ starts** in a tick, visited in topological order, iff:
    `code_version` — differs from the one recorded then, or it answered
    a start's `--prepare` with `needs_rerun` and has not succeeded
    since), or it declares no inputs and has not run since the
-   request opened, since a source's real input is outside the graph;
+   request opened, since a source's real input is outside the graph. A
+   fan-in whose `inputs` are patterns that match no step yet (`*/embed`
+   where no source is searched by meaning) reads nothing too, but it
+   declared inputs, so it is no source: it runs only when stale;
 6. **no producer it reads holds it**: none is running without streaming
    (or with this step reading its files), and none is about to
    run, held only by a lock or a reader, since that one would
@@ -298,7 +316,10 @@ of four ways:
    `round::rerun_offer` lists it for the app, which asks whether to run
    it now and opens one request rooted at the list if so. A sync that
    does not reach such a step leaves it alone. A `datalib-step` render
-   store or the grid index in another shape answers this way.
+   store or the grid index in another shape answers this way, and so
+   does `unified_grid_and_search_index` when a source it reads was drawn
+   into the search index by another version of the index text or its
+   chunking (`INDEX_TEXT_VERSION`), which no render moved.
 4. **Refused** (`failure: incompatible`). What the step wrote is in a
    shape its program cannot use, such as a newer build's. The runner
    turns the step off, as turned off by `the runner, because the step
@@ -310,24 +331,25 @@ A step that fails to answer costs that step only, and the rest are
 asked. For `datalib-step`'s own steps: the grid index reads a render
 store in another shape as the index had it, with a warning; a rebuild of
 the index has nothing to keep, so a source whose render step stays
-turned off then has no rows until it re-renders. Its collection stays
-in the qmd index with its embeddings, and a search reads only the
+turned off then has no rows until it re-renders. Its documents stay in
+the search index with their vectors, and a search reads only the
 sources the grid holds, so it leaves search too and costs a search
 nothing. In the app, the pass writes only what each step brings up to
 date in place, so the app stays usable while it runs: a pill where the
 sync indicator sits says how each step is going, and every Sync on the
 Sources card is disabled (`ManageResponse::sync_paused`); a request
 opened another way waits for the pass. After it, the pill stays red for
-a step the pass could not prepare until it is dismissed.
+a step the pass could not prepare until it is dismissed. The pass is
+held in the server's memory (`/api/config`'s `upgrade`) and announced as
+`pass_changed` on `/api/sync/stream`; freeing disk space is drawn by the
+same pill (§"Resets and purges").
 
-Before any of that, the http server brings the document index from
-before its rename forward (`http/src/config_upgrade.rs`): it moves
-`<root>/unified_index/` to `<root>/unified_document_index/` and the
-record's rows for those steps to their new ids
-(`Store::rename_group_steps`), and moves each folder an older config
-spelled with capitals to the lowercase spelling the config now uses
-(`move_case_folders`); `docs/dev/config_model.md` §"The retired shapes"
-has the config side.
+Before any of that, the http server moves each tree a config rewrite
+renamed to its new path, and the record's rows for its steps with it
+(`http/src/config_upgrade.rs`): the index under an earlier group name, the index
+step's `grid_index/` tree, and a folder an older config spelled with
+capitals. [`config_model.md`](../../../docs/dev/config_model.md)
+§"The retired shapes" has each rewrite and its move.
 `datalib/backend/datalib_step/raw_shapes/` holds the raw shape every
 release left, and a test migrates each one
 ([`raw_shapes/README.md`](../datalib_step/raw_shapes/README.md)).
@@ -353,32 +375,36 @@ follows from it:
   `[[locks]]` entry declares is dropped.
 - **Every config has two default locks** (`supervisor/locks.rs`):
   `network` (4 slots) and `cpu` (4). A step that names no locks holds
-  one of them: `network` for a step with no inputs, `cpu` for a step
-  with inputs, so a download waiting out a rate limit never keeps a
-  render from starting. A `[[locks]]` entry of the same name resizes
-  one, and `--parallelism N` sets both to N, over the config.
+  one of them: `network` for a step that declares no inputs, `cpu` for
+  any other, a fan-in whose patterns match nothing yet among them, so a
+  download waiting out a rate limit never keeps a render from starting.
+  A `[[locks]]` entry of the same name resizes one, and `--parallelism
+  N` sets both to N, over the config.
 
-A datalib config declares three more, and its `datalib-step` entries
-name them:
+A datalib config declares two more, and its `datalib-step` entries name
+them:
 
 | lock | slots | held by | why |
 |---|---|---|---|
-| `qmd_keyword` | 1 | `qmd_aggregator` and every `keyword_index` | they all write one qmd index file, which the runner cannot see as shared; two keyword updates on it can lose a document's body |
-| `qmd_embed` | 1 | every `embed` | they race on qmd's vector table, and share one GPU |
-| `index` | 2 | the index steps (`grid_index`, `time_series_index`, `embedding_map`) | a budget of its own, apart from the renders' `cpu` |
+| `embedder` | 1 | every `embed` | each loads the embedding model and writes the search index's inference cache, which the runner cannot see as shared |
+| `index` | 2 | the index steps (`unified_grid_and_search_index`, `time_series_index`, `embedding_map`) | a budget of its own, apart from the renders' `cpu` |
+
+The index step, `unified_grid_and_search_index`, needs no lock of its
+own: it is the one writer of the grid index's file, and an `embed` reads
+that file off disk, so the two never run together.
 
 None of `locks`, `reads` and `start` is in the fingerprint: they change
 when a step may run, not what it makes. A config edit that changes only
 them is still taken on mid-sync, like any other. A datalib config
 writes `reads = "files"` on the `datalib-step` steps that read their
-inputs off disk (`keyword_index`, which globs its render tree's `.md`
-files; `embed` and `embedding_map`, which read qmd's own SQLite file;
+inputs off disk (`embed`, which reads the search index as it is;
+`embedding_map`, which reads the search index and its inference cache;
 and perseus's render, which reads its TEI files) and `reads = "pinned"`
 on the rest that have inputs.
 
 ## What a sink owes its consumers
 
-A step's sink is whatever it writes: a doltlite store, the qmd index, a
+A step's sink is whatever it writes: a doltlite store, the search index, a
 directory of markdown. A consumer relies on two separate properties, and
 conflating them produces a contract that is false for half the sinks.
 
@@ -451,7 +477,7 @@ and the hash of that commit's tree, which also stays put when the
 store's history is folded into fewer commits
 ([Trees](../../../docs/dev/doltlite.md#trees-and-keeping-one-through-a-fold)).
 `render_markdown` reports the tree, since nothing reads its history;
-`grid_index`, whose index is plain SQLite, reports its generation, a
+`unified_grid_and_search_index`, whose index is plain SQLite, reports its generation, a
 count it raises only when a reader would see a change; the time-series
 steps report the head commit, since the time-series index reads each
 store at the commit it recorded. An ingest reports a commit too, so a
@@ -522,8 +548,8 @@ knowing `datalib-step` is refused entry by entry, each refusal naming
 the rewrite (`config::RETIRED_SHAPE_HELP`): a step that writes `group`
 or `function`, or has no `command`, is `Rejected`, and so is a
 `[[groups]]` entry with `source`; a top-level `checkpoint_cadence`,
-`render_pages` or `embed_contexts` is `Rejected` and the steps still
-load. The app rewrites such a config when it next reads it, and
+`render_pages`, `[modal]`, `embed_contexts` or `embed_search_index` is
+`Rejected` and the steps still load. The app rewrites such a config when it next reads it, and
 `datalib-migrate-config` does from a terminal
 ([`config_model.md`](../../../docs/dev/config_model.md) §"The retired
 shapes").
@@ -747,6 +773,16 @@ does not wait for the sync to end. What it decides is in
   named it as a root, so a reset does not refill a download, and a purged
   group's config change is not waited on; a request left with nothing is
   stopped.
+- **It says how far it has got.** A compaction or a collection writes
+  every step it asks into the record's `wipe_steps` table, waiting, then
+  each as it runs and ends: done with the store's size before and after
+  (its outcome's `store_bytes`), or failed with why. Each write is
+  announced, which the server turns into `pass_changed`, and
+  `/api/config`'s `free_space` is the newest one since the server
+  started. The toolbar draws it with the prepare pass's pill: amber with
+  "Freeing space · 7 of 20 · 5.2 GB freed" while it runs, then green
+  with what it freed (red with a source it could not shrink) until
+  dismissed. Its run is a `shrink`, its reason who asked.
 - **Then it does it, in the loop.** A reset invokes each step whose
   program takes the verb with `--reset`, deletes the tree of any other,
   and records it emptied in the loop's own record, then
@@ -780,8 +816,10 @@ The loop's memory is its **record**, in `system/supervisor.sqlite`
 (`supervisor/store.rs`): `requests` (its `roots`, `opened_by`, a
 `stop_requested_by`, and once closed its `outcome` — `done`, `failed`
 or `stopped` — and `failed_step`), `turned_off` (`step`,
-`turned_off_by`) and `wipes` (`kind`, `targets`, `opened_by`, and once
-closed the `error` that stopped it, if any). It is plain SQLite in
+`turned_off_by`), `wipes` (`kind`, `targets`, `opened_by`, and once
+closed the `error` that stopped it, if any) and `wipe_steps` (a
+compaction's or collection's steps in order, each `state`, `error` and
+`before_bytes`/`after_bytes`). It is plain SQLite in
 rollback-journal mode, so any `sqlite3` reads it, and only the holder of
 `runner-lock` writes it. `supervisor_contention_test` runs seven
 processes on one store (people opening requests, the loop saving, the
@@ -814,7 +852,11 @@ every step name one run. If
 they diverge nothing errors — the store describes a run nobody is
 displaying, `/api/dag` reports no progress on the id mismatch, and the
 UI silently shows none. `started_at` stays the pinned
-`DATALIB_DAG_NOW`.
+`DATALIB_DAG_NOW`, and `finished_at` is read off the same clock
+(`datalib_time::RunClock`: the start moved on by the time since), in
+the record and in the run store alike, so a run pinned to 2369 ends in
+2369. The runner's stamps for a step and its log lines stay on the
+wall clock.
 
 The record is the only channel to a reader who did not spawn the run, and the loop
 saves it before it closes a request, whether its work is done or it was

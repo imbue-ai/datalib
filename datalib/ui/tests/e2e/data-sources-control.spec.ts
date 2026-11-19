@@ -65,7 +65,7 @@ const PDFS: Source = {
   type: "pdf",
   params: `[steps.params.fswalk]\npath = "${PDF_DIR}"`,
 };
-const INDEX = "unified_document_index/grid_index";
+const INDEX = "unified_grid_and_search_index/unified_grid_and_search_index";
 const ingestOf = (s: Source) => `${s.id}/ingest`;
 const renderOf = (s: Source) => `${s.id}/render_markdown`;
 
@@ -310,12 +310,12 @@ name = "index"
 slots = 2
 
 [[groups]]
-id = "unified_document_index"
-name = "Document Index"
+id = "unified_grid_and_search_index"
+name = "Grid and Search Index"
 
 [[steps]]
-id = "unified_document_index/grid_index"
-command = "'${STEP_BIN}' run grid_index"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "'${STEP_BIN}' run unified_grid_and_search_index"
 inputs = [${sources.map((s) => `"${renderOf(s)}"`).join(", ")}]
 reads = "pinned"
 locks = ["index"]
@@ -324,7 +324,7 @@ ${sources.map((s) => stanza(s, names[s.id])).join("")}${applets()}`;
 async function writeConfigAndOpen(page: Page, sources: Source[], names?: Record<string, string>) {
   await writeConfig(page, config(sources, names));
   for (const s of sources) await expandGroup(page, s.id);
-  await expandGroup(page, "unified_document_index");
+  await expandGroup(page, "unified_grid_and_search_index");
 }
 
 test.describe("sources run independently", () => {

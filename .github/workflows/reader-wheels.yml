@@ -41,9 +41,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The wheels compile inside a manylinux or musllinux image, whose
+          # libc decides theirs; the runner is pinned anyway, as release.yml's
+          # are (release_steps.md §"The Linux floor").
           - leg: linux-x86_64
             target: linux
-            runs-on: ubuntu-latest
+            runs-on: ubuntu-24.04
           - leg: linux-aarch64
             target: linux
             runs-on: ubuntu-24.04-arm
@@ -56,7 +59,7 @@ jobs:
           persist-credentials: false
 
       # No cache, as in release.yml's build job; see its comment.
-      - uses: bazel-contrib/setup-bazel@104e3eea9447cdaa4b00d0fb46191a3985d26ab3 # 0.19.1
+      - uses: bazel-contrib/setup-bazel@f34d6a05eae3c24acab7fa54587492daeaeffdab # 0.19.2
         with:
           bazelisk-cache: false
           disk-cache: false

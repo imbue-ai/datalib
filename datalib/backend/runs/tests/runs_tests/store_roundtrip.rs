@@ -562,6 +562,30 @@ async fn retention_ages_runs_against_the_newest_run_not_the_wall_clock() {
     assert_eq!(snapshot(td.path()).await.run_id.as_deref(), Some("second"));
 }
 
+/// A run begun under a pinned `--now` ends on that clock. The demo's
+/// bake, pinned to 2369, recorded its run as ending in the present, so
+/// it read as finishing three centuries before it began.
+#[tokio::test]
+async fn a_run_under_a_pinned_clock_ends_after_it_began() {
+    let td = tempfile::tempdir().unwrap();
+    let pinned = "2369-04-15T00:00:00+00:00";
+    drop(RunWriter::start(td.path(), "pinned", pinned, None, Retention::default()).unwrap());
+
+    let run = runs(td.path(), None, 10).await.remove(0);
+    let finished = run
+        .finished_at_utc
+        .expect("a dropped writer closes the run");
+    assert!(
+        finished.as_str() >= run.started_at_utc.as_str() && finished.starts_with("2369-04-15T00:0"),
+        "began {}, ended {finished}",
+        run.started_at_utc
+    );
+    let runner = processes(td.path(), Some("pinned"), None, 10)
+        .await
+        .remove(0);
+    assert_eq!(runner.finished_at_utc.as_deref(), Some(finished.as_str()));
+}
+
 /// Reading a root that has never synced is not an error — a fresh data
 /// root has no store, and the answer is "nothing is running".
 #[tokio::test]

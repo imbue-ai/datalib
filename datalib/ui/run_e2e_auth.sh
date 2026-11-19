@@ -63,7 +63,7 @@ export DATALIB_TEST_AUTH_CURL_ROUTER
 DATALIB_TEST_AUTH_GARMIN_PLUGIN="$(dirname "$(need_runfile "$DATALIB_TEST_AUTH_GARMIN_PLUGIN_RLOC" -f)")"
 export DATALIB_TEST_AUTH_GARMIN_PLUGIN
 
-# The runtime the release ships — Node, qmd, latchkey — staged the way
+# The runtime the release ships — Node and latchkey — staged the way
 # the dev launchers stage it, then with its `node` swapped for the
 # stand-in in tests/e2e_auth/fake_node.mjs.
 unset DATALIB_RUNTIME_DIR

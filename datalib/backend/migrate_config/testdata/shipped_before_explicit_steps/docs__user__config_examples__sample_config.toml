@@ -1,35 +1,28 @@
 # Sample config in the format `datalib-dag` runs: each source is a
-# `[[groups]]` entry with a `type` plus its two steps (`ingest` and
-# `render_markdown`, each written as `group` + `function` and with no
-# `command`, since a built-in step is `datalib-step`), and the two
-# shared index steps under the `unified_document_index` group, which every
-# source's rendered markdown feeds. A step's id is `<group>/<function>`,
-# composed rather than written; `inputs` name steps by that id. See
-# configs/dag_example.toml for a walkthrough of the format and
-# all_sources.toml (next to this file) for every supported source.
+# `[[groups]]` entry with a `type` plus its steps (`ingest`,
+# `render_markdown` and `embed`, each written as `group` + `function`
+# with `command = "datalib-step"`, the program datalib ships), and the shared
+# index step under the `unified_grid_and_search_index` group, which every
+# source's rendered documents feed. A step's id is `<group>/<function>`,
+# composed rather than written; `inputs` name steps by that id.
+# `datalib-step help dag-example` walks through the format, and
+# `datalib-step help all-sources` shows every source.
 
 # Where the downloaded data gets written. Top-level keys have to come
 # before the first [[…]] header — everything after a table header
 # belongs to that table.
 data_root = "~/datalib"
 
-# Shared fan-in steps: the SQL index behind the grid UI, fed by every
-# source's rendered markdown, and the qmd aggregator, which runs after
-# every source's own search steps.
+# The shared fan-in step: the SQL index behind the grid and the keyword
+# search, fed by every source's rendered documents.
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
+group = "unified_grid_and_search_index"
+function = "unified_grid_and_search_index"
 command = "datalib-step"
-inputs = ["gmail-takeout/render_markdown", "slack/render_markdown", "claude-api/render_markdown"]
-
-[[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
-command = "datalib-step"
-inputs = ["gmail-takeout/keyword_index", "gmail-takeout/embed", "slack/keyword_index", "slack/embed", "claude-api/keyword_index", "claude-api/embed"]
+inputs = ["*/render_markdown"]
 
 # Google Takeout Gmail export. The `mbox` table is the method: it puts
 # the email provider in file-backed mode, reading the file at its
@@ -54,21 +47,15 @@ inputs = ["gmail-takeout/ingest"]
 
 [[steps]]
 group = "gmail-takeout"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["gmail-takeout/render_markdown"]
-
-[[steps]]
-group = "gmail-takeout"
 function = "embed"
 command = "datalib-step"
-inputs = ["gmail-takeout/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
-# Slack workspace mirror. Credentials come from `latchkey` at runtime
-# (see the "Register Slack with latchkey" section in the first-time
-# user guide). `channels` restricts the sync to the listed channels;
-# omit it (or set `all_channels = true`) to mirror every channel the
-# account can see. `media = true` pulls file attachments into blobs.
+# Slack workspace mirror. Credentials come from `latchkey` at runtime;
+# `datalib-step help slack` says how to sign in. `channels` restricts
+# the sync to the listed channels; omit it (or set `all_channels =
+# true`) to mirror every channel the account can see. `media = true`
+# pulls file attachments into blobs.
 [[groups]]
 id = "slack"
 type = "slack"
@@ -111,21 +98,15 @@ inputs = ["slack/ingest"]
 
 [[steps]]
 group = "slack"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["slack/render_markdown"]
-
-[[steps]]
-group = "slack"
 function = "embed"
 command = "datalib-step"
-inputs = ["slack/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
-# Anthropic / claude.ai conversation mirror. Credentials come from
-# `latchkey` at runtime (see the "Register Claude web with latchkey"
-# section in the first-time user guide). An empty `api` table fetches
-# every conversation across every org the account can see; uncomment
-# the knobs below to bound the work on incremental re-runs.
+# Claude (claude.ai) conversation mirror. Credentials come from
+# `latchkey` at runtime; `datalib-step help claude` says how to sign in.
+# An empty `api` table fetches every conversation, project and Cowork
+# task across every org the account can see; uncomment the knobs below
+# to bound the work.
 [[groups]]
 id = "claude-api"
 type = "claude"
@@ -135,10 +116,11 @@ group = "claude-api"
 function = "ingest"
 command = "datalib-step"
 [steps.params.api]
-# refresh_most_recent_n_chat_count = 3   # force-refetch top-N by updated_at
+# refetch_newest_conversations = 3   # fetch the 3 newest again every sync
 # since = "2025-01-01"      # only sync conversations updated at/after this
 # projects = false          # skip Claude Projects (default: on)
 # project_uuids = [...]     # or: mirror only these projects (UUIDs or URLs)
+# cowork = false            # skip Cowork tasks (default: on)
 
 [[steps]]
 group = "claude-api"
@@ -148,28 +130,22 @@ inputs = ["claude-api/ingest"]
 
 [[steps]]
 group = "claude-api"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["claude-api/render_markdown"]
-
-[[steps]]
-group = "claude-api"
 function = "embed"
 command = "datalib-step"
-inputs = ["claude-api/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
-# The app's own surface: `unified_document_index` serves the grid, the document
+# The app's own surface: `unified_grid_and_search_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is
 # an applet rather than a built-in so the backend does not have to know
 # what a grid row is.
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 
 # The contacts app: your own record of who a handle is, which the person
 # chips and search read. `datalib-step help contacts-app`.
 [[applets]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 id = "datalib_contacts"
 command = "datalib-applet datalib_contacts"

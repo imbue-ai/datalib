@@ -107,7 +107,6 @@ fn warm<'a>(cursor: Option<&'a str>, none: &'a HashSet<String>) -> RawRange<'a> 
 /// render step would record as the next cursor.
 fn render_once(
     raw: &Path,
-    out: &Path,
     cursor: Option<&str>,
 ) -> (
     Vec<RenderedMarkdown>,
@@ -117,7 +116,7 @@ fn render_once(
     let none = HashSet::new();
     let parsed = parse_api_dir(raw, "github", warm(cursor, &none)).unwrap();
     let mut docs = Vec::new();
-    render_github(&parsed, out, "github", &Progress::noop(), &mut |d| {
+    render_github(&parsed, "github", &Progress::noop(), &mut |d| {
         docs.push(d);
         Ok(())
     })
@@ -131,12 +130,11 @@ fn render_once(
 async fn a_second_render_over_an_unchanged_store_renders_nothing() {
     let d = tempdir().unwrap();
     let out_db = d.path().join("raw");
-    let out = d.path().join("out");
 
     build_events(&d.path().join("ev"), &[(1, "one"), (2, "two")]);
     download(&d.path().join("ev"), &d.path().join("pb"), &out_db).await;
 
-    let (first, render, cursor) = render_once(&db_path_for(&out_db), &out, None);
+    let (first, render, cursor) = render_once(&db_path_for(&out_db), None);
     assert_eq!(first.len(), 2, "cold start renders both PRs");
     assert!(
         render.is_none(),
@@ -146,7 +144,7 @@ async fn a_second_render_over_an_unchanged_store_renders_nothing() {
         .iter()
         .all(|d| d.bucket_key.as_deref().is_some_and(|k| k.starts_with(REPO))));
 
-    let (second, render, _) = render_once(&db_path_for(&out_db), &out, cursor.as_deref());
+    let (second, render, _) = render_once(&db_path_for(&out_db), cursor.as_deref());
 
     assert!(
         second.is_empty(),
@@ -167,11 +165,10 @@ async fn a_second_render_over_an_unchanged_store_renders_nothing() {
 async fn a_pr_that_left_the_store_is_a_bucket_with_no_rows() {
     let d = tempdir().unwrap();
     let out_db = d.path().join("raw");
-    let out = d.path().join("out");
 
     build_events(&d.path().join("ev"), &[(1, "one"), (2, "two")]);
     download(&d.path().join("ev"), &d.path().join("pb"), &out_db).await;
-    let (_, _, cursor) = render_once(&db_path_for(&out_db), &out, None);
+    let (_, _, cursor) = render_once(&db_path_for(&out_db), None);
 
     // Delete PR 2 from the raw store and commit, the way an upstream loss
     // reaches render.
@@ -193,7 +190,7 @@ async fn a_pr_that_left_the_store_is_a_bucket_with_no_rows() {
     // the assertion below comes back empty.
     db.close().await;
 
-    let (docs, render, _) = render_once(&db_path_for(&out_db), &out, cursor.as_deref());
+    let (docs, render, _) = render_once(&db_path_for(&out_db), cursor.as_deref());
     assert_eq!(
         render,
         Some([format!("{REPO}#2")].into_iter().collect()),

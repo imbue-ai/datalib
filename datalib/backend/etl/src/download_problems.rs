@@ -34,6 +34,8 @@ pub enum ProblemReason {
     NotFound,
     /// It exists, but this credential cannot read it.
     Forbidden,
+    /// The run did not use it: another setting takes its place.
+    Ignored,
 }
 
 impl ProblemReason {
@@ -76,6 +78,33 @@ impl DownloadProblem {
             detail: detail.into(),
         }
     }
+
+    pub fn ignored(setting: &str, value: &str, detail: impl Into<String>) -> Self {
+        Self {
+            setting: setting.to_string(),
+            value: value.to_string(),
+            reason: ProblemReason::Ignored,
+            detail: detail.into(),
+        }
+    }
+}
+
+/// A warning for each of `unused` the config set, when `named_by` names
+/// what to fetch and so leaves those settings nothing to do: `since`
+/// beside a list of conversation ids.
+pub fn ignored_beside(named_by: &str, unused: &[(&str, Option<String>)]) -> Vec<DownloadProblem> {
+    let detail = format!(
+        "{named_by} names what to fetch, so no listing runs and this setting does nothing; \
+         remove one of the two"
+    );
+    unused
+        .iter()
+        .filter_map(|(setting, value)| {
+            value
+                .as_deref()
+                .map(|v| DownloadProblem::ignored(setting, v, detail.clone()))
+        })
+        .collect()
 }
 
 /// What a configured list of names resolved to.
@@ -368,13 +397,14 @@ pub(crate) fn config_rows(problems: &[DownloadProblem]) -> Vec<Row> {
     problems
         .iter()
         .map(|p| {
-            let reason = match p.reason {
-                ProblemReason::NotFound => Reason::NotFound,
-                ProblemReason::Forbidden => Reason::Forbidden,
+            let (reason, outcome) = match p.reason {
+                ProblemReason::NotFound => (Reason::NotFound, Outcome::Dropped),
+                ProblemReason::Forbidden => (Reason::Forbidden, Outcome::Dropped),
+                ProblemReason::Ignored => (Reason::Ignored, Outcome::Ok),
             };
             (
                 format!("{CONFIG_PREFIX}{}:{}", p.setting, p.value),
-                Outcome::Dropped,
+                outcome,
                 Problem::explained(reason, Some(p.setting.clone()), &p.detail)
                     .severity(Severity::Warning),
             )
@@ -590,7 +620,7 @@ pub(crate) async fn apply(
     let mut news = Vec::new();
     for (key, outcome, problem) in &rows {
         let row = ProblemRow::new(
-            "",
+            datalib_problems::step_source(),
             Stage::Fetch,
             Scope::Entity(key),
             None,
@@ -618,6 +648,29 @@ pub(crate) async fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `since` beside `conv_uuids` did nothing, and nothing said so.
+    #[test]
+    fn a_setting_a_named_fetch_leaves_unused_is_a_warning_row() {
+        let rows = ignored_beside(
+            "conv_uuids",
+            &[("since", Some("2369-05-01".into())), ("limit", None)],
+        );
+        assert_eq!(
+            rows,
+            vec![DownloadProblem::ignored(
+                "since",
+                "2369-05-01",
+                "conv_uuids names what to fetch, so no listing runs and this setting does \
+                 nothing; remove one of the two"
+            )]
+        );
+        let (_, outcome, problem) = &config_rows(&rows)[0];
+        assert_eq!(*outcome, datalib_problems::Outcome::Ok);
+        assert_eq!(problem.reason, datalib_problems::Reason::Ignored);
+        assert_eq!(problem.severity, Some(datalib_problems::Severity::Warning));
+        assert!(ignored_beside("conv_uuids", &[("since", None)]).is_empty());
+    }
 
     /// strum and serde are independent derives producing independent
     /// strings; the agreement is a real check, not a tautology.

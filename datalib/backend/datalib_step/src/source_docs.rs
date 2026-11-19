@@ -24,6 +24,9 @@ impl SourceDocs {
 pub fn source_docs(t: SourceType) -> SourceDocs {
     use SourceType as T;
     match t {
+        T::BabyConnect => docs::<datalib_etl_baby_connect_config::BabyConnectConfig>(
+            datalib_etl_baby_connect_config::EXAMPLES,
+        ),
         T::Airvisual => docs::<datalib_etl_airvisual_config::AirvisualConfig>(
             datalib_etl_airvisual_config::EXAMPLES,
         ),
@@ -362,23 +365,28 @@ mod tests {
             .filter_map(|(n, _)| crate::step_entry::locks_entry(n))
             .collect::<Vec<_>>()
             .join("\n");
+        // In a new library's config, as `examples --append` puts it: its
+        // `embed` reads the `unified_grid_and_search_index` step.
         std::fs::write(
             &path,
             format!(
-                "data_root = \"{}\"\n\n{}\n{locks}\n{toml}",
+                "data_root = \"{}\"\n\n{}\n{locks}\n{toml}\n\n{}",
                 dir.join("root").display(),
-                crate::step_entry::programs_entry()
+                crate::step_entry::programs_entry(),
+                crate::append::unified_index_block()
             ),
         )
         .unwrap();
         crate::config_examples_test::validate_config(name, &path);
         let (cfg, _) = datalib_dag::config::load(&path).unwrap();
-        assert_eq!(
-            cfg.groups.len(),
-            1,
-            "{name}: one [[groups]] entry per example"
-        );
-        let group = &cfg.groups[0];
+        let sources: Vec<_> = cfg.groups.iter().filter(|g| g.r#type.is_some()).collect();
+        assert_eq!(sources.len(), 1, "{name}: one [[groups]] entry per example");
+        let group = sources[0];
+        let own: Vec<&datalib_dag::config::StepEntry> = cfg
+            .steps
+            .iter()
+            .filter(|s| s.group() == Some(group.id.as_str()))
+            .collect();
         let function_of = |s: &datalib_dag::config::StepEntry| {
             crate::step_entry::run_args(&s.command)
                 .unwrap_or_else(|| panic!("{name}: {} does not run datalib-step", s.id))
@@ -387,7 +395,7 @@ mod tests {
         };
         // Each step's command says what the examples promise: the group's
         // type, and the reads and locks datalib-step needs.
-        for s in &cfg.steps {
+        for s in &own {
             let args = crate::step_entry::run_args(&s.command).unwrap().unwrap();
             let f = Function::parse(&args.function).unwrap();
             assert_eq!(s.id, format!("{}/{f}", group.id), "{name}");
@@ -410,8 +418,7 @@ mod tests {
                 s.id
             );
         }
-        let ingest = cfg
-            .steps
+        let ingest = own
             .iter()
             .find(|s| function_of(s) == "ingest")
             .unwrap_or_else(|| panic!("{name}: no ingest step"));
@@ -423,7 +430,7 @@ mod tests {
                 .as_ref()
                 .map(|p| serde_json::to_value(p).unwrap())
                 .unwrap_or(Value::Null),
-            functions: cfg.steps.iter().map(function_of).collect(),
+            functions: own.iter().map(|s| function_of(s)).collect(),
         }
     }
 

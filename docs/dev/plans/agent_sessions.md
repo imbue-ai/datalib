@@ -4,7 +4,9 @@
 built (same day — `datalib/backend/etl/providers/claude_code/INGEST.md`
 is the reference) and the `codex` source's local method is built
 (2026-09-22 — `datalib/backend/etl/providers/codex/INGEST.md`); the
-rest is not.* What it would take to
+rest is not. §"Cowork" was re-measured 2026-11-16, and the `claude`
+source's `api` method reads Cowork tasks run in the cloud since
+(`datalib/backend/etl/providers/claude/INGEST.md` §"Cowork tasks").* What it would take to
 mirror the transcripts of the coding and desktop agents — Claude Code
 (local and cloud), Claude Cowork, OpenAI's Codex (local and cloud), the
 ChatGPT bulk export the `chatgpt` source still lacks, and Google's
@@ -19,8 +21,8 @@ unverified.
 |---|---|---|---|---|---|
 | Claude Code | `local` | files | `~/.claude/projects/<cwd-slug>/<session>.jsonl` | none | *measured*: 282 sessions, 630 MB on this machine |
 | Claude Code | `cloud` | origin | `api.anthropic.com/v1/code/sessions` + `…/{id}/teleport-events` | Claude Code's own OAuth token (keychain) | *from source* (the `claude` binary); undocumented; **not yet probed** |
-| Cowork (desktop) | `local` | files | `…/Application Support/Claude/local-agent-mode-sessions/…/*.jsonl` | none | documented by Anthropic; none on this machine to measure |
-| Cowork (web/mobile) | `cloud` | origin | unknown — `cse_` ids, same id space as Claude Code cloud | claude.ai session or OAuth | **open question**, needs a browser probe |
+| Cowork run on the computer | `local` | files | `…/Application Support/Claude/local-agent-mode-sessions/…/*.jsonl` | none | documented by Anthropic; none on this machine to measure. No new task on Pro/Max runs here since 2026-10-06 |
+| Cowork run in the cloud | `api` | origin | a claude.ai conversation, or `claude.ai/v1/code/sessions?tags=cowork-remote` and each task's `/events` | the `claude-ai` session the `claude` source holds | **built** in the `claude` source's `api` method; see §"Cowork" |
 | Any of the above, Enterprise only | — | origin | Compliance API `/v1/compliance/apps/sessions/{local,remote}` | Compliance Access Key | documented and stable, but Enterprise plans only |
 | ChatGPT | `export` | files | `conversations.json` from the data-export zip | none | shape already parsed by the `api` method's renderer |
 | Codex CLI | `local` | files | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` + `state_5.sqlite` | none | **built** (rollouts, both format generations; the SQLite is not read yet) |
@@ -34,7 +36,8 @@ credentials, and its parser is the one every other Claude surface
 reuses), then the ChatGPT `export` method (an afternoon), then Codex
 `local` + `cloud`, then Claude Code `cloud` once the probe below is
 done, then Gemini CLI. Cowork `local` is nearly free after Claude Code
-`local`; Cowork `cloud` waits on the same probe.
+`local`. A Cowork task run in the cloud is already a claude.ai
+conversation (§"Cowork").
 
 ## What every one of these has in common
 
@@ -211,32 +214,109 @@ up themselves; it is listed here so nobody rediscovers it.
 
 ## Cowork
 
-**Desktop Cowork is local.** Anthropic's own data-storage page
-documents `~/Library/Application Support/Claude/local-agent-mode-sessions/<account>/<org>/`
-holding, per session, a `local_<id>.json` state file, a working
-directory with `uploads/` and `outputs/`, an HMAC-chained
-`audit.jsonl`, and the transcript itself in the same JSONL format as
-Claude Code (`<session>/.claude/projects/-sessions-<process>/<cliSessionId>.jsonl`
-by one third-party measurement). This machine has never run a local
-Cowork session — the directory holds only skill scaffolding — so none
-of that is measured here. The directory is mid-rename to
-`claude-code-sessions/` upstream and both names can coexist. Once
-Claude Code `local` exists, Cowork `local` is the same parser over a
-second root plus the `local_*.json` metadata.
+A Cowork task runs either on the computer, in a VM the desktop app
+starts, or in Anthropic's cloud. Which one is the plan's call, not the
+person's (Anthropic's help pages, read 2026-11-16): on Pro, Max and
+Ultra every task started since 2026-10-06 runs in the cloud and the
+"Only on your computer" setting is gone; on Team an owner's "Run
+Cowork in the cloud" switch is on by default; on Enterprise it is off
+by default. Since the same releases a task has no tab of its own: chat
+and Cowork share one home screen and one Recents list.
 
-**Web and mobile Cowork is cloud-only and its consumer route is
-unknown.** Its sessions carry `cse_` ids — the same prefix as Claude
-Code cloud sessions, which suggests one backing service — and the
-Compliance API is the only documented reader. Whether
-`/v1/code/sessions` lists them, or claude.ai's frontend calls a
-different endpoint, is the open question; a logged-in browser's
-network log on claude.ai answers it in a minute. (This session's
-Chrome extension was not connected, and claude.ai's API was returning
-Cloudflare challenges to the CLI path.)
+**A task run in the cloud is a claude.ai conversation** (*measured*
+2026-11-16 on one test task in a Max org, started from the desktop
+app with a local folder picked):
+
+- `GET /api/organizations/{org}/chat_conversations` — the unpaginated
+  listing the `claude` source already walks — names it like any chat.
+  It carries one field a chat does not, `workspace_session_id`, a
+  `cse_…` id; its detail says `workspace_upgraded: true`. 3 of the
+  account's 72 conversations had one, the oldest from 2026-10-06.
+- The detail the `claude` source already fetches
+  (`?tree=True&rendering_mode=messages&render_all_tools=true&consistency=strong`)
+  holds the turn: the person's message, and an assistant message
+  whose blocks are `thinking`, `text`, `tool_use` and `tool_result`.
+- The full session log is `GET claude.ai/v1/code/sessions/{id}` and
+  `…/{id}/events?limit=500&sort_order=asc`, sent with the claude.ai
+  cookie and three headers: `anthropic-version: 2023-06-01`,
+  `anthropic-beta: ccr-byoc-2025-07-29` and `x-organization-uuid`. The
+  session says `environment_kind: "ccs"`, tags `product:cowork-remote`,
+  and `client_metadata.remote_cowork.userSelectedFolders`. Each event
+  wraps (`event_id`, `sequence_num`, `created_at`, …) a `payload` in
+  Claude Code's stream-json shape: `system:init`, `user`, `assistant`
+  (with `uuid`, `session_id`, `message.content`), `control_request`,
+  `control_response`, `result:success`. The session's own id is
+  `cse_…`; the desktop app keeps it as `session_…` with the same
+  suffix, and both spellings open it and its events. claude.ai shows a
+  task at `claude.ai/cowork/cse_…`.
+- `GET /v1/code/sessions` (paged by `next_cursor`) does **not** list
+  it: it listed 149 sessions, all `bridge` (the desktop app's Code tab
+  under Remote Control) or `anthropic_cloud`, under every filter tried
+  (`exclude_tags=-`, `include_archived=true`, `tags=cowork-remote`).
+- On the computer the task left one file,
+  `local-agent-mode-sessions/<account>/<org>/remote-session-spaces.json`
+  (`{"entries": [{"sessionId", "folders": [...]}]}`), mapping the
+  session to the folder it was given. No transcript was written. The
+  file the task made landed in that folder; the VM's disk images under
+  `vm_bundles/claudevm.bundle/` were written during the run and were
+  not opened.
+
+**Not every cloud task becomes a conversation.** Two more tasks the
+same day, both started in claude.ai in a browser with no folder — one
+in a Team org, one in the same Max org — are sessions only: the
+`ccs` session is there with the same `cowork-remote` tags and its
+turns in `/events`, but no conversation in either org's
+`chat_conversations` names it (the Team org's had no
+`workspace_session_id` at all). The plain `GET /v1/code/sessions`
+does not list them; `?tags=cowork-remote` (or `?exclude_tags=-`)
+does. The tasks that did become conversations — one from the desktop
+app with a folder, one from a browser with two pictures attached — are
+in none of those listings. A third browser task, in the Team org with
+a picture pasted in, stayed a session. So neither the org, the surface
+nor a picture decides it, and what does is not known, from five
+tasks.
+
+So a reader takes the union of two listings per org, both behind the
+`claude-ai` session the `claude` source already holds:
+
+- `GET /v1/code/sessions?tags=cowork-remote`, paged by `next_cursor`:
+  the tasks that are sessions only. The `claude` source reads these
+  (`cowork_sessions`, `cowork_events`).
+- The `workspace_session_id` of each conversation in
+  `chat_conversations`: the tasks that became conversations. The
+  `claude` source's `api` method should already mirror these as chats
+  (**not verified by a run**; check that the render draws a
+  `tool_use`/`tool_result` pair in an assistant message), and their
+  `/events` answer too, so a Cowork reader that also reads them must
+  decide which of the two copies a person sees.
+
+Each id's log is `…/{id}/events?sort_order=asc`, paged by its
+`next_cursor` passed back as `cursor` (checked on one log three events
+a page). The payloads are
+Claude Code's stream-json, close to the local JSONL the `claude_code`
+renderer reads but not the same lines (no `parentUuid`, `cwd` or
+`version` per record).
+
+**A task run on the computer** is documented by Anthropic at
+`~/Library/Application Support/Claude/local-agent-mode-sessions/<account>/<org>/`:
+per session a `local_<id>.json` state file, a working directory with
+`uploads/` and `outputs/`, an HMAC-chained `audit.jsonl`, and the
+transcript in Claude Code's JSONL format
+(`<session>/.claude/projects/-sessions-<process>/<cliSessionId>.jsonl`
+by one third-party measurement). This machine has none to measure.
+`claude-code-sessions/` beside it holds the desktop app's Code tab
+state (`local_<id>.json` naming a `cliSessionId`), whose transcripts
+are under `~/.claude/projects` and are the `claude_code` source's
+already. The `claude_code` reader takes every `.jsonl` under its
+`path` at any depth, so a second `claude_code` group pointed at
+`local-agent-mode-sessions` may read these as they are; Cowork's own
+title, in `local_<id>.json`, would be lost.
 
 The consumer data export (Settings → Privacy) is documented as
-"conversation data and user data"; there is no evidence it includes
-Code or Cowork sessions.
+"conversation data and user data"; whether it carries the
+`workspace_session_id` field is not checked. The help pages also name
+a per-task "Download task data" and an "Export your Cowork data" on
+the desktop home; neither is examined.
 
 ## OpenAI
 

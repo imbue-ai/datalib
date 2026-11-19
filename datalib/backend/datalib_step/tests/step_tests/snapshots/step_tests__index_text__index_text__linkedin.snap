@@ -1,0 +1,134 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== linkedin 00000000-0000-801a-aee1-8f706574061b linkedin storage
+--- chunk 0
+title: linkedin storage | text: Source: linkedin
+
+# linkedin — storage
+
+Measured Tue Apr 15th, 2369 at 00:00.
+
+| Kind | Step | What | Size | Count | Id |
+| Source Size | ingest | `linkedin/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `linkedin/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `linkedin/ingest/blobs.sqlite#cas_objects` |  | 0 rows | `00000000` |
+| Store | ingest | `linkedin/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `linkedin/ingest/entities.doltlite_db#comments` |  | 3 rows | `00000000` |
+| Table | ingest | `linkedin/ingest/entities.doltlite_db#connections` |  | 3 rows | `00000000` |
+| Table | ingest | `linkedin/ingest/entities.doltlite_db#email_addresses` |  | 2 rows | `00000000` |
+| Table | ingest | `linkedin/ingest/entities.doltlite_db#messages` |  | 3 rows | `00000000` |
+| Table | ingest | `linkedin/ingest/entities.doltlite_db#shares` |  | 1 row | `00000000` |
+| Table | ingest | `linkedin/ingest/entities.doltlite_db#skills` |  | 3 rows | `00000000` |
+
+=== linkedin 00000000-0000-8027-9f1f-73b03617467e Jean-Luc Picard, William Riker
+--- chunk 0
+title: Jean-Luc Picard, William Riker | text: Jean-Luc Picard — Thu 10 Apr 2369 09:00
+
+Number One, the bridge is yours.
+
+
+--- chunk 1
+title: Jean-Luc Picard, William Riker | text: William Riker — Thu 10 Apr 2369 09:05
+
+Aye, Captain. Setting a course for Risa.
+
+
+--- chunk 2
+title: Jean-Luc Picard, William Riker | text: Jean-Luc Picard — Thu 10 Apr 2369 09:06
+
+Make it so.
+
+
+=== linkedin 00000000-0000-84c5-a0e7-167d60e47f98 Comment: Captain, I must respectfully disagree: the odds are 1 in 4.7 trillion, not "ast…
+--- chunk 0
+title: Comment: Captain, I must respectfully disagree: the odds are 1 in 4.7 trillion, not "ast… | text: LinkedIn — Sat 12 Apr 2369 08:15
+
+Original post not included in the LinkedIn export — https://www.linkedin.com/feed/update/urn%3Ali%3Aactivity%3A2369041208000000002
+
+
+--- chunk 1
+title: Comment: Captain, I must respectfully disagree: the odds are 1 in 4.7 trillion, not "ast… | text: Me <data@enterprise.starfleet.test> — Sat 12 Apr 2369 08:15
+
+Captain, I must respectfully disagree: the odds are 1 in 4.7 trillion, not "astronomical".
+
+🔗 View on LinkedIn
+
+
+--- chunk 2
+title: Comment: Captain, I must respectfully disagree: the odds are 1 in 4.7 trillion, not "ast… | text: Me <data@enterprise.starfleet.test> — Sat 12 Apr 2369 08:20
+
+On reflection, "astronomical" is an acceptable approximation.
+
+I am attempting humor.
+
+🔗 View on LinkedIn
+
+
+=== linkedin 00000000-0000-8878-b482-b77c75689e79 Post: Thrilled to share: the Enterprise has completed its survey of the Mintaka syste…
+--- chunk 0
+title: Post: Thrilled to share: the Enterprise has completed its survey of the Mintaka syste… | text: Me <data@enterprise.starfleet.test> — Fri 11 Apr 2369 14:00
+
+Thrilled to share: the Enterprise has completed its survey of the Mintaka system. "Fascinating" barely covers it.
+
+🔗 View on LinkedIn
+
+
+--- chunk 1
+title: Post: Thrilled to share: the Enterprise has completed its survey of the Mintaka syste… | text: Me <data@enterprise.starfleet.test> — Fri 11 Apr 2369 15:02
+
+Correction: the survey concluded at 13:47 ship's time.
+
+🔗 View on LinkedIn
+
+
+=== linkedin 00000000-0000-8980-b4a1-ea8e394399fe LinkedIn skills
+--- chunk 0
+title: LinkedIn skills | text: Source: LinkedIn
+
+LinkedIn skills
+Diplomacy
+Starship Command
+Tactical Analysis
+
+=== linkedin 00000000-0000-8bbb-8c8b-8ae1dedef5e2 Jean-Luc Picard
+--- chunk 0
+title: Jean-Luc Picard | text: Source: LinkedIn
+Group: Connections
+
+# Jean-Luc Picard <jlpicard@starfleet.gov>
+
+Captain · Starfleet
+
+Email:
+
+jlpicard@starfleet.gov
+
+linkedin:
+
+jlpicard
+
+Connected On: 10 Apr 2369
+
+=== linkedin 00000000-0000-8d5b-95c0-1e95e75b6e77 William Riker
+--- chunk 0
+title: William Riker | text: Source: LinkedIn
+Group: Connections
+
+# William Riker
+
+Commander · Starfleet
+
+Connected On: 09 Apr 2369
+
+=== linkedin 00000000-0000-8f36-a408-50d26aa9b0db Data Soong
+--- chunk 0
+title: Data Soong | text: Source: LinkedIn
+Group: Connections
+
+# Data Soong
+
+Lt. Commander, Operations · Starfleet
+
+Connected On: 08 Apr 2369

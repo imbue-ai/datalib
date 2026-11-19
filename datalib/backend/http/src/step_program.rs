@@ -38,8 +38,9 @@ mod tests {
             Some("render_markdown")
         );
         assert_eq!(
-            datalib_step_function("/opt/bin/datalib-step run grid_index").as_deref(),
-            Some("grid_index")
+            datalib_step_function("/opt/bin/datalib-step run unified_grid_and_search_index")
+                .as_deref(),
+            Some("unified_grid_and_search_index")
         );
         assert_eq!(datalib_step_function("datalib-step help"), None);
         assert_eq!(datalib_step_function("./bin/fetch run ingest"), None);

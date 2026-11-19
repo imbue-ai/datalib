@@ -3,7 +3,6 @@
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use datalib_etl::periodize::Period;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_render::processor::{
     plan_source_render, ReadScope, RenderCtx, RenderProcessor, SourceRender,
@@ -42,10 +41,7 @@ impl SourceRender for WhatsappRender {
 
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse, render_all};
-        // WhatsApp doesn't expose a `period` knob on its sync block today —
-        // default to month bucketing, same as signal.
-        let period = Period::from_config(None).context("default whatsapp period")?;
-        let parsed = parse(raw_path, period, ctx.name, ctx.raw_range())
+        let parsed = parse(raw_path, ctx.name, ctx.raw_range())
             .with_context(|| format!("whatsapp parse {}", raw_path.display()))?;
         let Some(parsed) = parsed else {
             return Ok("no msgstore mirrored yet".into());
@@ -74,7 +70,6 @@ impl SourceRender for WhatsappRender {
             &parsed.chats,
             &parsed.commit,
             raw_path,
-            ctx.root,
             ctx.name,
             ctx.progress,
             ctx.raw_range(),

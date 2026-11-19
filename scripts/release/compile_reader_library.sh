@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Compiles libdoltlite for a reader wheel. stage_reader_wheels.sh runs this
 # inside a manylinux or musllinux image, whose libc is what the library ends up
-# needing: <in> holds sqlite3.c and library_copts.txt, the flags every other
-# build of the engine uses, one per line.
+# needing: <in> holds sqlite3.c, which carries BLAKE3's SIMD kernels too, and
+# library_copts.txt, the flags every other build of the engine uses, one per
+# line.
 set -euo pipefail
 
 in="$1"

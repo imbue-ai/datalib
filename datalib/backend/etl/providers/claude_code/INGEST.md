@@ -3,7 +3,7 @@
 The `claude_code` source mirrors the transcripts Claude Code keeps on
 this machine — every session run in the terminal, the desktop app or
 an IDE extension — into a raw store, and renders each one as a document.
-It has one ingest method today:
+It has one ingest method:
 
 | method table               | reads                                          | needs credentials |
 |----------------------------|------------------------------------------------|-------------------|
@@ -130,8 +130,11 @@ a `User Input` item; the assistant's text an `LLM Response` (authored
 by the model name); a non-empty `thinking` block an `LLM Thinking`
 aside; each `tool_use` block a `Tool Call` aside and each `tool_result`
 block a `Tool Result` aside, so chat-common folds every run of tool
-traffic into one collapsed block. An `isMeta` user record is a
-`Harness Message` aside. A `system` record is a `System` item only when
+traffic into one collapsed block. What the harness wrote in the
+person's place (an `isMeta` or compaction-summary record, one whose
+`origin` is not a person, a `<system-reminder>` span inside a prompt)
+is a `Harness Message` aside by `Claude Code`, not by "Me"; a
+subagent's brief is an `Agent Prompt`. A `system` record is a `System` item only when
 it carries hook output or errors; the usual empty stop-hook summary
 adds nothing. An assistant record whose only blocks are tool calls adds
 no empty response.

@@ -1,0 +1,135 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== beeper 00000000-0000-8594-aca2-4aa5aabd1723 Dr. Beverly Crusher
+--- chunk 0
+title: Dr. Beverly Crusher | text: Dr. Beverly Crusher <+15551234002> — Wed 10 Apr 2024 19:00
+
+Jean-Luc, dinner tonight in my quarters?
+
+
+--- chunk 1
+title: Dr. Beverly Crusher | text: Jean-Luc Picard — Wed 10 Apr 2024 19:01
+
+Earl Grey, hot — at 19:00.
+
+
+=== beeper 00000000-0000-86c6-9b0f-a87d76d8912c William T. Riker
+--- chunk 0
+title: William T. Riker | text: @googlechatbot:beeper.local — Wed 20 Mar 2024 13:58
+
+hidden: m.room.create
+
+
+--- chunk 1
+title: William T. Riker | text: @googlechatbot:beeper.local — Wed 20 Mar 2024 13:58
+
+hidden: m.bridge
+
+
+--- chunk 2
+title: William T. Riker | text: William T. Riker <riker@enterprise.org> — Wed 20 Mar 2024 14:00
+
+Captain, the away team report is ready for your review.
+
+
+--- chunk 3
+title: William T. Riker | text: Jean-Luc Picard — Wed 20 Mar 2024 14:05
+
+Send it through, Number One.
+
+
+--- chunk 4
+title: William T. Riker | text: William T. Riker <riker@enterprise.org> — Wed 20 Mar 2024 14:10
+
+📎 away-team-report.pdf — 38 B
+
+
+=== beeper 00000000-0000-8b2d-bd38-e68431f325dd Bridge crew
+--- chunk 0
+title: Bridge crew | text: Jean-Luc Picard — Sat 11 Apr 2364 00:00
+
+Status report.
+
+
+--- chunk 1
+title: Bridge crew | text: Will Riker — Sat 11 Apr 2364 00:01
+
+All decks at green status, Captain.
+
+
+--- chunk 2
+title: Bridge crew | text: Q — Sat 11 Apr 2364 00:10
+
+Mon capitaine, you are so predictable.
+
+
+=== beeper 00000000-0000-8c53-b909-d898f9ac9d58 Mr. Data
+--- chunk 0
+title: Mr. Data | text: Jean-Luc Picard — Fri 15 Mar 2024 09:00
+
+Mr. Data, regarding the Iconian artifact analysis...
+
+
+--- chunk 1
+title: Mr. Data | text: Mr. Data <+15551234001> — Fri 15 Mar 2024 09:05
+
+> ↪ in reply to `$tng-data-001:ba_TNG.local-signal.localhost`
+
+I have analyzed the artifact, Captain. It appears to be a quantum lattice.
+
+
+--- chunk 2
+title: Mr. Data | text: Jean-Luc Picard — Fri 15 Mar 2024 09:10
+
+iconian-schematic.png
+
+
+--- chunk 3
+title: Mr. Data | text: Mr. Data <+15551234001> — Tue 2 Apr 2024 11:30
+
+Captain, I have located three similar structures in the Federation database.
+
+
+--- chunk 4
+title: Mr. Data | text: Jean-Luc Picard — Tue 2 Apr 2024 11:35
+
+Excellent. Brief the senior staff at oh-eight-hundred.
+
+
+=== beeper 00000000-0000-8db2-bb39-6c4732048194 #bridge
+--- chunk 0
+title: #bridge | text: Worf — Thu 21 Mar 2024 17:00
+
+Captain, a Romulan warbird is decloaking off the port bow.
+
+
+--- chunk 1
+title: #bridge | text: Jean-Luc Picard — Thu 21 Mar 2024 17:01
+
+> ↪ in reply to `$tng-slack-001:beeper.com`
+
+Shields up. Red alert.
+
+
+=== beeper 00000000-0000-8e89-ade7-0034cbfbbf3b beeper storage
+--- chunk 0
+title: beeper storage | text: Source: beeper
+
+# beeper — storage
+
+Measured Tue Apr 15th, 2369 at 00:00.
+
+| Kind | Step | What | Size | Count | Id |
+| Source Size | ingest | `beeper/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `beeper/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `beeper/ingest/blobs.sqlite#cas_objects` |  | 4 rows | `00000000` |
+| Store | ingest | `beeper/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `beeper/ingest/entities.doltlite_db#beeper_media_files` |  | 4 rows | `00000000` |
+| Table | ingest | `beeper/ingest/entities.doltlite_db#message` |  | 11 rows | `00000000` |
+| Table | ingest | `beeper/ingest/entities.doltlite_db#mx_reactions` |  | 2 rows | `00000000` |
+| Table | ingest | `beeper/ingest/entities.doltlite_db#mx_room_messages` |  | 17 rows | `00000000` |
+| Table | ingest | `beeper/ingest/entities.doltlite_db#participant_identifiers` |  | 4 rows | `00000000` |
+| Table | ingest | `beeper/ingest/entities.doltlite_db#participants` |  | 11 rows | `00000000` |
+| Table | ingest | `beeper/ingest/entities.doltlite_db#threads` |  | 6 rows | `00000000` |

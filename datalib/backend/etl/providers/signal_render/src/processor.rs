@@ -3,7 +3,6 @@
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use datalib_etl::periodize::Period;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_render::processor::{
     plan_source_render, ReadScope, RenderCtx, RenderProcessor, SourceRender,
@@ -16,20 +15,17 @@ pub fn plan_render(
     ctx: PlanContext,
     config: SignalRenderConfig,
 ) -> Result<Vec<Box<dyn RenderProcessor>>> {
-    let period = Period::from_config(config.period.as_deref()).context("signal period")?;
     Ok(plan_source_render(
         ctx,
         config.common.raw_path(),
-        SignalRender { period },
+        SignalRender,
     ))
 }
 
 /// Signal's render processor — reads the raw store (driven by the render
-/// cursor's commit) and emits one rendered markdown per period-bucket through
-/// the fused-Load callback.
-struct SignalRender {
-    period: Period,
-}
+/// cursor's commit) and emits one rendered markdown per chat through the
+/// fused-Load callback.
+struct SignalRender;
 
 #[async_trait]
 impl SourceRender for SignalRender {
@@ -39,18 +35,14 @@ impl SourceRender for SignalRender {
         crate::render::render::RENDER_VERSION
     }
 
-    // `period` decides how messages bucket into documents, so a change
-    // re-renders every document.
     fn render_params(&self) -> serde_json::Value {
-        datalib_etl_chat_common::render::layout_params_with(crate::render::render_params(
-            self.period,
-        ))
+        datalib_etl_chat_common::render::layout_params()
     }
 
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse, render_all};
 
-        let parsed = parse(raw_path, self.period, ctx.name, ctx.raw_range())
+        let parsed = parse(raw_path, ctx.name, ctx.raw_range())
             .with_context(|| format!("signal parse {}", raw_path.display()))?;
         // Every recipient is read every run, so the report is whole for
         // the table: one that reads cleanly now loses its row.
@@ -95,7 +87,6 @@ impl SourceRender for SignalRender {
         let mut on_doc = |md| ctx.emit_doc(md);
         let summary = render_all(
             &parsed,
-            ctx.root,
             ctx.name,
             ctx.progress,
             &mut on_doc,

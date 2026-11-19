@@ -43,21 +43,14 @@ command = "datalib-step run render_markdown calendar"
 inputs = ["calendar/ingest"]
 reads = "pinned"
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "calendar/keyword_index"
-command = "datalib-step run keyword_index calendar"
-inputs = ["calendar/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "calendar/embed"
 command = "datalib-step run embed calendar"
-inputs = ["calendar/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 # Every occurrence of every event in a window of days around now, one row
 # each, the way Google's `singleEvents=true` lists them, in

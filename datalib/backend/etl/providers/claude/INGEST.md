@@ -10,14 +10,14 @@ ingest step's params, sharing one renderer:
 
 Both write **the same tables of the same raw store** — `users`,
 `orgs`, `projects`, `project_docs`, `conversations`,
-`claude_attachments`, and for the `api` method `project_docs_listings`
+`claude_attachments`, and for the `api` method `project_docs_listings`,
+`cowork_sessions` and `cowork_events` (§"Cowork tasks")
 — which is the whole point: `render` has one
 input shape to be correct against, and there is exactly one parser.
 
 The store is `<data_root>/<group>/ingest/entities.doltlite_db`, with a
 `<table>_bookkeeping` sidecar per table and the blob CAS beside it; the
-schema is `src/ingest/schema_raw.rs`. `claude-ingest --out <dir>` runs
-the `api` method from the command line into `<dir>/entities.doltlite_db`.
+schema is `src/ingest/schema_raw.rs`.
 
 ## Why "export shape" if we hit the live API?
 
@@ -44,15 +44,13 @@ as written: one export comes from one serializer.
 
 ## Auth + Cloudflare
 
-The downloader never handles claude.ai cookies. It shells out to
-[`latchkey curl`](https://github.com/imbue-ai/latchkey), which injects
-the `sessionKey` cookie registered under the `claude-ai` service.
-
-Cloudflare sits in front of `claude.ai`; requests clear its managed
-challenge by going through the bundled curl that impersonates Chrome's
-TLS handshake ([`docs/dev/curl_impersonate.md`](/docs/dev/curl_impersonate.md)
-has the pieces and `LATCHKEY_CURL`). That handshake is never asked for a
-`cf_clearance` cookie, so `sessionKey` is the whole credential. Should
+Requests go out as `latchkey curl` ([`docs/dev/latchkey.md`](/docs/dev/latchkey.md)),
+which adds the `sessionKey` cookie registered under the `claude-ai`
+service. Cloudflare sits in front of `claude.ai`, so they go through the
+bundled Chrome-impersonating curl
+([`docs/dev/curl_impersonate.md`](/docs/dev/curl_impersonate.md)). That
+handshake is never asked for a `cf_clearance` cookie, so `sessionKey` is
+the whole credential. Should
 Cloudflare start demanding one, take `cf_clearance` (HttpOnly) from
 DevTools → Application → Cookies → `claude.ai` and store it via
 `$(pbpaste)`, keeping it out of shell history:
@@ -110,7 +108,7 @@ the step.
 | a configured `conv_uuids` entry every org answers 404 or 403 for | `config:conv_uuids:<value>` | as above |
 | one conversation's detail fetch | `conversations:<id>` on its bookkeeping row | its next successful fetch: a conversation not held at the `updated_at` listed is owed, so the next run asks again |
 | one file | `claude_attachments:<conversation>#<file>`, with the real reason | the file landing; see Attachments |
-| the rate limit (the shared give-up guard tripped), or 25 failures in a row in one loop | `phase:conversations`, `phase:projects` or `phase:attachments`, wherever it stopped | the next run that gets through; the walk stops there, since every later request would be refused too |
+| the rate limit (the shared give-up guard tripped), or 25 failures in a row in one loop | `phase:conversations`, `phase:projects`, `phase:cowork` or `phase:attachments`, wherever it stopped | the next run that gets through; the walk stops there, since every later request would be refused too |
 | a conversation or project in a bulk export with no `uuid` | `phase:export` | the next export ingest without one |
 
 Render shows a `conversations:` or `claude_attachments:` row on the
@@ -187,6 +185,76 @@ is the way to drop them. A UUID in
 `config:project_uuids:<value>` problem rather than quietly mirroring
 nothing.
 
+## Cowork tasks
+
+A Cowork task runs in Anthropic's cloud or on the person's computer;
+which one is the plan's call. A task run on the computer is not read
+here. One run in the cloud is stored one of two ways, and the walk
+reads both:
+
+- **As a chat.** claude.ai has turned some tasks into conversations:
+  the conversation listing names them like any chat, with a
+  `workspace_session_id` naming the task. They are mirrored as those
+  conversations, by the walk above.
+- **As a session only.** The rest live only in the sessions API that
+  claude.ai's client shares with Claude Code on the web:
+  `GET https://claude.ai/v1/code/sessions?tags=cowork-remote` lists an
+  org's tasks (paged by `next_cursor`, passed back as `cursor`), and
+  `…/sessions/{id}/events?sort_order=asc` is one task's whole log
+  (paged the same way). The API answers only requests that carry
+  `anthropic-version: 2023-06-01`, `anthropic-beta: ccr-byoc-2025-07-29`
+  and the org in `x-organization-uuid`, beside the same `sessionKey`
+  cookie (`api::sessions_request`). Without `tags=cowork-remote` the
+  listing leaves Cowork tasks out.
+
+What decides which way a task is stored is not known. Measured on
+2026-11-16 over five tasks: one started in the desktop app with a
+folder picked and one started in a browser with two pictures attached,
+both in a personal org, became chats; three started in a browser stayed
+sessions, one in a personal org and two in a Team org, one of those
+with a picture pasted in. A task that is a chat was not in the session
+listing.
+
+`api.cowork` (default **on**) turns the session walk on and off;
+`api.cowork_session_ids` names tasks to fetch instead of listing,
+looked up by id in each org in turn (`cse_…`, the `session_…` spelling
+the desktop app keeps, or a `https://claude.ai/cowork/<id>` link). An
+entry no org has, or one claude.ai refuses as no task id at all (it
+answers 400), is a `config:cowork_session_ids:<value>` problem.
+Neither touches a task that is a chat.
+
+Two tables: `cowork_sessions` (the listing entry, `tags` sorted, with
+`org_uuid` / `org_name` / `title` / `last_event_at` promoted) and
+`cowork_events` (one row per event, keyed by its `event_id`, with
+`session_id` and `sequence_num` promoted). A task is held at its
+`last_event_at` and its title (`cowork::version_of`): the first moves
+only when the log grows, the second when it is renamed. Its
+`updated_at` is not used, because it moves whenever the task's
+connection or status changes. An owed task's log is read whole and
+written with its row in one transaction, and an event the log no
+longer has is deleted.
+
+A file the person attached is named on their message's event, in
+`file_attachments` (`file_uuid`, `file_name`, `file_size`, `is_image`),
+with the same `file_uuid` claude.ai gives it in a chat. Each is a
+`claude_attachments` edge owned by the task, written with it, and the
+attachment loop fetches its bytes from the org's `/contents` as it does
+a chat's (§"Attachments"), held at the task's version.
+
+A task the session listing names that this run's conversation listing
+also names (`workspace_session_id`) is counted as `cowork_as_chats`
+and left to its chat. A complete listing of an org prunes that org's
+tasks it does not name, including one that has become a chat since, so
+one task is never two pages (`when_deleted_upstream` applies). A
+listing that fails is a `listing:cowork org:<org uuid>` problem, and
+nothing of that org is pruned. A log that answers 404 means the task
+was deleted after the listing, and it goes. `api.since` gates a task
+by its `last_event_at`, as it gates a conversation by its `updated_at`.
+
+The render turns each task into a conversation in the export shape
+(`cowork::to_export_shape`; `../claude_render/TRANSLATE.md`
+§"Cowork tasks" has what is drawn).
+
 ## The `export` method: ingesting a bulk export
 
 `[steps.params.export] path = …` names the directory you unpacked
@@ -216,7 +284,8 @@ nothing (`reading_an_unchanged_export_again_commits_nothing`).
 
 A bulk export is a complete snapshot, so an id it stops mentioning has
 been deleted upstream: after upserting, the ingest drops the rows the
-export no longer names. Pruning is per table and runs only when that
+export no longer names, unless `when_deleted_upstream =
+"keep_local_copy"` (above). Pruning is per table and runs only when that
 table's file is present, so a partially unpacked export can't wipe the
 store.
 
@@ -286,28 +355,42 @@ that names no org, is not there to fetch rather than failed: its edge is held wi
 a `not_found` warning, and asked for again only when its conversation
 changes and is refetched.
 
+A `404` from `/contents` is not proof the file is gone. On one real
+root, a first download in October 2026 got `404` for every picture
+uploaded before March 2026 (seven of them) and the file for every
+newer one. A month later, after the store was cleared, the same
+requests got all seven. Rate limiting is unlikely to explain it: a
+rate limit comes back as `429`, which this download handles on its
+own path. The failures were also spread over a minute and fell by
+upload date, not at random. Since a `404` is held until its
+conversation changes, those pictures stayed missing for the month
+between. What is still open:
+
+- Whether a `404` should be asked again on later runs. If more of
+  these turn up for pictures, it should.
+- Older sandbox files carry a `path` and no `download_source`.
+  `/contents` answers `404` for them, both times. They may live at
+  another address, or be gone.
+
 ## What is owed
 
-There is no checkpoint file and no cursor. Each run lists every org's
-conversations, and a listed conversation is owed when the store does
-not hold it at the `updated_at` listed: the sidecar's `held_version`,
-written in the transaction that stores the row and its attachment
-edges, so a run cut off anywhere leaves nothing reading as done that
-is not (`tests/claude_tests/interrupt.rs` cuts a replayed run at every
-request and requires the store an uninterrupted run leaves). The ones
+Each run lists every org's conversations, and a listed conversation is
+owed when the store does not hold it at the `updated_at` listed: the
+sidecar's `held_version`, written in the transaction that stores the
+row and its attachment edges ([`data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md#what-is-left-to-fetch-listed-minus-held)).
+`tests/claude_tests/interrupt.rs` cuts a replayed run at every request
+and requires the store an uninterrupted run leaves. The ones
 never fetched come first, then the stale, so genuinely new
 conversations are fetched first. The N most recently updated
-conversations of each org (`refresh_most_recent_n_chat_count`, CLI
-`--overlap`) are fetched every run, held or not, as a check against the
-live copy.
+conversations of each org (`refetch_newest_conversations`) are fetched
+every run, held or not, as a check against the live copy. A run fetches
+at most `max_conversations_per_run` of all these, and waits
+`seconds_between_requests` between them.
 
-Items whose listing `updated_at` predates the configured `since`
-(`api.since`, a day, an RFC 3339 instant or an offset such as `-30d`
-resolved against the run's start; CLI `--since`, RFC 3339 or
-`YYYY-MM-DD`, assumed UTC; in a config a day is midnight in the
-run's own offset)
-are out of scope: they are never detail-fetched and are invisible to
-the overlap. The filter only gates fetching — already-stored rows are
+Items whose listing `updated_at` predates `api.since` (the grammar is
+[`config_model.md`](/docs/dev/config_model.md#time-windows-since-and-until))
+are out of scope: they are never detail-fetched and never counted
+among the newest. The filter only gates fetching — already-stored rows are
 untouched — so moving `since` further back later lists the newly in
 scope conversations as owed on that run.
 
@@ -326,6 +409,13 @@ payload, so no org. When every walked org listed, a stub no listing
 names is pruned too, problem and all; otherwise stubs wait for a run in
 which they all did. An org with no chat lists nothing, so it holds no
 stub back.
+
+With `when_deleted_upstream = "keep_local_copy"` none of these deletions
+happen: a conversation, project, document or user deleted on claude.ai
+(or left out of a newer export) stays as last fetched, and the run's
+summary counts it as `kept_deleted_upstream`. Stubs are still pruned;
+they hold nothing. Why someone wants that:
+[`docs/dev/deleted_upstream.md`](../../../../../docs/dev/deleted_upstream.md).
 
 ## Bootstrapping from an export, then keeping it fresh with the API
 
@@ -366,7 +456,7 @@ above is that it mostly won't.
     un-fetched until the same re-fetch happens.
 
 To force either one, make the API re-fetch: widen `api.since`, raise
-`refresh_most_recent_n_chat_count`, name the conversations in
+`refetch_newest_conversations`, name the conversations in
 `api.conv_uuids`, or `datalib-dag --reset` the whole store.
 
 ### The hazard: don't leave both download steps pointed at one store
@@ -389,13 +479,16 @@ rows alone. The export prune has no such limit, and `users` /
 
 ## Named conversations
 
-`api.conv_uuids` (CLI `--conv-uuid`, once per target; bare UUIDs or
-`https://claude.ai/chat/<uuid>` URLs) fetches exactly those
+`api.conv_uuids` (bare UUIDs or `https://claude.ai/chat/<uuid>` URLs) fetches exactly those
 conversations, every run, instead of walking the listing, and prunes
 nothing. Each
 org is tried in turn; a `404`, or a `403` that outlasts the retries,
 means "wrong org, try the next". The rows are upserted beside what the
-store already holds.
+store already holds. The listing's settings (`since`,
+`max_conversations_per_run`, `refetch_newest_conversations`) then do
+nothing, and each one set is a warning row (`ignored`) on the Manage
+screen. `seconds_between_requests` still applies, and projects are
+still mirrored.
 
 ## Rate limits
 

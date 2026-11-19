@@ -15,6 +15,7 @@ use datalib_etl_facebook::ingest::{self, db_path_for, FetchOptions, RawDb};
 use datalib_etl_facebook_render::processor::{render_source, Source};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_render::section::join;
 
 fn fixture() -> PathBuf {
     let rel = std::env::var("FACEBOOK_TNG_FIXTURE").expect("FACEBOOK_TNG_FIXTURE is set by BUILD");
@@ -124,11 +125,8 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         // `render_source` opens the store itself, so hand the file over
         // first: one doltlite file takes one connection at a time.
         db.close().await;
-        let out_dir = tmp.path().join("out");
-        fs::create_dir_all(&out_dir)?;
         let source = Source {
             raw_dir: &raw_dir,
-            out_dir: &out_dir,
             name: "facebook",
             range: RawRange::cold(),
             // One chat's media a batch, so each loads apart.
@@ -143,10 +141,9 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             render_source(&source, &Progress::noop(), &mut on_doc).context("render")?;
         }
 
-        // 5 posts (4 timeline + 1 on another page) + 1 album + a year of
-        // comments + a year of reactions + 3 friends + a year each of 7
-        // Messenger conversations + the edit of a post deleted since + 3
-        // group posts.
+        // 5 posts (4 timeline + 1 on another page) + 1 album + the
+        // comments + the reactions + 3 friends + 7 Messenger conversations
+        // + the edit of a post deleted since + 3 group posts.
         assert_eq!(docs.len(), 5 + 1 + 1 + 1 + 3 + 7 + 1 + 3, "documents rendered");
         let all_rows: Vec<_> = docs.iter().flat_map(|d| d.rows.iter()).collect();
         assert!(
@@ -163,7 +160,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             .iter()
             .find(|d| d.rows.iter().any(|r| r.preview.contains("Tea, Earl Grey, hot.")))
             .expect("check-in post rendered");
-        let md = fs::read_to_string(&check_in.md_path)?;
+        let md = join(&check_in.sections);
         assert!(md.contains("Tea, Earl Grey, hot. ☕"), "{md}");
         assert!(
             md.contains("📍 [Ten Forward](https://www.facebook.com/pages/Ten-Forward/300000000000001) — Deck 10, USS Enterprise"),
@@ -173,21 +170,16 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         assert!(check_in.rows.iter().any(|r| r.kind == "Facebook Post Message"));
 
         // The photo post: its two images were CAS'd at ingest, and the
-        // markdown embeds them at their addresses in the blob store
-        // rather than copying them beside the page.
+        // markdown embeds them at their addresses in the blob store.
         let photo_post = docs
             .iter()
             .find(|d| d.rows.iter().any(|r| r.preview.contains("Two views of the bridge")))
             .expect("photo post rendered");
-        let md = fs::read_to_string(&photo_post.md_path)?;
+        let md = join(&photo_post.sections);
         assert_eq!(
             md.matches("](/data/").count(),
             2,
             "two images linked in the blob store: {md}"
-        );
-        assert!(
-            !photo_post.md_path.parent().unwrap().join("blobs").exists(),
-            "nothing copied beside the page"
         );
         assert!(md.contains("The bridge at dawn."), "photo caption: {md}");
         assert!(md.contains("— with Data"), "tag: {md}");
@@ -197,7 +189,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             .iter()
             .find(|d| d.rows.iter().any(|r| r.kind == "Facebook Album"))
             .expect("album rendered");
-        let md = fs::read_to_string(&album.md_path)?;
+        let md = join(&album.sections);
         assert!(md.contains("Off-duty evenings on Deck 10."), "{md}");
         assert!(md.contains("Guinan behind the bar."), "{md}");
         assert_eq!(
@@ -205,18 +197,21 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             2
         );
 
-        // Comments: one document per year, the title folded in, the
-        // mojibake'd 🍸 restored.
+        // Comments: one document, under the feed's own uuid, the title
+        // folded in, the mojibake'd 🍸 restored.
         let comments: Vec<_> = docs
             .iter()
             .filter(|d| d.rows.iter().any(|r| r.kind == "Facebook Comment"))
             .collect();
-        let [year] = comments.as_slice() else {
-            let paths: Vec<_> = comments.iter().map(|d| &d.md_path).collect();
-            panic!("two months of comments are one year's document: {paths:?}")
+        let [comments_doc] = comments.as_slice() else {
+            let uuids: Vec<_> = comments.iter().map(|d| &d.markdown_uuid).collect();
+            panic!("two months of comments are one document: {uuids:?}")
         };
-        let md = fs::read_to_string(&year.md_path)?;
-        assert!(md.contains("(2369)"), "the year's document: {md}");
+        assert!(
+            comments_doc.rows.iter().all(|r| r.conversation_uuid == comments_doc.markdown_uuid),
+            "the document is the feed's own"
+        );
+        let md = join(&comments_doc.sections);
         assert!(md.contains("Guinan's synthehol never disappoints. 🍸"), "{md}");
         assert!(md.contains("*Jean-Luc Picard commented on his own album.*"), "{md}");
 
@@ -227,7 +222,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             .filter(|d| d.rows.iter().any(|r| r.kind == "Facebook Reaction"))
             .filter(|d| d.rows.iter().all(|r| r.kind != "Facebook Conversation"))
             .collect();
-        assert_eq!(reactions.len(), 1, "two months of reactions, one year");
+        assert_eq!(reactions.len(), 1, "two months of reactions, one document");
         let reaction_rows: Vec<_> = reactions
             .iter()
             .flat_map(|d| d.rows.iter())
@@ -264,7 +259,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
                     })
                 })
                 .unwrap_or_else(|| panic!("conversation {name} rendered"));
-            (d, fs::read_to_string(&d.md_path).unwrap())
+            (d, join(&d.sections))
         };
         let (riker, md) = conversation("William Riker");
         assert!(
@@ -277,7 +272,10 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         assert_eq!(md.matches("](/data/").count(), 2, "the photo and the sticker: {md}");
         assert!(md.find("Engage.") < md.find("Now."), "the older first: {md}");
         assert!(riker.rows.iter().any(|r| r.kind == "Facebook Reaction"));
-        assert!(md.contains("(2369)"), "the year's document: {md}");
+        assert!(
+            riker.rows.iter().all(|r| r.conversation_uuid == riker.markdown_uuid),
+            "the document is the conversation's own"
+        );
 
         // What render could not use is a problem row on the document,
         // at the message's own section, and says what it was by its
@@ -377,15 +375,15 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             ]
         );
         // A post on another page edited after it was posted says so.
-        let other_page = docs
-            .iter()
-            .find(|d| fs::read_to_string(&d.md_path).is_ok_and(|md| md.contains("*Edited <time datetime=\"2369-")))
-            .map(|d| d.md_path.clone());
-        assert!(other_page.is_some(), "the edited post carries its note");
+        assert!(
+            docs.iter()
+                .any(|d| join(&d.sections).contains("*Edited <time datetime=\"2369-")),
+            "the edited post carries its note"
+        );
 
         // Edits: an earlier version folds in above the text it became;
         // the version that is the text now is not shown twice.
-        let page = fs::read_to_string(&check_in.md_path)?;
+        let page = join(&check_in.sections);
         // Past the front matter and the heading, which repeat the title.
         let md = page.split_once("</h1>").map_or(page.as_str(), |(_, body)| body);
         let original = "Evening in Ten Forward with the senior staff\n";
@@ -399,11 +397,9 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             .any(|r| r.kind == "Facebook Post Version"));
         let gone = docs
             .iter()
-            .find(|d| {
-                fs::read_to_string(&d.md_path).is_ok_and(|md| md.contains("Away team to Risa"))
-            })
+            .find(|d| join(&d.sections).contains("Away team to Risa"))
             .expect("the edit of a deleted post is a post of its own");
-        let md = fs::read_to_string(&gone.md_path)?;
+        let md = join(&gone.sections);
         assert!(md.contains("a post the export no longer has"), "{md}");
         // A life event's words are its description: its two edit records,
         // the words it has now with and without the mention's markup, are
@@ -412,11 +408,11 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             .iter()
             .find(|d| d.rows.iter().any(|r| r.preview.contains("a new ship, a new crew")))
             .expect("life event rendered");
-        let md = fs::read_to_string(&life_event.md_path)?;
+        let md = join(&life_event.sections);
         assert!(md.contains("William Riker"), "{md}");
         assert!(!md.contains("Another version"), "{md}");
         assert!(!md.contains("@["), "{md}");
-        let md = fs::read_to_string(&year.md_path)?;
+        let md = join(&comments_doc.sections);
         assert!(
             md.find("Enjoy the chair, Number One.") < md.find("Enjoy the chair, Will."),
             "a comment's first version above it: {md}"
@@ -440,13 +436,13 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
             project_of("Saurian brandy").as_deref(),
             Some("Ten Forward Regulars")
         );
-        let comments_md = fs::read_to_string(&year.md_path)?;
+        let comments_md = join(&comments_doc.sections);
         assert!(comments_md.contains("Proud of you, Ensign."), "{comments_md}");
 
         // Every document declares the rows it read, so a change to any of
         // them renders it again; every one includes the profile row.
         for d in &docs {
-            assert!(d.bucket_key.is_some(), "{} has a bucket", d.md_path.display());
+            assert!(d.bucket_key.is_some(), "{} has a bucket", d.markdown_uuid);
         }
         Ok::<(), anyhow::Error>(())
     })?;

@@ -10,6 +10,12 @@ type = "claude"
 id = "claude/ingest"
 command = "datalib-step run ingest claude"
 
+[steps.params]
+# What becomes of the copy of a conversation a newer export no longer holds:
+# "delete_local_copy" (the default) deletes it here too; "keep_local_copy"
+# keeps it, so you can delete it upstream for privacy and still have it.
+when_deleted_upstream = "keep_local_copy"
+
 [steps.params.export]
 path = "~/Downloads/claude-export"  # the folder holding `conversations.json`
 
@@ -23,18 +29,11 @@ reads = "pinned"
 max_project_doc_bytes = 131072  # cut a project knowledge document's text at this many
                                 # bytes on the project's page; default 131072 (128 KiB)
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "claude/keyword_index"
-command = "datalib-step run keyword_index claude"
-inputs = ["claude/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 id = "claude/embed"
 command = "datalib-step run embed claude"
-inputs = ["claude/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]

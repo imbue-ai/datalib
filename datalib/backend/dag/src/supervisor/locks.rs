@@ -52,8 +52,8 @@ pub struct LockSpec {
     pub slots: usize,
 }
 
-/// The budget a step that reads nothing holds when it names no lock: in
-/// practice a download, so a rate limit on one keeps no render from
+/// The budget a step that declares no inputs holds when it names no lock:
+/// in practice a download, so a rate limit on one keeps no render from
 /// starting.
 pub const NETWORK: &str = "network";
 /// The budget a step that reads something holds when it names no lock.
@@ -74,9 +74,10 @@ pub fn defaults() -> Vec<LockSpec> {
 }
 
 /// The lock a step holds when it names none: `network` for a step that
-/// reads nothing, `cpu` for one that reads something.
+/// declares no inputs, `cpu` for any other, a fan-in whose patterns match
+/// nothing yet among them.
 pub fn default_for(spec: &StepSpec) -> &'static str {
-    if spec.inputs.is_empty() {
+    if spec.is_source() {
         NETWORK
     } else {
         CPU

@@ -109,3 +109,10 @@ file id alone, so a fetch problem keyed `files:<id>` lands on it.
 row, that capture's `capture_parts` and its `comments`. Every key in
 those tables starts with the file id, which is how the forward scan maps
 a changed row to the Doc to render again.
+
+**Where a row sits** (`grid_rows.md` §"`parent_uuid`…"). The Doc is read
+together, inside its folder: the first of the listing's `parents`,
+keyed by Drive's folder id. The download lists no folders, so the
+folder has no name and the folders above it are not known. Each comment
+thread is read together inside the Doc; the thread is its first
+comment's row, and its replies sit in it.

@@ -24,7 +24,7 @@ step_start, progress_*, log, hint and step_finish per step, then one \
 run_summary. stdout gets one line per step at the end.
 
 A step's id is <group>/<function>: slack/ingest, slack/render_markdown, \
-unified_document_index/grid_index.";
+unified_grid_and_search_index/unified_grid_and_search_index.";
 
 pub const EXAMPLES: &[Example] = &[
     Example {
@@ -103,8 +103,8 @@ pub struct Cli {
     #[arg(long)]
     pub check: bool,
     /// Run these steps and everything downstream of them, and nothing
-    /// else. A source step (one with no inputs) always runs; any other
-    /// runs only if it is out of date. Repeat it, or separate ids with
+    /// else. A source step (one that declares no inputs) always runs;
+    /// any other runs only if it is out of date. Repeat it, or separate ids with
     /// commas.
     #[arg(long, value_name = "STEP_ID", value_delimiter = ',')]
     pub sync: Vec<String>,

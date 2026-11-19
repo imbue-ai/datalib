@@ -1,5 +1,5 @@
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
-load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 # Public patches consumed by crate_universe annotations in MODULE.bazel.
@@ -34,7 +34,7 @@ filegroup(
 # This must match the version in the `doltlite_amalgamation` /
 # `doltlite_autoconf` URLs in MODULE.bazel; `//tools:version_pins_test`
 # enforces that.
-DOLTLITE_VERSION = "0.51.3"
+DOLTLITE_VERSION = "0.51.13"
 
 # Feature defines shared by the library and the CLI. Both compile
 # against the same amalgamation, so they must agree: `shell.c` has 12
@@ -262,6 +262,29 @@ cc_binary(
     deps = [":sqlite3"],
 )
 
+# The same shell with SQLite's `vec1` vector-search extension compiled in
+# (`-DDOLTLITE_VEC1=1`), for the facts tests that pin what vec1 does
+# (docs/dev/doltlite.md § "Vector search: vec1"). Test-only: nothing we
+# ship has vec1, and `:sqlite3` and `:doltlite` above stay as they are.
+cc_library(
+    name = "sqlite3_vec1",
+    testonly = True,
+    srcs = ["sqlite3.c"],
+    hdrs = ["sqlite3.h"],
+    copts = DOLTLITE_LIBRARY_COPTS + ["-DDOLTLITE_VEC1=1"],
+    includes = ["."],
+    linkopts = DOLTLITE_LINKOPTS,
+)
+
+cc_binary(
+    name = "doltlite_vec1",
+    testonly = True,
+    srcs = ["@doltlite_autoconf//:ext/wasm/bld/doltlite-build/shell.c"],
+    copts = DOLTLITE_DEFINES + DOLTLITE_WARNING_SUPPRESSIONS + ["-DDOLTLITE_VEC1=1"],
+    visibility = ["//datalib/backend/doltlite_facts:__pkg__"],
+    deps = [":sqlite3_vec1"],
+)
+
 # That the CLI links, runs, and has a real dolt-SQL surface (a shell
 # linked against stock SQLite fails on `dolt_commit`). Its `--version`
 # check compares DOLTLITE_VERSION with itself; pin drift between the two
@@ -275,4 +298,22 @@ sh_test(
         DOLTLITE_VERSION,
     ],
     data = [":doltlite"],
+)
+
+# What doltlite's chunk hashing computes, through the dispatcher as a store
+# write reaches it: BLAKE3's own test vectors, hashed whole and in pieces;
+# that the dispatcher has a SIMD kernel to pick (the amalgamation compiles
+# them itself); and that `@blake3_c`,
+# whose header and vectors the test takes, is the BLAKE3 the amalgamation
+# embeds. On x86 it covers the widest kernel this CPU has.
+cc_test(
+    name = "blake3_kernels_test",
+    size = "small",
+    srcs = ["blake3_kernels_test.c"],
+    args = ["$(rootpath @blake3_c//:test_vectors/test_vectors.json)"],
+    data = ["@blake3_c//:test_vectors/test_vectors.json"],
+    deps = [
+        ":sqlite3",
+        "@blake3_c//:headers",
+    ],
 )

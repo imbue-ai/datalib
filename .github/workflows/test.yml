@@ -14,13 +14,11 @@
 # actions and the broken cache never healed. Routing the cache through
 # BuildBuddy instead sidesteps the GHA-cache-shape mismatch entirely.
 #
-# Why the devcontainer image: `bazel test //...` needs the full Bazel
-# build toolchain — lld, perl, pkg-config, libssl-dev — that the
-# prod image deliberately omits. The
-# devcontainer image carries that toolchain on top of the prod image's
-# qmd model cache, latchkey, doltlite CLI, etc. Re-installing it via apt
-# at the start of each job (the pattern `release.yml`'s build matrix
-# uses) would add ~3 min of apt + cold qmd model download to every run;
+# Why the devcontainer image: `bazel test //...` needs what Bazel does
+# not bring itself — a C/C++ toolchain, the libraries two build scripts
+# link, Playwright's browsers (`.devcontainer/Dockerfile` lists them).
+# Installing that via apt at the start of each job (the pattern
+# `release.yml`'s build matrix uses) would add minutes to every run;
 # pulling the pre-built image is closer to ~30s.
 #
 # The devcontainer image is published by `devcontainer.yml` — on every
@@ -91,7 +89,8 @@ concurrency:
 # The costs are a second container pull and a second analysis phase, and
 # both are compute rather than wall clock: the jobs run concurrently on
 # separate runners. No job is a `needs:` of another, and all three are
-# merge gates, so a musl regression doesn't mask a test failure.
+# merge gates, so a musl regression doesn't mask a test failure. `e2e`
+# itself runs as three jobs, one per part, behind `e2e-gate`.
 #
 # Their common setup — the BuildBuddy key — lives in
 # `.github/actions/prepare-bazel` so the jobs cannot drift apart.
@@ -182,12 +181,13 @@ jobs:
       - name: cargo deny check (tauri shell)
         run: cd datalib/tauri && cargo deny check
 
-  # The same for the three npm trees a release ships: the UI bundle, and
-  # the qmd and latchkey trees in the runtime asset, the app and the
-  # docker image. A high or critical advisory against a production
-  # dependency of any of them fails this job; the fix is a bump, or a
-  # pnpm `overrides` entry in that tree's pnpm-workspace.yaml
-  # (third-party/qmd/runtime has some). `pnpm audit` reads the lockfile
+  # The same for the two npm trees a release ships: the UI bundle, and
+  # the latchkey tree in the runtime asset, the app and the docker image.
+  # A high or critical advisory against a production dependency of either
+  # fails this job; the fix is a bump, or a pnpm `overrides` entry in that
+  # tree's pnpm-workspace.yaml. Only when no fixed release exists, an
+  # `auditConfig.ignoreGhsas` entry there skips the one advisory, with a
+  # comment saying when to take it out. `pnpm audit` reads the lockfile
   # and asks the registry; nothing is installed.
   npm-audit:
     name: pnpm audit
@@ -198,7 +198,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           package_json_file: datalib/ui/package.json
 
@@ -206,7 +206,7 @@ jobs:
         run: |
           set -uo pipefail
           failed=""
-          for tree in datalib/ui third-party/qmd/runtime third-party/latchkey/runtime; do
+          for tree in datalib/ui third-party/latchkey/runtime; do
             echo "::group::$tree"
             (cd "$tree" && pnpm audit --prod --audit-level high) || failed="$failed $tree"
             echo "::endgroup::"
@@ -245,7 +245,7 @@ jobs:
     # moves all of these, and the PR that does it is what tries the new image.
     # A dispatch can name a `sha-<commit>` tag to try one first.
     container:
-      image: ghcr.io/imbue-ai/datalib_devcontainer${{ inputs.devcontainer_tag && format(':{0}', inputs.devcontainer_tag) || '@sha256:9082003e10d5cfa6503bcafa55886c403ec82ddb0711718af671f7b285eb7f9b' }}
+      image: ghcr.io/imbue-ai/datalib_devcontainer${{ inputs.devcontainer_tag && format(':{0}', inputs.devcontainer_tag) || '@sha256:039f97ec8928d248745a47d70eed0458037f42f4230629dbb179041cb240003d' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -319,7 +319,8 @@ jobs:
         run: |
           # Everything but `//datalib/ui:e2e_test`, which the `e2e` job
           # below runs. The two patterns are complements — `//...` less
-          # one label, and that label — so a new test lands in this job
+          # one label, and that label (a `test_suite`, whose tests the
+          # minus takes out with it) — so a new test lands in this job
           # without anyone choosing.
           #
           # `--test_env=PLAYWRIGHT_BROWSERS_PATH` stays although only the
@@ -419,14 +420,28 @@ jobs:
           path: artifact/datalib-x86_64-unknown-linux-gnu.tar.gz
           retention-days: 3
 
+      - uses: ./.github/actions/disk-low-point
+        if: ${{ !cancelled() }}
+
   # The Playwright suite, on a runner of its own. It is tagged `cpu:4`
   # (datalib/ui/BUILD.bazel), the whole runner, so inside `bazel-test`
   # every other test waited behind it; here the two run side by side.
   # It builds what the suite runs — the backend binaries, the fixture
   # root, the UI bundle — and nothing else. On a run where those are
   # not cached yet both jobs compile them: neither waits for the other.
+  # The Playwright suite, one runner per part (`DATALIB_TEST_E2E_PART`,
+  # datalib/ui/BUILD.bazel): each part is `cpu:4`, so on one runner they
+  # ran one after another and the job took their sum, ~11 min. Apart,
+  # the job takes the slowest part. `e2e-gate` below carries the check
+  # name the merge ruleset requires.
   e2e:
-    name: bazel test //datalib/ui:e2e_test
+    name: e2e ${{ matrix.part }}
+    strategy:
+      # A red part does not cancel the others: each one's report is the
+      # diagnosis, and a flake in one says nothing about the rest.
+      fail-fast: false
+      matrix:
+        part: [chromium, sandboxes, webkit]
     # Only `main` may use this environment, and only it holds the release
     # org's key, so a workflow edited on a branch cannot name the key
     # (docs/dev/ci.md § "Two caches"). Everything else runs with no environment.
@@ -436,6 +451,7 @@ jobs:
 
     env:
       PR_TESTS: ${{ github.event_name != 'push' && '--config=pr-tests' || '' }}
+      PART: ${{ matrix.part }}
 
     # Same shell, image, checkout depth and cache as `bazel-test` above,
     # for the reasons documented there.
@@ -444,7 +460,7 @@ jobs:
         shell: bash
 
     container:
-      image: ghcr.io/imbue-ai/datalib_devcontainer${{ inputs.devcontainer_tag && format(':{0}', inputs.devcontainer_tag) || '@sha256:9082003e10d5cfa6503bcafa55886c403ec82ddb0711718af671f7b285eb7f9b' }}
+      image: ghcr.io/imbue-ai/datalib_devcontainer${{ inputs.devcontainer_tag && format(':{0}', inputs.devcontainer_tag) || '@sha256:039f97ec8928d248745a47d70eed0458037f42f4230629dbb179041cb240003d' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -466,7 +482,7 @@ jobs:
           buildbuddy-api-key: ${{ github.event_name == 'push' && secrets.BUILD_BUDDY_RELEASE_API_KEY || secrets.BUILD_BUDDY_API_KEY }}
           buildbuddy-config: ${{ github.event_name == 'push' && 'buildbuddy-release' || 'buildbuddy' }}
 
-      - name: bazel test //datalib/ui:e2e_test
+      - name: bazel test //datalib/ui:e2e_${{ matrix.part }}_test
         run: |
           # `//datalib/ui:e2e_test` (Playwright) IS in this gate. The image
           # bakes both browsers with their OS libraries (the
@@ -474,9 +490,9 @@ jobs:
           # `.devcontainer/Dockerfile`), and two things the suite needs
           # are arranged here:
           #
-          #   1. The qmd GGUFs are not in the image; they are bazel
-          #      inputs (`//third-party/qmd_models`), so the suite brings
-          #      its own.
+          #   1. The embedding model is not in the image; it is a bazel
+          #      input (`//third-party/embedding_models`), so the suite
+          #      brings its own (below).
           #   2. `HOME=/github/home`, which GitHub forces for container
           #      steps, points every cache lookup away from the `/root`
           #      the image bakes into. That matters for Playwright's
@@ -498,7 +514,8 @@ jobs:
           # the step after this one uploads when the run is red; see
           # datalib/ui/tests/e2e/README-artifacts.md.
           #
-          # It is `no-sandbox` + `requires-network` and takes ~4 min, so
+          # It is `no-sandbox` + `requires-network` and each part takes
+          # 2.5–5 min, so
           # it lands on the critical path rather than being a cache
           # replay like the rest of a warm `main` run. That is the price
           # of gating UI regressions; see `docs/dev/testing.md`.
@@ -518,22 +535,11 @@ jobs:
           # which it could only do by ignoring the flag. Redirecting the
           # specific lookup is the mechanism that actually works.
           #
-          # qmd models: nothing to arrange here any more, and the
-          # steps that used to arrange it are gone. The GGUFs are
-          # fetched by `//third-party/qmd_models` and reach their two
-          # consumers as bazel inputs: the
-          # `//tests/fixtures:ingested_tng_qmd` genrule and
-          # `//tests/fixtures:materialize_tng_root_embed_only`, which
-          # the e2e suite runs — the embedding model only, in both
-          # cases. Neither reads a host cache, so neither cares that
-          # the devcontainer image carries no `/root/.cache/qmd/models`.
-          #
-          # What this replaced: a `Cache the qmd models` + `Populate the
-          # qmd models` pair of steps that filled that directory from the
-          # GitHub Actions cache, plus a `qmd pull` on a cache miss. They
-          # existed because the two consumers downloaded models
-          # themselves, and on 2026-09-03 one of those downloads drew a
-          # 429 from HuggingFace and failed a merge-gating build.
+          # The embedding model reaches its consumers as a bazel input:
+          # the `//tests/fixtures:ingested_tng_vectors` genrule and
+          # `//tests/fixtures:materialize_tng_root`, which the e2e suite
+          # runs. Neither reads a host cache, so nothing here aims them
+          # at one.
           #
           # The fetch is a remote-cached build action. A run whose e2e
           # test is a cache hit never moves the bytes; one that executes
@@ -541,14 +547,6 @@ jobs:
           # action cache, before it can start — the reason the suite
           # carries one model and not three. HuggingFace is reached
           # only when that cache has lost them, with retries on a 429.
-          #
-          # Three flags went with those steps:
-          # `--sandbox_add_mount_pair=/root/.cache/qmd/models`,
-          # `--action_env=CLAUDE_MIRROR_HOST_HOME=/root` and
-          # `--test_env=CLAUDE_MIRROR_HOST_HOME=/root` — between them
-          # what aimed the genrule and the e2e materializer at the
-          # image's cache, GitHub having forced HOME=/github/home for
-          # container steps. Nothing reads that variable now.
           if [[ "${{ inputs.remote_execution }}" == "true" ]]; then
               mode=(--config=remote)
           else
@@ -557,7 +555,7 @@ jobs:
           bazel test -c opt --config=release --config=ci --nostamp ${PR_TESTS} "${mode[@]}" \
             --build_metadata=ROLE=CI \
             --test_env=PLAYWRIGHT_BROWSERS_PATH=/root/.cache/ms-playwright \
-            //datalib/ui:e2e_test
+            "//datalib/ui:e2e_${PART}_test"
 
       # The e2e suite's Playwright report, when the run is red: a trace
       # per failed test, scrubbable action by action with the DOM before
@@ -571,25 +569,33 @@ jobs:
         run: |
           set -euo pipefail
           flags=(-c opt --config=release --config=ci --nostamp ${PR_TESTS})
-          zip="$(bazel info bazel-testlogs "${flags[@]}")/datalib/ui/e2e_test/test.outputs/outputs.zip"
+          testlogs="$(bazel info bazel-testlogs "${flags[@]}")"
+          mkdir -p e2e-report
+          zip="${testlogs}/datalib/ui/e2e_${PART}_test/test.outputs/outputs.zip"
           if [[ -f "${zip}" ]]; then
-            mkdir -p e2e-report && cp -L "${zip}" e2e-report/playwright-report.zip
+            cp -L "${zip}" "e2e-report/playwright-report-${PART}.zip"
+            # Each failure's error and the page as it stood, here in the
+            # job's log, readable without downloading the artifact.
+            echo "::group::e2e ${PART}: each failure and the page it left"
+            unzip -p "${zip}" 'playwright-report/data/*.md' || true
+            echo "::endgroup::"
           else
-            echo "no e2e outputs at ${zip} — the suite did not run, or passed"
+            echo "no e2e outputs at ${zip} — the part did not run, or passed"
           fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: failure() && hashFiles('e2e-report/playwright-report.zip') != ''
+        if: failure() && hashFiles('e2e-report/playwright-report-*.zip') != ''
         with:
-          name: e2e-playwright-report
-          path: e2e-report/playwright-report.zip
+          name: e2e-playwright-report-${{ matrix.part }}
+          path: e2e-report/playwright-report-*.zip
           retention-days: 7
 
       # The suite's console log, green or red: Playwright's list of every
       # test with its duration, and the specs' own `[e2e]` lines. This is
       # the only record of what the suite spends its minutes on when it
-      # passes — bazel prints one wall-clock number for the whole target.
-      # When the test step says `(cached) PASSED` for the target, the
-      # suite did not run here and this log is the run's that did.
+      # passes — bazel prints one wall-clock number per part. One
+      # artifact per part, `e2e-test-log-<part>` holding `<part>.log`.
+      # When the test step says `(cached) PASSED`, the part did not run
+      # here and its log is the run's that did.
       # `!cancelled()`, not `always()`: on a cancelled run the bazel
       # server is still winding down the build, `bazel info` queues
       # behind it, and the job then holds its concurrency group — and
@@ -599,18 +605,41 @@ jobs:
         run: |
           set -euo pipefail
           flags=(-c opt --config=release --config=ci --nostamp ${PR_TESTS})
-          log="$(bazel info bazel-testlogs "${flags[@]}")/datalib/ui/e2e_test/test.log"
+          testlogs="$(bazel info bazel-testlogs "${flags[@]}")"
+          mkdir -p e2e-report
+          log="${testlogs}/datalib/ui/e2e_${PART}_test/test.log"
           if [[ -f "${log}" ]]; then
-            mkdir -p e2e-report && cp -L "${log}" e2e-report/test.log
+            cp -L "${log}" "e2e-report/${PART}.log"
           else
-            echo "no e2e log at ${log} — the suite did not run"
+            echo "no e2e log at ${log} — the part did not run"
           fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ !cancelled() && hashFiles('e2e-report/test.log') != '' }}
+        if: ${{ !cancelled() && hashFiles('e2e-report/*.log') != '' }}
         with:
-          name: e2e-test-log
-          path: e2e-report/test.log
+          name: e2e-test-log-${{ matrix.part }}
+          path: e2e-report/*.log
           retention-days: 14
+
+      - uses: ./.github/actions/disk-low-point
+        if: ${{ !cancelled() }}
+
+  # The check the merge ruleset requires, under the name the e2e job had
+  # before it became three: green only when every part is. `!cancelled()`
+  # so that a red part makes this red rather than skipped, which a
+  # ruleset would leave pending.
+  e2e-gate:
+    name: bazel test //datalib/ui:e2e_test
+    needs: e2e
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every e2e part passed
+        env:
+          RESULT: ${{ needs.e2e.result }}
+        run: |
+          echo "e2e parts: ${RESULT}"
+          [[ "${RESULT}" == "success" ]]
 
   # Fill the *contributor* cache with main's tree, after the merge.
   #
@@ -649,7 +678,7 @@ jobs:
         shell: bash
 
     container:
-      image: ghcr.io/imbue-ai/datalib_devcontainer${{ inputs.devcontainer_tag && format(':{0}', inputs.devcontainer_tag) || '@sha256:9082003e10d5cfa6503bcafa55886c403ec82ddb0711718af671f7b285eb7f9b' }}
+      image: ghcr.io/imbue-ai/datalib_devcontainer${{ inputs.devcontainer_tag && format(':{0}', inputs.devcontainer_tag) || '@sha256:039f97ec8928d248745a47d70eed0458037f42f4230629dbb179041cb240003d' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -692,6 +721,9 @@ jobs:
             --build_metadata=ROLE=CACHE \
             //datalib/backend:dist
 
+      - uses: ./.github/actions/disk-low-point
+        if: ${{ !cancelled() }}
+
   # PR-time gate for the fully-static musl release leg. The musl dist
   # build only otherwise runs at tag time (release.yml), and this repo
   # has been burned before by release-only build paths rotting between
@@ -701,8 +733,10 @@ jobs:
   # the musl toolchain — on every PR instead of at the next release. The
   # static-ness assertion mirrors
   # release.yml's: no PT_INTERP, no DT_NEEDED. (This runs on the x86_64
-  # runner only; the aarch64-musl leg differs by arch, not by build
-  # logic, and stays tag-time-only.)
+  # runner only and the aarch64-musl leg stays tag-time-only, though
+  # arch alone can break it: blake3's NEON kernel links only there, and
+  # once clashed with doltlite's own copy of blake3. Cross-build it
+  # from a mac with `--config=musl-aarch64` after touching either.)
   musl-dist:
     name: bazel build :dist (musl static)
     # Only `main` may use this environment, and only it holds the release
@@ -719,7 +753,7 @@ jobs:
         shell: bash
 
     container:
-      image: ghcr.io/imbue-ai/datalib_devcontainer${{ inputs.devcontainer_tag && format(':{0}', inputs.devcontainer_tag) || '@sha256:9082003e10d5cfa6503bcafa55886c403ec82ddb0711718af671f7b285eb7f9b' }}
+      image: ghcr.io/imbue-ai/datalib_devcontainer${{ inputs.devcontainer_tag && format(':{0}', inputs.devcontainer_tag) || '@sha256:039f97ec8928d248745a47d70eed0458037f42f4230629dbb179041cb240003d' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -787,5 +821,8 @@ jobs:
           DATALIB_BIN_DIR="$(bazel info bazel-bin "${flags[@]}")/datalib/backend/bin" \
           DATALIB_VCF_DIR="datalib/backend/etl/providers/contacts/tests/fixtures/carddav_tng" \
               datalib/backend/doltlite_link_test.sh
+
+      - uses: ./.github/actions/disk-low-point
+        if: ${{ !cancelled() }}
 
 

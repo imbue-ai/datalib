@@ -1,0 +1,117 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+# The search index that replaces qmd's storage: keyword postings in the
+# grid index's file, and each document's chunks and their embeddings in
+# the inference cache, holding no text
+# (docs/dev/plans/search_index_from_ram.md).
+rust_library(
+    name = "datalib_search_index",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_search_index",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/html_entities:datalib_html_entities",
+        "//datalib/backend/handle:datalib_handle",
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/store_meta:datalib_store_meta",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:blake3",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "search_index_unittests",
+    size = "small",
+    crate = ":datalib_search_index",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# The SQLite facts the index is built on, one test each, run against the
+# engine we link: a doltlite bump that moves one fails by name.
+rust_test(
+    name = "fts_facts_test",
+    size = "small",
+    srcs = ["tests/fts_facts.rs"],
+    edition = "2021",
+    deps = [
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# Every chunk of dense text fits the model, cut and counted by the
+# model's own tokenizer.
+rust_test(
+    name = "fits_the_model_test",
+    size = "medium",
+    srcs = ["tests/fits_the_model.rs"],
+    data = ["//third-party/embedding_models:embeddinggemma"],
+    edition = "2021",
+    env = {
+        "EMBED_MODEL_RLOC": "$(rlocationpath //third-party/embedding_models:embeddinggemma)",
+    },
+    deps = [
+        ":datalib_search_index",
+        "//datalib/backend/embedder:datalib_embedder",
+        "@datalib_crates//:runfiles",
+    ],
+)
+
+rust_test(
+    name = "read_test",
+    size = "small",
+    srcs = ["tests/read.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_search_index",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+# The TNG fixture's search index (`//tests/fixtures:ingested_tng_search_index`
+# and `:ingested_tng_inference_cache`): every document cut into chunks as
+# `embed` cuts them, with each chunk's prompt, then the vectors
+# `//datalib/backend/embedder:embed_prompts` made of them, cached beside
+# the chunks.
+rust_binary(
+    name = "search_prompts",
+    srcs = ["tools/search_prompts.rs"],
+    edition = "2021",
+    visibility = ["//tests/fixtures:__pkg__"],
+    deps = [
+        ":datalib_search_index",
+        "//datalib/backend/embedder:datalib_embedder",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_binary(
+    name = "cache_vectors",
+    srcs = ["tools/cache_vectors.rs"],
+    edition = "2021",
+    visibility = ["//tests/fixtures:__pkg__"],
+    deps = [
+        ":datalib_search_index",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tokio",
+    ],
+)

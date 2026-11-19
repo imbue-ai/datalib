@@ -1,0 +1,50 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "datalib_etl_baby_connect",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_etl_baby_connect",
+    edition = "2021",
+    proc_macro_deps = ["@datalib_crates//:async-trait"],
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/baby_connect_config:datalib_etl_baby_connect_config",
+        "//datalib/backend/etl/web:datalib_etl_web",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:thiserror",
+    ],
+)
+
+rust_test(
+    name = "baby_connect_unittests",
+    size = "small",
+    crate = ":datalib_etl_baby_connect",
+    edition = "2021",
+)
+
+# The download end to end against playback tapes of made-up TNG data;
+# the modules are listed in its `main.rs`.
+rust_test(
+    name = "baby_connect_tests",
+    srcs = glob(["tests/baby_connect_tests/*.rs"]),
+    crate_root = "tests/baby_connect_tests/main.rs",
+    edition = "2021",
+    deps = [
+        ":datalib_etl_baby_connect",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/baby_connect_config:datalib_etl_baby_connect_config",
+        "//datalib/backend/etl/web:datalib_etl_web",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

@@ -79,7 +79,7 @@ reached **677 first-party source files**, including:
     `slack`, `notion`, `github`, `gitlab`, `beeper`, `signal`,
     `contacts`, `perseus`, `email`, `yolink`)
   - shared infra (`doltlite_raw`, `blob_cas`, `load`, `latchkey`,
-    `obs`, `qmd_indexer`, `signal-backup` crypto + writer)
+    `obs`, `signal-backup` crypto + writer)
   - the `datalib-dag` orchestrator and `datalib-step` step binary
     themselves
 
@@ -226,8 +226,11 @@ option is stabilized.
 The Playwright e2e suite at `//datalib/ui:e2e_test` drives the
 backend through the HTTP server, which is a `rust_binary` already in
 the e2e test's `data`, so the same mechanism counts the Rust it reaches:
-`tools/run_coverage.sh //datalib/ui:e2e_test --
-//datalib/backend/http:datalib_http_bin`. That covers request-path code
+`tools/run_coverage.sh //datalib/ui:e2e_chromium_test
+//datalib/ui:e2e_sandboxes_test //datalib/ui:e2e_webkit_test --
+//datalib/backend/http:datalib_http_bin` (the three parts by name: the
+wrapper reads each test's own `_coverage/`, and the `e2e_test` suite has
+none). That covers request-path code
 the unit tests don't reach (HTTP routing, response serialization, auth
 middleware). It counts nothing in the browser: what Playwright runs of
 the UI's own code is not measured.

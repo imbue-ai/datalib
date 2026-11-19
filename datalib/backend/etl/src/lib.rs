@@ -25,7 +25,6 @@ pub mod expansion;
 pub mod ids;
 pub mod indicatif_progress;
 pub mod layout;
-pub mod periodize;
 pub mod pin;
 pub mod processor;
 pub mod progress;

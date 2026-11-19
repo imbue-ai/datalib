@@ -8,21 +8,18 @@
 //! writes it out under the front matter and title every document has.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs;
-use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
-use datalib_etl::layout::render_markdown_root;
 use datalib_etl::progress::Progress;
-use datalib_etl_render::front_matter::yaml_scalar;
-use datalib_etl_render::grid_index::{doc_md_path, unindexed_doc_md_path, RenderedMarkdown};
-use datalib_etl_render::html::{escape_md_block, escape_md_inline};
+use datalib_etl_render::front_matter::Front;
+use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::{escape_md_block, escape_md_inline, escape_name_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets, Lookup};
-use datalib_etl_render::message::{chip_link, stamp_text_html};
+use datalib_etl_render::message::{chip_link, message_stamp_text_html};
+use datalib_etl_render::section::Section;
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
-use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
 use serde_json::Value;
 
@@ -49,7 +46,10 @@ use datalib_etl_render::pages::batches;
 ///      under the shared title line, with its ids in the front matter.
 /// v13: a source has a table of contents, the path above a page links it
 ///      where the path used to link Notion, and a trashed page says so.
-pub const RENDER_VERSION: u32 = 13;
+/// v14: a comment's time keeps Notion's `Z`: its clock is unknown.
+/// v15: a page's text is a block keyed by its row, its front matter
+///      layout around it.
+pub const RENDER_VERSION: u32 = 15;
 pub fn notion_url(page_id: &str) -> String {
     format!("https://www.notion.so/{}", page_id.replace('-', ""))
 }
@@ -98,38 +98,29 @@ fn localize_attachments(markdown: &str, bundle: &BlobBundle) -> String {
     out
 }
 
-/// The front matter and the title line: the page's ids, its times, and
-/// the link back to Notion.
-fn head(title: &str, markdown_uuid: &str, page_id: &str, page: &Value) -> String {
-    let mut fm = String::from("---\n");
-    fm.push_str(&format!("title: {}\n", yaml_scalar(title)));
-    fm.push_str(&format!("provider: {}\n", Provider::Notion));
-    fm.push_str(&format!("markdown_uuid: {markdown_uuid}\n"));
-    fm.push_str(&format!("page_id: {}\n", yaml_scalar(page_id)));
-    for (k, v) in [
-        ("created_at", "created_time"),
-        ("last_edited_at", "last_edited_time"),
-    ] {
-        if let Some(t) = page.get(v).and_then(|x| x.as_str()) {
-            fm.push_str(&format!("{k}: {}\n", yaml_scalar(t)));
-        }
+/// A page's front matter: its ids, its times, and the link back to Notion.
+fn page_front(title: &str, markdown_uuid: &str, page_id: &str, page: &Value) -> Front {
+    let field = |k: &str| page.get(k).and_then(|x| x.as_str());
+    Front::new()
+        .name("title", title)
+        .plain("provider", Provider::Notion)
+        .plain("markdown_uuid", markdown_uuid)
+        .text("page_id", page_id)
+        .text_if("created_at", field("created_time"))
+        .text_if("last_edited_at", field("last_edited_time"))
+        .text_if("source_url", field("url"))
+        .plain("source_label", "Notion")
+}
+
+/// The page's title line.
+fn title_line(title: &str, markdown_uuid: &str, page: &Value) -> String {
+    Title {
+        text: title,
+        markdown_uuid: Some(markdown_uuid),
+        suffix: None,
+        source_url: page.get("url").and_then(|x| x.as_str()),
     }
-    if let Some(u) = page.get("url").and_then(|x| x.as_str()) {
-        fm.push_str(&format!("source_url: {}\n", yaml_scalar(u)));
-    }
-    fm.push_str("source_label: Notion\n");
-    fm.push_str("---\n\n");
-    let url = page.get("url").and_then(|x| x.as_str());
-    fm.push_str(
-        &Title {
-            text: title,
-            markdown_uuid: Some(markdown_uuid),
-            suffix: None,
-            source_url: url,
-        }
-        .render(),
-    );
-    fm
+    .render()
 }
 
 /// The line above a page naming where it sits, top first: each page,
@@ -157,7 +148,7 @@ fn breadcrumb(page_id: &str, tree: Lookup<'_, HashMap<String, TreeRow>>, stanza:
                 }
                 _ => toc::entry_href(stanza, &id),
             };
-            crumbs.push(format!("[{}]({href})", escape_md_inline(title)));
+            crumbs.push(format!("[{}]({href})", escape_name_inline(title)));
         }
         next = parent_of(row);
     }
@@ -307,17 +298,19 @@ fn names_of(v: Option<&Value>) -> String {
         .unwrap_or_default()
 }
 
-fn thread_markdown(
+/// A thread's front matter, and its sections: the head, then one per
+/// comment.
+fn thread_sections(
     stanza: &str,
     page_title: &str,
     members: &[&Value],
     anchor: Option<&str>,
     author_of: &dyn Fn(&Value) -> Option<Handle>,
-) -> String {
-    let mut out = format!(
-        "---\ntitle: {}\nsource_label: Notion\n---\n\n",
-        yaml_scalar(page_title)
-    );
+) -> (Front, Vec<Section>) {
+    let front = Front::new()
+        .text("title", page_title)
+        .plain("source_label", "Notion");
+    let mut out = front.draw();
     // A comment names the block it hangs off and carries no quote of
     // it, so without this the thread opens with no indication of what
     // it is about.
@@ -333,6 +326,7 @@ fn thread_markdown(
     {
         out.push_str("*The commented-on content has been deleted upstream.*\n\n");
     }
+    let mut sections = vec![Section::unkeyed(std::mem::take(&mut out))];
     for c in members {
         let uuid = super::ids::comment(
             stanza,
@@ -346,45 +340,20 @@ fn thread_markdown(
             .and_then(|v| v.as_str())
             .unwrap_or("(unknown)");
         let when = c.get("created_time").and_then(|v| v.as_str()).unwrap_or("");
-        // The id + data-section-uuid pair is what the UI walks to anchor
-        // per-message feedback; see AGENTS.md "QMDs are write-only".
-        out.push_str(&format!(
-            "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--notion\">\n\n"
-        ));
         let who = match author_of(c) {
             Some(h) => chip_link(author, &h),
-            None => format!("**{}**", escape_md_inline(author)),
+            None => format!("**{}**", escape_name_inline(author)),
         };
-        out.push_str(&format!("{who} · {}\n\n", stamp_text_html(when)));
+        out.push_str(&format!("{who} · {}\n\n", message_stamp_text_html(when)));
         out.push_str(&escape_md_block(&plain(c.get("rich_text"))));
-        out.push_str("\n\n</div>\n\n");
+        out.push_str("\n\n");
+        sections.push(Section::boxed(
+            &uuid,
+            "msg msg--notion".to_string(),
+            &std::mem::take(&mut out),
+        ));
     }
-    out
-}
-
-/// Write a document to `md_path`, and point each of its rows at that file.
-fn file_document(
-    root: &Path,
-    md_path: PathBuf,
-    rows: &[GridRow],
-    body: &str,
-) -> Result<(PathBuf, Vec<GridRow>)> {
-    let dir = md_path.parent().expect("a document's file has a folder");
-    fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
-    fs::write(&md_path, body).with_context(|| format!("write {}", md_path.display()))?;
-    let md_rel = md_path
-        .strip_prefix(root)
-        .unwrap_or(&md_path)
-        .to_string_lossy()
-        .into_owned();
-    let rows = rows
-        .iter()
-        .map(|r| GridRow {
-            qmd_path: Some(md_rel.clone()),
-            ..r.clone()
-        })
-        .collect();
-    Ok((md_path, rows))
+    (front, sections)
 }
 
 /// Where a pass reads its pages' attachment bytes: what each page's
@@ -486,7 +455,6 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
 /// read, a batch of at most `blob_bytes` at a time.
 pub fn render_from_store(
     parsed: &ParsedNotion,
-    root: &Path,
     stanza: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -496,7 +464,6 @@ pub fn render_from_store(
         Some(blobs) => {
             let rendered = render_notion(
                 parsed,
-                root,
                 stanza,
                 progress,
                 on_doc_complete,
@@ -508,7 +475,6 @@ pub fn render_from_store(
         }
         None => render_notion(
             parsed,
-            root,
             stanza,
             progress,
             on_doc_complete,
@@ -520,7 +486,6 @@ pub fn render_from_store(
 
 pub fn render_notion(
     parsed: &ParsedNotion,
-    root: &Path,
     stanza: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -528,8 +493,6 @@ pub fn render_notion(
     blob_bytes: u64,
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
-    let render_root = render_markdown_root(root, stanza);
-    fs::create_dir_all(&render_root)?;
     let contents = parsed
         .renders(toc::BUCKET)
         .then(|| toc::document(&parsed.tree, &parsed.trashed, stanza))
@@ -584,7 +547,8 @@ pub fn render_notion(
             } else {
                 body
             };
-            let mut out = head(page_title, markdown_uuid, page_uuid, page);
+            let front = page_front(page_title, markdown_uuid, page_uuid, page);
+            let mut out = title_line(page_title, markdown_uuid, page);
             if in_trash(page) {
                 out.push_str("*This page is in Notion's trash.*\n\n");
             }
@@ -594,20 +558,30 @@ pub fn render_notion(
                 stanza,
             ));
             out.push_str(&body);
-            let md_path = doc_md_path(&render_root, markdown_uuid);
-            let (md_path, rows) = file_document(root, md_path, &doc.rows, &out)?;
+            let rows = doc.rows.clone();
+            // The page's text is one block, its row's: a hit on the page
+            // lands on it, and its front matter is layout around it.
+            let page_row = rows
+                .iter()
+                .find(|r| r.is_document)
+                .map_or(markdown_uuid.as_str(), |r| r.uuid.as_str());
+            let sections = vec![Section::frame(front.draw()), Section::keyed(page_row, out)];
 
             on_doc_complete(RenderedMarkdown {
+                searchable: true,
+                content_hash: None,
                 markdown_uuid: markdown_uuid.clone(),
-                source_id: String::new(),
+                source_id: stanza.to_string(),
                 upstream_cursor: None,
                 bucket_key: Some(page_uuid.clone()),
-                md_path,
                 render_version: RENDER_VERSION,
                 rows,
-                sections: Vec::new(),
+                front,
+                sections,
                 edges: Vec::new(),
                 contacts: Vec::new(),
+                data_nodes: doc.data_nodes.clone(),
+                filings: Vec::new(),
                 photos: Vec::new(),
                 problems: doc.problems.clone(),
             })?;
@@ -647,20 +621,23 @@ pub fn render_notion(
             .map(String::as_str);
         let emails = inputs.lookup("users", &parsed.user_emails);
         let author_of = |c: &Value| comment_author_handle(c, emails);
-        let body = thread_markdown(stanza, page_title, members, anchor, &author_of);
-        let md_path = doc_md_path(&render_root, markdown_uuid);
-        let (md_path, rows) = file_document(root, md_path, &doc.rows, &body)?;
+        let (front, sections) = thread_sections(stanza, page_title, members, anchor, &author_of);
+        let rows = doc.rows.clone();
         on_doc_complete(RenderedMarkdown {
+            searchable: true,
+            content_hash: None,
             markdown_uuid: markdown_uuid.clone(),
-            source_id: String::new(),
+            source_id: stanza.to_string(),
             upstream_cursor: None,
             bucket_key: Some(discussion_uuid.clone()),
-            md_path,
             render_version: RENDER_VERSION,
             rows,
-            sections: Vec::new(),
+            front,
+            sections,
             edges: Vec::new(),
             contacts: Vec::new(),
+            data_nodes: doc.data_nodes.clone(),
+            filings: Vec::new(),
             photos: Vec::new(),
             problems: doc.problems.clone(),
         })?;
@@ -672,19 +649,22 @@ pub fn render_notion(
         progress.inc(1);
     }
     if let Some(doc) = contents {
-        let md_path = unindexed_doc_md_path(&render_root, &doc.markdown_uuid);
-        let (md_path, rows) = file_document(root, md_path, &doc.rows, &doc.markdown)?;
+        let rows = doc.rows.clone();
         on_doc_complete(RenderedMarkdown {
+            searchable: false,
+            content_hash: None,
             markdown_uuid: doc.markdown_uuid,
-            source_id: String::new(),
+            source_id: stanza.to_string(),
             upstream_cursor: None,
             bucket_key: Some(toc::BUCKET.to_string()),
-            md_path,
             render_version: RENDER_VERSION,
             rows,
-            sections: Vec::new(),
+            front: doc.front,
+            sections: vec![Section::unkeyed(doc.markdown)],
             edges: Vec::new(),
             contacts: Vec::new(),
+            data_nodes: Vec::new(),
+            filings: Vec::new(),
             photos: Vec::new(),
             problems: doc.problems,
         })?;
@@ -706,12 +686,23 @@ pub struct RenderSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datalib_etl_render::section::{join, Kept};
     use serde_json::json;
     use tempfile::tempdir;
 
+    fn thread_markdown(
+        stanza: &str,
+        page_title: &str,
+        members: &[&Value],
+        anchor: Option<&str>,
+        author_of: &dyn Fn(&Value) -> Option<Handle>,
+    ) -> String {
+        join(&thread_sections(stanza, page_title, members, anchor, author_of).1)
+    }
+
     /// A page's attachments are read from the store its parse read, a
     /// batch at a time, and the page links each where the blob store
-    /// holds it, writing no copy. Every other render test hands in
+    /// holds it. Every other render test hands in
     /// bundles already in memory; this is the one that reads a store.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_stored_attachment_is_read_from_the_store_and_linked_there() {
@@ -771,33 +762,26 @@ mod tests {
             datalib_etl_render::inputs::RawRange::cold(),
         )
         .unwrap();
-        let out = tempdir().unwrap();
         let mut pages = Vec::new();
         render_from_store(
             &parsed,
-            out.path(),
             "notion",
             &Progress::noop(),
             &mut |md: RenderedMarkdown| {
                 if md.rows.iter().any(|r| r.kind == "Notion Page") {
-                    pages.push(md.md_path);
+                    pages.push(join(&md.sections));
                 }
                 Ok(())
             },
             1,
         )
         .unwrap();
-        let page = pages.first().expect("the page rendered");
-        let md = fs::read_to_string(page).unwrap();
+        let md = pages.first().expect("the page rendered");
         assert!(
             md.contains("](/data/") && md.contains(&format!("/blob/{blake3})")),
             "linked in the blob store: {md}"
         );
         assert!(!md.contains(SLOT), "not at the upstream slot: {md}");
-        assert!(
-            !page.parent().unwrap().join("blobs").exists(),
-            "no copy beside the page"
-        );
     }
 
     fn node(kind: TreeKind, title: Option<&str>, parent: (&str, &str)) -> TreeRow {
@@ -903,7 +887,7 @@ mod tests {
         )
     }
 
-    fn render(parsed: &ParsedNotion, root: &Path) -> (Vec<RenderedMarkdown>, RenderSummary) {
+    fn render(parsed: &ParsedNotion) -> (Vec<RenderedMarkdown>, RenderSummary) {
         let mut emitted: Vec<RenderedMarkdown> = Vec::new();
         let mut on_doc = |md: RenderedMarkdown| {
             emitted.push(md);
@@ -911,7 +895,6 @@ mod tests {
         };
         let summary = render_notion(
             parsed,
-            root,
             "notion",
             &Progress::noop(),
             &mut on_doc,
@@ -922,40 +905,26 @@ mod tests {
         (emitted, summary)
     }
 
-    /// A cold render writes the table of contents beside the pages, in
-    /// the file its row names, reading the two tables whose rows can
+    /// A cold render writes the table of contents beside the pages, kept
+    /// out of free-text search, reading the two tables whose rows can
     /// change what it says.
     #[test]
     fn a_cold_render_writes_the_table_of_contents() {
-        let d = tempdir().unwrap();
         let parsed = ParsedNotion {
             pages: vec![top_page("Bridge")],
             tree: [top_row("Bridge")].into_iter().collect(),
             ..Default::default()
         };
-        let (emitted, summary) = render(&parsed, d.path());
+        let (emitted, summary) = render(&parsed);
         assert_eq!(emitted.len(), 2, "the page and the contents");
         let contents = emitted
             .iter()
             .find(|d| d.bucket_key.as_deref() == Some(toc::BUCKET))
             .expect("the contents");
-        let md = fs::read_to_string(&contents.md_path).unwrap();
+        let md = join(&contents.sections);
         assert!(md.contains(toc::TITLE), "{md}");
         assert!(md.contains("[Bridge](/chat/"), "{md}");
-        let rel = contents.md_path.strip_prefix(d.path()).unwrap();
-        assert!(
-            rel.starts_with(format!(
-                "notion/render_markdown/{}",
-                datalib_etl::layout::UNINDEXED_DIR
-            )),
-            "free-text search leaves it out: {}",
-            rel.display()
-        );
-        assert_eq!(
-            contents.rows[0].qmd_path.as_deref(),
-            rel.to_str(),
-            "the row names the file"
-        );
+        assert!(!contents.searchable, "free-text search leaves it out");
         let bucket = summary
             .buckets
             .iter()
@@ -969,18 +938,43 @@ mod tests {
         assert_eq!(read, [("tree", "*"), ("pages", "*")]);
     }
 
+    /// A page's text is one block, keyed by the page's own row, so a hit on
+    /// the page lands on it; its front matter is layout, which the store
+    /// keeps as drawn and the search draws nothing from.
+    #[test]
+    fn a_page_is_one_block_keyed_by_its_row_inside_its_front_matter() {
+        let parsed = ParsedNotion {
+            pages: vec![top_page("Bridge")],
+            tree: [top_row("Bridge")].into_iter().collect(),
+            ..Default::default()
+        };
+        let (emitted, _) = render(&parsed);
+        let page = emitted
+            .iter()
+            .find(|d| d.bucket_key.as_deref() != Some(toc::BUCKET))
+            .expect("the page");
+        let row = page.rows.iter().find(|r| r.is_document).expect("its row");
+        let shape: Vec<(Option<&str>, bool)> = page
+            .sections
+            .iter()
+            .map(|s| (s.uuid.as_deref(), s.kept == Kept::Frame))
+            .collect();
+        assert_eq!(shape, [(None, true), (Some(row.uuid.as_str()), false)]);
+        assert!(page.sections[0].md.starts_with("---\n"), "front matter");
+        assert!(page.sections[1].md.contains("Bridge"), "the title and text");
+    }
+
     /// A rename of a database changes `tree` and no page, so this run has
     /// no pages to render and the contents still has to. An early return
     /// on "no pages" would leave it showing the old name.
     #[test]
     fn a_run_that_names_only_the_contents_renders_only_the_contents() {
-        let d = tempdir().unwrap();
         let parsed = ParsedNotion {
             tree: [top_row("Bridge")].into_iter().collect(),
             render: Some([toc::BUCKET.to_string()].into_iter().collect()),
             ..Default::default()
         };
-        let (emitted, _) = render(&parsed, d.path());
+        let (emitted, _) = render(&parsed);
         let keys: Vec<_> = emitted.iter().map(|d| d.bucket_key.as_deref()).collect();
         assert_eq!(keys, [Some(toc::BUCKET)]);
     }
@@ -988,14 +982,13 @@ mod tests {
     /// And a run that names a page and not the contents leaves it alone.
     #[test]
     fn a_run_that_does_not_name_the_contents_does_not_write_it() {
-        let d = tempdir().unwrap();
         let parsed = ParsedNotion {
             pages: vec![top_page("Bridge")],
             tree: [top_row("Bridge")].into_iter().collect(),
             render: Some(["Bridge".to_string()].into_iter().collect()),
             ..Default::default()
         };
-        let (emitted, _) = render(&parsed, d.path());
+        let (emitted, _) = render(&parsed);
         let keys: Vec<_> = emitted.iter().map(|d| d.bucket_key.as_deref()).collect();
         assert_eq!(keys, [Some("Bridge")]);
     }
@@ -1004,20 +997,19 @@ mod tests {
     /// Notion no longer shows it. A page not in the trash says nothing.
     #[test]
     fn a_trashed_page_says_so_under_its_title() {
-        let d = tempdir().unwrap();
         let mut gone = top_page("Gone");
         gone["in_trash"] = json!(true);
         let parsed = ParsedNotion {
             pages: vec![gone, top_page("Kept")],
             ..Default::default()
         };
-        let (emitted, _) = render(&parsed, d.path());
+        let (emitted, _) = render(&parsed);
         let body = |key: &str| {
             let doc = emitted
                 .iter()
                 .find(|d| d.bucket_key.as_deref() == Some(key))
                 .unwrap();
-            fs::read_to_string(&doc.md_path).unwrap()
+            join(&doc.sections)
         };
         const NOTE: &str = "*This page is in Notion's trash.*";
         assert!(body("Gone").contains(NOTE), "{}", body("Gone"));
@@ -1077,12 +1069,11 @@ mod tests {
         assert!(!t.contains("Empty"), "empty properties are omitted: {t}");
     }
 
-    /// A page and a thread are each written to the file their id names,
-    /// and every row names that file. The row and the writer once named a
-    /// thread's file apart, and a user saw a 404 preview.
+    /// Every row of a page and of a thread names the document it rides
+    /// on. The row and the writer once named a thread's document apart,
+    /// and a user saw a 404 preview.
     #[test]
-    fn each_document_lands_in_the_file_its_id_and_its_rows_name() {
-        let d = tempdir().unwrap();
+    fn every_row_names_the_document_it_rides_on() {
         let page = "b1d6e000-1701-4d00-8000-000000000001";
         let disc = "d0000001-1701-4d00-8000-000000000001";
         let parsed = ParsedNotion {
@@ -1109,7 +1100,6 @@ mod tests {
         };
         render_notion(
             &parsed,
-            d.path(),
             "notion",
             &Progress::noop(),
             &mut on_doc,
@@ -1119,12 +1109,13 @@ mod tests {
         .unwrap();
         assert_eq!(emitted.len(), 2, "a page and a thread");
         for md in &emitted {
-            let want = doc_md_path(&render_markdown_root(d.path(), "notion"), &md.markdown_uuid);
-            assert_eq!(md.md_path, want);
-            assert!(want.exists(), "{} was not written", want.display());
-            let rel = want.strip_prefix(d.path()).unwrap().to_string_lossy();
             for r in &md.rows {
-                assert_eq!(r.qmd_path.as_deref(), Some(&*rel), "row {}", r.uuid);
+                assert_eq!(
+                    r.markdown_uuid.as_deref(),
+                    Some(md.markdown_uuid.as_str()),
+                    "row {}",
+                    r.uuid
+                );
             }
         }
     }

@@ -26,8 +26,7 @@ command = "datalib-step run render_markdown yolink"
 inputs = ["yolink/ingest"]
 reads = "pinned"
 
-# Its numbers as time series, for charts and the time-series index: add
-# `yolink/render_time_series` to `unified_time_series_index/time_series_index`'s inputs.
+# Its numbers as time series, for charts and the time-series index.
 [[steps]]
 id = "yolink/render_time_series"
 command = "datalib-step run render_time_series yolink"

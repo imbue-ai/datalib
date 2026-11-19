@@ -2,8 +2,8 @@
 
 The same captured API as `../slack_api/`, as the *second* sync sees it:
 `auth.test`, `users.list` and `conversations.list` unchanged, and one
-`conversations.history` answer per channel at the `oldest` the first
-sync's resume scan computes (its latest `ts`, not inclusive). Every
+`conversations.history` answer per channel at the `oldest` the second
+sync asks from (the top of what the first covered, not inclusive). Every
 channel but `#bridge` answers with nothing new. `#bridge` carries the
 delta: Riker's "Shields up. Red alert." is **added**; Worf's "I
 recommend raising shields" is **edited** (an `edited` stamp, a word

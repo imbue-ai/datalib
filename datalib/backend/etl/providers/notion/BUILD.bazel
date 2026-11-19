@@ -30,6 +30,7 @@ rust_library(
         "//datalib/backend/probe:datalib_probe",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/time:datalib_time",
+        "//datalib/backend/uuid_text:datalib_uuid_text",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",
         "@datalib_crates//:serde",

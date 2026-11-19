@@ -1,5 +1,6 @@
 //! Writing the store, and reading it.
 
+use datalib_time::RunClock;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -10,6 +11,7 @@ use datalib_flock::FileLock;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
+use crate::redact::Redactor;
 use crate::{is_terminal, runs_path, LiveState, Retention, INDEXES, SCHEMA_VERSION};
 use app_schema::runs::{
     LogRow, MetricRow, MetricSampleRow, Process, ProcessRow, RunRow, RunStart, StepRunRow,
@@ -36,16 +38,6 @@ const SAMPLE_EVERY: Duration = Duration::from_secs(5);
 /// outside any run. A run prunes them when it starts; a server that
 /// runs for weeks between syncs has to do it for itself.
 const PRUNE_EVERY: Duration = Duration::from_secs(60 * 60);
-
-/// How often a writer copies the WAL back into the file. Doltlite's
-/// engine never runs SQLite's automatic checkpoint on a plain file, so
-/// without this the `-wal` grows by every line ever written and every
-/// read pays for it (docs/dev/doltlite.md § Plain SQLite files).
-const CHECKPOINT_EVERY: Duration = Duration::from_secs(30);
-
-/// What a restarted WAL is cut back to, so a WAL that grew while a
-/// checkpoint was held off gives the disk back.
-const WAL_SIZE_LIMIT_BYTES: &str = "67108864";
 
 /// How long a writer waits for the other process's write lock before
 /// SQLite hands it `SQLITE_BUSY` and its batch is lost. Set here rather
@@ -78,7 +70,10 @@ fn options(path: &Path, create: bool) -> SqliteConnectOptions {
         // file torn by a power cut is emptied and remade on the next
         // open (see `open_or_recreate`).
         .synchronous(sqlx::sqlite::SqliteSynchronous::Off)
-        .pragma("journal_size_limit", WAL_SIZE_LIMIT_BYTES)
+        .pragma(
+            "journal_size_limit",
+            datalib_runtime::plain_sqlite::WAL_SIZE_LIMIT_BYTES,
+        )
         .busy_timeout(BUSY_TIMEOUT)
 }
 
@@ -595,6 +590,41 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRo
 /// draws "not counted", never a false zero.
 pub async fn latest_metric(data_root: &Path, name: &str) -> Vec<MetricRow> {
     newest_per_series(data_root, Some(name)).await
+}
+
+/// One metric's value in each run the store keeps, per (step, labels):
+/// for a running total, what each run came to. Oldest run first within a
+/// series.
+pub async fn metric_by_run(data_root: &Path, name: &str) -> Vec<MetricRow> {
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(pool) = open_existing(&path).await else {
+        return Vec::new();
+    };
+    let rows = sqlx::query(
+        "SELECT m.run_id, m.step, m.name, m.labels, m.value, m.updated_at_utc, m.tz_offset \
+         FROM metrics m JOIN runs r ON r.run_id = m.run_id \
+         WHERE m.name = ?1 \
+         ORDER BY m.step, m.labels, r.started_at_utc, r.rowid",
+    )
+    .bind(name)
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
+    pool.close().await;
+    rows.iter()
+        .map(|r| MetricRow {
+            run_id: r.get("run_id"),
+            step: r.get("step"),
+            name: r.get("name"),
+            labels: r.get("labels"),
+            value: r.get("value"),
+            updated_at_utc: r.get("updated_at_utc"),
+            tz_offset: r.get("tz_offset"),
+        })
+        .collect()
 }
 
 /// The newest sample of every series every step has reported, across
@@ -1156,6 +1186,7 @@ type FlushAck = tokio::sync::oneshot::Sender<()>;
 struct Writer {
     process_id: String,
     pending: Shared,
+    redact: Redactor,
     flushes: Mutex<Option<mpsc::Sender<FlushAck>>>,
     handle: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
@@ -1196,12 +1227,14 @@ impl Writer {
         Some(Self {
             process_id,
             pending,
+            redact: Redactor::from_env(),
             flushes: Mutex::new(Some(tx)),
             handle: Mutex::new(Some(handle)),
         })
     }
 
     fn log(&self, row: LogRow) {
+        let row = self.redact.log(row);
         self.pending.lock().expect("run store mutex").logs.push(row);
     }
 
@@ -1262,7 +1295,12 @@ impl RunWriter {
     ) -> Option<Self> {
         // The start stamp arrives as the runner wrote it, offset and
         // all; the store keeps UTC and the offset apart. The runner's
-        // process starts when its run does.
+        // process starts when its run does. A start that is not a stamp
+        // is kept as written, and the run's clock is the wall clock's.
+        let clock = RunClock::starting_at(
+            datalib_time::parse_strict(started_at_utc)
+                .unwrap_or_else(|_| datalib_time::IsoOffsetTimestamp::now_local()),
+        );
         let (started_at_utc, tz_offset) = split_stamp(started_at_utc);
         let process = ProcessRow {
             process_id: mint_process_id(),
@@ -1285,12 +1323,14 @@ impl RunWriter {
                 process,
                 run: Some(run),
                 retention,
+                clock,
             },
         )
         .map(Self)
     }
 
     pub fn step(&self, next: StepRunRow) {
+        let next = self.0.redact.step(next);
         let mut p = self.0.pending.lock().expect("run store mutex");
         // A terminal state latches: a tick that was already in flight
         // when the step finished must not resurrect it as running.
@@ -1365,7 +1405,9 @@ impl ProcessLogWriter {
         git_hash: Option<String>,
         retention: Retention,
     ) -> Option<Self> {
-        let (started_at_utc, tz_offset) = now_split();
+        let clock = RunClock::starting_at(datalib_time::IsoOffsetTimestamp::now_local());
+        let (started_at_utc, tz_offset) = clock.now().to_utc_and_offset();
+        let tz_offset = Some(tz_offset);
         let process = ProcessRow {
             process_id: mint_process_id(),
             process: process.as_str().into(),
@@ -1380,6 +1422,7 @@ impl ProcessLogWriter {
                 process,
                 run: None,
                 retention,
+                clock,
             },
         )
         .map(Self)
@@ -1433,6 +1476,8 @@ struct Scope {
     process: ProcessRow,
     run: Option<RunInfo>,
     retention: Retention,
+    /// What the process's and its run's ends are stamped from.
+    clock: RunClock,
 }
 
 impl Scope {
@@ -1485,7 +1530,6 @@ fn writer_loop(
 
     let mut series: HashMap<SeriesKey, SeriesState> = HashMap::new();
     let mut last_prune = Instant::now();
-    let mut last_checkpoint = Instant::now();
     loop {
         // Wake on the interval, on a flush asked for, or when the writer
         // is dropped — whose disconnect is the signal to flush and go.
@@ -1523,29 +1567,11 @@ fn writer_loop(
             }
             last_prune = Instant::now();
         }
-        if last_checkpoint.elapsed() >= CHECKPOINT_EVERY {
-            rt.block_on(checkpoint(&pool));
-            last_checkpoint = Instant::now();
-        }
     }
     if let Err(e) = rt.block_on(end(&pool, &scope)) {
         tracing::warn!(error = %e, "run store: could not close the record");
     }
     rt.block_on(pool.close());
-}
-
-/// `PASSIVE` never waits on a reader: it copies what no reader still
-/// needs, and the next write restarts the WAL once all of it is copied.
-async fn checkpoint(pool: &SqlitePool) {
-    match sqlx::query_as::<_, (i64, i64, i64)>("PRAGMA wal_checkpoint(PASSIVE)")
-        .fetch_one(pool)
-        .await
-    {
-        Ok((busy, frames, copied)) => {
-            tracing::debug!(busy, frames, copied, "run store: checkpointed the WAL")
-        }
-        Err(e) => tracing::warn!(error = %e, "run store: could not checkpoint the WAL"),
-    }
 }
 
 /// An ISO stamp with an offset, as UTC plus that offset. A stamp that
@@ -1756,7 +1782,11 @@ async fn close_abandoned_run_in(
     let mut tx = pool.begin().await?;
 
     let run_was_open = sqlx::query(
-        "UPDATE runs SET finished_at_utc = ?, tz_offset = coalesce(tz_offset, ?) \
+        // `max`: a run begun under a pinned `--now` may have begun after
+        // the wall clock's now, and it cannot end before it began
+        // (`datalib_time::closed_now` is the same rule for one run).
+        "UPDATE runs SET finished_at_utc = max(?, started_at_utc), \
+           tz_offset = coalesce(tz_offset, ?) \
          WHERE run_id = ? AND finished_at_utc IS NULL",
     )
     .bind(&at)
@@ -1881,7 +1911,7 @@ fn days_before(at: datalib_time::IsoOffsetTimestamp, days: u32) -> String {
 /// for: it was not part of this run, and its row goes rather than
 /// reading as waiting forever.
 async fn end(pool: &SqlitePool, scope: &Scope) -> Result<(), sqlx::Error> {
-    let (finished_at_utc, _) = now_split();
+    let (finished_at_utc, _) = scope.clock.now().to_utc_and_offset();
     let mut tx = pool.begin().await?;
     sqlx::query("UPDATE processes SET finished_at_utc = ? WHERE process_id = ?")
         .bind(&finished_at_utc)
@@ -2157,12 +2187,12 @@ async fn insert_sample(
 mod tests {
     use super::*;
 
-    /// Doltlite never checkpoints a plain file by itself, and a live
-    /// root's `-wal` reached 4 GB over eight days, behind which every
-    /// read of the log took seconds. The writer's own checkpoint, and
-    /// the size limit its connection sets, give the WAL back.
+    /// The run store's `-wal` stays within its size limit with no
+    /// checkpoint of ours: the engine checkpoints as it goes. Under
+    /// doltlite 0.51.3, which never did, a live root's `-wal` reached 4 GB
+    /// over eight days, behind which every read of the log took seconds.
     #[tokio::test]
-    async fn the_writers_checkpoint_cuts_the_wal_back() {
+    async fn the_wal_stays_within_its_limit_by_itself() {
         let td = tempfile::tempdir().unwrap();
         let path = td.path().join("runs.sqlite");
         let pool = open_or_create(&path).await.unwrap();
@@ -2170,6 +2200,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        // About 80 MB in 20 commits, past the 64 MB limit.
         for _ in 0..20 {
             sqlx::query(
                 "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000) \
@@ -2179,16 +2210,13 @@ mod tests {
             .await
             .unwrap();
         }
-        let wal = path.with_file_name("runs.sqlite-wal");
-        let limit: u64 = WAL_SIZE_LIMIT_BYTES.parse().unwrap();
-        assert!(std::fs::metadata(&wal).unwrap().len() > limit);
-
-        checkpoint(&pool).await;
-        sqlx::query("INSERT INTO filler VALUES (1)")
-            .execute(&pool)
-            .await
+        let wal = std::fs::metadata(path.with_file_name("runs.sqlite-wal"))
+            .unwrap()
+            .len();
+        let limit: u64 = datalib_runtime::plain_sqlite::WAL_SIZE_LIMIT_BYTES
+            .parse()
             .unwrap();
-        assert!(std::fs::metadata(&wal).unwrap().len() <= limit);
+        assert!(wal <= limit, "the -wal grew to {wal} bytes");
         pool.close().await;
     }
 

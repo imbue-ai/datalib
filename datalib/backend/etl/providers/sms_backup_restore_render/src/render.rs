@@ -44,7 +44,9 @@ use datalib_schema::providers::Provider;
 ///     MMS's included, and one the account sent still shows as "Me"; the
 ///     numbers the account sent from are its own, so search reads them as
 ///     `me`.
-pub const RENDER_VERSION: u32 = 9;
+/// v10: a conversation is one document, keyed on the conversation's own
+///     uuid, rather than one per month.
+pub const RENDER_VERSION: u32 = 10;
 
 /// Projection for `BlobBundle::load_many` over the SMS CAS edge: the
 /// `ref_name` ({message_id}/{partname}) is the bundle key; `content_type`
@@ -76,7 +78,6 @@ pub use datalib_etl_chat_common::RenderOutcome;
 /// of at most `blob_bytes` at a time.
 pub fn render(
     raw_dir: &Path,
-    out_root: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -99,7 +100,6 @@ pub fn render(
         range,
         blob_bytes,
         RenderTarget {
-            out_root,
             source_id,
             progress,
             on_doc_complete,
@@ -170,7 +170,7 @@ async fn scan_diff(
         last_render_hash,
         pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
-            global_fanout_tables: &[],
+            fanout_query: None,
             bucket_query: "
                 SELECT DISTINCT bucket FROM (
                     SELECT 'sms:' || coalesce(to_conversation_key, from_conversation_key)
@@ -279,24 +279,6 @@ fn build_chats(
             rows.iter().map(|v| item(source_id, v, marks)).collect();
         items.sort_by_key(|i| i.date_ms);
 
-        let mut by_month: BTreeMap<String, Vec<NormalizedChatItem>> = BTreeMap::new();
-        for it in items {
-            by_month.entry(month_of(it.date_ms)).or_default().push(it);
-        }
-        let buckets: Vec<NormalizedDoc> = by_month
-            .into_iter()
-            .map(|(period_key, items)| {
-                let month = ids::month(source_id, &id, &period_key);
-                NormalizedDoc {
-                    orphan_reactions: Vec::new(),
-                    markdown_uuid: month.uuid,
-                    source_ref: Some(UpstreamRef::new(month.entity_kind, month.natural_key)),
-                    period_key,
-                    items,
-                }
-            })
-            .collect();
-
         // A text conversation has no title: it is named after whoever is
         // on the other end, by number where its key is one.
         let named_after = vec![NamedPerson {
@@ -304,11 +286,19 @@ fn build_chats(
             handle: Handle::tel(&id),
         }];
         let conversation = ids::conversation(source_id, &id);
+        let whole = NormalizedDoc {
+            markdown_uuid: conversation.uuid.clone(),
+            source_ref: None,
+            items,
+            orphan_reactions: Vec::new(),
+        };
         chats.push(NormalizedChat {
             named_after,
             contacts: account(source_id, &rows).into_iter().collect(),
             inputs: inputs.declared(),
             id: id.clone(),
+            containers: Vec::new(),
+            filed_under: Vec::new(),
             chat_uuid: conversation.uuid,
             display,
             author: None,
@@ -320,7 +310,7 @@ fn build_chats(
             title: None,
             org_uuid: None,
             org_name: None,
-            buckets,
+            buckets: vec![whole],
         });
     }
     chats
@@ -382,11 +372,13 @@ fn item(source_id: &str, v: &Value, marks: &BTreeMap<String, ReadMark>) -> Norma
             let duration = v.get("duration").and_then(Value::as_i64).unwrap_or(0);
             let number = v.get("number").and_then(Value::as_str).unwrap_or("");
             NormalizedChatItem {
+                reply_to: None,
                 message_uuid,
                 author_handle: Handle::tel(number),
                 author_kind: AuthorKind::Named,
                 author_display: display.to_string(),
                 date_ms,
+                date_offset_secs: None,
                 text: None,
                 kind: ItemKind::System,
                 attachments: Vec::new(),
@@ -451,6 +443,7 @@ fn item(source_id: &str, v: &Value, marks: &BTreeMap<String, ReadMark>) -> Norma
                 .collect();
 
             NormalizedChatItem {
+                reply_to: None,
                 message_uuid,
                 author_handle,
                 author_kind: if is_me {
@@ -460,6 +453,7 @@ fn item(source_id: &str, v: &Value, marks: &BTreeMap<String, ReadMark>) -> Norma
                 },
                 author_display,
                 date_ms,
+                date_offset_secs: None,
                 text,
                 kind: if attachments.is_empty() {
                     ItemKind::Text
@@ -548,15 +542,6 @@ fn fmt_duration(s: i64) -> String {
     }
 }
 
-fn month_of(ms: Option<i64>) -> String {
-    use chrono::TimeZone;
-    chrono::Utc
-        .timestamp_millis_opt(ms.unwrap_or(0))
-        .single()
-        .map(|d| d.format("%Y-%m").to_string())
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
 fn basename(ref_name: &str) -> &str {
     ref_name
         .rsplit_once('/')
@@ -606,7 +591,7 @@ mod tests {
     }
 
     /// A row with no usable `date` must carry no timestamp — not the
-    /// epoch — while still landing in a bucket so it stays reachable.
+    /// epoch — and is still in its conversation's document.
     #[test]
     fn undated_row_has_no_timestamp_but_still_files() {
         let messages = vec![
@@ -619,9 +604,30 @@ mod tests {
         for i in &items {
             assert_eq!(i.date_ms, None, "{} fabricated a timestamp", i.message_uuid);
         }
-        // Filed under the epoch bucket — a filing decision, not a claim
-        // about when they happened.
-        assert_eq!(chats[0].buckets[0].period_key, "1970-01");
+        assert_eq!(chats[0].buckets.len(), 1);
+    }
+
+    /// A conversation was one document per month, each minted from the
+    /// month; it is one document, whose uuid is the conversation's.
+    #[test]
+    fn a_conversation_spanning_two_months_is_one_document() {
+        let messages = vec![
+            // 2026-05-08 and 2026-06-08.
+            json!({"id":"may","kind":"sms","conversation_key":"+1410","conversation_display":"Jean-Luc Picard","date":1778277198761i64,"is_me":false,"body":"Report","attachments":[]}),
+            json!({"id":"jun","kind":"sms","conversation_key":"+1410","conversation_display":"+1410","date":1780955598761i64,"is_me":true,"body":"Aye","attachments":[]}),
+        ];
+        let chats = build_chats("sms", &with_ids(&messages), &[], &BTreeMap::new());
+        assert_eq!(chats.len(), 1);
+        assert_eq!(chats[0].buckets.len(), 1, "one document, not one a month");
+        let doc = &chats[0].buckets[0];
+        assert_eq!(doc.markdown_uuid, chats[0].chat_uuid);
+        assert!(doc.source_ref.is_none(), "the chat's own backpointer");
+        let natives: Vec<_> = doc
+            .items
+            .iter()
+            .map(|i| i.source_ref.as_ref().unwrap().native_id.as_str())
+            .collect();
+        assert_eq!(natives, ["may", "jun"], "oldest first");
     }
 
     /// Only a message someone else sent, and the backup says is
@@ -875,7 +881,7 @@ mod tests {
         );
         assert_eq!(chats.len(), 1, "calls + texts on one number → one chat");
         assert_eq!(chats[0].display, "Jean-Luc Picard");
-        // 3 items across the buckets (2 texts + 1 call).
+        // 2 texts + 1 call.
         let n: usize = chats[0].buckets.iter().map(|b| b.items.len()).sum();
         assert_eq!(n, 3);
         // The sent text shows as "Me".

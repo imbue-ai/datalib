@@ -45,13 +45,12 @@ The sections on credentials (step 2) and on getting your data back out
 ## 0. Prerequisites
 
 None. The release tarball carries the binaries, and the first sync
-fetches the one other thing a sync runs: a Node runtime with the two
-Node programs the tools shell out to — `latchkey`, which holds your
-credentials, and `qmd`, which builds the semantic search index — at
-the exact versions datalib was built and tested with, published beside
-the tarball on the same release and checked against the sha256 the
-tarball carries for it. It lands in `~/.cache/datalib/runtime`, a
-download of about 100 MB, once per release. You do not need `node`,
+fetches the one other thing a sync runs: a Node runtime with the
+Node program the tools shell out to — `latchkey`, which holds your
+credentials — at the exact versions datalib was built and tested with,
+published beside the tarball on the same release and checked against
+the sha256 the tarball carries for it. It lands in
+`~/.cache/datalib/runtime`, one download per release. You do not need `node`,
 `npm` or `npx` installed. The `latchkey` command does not fetch it
 itself, so step 1 fetches it by hand with `datalib-step pull-runtime`;
 that is also how to fetch it ahead of time for an offline laptop.
@@ -89,8 +88,8 @@ it into `~/.local/lib/datalib` and links the tools into
 
 Also installed: `latchkey` (the credential tool, step 2, running on
 the fetched Node runtime), `datalib-file-inventory` (a standalone directory
-scanner) and the two
-`latchkey-curl-*` binaries the web-API sources fetch through. If
+scanner) and the two binaries the web-API sources fetch through,
+`latchkey-curl-router` and `curl-impersonate`. If
 `~/.local/bin` isn't already on your `PATH`, the script prints the exact
 line to add to your `~/.zshrc` — add it and restart your shell.
 
@@ -103,16 +102,45 @@ Three optional knobs:
   `DATALIB_VERSION=v0.30.1 curl -LsSf …/install.sh | sh`. By default the
   script installs the release it names, which moves to each new release
   shortly after it publishes.
-- `DATALIB_LIBC` — Linux only: `gnu` or `musl`. Auto-detected (musl
-  distros like Alpine get the fully-static musl build); set
-  `DATALIB_LIBC=musl` to force the static build on a glibc distro —
-  it runs on any Linux of the right architecture.
+- `DATALIB_LIBC` — Linux only: `gnu` or `musl`. Auto-detected: musl
+  distros like Alpine, and glibc older than 2.39 (Ubuntu 24.04's), get
+  the fully-static musl build. If a binary fails with
+  ``version `GLIBC_2.xx' not found``, install again with
+  `DATALIB_LIBC=musl`: the static build runs on any Linux of the right
+  architecture.
 
 > The install script supports macOS on Apple Silicon and Linux
-> (x86_64 / arm64, glibc or musl); it auto-detects your platform and
+> (x86_64 / arm64; glibc 2.39 or newer, or any Linux through the static
+> musl build); it auto-detects your platform and
 > pulls the matching tarball. The rest of this guide is written
 > macOS-first (Homebrew, `pbpaste`) — on Linux, substitute your package
 > manager and clipboard tool.
+
+### Checking who built what you downloaded
+
+The script checks the tarball against a hash written into the script
+itself, so it installs exactly what the script names, and the script
+comes from datalib's `main` branch. To see for yourself that a download
+was built by datalib's release workflow from the release's own commit,
+and not uploaded by hand, ask for its *build
+provenance attestation*: a statement that workflow signed when it built
+the file. You need GitHub's CLI, `gh`, signed in to any account. Set
+`tag` to the release you installed:
+
+```sh
+tag=v0.55.0
+gh release download "$tag" -R imbue-ai/datalib -p datalib-aarch64-apple-darwin.tar.gz
+gh attestation verify datalib-aarch64-apple-darwin.tar.gz -R imbue-ai/datalib \
+  --signer-workflow imbue-ai/datalib/.github/workflows/release.yml \
+  --source-ref "refs/tags/$tag"
+```
+
+The same check works on every file of a release except the `.sha256`
+files: the other tarballs, the Node runtime (`runtime-*.tar.gz`) and the
+desktop app's `Datalib-aarch64-apple-darwin.dmg`. It fails on a file
+whose bytes differ by one bit, and on one built by any other workflow,
+tag or commit. Releases up to v0.54.1 carry no attestation. The check
+says where a file came from, not that the code in it is good.
 
 Next, make the data root — the folder everything gets written into —
 and work from there:
@@ -230,6 +258,32 @@ What that means for datalib today:
   for example). Sign out of a service you stop syncing:
   `latchkey auth clear <service>`.
 
+Spotlight indexes an ordinary library, as it does the rest of your home
+folder, and not one in the protected folder. To keep your libraries out of
+its results, add `~/Datalib` to the Search Privacy list in Spotlight's page
+of System Settings.
+
+#### When macOS asks to "access data from other apps"
+
+This dialog is what guards a protected folder, and it tells you very little.
+macOS writes it, not Datalib, so Datalib cannot make it clearer. It names the
+app asking, which is the app an agent or a command runs inside, such as Claude
+or Terminal. It does not name the folder, the file or the command.
+
+So the same dialog can come from something routine: an AI agent running `docker`
+inside Claude has brought it up. And saying **Allow** to it lets that app into
+your protected libraries too: one Allow, given when Terminal asked for Docker's
+data, let Terminal list Datalib's protected folder with no second dialog. The
+dialog gives no sign that it does this.
+
+- **If you did not expect it, say no** and see what breaks.
+- **If you said Allow, quit that app when you are done.** The permission is meant
+  to last until the app quits, and everything running inside the app shares it,
+  including every agent.
+- **Run what keeps asking from a different app.** Docker commands you run in
+  Terminal make Terminal the one asking, not the app your agent runs in. An
+  agent running inside that Terminal still shares its permission.
+
 #### Which apps have you let in? (macOS)
 
 A protected folder is only as closed as the permissions you've handed
@@ -290,8 +344,8 @@ data out of Google's silos. Useful targets:
 - **Mail** — exports as a single `.mbox` (one file for "All mail
   Including Spam and Trash"). The email source reads it directly.
 - **Chat**, **Voice**, **Maps**, **YouTube history**, **Gemini** — the
-  `google_takeout` source reads the unpacked tree. Chat and Voice
-  render to markdown today; the rest land in the raw store.
+  `google_takeout` source reads the export and renders each of them to
+  markdown.
 
 Steps:
 
@@ -372,8 +426,8 @@ these steps for whichever source failed.
 
 The config lives at `config.toml` in your data root. Each source is a
 **group** with an `ingest` step (bring the data in) and a
-`render_markdown` step (turn it into readable markdown), plus two shared
-index steps that fan in over everything rendered. Every step names the
+`render_markdown` step (turn it into readable markdown), plus a shared
+index step that fans in over everything rendered. Every step names the
 program it runs in `command`; datalib's own steps run
 `datalib-step run <function> <type>`, the type being the group's. A
 one-source config looks like this:
@@ -390,11 +444,7 @@ name = "index"
 slots = 2
 
 [[locks]]
-name = "qmd_keyword"
-slots = 1
-
-[[locks]]
-name = "qmd_embed"
+name = "embedder"
 slots = 1
 
 [[groups]]
@@ -415,40 +465,26 @@ inputs = ["claude/ingest"]
 reads = "pinned"
 
 [[steps]]
-id = "claude/keyword_index"
-command = "datalib-step run keyword_index claude"
-inputs = ["claude/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]
-
-[[steps]]
 id = "claude/embed"
 command = "datalib-step run embed claude"
-inputs = ["claude/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 reads = "files"
-locks = ["qmd_embed"]
+locks = ["embedder"]
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-id = "unified_document_index/grid_index"
-command = "datalib-step run grid_index"
-inputs = ["claude/render_markdown"]
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "datalib-step run unified_grid_and_search_index"
+inputs = ["*/render_markdown"]
 reads = "pinned"
 locks = ["index"]
 
-[[steps]]
-id = "unified_document_index/qmd_aggregator"
-command = "datalib-step run qmd_aggregator"
-inputs = ["claude/keyword_index", "claude/embed"]
-reads = "pinned"
-locks = ["qmd_keyword"]
-
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 ```
 
 A step's `id` is the directory it writes — `claude/ingest`,
@@ -463,7 +499,7 @@ you write after a `[…]` header belongs to that header's table until the
 next one.
 
 You normally don't write this by hand. The app's first-run screen
-writes the index steps and the applets (search, and your contacts)
+writes the index step and the applets (search, and your contacts)
 for an empty folder, and the
 **Data sources** card's **Add source** button fills in a source (next
 step). From a terminal, two commands do the same:
@@ -474,9 +510,9 @@ datalib-step examples slack --append ~/datalib/config.toml
 ```
 
 The first writes a config with no steps and nothing else. The second
-adds a source's smallest working config, and the index steps and the
-applets when the config has none yet, and puts the source in the index
-steps' `inputs`; a source with more than one way in names it
+adds a source's smallest working config, and the index step and the
+applets when the config has none yet, and makes sure the index step's
+`inputs` read it; a source with more than one way in names it
 (`--method gmail`), and `--id` names a second account's group.
 If you'd rather hand-edit, copy
 [**configs/dag_example.toml**](../../configs/dag_example.toml),
@@ -491,7 +527,7 @@ one source's entries, straight into `<data_root>/config.toml`:
   reads a Google Takeout `.mbox` from disk (the trio step 2 above sets
   up).
 - [**claude_only.toml**](config_examples/claude_only.toml)
-  — just the Claude source, plus the two index steps.
+  — just the Claude source, plus the index step and the applets.
 - [**all_sources.toml**](config_examples/all_sources.toml)
   — every supported source type with realistic defaults (including
   every input mode for email and contacts).
@@ -511,14 +547,14 @@ datalib-migrate-config ~/datalib --force     # rewrites ~/datalib/config.toml
 ```
 
 It keeps the original beside the result as `config.toml.orig`. Comments
-from the old file don't carry over, so review the result. A config whose
-search is still one shared `qmd_index` step needs none of this: the app
-gives each source its own search steps the first time it reads the
-file, and keeps the old one as `config.toml.bak`. The same is true of a
-config whose index is still called `unified_index`: the app renames it
-`unified_document_index`, and moves the index's folder to match rather
-than rebuilding it. And of a config whose steps are written as
-`group = …` and `function = …`: the app writes each step's `id` and
+from the old file don't carry over, so review the result. A config with
+an older search or index step (a shared `qmd_index` step, or an index
+group called `unified_index` or `unified_document_index`) needs none of
+this: the app rewrites it the first time it reads the file and keeps the
+old one as `config.toml.bak`
+([the retired shapes](../dev/config_model.md#the-retired-shapes) lists
+every such rewrite). The same goes for a config whose steps are written
+as `group = …` and `function = …`: the app writes each step's `id` and
 whole `command` and the entries `datalib-step` needs, and every step
 runs once at the next sync, each fetching only what is new. A much older root with
 only a `config.yaml` is not convertible any more: set it up again from
@@ -580,11 +616,12 @@ faster.
   first.
 - A `render_markdown` step per source: each conversation or document
   rendered into readable markdown, attachments included.
-- The `grid_index` step: one row per message or document written into
-  the SQL store at `<data_root>/unified_document_index/grid_index/db.sqlite`.
-- A `keyword_index` and an `embed` step per source: that source's part
-  of free-text search — its words, then its embeddings, which let a
-  search match on meaning. The first `embed` downloads its model once.
+- The `unified_grid_and_search_index` step: one row per message or document written into
+  the SQL store at `<data_root>/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`,
+  then each source's words into the keyword search beside them.
+- An `embed` step per source: the embeddings of that source's part of
+  search, which let a search match on meaning. The first `embed`
+  downloads its model once.
   **The first embed is slow** — roughly 5–10
   minutes per thousand chunks on CPU. It's resumable, so Ctrl-C and
   re-run is safe, and one source's `embed` can be turned off on the
@@ -592,9 +629,6 @@ faster.
   drains take seconds. A Garmin, YoLink or AirVisual source has no
   `embed` step: its markdown is daily summaries of numbers, which the
   keyword index already finds. The app takes out one a config already has.
-- The `qmd_aggregator` step, once every source's search steps are
-  done: it drops any source no longer in the config from the search
-  index and reports what the index holds.
 
 **On disk afterwards** (with `data_root = "~/datalib"`):
 
@@ -605,16 +639,16 @@ faster.
 │   ├── ingest/                     #   the captured raw stores (precious) …
 │   │   ├── entities.doltlite_db
 │   │   └── blobs.sqlite
-│   └── render_markdown/            #   … and the rendered .md tree
-│       └── …
+│   └── render_markdown/            #   … and the rendered documents
+│       └── indexed_markdown.doltlite_db
 ├── slack/
 │   ├── ingest/
 │   └── render_markdown/
 ├── gmail-takeout/
 │   └── …
-├── unified_document_index/                  # the shared indexes, rebuildable
-│   ├── grid_index/db.sqlite        #   grid rows + markdowns + edges
-│   └── qmd_aggregator/qmd/index.sqlite  #   the semantic search index
+├── unified_grid_and_search_index/                  # the shared indexes, rebuildable
+│   ├── unified_grid_and_search_index/db.sqlite  #   grid rows + markdowns + edges + the search index
+│   └── search_index/inference_cache.sqlite  #   each passage's vector, for search by meaning
 └── system/                         # everything that isn't a source
     ├── supervisor.sqlite           # syncs asked for, and which steps are up to date
     ├── api-token                   # the running server's bearer token
@@ -627,7 +661,7 @@ faster.
 ```
 
 > **Backups:** the bulky **derived** trees — each `<group>/render_markdown/`,
-> and `unified_document_index/` — are rebuilt from your raw
+> and `unified_grid_and_search_index/` — are rebuilt from your raw
 > stores by re-running the pipeline, and each carries a `CACHEDIR.TAG`,
 > so cache-aware backup tools skip them automatically:
 >
@@ -693,31 +727,27 @@ whenever you want to pull in what's new. Downloads are incremental and
 the semantic index is content-hashed, so a re-run over an unchanged
 corpus is a fast no-op.
 
-## 7. Querying the search index directly with qmd
+## 7. Searching from the command line
 
-You can also query the semantic index from the command line, by
-pointing the fetched `qmd` at the sqlite file under your data root via
-the `INDEX_PATH` env var:
+`datalib-applet search` answers a search exactly as the app's search box
+does, by words and by meaning, with no server running:
 
 ```sh
-rt=$(echo ~/.cache/datalib/runtime/*/)
-INDEX_PATH=~/datalib/unified_document_index/qmd_aggregator/qmd/index.sqlite \
-    "$rt/node/bin/node" "$rt"/qmd/*/node_modules/@tobilu/qmd/dist/cli/qmd.js query "hello"
+datalib-applet search ~/datalib "hello"
 ```
 
-`qmd status` against the same `INDEX_PATH` shows collections and
-document counts.
+[Searching your mirror](searching.md) has the query language.
 
 ## 8. Getting your data back out
 
 The point of mirroring your data locally is that it stays yours, so it
-is worth knowing the exit before you need it. Two of the three copies
-are already in open formats you can read with no datalib at all:
+is worth knowing the exit before you need it. The markdown is already
+in an open format, and one command turns each database into one:
 
-- **The markdown.** `<group>/render_markdown/` is a tree of ordinary
-  UTF-8 `.md` files, one per conversation or document. Copy it
-  anywhere; every text editor and search tool on your machine already
-  reads it.
+- **The markdown.** `datalib-step markdown <data root> --out <folder>`
+  writes every conversation or document as an ordinary UTF-8 `.md`
+  file, one each, wherever you like. Every text editor and search tool
+  on your machine already reads it.
 - **The databases.** The `.doltlite_db` files are
   [doltlite](https://github.com/dolthub/doltlite) stores — SQLite's SQL
   engine over a versioned, content-addressed file format, which is what
@@ -742,7 +772,7 @@ are already in open formats you can read with no datalib at all:
   Attachments are not in those: their bytes live beside them in
   `<group>/ingest/blobs.sqlite`, which is plain SQLite already and
   opens as it is. So is the grid's table,
-  `unified_document_index/grid_index/db.sqlite`, which is rebuilt from
+  `unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`, which is rebuilt from
   the stores and keeps no history; the same pipe makes a copy of it
   that opens anywhere.
 
@@ -756,7 +786,10 @@ are already in open formats you can read with no datalib at all:
 just explore in place — `datalib-doltlite -readonly <file>` drops you
 in a REPL. Pass `-readonly` whenever you are only looking: anything a
 writable session commits is overwritten by your next sync, and a
-transaction it leaves open stalls that sync. 
+transaction it leaves open stalls that sync.
+
+From Python, `uv add imbue-datalib-reader` reads a store in place, with no
+export: see [Reading the raw stores](raw_stores.md).
 
 If you prefer a GUI, you have two options:
 
@@ -767,7 +800,7 @@ If you prefer a GUI, you have two options:
 
 In the desktop app, **Browse** on a source's download row opens its raw store
 read-only for you — in that DB Browser when it is installed, otherwise
-in `datalib-doltlite` in Terminal. More recipes, including the commit history 
+in `datalib-doltlite` in Terminal. More recipes, including the commit history
 and per-sync diffs, are in [`docs/dev/doltlite.md`](../dev/doltlite.md).
 
 ## 9. Feedback

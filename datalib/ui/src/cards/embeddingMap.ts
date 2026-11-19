@@ -222,24 +222,20 @@ export function encodeState(st: MapState): string {
   return p.toString();
 }
 
-/// The step that runs after every source's `embed`, and so the one the
-/// map reads.
-export const QMD_AGGREGATOR_STEP = "unified_document_index/qmd_aggregator";
-
 /// The TOML stanza that declares the step, for a config that lacks it:
-/// it reads every source's embeddings, so it runs after the aggregator —
-/// where there is one to name; without it nothing is embedded. A config
-/// it is added to also needs the `index` lock (`withDeclarations`).
-export function stepStanza(hasAggregator: boolean): string {
+/// it reads every source's embeddings by pattern, so it runs after every
+/// `embed`. A config it is added to also needs the `index` lock
+/// (`withDeclarations`).
+export function stepStanza(): string {
   const step = stepToml({
-    group: "unified_document_index",
+    group: "unified_grid_and_search_index",
     fn: "embedding_map",
     type: null,
-    inputs: hasAggregator ? [QMD_AGGREGATOR_STEP] : [],
+    inputs: ["*/embed"],
   });
   return `
-# qmd's document embeddings laid out on a plane, for the map card. Each
-# run starts from the last map; resetting the step lays one out afresh.
+# The search index's document embeddings laid out on a plane, for the map card.
+# Each run starts from the last map; resetting the step lays one out afresh.
 ${step}
 `;
 }

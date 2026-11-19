@@ -1,0 +1,25 @@
+# Your Baby Connect history, signed in through latchkey (by browser). An
+# empty `api` table copies every entry of every child, from the eldest
+# child's birthday to today; later syncs read only the days not yet read.
+[[groups]]
+id = "baby_connect"
+name = "Baby Connect"
+type = "baby_connect"
+
+[[steps]]
+group = "baby_connect"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params.api]
+
+# One document per child: every entry, with its notes, its time
+# read in the zone you logged in.
+[[steps]]
+group = "baby_connect"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["baby_connect/ingest"]
+
+[steps.params]
+time_zone = "America/Los_Angeles"

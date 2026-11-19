@@ -10,8 +10,8 @@ use std::collections::{HashMap, HashSet};
 
 use datalib_etl_notion::ingest::db::TreeRow;
 use datalib_etl_notion::ingest::schema_raw::TreeKind;
-use datalib_etl_render::front_matter::yaml_scalar;
-use datalib_etl_render::html::escape_md_inline;
+use datalib_etl_render::front_matter::Front;
+use datalib_etl_render::html::escape_name_inline;
 use datalib_etl_render::inputs::{Bucket, Input};
 use datalib_etl_render::title::Title;
 use datalib_schema::grid_rows::GridRow;
@@ -130,7 +130,7 @@ fn write_entries(
     for e in entries {
         out.push_str(&"  ".repeat(depth));
         out.push_str("- ");
-        let title = escape_md_inline(e.title);
+        let title = escape_name_inline(e.title);
         if is_held(e.row) {
             let uuid = ids::page(stanza, e.id, e.row.created_time.as_deref()).uuid;
             out.push_str(&format!("[{title}](/chat/{uuid})"));
@@ -169,6 +169,7 @@ fn page_stamps(entries: &[Entry<'_>]) -> (Option<String>, Option<String>) {
 
 pub(super) struct TocDocument {
     pub markdown_uuid: String,
+    pub front: Front,
     pub markdown: String,
     pub rows: Vec<GridRow>,
     pub problems: Vec<ProblemRow>,
@@ -185,11 +186,12 @@ pub(super) fn document(
         return None;
     }
     let id = ids::toc(stanza);
-    let mut markdown = String::from("---\n");
-    markdown.push_str(&format!("title: {}\n", yaml_scalar(TITLE)));
-    markdown.push_str(&format!("provider: {}\n", Provider::Notion));
-    markdown.push_str(&format!("markdown_uuid: {}\n", id.uuid));
-    markdown.push_str("source_label: Notion\n---\n\n");
+    let front = Front::new()
+        .text("title", TITLE)
+        .plain("provider", Provider::Notion)
+        .plain("markdown_uuid", &id.uuid)
+        .plain("source_label", "Notion");
+    let mut markdown = front.draw();
     markdown.push_str(
         &Title {
             text: TITLE,
@@ -228,6 +230,7 @@ pub(super) fn document(
         .collect();
     Some(TocDocument {
         markdown_uuid: id.uuid,
+        front,
         markdown,
         rows,
         problems,

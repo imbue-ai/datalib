@@ -23,7 +23,7 @@ signed in as the same account:
 
 Image links in the native JSON (`docs.google.com/*-images-rt/…`) are
 signed by Google for about 30 minutes and go out as plain `curl`
-(`api::req_image`). Google signs them afresh on every read, so they are
+(`api::req_signed`). Google signs them afresh on every read, so they are
 taken out of the JSON that is stored (`shape::take_image_links`). The
 image bytes, which do not change, are stored by where each link was.
 An image larger than one plain request takes (1 GiB) is left out: its
@@ -188,8 +188,6 @@ The exports are big because Google embeds the document's fonts in each.
 - **Only native files.** Other Drive files (PDFs, images, uploaded
   Office files) are not listed.
 - **Only Docs render.** Sheets and Slides stay in the raw store.
-- **No Add source form.** A config entry is written by hand
-  (`docs/user/config_examples/all_sources.toml`).
 - **A capture can be newer than its version.** It is keyed by the
   `version` the listing named. If the file was edited while it was being
   fetched, the content is newer, and the next listing captures it again

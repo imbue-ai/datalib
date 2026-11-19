@@ -1379,20 +1379,20 @@ impl Accumulator {
 /// transaction touched at each `COMMIT` (docs/dev/doltlite.md § "What a write
 /// costs").
 #[derive(Default)]
-struct PendingBatch {
-    emails: Vec<EmailRow>,
+pub(super) struct PendingBatch {
+    pub(super) emails: Vec<EmailRow>,
     /// One per email in `emails`.
-    marks: Vec<ReadMarkRow>,
+    pub(super) marks: Vec<ReadMarkRow>,
     /// `.eml` bytes + their `email_blobs` edges for this batch. The
     /// accumulator holds the bytes (in its [`BlobBundle`]) and resolves
     /// each edge's `blake3` off them at flush time — see
     /// [`datalib_etl::blob_cas::CasEdgeAccumulator`].
-    cas: CasEdgeAccumulator,
+    pub(super) cas: CasEdgeAccumulator,
     /// In-run dedupe of blob ref ids. For mbox the ref_id is the
     /// `.eml`'s blake3, so identical bodies collapse to one row and
     /// doltlite never sees a conflicting bind pair inside one multi-row
     /// statement.
-    seen_blob_ids: std::collections::HashSet<String>,
+    pub(super) seen_blob_ids: std::collections::HashSet<String>,
 }
 
 impl PendingBatch {
@@ -1415,8 +1415,14 @@ async fn flush_batch(
     batch: &mut PendingBatch,
     summary: &mut FetchSummary,
 ) -> Result<()> {
+    summary.emails_upserted += write_batch(db, batch).await?;
+    Ok(())
+}
+
+/// Write `batch` and empty it; how many emails it held.
+pub(super) async fn write_batch(db: &RawDb, batch: &mut PendingBatch) -> Result<usize> {
     if batch.emails.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
 
     let mut etx = db.pool().begin().await.context("begin entity tx")?;
@@ -1440,9 +1446,9 @@ async fn flush_batch(
         })
         .await?;
 
-    summary.emails_upserted += batch.emails.len();
+    let n = batch.emails.len();
     batch.clear();
-    Ok(())
+    Ok(n)
 }
 
 /// [`flush_batch`] for a seed: the email rows and their joins, and the
@@ -1643,7 +1649,7 @@ async fn bulk_insert_email_keywords(
     Ok(())
 }
 
-async fn bulk_insert_mailboxes(
+pub(super) async fn bulk_insert_mailboxes(
     tx: &mut Transaction<'_, Sqlite>,
     account_id: &str,
     specs: &[(String, String, Option<&'static str>, String)],
@@ -1681,7 +1687,7 @@ async fn bulk_insert_mailboxes(
     Ok(())
 }
 
-async fn bulk_insert_threads(
+pub(super) async fn bulk_insert_threads(
     tx: &mut Transaction<'_, Sqlite>,
     account_id: &str,
     specs: &[(String, i64, Option<i64>, String)],

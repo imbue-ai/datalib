@@ -10,21 +10,28 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import publish_release
 from publish_release import (
+    CUDA_IMAGE_DIGEST,
     DMG,
     IMAGE_DIGEST,
+    IMAGE_DIGESTS,
     Refused,
+    attestation_checks,
     content_problems,
     expected_artifacts,
     publish,
     read_artifacts,
     sha256_of,
+    subjects_problems,
+    subjects_text,
 )
 
 REPO = "imbue-ai/datalib"
@@ -112,7 +119,7 @@ class ArtifactsCase(unittest.TestCase):
                     continue
                 data = (
                     f"sha256:{'a' * 64}\n".encode()
-                    if file == IMAGE_DIGEST
+                    if file in IMAGE_DIGESTS
                     else file.encode()
                 )
                 (self.root / artifact / file).write_bytes(data)
@@ -135,7 +142,7 @@ class WhatIsTakenTest(ArtifactsCase):
         self.assertEqual(self.problems(), [])
 
     def test_every_asset_a_release_shipped_is_expected(self) -> None:
-        """v0.50.0's twenty assets, read from GitHub, plus the image digest."""
+        """v0.50.0's twenty assets, read from GitHub, plus the image digest; then the CUDA module and the -cuda image's digest."""
         shipped = {
             f"{stem}{suffix}"
             for stem in [
@@ -147,13 +154,17 @@ class WhatIsTakenTest(ArtifactsCase):
                 "datalib-x86_64-unknown-linux-musl.tar.gz",
                 "runtime-aarch64-apple-darwin.tar.gz",
                 "runtime-aarch64-unknown-linux-gnu.tar.gz",
-                "runtime-x86_64-unknown-linux-gnu-cuda.tar.gz",
                 "runtime-x86_64-unknown-linux-gnu.tar.gz",
             ]
             for suffix in ["", ".sha256"]
         }
+        cuda = {
+            "ggml-cuda-x86_64-unknown-linux-gnu.tar.gz",
+            "ggml-cuda-x86_64-unknown-linux-gnu.tar.gz.sha256",
+            CUDA_IMAGE_DIGEST,
+        }
         expected = {f for files in expected_artifacts().values() for f in files}
-        self.assertEqual(expected, shipped | {IMAGE_DIGEST})
+        self.assertEqual(expected, shipped | {IMAGE_DIGEST} | cuda)
 
     def test_a_build_cannot_carry_the_dmg_in_its_own_artifact(self) -> None:
         """A file named like another job's would otherwise replace it on the release."""
@@ -199,6 +210,117 @@ class WhatIsTakenTest(ArtifactsCase):
     def test_a_bad_image_digest_is_refused(self) -> None:
         (self.root / "docker-image-digest" / IMAGE_DIGEST).write_text("latest\n")
         self.assertEqual(self.problems(), [f"{IMAGE_DIGEST}: not one image digest"])
+
+    def test_a_bad_cuda_image_digest_is_refused(self) -> None:
+        (self.root / "docker-image-cuda-digest" / CUDA_IMAGE_DIGEST).write_text("")
+        self.assertEqual(
+            self.problems(), [f"{CUDA_IMAGE_DIGEST}: not one image digest"]
+        )
+
+    def test_the_cuda_module_comes_only_from_the_cuda_artifact(self) -> None:
+        name = "ggml-cuda-x86_64-unknown-linux-gnu.tar.gz"
+        (self.root / "tarball-x86_64-unknown-linux-gnu" / name).write_bytes(b"evil")
+        self.assertEqual(
+            self.problems(),
+            [f"artifact tarball-x86_64-unknown-linux-gnu: {name} unexpected"],
+        )
+
+
+class AttestTest(ArtifactsCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.assets, problems = read_artifacts(self.root)
+        self.assertEqual(problems, [])
+        self.hashes = {n: sha256_of(p) for n, p in self.assets.items()}
+
+    def signed(self) -> str:
+        return sha(subjects_text(self.assets, self.hashes).encode())
+
+    def run_script(self, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-I", publish_release.__file__, *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={},
+        )
+
+    def test_every_asset_but_the_sidecars_is_signed_once(self) -> None:
+        text = subjects_text(self.assets, self.hashes)
+        names = [line.split("  ")[1] for line in text.splitlines()]
+        self.assertEqual(
+            names, sorted(n for n in self.assets if not n.endswith(".sha256"))
+        )
+        self.assertIn(DMG, names)
+        self.assertIn(IMAGE_DIGEST, names)
+
+    def test_the_subjects_are_in_shasums_format(self) -> None:
+        """The attest action reads `<hex>  <name>`: a space, then the text-mode flag."""
+        for line in subjects_text(self.assets, self.hashes).splitlines():
+            digest, name = line.split("  ")
+            self.assertEqual(digest, sha256_of(self.assets[name]))
+
+    def test_what_was_signed_publishes(self) -> None:
+        self.assertEqual(subjects_problems(self.assets, self.hashes, self.signed()), [])
+
+    def test_an_asset_replaced_after_attest_is_refused(self) -> None:
+        """An artifact can be uploaded again after `attest` read it; a job output cannot."""
+        signed = self.signed()
+        name = "datalib-x86_64-unknown-linux-gnu.tar.gz"
+        self.assets[name].write_bytes(b"evil")
+        Path(f"{self.assets[name]}.sha256").write_text(f"{sha(b'evil')}  {name}\n")
+        hashes = {n: sha256_of(p) for n, p in self.assets.items()}
+        self.assertEqual(content_problems(self.assets, hashes, self.dmg_sha256), [])
+        problems = subjects_problems(self.assets, hashes, signed)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("not the ones the attest job signed", problems[0])
+
+    def test_each_check_names_this_workflow_tag_and_commit(self) -> None:
+        env = {
+            "GITHUB_REPOSITORY": REPO,
+            "GITHUB_REF": f"refs/tags/{TAG}",
+            "GITHUB_SHA": "c" * 40,
+        }
+        checks = attestation_checks(self.assets, "ghcr.io/imbue-ai/datalib", env)
+        files = [
+            str(self.assets[n])
+            for n in sorted(self.assets)
+            if not n.endswith(".sha256")
+        ]
+        image = f"oci://ghcr.io/imbue-ai/datalib@sha256:{'a' * 64}"
+        self.assertEqual(
+            [check[2] for check in checks], [*files, image, image, image, image]
+        )
+        self.assertIn("--bundle-from-oci", checks[-1])
+        self.assertIn("--bundle-from-oci", checks[-3])
+        for check in checks:
+            with self.subTest(subject=check[2]):
+                self.assertEqual(check[:2], ["attestation", "verify"])
+                flags = check[3:]
+                for flag, value in [
+                    ("--repo", REPO),
+                    ("--signer-workflow", f"{REPO}/.github/workflows/release.yml"),
+                    ("--source-ref", f"refs/tags/{TAG}"),
+                    ("--source-digest", "c" * 40),
+                ]:
+                    self.assertEqual(flags[flags.index(flag) + 1], value)
+                self.assertIn("--deny-self-hosted-runners", flags)
+
+    def test_the_command_line_prints_the_subjects_and_refuses_other_bytes(self) -> None:
+        """What the two jobs run; publish stops before it reaches GitHub."""
+        printed = self.run_script("subjects", str(self.root), self.dmg_sha256)
+        self.assertEqual(printed.returncode, 0, printed.stderr)
+        self.assertEqual(printed.stdout, subjects_text(self.assets, self.hashes))
+        refused = self.run_script(
+            "publish", TAG, str(self.root), self.dmg_sha256, "0" * 64
+        )
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("not the ones the attest job signed", refused.stderr)
+
+    def test_the_command_line_refuses_a_bad_dmg_hash(self) -> None:
+        refused = self.run_script("subjects", str(self.root), "latest")
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("is not a sha256", refused.stderr)
 
 
 class PublishTest(ArtifactsCase):

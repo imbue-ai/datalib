@@ -1,6 +1,6 @@
 //! The search terms in the grid index: every term each `grid_rows` row
 //! answers to (`datalib_schema::search_terms`), in the `rows`, `vals`,
-//! `vals_fts` and `terms` tables. It is the grid's rows melted, one
+//! `vals_fts`, `vals_tri` and `terms` tables. It is the grid's rows melted, one
 //! indexed row per term: what each row's columns say (`search_terms_of`)
 //! and what its render supplied (`supplied_terms`). The index's writer
 //! rewrites a row's terms in the transaction that writes the row, so the
@@ -93,12 +93,12 @@ async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usi
     ] {
         sqlx::query(sql).execute(&mut *conn).await?;
     }
-    sqlx::query(
+    for sql in [
         "INSERT INTO vals_fts (rowid, value) SELECT val_id, value FROM vals WHERE val_id > ?",
-    )
-    .bind(floor)
-    .execute(&mut *conn)
-    .await?;
+        "INSERT INTO vals_tri (rowid, value) SELECT val_id, value FROM vals WHERE val_id > ?",
+    ] {
+        sqlx::query(sql).bind(floor).execute(&mut *conn).await?;
+    }
     for sql in [
         "INSERT OR IGNORE INTO terms (val_id, kind, row_id) \
              SELECT v.val_id, i.kind, r.row_id FROM temp.incoming i \
@@ -107,6 +107,7 @@ async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usi
         "DELETE FROM temp.dropped WHERE EXISTS \
              (SELECT 1 FROM terms t WHERE t.val_id = dropped.val_id)",
         "DELETE FROM vals_fts WHERE rowid IN (SELECT val_id FROM temp.dropped)",
+        "DELETE FROM vals_tri WHERE rowid IN (SELECT val_id FROM temp.dropped)",
         "DELETE FROM vals WHERE val_id IN (SELECT val_id FROM temp.dropped)",
     ] {
         sqlx::query(sql).execute(&mut *conn).await?;
@@ -114,20 +115,24 @@ async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usi
     Ok(terms.len())
 }
 
+/// Every `(handle, author)` pair the grid shows, read from
+/// `grid_index::AUTHORS_INDEX` alone. Pinned, so a dropped or renamed
+/// index fails the pass instead of scanning every row's text (#1803).
+const AUTHORS: &str = "SELECT DISTINCT author_handle, author \
+     FROM grid_rows INDEXED BY grid_rows_by_author \
+     WHERE author_handle IS NOT NULL AND author_handle != '' \
+     AND author IS NOT NULL AND author != ''";
+
 /// Each handle with every name it was seen under: the author a grid row
 /// shows beside its handle, and every name a source's record of a person
 /// (`source_contacts`) gives for each handle it ties to them; and the
 /// handles of each source's own account. Written whole: it is a few
 /// thousand rows.
 pub(crate) async fn write_people(conn: &mut SqliteConnection) -> Result<()> {
-    let authors: Vec<(String, String)> = sqlx::query_as(
-        "SELECT DISTINCT author_handle, author FROM grid_rows \
-         WHERE author_handle IS NOT NULL AND author_handle != '' \
-         AND author IS NOT NULL AND author != ''",
-    )
-    .fetch_all(&mut *conn)
-    .await
-    .context("read the grid's authors")?;
+    let authors: Vec<(String, String)> = sqlx::query_as(AUTHORS)
+        .fetch_all(&mut *conn)
+        .await
+        .context("read the grid's authors")?;
     let contacts: Vec<(String, String)> = sqlx::query_as(
         "SELECT h.handle, c.contact_json FROM source_contact_handles h \
          JOIN source_contacts c \
@@ -194,7 +199,14 @@ pub fn names_seen_under(
     let mut out: std::collections::BTreeSet<(String, String)> = std::collections::BTreeSet::new();
     let mut unread = 0usize;
     for (handle, name) in authors {
-        out.insert((handle, name.trim().to_string()));
+        // An author shown as another handle (a forged `From`) is not a
+        // name for this one; a source contact's names were settled at
+        // render (`crate::names`).
+        let anothers =
+            datalib_handle::Handle::spelled_by(&name).is_some_and(|h| h.as_str() != handle);
+        if !anothers {
+            out.insert((handle, name.trim().to_string()));
+        }
     }
     for (handle, json) in contacts {
         match serde_json::from_str::<datalib_contact_schema::NormalizedContact>(json) {
@@ -280,7 +292,7 @@ fn placeholders(rows: usize, per_row: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grid_index::{apply_one, delete_markdown, open_index, RenderedMarkdown, WriteLock};
+    use crate::grid_index::{apply_one, delete_markdowns, open_index, RenderedMarkdown, WriteLock};
     use datalib_schema::grid_rows::GridRow;
     use datalib_schema::providers::Provider;
     use datalib_schema::search_terms::SearchTermKind;
@@ -348,9 +360,7 @@ mod tests {
     }
 
     /// A document of one row: its uuid, its author's handle, its title.
-    fn doc(root: &std::path::Path, uuid: &str, handle: &str, title: &str) -> RenderedMarkdown {
-        let md_path = crate::grid_index::doc_md_path(&root.join("enterprise"), uuid);
-        let file = md_path.strip_prefix(root).unwrap().to_string_lossy();
+    fn doc(uuid: &str, handle: &str, title: &str) -> RenderedMarkdown {
         let row = GridRow::builder()
             .uuid(uuid)
             .provider(Provider::Claude)
@@ -364,20 +374,23 @@ mod tests {
             .entire_chat(format!("/chat/{uuid}"))
             .body("")
             .markdown_uuid(Some(uuid.to_string()))
-            .qmd_path(file.into_owned())
             .build()
             .unwrap();
         RenderedMarkdown {
+            searchable: true,
+            content_hash: None,
             markdown_uuid: uuid.to_string(),
             source_id: "enterprise".into(),
             upstream_cursor: None,
             bucket_key: None,
-            md_path,
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
+            front: Default::default(),
             edges: Vec::new(),
             contacts: Vec::new(),
+            data_nodes: Vec::new(),
+            filings: Vec::new(),
             photos: Vec::new(),
             problems: Vec::new(),
         }
@@ -385,31 +398,25 @@ mod tests {
 
     struct Grid {
         _dir: tempfile::TempDir,
-        root: std::path::PathBuf,
         pool: sqlx::SqlitePool,
     }
 
     impl Grid {
         async fn new() -> Grid {
             let dir = tempfile::tempdir().unwrap();
-            let root = dir.path().to_path_buf();
-            let pool = open_index(&datalib_core::layout::grid_index_db(&root))
+            let pool = open_index(&datalib_core::layout::grid_index_db(dir.path()))
                 .await
                 .unwrap();
-            Grid {
-                _dir: dir,
-                root,
-                pool,
-            }
+            Grid { _dir: dir, pool }
         }
 
         async fn seal(&self, put: &[RenderedMarkdown], remove: &[&str]) {
             let lock = WriteLock::for_index(self.pool.clone());
             for md in put {
-                apply_one(&lock, &self.root, md).await.unwrap();
+                apply_one(&lock, md).await.unwrap();
             }
             for md in remove {
-                delete_markdown(&lock, md).await.unwrap();
+                delete_markdowns(&lock, &[md.to_string()]).await.unwrap();
             }
             crate::grid_index::seal(&lock).await.unwrap();
         }
@@ -450,12 +457,58 @@ mod tests {
         (uuid.to_string(), kind.to_string())
     }
 
+    /// #1803: the authors were read by scanning `grid_rows`, every row's
+    /// text with them, on each pass. They must come from the index alone.
+    #[tokio::test]
+    async fn the_authors_are_read_from_their_index_alone() {
+        let g = Grid::new().await;
+        // Audited: a constant statement of ours.
+        let rows: Vec<(i64, i64, i64, String)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {AUTHORS}")))
+                .fetch_all(&g.pool)
+                .await
+                .unwrap();
+        let plan: Vec<String> = rows.into_iter().map(|r| r.3).collect();
+        assert!(
+            plan.iter()
+                .any(|p| p.starts_with("SEARCH grid_rows USING COVERING INDEX grid_rows_by_author")),
+            "{plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|p| p.starts_with("SCAN grid_rows")),
+            "{plan:?}"
+        );
+    }
+
+    /// A forged `From: "picard@enterprise.org" <q@continuum.test>` made
+    /// the row's author Picard's address, and the index then knew Q by
+    /// that name. The row still shows what the message said.
+    #[tokio::test]
+    async fn an_author_that_is_another_handle_names_nobody() {
+        let g = Grid::new().await;
+        let q = "email:q@continuum.test";
+        let mut forged = doc("c-f", q, "Orders");
+        forged.rows[0].author = Some("picard@enterprise.org".into());
+        let mut own = doc("c-q", q, "Orders");
+        own.rows[0].author = Some("Q".into());
+        let mut bare = doc("c-b", q, "Orders");
+        bare.rows[0].author = Some("q@continuum.test".into());
+        g.seal(&[forged, own, bare], &[]).await;
+        let names: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM names WHERE handle = ? ORDER BY name")
+                .bind(q)
+                .fetch_all(&g.pool)
+                .await
+                .unwrap();
+        assert_eq!(names, ["Q", "q@continuum.test"]);
+    }
+
     #[tokio::test]
     async fn a_row_is_found_by_its_terms_once_it_is_written() {
         let g = Grid::new().await;
         let (a, b) = (
-            doc(&g.root, "c-a", "email:ann@example.com", "Away team"),
-            doc(&g.root, "c-b", "email:bo@example.com", "Bridge"),
+            doc("c-a", "email:ann@example.com", "Away team"),
+            doc("c-b", "email:bo@example.com", "Bridge"),
         );
         g.seal(&[a, b], &[]).await;
         assert_eq!(
@@ -470,11 +523,11 @@ mod tests {
     #[tokio::test]
     async fn only_the_rows_that_changed_have_their_terms_rewritten() {
         let g = Grid::new().await;
-        let kept = doc(&g.root, "c-k", "email:kit@example.com", "Kept");
+        let kept = doc("c-k", "email:kit@example.com", "Kept");
         g.seal(
             &[
-                doc(&g.root, "c-a", "email:ann@example.com", "Away team"),
-                doc(&g.root, "c-b", "email:bo@example.com", "Bridge"),
+                doc("c-a", "email:ann@example.com", "Away team"),
+                doc("c-b", "email:bo@example.com", "Bridge"),
                 kept.clone(),
             ],
             &[],
@@ -483,8 +536,8 @@ mod tests {
 
         g.seal(
             &[
-                doc(&g.root, "c-a", "email:ann@example.org", "Away team"),
-                doc(&g.root, "c-c", "email:cy@example.com", "Cargo"),
+                doc("c-a", "email:ann@example.org", "Away team"),
+                doc("c-c", "email:cy@example.com", "Cargo"),
                 kept,
             ],
             &["c-b"],
@@ -523,7 +576,7 @@ mod tests {
     async fn a_renders_supplied_terms_are_written_and_follow_its_rerender() {
         use SearchTermKind::{Cc, Label, To};
         let g = Grid::new().await;
-        let mut a = doc(&g.root, "c-a", "email:ann@example.com", "Away team");
+        let mut a = doc("c-a", "email:ann@example.com", "Away team");
         supplied(&mut a, &[(To, "email:bo@example.com"), (Label, "Inbox")]);
         g.seal(&[a.clone()], &[]).await;
         assert_eq!(g.matching("email:bo@example.com").await, [hit("c-a", "to")]);

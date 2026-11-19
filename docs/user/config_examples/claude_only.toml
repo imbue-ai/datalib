@@ -1,7 +1,7 @@
 # Minimal config in the format `datalib-dag` runs: one source (claude.ai
-# conversations) — a group and its steps — plus the unified document index
-# group with its two shared index steps. See configs/dag_example.toml
-# for a walkthrough of the format.
+# conversations) — a group and its three steps — plus the grid and search
+# index group with its shared index step and the app's applets.
+# `datalib-step help dag-example` walks through the format.
 
 # Where the downloaded data gets written. Top-level keys have to come
 # before the first [[…]] header — everything after a table header
@@ -25,49 +25,35 @@ reads = "pinned"
 inputs = ["claude_chats/ingest"]
 
 [[steps]]
-id = "claude_chats/keyword_index"
-command = "datalib-step run keyword_index claude"
-reads = "files"
-locks = ["qmd_keyword"]
-inputs = ["claude_chats/render_markdown"]
-
-[[steps]]
 id = "claude_chats/embed"
 command = "datalib-step run embed claude"
 reads = "files"
-locks = ["qmd_embed"]
-inputs = ["claude_chats/keyword_index"]
+locks = ["embedder"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-id = "unified_document_index/grid_index"
-command = "datalib-step run grid_index"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "datalib-step run unified_grid_and_search_index"
 reads = "pinned"
 locks = ["index"]
-inputs = ["claude_chats/render_markdown"]
+inputs = ["*/render_markdown"]
 
-[[steps]]
-id = "unified_document_index/qmd_aggregator"
-command = "datalib-step run qmd_aggregator"
-reads = "pinned"
-locks = ["qmd_keyword"]
-inputs = ["claude_chats/keyword_index", "claude_chats/embed"]
-
-# The app's own surface: `unified_document_index` serves the grid, the document
+# The app's own surface: `unified_grid_and_search_index` serves the grid, the document
 # view and the document picker. Without it the UI has no search — it is
 # an applet rather than a built-in so the backend does not have to know
 # what a grid row is.
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 
 # The contacts app: your own record of who a handle is, which the person
 # chips and search read. `datalib-step help contacts-app`.
 [[applets]]
-group = "unified_document_index"
+group = "unified_grid_and_search_index"
 id = "datalib_contacts"
 command = "datalib-applet datalib_contacts"
 
@@ -76,14 +62,9 @@ command = "datalib-applet datalib_contacts"
 command = "datalib-step"
 verbs = ["reset", "prepare", "compact", "collect"]
 
-# Whatever writes qmd's keyword index: two at once can lose a document.
+# One embed at a time: each loads the model and writes the search index.
 [[locks]]
-name = "qmd_keyword"
-slots = 1
-
-# Whatever embeds into qmd's index: two at once race on its vectors.
-[[locks]]
-name = "qmd_embed"
+name = "embedder"
 slots = 1
 
 # The fan-ins that read every source.

@@ -1,17 +1,12 @@
-// Per-rendered-markdown metadata + render bookkeeping. One row per
-// `.md` file in `<root>/render_markdown/`. Owns the file's identity (UUID +
-// title + provenance) and the `renderer_version` that produced it, which
-// is how a renderer bump is noticed. `grid_rows.markdown_uuid` is the FK
-// pointing here;
-// many grid rows can share one markdown file. Note that a single
-// 'conversation' upstream can shard into many markdowns when a provider
-// renders one file per period (beeper) — the `markdowns` table is keyed
-// on the rendered file, not the abstract conversation.
+// One row per rendered document: its identity (uuid, title, provenance)
+// and the `renderer_version` that produced it, which is how a renderer
+// bump is noticed. `grid_rows.markdown_uuid` points here; many grid rows
+// share one document.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
 
-/// One row in the `markdowns` table: one rendered `.md` file and the
+/// One row in the `markdowns` table: one rendered document and the
 /// facts about it the grid and the index read. Nothing here is stamped
 /// per run: a re-render that produces the same document writes the same
 /// row, and doltlite's content-addressed tables then carry no diff for
@@ -65,14 +60,6 @@ pub struct MarkdownRow {
     /// document that does not count what it holds.
     #[col(sql = "BIGINT")]
     pub item_count: Option<i64>,
-    /// Path to the rendered markdown file, relative to the **data
-    /// root** — `<stanza>/render_markdown/...`, derived by
-    /// `grid_index::apply_one` stripping the data root off the absolute
-    /// path the renderer wrote. NULL until the renderer has produced
-    /// output. The backend's `/api/chat/{markdown_uuid}` endpoint
-    /// resolves this column to find the file to serve.
-    #[col(sql = "VARCHAR(1024)")]
-    pub md_path: Option<String>,
     /// Optional provider-defined cheap-probe value, consulted *before*
     /// loading payloads to decide whether a markdown has changed.
     /// Slack stamps each thread's `MAX(fetched_at_utc)` here so the next run
@@ -80,7 +67,7 @@ pub struct MarkdownRow {
     /// providers with no such signal.
     #[col(sql = "VARCHAR(64)")]
     pub upstream_cursor: Option<String>,
-    /// Opaque version string for the renderer that produced `md_path`.
+    /// Opaque version string for the renderer that produced the document.
     /// Bumping this value (typically when the markdown layout or
     /// templating changes) forces a global re-render on the next run.
     #[col(sql = "VARCHAR(32)")]
@@ -91,4 +78,20 @@ pub struct MarkdownRow {
     /// NULL from a renderer that has not been ported to declare buckets.
     #[col(sql = "VARCHAR(256)")]
     pub bucket_key: Option<String>,
+    /// blake3 of the document's text, its sections end to end, as hex: what
+    /// the search index compares to learn whether it holds this rendering.
+    /// NULL from a renderer that declares no sections.
+    #[col(sql = "VARCHAR(64)")]
+    pub content_hash: Option<String>,
+    /// The document's front matter as its renderer handed it, as JSON:
+    /// its keys in order, each with its value
+    /// (`datalib_etl_render::front_matter::Front`). NULL from a store an
+    /// older build wrote.
+    #[col(sql = "TEXT")]
+    pub front: Option<String>,
+    /// The search indexes this document: false for one filed for the grid
+    /// alone (Notion's table of contents), which the keyword pass and the
+    /// embeddings leave out.
+    #[col(sql = "INTEGER")]
+    pub searchable: bool,
 }

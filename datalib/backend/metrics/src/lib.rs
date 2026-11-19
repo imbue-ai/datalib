@@ -67,6 +67,19 @@ pub const DEQUEUED: &str = "dequeued_total";
 /// one as a warning on the step's row.
 pub const FAILED_PASSES: &str = "failed_passes";
 
+/// What an `embed` step's Modal Sandboxes have cost this run, in
+/// millionths of a dollar at Modal's list price, by `gpu`: a running total
+/// the step estimates as each Sandbox ends. The Manage screen's Modal
+/// spend column sums it over runs.
+pub const MODAL_COST: &str = "modal_cost_estimate_micro_usd_total";
+
+/// The Modal Sandboxes an `embed` step has started this run, by `gpu`:
+/// a running total, beside [`MODAL_COST`] in the spend column's hover.
+pub const MODAL_SANDBOXES: &str = "modal_sandboxes_total";
+
+/// The seconds those Sandboxes lived, by `gpu`: a running total.
+pub const MODAL_SANDBOX_SECONDS: &str = "modal_sandbox_seconds_total";
+
 /// Whether a series is a running total — a counter — by the naming rule
 /// above. `GET /metrics` types a series by this, and the runner warns
 /// when one goes down within a step's attempt.

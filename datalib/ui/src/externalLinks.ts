@@ -98,7 +98,7 @@ export async function openExternal(url: string): Promise<void> {
     return;
   }
   if (!isDesktopApp()) {
-    window.open(parsed.href, "_blank", "noopener");
+    window.open(parsed.href, "_blank", "noopener,noreferrer");
     return;
   }
   try {

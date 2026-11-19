@@ -46,19 +46,9 @@ command = "datalib-step run render_markdown garmin"
 inputs = ["garmin/ingest"]
 reads = "pinned"
 
-# Its numbers as time series, for charts and the time-series index: add
-# `garmin/render_time_series` to `unified_time_series_index/time_series_index`'s inputs.
+# Its numbers as time series, for charts and the time-series index.
 [[steps]]
 id = "garmin/render_time_series"
 command = "datalib-step run render_time_series garmin"
 inputs = ["garmin/ingest"]
 reads = "pinned"
-
-# Free-text search by keyword (BM25). Add it to
-# `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-id = "garmin/keyword_index"
-command = "datalib-step run keyword_index garmin"
-inputs = ["garmin/render_markdown"]
-reads = "files"
-locks = ["qmd_keyword"]

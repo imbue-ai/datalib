@@ -17,7 +17,7 @@ use datalib_etl_gitlab::ingest::db::{db_path_for, LoadedRaw, RawDb};
 use datalib_etl_gitlab::ingest::schema_raw::mr_pk_recipe;
 
 use datalib_etl_forge_render_common::{
-    opt_str, str_field, ChangeRequest, Comment, Parsed, Section,
+    opt_str, str_field, ChangeRequest, Comment, Container, Parsed, Section,
 };
 
 use super::ids::KIND_NOTE;
@@ -73,6 +73,23 @@ async fn read_everything(
     Ok((raw, Some(pin.commit().to_string()), changed))
 }
 
+/// The project an MR is in, by the id GitLab gives it, which a rename or
+/// a move keeps; by its path where the payload has no id.
+fn project(source_id: &str, mr: &Value, path: &str) -> Container {
+    let id = mr
+        .get("project_id")
+        .and_then(Value::as_i64)
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| path.to_string());
+    let id = super::ids::project(source_id, &id);
+    Container {
+        uuid: id.uuid,
+        kind: "GitLab project",
+        entity_kind: id.entity_kind,
+        upstream_id: id.natural_key,
+    }
+}
+
 pub fn parse_loaded(source_id: &str, raw: LoadedRaw) -> Parsed {
     let mut out = Parsed {
         account: raw.self_identity.as_ref().and_then(|me| {
@@ -95,6 +112,7 @@ pub fn parse_loaded(source_id: &str, raw: LoadedRaw) -> Parsed {
         out.change_requests.push(ChangeRequest {
             uuid: super::ids::merge_request(source_id, &proj, iid, created_at.as_deref()).uuid,
             row_id: mr.id,
+            container_node: Some(project(source_id, p, &proj)),
             container: proj,
             number: iid,
             title: str_field(p, "title"),
@@ -222,5 +240,16 @@ mod no_data_tests {
             parse_api_dir(Path::new("/this/does/not/exist"), "src", RawRange::cold()).unwrap();
         assert!(parsed.change_requests.is_empty());
         assert!(parsed.comments.is_empty());
+    }
+    /// A project is keyed by GitLab's id for it, so a renamed or moved
+    /// one is the same container.
+    #[test]
+    fn a_moved_project_is_the_same_container() {
+        let mr = serde_json::json!({"project_id": 1701017});
+        let before = project("src", &mr, "g/p");
+        let after = project("src", &mr, "other/p");
+        assert_eq!(before.uuid, after.uuid);
+        assert_eq!(before.upstream_id, "1701017");
+        assert_eq!(before.entity_kind, "project");
     }
 }

@@ -3,8 +3,8 @@
 // produced is in the grid — then a file lands in the watched folder and
 // the second sync picks it up.
 
-import { test, expect, type Page } from "@playwright/test";
-import { reviewToml } from "./wizard-helpers";
+import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { openAdvanced, reviewToml } from "./wizard-helpers";
 import { copyFileSync } from "node:fs";
 import {
   cardOf,
@@ -33,6 +33,19 @@ import {
 declare const process: { env: Record<string, string | undefined> };
 
 const BASE = process.env.DATALIB_TEST_E2E_ONBOARDING_URL;
+/// Keeps the source the wizard is adding out of the keyword search. The
+/// `unified_grid_and_search_index` step cuts a searched source's chunks with the embedding model's
+/// tokenizer, and a library made from an empty folder has no model and
+/// may not fetch one here. What this spec checks reads the grid alone.
+async function leaveOutOfSearch(page: Page) {
+  await openAdvanced(page);
+  await page
+    .getByRole("dialog")
+    .locator(".wiz-section .wiz-choice", { hasText: "Keyword-index the markdown" })
+    .locator("input.wiz-bool")
+    .uncheck();
+}
+
 /// The folder the source scans. Seeded by playwright.config.ts with the
 /// two Captain's Log PDFs; the third arrives mid-test.
 const SCAN_DIR = process.env.DATALIB_TEST_E2E_PDF_SCAN_DIR;
@@ -46,7 +59,11 @@ const SIGNAL_BACKUP_DIR = process.env.DATALIB_TEST_E2E_SIGNAL_BACKUP_DIR;
 
 /// The three rows a sync of `pdfs/ingest` drives: the source, its render
 /// sibling, and the fan-in that makes the documents searchable.
-const SYNCED_ROWS = ["pdfs/ingest", "pdfs/render_markdown", "unified_document_index/grid_index"];
+const SYNCED_ROWS = [
+  "pdfs/ingest",
+  "pdfs/render_markdown",
+  "unified_grid_and_search_index/unified_grid_and_search_index",
+];
 
 /// The "Size" column as a number, read back off the label drawn over the
 /// sparkline — the number a person actually sees. `null` for a row with
@@ -59,6 +76,20 @@ async function bytesOf(page: Page, id: string): Promise<number | null> {
   expect(m, `unparsable size in the Bytes column: ${JSON.stringify(text)}`).not.toBeNull();
   const scale = { B: 1, kB: 1e3, MB: 1e6, GB: 1e9, TB: 1e12 }[m![2]]!;
   return Number(m![1]) * scale;
+}
+
+/// A store's size in bytes, measured now, for asking whether it grew. The
+/// column rounds: from 1 MB it moves in steps of 100 kB, and one more
+/// short PDF's markdown is a few kB.
+async function exactBytesOf(request: APIRequestContext, id: string): Promise<number | null> {
+  const res = await request.post(`${BASE}/api/manage/rows/refresh`);
+  expect(res.ok(), `refreshing the rows answered ${res.status()}`).toBe(true);
+  const { rows } = (await res.json()) as {
+    rows: { key: string; disk: { value: number | null } }[];
+  };
+  const found = rows.find((r) => r.key === id);
+  expect(found, `no row ${id} in /api/manage/rows`).toBeDefined();
+  return found!.disk.value;
 }
 
 /// Every row the Explore grid is holding, read through the grid api the
@@ -129,39 +160,27 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
     await expect(cardOf(page, "sourcesView(")).toHaveCount(1);
     // The scaffold's one group, and the System group every root has,
-    // are the table's whole content; the scaffold's four entries are
+    // are the table's whole content; the scaffold's three entries are
     // under it.
-    await expect(nameCell(page, "group:unified_document_index")).toContainText("Document Index");
+    await expect(nameCell(page, "group:unified_grid_and_search_index")).toContainText(
+      "Grid and Search Index",
+    );
     await expect(page.locator(TABLE_ROWS)).toHaveCount(2);
     await expect(nameCell(page, "system")).toContainText("System");
-    await expandGroup(page, "unified_document_index");
+    await expandGroup(page, "unified_grid_and_search_index");
     for (const id of [
-      "unified_document_index/grid_index",
-      "unified_document_index/qmd_aggregator",
-      "unified_document_index",
+      "unified_grid_and_search_index/unified_grid_and_search_index",
+      "unified_grid_and_search_index",
       "datalib_contacts",
     ]) {
       await expect(row(page, id)).toHaveCount(1);
     }
-    // The two index steps are labelled by their function, not by the
-    // generic "Index" the label map falls through to when a key is
-    // stale — which is what happened when the functions were renamed.
-    await expect(nameCell(page, "unified_document_index/grid_index")).toContainText("Grid index");
-    await expect(nameCell(page, "unified_document_index/qmd_aggregator")).toContainText(
-      "QMD aggregator",
-    );
-
-    // The qmd aggregator, removed before the source is added: without it
-    // the wizard writes no qmd steps, whose embedding is real work this
-    // test cannot afford, and the delete action is the honest way to not
-    // run it.
-    const remove = await rowMenuEntry(
-      page,
-      row(page, "unified_document_index/qmd_aggregator"),
-      /^Remove from config$/,
-    ).open();
-    await remove.click();
-    await expect(row(page, "unified_document_index/qmd_aggregator")).toHaveCount(0);
+    // The index step is labelled by its function, not by the generic
+    // "Index" the label map falls through to when a key is stale —
+    // which is what happened when the functions were renamed.
+    await expect(
+      nameCell(page, "unified_grid_and_search_index/unified_grid_and_search_index"),
+    ).toContainText("Grid and search index");
 
     // ── 4-6. the wizard ──────────────────────────────────────────────
     await page.getByRole("button", { name: "Add source" }).click();
@@ -188,6 +207,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     await expect(toml).toContainText('id = "pdfs/render_markdown"');
     await expect(toml).toContainText('inputs = ["pdfs/ingest"]');
 
+    await leaveOutOfSearch(page);
     await wizard.getByRole("button", { name: "Add source" }).click();
     await expect(wizard).toHaveCount(0);
 
@@ -209,11 +229,13 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     expect(await bytesOf(page, "pdfs/ingest")).toBeNull();
     await expect(row(page, "pdfs/ingest").locator(LAST_UPDATE_AT)).toHaveCount(0);
 
-    // The render step was wired into the surviving fan-in, which is
-    // what gets these documents indexed rather than merely converted.
+    // The surviving fan-in reads every render by pattern, which is what
+    // gets these documents indexed rather than merely converted; the
+    // render step needs no edit there.
     const wired = await (await request.get(`${BASE}/api/config`)).json();
     expect(wired.parsed_ok, wired.error ?? "config must load").toBe(true);
-    expect(wired.text).toContain('inputs = ["pdfs/render_markdown"]');
+    expect(wired.text).toContain('"*/render_markdown"');
+    expect(wired.text).not.toContain('"pdfs/render_markdown"');
 
     // ── 7-8. run it ──────────────────────────────────────────────────
     const firstRun = await stampsBefore(page, SYNCED_ROWS);
@@ -225,7 +247,9 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     const firstDone = await settleRows(page, SYNCED_ROWS, firstRun);
     expect(firstDone["pdfs/ingest"]).toBe("Succeeded");
     expect(firstDone["pdfs/render_markdown"]).toMatch(/^(Succeeded|Up to date)$/);
-    expect(firstDone["unified_document_index/grid_index"]).toMatch(/^(Succeeded|Up to date)$/);
+    expect(firstDone["unified_grid_and_search_index/unified_grid_and_search_index"]).toMatch(
+      /^(Succeeded|Up to date)$/,
+    );
 
     // ── 9. the two columns that report it ────────────────────────────
     const cell = row(page, "pdfs/ingest").locator(LAST_UPDATE_AT);
@@ -237,10 +261,13 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
       `Status claims ${stamp}, which is not a moment ago`,
     ).toBeLessThan(5 * 60_000);
 
-    const rawBytes = await bytesOf(page, "pdfs/ingest");
-    const renderedBytes = await bytesOf(page, "pdfs/render_markdown");
-    expect(rawBytes, "the raw store should be on disk now").toBeGreaterThan(0);
-    expect(renderedBytes, "so should the markdown").toBeGreaterThan(0);
+    const shownRawBytes = await bytesOf(page, "pdfs/ingest");
+    expect(shownRawBytes, "the raw store should be on disk now").toBeGreaterThan(0);
+    expect(await bytesOf(page, "pdfs/render_markdown"), "so should the markdown").toBeGreaterThan(
+      0,
+    );
+    const rawBytes = await exactBytesOf(request, "pdfs/ingest");
+    const renderedBytes = await exactBytesOf(request, "pdfs/render_markdown");
 
     // ── 10-11. the documents, in the grid ────────────────────────────
     await openExplore(page);
@@ -273,25 +300,27 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
       .poll(() => bytesOf(page, "pdfs/ingest"), {
         message: "the fresh page should show the size the first sync left",
       })
-      .toBe(rawBytes);
+      .toBe(shownRawBytes);
 
     const secondRun = await stampsBefore(page, SYNCED_ROWS);
     await row(page, "pdfs/ingest").getByRole("button", { name: "Sync now" }).click();
     const secondDone = await settleRows(page, SYNCED_ROWS, secondRun);
     expect(secondDone["pdfs/ingest"]).toBe("Succeeded");
     expect(secondDone["pdfs/render_markdown"]).toMatch(/^(Succeeded|Up to date)$/);
-    expect(secondDone["unified_document_index/grid_index"]).toMatch(/^(Succeeded|Up to date)$/);
+    expect(secondDone["unified_grid_and_search_index/unified_grid_and_search_index"]).toMatch(
+      /^(Succeeded|Up to date)$/,
+    );
 
     // A document more on disk.
     await expect
-      .poll(async () => (await bytesOf(page, "pdfs/render_markdown")) ?? 0, {
+      .poll(async () => (await exactBytesOf(request, "pdfs/render_markdown")) ?? 0, {
         timeout: 10_000,
         intervals: [250],
         message: `the rendered markdown never grew past ${renderedBytes}`,
       })
       .toBeGreaterThan(renderedBytes!);
     expect(
-      (await bytesOf(page, "pdfs/ingest"))!,
+      (await exactBytesOf(request, "pdfs/ingest"))!,
       "the raw store should have gained a document, not just per-run churn",
     ).toBeGreaterThan(rawBytes! + 4_000);
 
@@ -338,6 +367,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // The render step has a `period` option, shown under the Rendering
     // heading of the same form. Its default is what we want.
     await expect(wizard.locator(".wiz-section-head")).toHaveText("Rendering");
+    await leaveOutOfSearch(page);
     await wizard.getByRole("button", { name: "Add source" }).click();
     await expect(wizard).toHaveCount(0);
 

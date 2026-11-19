@@ -187,7 +187,6 @@ pub fn render_changed_batched(
     let docs_total = changed.chats.iter().map(|c| c.buckets.len()).sum();
     let mut renderer = ChatRenderer::new(
         profile,
-        target.out_root,
         target.source_id,
         docs_total,
         target.progress,

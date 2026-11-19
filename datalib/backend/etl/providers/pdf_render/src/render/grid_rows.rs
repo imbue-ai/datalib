@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use datalib_id::{composite_key, IdNamespace, Identity};
+use datalib_schema::data_nodes::DataNodeRow;
 use datalib_schema::grid_rows::{content_hash, preview, GridRow};
 use datalib_schema::providers::Provider;
 use datalib_time::record_stamp_ms;
@@ -83,10 +84,6 @@ pub struct DocumentMeta<'a> {
     /// ISO-8601 with offset, from the PDF's Info dictionary.
     pub created_at: Option<&'a str>,
     pub modified_at: Option<&'a str>,
-    /// Path to the rendered markdown, **relative to the data root**
-    /// (`<stanza>/render_markdown/<xx>/<id>.md`). Anything shorter makes
-    /// the document unfindable through qmd search.
-    pub qmd_path: Option<&'a str>,
 }
 
 /// Display title: the PDF's own title if it has a usable one, else the
@@ -123,6 +120,17 @@ pub fn display_author(author: Option<&str>) -> Option<String> {
         return Some(format!("{short}…"));
     }
     Some(a.to_string())
+}
+
+/// The document as a container, read together, at the top of its source:
+/// it is its bytes, wherever on disk they are, so no folder holds it.
+pub fn document_node(source_id: &str, meta: &DocumentMeta<'_>) -> DataNodeRow {
+    let when = document_stamp(meta.created_at, meta.modified_at);
+    let doc = document(source_id, meta.blake3, when);
+    DataNodeRow::new(&doc.uuid, &doc.uuid, source_id, KIND_DOCUMENT)
+        .named(Some(display_title(meta.title, meta.rel_path)))
+        .upstream(doc.entity_kind, doc.natural_key, None)
+        .read_together()
 }
 
 /// Build the row set for one document: the document row followed by one
@@ -172,11 +180,18 @@ pub fn rows_for_document(
         channel: None,
         conversation_name: Some(title.clone()),
         conversation_uuid: doc_uuid.clone(),
+        parent_uuid: None,
+        sort_key: when
+            .and_then(datalib_time::split_record_stamp)
+            .map(|(utc, _)| utc)
+            .unwrap_or_default(),
+        read_uuid: None,
+        place_uuid: None,
         message_index: None,
         entire_chat: format!("/chat/{doc_uuid}"),
         preview: preview(&doc_body),
         content_hash: content_hash(&doc_body),
-        qmd_path: meta.qmd_path.map(str::to_string),
+        source_id: None,
         source_url: source_url.clone(),
         git_sha: None,
         // `upstream_account` stays NULL: a content hash needs no further
@@ -226,11 +241,16 @@ pub fn rows_for_document(
             channel: None,
             conversation_name: Some(title.clone()),
             conversation_uuid: doc_uuid.clone(),
+            // A page is read with its document, in the PDF's order.
+            parent_uuid: Some(doc_uuid.clone()),
+            sort_key: format!("{number:010}"),
+            read_uuid: Some(doc_uuid.clone()),
+            place_uuid: None,
             message_index: Some(i64::from(*number)),
             entire_chat: format!("/chat/{doc_uuid}"),
             preview: preview(text),
             content_hash: content_hash(text),
-            qmd_path: meta.qmd_path.map(str::to_string),
+            source_id: None,
             source_url: source_url.clone(),
             git_sha: None,
             upstream_id: Some(page.natural_key),
@@ -267,7 +287,6 @@ mod tests {
             copy_count: 1,
             created_at: Some("2024-01-15T10:30:00-08:00"),
             modified_at: None,
-            qmd_path: Some("papers/render_markdown/docs/abc123.md"),
         }
     }
 
@@ -337,6 +356,25 @@ mod tests {
         let rows = rows_for_document("pdf", &meta(None, "a/b.pdf"), &pages);
         let doc = rows[0].uuid.clone();
         assert!(rows.iter().all(|r| r.conversation_uuid == doc));
+    }
+
+    /// A page sits in its document, which is read together, and sorts
+    /// by its number: every page carries the document's one stamp.
+    #[test]
+    fn a_page_sits_in_its_document_in_page_order() {
+        let pages = vec![(2, "two".into()), (10, "ten".into())];
+        let m = meta(Some("T"), "a.pdf");
+        let rows = rows_for_document("pdf", &m, &pages);
+        let node = document_node("pdf", &m);
+        assert_eq!(node.uuid, rows[0].uuid);
+        assert!(node.read_together && !node.is_place);
+        assert_eq!(node.parent_uuid, None);
+        assert_eq!(rows[0].parent_uuid, None);
+        for page in &rows[1..] {
+            assert_eq!(page.parent_uuid.as_deref(), Some(node.uuid.as_str()));
+            assert_eq!(page.read_uuid.as_deref(), Some(node.uuid.as_str()));
+        }
+        assert!(rows[1].sort_key < rows[2].sort_key, "page 2 before page 10");
     }
 
     #[test]

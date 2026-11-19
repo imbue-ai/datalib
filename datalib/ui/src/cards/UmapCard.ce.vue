@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // The embedding map as a card: every embedded document as a point,
-// placed by the `embedding_map` step so documents qmd embeds alike sit
+// placed by the `embedding_map` step so documents embedded alike sit
 // together. A search bar with the grid's grammar lights up what it
 // matches, a legend colours and isolates by one field, hovering shows
 // a preview, and a click opens the document beside the card. What the
@@ -18,7 +18,6 @@ import {
   OTHER_COLOR,
   PointGrid,
   SLOTS,
-  QMD_AGGREGATOR_STEP,
   stepStanza,
   categoryOf,
   decodeState,
@@ -55,7 +54,6 @@ const loadError = ref<string | null>(null);
 const loading = ref(false);
 const step = shallowRef<DagStep | null>(null);
 const configured = ref<boolean | null>(null);
-const hasAggregator = ref(false);
 const busy = ref<string | null>(null);
 
 const hidden = ref(new Set<string>());
@@ -94,15 +92,15 @@ function retitle() {
 }
 retitle();
 props.ctx.setHelp(`
-<p>Every document qmd has embedded, placed so that documents with
-similar content sit near each other. The layout is UMAP over qmd's
-embeddings, computed by the <code>unified_document_index/embedding_map</code>
+<p>Every document the search has embedded, placed so that documents with
+similar content sit near each other. The layout is UMAP over the search's
+embeddings, computed by the <code>unified_grid_and_search_index/embedding_map</code>
 step. Each sync starts from the last layout, so documents already on
 the map stay where they were as new ones arrive; <b>Lay out afresh</b>
 throws the old layout away.</p>
 <p>The search bar takes the grid's grammar (<code>source:slack</code>,
 <code>after:2025-01-01</code>, free text): what it matches stays in
-colour, the rest greys out. Free text asks qmd, so it lights up the
+colour, the rest greys out. Free text asks the search index, so it lights up the
 best few hundred matches rather than every mention. <b>Open in grid</b>
 lists the same search as a table.</p>
 <p>Colour by a field with the picker; hover a legend entry to isolate
@@ -175,7 +173,6 @@ async function loadStep() {
     const s = dag.steps.find((x) => x.id === EMBEDDING_MAP_STEP) ?? null;
     step.value = s;
     configured.value = dag.ok ? s !== null : configured.value;
-    hasAggregator.value = dag.steps.some((x) => x.id === QMD_AGGREGATOR_STEP);
     const finished = s?.last_run?.status === "succeeded" ? s.last_run.finished_at : null;
     // A run that finished since we last looked wrote a new map.
     if (lastFinished !== undefined && finished && finished !== lastFinished) void load();
@@ -213,7 +210,7 @@ const stepMessage = computed(() => {
   if (!s) return null;
   if (s.current_state === "running") return s.progress?.msg ?? "laying out…";
   if (s.current_state === "blocked") {
-    return "waiting for the qmd index, which this data root has not built yet — sync a source";
+    return "waiting for the search index, which this data root has not built yet — sync a source";
   }
   if (s.last_run?.status === "failed") return `the last layout failed: ${s.last_run.error ?? ""}`;
   return null;
@@ -253,9 +250,7 @@ async function layOutAfresh() {
 function addStep() {
   return act("adding the step", async () => {
     const cfg = await api.fetchConfig();
-    const res = await api.saveConfig(
-      withDeclarations(`${cfg.text.trimEnd()}\n${stepStanza(hasAggregator.value)}`),
-    );
+    const res = await api.saveConfig(withDeclarations(`${cfg.text.trimEnd()}\n${stepStanza()}`));
     if (!res.ok) throw new Error(res.error ?? "config.toml refused the step");
     props.ctx.bus.publish(TOPIC_CONFIG_WRITTEN, null);
     await api.openRequest([EMBEDDING_MAP_STEP]);
@@ -461,7 +456,7 @@ function loadPreview(uuid: string) {
   previewTimer = setTimeout(async () => {
     try {
       const chat = await api.fetchChat(uuid);
-      previews.set(uuid, previewText(chat.body));
+      previews.set(uuid, previewText(chat.pieces.map((p) => p.md).join("")));
     } catch {
       previews.set(uuid, "");
     }
@@ -650,10 +645,10 @@ onBeforeUnmount(() => {
           <template v-if="configured === false">
             <p>
               There is no map yet, and <code>config.toml</code> has no step to make one. The step
-              reads qmd's embeddings, so it runs after the qmd aggregator, which runs after every
-              source's <code>embed</code> step.
+              reads the search's embeddings, so it runs after every source's
+              <code>embed</code> step.
             </p>
-            <pre>{{ stepStanza(hasAggregator).trim() }}</pre>
+            <pre>{{ stepStanza().trim() }}</pre>
             <button type="button" :disabled="!!busy" @click="addStep">
               {{ busy ?? "Add the step and lay out the map" }}
             </button>

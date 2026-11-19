@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="mission" viewBox="0 0 640 310" width="640" height="310" role="img" aria-label="Organize your own information and make it accessible and useful to you, your way.">
+  <title>Organize the world’s (struck out) your own information and make it universally (struck out) accessible and useful to you, your way.</title>
+  <style>
+    .mission { --paper: #fbf8f1; --edge: #e4ddcc; --ink: #24292f; --struck: #8c8a84; --pen: #c8102e; }
+    .dark .mission { --paper: #1c2128; --edge: #30363d; --ink: #e6edf3; --struck: #7d8590; --pen: #ff7b72; }
+    .paper { fill: var(--paper); stroke: var(--edge); stroke-width: 1; }
+    .type { font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif; font-size: 38px; fill: var(--ink); }
+    .struck { fill: var(--struck); text-decoration: line-through; }
+    .hand { font-family: "Bradley Hand", "Segoe Print", "Marker Felt", "Comic Sans MS", cursive; font-size: 40px; font-weight: bold; fill: var(--pen); }
+    .mark { fill: none; stroke: var(--pen); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+  <rect class="paper" x="0.5" y="0.5" width="639" height="309" rx="10"/>
+  <text class="type" x="32" y="62">Organize <tspan class="struck">the world’s</tspan><tspan class="hand" dx="10" dy="-6">your own</tspan></text>
+  <text class="type" x="32" y="112">information and</text>
+  <text class="type" x="32" y="162">make it <tspan class="struck">universally</tspan></text>
+  <text class="type" x="32" y="212">accessible and useful</text>
+  <path class="mark" d="M 386 222 L 396 206 L 406 222"/>
+  <text class="hand" x="150" y="272" transform="rotate(-2 150 272)">to you, your way.</text>
+</svg>

@@ -472,32 +472,26 @@ mod tests {
         use datalib_etl_render::grid_index::RenderedMarkdown;
         use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
 
-        let rows = rows
-            .into_iter()
-            .map(|mut r| {
-                r.qmd_path = Some(datalib_schema::grid_rows::doc_file_rel(md));
-                r
-            })
-            .collect();
         let store = IndexedMarkdownStore::open(dir).unwrap();
         store
-            .put_document(
-                dir,
-                &RenderedMarkdown {
-                    markdown_uuid: md.to_string(),
-                    source_id: "slack".into(),
-                    upstream_cursor: None,
-                    bucket_key: None,
-                    md_path: datalib_etl_render::grid_index::doc_md_path(dir, md),
-                    render_version: 1,
-                    rows,
-                    sections: Vec::new(),
-                    edges: Vec::new(),
-                    contacts: Vec::new(),
-                    photos: Vec::new(),
-                    problems: Vec::new(),
-                },
-            )
+            .put_document(&RenderedMarkdown {
+                searchable: true,
+                content_hash: None,
+                markdown_uuid: md.to_string(),
+                source_id: "slack".into(),
+                upstream_cursor: None,
+                bucket_key: None,
+                render_version: 1,
+                rows,
+                sections: Vec::new(),
+                front: Default::default(),
+                edges: Vec::new(),
+                contacts: Vec::new(),
+                data_nodes: Vec::new(),
+                filings: Vec::new(),
+                photos: Vec::new(),
+                problems: Vec::new(),
+            })
             .unwrap();
         // The applet reads at HEAD, as the render step leaves it.
         store.commit("test").unwrap();

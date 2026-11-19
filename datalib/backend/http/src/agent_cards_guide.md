@@ -112,7 +112,7 @@ export default (args) => (root, ctx) => {
 - **Offer help.** `ctx.setHelp("<p>…</p>")` puts a "?" on the card
   that opens what this card shows and how to work it.
 - **Data** comes from the backend HTTP API (same origin): e.g.
-  `GET /applet/unified_document_index/search?q=…`, `GET /applet/unified_document_index/chat/{markdown_uuid}`. Fetch with
+  `GET /applet/unified_grid_and_search_index/search?q=…`, `GET /applet/unified_grid_and_search_index/chat/{markdown_uuid}`. Fetch with
   relative paths — and *don't* add an auth header in component code. The
   browser holds the token as an HttpOnly session cookie it sends
   automatically; the token is deliberately not reachable from page JS.
@@ -143,8 +143,9 @@ Add an `icon` to the same body and the app draws it beside the card's
 name, in the gallery and in every layout. It is one of:
 
 - a glyph name: `home`, `sources`, `search`, `table`, `map`, `log`,
-  `code`, `document`, `history`, `dag`, `dashboard`, `add`, `problem`,
-  `chat`, `book`, `component`;
+  `code`, `document`, `history`, `dag`, `chart`, `dashboard`, `add`,
+  `problem`, `chat`, `book`, `person`, `contacts`, `photo`,
+  `component`;
 - a source's mark: `slack`, `gmail`, `claude`, `chatgpt`, … (any source
   the wizard offers);
 - an image of your own, as a `data:` URL — PNG, JPEG, GIF, WebP or SVG

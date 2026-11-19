@@ -1,7 +1,7 @@
 // What a rendered document offers wherever it is drawn whole: the
-// buttons and the ⋯ menu of its title bar (DocTitleBar.ce.vue), and the
-// menu a document chip will show once there is one (docs/dev/chips.md
-// § "Not built"). Pure; the card showing the document does what an
+// buttons and the ⋯ menu of its title bar (DocTitleBar.ce.vue). A
+// document's chip offers the part of it a chip can do
+// (documentChip.ts). Pure; the card showing the document does what an
 // entry names (DocCard.ce.vue).
 import type { ChatResponse } from "@/api";
 import { filePathFromUrl } from "@/desktop";

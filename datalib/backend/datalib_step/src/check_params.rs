@@ -52,6 +52,15 @@ fn plan_step(
                 .map(|_| ())
                 .map_err(|e| format!("{e:#}"));
         }
+        Function::Embed => {
+            let params = match &step.params {
+                Some(_) => params,
+                None => serde_json::Value::Null,
+            };
+            return crate::modal::params(params)
+                .map(|_| ())
+                .map_err(|e| format!("{e:#}"));
+        }
         Function::Ingest => Phase::Ingest,
         Function::RenderMarkdown => Phase::Render,
         _ => return Ok(()),
@@ -120,6 +129,34 @@ mod tests {
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(found[0].step, "slack/ingest");
         assert!(found[0].message.contains("chanels"), "{found:?}");
+    }
+
+    /// An `embed` step's one parameter is planned like any other: a value
+    /// that is not a whole number, or a name that is not it, is named
+    /// against its step.
+    #[test]
+    fn an_embed_step_s_threshold_is_planned() {
+        let embed = |params: &str| {
+            check(&format!(
+                "[[groups]]\nid = \"slack\"\ntype = \"slack\"\n\n[[steps]]\ngroup = \"slack\"\n\
+                 function = \"embed\"\n{params}"
+            ))
+        };
+        assert!(embed("").is_empty());
+        assert!(embed("[steps.params]\nembed_on_modal_from_n_chunks = 5000\n").is_empty());
+        for bad in [
+            "[steps.params]\nembed_on_modal_from_n_chunks = \"lots\"\n",
+            "[steps.params]\nembed_on_modal_from_n_chunks = -1\n",
+            "[steps.params]\nembed_on_modal = 5000\n",
+        ] {
+            let found = embed(bad);
+            assert_eq!(found.len(), 1, "{bad}: {found:?}");
+            assert_eq!(found[0].step, "slack/embed");
+            assert!(
+                found[0].message.contains("embed_on_modal_from_n_chunks"),
+                "{found:?}"
+            );
+        }
     }
 
     #[test]

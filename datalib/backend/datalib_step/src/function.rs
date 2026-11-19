@@ -23,9 +23,7 @@ use strum::VariantArray;
 pub enum Function {
     Ingest,
     RenderMarkdown,
-    GridIndex,
-    QmdAggregator,
-    KeywordIndex,
+    UnifiedGridAndSearchIndex,
     Embed,
     EmbeddingMap,
     RenderTimeSeries,
@@ -64,33 +62,29 @@ impl Function {
                  shows, under <group>/render_markdown/. One per source; \
                  inputs = [\"<group>/ingest\"]."
             }
-            Function::GridIndex => {
+            Function::UnifiedGridAndSearchIndex => {
                 "Stack every source's rendered rows into the one SQL index the grid and \
-                 search read, unified_document_index/grid_index/db.sqlite. Goes \
-                 under the `unified_document_index` group; its inputs name each \
-                 source's `<group>/render_markdown`."
-            }
-            Function::KeywordIndex => {
-                "Bring a source's collection of the qmd search index up to date for \
-                 keyword (BM25) search. One per searched source; \
-                 inputs = [\"<group>/render_markdown\"]."
+                 search read, unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite, and put \
+                 each searched source's documents in the search index's keyword (BM25) \
+                 tables beside them. Goes under the `unified_grid_and_search_index` group; \
+                 inputs = [\"*/render_markdown\", \"*/render_time_series\", \
+                 \"*/render_occurrences\"]. `params.not_searched` lists the sources kept \
+                 out of search."
             }
             Function::Embed => {
-                "Embed what a source's qmd collection lacks, for search by meaning. The \
-                 slow one: turn it off for a source with `datalib-dag turn-off <config> \
-                 <group>/embed`, and keyword search still works. One per searched \
-                 source; inputs = [\"<group>/keyword_index\"]."
-            }
-            Function::QmdAggregator => {
-                "Keep the qmd search index to the sources it reads, and report on the \
-                 whole. Goes under the `unified_document_index` group; its inputs name \
-                 each searched source's `<group>/keyword_index` and `<group>/embed`. \
-                 Without it, free-text search is off."
+                "Embed the chunks of a source the search index has no vector for, for \
+                 search by meaning. The slow one: turn it off for a source with \
+                 `datalib-dag turn-off <config> <group>/embed`, and keyword search still \
+                 works. One per source searched by meaning; \
+                 inputs = [\"unified_grid_and_search_index/unified_grid_and_search_index\"]. Param \
+                 `embed_on_modal_from_n_chunks`: a run that owes at least that many \
+                 chunks embeds them on the person's own Modal account; absent, \
+                 nothing leaves the machine."
             }
             Function::EmbeddingMap => {
                 "Lay the search index's embeddings out on a plane, for the map card. Goes \
-                 under the `unified_document_index` group; \
-                 inputs = [\"unified_document_index/qmd_aggregator\"]."
+                 under the `unified_grid_and_search_index` group; inputs = [\"*/embed\"], \
+                 so it runs after every embed."
             }
             Function::RenderTimeSeries => {
                 "Turn a raw store into its time series, under \
@@ -152,18 +146,17 @@ mod tests {
             Function::RenderOccurrences.as_str(),
             datalib_etl::layout::RENDER_OCCURRENCES_DIR
         );
-        assert_eq!(Function::GridIndex.as_str(), datalib_core::layout::GRID_DIR);
+        assert_eq!(
+            Function::UnifiedGridAndSearchIndex.as_str(),
+            datalib_core::layout::INDEX_STEP_DIR
+        );
         assert_eq!(
             Function::TimeSeriesIndex.as_str(),
             datalib_core::layout::TIME_SERIES_INDEX_DIR
         );
         assert_eq!(
-            Function::QmdAggregator.as_str(),
-            datalib_core::layout::QMD_DIR
-        );
-        assert_eq!(
             Function::EmbeddingMap.as_str(),
-            datalib_unified_document_index::embedding_map::DIR
+            datalib_unified_grid_and_search_index::embedding_map::DIR
         );
     }
 }

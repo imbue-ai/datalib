@@ -26,13 +26,15 @@ shape or `RENDER_VERSION`. So: a change that moves the
 
 ## The steps are scripts
 
-The two steps that assemble what a release ships are scripts, and the
+The steps that assemble what a release ships are scripts, and the
 workflow's `run:` blocks are one line each:
 
 | step | script | what it makes |
 |---|---|---|
-| `runtime` job, "Stage the runtime" | `scripts/release/stage_runtime_asset.sh <triple> <cuda>` | `runtime-<triple>.tar.gz` (+ `-cuda`) and `.sha256` sidecars, from `scripts/stage_runtime.sh` |
-| `build` job, "Stage tarball" | `scripts/release/stage_tarball.sh <ref> <triple>` | `datalib-<triple>.tar.gz` and its sidecar: the `//datalib/backend:bin` binaries and, except on musl, `lib/libdoltlite`, the `latchkey` launcher, `git-hash`, `runtime.manifest`, every doc `datalib-step help docs` lists, at its path in the repo (written by the staged `datalib-step help <topic>`: `docs/agent_user.md`, `docs/user/raw_stores.md`, `configs/dag_example.toml`, …), `licenses/` |
+| `runtime` job, "Stage the runtime" | `scripts/release/stage_runtime_asset.sh <triple>` | `runtime-<triple>.tar.gz` and its `.sha256` sidecar, from `scripts/stage_runtime.sh` |
+| `build` job, "Stage tarball" | `scripts/release/stage_tarball.sh <ref> <triple>` | `datalib-<triple>.tar.gz` and its sidecar: the `//datalib/backend:bin` binaries and, except on musl, `lib/libdoltlite`, the `latchkey` launcher, `git-hash`, `runtime.manifest` (the runtime asset, and on x86_64 gnu the CUDA module), every doc `datalib-step help docs` lists, at its path in the repo (written by the staged `datalib-step help <topic>`: `docs/agent_user.md`, `docs/user/raw_stores.md`, `configs/dag_example.toml`, …), `licenses/` |
+| `cuda` job, "Build and stage" | `scripts/release/build_cuda.sh <bazel flag>…`, which runs `stage_cuda.sh` | `ggml-cuda-x86_64-unknown-linux-gnu.tar.gz` (`lib/libggml-cuda.so`, our notice, llama.cpp's license and NVIDIA's for the CUDA runtime) and, for the `-cuda` image only, `cuda-libs-x86_64-unknown-linux-gnu.tar.gz` (cuBLAS and NVIDIA's license for it), each with its sidecar; it refuses a module that needs a symbol `datalib-step` does not export, or a library besides NVIDIA's driver that the staged cuBLAS lacks |
+| the image jobs, "Stage … into docker build context" | `scripts/release/stage_docker_context.sh <ctx> <arch> <triple> <assets> [<cuda>]` | the build context `datalib/docker/Dockerfile` expects |
 
 Each script writes into the current directory, prints what it wrote,
 and takes what a test cannot supply through environment variables
@@ -41,15 +43,17 @@ files, the commit, a stand-in for `cargo-about`). The header of each
 script lists them. A script calls another through `"$BASH"`, so the
 bash that runs the outer one runs the inner one too.
 
-Publishing is a script too, `scripts/release/publish_release.py`, and
-`//:publish_release_test` runs it against a stand-in for GitHub's API. Only
-a tag's run shows that the real API takes its calls.
+Attesting and publishing are one script too, `scripts/release/publish_release.py`,
+and `//:publish_release_test` runs it against a stand-in for GitHub's API. Only
+a tag's run makes the real calls.
 
-## Draft, then publish
+## Attest, then draft, then publish
 
-No release exists until every other job has succeeded. Then
-`publish-release`, the one job that can write to a release, does all of this
-in one step:
+No release exists until every other job has succeeded. Then two jobs run,
+one after the other.
+
+`attest` (`publish_release.py subjects`, then `verify`) signs what the release
+will hold:
 
 1. **Takes each asset from the artifact that should hold it.** Each artifact
    has an exact list of files, and anything missing or extra stops the job
@@ -58,6 +62,25 @@ in one step:
    `.sha256` against its file, and the dmg against the hash `macos-app-verify`
    reported, because a later upload can replace an artifact but cannot change
    another job's output.
+2. **Signs a build provenance attestation** for every asset but the `.sha256`
+   sidecars, listed in `shasum`'s format, and one for each image by the
+   digest `docker-publish` and `docker-publish-cuda` tagged, pushed beside it
+   on ghcr.io. Each is a SLSA
+   statement signed through Sigstore with the job's OIDC identity: this
+   workflow, this tag, this commit, this run.
+3. **Runs the check a person would**, `gh attestation verify` with this
+   workflow, tag and commit, on every asset and on both images, both from GitHub
+   and from ghcr.io. The commands are in
+   [`first_time_user.md`](../user/first_time_user.md) and
+   [`docker.md`](../user/docker.md).
+4. **Hands on the hash of the list it signed** as a job output.
+
+`publish-release` (`publish_release.py publish`), the one job that can write
+to a release, then does all of this in one step:
+
+1. **Takes each asset as `attest` did**, with the same checks, and stops
+   unless the list hashes to what `attest` signed, so an artifact uploaded
+   again in between cannot be published.
 2. **Removes any draft already on this tag**, a failed attempt's or anyone
    else's, and stops if the tag already has a published release.
 3. **Creates a draft and uploads**, trying once more if the upload fails.
@@ -70,7 +93,8 @@ in one step:
    immutable, or if `releases/latest` is not this tag. It cannot undo a
    publish, so this is an alarm rather than a guard.
 
-So a release is writable by us only for as long as the upload takes, rather
+A release made this way never lacks an attestation, and an asset nobody
+attested never reaches one. So a release is writable by us only for as long as the upload takes, rather
 than for the whole run (50 minutes for v0.50.0), and a failed job leaves
 nothing open.
 
@@ -101,7 +125,10 @@ After a release publishes, `uv run python scripts/release/pin_release.py vX.Y.Z`
 rewrites all four from what GitHub reports, which needs `gh` to hold
 `read:packages` (`gh auth refresh -s read:packages`). Wait for that tag's
 `devcontainer.yml` first, or it stops for want of the image. It refuses a release that is a draft, is not immutable, or has no
-successful `release.yml` run on its tag's commit. Until that PR lands, people
+successful `release.yml` run on its tag's commit. It then downloads the five
+tarballs, about 450 MB, and refuses any of them, and the image, that
+`gh attestation verify` does not pass for `release.yml` at that tag and
+commit, so a hash it writes always names attested bytes. Until that PR lands, people
 get the previous release, which still works, and CI stays on the previous image.
 
 ### What one failed job costs
@@ -113,13 +140,18 @@ missing asset can never be added.
 |---|---|---|
 | the mac leg of `runtime` or `build` | tagged | previous release |
 | a musl leg of `build` | tagged | previous release |
-| a gnu leg of `build` or `runtime` | not tagged | previous release |
+| a gnu leg of `build` or `runtime`, or `cuda` | not tagged | previous release |
 | a `macos-app-*` job | tagged | previous release |
 
 The Docker image does not wait for the release. It carries its own runtime, and
 `docker-publish` checks the tagged image against the walkthrough. So
 `ghcr.io/…:latest` can be a version ahead of `releases/latest` until the release
 is published. An image needs both gnu legs, so losing either tags nothing.
+The `-cuda` variant (`docker-image-cuda`, `docker-publish-cuda`) needs the
+x86_64 gnu legs and the `cuda` job. Every `build` leg waits for `cuda`, since
+the x86_64 gnu tarball's `runtime.manifest` names the module with its sha256
+(docs/dev/runtime_fetch.md § "The CUDA module"), so a failed `cuda` costs
+that tarball and with it both images.
 
 ### What a re-run does
 
@@ -129,16 +161,19 @@ a matrix job that failed runs only its failed legs.
 
 | what failed | what runs again |
 |---|---|
-| a `build` leg | that leg, both `docker-image` legs, `docker-publish`, `publish-release` |
-| a `runtime` leg | that leg, all five `build` legs, and the rest of the row above |
-| a `macos-app-*` job | the rest of that chain, `publish-release` |
+| a `build` leg | that leg, both `docker-image` legs, `docker-image-cuda`, both publish jobs, `attest`, `publish-release` |
+| `cuda` | it, all five `build` legs, and the rest of the first row |
+| a `runtime` leg | that leg, all five `build` legs, and the rest of the first row |
+| a `macos-app-*` job | the rest of that chain, `attest`, `publish-release` |
+| `attest` | it and `publish-release`. It signs again, which adds a second attestation for the same bytes |
 | `publish-release` | it alone, which removes its own draft and starts again |
 
 So re-running a failed `build` leg rebuilds both images, and the version tag
 and `:latest` move to the new ones. A job that a re-run repeats also uploads
 its artifact again, and `download-artifact` takes the same-named artifact
 with the highest id, which is not always the newest. So the uploads a re-run
-can repeat, `tarball-*`, `docker-digest-*` and `docker-image-digest`, say
+can repeat, `tarball-*`, the two `cuda-*`, `docker-digest-*`,
+`docker-image-digest` and `docker-image-cuda-digest`, say
 `overwrite: true`.
 
 ### Trying the job graph on a branch
@@ -178,8 +213,8 @@ and one for an Apple-silicon Mac:
 On Linux, a library's symbol versions come from the libc it is linked against,
 which is why each one is compiled in an old image rather than by Bazel on the
 runner. The source and flags still come from Bazel
-(`//third-party/doltlite:rename_amalgamation` and `:library_copts`), so there is no
-second list of them. A Mac's floor is `--macos_minimum_os` in `.bazelrc`, whatever
+(`//third-party/doltlite:rename_amalgamation` and `:library_copts`), so there
+is no second list of them. A Mac's floor is `--macos_minimum_os` in `.bazelrc`, whatever
 SDK the runner has, so the same build serves. It has no Intel wheel, as a release
 has no Intel tarball.
 
@@ -212,12 +247,13 @@ BAZEL=bazelisk scripts/release/check_reader_wheels.sh macos /tmp/wheels
 With `linux`, `READER_ARCH=x86_64` gives the other architecture, which runs under
 an emulator and takes far longer to compile. The mac check needs `uv`.
 
-**Setting it up on PyPI, once.** Nothing here can do this. On pypi.org, under an
-account the team shares, add a *pending publisher* for `imbue-datalib-reader`:
-owner `imbue-ai`, repository `datalib`, workflow `reader-wheels.yml`, environment
-`pypi`. Then restrict that GitHub environment to `v*` tags, which
+**How PyPI is set up.** This is done, and nothing here can change it. On pypi.org,
+under an account the team shares, `imbue-datalib-reader` names one *trusted
+publisher*, the only place PyPI takes an upload from: owner `imbue-ai`, repository
+`datalib`, workflow `reader-wheels.yml`, environment `pypi`. If that workflow or
+environment is renamed, change the publisher to match, or the next tag's upload is
+refused. That GitHub environment is restricted to `v*` tags, which
 [`security_posture.md`](security_posture.md) §"The settings this rests on" checks.
-A pending publisher does not reserve the name; the first upload does.
 
 ## Who holds what
 
@@ -233,17 +269,21 @@ any process in a job can read the runner's memory, where every secret
 that job holds is kept. `id-token: write` also puts the variables that
 mint an OIDC token into every step's environment, so a build script in
 a job with that grant could get the Vault token itself, with no export
-to wait for.
+to wait for, or sign a build provenance attestation as `release.yml`
+for bytes of its own. That is why the attestations come from a job of
+their own, after the builds, rather than from the jobs that make the
+files.
 
 | job | runs on it | holds |
 |---|---|---|
-| `runtime`, `build` | Bazel, crate build scripts, the staged Node runtime | `contents: read` |
+| `runtime`, `build`, `cuda` | Bazel, crate build scripts, the staged Node runtime, NVIDIA's toolkit | `contents: read` |
+| `attest` | `actions/attest-build-provenance`, `gh`, nothing built | `id-token: write`, `attestations: write`, `packages: write` |
 | `publish-release` | `gh`, nothing built | `contents: write` |
 | `macos-app-compile` | Bazel, the shell's crates, cargo-about | `contents: read` |
 | `macos-app-sign` | `codesign`, the Tauri CLI's bundler, `notarytool`, the dmg maker | `id-token: write`, then the certs |
-| `macos-app-verify` | the signed app: its Node, qmd, latchkey | `contents: read` |
-| `docker-image` | `docker buildx`, whose `RUN` steps see no credentials | `packages: write` |
-| `docker-publish` | `docker buildx imagetools`, the image's walkthrough | `packages: write` |
+| `macos-app-verify` | the signed app: its Node, latchkey | `contents: read` |
+| `docker-image`, `docker-image-cuda` | `docker buildx`, whose `RUN` steps see no credentials | `packages: write` |
+| `docker-publish`, `docker-publish-cuda` | `docker buildx imagetools`, the image's walkthrough | `packages: write` |
 | `reader-wheels.yml`'s `wheels` | Bazel fetching and, on a Mac, compiling doltlite, gcc in the wheel images, the `pip` and `uv` checks | `contents: read` |
 | `reader-wheels.yml`'s `publish` | `pypa/gh-action-pypi-publish`, no checkout | `id-token: write`, which only PyPI takes |
 
@@ -299,15 +339,15 @@ cache to leave anything in.
 
 - **`//tools:stage_runtime_test`** runs `stage_runtime_asset.sh` from
   a directory that is not the repo, with the relative `runtime` the
-  workflow passes, then unpacks the asset and runs qmd out of it,
-  checking it reports the pinned `DEFAULT_QMD_VERSION`. On Linux CI
-  this is where node-llama-cpp's fork probe runs.
+  workflow passes, then unpacks the asset, runs its Node, and checks
+  its latchkey `package.json` names the pinned `LATCHKEY_VERSION` and
+  that it carries no `qmd/` tree.
 - **`//tools:stage_tarball_test`** runs `stage_tarball.sh` for four
-  triples (gnu with the CUDA overlay, the two musl ones naming their
+  triples (gnu, the two musl ones naming their
   gnu sibling, mac) against the built binaries, unpacks each tarball
   and checks every binary is a regular executable, the library, the launcher, the
-  commit, the manifest line for this triple's runtime asset, and the
-  six notice files. `cargo-about` cannot run in the sandbox (it needs
+  commit, the manifest line for this triple's runtime asset (and on
+  x86_64 gnu the CUDA module's), the docs, and the six notice files. `cargo-about` cannot run in the sandbox (it needs
   `cargo` and the crate sources), so the test hands
   `third_party_notices.sh` a stub, `tools/fake_cargo_about.sh`, that
   writes the file `-o` names from the directory it is run in, which is
@@ -335,13 +375,78 @@ on its own runner before anything is published:
   and fails when it finds none. `//tools:check_binaries_test` (and its
   `_bash32` twin) runs it against stand-ins.
 - The musl binaries are fully static: inline in the workflow.
+- **`scripts/release/check_glibc_floor.sh <dir-or-.tar.gz>...`** and
+  **`scripts/release/smoke_linux_assets.sh`** hold every Linux asset to
+  the glibc floor; the next section says how.
+  `//tools:check_glibc_floor_test` (and its `_bash32` twin) runs the
+  first against stand-ins. The second runs only in the workflow, inside
+  a container.
+
+## The Linux floor
+
+The Linux gnu tarballs and the Node runtime assets, and so the Docker
+image's binaries, run on **glibc 2.39 and newer: Ubuntu 24.04, Debian
+13, and anything later**. On an older glibc the installer picks the
+musl build, which needs no libc from the host (below).
+
+A binary built on Linux asks for the glibc it was linked against: each
+libc function it calls is tied to the glibc version that introduced the
+function's current form (`atan2f@GLIBC_2.43`), and the loader refuses
+to start a binary whose versions the host's glibc lacks ("version
+`GLIBC_2.43' not found"). Bazel builds the gnu legs with the hermetic
+LLVM toolchain `MODULE.bazel` registers, which compiles against its own
+glibc 2.28 headers and links against 2.28 stubs, so **datalib's own
+binaries ask for glibc 2.28 at most, whatever the runner**, and link no
+`libgcc_s` or `libstdc++`. The declared floor stays 2.39, and the
+checks below still hold every Linux file to it, Node and the npm
+prebuilds in the runtime included, which someone else built. Lowering
+it is a decision of its own: `install.sh` would then hand hosts between
+the two the gnu build rather than the musl one.
+
+What holds it:
+
+- **Every job that builds or stages a shipped Linux file names a
+  pinned runner**, `ubuntu-24.04` or `ubuntu-24.04-arm`, never
+  `ubuntu-latest`, for what is staged rather than built by the
+  toolchain: `runtime`, every Linux `build` leg (the musl ones
+  too, so their build scripts run where the gnu ones do),
+  `cuda`, `docker-image` and `docker-image-cuda`, and
+  `reader-wheels.yml`'s Linux legs. The wheels
+  compile inside manylinux and musllinux images, so their libc is the
+  image's, and `check_reader_wheels.sh` loads them on glibc 2.17
+  (§"The reader wheels").
+- **`check_glibc_floor.sh`** reads every ELF file in the tarball (the
+  `build` job), in each runtime asset (the `runtime` job) and in the CUDA
+  module's asset (the `cuda` job), and fails on any glibc version above
+  `GLIBC_FLOOR`. Node and the npm prebuilds in the runtime were built by
+  someone else, so the runner pin does nothing for them; this is what
+  notices one that moved. The version names are whole strings in an ELF
+  file's dynamic string table, so the script reads them with `tr` and
+  `grep` rather than binutils, which a mac lacks.
+- **`smoke_linux_assets.sh`** runs in `ubuntu:24.04` (pinned by digest)
+  on every Linux `build` leg: `ldd` on every ELF file in the tarball and
+  its runtime, so a missing shared library fails as well as a missing
+  version, then `--version` from the binaries and from Node. The musl
+  prebuilds npm ships beside the glibc ones are left to musl hosts.
+- **`scripts/install.sh`** asks `getconf GNU_LIBC_VERSION` and, on a
+  glibc older than the floor, says so and installs the musl build; when
+  it cannot tell, it installs the gnu build and names
+  `DATALIB_LIBC=musl` as the way out. `DATALIB_LIBC` set by hand is
+  used as given. `//tools:install_test` checks the choice, and that its
+  `GLIBC_FLOOR` is `check_glibc_floor.sh`'s.
+
+To move the floor, change the runner labels, the smoke image and
+`GLIBC_FLOOR` in both scripts together, and this section's first
+paragraph. The image's digest comes from `crane digest
+mirror.gcr.io/library/ubuntu:<version>`.
 
 ## Before a tag: the Linux run from a mac
 
 `bazel test //...` on a mac runs the two tests under macOS, and CI
 runs them under Linux x86_64 — but a mac is where releases are cut
-from, and the Linux-only behaviour (node-llama-cpp's binding probe)
-is what has bitten. So run them on Linux locally, in the devcontainer:
+from, and what the release steps do only on Linux (GNU tools, the
+gnu and musl tarballs, Linux's Node) does not show on a mac. So run
+them on Linux locally, in the devcontainer:
 
 ```sh
 bazelisk run //tools:release_steps_docker
@@ -349,7 +454,7 @@ bazelisk run //tools:release_steps_docker
 
 That builds the devcontainer image from `.devcontainer/Dockerfile` for
 this host's arch (the published one is amd64 only, and an emulated
-node-llama-cpp is not a faithful test), bind-mounts the working tree
+run is not a faithful test), bind-mounts the working tree
 where `devcontainer.json` does, reuses its named cache volumes, and
 runs the two tests with `bazelisk test` inside. The first run pays for
 the image and a cold Linux build of the shipped binaries — the better
@@ -401,8 +506,8 @@ matches.
 ## What stays release-only
 
 - The upload to PyPI, in `reader-wheels.yml`. PRs build and check the same
-  wheels, but only a tag's run can publish, so the first tag after setting it
-  up is what first tries it.
+  wheels, but only a tag's run can publish, so a problem with the upload itself
+  first shows on a tag.
 - The `runtime` legs on the real runners, with their own bash and
   their own filesystem — the tests make the same calls, not the same
   machine.
@@ -417,6 +522,16 @@ matches.
   artifact hand-off and that the bundle compiles nothing; Vault refuses
   anything but a tag, so the real certificate and `notarytool` are first
   tried by the next release.
+- The attestations. The job's place in the graph can be tried on a branch
+  (§"Trying the job graph on a branch"), but the action reading the subjects
+  file, the image's attestation going to ghcr.io and the check passing happen
+  only on a tag. A failure there holds the release back, as any job's does.
+- The `cuda` job's stamped build and the `-cuda` image's push. On a PR,
+  `.github/workflows/cuda.yml` runs `build_cuda.sh` unstamped and builds
+  the `-cuda` image, up to its demo, over the latest release's binaries, so the
+  scripts and the Dockerfile's CUDA stage are tried; the release
+  runner without a cache (about 1 GB of NVIDIA's toolkit, and the GPU
+  code compiled cold) and the push first happen on a tag.
 - Publishing and `releases/latest` moving to it: these need a real release,
   and a tag's run is the only one this workflow makes. A mistake there fails
   `publish-release`, and since a tag's run executes the tag's own tree, the fix

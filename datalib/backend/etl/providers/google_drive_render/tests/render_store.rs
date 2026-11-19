@@ -13,6 +13,7 @@ use datalib_etl_google_drive::ingest::RawDb;
 use datalib_etl_google_drive_render::render::{render_doc, DocInput};
 use datalib_etl_google_drive_render::{ids, store};
 use datalib_etl_render::inputs::{Inputs, RawRange};
+use datalib_etl_render::section::join;
 use serde_json::{json, Value};
 
 const DOC: &str = "1PicardLogSupplemental";
@@ -159,7 +160,6 @@ async fn a_doc_in_the_store_renders_with_its_image_and_its_thread() {
     let images = store::images(&db, capture).await.unwrap();
     let inputs = Inputs::default();
     let md = render_doc(
-        dir.path(),
         "drive",
         &DocInput {
             file_id: DOC,
@@ -170,11 +170,10 @@ async fn a_doc_in_the_store_renders_with_its_image_and_its_thread() {
             comments: &listing.comments[DOC],
         },
         &inputs,
-    )
-    .unwrap();
+    );
     db.close().await;
 
-    let text = std::fs::read_to_string(&md.md_path).unwrap();
+    let text = join(&md.sections);
     let image = text
         .split("![NCC-1701-D](")
         .nth(1)
@@ -184,10 +183,6 @@ async fn a_doc_in_the_store_renders_with_its_image_and_its_thread() {
     assert!(
         image.starts_with("/data/") && image.ends_with(&format!("/ingest/blob/{hash}")),
         "the image is linked in the blob store: {image}"
-    );
-    assert!(
-        !md.md_path.parent().unwrap().join("blobs").exists(),
-        "no copy beside the document"
     );
     let heading = text.find("# Captain's log\n").expect(&text);
     let thread = text
@@ -246,12 +241,10 @@ async fn a_doc_in_the_store_renders_with_its_image_and_its_thread() {
 #[test]
 fn a_doc_whose_text_is_lost_renders_with_the_loss_on_it() {
     use datalib_schema::problems::{Problem, Reason};
-    let dir = tempfile::tempdir().unwrap();
     let doc = capture(DOC, store::DOC_MIME, Vec::new(), Vec::new());
     let entry: Value = serde_json::from_str(&doc.file.row.id_and_payload.payload).unwrap();
     let lost = Problem::field("native", Reason::BlobMissing, "the blob store has lost it");
     let md = render_doc(
-        dir.path(),
         "drive",
         &DocInput {
             file_id: DOC,
@@ -265,13 +258,88 @@ fn a_doc_whose_text_is_lost_renders_with_the_loss_on_it() {
             comments: &[],
         },
         &Inputs::default(),
-    )
-    .unwrap();
-    let text = std::fs::read_to_string(&md.md_path).unwrap();
+    );
+    let text = join(&md.sections);
     assert!(
         text.contains("Captain's log, supplemental") && text.contains("not in the mirror"),
         "{text}"
     );
     let reasons: Vec<Reason> = md.problems.iter().map(|p| p.reason).collect();
     assert_eq!(reasons, vec![Reason::BlobMissing]);
+}
+
+/// A Doc sits in its folder, a place, and is read together; a comment
+/// thread is read together inside it, its first comment where the thread
+/// sits and each reply inside the thread.
+#[test]
+fn a_doc_sits_in_its_folder_and_its_threads_inside_it() {
+    let entry = json!({
+        "id": DOC, "name": "Captain's log, supplemental", "mimeType": store::DOC_MIME,
+        "createdTime": "2364-03-01T08:00:00.000Z", "parents": ["0BridgeLogs"],
+    });
+    let comment = json!({
+        "author": {"displayName": "Geordi La Forge"}, "content": "Warp core?",
+        "createdTime": "2364-03-01T09:00:00.000Z",
+        "replies": [{"id": "r1", "author": {"displayName": "Data"}, "content": "Stable.",
+                     "createdTime": "2364-03-01T10:00:00.000Z"}],
+    });
+    let md = render_doc(
+        "drive",
+        &DocInput {
+            file_id: DOC,
+            entry: &entry,
+            capture: &store::Capture {
+                id: CaptureRow::id_for(DOC, "12"),
+                parts: Vec::new(),
+            },
+            native: Ok(&native()),
+            images: &Default::default(),
+            comments: &[(format!("{DOC}#c1"), comment)],
+        },
+        &Inputs::default(),
+    );
+    let roles: Vec<(&str, bool, bool, Option<&str>)> = md
+        .data_nodes
+        .iter()
+        .map(|n| {
+            (
+                n.kind.as_str(),
+                n.is_place,
+                n.read_together,
+                n.parent_uuid.as_deref(),
+            )
+        })
+        .collect();
+    let folder = ids::folder("drive", "0BridgeLogs").uuid;
+    let file = md.markdown_uuid.as_str();
+    let thread = md.rows[1].uuid.as_str();
+    assert_eq!(
+        roles,
+        vec![
+            ("Google Drive folder", true, false, None),
+            ("Google Doc", false, true, Some(folder.as_str())),
+            ("Google Doc comment thread", false, true, Some(file)),
+        ]
+    );
+    assert_eq!(md.data_nodes[2].uuid, thread);
+    let at: Vec<(Option<&str>, Option<&str>, Option<&str>)> = md
+        .rows
+        .iter()
+        .map(|r| {
+            (
+                r.parent_uuid.as_deref(),
+                r.read_uuid.as_deref(),
+                r.place_uuid.as_deref(),
+            )
+        })
+        .collect();
+    let folder = Some(folder.as_str());
+    assert_eq!(
+        at,
+        vec![
+            (folder, None, folder),
+            (Some(file), Some(file), folder),
+            (Some(thread), Some(thread), folder),
+        ]
+    );
 }

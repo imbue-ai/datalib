@@ -67,8 +67,9 @@ export type SanitizeOptions = {
 
 export type Sanitized = {
   html: string;
-  /** Every remote reference the body carried, in document order,
-   *  whether held or let through. */
+  /** Every remote reference the body carried, whether held or let
+   *  through: in document order, but for a body rendered in sections,
+   *  whose frame's come first. */
   remote: RemoteRef[];
 };
 
@@ -80,7 +81,7 @@ let found: RemoteRef[] = [];
 let chipMark: string | null = null;
 
 const CHIP_MARK = "data-chip-mark";
-const CHIP_ATTRS = ["data-handle", "data-entity", "data-contact"];
+const CHIP_ATTRS = ["data-handle", "data-entity", "data-contact", "data-chip-header"];
 
 // A presentation attribute of SVG's (`fill`, `filter`, `mask`, …) reads
 // as CSS, so a `url(…)` in one is a fetch. One naming a part of the

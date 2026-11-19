@@ -1,0 +1,142 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== whatsapp 00000000-0000-84f0-8faa-a404dacb63b6 WhatsApp user …0108
+--- chunk 0
+title: WhatsApp user …0108 | text: WhatsApp user …0108 — Sat 11 Apr 2364 00:16
+
+Is this the Enterprise? Wrong number, sorry.
+
+
+=== whatsapp 00000000-0000-8891-ab80-dd17e867538b Bridge Crew
+--- chunk 0
+title: Bridge Crew | text: Me — Sat 11 Apr 2364 00:00
+
+Status report.
+
+
+--- chunk 1
+title: Bridge Crew | text: William Riker <+17015550101> — Sat 11 Apr 2364 00:01
+
+All decks at green status, Captain.
+
+
+--- chunk 2
+title: Bridge Crew | text: Data <+17015550102> — Sat 11 Apr 2364 00:02
+
+Sensors detect an unidentified vessel.
+
+
+--- chunk 3
+title: Bridge Crew | text: Geordi La Forge <+17015550103> — Sat 11 Apr 2364 00:03
+
+Warp engines online. Ready for your order.
+
+
+--- chunk 4
+title: Bridge Crew | text: Worf <+17015550104> — Sat 11 Apr 2364 00:04
+
+Shields at maximum, Captain.
+
+
+--- chunk 5
+title: Bridge Crew | text: Me — Sat 11 Apr 2364 00:05
+
+bridge-viewscreen.jpg
+
+
+--- chunk 6
+title: Bridge Crew | text: Data <+17015550102> — Sat 11 Apr 2364 00:06
+
+Hailing frequencies open, sir.
+
+
+--- chunk 7
+title: Bridge Crew | text: Me — Sat 11 Apr 2364 00:07
+
+Make it so.
+
+
+--- chunk 8
+title: Bridge Crew | text: Geordi La Forge <+17015550103> — Sat 11 Apr 2364 00:10
+
+🎞 warp-core-diagnostic.mp4 — 512 B
+
+
+--- chunk 9
+title: Bridge Crew | text: Worf <+17015550104> — Sat 11 Apr 2364 00:11
+
+🔊 tactical-briefing.opus — 640 B
+
+
+--- chunk 10
+title: Bridge Crew | text: Data <+17015550102> — Sat 11 Apr 2364 00:13
+
+Sensor sweep complete: nothing on long range.
+
+
+=== whatsapp 00000000-0000-8a99-9206-1d7e42e1b482 Data
+--- chunk 0
+title: Data | text: Data <+17015550102> — Sat 11 Apr 2364 00:14
+
+Captain, I have a question about humour.
+
+
+--- chunk 1
+title: Data | text: Me — Sat 11 Apr 2364 00:15
+
+Ask away, Data.
+
+
+=== whatsapp 00000000-0000-8b1c-9241-3a10a9e8b6d0 Worf
+--- chunk 0
+title: Worf | text: Worf <+17015550104> — Sat 11 Apr 2364 00:17
+
+Sir, I request permission to run a tactical drill.
+
+
+=== whatsapp 00000000-0000-8d08-85b0-d2533cc3a460 William Riker
+--- chunk 0
+title: William Riker | text: William Riker <+17015550101> — Sat 11 Apr 2364 00:08
+
+Captain, a private word about Commander Data?
+
+
+--- chunk 1
+title: William Riker | text: Me — Sat 11 Apr 2364 00:09
+
+Come in, Number One.
+
+
+--- chunk 2
+title: William Riker | text: William Riker <+17015550101> — Sat 11 Apr 2364 00:12
+
+🖼 *[holodeck-poker-night.jpg (not yet fetched)]*
+*(source: Media/WhatsApp Images/holodeck-poker-night.jpg)*
+
+
+=== whatsapp 00000000-0000-8f4c-b365-c0f656f665bf whatsapp storage
+--- chunk 0
+title: whatsapp storage | text: Source: whatsapp
+
+# whatsapp — storage
+
+Measured Tue Apr 15th, 2369 at 00:00.
+
+| Kind | Step | What | Size | Count | Id |
+| Source Size | ingest | `whatsapp/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `whatsapp/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `whatsapp/ingest/blobs.sqlite#cas_objects` |  | 3 rows | `00000000` |
+| Store | ingest | `whatsapp/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#chat` |  | 5 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#jid` |  | 10 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#jid_map` |  | 2 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#lid_display_name` |  | 1 row | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#message` |  | 18 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#message_add_on` |  | 6 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#message_add_on_reaction` |  | 6 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#message_media` |  | 4 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#message_text` |  | 0 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#wa_db_contacts` |  | 5 rows | `00000000` |
+| Table | ingest | `whatsapp/ingest/entities.doltlite_db#wa_media_files` |  | 3 rows | `00000000` |

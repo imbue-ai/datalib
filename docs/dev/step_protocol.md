@@ -127,7 +127,7 @@ arrives in the environment.
 | `DATALIB_DAG_INPUTS` | resolved input artifacts, `\n`-separated, relative to the data root |
 | `DATALIB_DAG_CHANGED_INPUTS` | the subset of the above whose version moved since this step's last success, `\n`-separated; every input when there is no last success to compare against (a first run, or the step's own config changed). Empty only when nothing moved |
 | `DATALIB_DAG_FAILED_INPUTS` | the subset of `DATALIB_DAG_INPUTS` whose producer's most recent run did not succeed — it failed (`incomplete` included), was stopped, or was blocked — `\n`-separated; empty when every one succeeded or is running now. You are started anyway, on what each committed before it ended; whether to go on is yours to decide |
-| `DATALIB_READS` | a JSON object, input path → the version the runner started this invocation against, as `<fingerprint>:<version>` (§ "When you are started"); an input with no version yet is absent. A version for what you *read*, where the output's own would say less (the qmd index reports a hash of this) |
+| `DATALIB_READS` | a JSON object, input path → the version the runner started this invocation against, as `<fingerprint>:<version>` (§ "When you are started"); an input with no version yet is absent. A version for what you *read*, where the output's own would say less (an `embed` step reports a hash of this as its version) |
 | `DATALIB_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of sampling your own clock, so one run's outputs agree |
 | `RUST_LOG` | the run's log filter, in `tracing-subscriber`'s grammar, built from the config's `log_level` ([`logging.md`](logging.md) § "Where a line comes from"). A `RUST_LOG` already set where the runner was started is passed through instead. A step in another language may honor it or ignore it; what it prints is kept regardless |
 
@@ -190,7 +190,8 @@ What that means from your side:
   "checkpoint") lets the steps that read it this way start on each of
   its seals while it carries on. The downloads datalib ships for Slack, mail,
   Claude, ChatGPT, Notion, Google Drive, Linear, Todoist, Garmin, YoLink,
-  GitHub and GitLab all declare it. You are run again after each later seal, and
+  GitHub, GitLab and Baby Connect all declare it, and so does every
+  `render_markdown`. You are run again after each later seal, and
   once more when the producer ends if it moved since your last run;
   never twice at once.
 * **Or ask to start once it has all settled.** A step whose config entry
@@ -284,10 +285,11 @@ how many things your output store holds — messages, readings, events;
 whole store, not this run — and fills the Manage screen's Items column
 and its sparkline; **`documents`** is how many documents those items
 sit in, for that cell's hover; **`problems`**, with
-a `severity=error` or `severity=warning` label, fills the red and
-yellow counts after a row's name — count the problems your step
-found, not ones it copied from an input, since the group's count is
-the sum of its steps'. Report each one every run, zero
+a `severity=error` or `severity=warning` label, is a grey count after
+a row's name — count the problems your step found, not ones it copied
+from an input, since the group's count is the sum of its steps'. (The
+red and yellow counts are problem rows, read where each step keeps
+them; §"Problems: what you could not do".) Report each one every run, zero
 included: the screen shows the newest value a step reported, so a
 count left out keeps last run's. A step that counts neither leaves no
 series, and draws a blank Items cell and no counts. They are
@@ -384,6 +386,53 @@ step's state — for this run and the ones before it, which is what the
 Manage screen reads. The store, its retention and how to read it:
 [`logging.md`](logging.md).
 
+### Problems: what you could not do
+
+A problem is one thing your step could not fully do: a record it could
+not fetch, a file it could not read. It is a row of the `problems`
+table (`datalib_problems::ProblemRow`), the same table in every store,
+and a reader finds a step's problems in the stores directly in its
+folder (`<data root>/<group>/<function>/`): each `.doltlite_db` as its
+`main` commit has it, and each plain `.sqlite` file
+(`datalib_step_problems::of_step`). `datalib-step`'s steps keep theirs
+in their own stores. A step with no store of its own keeps them in
+`problems.sqlite` there: it writes the file itself through
+`datalib_step_problems::StepFile`, or sends two lines and lets the
+runner write it:
+
+```json
+{"event":"problem","stage":"fetch","scope_kind":"entity","scope_key":"messages:C01/1712345678.000100","outcome":"dropped","reason":"fetch_failed","severity":"warning","sample":"HTTP 404","upstream_entity_kind":"message","upstream_id":"C01/1712345678.000100"}
+{"event":"covered","kind":"records","table":"messages","all_but":["C01/1712345999.000200"]}
+```
+
+- **A `problem` line** is a `ProblemRow` without the columns its writer
+  fills: its id (minted from what the line says), its source (the
+  step's group) and its stamps. `stage`, `scope_kind`, `outcome`,
+  `reason` and `severity` are datalib's own closed sets
+  (`datalib_problems`); `sample` says what happened; `item_uuid`,
+  `field`, `path` and `rule` are optional.
+- **`scope_key`** is what the problem is about within your step:
+  `<table>:<id>` for a record, `file:<path>` for a file, or
+  `listing:<name>` or `phase:<name>` for a part of your run. It is
+  what `covered` matches.
+- **What it is about upstream** goes in `upstream_entity_kind`,
+  `upstream_id` and `upstream_account`, the names a grid row carries;
+  never an id some other step mints.
+- **`covered`** says what this run checked again, so what it covered
+  and did not find again can go: `all`, `listings` (every `listing:`
+  and `phase:` scope), `records` of one `table`, or `files` `under` a
+  folder. A `records` line with `only` vouches for exactly those
+  records; one with `all_but`, and a `files` line with it, for every
+  one but those. Both count even when your run fails. Without either,
+  and for `all` and `listings`, only a run that succeeds clears
+  anything.
+
+The runner writes the problems as they arrive, at most a second after
+a line, so they show while you run, and clears when you end. A step
+that sends no `problem` or `covered` line has its file left alone. Run
+by hand (§"Running `datalib-step` by hand"), these lines are printed
+and kept nowhere; a step that wants them kept writes the file itself.
+
 ### The outcome line
 
 The last thing you may print is one `outcome` event — the content
@@ -479,10 +528,10 @@ Failing there is wrong: `data` means "a human must look at this", and
 the Manage row turns red for a source that has simply not been synced
 yet.
 
-An empty render is safe for the index: `grid_index` deletes per
-document (`DELETE FROM grid_rows WHERE markdown_uuid = ?`), driven by
-the markdown files actually present, so rendering nothing contributes
-nothing rather than dropping another source's rows.
+An empty render is safe for the index: `unified_grid_and_search_index`
+reads each source's render store on its own and removes only the
+documents that store dropped, so rendering nothing contributes nothing
+rather than dropping another source's rows.
 
 Keep failing, loudly, when the data is *there but wrong*: a store that
 exists and can't be opened, a schema missing tables it should have, a
@@ -595,9 +644,12 @@ A structured tracing-JSON line (with a `level` field, as
 tracing-subscriber's JSON format writes) is unwrapped rather than
 quoted: its `fields.message` becomes the log's `msg`; its `timestamp`,
 `level`, `target` and thread (`threadName`, else `threadId`) become
-columns — the line's own timestamp wins over the runner's arrival time
-— and everything else it carried (`filename`, `line_number`, the
-remaining `fields`) rides along as `fields`. The Manage screen shows
+columns — the line's own timestamp wins over the runner's arrival time,
+offset included, so write it in the local offset
+(`…T10:00:00+01:00`): a `Z` stamp is filed as `+00:00` beside the
+runner's lines in the real one — and everything else it carried
+(`filename`, `line_number`, the remaining `fields`) rides along as
+`fields`. The Manage screen shows
 the sentence, not the envelope, and can still sort by thread.
 
 Every level is kept, `debug` and `trace` included: the runner stores a
@@ -707,7 +759,11 @@ provider's migration ladder and closes it: every rung, the additive DDL
 and an old blob store's conversion run, and each is sealed to `main`. A
 render step and the grid index answer `needs_rerun` when their store's
 `_datalib_meta.schema_hash` differs; a derived store is rebuilt, never
-migrated. Any of them refuses a store a newer build wrote.
+migrated. The grid index also answers `needs_rerun` when the search
+index's keyword tables are in another shape or a source's documents
+were drawn by another version, which its keyword pass reads again;
+`embed` and `embedding_map` have nothing to answer. Any of them refuses
+a store a newer build wrote.
 
 ## Compact and collect
 
@@ -725,6 +781,13 @@ wrote, runs nothing else, and reports its version as a run would; the
 runner records it, so a step that kept its content and reports a
 content version moves nothing downstream. Report nothing when there is
 nothing to give back.
+
+A step that shrank a store also says how big it was, in bytes, before and
+after, which is what the app's free-space pill adds up:
+
+```json
+{"event":"outcome","store_bytes":{"before":6600000000,"after":3100000000},"outputs":[...]}
+```
 
 `--collect` is lossless: `datalib-step` runs `dolt_gc` on the step's
 doltlite store (`doltlite_raw::collect_garbage`), which deletes only
@@ -771,7 +834,7 @@ The run then returns as a shorter run, `finish` commits blobs then
 entities, and the step reports `cancelled`. A stopped run does not
 record its scope config as satisfied, so a widened filter interrupted
 part-way is backfilled by the next run rather than believed done.
-`grid_index` reads the same flag between documents: it rolls back the
+`unified_grid_and_search_index` reads the same flag between documents: it rolls back the
 source it is loading and keeps the ones it has already committed.
 
 ## Minimal examples
@@ -848,9 +911,9 @@ datalib-step run <function> [<type>] [--source-type <type>]
 ```
 
 `<function>` is `ingest`, `render_markdown`, `render_time_series`,
-`render_occurrences`, `keyword_index`, `embed`, `grid_index`,
-`qmd_aggregator`, `embedding_map` or `time_series_index`; anything else
-is refused with the list. `<type>` is the source type, which `ingest`
+`render_occurrences`, `embed`, `unified_grid_and_search_index`,
+`embedding_map` or `time_series_index`; anything else is refused with
+the list. `<type>` is the source type, which `ingest`
 and the renders require; under a diff group it is `diff`, and
 `--source-type` names the type of the source it compares. Its step's id
 must be `<group>/<function>`, and it writes that tree; a render reads
@@ -858,19 +921,20 @@ its raw store from the first entry of `DATALIB_DAG_INPUTS`. It reads
 `DATALIB_DAG_PARAMS` as the provider's **function-specific** config —
 the ingest step carries the provider's download config (`common`
 envelope, the method table block, …), the render step only the render
-knobs (nothing for most providers; beeper/signal `period`, perseus
-`alignment_pairs`, email `outlink_format`/`only_render_labels`). It
+knobs (nothing for most providers; perseus `alignment_pairs`, email
+`outlink_format`/`only_render_labels`). It
 honors `DATALIB_DAG_NOW` and the four verbs, which datalib's configs
 declare for it in `[[programs]]`; it stops at its next consistent point
 on SIGINT and commits there, and emits versions where it has them (the
-grid index claims the hash of its store's tree). It reads three knobs a
+index reports its generation; the versions are in the [runner's
+README](../../datalib/backend/dag/README.md#versions-reported-by-the-step)). It reads three knobs a
 config sets in `[env]`:
 
 | variable | meaning |
 | --- | --- |
 | `DATALIB_STEP_CHECKPOINT_CADENCE` | how many seconds to let pass before a run's first checkpoint; it doubles the wait after each one (the next comes once the run is twice as old as at the last), since every commit keeps the pages it touched; `0` means every consistent point and never grows |
 | `DATALIB_STEP_RENDER_PAGES` | `<buckets>,<blob_mb>`, either side empty for its default: how many buckets a render reads together and how many MB of their blobs it loads at once |
-| `DATALIB_STEP_EMBED_CONTEXTS` | how many embedding contexts an embed step gives qmd (default 1) |
+| `DATALIB_STEP_MODAL_MAX_SANDBOXES` | the most Modal Sandboxes an `embed` step that sends its chunks to Modal runs at once (default 100) |
 
 Use it as the reference implementation.
 
@@ -921,6 +985,6 @@ Four things a hand run has to get right that the runner does for it:
   data root as its working directory, so a relative one is resolved a
   second time, beneath itself.
 
-The index functions' ids are fixed at `unified_document_index/<function>`, and
-the qmd steps share one index file; the rules are in
+The index functions' ids are fixed at `unified_grid_and_search_index/<function>`, and
+the search index's tables live in `unified_grid_and_search_index`'s file; the rules are in
 [`config_model.md`](config_model.md) § "Naming rules".

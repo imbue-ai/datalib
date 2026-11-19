@@ -18,8 +18,9 @@ export type Line = {
 export type Chart = {
   key: string;
   title: string;
-  /// `bytes` draws sizes; anything else, counts.
-  unit: "bytes" | "count";
+  /// `bytes` draws sizes, `micro_usd` dollars from millionths of one;
+  /// anything else, counts.
+  unit: "bytes" | "micro_usd" | "count";
   /// A running total or a queue starts at nothing; a size does not, and
   /// is scaled to its own range so a small change still shows.
   fromZero: boolean;
@@ -63,9 +64,29 @@ export function sumSeries(series: Point[][]): Point[] {
 }
 
 /// `rows_upserted_total` → "rows upserted": the suffix says the series
-/// is a running total, which every chart but the queue's is.
+/// is a running total, which every chart but the queue's is. A unit
+/// suffix goes too, since the chart draws the unit.
 export function humanName(name: string): string {
-  return name.replace(/_total$/, "").replace(/_/g, " ");
+  return name
+    .replace(/_total$/, "")
+    .replace(MICRO_USD, "")
+    .replace(/_/g, " ");
+}
+
+/// A series in millionths of a dollar, such as an `embed` step's
+/// `modal_cost_estimate_micro_usd_total`: a whole-number metric that
+/// still holds a fraction of a cent.
+const MICRO_USD = /_micro_usd$/;
+
+export function unitOf(name: string): Chart["unit"] {
+  return MICRO_USD.test(name.replace(/_total$/, "")) ? "micro_usd" : "count";
+}
+
+/// Millionths of a dollar as dollars: to the cent, or past it below a
+/// cent, where a small run would otherwise read $0.00.
+export function formatMicroUsd(micro: number): string {
+  const dollars = micro / 1e6;
+  return `$${dollars > 0 && dollars < 0.01 ? dollars.toFixed(4) : dollars.toFixed(2)}`;
 }
 
 /// `table=messages,kind=dm` → "messages, dm": the values say which is
@@ -118,7 +139,7 @@ export function stepCharts(step: DashboardStep): Chart[] {
         points: sumSeries(rest.map((s) => toPoints(s.points))),
       });
     }
-    charts.push({ key: name, title: humanName(name), unit: "count", fromZero: true, lines });
+    charts.push({ key: name, title: humanName(name), unit: unitOf(name), fromZero: true, lines });
   }
   if (step.warnings.length > 0 || step.errors.length > 0) {
     charts.push(problemChart(step.warnings, step.errors));

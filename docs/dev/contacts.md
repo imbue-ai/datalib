@@ -69,7 +69,7 @@ tree does for a person.
 | word | means |
 |---|---|
 | **handle** | one identifier in one namespace, normalized: `email:riker@enterprise.org`, `tel:+12025550101`, `slack:T01/U02`, `signal_aci:<uuid>`, `facebook:name/Will Riker`. `datalib_handle` makes them; the UI's `chipLinks.js` mirrors its rules by hand. |
-| **render** | the pipeline's render step: it writes a source's documents (markdown files) and grid rows into its render store during a sync, and the index and qmd read them from there. "Renders again" means those stored documents are rewritten. |
+| **render** | the pipeline's render step: it writes a source's documents (their markdown) and grid rows into its render store during a sync, and the grid index and the search index read them from there. "Renders again" means those stored documents are rewritten. |
 | **draw** | what the UI does with a chip when it is shown: it asks who the handle is and paints the name, photo and mark. Nothing is stored. |
 | **chip link** | how a document names a person: a markdown link whose href is the handle as a URI, `[Will Riker](mailto:riker@enterprise.org "Will Riker <riker@enterprise.org>")`. The viewer draws it as a chip. |
 | **source contact** | a `NormalizedContact` a source wrote: that source's attempt at a neutral, unified record of what it knows about one person, keyed by `source_id` and the source's own `key`. The index stores them in `source_contacts`; the UI holds them as `Who.sourceContacts`. |
@@ -81,8 +81,9 @@ tree does for a person.
 ## Handles
 
 [`datalib/backend/handle`](../../datalib/backend/handle/src/lib.rs) is a
-crate with no first-party dependencies, so render crates, the index, the
-applets and the contacts store all share one definition. A handle is
+crate whose one first-party dependency, `uuid_text`, has none, so render
+crates, the index, the applets and the contacts store all share one
+definition. A handle is
 `<kind>:<value>`. The rule that matters most: **where a native id is an
 email address or a phone number, the handle is `email:` or `tel:`, not a
 per-app kind**, so one link covers every app that reaches a person that
@@ -202,7 +203,7 @@ union has the kind); nothing finds the rest:
 |---|---|
 | `handle/src/lib.rs` | the `HandleKind` variant and its constructor; an arm each in `rebuild`, `to_uri` and `describe`; a branch in `from_uri` unless the URI is `datalib:handle/…`; a row in `every_kind_round_trips_through_its_uri` |
 | `contact_schema/src/lib.rs` | `Medium::of_kind` |
-| `applets/src/unified_document_index/columns.rs` | `handle_mark`, the mark the grid's Author chip shows |
+| `applets/src/unified_grid_and_search_index/columns.rs` | `handle_mark`, the mark the grid's Author chip shows |
 | `ui/src/cards/chipLinks.js` | `KINDS`, `handleFromUri`, `uriFromHandle`, and a row in `tests/chip_links.test.ts` |
 | `ui/src/cards/contacts.ts` | the `HandleKind` union, `handleKind`, `KIND_ICON`, and `copyText` if `describe` is not `label (handle)` |
 | `ui/src/cards/sanitize.ts` | `ALLOWED_URI_REGEXP`, if the URI's scheme is a new one |
@@ -232,7 +233,9 @@ What each source has today:
 | Beeper | a Slack user by `slack:<team>/<user>`, read out of the bridge's Matrix id (the owner by the Slack user the room was bridged for); anyone else by a number or address the app lists for them (`participant_identifiers`); a Matrix id alone has no kind | each reaction's; the person's numbers, addresses and cached avatar, in the source contact |
 | calendar | an event's organizer, by address | each guest with an address, as a chip on the event's page |
 | GitHub, GitLab | a change request's or a comment's author, by login (GitLab's on the host the merge request's address is on) | |
-| Notion | a comment's author, and a page's last editor, by the address the users table gives, else by user id | |
+| Notion | a comment's author, and a page's last editor, by the address the users table gives, else by user id | a user mentioned in a page |
+| Todoist | a task's adder and a comment's author, by the address the account or its collaborators list gives | a task's assignee, as a chip on its line |
+| Baby Connect | whoever logged an entry, by the address the account's users list gives | |
 
 An AI chat's answers (Claude, ChatGPT, Claude Code, Codex) are by their
 model, `ai_model:<id>`, where the record names one.
@@ -281,11 +284,8 @@ the backend writes is shaped by one function,
 
 The viewer draws a chip for any explicit link whose href is a handle,
 whoever wrote it, so a `mailto:` link in an email's HTML body is drawn
-as a chip too. A chip anywhere in a body is safe for one reason: **it
-shows who the href resolves to, never the link text**. A link
-`[Picard](mailto:phisher@romulan.net)` gets a chip for the phisher
-under the name the sources know, with "Shown here as “Picard”" in its
-tooltip.
+as a chip too. That is safe because a chip shows who the href resolves
+to, never the link text ([`chips.md`](chips.md) §"Trust").
 
 ## Source contacts: `NormalizedContact`
 
@@ -324,14 +324,14 @@ and the index hold them in two tables: `source_contacts`
 (`markdown_uuid`, `contact_key`, `source_id`, `name`, `seen_items`,
 `last_seen_at`, and the whole record as `contact_json`) and
 `source_contact_handles` (`markdown_uuid`, `contact_key`, `handle`;
-the index's copy is indexed by handle). `grid_index` loads them the way
+the index's copy is indexed by handle). `unified_grid_and_search_index` loads them the way
 it loads `grid_rows`.
 
-**`POST /people` on the `unified_document_index` applet** takes `{"handles":
+**`POST /people` on the `unified_grid_and_search_index` applet** takes `{"handles":
 […]}` and answers `{"people": {<handle>: [NormalizedContact, …]}}`: for
 each handle, every source contact holding it, one per source and key
 (the rows from each document summed), ranked by
-`unified_document_index/src/people.rs`: a source about people first, then the
+`unified_grid_and_search_index/src/people.rs`: a source about people first, then the
 chat where the person wrote the most. A handle no source mentions is
 absent. This works with no contacts app at all.
 
@@ -468,7 +468,7 @@ The config entry is `[[applets]] id = "datalib_contacts"` with
 `command = "datalib-applet datalib_contacts"`; the gateway passes the
 data root in the environment. A new root's starter config
 (`datalib_dag::starter::STARTER_CONFIG`) writes it, filed under
-`unified_document_index`; a config written before that has to add it by hand.
+`unified_grid_and_search_index`; a config written before that has to add it by hand.
 
 ### Fields, and editing a contact through a draft
 
@@ -597,12 +597,9 @@ yet.
 
 Everything is in `datalib/ui/src/cards/`:
 
-- `chipLinks.js` is the markdown-it plugin: an explicit link whose
-  href `handleFromUri` reads becomes `<a class="chip" data-handle=…>`
-  (and one naming a group or step, `data-entity`; see
-  [`chips.md`](chips.md)); a link `linkify` made from a
-  bare address in running text is left alone, so a signature's address
-  stays an address. Plain JavaScript, so the render preview runs it
+- `chipLinks.js` is the markdown-it plugin that marks a link whose
+  href `handleFromUri` reads as a person's chip ([`chips.md`](chips.md)
+  §"Drawing a chip"). Plain JavaScript, so the render preview runs it
   too. It mirrors `to_uri` and `from_uri` over the same test cases.
 - `contacts.ts` holds the pure rules, unit-tested in `contacts.test.ts`:
   `chipLook` (what a chip shows, from the contact if there is one,
@@ -673,31 +670,38 @@ Everything is in `datalib/ui/src/cards/`:
   then Channel (`config/browsePresets.ts`).
 
 A chip ranks what it hears: your contact first, then the source
-contacts as `/people` ranked them, then the text the source showed.
+contacts as `/people` ranked them, then the text the source showed. A
+message's own header is the exception: it shows the name that message
+gave ([`chips.md`](chips.md) §"Trust").
+
+**A source's name for a person is not any one message's.** A chat
+source's record of a person is one row per document; `/people` merges
+them (`unified_grid_and_search_index/src/people.rs::merge_and_rank`) and puts
+first the name the most was written under: each document's first name
+(its most used, as `chat-common::people::baseline_contacts` orders
+them) is credited with the items the person wrote there, at least one,
+and a tie goes to the name that sorts first. So one forged message in a
+spam folder cannot rename the sender on the rest of their mail. A name
+that spells out an address, a number, a handle's URI or its stored form
+(`datalib_handle::Handle::spelled_by`) that the record does not hold
+(`"picard@enterprise.org" <q@continuum.test>`) is no name for it
+(`NormalizedContact::is_anothers_handle`). The render drops it from
+every source's contacts as the document is stored
+(`datalib_etl_render::names`), `/people` drops it from a store rendered
+before that, the search's `names` table takes no row author spelled
+that way (`search_terms::names_seen_under`), and the chip refuses one
+too (`contacts.ts::namesSomeoneElse`), showing the identifier instead.
 
 ## Searching for a person
 
-A person is searched by the role they had on a row, through the search
-terms (`docs/dev/plans/search_tabs.md` § "The search terms"), which
-hold each row's people by handle:
-
-| key | finds the rows where the person |
-|---|---|
-| `from:` (and `author:`, `author_handle:`) | wrote it: by handle, or by the name they were shown under |
-| `to:`, `cc:`, `bcc:` | was in that header |
-| `recipient:` | was in any of them |
-| `mention:` | was mentioned, where the source marks a mention up |
-| `with:` (and `involves:`) | had any role, took part in the conversation the row is (a document's own row), or is who a contact's card is about |
-
-A value that is a handle (`email:riker@enterprise.org`, or simply
-`riker@enterprise.org`, `+12025550101`) matches that handle exactly, and
-the search bar draws it as the person's chip; a quoted value matches a
-handle or name whole (`from:"Will Riker"`); anything else matches any
-handle or name holding it, so `from:riker` finds Riker under every
-spelling a source used, and anyone else whose name holds it. A name
-also reaches every handle a source ever showed under it, through the
-search terms' `names` table, filled from the rows' authors and from
-`source_contacts`. A chip's "Everything with <name>" writes
+A person is searched by the role they had on a row: `from:`, `to:`,
+`mention:`, `with:` and the rest. Which key finds which role, and what
+a value matches, is [`searching.md`](../user/searching.md) §"People".
+They read the search terms, which hold each row's people by handle
+(`etl/render/src/search_terms.rs`; [`grid_rows.md`](grid_rows.md)
+§"`supplied_terms`"). A name also reaches every handle a source ever
+showed under it, through the search terms' `names` table, filled from
+the rows' authors and from `source_contacts`. A chip's "Everything with <name>" writes
 `with:contact:<id>` when the handle is linked to one of your contacts,
 so it finds them under every handle linked there, and `with:<handle>`
 otherwise; either finds what they wrote, what they received and their
@@ -730,7 +734,7 @@ supplies an `about` search term for each handle the card holds and each
 name it gives, and nobody wrote the card. So `with:riker` finds his card
 beside everything he took part in.
 
-[`search_by_example_tests.rs`](../../datalib/backend/applets/src/unified_document_index/search_by_example_tests.rs)
+[`search_by_example_tests.rs`](../../datalib/backend/applets/src/unified_grid_and_search_index/search_by_example_tests.rs)
 shows each of these rules on a small cast: how its rows are filed, and
 which queries do and do not find them.
 
@@ -739,13 +743,14 @@ Links sit over the view, so the search terms know handles and never
 contacts. A `contact:<id>` value on a person key is read from the
 contacts store when the search runs (`datalib_contacts::read`, a
 detached read, so the applet stays the one writer) and matches each
-handle the contact reaches: its own, stopped ones included; those of
-the contact it was merged into, or merged into it; and, for a group,
-every member's. The search bar offers your contacts first and draws the
-value as a contact chip. Making a link changes nothing in the index: no
-document renders again, qmd re-indexes nothing, and search follows the
-link at once, as chips do. A root without the contacts app refuses
-`contact:` by name ([`plans/search_autocomplete.md`](plans/search_autocomplete.md)
+handle the contact reaches: its own, stopped ones included; those of the
+contact it was merged into, or merged into it; and, for a group, every
+member's. The search bar offers your contacts first and draws the value
+as a contact chip. Making a link changes nothing in the index: no
+document renders again, the search index re-indexes nothing, and search
+follows the link at once, as chips do. A root without the contacts app
+refuses `contact:` by name
+([`plans/search_autocomplete.md`](plans/search_autocomplete.md)
 §"Contacts: expanded when the search runs").
 
 **`me` is the person whose library this is.** On a person key, an
@@ -775,10 +780,11 @@ what `me` cannot find, is the table in
 **Keeping the name out of the markdown is a choice, not a rule.**
 Writing a contact's name into each chip link (its text or its title)
 would make a document say who a handle is on its own: readable as a
-plain file, findable by `grep`, and searchable by qmd under the name
+plain file, findable by `grep`, and searchable by its words under the name
 you gave the person. It would cost what the paragraph above saves:
 render would read the contacts store, and a link would render again
-every document naming the handle and send each back through qmd. The
+every document naming the handle and send each back through
+`unified_grid_and_search_index`'s keyword pass and the source's `embed`. The
 search terms name exactly those documents, so the cost can stay
 proportional to the link. Nothing in the tree rules it out: chips draw
 from the live answer whatever the link text says.
@@ -810,7 +816,7 @@ chip in the UI is separate and always uses the latest answer.
   batch leaving the person's word alone.
 - `chat-common`: `people.rs` (the baseline, recipients, reactors, the
   provider merge); `render.rs` (the header and recipients line).
-- `unified_document_index`: `people.rs` ranking; the applet's `/people` against
+- `unified_grid_and_search_index`: `people.rs` ranking; the applet's `/people` against
   the fixture index.
 - `tests/fixtures/ingested_tng_test.py`: the end-to-end guard, from the
   TNG fixture through the index: Picard known by one address from

@@ -60,6 +60,9 @@ pub struct IngestOptions {
     /// (`export.path`).
     pub input_path: PathBuf,
     pub reading: Reading,
+    /// Whether a conversation a snapshot no longer holds is deleted here
+    /// too or kept. A `FillGaps` reading deletes nothing either way.
+    pub when_deleted_upstream: datalib_etl_chatgpt_config::WhenDeletedUpstream,
     /// The host's file fingerprints, which say whether the export changed
     /// since it was last read.
     pub cache: FingerprintCache,
@@ -82,6 +85,9 @@ pub struct IngestSummary {
     pub unchanged: usize,
     /// Conversations dropped because the export no longer has them.
     pub pruned: usize,
+    /// Conversations the export no longer has, kept because
+    /// `when_deleted_upstream = "keep_local_copy"`.
+    pub kept_deleted_upstream: usize,
     /// Conversations the export holds with no id to store them under.
     pub without_id: usize,
     pub new_blobs: usize,
@@ -249,11 +255,23 @@ async fn conversations_in_one_tx(
         // Only a complete API listing says a conversation is gone.
     } else if conversations.is_empty() || !listed.is_empty() {
         let keep: HashSet<String> = files.keys().cloned().collect();
-        let gone =
-            datalib_etl::prune::prune_scope_in_tx(&mut tx, CONVERSATIONS, &[], &keep).await?;
-        datalib_etl::prune::delete_owned_in_tx(&mut tx, ATTACHMENTS, "conversation_id", &gone)
-            .await?;
-        summary.pruned = gone.len();
+        let unlisted = datalib_etl::prune::follow_deletions_in_tx(
+            &mut tx,
+            opts.when_deleted_upstream,
+            CONVERSATIONS,
+            &[],
+            &keep,
+        )
+        .await?;
+        datalib_etl::prune::delete_owned_in_tx(
+            &mut tx,
+            ATTACHMENTS,
+            "conversation_id",
+            &unlisted.deleted,
+        )
+        .await?;
+        summary.pruned = unlisted.deleted.len();
+        summary.kept_deleted_upstream = unlisted.kept.len();
     } else {
         found.phase(
             "conversations.json",
@@ -283,6 +301,10 @@ async fn conversations_in_one_tx(
             "dropped conversations the export no longer contains",
         );
     }
+    datalib_etl::prune::record_kept(
+        "chatgpt export conversations",
+        summary.kept_deleted_upstream,
+    );
     Ok(files)
 }
 
@@ -475,6 +497,7 @@ mod tests {
             db: db.clone(),
             input_path: export.to_path_buf(),
             reading: Reading::Snapshot,
+            when_deleted_upstream: Default::default(),
             cache: cache.clone(),
             now: NOW.to_string(),
             progress: Default::default(),
@@ -700,6 +723,37 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(orphans, 0, "the sidecar went with its row");
+        db.close().await;
+    }
+
+    /// With `keep_local_copy`, a conversation a newer export leaves out
+    /// (deleted on chatgpt.com) stays, with its attachment edge, and the
+    /// run says how many it kept.
+    #[tokio::test]
+    async fn keep_local_copy_keeps_what_a_shrinking_export_dropped() {
+        let ex = tempfile::tempdir().unwrap();
+        let raw = tempfile::tempdir().unwrap();
+        let cache = cache_in(raw.path()).await;
+        let db = RawDb::open(&db_path_for(raw.path())).await.unwrap();
+        let keeping = || IngestOptions {
+            when_deleted_upstream: datalib_etl_chatgpt_config::WhenDeletedUpstream::KeepLocalCopy,
+            ..opts(&db, ex.path(), &cache)
+        };
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([conv("c1", 1.0, &[]), conv("c2", 2.0, &["file-AbC2"])]),
+        );
+        ingest(keeping()).await.unwrap();
+        write(
+            ex.path(),
+            "conversations.json",
+            &json!([conv("c1", 1.0, &[])]),
+        );
+        let s = ingest(keeping()).await.unwrap();
+        assert_eq!((s.pruned, s.kept_deleted_upstream), (0, 1));
+        assert_eq!(ids(&db).await, ["c1", "c2"]);
+        assert_eq!(db.attachments_listed().await.unwrap().len(), 1);
         db.close().await;
     }
 

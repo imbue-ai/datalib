@@ -10,6 +10,12 @@ group = "chatgpt"
 function = "ingest"
 command = "datalib-step"
 
+[steps.params]
+# What becomes of the copy of a conversation you delete on chatgpt.com:
+# "delete_local_copy" (the default) deletes it here too; "keep_local_copy"
+# keeps it, so you can delete it upstream for privacy and still have it.
+when_deleted_upstream = "keep_local_copy"
+
 # When to give up on rate limits. The download always honours a 429's
 # Retry-After and backs off; these only decide when to stop.
 [steps.params.common.download_params]
@@ -22,15 +28,20 @@ maximum_sequential_failed_requests = 50        # the default
 account = "picard"
 
 [steps.params.api]
-since = "2025-01-01"   # only conversations updated at or after this (a day, RFC 3339,
-                       # or "-30d" from the sync); move it back later to backfill;
-                       # default: all
-max_pages = 20         # stop listing after this many pages (100 conversations each);
-                       # default: no cap
-limit = 100            # fetch at most this many conversations per run; default: no cap
-sleep_between = 0.5    # seconds to wait between requests (0 to 3600); default: none
-conv_uuids = ["https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789"]
-                       # only these conversations, by id or pasted link; omit for all
+since = "2025-01-01"              # only conversations updated at or after this (a day,
+                                  # RFC 3339, or "-30d" from the sync); move it back later
+                                  # to backfill; default: all
+max_listing_pages = 20            # stop listing after this many pages (100 conversations
+                                  # each); a listing cut short deletes nothing; default: all
+max_conversations_per_run = 100   # fetch at most this many per run, the never-fetched
+                                  # first; default: every one that changed
+refetch_newest_conversations = 3  # fetch the 3 most recently updated conversations
+                                  # again every run; unset fetches only what changed
+seconds_between_requests = 0.5    # wait between requests (0 to 3600); default: none
+conv_uuids = [                    # only these conversations, by id or pasted link, and
+  "https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789",  # no listing, so every
+]                                 # setting above but the wait is ignored, with a
+                                  # warning; omit for all
 
 # Start from a data export of this same account: the `.zip`, or the
 # folder it was unzipped into. It fills in every conversation the store
@@ -47,16 +58,10 @@ function = "render_markdown"
 command = "datalib-step"
 inputs = ["chatgpt/ingest"]
 
-# Free-text search: keyword (BM25), then embeddings for search by meaning.
-# Add both to `unified_document_index/qmd_aggregator`'s inputs.
-[[steps]]
-group = "chatgpt"
-function = "keyword_index"
-command = "datalib-step"
-inputs = ["chatgpt/render_markdown"]
-
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 group = "chatgpt"
 function = "embed"
 command = "datalib-step"
-inputs = ["chatgpt/keyword_index"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]

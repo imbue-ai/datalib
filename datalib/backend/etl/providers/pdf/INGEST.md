@@ -46,16 +46,15 @@ keeps its stamps.
 
 The scan goes on, and what it could not do is a `problems` row:
 
-- **An entry the walk could not read** (a folder it may not list, a
-  dangling link) means a path the walk did
-  not see may only be one it could not see, so **that scan does not
-  truncate `pdf_paths`**: what it saw is upserted over what was there
-  and nothing falls out. It leaves a `listing:files` row; the next
-  clean walk truncates as usual and clears it
-  (`a_walk_with_errors_drops_no_path`).
-- **A file that would not open** is `record:files:<path>`. It is
-  there, so it keeps its path row and holds back no other deletion; the
-  row goes the scan it opens.
+- **A walk error** (an entry the walk could not read) leaves a
+  `listing:files` row, and **that scan does not truncate `pdf_paths`**:
+  what it saw is upserted over what was there and nothing falls out.
+  **A file that would not open** is `record:files:<path>`; it keeps its
+  path row and holds back no other deletion. These are the rules of
+  [`file_changes_scan`](../../files/README.md#answering-did-it-change-for-a-file-backed-source).
+  The next clean walk truncates as usual and clears the listing row
+  (`a_walk_with_errors_drops_no_path`); a file's row goes the scan that
+  opens it.
 - **A document that would not identify** is
   `record:pdf_paths:<path>`, with what the parser said. It is retried
   every scan (above), and the scan that identifies it clears the row; a
@@ -212,7 +211,7 @@ read stay counted in `ocr_page_count`, and the render step writes a
 visible to whoever opens the document rather than only to whoever
 queries the store. Those notes get no `grid_rows` row: the sentence is
 identical on every unreadable page, so rows would add nothing to the
-grid while costing a qmd embedding each.
+grid while costing an embedding each.
 
 `has_encoding_issues` is the one all-or-nothing case, and deliberately
 so. A page whose fonts do not decode produces mojibake, which *looks*
@@ -307,7 +306,7 @@ Two things follow, both deliberate:
 
 - **PDF grid rows are machine-specific.** The backend index is a derived
   artifact — rebuilt from the per-source render stores by
-  `grid_index` — so this does not corrupt anything shared. But it does
+  `unified_grid_and_search_index` — so this does not corrupt anything shared. But it does
   mean two machines indexing the same corpus produce different rows for
   the same document.
 - **Moving the corpus rewrites its rows.** The path is in every grid
@@ -316,7 +315,7 @@ Two things follow, both deliberate:
   but it is worth knowing before relocating a large tree.
 
 The same property makes the rows differ between machines, which is why
-`fixture_db_snapshot` (in `unified_document_index`'s tests) normalizes
+`fixture_db_snapshot` (in `unified_grid_and_search_index`'s tests) normalizes
 `source_url` through `stable_source_url`.
 
 ## Orphaned documents
@@ -382,7 +381,7 @@ $dl -readonly $db "SELECT blake3, title, doc_modified_at, xmp_instance_id
 `holodeck/scanned_blueprint_retitled.pdf` are the `content_blake3`
 pair: identical page content, different `/Title` and different trailer
 `/ID`. They are built on the *scanned* document on purpose — it is the
-one fixture that never renders, so the pair costs the qmd indexer
+one fixture that never renders, so the pair costs the search index
 nothing. A text-document pair would add a page to embed on every full
 fixture build.
 

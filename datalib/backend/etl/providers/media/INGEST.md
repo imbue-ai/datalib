@@ -33,13 +33,12 @@ They are separate **sources** because they answer different questions:
 ## No render side
 
 `media` fills its raw store and stops, the way `file_inventory` does.
-"Download-only" is structural — `processor::plan_render` returns no
-processors — not a flag.
+"Download-only" is structural — `ingest_only!` in
+`datalib_step/src/dispatch.rs` plans no render step — not a flag.
 
 There is no text to render. A small metadata card per item would let
-the qmd index answer "photos from the Yosemite trip", but it is not
-built, for two reasons: the qmd index's cost at 10⁵–10⁶ items is
-unmeasured, and a grid of text rows is the wrong surface for this data,
+search answer "photos from the Yosemite trip", but it is not built, for
+two reasons: the search index's cost at 10⁵–10⁶ items is unmeasured, and a grid of text rows is the wrong surface for this data,
 which wants thumbnails, a map, a time scrubber and an album view.
 
 Nothing here reaches `grid_rows`. Query the store directly; see
@@ -355,11 +354,11 @@ and identifies exactly two new items.
 A path the scan did not read is not a path that is gone. A cloud
 placeholder (above), a file over `max_bytes` and a file that will not
 open are found by the walk and not read; all are in the scan's
-`present_unread`, and their rows stay. A walk that reported an error deletes nothing at all, because an
-unreadable folder's files look exactly like deleted ones; the error is
-the source's `listing:files` problem. `a_path_the_scan_passed_over_keeps_its_row`
-in `tests/media_e2e.rs` covers all three, the placeholder as a sparse
-file (a size and no blocks).
+`present_unread`, and their rows stay. A walk that reported an error
+deletes nothing at all (§"When part of a scan fails").
+`a_path_the_scan_passed_over_keeps_its_row` in `tests/media_e2e.rs`
+covers all three, the placeholder as a sparse file (a size and no
+blocks).
 
 A file over `max_bytes` is a `record:files:<path>` warning until it is read,
 whether or not an earlier scan stored it. A playlist over 16 MiB is not read as one, keeps
@@ -368,7 +367,7 @@ the row it has, and is a `record:media_playlists:<path>` warning.
 ## Interrupting a scan
 
 The path-keyed tables are reconciled at the **end** of a scan, not
-truncated at the start as `pdf` does. The scan loads the stored paths
+truncated before the files are read as `pdf`'s is. The scan loads the stored paths
 first; each visited path is taken out of that set, and whatever remains
 at the end is exactly the set of paths that disappeared. Those rows are
 deleted by id, and the count lands in the step's `removed=` summary.
@@ -376,8 +375,7 @@ deleted by id, and the count lands in the step's `removed=` summary.
 Two things follow:
 
 - **A killed scan deletes nothing.** The path table keeps every row it
-  had, plus the batches the scan flushed (`BATCH_SIZE` rows each), and
-  the next scan reads no bytes for unchanged files. Pinned by
+  had, and the next scan reads no bytes for unchanged files. Pinned by
   `a_failed_scan_leaves_the_rescan_cursors_intact` in
   `tests/media_e2e.rs`, which induces the failure with a malformed
   ignore glob.
@@ -389,15 +387,15 @@ Two things follow:
 
 The scan goes on, and what it could not do is a `problems` row:
 
-- **An entry the walk could not read** (a folder it may not list, a
-  dangling link) means a path the walk did
-  not see may only be one it could not see, so **that scan deletes
-  nothing** and leaves a `listing:files` row. The next clean walk
-  deletes what is really gone and clears the row
-  (`a_walk_with_errors_deletes_nothing`).
-- **A file the walk could not open** is `record:files:<path>`, and
-  holds back no other deletion
-  (`a_file_that_will_not_open_is_its_own_row_and_deletes_go_on`).
+- **An entry the walk could not read** is a `listing:files` row, and
+  **that scan deletes nothing**; **a file the walk could not open** is
+  `record:files:<path>`, and holds back no other deletion. Why, for
+  every file-backed source:
+  [`etl/files/README.md`](../../files/README.md#answering-did-it-change-for-a-file-backed-source).
+  The next clean walk deletes what is really gone and clears the
+  listing row; a file's row goes the scan that opens it
+  (`a_walk_with_errors_deletes_nothing`,
+  `a_file_that_will_not_open_is_its_own_row_and_deletes_go_on`).
 - **A media file that would not open or parse** after the walk hashed it is
   `record:media_files:<path>`, and **a playlist that would not read**
   `record:media_playlists:<path>`; either keeps the rows an earlier scan
@@ -420,16 +418,13 @@ rows for deleted files. Set difference has no clock in it.
 `deletions_are_reconciled_without_a_clock` runs both scans under one
 `NOW` for exactly this reason.
 
-What is *not* interrupt-tolerant is the doltlite commit, and that turns
-out not to matter. Batches are written as SQLite transactions against
-the working set, which lives in the file and persists without a
-`dolt_commit`
-([doltlite.md § Branches](/docs/dev/doltlite.md#branches-head-and-the-working-set));
-the commit at the end of the step is a history marker, not what makes
-the work durable. The expensive per-item work — container
-parse, payload hash, metadata read — is keyed on content and lives in
-`media_items`, which only a scan that reached its end prunes, so an
-interrupted run's parses survive too.
+A scan seals only at its end, so a stopped or failed one publishes
+nothing it wrote: its batches are transactions on the working set, which
+the next open discards
+([doltlite.md § A writer's open discards the working set](/docs/dev/doltlite.md#a-writers-open-discards-the-working-set)).
+The host's fingerprint cache keeps the hashes it took, so the next scan
+re-hashes nothing it already read, but it parses again the content that
+was new in the stopped one.
 
 ## Items no path names
 
@@ -472,8 +467,9 @@ its item stays. The rows stay in earlier commits. Pinned by
 - **`skip_dataless` is exercised only where a sparse file has no
   blocks** (APFS does; a filesystem that allocates them leaves
   `a_dataless_file_keeps_its_row` checking nothing).
-- **A scan interrupted before its first flush loses that batch**, up to
-  `BATCH_SIZE` files. Everything already flushed survives.
+- **An interrupted scan keeps none of its parses** (§"Interrupting a
+  scan"): a first scan of a large library that is stopped starts its
+  parsing over.
 
 ## Inspecting a scan
 

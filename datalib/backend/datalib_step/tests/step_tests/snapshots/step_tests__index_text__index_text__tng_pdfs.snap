@@ -1,0 +1,59 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== tng_pdfs 00000000-0000-80f8-80ef-0e1b900a6c4f tng_pdfs storage
+--- chunk 0
+title: tng_pdfs storage | text: Source: tng_pdfs
+
+# tng_pdfs — storage
+
+Measured Tue Apr 15th, 2369 at 00:00.
+
+| Kind | Step | What | Size | Count | Id |
+| Source Size | ingest | `tng_pdfs/ingest` | <size> | 2 files | `00000000` |
+| Store | ingest | `tng_pdfs/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `tng_pdfs/ingest/entities.doltlite_db#pdf_documents` |  | 6 rows | `00000000` |
+| Table | ingest | `tng_pdfs/ingest/entities.doltlite_db#pdf_paths` |  | 7 rows | `00000000` |
+| Table | ingest | `tng_pdfs/ingest/entities.doltlite_db#pdf_scan_meta` |  | 1 row | `00000000` |
+
+=== tng_pdfs 00000000-0000-8a13-8568-fa91d9598906 Hull Integrity Survey
+--- chunk 0
+title: Hull Integrity Survey | text: Source: PDF
+Pages: 2
+Path: engineering/hull_survey.pdf
+
+# Hull Integrity Survey
+Hull Integrity Survey, Stardate 41209.2 Ablative plating on decks nine through twelve shows microfracturing consistent with prolonged warp stress. The scanned schematic follows on the next page.
+*Page 2 — no extractable text (image-only or scanned; OCR is not available yet).*
+
+=== tng_pdfs 00000000-0000-8ccc-b967-791c3561a091 warp_core_manual.pdf
+--- chunk 0
+title: warp_core_manual.pdf | text: Source: PDF
+Author: Geordi La Forge
+Pages: 1
+Path: engineering/warp_core_manual.pdf
+
+# warp_core_manual.pdf
+Warp Core Maintenance, Galaxy Class Recalibrate the dilithium articulation frame every four hundred hours of continuous warp operation. Misalignment induces antimatter containment cascade.
+
+=== tng_pdfs 0b50f5ba-0c60-856f-8ff1-ea60e22c037d Captain's Log
+--- chunk 0
+title: Captain's Log | text: Source: PDF
+Author: Jean-Luc Picard
+Pages: 1
+Path: archive/captains_log_copy.pdf
+
+# Captain's Log
+Captain’s Log, Stardate 41153.7 Our destination is planet Deneb IV, beyond which lies the great unexplored mass of the galaxy.
+
+=== tng_pdfs 0b50f5ba-0c60-8e25-aebf-920f19049521 Captain's Log
+--- chunk 0
+title: Captain's Log | text: Source: PDF
+Author: Jean-Luc Picard
+Pages: 2
+Path: captains_log_v2.pdf
+
+# Captain's Log
+Captain’s Log, Stardate 41153.7 Our destination is planet Deneb IV, beyond which lies the great unexplored mass of the galaxy.
+Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Command. The alien entity known as Q has confronted us.

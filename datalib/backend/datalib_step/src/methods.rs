@@ -34,6 +34,7 @@ pub fn ingest_methods(source_type: SourceType) -> &'static [IngestMethod] {
         }
         SourceType::Lightroom => datalib_etl_lightroom_config::LightroomConfig::METHODS,
         SourceType::Airvisual => datalib_etl_airvisual_config::AirvisualConfig::METHODS,
+        SourceType::BabyConnect => datalib_etl_baby_connect_config::BabyConnectConfig::METHODS,
         SourceType::AppleMessages => {
             datalib_etl_apple_messages_config::AppleMessagesConfig::METHODS
         }
@@ -101,9 +102,11 @@ pub fn refuse_retired_params(source_type: SourceType, params: &serde_json::Value
 /// are dropped rather than refused: the config still loads without them,
 /// and `datalib-dag --check` warns at the line, saying why.
 const INERT_PARAM_PATHS: &[&str] = &[
+    "backup.period",
     "common.always_clear_before_ingest",
     "export.fetch_photos",
     "gmail.request_concurrency",
+    "period",
 ];
 
 /// Removes the [`INERT_PARAM_PATHS`] these params write, returning the

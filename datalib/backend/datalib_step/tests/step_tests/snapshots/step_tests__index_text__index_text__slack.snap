@@ -1,0 +1,140 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== slack 00000000-0000-8087-98c3-35796eae6f68 #ten-forward
+--- chunk 0
+title: #ten-forward | text: William T. Riker — Wed 28 May 2369 15:16
+
+Anyone up for poker tonight?
+
+
+--- chunk 1
+title: #ten-forward | text: Worf — Wed 28 May 2369 15:18
+
+I do not understand the appeal of this Earth game.
+
+
+=== slack 00000000-0000-80d6-b5a5-2617d0679dab @William T. Riker, Worf
+--- chunk 0
+title: @William T. Riker, Worf | text: Jean-Luc Picard — Wed 28 May 2369 15:21
+
+Noted, Mr. Worf. Phasers on stun.
+
+
+=== slack 00000000-0000-8119-8c96-61dfdcca24d4 #bridge
+--- chunk 0
+title: #bridge | text: William T. Riker — Wed 28 May 2369 15:26
+
+Shields up. Red alert.
+
+
+=== slack 00000000-0000-811d-904c-516d04a43f68 #bridge
+--- chunk 0
+title: #bridge | text: Lt. Cmdr. Data — Wed 28 May 2369 15:20
+
+Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271 mark 4.
+
+
+=== slack 00000000-0000-81d7-a9c9-0ee77752a4e6 #engineering
+--- chunk 0
+title: #engineering | text: Lt. Cmdr. Data — Wed 28 May 2369 15:15
+
+Warp core efficiency at 99.7%.
+
+
+=== slack 00000000-0000-828b-b39d-73c49d6cb65c slack storage
+--- chunk 0
+title: slack storage | text: Source: slack
+
+# slack — storage
+
+Measured Tue Apr 15th, 2369 at 00:00.
+
+| Kind | Step | What | Size | Count | Id |
+| Source Size | ingest | `slack/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `slack/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `slack/ingest/blobs.sqlite#cas_objects` |  | 0 rows | `00000000` |
+| Store | ingest | `slack/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#bookmarks` |  | 2 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#channel_read_states` |  | 6 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#channels` |  | 6 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#coverage` |  | 12 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#coverage_checked` |  | 6 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#involving` |  | 0 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#messages` |  | 16 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#read_marks` |  | 6 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#saved_items` |  | 3 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#slack_attachments` |  | 1 row | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#threads` |  | 2 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#users` |  | 5 rows | `00000000` |
+| Table | ingest | `slack/ingest/entities.doltlite_db#workspaces` |  | 1 row | `00000000` |
+
+=== slack 00000000-0000-84d6-b1f0-0b22f0528e5c #bridge
+--- chunk 0
+title: #bridge | text: Jean-Luc Picard — Wed 28 May 2369 15:08
+
+Mr. Data, status report.
+
+
+--- chunk 1
+title: #bridge | text: Lt. Cmdr. Data — Wed 28 May 2369 15:10
+
+All systems nominal, Captain. Long-range sensors detect a Class M planet bearing 042 mark 7.
+
+
+--- chunk 2
+title: #bridge | text: William T. Riker — Wed 28 May 2369 15:11
+
+Set a course, Mr. Data. Warp factor five.
+
+
+--- chunk 3
+title: #bridge | text: Worf — Wed 28 May 2369 15:25
+
+Long-range sensors confirm it, Captain: a Warbird, decloaking.
+
+
+=== slack 00000000-0000-8630-8d5e-f4aae259bc1c @William T. Riker
+--- chunk 0
+title: @William T. Riker | text: William T. Riker — Wed 28 May 2369 15:21
+
+Captain, the away team roster is ready for your review.
+
+
+=== slack 00000000-0000-89a0-9bd6-7e928c9b2396 @Lt. Cmdr. Data
+--- chunk 0
+title: @Lt. Cmdr. Data | text: Lt. Cmdr. Data — Wed 28 May 2369 15:21
+
+Sir, I have completed my analysis of the Romulan signature.
+
+
+=== slack 00000000-0000-8ac1-a181-7b8e737cbd85 @William T. Riker
+--- chunk 0
+title: @William T. Riker | text: Jean-Luc Picard — Wed 28 May 2369 15:21
+
+Thank you, Number One. Make it so.
+
+
+=== slack 00000000-0000-8b0f-9140-61eaa37493ff #bridge
+--- chunk 0
+title: #bridge | text: Jean-Luc Picard — Wed 28 May 2369 15:18
+
+New combadge prototypes — thoughts?
+
+🖼 *[Delta shield prototype (not yet fetched)]*
+*(source: https://files.slack.com/files-pri/T_NCC1701D-F_DELTA_SHIELD/delta_shield.png)*
+
+
+=== slack 00000000-0000-8bff-b36c-0096661fd9fa #bridge
+--- chunk 0
+title: #bridge | text: Worf — Wed 28 May 2369 15:13
+
+I recommend raising shields **now**, Captain.
+
+
+=== slack 00000000-0000-8d9c-9316-43944fcd9e60 @William T. Riker, Worf
+--- chunk 0
+title: @William T. Riker, Worf | text: Worf — Wed 28 May 2369 15:21
+
+@Jean-Luc Picard, I must object to beaming down unarmed.

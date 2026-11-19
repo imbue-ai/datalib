@@ -5,8 +5,8 @@
 # `datalib-applet`, `datalib-doltlite`, `latchkey-curl-router`,
 # `curl-impersonate`) and the `latchkey` launcher — plus the
 # release's runtime asset unpacked beside them as `runtime/` (Node plus
-# the lockfile-pinned `qmd` and `latchkey` package trees the binaries
-# resolve beside themselves), so users register services and run syncs
+# the lockfile-pinned `latchkey` package tree the binaries resolve
+# beside themselves), so users register services and run syncs
 # from a single container with no Node, npm or npx in the image and
 # nothing fetched at run time — and a pre-baked demo data library to
 # try first.
@@ -20,18 +20,28 @@
 #     dist/arm64/datalib-aarch64-unknown-linux-gnu.tar.gz
 #     dist/arm64/runtime-aarch64-unknown-linux-gnu.tar.gz        (+ .sha256)
 #
+# and, for the CUDA variant only (`--build-arg CUDA=12`, amd64):
+#
+#     cuda/rootfs-cuda-libs.tar   cuBLAS 12, at usr/local/lib/datalib-cuda/
+#     cuda/rootfs-ggml-cuda.tar   opt/datalib/lib/libggml-cuda.so
+#
+# (scripts/release/stage_cuda.sh stages them, and stage_docker_context.sh
+# roots them at /).
+#
 # plus `demo/` (the fixtures + config that datalib/docker/stage_demo.sh
 # copies in). `scripts/build_docker.sh` stages all of it locally; the
 # docker-image job in `release.yml` stages its architecture's assets from
 # that run's artifacts and the demo from the checkout.
 #
-# Bind mounts at runtime (see docs/user/docker.md):
+# Everything runs as `datalib`, uid and gid 1000, whose home is /root
+# (see the user step below). Bind mounts at runtime (see
+# docs/user/docker.md), which uid 1000 must be able to write:
 #   /root/.latchkey                latchkey credentials store
 #                                  (RW for `auth set` / `services register`;
 #                                  may be RO for `datalib-dag`).
 #   /data                          the user's data root: config.toml, one
 #                                  directory per source, the indexes under
-#                                  unified_document_index/, the server's state
+#                                  unified_grid_and_search_index/, the server's state
 #                                  under system/.
 #   /import                        (convention, not required) whatever
 #                                  local export a file-backed source
@@ -41,12 +51,17 @@
 # build time from the TNG fixtures — see the demo step near the bottom.
 #
 # The devcontainer (`.devcontainer/Dockerfile`) does NOT build on this
-# image: it is its own `ubuntu:24.04` image with the Bazel toolchain,
+# image: it is its own `ubuntu:26.04` image with the Bazel toolchain,
 # published by `devcontainer.yml` independently of releases. The two
 # share their Node major and latchkey pin through
 # `//tools:version_pins_test`, and nothing else.
 
-FROM ubuntu:26.04
+# `none` is the image everyone pulls; `12` is the CUDA variant,
+# `<version>-cuda`, for a machine with an NVIDIA GPU and for Modal
+# (docs/dev/docker.md § "The CUDA variant").
+ARG CUDA=none
+
+FROM ubuntu:26.04 AS os
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -58,8 +73,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 #                    `curl-impersonate`)
 #   tini             PID 1 that reaps zombies and forwards signals; the
 #                    Rust binaries don't fork, but the pipeline spawns
-#                    the bundled `node` for the qmd indexer and latchkey
-#                    and we want SIGTERM to flow through cleanly
+#                    the bundled `node` for latchkey and we want
+#                    SIGTERM to flow through cleanly
 #   openssl          used by datalib-entrypoint.sh to generate the
 #                    latchkey encryption key on first run
 #
@@ -76,9 +91,49 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         tini \
     && rm -rf /var/lib/apt/lists/*
 
-# Pre-create the bind-mount targets so empty-dir mounts behave predictably
-# and so an unmounted run still has somewhere to write.
-RUN mkdir -p /root/.latchkey /data
+# The app parses whatever a person's mail and files hold, so nothing in
+# the container runs as root: everything runs as `datalib`, uid and gid
+# 1000, the id the first user on most Linux desktops has, so a folder
+# such a user mounts is already writable. Ubuntu's stock `ubuntu` user
+# holds that id and goes.
+#
+# Its home stays /root, a path and nothing more: every `docker run` a
+# person has written mounts `/root/.latchkey`.
+#
+# The bind-mount targets are made here so empty-dir mounts behave
+# predictably and an unmounted run still has somewhere to write.
+RUN set -eux; \
+    if id ubuntu >/dev/null 2>&1; then userdel --remove ubuntu; fi; \
+    if getent group ubuntu >/dev/null; then groupdel ubuntu; fi; \
+    groupadd --gid 1000 datalib; \
+    useradd --uid 1000 --gid 1000 --home-dir /root --no-create-home \
+        --shell /bin/bash datalib; \
+    mkdir -p /root/.latchkey /root/.cache /data; \
+    chown datalib:datalib /root /root/.latchkey /root/.cache /data; \
+    chmod 0755 /root
+ENV HOME=/root
+
+FROM os AS cuda-none
+
+# cuBLAS and the CUDA module, below everything a release changes, with
+# `--link`, which builds each layer apart from the ones under it, so that a
+# pull of the next release can reuse the ~700 MB. Each archive is rooted at
+# /, so every directory in its layer comes from the archive with a fixed
+# time: one `ADD` makes for its destination would carry the build's clock
+# and a new digest every release. `.github/workflows/cuda.yml` holds the
+# pushed layers' digests across two builds over different Ubuntus
+# (docs/dev/docker.md § "The CUDA variant"). NVIDIA's container
+# runtime passes in the driver (libcuda.so.1) and nothing else, so cuBLAS
+# ships here; datalib-step finds the module in /opt/datalib/lib/.
+FROM os AS cuda-12
+ADD --link cuda/rootfs-cuda-libs.tar /
+ADD --link cuda/rootfs-ggml-cuda.tar /
+ENV LD_LIBRARY_PATH=/usr/local/lib/datalib-cuda/cublas
+
+# The app without the demo: what `.github/workflows/cuda.yml` builds
+# (`--target app`) over the latest release's binaries, which cannot run a
+# newer demo config.
+FROM cuda-${CUDA} AS app
 
 # Everything below is the release tarball and the entrypoint. A
 # contributor in the devcontainer builds the binaries from source with
@@ -107,13 +162,17 @@ RUN mkdir -p /root/.latchkey /data
 ARG TARGETARCH
 COPY dist/${TARGETARCH}/ /tmp/release/
 RUN set -eux; \
-    tar -xzf /tmp/release/datalib-*-linux-gnu.tar.gz -C /tmp/release; \
+    tar --no-same-owner -xzf /tmp/release/datalib-*-linux-gnu.tar.gz -C /tmp/release; \
     staged="$(find /tmp/release -maxdepth 1 -type d -name 'datalib-*-linux-gnu' -print -quit)"; \
     test -n "$staged"; \
-    mv "$staged" /opt/datalib; \
+    # Into /opt/datalib rather than onto it: the CUDA variant has put the
+    # module in its lib/ already.
+    mkdir -p /opt/datalib; \
+    cp -a "$staged/." /opt/datalib/; \
+    rm -rf "$staged"; \
     (cd /tmp/release && sha256sum -c runtime-*-linux-gnu.tar.gz.sha256); \
     mkdir /opt/datalib/runtime; \
-    tar -xzf /tmp/release/runtime-*-linux-gnu.tar.gz -C /opt/datalib/runtime; \
+    tar --no-same-owner -xzf /tmp/release/runtime-*-linux-gnu.tar.gz -C /opt/datalib/runtime; \
     rm -rf /tmp/release; \
     for bin in datalib-dag datalib-migrate-config datalib-step datalib-applet \
                datalib-http latchkey-curl-router curl-impersonate \
@@ -135,34 +194,45 @@ RUN set -eux; \
     # anything else, so we can't use it the same way here.
     datalib-dag --version; \
     doltlite --version; \
-    /opt/datalib/runtime/node/bin/node --version
+    /opt/datalib/runtime/node/bin/node --version; \
+    # The CUDA variant: with cuBLAS beside it, the module may want nothing
+    # but the driver, which a builder without a GPU lacks.
+    if [ -e /opt/datalib/lib/libggml-cuda.so ]; then \
+        missing="$(ldd /opt/datalib/lib/libggml-cuda.so | awk '/not found/ {print $1}' | sort -u)"; \
+        echo "libggml-cuda.so lacks: ${missing:-nothing}"; \
+        test -z "$missing" || test "$missing" = libcuda.so.1; \
+        test -s /opt/datalib/licenses/CUDA-NOTICE.md; \
+        test -s /opt/datalib/licenses/nvidia/cudart/LICENSE; \
+        test -s /usr/local/lib/datalib-cuda/licenses/nvidia/cublas/LICENSE; \
+    fi; \
+    # The demo library is the one place under /opt the app writes.
+    install -d -o datalib -g datalib /opt/datalib/demo
 
-# Pre-fetch qmd's three pinned GGUF models (embedding + query-expansion
-# + reranker, ~2.25 GB) into qmd's cache (`~/.cache/qmd/models`), each
-# from its pinned HuggingFace revision and sha256-verified — the same
-# table the `embed` step and the search applet check, so a rebuilt image
-# with the same pins lands the same bytes.
-#
-# `QMD_PREFETCH_MODELS=false` skips it, which is what makes the
-# `:<ver>-slim` variant slim — the three GGUFs are 2.2 GB of the image.
-# Prod keeps them (default `true`): a first sync would otherwise stall
-# on a multi-GB download. The `else` branch still creates the empty
-# directory so a container that runs the app writes models to a path
-# the image owns.
-ARG QMD_PREFETCH_MODELS=true
-RUN set -eux; \
-    if [ "${QMD_PREFETCH_MODELS}" = "true" ]; then \
-        datalib-step pull-models && ls -lh /root/.cache/qmd/models; \
-    else \
-        echo "QMD_PREFETCH_MODELS=false - skipping the model prefetch"; \
-        mkdir -p /root/.cache/qmd/models; \
-    fi
+# The binaries and the runtime above stay root's and read-only to the
+# app; from here on, everything runs as the app's user.
+USER datalib
+
+# The embedding model (about 330 MB), the one model search loads,
+# from its pinned HuggingFace revision and sha256-verified into the
+# shared model cache (`/root/.cache/qmd/models`, the path qmd chose) —
+# the same table the `embed` step and the search applet check, so a
+# rebuilt image with the same pins lands the same bytes, and search by
+# meaning works with nothing fetched.
+RUN datalib-step pull-models && ls -lh /root/.cache/qmd/models
+
+# Nothing is fetched at run time: what the image ships is all it runs.
+# Every first-use fetch datalib makes (the embedding model, the Node
+# runtime, a package) is refused under this switch, naming what was
+# missing.
+# `-e DATALIB_NO_FETCH=0` lets it fetch (docs/dev/docker.md).
+ENV DATALIB_NO_FETCH=1
 
 # Entrypoint shim that bootstraps `LATCHKEY_ENCRYPTION_KEY` from a
 # per-bind-mount key file before exec'ing the user's command. See the
 # script header and docs/docker.md for the security model.
-COPY entrypoint.sh /usr/local/bin/datalib-entrypoint.sh
-RUN chmod 0755 /usr/local/bin/datalib-entrypoint.sh
+COPY --chmod=0755 entrypoint.sh /usr/local/bin/datalib-entrypoint.sh
+
+FROM app
 
 # --- The demo data library ------------------------------------------
 #
@@ -173,28 +243,23 @@ RUN chmod 0755 /usr/local/bin/datalib-entrypoint.sh
 # first-time user through it, and datalib/docker/doc_test.sh checks
 # that walkthrough against the built image.
 #
-# Each source's keyword (BM25) index is built here too, so free-text
-# search works the moment the demo starts. The embed steps and the
-# aggregator sit below a BUILD-TIME CUT marker and are dropped for this
-# run (the slim build has no models to embed with); the shipped config
-# keeps them, so the first sync in a container adds the embeddings.
-# `--now` is pinned to the fixture's own era so the bookkeeping reads
-# in fixture time rather than in build time, like the test fixture.
+# Every step runs, the search index's keyword index and embeddings
+# included, so search by words and by meaning both work the moment the
+# demo starts and every step on the Manage screen has run.
+# No `--now`: the run record is stamped at build time, so the
+# Dashboard's "Synced …" reads as a real past time.
 #
 # This layer is also the one smoke test that runs the shipped
 # pipeline end to end: a tarball whose datalib-dag or datalib-step
 # cannot ingest the fixtures fails the image build here.
-COPY demo/ /opt/datalib/demo-sources/
+COPY --chown=datalib:datalib demo/ /opt/datalib/demo-sources/
 RUN set -eux; \
-    mkdir -p /opt/datalib/demo; \
-    mv /opt/datalib/demo-sources/config.toml /opt/datalib/demo/config.full.toml; \
-    sed '/^# === BUILD-TIME CUT ===/,$d' /opt/datalib/demo/config.full.toml \
-        > /opt/datalib/demo/config.toml; \
-    datalib-dag /opt/datalib/demo/config.toml --now 2369-04-15T00:00:00+00:00; \
-    mv /opt/datalib/demo/config.full.toml /opt/datalib/demo/config.toml; \
+    mv /opt/datalib/demo-sources/config.toml /opt/datalib/demo/config.toml; \
+    datalib-dag /opt/datalib/demo/config.toml; \
     datalib-dag --check /opt/datalib/demo/config.toml; \
-    test -s /opt/datalib/demo/unified_document_index/qmd_aggregator/qmd/index.sqlite; \
-    datalib-doltlite -readonly /opt/datalib/demo/unified_document_index/grid_index/db.sqlite \
+    datalib-doltlite -readonly /opt/datalib/demo/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
+        "SELECT count(*) FROM search_documents;" | grep -qv '^0$'; \
+    datalib-doltlite -readonly /opt/datalib/demo/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
         "SELECT provider, count(*) FROM grid_rows GROUP BY 1;" \
         | tee /dev/stderr | grep -q .
 
@@ -232,8 +297,8 @@ ENV DATALIB_BIND=0.0.0.0:8731
 # on first run — see the script header) so users don't have to remember
 # `-e LATCHKEY_ENCRYPTION_KEY=...` on every `docker run`.
 #
-# tini in front of it reaps zombie subprocesses (the qmd indexer and
-# latchkey run under the bundled `node`) and forwards SIGTERM cleanly to the long-lived
+# tini in front of it reaps zombie subprocesses (latchkey runs under the
+# bundled `node`) and forwards SIGTERM cleanly to the long-lived
 # `datalib-http` case. Cheap enough to keep for short-lived runs too.
 #
 # No default CMD: this image is multi-entrypoint (`datalib-dag`,

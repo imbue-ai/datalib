@@ -1,13 +1,13 @@
 //! Golden test for Claude render::render against the TNG fixture.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use datalib_etl_claude::ingest::export::{ingest, IngestOptions};
 use datalib_etl_claude_render::render::parse::parse;
 use datalib_etl_claude_render::render::render::render_all;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_render::section::join;
 
 fn fixture_dir() -> PathBuf {
     if let Ok(d) = std::env::var("CLAUDE_FIXTURE_DIR") {
@@ -36,30 +36,6 @@ pub(crate) fn unpacked_fixture() -> tempfile::TempDir {
     unpacked
 }
 
-fn collect_by_ext(root: &std::path::Path, ext: &str) -> BTreeMap<String, String> {
-    let mut out = BTreeMap::new();
-    fn walk(
-        dir: &std::path::Path,
-        root: &std::path::Path,
-        ext: &str,
-        out: &mut BTreeMap<String, String>,
-    ) {
-        for e in fs::read_dir(dir).unwrap().flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                walk(&p, root, ext, out);
-            } else {
-                let rel = p.strip_prefix(root).unwrap().to_string_lossy().to_string();
-                if rel.ends_with(ext) {
-                    out.insert(rel, fs::read_to_string(&p).unwrap());
-                }
-            }
-        }
-    }
-    walk(root, root, ext, &mut out);
-    out
-}
-
 async fn ingest_fixture(raw: &Path) {
     let db =
         datalib_etl_claude::ingest::RawDb::open(&datalib_etl_claude::ingest::db::db_path_for(raw))
@@ -70,6 +46,7 @@ async fn ingest_fixture(raw: &Path) {
         db: db.clone(),
         input_path: export.path().to_path_buf(),
         now: "2026-09-04T00:00:00-07:00".to_string(),
+        when_deleted_upstream: Default::default(),
         progress: Default::default(),
         control: Default::default(),
     })
@@ -96,11 +73,9 @@ async fn renders_tng_fixture() {
     let raw = tempfile::tempdir().expect("raw");
     ingest_fixture(raw.path()).await;
     let parsed = parse(raw.path(), "claude_export", RawRange::cold()).expect("parse");
-    let tmp = tempfile::tempdir().expect("tmp");
     let mut docs = Vec::new();
     render_all(
         &parsed,
-        tmp.path(),
         "claude_export",
         Default::default(),
         &datalib_etl::progress::Progress::noop(),
@@ -113,11 +88,14 @@ async fn renders_tng_fixture() {
     )
     .expect("render");
 
-    let md = collect_by_ext(tmp.path(), ".md");
+    let md: BTreeMap<&str, String> = docs
+        .iter()
+        .map(|d| (d.markdown_uuid.as_str(), join(&d.sections)))
+        .collect();
     let mut bundle = String::new();
-    for (path, body) in &md {
+    for (uuid, body) in &md {
         bundle.push_str("=== ");
-        bundle.push_str(path);
+        bundle.push_str(uuid);
         bundle.push_str(" ===\n");
         bundle.push_str(body);
         bundle.push('\n');

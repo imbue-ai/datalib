@@ -3,18 +3,11 @@
 # Seven file-backed sources over the Star Trek: TNG fixtures the test
 # suite already uses, staged into the image at /opt/datalib/demo-sources
 # by stage_demo.sh. Nothing here needs a credential or the network, so
-# the ingest, render and grid_index steps run at image build time and
-# the demo is browsable the moment the container starts.
+# every step, the search index's embeddings included, runs at image
+# build time and the demo is searchable the moment the container starts.
 #
 # No `data_root`: it defaults to this file's directory, so the root can
 # be copied anywhere (a bind mount, say) and still work.
-#
-# The search index's embeddings are the one thing NOT built into the
-# image — see the BUILD-TIME CUT marker at the bottom. Everything after
-# that line is dropped for the build-time run and present in the shipped
-# file, so the first `Sync all` (or `datalib-dag` run) in a container
-# builds them. The reason is the slim build, which has no models to embed
-# with. The keyword (BM25) part is cheap and is built with the image.
 
 [[groups]]
 id = "claude-export"
@@ -148,173 +141,81 @@ reads = "pinned"
 inputs = ["pdfs/ingest"]
 
 [[groups]]
-id = "unified_document_index"
+id = "unified_grid_and_search_index"
 
 [[steps]]
-id = "unified_document_index/grid_index"
-command = "datalib-step run grid_index"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "datalib-step run unified_grid_and_search_index"
 reads = "pinned"
 locks = ["index"]
-inputs = [
-  "claude-export/render_markdown",
-  "gmail-takeout/render_markdown",
-  "google-takeout/render_markdown",
-  "sms-backup-restore/render_markdown",
-  "linkedin/render_markdown",
-  "contacts/render_markdown",
-  "pdfs/render_markdown",
-]
+inputs = ["*/render_markdown"]
 
 [[applets]]
-group = "unified_document_index"
-id = "unified_document_index"
-command = "datalib-applet unified_document_index"
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
 
-# Each source's keyword (BM25) part of the qmd index. Cheap enough to
-# build with the image, so free-text search works the moment the demo
-# starts; the embeddings below the cut are what a first sync adds.
+# Each source's embeddings, over the keywords baked into the image.
+[[steps]]
+id = "claude-export/embed"
+command = "datalib-step run embed claude"
+reads = "files"
+locks = ["embedder"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[steps]]
-id = "claude-export/keyword_index"
-command = "datalib-step run keyword_index claude"
+id = "gmail-takeout/embed"
+command = "datalib-step run embed email"
 reads = "files"
-locks = ["qmd_keyword"]
-inputs = ["claude-export/render_markdown"]
+locks = ["embedder"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[steps]]
-id = "gmail-takeout/keyword_index"
-command = "datalib-step run keyword_index email"
+id = "google-takeout/embed"
+command = "datalib-step run embed google_takeout"
 reads = "files"
-locks = ["qmd_keyword"]
-inputs = ["gmail-takeout/render_markdown"]
+locks = ["embedder"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[steps]]
-id = "google-takeout/keyword_index"
-command = "datalib-step run keyword_index google_takeout"
+id = "sms-backup-restore/embed"
+command = "datalib-step run embed sms_backup_restore"
 reads = "files"
-locks = ["qmd_keyword"]
-inputs = ["google-takeout/render_markdown"]
+locks = ["embedder"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[steps]]
-id = "sms-backup-restore/keyword_index"
-command = "datalib-step run keyword_index sms_backup_restore"
+id = "linkedin/embed"
+command = "datalib-step run embed linkedin"
 reads = "files"
-locks = ["qmd_keyword"]
-inputs = ["sms-backup-restore/render_markdown"]
+locks = ["embedder"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[steps]]
-id = "linkedin/keyword_index"
-command = "datalib-step run keyword_index linkedin"
+id = "contacts/embed"
+command = "datalib-step run embed contacts"
 reads = "files"
-locks = ["qmd_keyword"]
-inputs = ["linkedin/render_markdown"]
+locks = ["embedder"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[steps]]
-id = "contacts/keyword_index"
-command = "datalib-step run keyword_index contacts"
+id = "pdfs/embed"
+command = "datalib-step run embed pdf"
 reads = "files"
-locks = ["qmd_keyword"]
-inputs = ["contacts/render_markdown"]
+locks = ["embedder"]
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
-[[steps]]
-id = "pdfs/keyword_index"
-command = "datalib-step run keyword_index pdf"
-reads = "files"
-locks = ["qmd_keyword"]
-inputs = ["pdfs/render_markdown"]
-
-# Above the cut: the build-time run needs these too.
 # The verbs `datalib-step` takes (docs/dev/step_protocol.md § Verbs).
 [[programs]]
 command = "datalib-step"
 verbs = ["reset", "prepare", "compact", "collect"]
 
-# Whatever writes qmd's keyword index: two at once can lose a document.
+# One embed at a time: each loads the model and writes the search index.
 [[locks]]
-name = "qmd_keyword"
-slots = 1
-
-# Whatever embeds into qmd's index: two at once race on its vectors.
-[[locks]]
-name = "qmd_embed"
+name = "embedder"
 slots = 1
 
 # The fan-ins that read every source.
 [[locks]]
 name = "index"
 slots = 2
-
-# === BUILD-TIME CUT === (the Dockerfile drops everything below this line
-# for the build-time run; keep the aggregator and the embed steps last)
-[[steps]]
-id = "unified_document_index/qmd_aggregator"
-command = "datalib-step run qmd_aggregator"
-reads = "pinned"
-locks = ["qmd_keyword"]
-inputs = [
-  "claude-export/keyword_index",
-  "claude-export/embed",
-  "gmail-takeout/keyword_index",
-  "gmail-takeout/embed",
-  "google-takeout/keyword_index",
-  "google-takeout/embed",
-  "sms-backup-restore/keyword_index",
-  "sms-backup-restore/embed",
-  "linkedin/keyword_index",
-  "linkedin/embed",
-  "contacts/keyword_index",
-  "contacts/embed",
-  "pdfs/keyword_index",
-  "pdfs/embed",
-]
-
-# Each source's embeddings, over the keywords baked into the image.
-
-[[steps]]
-id = "claude-export/embed"
-command = "datalib-step run embed claude"
-reads = "files"
-locks = ["qmd_embed"]
-inputs = ["claude-export/keyword_index"]
-
-[[steps]]
-id = "gmail-takeout/embed"
-command = "datalib-step run embed email"
-reads = "files"
-locks = ["qmd_embed"]
-inputs = ["gmail-takeout/keyword_index"]
-
-[[steps]]
-id = "google-takeout/embed"
-command = "datalib-step run embed google_takeout"
-reads = "files"
-locks = ["qmd_embed"]
-inputs = ["google-takeout/keyword_index"]
-
-[[steps]]
-id = "sms-backup-restore/embed"
-command = "datalib-step run embed sms_backup_restore"
-reads = "files"
-locks = ["qmd_embed"]
-inputs = ["sms-backup-restore/keyword_index"]
-
-[[steps]]
-id = "linkedin/embed"
-command = "datalib-step run embed linkedin"
-reads = "files"
-locks = ["qmd_embed"]
-inputs = ["linkedin/keyword_index"]
-
-[[steps]]
-id = "contacts/embed"
-command = "datalib-step run embed contacts"
-reads = "files"
-locks = ["qmd_embed"]
-inputs = ["contacts/keyword_index"]
-
-[[steps]]
-id = "pdfs/embed"
-command = "datalib-step run embed pdf"
-reads = "files"
-locks = ["qmd_embed"]
-inputs = ["pdfs/keyword_index"]

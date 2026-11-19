@@ -147,6 +147,92 @@ pub fn sniff(head: &[u8]) -> Option<&'static str> {
     None
 }
 
+/// EXIF's Orientation for a Lightroom orientation code, which names the
+/// stored picture's corners, clockwise from `A` at its top left, that
+/// the shown picture's top edge runs between. `AB` is upright; a code
+/// read backwards (`BA`) is the same turn, mirrored. `None` for a code
+/// this does not know.
+///
+/// A preview's pixels are stored unturned and `previews.db` says how to
+/// show them. `BC` is the commonest turn in a real library, as a
+/// camera's commonest portrait (EXIF 6) would be, and a `BC` preview drawn
+/// as stored lies on its side, its top to the left. The mirrored codes
+/// are a handful of photos in that library and not yet seen drawn.
+pub fn exif_orientation(code: &str) -> Option<u16> {
+    Some(match code {
+        "AB" => 1,
+        "BA" => 2,
+        "CD" => 3,
+        "DC" => 4,
+        "AD" => 5,
+        "BC" => 6,
+        "CB" => 7,
+        "DA" => 8,
+        _ => return None,
+    })
+}
+
+/// `jpeg` with its EXIF replaced by one saying only `orientation`, so a
+/// browser draws it turned. `None` when the bytes are not a JPEG whose
+/// segments read up to the image data.
+pub fn with_orientation(jpeg: &[u8], orientation: u16) -> Option<Vec<u8>> {
+    if !jpeg.starts_with(&[0xFF, 0xD8]) {
+        return None;
+    }
+    let mut kept = Vec::with_capacity(jpeg.len());
+    let mut at = 2usize;
+    // APP0 (JFIF) stays first; ours goes right after it.
+    let mut ours_at = 2usize;
+    loop {
+        let marker = *jpeg.get(at..at + 2)?.get(1)?;
+        if jpeg[at] != 0xFF {
+            return None;
+        }
+        // Start of scan: the image data, which no tag can follow.
+        if marker == 0xDA {
+            break;
+        }
+        let len = u16::from_be_bytes([*jpeg.get(at + 2)?, *jpeg.get(at + 3)?]) as usize;
+        let segment = jpeg.get(at..at + 2 + len)?;
+        let is_exif = marker == 0xE1 && segment.get(4..10) == Some(b"Exif\0\0");
+        if !is_exif {
+            kept.extend_from_slice(segment);
+            if marker == 0xE0 && kept.len() == segment.len() {
+                ours_at += segment.len();
+            }
+        }
+        at += 2 + len;
+    }
+    let mut out = Vec::with_capacity(jpeg.len());
+    out.extend_from_slice(&jpeg[..2]);
+    out.extend_from_slice(&kept[..ours_at - 2]);
+    out.extend_from_slice(&orientation_app1(orientation));
+    out.extend_from_slice(&kept[ours_at - 2..]);
+    out.extend_from_slice(&jpeg[at..]);
+    Some(out)
+}
+
+/// An APP1 segment holding one big-endian TIFF directory with one tag,
+/// Orientation (0x0112, a SHORT).
+fn orientation_app1(orientation: u16) -> Vec<u8> {
+    let mut tiff = Vec::with_capacity(26);
+    tiff.extend_from_slice(b"MM\0\x2A");
+    tiff.extend_from_slice(&8u32.to_be_bytes());
+    tiff.extend_from_slice(&1u16.to_be_bytes());
+    tiff.extend_from_slice(&0x0112u16.to_be_bytes());
+    tiff.extend_from_slice(&3u16.to_be_bytes());
+    tiff.extend_from_slice(&1u32.to_be_bytes());
+    tiff.extend_from_slice(&orientation.to_be_bytes());
+    tiff.extend_from_slice(&[0, 0]);
+    tiff.extend_from_slice(&0u32.to_be_bytes());
+    let len = (2 + 6 + tiff.len()) as u16;
+    let mut seg = vec![0xFF, 0xE1];
+    seg.extend_from_slice(&len.to_be_bytes());
+    seg.extend_from_slice(b"Exif\0\0");
+    seg.extend_from_slice(&tiff);
+    seg
+}
+
 /// Whether a browser draws it. A RAW file, a TIFF or a HEIC (outside
 /// Safari) it does not, so an original of one is refused with a reason.
 pub fn drawable(content_type: &str) -> bool {
@@ -319,5 +405,65 @@ mod tests {
         assert_eq!(byte_range(Some("bytes=0-1,5-6"), 1000), None);
         assert_eq!(byte_range(Some("bytes=2000-"), 1000), None);
         assert_eq!(byte_range(None, 1000), None);
+    }
+
+    fn segment(marker: u8, payload: &[u8]) -> Vec<u8> {
+        let mut s = vec![0xFF, marker];
+        s.extend_from_slice(&((payload.len() + 2) as u16).to_be_bytes());
+        s.extend_from_slice(payload);
+        s
+    }
+
+    /// The markers before the image data, and the Orientation an EXIF
+    /// segment among them holds.
+    fn read_back(jpeg: &[u8]) -> (Vec<u8>, Option<u16>) {
+        let (mut markers, mut orientation, mut at) = (Vec::new(), None, 2);
+        while jpeg[at + 1] != 0xDA {
+            let len = u16::from_be_bytes([jpeg[at + 2], jpeg[at + 3]]) as usize;
+            let seg = &jpeg[at..at + 2 + len];
+            markers.push(seg[1]);
+            if seg[1] == 0xE1 && &seg[4..10] == b"Exif\0\0" {
+                let tiff = &seg[10..];
+                assert_eq!(&tiff[..2], b"MM");
+                assert_eq!(u16::from_be_bytes([tiff[10], tiff[11]]), 0x0112);
+                orientation = Some(u16::from_be_bytes([tiff[18], tiff[19]]));
+            }
+            at += 2 + len;
+        }
+        (markers, orientation)
+    }
+
+    /// A turned photo's preview was drawn as stored, on its side: the
+    /// served picture has to say how to turn it.
+    #[test]
+    fn a_turned_preview_carries_its_orientation() {
+        let mut jpeg = vec![0xFF, 0xD8];
+        jpeg.extend(segment(0xE0, b"JFIF\0\x01\x02"));
+        jpeg.extend(segment(0xE1, b"Exif\0\0MM\0\x2A\0\0\0\x08\0\0"));
+        jpeg.extend(segment(0xE1, b"http://ns.adobe.com/xap/1.0/\0<x/>"));
+        jpeg.extend(segment(0xDB, &[0; 4]));
+        let scan = [0xFF, 0xDA, 0x00, 0x02, 0x12, 0x34, 0xFF, 0xD9];
+        jpeg.extend(scan);
+
+        let out = with_orientation(&jpeg, 6).unwrap();
+        let (markers, orientation) = read_back(&out);
+        assert_eq!(markers, vec![0xE0, 0xE1, 0xE1, 0xDB]);
+        assert_eq!(orientation, Some(6));
+        assert!(out.ends_with(&scan));
+
+        assert_eq!(with_orientation(b"not a jpeg", 6), None);
+        assert_eq!(with_orientation(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00], 6), None);
+    }
+
+    #[test]
+    fn every_lightroom_turn_has_an_exif_orientation() {
+        let codes = ["AB", "BA", "CD", "DC", "AD", "BC", "CB", "DA"];
+        let mut seen: Vec<u16> = codes.iter().map(|c| exif_orientation(c).unwrap()).collect();
+        seen.sort_unstable();
+        assert_eq!(seen, (1..=8).collect::<Vec<_>>());
+        assert_eq!(exif_orientation("AB"), Some(1));
+        assert_eq!(exif_orientation("BC"), Some(6));
+        assert_eq!(exif_orientation("DA"), Some(8));
+        assert_eq!(exif_orientation("XY"), None);
     }
 }

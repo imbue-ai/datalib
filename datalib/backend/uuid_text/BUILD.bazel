@@ -1,0 +1,19 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# A uuid read however it is written (dashed or not, either case, at the
+# end of a slug or a link) and written one way. No deps at all, so
+# anything that reads an id a person or a source wrote can take it.
+rust_library(
+    name = "datalib_uuid_text",
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_uuid_text",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+)
+
+rust_test(
+    name = "uuid_text_unittests",
+    size = "small",
+    crate = ":datalib_uuid_text",
+    edition = "2021",
+)

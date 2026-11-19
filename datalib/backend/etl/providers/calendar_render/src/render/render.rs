@@ -2,7 +2,6 @@
 //! shared calendar renderer.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 use anyhow::Result;
 use datalib_etl::progress::Progress;
@@ -23,13 +22,17 @@ use super::{calendly, google, ics, ids};
 /// "this and following" edit moved them to a new UID; 7 when "Added" and
 /// "Last changed" became `<time>` stamps; 8 when an organizer or guest
 /// with an address became a chip; 9 when an event's row was placed at its
-/// start rather than its last edit.
-pub const RENDER_VERSION: u32 = 9;
+/// start rather than its last edit; 10 when a Windows zone name or a
+/// `GMT-0700` `TZID` began to resolve; 11 when an iCalendar description
+/// written as HTML began to read as text.
+pub const RENDER_VERSION: u32 = 11;
 
 /// A calendar as its events need it.
 #[derive(Debug, Clone)]
 pub struct CalendarInfo {
     pub uuid: String,
+    /// Upstream's id for it, which a rename keeps.
+    pub upstream_id: String,
     pub label: String,
     pub time_zone: Option<String>,
 }
@@ -44,7 +47,6 @@ pub struct Rendered {
 
 pub fn render_all(
     parsed: &Parsed,
-    out_dir: &Path,
     source_id: &str,
     progress: &Progress,
     range: RawRange<'_>,
@@ -90,14 +92,7 @@ pub fn render_all(
     if let Some(render) = &render {
         events.retain(|e| render.contains(&e.event_uuid));
     }
-    let summary = cc_render_all(
-        &profile,
-        &events,
-        out_dir,
-        source_id,
-        progress,
-        on_doc_complete,
-    )?;
+    let summary = cc_render_all(&profile, &events, source_id, progress, on_doc_complete)?;
     buckets.extend(summary.buckets);
     Ok(Rendered { buckets, gone })
 }
@@ -135,6 +130,7 @@ pub fn normalize_all(parsed: &Parsed, source_id: &str) -> Vec<NormalizedEvent> {
                 c.id.as_str(),
                 CalendarInfo {
                     uuid: ids::calendar(source_id, &c.id).uuid,
+                    upstream_id: c.id.clone(),
                     label: c.display_name.clone().unwrap_or_else(|| c.id.clone()),
                     time_zone: c.time_zone.clone(),
                 },
@@ -144,6 +140,7 @@ pub fn normalize_all(parsed: &Parsed, source_id: &str) -> Vec<NormalizedEvent> {
     let info = |id: &str| {
         calendars.get(id).cloned().unwrap_or_else(|| CalendarInfo {
             uuid: ids::calendar(source_id, id).uuid,
+            upstream_id: id.to_string(),
             label: id.to_string(),
             time_zone: None,
         })

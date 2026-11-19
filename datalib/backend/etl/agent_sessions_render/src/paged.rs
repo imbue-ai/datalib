@@ -199,7 +199,7 @@ fn render_open<S: SessionRender>(
             range.cursor,
             pin,
             &DiffScanSpec {
-                global_fanout_tables: &[],
+                fanout_query: None,
                 bucket_query: TRANSCRIPT_BUCKETS_SQL,
             },
         )
@@ -229,7 +229,6 @@ fn render_open<S: SessionRender>(
     };
     let mut renderer = ChatRenderer::new(
         &profile,
-        target.out_root,
         target.source_id,
         plan.render.len(),
         target.progress,

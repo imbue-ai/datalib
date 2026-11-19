@@ -70,6 +70,19 @@ pub enum SearchTermKind {
     /// photo's. What `caption:` finds it by, since a photo has no page
     /// for free text to search.
     Caption = 17,
+    /// A keyword the row is tagged with, or one above it in its source's
+    /// keyword tree: a photo's. What `keyword:` finds it by.
+    Keyword = 18,
+    /// The name of someone shown in the row: a person a photo's face or
+    /// keyword tags. What `with:` and `pictured:` find a photo by.
+    Pictured = 19,
+    /// The row's star rating, `1` to `5`, where it has one. What
+    /// `rating:` finds a photo by.
+    Rating = 20,
+    /// A collection the row is in, by its name, the name of each set
+    /// above it, and its whole path: a photo's albums. What
+    /// `collection:` finds it by.
+    Collection = 21,
 }
 
 impl SearchTermKind {
@@ -112,8 +125,14 @@ impl SearchTermKind {
             | SearchTermKind::Subject
             | SearchTermKind::Label
             | SearchTermKind::Place
-            | SearchTermKind::Caption => 2,
-            SearchTermKind::Author | SearchTermKind::Name | SearchTermKind::Participant => 1,
+            | SearchTermKind::Caption
+            | SearchTermKind::Keyword
+            | SearchTermKind::Pictured
+            | SearchTermKind::Collection => 2,
+            SearchTermKind::Author
+            | SearchTermKind::Name
+            | SearchTermKind::Participant
+            | SearchTermKind::Rating => 1,
         }
     }
 
@@ -136,7 +155,11 @@ impl SearchTermKind {
             | SearchTermKind::Subject
             | SearchTermKind::Label
             | SearchTermKind::Place
-            | SearchTermKind::Caption => false,
+            | SearchTermKind::Caption
+            | SearchTermKind::Keyword
+            | SearchTermKind::Pictured
+            | SearchTermKind::Rating
+            | SearchTermKind::Collection => false,
         }
     }
 }
@@ -215,7 +238,13 @@ pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
         row.notion_page_uuid.as_deref(),
     ];
     let names = [row.channel.as_deref(), row.account.as_deref()];
-    let upstream_id = row.upstream_id.as_deref().filter(|id| is_dashed_uuid(id));
+    // Only an upstream id shaped like a uuid is a term: the rest are often
+    // keys datalib composed (a period, a path), which the Fields tab would
+    // match by their opening words.
+    let upstream_id = row
+        .upstream_id
+        .as_deref()
+        .filter(|id| datalib_uuid_text::is_dashed(id));
     let candidates = std::iter::once((SearchTermKind::Id, Some(row.uuid.as_str())))
         .chain(std::iter::once((SearchTermKind::UpstreamId, upstream_id)))
         .chain(
@@ -252,28 +281,19 @@ pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
     out
 }
 
-/// Only an upstream id shaped like a uuid is a term: the rest are often
-/// keys datalib composed (a period, a path), which the Fields tab would
-/// match by their opening words.
-fn is_dashed_uuid(s: &str) -> bool {
-    s.len() == 36
-        && s.bytes().enumerate().all(|(i, c)| match i {
-            8 | 13 | 18 | 23 => c == b'-',
-            _ => c.is_ascii_hexdigit(),
-        })
-}
-
 /// What [`search_terms_of`] derives and how [`TERMS_DDL`] lays it out. It
 /// is part of the grid index's shape, and an index in another shape is
 /// built again, so change it whenever either changes. A kind a render
 /// starts to supply needs no change: it arrives as its rows are written.
-pub const TERMS_SHAPE: &str = "9";
+pub const TERMS_SHAPE: &str = "10";
 
 /// The search terms' tables in the grid index, dictionary-encoded: each grid row once in
 /// `rows`, each distinct value once in `vals`, and a term is three
-/// integers. The FTS5 index covers `vals` alone, linked by rowid, and
-/// keeps `@ . - _ + : /` inside a token so an id or a handle is one
-/// token (`docs/dev/doltlite.md` § "Full-text search (FTS5)").
+/// integers. The two FTS5 indexes cover `vals` alone, linked by rowid:
+/// `vals_fts` by word, keeping `@ . - _ + : /` inside a token so an id or
+/// a handle is one token (`docs/dev/doltlite.md` § "Full-text search
+/// (FTS5)"), and `vals_tri` by every run of three characters, so a value
+/// holding a bare word is looked up rather than read from every value.
 pub const TERMS_DDL: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS rows (row_id INTEGER PRIMARY KEY, \
      uuid TEXT NOT NULL UNIQUE, touched_at_utc TEXT)",
@@ -286,6 +306,8 @@ pub const TERMS_DDL: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS vals_nocase ON vals (value COLLATE NOCASE)",
     "CREATE VIRTUAL TABLE IF NOT EXISTS vals_fts USING fts5(value, content='', \
      contentless_delete=1, tokenize=\"unicode61 tokenchars '@.-_+:/'\")",
+    "CREATE VIRTUAL TABLE IF NOT EXISTS vals_tri USING fts5(value, content='', \
+     contentless_delete=1, tokenize='trigram')",
     // Each handle with every name it was seen under, so a name finds the
     // handles of whoever went by it (`datalib_etl_render::search_terms`).
     "CREATE TABLE IF NOT EXISTS names (handle TEXT NOT NULL, name TEXT NOT NULL, \

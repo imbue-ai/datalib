@@ -2,13 +2,12 @@
 //! walk and the export ingest, writing one raw store.
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
 
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
-use datalib_etl_claude_config::{ClaudeApiSync, ClaudeConfig};
+use datalib_etl_claude_config::{ClaudeApiSync, ClaudeConfig, WhenDeletedUpstream};
 use datalib_etl_web::http::LatchkeySettings;
 
 use crate::ingest;
@@ -24,6 +23,7 @@ pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
 pub fn plan_ingest(ctx: PlanContext, config: ClaudeConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
+    let when_deleted_upstream = config.when_deleted_upstream;
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();
     if let Some(sync) = config.api {
         procs.push(Box::new(ClaudeIngest {
@@ -31,12 +31,14 @@ pub fn plan_ingest(ctx: PlanContext, config: ClaudeConfig) -> Result<Vec<Box<dyn
             raw_path,
             sync,
             latchkey: config.latchkey_settings.clone(),
+            when_deleted_upstream,
         }));
     } else if let Some(export) = config.export {
         procs.push(Box::new(ClaudeExportIngest {
             id: format!("claude/{name}/download"),
             raw_path,
             input_path: export.path(),
+            when_deleted_upstream,
         }));
     }
     Ok(procs)
@@ -49,6 +51,7 @@ struct ClaudeIngest {
     /// Which latchkey identity to authenticate as, forwarded whole from
     /// the source's `latchkey_settings:` block.
     latchkey: LatchkeySettings,
+    when_deleted_upstream: WhenDeletedUpstream,
 }
 
 #[async_trait]
@@ -86,16 +89,19 @@ impl DataProcessor for ClaudeIngest {
                 latchkey: self.latchkey.clone(),
                 // users.json is expected alongside the raw store (playback seeds it).
                 export_dir: Some(self.raw_path.clone()),
-                overlap: self
+                refetch_newest_conversations: self
                     .sync
-                    .refresh_most_recent_n_chat_count
-                    .map(|v| v as usize)
-                    .unwrap_or(0),
-                sleep_between: Duration::ZERO,
+                    .refetch_newest_conversations
+                    .map(|v| v as usize),
+                max_conversations_per_run: self.sync.max_conversations_per_run.map(|v| v as usize),
+                wait_between_requests: self.sync.wait_between_requests(),
                 since,
                 conv_uuids: self.sync.conv_uuids.clone(),
                 projects: self.sync.projects,
                 project_uuids: self.sync.project_uuids.clone(),
+                cowork: self.sync.cowork,
+                cowork_session_ids: self.sync.cowork_session_ids.clone(),
+                when_deleted_upstream: self.when_deleted_upstream,
                 progress: ctx.progress.clone(),
                 control: ctx.control.clone(),
                 sealer: Some(sealer),
@@ -104,8 +110,9 @@ impl DataProcessor for ClaudeIngest {
             .await?;
             Ok(format!(
                 "fetched={} skipped={} out_of_scope={} errors={} non_chat_orgs={} forbidden_orgs={} \
-             pruned={} total={} projects={} projects_skipped={} project_docs={} \
-             project_docs_skipped={} \
+             pruned={} kept_deleted_upstream={} total={} projects={} projects_skipped={} project_docs={} \
+             project_docs_skipped={} cowork={} cowork_skipped={} cowork_as_chats={} \
+             cowork_pruned={} \
              requests={} forbidden_retry_attempts={} forbidden_retry_recoveries={}",
                 s.fetched,
                 s.skipped,
@@ -114,11 +121,16 @@ impl DataProcessor for ClaudeIngest {
                 s.non_chat_orgs,
                 s.forbidden_orgs,
                 s.pruned,
+                s.kept_deleted_upstream,
                 s.total,
                 s.projects_fetched,
                 s.projects_skipped,
                 s.project_docs_fetched,
                 s.project_docs_skipped,
+                s.cowork_fetched,
+                s.cowork_skipped,
+                s.cowork_as_chats,
+                s.cowork_pruned,
                 s.requests,
                 s.forbidden_retry_attempts,
                 s.forbidden_retry_recoveries,
@@ -134,6 +146,7 @@ struct ClaudeExportIngest {
     id: String,
     raw_path: PathBuf,
     input_path: PathBuf,
+    when_deleted_upstream: WhenDeletedUpstream,
 }
 
 #[async_trait]
@@ -153,13 +166,20 @@ impl DataProcessor for ClaudeExportIngest {
                 // The run-pinned `now`, so every bookkeeping stamp this
                 // ingest writes agrees with the rest of the run.
                 now: ctx.now.to_string(),
+                when_deleted_upstream: self.when_deleted_upstream,
                 progress: ctx.progress.clone(),
                 control: ctx.control.clone(),
             })
             .await?;
             Ok(format!(
-                "users={} conversations={} projects={} project_docs={} pruned={}",
-                s.users, s.conversations, s.projects, s.project_docs, s.pruned,
+                "users={} conversations={} projects={} project_docs={} pruned={} \
+                 kept_deleted_upstream={}",
+                s.users,
+                s.conversations,
+                s.projects,
+                s.project_docs,
+                s.pruned,
+                s.kept_deleted_upstream,
             ))
         })
         .await

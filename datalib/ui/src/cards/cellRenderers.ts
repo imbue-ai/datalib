@@ -17,6 +17,7 @@ import { STATUS_GLYPHS, STEP_GLYPHS, glyphSvg } from "@/config/glyphs";
 import { ownRange, sparkline, windowDelta, type Sample } from "@/config/sparkline";
 import { formatDuration, formatRelative, formatStamp } from "@/config/timeFormat";
 import { formatBytes } from "@/config/bytes";
+import { formatMicroUsd } from "./dashboardCharts";
 import { fittingDateCell, parseStamp } from "./dates";
 
 /// The fields of one type among the specs. A `timestamp` cell reads "5
@@ -51,8 +52,10 @@ function iconFor(token: string | null | undefined, label: string): Element | nul
   return glyph ? glyphSvg(glyph, label, 14) : null;
 }
 
-function formatUnit(n: number, unit: string): string {
-  return unit === "bytes" ? formatBytes(n) : n.toLocaleString();
+export function formatUnit(n: number, unit: string): string {
+  if (unit === "bytes") return formatBytes(n);
+  if (unit === "micro_usd") return formatMicroUsd(n);
+  return n.toLocaleString();
 }
 
 export function none(): HTMLElement {
@@ -323,7 +326,6 @@ export const WIDTH: Record<ColumnType, number> = {
   status: 150,
   chips: 260,
   actions: 116,
-  markdown_uuid: 200,
   membership: 72,
   image: 80,
 };

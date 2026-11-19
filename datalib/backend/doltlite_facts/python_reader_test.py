@@ -126,8 +126,41 @@ class TheReader(WithAStore):
                 store.query("INSERT INTO t VALUES ('z')")
 
     def test_a_missing_commit_fails_the_open(self) -> None:
-        with self.assertRaisesRegex(OSError, "not found"):
-            reader.Store(self.store, "0" * 40)
+        for commit in ("0" * 40, "no-such-branch"):
+            with self.assertRaisesRegex(reader.UnknownCommit, "not found"):
+                reader.Store(self.store, commit)
+
+    def test_each_failure_has_its_own_class_and_is_still_an_oserror(self) -> None:
+        with self.assertRaises(reader.CannotOpen) as opened:
+            reader.Store(self.dir / "missing.doltlite_db")
+        self.assertNotIsInstance(opened.exception, reader.UnknownCommit)
+        with reader.Store(self.store) as store:
+            for sql, kind in [
+                ("SELEC 1", reader.QueryError),
+                ("SELECT * FROM nope", reader.QueryError),
+                ("SELECT nope FROM t", reader.QueryError),
+                ("INSERT INTO t VALUES ('z')", reader.ReadOnly),
+            ]:
+                with self.assertRaises(kind, msg=sql) as raised:
+                    store.query(sql)
+                self.assertIsInstance(raised.exception, OSError)
+                self.assertNotEqual(raised.exception.code, 0, sql)
+
+    def test_rows_answer_by_name_and_say_their_columns(self) -> None:
+        with reader.Store(self.store) as store:
+            rows = store.query(
+                "SELECT id, length(id) AS n, id AS id FROM t ORDER BY id"
+            )
+            self.assertEqual(rows.columns, ("id", "n", "id"))
+            self.assertEqual(rows, [("a", 1, "a"), ("b", 1, "b")])
+            first = rows[0]
+            self.assertEqual((first["n"], first[0], first[-1]), (1, "a", "a"))
+            self.assertEqual(first.as_dict(), {"id": "a", "n": 1})
+            self.assertEqual(first.keys(), ["id", "n", "id"])
+            with self.assertRaises(KeyError):
+                first["nope"]
+            empty = store.query("SELECT id FROM t WHERE id = 'z'")
+            self.assertEqual((empty, empty.columns), ([], ("id",)))
 
     def test_binds_and_returns_every_type(self) -> None:
         values = (None, 7, 2.5, "é\x00z", b"\x00\xff", b"")
