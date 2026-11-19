@@ -13,7 +13,7 @@ beside `[[groups]]` and `[[steps]]`.
 | Lifetime | runs to completion during a sync | long-lived server, started with `datalib-http` |
 | Produces | artifacts on disk | HTTP responses and card components |
 | Scheduled by | `datalib-dag`, from artifact dependencies | the http gateway, one for each entry in the config |
-| Declares | `group` + `function` (or `id`), `command`, `inputs`, `params` | `id`, `command`, `params`, and optionally the `group` its Manage row is filed under |
+| Declares | `id`, `command`, `inputs`, `params`, `reads`, `locks` | `id`, `command`, `params`, and optionally the `group` its Manage row is filed under |
 
 An applet declares no `inputs` because it is never scheduled and owns
 no artifacts: it reads what steps already wrote.
@@ -44,9 +44,10 @@ how an applet runs a package's program (`packages.md`).
 `params` is forwarded as
 `--params-file <path>` (a JSON file only the owner can read, deleted
 when the applet stops — params can hold tokens, and `ps` shows every
-user every command line), the working directory is the data root, and
-`env` is merged into the child — all as for a step, so there is one set
-of rules. The same goes for what an applet is handed of the server's
+user every command line); a step gets its params in
+`DATALIB_DAG_PARAMS` instead. The working directory is the data root,
+and `env` is merged into the child, as for a step. The same goes for
+what an applet is handed of the server's
 own environment, except that it gets none of latchkey's `LATCHKEY_*`
 variables ([`step_protocol.md`](step_protocol.md) § "What your command
 receives").

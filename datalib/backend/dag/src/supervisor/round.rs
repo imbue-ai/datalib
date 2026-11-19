@@ -1045,7 +1045,7 @@ impl Runner {
         facts: &mut Facts,
     ) -> Result<()> {
         let mut failed: BTreeMap<String, Vec<&str>> = BTreeMap::new();
-        for i in wipe::compact_targets(graph, targets) {
+        for i in wipe::compact_targets(graph, targets, how) {
             let step = &graph.steps[i].id;
             match self.shrink_one(graph, step, how).await {
                 Ok(Some(version)) => {
@@ -1142,9 +1142,6 @@ impl Runner {
         );
         StepCtx {
             step_id: spec.id.clone(),
-            group: spec.group.clone(),
-            group_type: spec.group_type.clone(),
-            function: spec.function.clone(),
             data_root: self.data_root.clone(),
             inputs: graph.resolved_inputs[i].clone(),
             changed_inputs,

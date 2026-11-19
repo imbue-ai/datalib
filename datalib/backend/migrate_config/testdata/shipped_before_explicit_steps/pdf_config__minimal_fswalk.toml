@@ -1,0 +1,20 @@
+# Every PDF under a folder on this machine, converted to markdown. No
+# account and no credentials: `fswalk.path` is the folder to scan.
+[[groups]]
+id = "pdf"
+name = "PDFs"
+type = "pdf"
+
+[[steps]]
+group = "pdf"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params.fswalk]
+path = "~/Documents/papers"
+
+[[steps]]
+group = "pdf"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["pdf/ingest"]

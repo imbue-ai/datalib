@@ -23,7 +23,7 @@ pub struct OutputClaim {
 pub struct Emitter {
     step: String,
     out: Arc<Mutex<std::io::Stdout>>,
-    /// Set by a `--migrate` that cannot bring the step's store to this
+    /// Set by a `--prepare` that cannot bring the step's store to this
     /// build's shape in place; the outcome then says `needs_rerun`.
     needs_rerun: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -98,7 +98,14 @@ impl Emitter {
         self.event(&Event::Capabilities {
             step: self.step.clone(),
             streams_output,
+            version: this_build(),
         });
+    }
+
+    /// Say which commit this program was built from, which the run store
+    /// records for the process. Streams nothing until a step says it does.
+    pub fn declare_version(&self) {
+        self.declare_streams_output(false);
     }
 
     pub fn progress(&self) -> Progress {
@@ -107,6 +114,11 @@ impl Emitter {
             step: self.step.clone(),
         }))
     }
+}
+
+/// This build's commit, when the build knows it.
+fn this_build() -> Option<String> {
+    datalib_runtime::build_id::git_hash()
 }
 
 /// [`ProgressSink`] impl over an [`Emitter`].

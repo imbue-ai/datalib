@@ -51,12 +51,12 @@ pub(crate) fn groups_from_inputs(inputs: &[String]) -> Vec<String> {
 
 fn open_index(root: &Path, stop: &StopFlag) -> Result<Index> {
     let stop = stop.clone();
-    let raw = std::env::var(datalib_dag::subprocess::ENV_EMBED_CONTEXTS).ok();
+    let raw = std::env::var(datalib_env::DATALIB_STEP_EMBED_CONTEXTS).ok();
     let contexts = embed_contexts(raw.as_deref()).unwrap_or_else(|| {
         tracing::warn!(
             raw,
             default = datalib_qmd_indexer::DEFAULT_EMBED_CONTEXTS,
-            "embed_contexts is not a number above zero; using the default"
+            "DATALIB_STEP_EMBED_CONTEXTS is not a number above zero; using the default"
         );
         datalib_qmd_indexer::DEFAULT_EMBED_CONTEXTS
     });
@@ -65,7 +65,7 @@ fn open_index(root: &Path, stop: &StopFlag) -> Result<Index> {
         .embed_contexts(contexts))
 }
 
-/// The contexts a config's `embed_contexts` asks for, the default when it
+/// The contexts a config's `DATALIB_STEP_EMBED_CONTEXTS` asks for, the default when it
 /// says nothing, or `None` for a value this build cannot use.
 fn embed_contexts(raw: Option<&str>) -> Option<u32> {
     match raw {

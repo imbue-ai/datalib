@@ -7,9 +7,8 @@ name = "GitLab"
 type = "gitlab"
 
 [[steps]]
-group = "gitlab"
-function = "ingest"
-command = "datalib-step"
+id = "gitlab/ingest"
+command = "datalib-step run ingest gitlab"
 
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
@@ -33,21 +32,23 @@ merge_requests = [        # only these MRs, as `namespace/project!IID` or a gitl
 ]
 
 [[steps]]
-group = "gitlab"
-function = "render_markdown"
-command = "datalib-step"
+id = "gitlab/render_markdown"
+command = "datalib-step run render_markdown gitlab"
 inputs = ["gitlab/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "gitlab"
-function = "keyword_index"
-command = "datalib-step"
+id = "gitlab/keyword_index"
+command = "datalib-step run keyword_index gitlab"
 inputs = ["gitlab/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "gitlab"
-function = "embed"
-command = "datalib-step"
+id = "gitlab/embed"
+command = "datalib-step run embed gitlab"
 inputs = ["gitlab/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]

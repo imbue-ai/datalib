@@ -7,9 +7,8 @@ name = "Claude Code"
 type = "claude_code"
 
 [[steps]]
-group = "claude_code"
-function = "ingest"
-command = "datalib-step"
+id = "claude_code/ingest"
+command = "datalib-step run ingest claude_code"
 
 [steps.params.sessions]
 path = "~/Downloads/claude-code-backup/projects"  # a copy of another machine's
@@ -17,10 +16,10 @@ path = "~/Downloads/claude-code-backup/projects"  # a copy of another machine's
                                                   # ~/.claude/projects
 
 [[steps]]
-group = "claude_code"
-function = "render_markdown"
-command = "datalib-step"
+id = "claude_code/render_markdown"
+command = "datalib-step run render_markdown claude_code"
 inputs = ["claude_code/ingest"]
+reads = "pinned"
 
 # How much of one tool result reaches the page. The raw store keeps all of
 # it; a result that echoes a whole file is cut here, with a marker saying
@@ -31,13 +30,15 @@ max_tool_result_bytes = 16384  # the default
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "claude_code"
-function = "keyword_index"
-command = "datalib-step"
+id = "claude_code/keyword_index"
+command = "datalib-step run keyword_index claude_code"
 inputs = ["claude_code/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "claude_code"
-function = "embed"
-command = "datalib-step"
+id = "claude_code/embed"
+command = "datalib-step run embed claude_code"
 inputs = ["claude_code/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]

@@ -63,11 +63,18 @@ const SETUP: &[SetupStep] = &[
         commands: &[],
     },
     SetupStep {
-        say: "Check the config. Every problem is reported at once, each with its line.",
-        commands: &[Example {
-            what: "check the config",
-            command: "datalib-dag --check ~/datalib/config.toml",
-        }],
+        say: "Check the config. Every problem is reported at once, each with its line; \
+              `check-params` reads each source's params the way a sync would.",
+        commands: &[
+            Example {
+                what: "check the config",
+                command: "datalib-dag --check ~/datalib/config.toml",
+            },
+            Example {
+                what: "check its sources' params",
+                command: "datalib-step check-params ~/datalib/config.toml",
+            },
+        ],
     },
     SetupStep {
         say: "Check the sign-in: ask the service which account the credentials reach. \
@@ -275,9 +282,9 @@ fn examples_intro(t: SourceType) -> Vec<String> {
             "Every stanza names its group after its type, `{t}`. The group's `id` is the \
              folder under the data root its data goes in, and the first half of each of \
              its step ids (`{t}/ingest`), so it must be unique in the config; choose it \
-             once. To use another id, change the group's `id`, each step's `group`, and the \
-             `{t}/` at the start of every step named in an `inputs` list. Leave `type` as \
-             it is. `name` is free text the app shows, and can be anything."
+             once. To use another id, change the group's `id`, and the `{t}/` at the start \
+             of each step's `id` and of every step named in an `inputs` list. Leave `type`, \
+             and the type at the end of each step's `command`, as they are. `name` is free text the app shows, and can be anything."
         ),
         format!(
             "`datalib-step examples {t} --append <config>` appends the minimal stanza for \
@@ -300,7 +307,8 @@ fn examples_intro(t: SourceType) -> Vec<String> {
         ),
         format!(
             "Then `datalib-dag --check <config>` reports every problem with the config at \
-             once, each at its line; `datalib-step probe {t}` asks the service which \
+             once, each at its line, and `datalib-step check-params <config>` every param a \
+             sync would refuse; `datalib-step probe {t}` asks the service which \
              account the credentials reach, if the method reaches one; and \
              `datalib-dag <config> --sync <id>/ingest --by <you>` syncs the source and \
              everything that reads it.{sign_in}"
@@ -791,19 +799,6 @@ mod tests {
                 assert!(!page.contains(command), "{t}:\n{page}");
             }
         }
-    }
-
-    /// `datalib-dag init` writes the starter with no server to fill in a
-    /// placeholder, and it told the reader to go to `<origin>/agent/config.md`.
-    #[test]
-    fn the_starter_config_names_a_page_that_exists() {
-        let starter = datalib_dag::starter::STARTER_CONFIG;
-        assert!(!starter.contains("<origin>"), "{starter}");
-        let (_, rest) = starter
-            .split_once("`datalib-step help ")
-            .expect("the starter points at a help page");
-        let (topic, _) = rest.split_once('`').unwrap();
-        assert!(datalib_agent_docs::doc(topic).is_some(), "{topic}");
     }
 
     /// `help calendar` opened on "## Calendar (CalDAV)", so it read as if

@@ -6,9 +6,8 @@ name = "ChatGPT"
 type = "chatgpt"
 
 [[steps]]
-group = "chatgpt"
-function = "ingest"
-command = "datalib-step"
+id = "chatgpt/ingest"
+command = "datalib-step run ingest chatgpt"
 
 # When to give up on rate limits. The download always honours a 429's
 # Retry-After and backs off; these only decide when to stop.
@@ -42,21 +41,23 @@ conv_uuids = ["https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789"]
 path = "~/Downloads/chatgpt-export.zip"
 
 [[steps]]
-group = "chatgpt"
-function = "render_markdown"
-command = "datalib-step"
+id = "chatgpt/render_markdown"
+command = "datalib-step run render_markdown chatgpt"
 inputs = ["chatgpt/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "chatgpt"
-function = "keyword_index"
-command = "datalib-step"
+id = "chatgpt/keyword_index"
+command = "datalib-step run keyword_index chatgpt"
 inputs = ["chatgpt/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "chatgpt"
-function = "embed"
-command = "datalib-step"
+id = "chatgpt/embed"
+command = "datalib-step run embed chatgpt"
 inputs = ["chatgpt/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]

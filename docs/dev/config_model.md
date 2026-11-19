@@ -8,35 +8,43 @@ forwards, what a bad entry costs — is
 the contract a step command implements is
 [`step_protocol.md`](step_protocol.md).
 
-## Three kinds of entry
+## The kinds of entry
 
 ```toml
+[[programs]]
+command = "datalib-step"
+verbs = ["reset", "prepare", "compact", "collect"]
+
+[[locks]]
+name = "index"
+slots = 2
+
 [[groups]]
 id = "work-slack"          # the directory; permanent
 name = "Work Slack"        # free text; nothing depends on it
 type = "slack"             # what is mirrored — makes this a source
 
 [[steps]]
-group = "work-slack"
-function = "ingest"        # id composes to work-slack/ingest
-command = "datalib-step"
+id = "work-slack/ingest"   # its group is the first part
+command = "datalib-step run ingest slack"
 [steps.params.api]         # the method: Slack's own API
 channels = ["chat-qi"]
 
 [[steps]]
-group = "work-slack"
-function = "render_markdown"
-command = "datalib-step"
+id = "work-slack/render_markdown"
+command = "datalib-step run render_markdown slack"
 inputs = ["work-slack/ingest"]
+reads = "pinned"
 
 [[groups]]
 id = "unified_document_index"       # no type: it mirrors nothing
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
-command = "datalib-step"
+id = "unified_document_index/grid_index"
+command = "datalib-step run grid_index"
 inputs = ["work-slack/render_markdown"]
+reads = "pinned"
+locks = ["index"]
 
 [[applets]]
 group = "unified_document_index"
@@ -46,38 +54,70 @@ command = "datalib-applet unified_document_index"
 
 **A group** is one thing on the Manage screen: an `id`, an optional
 `name`, an optional `type`, an optional `description`. A source is a
-group with a `type`; the unified document index is a group without one. `name`
-and `description` are display text — never forwarded to a step, never
-fingerprinted — so editing either re-runs nothing.
+group with a `type`; the unified document index is a group without one.
+None of the four is handed to a step or fingerprinted, so editing
+`name` or `description` re-runs nothing. The runner never reads `type`:
+the Manage screen and the wizard do, and `datalib-step` is told it on
+its command line.
 
-**A step** is `(group, function)`. The loader composes its id as
-`<group>/<function>`; it is never written, and nothing downstream
-splits it. That id is the tree the step writes, the key its state is
-kept under, and what another step's `inputs` name. Every step names
-the program it runs in `command`. Datalib's own steps run
-`datalib-step`, the step program it ships, which reads its function and
-its group's `type` from the environment, so such a step has to be under
-a group. Another program may take any function word it likes, or sit
-outside any group with a verbatim `id` — the one place a step id is
-written.
+**A step** is an `id` and a `command`. The id is the tree the step
+writes, the key its state is kept under, and what another step's
+`inputs` name; its first `/`-separated part is its group. The command
+is required, and is everything the program needs to know about what to
+do. Datalib's own steps run `datalib-step`, the step program it ships,
+as `datalib-step run <function> [<type>]`: `<function>` is what the
+step does (`ingest`, `render_markdown`, …), and `<type>` is its group's
+`type`, written for every step under a typed group. Such a step's id
+must be `<group>/<function>`. Another program may write any id and any
+command; a step whose id's first part names no `[[groups]]` entry is a
+step outside any group.
+
+A step of `datalib-step` also writes the `reads` and `locks` it needs,
+since the runner infers nothing from the program's name:
+
+- **`reads`.** `ingest` writes none, since it reads nothing.
+  `keyword_index`, `embed`, `embedding_map` and perseus's
+  `render_markdown` read their inputs off disk and write
+  `reads = "files"`. Every other step writes `reads = "pinned"`, even
+  while its `inputs` are empty (a fan-in's are, until a source is
+  added).
+- **`locks`.** `qmd_aggregator` and `keyword_index` write
+  `locks = ["qmd_keyword"]`, `embed` writes `locks = ["qmd_embed"]`,
+  and every other step under a group with no `type` (`grid_index`,
+  `embedding_map`, `time_series_index`) writes `locks = ["index"]`. A
+  source's `ingest` and renders write none, and hold the runner's
+  default.
+
+The file then declares those three locks in `[[locks]]` entries
+(`qmd_keyword` and `qmd_embed` with 1 slot, `index` with 2), since a
+step that holds an undeclared lock is dropped, and lists the verbs
+`datalib-step` takes in a `[[programs]]` entry. `datalib-step`'s own
+code for all of this is `datalib_step/src/step_entry.rs`, which the
+examples, `examples --append` and `check-params` share.
+
+`[env]` is a table of variables handed to every step, below each
+step's own `env`. `datalib-step` reads three knobs from it:
+`DATALIB_STEP_CHECKPOINT_CADENCE`, `DATALIB_STEP_RENDER_PAGES` and
+`DATALIB_STEP_EMBED_CONTEXTS` (`step_protocol.md` § "How
+`datalib-step` fits").
 
 **An applet** is a server the http gateway spawns on demand. Its `id`
 is the mount prefix and a JavaScript identifier, unique on its own and
 not composed; `group` on an applet only says which Manage row it is
 filed under.
 
-**A diff group** is a group of `type = "diff"` with a `source`: it
-mirrors nothing itself and renders what changed in the `source` group's
-raw store between two commits, as documents with the changes marked and
-`grid_rows` with a `diff_status`. Its render step is `render_markdown`,
-reading `<source>/ingest`, with the two commits under `params.diff`
-(`from` and `to`, both required, and `max_documents`, the most
-documents a side may render before the step fails, default 1000); the
-rest of `params` is the source type's render config. It may also carry
-a `keyword_index` and an `embed`, like a source; no other function. The
-fan-ins name it like any render step. The source's id and type reach the
-step as `DATALIB_DAG_SOURCE_GROUP` and `DATALIB_DAG_SOURCE_GROUP_TYPE`,
-set by the loader in the step's `env`.
+**A diff group** is a group of `type = "diff"`: it mirrors nothing
+itself and renders what changed in another source's raw store between
+two commits, as documents with the changes marked and `grid_rows` with
+a `diff_status`. Its render step runs
+`datalib-step run render_markdown diff --source-type <type>`, where
+`<type>` is the type of the source it compares, and reads that
+source's `<source>/ingest` as its first input. The two commits are
+under `params.diff` (`from` and `to`, both required, and
+`max_documents`, the most documents a side may render before the step
+fails, default 1000); the rest of `params` is the source type's render
+config. It may also carry a `keyword_index` and an `embed`, like a
+source. The fan-ins name it like any render step.
 [`plans/completed/diff_renderer.md`](plans/completed/diff_renderer.md)
 has the design; `configs/dag_example.toml` has one.
 
@@ -90,7 +130,7 @@ and forgets the group's steps in its record, without waiting for a sync
 to end (`datalib/backend/dag/README.md` §"Resets and purges"); without that, a group re-added under the
 same id and definition would read as up to date and write nothing.
 
-A fourth table, `[[packages]]`, lists the packages the library uses,
+A `[[packages]]` table lists the packages the library uses,
 each pinned by its manifest's hash. A step or applet runs one of a
 package's programs by its path under the data root, in its `command`;
 `packages.md` is the rest.
@@ -100,17 +140,21 @@ package's programs by its path under the data root, in its `command`;
 
 ## Naming rules
 
-- A group id and a function are each one portable filename segment:
-  lowercase letters, digits, `.`, `_`, `-`, not starting with `-`,
-  never `.` or `..`, no `/`. Lower case because each names a folder and
+- A group id, and each `/`-separated part of a step id, is one
+  portable filename segment: lowercase letters, digits, `.`, `_`, `-`,
+  not starting with `-`, never `.` or `..`. Lower case because each
+  names a folder and
   a Mac's disk does not tell `Email/` from `email/`: with one spelling
   per folder, no two ids name one folder on any platform. An applet id
   is a lowercase JavaScript identifier for the same reason (it names
   `system/frontend/<id>/`).
-- `system` is reserved for the runner's and server's own state.
+- `system` is reserved for the runner's and server's own state, and
+  `datalib_curated` for what a person curates by hand; no step id
+  starts with either.
 - Step ids are unique and never nested: two steps under one tree would
   be two writers on one doltlite file.
-- The built-in functions are the directory names: `ingest`,
+- `datalib-step`'s functions are the last part of their step's id:
+  `ingest`,
   `render_markdown`, `render_time_series`, `render_occurrences`,
   `keyword_index`, `embed`, `grid_index`, `qmd_aggregator`,
   `embedding_map`, `time_series_index`
@@ -120,8 +164,9 @@ package's programs by its path under the data root, in its `command`;
   `time_series_index` writes `unified_time_series_index/time_series_index`,
   and nothing else, because the applet that reads each finds it from the
   data root alone.
-- A source whose type has time series (`TIME_SERIES_SOURCE_TYPES` in
-  `dag/src/config.rs`: `garmin`, `yolink`, `airvisual`) has a `render_time_series` step beside
+- A source whose type has time series (`SourceType::renders_time_series`
+  in `datalib_step/src/source_type.rs`: `garmin`, `yolink`,
+  `airvisual`) has a `render_time_series` step beside
   its `render_markdown`, reading its ingest, and the
   `time_series_index` names every such step in its `inputs`.
   `docs/dev/time_series.md` is the design.
@@ -294,15 +339,15 @@ option of its method's table; the shared
 reads them. A retired field a planner refuses stays readable by serde
 and leaves the schema with `#[schemars(skip)]`.
 
-`datalib-step check-params <config>` plans every built-in step's params
-the way a sync would and prints one JSON line per step it would refuse.
-The runner and the server link no provider, so both ask it:
-`datalib-dag --check`, and `PUT /api/config` and `POST
-/api/config/check` (`http/src/params_check.rs`), which refuse to write
-a config a sync would refuse a step of. `params_diagnostics` in
-`dag/src/config.rs` turns the answer into ordinary `rejected`
-diagnostics at the misspelled key's line, so every door shows it the
-same way. A custom command's params are never asked about.
+`datalib-step check-params <config>` plans the params of every step
+that runs `datalib-step run` the way a sync would, and prints one JSON
+line per step it would refuse. The server links no provider, so it asks:
+`PUT /api/config` and `POST /api/config/check`
+(`http/src/params_check.rs`) refuse to write a config a sync would
+refuse a step of, and show each answer as an ordinary `rejected`
+diagnostic at the misspelled key's line. `datalib-dag --check` does not
+ask: the runner knows no program, so it checks only what the runner
+itself reads. Another program's params are never asked about.
 
 ## `Reach`: origin or local
 
@@ -332,63 +377,67 @@ test in `methods.rs` fails when it drifts, and
 
 `datalib-dag --reset` is *not* gated on it: it empties the step's store
 whatever the method, and the next sync reads its files or its origin in
-full — the only "from scratch" button a user has. The built-in ingest
-driver only logs the reach.
+full — the only "from scratch" button a user has. `datalib-step`'s
+ingest driver only logs the reach.
 
 ## What the loader checks
 
 The rules sit in `datalib/backend/dag/src/config.rs` (`accept_groups`,
-`accept_steps`, `accept_applets`) and `graph.rs`; `diagnostics.rs`
-explains the severities. A bad entry is dropped and the rest of the
-file runs.
+`accept_steps`, `accept_programs`, `accept_applets`) and `graph.rs`;
+`diagnostics.rs` explains the severities. A bad entry is dropped and
+the rest of the file runs.
 
 | the entry | is dropped when |
 |---|---|
 | the whole file (`Fatal`) | it is not TOML; nothing loads |
-| any entry | it does not deserialize: an unknown key, a wrong type, both `id` and `group` |
+| any entry | it does not deserialize: an unknown key, a wrong type, a missing required key |
+| a top-level key | it is `checkpoint_cadence`, `render_pages` or `embed_contexts`, the shape from before `[env]` (the steps still load); an `[env]` name is not a variable name |
 | a lock | its name is not one segment, it has no slots, or it is declared twice |
-| a group | its id is not one segment, is `system`, or is a duplicate; it is a `diff` group with no `source`, or whose `source` names no group, a typeless group or another `diff` group; it carries `source` without being a `diff` group |
-| a step | its function is not one segment; its group is undeclared; it runs `datalib-step` and has no group; its `command` is the retired `datalib-step download\|render\|grid_index\|qmd_index …` shape; it is a built-in `qmd_index`, the shape from before `qmd_aggregator` (the message names `datalib-migrate-config`); its id is under `system`, duplicated, or nested with another; its `command` is empty or has unbalanced quoting; it holds a lock no `[[locks]]` entry declares; an input names itself; under a `diff` group it is not `render_markdown`, `keyword_index` or `embed`, or it is the render and has inputs and the first is not `<source>/ingest` |
+| a program | its `command` is more than one word, or it is declared twice |
+| a group | its id is not one segment, is reserved, or is a duplicate; it carries `source`, the shape from before a diff group's steps named their source's type |
+| a step | it writes `group` or `function`, or has no `command`, the shape from before every step wrote its id and its whole command; a part of its id is not one segment; its id is under `system` or `datalib_curated`, duplicated, or nested with another; its `command` is empty or has unbalanced quoting; its program is in a package directory no `[[packages]]` entry pins; its params are over 64 KiB as JSON; it holds a lock no `[[locks]]` entry declares; an input names itself |
 | a step (blocked: fix elsewhere) | its group or an input was itself dropped; an input names no step; it sits on a cycle or downstream of one |
 | an applet | its id is not a JS identifier, is `user`, or is a duplicate; its `command` is empty |
 
-Warnings: a group with nothing filed under it; a `name` on a grouped
-step (the label comes from the group and the function); an applet
-filed under an undeclared group; a `keyword_index` that `qmd_aggregator`
-does not read, in a config that has one; a built-in step's
-`common.always_clear_before_ingest`, or linkedin's
-`export.fetch_photos` (linkedin.com no longer shows a profile to
-anyone signed out), which no longer do anything (`datalib-step` drops
-them before parsing). The Manage screen's System
-row counts the config's warnings and names them on hover; a
-double-click opens the config.
+A refusal of a retired shape names the rewrite: the app makes it when
+it next reads the file, and `datalib-migrate-config` from a terminal
+(§"The retired shapes").
 
-## What the runner forwards and what `datalib-step` refuses
+Warnings: a group with nothing filed under it, and an applet filed
+under an undeclared group. The Manage screen's System row counts the
+config's warnings and names them on hover; a double-click opens the
+config.
 
-Every grouped step gets `DATALIB_DAG_STEP` (the composed id),
-`DATALIB_DAG_GROUP`, `DATALIB_DAG_FUNCTION`, and `DATALIB_DAG_GROUP_TYPE`
-when the group has one. The group's `type` is in every child step's
-fingerprint, so changing it re-runs the group.
+`datalib-step` drops a few keys from its params before parsing them,
+since they no longer do anything, and the step still runs: an ingest's
+`common.always_clear_before_ingest`, linkedin's `export.fetch_photos`
+(linkedin.com no longer shows a profile to anyone signed out) and
+email's `gmail.request_concurrency`.
 
-`datalib-step` (`src/source.rs`, `main.rs`, `dispatch.rs`,
-`methods.rs`) refuses, naming the fix:
+## What `datalib-step` refuses
 
-- no `DATALIB_DAG_GROUP`, or a function it does not perform;
-- a step id that is not `<group>/<function>` as the environment
-  spells them;
-- `ingest` or `render_markdown` under a group with no `type`;
-- `render_time_series` under a group with no `type`, or of a type with
-  no time series;
-- `render_occurrences` under a group whose type is not `calendar`, or
-  with a param other than `days_back` and `days_ahead`;
+The runner hands every step `DATALIB_DAG_STEP` (its id) and, when it
+has params, `DATALIB_DAG_PARAMS`; nothing about its group. `datalib-step`
+reads its function and its group's type off its command line
+(`src/source.rs`, `main.rs`, `dispatch.rs`, `methods.rs`), and refuses,
+naming the fix:
+
+- a command with no `run <function>`, or a function it does not perform;
+- a step id that is not `<group>/<function>`;
+- `ingest` or a render with no `<type>` on its command line;
+- `--source-type` on a step whose type is not `diff`, or a diff
+  group's render without it;
+- `render_time_series` of a type with no time series;
+- `render_occurrences` of a type that is not `calendar`, or with a
+  param other than `days_back` and `days_ahead`;
 - a `type` it has no provider for — a retired spelling (`*_api`,
   `*_backup`, `claude_export`, `carddav`) names `datalib-migrate-config`;
 - params still carrying `sync`, `common.input_path`, `common.raw_path`,
   `gmail_api` or a top-level `fetch_photos`, likewise naming the tool;
 - an `ingest` step whose params hold none of its type's methods;
-- `grid_index`, `qmd_aggregator` or `embedding_map` under any group but
-  `unified_document_index`, and `time_series_index` under any but
-  `unified_time_series_index`.
+- `grid_index`, `qmd_aggregator` or `embedding_map` with any id but
+  `unified_document_index/<function>`, and `time_series_index` with any
+  but `unified_time_series_index/time_series_index`.
 
 A render reads its raw store from its first input; one that declares
 none reads its own group's `ingest` tree and logs a warning. A store
@@ -399,18 +448,22 @@ can point elsewhere.
 
 A `[[locks]]` entry names a lock and its `slots`; a step's `locks` names
 the ones it holds (`["q"]` takes one slot, `{ q = "exclusive" }` all of
-them), and one that names none holds `network`, `cpu` or `index`, the
-three budgets every config has — or, for the built-in qmd steps, one of
-the two one-slot locks every config has too: `qmd_keyword`, held by
-`qmd_aggregator` and every `keyword_index`, and `qmd_embed`, held by every
-`embed`. qmd lets a keyword update run beside an embed, but not two of
-either ([`qmd_behaviour.md`](qmd_behaviour.md), findings 4, 5 and 12).
-`reads = "files"` says a step reads its inputs off disk, so no writer of
-them runs beside it. `start = "after_inputs_settle"` says a step waits
-until nothing upstream of it is running or due, rather than starting on
-each seal of a download that streams (`"on_each_seal"`, the default);
-no built-in step says it. None of these is in the
-fingerprint. The rules are the dag README's "What keeps steps apart";
+them), and one that names none holds `network` (no inputs) or `cpu`
+(inputs), the two budgets every config has. A datalib config declares
+three more for `datalib-step`'s steps (§"The kinds of entry"): the
+one-slot `qmd_keyword`, held by `qmd_aggregator` and every
+`keyword_index`, the one-slot `qmd_embed`, held by every `embed`, and
+`index`, held by the index steps. qmd lets a keyword update run beside
+an embed, but not two of either
+([`qmd_behaviour.md`](qmd_behaviour.md), findings 4, 5 and 12).
+`reads = "files"`, the default, says a step reads its inputs off disk,
+so no writer of them runs beside it; `reads = "pinned"` says it reads
+only the commit `DATALIB_READS` names, so a writer may go on beside it.
+`start = "after_inputs_settle"` says a step waits until nothing
+upstream of it is running or due, rather than starting on each seal of
+a download that streams (`"on_each_seal"`, the default); no step of
+`datalib-step`'s says it. None of these is in the fingerprint. The
+rules are the dag README's "What keeps steps apart";
 `configs/dag_example.toml` shows the syntax.
 
 ## The fan-ins read exactly their `inputs`
@@ -436,13 +489,13 @@ it is still running, so a step downstream of a fan-in would finish
 only when the slowest source did. Each per-source step reports what it
 read as its version and lets qmd skip what it already has, so one source
 re-rendering reruns that source's two steps and nobody else's. A
-`keyword_index` the aggregator does not name is warned about: each
+`keyword_index` the aggregator does not name is wasted work: each
 aggregation retires what it indexed. Removing the aggregator turns
 free-text search off; the Manage screen takes every source's qmd steps
 with it. A `qmd_index` step is the shape from before the aggregator,
-when that fan-in fed the per-source steps or did their work itself; the
-loader refuses it, and `datalib-http` rewrites it as soon as it reads such
-a file, at boot or on any change to it, keeping the old text as
+when that fan-in fed the per-source steps or did their work itself;
+`datalib-step` has no such function and refuses it, and `datalib-http`
+rewrites it as soon as it reads such a file, at boot or on any change to it, keeping the old text as
 `config.toml.bak` (`http/src/config_upgrade.rs`).
 `datalib-migrate-config` makes the same rewrite from a terminal.
 
@@ -476,10 +529,10 @@ off (the group reads off only when every child is); last synced and last
 success are the ingest step's instants, else the newest child's; bytes
 are the group directory's own measured series, never a sum across
 children; a sync of the group starts at its steps with no inputs (for
-a diff group, at what its step reads). A child step is labelled by its function, with the
-composed id muted beside it. Phase is read off `function` and the
-grid's Source column joins `source_id` to a group's `name`; nothing in
-the UI splits an id.
+a diff group, at what its step reads). A child step is labelled by the
+rest of its id after the group (its function, for a step of
+`datalib-step`), with the whole id muted beside it. The grid's Source
+column joins `source_id` to a group's `name`.
 
 The wizard (`SourceWizard.vue`, writers in `sourceSteps.ts`) edits a
 source as one thing: the group plus its `ingest` and `render_markdown`
@@ -531,12 +584,11 @@ and refuse an edit that does not read back as what was asked for.
 
 `datalib-migrate-config` (`datalib/backend/migrate_config/`) is the
 one place an earlier config shape is understood: `datalib-step
-download …` command lines become groups and steps whose command is
-`datalib-step`, retired type words become the current ones, and `sync` /
+download …` command lines become groups and steps, retired type words become the current ones, and `sync` /
 `common.input_path` / `common.raw_path` become method tables with
 their own `path` (`convert.rs`). The rewrite is value-level, so comments do not
 survive. The loader and `datalib-step` recognize the old shapes only
-well enough to name the tool. Seven rewrites are made without asking,
+well enough to name the tool. Eight rewrites are made without asking,
 all text edits that keep comments, and each refuses a result that would
 drop an entry the original ran, other than one it exists to take out. `datalib-http` makes them in this order
 (`http/src/config_upgrade.rs`), at boot, on any change to the file, and
@@ -584,18 +636,42 @@ the next would put the first back:
    of numbers, which the keyword index already finds, so the wizard
    never offers the step (`embedAllowed` in
    `ui/src/config/sourceSteps.ts`). This rewrite is the only one of the
-   seven that is meant to take an entry out; it still refuses a result
+   eight that is meant to take an entry out; it still refuses a result
    that loses any other entry.
 6. The step commands (`upgrade_step_commands`, `step_commands.rs`):
    a step that writes no `command` was read as `datalib-step`, the
    shape from before every step named its program. The rewrite writes
-   `command = "datalib-step"` on the line after its `function`. The
-   loader still reads a step without one the same way.
+   `command = "datalib-step"` on the line after its `function`, for
+   rewrite 8 to complete.
 7. Todoist's window (`upgrade_todoist_since`, `todoist_since.rs`): a
    Todoist ingest's `api.completed_since` becomes `api.since`, its value
    as it was. The loader refuses the old key.
+8. What the runner used to infer for `datalib-step`
+   (`upgrade_explicit_steps`, `explicit_steps.rs`), the shape from
+   before the runner stopped knowing that program. A file is in that
+   shape when a step writes `group` or `function`; a step's `command`
+   is `datalib-step` (or a path ending in `/datalib-step`) without
+   `run` as its next word, or is missing; the file has a top-level
+   `checkpoint_cadence`, `render_pages` or `embed_contexts`; or a
+   `[[groups]]` entry has `source`. Each step's `group` and `function`
+   become `id = "<group>/<function>"`. A step of `datalib-step` gets
+   `command = "datalib-step run <function>"`, then ` <type>` when its
+   group has a type, then ` --source-type <t>` under a diff group,
+   `<t>` being the type of the group its `source` named; the program
+   word is kept as written. Where a step writes no `reads` or `locks`,
+   it gets the ones the runner used to give it (§"The kinds of entry");
+   a custom step with inputs gets `reads = "pinned"`, and
+   `locks = ["index"]` when its group has no type. The file gets a
+   `[[programs]]` entry for each spelling of `datalib-step` its steps
+   use, a `[[locks]]` entry for each of `qmd_keyword`, `qmd_embed` and
+   `index` some step holds and the file does not declare, and an
+   `[env]` table holding `DATALIB_STEP_CHECKPOINT_CADENCE`,
+   `DATALIB_STEP_RENDER_PAGES` and `DATALIB_STEP_EMBED_CONTEXTS` in
+   place of the three top-level keys; a group loses its `source`. Every
+   step's fingerprint changes with its `command`, so every step runs
+   once at the next sync; a `datalib-step` step does only what is new.
 
-A source may not take `unified_index`, `unified_document_index` or
-`unified_time_series_index` as its id
-(`datalib_dag::config::RESERVED_STANZA_NAMES`); only an index group,
-which has no `type`, may.
+The wizard never gives a source `unified_index`,
+`unified_document_index` or `unified_time_series_index` as its id
+(`RESERVED_IDS` in `ui/src/config/sourceSteps.ts`): those are the index
+groups' ids, which have no `type`. The runner does not refuse one.

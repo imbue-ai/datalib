@@ -16,19 +16,19 @@
 # how to sign one in or where its data comes from. Copy the groups you want,
 # and the index groups' inputs that name them.
 #
-# Shape: each source is a `[[groups]]` entry with a `type`, and steps under
-# it, each declared as `group` + `function`. `ingest` brings the data into
-# `<group>/ingest` (its `params` hold one method table, `[steps.params.api]`,
-# `[steps.params.export]`, …, and the options every method shares);
-# `render_markdown` turns that raw store into documents under
-# `<group>/render_markdown`; `keyword_index` and `embed` put them in the
-# search index; a source whose data is also numbers over time adds
-# `render_time_series`. Neither writes a `command`: a step without one is
-# the built-in `datalib-step`. A step's id is `<group>/<function>`, never
-# written; it is what another step's `inputs` name.
+# Shape: each source is a `[[groups]]` entry with a `type`, and steps whose
+# `id` is `<group>/<function>`: the tree the step writes, and what another
+# step's `inputs` name. Each runs `datalib-step run <function> <type>`.
+# `ingest` brings the data into `<group>/ingest` (its `params` hold one
+# method table, `[steps.params.api]`, `[steps.params.export]`, …, and the
+# options every method shares); `render_markdown` turns that raw store into
+# documents under `<group>/render_markdown`; `keyword_index` and `embed` put
+# them in the search index; a source whose data is also numbers over time
+# adds `render_time_series`. `reads` and `locks` say what a step may run
+# beside; the `[[programs]]` entry, which verbs `datalib-step` takes.
 #
 # TOML shape: a table header ends the table it sits in, so within a step
-# the plain keys (`group`, `function`, `inputs`) come first and the params
+# the plain keys (`id`, `command`, `inputs`) come first and the params
 # headers last, and `data_root` comes before the first `[[…]]` header.
 #
 # A group's `id` is the folder under `data_root` its data goes in, chosen
@@ -41,6 +41,24 @@
 
 data_root = "~/datalib"
 
+# --- The program and the locks its steps hold ---------------------------
+
+[[programs]]
+command = "datalib-step"
+verbs = ["reset", "prepare", "compact", "collect"]
+
+[[locks]]
+name = "index"
+slots = 2
+
+[[locks]]
+name = "qmd_keyword"
+slots = 1
+
+[[locks]]
+name = "qmd_embed"
+slots = 1
+
 # --- The indexes every source feeds -------------------------------------
 
 # The SQL index behind the grid and search reads every source's documents;
@@ -51,9 +69,8 @@ id = "unified_document_index"
 name = "Document Index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
-command = "datalib-step"
+id = "unified_document_index/grid_index"
+command = "datalib-step run grid_index"
 inputs = [
   "airvisual/render_markdown",
   "apple_messages/render_markdown",
@@ -98,82 +115,16 @@ inputs = [
   "whatsapp/render_markdown",
   "yolink/render_markdown",
 ]
+reads = "pinned"
+locks = ["index"]
 
 [[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
-command = "datalib-step"
+id = "unified_document_index/qmd_aggregator"
+command = "datalib-step run qmd_aggregator"
 inputs = [
-  "airvisual/keyword_index",
-  "apple_messages/keyword_index",
-  "apple_messages/embed",
-  "beeper/keyword_index",
-  "beeper/embed",
-  "calendar-google/keyword_index",
-  "calendar-google/embed",
-  "calendar-fastmail/keyword_index",
-  "calendar-fastmail/embed",
-  "calendar-caldav/keyword_index",
-  "calendar-caldav/embed",
-  "calendar-calendly/keyword_index",
-  "calendar-calendly/embed",
-  "calendar-ics/keyword_index",
-  "calendar-ics/embed",
-  "chatgpt-api/keyword_index",
-  "chatgpt-api/embed",
-  "chatgpt-export/keyword_index",
-  "chatgpt-export/embed",
-  "claude-api/keyword_index",
-  "claude-api/embed",
-  "claude-export/keyword_index",
-  "claude-export/embed",
-  "claude_code/keyword_index",
-  "claude_code/embed",
-  "codex/keyword_index",
-  "codex/embed",
-  "contacts-fastmail/keyword_index",
-  "contacts-fastmail/embed",
-  "contacts-carddav/keyword_index",
-  "contacts-carddav/embed",
-  "contacts-vcf/keyword_index",
-  "contacts-vcf/embed",
-  "email-jmap/keyword_index",
-  "email-jmap/embed",
-  "email-gmail/keyword_index",
-  "email-gmail/embed",
-  "email-mbox/keyword_index",
-  "email-mbox/embed",
-  "facebook/keyword_index",
-  "facebook/embed",
-  "garmin/keyword_index",
-  "github/keyword_index",
-  "github/embed",
-  "gitlab/keyword_index",
-  "gitlab/embed",
-  "google_drive/keyword_index",
-  "google_drive/embed",
-  "google_takeout/keyword_index",
-  "google_takeout/embed",
-  "linkedin/keyword_index",
-  "linkedin/embed",
-  "notion/keyword_index",
-  "notion/embed",
-  "pdf/keyword_index",
-  "pdf/embed",
-  "perseus/keyword_index",
-  "perseus/embed",
-  "signal/keyword_index",
-  "signal/embed",
-  "slack/keyword_index",
-  "slack/embed",
-  "sms_backup_restore/keyword_index",
-  "sms_backup_restore/embed",
-  "todoist/keyword_index",
-  "todoist/embed",
-  "whatsapp/keyword_index",
-  "whatsapp/embed",
-  "yolink/keyword_index",
 ]
+reads = "pinned"
+locks = ["qmd_keyword"]
 
 # The app's search, grid and document view.
 [[applets]]
@@ -195,14 +146,15 @@ id = "unified_time_series_index"
 name = "Time Series Index"
 
 [[steps]]
-group = "unified_time_series_index"
-function = "time_series_index"
-command = "datalib-step"
+id = "unified_time_series_index/time_series_index"
+command = "datalib-step run time_series_index"
 inputs = [
   "airvisual/render_time_series",
   "garmin/render_time_series",
   "yolink/render_time_series",
 ]
+reads = "pinned"
+locks = ["index"]
 
 [[applets]]
 group = "unified_time_series_index"
@@ -220,9 +172,8 @@ name = "AirVisual"
 type = "airvisual"
 
 [[steps]]
-group = "airvisual"
-function = "ingest"
-command = "datalib-step"
+id = "airvisual/ingest"
+command = "datalib-step run ingest airvisual"
 
 # One entry per monitor. Every `YYYYMM_AirVisual_values.txt` under `path`
 # is read, the `archive*/` folders too.
@@ -240,27 +191,28 @@ path = "~/Downloads/airvisual-export/ten-forward"
 # One page with a chart per quantity (particulates, AQI, CO2, temperature,
 # humidity, VOC), every device a series. No options.
 [[steps]]
-group = "airvisual"
-function = "render_markdown"
-command = "datalib-step"
+id = "airvisual/render_markdown"
+command = "datalib-step run render_markdown airvisual"
 inputs = ["airvisual/ingest"]
+reads = "pinned"
 
 # The readings as time series, for the charts. Add this step to
 # `unified_time_series_index/time_series_index`'s inputs.
 [[steps]]
-group = "airvisual"
-function = "render_time_series"
-command = "datalib-step"
+id = "airvisual/render_time_series"
+command = "datalib-step run render_time_series airvisual"
 inputs = ["airvisual/ingest"]
+reads = "pinned"
 
 # Keyword (BM25) search over the page. Add it to
 # `unified_document_index/qmd_aggregator`'s inputs. A time-series source
 # takes no `embed` step: its pages are summaries of numbers.
 [[steps]]
-group = "airvisual"
-function = "keyword_index"
-command = "datalib-step"
+id = "airvisual/keyword_index"
+command = "datalib-step run keyword_index airvisual"
 inputs = ["airvisual/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 # --- apple_messages by `messages` ---------------------------------------
 
@@ -273,9 +225,8 @@ name = "Apple Messages"
 type = "apple_messages"
 
 [[steps]]
-group = "apple_messages"
-function = "ingest"
-command = "datalib-step"
+id = "apple_messages/ingest"
+command = "datalib-step run ingest apple_messages"
 
 # Which tables and columns to mirror. Globs: `*` and `?` only.
 [steps.params]
@@ -298,24 +249,26 @@ gc = false           # collect unreachable chunks each run: a smaller store,
 path = "~/Library/Messages"
 
 [[steps]]
-group = "apple_messages"
-function = "render_markdown"
-command = "datalib-step"
+id = "apple_messages/render_markdown"
+command = "datalib-step run render_markdown apple_messages"
 inputs = ["apple_messages/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "apple_messages"
-function = "keyword_index"
-command = "datalib-step"
+id = "apple_messages/keyword_index"
+command = "datalib-step run keyword_index apple_messages"
 inputs = ["apple_messages/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "apple_messages"
-function = "embed"
-command = "datalib-step"
+id = "apple_messages/embed"
+command = "datalib-step run embed apple_messages"
 inputs = ["apple_messages/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- apple_photos by `library` ------------------------------------------
 
@@ -328,9 +281,8 @@ name = "Apple Photos"
 type = "apple_photos"
 
 [[steps]]
-group = "apple_photos"
-function = "ingest"
-command = "datalib-step"
+id = "apple_photos/ingest"
+command = "datalib-step run ingest apple_photos"
 
 # Which tables and columns to mirror. Globs: `*` and `?` only.
 [steps.params]
@@ -361,10 +313,10 @@ path = "~/Pictures/Photos Library.photoslibrary"
 # `datalib-doltlite`. This step writes the storage report every source
 # gets, which is what puts Apple Photos in the grid.
 [[steps]]
-group = "apple_photos"
-function = "render_markdown"
-command = "datalib-step"
+id = "apple_photos/render_markdown"
+command = "datalib-step run render_markdown apple_photos"
 inputs = ["apple_photos/ingest"]
+reads = "pinned"
 
 # --- beeper by `texts` --------------------------------------------------
 
@@ -376,9 +328,8 @@ name = "Beeper"
 type = "beeper"
 
 [[steps]]
-group = "beeper"
-function = "ingest"
-command = "datalib-step"
+id = "beeper/ingest"
+command = "datalib-step run ingest beeper"
 
 [steps.params.texts]
 path = "~/Library/Application Support/BeeperTexts"  # the app's data directory; this is
@@ -387,10 +338,10 @@ media = true         # copy the app's cached media into blobs; false keeps the
                      # attachments' names without their bytes; default true
 
 [[steps]]
-group = "beeper"
-function = "render_markdown"
-command = "datalib-step"
+id = "beeper/render_markdown"
+command = "datalib-step run render_markdown beeper"
 inputs = ["beeper/ingest"]
+reads = "pinned"
 
 [steps.params]
 period = "month"                     # span of each page: month (default), day, year,
@@ -401,16 +352,18 @@ networks = ["signal", "googlechat"]  # which networks to render; omit for every 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "beeper"
-function = "keyword_index"
-command = "datalib-step"
+id = "beeper/keyword_index"
+command = "datalib-step run keyword_index beeper"
 inputs = ["beeper/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "beeper"
-function = "embed"
-command = "datalib-step"
+id = "beeper/embed"
+command = "datalib-step run embed beeper"
 inputs = ["beeper/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- calendar by `google` -----------------------------------------------
 
@@ -422,9 +375,8 @@ name = "Google Calendar"
 type = "calendar"
 
 [[steps]]
-group = "calendar-google"
-function = "ingest"
-command = "datalib-step"
+id = "calendar-google/ingest"
+command = "datalib-step run ingest calendar"
 
 # When to give up on a failing server. The download always backs off and
 # retries; these only decide when to stop.
@@ -453,34 +405,36 @@ until = "+21d"  # last day mirrored, included, the same way; omit for no end. Wi
                 # resumed, and an event the window no longer reaches is dropped
 
 [[steps]]
-group = "calendar-google"
-function = "render_markdown"
-command = "datalib-step"
+id = "calendar-google/render_markdown"
+command = "datalib-step run render_markdown calendar"
 inputs = ["calendar-google/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "calendar-google"
-function = "keyword_index"
-command = "datalib-step"
+id = "calendar-google/keyword_index"
+command = "datalib-step run keyword_index calendar"
 inputs = ["calendar-google/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "calendar-google"
-function = "embed"
-command = "datalib-step"
+id = "calendar-google/embed"
+command = "datalib-step run embed calendar"
 inputs = ["calendar-google/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # Every occurrence of every event in a window of days around now, one row
 # each, the way Google's `singleEvents=true` lists them, in
 # render_occurrences/occurrences.doltlite_db. The window moves when the
 # step runs, which is when ingest has stored something new.
 [[steps]]
-group = "calendar-google"
-function = "render_occurrences"
-command = "datalib-step"
+id = "calendar-google/render_occurrences"
+command = "datalib-step run render_occurrences calendar"
 inputs = ["calendar-google/ingest"]
+reads = "pinned"
 
 [steps.params]
 days_back = 30    # the default
@@ -497,9 +451,8 @@ name = "Fastmail Calendar"
 type = "calendar"
 
 [[steps]]
-group = "calendar-fastmail"
-function = "ingest"
-command = "datalib-step"
+id = "calendar-fastmail/ingest"
+command = "datalib-step run ingest calendar"
 
 # When to give up on a failing server. The download always backs off and
 # retries; these only decide when to stop.
@@ -529,34 +482,36 @@ until = "2026-12-31"  # last day mirrored, included; omit for no end. With eithe
                       # the calendar is listed whole every run rather than resumed
 
 [[steps]]
-group = "calendar-fastmail"
-function = "render_markdown"
-command = "datalib-step"
+id = "calendar-fastmail/render_markdown"
+command = "datalib-step run render_markdown calendar"
 inputs = ["calendar-fastmail/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "calendar-fastmail"
-function = "keyword_index"
-command = "datalib-step"
+id = "calendar-fastmail/keyword_index"
+command = "datalib-step run keyword_index calendar"
 inputs = ["calendar-fastmail/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "calendar-fastmail"
-function = "embed"
-command = "datalib-step"
+id = "calendar-fastmail/embed"
+command = "datalib-step run embed calendar"
 inputs = ["calendar-fastmail/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # Every occurrence of every event in a window of days around now, one row
 # each, the way Google's `singleEvents=true` lists them, in
 # render_occurrences/occurrences.doltlite_db. The window moves when the
 # step runs, which is when ingest has stored something new.
 [[steps]]
-group = "calendar-fastmail"
-function = "render_occurrences"
-command = "datalib-step"
+id = "calendar-fastmail/render_occurrences"
+command = "datalib-step run render_occurrences calendar"
 inputs = ["calendar-fastmail/ingest"]
+reads = "pinned"
 
 [steps.params]
 days_back = 30    # the default
@@ -572,9 +527,8 @@ name = "CalDAV Calendar"
 type = "calendar"
 
 [[steps]]
-group = "calendar-caldav"
-function = "ingest"
-command = "datalib-step"
+id = "calendar-caldav/ingest"
+command = "datalib-step run ingest calendar"
 
 # When to give up on a failing server. The download always backs off and
 # retries; these only decide when to stop.
@@ -605,34 +559,36 @@ until = "2026-12-31"  # last day mirrored, included; omit for no end. With eithe
                       # the calendar is listed whole every run rather than resumed
 
 [[steps]]
-group = "calendar-caldav"
-function = "render_markdown"
-command = "datalib-step"
+id = "calendar-caldav/render_markdown"
+command = "datalib-step run render_markdown calendar"
 inputs = ["calendar-caldav/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "calendar-caldav"
-function = "keyword_index"
-command = "datalib-step"
+id = "calendar-caldav/keyword_index"
+command = "datalib-step run keyword_index calendar"
 inputs = ["calendar-caldav/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "calendar-caldav"
-function = "embed"
-command = "datalib-step"
+id = "calendar-caldav/embed"
+command = "datalib-step run embed calendar"
 inputs = ["calendar-caldav/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # Every occurrence of every event in a window of days around now, one row
 # each, the way Google's `singleEvents=true` lists them, in
 # render_occurrences/occurrences.doltlite_db. The window moves when the
 # step runs, which is when ingest has stored something new.
 [[steps]]
-group = "calendar-caldav"
-function = "render_occurrences"
-command = "datalib-step"
+id = "calendar-caldav/render_occurrences"
+command = "datalib-step run render_occurrences calendar"
 inputs = ["calendar-caldav/ingest"]
+reads = "pinned"
 
 [steps.params]
 days_back = 30    # the default
@@ -649,9 +605,8 @@ name = "Calendly"
 type = "calendar"
 
 [[steps]]
-group = "calendar-calendly"
-function = "ingest"
-command = "datalib-step"
+id = "calendar-calendly/ingest"
+command = "datalib-step run ingest calendar"
 
 # When to give up on a failing server. The download always backs off and
 # retries; these only decide when to stop.
@@ -677,34 +632,36 @@ until = "+21d"        # last day mirrored, included, the same way; omit for no e
                       # meeting that leaves the range is dropped from the copy
 
 [[steps]]
-group = "calendar-calendly"
-function = "render_markdown"
-command = "datalib-step"
+id = "calendar-calendly/render_markdown"
+command = "datalib-step run render_markdown calendar"
 inputs = ["calendar-calendly/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "calendar-calendly"
-function = "keyword_index"
-command = "datalib-step"
+id = "calendar-calendly/keyword_index"
+command = "datalib-step run keyword_index calendar"
 inputs = ["calendar-calendly/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "calendar-calendly"
-function = "embed"
-command = "datalib-step"
+id = "calendar-calendly/embed"
+command = "datalib-step run embed calendar"
 inputs = ["calendar-calendly/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # Every meeting in a window of days around now, one row each, in
 # render_occurrences/occurrences.doltlite_db, the way the other calendar
 # methods list their occurrences. The window moves when the step runs,
 # which is when ingest has stored something new.
 [[steps]]
-group = "calendar-calendly"
-function = "render_occurrences"
-command = "datalib-step"
+id = "calendar-calendly/render_occurrences"
+command = "datalib-step run render_occurrences calendar"
 inputs = ["calendar-calendly/ingest"]
+reads = "pinned"
 
 [steps.params]
 days_back = 30    # the default
@@ -720,9 +677,8 @@ name = "Calendar export"
 type = "calendar"
 
 [[steps]]
-group = "calendar-ics"
-function = "ingest"
-command = "datalib-step"
+id = "calendar-ics/ingest"
+command = "datalib-step run ingest calendar"
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
 # Nothing reads it and it grows every run.
@@ -733,34 +689,36 @@ enabled = false
 path = "~/Downloads/calendar-export"  # the folder; each `.ics` file in it is one calendar
 
 [[steps]]
-group = "calendar-ics"
-function = "render_markdown"
-command = "datalib-step"
+id = "calendar-ics/render_markdown"
+command = "datalib-step run render_markdown calendar"
 inputs = ["calendar-ics/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "calendar-ics"
-function = "keyword_index"
-command = "datalib-step"
+id = "calendar-ics/keyword_index"
+command = "datalib-step run keyword_index calendar"
 inputs = ["calendar-ics/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "calendar-ics"
-function = "embed"
-command = "datalib-step"
+id = "calendar-ics/embed"
+command = "datalib-step run embed calendar"
 inputs = ["calendar-ics/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # Every occurrence of every event in a window of days around now, one row
 # each, the way Google's `singleEvents=true` lists them, in
 # render_occurrences/occurrences.doltlite_db. The window moves when the
 # step runs, which is when ingest has stored something new.
 [[steps]]
-group = "calendar-ics"
-function = "render_occurrences"
-command = "datalib-step"
+id = "calendar-ics/render_occurrences"
+command = "datalib-step run render_occurrences calendar"
 inputs = ["calendar-ics/ingest"]
+reads = "pinned"
 
 [steps.params]
 days_back = 30    # the default
@@ -776,9 +734,8 @@ name = "ChatGPT"
 type = "chatgpt"
 
 [[steps]]
-group = "chatgpt-api"
-function = "ingest"
-command = "datalib-step"
+id = "chatgpt-api/ingest"
+command = "datalib-step run ingest chatgpt"
 
 # When to give up on rate limits. The download always honours a 429's
 # Retry-After and backs off; these only decide when to stop.
@@ -812,24 +769,26 @@ conv_uuids = ["https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789"]
 path = "~/Downloads/chatgpt-export.zip"
 
 [[steps]]
-group = "chatgpt-api"
-function = "render_markdown"
-command = "datalib-step"
+id = "chatgpt-api/render_markdown"
+command = "datalib-step run render_markdown chatgpt"
 inputs = ["chatgpt-api/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "chatgpt-api"
-function = "keyword_index"
-command = "datalib-step"
+id = "chatgpt-api/keyword_index"
+command = "datalib-step run keyword_index chatgpt"
 inputs = ["chatgpt-api/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "chatgpt-api"
-function = "embed"
-command = "datalib-step"
+id = "chatgpt-api/embed"
+command = "datalib-step run embed chatgpt"
 inputs = ["chatgpt-api/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- chatgpt by `export` ------------------------------------------------
 
@@ -845,32 +804,33 @@ name = "ChatGPT export"
 type = "chatgpt"
 
 [[steps]]
-group = "chatgpt-export"
-function = "ingest"
-command = "datalib-step"
+id = "chatgpt-export/ingest"
+command = "datalib-step run ingest chatgpt"
 
 [steps.params.export]
 path = "~/Downloads/chatgpt-export.zip"  # the .zip, or the folder it was unzipped into
 
 [[steps]]
-group = "chatgpt-export"
-function = "render_markdown"
-command = "datalib-step"
+id = "chatgpt-export/render_markdown"
+command = "datalib-step run render_markdown chatgpt"
 inputs = ["chatgpt-export/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "chatgpt-export"
-function = "keyword_index"
-command = "datalib-step"
+id = "chatgpt-export/keyword_index"
+command = "datalib-step run keyword_index chatgpt"
 inputs = ["chatgpt-export/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "chatgpt-export"
-function = "embed"
-command = "datalib-step"
+id = "chatgpt-export/embed"
+command = "datalib-step run embed chatgpt"
 inputs = ["chatgpt-export/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- claude by `api` ----------------------------------------------------
 
@@ -883,9 +843,8 @@ name = "Claude"
 type = "claude"
 
 [[steps]]
-group = "claude-api"
-function = "ingest"
-command = "datalib-step"
+id = "claude-api/ingest"
+command = "datalib-step run ingest claude"
 
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
@@ -914,10 +873,10 @@ project_uuids = [                     # only these projects, by id or pasted lin
 ]
 
 [[steps]]
-group = "claude-api"
-function = "render_markdown"
-command = "datalib-step"
+id = "claude-api/render_markdown"
+command = "datalib-step run render_markdown claude"
 inputs = ["claude-api/ingest"]
+reads = "pinned"
 
 [steps.params]
 max_project_doc_bytes = 131072  # cut a project knowledge document's text at this many
@@ -926,16 +885,18 @@ max_project_doc_bytes = 131072  # cut a project knowledge document's text at thi
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "claude-api"
-function = "keyword_index"
-command = "datalib-step"
+id = "claude-api/keyword_index"
+command = "datalib-step run keyword_index claude"
 inputs = ["claude-api/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "claude-api"
-function = "embed"
-command = "datalib-step"
+id = "claude-api/embed"
+command = "datalib-step run embed claude"
 inputs = ["claude-api/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- claude by `export` -------------------------------------------------
 
@@ -948,18 +909,17 @@ name = "Claude export"
 type = "claude"
 
 [[steps]]
-group = "claude-export"
-function = "ingest"
-command = "datalib-step"
+id = "claude-export/ingest"
+command = "datalib-step run ingest claude"
 
 [steps.params.export]
 path = "~/Downloads/claude-export"  # the folder holding `conversations.json`
 
 [[steps]]
-group = "claude-export"
-function = "render_markdown"
-command = "datalib-step"
+id = "claude-export/render_markdown"
+command = "datalib-step run render_markdown claude"
 inputs = ["claude-export/ingest"]
+reads = "pinned"
 
 [steps.params]
 max_project_doc_bytes = 131072  # cut a project knowledge document's text at this many
@@ -968,16 +928,18 @@ max_project_doc_bytes = 131072  # cut a project knowledge document's text at thi
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "claude-export"
-function = "keyword_index"
-command = "datalib-step"
+id = "claude-export/keyword_index"
+command = "datalib-step run keyword_index claude"
 inputs = ["claude-export/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "claude-export"
-function = "embed"
-command = "datalib-step"
+id = "claude-export/embed"
+command = "datalib-step run embed claude"
 inputs = ["claude-export/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- claude_code by `sessions` ------------------------------------------
 
@@ -990,9 +952,8 @@ name = "Claude Code"
 type = "claude_code"
 
 [[steps]]
-group = "claude_code"
-function = "ingest"
-command = "datalib-step"
+id = "claude_code/ingest"
+command = "datalib-step run ingest claude_code"
 
 [steps.params.sessions]
 path = "~/Downloads/claude-code-backup/projects"  # a copy of another machine's
@@ -1000,10 +961,10 @@ path = "~/Downloads/claude-code-backup/projects"  # a copy of another machine's
                                                   # ~/.claude/projects
 
 [[steps]]
-group = "claude_code"
-function = "render_markdown"
-command = "datalib-step"
+id = "claude_code/render_markdown"
+command = "datalib-step run render_markdown claude_code"
 inputs = ["claude_code/ingest"]
+reads = "pinned"
 
 # How much of one tool result reaches the page. The raw store keeps all of
 # it; a result that echoes a whole file is cut here, with a marker saying
@@ -1014,16 +975,18 @@ max_tool_result_bytes = 16384  # the default
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "claude_code"
-function = "keyword_index"
-command = "datalib-step"
+id = "claude_code/keyword_index"
+command = "datalib-step run keyword_index claude_code"
 inputs = ["claude_code/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "claude_code"
-function = "embed"
-command = "datalib-step"
+id = "claude_code/embed"
+command = "datalib-step run embed claude_code"
 inputs = ["claude_code/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- codex by `sessions` ------------------------------------------------
 
@@ -1036,9 +999,8 @@ name = "Codex"
 type = "codex"
 
 [[steps]]
-group = "codex"
-function = "ingest"
-command = "datalib-step"
+id = "codex/ingest"
+command = "datalib-step run ingest codex"
 
 [steps.params.sessions]
 path = "~/Downloads/codex-backup"  # a copy of another machine's Codex home, the folder
@@ -1046,10 +1008,10 @@ path = "~/Downloads/codex-backup"  # a copy of another machine's Codex home, the
                                    # default ~/.codex
 
 [[steps]]
-group = "codex"
-function = "render_markdown"
-command = "datalib-step"
+id = "codex/render_markdown"
+command = "datalib-step run render_markdown codex"
 inputs = ["codex/ingest"]
+reads = "pinned"
 
 # How much of one tool output reaches the page. The raw store keeps all of
 # it; an output that echoes a whole file is cut here, with a marker saying
@@ -1060,16 +1022,18 @@ max_tool_result_bytes = 16384  # the default
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "codex"
-function = "keyword_index"
-command = "datalib-step"
+id = "codex/keyword_index"
+command = "datalib-step run keyword_index codex"
 inputs = ["codex/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "codex"
-function = "embed"
-command = "datalib-step"
+id = "codex/embed"
+command = "datalib-step run embed codex"
 inputs = ["codex/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- contacts by `fastmail` ---------------------------------------------
 
@@ -1082,9 +1046,8 @@ name = "Fastmail Contacts"
 type = "contacts"
 
 [[steps]]
-group = "contacts-fastmail"
-function = "ingest"
-command = "datalib-step"
+id = "contacts-fastmail/ingest"
+command = "datalib-step run ingest contacts"
 
 # When to give up on a failing server. The download always backs off and
 # retries; these only decide when to stop.
@@ -1109,24 +1072,26 @@ addressbooks = ["Enterprise Crew"]  # names as the server shows them, matched ex
                                     # omit for every address book
 
 [[steps]]
-group = "contacts-fastmail"
-function = "render_markdown"
-command = "datalib-step"
+id = "contacts-fastmail/render_markdown"
+command = "datalib-step run render_markdown contacts"
 inputs = ["contacts-fastmail/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "contacts-fastmail"
-function = "keyword_index"
-command = "datalib-step"
+id = "contacts-fastmail/keyword_index"
+command = "datalib-step run keyword_index contacts"
 inputs = ["contacts-fastmail/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "contacts-fastmail"
-function = "embed"
-command = "datalib-step"
+id = "contacts-fastmail/embed"
+command = "datalib-step run embed contacts"
 inputs = ["contacts-fastmail/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- contacts by `carddav` ----------------------------------------------
 
@@ -1138,9 +1103,8 @@ name = "CardDAV Contacts"
 type = "contacts"
 
 [[steps]]
-group = "contacts-carddav"
-function = "ingest"
-command = "datalib-step"
+id = "contacts-carddav/ingest"
+command = "datalib-step run ingest contacts"
 
 # When to give up on a failing server. The download always backs off and
 # retries; these only decide when to stop.
@@ -1166,24 +1130,26 @@ addressbooks = ["Enterprise Crew"]  # names as the server shows them, matched ex
                                     # omit for every address book
 
 [[steps]]
-group = "contacts-carddav"
-function = "render_markdown"
-command = "datalib-step"
+id = "contacts-carddav/render_markdown"
+command = "datalib-step run render_markdown contacts"
 inputs = ["contacts-carddav/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "contacts-carddav"
-function = "keyword_index"
-command = "datalib-step"
+id = "contacts-carddav/keyword_index"
+command = "datalib-step run keyword_index contacts"
 inputs = ["contacts-carddav/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "contacts-carddav"
-function = "embed"
-command = "datalib-step"
+id = "contacts-carddav/embed"
+command = "datalib-step run embed contacts"
 inputs = ["contacts-carddav/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- contacts by `vcf` --------------------------------------------------
 
@@ -1195,9 +1161,8 @@ name = "Contacts export"
 type = "contacts"
 
 [[steps]]
-group = "contacts-vcf"
-function = "ingest"
-command = "datalib-step"
+id = "contacts-vcf/ingest"
+command = "datalib-step run ingest contacts"
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
 # Nothing reads it and it grows every run.
@@ -1211,24 +1176,26 @@ enabled = false
 path = "~/Downloads/contacts-export"
 
 [[steps]]
-group = "contacts-vcf"
-function = "render_markdown"
-command = "datalib-step"
+id = "contacts-vcf/render_markdown"
+command = "datalib-step run render_markdown contacts"
 inputs = ["contacts-vcf/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "contacts-vcf"
-function = "keyword_index"
-command = "datalib-step"
+id = "contacts-vcf/keyword_index"
+command = "datalib-step run keyword_index contacts"
 inputs = ["contacts-vcf/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "contacts-vcf"
-function = "embed"
-command = "datalib-step"
+id = "contacts-vcf/embed"
+command = "datalib-step run embed contacts"
 inputs = ["contacts-vcf/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- email by `jmap` ----------------------------------------------------
 
@@ -1240,9 +1207,8 @@ name = "Fastmail"
 type = "email"
 
 [[steps]]
-group = "email-jmap"
-function = "ingest"
-command = "datalib-step"
+id = "email-jmap/ingest"
+command = "datalib-step run ingest email"
 
 # Mirror only mail under these mailboxes. Labels are full paths and match
 # exactly: `Work` does not take in `Work/Projects`, so list nested ones.
@@ -1272,10 +1238,10 @@ account_id = "u1701d"          # which JMAP account; default the session's prima
 blob_download_concurrency = 8  # .eml files downloaded at once; default 8, 1 is one at a time
 
 [[steps]]
-group = "email-jmap"
-function = "render_markdown"
-command = "datalib-step"
+id = "email-jmap/render_markdown"
+command = "datalib-step run render_markdown email"
 inputs = ["email-jmap/ingest"]
+reads = "pinned"
 
 [steps.params]
 outlink_format = "fastmail"     # each message's `↗` link opens it in Fastmail; omit for no link
@@ -1285,16 +1251,18 @@ only_render_labels = ["Inbox"]  # render only threads with a message under these
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "email-jmap"
-function = "keyword_index"
-command = "datalib-step"
+id = "email-jmap/keyword_index"
+command = "datalib-step run keyword_index email"
 inputs = ["email-jmap/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "email-jmap"
-function = "embed"
-command = "datalib-step"
+id = "email-jmap/embed"
+command = "datalib-step run embed email"
 inputs = ["email-jmap/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- email by `gmail` ---------------------------------------------------
 
@@ -1306,9 +1274,8 @@ name = "Gmail"
 type = "email"
 
 [[steps]]
-group = "email-gmail"
-function = "ingest"
-command = "datalib-step"
+id = "email-gmail/ingest"
+command = "datalib-step run ingest email"
 
 # Mirror only mail under these labels. Labels are full paths and match
 # exactly: `Work` does not take in `Work/Projects`, so list nested ones.
@@ -1357,10 +1324,10 @@ message_budget = 20000                # stop after this many messages and finish
 path = "~/Takeout/Mail"
 
 [[steps]]
-group = "email-gmail"
-function = "render_markdown"
-command = "datalib-step"
+id = "email-gmail/render_markdown"
+command = "datalib-step run render_markdown email"
 inputs = ["email-gmail/ingest"]
+reads = "pinned"
 
 [steps.params]
 outlink_format = "gmail"        # each message's `↗` link opens it in Gmail; omit for no link
@@ -1370,16 +1337,18 @@ only_render_labels = ["Inbox"]  # render only threads with a message under these
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "email-gmail"
-function = "keyword_index"
-command = "datalib-step"
+id = "email-gmail/keyword_index"
+command = "datalib-step run keyword_index email"
 inputs = ["email-gmail/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "email-gmail"
-function = "embed"
-command = "datalib-step"
+id = "email-gmail/embed"
+command = "datalib-step run embed email"
 inputs = ["email-gmail/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- email by `mbox` ----------------------------------------------------
 
@@ -1393,9 +1362,8 @@ name = "Gmail Takeout"
 type = "email"
 
 [[steps]]
-group = "email-mbox"
-function = "ingest"
-command = "datalib-step"
+id = "email-mbox/ingest"
+command = "datalib-step run ingest email"
 
 # Mirror only messages carrying these Gmail labels (the `X-Gmail-Labels`
 # header). Labels are full paths and match exactly: `Work` does not take
@@ -1413,10 +1381,10 @@ email_address = "picard@example.com"  # the account's address; unset by default
 is_personal = true                    # a personal (not work) account; default true
 
 [[steps]]
-group = "email-mbox"
-function = "render_markdown"
-command = "datalib-step"
+id = "email-mbox/render_markdown"
+command = "datalib-step run render_markdown email"
 inputs = ["email-mbox/ingest"]
+reads = "pinned"
 
 [steps.params]
 outlink_format = "gmail"        # each message's `↗` link opens it in Gmail; omit for no link
@@ -1426,16 +1394,18 @@ only_render_labels = ["Inbox"]  # render only threads with a message under these
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "email-mbox"
-function = "keyword_index"
-command = "datalib-step"
+id = "email-mbox/keyword_index"
+command = "datalib-step run keyword_index email"
 inputs = ["email-mbox/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "email-mbox"
-function = "embed"
-command = "datalib-step"
+id = "email-mbox/embed"
+command = "datalib-step run embed email"
 inputs = ["email-mbox/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- facebook by `export` -----------------------------------------------
 
@@ -1448,32 +1418,33 @@ name = "Facebook"
 type = "facebook"
 
 [[steps]]
-group = "facebook"
-function = "ingest"
-command = "datalib-step"
+id = "facebook/ingest"
+command = "datalib-step run ingest facebook"
 
 [steps.params.export]
 path = "~/Downloads/facebook-export"  # the folder the export's zips were unzipped into
 
 [[steps]]
-group = "facebook"
-function = "render_markdown"
-command = "datalib-step"
+id = "facebook/render_markdown"
+command = "datalib-step run render_markdown facebook"
 inputs = ["facebook/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "facebook"
-function = "keyword_index"
-command = "datalib-step"
+id = "facebook/keyword_index"
+command = "datalib-step run keyword_index facebook"
 inputs = ["facebook/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "facebook"
-function = "embed"
-command = "datalib-step"
+id = "facebook/embed"
+command = "datalib-step run embed facebook"
 inputs = ["facebook/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- file_inventory by `fswalk` -----------------------------------------
 
@@ -1485,9 +1456,8 @@ name = "Local files"
 type = "file_inventory"
 
 [[steps]]
-group = "file_inventory"
-function = "ingest"
-command = "datalib-step"
+id = "file_inventory/ingest"
+command = "datalib-step run ingest file_inventory"
 
 [steps.params]
 stamp = false  # true writes `.file_inventory.toml` UUID breadcrumbs into each directory
@@ -1499,10 +1469,10 @@ path = "~/Documents/starfleet"  # the tree to scan; `~` is your home folder
 # Renders no documents, only the storage report every source gets, which
 # is what puts the source in the grid. No options.
 [[steps]]
-group = "file_inventory"
-function = "render_markdown"
-command = "datalib-step"
+id = "file_inventory/render_markdown"
+command = "datalib-step run render_markdown file_inventory"
 inputs = ["file_inventory/ingest"]
+reads = "pinned"
 
 # --- garmin by `api` ----------------------------------------------------
 
@@ -1514,9 +1484,8 @@ name = "Garmin Connect"
 type = "garmin"
 
 [[steps]]
-group = "garmin"
-function = "ingest"
-command = "datalib-step"
+id = "garmin/ingest"
+command = "datalib-step run ingest garmin"
 
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
@@ -1550,26 +1519,27 @@ wellness_files = false     # each day's wellness FIT bundle (one zip a day, sens
 # log with a row per day, a page per activity, and the personal records,
 # badges, gear, workouts and goals. No options.
 [[steps]]
-group = "garmin"
-function = "render_markdown"
-command = "datalib-step"
+id = "garmin/render_markdown"
+command = "datalib-step run render_markdown garmin"
 inputs = ["garmin/ingest"]
+reads = "pinned"
 
 # Its numbers as time series, for charts and the time-series index: add
 # `garmin/render_time_series` to `unified_time_series_index/time_series_index`'s inputs.
 [[steps]]
-group = "garmin"
-function = "render_time_series"
-command = "datalib-step"
+id = "garmin/render_time_series"
+command = "datalib-step run render_time_series garmin"
 inputs = ["garmin/ingest"]
+reads = "pinned"
 
 # Free-text search by keyword (BM25). Add it to
 # `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "garmin"
-function = "keyword_index"
-command = "datalib-step"
+id = "garmin/keyword_index"
+command = "datalib-step run keyword_index garmin"
 inputs = ["garmin/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 # --- github by `api` ----------------------------------------------------
 
@@ -1581,9 +1551,8 @@ name = "GitHub"
 type = "github"
 
 [[steps]]
-group = "github"
-function = "ingest"
-command = "datalib-step"
+id = "github/ingest"
+command = "datalib-step run ingest github"
 
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
@@ -1607,24 +1576,26 @@ pull_requests = [         # only these PRs, as `owner/repo#NUM` or a github.com 
 ]
 
 [[steps]]
-group = "github"
-function = "render_markdown"
-command = "datalib-step"
+id = "github/render_markdown"
+command = "datalib-step run render_markdown github"
 inputs = ["github/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "github"
-function = "keyword_index"
-command = "datalib-step"
+id = "github/keyword_index"
+command = "datalib-step run keyword_index github"
 inputs = ["github/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "github"
-function = "embed"
-command = "datalib-step"
+id = "github/embed"
+command = "datalib-step run embed github"
 inputs = ["github/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- gitlab by `api` ----------------------------------------------------
 
@@ -1637,9 +1608,8 @@ name = "GitLab"
 type = "gitlab"
 
 [[steps]]
-group = "gitlab"
-function = "ingest"
-command = "datalib-step"
+id = "gitlab/ingest"
+command = "datalib-step run ingest gitlab"
 
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
@@ -1663,24 +1633,26 @@ merge_requests = [        # only these MRs, as `namespace/project!IID` or a gitl
 ]
 
 [[steps]]
-group = "gitlab"
-function = "render_markdown"
-command = "datalib-step"
+id = "gitlab/render_markdown"
+command = "datalib-step run render_markdown gitlab"
 inputs = ["gitlab/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "gitlab"
-function = "keyword_index"
-command = "datalib-step"
+id = "gitlab/keyword_index"
+command = "datalib-step run keyword_index gitlab"
 inputs = ["gitlab/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "gitlab"
-function = "embed"
-command = "datalib-step"
+id = "gitlab/embed"
+command = "datalib-step run embed gitlab"
 inputs = ["gitlab/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- google_drive by `api` ----------------------------------------------
 
@@ -1693,9 +1665,8 @@ name = "Google Drive"
 type = "google_drive"
 
 [[steps]]
-group = "google_drive"
-function = "ingest"
-command = "datalib-step"
+id = "google_drive/ingest"
+command = "datalib-step run ingest google_drive"
 
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
@@ -1728,24 +1699,26 @@ file_ids = [               # only these files, as a bare id or a pasted docs.goo
 # Each Doc as one document, its comment threads folded in; Sheets and
 # Slides are kept but not rendered yet. No options.
 [[steps]]
-group = "google_drive"
-function = "render_markdown"
-command = "datalib-step"
+id = "google_drive/render_markdown"
+command = "datalib-step run render_markdown google_drive"
 inputs = ["google_drive/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "google_drive"
-function = "keyword_index"
-command = "datalib-step"
+id = "google_drive/keyword_index"
+command = "datalib-step run keyword_index google_drive"
 inputs = ["google_drive/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "google_drive"
-function = "embed"
-command = "datalib-step"
+id = "google_drive/embed"
+command = "datalib-step run embed google_drive"
 inputs = ["google_drive/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- google_takeout by `export` -----------------------------------------
 
@@ -1757,9 +1730,8 @@ name = "Google Takeout"
 type = "google_takeout"
 
 [[steps]]
-group = "google_takeout"
-function = "ingest"
-command = "datalib-step"
+id = "google_takeout/ingest"
+command = "datalib-step run ingest google_takeout"
 
 # Each Takeout is a complete snapshot of the products you ticked: a record a
 # newer export no longer holds leaves the mirror on the next sync. A product
@@ -1781,24 +1753,26 @@ youtube_watch_history = true       # every video you watched
 youtube_subscriptions = true       # the channels you subscribe to
 
 [[steps]]
-group = "google_takeout"
-function = "render_markdown"
-command = "datalib-step"
+id = "google_takeout/render_markdown"
+command = "datalib-step run render_markdown google_takeout"
 inputs = ["google_takeout/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "google_takeout"
-function = "keyword_index"
-command = "datalib-step"
+id = "google_takeout/keyword_index"
+command = "datalib-step run keyword_index google_takeout"
 inputs = ["google_takeout/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "google_takeout"
-function = "embed"
-command = "datalib-step"
+id = "google_takeout/embed"
+command = "datalib-step run embed google_takeout"
 inputs = ["google_takeout/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- lightroom by `catalog` ---------------------------------------------
 
@@ -1810,9 +1784,8 @@ name = "Lightroom"
 type = "lightroom"
 
 [[steps]]
-group = "lightroom-catalog"
-function = "ingest"
-command = "datalib-step"
+id = "lightroom-catalog/ingest"
+command = "datalib-step run ingest lightroom"
 
 # Which tables and columns to mirror. Globs: `*` and `?` only.
 [steps.params]
@@ -1842,10 +1815,10 @@ path = "~/Pictures/Lightroom/Enterprise.lrcat"
 # `datalib-doltlite`. This step writes the storage report every source
 # gets, which is what puts Lightroom in the grid.
 [[steps]]
-group = "lightroom-catalog"
-function = "render_markdown"
-command = "datalib-step"
+id = "lightroom-catalog/render_markdown"
+command = "datalib-step run render_markdown lightroom"
 inputs = ["lightroom-catalog/ingest"]
+reads = "pinned"
 
 # --- lightroom by `backups` ---------------------------------------------
 
@@ -1857,9 +1830,8 @@ name = "Lightroom"
 type = "lightroom"
 
 [[steps]]
-group = "lightroom-backups"
-function = "ingest"
-command = "datalib-step"
+id = "lightroom-backups/ingest"
+command = "datalib-step run ingest lightroom"
 
 # Which tables and columns to mirror. Globs: `*` and `?` only.
 [steps.params]
@@ -1892,10 +1864,10 @@ path = "~/Pictures/Lightroom/Backups"
 # `datalib-doltlite`. This step writes the storage report every source
 # gets, which is what puts Lightroom in the grid.
 [[steps]]
-group = "lightroom-backups"
-function = "render_markdown"
-command = "datalib-step"
+id = "lightroom-backups/render_markdown"
+command = "datalib-step run render_markdown lightroom"
 inputs = ["lightroom-backups/ingest"]
+reads = "pinned"
 
 # --- linear by `api` ----------------------------------------------------
 
@@ -1907,9 +1879,8 @@ name = "Linear"
 type = "linear"
 
 [[steps]]
-group = "linear"
-function = "ingest"
-command = "datalib-step"
+id = "linear/ingest"
+command = "datalib-step run ingest linear"
 
 # When to give up on failed requests. The download retries and backs off
 # on its own; these only decide when to stop.
@@ -1932,10 +1903,10 @@ projects = ["Warp core refit"]  # by name, as Linear shows it
 # Nothing renders as documents; this step writes the storage report that
 # puts the source in the grid and counts its issues.
 [[steps]]
-group = "linear"
-function = "render_markdown"
-command = "datalib-step"
+id = "linear/render_markdown"
+command = "datalib-step run render_markdown linear"
 inputs = ["linear/ingest"]
+reads = "pinned"
 
 # --- linkedin by `export` -----------------------------------------------
 
@@ -1948,32 +1919,33 @@ name = "LinkedIn"
 type = "linkedin"
 
 [[steps]]
-group = "linkedin"
-function = "ingest"
-command = "datalib-step"
+id = "linkedin/ingest"
+command = "datalib-step run ingest linkedin"
 
 [steps.params.export]
 path = "~/Downloads/linkedin-export"  # the unzipped export: the folder of CSVs
 
 [[steps]]
-group = "linkedin"
-function = "render_markdown"
-command = "datalib-step"
+id = "linkedin/render_markdown"
+command = "datalib-step run render_markdown linkedin"
 inputs = ["linkedin/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "linkedin"
-function = "keyword_index"
-command = "datalib-step"
+id = "linkedin/keyword_index"
+command = "datalib-step run keyword_index linkedin"
 inputs = ["linkedin/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "linkedin"
-function = "embed"
-command = "datalib-step"
+id = "linkedin/embed"
+command = "datalib-step run embed linkedin"
 inputs = ["linkedin/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- media by `fswalk` --------------------------------------------------
 
@@ -1986,9 +1958,8 @@ name = "Media"
 type = "media"
 
 [[steps]]
-group = "media"
-function = "ingest"
-command = "datalib-step"
+id = "media/ingest"
+command = "datalib-step run ingest media"
 
 [steps.params]
 ignore = ["**/.Trash/**", "**/Thumbnails/**"]  # gitignore-style patterns left out of the
@@ -2007,10 +1978,10 @@ path = "~/Music"  # the folder to scan
 # This step writes the storage report every source gets, which is what
 # puts Media in the grid.
 [[steps]]
-group = "media"
-function = "render_markdown"
-command = "datalib-step"
+id = "media/render_markdown"
+command = "datalib-step run render_markdown media"
 inputs = ["media/ingest"]
+reads = "pinned"
 
 # --- notion by `api` ----------------------------------------------------
 
@@ -2023,9 +1994,8 @@ name = "Notion"
 type = "notion"
 
 [[steps]]
-group = "notion"
-function = "ingest"
-command = "datalib-step"
+id = "notion/ingest"
+command = "datalib-step run ingest notion"
 
 # When to give up on rate limits. The download always honours a 429's
 # Retry-After and backs off; these only decide when to stop.
@@ -2054,24 +2024,26 @@ comments = true          # comment threads; default true
 attachments = true       # files attached to pages; default true
 
 [[steps]]
-group = "notion"
-function = "render_markdown"
-command = "datalib-step"
+id = "notion/render_markdown"
+command = "datalib-step run render_markdown notion"
 inputs = ["notion/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "notion"
-function = "keyword_index"
-command = "datalib-step"
+id = "notion/keyword_index"
+command = "datalib-step run keyword_index notion"
 inputs = ["notion/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "notion"
-function = "embed"
-command = "datalib-step"
+id = "notion/embed"
+command = "datalib-step run embed notion"
 inputs = ["notion/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- pdf by `fswalk` ----------------------------------------------------
 
@@ -2084,9 +2056,8 @@ name = "PDFs"
 type = "pdf"
 
 [[steps]]
-group = "pdf"
-function = "ingest"
-command = "datalib-step"
+id = "pdf/ingest"
+command = "datalib-step run ingest pdf"
 
 [steps.params]
 ignore = ["drafts/**", "**/.Trash/**"]  # gitignore-style patterns to skip, on top of any
@@ -2105,24 +2076,26 @@ path = "~/Documents/papers"  # the folder to scan, and everything under it
 # Render needs no params: it reads the scan root back out of the raw
 # store, so it converts exactly the tree the ingest step walked.
 [[steps]]
-group = "pdf"
-function = "render_markdown"
-command = "datalib-step"
+id = "pdf/render_markdown"
+command = "datalib-step run render_markdown pdf"
 inputs = ["pdf/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "pdf"
-function = "keyword_index"
-command = "datalib-step"
+id = "pdf/keyword_index"
+command = "datalib-step run keyword_index pdf"
 inputs = ["pdf/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "pdf"
-function = "embed"
-command = "datalib-step"
+id = "pdf/embed"
+command = "datalib-step run embed pdf"
 inputs = ["pdf/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- perseus by `github` ------------------------------------------------
 
@@ -2135,9 +2108,8 @@ name = "Perseus"
 type = "perseus"
 
 [[steps]]
-group = "perseus"
-function = "ingest"
-command = "datalib-step"
+id = "perseus/ingest"
+command = "datalib-step run ingest perseus"
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
 # Nothing reads it and it grows every run.
@@ -2154,10 +2126,10 @@ files = [
 ]
 
 [[steps]]
-group = "perseus"
-function = "render_markdown"
-command = "datalib-step"
+id = "perseus/render_markdown"
+command = "datalib-step run render_markdown perseus"
 inputs = ["perseus/ingest"]
+reads = "files"
 
 [steps.params]
 # Edition pairs to align sentence by sentence; default none. Aligning
@@ -2172,16 +2144,18 @@ alignment_pairs = [["perseus-grc2", "perseus-eng4"]]
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "perseus"
-function = "keyword_index"
-command = "datalib-step"
+id = "perseus/keyword_index"
+command = "datalib-step run keyword_index perseus"
 inputs = ["perseus/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "perseus"
-function = "embed"
-command = "datalib-step"
+id = "perseus/embed"
+command = "datalib-step run embed perseus"
 inputs = ["perseus/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- signal by `backup` -------------------------------------------------
 
@@ -2195,9 +2169,8 @@ name = "Signal"
 type = "signal"
 
 [[steps]]
-group = "signal"
-function = "ingest"
-command = "datalib-step"
+id = "signal/ingest"
+command = "datalib-step run ingest signal"
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
 # Nothing reads it and it grows every run.
@@ -2210,10 +2183,10 @@ aep_env_var = "SIGNAL_BACKUP_PASSPHRASE_PICARD"  # env var holding the passphras
                                                  # default SIGNAL_BACKUP_PASSPHRASE
 
 [[steps]]
-group = "signal"
-function = "render_markdown"
-command = "datalib-step"
+id = "signal/render_markdown"
+command = "datalib-step run render_markdown signal"
 inputs = ["signal/ingest"]
+reads = "pinned"
 
 [steps.params]
 period = "month"  # span of each rendered doc: month (default), day, year or all
@@ -2221,16 +2194,18 @@ period = "month"  # span of each rendered doc: month (default), day, year or all
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "signal"
-function = "keyword_index"
-command = "datalib-step"
+id = "signal/keyword_index"
+command = "datalib-step run keyword_index signal"
 inputs = ["signal/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "signal"
-function = "embed"
-command = "datalib-step"
+id = "signal/embed"
+command = "datalib-step run embed signal"
 inputs = ["signal/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- slack by `api` -----------------------------------------------------
 
@@ -2242,9 +2217,8 @@ name = "Slack"
 type = "slack"
 
 [[steps]]
-group = "slack"
-function = "ingest"
-command = "datalib-step"
+id = "slack/ingest"
+command = "datalib-step run ingest slack"
 
 [steps.params.common]
 blob_size_limit_bytes = "1 MB"  # skip an attachment larger than this; unset is no limit
@@ -2299,24 +2273,26 @@ context_before = "-1d"         # walk a channel from this long before the oldest
 context_after = "+2d"          # walk only this long after each one; unset walks up to now
 
 [[steps]]
-group = "slack"
-function = "render_markdown"
-command = "datalib-step"
+id = "slack/render_markdown"
+command = "datalib-step run render_markdown slack"
 inputs = ["slack/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "slack"
-function = "keyword_index"
-command = "datalib-step"
+id = "slack/keyword_index"
+command = "datalib-step run keyword_index slack"
 inputs = ["slack/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "slack"
-function = "embed"
-command = "datalib-step"
+id = "slack/embed"
+command = "datalib-step run embed slack"
 inputs = ["slack/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- sms_backup_restore by `backup` -------------------------------------
 
@@ -2328,9 +2304,8 @@ name = "SMS Backup & Restore"
 type = "sms_backup_restore"
 
 [[steps]]
-group = "sms_backup_restore"
-function = "ingest"
-command = "datalib-step"
+id = "sms_backup_restore/ingest"
+command = "datalib-step run ingest sms_backup_restore"
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
 # Nothing reads it and it grows every run.
@@ -2343,24 +2318,26 @@ enabled = false
 path = "~/Downloads/sms-backup"
 
 [[steps]]
-group = "sms_backup_restore"
-function = "render_markdown"
-command = "datalib-step"
+id = "sms_backup_restore/render_markdown"
+command = "datalib-step run render_markdown sms_backup_restore"
 inputs = ["sms_backup_restore/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "sms_backup_restore"
-function = "keyword_index"
-command = "datalib-step"
+id = "sms_backup_restore/keyword_index"
+command = "datalib-step run keyword_index sms_backup_restore"
 inputs = ["sms_backup_restore/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "sms_backup_restore"
-function = "embed"
-command = "datalib-step"
+id = "sms_backup_restore/embed"
+command = "datalib-step run embed sms_backup_restore"
 inputs = ["sms_backup_restore/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- todoist by `api` ---------------------------------------------------
 
@@ -2373,9 +2350,8 @@ name = "Todoist"
 type = "todoist"
 
 [[steps]]
-group = "todoist"
-function = "ingest"
-command = "datalib-step"
+id = "todoist/ingest"
+command = "datalib-step run ingest todoist"
 
 # When to give up on failed requests. The download retries and backs off
 # on its own; these only decide when to stop.
@@ -2399,24 +2375,26 @@ since = "2024-01-01"
 # One document per project: its sections, its tasks and their comments,
 # completed tasks folded under each section. No options.
 [[steps]]
-group = "todoist"
-function = "render_markdown"
-command = "datalib-step"
+id = "todoist/render_markdown"
+command = "datalib-step run render_markdown todoist"
 inputs = ["todoist/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "todoist"
-function = "keyword_index"
-command = "datalib-step"
+id = "todoist/keyword_index"
+command = "datalib-step run keyword_index todoist"
 inputs = ["todoist/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "todoist"
-function = "embed"
-command = "datalib-step"
+id = "todoist/embed"
+command = "datalib-step run embed todoist"
 inputs = ["todoist/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- whatsapp by `backup` -----------------------------------------------
 
@@ -2429,9 +2407,8 @@ name = "WhatsApp"
 type = "whatsapp"
 
 [[steps]]
-group = "whatsapp"
-function = "ingest"
-command = "datalib-step"
+id = "whatsapp/ingest"
+command = "datalib-step run ingest whatsapp"
 
 # The decrypted database is mirrored table for table; these pick the tables.
 [steps.params]
@@ -2449,24 +2426,26 @@ key_env_var = "WHATSAPP_ENTERPRISE_PHONE_KEY"  # the variable holding the key as
                                                # default WHATSAPP_BACKUP_DECRYPTION_KEY
 
 [[steps]]
-group = "whatsapp"
-function = "render_markdown"
-command = "datalib-step"
+id = "whatsapp/render_markdown"
+command = "datalib-step run render_markdown whatsapp"
 inputs = ["whatsapp/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "whatsapp"
-function = "keyword_index"
-command = "datalib-step"
+id = "whatsapp/keyword_index"
+command = "datalib-step run keyword_index whatsapp"
 inputs = ["whatsapp/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "whatsapp"
-function = "embed"
-command = "datalib-step"
+id = "whatsapp/embed"
+command = "datalib-step run embed whatsapp"
 inputs = ["whatsapp/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # --- yolink by `api` ----------------------------------------------------
 
@@ -2480,9 +2459,8 @@ name = "YoLink"
 type = "yolink"
 
 [[steps]]
-group = "yolink"
-function = "ingest"
-command = "datalib-step"
+id = "yolink/ingest"
+command = "datalib-step run ingest yolink"
 
 # When to give up on failed requests. The download retries and backs off
 # on its own; these only decide when to stop.
@@ -2517,24 +2495,25 @@ device_udid = "ffeeddccbbaa99887766554433221100"
 # The whole store renders as one page: a summary per device and a chart per
 # quantity (temperature, humidity, water), every device a series.
 [[steps]]
-group = "yolink"
-function = "render_markdown"
-command = "datalib-step"
+id = "yolink/render_markdown"
+command = "datalib-step run render_markdown yolink"
 inputs = ["yolink/ingest"]
+reads = "pinned"
 
 # Its numbers as time series, for charts and the time-series index: add
 # `yolink/render_time_series` to `unified_time_series_index/time_series_index`'s inputs.
 [[steps]]
-group = "yolink"
-function = "render_time_series"
-command = "datalib-step"
+id = "yolink/render_time_series"
+command = "datalib-step run render_time_series yolink"
 inputs = ["yolink/ingest"]
+reads = "pinned"
 
 # Free-text search by keyword (BM25). Add it to
 # `unified_document_index/qmd_aggregator`'s inputs. A time-series source
 # takes no `embed` step: its pages are summaries of numbers.
 [[steps]]
-group = "yolink"
-function = "keyword_index"
-command = "datalib-step"
+id = "yolink/keyword_index"
+command = "datalib-step run keyword_index yolink"
 inputs = ["yolink/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]

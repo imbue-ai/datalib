@@ -183,9 +183,9 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     const toml = wizard.locator("pre");
     await expect(toml).toContainText('id = "pdfs"');
     await expect(toml).toContainText('type = "pdf"');
-    await expect(toml).toContainText('function = "ingest"');
+    await expect(toml).toContainText('id = "pdfs/ingest"');
     await expect(toml).toContainText(`path = "${SCAN_DIR}"`);
-    await expect(toml).toContainText('function = "render_markdown"');
+    await expect(toml).toContainText('id = "pdfs/render_markdown"');
     await expect(toml).toContainText('inputs = ["pdfs/ingest"]');
 
     await wizard.getByRole("button", { name: "Add source" }).click();

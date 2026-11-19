@@ -4,12 +4,10 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 # writes any more into the one the wizard writes.
 #
 # This package is the one place a retired config shape is *rewritten*.
-# The runner refuses most old shapes, naming this tool. Two rewrites are
-# safe to make unattended — the qmd steps and the document index's name,
-# text edits that keep the file as written — and `datalib-http` makes
-# them itself on seeing the old shape (`upgrade_qmd_steps`,
-# `upgrade_document_index`). It holds one rewrite at a time, "any
-# earlier shape → the current one"; the next shape change extends it.
+# The runner refuses the old shapes, naming this tool. The rewrites that
+# are text edits keeping the file as written are safe to make unattended,
+# and `datalib-http` makes them itself on seeing the old shape (the
+# `upgrade_*` functions in src/lib.rs).
 rust_library(
     name = "datalib_migrate_config",
     srcs = glob(
@@ -21,6 +19,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/dag:datalib_dag",
+        "//datalib/backend/env:datalib_env",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",
         "@datalib_crates//:toml",
@@ -31,6 +30,10 @@ rust_test(
     name = "migrate_config_unittests",
     size = "small",
     crate = ":datalib_migrate_config",
+    # Every config this repo shipped before steps wrote their own `id`,
+    # `command`, locks and `reads`, as it was then
+    # (`explicit_steps::tests`).
+    data = glob(["testdata/shipped_before_explicit_steps/*.toml"]),
     edition = "2021",
     deps = [
         "@datalib_crates//:tempfile",

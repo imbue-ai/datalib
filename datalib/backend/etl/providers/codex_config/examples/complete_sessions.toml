@@ -7,9 +7,8 @@ name = "Codex"
 type = "codex"
 
 [[steps]]
-group = "codex"
-function = "ingest"
-command = "datalib-step"
+id = "codex/ingest"
+command = "datalib-step run ingest codex"
 
 [steps.params.sessions]
 path = "~/Downloads/codex-backup"  # a copy of another machine's Codex home, the folder
@@ -17,10 +16,10 @@ path = "~/Downloads/codex-backup"  # a copy of another machine's Codex home, the
                                    # default ~/.codex
 
 [[steps]]
-group = "codex"
-function = "render_markdown"
-command = "datalib-step"
+id = "codex/render_markdown"
+command = "datalib-step run render_markdown codex"
 inputs = ["codex/ingest"]
+reads = "pinned"
 
 # How much of one tool output reaches the page. The raw store keeps all of
 # it; an output that echoes a whole file is cut here, with a marker saying
@@ -31,13 +30,15 @@ max_tool_result_bytes = 16384  # the default
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "codex"
-function = "keyword_index"
-command = "datalib-step"
+id = "codex/keyword_index"
+command = "datalib-step run keyword_index codex"
 inputs = ["codex/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "codex"
-function = "embed"
-command = "datalib-step"
+id = "codex/embed"
+command = "datalib-step run embed codex"
 inputs = ["codex/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]

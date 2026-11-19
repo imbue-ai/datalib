@@ -62,13 +62,11 @@ id = "google_drive"
 type = "google_drive"
 
 [[steps]]
-group = "google_drive"
-function = "ingest"
+id = "google_drive/ingest"
 ${params}
 
 [[steps]]
-group = "google_drive"
-function = "render_markdown"
+id = "google_drive/render_markdown"
 inputs = ["google_drive/ingest"]
 `;
 const ingest = (text: string) => sourceStepsOf("google_drive", listSteps(text)).ingest!;

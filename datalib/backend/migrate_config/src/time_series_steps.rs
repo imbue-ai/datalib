@@ -1,5 +1,5 @@
 //! A config from before time series: its sources of a type that renders
-//! them (`datalib_dag::config::TIME_SERIES_SOURCE_TYPES`) have no
+//! them (`crate::retired::TIME_SERIES_SOURCE_TYPES`) have no
 //! `render_time_series` step, and there is no time-series index. The
 //! rewrite adds the steps a source lacks, the index group with its
 //! `time_series_index` reading every one, and the applet that serves it, appended after everything the file
@@ -9,8 +9,8 @@
 //! Once that group is there the time-series steps are the person's: a
 //! `render_time_series` step they took out is not put back.
 
+use crate::retired::{TIME_SERIES_INDEX_GROUP, TIME_SERIES_SOURCE_TYPES};
 use anyhow::{Context as _, Result};
-use datalib_dag::config::{TIME_SERIES_INDEX_GROUP, TIME_SERIES_SOURCE_TYPES};
 use serde::Deserialize;
 
 const RENDER: &str = "render_time_series";
@@ -142,7 +142,7 @@ path = "/deck8/troi.mbox"
 "#;
 
     fn step_ids(text: &str) -> Vec<String> {
-        let check = datalib_dag::config::check_text(text);
+        let check = crate::check_as_current(text);
         check.cfg.steps.iter().map(|s| s.id.clone()).collect()
     }
 
@@ -162,7 +162,7 @@ path = "/deck8/troi.mbox"
         );
         assert!(!ids.iter().any(|i| i.starts_with("troi-mail/render_time")));
         assert!(after.contains(r#"inputs = ["riker/render_time_series"]"#));
-        let check = datalib_dag::config::check_text(&after);
+        let check = crate::check_as_current(&after);
         let applets: Vec<&str> = check.cfg.applets.iter().map(|a| a.id.as_str()).collect();
         assert_eq!(applets, ["unified_time_series_index"]);
         assert!(!is_retired(&after).unwrap());
@@ -183,7 +183,7 @@ path = "/deck8/troi.mbox"
             1
         );
         assert!(after.contains(r#"inputs = ["riker/render_time_series"]"#));
-        assert!(datalib_dag::config::check_text(&after).is_clean());
+        assert!(crate::check_as_current(&after).is_clean());
     }
 
     /// Once the index group is there, a step the person took out stays out.

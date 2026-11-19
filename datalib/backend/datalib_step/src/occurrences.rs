@@ -59,7 +59,7 @@ pub async fn run(
         .with_context(|| format!("the run's now, {now:?}"))?
         .with_timezone(&Utc);
     let window = window(now, &cfg);
-    let raw = data_root.join(env.raw_store_rel());
+    let raw = data_root.join(env.raw_store_rel()?);
     let Some(listed) = occurrences::read(&raw, &window)? else {
         tracing::info!(raw = %raw.display(), "no raw store yet; nothing to list");
         return Ok(Vec::new());

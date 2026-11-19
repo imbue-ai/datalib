@@ -137,14 +137,30 @@ config first:
 ```sh
 mkdir -p "$DATA_ROOT"
 cat > "$DATA_ROOT/config.toml" <<EOF
+[[programs]]
+command = "datalib-step"
+verbs = ["reset", "prepare", "compact", "collect"]
+
+[[locks]]
+name = "index"
+slots = 2
+
+[[locks]]
+name = "qmd_keyword"
+slots = 1
+
+[[locks]]
+name = "qmd_embed"
+slots = 1
+
 [[groups]]
 id = "gmail"
 name = "Gmail (Takeout)"
 type = "email"
 
 [[steps]]
-group = "gmail"
-function = "ingest"
+id = "gmail/ingest"
+command = "datalib-step run ingest email"
 [steps.params.mbox]
 path = "/import/$(basename "$MBOX")"
 account_id = "you@gmail.com"
@@ -153,34 +169,43 @@ email_address = "you@gmail.com"
 is_personal = true
 
 [[steps]]
-group = "gmail"
-function = "render_markdown"
+id = "gmail/render_markdown"
+command = "datalib-step run render_markdown email"
 inputs = ["gmail/ingest"]
+reads = "pinned"
 [steps.params]
 outlink_format = "gmail"
+
+[[steps]]
+id = "gmail/keyword_index"
+command = "datalib-step run keyword_index email"
+inputs = ["gmail/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
+
+[[steps]]
+id = "gmail/embed"
+command = "datalib-step run embed email"
+inputs = ["gmail/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 [[groups]]
 id = "unified_document_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
+id = "unified_document_index/grid_index"
+command = "datalib-step run grid_index"
 inputs = ["gmail/render_markdown"]
+reads = "pinned"
+locks = ["index"]
 
 [[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
+id = "unified_document_index/qmd_aggregator"
+command = "datalib-step run qmd_aggregator"
 inputs = ["gmail/keyword_index", "gmail/embed"]
-
-[[steps]]
-group = "gmail"
-function = "keyword_index"
-inputs = ["gmail/render_markdown"]
-
-[[steps]]
-group = "gmail"
-function = "embed"
-inputs = ["gmail/keyword_index"]
+reads = "pinned"
+locks = ["qmd_keyword"]
 
 [[applets]]
 group = "unified_document_index"

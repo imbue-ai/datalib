@@ -1,0 +1,26 @@
+# An index of a local directory tree, with every option set. Nothing to
+# sign in to; with `stamp` off the scan only reads the folder `path` names.
+[[groups]]
+id = "file_inventory"
+name = "Local files"
+type = "file_inventory"
+
+[[steps]]
+group = "file_inventory"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params]
+stamp = false  # true writes `.file_inventory.toml` UUID breadcrumbs into each directory
+               # that opts in with `stamp_me_with_uuid`; default false
+
+[steps.params.fswalk]
+path = "~/Documents/starfleet"  # the tree to scan; `~` is your home folder
+
+# Renders no documents, only the storage report every source gets, which
+# is what puts the source in the grid. No options.
+[[steps]]
+group = "file_inventory"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["file_inventory/ingest"]

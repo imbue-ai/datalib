@@ -7,14 +7,13 @@ name = "Notion"
 type = "notion"
 
 [[steps]]
-group = "notion"
-function = "ingest"
-command = "datalib-step"
+id = "notion/ingest"
+command = "datalib-step run ingest notion"
 
 [steps.params.api]
 
 [[steps]]
-group = "notion"
-function = "render_markdown"
-command = "datalib-step"
+id = "notion/render_markdown"
+command = "datalib-step run render_markdown notion"
 inputs = ["notion/ingest"]
+reads = "pinned"

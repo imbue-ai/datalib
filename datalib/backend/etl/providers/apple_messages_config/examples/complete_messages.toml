@@ -7,9 +7,8 @@ name = "Apple Messages"
 type = "apple_messages"
 
 [[steps]]
-group = "apple_messages"
-function = "ingest"
-command = "datalib-step"
+id = "apple_messages/ingest"
+command = "datalib-step run ingest apple_messages"
 
 # Which tables and columns to mirror. Globs: `*` and `?` only.
 [steps.params]
@@ -32,21 +31,23 @@ gc = false           # collect unreachable chunks each run: a smaller store,
 path = "~/Library/Messages"
 
 [[steps]]
-group = "apple_messages"
-function = "render_markdown"
-command = "datalib-step"
+id = "apple_messages/render_markdown"
+command = "datalib-step run render_markdown apple_messages"
 inputs = ["apple_messages/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "apple_messages"
-function = "keyword_index"
-command = "datalib-step"
+id = "apple_messages/keyword_index"
+command = "datalib-step run keyword_index apple_messages"
 inputs = ["apple_messages/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "apple_messages"
-function = "embed"
-command = "datalib-step"
+id = "apple_messages/embed"
+command = "datalib-step run embed apple_messages"
 inputs = ["apple_messages/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]

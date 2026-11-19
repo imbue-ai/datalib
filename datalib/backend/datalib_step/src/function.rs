@@ -2,9 +2,9 @@
 //!
 //! A step's function is the second half of its id and the directory it
 //! writes under its group's, so the spelling here is a storage contract:
-//! `ingest` is what `<group>/ingest` is named after. The runner hands the
-//! function over in `DATALIB_DAG_FUNCTION` and never interprets it; this
-//! binary is the one thing that does.
+//! `ingest` is what `<group>/ingest` is named after. A step's `command`
+//! names it (`datalib-step run <function> …`); the runner never interprets
+//! it, and this binary is the one thing that does.
 
 use strum::VariantArray;
 

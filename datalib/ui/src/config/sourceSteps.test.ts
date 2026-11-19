@@ -188,22 +188,21 @@ id = "slack"
 type = "slack"
 
 [[steps]]
-group = "slack"
-function = "ingest"
+id = "slack/ingest"
 params.api = {}
 
 [[groups]]
 id = "unified_document_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
+id = "unified_document_index/grid_index"
 inputs = ["slack/render_markdown"]
 `;
     const built = buildDiffSource({
       id: "slack-diff",
       name: "Slack, this week",
       source: "slack",
+      sourceType: "slack",
       from: "aaa",
       to: "bbb",
       maxDocuments: 50,
@@ -219,7 +218,9 @@ inputs = ["slack/render_markdown"]
     expect(step.params).toEqual({ diff: { from: "aaa", to: "bbb", max_documents: 50 } });
     const fanIn = listSteps(next).find((s) => s.id === "unified_document_index/grid_index")!;
     expect(fanIn.inputs).toContain("slack-diff/render_markdown");
-    expect(next).toContain('source = "slack"');
+    expect(next).not.toContain('source = "slack"');
+    expect(step.command).toBe("datalib-step run render_markdown diff --source-type slack");
+    expect(next).toContain('reads = "pinned"');
   });
 });
 

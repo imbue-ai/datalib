@@ -1,6 +1,6 @@
 //! `docs/user/raw_stores.md` names every table and column of the raw
 //! stores it covers, and those names are checked here against
-//! `raw_shapes/current.json`, which `migrate.rs` keeps equal to what the
+//! `raw_shapes/current.json`, which `prepare.rs` keeps equal to what the
 //! code creates. A column added, renamed or dropped in a covered source
 //! fails this until the doc says what it holds.
 //!

@@ -7,9 +7,8 @@ name = "Calendly"
 type = "calendar"
 
 [[steps]]
-group = "calendar"
-function = "ingest"
-command = "datalib-step"
+id = "calendar/ingest"
+command = "datalib-step run ingest calendar"
 
 # When to give up on a failing server. The download always backs off and
 # retries; these only decide when to stop.
@@ -35,34 +34,36 @@ until = "+21d"        # last day mirrored, included, the same way; omit for no e
                       # meeting that leaves the range is dropped from the copy
 
 [[steps]]
-group = "calendar"
-function = "render_markdown"
-command = "datalib-step"
+id = "calendar/render_markdown"
+command = "datalib-step run render_markdown calendar"
 inputs = ["calendar/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "calendar"
-function = "keyword_index"
-command = "datalib-step"
+id = "calendar/keyword_index"
+command = "datalib-step run keyword_index calendar"
 inputs = ["calendar/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "calendar"
-function = "embed"
-command = "datalib-step"
+id = "calendar/embed"
+command = "datalib-step run embed calendar"
 inputs = ["calendar/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # Every meeting in a window of days around now, one row each, in
 # render_occurrences/occurrences.doltlite_db, the way the other calendar
 # methods list their occurrences. The window moves when the step runs,
 # which is when ingest has stored something new.
 [[steps]]
-group = "calendar"
-function = "render_occurrences"
-command = "datalib-step"
+id = "calendar/render_occurrences"
+command = "datalib-step run render_occurrences calendar"
 inputs = ["calendar/ingest"]
+reads = "pinned"
 
 [steps.params]
 days_back = 30    # the default

@@ -28,7 +28,7 @@ unified_document_index/grid_index.";
 
 pub const EXAMPLES: &[Example] = &[
     Example {
-        what: "start a new data root on the starter config: the index steps, and no sources yet",
+        what: "start a new data root, with a config that has no steps yet",
         command: "datalib-dag init ~/datalib",
     },
     Example {
@@ -133,9 +133,9 @@ pub struct Cli {
     /// ("started by claude").
     #[arg(long, value_name = "WHO", default_value = "cli")]
     pub by: String,
-    /// Put this directory first on every step's PATH, so a bare
-    /// `datalib-step` resolves there. Default: the config's `binary_dir`,
-    /// else the directory this binary is in.
+    /// Put this directory first on every step's PATH, so a program
+    /// shipped beside the runner resolves by its bare name. Default: the
+    /// config's `binary_dir`, else the directory this binary is in.
     #[arg(long, value_name = "DIR")]
     pub binary_dir: Option<PathBuf>,
     /// Run at most this many steps at once.
@@ -154,11 +154,10 @@ pub struct Cli {
 /// returns, and whoever runs the loop acts on it within a second.
 #[derive(Subcommand)]
 pub enum Verb {
-    /// Write the starter config.toml into a data root, creating the root:
-    /// the index steps with nothing to read yet, and no sources. A root
-    /// that already has a config is left as it is. Writes nothing else,
-    /// and starts nothing. `datalib-step examples <type> --append` adds a
-    /// source to it.
+    /// Write a starter config.toml into a data root, creating the root:
+    /// no steps yet, and comments saying what a step is. A root that
+    /// already has a config is left as it is. Writes nothing else, and
+    /// starts nothing.
     Init {
         /// The data root, the directory that will hold config.toml and
         /// everything synced into it.

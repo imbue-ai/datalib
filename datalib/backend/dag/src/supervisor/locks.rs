@@ -52,49 +52,32 @@ pub struct LockSpec {
     pub slots: usize,
 }
 
-/// A download: one per source a person syncs, so a rate limit on one
-/// keeps no render from starting.
+/// The budget a step that reads nothing holds when it names no lock: in
+/// practice a download, so a rate limit on one keeps no render from
+/// starting.
 pub const NETWORK: &str = "network";
-/// A render: a step in a group with a `type` that reads something.
+/// The budget a step that reads something holds when it names no lock.
 pub const CPU: &str = "cpu";
-/// An index: a step outside any typed group that reads something.
-pub const INDEX: &str = "index";
-/// Whatever writes qmd's collection registry or its keyword index. One
-/// slot, and resizing it is a mistake: two keyword updates on one index
-/// can lose a document's body (`docs/dev/qmd_behaviour.md`, finding 12).
-pub const QMD_KEYWORD: &str = "qmd_keyword";
-/// Whatever embeds into qmd's index. One slot: two embeds race on qmd's
-/// vector table, and share one GPU besides.
-pub const QMD_EMBED: &str = "qmd_embed";
 
-/// The locks every config has, whether or not it declares them: the three
-/// budgets, as `--parallelism 4` sizes them, and the two qmd writers'. A
-/// config's `[[locks]]` entry of the same name resizes one;
-/// `--parallelism N` sets `network` and `cpu` to N, over the config.
+/// The locks every config has, whether or not it declares them: the two
+/// budgets, as `--parallelism 4` sizes them. A config's `[[locks]]` entry
+/// of the same name resizes one; `--parallelism N` sets both to N, over
+/// the config. Any other lock a step holds, the config declares.
 pub fn defaults() -> Vec<LockSpec> {
-    [
-        (NETWORK, 4),
-        (CPU, 4),
-        (INDEX, 2),
-        (QMD_KEYWORD, 1),
-        (QMD_EMBED, 1),
-    ]
-    .into_iter()
-    .map(|(name, slots)| LockSpec {
-        name: name.to_string(),
-        slots,
-    })
-    .collect()
+    [(NETWORK, 4), (CPU, 4)]
+        .into_iter()
+        .map(|(name, slots)| LockSpec {
+            name: name.to_string(),
+            slots,
+        })
+        .collect()
 }
 
 /// The lock a step holds when it names none: `network` for a step that
-/// reads nothing (a download), `cpu` for one in a group with a `type`
-/// (a source's render), `index` for any other step that reads something.
+/// reads nothing, `cpu` for one that reads something.
 pub fn default_for(spec: &StepSpec) -> &'static str {
     if spec.inputs.is_empty() {
         NETWORK
-    } else if spec.group_type.is_none() {
-        INDEX
     } else {
         CPU
     }

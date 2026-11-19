@@ -7,29 +7,30 @@ name = "LinkedIn"
 type = "linkedin"
 
 [[steps]]
-group = "linkedin"
-function = "ingest"
-command = "datalib-step"
+id = "linkedin/ingest"
+command = "datalib-step run ingest linkedin"
 
 [steps.params.export]
 path = "~/Downloads/linkedin-export"  # the unzipped export: the folder of CSVs
 
 [[steps]]
-group = "linkedin"
-function = "render_markdown"
-command = "datalib-step"
+id = "linkedin/render_markdown"
+command = "datalib-step run render_markdown linkedin"
 inputs = ["linkedin/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "linkedin"
-function = "keyword_index"
-command = "datalib-step"
+id = "linkedin/keyword_index"
+command = "datalib-step run keyword_index linkedin"
 inputs = ["linkedin/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "linkedin"
-function = "embed"
-command = "datalib-step"
+id = "linkedin/embed"
+command = "datalib-step run embed linkedin"
 inputs = ["linkedin/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]

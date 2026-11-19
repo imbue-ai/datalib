@@ -21,16 +21,23 @@
 //! time-series source loses its `embed` step; then `step_commands.rs`: a
 //! step of datalib's own names `datalib-step` as its `command`; then
 //! `todoist_since.rs`: a Todoist ingest's `completed_since` becomes
-//! `since`. Those last seven rewrites are also the ones `datalib-http`
-//! makes by itself (`upgrade_lowercase_ids`, `upgrade_qmd_steps`,
-//! `upgrade_document_index`, `upgrade_time_series_steps`,
-//! `upgrade_time_series_embeds`, `upgrade_step_commands`,
-//! `upgrade_todoist_since`).
+//! `since`; and last `explicit_steps.rs`: each step writes its `id`, its
+//! whole `datalib-step run …` command, and the locks and `reads` the
+//! runner used to work out for it, and the file its `[[programs]]`,
+//! `[[locks]]` and `[env]`. Those last eight rewrites are also the ones
+//! `datalib-http` makes by itself (`upgrade_lowercase_ids`,
+//! `upgrade_qmd_steps`, `upgrade_document_index`,
+//! `upgrade_time_series_steps`, `upgrade_time_series_embeds`,
+//! `upgrade_step_commands`, `upgrade_todoist_since`,
+//! `upgrade_explicit_steps`). Every one before `explicit_steps.rs` reads
+//! the shape from before it.
 
 pub mod convert;
 pub mod document_index;
+pub mod explicit_steps;
 pub mod lowercase_ids;
 pub mod qmd_steps;
+mod retired;
 pub mod step_commands;
 pub mod time_series_embeds;
 pub mod time_series_steps;
@@ -76,6 +83,9 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if todoist_since::is_retired(text)? {
         return Ok(LegacyFormat::TodoistCompletedSince);
     }
+    if explicit_steps::is_retired(text)? {
+        return Ok(LegacyFormat::InferredByTheRunner);
+    }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
@@ -87,7 +97,8 @@ pub fn convert(text: &str) -> Result<String> {
         | LegacyFormat::NoTimeSeries
         | LegacyFormat::TimeSeriesEmbed
         | LegacyFormat::ImplicitStepCommand
-        | LegacyFormat::TodoistCompletedSince => text.to_string(),
+        | LegacyFormat::TodoistCompletedSince
+        | LegacyFormat::InferredByTheRunner => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = lowercase_ids::rewrite(&out)?;
@@ -101,6 +112,11 @@ pub fn convert(text: &str) -> Result<String> {
     let out = time_series_embeds::rewrite(&out)?;
     let out = step_commands::rewrite(&out)?;
     let out = todoist_since::rewrite(&out)?;
+    let out = if explicit_steps::is_retired(&out)? {
+        explicit_steps::rewrite(&out)?
+    } else {
+        out
+    };
     // The conversion is value-level, so anything the loader would refuse in
     // the result surfaces here rather than on the next run. Report what the
     // runner rejected and let the message speak.
@@ -121,7 +137,11 @@ pub fn upgrade_qmd_steps(text: &str) -> Result<Option<String>> {
         return Ok(None);
     }
     let out = qmd_steps::rewrite(text)?;
-    refuse_a_loss(text, &out, |e| e.to_string())?;
+    let gone: Vec<String> = qmd_steps::retired_ids(text)?
+        .into_iter()
+        .map(|id| format!("step {id}"))
+        .collect();
+    refuse_a_loss_but(text, &out, |e| e.to_string(), &gone)?;
     Ok(Some(out))
 }
 
@@ -208,6 +228,37 @@ pub fn upgrade_todoist_since(text: &str) -> Result<Option<String>> {
     Ok(Some(out))
 }
 
+/// Write into the file what the runner used to work out for
+/// `datalib-step`'s steps (`explicit_steps.rs`). Refused when the result
+/// would lose a group, applet or lock the original loaded, or drop more
+/// entries than the original. The runner refuses every step of the
+/// original, so its steps cannot be compared; the tests hold the rewrite
+/// of every config this repo shipped to the runner it was written for.
+pub fn upgrade_explicit_steps(text: &str) -> Result<Option<String>> {
+    if !explicit_steps::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = explicit_steps::rewrite(text)?;
+    refuse_a_loss_between(
+        datalib_dag::config::check_text(text),
+        datalib_dag::config::check_text(&out),
+        str::to_string,
+        &[],
+    )?;
+    Ok(Some(out))
+}
+
+/// What the loader makes of `text` once `explicit_steps.rs` has brought
+/// it to the shape the runner reads, which every other rewrite's text is
+/// a step short of.
+pub(crate) fn check_as_current(text: &str) -> datalib_dag::config::ConfigCheck {
+    let current = match explicit_steps::is_retired(text) {
+        Ok(true) => explicit_steps::rewrite(text).ok(),
+        _ => None,
+    };
+    datalib_dag::config::check_text(current.as_deref().unwrap_or(text))
+}
+
 /// Refuse `out` when it loads fewer entries than `text`, or loses one
 /// `text` loaded, as `follow` names it after the rewrite.
 fn refuse_a_loss(text: &str, out: &str, follow: impl Fn(&str) -> String) -> Result<()> {
@@ -221,13 +272,27 @@ fn refuse_a_loss_but(
     follow: impl Fn(&str) -> String,
     meant: &[String],
 ) -> Result<()> {
-    let before = datalib_dag::config::check_text(text);
-    let after = datalib_dag::config::check_text(out);
+    refuse_a_loss_between(check_as_current(text), check_as_current(out), follow, meant)
+}
+
+fn refuse_a_loss_between(
+    before: datalib_dag::config::ConfigCheck,
+    after: datalib_dag::config::ConfigCheck,
+    follow: impl Fn(&str) -> String,
+    meant: &[String],
+) -> Result<()> {
     let kept = loaded(&after.cfg);
     let lost: Vec<String> = loaded(&before.cfg)
         .into_iter()
         .map(|e| follow(&e))
         .filter(|e| !kept.contains(e) && !meant.contains(e))
+        // A lock `explicit_steps.rs` declares because a step holds it
+        // goes with the step that held it.
+        .filter(|e| {
+            !explicit_steps::RETIRED_DEFAULT_LOCKS
+                .iter()
+                .any(|(name, _, _)| *e == format!("lock {name}"))
+        })
         .collect();
     if !lost.is_empty() || after.dropped() > before.dropped() {
         bail!(
@@ -479,9 +544,9 @@ function = "grid_index"
 inputs = ["slack/render_markdown"]
 "#;
 
-    /// The top-level tables ride through a rewrite untouched. A rewrite
-    /// that dropped one would silently reset the retention or the
-    /// checkpoint cadence a person had set.
+    /// The top-level tables ride through a rewrite, the checkpoint cadence
+    /// into `[env]`. A rewrite that dropped one would silently reset the
+    /// retention or the checkpoint cadence a person had set.
     #[test]
     fn top_level_tables_survive_the_rewrite() {
         let text = format!(
@@ -498,8 +563,10 @@ inputs = ["slack/render_markdown"]
             })
         );
         assert_eq!(
-            cfg.checkpoint_cadence.map(|c| c.at_most_every_secs),
-            Some(30.0)
+            cfg.env
+                .get(datalib_env::DATALIB_STEP_CHECKPOINT_CADENCE)
+                .map(String::as_str),
+            Some("30")
         );
     }
 
@@ -643,20 +710,24 @@ inputs = ["slack/render_markdown"]
         // The name moves from the download step to the group.
         assert_eq!(out.matches("name = \"Work Slack\"").count(), 1, "{out}");
         assert!(
-            out.contains("group = \"slack\"\nfunction = \"ingest\""),
+            out.contains("id = \"slack/ingest\"\ncommand = \"datalib-step run ingest slack\""),
             "{out}"
         );
         assert!(
-            out.contains("group = \"slack\"\nfunction = \"render_markdown\""),
+            out.contains(
+                "id = \"slack/render_markdown\"\ncommand = \"datalib-step run render_markdown slack\""
+            ),
             "{out}"
         );
         assert!(
-            out.contains("group = \"unified_document_index\"\nfunction = \"grid_index\""),
+            out.contains(
+                "id = \"unified_document_index/grid_index\"\ncommand = \"datalib-step run grid_index\""
+            ),
             "{out}"
         );
         assert!(!out.contains("id = \"slack/raw\""), "{out}");
         assert!(
-            !out.contains("datalib-step "),
+            !out.contains("download") && !out.contains("slack_api"),
             "the provider word leaves: {out}"
         );
         // …and the method table with it, under its current name.
@@ -691,12 +762,18 @@ inputs = ["slack/render_markdown"]
     #[test]
     fn a_grouped_config_with_subcommands_loses_them_and_renames_its_functions() {
         let out = convert(GROUPED_WITH_COMMANDS).unwrap();
-        assert!(!out.contains("datalib-step "), "{out}");
+        assert!(
+            !out.contains("download") && !out.contains("render slack"),
+            "{out}"
+        );
         assert!(
             !out.contains("\"raw\"") && !out.contains("rendered_md"),
             "{out}"
         );
-        assert!(out.contains("function = \"qmd_aggregator\""), "{out}");
+        assert!(
+            out.contains("command = \"datalib-step run qmd_aggregator\""),
+            "{out}"
+        );
         assert!(
             out.contains("inputs = [\"slack/render_markdown\"]"),
             "{out}"
@@ -709,7 +786,7 @@ inputs = ["slack/render_markdown"]
         assert!(
             cfg.steps
                 .iter()
-                .all(|s| s.command.as_deref() == Some("datalib-step")),
+                .all(|s| s.command.starts_with("datalib-step run ")),
             "{out}"
         );
     }
@@ -786,7 +863,7 @@ inputs = ["mail/render_markdown"]
         let out = upgrade_qmd_steps(SHARED_QMD_INDEX).unwrap().unwrap();
         assert!(out.contains("function = \"keyword_index\""), "{out}");
         assert!(out.contains("function = \"embed\""), "{out}");
-        let check = datalib_dag::config::check_text(&out);
+        let check = check_as_current(&out);
         assert!(check.is_clean(), "{:?}\n{out}", check.diagnostics);
         assert_eq!(upgrade_qmd_steps(&out).unwrap(), None);
         assert_eq!(upgrade_qmd_steps("not [ toml").unwrap(), None);
@@ -794,19 +871,18 @@ inputs = ["mail/render_markdown"]
     }
 
     /// A rewrite nobody reviews must not cost an entry the original ran.
-    /// Here a custom step already writes under `mail/keyword_index/`, so
-    /// the keyword step the rewrite adds nests with it, and the loader
-    /// drops the custom step, which sits below it once the file is sorted.
-    /// The original drops one entry too (`qmd_index`), so a count of the
-    /// dropped entries does not see the loss.
+    /// Here a custom step reads the `qmd_index` step itself, which the
+    /// rewrite renames, so the custom step's input names nothing and the
+    /// loader drops it. The original drops no step, but the rewrite adds
+    /// two, so a count of the loaded entries does not see the loss.
     #[test]
     fn the_unattended_upgrade_refuses_a_rewrite_that_drops_an_entry() {
-        let extra = "mail/keyword_index/extra";
+        let extra = "exports/qmd_report";
         let clash = format!(
-            "{SHARED_QMD_INDEX}\n[[steps]]\nid = \"{extra}\"\ncommand = \"x\"\ninputs = [\"mail/render_markdown\"]\n"
+            "{SHARED_QMD_INDEX}\n[[steps]]\nid = \"{extra}\"\ncommand = \"x\"\ninputs = [\"unified_index/qmd_index\"]\n"
         );
         let runs = |text: &str| {
-            let check = datalib_dag::config::check_text(text);
+            let check = check_as_current(text);
             check.cfg.steps.iter().any(|s| s.id == extra)
         };
         assert!(runs(&clash));
@@ -828,14 +904,17 @@ inputs = ["mail/render_markdown"]
                       group = \"tasks\"\nfunction = \"ingest\"\ncommand = \"datalib-step\"\n\
                       [steps.params.api]\ncompleted_since = \"2364-01-01\"\n";
         let loads = |text: &str| {
-            let check = datalib_dag::config::check_text(text);
+            let check = check_as_current(text);
             check.cfg.steps.iter().any(|s| s.id == "tasks/ingest")
         };
         let out = upgrade_todoist_since(before).unwrap().unwrap();
         assert!(out.contains("\nsince = \"2364-01-01\"\n"), "{out}");
         assert!(loads(&out), "{out}");
         assert_eq!(upgrade_todoist_since(&out).unwrap(), None);
-        assert_eq!(convert(before).unwrap(), out);
+        assert_eq!(
+            convert(before).unwrap(),
+            explicit_steps::rewrite(&out).unwrap()
+        );
     }
 
     /// The server runs the unattended rewrites in turn; each one after the
@@ -847,7 +926,7 @@ inputs = ["mail/render_markdown"]
         let out = upgrade_document_index(&out).unwrap().unwrap();
         let out = upgrade_step_commands(&out).unwrap().unwrap();
         assert_eq!(upgrade_step_commands(&out).unwrap(), None);
-        let check = datalib_dag::config::check_text(&out);
+        let check = check_as_current(&out);
         assert!(check.is_clean(), "{:?}\n{out}", check.diagnostics);
         assert!(check
             .cfg
@@ -857,6 +936,9 @@ inputs = ["mail/render_markdown"]
         assert!(!out.contains("\"unified_index"), "{out}");
         assert_eq!(upgrade_document_index(&out).unwrap(), None);
         assert_eq!(upgrade_document_index("not [ toml").unwrap(), None);
+        let out = upgrade_explicit_steps(&out).unwrap().unwrap();
+        assert_eq!(upgrade_explicit_steps(&out).unwrap(), None);
+        assert!(datalib_dag::config::check_text(&out).is_clean(), "{out}");
         assert_eq!(convert(SHARED_QMD_INDEX).unwrap(), out);
     }
 
@@ -870,7 +952,7 @@ inputs = ["mail/render_markdown"]
             "{current}\n[[steps]]\nid = \"unified_document_index/qmd_aggregator\"\n\
              command = \"x\"\ninputs = [\"mail/render_markdown\"]\n"
         );
-        assert!(datalib_dag::config::check_text(&clash).is_clean());
+        assert!(check_as_current(&clash).is_clean());
         let err = upgrade_document_index(&clash).unwrap_err().to_string();
         assert!(err.contains("would not load"), "{err}");
     }

@@ -2,32 +2,30 @@
 #
 # Three kinds of entry. A `[[groups]]` entry is one thing on the
 # Manage screen — a source is a group with a `type`, and the unified
-# index is a group without one. A `[[steps]]` entry is `group` +
-# `function`: what it does within its group. Its id is composed as
-# `<group>/<function>` and never written; that id is the directory the
-# step writes, and what another step's `inputs` name. An `[[applets]]`
+# index is a group without one. A `[[steps]]` entry is one process the
+# runner starts. Its `id` is `<group>/<function>`: the first part names
+# the group it is filed under, and the whole id is the directory the
+# step writes and what another step's `inputs` name. An `[[applets]]`
 # entry is a server the app runs, filed under a group for display.
 #
-# Every step names the program it runs in `command` (see
-# docs/dev/step_protocol.md); the runner writes `params` to an
-# owner-only JSON file it names with `--params-file`, appends `inputs`
-# as a `--inputs` JSON flag, and passes the composed id, the group, its
-# type and the function in the environment. Datalib's own steps run
-# `datalib-step`, which reads the function and the group's `type` from
-# that environment. The built-in functions are `ingest`
-# (bring the data in), `render_markdown` (turn the raw store into
-# markdown), `keyword_index` and `embed` (fill the source's part of the
-# qmd search index: its keyword index, then its embeddings), and three
-# under the unified document index: `grid_index` over every render_markdown tree,
-# `qmd_aggregator` over every source's qmd steps, and `embedding_map`,
-# which lays out what the `embed` steps embedded.
-# `params` is per-function — the ingest
-# step carries the provider's config, with where the data comes from
-# as one table whose name is read under the group's type (`api` is
-# the product's own API; `export`, `backup` and the like read files
-# and carry their own `path`), and the render step only render knobs
-# (none for most providers; e.g. beeper's `period`, perseus's
-# `alignment_pairs`).
+# Every step names the program it runs, with all of its arguments, in
+# `command` (see docs/dev/step_protocol.md). The runner hands it its
+# `params` as JSON in `DATALIB_DAG_PARAMS` and its `inputs` in
+# `DATALIB_DAG_INPUTS`, and knows nothing else about it. Datalib's own
+# steps run `datalib-step run <function> [<type>]`: the function, and
+# the group's `type` for a step under a source. The functions are
+# `ingest` (bring the data in), `render_markdown` (turn the raw store
+# into markdown), `keyword_index` and `embed` (fill the source's part
+# of the qmd search index: its keyword index, then its embeddings), and
+# three under the unified document index: `grid_index` over every
+# render_markdown tree, `qmd_aggregator` over every source's qmd steps,
+# and `embedding_map`, which lays out what the `embed` steps embedded.
+# `params` is per-function — the ingest step carries the provider's
+# config, with where the data comes from as one table whose name is
+# read under the group's type (`api` is the product's own API;
+# `export`, `backup` and the like read files and carry their own
+# `path`), and the render step only render knobs (none for most
+# providers; e.g. beeper's `period`, perseus's `alignment_pairs`).
 #
 # TOML shape: one `[[…]]` table per entry, with a step's `params` as
 # `[steps.params.…]` sub-tables. A table header ends the table it sits
@@ -35,8 +33,7 @@
 # likewise `data_root` below has to precede the first `[[…]]` header.
 #
 # Editing a step re-runs it. The runner fingerprints each step over its
-# command, `params`, `env`, declared paths and its group's `type`, so
-# changing any of them
+# id, `command`, `inputs`, `params` and `env`, so changing any of them
 # makes the step stale even when nothing it reads has moved — widen a
 # `since`, flip a render knob, and the next run rebuilds that step's
 # output. An optional `code_version = "..."` covers the remaining case:
@@ -64,12 +61,6 @@ data_root = "~/tmp/dr-dag"
 log_level = "trace"
 
 
-# How many embedding contexts an embed step uses, each holding about
-# 520 MiB once used. On an Apple Silicon mac more of them cost memory and
-# earn almost no speed, so the default is 1. A machine with its own GPU may
-# gain from more; qmd uses at most 8. Changing this re-embeds nothing.
-embed_contexts = 1
-
 # The free space the data root's disk must keep. Under `pause_below`
 # no step starts and running ones are stopped; they carry on once the
 # disk is back to `resume_at`, and the status bar turns red meanwhile.
@@ -96,17 +87,6 @@ process_log_lines = 200000
 # run still listed keeps its chart.
 disk_usage_days = 30
 
-# How much a render holds in memory at once. It reads the raw store a
-# page of `buckets` at a time (threads, conversations: whatever the
-# source renders as one unit), and loads at most `blob_mb` of their
-# attachments together. Smaller pages hold less and cost more queries;
-# changing them changes no document. Omit the table, or either key, for
-# the defaults, which are these. Email and Slack read both; every other
-# render with attachments reads `blob_mb`.
-[render_pages]
-buckets = 500
-blob_mb = 64
-
 # ── slack ──────────────────────────────────────────────────────────
 # A group has two names. Its `id` is the identity: unique, path-safe,
 # and the directory every step under it writes into — so changing it
@@ -114,10 +94,10 @@ blob_mb = 64
 # a migration rather than an edit. Its `name` is what a person types and
 # what every screen shows; optional, read only by the UI, and free to
 # change at any moment because nothing depends on it. The `type` says
-# what kind of data the group mirrors, and which provider the built-in
-# steps run; the steps under it are named for what they do (`ingest`
-# brings the data in, `render_markdown` renders it), and their ids —
-# the directories they write — are composed from the two. An optional
+# what kind of data the group mirrors; each `datalib-step` command under
+# it names it again, so the step knows which provider to run. Each step's
+# id is the group's id and a word for what the step does (`ingest`
+# brings the data in, `render_markdown` renders it). An optional
 # `description` says what this source is to you. Like the name it is
 # display text nothing depends on; search does not read it yet
 # (imbue-ai/datalib#409).
@@ -128,18 +108,17 @@ type = "slack"
 description = "The company Slack, mostly the infra and on-call channels."
 
 [[steps]]
-group = "slack"
-function = "ingest"
-command = "datalib-step"
+id = "slack/ingest"
+command = "datalib-step run ingest slack"
 [steps.params.api]
 media = true
 channels = ["chat-qi"]
 since = "2026-06-15"
 
 [[steps]]
-group = "slack"
-function = "render_markdown"
-command = "datalib-step"
+id = "slack/render_markdown"
+command = "datalib-step run render_markdown slack"
+reads = "pinned"
 inputs = ["slack/ingest"]
 
 # A source's own part of free-text search. `keyword_index` keeps its
@@ -148,15 +127,17 @@ inputs = ["slack/ingest"]
 # the Manage screen and synced by hand; leave both out, and out of
 # `qmd_aggregator`'s inputs, to keep the source out of search.
 [[steps]]
-group = "slack"
-function = "keyword_index"
-command = "datalib-step"
+id = "slack/keyword_index"
+command = "datalib-step run keyword_index slack"
+reads = "files"
+locks = ["qmd_keyword"]
 inputs = ["slack/render_markdown"]
 
 [[steps]]
-group = "slack"
-function = "embed"
-command = "datalib-step"
+id = "slack/embed"
+command = "datalib-step run embed slack"
+reads = "files"
+locks = ["qmd_embed"]
 inputs = ["slack/keyword_index"]
 
 # ── claude ─────────────────────────────────────────────────────────
@@ -167,34 +148,36 @@ id = "claude"
 type = "claude"
 
 [[steps]]
-group = "claude"
-function = "ingest"
-command = "datalib-step"
+id = "claude/ingest"
+command = "datalib-step run ingest claude"
 [steps.params.api]
 conv_uuids = ["f6e7d4bb-991e-433d-91f0-e19b2c8a1e37"]
 
 [[steps]]
-group = "claude"
-function = "render_markdown"
-command = "datalib-step"
+id = "claude/render_markdown"
+command = "datalib-step run render_markdown claude"
+reads = "pinned"
 inputs = ["claude/ingest"]
 
 [[steps]]
-group = "claude"
-function = "keyword_index"
-command = "datalib-step"
+id = "claude/keyword_index"
+command = "datalib-step run keyword_index claude"
+reads = "files"
+locks = ["qmd_keyword"]
 inputs = ["claude/render_markdown"]
 
 [[steps]]
-group = "claude"
-function = "embed"
-command = "datalib-step"
+id = "claude/embed"
+command = "datalib-step run embed claude"
+reads = "files"
+locks = ["qmd_embed"]
 inputs = ["claude/keyword_index"]
 
 # ── a diff group ───────────────────────────────────────────────────
 # What changed in a source between two of its raw store's commits, as
 # documents with the changes highlighted and grid rows with a
-# `diff_status`. `type = "diff"` and `source` make it one; its one step
+# `diff_status`. `type = "diff"` makes it one, and each of its commands
+# names the source's type after `--source-type`; its one render step
 # is `render_markdown`, reading the source's ingest tree, with the two
 # commits under `params.diff` — both required, a diff is asked for and
 # never keeps itself up to date. Named in the fan-ins like any source.
@@ -204,12 +187,11 @@ inputs = ["claude/keyword_index"]
 id = "slack-diff"
 name = "Work Slack, this week's changes"
 type = "diff"
-source = "slack"
 
 [[steps]]
-group = "slack-diff"
-function = "render_markdown"
-command = "datalib-step"
+id = "slack-diff/render_markdown"
+command = "datalib-step run render_markdown diff --source-type slack"
+reads = "pinned"
 inputs = ["slack/ingest"]
 [steps.params.diff]
 from = "8f1c2b0d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c"
@@ -219,26 +201,30 @@ to = "3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c"
 max_documents = 200
 
 [[steps]]
-group = "slack-diff"
-function = "keyword_index"
-command = "datalib-step"
+id = "slack-diff/keyword_index"
+command = "datalib-step run keyword_index diff --source-type slack"
+reads = "files"
+locks = ["qmd_keyword"]
 inputs = ["slack-diff/render_markdown"]
 
 [[steps]]
-group = "slack-diff"
-function = "embed"
-command = "datalib-step"
+id = "slack-diff/embed"
+command = "datalib-step run embed diff --source-type slack"
+reads = "files"
+locks = ["qmd_embed"]
 inputs = ["slack-diff/keyword_index"]
 
 # ── locks ──────────────────────────────────────────────────────────
-# What keeps steps apart beyond the trees they write and read. Every
-# config has three budgets, `network` (4 slots), `cpu` (4) and `index`
-# (2), and a step that names none holds one of them by its shape: a
-# download `network`, a render `cpu`, an index `index`. The qmd steps
-# hold one of two locks of one slot instead, since they all write one
-# index file: `qmd_keyword` (`qmd_aggregator`, every `keyword_index`) and
-# `qmd_embed` (every `embed`). Declare a budget to resize it, or add your
-# own and name it on the steps that hold it:
+# What keeps steps apart beyond the trees they write and read. The
+# runner has two budgets, `network` (4 slots) and `cpu` (4), and a step
+# that names no lock holds one of them: `network` if it reads nothing
+# (a download), `cpu` if it does. Any other lock is declared here and
+# named on the steps that hold it. The qmd steps all write one index
+# file, so they hold a lock of one slot: `qmd_keyword`
+# (`qmd_aggregator`, every `keyword_index`) or `qmd_embed` (every
+# `embed`). The fan-ins that read every source hold `index`, so two of
+# them at most run at once. Declare a budget to resize it, or add your
+# own:
 #
 #   [[locks]]
 #   name = "slack-api"   # two sources on one workspace's rate limit
@@ -246,9 +232,22 @@ inputs = ["slack-diff/keyword_index"]
 #
 #   locks = ["slack-api"]                 # on a step: one slot
 #   locks = { slack-api = "exclusive" }   # or every slot, alone
-#
-# A step that reads its inputs' files off disk rather than at a pinned
-# commit says `reads = "files"`, and no writer of them runs beside it.
+[[locks]]
+name = "qmd_keyword"
+slots = 1
+
+[[locks]]
+name = "qmd_embed"
+slots = 1
+
+[[locks]]
+name = "index"
+slots = 2
+
+# A step that reads its inputs at a pinned commit says
+# `reads = "pinned"`, and may run while a writer of them does; one that
+# reads their files off disk leaves it out or says `reads = "files"`,
+# and no writer of them runs beside it.
 # A step that would rather not run at every seal of a download that
 # streams says `start = "after_inputs_settle"`: it waits until nothing
 # upstream of it is running or due, then runs once, and holds no writer
@@ -257,7 +256,7 @@ inputs = ["slack-diff/keyword_index"]
 # datalib/backend/dag/README.md, "What keeps steps apart".
 
 # ── shared fan-in steps ────────────────────────────────────────────
-# `inputs` names the steps these read, by composed id. Adding a source
+# `inputs` names the steps these read, by id. Adding a source
 # above means adding its steps' ids here too — the wizard does that for
 # you; a hand-edit has to remember, and the Pipeline table flags a
 # render step nothing consumes. The group has no `type`: it mirrors
@@ -269,15 +268,17 @@ inputs = ["slack-diff/keyword_index"]
 id = "unified_document_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
-command = "datalib-step"
+id = "unified_document_index/grid_index"
+command = "datalib-step run grid_index"
+reads = "pinned"
+locks = ["index"]
 inputs = ["slack/render_markdown", "claude/render_markdown", "slack-diff/render_markdown"]
 
 [[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
-command = "datalib-step"
+id = "unified_document_index/qmd_aggregator"
+command = "datalib-step run qmd_aggregator"
+reads = "pinned"
+locks = ["qmd_keyword"]
 inputs = ["slack/keyword_index", "slack/embed", "claude/keyword_index", "claude/embed", "slack-diff/keyword_index", "slack-diff/embed"]
 
 # qmd's document embeddings laid out on a plane by UMAP, for the map
@@ -286,9 +287,10 @@ inputs = ["slack/keyword_index", "slack/embed", "claude/keyword_index", "claude/
 # documents stay put as more arrive; resetting the step lays the map out
 # afresh.
 [[steps]]
-group = "unified_document_index"
-function = "embedding_map"
-command = "datalib-step"
+id = "unified_document_index/embedding_map"
+command = "datalib-step run embedding_map"
+reads = "files"
+locks = ["index"]
 inputs = ["unified_document_index/qmd_aggregator"]
 
 # ── applets ────────────────────────────────────────────────────────
@@ -342,3 +344,4 @@ command = "datalib-applet unified_document_index"
 group = "unified_document_index"
 id = "datalib_contacts"
 command = "datalib-applet datalib_contacts"
+

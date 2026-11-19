@@ -20,14 +20,12 @@ id = "slack"
 type = "slack"
 
 [[steps]]
-group = "slack"
-function = "ingest"
+id = "slack/ingest"
 [steps.params]
 api = {}
 
 [[steps]]
-group = "slack"
-function = "render_markdown"
+id = "slack/render_markdown"
 inputs = ["slack/ingest"]
 `;
 
@@ -59,8 +57,8 @@ describe("reading a name", () => {
   /// put one there — and the loader tells them it is not shown.
   it("lets a step's own name beat the group's", () => {
     const text = renameGroup(UNNAMED, "slack", "Work Slack").replace(
-      'function = "render_markdown"',
-      'function = "render_markdown"\nname = "The markdown"',
+      'id = "slack/render_markdown"',
+      'id = "slack/render_markdown"\nname = "The markdown"',
     );
     const by = new Map(listSteps(text).map((e) => [e.id, e.name]));
     expect(by.get("slack/ingest")).toBe("Work Slack");
@@ -83,14 +81,12 @@ describe("names on the other kinds of entry", () => {
 id = "unified_document_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
+id = "unified_document_index/grid_index"
 name = "Search index"
 inputs = ["slack/render_markdown"]
 
 [[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
+id = "unified_document_index/qmd_aggregator"
 inputs = []
 
 [[applets]]
@@ -122,8 +118,7 @@ id = "notes"
 type = "file_inventory"
 
 [[steps]]
-group = "notes"
-function = "ingest"
+id = "notes/ingest"
 
 [[applets]]
 id = "slack"
@@ -176,7 +171,9 @@ describe("writing a name", () => {
       { entry: SLACK, group: "slack-2", phase: "download", values: { "api.media": true } },
     )}`;
     const next = insertEntries(UNNAMED, body);
-    expect(next.indexOf('name = "Second Slack"')).toBeLessThan(next.indexOf('group = "slack-2"'));
+    expect(next.indexOf('name = "Second Slack"')).toBeLessThan(
+      next.indexOf('id = "slack-2/ingest"'),
+    );
     expect(listSteps(next).find((s) => s.id === "slack-2/ingest")!.name).toBe("Second Slack");
   });
 });

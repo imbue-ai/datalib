@@ -4,6 +4,7 @@
 // (UmapCard.ce.vue) draws and listens; everything it decides is here.
 
 import type { MapPoint } from "@/api";
+import { stepToml } from "@/config/sourceSteps";
 
 export type ColorBy = "provider" | "source" | "kind" | "year" | "account";
 
@@ -227,16 +228,18 @@ export const QMD_AGGREGATOR_STEP = "unified_document_index/qmd_aggregator";
 
 /// The TOML stanza that declares the step, for a config that lacks it:
 /// it reads every source's embeddings, so it runs after the aggregator —
-/// where there is one to name; without it nothing is embedded.
+/// where there is one to name; without it nothing is embedded. A config
+/// it is added to also needs the `index` lock (`withDeclarations`).
 export function stepStanza(hasAggregator: boolean): string {
-  const inputs = hasAggregator ? JSON.stringify(QMD_AGGREGATOR_STEP) : "";
+  const step = stepToml({
+    group: "unified_document_index",
+    fn: "embedding_map",
+    type: null,
+    inputs: hasAggregator ? [QMD_AGGREGATOR_STEP] : [],
+  });
   return `
 # qmd's document embeddings laid out on a plane, for the map card. Each
 # run starts from the last map; resetting the step lays one out afresh.
-[[steps]]
-group = "unified_document_index"
-function = "embedding_map"
-command = "datalib-step"
-inputs = [${inputs}]
+${step}
 `;
 }

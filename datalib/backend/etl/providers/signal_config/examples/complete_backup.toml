@@ -8,9 +8,8 @@ name = "Signal"
 type = "signal"
 
 [[steps]]
-group = "signal"
-function = "ingest"
-command = "datalib-step"
+id = "signal/ingest"
+command = "datalib-step run ingest signal"
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
 # Nothing reads it and it grows every run.
@@ -23,10 +22,10 @@ aep_env_var = "SIGNAL_BACKUP_PASSPHRASE_PICARD"  # env var holding the passphras
                                                  # default SIGNAL_BACKUP_PASSPHRASE
 
 [[steps]]
-group = "signal"
-function = "render_markdown"
-command = "datalib-step"
+id = "signal/render_markdown"
+command = "datalib-step run render_markdown signal"
 inputs = ["signal/ingest"]
+reads = "pinned"
 
 [steps.params]
 period = "month"  # span of each rendered doc: month (default), day, year or all
@@ -34,13 +33,15 @@ period = "month"  # span of each rendered doc: month (default), day, year or all
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "signal"
-function = "keyword_index"
-command = "datalib-step"
+id = "signal/keyword_index"
+command = "datalib-step run keyword_index signal"
 inputs = ["signal/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "signal"
-function = "embed"
-command = "datalib-step"
+id = "signal/embed"
+command = "datalib-step run embed signal"
 inputs = ["signal/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]

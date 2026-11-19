@@ -6,9 +6,8 @@ name = "SMS Backup & Restore"
 type = "sms_backup_restore"
 
 [[steps]]
-group = "sms_backup_restore"
-function = "ingest"
-command = "datalib-step"
+id = "sms_backup_restore/ingest"
+command = "datalib-step run ingest sms_backup_restore"
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
 # Nothing reads it and it grows every run.
@@ -21,21 +20,23 @@ enabled = false
 path = "~/Downloads/sms-backup"
 
 [[steps]]
-group = "sms_backup_restore"
-function = "render_markdown"
-command = "datalib-step"
+id = "sms_backup_restore/render_markdown"
+command = "datalib-step run render_markdown sms_backup_restore"
 inputs = ["sms_backup_restore/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "sms_backup_restore"
-function = "keyword_index"
-command = "datalib-step"
+id = "sms_backup_restore/keyword_index"
+command = "datalib-step run keyword_index sms_backup_restore"
 inputs = ["sms_backup_restore/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "sms_backup_restore"
-function = "embed"
-command = "datalib-step"
+id = "sms_backup_restore/embed"
+command = "datalib-step run embed sms_backup_restore"
 inputs = ["sms_backup_restore/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]

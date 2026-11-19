@@ -6,9 +6,8 @@ name = "Google Takeout"
 type = "google_takeout"
 
 [[steps]]
-group = "google_takeout"
-function = "ingest"
-command = "datalib-step"
+id = "google_takeout/ingest"
+command = "datalib-step run ingest google_takeout"
 
 # Each Takeout is a complete snapshot of the products you ticked: a record a
 # newer export no longer holds leaves the mirror on the next sync. A product
@@ -30,21 +29,23 @@ youtube_watch_history = true       # every video you watched
 youtube_subscriptions = true       # the channels you subscribe to
 
 [[steps]]
-group = "google_takeout"
-function = "render_markdown"
-command = "datalib-step"
+id = "google_takeout/render_markdown"
+command = "datalib-step run render_markdown google_takeout"
 inputs = ["google_takeout/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "google_takeout"
-function = "keyword_index"
-command = "datalib-step"
+id = "google_takeout/keyword_index"
+command = "datalib-step run keyword_index google_takeout"
 inputs = ["google_takeout/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "google_takeout"
-function = "embed"
-command = "datalib-step"
+id = "google_takeout/embed"
+command = "datalib-step run embed google_takeout"
 inputs = ["google_takeout/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]

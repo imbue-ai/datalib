@@ -1627,6 +1627,7 @@ async fn upsert_process(
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(process_id) DO UPDATE SET finished_at_utc = excluded.finished_at_utc, \
            exit_code = excluded.exit_code, signal = excluded.signal, \
+           git_hash = COALESCE(excluded.git_hash, processes.git_hash), \
            peak_rss_bytes = COALESCE(excluded.peak_rss_bytes, processes.peak_rss_bytes)",
     )
     .bind(&p.process_id)

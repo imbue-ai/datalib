@@ -359,7 +359,7 @@ avatar counts only when the store holds it as an image). A vCard
 carries its photo inside the card, in the raw store: the contacts
 download decodes each inline `PHOTO` and puts it in the source's blob
 store before the card is stored (`contacts/src/ingest/photo.rs`), and
-the source's `--migrate` puts in the photos of every card a store
+the ingest's `--prepare` puts in the photos of every card a store
 already holds, for a store an older build filled. Render hashes the
 card's decoded photo and links it. A photo the blob store lacks leaves
 the contact with no photo and a `blob_missing` problem on its page.

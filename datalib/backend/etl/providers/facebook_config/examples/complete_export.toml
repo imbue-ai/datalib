@@ -7,29 +7,30 @@ name = "Facebook"
 type = "facebook"
 
 [[steps]]
-group = "facebook"
-function = "ingest"
-command = "datalib-step"
+id = "facebook/ingest"
+command = "datalib-step run ingest facebook"
 
 [steps.params.export]
 path = "~/Downloads/facebook-export"  # the folder the export's zips were unzipped into
 
 [[steps]]
-group = "facebook"
-function = "render_markdown"
-command = "datalib-step"
+id = "facebook/render_markdown"
+command = "datalib-step run render_markdown facebook"
 inputs = ["facebook/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "facebook"
-function = "keyword_index"
-command = "datalib-step"
+id = "facebook/keyword_index"
+command = "datalib-step run keyword_index facebook"
 inputs = ["facebook/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "facebook"
-function = "embed"
-command = "datalib-step"
+id = "facebook/embed"
+command = "datalib-step run embed facebook"
 inputs = ["facebook/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]

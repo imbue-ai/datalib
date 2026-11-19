@@ -19,20 +19,21 @@ names! { STEP_PROTOCOL:
     DATALIB_DAG_STEP,
     DATALIB_DAG_RUN_ID,
     DATALIB_DAG_ATTEMPT,
-    DATALIB_DAG_GROUP,
-    DATALIB_DAG_GROUP_TYPE,
-    DATALIB_DAG_SOURCE_GROUP,
-    DATALIB_DAG_SOURCE_GROUP_TYPE,
-    DATALIB_DAG_FUNCTION,
     DATALIB_DAG_DATA_ROOT,
+    DATALIB_DAG_PARAMS,
     DATALIB_DAG_INPUTS,
     DATALIB_DAG_CHANGED_INPUTS,
     DATALIB_DAG_FAILED_INPUTS,
     DATALIB_READS,
     DATALIB_DAG_NOW,
-    DATALIB_DAG_CHECKPOINT_CADENCE,
-    DATALIB_DAG_RENDER_PAGES,
-    DATALIB_DAG_EMBED_CONTEXTS,
+}
+
+// The knobs `datalib-step` reads, which a config sets in its `[env]`
+// table. The runner hands them on like any other variable there.
+names! { DATALIB_STEP_KNOBS:
+    DATALIB_STEP_CHECKPOINT_CADENCE,
+    DATALIB_STEP_RENDER_PAGES,
+    DATALIB_STEP_EMBED_CONTEXTS,
 }
 
 names! { APPLET_PROTOCOL:
@@ -52,7 +53,7 @@ names! { LATCHKEY:
 /// big buffers holds gigabytes it no longer uses.
 pub const MALLOC_LARGE_CACHE: &str = "MallocLargeCache";
 
-names! { BUILT_IN_SOURCE_KEYS:
+names! { BACKUP_SECRET_KEYS:
     WHATSAPP_BACKUP_DECRYPTION_KEY,
     SIGNAL_BACKUP_PASSPHRASE,
 }
@@ -231,7 +232,9 @@ mod tests {
 
     /// The step protocol doc is the contract a third-party step is
     /// written against, so every variable the runner sets is in its
-    /// table — and the table names nothing the runner does not set.
+    /// table — and the table names nothing the runner does not set. The
+    /// doc's other table is the knobs `datalib-step` reads, which the
+    /// runner only hands on.
     #[test]
     fn the_step_protocol_doc_and_the_runner_name_the_same_variables() {
         let doc = step_protocol_doc();
@@ -239,6 +242,7 @@ mod tests {
             .lines()
             .filter(|l| l.starts_with("| `DATALIB_"))
             .filter_map(|l| l.trim_start_matches("| `").split('`').next())
+            .filter(|name| !DATALIB_STEP_KNOBS.contains(name))
             .collect();
         let ours: std::collections::BTreeSet<&str> = STEP_PROTOCOL.iter().copied().collect();
         assert_eq!(

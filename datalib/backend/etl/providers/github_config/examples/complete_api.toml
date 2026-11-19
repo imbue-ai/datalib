@@ -6,9 +6,8 @@ name = "GitHub"
 type = "github"
 
 [[steps]]
-group = "github"
-function = "ingest"
-command = "datalib-step"
+id = "github/ingest"
+command = "datalib-step run ingest github"
 
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
@@ -32,21 +31,23 @@ pull_requests = [         # only these PRs, as `owner/repo#NUM` or a github.com 
 ]
 
 [[steps]]
-group = "github"
-function = "render_markdown"
-command = "datalib-step"
+id = "github/render_markdown"
+command = "datalib-step run render_markdown github"
 inputs = ["github/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "github"
-function = "keyword_index"
-command = "datalib-step"
+id = "github/keyword_index"
+command = "datalib-step run keyword_index github"
 inputs = ["github/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "github"
-function = "embed"
-command = "datalib-step"
+id = "github/embed"
+command = "datalib-step run embed github"
 inputs = ["github/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]

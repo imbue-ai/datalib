@@ -59,21 +59,23 @@ name = "Work Slack"
 type = "slack"
 
 [[steps]]
-group = "slack"
-function = "ingest"
+id = "slack/ingest"
+command = "datalib-step run ingest slack"
 
 [[steps]]
-group = "slack"
-function = "render_markdown"
+id = "slack/render_markdown"
+command = "datalib-step run render_markdown slack"
 inputs = ["slack/ingest"]
+reads = "pinned"
 
 [[groups]]
 id = "unified_document_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
+id = "unified_document_index/grid_index"
+command = "datalib-step run grid_index"
 inputs = ["slack/render_markdown"]
+reads = "pinned"
 
 [[applets]]
 id = "unified_document_index"
@@ -728,8 +730,8 @@ id = \"photos\"
 type = \"media\"
 
 [[steps]]
-group = \"photos\"
-function = \"ingest\"
+id = \"photos/ingest\"
+command = \"datalib-step run ingest media\"
 "
     );
     write_root(tmp.path(), &config, None).await;
@@ -789,8 +791,8 @@ async fn a_download_step_names_its_raw_store_once_it_exists() {
 async fn a_dropped_entry_keeps_its_row_and_says_why() {
     let tmp = tempfile::tempdir().unwrap();
     let config = CONFIG.replace(
-        "function = \"render_markdown\"\n",
-        "function = \"render_markdown\"\ntitle = \"not a key\"\n",
+        "command = \"datalib-step run render_markdown slack\"\n",
+        "command = \"datalib-step run render_markdown slack\"\ntitle = \"not a key\"\n",
     );
     write_root(tmp.path(), &config, None).await;
 
@@ -826,11 +828,9 @@ async fn a_dropped_entry_keeps_its_row_and_says_why() {
 #[tokio::test]
 async fn config_warnings_reach_the_system_row() {
     let tmp = tempfile::tempdir().unwrap();
-    let config = CONFIG.replace(
-        "function = \"ingest\"\n",
-        "function = \"ingest\"\n[steps.params]\napi = {}\n\
-         [steps.params.common]\nalways_clear_before_ingest = true\n",
-    ) + "\n[[groups]]\nid = \"lonely\"\n";
+    let config = CONFIG.to_string()
+        + "\n[[programs]]\ncommand = \"datalib-step\"\nverbs = [\"reset\", \"prepair\"]\n"
+        + "\n[[groups]]\nid = \"lonely\"\n";
     write_root(tmp.path(), &config, None).await;
 
     let got = get_rows(tmp.path()).await;
@@ -841,9 +841,7 @@ async fn config_warnings_reach_the_system_row() {
     assert_eq!(chips[0]["kind"], "warning");
     assert_eq!(chips[0]["text"], "2");
     let title = chips[0]["title"].as_str().unwrap();
-    assert!(title.contains("always_clear_before_ingest"), "{title}");
-    assert!(title.contains("has no effect"), "{title}");
-    assert!(title.contains("delete this line"), "{title}");
+    assert!(title.contains("\"prepair\" is not a verb"), "{title}");
     assert!(title.contains("\"lonely\" has no steps"), "{title}");
     // A warning is not a dropped entry: the step still loads, and its
     // own row carries no count it did not earn.

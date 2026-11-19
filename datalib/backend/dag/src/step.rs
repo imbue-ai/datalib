@@ -15,6 +15,54 @@ use crate::events::StepProgress;
 
 pub type StepId = String;
 
+/// A verb the runner may append to a step's argv, as `--<verb>`, when the
+/// step's program declares it (`docs/dev/step_protocol.md` § Verbs).
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Deserialize,
+    Serialize,
+    strum::EnumString,
+    strum::IntoStaticStr,
+    strum::VariantArray,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum Verb {
+    /// Empty what the step wrote. A program that does not take it has its
+    /// step's directory deleted by the runner instead.
+    Reset,
+    /// Each time the runner starts: bring what the step wrote to this
+    /// program's shape, or say it cannot.
+    Prepare,
+    /// Give back disk, dropping history nothing reads.
+    Compact,
+    /// Give back disk, keeping every version.
+    Collect,
+}
+
+impl Verb {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+
+    /// The argv word the step is sent.
+    pub fn flag(self) -> String {
+        format!("--{}", self.as_str())
+    }
+}
+
 /// A step declaration.
 #[derive(Debug, Clone)]
 pub struct StepSpec {
@@ -35,15 +83,10 @@ pub struct StepSpec {
     /// Most steps leave this `None`: `params` is already in the
     /// fingerprint.
     pub code_version: Option<String>,
-    /// Whether the step takes the `--migrate` verb a launch asks after an
-    /// upgrade (`docs/dev/step_protocol.md` § Migrate). The loader sets it
-    /// for `datalib-step`'s own steps. Not in the fingerprint: it says what
-    /// the step can be asked, not what it makes.
-    pub migrates: bool,
-    /// Whether the step takes the `--compact` and `--collect` verbs
-    /// (`docs/dev/step_protocol.md` § Compact and collect). Set like
-    /// `migrates`.
-    pub compacts: bool,
+    /// The verbs its program takes, from the program's `[[programs]]`
+    /// entry (`docs/dev/step_protocol.md` § Verbs). Not in the
+    /// fingerprint: it says what the step can be asked, not what it makes.
+    pub verbs: std::collections::BTreeSet<Verb>,
     /// Whether a consumer may read this step's output *while it is still
     /// being written* — P2 in
     /// `datalib/backend/dag/README.md` § "What a sink owes its consumers".
@@ -71,17 +114,9 @@ pub struct StepSpec {
     /// `None` for the default one its shape gives it. Not in the
     /// fingerprint: it changes when the step may run, not what it makes.
     pub locks: Option<Vec<(String, crate::supervisor::locks::Hold)>>,
-    /// The `[[groups]]` entry this step belongs to, when it has one. The
-    /// id is then `<group>/<function>`, composed by the loader; a step
-    /// with no group carries a verbatim id and none of these three.
+    /// The `[[groups]]` entry its id's first part names, when one does.
+    /// Labels what the step reports; the runner does nothing else with it.
     pub group: Option<String>,
-    /// The group's `type` — the kind of data the group mirrors. In the
-    /// fingerprint, so changing a group's type re-runs its steps; the
-    /// group's `name` is deliberately not, so renaming re-runs nothing.
-    pub group_type: Option<String>,
-    /// What this step does within its group: the second segment of its
-    /// id, and the directory it writes under the group's.
-    pub function: Option<String>,
 }
 
 impl StepSpec {
@@ -94,8 +129,6 @@ impl StepSpec {
     pub fn fingerprint_material(&self) -> String {
         let mut m = String::new();
         m.push_str(&self.id);
-        m.push('\u{1}');
-        m.push_str(self.group_type.as_deref().unwrap_or(""));
         m.push('\u{1}');
         for i in &self.inputs {
             m.push_str(i.as_str());
@@ -131,15 +164,12 @@ impl StepSpec {
             inputs: Vec::new(),
             run,
             code_version: None,
-            migrates: false,
-            compacts: false,
+            verbs: std::collections::BTreeSet::new(),
             streams_output: false,
             reads_pinned: true,
             waits_for_settled_inputs: false,
             locks: None,
             group: None,
-            group_type: None,
-            function: None,
         }
     }
 
@@ -159,6 +189,11 @@ impl StepSpec {
     pub fn streams_output(mut self) -> Self {
         self.streams_output = true;
         self
+    }
+
+    /// Whether its program takes `verb`.
+    pub fn takes(&self, verb: Verb) -> bool {
+        self.verbs.contains(&verb)
     }
 
     pub fn input(mut self, id: &str) -> Self {
@@ -275,13 +310,6 @@ impl CheckpointSink {
 #[derive(Clone)]
 pub struct StepCtx {
     pub step_id: StepId,
-    /// The step's group, its type and its function — see the same
-    /// fields on [`StepSpec`]. Forwarded to a subprocess as
-    /// `DATALIB_DAG_GROUP`, `DATALIB_DAG_GROUP_TYPE` and
-    /// `DATALIB_DAG_FUNCTION`; all `None` for an ungrouped step.
-    pub group: Option<String>,
-    pub group_type: Option<String>,
-    pub function: Option<String>,
     pub data_root: PathBuf,
     /// Concrete input artifacts, resolved from the step's input
     /// patterns (producer outputs + external artifacts), relative to
@@ -511,6 +539,10 @@ pub enum FailureKind {
     /// and its dependents read it, and the rest waits for the next run.
     /// Not retried, since the step's own retries are what ran out.
     Incomplete,
+    /// Its answer to `--prepare`: what it wrote is in a shape this
+    /// program cannot use, a newer build's. The step stays blocked until
+    /// the runner next starts and asks again.
+    Incompatible,
 }
 
 impl FailureKind {

@@ -35,8 +35,8 @@ id = "media"
 type = "media"
 
 [[steps]]
-group = "media"
-function = "ingest"
+id = "media/ingest"
+command = "datalib-step run ingest media"
 `;
 
 /// The painted values of one column of the search grid, retried until

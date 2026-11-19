@@ -7,16 +7,15 @@ name = "Google Drive"
 type = "google_drive"
 
 [[steps]]
-group = "google_drive"
-function = "ingest"
-command = "datalib-step"
+id = "google_drive/ingest"
+command = "datalib-step run ingest google_drive"
 
 [steps.params.api]
 
 # Each Doc as one document, its comment threads folded in; Sheets and
 # Slides are kept but not rendered yet.
 [[steps]]
-group = "google_drive"
-function = "render_markdown"
-command = "datalib-step"
+id = "google_drive/render_markdown"
+command = "datalib-step run render_markdown google_drive"
 inputs = ["google_drive/ingest"]
+reads = "pinned"

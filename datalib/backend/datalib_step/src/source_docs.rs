@@ -280,9 +280,9 @@ fn kind_of(root: &Value, node: &Value) -> String {
 }
 
 /// An example stanza with its group renamed: the `id` of its `[[groups]]`
-/// entry, the `group` of each step, and every step id naming the group,
-/// in an input or in a comment's backticks. The `type` stays, which is
-/// why this is not a plain replace.
+/// entry, and every step id naming the group, its own or an input's or in
+/// a comment's backticks. The `type`, in the group and at the end of each
+/// step's `command`, stays, which is why this is not a plain replace.
 pub fn with_group_id(toml: &str, from: &str, to: &str) -> String {
     let quoted = format!("\"{from}\"");
     let step_prefix = format!("\"{from}/");
@@ -310,6 +310,7 @@ mod tests {
     use strum::VariantArray;
 
     use super::*;
+    use crate::function::Function;
     use crate::methods::{held, ingest_methods};
 
     /// Every dotted path a params tree writes, in the spelling [`Field::path`]
@@ -356,9 +357,18 @@ mod tests {
     // checked-in config, and hands back what the checks below look at.
     fn load(name: &str, toml: &str, dir: &Path) -> Loaded {
         let path = dir.join(format!("{}.toml", name.replace('/', "_")));
+        let locks: String = crate::step_entry::LOCKS
+            .iter()
+            .filter_map(|(n, _)| crate::step_entry::locks_entry(n))
+            .collect::<Vec<_>>()
+            .join("\n");
         std::fs::write(
             &path,
-            format!("data_root = \"{}\"\n\n{toml}", dir.join("root").display()),
+            format!(
+                "data_root = \"{}\"\n\n{}\n{locks}\n{toml}",
+                dir.join("root").display(),
+                crate::step_entry::programs_entry()
+            ),
         )
         .unwrap();
         crate::config_examples_test::validate_config(name, &path);
@@ -369,12 +379,42 @@ mod tests {
             "{name}: one [[groups]] entry per example"
         );
         let group = &cfg.groups[0];
+        let function_of = |s: &datalib_dag::config::StepEntry| {
+            crate::step_entry::run_args(&s.command)
+                .unwrap_or_else(|| panic!("{name}: {} does not run datalib-step", s.id))
+                .unwrap_or_else(|e| panic!("{name}: {}: {e}", s.id))
+                .function
+        };
+        // Each step's command says what the examples promise: the group's
+        // type, and the reads and locks datalib-step needs.
+        for s in &cfg.steps {
+            let args = crate::step_entry::run_args(&s.command).unwrap().unwrap();
+            let f = Function::parse(&args.function).unwrap();
+            assert_eq!(s.id, format!("{}/{f}", group.id), "{name}");
+            assert_eq!(args.group_type, group.r#type, "{name}: {}", s.id);
+            let ty = group.r#type.as_deref();
+            assert_eq!(
+                s.reads.map(|r| r.as_str()),
+                crate::step_entry::reads(f, ty),
+                "{name}: {}'s reads",
+                s.id
+            );
+            let locks = s.locks.as_ref().map(|l| l.held()).unwrap_or_default();
+            let names: Vec<&str> = locks.iter().map(|(n, _)| n.as_str()).collect();
+            assert_eq!(
+                names,
+                crate::step_entry::lock(f, ty)
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+                "{name}: {}'s locks",
+                s.id
+            );
+        }
         let ingest = cfg
             .steps
             .iter()
-            .find(|s| s.function.as_deref() == Some("ingest"))
+            .find(|s| function_of(s) == "ingest")
             .unwrap_or_else(|| panic!("{name}: no ingest step"));
-        assert_eq!(ingest.group.as_deref(), Some(group.id.as_str()), "{name}");
         Loaded {
             group_id: group.id.clone(),
             group_type: group.r#type.clone(),
@@ -383,11 +423,7 @@ mod tests {
                 .as_ref()
                 .map(|p| serde_json::to_value(p).unwrap())
                 .unwrap_or(Value::Null),
-            functions: cfg
-                .steps
-                .iter()
-                .filter_map(|s| s.function.clone())
-                .collect(),
+            functions: cfg.steps.iter().map(function_of).collect(),
         }
     }
 
@@ -519,11 +555,15 @@ mod tests {
     #[test]
     fn a_group_id_is_renamed_and_the_type_kept() {
         let toml = "[[groups]]\nid = \"slack\"\ntype = \"slack\"\n\n[[steps]]\n\
-                    group = \"slack\"\nfunction = \"render_markdown\"\ninputs = [\"slack/ingest\"]\n";
+                    id = \"slack/render_markdown\"\n\
+                    command = \"datalib-step run render_markdown slack\"\n\
+                    inputs = [\"slack/ingest\"]\n";
         assert_eq!(
             with_group_id(toml, "slack", "work"),
             "[[groups]]\nid = \"work\"\ntype = \"slack\"\n\n[[steps]]\n\
-             group = \"work\"\nfunction = \"render_markdown\"\ninputs = [\"work/ingest\"]\n"
+             id = \"work/render_markdown\"\n\
+             command = \"datalib-step run render_markdown slack\"\n\
+             inputs = [\"work/ingest\"]\n"
         );
     }
 

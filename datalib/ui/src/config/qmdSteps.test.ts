@@ -10,20 +10,17 @@ id = "away-team"
 type = "${type}"
 
 [[steps]]
-group = "away-team"
-function = "ingest"
+id = "away-team/ingest"
 
 [[steps]]
-group = "away-team"
-function = "render_markdown"
+id = "away-team/render_markdown"
 inputs = ["away-team/ingest"]
 
 [[groups]]
 id = "unified_document_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
+id = "unified_document_index/qmd_aggregator"
 inputs = []
 `;
 

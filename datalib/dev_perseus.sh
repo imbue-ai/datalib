@@ -52,38 +52,63 @@ cat > "$ROOT/config.toml" <<EOF
 data_root = "$ROOT"
 binary_dir = "$BIN_DIR"
 
+[[programs]]
+command = "datalib-step"
+verbs = ["reset", "prepare", "compact", "collect"]
+
+[[locks]]
+name = "index"
+slots = 2
+
+[[locks]]
+name = "qmd_keyword"
+slots = 1
+
+[[locks]]
+name = "qmd_embed"
+slots = 1
+
 [[groups]]
 id = "perseus"
 type = "perseus"
 
 [[steps]]
-group = "perseus"
-function = "render_markdown"
+id = "perseus/render_markdown"
+command = "datalib-step run render_markdown perseus"
+reads = "files"
 [steps.params.common]
 input_path = "$PERSEUS_FIXTURE_DIR"
 
 [[steps]]
-group = "perseus"
-function = "keyword_index"
+id = "perseus/keyword_index"
+command = "datalib-step run keyword_index perseus"
 inputs = ["perseus/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "perseus"
-function = "embed"
+id = "perseus/embed"
+command = "datalib-step run embed perseus"
 inputs = ["perseus/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 [[groups]]
 id = "unified_document_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
+id = "unified_document_index/grid_index"
+command = "datalib-step run grid_index"
 inputs = ["perseus/render_markdown"]
+reads = "pinned"
+locks = ["index"]
 
 [[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
+id = "unified_document_index/qmd_aggregator"
+command = "datalib-step run qmd_aggregator"
 inputs = ["perseus/keyword_index", "perseus/embed"]
+reads = "pinned"
+locks = ["qmd_keyword"]
 
 # Serves the grid, the document view and the document picker.
 [[applets]]

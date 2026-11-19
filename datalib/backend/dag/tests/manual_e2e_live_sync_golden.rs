@@ -1286,9 +1286,10 @@ fn qmd_collections_report(data_root: &Path, cfg_text: &str) -> Value {
     let groups_with = |function: &str| -> std::collections::BTreeSet<String> {
         steps
             .iter()
-            .filter(|s| s.get("function").and_then(toml::Value::as_str) == Some(function))
-            .filter_map(|s| s.get("group").and_then(toml::Value::as_str))
-            .map(str::to_string)
+            .filter_map(|s| s.get("id").and_then(toml::Value::as_str))
+            .filter_map(|id| id.split_once('/'))
+            .filter(|(_, f)| *f == function)
+            .map(|(g, _)| g.to_string())
             .collect()
     };
     let embedded = groups_with("embed");
@@ -1922,7 +1923,7 @@ fn rewrite_config(text: &str) -> String {
     let mut doc: toml::Table = toml::from_str(text).expect("parse config toml");
     doc.remove("data_root");
 
-    // A step is `group` + `function`; its provider is the group's `type`.
+    // A step's id is `<group>/<function>`; its provider is the group's `type`.
     let slack_groups: Vec<String> = doc
         .get("groups")
         .and_then(|v| v.as_array())
@@ -1947,8 +1948,8 @@ fn rewrite_config(text: &str) -> String {
         let Some(m) = step.as_table_mut() else {
             continue;
         };
-        let function = m.get("function").and_then(|v| v.as_str()).unwrap_or("");
-        let group = m.get("group").and_then(|v| v.as_str()).unwrap_or("");
+        let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let (group, function) = id.split_once('/').unwrap_or((id, ""));
         if function != "ingest" || !slack_groups.iter().any(|g| g == group) {
             continue;
         }

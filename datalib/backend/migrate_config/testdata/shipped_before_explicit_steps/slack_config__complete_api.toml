@@ -1,0 +1,83 @@
+# Slack over its API, signed in through latchkey, with every option set, and
+# searchable.
+[[groups]]
+id = "slack"
+name = "Slack"
+type = "slack"
+
+[[steps]]
+group = "slack"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params.common]
+blob_size_limit_bytes = "1 MB"  # skip an attachment larger than this; unset is no limit
+
+# When to give up on rate limits. The download always honours a 429's
+# Retry-After and backs off; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 100       # Slack rate-limits hard; the default is 50
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "enterprise"
+
+[steps.params.api]
+since = "2025-01-01"           # oldest message: a day ("2025-01-01"), an RFC 3339 instant
+                               # ("2025-01-01T09:00:00-08:00"), or an offset back from each
+                               # sync ("-30d", "-2w": a rolling window). Omit it for the whole
+                               # history; a first sync of a big workspace then takes hours
+channels = ["bridge", "engineering"]  # by name, without `#`; omit for every channel you are in
+all_channels = false           # also channels you can see but are not in (ignored with `channels`)
+archived = false               # also archived channels, each read once; meant with
+                               # `all_channels` (Slack drops members on archive). A
+                               # channel named in `channels` is mirrored either way
+media = true                   # download attachments into blobs; on unless set, so a
+                               # first sync fetches every file in range
+dms = true                     # direct messages, 1:1 and group: off unless set
+dm_conversations = ["D024BE7LH", "https://enterprise.slack.com/archives/G0ABC12DE"]
+                               # only these DMs, by id or pasted link; needs `dms = true`.
+                               # Unset, every DM: each is read once, then when Slack
+                               # shows it open with new messages, and daily if closed
+refresh_window_days = 30       # re-walk this many trailing days for edits, reactions
+                               # and deletions; default 30, 0 turns it off
+refresh_every_minutes = 60     # re-walk that window at most this often; default 60,
+                               # 0 re-walks it on every sync
+list_every_hours = 6           # re-read the user list and bookmarks at most this often;
+                               # default 6, 0 re-reads them on every sync. New authors are
+                               # looked up as their messages land either way
+scope = "involves_me"          # walk only the channels where something involves you;
+                               # default "every_conversation". DMs follow `dms` either way
+involves_me = ["mention", "from_me", "broadcast"]
+                               # what counts: a mention of you, your own message,
+                               # @here / @channel; unset is all three
+context_before = "-1d"         # walk a channel from this long before the oldest such
+                               # message; default "-1d"
+context_after = "+2d"          # walk only this long after each one; unset walks up to now
+
+[[steps]]
+group = "slack"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["slack/ingest"]
+
+# Free-text search: keyword (BM25), then embeddings for search by meaning.
+# Add both to `unified_document_index/qmd_aggregator`'s inputs.
+[[steps]]
+group = "slack"
+function = "keyword_index"
+command = "datalib-step"
+inputs = ["slack/render_markdown"]
+
+[[steps]]
+group = "slack"
+function = "embed"
+command = "datalib-step"
+inputs = ["slack/keyword_index"]

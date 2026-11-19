@@ -7,16 +7,15 @@ name = "Google Takeout"
 type = "google_takeout"
 
 [[steps]]
-group = "google_takeout"
-function = "ingest"
-command = "datalib-step"
+id = "google_takeout/ingest"
+command = "datalib-step run ingest google_takeout"
 
 [steps.params.export]
 path = "~/Downloads/takeout-export"
 google_chat = true
 
 [[steps]]
-group = "google_takeout"
-function = "render_markdown"
-command = "datalib-step"
+id = "google_takeout/render_markdown"
+command = "datalib-step run render_markdown google_takeout"
 inputs = ["google_takeout/ingest"]
+reads = "pinned"

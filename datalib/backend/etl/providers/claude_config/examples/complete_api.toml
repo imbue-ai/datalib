@@ -7,9 +7,8 @@ name = "Claude"
 type = "claude"
 
 [[steps]]
-group = "claude"
-function = "ingest"
-command = "datalib-step"
+id = "claude/ingest"
+command = "datalib-step run ingest claude"
 
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
@@ -38,10 +37,10 @@ project_uuids = [                     # only these projects, by id or pasted lin
 ]
 
 [[steps]]
-group = "claude"
-function = "render_markdown"
-command = "datalib-step"
+id = "claude/render_markdown"
+command = "datalib-step run render_markdown claude"
 inputs = ["claude/ingest"]
+reads = "pinned"
 
 [steps.params]
 max_project_doc_bytes = 131072  # cut a project knowledge document's text at this many
@@ -50,13 +49,15 @@ max_project_doc_bytes = 131072  # cut a project knowledge document's text at thi
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "claude"
-function = "keyword_index"
-command = "datalib-step"
+id = "claude/keyword_index"
+command = "datalib-step run keyword_index claude"
 inputs = ["claude/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "claude"
-function = "embed"
-command = "datalib-step"
+id = "claude/embed"
+command = "datalib-step run embed claude"
 inputs = ["claude/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]

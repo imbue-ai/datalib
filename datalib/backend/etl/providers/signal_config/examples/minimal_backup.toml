@@ -10,15 +10,14 @@ name = "Signal"
 type = "signal"
 
 [[steps]]
-group = "signal"
-function = "ingest"
-command = "datalib-step"
+id = "signal/ingest"
+command = "datalib-step run ingest signal"
 
 [steps.params.backup]
 path = "~/Downloads/signal-backup"
 
 [[steps]]
-group = "signal"
-function = "render_markdown"
-command = "datalib-step"
+id = "signal/render_markdown"
+command = "datalib-step run render_markdown signal"
 inputs = ["signal/ingest"]
+reads = "pinned"

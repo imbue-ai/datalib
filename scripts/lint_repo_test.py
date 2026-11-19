@@ -1,4 +1,4 @@
-"""lint_repo.py's checks on what can be misspelled: checks 11 and 20."""
+"""lint_repo.py's checks on what can be misspelled: checks 11, 20 and 23."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from lint_repo import (
     reader_grant_problems,
     release_grant_problems,
     release_key_problems,
+    step_program_mentions,
     unliteral_opens,
 )
 
@@ -394,6 +395,28 @@ class LiteralOpenTest(unittest.TestCase):
         ]:
             with self.subTest(source=source):
                 self.assertEqual(unliteral_opens(source), [])
+
+
+class StepProgramMentionTest(unittest.TestCase):
+    def test_a_mention_outside_a_test_module_is_found_at_its_line(self) -> None:
+        source = (
+            "//! Runs `datalib-step`.\n"
+            "fn f() {}\n"
+            "#[cfg(test)]\n"
+            "mod tests {\n"
+            '    const P: &str = "datalib-step";\n'
+            "}\n"
+            'const Q: &str = "datalib-step run";\n'
+            "#[cfg(test)]\n"
+            "mod more_tests {\n"
+            "    // datalib-step\n"
+            "}\n"
+        )
+        self.assertEqual(step_program_mentions(source), [1, 7])
+
+    def test_a_cfg_test_on_one_item_hides_nothing_after_it(self) -> None:
+        source = '#[cfg(test)]\nfn helper() {}\nconst P: &str = "datalib-step";\n'
+        self.assertEqual(step_program_mentions(source), [3])
 
 
 if __name__ == "__main__":

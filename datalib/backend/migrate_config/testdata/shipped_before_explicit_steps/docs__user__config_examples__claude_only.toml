@@ -1,0 +1,69 @@
+# Minimal config in the format `datalib-dag` runs: one source (claude.ai
+# conversations) — a group and its two steps — plus the unified document index
+# group with its two shared index steps. See configs/dag_example.toml
+# for a walkthrough of the format.
+
+# Where the downloaded data gets written. Top-level keys have to come
+# before the first [[…]] header — everything after a table header
+# belongs to that table.
+data_root = "~/claude_data_liberated"
+
+[[groups]]
+id = "claude_chats"
+type = "claude"
+
+[[steps]]
+group = "claude_chats"
+function = "ingest"
+command = "datalib-step"
+[steps.params]
+api = {}
+
+[[steps]]
+group = "claude_chats"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["claude_chats/ingest"]
+
+[[steps]]
+group = "claude_chats"
+function = "keyword_index"
+command = "datalib-step"
+inputs = ["claude_chats/render_markdown"]
+
+[[steps]]
+group = "claude_chats"
+function = "embed"
+command = "datalib-step"
+inputs = ["claude_chats/keyword_index"]
+
+[[groups]]
+id = "unified_document_index"
+
+[[steps]]
+group = "unified_document_index"
+function = "grid_index"
+command = "datalib-step"
+inputs = ["claude_chats/render_markdown"]
+
+[[steps]]
+group = "unified_document_index"
+function = "qmd_aggregator"
+command = "datalib-step"
+inputs = ["claude_chats/keyword_index", "claude_chats/embed"]
+
+# The app's own surface: `unified_document_index` serves the grid, the document
+# view and the document picker. Without it the UI has no search — it is
+# an applet rather than a built-in so the backend does not have to know
+# what a grid row is.
+[[applets]]
+group = "unified_document_index"
+id = "unified_document_index"
+command = "datalib-applet unified_document_index"
+
+# The contacts app: your own record of who a handle is, which the person
+# chips and search read. `datalib-step help contacts-app`.
+[[applets]]
+group = "unified_document_index"
+id = "datalib_contacts"
+command = "datalib-applet datalib_contacts"

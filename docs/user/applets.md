@@ -38,9 +38,10 @@ and the app starts it within a moment, with no restart.
 | `photos` | photos and videos | a contact sheet |
 | `slack` | one Slack mirror's channels and threads | a channel browser |
 
-`datalib-dag init` writes the first two. `datalib-step examples <type>
---append` adds the time-series index when a source that has time series
-is the first. The other two are yours to add:
+The app's first-run screen writes the first two, and so does
+`datalib-step examples <type> --append` into a config that has no
+document index yet; it adds the time-series index when a source that
+has time series is the first. The other two are yours to add:
 
 ```toml fragment
 [[applets]]

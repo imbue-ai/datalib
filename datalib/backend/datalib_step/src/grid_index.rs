@@ -141,8 +141,7 @@ mod tests {
             step: "unified_document_index/grid_index".into(),
             group: "unified_document_index".into(),
             group_type: None,
-            source_group: None,
-            source_group_type: None,
+            diff_source_type: None,
             function: crate::function::Function::GridIndex,
             inputs: Vec::new(),
         };

@@ -1,5 +1,5 @@
 # Minimal config in the format `datalib-dag` runs: one source (claude.ai
-# conversations) — a group and its two steps — plus the unified document index
+# conversations) — a group and its steps — plus the unified document index
 # group with its two shared index steps. See configs/dag_example.toml
 # for a walkthrough of the format.
 
@@ -13,43 +13,46 @@ id = "claude_chats"
 type = "claude"
 
 [[steps]]
-group = "claude_chats"
-function = "ingest"
-command = "datalib-step"
+id = "claude_chats/ingest"
+command = "datalib-step run ingest claude"
 [steps.params]
 api = {}
 
 [[steps]]
-group = "claude_chats"
-function = "render_markdown"
-command = "datalib-step"
+id = "claude_chats/render_markdown"
+command = "datalib-step run render_markdown claude"
+reads = "pinned"
 inputs = ["claude_chats/ingest"]
 
 [[steps]]
-group = "claude_chats"
-function = "keyword_index"
-command = "datalib-step"
+id = "claude_chats/keyword_index"
+command = "datalib-step run keyword_index claude"
+reads = "files"
+locks = ["qmd_keyword"]
 inputs = ["claude_chats/render_markdown"]
 
 [[steps]]
-group = "claude_chats"
-function = "embed"
-command = "datalib-step"
+id = "claude_chats/embed"
+command = "datalib-step run embed claude"
+reads = "files"
+locks = ["qmd_embed"]
 inputs = ["claude_chats/keyword_index"]
 
 [[groups]]
 id = "unified_document_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
-command = "datalib-step"
+id = "unified_document_index/grid_index"
+command = "datalib-step run grid_index"
+reads = "pinned"
+locks = ["index"]
 inputs = ["claude_chats/render_markdown"]
 
 [[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
-command = "datalib-step"
+id = "unified_document_index/qmd_aggregator"
+command = "datalib-step run qmd_aggregator"
+reads = "pinned"
+locks = ["qmd_keyword"]
 inputs = ["claude_chats/keyword_index", "claude_chats/embed"]
 
 # The app's own surface: `unified_document_index` serves the grid, the document
@@ -67,3 +70,23 @@ command = "datalib-applet unified_document_index"
 group = "unified_document_index"
 id = "datalib_contacts"
 command = "datalib-applet datalib_contacts"
+
+# The verbs `datalib-step` takes (docs/dev/step_protocol.md § Verbs).
+[[programs]]
+command = "datalib-step"
+verbs = ["reset", "prepare", "compact", "collect"]
+
+# Whatever writes qmd's keyword index: two at once can lose a document.
+[[locks]]
+name = "qmd_keyword"
+slots = 1
+
+# Whatever embeds into qmd's index: two at once race on its vectors.
+[[locks]]
+name = "qmd_embed"
+slots = 1
+
+# The fan-ins that read every source.
+[[locks]]
+name = "index"
+slots = 2

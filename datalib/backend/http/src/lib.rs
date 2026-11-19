@@ -9,6 +9,7 @@
 //! loader in `datalib_dag::config` accepts today; a root written in an
 //! earlier shape is rewritten out of band by `datalib-migrate-config`.
 
+use crate::starter::STARTER_CONFIG;
 use app_schema::feedback::FeedbackRow;
 use axum::{
     body::Body,
@@ -20,7 +21,6 @@ use axum::{
     Router,
 };
 use datalib_core::repo::{DynAppRepo, RepoError};
-use datalib_dag::starter::STARTER_CONFIG;
 use datalib_dag::supervisor::store::RequestRow;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -54,6 +54,8 @@ pub mod prometheus;
 pub mod remote_media;
 pub mod request_log;
 pub mod request_progress;
+pub mod starter;
+pub mod step_program;
 pub mod supervisor;
 pub mod ui_events;
 mod ui_mirror;
@@ -1130,8 +1132,18 @@ async fn put_config(
     let path = s.config_path();
 
     // Validate the submitted text before it touches the filesystem, so
-    // a rejected config never gets written even transiently.
-    let verdict = full_verdict(&req.text).await;
+    // a rejected config never gets written even transiently. Text in a
+    // shape the save will upgrade is judged as it will be written: the
+    // loader refuses an old shape the upgrade turns into a good one.
+    let mut verdict = full_verdict(&req.text).await;
+    if !verdict.ok {
+        if let Some(upgraded) = config_upgrade::upgraded(&req.text) {
+            let after = full_verdict(&upgraded).await;
+            if after.ok {
+                verdict = after;
+            }
+        }
+    }
     if !verdict.ok {
         return Ok(Json(verdict));
     }
@@ -1176,7 +1188,7 @@ pub struct InitConfigResponse {
 /// makes the check and the write one operation.
 async fn init_config(State(s): State<AppState>) -> Result<Json<InitConfigResponse>, StatusCode> {
     let path = s.config_path();
-    let created = datalib_dag::starter::write_starter_config(&s.root).map_err(|e| {
+    let created = crate::starter::write_starter_config(&s.root).map_err(|e| {
         tracing::error!("init_config: {}: {e}", path.display());
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -1525,13 +1537,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
         let commands: std::collections::HashMap<String, String> = cfg
             .steps
             .iter()
-            .map(|e| {
-                let command = e
-                    .command
-                    .clone()
-                    .unwrap_or_else(|| config::BUILTIN_STEP_PROGRAM.to_string());
-                (e.id.clone(), command)
-            })
+            .map(|e| (e.id.clone(), e.command.clone()))
             .collect();
         let specs = config::to_specs(&cfg)?;
         let graph = datalib_dag::Graph::build(specs)?;

@@ -1,0 +1,28 @@
+# Fastmail's calendars over CalDAV, signed in through latchkey's
+# `fastmail-dav` service with a read-only app password. An empty `fastmail`
+# table mirrors every calendar the account can see.
+[[groups]]
+id = "calendar"
+name = "Fastmail Calendar"
+type = "calendar"
+
+[[steps]]
+group = "calendar"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params.fastmail]
+
+[[steps]]
+group = "calendar"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["calendar/ingest"]
+
+# Every occurrence of every event from 30 days back to 400 ahead, one row
+# each, the way Google's `singleEvents=true` lists them.
+[[steps]]
+group = "calendar"
+function = "render_occurrences"
+command = "datalib-step"
+inputs = ["calendar/ingest"]

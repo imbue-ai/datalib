@@ -17,8 +17,8 @@ id = "pdfs"
 type = "pdf"
 
 [[steps]]
-group = "pdfs"
-function = "ingest"
+id = "pdfs/ingest"
+command = "datalib-step run ingest pdf"
 "#;
 
 /// Writes `<tree>/blobs.sqlite` the way the contract says a step does,
@@ -127,8 +127,9 @@ id = "pdfs"
 type = "pdf"
 
 [[steps]]
-group = "pdfs"
-function = "render_markdown"
+id = "pdfs/render_markdown"
+command = "datalib-step run render_markdown pdf"
+reads = "pinned"
 "#,
     )
     .unwrap();

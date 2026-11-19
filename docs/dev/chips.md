@@ -57,7 +57,7 @@ still works in another app, and `datalib:` otherwise:
 | a person by a handle kind with no scheme | `datalib:handle/<kind>/<value>`, the value percent-encoded but for its `/`s, e.g. a Signal account id, `datalib:handle/facebook/name/Will%20Riker` or `datalib:handle/github/data-soong`. A GitHub profile's address is not used: `github.com/<x>` is as often an organization or one of GitHub's own pages | `Handle::to_uri` |
 | one of your contacts, by its id | `datalib:contact/<id>` (`contactFromUri` in `chipLinks.js`) | `datalib_contacts::contact_uri` |
 | a group | `datalib:group/<id>` | `datalib_columns::Entity::uri` |
-| a step | `datalib:step/<group>/<function>` | `datalib_columns::Entity::uri` |
+| a step | `datalib:step/<step id>`, e.g. `datalib:step/slack/ingest` | `datalib_columns::Entity::uri` |
 
 Two functions in `datalib_etl_render::message` write every chip link
 the backend writes, so the escaping lives in one place:

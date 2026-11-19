@@ -122,8 +122,7 @@ mod tests {
 id = "w"
 
 [[steps]]
-group = "w"
-function = "ingest"
+id = "w/ingest"
 command = "my-fetcher --out ."
 
 [[steps]]

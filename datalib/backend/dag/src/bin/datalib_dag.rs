@@ -26,6 +26,7 @@ const VERSION_RESOLVED: &str = {
 use datalib_dag::cli::{Cli, Verb};
 use datalib_dag::disk_space::human_bytes;
 use datalib_dag::events::FanOutSink;
+use datalib_dag::scheduler::PrepareError;
 use datalib_dag::subprocess::Shrink;
 use datalib_dag::supervisor::host;
 use datalib_dag::supervisor::reload::ConfigFile;
@@ -120,26 +121,11 @@ async fn main() -> Result<()> {
             config_path.display()
         );
     }
-    // A root a newer line of datalib wrote is refused here, before the
-    // runner lock and before the record is read: every step's open would
-    // refuse anyway (`datalib_store_meta::guard`). `--check` reports it
-    // the same way.
-    let newer = datalib_store_meta::inspect_root(&data_root).await;
-    if !newer.is_empty() {
-        let lines: Vec<String> = newer.iter().map(ToString::to_string).collect();
-        bail!(
-            "{} was written by a newer datalib; this build ({}) will not touch it:\n{}",
-            data_root.display(),
-            datalib_runtime::build_id::DATALIB_VERSION,
-            lines.join("\n")
-        );
-    }
     if check_only {
-        let refused = check_params(&config_path, &checked, binary_dir.as_deref());
         #[allow(clippy::disallowed_macros)]
         {
             println!(
-                "{}: {} step(s), {} applet(s){}{}",
+                "{}: {} step(s), {} applet(s){}",
                 config_path.display(),
                 checked.cfg.steps.len(),
                 checked.cfg.applets.len(),
@@ -147,19 +133,11 @@ async fn main() -> Result<()> {
                     0 => String::new(),
                     n => format!(", {n} entr{} dropped", if n == 1 { "y" } else { "ies" }),
                 },
-                match refused {
-                    0 => String::new(),
-                    n => format!(", {n} step(s) whose params a sync would refuse"),
-                }
             );
         }
         // Same door as `PUT /api/config`: a warning drops nothing, so it
         // is printed above and does not fail the check.
-        std::process::exit(if checked.nothing_dropped() && refused == 0 {
-            0
-        } else {
-            2
-        });
+        std::process::exit(if checked.nothing_dropped() { 0 } else { 2 });
     }
     let dropped_entries = checked.dropped();
     let cfg = checked.cfg;
@@ -365,25 +343,28 @@ async fn main() -> Result<()> {
         if let Some(p) = parallelism {
             runner = runner.parallelism(p.get());
         }
-        // The first time this build runs on the root, every step that takes
-        // the verb is asked to migrate before anything else runs
+        // Each time the loop starts, every step whose program takes the
+        // verb is asked to prepare before anything else runs
         // (dag/README.md §"Upgrading a root"); the http server does the
         // same when it takes the lock.
-        let build = datalib_dag::supervisor::upgrade::this_build();
-        if !store.launch_pass_done(&build).await? {
-            let asked = datalib_dag::supervisor::upgrade::steps_to_ask(&graph);
-            #[allow(clippy::disallowed_macros)]
-            for m in runner.migrate(&graph, &asked).await? {
-                match &m.answer {
-                    Ok(true) => eprintln!(
-                        "datalib-dag: {} needs to run again for this build; --sync it",
-                        m.step
-                    ),
-                    Ok(false) => {}
-                    Err(error) => eprintln!("datalib-dag: could not migrate {}: {error}", m.step),
+        let asked = datalib_dag::supervisor::upgrade::steps_to_ask(&graph);
+        #[allow(clippy::disallowed_macros)]
+        for m in runner.prepare(&graph, &asked).await? {
+            match &m.answer {
+                Ok(true) => eprintln!(
+                    "datalib-dag: {} needs to run again before it is up to date; --sync it",
+                    m.step
+                ),
+                Ok(false) => {}
+                Err(PrepareError::Refused(why)) => eprintln!(
+                    "datalib-dag: {} refused to prepare, and is turned off until it no longer \
+                     does: {why}",
+                    m.step
+                ),
+                Err(PrepareError::Failed(error)) => {
+                    eprintln!("datalib-dag: could not prepare {}: {error}", m.step)
                 }
             }
-            store.record_launch_pass(&build).await?;
         }
         if !reset.is_empty() {
             runner.reset(&graph, &reset).await?;
@@ -439,55 +420,6 @@ async fn main() -> Result<()> {
         exit_code(outcome, dropped_entries)
     }; // every sink drops here, so the store flushes and joins before we exit
     std::process::exit(code);
-}
-
-/// Asks `datalib-step check-params` which built-in steps' params a sync
-/// would refuse, prints each against its line, and returns how many. The
-/// runner links no provider, so the step program is the one that can read
-/// them. A config with no built-in ingest or render step is not asked
-/// about; a `datalib-step` that cannot be run is said so, and counts none.
-#[allow(clippy::disallowed_macros)]
-fn check_params(
-    config_path: &Path,
-    checked: &config::ConfigCheck,
-    binary_dir: Option<&Path>,
-) -> usize {
-    let has_builtin = checked.cfg.steps.iter().any(|s| {
-        s.runs_datalib_step() && matches!(s.function.as_deref(), Some("ingest" | "render_markdown"))
-    });
-    if !has_builtin {
-        return 0;
-    }
-    let beside = config::resolve_binary_dir(&checked.cfg, binary_dir)
-        .map(|d| d.join("datalib-step"))
-        .filter(|p| p.is_file());
-    let program = beside.unwrap_or_else(|| "datalib-step".into());
-    let mut cmd = std::process::Command::new(&program);
-    cmd.arg("check-params").arg(config_path);
-    datalib_env::inherit_only(&mut cmd, datalib_env::Child::Step, &[]);
-    let out = match cmd.output() {
-        Ok(out) if out.status.success() => out,
-        Ok(out) => {
-            eprintln!(
-                "note: step params not checked: `{} check-params` failed: {}",
-                program.display(),
-                String::from_utf8_lossy(&out.stderr).trim()
-            );
-            return 0;
-        }
-        Err(e) => {
-            eprintln!(
-                "note: step params not checked: could not run {}: {e}",
-                program.display()
-            );
-            return 0;
-        }
-    };
-    let refused = config::params_diagnostics(&checked.text, &String::from_utf8_lossy(&out.stdout));
-    for d in &refused {
-        eprintln!("{}", d.render(config_path, &checked.text));
-    }
-    refused.len()
 }
 
 enum Taken {
@@ -550,7 +482,7 @@ async fn shrink_and_report(
     let before: HashMap<String, u64> = graph
         .steps
         .iter()
-        .filter(|spec| spec.compacts)
+        .filter(|spec| spec.takes(how.verb()))
         .map(|spec| (spec.id.clone(), tree(&spec.id)))
         .collect();
     let mut failed = false;
@@ -719,12 +651,7 @@ fn init(data_root: &Path) -> Result<()> {
     if datalib_dag::starter::write_starter_config(data_root)
         .with_context(|| format!("write {}", path.display()))?
     {
-        println!(
-            "wrote the starter config, with no sources yet: {}\n\
-             add one with `datalib-step examples <type> --append {}`",
-            path.display(),
-            path.display()
-        );
+        println!("wrote a config with no steps yet: {}", path.display());
     } else {
         println!("{} already exists; left as it is", path.display());
     }

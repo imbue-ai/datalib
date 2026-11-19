@@ -1,0 +1,344 @@
+# DAG config (run with `datalib-dag`): two sources and the index.
+#
+# Three kinds of entry. A `[[groups]]` entry is one thing on the
+# Manage screen — a source is a group with a `type`, and the unified
+# index is a group without one. A `[[steps]]` entry is `group` +
+# `function`: what it does within its group. Its id is composed as
+# `<group>/<function>` and never written; that id is the directory the
+# step writes, and what another step's `inputs` name. An `[[applets]]`
+# entry is a server the app runs, filed under a group for display.
+#
+# Every step names the program it runs in `command` (see
+# docs/dev/step_protocol.md); the runner writes `params` to an
+# owner-only JSON file it names with `--params-file`, appends `inputs`
+# as a `--inputs` JSON flag, and passes the composed id, the group, its
+# type and the function in the environment. Datalib's own steps run
+# `datalib-step`, which reads the function and the group's `type` from
+# that environment. The built-in functions are `ingest`
+# (bring the data in), `render_markdown` (turn the raw store into
+# markdown), `keyword_index` and `embed` (fill the source's part of the
+# qmd search index: its keyword index, then its embeddings), and three
+# under the unified document index: `grid_index` over every render_markdown tree,
+# `qmd_aggregator` over every source's qmd steps, and `embedding_map`,
+# which lays out what the `embed` steps embedded.
+# `params` is per-function — the ingest
+# step carries the provider's config, with where the data comes from
+# as one table whose name is read under the group's type (`api` is
+# the product's own API; `export`, `backup` and the like read files
+# and carry their own `path`), and the render step only render knobs
+# (none for most providers; e.g. beeper's `period`, perseus's
+# `alignment_pairs`).
+#
+# TOML shape: one `[[…]]` table per entry, with a step's `params` as
+# `[steps.params.…]` sub-tables. A table header ends the table it sits
+# in, so a step's plain keys come first and its params headers last;
+# likewise `data_root` below has to precede the first `[[…]]` header.
+#
+# Editing a step re-runs it. The runner fingerprints each step over its
+# command, `params`, `env`, declared paths and its group's `type`, so
+# changing any of them
+# makes the step stale even when nothing it reads has moved — widen a
+# `since`, flip a render knob, and the next run rebuilds that step's
+# output. An optional `code_version = "..."` covers the remaining case:
+# a step whose behavior changed without its command line changing.
+#
+#   bazelisk build //datalib/backend:bin
+#   bazel-bin/datalib/backend/bin/datalib-dag configs/dag_example.toml
+#
+# (`//datalib/backend:bin` stages every binary under its public
+# dash-separated name in one directory — the same layout the installer
+# produces. `datalib-dag` falls back to its own directory when looking
+# up a step's `command`, so `datalib-step` is found with no flag. Use
+# `--binary-dir DIR` only to point at binaries staged somewhere else.)
+#
+# data_root defaults to the directory this file lives in; set it
+# explicitly for a real run. A relative one is taken from the directory
+# `datalib-dag` is run in.
+data_root = "~/tmp/dr-dag"
+
+# The lowest level of datalib's own log lines every process of this
+# root keeps — the server, the runner, each step: `trace`, `debug`,
+# `info`, `warn` or `error`. Omitted means `trace` (the log card still
+# opens at `info`); third-party crates never go below `debug`; a
+# `RUST_LOG` in a process's environment wins over this.
+log_level = "trace"
+
+
+# How many embedding contexts an embed step uses, each holding about
+# 520 MiB once used. On an Apple Silicon mac more of them cost memory and
+# earn almost no speed, so the default is 1. A machine with its own GPU may
+# gain from more; qmd uses at most 8. Changing this re-embeds nothing.
+embed_contexts = 1
+
+# The free space the data root's disk must keep. Under `pause_below`
+# no step starts and running ones are stopped; they carry on once the
+# disk is back to `resume_at`, and the status bar turns red meanwhile.
+# Bytes, or a size with a unit: "5000 MB", "10 GB", "8 GiB". Omit the
+# table for the defaults, which are these; `pause_below_bytes = 0`
+# turns the floor off.
+[disk_space]
+pause_below_bytes = "10 GB"
+resume_at_bytes = "15 GB"
+
+# How much of the run store (`system/runs/runs.sqlite`: every run's step
+# states, log lines and metrics) to keep. Both limits apply; omit the
+# table for the defaults, which are these.
+[run_history]
+max_runs = 100
+max_age_days = 30
+# The app server's own log lines belong to no run and rotate faster:
+# these are their limits.
+process_log_days = 3
+process_log_lines = 200000
+# How long to keep the disk samples in `system/disk_stats.sqlite` (each
+# tree's size, and the disk's free space) that the storage sparklines and
+# each run's disk chart are drawn from. As long as a run is kept, so every
+# run still listed keeps its chart.
+disk_usage_days = 30
+
+# How much a render holds in memory at once. It reads the raw store a
+# page of `buckets` at a time (threads, conversations: whatever the
+# source renders as one unit), and loads at most `blob_mb` of their
+# attachments together. Smaller pages hold less and cost more queries;
+# changing them changes no document. Omit the table, or either key, for
+# the defaults, which are these. Email and Slack read both; every other
+# render with attachments reads `blob_mb`.
+[render_pages]
+buckets = 500
+blob_mb = 64
+
+# ── slack ──────────────────────────────────────────────────────────
+# A group has two names. Its `id` is the identity: unique, path-safe,
+# and the directory every step under it writes into — so changing it
+# moves data on disk and strands the paths the index recorded, which is
+# a migration rather than an edit. Its `name` is what a person types and
+# what every screen shows; optional, read only by the UI, and free to
+# change at any moment because nothing depends on it. The `type` says
+# what kind of data the group mirrors, and which provider the built-in
+# steps run; the steps under it are named for what they do (`ingest`
+# brings the data in, `render_markdown` renders it), and their ids —
+# the directories they write — are composed from the two. An optional
+# `description` says what this source is to you. Like the name it is
+# display text nothing depends on; search does not read it yet
+# (imbue-ai/datalib#409).
+[[groups]]
+id = "slack"
+name = "Work Slack"
+type = "slack"
+description = "The company Slack, mostly the infra and on-call channels."
+
+[[steps]]
+group = "slack"
+function = "ingest"
+command = "datalib-step"
+[steps.params.api]
+media = true
+channels = ["chat-qi"]
+since = "2026-06-15"
+
+[[steps]]
+group = "slack"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["slack/ingest"]
+
+# A source's own part of free-text search. `keyword_index` keeps its
+# collection of the qmd index in line with its render; `embed` then
+# embeds what changed, and is the slow one. Either can be turned off on
+# the Manage screen and synced by hand; leave both out, and out of
+# `qmd_aggregator`'s inputs, to keep the source out of search.
+[[steps]]
+group = "slack"
+function = "keyword_index"
+command = "datalib-step"
+inputs = ["slack/render_markdown"]
+
+[[steps]]
+group = "slack"
+function = "embed"
+command = "datalib-step"
+inputs = ["slack/keyword_index"]
+
+# ── claude ─────────────────────────────────────────────────────────
+# Signs in through latchkey's `claude-ai` service with your browser's
+# sessionKey cookie; `datalib-step help claude` says how.
+[[groups]]
+id = "claude"
+type = "claude"
+
+[[steps]]
+group = "claude"
+function = "ingest"
+command = "datalib-step"
+[steps.params.api]
+conv_uuids = ["f6e7d4bb-991e-433d-91f0-e19b2c8a1e37"]
+
+[[steps]]
+group = "claude"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["claude/ingest"]
+
+[[steps]]
+group = "claude"
+function = "keyword_index"
+command = "datalib-step"
+inputs = ["claude/render_markdown"]
+
+[[steps]]
+group = "claude"
+function = "embed"
+command = "datalib-step"
+inputs = ["claude/keyword_index"]
+
+# ── a diff group ───────────────────────────────────────────────────
+# What changed in a source between two of its raw store's commits, as
+# documents with the changes highlighted and grid rows with a
+# `diff_status`. `type = "diff"` and `source` make it one; its one step
+# is `render_markdown`, reading the source's ingest tree, with the two
+# commits under `params.diff` — both required, a diff is asked for and
+# never keeps itself up to date. Named in the fan-ins like any source.
+# The Manage screen's "Compare…" writes one; see
+# docs/dev/plans/completed/diff_renderer.md.
+[[groups]]
+id = "slack-diff"
+name = "Work Slack, this week's changes"
+type = "diff"
+source = "slack"
+
+[[steps]]
+group = "slack-diff"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["slack/ingest"]
+[steps.params.diff]
+from = "8f1c2b0d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c"
+to = "3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c"
+# The most documents a side may render before the step fails instead —
+# a diff a person expected to be small and is not. Default 1000.
+max_documents = 200
+
+[[steps]]
+group = "slack-diff"
+function = "keyword_index"
+command = "datalib-step"
+inputs = ["slack-diff/render_markdown"]
+
+[[steps]]
+group = "slack-diff"
+function = "embed"
+command = "datalib-step"
+inputs = ["slack-diff/keyword_index"]
+
+# ── locks ──────────────────────────────────────────────────────────
+# What keeps steps apart beyond the trees they write and read. Every
+# config has three budgets, `network` (4 slots), `cpu` (4) and `index`
+# (2), and a step that names none holds one of them by its shape: a
+# download `network`, a render `cpu`, an index `index`. The qmd steps
+# hold one of two locks of one slot instead, since they all write one
+# index file: `qmd_keyword` (`qmd_aggregator`, every `keyword_index`) and
+# `qmd_embed` (every `embed`). Declare a budget to resize it, or add your
+# own and name it on the steps that hold it:
+#
+#   [[locks]]
+#   name = "slack-api"   # two sources on one workspace's rate limit
+#   slots = 1            # at most this many hold it at once; 1 is a mutex
+#
+#   locks = ["slack-api"]                 # on a step: one slot
+#   locks = { slack-api = "exclusive" }   # or every slot, alone
+#
+# A step that reads its inputs' files off disk rather than at a pinned
+# commit says `reads = "files"`, and no writer of them runs beside it.
+# A step that would rather not run at every seal of a download that
+# streams says `start = "after_inputs_settle"`: it waits until nothing
+# upstream of it is running or due, then runs once, and holds no writer
+# back while it does. None of these changes a step's fingerprint: they
+# say when it may run, not what it makes. See
+# datalib/backend/dag/README.md, "What keeps steps apart".
+
+# ── shared fan-in steps ────────────────────────────────────────────
+# `inputs` names the steps these read, by composed id. Adding a source
+# above means adding its steps' ids here too — the wizard does that for
+# you; a hand-edit has to remember, and the Pipeline table flags a
+# render step nothing consumes. The group has no `type`: it mirrors
+# nothing, it indexes what the others mirrored. `qmd_aggregator` runs
+# after every source's qmd steps: it retires the collection of any
+# source it does not name, and reports what the index holds. Removing it
+# turns free-text search off.
+[[groups]]
+id = "unified_document_index"
+
+[[steps]]
+group = "unified_document_index"
+function = "grid_index"
+command = "datalib-step"
+inputs = ["slack/render_markdown", "claude/render_markdown", "slack-diff/render_markdown"]
+
+[[steps]]
+group = "unified_document_index"
+function = "qmd_aggregator"
+command = "datalib-step"
+inputs = ["slack/keyword_index", "slack/embed", "claude/keyword_index", "claude/embed", "slack-diff/keyword_index", "slack-diff/embed"]
+
+# qmd's document embeddings laid out on a plane by UMAP, for the map
+# card (`umapView()`). It reads the vectors every source's `embed` wrote,
+# so it runs after the aggregator, which runs after them. Each run starts from the last map, so
+# documents stay put as more arrive; resetting the step lays the map out
+# afresh.
+[[steps]]
+group = "unified_document_index"
+function = "embedding_map"
+command = "datalib-step"
+inputs = ["unified_document_index/qmd_aggregator"]
+
+# ── applets ────────────────────────────────────────────────────────
+# An applet is the third kind of config entry: a long-lived server the
+# http gateway starts with itself, contributing both card components and
+# the endpoints behind them. It declares no inputs because it is never
+# scheduled — it reads what the steps above already wrote.
+#
+# `id` is the mount prefix (`/applet/<id>/`) *and* the name card source
+# calls, so it must be a JavaScript identifier, and it is not composed
+# from the group. `group` only says which row the Manage screen shows
+# it under. There is no `title` key: the label the component gallery
+# shows is written by the applet itself, from its own `params` —
+# `workspace` below, for this one.
+#
+# The entry below serves the `slack` source rendered above. Starting
+# this applet wipes `system/frontend/slack_view/` and asks the command
+# to rewrite it; what lands there — one `<sha256>.js` and one
+# `<name>.json` — is what defines `comp.slack_view.channels` and its
+# gallery row.
+#
+# A second Slack download (its own download + render steps) would get a
+# second applet entry over that tree. The two would write *identical*
+# component code — same bytes, same hash, one URL in the browser — and
+# differ only in the argument their metadata carries, so each row calls
+# the shared component against its own backend.
+#
+# See docs/dev/applets.md for the contract a command has to honor. Note
+# that `user` is not available as an id: it names the namespace for
+# hand-written components, which a refresh never touches.
+[[applets]]
+group = "slack"
+id = "slack_view"
+command = "datalib-applet slack"
+[applets.params]
+tree = "slack/render_markdown"
+workspace = "Slack"
+
+# The app's own surface: `unified_document_index` serves the grid, the document
+# view and the document picker. Without it the UI has no search — it is
+# an applet rather than a built-in so the backend does not have to know
+# what a grid row is.
+[[applets]]
+group = "unified_document_index"
+id = "unified_document_index"
+command = "datalib-applet unified_document_index"
+
+# The contacts app: your own record of who a handle is, which the person
+# chips and search read. `datalib-step help contacts-app`.
+[[applets]]
+group = "unified_document_index"
+id = "datalib_contacts"
+command = "datalib-applet datalib_contacts"

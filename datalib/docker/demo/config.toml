@@ -22,14 +22,15 @@ name = "Claude export"
 type = "claude"
 
 [[steps]]
-group = "claude-export"
-function = "ingest"
+id = "claude-export/ingest"
+command = "datalib-step run ingest claude"
 [steps.params.export]
 path = "/opt/datalib/demo-sources/claude-export"
 
 [[steps]]
-group = "claude-export"
-function = "render_markdown"
+id = "claude-export/render_markdown"
+command = "datalib-step run render_markdown claude"
+reads = "pinned"
 inputs = ["claude-export/ingest"]
 
 # Google Takeout Gmail: the `mbox` table selects the file-backed method;
@@ -40,8 +41,8 @@ name = "Gmail (Takeout .mbox)"
 type = "email"
 
 [[steps]]
-group = "gmail-takeout"
-function = "ingest"
+id = "gmail-takeout/ingest"
+command = "datalib-step run ingest email"
 [steps.params.mbox]
 path = "/opt/datalib/demo-sources/gmail-takeout/star_trek.mbox"
 account_id = "picard@enterprise.starfleet"
@@ -50,8 +51,9 @@ email_address = "picard@enterprise.starfleet"
 is_personal = true
 
 [[steps]]
-group = "gmail-takeout"
-function = "render_markdown"
+id = "gmail-takeout/render_markdown"
+command = "datalib-step run render_markdown email"
+reads = "pinned"
 inputs = ["gmail-takeout/ingest"]
 [steps.params]
 outlink_format = "gmail"
@@ -62,8 +64,8 @@ name = "Google Takeout (Chat + Voice)"
 type = "google_takeout"
 
 [[steps]]
-group = "google-takeout"
-function = "ingest"
+id = "google-takeout/ingest"
+command = "datalib-step run ingest google_takeout"
 [steps.params.export]
 path = "/opt/datalib/demo-sources/google-takeout/Takeout"
 google_chat = true
@@ -71,8 +73,9 @@ google_voice = true
 google_voice_include_spam = true
 
 [[steps]]
-group = "google-takeout"
-function = "render_markdown"
+id = "google-takeout/render_markdown"
+command = "datalib-step run render_markdown google_takeout"
+reads = "pinned"
 inputs = ["google-takeout/ingest"]
 
 [[groups]]
@@ -81,14 +84,15 @@ name = "SMS & calls"
 type = "sms_backup_restore"
 
 [[steps]]
-group = "sms-backup-restore"
-function = "ingest"
+id = "sms-backup-restore/ingest"
+command = "datalib-step run ingest sms_backup_restore"
 [steps.params.backup]
 path = "/opt/datalib/demo-sources/sms-backup-restore"
 
 [[steps]]
-group = "sms-backup-restore"
-function = "render_markdown"
+id = "sms-backup-restore/render_markdown"
+command = "datalib-step run render_markdown sms_backup_restore"
+reads = "pinned"
 inputs = ["sms-backup-restore/ingest"]
 
 [[groups]]
@@ -97,14 +101,15 @@ name = "LinkedIn export"
 type = "linkedin"
 
 [[steps]]
-group = "linkedin"
-function = "ingest"
+id = "linkedin/ingest"
+command = "datalib-step run ingest linkedin"
 [steps.params.export]
 path = "/opt/datalib/demo-sources/linkedin"
 
 [[steps]]
-group = "linkedin"
-function = "render_markdown"
+id = "linkedin/render_markdown"
+command = "datalib-step run render_markdown linkedin"
+reads = "pinned"
 inputs = ["linkedin/ingest"]
 
 # The `vcf` table selects the file-backed method: `.vcf` files under `path`.
@@ -114,14 +119,15 @@ name = "Contacts (vCard)"
 type = "contacts"
 
 [[steps]]
-group = "contacts"
-function = "ingest"
+id = "contacts/ingest"
+command = "datalib-step run ingest contacts"
 [steps.params.vcf]
 path = "/opt/datalib/demo-sources/contacts"
 
 [[steps]]
-group = "contacts"
-function = "render_markdown"
+id = "contacts/render_markdown"
+command = "datalib-step run render_markdown contacts"
+reads = "pinned"
 inputs = ["contacts/ingest"]
 
 [[groups]]
@@ -130,22 +136,25 @@ name = "PDFs"
 type = "pdf"
 
 [[steps]]
-group = "pdfs"
-function = "ingest"
+id = "pdfs/ingest"
+command = "datalib-step run ingest pdf"
 [steps.params.fswalk]
 path = "/opt/datalib/demo-sources/pdfs"
 
 [[steps]]
-group = "pdfs"
-function = "render_markdown"
+id = "pdfs/render_markdown"
+command = "datalib-step run render_markdown pdf"
+reads = "pinned"
 inputs = ["pdfs/ingest"]
 
 [[groups]]
 id = "unified_document_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
+id = "unified_document_index/grid_index"
+command = "datalib-step run grid_index"
+reads = "pinned"
+locks = ["index"]
 inputs = [
   "claude-export/render_markdown",
   "gmail-takeout/render_markdown",
@@ -166,45 +175,82 @@ command = "datalib-applet unified_document_index"
 # starts; the embeddings below the cut are what a first sync adds.
 
 [[steps]]
-group = "claude-export"
-function = "keyword_index"
+id = "claude-export/keyword_index"
+command = "datalib-step run keyword_index claude"
+reads = "files"
+locks = ["qmd_keyword"]
 inputs = ["claude-export/render_markdown"]
 
 [[steps]]
-group = "gmail-takeout"
-function = "keyword_index"
+id = "gmail-takeout/keyword_index"
+command = "datalib-step run keyword_index email"
+reads = "files"
+locks = ["qmd_keyword"]
 inputs = ["gmail-takeout/render_markdown"]
 
 [[steps]]
-group = "google-takeout"
-function = "keyword_index"
+id = "google-takeout/keyword_index"
+command = "datalib-step run keyword_index google_takeout"
+reads = "files"
+locks = ["qmd_keyword"]
 inputs = ["google-takeout/render_markdown"]
 
 [[steps]]
-group = "sms-backup-restore"
-function = "keyword_index"
+id = "sms-backup-restore/keyword_index"
+command = "datalib-step run keyword_index sms_backup_restore"
+reads = "files"
+locks = ["qmd_keyword"]
 inputs = ["sms-backup-restore/render_markdown"]
 
 [[steps]]
-group = "linkedin"
-function = "keyword_index"
+id = "linkedin/keyword_index"
+command = "datalib-step run keyword_index linkedin"
+reads = "files"
+locks = ["qmd_keyword"]
 inputs = ["linkedin/render_markdown"]
 
 [[steps]]
-group = "contacts"
-function = "keyword_index"
+id = "contacts/keyword_index"
+command = "datalib-step run keyword_index contacts"
+reads = "files"
+locks = ["qmd_keyword"]
 inputs = ["contacts/render_markdown"]
 
 [[steps]]
-group = "pdfs"
-function = "keyword_index"
+id = "pdfs/keyword_index"
+command = "datalib-step run keyword_index pdf"
+reads = "files"
+locks = ["qmd_keyword"]
 inputs = ["pdfs/render_markdown"]
+
+# Above the cut: the build-time run needs these too.
+# The verbs `datalib-step` takes (docs/dev/step_protocol.md § Verbs).
+[[programs]]
+command = "datalib-step"
+verbs = ["reset", "prepare", "compact", "collect"]
+
+# Whatever writes qmd's keyword index: two at once can lose a document.
+[[locks]]
+name = "qmd_keyword"
+slots = 1
+
+# Whatever embeds into qmd's index: two at once race on its vectors.
+[[locks]]
+name = "qmd_embed"
+slots = 1
+
+# The fan-ins that read every source.
+[[locks]]
+name = "index"
+slots = 2
 
 # === BUILD-TIME CUT === (the Dockerfile drops everything below this line
 # for the build-time run; keep the aggregator and the embed steps last)
 [[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
+id = "unified_document_index/qmd_aggregator"
+command = "datalib-step run qmd_aggregator"
+reads = "pinned"
+locks = ["qmd_keyword"]
 inputs = [
   "claude-export/keyword_index",
   "claude-export/embed",
@@ -225,36 +271,50 @@ inputs = [
 # Each source's embeddings, over the keywords baked into the image.
 
 [[steps]]
-group = "claude-export"
-function = "embed"
+id = "claude-export/embed"
+command = "datalib-step run embed claude"
+reads = "files"
+locks = ["qmd_embed"]
 inputs = ["claude-export/keyword_index"]
 
 [[steps]]
-group = "gmail-takeout"
-function = "embed"
+id = "gmail-takeout/embed"
+command = "datalib-step run embed email"
+reads = "files"
+locks = ["qmd_embed"]
 inputs = ["gmail-takeout/keyword_index"]
 
 [[steps]]
-group = "google-takeout"
-function = "embed"
+id = "google-takeout/embed"
+command = "datalib-step run embed google_takeout"
+reads = "files"
+locks = ["qmd_embed"]
 inputs = ["google-takeout/keyword_index"]
 
 [[steps]]
-group = "sms-backup-restore"
-function = "embed"
+id = "sms-backup-restore/embed"
+command = "datalib-step run embed sms_backup_restore"
+reads = "files"
+locks = ["qmd_embed"]
 inputs = ["sms-backup-restore/keyword_index"]
 
 [[steps]]
-group = "linkedin"
-function = "embed"
+id = "linkedin/embed"
+command = "datalib-step run embed linkedin"
+reads = "files"
+locks = ["qmd_embed"]
 inputs = ["linkedin/keyword_index"]
 
 [[steps]]
-group = "contacts"
-function = "embed"
+id = "contacts/embed"
+command = "datalib-step run embed contacts"
+reads = "files"
+locks = ["qmd_embed"]
 inputs = ["contacts/keyword_index"]
 
 [[steps]]
-group = "pdfs"
-function = "embed"
+id = "pdfs/embed"
+command = "datalib-step run embed pdf"
+reads = "files"
+locks = ["qmd_embed"]
 inputs = ["pdfs/keyword_index"]

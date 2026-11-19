@@ -26,8 +26,8 @@
 
 use std::collections::BTreeMap;
 
+use crate::retired::names_datalib_step;
 use anyhow::{bail, Context as _, Result};
-use datalib_dag::config::names_datalib_step;
 use serde::{Deserialize, Serialize};
 
 /// The file as the retired shape wrote it. Every entry key is optional
@@ -40,7 +40,7 @@ struct OldConfig {
     #[serde(default)]
     binary_dir: Option<String>,
     #[serde(default)]
-    checkpoint_cadence: Option<datalib_dag::config::CheckpointCadence>,
+    checkpoint_cadence: Option<crate::retired::CheckpointCadence>,
     #[serde(default)]
     run_history: Option<datalib_dag::config::RunHistory>,
     #[serde(default)]
@@ -136,6 +136,10 @@ pub enum Retired {
     TodoistCompletedSince,
     /// An id that names a folder, with capitals in it (`lowercase_ids.rs`).
     UpperCaseId,
+    /// A step written as `group` + `function`, whose `datalib-step`
+    /// arguments, locks and `reads` the runner worked out
+    /// (`explicit_steps.rs`).
+    InferredByTheRunner,
 }
 
 /// Which retired shape this config is in, or `None` when it is already
@@ -682,7 +686,7 @@ fn header(cfg: &OldConfig) -> Result<String> {
         #[serde(skip_serializing_if = "Option::is_none")]
         binary_dir: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        checkpoint_cadence: Option<datalib_dag::config::CheckpointCadence>,
+        checkpoint_cadence: Option<crate::retired::CheckpointCadence>,
         #[serde(skip_serializing_if = "Option::is_none")]
         run_history: Option<datalib_dag::config::RunHistory>,
     }

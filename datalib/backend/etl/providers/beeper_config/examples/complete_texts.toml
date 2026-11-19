@@ -6,9 +6,8 @@ name = "Beeper"
 type = "beeper"
 
 [[steps]]
-group = "beeper"
-function = "ingest"
-command = "datalib-step"
+id = "beeper/ingest"
+command = "datalib-step run ingest beeper"
 
 [steps.params.texts]
 path = "~/Library/Application Support/BeeperTexts"  # the app's data directory; this is
@@ -17,10 +16,10 @@ media = true         # copy the app's cached media into blobs; false keeps the
                      # attachments' names without their bytes; default true
 
 [[steps]]
-group = "beeper"
-function = "render_markdown"
-command = "datalib-step"
+id = "beeper/render_markdown"
+command = "datalib-step run render_markdown beeper"
 inputs = ["beeper/ingest"]
+reads = "pinned"
 
 [steps.params]
 period = "month"                     # span of each page: month (default), day, year,
@@ -31,13 +30,15 @@ networks = ["signal", "googlechat"]  # which networks to render; omit for every 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "beeper"
-function = "keyword_index"
-command = "datalib-step"
+id = "beeper/keyword_index"
+command = "datalib-step run keyword_index beeper"
 inputs = ["beeper/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "beeper"
-function = "embed"
-command = "datalib-step"
+id = "beeper/embed"
+command = "datalib-step run embed beeper"
 inputs = ["beeper/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]

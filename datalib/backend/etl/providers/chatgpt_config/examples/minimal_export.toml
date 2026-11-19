@@ -7,15 +7,14 @@ name = "ChatGPT export"
 type = "chatgpt"
 
 [[steps]]
-group = "chatgpt"
-function = "ingest"
-command = "datalib-step"
+id = "chatgpt/ingest"
+command = "datalib-step run ingest chatgpt"
 
 [steps.params.export]
 path = "~/Downloads/chatgpt-export.zip"
 
 [[steps]]
-group = "chatgpt"
-function = "render_markdown"
-command = "datalib-step"
+id = "chatgpt/render_markdown"
+command = "datalib-step run render_markdown chatgpt"
 inputs = ["chatgpt/ingest"]
+reads = "pinned"

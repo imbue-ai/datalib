@@ -182,7 +182,7 @@ does not carry over to `createStore()` without being re-measured.
     and since the next update finds its hash unchanged, nothing repairs
     it. Scoped updates on different collections still share the
     `content` table, so scoping does not help. The per-source steps
-    therefore hold the runner's one-slot `qmd_keyword` lock, and so does
+    therefore hold the config's one-slot `qmd_keyword` lock, and so does
     `qmd_aggregator`, which registers collections too: registering
     through the SDK rewrites `index.yml` whole, and two of those at once
     would lose one's collection.
@@ -248,8 +248,8 @@ does not carry over to `createStore()` without being re-measured.
 
     All of this is one Apple Silicon mac, where the GPU shares the
     machine's memory. A machine with a discrete GPU has not been measured
-    and may well gain from more contexts, which is what `embed_contexts`
-    in `config.toml` is for.
+    and may well gain from more contexts, which is what
+    `DATALIB_STEP_EMBED_CONTEXTS` in `config.toml`'s `[env]` is for.
 
 ## What the shipped steps do with these
 
@@ -257,13 +257,15 @@ does not carry over to `createStore()` without being re-measured.
 indexes nothing. Each source has a `keyword_index` step (registers its
 own collection, then `update({collections:[g]})`, finding 1) and an
 `embed` step (embedding scoped to `g`), both driven through
-`qmd_indexer/src/js/qmd_sdk.mjs` and kept apart by the runner's
-one-slot `qmd_keyword` and `qmd_embed` locks
-(`dag/src/supervisor/locks.rs`; findings 5 and 12). Each step is its
+`qmd_indexer/src/js/qmd_sdk.mjs` and kept apart by the one-slot
+`qmd_keyword` and `qmd_embed` locks a datalib config declares in
+`[[locks]]` and names on those steps (`datalib_step/src/step_entry.rs`;
+findings 5 and 12). Each step is its
 own process, so each pays finding 8's model load; that is the price of
 per-source steps over one loop calling `embed({collection})`. Every
-embed is started with `QMD_EMBED_PARALLELISM` set from the config's
-`embed_contexts`, 1 when it does not say (finding 16, `set_qmd_env` in
+embed is started with `QMD_EMBED_PARALLELISM` set from
+`DATALIB_STEP_EMBED_CONTEXTS`, which a config sets in `[env]`, 1 when
+it does not say (finding 16, `set_qmd_env` in
 `qmd_indexer/src/lib.rs`). One takes about 10% off the embedding rate for
 about 3.6 GB less memory. A search's query embedder always gets one.
 

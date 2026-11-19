@@ -1251,7 +1251,7 @@ impl RowCtx<'_> {
             ),
             // So are the time-series index's: Browse opens the Time series
             // card (`timeSeriesView()`).
-            Entry::Applet(a) if a.id == datalib_dag::config::TIME_SERIES_INDEX_GROUP => {
+            Entry::Applet(a) if a.id == crate::step_program::TIME_SERIES_INDEX_GROUP => {
                 browse_action(
                     "Browse time series",
                     "Open every time series your sources keep, on one chart.",
@@ -1424,7 +1424,7 @@ impl RowCtx<'_> {
         let is_dropped = |c: &Entry<'_>| row_of(c.id()).dropped.is_some();
         // A diff group has no source step of its own: a sync of it is a
         // sync of what its step reads, which is its source's ingest.
-        let source_seeds = if g.r#type.as_deref() == Some(datalib_dag::config::DIFF_GROUP_TYPE) {
+        let source_seeds = if g.r#type.as_deref() == Some(crate::step_program::DIFF_GROUP_TYPE) {
             group::diff_group_seeds(&ordered, is_dropped)
         } else {
             group::group_seeds(&ordered, is_dropped)

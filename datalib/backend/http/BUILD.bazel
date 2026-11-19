@@ -63,6 +63,8 @@ rust_library(
         "src/remote_media.rs",
         "src/request_log.rs",
         "src/request_progress.rs",
+        "src/starter.rs",
+        "src/step_program.rs",
         "src/supervisor.rs",
         "src/ui_events.rs",
         "src/ui_mirror.rs",
@@ -377,7 +379,6 @@ rust_binary(
     deps = [
         ":datalib_http",
         "//datalib/backend/cli_help:datalib_cli_help",
-        "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/fetch:datalib_fetch",
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/runtime:datalib_runtime",

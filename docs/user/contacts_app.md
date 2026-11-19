@@ -55,8 +55,9 @@ calling it is what they asked for. When you are working through a
 mailbox, it is not.
 
 If the answer is a 502 saying `no applet "datalib_contacts"`, the config
-has no entry for it. A root made by `datalib-dag init` or the app has
-one; an older one may not. Add this and the app starts it:
+has no entry for it. A root the app set up has one, and so does a
+config `datalib-step examples --append` added the document index to; an
+older one, or one written by hand, may not. Add this and the app starts it:
 
 ```toml fragment
 [[applets]]

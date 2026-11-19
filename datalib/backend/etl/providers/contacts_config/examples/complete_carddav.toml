@@ -6,9 +6,8 @@ name = "CardDAV Contacts"
 type = "contacts"
 
 [[steps]]
-group = "contacts"
-function = "ingest"
-command = "datalib-step"
+id = "contacts/ingest"
+command = "datalib-step run ingest contacts"
 
 # When to give up on a failing server. The download always backs off and
 # retries; these only decide when to stop.
@@ -34,21 +33,23 @@ addressbooks = ["Enterprise Crew"]  # names as the server shows them, matched ex
                                     # omit for every address book
 
 [[steps]]
-group = "contacts"
-function = "render_markdown"
-command = "datalib-step"
+id = "contacts/render_markdown"
+command = "datalib-step run render_markdown contacts"
 inputs = ["contacts/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "contacts"
-function = "keyword_index"
-command = "datalib-step"
+id = "contacts/keyword_index"
+command = "datalib-step run keyword_index contacts"
 inputs = ["contacts/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "contacts"
-function = "embed"
-command = "datalib-step"
+id = "contacts/embed"
+command = "datalib-step run embed contacts"
 inputs = ["contacts/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]

@@ -1,38 +1,44 @@
-//! What the runner tells a step about itself: the environment it sets and
-//! the `--params-file` flag it appends.
+//! What a step knows about itself: its id from the runner's environment,
+//! and its function and its group's type from its own argv, `datalib-step
+//! run <function> [<type>] [--source-type <type>]`, which its config entry's
+//! `command` spells.
 
 use anyhow::{Context, Result};
 
 use crate::function::Function;
 
-/// The runner's side of these names is `datalib_dag::subprocess::ENV_*`;
-/// both spell them through `datalib_env`, so neither can drift.
 pub const STEP_ID_ENV: &str = datalib_env::DATALIB_DAG_STEP;
-pub const GROUP_ENV: &str = datalib_env::DATALIB_DAG_GROUP;
-pub const GROUP_TYPE_ENV: &str = datalib_env::DATALIB_DAG_GROUP_TYPE;
-pub const FUNCTION_ENV: &str = datalib_env::DATALIB_DAG_FUNCTION;
 pub const INPUTS_ENV: &str = datalib_env::DATALIB_DAG_INPUTS;
-/// Under a diff group only: the group whose raw store the diff compares,
-/// and its `type`, which is the renderer this step runs.
-pub const SOURCE_GROUP_ENV: &str = datalib_env::DATALIB_DAG_SOURCE_GROUP;
-pub const SOURCE_GROUP_TYPE_ENV: &str = datalib_env::DATALIB_DAG_SOURCE_GROUP_TYPE;
+pub const PARAMS_ENV: &str = datalib_env::DATALIB_DAG_PARAMS;
 /// The group `type` that means "render what changed in another group's
-/// raw store" — `datalib_dag::config::DIFF_GROUP_TYPE`, spelled here as
-/// this binary's side of the contract.
+/// raw store": the source's own type then comes in `--source-type`.
 pub const DIFF_GROUP_TYPE: &str = "diff";
 
-/// The step as the runner declared it. `step` is the composed id, and
-/// the one tree this process may write; the loader composed it from
-/// `group` and `function`, and [`StepEnv::from_env`] checks that the
-/// three still agree before anything is written.
+/// The words after `run` in a step's command.
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+pub struct RunArgs {
+    /// What the step does: `ingest`, `render_markdown`, `grid_index`, …
+    /// The second part of its id, which is `<group>/<function>`.
+    pub function: String,
+    /// Its group's `type`: the provider (`slack`, `email`, …), or `diff`.
+    /// Left out under an index group, which has none.
+    #[arg(value_name = "TYPE")]
+    pub group_type: Option<String>,
+    /// Under a `diff` group only: the type of the source whose raw store
+    /// the diff renders.
+    #[arg(long, value_name = "TYPE")]
+    pub source_type: Option<String>,
+}
+
+/// The step as its config entry declares it. `step` is the id, and the
+/// one tree this process may write.
 #[derive(Debug, Clone)]
 pub struct StepEnv {
     pub step: String,
     pub group: String,
     pub group_type: Option<String>,
-    /// Set only under a diff group: the source group and its type.
-    pub source_group: Option<String>,
-    pub source_group_type: Option<String>,
+    /// Set only under a diff group: the type of the source it renders.
+    pub diff_source_type: Option<String>,
     pub function: Function,
     /// The trees this step reads, data-root-relative, as the runner
     /// resolved them from the config's `inputs`.
@@ -40,36 +46,14 @@ pub struct StepEnv {
 }
 
 impl StepEnv {
-    pub fn from_env() -> Result<StepEnv> {
-        let step = required(STEP_ID_ENV)?;
-        let group = required(GROUP_ENV).context(
-            "`datalib-step` runs only under a `[[groups]]` entry: it takes the provider \
-             from the group's `type` and the tree it writes from `<group>/<function>`",
-        )?;
-        let function_word = required(FUNCTION_ENV)?;
-        let function = Function::parse(&function_word).with_context(|| {
+    /// From `DATALIB_DAG_STEP`, `DATALIB_DAG_INPUTS` and the argv.
+    pub fn from_env(args: &RunArgs) -> Result<StepEnv> {
+        let step = std::env::var(STEP_ID_ENV).with_context(|| {
             format!(
-                "`datalib-step` has no function {function_word:?}. It performs {}; a step \
-                 doing anything else needs its own `command`.",
-                Function::known_list()
+                "{STEP_ID_ENV} is not set. `datalib-step run` expects to be run by \
+                 `datalib-dag`, which sets it to the step's id."
             )
         })?;
-        let composed = format!("{group}/{}", function.as_str());
-        anyhow::ensure!(
-            step == composed,
-            "{STEP_ID_ENV}={step:?} but {GROUP_ENV}={group:?} and {FUNCTION_ENV}=\
-             {function_word:?} compose to {composed:?}. A step writes only the tree its id \
-             names, and the two must agree."
-        );
-        let group_type = std::env::var(GROUP_TYPE_ENV)
-            .ok()
-            .filter(|t| !t.trim().is_empty());
-        let source_group = std::env::var(SOURCE_GROUP_ENV)
-            .ok()
-            .filter(|t| !t.trim().is_empty());
-        let source_group_type = std::env::var(SOURCE_GROUP_TYPE_ENV)
-            .ok()
-            .filter(|t| !t.trim().is_empty());
         let inputs = std::env::var(INPUTS_ENV)
             .unwrap_or_default()
             .lines()
@@ -77,12 +61,41 @@ impl StepEnv {
             .filter(|l| !l.is_empty())
             .map(str::to_string)
             .collect();
+        StepEnv::new(step, args, inputs)
+    }
+
+    pub fn new(step: String, args: &RunArgs, inputs: Vec<String>) -> Result<StepEnv> {
+        let function = Function::parse(&args.function).with_context(|| {
+            format!(
+                "`datalib-step` has no function {:?}. It performs {}; a step doing anything \
+                 else needs its own `command`.",
+                args.function,
+                Function::known_list()
+            )
+        })?;
+        let group = match step.split_once('/') {
+            Some((group, rest)) if !group.is_empty() && rest == function.as_str() => {
+                group.to_string()
+            }
+            _ => anyhow::bail!(
+                "this step's id is {step:?}, but a step `datalib-step run {function}` runs must \
+                 be `<group>/{function}`: the step writes only the tree its id names, and \
+                 `datalib-step` finds the trees it reads by that name"
+            ),
+        };
+        let group_type = args.group_type.clone().filter(|t| !t.trim().is_empty());
+        let diff_source_type = args.source_type.clone().filter(|t| !t.trim().is_empty());
+        let is_diff = group_type.as_deref() == Some(DIFF_GROUP_TYPE);
+        anyhow::ensure!(
+            is_diff || diff_source_type.is_none(),
+            "`--source-type` is for a step under a `{DIFF_GROUP_TYPE}` group, and {step:?} \
+             is not one"
+        );
         Ok(StepEnv {
             step,
             group,
             group_type,
-            source_group,
-            source_group_type,
+            diff_source_type,
             function,
             inputs,
         })
@@ -92,26 +105,25 @@ impl StepEnv {
         self.group_type.as_deref() == Some(DIFF_GROUP_TYPE)
     }
 
-    /// The renderer a diff group's step runs: its source's type, which the
-    /// loader put in this step's environment.
+    /// The renderer a diff group's step runs: its source's type.
     pub fn diff_source_type(&self) -> Result<&str> {
-        self.source_group_type.as_deref().with_context(|| {
+        self.diff_source_type.as_deref().with_context(|| {
             format!(
-                "step {:?} is under diff group {:?} but {SOURCE_GROUP_TYPE_ENV} is not set; \
-                 `datalib-dag` sets it from the group's `source`",
-                self.step, self.group
+                "step {:?} is under a `{DIFF_GROUP_TYPE}` group, so its command names the \
+                 source's type: `datalib-step run {} {DIFF_GROUP_TYPE} --source-type <type>`",
+                self.step, self.function
             )
         })
     }
 
-    /// The group's type, which is the provider to run. Only the two
-    /// per-source functions need one; the index steps are typeless.
+    /// The group's type, which is the provider to run. Only the per-source
+    /// functions need one; the index steps are typeless.
     pub fn source_type(&self) -> Result<&str> {
         self.group_type.as_deref().with_context(|| {
             format!(
-                "step {:?} is `{}` under group {:?}, which declares no `type`; `datalib-step` \
-                 needs the group's type to know which provider to run",
-                self.step, self.function, self.group
+                "step {:?} is `{}`, which needs its group's type to know which provider to \
+                 run: `datalib-step run {} <type>`",
+                self.step, self.function, self.function
             )
         })
     }
@@ -119,40 +131,44 @@ impl StepEnv {
     /// The raw store a render reads: the first input, which is the
     /// ingest step's tree. A render with no inputs — a store seeded by
     /// hand, with no ingest step in front of it — reads the group's own
-    /// `ingest` tree, and says so; under a diff group, its source's.
-    pub fn raw_store_rel(&self) -> String {
-        match self.inputs.first() {
-            Some(input) => input.clone(),
-            None => {
-                let owner = self.source_group.as_deref().unwrap_or(&self.group);
-                let rel = format!("{owner}/{}", Function::Ingest.as_str());
-                tracing::warn!(
-                    step = %self.step,
-                    raw = %rel,
-                    "this step declares no inputs; reading the group's own ingest tree"
-                );
-                rel
-            }
+    /// `ingest` tree, and says so. A diff has no tree of its own to fall
+    /// back on.
+    pub fn raw_store_rel(&self) -> Result<String> {
+        if let Some(input) = self.inputs.first() {
+            return Ok(input.clone());
         }
+        anyhow::ensure!(
+            !self.is_diff_group(),
+            "step {:?} is under a `{DIFF_GROUP_TYPE}` group and reads nothing: its `inputs` \
+             name the source's `<group>/ingest`",
+            self.step
+        );
+        let rel = format!("{}/{}", self.group, Function::Ingest.as_str());
+        tracing::warn!(
+            step = %self.step,
+            raw = %rel,
+            "this step declares no inputs; reading the group's own ingest tree"
+        );
+        Ok(rel)
     }
 }
 
-fn required(name: &str) -> Result<String> {
-    let v = std::env::var(name).with_context(|| {
-        format!(
-            "{name} is not set. `datalib-step` expects to be run by `datalib-dag`, which \
-             sets it from the step's config entry."
-        )
-    })?;
-    anyhow::ensure!(!v.trim().is_empty(), "{name} is set but empty");
-    Ok(v)
+/// The step's params: the JSON object in `DATALIB_DAG_PARAMS`, or an
+/// empty one when the step has none.
+pub fn params_from_env() -> Result<serde_json::Value> {
+    match std::env::var(PARAMS_ENV) {
+        Ok(text) if !text.trim().is_empty() => {
+            parse_params(&text).with_context(|| format!("read {PARAMS_ENV}"))
+        }
+        _ => Ok(empty_params()),
+    }
 }
 
-/// The step's params: the JSON object in the file `--params-file` names,
-/// or an empty one when the runner passed no file.
+/// The params in the file a utility's `--params-file` names, or an empty
+/// object when it names none.
 pub fn read_params(path: Option<&std::path::Path>) -> Result<serde_json::Value> {
     match path {
-        None => Ok(serde_json::Value::Object(Default::default())),
+        None => Ok(empty_params()),
         Some(p) => {
             let text = std::fs::read_to_string(p)
                 .with_context(|| format!("read the params file {}", p.display()))?;
@@ -161,12 +177,16 @@ pub fn read_params(path: Option<&std::path::Path>) -> Result<serde_json::Value> 
     }
 }
 
+fn empty_params() -> serde_json::Value {
+    serde_json::Value::Object(Default::default())
+}
+
 pub fn parse_params(text: &str) -> Result<serde_json::Value> {
     let v: serde_json::Value = serde_json::from_str(text)
-        .context("parse the params file as JSON (the provider's config subtree)")?;
+        .context("parse the params as JSON (the provider's config subtree)")?;
     anyhow::ensure!(
         v.is_object(),
-        "the params file must hold a JSON object (the provider's config subtree), got {v}"
+        "the params must be a JSON object (the provider's config subtree), got {v}"
     );
     Ok(v)
 }
@@ -188,12 +208,9 @@ mod tests {
 
     #[test]
     fn the_env_names_agree_with_the_runners() {
-        assert_eq!(
-            SOURCE_GROUP_TYPE_ENV,
-            datalib_dag::subprocess::ENV_SOURCE_GROUP_TYPE
-        );
-        assert_eq!(SOURCE_GROUP_ENV, datalib_dag::subprocess::ENV_SOURCE_GROUP);
-        assert_eq!(DIFF_GROUP_TYPE, datalib_dag::config::DIFF_GROUP_TYPE);
+        assert_eq!(PARAMS_ENV, datalib_dag::subprocess::ENV_PARAMS);
+        assert_eq!(STEP_ID_ENV, datalib_dag::subprocess::ENV_STEP);
+        assert_eq!(INPUTS_ENV, datalib_dag::subprocess::ENV_INPUTS);
     }
 
     #[test]
@@ -215,16 +232,67 @@ mod tests {
         assert!(err.contains("read the params file"), "{err}");
     }
 
-    fn env(step: &str, group: &str, function: &str, inputs: &[&str]) -> StepEnv {
-        StepEnv {
-            step: step.into(),
-            group: group.into(),
-            group_type: Some("slack".into()),
-            source_group: None,
-            source_group_type: None,
-            function: Function::parse(function).unwrap(),
-            inputs: inputs.iter().map(|s| s.to_string()).collect(),
+    fn args(function: &str, group_type: Option<&str>, source_type: Option<&str>) -> RunArgs {
+        RunArgs {
+            function: function.into(),
+            group_type: group_type.map(Into::into),
+            source_type: source_type.map(Into::into),
         }
+    }
+
+    /// The id is `<group>/<function>`, and the function is the one the
+    /// command names: a step writes only its own tree, and datalib-step
+    /// finds every tree by that name.
+    #[test]
+    fn the_step_id_must_be_the_group_and_the_function() {
+        let ok = StepEnv::new(
+            "work-slack/ingest".into(),
+            &args("ingest", Some("slack"), None),
+            Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(ok.group, "work-slack");
+        assert_eq!(ok.source_type().unwrap(), "slack");
+        for bad in [
+            "work-slack/render_markdown",
+            "ingest",
+            "/ingest",
+            "a/b/ingest",
+        ] {
+            let err = StepEnv::new(bad.into(), &args("ingest", Some("slack"), None), Vec::new())
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("<group>/ingest"), "{bad}: {err}");
+        }
+        let err = StepEnv::new("x/fetch".into(), &args("fetch", None, None), Vec::new())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no function \"fetch\""), "{err}");
+    }
+
+    #[test]
+    fn a_source_type_is_only_for_a_diff_group() {
+        let diff = StepEnv::new(
+            "slack-diff/render_markdown".into(),
+            &args("render_markdown", Some("diff"), Some("slack")),
+            vec!["slack/ingest".into()],
+        )
+        .unwrap();
+        assert!(diff.is_diff_group());
+        assert_eq!(diff.diff_source_type().unwrap(), "slack");
+        assert!(StepEnv::new(
+            "slack/render_markdown".into(),
+            &args("render_markdown", Some("slack"), Some("slack")),
+            Vec::new(),
+        )
+        .is_err());
+        let no_source = StepEnv::new(
+            "slack-diff/render_markdown".into(),
+            &args("render_markdown", Some("diff"), None),
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(no_source.diff_source_type().is_err());
     }
 
     /// The raw store is whatever the render's input names — which is how
@@ -232,23 +300,24 @@ mod tests {
     /// back to the group's own tree when nothing is declared.
     #[test]
     fn render_reads_its_input_tree_else_the_groups_ingest() {
+        let env = |step: &str, ty: &str, source: Option<&str>, inputs: &[&str]| {
+            StepEnv::new(
+                step.into(),
+                &args("render_markdown", Some(ty), source),
+                inputs.iter().map(|s| s.to_string()).collect(),
+            )
+            .unwrap()
+        };
         let e = env(
             "slack/render_markdown",
             "slack",
-            "render_markdown",
+            None,
             &["elsewhere/ingest"],
         );
-        assert_eq!(e.raw_store_rel(), "elsewhere/ingest");
-        let e = env("slack/render_markdown", "slack", "render_markdown", &[]);
-        assert_eq!(e.raw_store_rel(), "slack/ingest");
-        let mut diff = env(
-            "slack-diff/render_markdown",
-            "slack-diff",
-            "render_markdown",
-            &[],
-        );
-        diff.group_type = Some(DIFF_GROUP_TYPE.into());
-        diff.source_group = Some("slack".into());
-        assert_eq!(diff.raw_store_rel(), "slack/ingest");
+        assert_eq!(e.raw_store_rel().unwrap(), "elsewhere/ingest");
+        let e = env("slack/render_markdown", "slack", None, &[]);
+        assert_eq!(e.raw_store_rel().unwrap(), "slack/ingest");
+        let diff = env("slack-diff/render_markdown", "diff", Some("slack"), &[]);
+        assert!(diff.raw_store_rel().is_err());
     }
 }

@@ -188,15 +188,16 @@ id = "whatsapp"
 type = "whatsapp"
 
 [[steps]]
-group = "whatsapp"
-function = "ingest"
+id = "whatsapp/ingest"
+command = "datalib-step run ingest whatsapp"
 [steps.params.backup]
 path = "~/backups/WhatsApp"      # holds Databases/msgstore.db.crypt15 and Media/
 
 [[steps]]
-group = "whatsapp"
-function = "render_markdown"
+id = "whatsapp/render_markdown"
+command = "datalib-step run render_markdown whatsapp"
 inputs = ["whatsapp/ingest"]
+reads = "pinned"
 ```
 
 The key comes from `WHATSAPP_BACKUP_DECRYPTION_KEY` (or the env var

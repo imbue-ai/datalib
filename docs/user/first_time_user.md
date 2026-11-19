@@ -373,12 +373,29 @@ these steps for whichever source failed.
 The config lives at `config.toml` in your data root. Each source is a
 **group** with an `ingest` step (bring the data in) and a
 `render_markdown` step (turn it into readable markdown), plus two shared
-index steps that fan in over everything rendered. None of them names a
-command: a step without one is datalib's own, and the group's `type`
-says which source it is. A one-source config looks like this:
+index steps that fan in over everything rendered. Every step names the
+program it runs in `command`; datalib's own steps run
+`datalib-step run <function> <type>`, the type being the group's. A
+one-source config looks like this:
 
 ```toml
 data_root = "~/datalib"
+
+[[programs]]
+command = "datalib-step"
+verbs = ["reset", "prepare", "compact", "collect"]
+
+[[locks]]
+name = "index"
+slots = 2
+
+[[locks]]
+name = "qmd_keyword"
+slots = 1
+
+[[locks]]
+name = "qmd_embed"
+slots = 1
 
 [[groups]]
 id = "claude"
@@ -386,44 +403,47 @@ name = "Claude"
 type = "claude"
 
 [[steps]]
-group = "claude"
-function = "ingest"
-command = "datalib-step"
+id = "claude/ingest"
+command = "datalib-step run ingest claude"
 [steps.params]
 api = {}
 
 [[steps]]
-group = "claude"
-function = "render_markdown"
-command = "datalib-step"
+id = "claude/render_markdown"
+command = "datalib-step run render_markdown claude"
 inputs = ["claude/ingest"]
+reads = "pinned"
 
 [[steps]]
-group = "claude"
-function = "keyword_index"
-command = "datalib-step"
+id = "claude/keyword_index"
+command = "datalib-step run keyword_index claude"
 inputs = ["claude/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "claude"
-function = "embed"
-command = "datalib-step"
+id = "claude/embed"
+command = "datalib-step run embed claude"
 inputs = ["claude/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 [[groups]]
 id = "unified_document_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
-command = "datalib-step"
+id = "unified_document_index/grid_index"
+command = "datalib-step run grid_index"
 inputs = ["claude/render_markdown"]
+reads = "pinned"
+locks = ["index"]
 
 [[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
-command = "datalib-step"
+id = "unified_document_index/qmd_aggregator"
+command = "datalib-step run qmd_aggregator"
 inputs = ["claude/keyword_index", "claude/embed"]
+reads = "pinned"
+locks = ["qmd_keyword"]
 
 [[applets]]
 group = "unified_document_index"
@@ -431,9 +451,12 @@ id = "unified_document_index"
 command = "datalib-applet unified_document_index"
 ```
 
-Each step says which group it belongs to and what it does there, and
-the pair names a directory — `claude/ingest`, `claude/render_markdown`
-— that the next step's `inputs` refer to. Two TOML rules worth knowing
+A step's `id` is the directory it writes — `claude/ingest`,
+`claude/render_markdown` — and the next step's `inputs` refer to it;
+its first part is the group it belongs to. The `reads` and `locks`
+lines keep steps that share files from running at once, and the
+`[[programs]]` entry says which requests (such as a reset) `datalib-step`
+understands; copy them as they are. Two TOML rules worth knowing
 before you hand-edit: `data_root` has to come *above* the first `[[…]]`
 header, and within a step the `params` sub-table comes last — anything
 you write after a `[…]` header belongs to that header's table until the
@@ -450,9 +473,10 @@ datalib-dag init ~/datalib
 datalib-step examples slack --append ~/datalib/config.toml
 ```
 
-The first writes the starter config and nothing else. The second adds
-a source's smallest working config and puts it in the index steps'
-`inputs`; a source with more than one way in names it
+The first writes a config with no steps and nothing else. The second
+adds a source's smallest working config, and the index steps and the
+applets when the config has none yet, and puts the source in the index
+steps' `inputs`; a source with more than one way in names it
 (`--method gmail`), and `--id` names a second account's group.
 If you'd rather hand-edit, copy
 [**configs/dag_example.toml**](../../configs/dag_example.toml),
@@ -493,7 +517,10 @@ gives each source its own search steps the first time it reads the
 file, and keeps the old one as `config.toml.bak`. The same is true of a
 config whose index is still called `unified_index`: the app renames it
 `unified_document_index`, and moves the index's folder to match rather
-than rebuilding it. A much older root with
+than rebuilding it. And of a config whose steps are written as
+`group = …` and `function = …`: the app writes each step's `id` and
+whole `command` and the entries `datalib-step` needs, and every step
+runs once at the next sync, each fetching only what is new. A much older root with
 only a `config.yaml` is not convertible any more: set it up again from
 the app.
 

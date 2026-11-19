@@ -1,12 +1,13 @@
 # Sample config in the format `datalib-dag` runs: each source is a
-# `[[groups]]` entry with a `type` plus its two steps (`ingest` and
-# `render_markdown`, each written as `group` + `function` and with no
-# `command`, since a built-in step is `datalib-step`), and the two
-# shared index steps under the `unified_document_index` group, which every
-# source's rendered markdown feeds. A step's id is `<group>/<function>`,
-# composed rather than written; `inputs` name steps by that id. See
-# configs/dag_example.toml for a walkthrough of the format and
-# all_sources.toml (next to this file) for every supported source.
+# `[[groups]]` entry with a `type` plus its steps (`ingest`,
+# `render_markdown` and its two search steps), and the two shared index
+# steps under the `unified_document_index` group, which every source's
+# rendered markdown feeds. A step's `id` is `<group>/<function>`, and
+# `inputs` name steps by that id. Each step's `command` runs
+# `datalib-step run <function>`, followed by the group's `type` for a
+# step under a source. See configs/dag_example.toml for a walkthrough
+# of the format and all_sources.toml (next to this file) for every
+# supported source.
 
 # Where the downloaded data gets written. Top-level keys have to come
 # before the first [[…]] header — everything after a table header
@@ -20,15 +21,17 @@ data_root = "~/datalib"
 id = "unified_document_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
-command = "datalib-step"
+id = "unified_document_index/grid_index"
+command = "datalib-step run grid_index"
+reads = "pinned"
+locks = ["index"]
 inputs = ["gmail-takeout/render_markdown", "slack/render_markdown", "claude-api/render_markdown"]
 
 [[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
-command = "datalib-step"
+id = "unified_document_index/qmd_aggregator"
+command = "datalib-step run qmd_aggregator"
+reads = "pinned"
+locks = ["qmd_keyword"]
 inputs = ["gmail-takeout/keyword_index", "gmail-takeout/embed", "slack/keyword_index", "slack/embed", "claude-api/keyword_index", "claude-api/embed"]
 
 # Google Takeout Gmail export. The `mbox` table is the method: it puts
@@ -40,28 +43,29 @@ id = "gmail-takeout"
 type = "email"
 
 [[steps]]
-group = "gmail-takeout"
-function = "ingest"
-command = "datalib-step"
+id = "gmail-takeout/ingest"
+command = "datalib-step run ingest email"
 [steps.params.mbox]
 path = "~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox"
 
 [[steps]]
-group = "gmail-takeout"
-function = "render_markdown"
-command = "datalib-step"
+id = "gmail-takeout/render_markdown"
+command = "datalib-step run render_markdown email"
+reads = "pinned"
 inputs = ["gmail-takeout/ingest"]
 
 [[steps]]
-group = "gmail-takeout"
-function = "keyword_index"
-command = "datalib-step"
+id = "gmail-takeout/keyword_index"
+command = "datalib-step run keyword_index email"
+reads = "files"
+locks = ["qmd_keyword"]
 inputs = ["gmail-takeout/render_markdown"]
 
 [[steps]]
-group = "gmail-takeout"
-function = "embed"
-command = "datalib-step"
+id = "gmail-takeout/embed"
+command = "datalib-step run embed email"
+reads = "files"
+locks = ["qmd_embed"]
 inputs = ["gmail-takeout/keyword_index"]
 
 # Slack workspace mirror. Credentials come from `latchkey` at runtime
@@ -74,9 +78,8 @@ id = "slack"
 type = "slack"
 
 [[steps]]
-group = "slack"
-function = "ingest"
-command = "datalib-step"
+id = "slack/ingest"
+command = "datalib-step run ingest slack"
 
 [steps.params.common]
 blob_size_limit_bytes = "1 MB"  # skip larger file uploads
@@ -104,21 +107,23 @@ channels = ["project-data-liberation"]
                          # bound how far back the mirror goes.
 
 [[steps]]
-group = "slack"
-function = "render_markdown"
-command = "datalib-step"
+id = "slack/render_markdown"
+command = "datalib-step run render_markdown slack"
+reads = "pinned"
 inputs = ["slack/ingest"]
 
 [[steps]]
-group = "slack"
-function = "keyword_index"
-command = "datalib-step"
+id = "slack/keyword_index"
+command = "datalib-step run keyword_index slack"
+reads = "files"
+locks = ["qmd_keyword"]
 inputs = ["slack/render_markdown"]
 
 [[steps]]
-group = "slack"
-function = "embed"
-command = "datalib-step"
+id = "slack/embed"
+command = "datalib-step run embed slack"
+reads = "files"
+locks = ["qmd_embed"]
 inputs = ["slack/keyword_index"]
 
 # Anthropic / claude.ai conversation mirror. Credentials come from
@@ -131,9 +136,8 @@ id = "claude-api"
 type = "claude"
 
 [[steps]]
-group = "claude-api"
-function = "ingest"
-command = "datalib-step"
+id = "claude-api/ingest"
+command = "datalib-step run ingest claude"
 [steps.params.api]
 # refresh_most_recent_n_chat_count = 3   # force-refetch top-N by updated_at
 # since = "2025-01-01"      # only sync conversations updated at/after this
@@ -141,21 +145,23 @@ command = "datalib-step"
 # project_uuids = [...]     # or: mirror only these projects (UUIDs or URLs)
 
 [[steps]]
-group = "claude-api"
-function = "render_markdown"
-command = "datalib-step"
+id = "claude-api/render_markdown"
+command = "datalib-step run render_markdown claude"
+reads = "pinned"
 inputs = ["claude-api/ingest"]
 
 [[steps]]
-group = "claude-api"
-function = "keyword_index"
-command = "datalib-step"
+id = "claude-api/keyword_index"
+command = "datalib-step run keyword_index claude"
+reads = "files"
+locks = ["qmd_keyword"]
 inputs = ["claude-api/render_markdown"]
 
 [[steps]]
-group = "claude-api"
-function = "embed"
-command = "datalib-step"
+id = "claude-api/embed"
+command = "datalib-step run embed claude"
+reads = "files"
+locks = ["qmd_embed"]
 inputs = ["claude-api/keyword_index"]
 
 # The app's own surface: `unified_document_index` serves the grid, the document
@@ -173,3 +179,23 @@ command = "datalib-applet unified_document_index"
 group = "unified_document_index"
 id = "datalib_contacts"
 command = "datalib-applet datalib_contacts"
+
+# The verbs `datalib-step` takes (docs/dev/step_protocol.md § Verbs).
+[[programs]]
+command = "datalib-step"
+verbs = ["reset", "prepare", "compact", "collect"]
+
+# Whatever writes qmd's keyword index: two at once can lose a document.
+[[locks]]
+name = "qmd_keyword"
+slots = 1
+
+# Whatever embeds into qmd's index: two at once race on its vectors.
+[[locks]]
+name = "qmd_embed"
+slots = 1
+
+# The fan-ins that read every source.
+[[locks]]
+name = "index"
+slots = 2

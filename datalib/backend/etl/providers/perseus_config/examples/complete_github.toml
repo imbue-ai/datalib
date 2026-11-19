@@ -7,9 +7,8 @@ name = "Perseus"
 type = "perseus"
 
 [[steps]]
-group = "perseus"
-function = "ingest"
-command = "datalib-step"
+id = "perseus/ingest"
+command = "datalib-step run ingest perseus"
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
 # Nothing reads it and it grows every run.
@@ -26,10 +25,10 @@ files = [
 ]
 
 [[steps]]
-group = "perseus"
-function = "render_markdown"
-command = "datalib-step"
+id = "perseus/render_markdown"
+command = "datalib-step run render_markdown perseus"
 inputs = ["perseus/ingest"]
+reads = "files"
 
 [steps.params]
 # Edition pairs to align sentence by sentence; default none. Aligning
@@ -44,13 +43,15 @@ alignment_pairs = [["perseus-grc2", "perseus-eng4"]]
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "perseus"
-function = "keyword_index"
-command = "datalib-step"
+id = "perseus/keyword_index"
+command = "datalib-step run keyword_index perseus"
 inputs = ["perseus/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "perseus"
-function = "embed"
-command = "datalib-step"
+id = "perseus/embed"
+command = "datalib-step run embed perseus"
 inputs = ["perseus/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]

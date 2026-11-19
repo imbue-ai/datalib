@@ -176,27 +176,36 @@ pub fn claims(step: &str, report: &RenderReport) -> Vec<OutputClaim> {
         .collect()
 }
 
-/// The config's `[render_pages]` over the render's defaults. One the
-/// step cannot read is logged and the defaults stand.
+/// The config's `DATALIB_STEP_RENDER_PAGES` over the render's defaults.
+/// One the step cannot read is logged and the defaults stand.
 pub(crate) fn page_size() -> PageSize {
-    use datalib_dag::subprocess::ENV_RENDER_PAGES;
-    let Ok(raw) = std::env::var(ENV_RENDER_PAGES) else {
+    const ENV: &str = datalib_env::DATALIB_STEP_RENDER_PAGES;
+    let Ok(raw) = std::env::var(ENV) else {
         return PageSize::DEFAULT;
     };
-    match datalib_dag::config::RenderPages::decode(&raw) {
-        Some(pages) => PageSize {
-            buckets: pages
-                .buckets
-                .map_or(PageSize::DEFAULT.buckets, |n| n as usize),
-            bytes: pages
-                .blob_mb
-                .map_or(PageSize::DEFAULT.bytes, |mb| mb * 1024 * 1024),
+    match decode_render_pages(&raw) {
+        Some((buckets, blob_mb)) => PageSize {
+            buckets: buckets.map_or(PageSize::DEFAULT.buckets, |n| n as usize),
+            bytes: blob_mb.map_or(PageSize::DEFAULT.bytes, |mb| mb * 1024 * 1024),
         },
         None => {
-            tracing::warn!(raw = %raw, "{ENV_RENDER_PAGES} is not readable; using the default page size");
+            tracing::warn!(raw = %raw, "{ENV} is not readable; using the default page size");
             PageSize::DEFAULT
         }
     }
+}
+
+/// `<buckets>,<blob_mb>`, either side empty for the render's default.
+/// `None` for anything this build cannot read, a zero included.
+fn decode_render_pages(s: &str) -> Option<(Option<u64>, Option<u64>)> {
+    let (buckets, blob_mb) = s.trim().split_once(',')?;
+    let side = |v: &str| -> Option<Option<u64>> {
+        match v.trim() {
+            "" => Some(None),
+            n => n.parse::<u64>().ok().filter(|n| *n > 0).map(Some),
+        }
+    };
+    Some((side(buckets)?, side(blob_mb)?))
 }
 
 /// One source's render, as the core takes it: everything the step shell
@@ -1353,6 +1362,28 @@ pub(crate) fn declared_render_versions(
         .map(|p| p.render_version())
         .collect::<Option<_>>()?;
     (!versions.is_empty()).then_some(versions)
+}
+
+#[cfg(test)]
+mod render_pages_tests {
+    use super::decode_render_pages;
+
+    #[test]
+    fn render_pages_read_either_side_or_neither() {
+        assert_eq!(decode_render_pages(","), Some((None, None)));
+        assert_eq!(decode_render_pages("200,"), Some((Some(200), None)));
+        assert_eq!(decode_render_pages(",16"), Some((None, Some(16))));
+        assert_eq!(decode_render_pages("1,1"), Some((Some(1), Some(1))));
+    }
+
+    /// A zero or a word is `None`, never a guess: the render falls back
+    /// to its own page size and logs.
+    #[test]
+    fn unreadable_render_pages_are_none() {
+        for bad in ["", "500", "0,64", "500,0", "-1,64", "five,64", "500,64,1"] {
+            assert_eq!(decode_render_pages(bad), None, "{bad:?} must not parse");
+        }
+    }
 }
 
 #[cfg(test)]

@@ -137,10 +137,11 @@ rather than an error.
 5. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 On an existing root, a render store and the grid index change shape only
-when the step that writes them runs. The first launch of the new build
-asks each of them (`--migrate`); each compares its store's recorded
-shape with this build's and answers that it needs to run again, and the
-app offers to re-render them all, downloading nothing; until then a
+when the step that writes them runs. Each start of the loop asks each
+of them (`--prepare`); each compares its store's recorded shape with
+this build's and, when they differ, answers that it needs to run
+again, and the app offers to re-render them all, downloading nothing;
+until then a
 source's own sync re-renders that source
 ([dag README](../../datalib/backend/dag/README.md) § "Upgrading a
 root"). The render step then sees its own DDL hash moved (it is one of

@@ -7,9 +7,8 @@ name = "AirVisual"
 type = "airvisual"
 
 [[steps]]
-group = "airvisual"
-function = "ingest"
-command = "datalib-step"
+id = "airvisual/ingest"
+command = "datalib-step run ingest airvisual"
 
 # One entry per monitor. Every `YYYYMM_AirVisual_values.txt` under `path`
 # is read, the `archive*/` folders too.
@@ -27,24 +26,25 @@ path = "~/Downloads/airvisual-export/ten-forward"
 # One page with a chart per quantity (particulates, AQI, CO2, temperature,
 # humidity, VOC), every device a series. No options.
 [[steps]]
-group = "airvisual"
-function = "render_markdown"
-command = "datalib-step"
+id = "airvisual/render_markdown"
+command = "datalib-step run render_markdown airvisual"
 inputs = ["airvisual/ingest"]
+reads = "pinned"
 
 # The readings as time series, for the charts. Add this step to
 # `unified_time_series_index/time_series_index`'s inputs.
 [[steps]]
-group = "airvisual"
-function = "render_time_series"
-command = "datalib-step"
+id = "airvisual/render_time_series"
+command = "datalib-step run render_time_series airvisual"
 inputs = ["airvisual/ingest"]
+reads = "pinned"
 
 # Keyword (BM25) search over the page. Add it to
 # `unified_document_index/qmd_aggregator`'s inputs. A time-series source
 # takes no `embed` step: its pages are summaries of numbers.
 [[steps]]
-group = "airvisual"
-function = "keyword_index"
-command = "datalib-step"
+id = "airvisual/keyword_index"
+command = "datalib-step run keyword_index airvisual"
 inputs = ["airvisual/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]

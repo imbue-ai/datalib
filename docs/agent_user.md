@@ -92,17 +92,21 @@ End-to-end setup walkthrough:
 ## Configuring sources
 
 `<data_root>/config.toml` is TOML: a `[[groups]]` entry per source (an
-`id`, a `name`, a `type`), one `[[steps]]` table per step declared as
-`group` + `function` — its id, `<group>/<function>`, is composed rather
-than written — and `inputs` naming the steps it reads by that id.
+`id`, a `name`, a `type`), one `[[steps]]` table per step with its `id`
+(`<group>/<function>`, the tree it writes) and its `command`
+(`datalib-step run <function> <type>` for datalib's own steps), and
+`inputs` naming the steps it reads by that id. Datalib's steps also
+write the `reads` and `locks` they need, and the file lists the verbs
+`datalib-step` takes in a `[[programs]]` entry; `datalib-step examples`
+writes all of it for you.
 Top-level keys (`data_root`, `binary_dir`) go above the first `[[…]]`
 header, and a step's `params` sub-tables come after its plain keys — a
 `[…]` header ends the table it appears in.
 
-- **From the CLI alone:** `datalib-dag init <data_root>` writes the
-  starter `config.toml` (the index steps and their applets, no
-  sources) and nothing else; `datalib-step examples <type> --append
-  <data_root>/config.toml` adds a source (below).
+- **From the CLI alone:** `datalib-dag init <data_root>` writes a
+  `config.toml` with no steps and nothing else; `datalib-step examples
+  <type> --append <data_root>/config.toml` adds a source (below), and
+  the document index and its applets when the config has none yet.
 - **Complete commented example:**
   [`configs/dag_example.toml`](../configs/dag_example.toml).
 - **Every source, every option**:
@@ -111,9 +115,11 @@ header, and a step's `params` sub-tables come after its plain keys — a
   every option set, and the index groups reading them all. It is
   generated from the complete stanzas `datalib-step examples <type>`
   prints, so it is always one that loads. A release ships both files
-  beside this guide, at the same paths under its directory. A `config.toml` in the retired
-  shape (steps naming a `datalib-step download …` command) is refused;
-  rewrite it once with `datalib-migrate-config <data_root> --force`.
+  beside this guide, at the same paths under its directory. A `config.toml` in a retired
+  shape (steps written as `group` + `function`, a bare
+  `command = "datalib-step"`, or a `datalib-step download …` command)
+  is refused; the app rewrites it when it next reads it, and from a
+  shell `datalib-migrate-config <data_root> --force` does.
 - **Credentials**: web-API sources authenticate through
   [`latchkey`](https://github.com/imbue-ai/latchkey). Per-source
   walkthroughs for getting cookies/tokens/exports:
@@ -150,12 +156,15 @@ datalib-dag --check <data_root>/config.toml   # validate, run nothing
 `--check` prints *every* problem with the config rather than the first,
 as `file:line:col: severity: message` with the offending line and a
 `help:` line under each — so fixing a config takes one round-trip, not
-one per typo. It also has `datalib-step` plan every built-in step's
-params, so a misspelled or misplaced option is reported at its line
-before a sync rather than when the step runs. Exit 0 when every entry
-loads and every step's params plan, 1 if the file is not a config at
-all (or the root was written by a newer datalib), 2 if some entries
-were dropped or some step's params would be refused.
+one per typo. It checks what the runner reads, not a step's params:
+the app's config editor (`PUT /api/config`, `POST /api/config/check`)
+has `datalib-step check-params` plan every `datalib-step` step's
+params, so there a misspelled or misplaced option is reported at its
+line before a sync rather than when the step runs. Exit 0 when every
+entry loads, 1 if the file is not a config at all, 2 if some entries
+were dropped. A root a newer datalib wrote is not refused here: each
+step refuses it when the runner starts, and is turned off until a build
+that can read it runs.
 
 `datalib-step examples <type>` prints each source's config stanzas:
 for every way into the source, a minimal one (the least that syncs) and
@@ -163,7 +172,10 @@ a complete one (every option set, each with a comment). With
 `--append <config>` it adds the minimal one to the config instead,
 above the index groups, and puts the source's steps in the `inputs` of
 the index steps that read them (`grid_index`, and the time-series
-index, which it adds when a time-series source is the first). A
+index, which it adds when a time-series source is the first). A config
+with no document index gets one, with its applets, and a config
+without the `[[programs]]` and `[[locks]]` entries `datalib-step`'s
+steps need gets those. A
 source reached more than one way names the method (`--method gmail`),
 and `--id` gives the group an id of its own, for a second account. It
 refuses an id the config already has, and a result `datalib-dag
@@ -702,7 +714,7 @@ document.
 - **A config the runner rejects**: `datalib-dag --check
   <data_root>/config.toml` lists every problem with a line number;
   `PUT /api/config` (or the Manage tab) returns the same list in
-  `diagnostics`, built-in steps whose params a sync would refuse
+  `diagnostics`, `datalib-step` steps whose params a sync would refuse
   included, and writes nothing. A data root holding a pre-TOML
   `config.yaml` reads as unconfigured — set it up again from the app.
 - **Every step reads `waiting for disk space`**: the data root's disk

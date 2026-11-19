@@ -55,23 +55,25 @@ id = "contacts"
 type = "contacts"
 
 [[steps]]
-group = "contacts"
-function = "ingest"
+id = "contacts/ingest"
+command = "datalib-step run ingest contacts"
 [steps.params.vcf]
 path = "$fixture_dir"
 
 [[steps]]
-group = "contacts"
-function = "render_markdown"
+id = "contacts/render_markdown"
+command = "datalib-step run render_markdown contacts"
 inputs = ["contacts/ingest"]
+reads = "pinned"
 
 [[groups]]
 id = "unified_document_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
+id = "unified_document_index/grid_index"
+command = "datalib-step run grid_index"
 inputs = ["contacts/render_markdown"]
+reads = "pinned"
 CONFIG
 
 # The run takes seconds. Past the deadline it is hung, and a job killed

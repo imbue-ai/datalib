@@ -146,10 +146,16 @@ function bareRoot(prefix: string): string {
 id = "unified_document_index"
 name = "Document Index"
 
+[[locks]]
+name = "index"
+slots = 2
+
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
+id = "unified_document_index/grid_index"
+command = "datalib-step run grid_index"
 inputs = []
+reads = "pinned"
+locks = ["index"]
 
 [[applets]]
 group = "unified_document_index"

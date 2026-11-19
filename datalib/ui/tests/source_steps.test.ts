@@ -54,13 +54,11 @@ const PAIR = `data_root = "~/datalib"
 id = "unified_document_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
+id = "unified_document_index/grid_index"
 inputs = ["slack/render_markdown"]
 
 [[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
+id = "unified_document_index/qmd_aggregator"
 inputs = []
 
 # ── slack ─────────────────────────────────────────────────────────────
@@ -70,14 +68,12 @@ name = "Work Slack"
 type = "slack"
 
 [[steps]]
-group = "slack"
-function = "ingest"
+id = "slack/ingest"
 [steps.params.api]
 channels = ["general"]
 
 [[steps]]
-group = "slack"
-function = "render_markdown"
+id = "slack/render_markdown"
 inputs = ["slack/ingest"]
 `;
 
@@ -106,18 +102,17 @@ describe("listSteps", () => {
     expect(qmd.get("slack/keyword_index")!.phase).toBe("index");
     expect(qmd.get("slack/embed")!.phase).toBe("index");
     expect(qmd.get("slack/embed")!.name).toBe("Work Slack (QMD embedding index)");
-    // A custom function under a group, and a step outside any group,
-    // are steps and nothing more — whatever their ids look like.
+    // A custom function is a step and nothing more. What a step does is
+    // read off its id's second part, whatever program it runs.
     const custom = listSteps(`[[steps]]
-group = "slack"
-function = "summarize"
+id = "slack/summarize"
 command = "my-summarizer"
 
 [[steps]]
 id = "exports/render_markdown"
 command = "my-exporter"
 `);
-    expect(custom.map((s) => s.phase)).toEqual(["other", "other"]);
+    expect(custom.map((s) => s.phase)).toEqual(["other", "render"]);
   });
 
   it("reads group, function, type and inputs off each step", () => {
@@ -166,12 +161,12 @@ command = "datalib-applet unified_document_index"
   });
 
   // Any executable may be a step, so a command the catalog doesn't know
-  // has to produce a row rather than a crash — and a step outside any
-  // group keeps the id it wrote.
+  // has to produce a row rather than a crash. Its group is its id's
+  // first part, which no `[[groups]]` entry gives a type.
   it("reports a null type for a custom executable", () => {
     const [step] = listSteps('[[steps]]\nid = "custom/out"\ncommand = "my-exporter --flag"\n');
     expect(step.id).toBe("custom/out");
-    expect(step.group).toBeNull();
+    expect(step.group).toBe("custom");
     expect(step.phase).toBe("other");
     expect(step.type).toBeNull();
     expect(step.name).toBe("custom/out");
@@ -236,14 +231,14 @@ describe("buildSource", () => {
     });
     expect(out.groupBody).toContain('id = "slack"');
     expect(out.groupBody).toContain('name = "Work Slack"');
-    expect(out.stepsBody).toContain('function = "ingest"');
+    expect(out.stepsBody).toContain('id = "slack/ingest"');
     expect(out.stepsBody).toContain('channels = ["general"]');
-    expect(out.stepsBody).toContain('function = "render_markdown"');
-    expect(out.stepsBody).toContain('inputs = ["slack/ingest"]');
+    expect(out.stepsBody).toContain('id = "slack/render_markdown"');
+    expect(out.stepsBody).toContain('inputs = ["slack/ingest"]\nreads = "pinned"');
     expect(out.renderId).toBe("slack/render_markdown");
     // Ingest first: the render step names it.
-    expect(out.stepsBody.indexOf('function = "ingest"')).toBeLessThan(
-      out.stepsBody.indexOf('function = "render_markdown"'),
+    expect(out.stepsBody.indexOf('id = "slack/ingest"')).toBeLessThan(
+      out.stepsBody.indexOf('id = "slack/render_markdown"'),
     );
     // And the whole thing parses back as the two steps under the group.
     const text = `${out.groupBody}\n\n${out.stepsBody}`;
@@ -264,7 +259,8 @@ describe("buildSource", () => {
     });
     expect(out.groupBody).toBeNull();
     expect(out.stepsBody).toContain(
-      'function = "render_markdown"\ncommand = "datalib-step"\ninputs = ["photos/ingest"]',
+      'id = "photos/render_markdown"\ncommand = "datalib-step run render_markdown lightroom"\n' +
+        'inputs = ["photos/ingest"]\nreads = "pinned"',
     );
     expect(out.renderId).toBe("photos/render_markdown");
   });
@@ -323,16 +319,18 @@ describe("buildStep", () => {
   const fetch = (values = {}) =>
     buildStep({ entry: SLACK, group: "slack", phase: "download", values });
 
-  it("writes a fetch step as group + function, with its params and no inputs", () => {
+  it("writes a fetch step by its id, with its params and no inputs", () => {
     const body = fetch({ "api.channels": ["general", "random"], "api.since": "" });
-    expect(body).toContain('group = "slack"');
-    expect(body).toContain('function = "ingest"');
-    // A built-in step says it runs `datalib-step`, which reads its
-    // function and its group's type from the environment.
-    expect(body).toContain('function = "ingest"\ncommand = "datalib-step"');
+    // A built-in step runs `datalib-step`, told its function and its
+    // group's type in its arguments.
+    expect(body).toContain('id = "slack/ingest"\ncommand = "datalib-step run ingest slack"');
     expect(body).toContain('channels = ["general", "random"]');
     expect(body).not.toContain("inputs =");
-    expect(body).not.toContain("id =");
+    // A download reads nothing, so it takes the runner's defaults.
+    expect(body).not.toContain("reads =");
+    expect(body).not.toContain("locks =");
+    expect(body).not.toContain("group =");
+    expect(body).not.toContain("function =");
     // A step carries no name: the label comes from the group.
     expect(body).not.toContain("name =");
     // An empty optional stays out of the file rather than landing as "".
@@ -347,9 +345,12 @@ describe("buildStep", () => {
       inputs: ["slack/ingest"],
       values: {},
     });
-    expect(body).toContain('group = "slack"');
-    expect(body).toContain('function = "render_markdown"\ncommand = "datalib-step"');
-    expect(body).toContain('inputs = ["slack/ingest"]');
+    expect(body).toContain(
+      'id = "slack/render_markdown"\ncommand = "datalib-step run render_markdown slack"\n' +
+        'inputs = ["slack/ingest"]\nreads = "pinned"',
+    );
+    // A source's render holds the runner's default lock.
+    expect(body).not.toContain("locks =");
   });
 
   // Only download-phase params land on a download step, and vice versa.
@@ -531,8 +532,7 @@ describe("the Slack pickers", () => {
   it("read the cap in either spelling the config allows", () => {
     const seededFrom = (line: string) => {
       const [step] = listSteps(`[[steps]]
-group = "slack"
-function = "ingest"
+id = "slack/ingest"
 [steps.params.common]
 ${line}
 `);
@@ -552,8 +552,7 @@ describe("paramsAreRepresentable", () => {
   // The form names a hand-written knob it can't show, and saving keeps it.
   it("names the params it cannot model", () => {
     const [step] = listSteps(`[[steps]]
-group = "slack"
-function = "ingest"
+id = "slack/ingest"
 [steps.params.common]
 download_params = { maximum_sequential_failed_requests = 3 }
 `);
@@ -569,11 +568,11 @@ describe("removeSteps / patchSource", () => {
   it("removes one step and leaves its group, its sibling and the rest", () => {
     const fetch = listSteps(PAIR).find((s) => s.id === "slack/ingest")!;
     const after = removeSteps(PAIR, [fetch]);
-    expect(after).not.toContain('function = "ingest"');
-    expect(after).toContain('function = "render_markdown"');
+    expect(after).not.toContain('id = "slack/ingest"');
+    expect(after).toContain('id = "slack/render_markdown"');
     expect(after).toContain("── slack");
     expect(after).toContain('name = "Work Slack"');
-    expect(after).toContain('function = "grid_index"');
+    expect(after).toContain('id = "unified_document_index/grid_index"');
     expect(after).toContain('data_root = "~/datalib"');
   });
 
@@ -620,8 +619,8 @@ describe("removeSteps / patchSource", () => {
       group: "slack",
       values: { "api.channels": ["random"] },
     });
-    expect(after.match(/function = "ingest"/g)).toHaveLength(1);
-    expect(after.match(/function = "render_markdown"/g)).toHaveLength(1);
+    expect(after.match(/id = "slack\/ingest"/g)).toHaveLength(1);
+    expect(after.match(/id = "slack\/render_markdown"/g)).toHaveLength(1);
     expect(after).toContain('channels = ["random"]');
     expect(after).not.toContain('channels = ["general"]');
     // The group and the index steps are untouched.
@@ -642,7 +641,7 @@ describe("removeSteps / patchSource", () => {
   // the form writes it alongside the other, and nothing is duplicated.
   it("adds the step a source was missing", () => {
     const fetchOnly = PAIR.replace(
-      /\n\[\[steps\]\]\ngroup = "slack"\nfunction = "render_markdown"\ninputs = \["slack\/ingest"\]\n/,
+      /\n\[\[steps\]\]\nid = "slack\/render_markdown"\ninputs = \["slack\/ingest"\]\n/,
       "\n",
     );
     const { render } = sourceStepsOf("slack", listSteps(fetchOnly));
@@ -754,8 +753,8 @@ describe("fan-in wiring", () => {
     // ...but the render step itself is untouched. Unwiring is about
     // edges; removing the step is `removeSteps`, and the two are
     // separate because deleting a source needs both.
-    expect(bare).toContain('function = "render_markdown"');
-    expect(bare).toContain('function = "grid_index"');
+    expect(bare).toContain('id = "slack/render_markdown"');
+    expect(bare).toContain('id = "unified_document_index/grid_index"');
   });
 
   /// Semantic search is the one fan-in a person can opt out of, so the
@@ -781,8 +780,7 @@ describe("fan-in wiring", () => {
   it("finds a fan-in whose keys are in an unusual order", () => {
     const odd = `[[steps]]
 inputs = []
-function = "qmd_aggregator"
-group = "unified_document_index"
+id = "unified_document_index/qmd_aggregator"
 `;
     const wired = wireIntoFanIns(odd, "pdfs/keyword_index", "qmd_aggregator");
     expect(
@@ -798,8 +796,7 @@ group = "unified_document_index"
 id = "unified_document_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
+id = "unified_document_index/grid_index"
 inputs = []
 
 [[applets]]
@@ -813,13 +810,11 @@ command = "datalib-applet unified_document_index"
   });
 
   const gridIndex = (inputs: string) => `[[steps]]
-group = "unified_document_index"
-function = "grid_index"
+id = "unified_document_index/grid_index"
 inputs = ${inputs}
 
 [[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
+id = "unified_document_index/qmd_aggregator"
 inputs = ["bridge/keyword_index"]
 `;
 
@@ -1071,8 +1066,7 @@ describe("the ChatGPT descriptor", () => {
 describe("a source's qmd steps", () => {
   const MAPPED = `${PAIR}
 [[steps]]
-group = "unified_document_index"
-function = "embedding_map"
+id = "unified_document_index/embedding_map"
 inputs = ["unified_document_index/qmd_aggregator"]
 `;
   const inputsOf = (text: string, id: string) => listSteps(text).find((s) => s.id === id)?.inputs;
@@ -1122,8 +1116,7 @@ inputs = ["unified_document_index/qmd_aggregator"]
   it("takes a step that reads the embeddings with them", () => {
     const reader = `${setQmdSteps(MAPPED, "slack", "keyword_and_embed")}
 [[steps]]
-group = "slack"
-function = "cluster"
+id = "slack/cluster"
 command = "my-clusterer"
 inputs = ["slack/embed"]
 `;
@@ -1204,14 +1197,12 @@ id = "slack"
 type = "slack"
 
 [[steps]]
-group = "slack"
-function = "ingest"
+id = "slack/ingest"
 [steps.params.api]
 channels = ["general"]
 
 [[steps]]
-group = "slack"
-function = "render_markdown"
+id = "slack/render_markdown"
 inputs = ["slack/ingest"]
 
 # ── notes ─────────────────────────────────────────────────────────────
@@ -1220,14 +1211,12 @@ id = "notes"
 type = "slack"
 
 [[steps]]
-group = "notes"
-function = "ingest"
+id = "notes/ingest"
 [steps.params.api]
 channels = ["notes"]
 
 [[steps]]
-group = "notes"
-function = "render_markdown"
+id = "notes/render_markdown"
 inputs = ["notes/ingest"]
 
 # ── the unified document index ────────────────────────────────────────
@@ -1235,13 +1224,11 @@ inputs = ["notes/ingest"]
 id = "unified_document_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
+id = "unified_document_index/grid_index"
 inputs = ["slack/render_markdown", "notes/render_markdown"]
 
 [[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
+id = "unified_document_index/qmd_aggregator"
 inputs = []
 
 [[applets]]
@@ -1293,7 +1280,7 @@ command = "datalib-applet unified_document_index"
     expect(next.startsWith('data_root = "~/datalib"\n')).toBe(true);
     // Its divider stays above its group, and the index's above the index.
     expect(next.indexOf("── extra")).toBeLessThan(next.indexOf('id = "extra"'));
-    expect(next.indexOf('function = "embed"')).toBeLessThan(
+    expect(next.indexOf('id = "extra/embed"')).toBeLessThan(
       next.indexOf("── the unified document index"),
     );
   });
@@ -1308,7 +1295,12 @@ command = "datalib-applet unified_document_index"
     const next = addSource(scaffold, "extra");
     expect(listGroups(next).map((g) => g.id)).toEqual(["extra", "unified_document_index"]);
     expect(flowsDown(next)).toEqual([]);
-    expect(next.startsWith("# ── extra")).toBe(true);
+    // The scaffold declares no `[[programs]]` entry, so the one the new
+    // steps need goes first, above the source's divider.
+    expect(next.startsWith('[[programs]]\ncommand = "datalib-step"')).toBe(true);
+    expect(next.indexOf("# ── extra")).toBeLessThan(
+      next.indexOf("# ── the unified document index"),
+    );
   });
 
   /// Search turned on for a source that is not the last: its steps go
@@ -1350,6 +1342,7 @@ command = "datalib-applet unified_document_index"
       id: "slack-diff",
       name: "",
       source: "slack",
+      sourceType: "slack",
       from: "aaa",
       to: "bbb",
       maxDocuments: 50,
@@ -1409,15 +1402,13 @@ id = "slack"
 type = "slack"
 
 [[steps]]
-group = "slack"
-function = "ingest"
+id = "slack/ingest"
 
 [steps.params.api]
 workspace = "enterprise"
 
 [[steps]]
-group = "slack"
-function = "render_markdown"
+id = "slack/render_markdown"
 inputs = ["slack/ingest"]
 
 # ── claude ──
@@ -1426,21 +1417,18 @@ id = "claude"
 type = "claude"
 
 [[steps]]
-group = "claude"
-function = "ingest"
+id = "claude/ingest"
 
 [[groups]]
 id = "unified_document_index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
+id = "unified_document_index/grid_index"
 inputs = ["slack/render_markdown"]
 
 # A step filed under slack, written apart from it.
 [[steps]]
-group = "slack"
-function = "keyword_index"
+id = "slack/keyword_index"
 inputs = ["slack/render_markdown"]
 
 [[applets]]
@@ -1547,8 +1535,7 @@ id = "riker"
 type = "garmin"
 
 [[steps]]
-group = "riker"
-function = "ingest"
+id = "riker/ingest"
 `;
   const inputsOf = (text: string, id: string) => listSteps(text).find((s) => s.id === id)?.inputs;
 
@@ -1572,7 +1559,7 @@ function = "ingest"
   it("joins an index that is already there", () => {
     const one = setTimeSeriesStep(WATCH, "riker", "garmin");
     const two = setTimeSeriesStep(
-      `${one}\n[[groups]]\nid = "troi"\ntype = "garmin"\n\n[[steps]]\ngroup = "troi"\nfunction = "ingest"\n`,
+      `${one}\n[[groups]]\nid = "troi"\ntype = "garmin"\n\n[[steps]]\nid = "troi/ingest"\n`,
       "troi",
       "garmin",
     );
@@ -1600,8 +1587,7 @@ id = "bridge"
 type = "calendar"
 
 [[steps]]
-group = "bridge"
-function = "ingest"
+id = "bridge/ingest"
 `;
 
   it("adds the step reading the source's download, once", () => {
@@ -1620,7 +1606,7 @@ function = "ingest"
   /// occurrences step must not be taken for it.
   it("is not the render step the wizard edits", () => {
     const first = setOccurrencesStep(CAL, "bridge", "calendar");
-    const both = `${first}\n[[steps]]\ngroup = "bridge"\nfunction = "render_markdown"\ninputs = ["bridge/ingest"]\n`;
+    const both = `${first}\n[[steps]]\nid = "bridge/render_markdown"\ninputs = ["bridge/ingest"]\n`;
     expect(sourceStepsOf("bridge", listSteps(both)).render?.function).toBe("render_markdown");
   });
 });

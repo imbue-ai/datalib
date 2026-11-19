@@ -7,9 +7,8 @@ name = "Todoist"
 type = "todoist"
 
 [[steps]]
-group = "todoist"
-function = "ingest"
-command = "datalib-step"
+id = "todoist/ingest"
+command = "datalib-step run ingest todoist"
 
 # When to give up on failed requests. The download retries and backs off
 # on its own; these only decide when to stop.
@@ -33,21 +32,23 @@ since = "2024-01-01"
 # One document per project: its sections, its tasks and their comments,
 # completed tasks folded under each section. No options.
 [[steps]]
-group = "todoist"
-function = "render_markdown"
-command = "datalib-step"
+id = "todoist/render_markdown"
+command = "datalib-step run render_markdown todoist"
 inputs = ["todoist/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "todoist"
-function = "keyword_index"
-command = "datalib-step"
+id = "todoist/keyword_index"
+command = "datalib-step run keyword_index todoist"
 inputs = ["todoist/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "todoist"
-function = "embed"
-command = "datalib-step"
+id = "todoist/embed"
+command = "datalib-step run embed todoist"
 inputs = ["todoist/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]

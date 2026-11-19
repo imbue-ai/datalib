@@ -15,7 +15,7 @@ for the life of the server. The tables:
 | table | one row per |
 |---|---|
 | `processes` | a process that took part (below) |
-| `runs` | a run of the runner: what it is for (`kind`: a sync, a migration on a build's first launch, or giving back disk) and why it started (`reason`, also the run's first line). Empty for a run an older build recorded |
+| `runs` | a run of the runner: what it is for (`kind`: a sync, the prepare pass at a start, or giving back disk) and why it started (`reason`, also the run's first line). Empty for a run an older build recorded |
 | `step_runs` | a step in a run: state, attempt, error, message. While a run is live every step of the config is here, `pending` until reached; when it ends, the ones no request reached go, so a closed run holds the steps it ran. A run whose runner died keeps them, as `stopped`: nothing settled them, so any might have been about to run |
 | `log` | a line |
 | `metrics`, `metric_samples` | a step's numbers — the newest value, and a sparse timeseries |
@@ -144,9 +144,11 @@ is shown, never stored: the store keeps the path rustc saw and the
 commit, and the UI (`runLogSource.ts`) makes the URL. Nothing is
 compiled into a binary — a rustc stamp would rebuild everything
 downstream on every commit; the staged file is one stamped genrule
-(`.bazelrc` §stamping). A step attempt running the built-in step
-program shares the runner's commit; a custom command has none; a page
-has the server's, since the bundle is embedded in the binary.
+(`.bazelrc` §stamping). A step attempt's commit is the `version` its
+program reports in a `capabilities` event (`step_protocol.md` §"stdout:
+the event protocol"); `datalib-step` reports the commit it was built
+from, read the same way, and a program that reports none has none. A
+page has the server's, since the bundle is embedded in the binary.
 
 ## Where a line comes from
 
@@ -154,7 +156,7 @@ has the server's, since the bundle is embedded in the binary.
 |---|---|---|
 | Rust in the runner or the server | `tracing::info!(target: "…", key = value, "the sentence")` | a row with `target`, `msg`, and the keys as a JSON object in `fields`; `filename` / `line_number` added ([`runs/src/tracing_layer.rs`](../../datalib/backend/runs/src/tracing_layer.rs)) |
 | the runner, about a step — a checkpoint sealed, a pass that failed, why it ended, a hint | nothing — the runner writes these itself | `target:datalib_dag::runner` under the step, with the runner as author |
-| Rust in a built-in step (`datalib-step`) | the same `tracing` call | a JSON envelope on the step's stderr, which the runner unwraps into the same columns; the line's own timestamp wins |
+| Rust in `datalib-step`'s steps | the same `tracing` call | a JSON envelope on the step's stderr, which the runner unwraps into the same columns; the line's own timestamp wins |
 | Rust in an applet (`datalib-applet`) | the same `tracing` call | a JSON envelope on the applet's stderr, which the gateway logs again as the server's line at the envelope's level: `target:datalib_http::applets`, with `applet` naming it and the applet's own target and fields in `applet_target` and `applet_fields`. The row's `filename` / `line_number` are the gateway's; the applet's are inside `applet_fields` ([`applets.md`](applets.md)) |
 | a custom step, any language | print a line on stderr (or a non-event line on stdout) | an `info` row with `stream` set; the last lines before a non-zero exit also become the step's error |
 | the server, per request | nothing — [`http/src/request_log.rs`](../../datalib/backend/http/src/request_log.rs) does it | `target:http.request`: method, path, query, status, `ms`, `bytes`, the `page` that asked, and the `card` and `card_type` when a card asked (`ui/src/cards/cardScope.ts`; `ui.card_open` says what source that card ran). These are pages asking this server, not traffic off the machine. `debug` when it succeeded and only read (below), `info` for what changes something or was refused, `warn` for a 5xx |

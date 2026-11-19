@@ -30,11 +30,9 @@ async fn a_reset_download_reports_the_emptied_stores_problems() {
 
     let out = Command::new(std::env::var_os("DATALIB_STEP_BIN").expect("DATALIB_STEP_BIN"))
         .env("DATALIB_DAG_STEP", "tng/ingest")
-        .env("DATALIB_DAG_GROUP", "tng")
-        .env("DATALIB_DAG_GROUP_TYPE", "slack")
-        .env("DATALIB_DAG_FUNCTION", "ingest")
+        .args(["run", "ingest", "slack"])
         .env("DATALIB_DAG_DATA_ROOT", root)
-        .args(["--reset", "store"])
+        .arg("--reset")
         .stdin(Stdio::null())
         .output()
         .expect("spawn datalib-step");

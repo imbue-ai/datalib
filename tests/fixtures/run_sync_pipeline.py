@@ -456,6 +456,40 @@ def prepare(argv: list[str]) -> Prepared:
     # fan-in. qmd is skipped here (the old configs set `qmd.skip`);
     # `:ingested_tng_qmd` builds the search index separately.
     notion_seed = _first_notion_page_id(notion_fx)
+
+    def step(
+        group: str, function: str, command: str, reads: str | None, lock: str | None
+    ) -> str:
+        """A `[[steps]]` header and its keys, as `datalib-step examples`
+        writes one: the id, the command, and the `reads` and `locks` the
+        runner no longer infers (docs/dev/plans/dag_and_step_decoupling.md)."""
+        text = f'[[steps]]\nid = "{group}/{function}"\ncommand = "{command}"'
+        if reads:
+            text += f'\nreads = "{reads}"'
+        if lock:
+            text += f'\nlocks = ["{lock}"]'
+        return text
+
+    def run(function: str, type_str: str = "") -> str:
+        return f"datalib-step run {function} {type_str}".rstrip()
+
+    # The program and the locks a datalib config declares, above every
+    # group: the runner gives `datalib-step` no verbs and no locks of its own.
+    preamble = """[[programs]]
+command = "datalib-step"
+verbs = ["reset", "prepare", "compact", "collect"]
+
+[[locks]]
+name = "index"
+slots = 2
+
+[[locks]]
+name = "qmd_keyword"
+slots = 1
+
+[[locks]]
+name = "qmd_embed"
+slots = 1"""
     steps: list[str] = []
     root_entries: list[str] = []
     ingest_ids: list[str] = []
@@ -479,10 +513,9 @@ def prepare(argv: list[str]) -> Prepared:
         render_params_line = (
             f"\nparams = {_toml_value(render_params)}" if render_params else ""
         )
-        # One group per source; each step is `group` + `function`, and its
-        # id — the tree it writes — is composed from the two. No
-        # `command`: a built-in step is `datalib-step`, which reads the
-        # function and the group's type from the environment.
+        # One group per source; each step's id is `<group>/<function>`,
+        # the tree it writes, and its command names the function and the
+        # group's type to `datalib-step`.
         group_block = f"""[[groups]]
 id = "{name}"
 type = "{type_str}"
@@ -491,9 +524,8 @@ type = "{type_str}"
         ingest_block = (
             ""
             if name in PRESEEDED_RAW
-            else f"""[[steps]]
-group = "{name}"
-function = "ingest"
+            else step(name, "ingest", run("ingest", type_str), None, None)
+            + f"""
 params = {params}
 
 """
@@ -504,12 +536,22 @@ params = {params}
         inputs_line = "" if name in PRESEEDED_RAW else f'\ninputs = ["{name}/ingest"]'
         if name not in PRESEEDED_RAW:
             ingest_ids.append(f"{name}/ingest")
-        render_block = f'[[steps]]\ngroup = "{name}"\nfunction = "render_markdown"'
+        render_block = step(
+            name,
+            "render_markdown",
+            run("render_markdown", type_str),
+            "files" if type_str == "perseus" else "pinned",
+            None,
+        )
         series_block = ""
         if type_str in TIME_SERIES_TYPES:
             time_series_groups.add(name)
-            series_block = (
-                f'\n\n[[steps]]\ngroup = "{name}"\nfunction = "render_time_series"'
+            series_block = "\n\n" + step(
+                name,
+                "render_time_series",
+                run("render_time_series", type_str),
+                "pinned",
+                None,
             )
         steps.append(
             group_block
@@ -531,21 +573,27 @@ params = {params}
     ) -> tuple[str, str]:
         """The config with the first `count` sources (all by default),
         and a diff group per source whose two commits are known. A diff
-        group is `type = "diff"` + `source`; its one step is
-        `render_markdown` reading the source's ingest tree, and the
-        fan-in names it like any render step. Two texts: the DAG's own,
+        group is `type = "diff"`; its one step is `render_markdown`
+        reading the source's ingest tree, its command naming the source's
+        type, and the fan-in names it like any render step. Two texts: the DAG's own,
         and the body of a materialized root's, where the diff step — like
         every render step there — declares no inputs."""
         names = list(sources)[:count]
-        blocks = steps[: len(names)]
-        root_blocks = root_entries[: len(names)]
+        blocks = [preamble] + steps[: len(names)]
+        root_blocks = [preamble] + root_entries[: len(names)]
+        # How `datalib-step` is told each group's type: a diff group's
+        # steps also name the type of the source they compare.
+        type_args = {n: sources[n][0] for n in names}
         rendered = [f'"{n}/render_markdown"' for n in names]
         for source_id, (from_commit, to_commit) in diffs.items():
             group = DIFF_GROUPS[source_id]
-            group_block = (
-                f'[[groups]]\nid = "{group}"\ntype = "diff"\n'
-                f'source = "{source_id}"\n\n'
-                f'[[steps]]\ngroup = "{group}"\nfunction = "render_markdown"'
+            type_args[group] = f"diff --source-type {sources[source_id][0]}"
+            group_block = f'[[groups]]\nid = "{group}"\ntype = "diff"\n\n' + step(
+                group,
+                "render_markdown",
+                run("render_markdown", type_args[group]),
+                "pinned",
+                None,
             )
             params_line = (
                 f'params.diff = {{ from = "{from_commit}", to = "{to_commit}" }}'
@@ -566,9 +614,7 @@ params = {params}
             f"""[[groups]]
 id = "unified_document_index"
 
-[[steps]]
-group = "unified_document_index"
-function = "grid_index"
+{step("unified_document_index", "grid_index", run("grid_index"), "pinned", "index")}
 inputs = [{rendered_list}]"""
         )
         # The time-series index reads every source's `render_time_series`.
@@ -580,9 +626,7 @@ inputs = [{rendered_list}]"""
 id = "unified_time_series_index"
 name = "Time Series Index"
 
-[[steps]]
-group = "unified_time_series_index"
-function = "time_series_index"
+{step("unified_time_series_index", "time_series_index", run("time_series_index"), "pinned", "index")}
 inputs = [{", ".join(f'"{g}/render_time_series"' for g in series)}]"""
             if series
             else ""
@@ -600,14 +644,10 @@ inputs = [{", ".join(f'"{g}/render_time_series"' for g in series)}]"""
 id = "unified_document_index"
 name = "Document Index"
 
-[[steps]]
-group = "unified_document_index"
-function = "grid_index"
+{step("unified_document_index", "grid_index", run("grid_index"), "pinned", "index")}
 inputs = [{rendered_list}]
 
-[[steps]]
-group = "unified_document_index"
-function = "qmd_aggregator"
+{step("unified_document_index", "qmd_aggregator", run("qmd_aggregator"), "pinned", "qmd_keyword")}
 inputs = [{qmd_list}]"""
         )
         # Each source fills its own qmd collection: a keyword index and
@@ -616,10 +656,18 @@ inputs = [{qmd_list}]"""
             root_blocks.append(series_index)
         for group in groups:
             root_blocks.append(
-                f'[[steps]]\ngroup = "{group}"\nfunction = "keyword_index"\n'
-                f'inputs = ["{group}/render_markdown"]\n\n'
-                f'[[steps]]\ngroup = "{group}"\nfunction = "embed"\n'
-                f'inputs = ["{group}/keyword_index"]'
+                step(
+                    group,
+                    "keyword_index",
+                    run("keyword_index", type_args[group]),
+                    "files",
+                    "qmd_keyword",
+                )
+                + f'\ninputs = ["{group}/render_markdown"]\n\n'
+                + step(
+                    group, "embed", run("embed", type_args[group]), "files", "qmd_embed"
+                )
+                + f'\ninputs = ["{group}/keyword_index"]'
             )
         return dag_text, "\n\n".join(root_blocks) + "\n"
 
@@ -941,11 +989,13 @@ def _source_config(
     elif type_str == "signal":
         # The signal extractor needs the directory where the
         # `signal-backup-*` subdirs live. AEP comes from the
-        # SIGNAL_BACKUP_PASSPHRASE env var.
+        # SIGNAL_BACKUP_PASSPHRASE env var, which the runner hands the
+        # step because its params name it.
         source["backup"] = {
             "path": str(
                 signal_snapshot_root if signal_snapshot_root is not None else input_path
-            )
+            ),
+            "aep_env_var": "SIGNAL_BACKUP_PASSPHRASE",
         }
     elif type_str == "email":
         # Mbox mode. Account metadata is supplied beside the path so the
@@ -962,9 +1012,11 @@ def _source_config(
     elif type_str == "whatsapp":
         # WhatsApp extractor needs the dir containing
         # `Databases/msgstore.db.crypt15` + `Media/`. Root key comes
-        # from the WHATSAPP_BACKUP_DECRYPTION_KEY env var.
+        # from the WHATSAPP_BACKUP_DECRYPTION_KEY env var, which the
+        # runner hands the step because its params name it.
         source["backup"] = {
-            "path": str(whatsapp_dir if whatsapp_dir is not None else input_path)
+            "path": str(whatsapp_dir if whatsapp_dir is not None else input_path),
+            "key_env_var": "WHATSAPP_BACKUP_DECRYPTION_KEY",
         }
     elif type_str == "linkedin":
         # File-backed CSV walk.

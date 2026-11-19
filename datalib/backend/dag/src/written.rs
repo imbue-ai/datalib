@@ -17,9 +17,11 @@ pub struct WrittenGroup {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct WrittenStep {
-    /// `<group>/<function>` when both are written, else the written
-    /// `id`. The loader composes it the same way.
+    /// The written `id`, or `<group>/<function>` for a step in the
+    /// retired shape that writes those two.
     pub id: String,
+    /// The id's first part, and the rest: what a screen files the step
+    /// under and labels it with.
     pub group: Option<String>,
     pub function: Option<String>,
     /// The step's own `name =`, trimmed; blank counts as absent.
@@ -75,11 +77,13 @@ pub fn entries_as_written(text: &str) -> Result<WrittenEntries, String> {
     let steps = tables("steps")
         .into_iter()
         .filter_map(|v| {
-            let group = s(v, "group");
-            let function = s(v, "function");
-            let id = match (&group, &function) {
+            let id = match (s(v, "group"), s(v, "function")) {
                 (Some(g), Some(f)) => format!("{g}/{f}"),
                 _ => s(v, "id")?,
+            };
+            let (group, function) = match id.split_once('/') {
+                Some((g, f)) => (Some(g.to_string()), Some(f.to_string())),
+                None => (None, None),
             };
             let inputs = v
                 .get("inputs")

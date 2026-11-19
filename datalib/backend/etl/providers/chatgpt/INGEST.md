@@ -17,8 +17,8 @@ id = "chatgpt"
 type = "chatgpt"
 
 [[steps]]
-group = "chatgpt"
-function = "ingest"
+id = "chatgpt/ingest"
+command = "datalib-step run ingest chatgpt"
 [steps.params.api]
 since = "2025-01-01"   # only conversations updated at/after this; move it back to backfill
 max_pages = 20         # cap on listing pages (100 conversations each)

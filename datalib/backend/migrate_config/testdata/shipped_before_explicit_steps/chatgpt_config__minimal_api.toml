@@ -1,0 +1,20 @@
+# ChatGPT conversations over chatgpt.com's web API, signed in through
+# latchkey's `chatgpt` service, which has to be registered first. An empty
+# `api` table mirrors every conversation.
+[[groups]]
+id = "chatgpt"
+name = "ChatGPT"
+type = "chatgpt"
+
+[[steps]]
+group = "chatgpt"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params.api]
+
+[[steps]]
+group = "chatgpt"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["chatgpt/ingest"]

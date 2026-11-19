@@ -46,15 +46,13 @@ id = "beeper"
 type = "beeper"
 
 [[steps]]
-group = "beeper"
-function = "ingest"
+id = "beeper/ingest"
 [steps.params.texts]
 media = true
 path = "${FOLDER}"
 
 [[steps]]
-group = "beeper"
-function = "render_markdown"
+id = "beeper/render_markdown"
 inputs = ["beeper/ingest"]
 [steps.params]
 period = "month"

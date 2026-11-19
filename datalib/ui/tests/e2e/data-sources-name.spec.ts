@@ -40,7 +40,7 @@ const embedToggle = (page: Page) => toggle(page, "Embed it for search by meaning
 /// The `inputs` one fan-in declares, read out of the config text.
 function fanInInputs(config: string, fn: string): string[] {
   const table = new RegExp(
-    `\\[\\[steps\\]\\]\\ngroup = "unified_document_index"\\nfunction = "${fn}"\\n(?:command = "[^"]*"\\n)?inputs = \\[([^\\]]*)\\]`,
+    `\\[\\[steps\\]\\]\\nid = "unified_document_index/${fn}"\\n(?:(?!inputs )[a-z_]+ = [^\\n]*\\n)*inputs = \\[([^\\]]*)\\]`,
   ).exec(config);
   if (!table) throw new Error(`no unified_document_index/${fn} step in the config`);
   return table[1]
@@ -48,11 +48,8 @@ function fanInInputs(config: string, fn: string): string[] {
     .map((t) => t.trim().replace(/^"|"$/g, ""))
     .filter(Boolean);
 }
-/// A step's own table in the config text. Its id is never written — it is
-/// composed from these two keys — so the id alone appears only where
-/// another step names it as an input.
-const stepBlock = (group: string, fn: string) =>
-  new RegExp(`group = "${group}"\nfunction = "${fn}"\n`);
+/// A step's own table in the config text: its `id` line.
+const stepBlock = (group: string, fn: string) => new RegExp(`id = "${group}/${fn}"\n`);
 const idField = (page: Page) => field(page, "ID");
 /// The step-role mark. It leads the name, where a group's brand mark
 /// sits — there is no Step column any more — and `aria-label` is the
@@ -109,13 +106,13 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   await expect(wizard(page).locator(".wiz-section")).toContainText("no settings of its own");
   await reviewToml(page);
   const preview = wizard(page).locator(".wiz-review pre");
-  // The name lands on the group; the two steps are written as
-  // `group` + `function` and carry none.
+  // The name lands on the group; the two steps are written by `id`
+  // and carry none.
   await expect(preview).toContainText('id = "personal-claude"');
   await expect(preview).toContainText('name = "Personal Claude"');
   await expect(preview).toContainText('type = "claude"');
-  await expect(preview).toContainText('function = "ingest"');
-  await expect(preview).toContainText('function = "render_markdown"');
+  await expect(preview).toContainText('id = "personal-claude/ingest"');
+  await expect(preview).toContainText('id = "personal-claude/render_markdown"');
   await expect(preview).toContainText('inputs = ["personal-claude/ingest"]');
 
   await wizard(page).getByRole("button", { name: "Add source" }).click();
@@ -161,9 +158,9 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   // wiring is covered in source_steps.test.ts against a config that has
   // fan-ins. The editor is its own card and reloads on the write; wait
   // for the entry before reading.
-  await expect(editor).toHaveValue(/group = "personal-claude"/);
+  await expect(editor).toHaveValue(/id = "personal-claude\/ingest"/);
   const text = await editor.inputValue();
-  expect(text.match(/group = "personal-claude"\nfunction = "render_markdown"/g)).toHaveLength(1);
+  expect(text.match(/id = "personal-claude\/render_markdown"/g)).toHaveLength(1);
 
   // Edit from the group's row: the same one dialog, over the source.
   // Name free, id fixed, and renaming leaves the id alone — the
@@ -185,8 +182,8 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   await expect(editor).toHaveValue(/name = "Claude Archive"/);
   await expect(editor).not.toHaveValue(/Personal Claude/);
   const saved = await editor.inputValue();
-  expect(saved.match(/group = "personal-claude"\nfunction = "ingest"/g)).toHaveLength(1);
-  expect(saved.match(/group = "personal-claude"\nfunction = "render_markdown"/g)).toHaveLength(1);
+  expect(saved.match(/id = "personal-claude\/ingest"/g)).toHaveLength(1);
+  expect(saved.match(/id = "personal-claude\/render_markdown"/g)).toHaveLength(1);
 });
 
 test("a step's Edit opens its source, and Rendering brings a hand-removed render step back", async ({
@@ -205,11 +202,11 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
   // the index fans in from every source's render step, so removing one
   // means removing it from two places. That is the edit a person doing
   // this by hand actually has to make.
-  await expect(editor).toHaveValue(/group = "fetch-only"/);
+  await expect(editor).toHaveValue(/id = "fetch-only\/ingest"/);
   const text = await editor.inputValue();
   const without = text
     .replace(
-      /\n\[\[steps\]\]\ngroup = "fetch-only"\nfunction = "render_markdown"\ncommand = "datalib-step"\ninputs = \["fetch-only\/ingest"\]\n/,
+      /\n\[\[steps\]\]\nid = "fetch-only\/render_markdown"\ncommand = "[^"]*"\ninputs = \["fetch-only\/ingest"\]\nreads = "pinned"\n/,
       "\n",
     )
     .replace(/"fetch-only\/render_markdown"(,\s*)?/g, "");
@@ -244,7 +241,7 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
   await expect(row(page, "fetch-only/render_markdown")).toBeVisible();
   await expect(editor).toHaveValue(/inputs = \["fetch-only\/ingest"\]/);
   const after = await editor.inputValue();
-  expect(after.match(/group = "fetch-only"\nfunction = "ingest"/g)).toHaveLength(1);
+  expect(after.match(/id = "fetch-only\/ingest"/g)).toHaveLength(1);
 });
 
 test("editing a source keeps what the form has no field for", async ({ page }) => {
@@ -255,11 +252,11 @@ test("editing a source keeps what the form has no field for", async ({ page }) =
   await expect(page.getByText("Added Hand Tuned.")).toBeVisible();
 
   // A key and a comment written by hand, which no field of the form owns.
-  await expect(editor).toHaveValue(/group = "hand-tuned"/);
+  await expect(editor).toHaveValue(/id = "hand-tuned\/ingest"/);
   const text = await editor.inputValue();
   const tuned = text.replace(
-    'group = "hand-tuned"\nfunction = "ingest"\n',
-    'group = "hand-tuned"\nfunction = "ingest"\n# pinned by hand\ncode_version = "7"\n',
+    'id = "hand-tuned/ingest"\n',
+    'id = "hand-tuned/ingest"\n# pinned by hand\ncode_version = "7"\n',
   );
   expect(tuned).not.toBe(text);
   await fillConfigEditor(page, tuned);
@@ -303,7 +300,7 @@ test("clearing Rendering removes the render step and its index edge", async ({ p
   await expect(editor).not.toHaveValue(/no-render\/render_markdown/);
   const after = await editor.inputValue();
   expect(after).not.toContain("no-render/render_markdown");
-  expect(after).toContain('group = "no-render"');
+  expect(after).toContain('id = "no-render/ingest"');
 });
 
 test("free-text search is a choice, and only the qmd steps feel it", async ({ page }) => {
@@ -369,14 +366,16 @@ test("free-text search is a choice, and only the qmd steps feel it", async ({ pa
     expect.arrayContaining(["rows-only/keyword_index", "rows-only/embed"]),
   );
   expect(saved).toContain(
-    'group = "rows-only"\nfunction = "keyword_index"\ncommand = "datalib-step"\ninputs = ["rows-only/render_markdown"]',
+    'id = "rows-only/keyword_index"\ncommand = "datalib-step run keyword_index claude"\n' +
+      'inputs = ["rows-only/render_markdown"]\nreads = "files"\nlocks = ["qmd_keyword"]',
   );
   expect(saved).toContain(
-    'group = "rows-only"\nfunction = "embed"\ncommand = "datalib-step"\ninputs = ["rows-only/keyword_index"]',
+    'id = "rows-only/embed"\ncommand = "datalib-step run embed claude"\n' +
+      'inputs = ["rows-only/keyword_index"]\nreads = "files"\nlocks = ["qmd_embed"]',
   );
-  // Added once, however many times the source is saved: in the grid
-  // index and as the keyword index's input.
-  expect(saved.match(/"rows-only\/render_markdown"/g)).toHaveLength(2);
+  // Added once, however many times the source is saved: the render
+  // step's own id, and in the grid index and as the keyword index's input.
+  expect(saved.match(/"rows-only\/render_markdown"/g)).toHaveLength(3);
 });
 
 test("a provider with render options writes them on the render step, from the one form", async ({
@@ -412,9 +411,9 @@ test("a provider with render options writes them on the render step, from the on
     /, Render step/,
   );
 
-  await expect(editor).toHaveValue(/group = "signal-work"/);
+  await expect(editor).toHaveValue(/id = "signal-work\/ingest"/);
   const text = await editor.inputValue();
-  expect(text).toContain('group = "signal-work"\nfunction = "render_markdown"');
+  expect(text).toContain('id = "signal-work/render_markdown"');
   expect(text).toContain('inputs = ["signal-work/ingest"]');
   expect(text).toContain('period = "month"');
   // One group, written once.
@@ -436,10 +435,10 @@ test("a download-only source gets its render step, and no Rendering section", as
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Photos.")).toBeVisible();
 
-  await expect(editor).toHaveValue(/group = "photos"\nfunction = "render_markdown"/);
+  await expect(editor).toHaveValue(/id = "photos\/render_markdown"/);
   const text = await editor.inputValue();
-  expect(text).toContain('group = "photos"\nfunction = "ingest"');
-  expect(text).not.toContain('group = "photos"\nfunction = "keyword_index"');
+  expect(text).toContain('id = "photos/ingest"');
+  expect(text).not.toContain('id = "photos/keyword_index"');
   await expandGroup(page, "photos");
   await expect(row(page, "photos/render_markdown")).toBeVisible();
 });
@@ -483,7 +482,7 @@ test("Add source waits for the config, and what it adds keeps the rest", async (
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(page.getByText("Added Photos.")).toBeVisible();
   const saved = await savedConfig(request);
-  expect(saved).toContain('group = "photos"\nfunction = "ingest"');
+  expect(saved).toContain('id = "photos/ingest"');
   for (const [entry] of original.matchAll(/^id = "[^"]+"$/gm)) expect(saved).toContain(entry);
 });
 
@@ -553,7 +552,7 @@ test("deleting the group takes every step under it", async ({ page }) => {
   await nameField(page).fill("Whole Group");
   await wizard(page).getByRole("button", { name: "Add source" }).click();
   await expect(groupRow(page, "whole-group")).toBeVisible();
-  await expect(editor).toHaveValue(/group = "whole-group"\nfunction = "render_markdown"/);
+  await expect(editor).toHaveValue(/id = "whole-group\/render_markdown"/);
 
   // The confirm says what goes: the group and the four steps under it —
   // ingest, render, and the source's keyword index and embeddings.
@@ -623,7 +622,7 @@ test("dragging a group by its grip moves it, with every step under it, in the co
   expect(groupOrder(after).slice(0, 2)).toEqual([second, first]);
   expect([...groupOrder(after)].sort()).toEqual([...groupOrder(original)].sort());
   const firstAt = after.indexOf(`[[groups]]\nid = "${first}"`);
-  const filedUnder = new RegExp(`\\]\\]\\ngroup = "${second}"\\n`, "g");
+  const filedUnder = new RegExp(`\\]\\]\\nid = "${second}/`, "g");
   const filed = [...after.matchAll(filedUnder)];
   expect(filed.length).toBeGreaterThan(0);
   expect(filed.length).toBe([...original.matchAll(filedUnder)].length);
@@ -645,8 +644,9 @@ async function addComparison(page: Page, root: string, id: string, name: string)
   await page
     .locator(".m2-editor")
     .fill(
-      `${original}\n[[groups]]\nid = "${id}"\nname = "${name}"\ntype = "diff"\nsource = "slack"\n\n` +
-        `[[steps]]\ngroup = "${id}"\nfunction = "render_markdown"\n\n` +
+      `${original}\n[[groups]]\nid = "${id}"\nname = "${name}"\ntype = "diff"\n\n` +
+        `[[steps]]\nid = "${id}/render_markdown"\n` +
+        `command = "datalib-step run render_markdown diff --source-type slack"\n\n` +
         `[steps.params.diff]\nfrom = "a"\nto = "b"\n`,
     );
   await page.getByRole("button", { name: "Save", exact: true }).click();

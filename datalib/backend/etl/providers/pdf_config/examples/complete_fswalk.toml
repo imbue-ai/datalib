@@ -7,9 +7,8 @@ name = "PDFs"
 type = "pdf"
 
 [[steps]]
-group = "pdf"
-function = "ingest"
-command = "datalib-step"
+id = "pdf/ingest"
+command = "datalib-step run ingest pdf"
 
 [steps.params]
 ignore = ["drafts/**", "**/.Trash/**"]  # gitignore-style patterns to skip, on top of any
@@ -28,21 +27,23 @@ path = "~/Documents/papers"  # the folder to scan, and everything under it
 # Render needs no params: it reads the scan root back out of the raw
 # store, so it converts exactly the tree the ingest step walked.
 [[steps]]
-group = "pdf"
-function = "render_markdown"
-command = "datalib-step"
+id = "pdf/render_markdown"
+command = "datalib-step run render_markdown pdf"
 inputs = ["pdf/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "pdf"
-function = "keyword_index"
-command = "datalib-step"
+id = "pdf/keyword_index"
+command = "datalib-step run keyword_index pdf"
 inputs = ["pdf/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "pdf"
-function = "embed"
-command = "datalib-step"
+id = "pdf/embed"
+command = "datalib-step run embed pdf"
 inputs = ["pdf/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]

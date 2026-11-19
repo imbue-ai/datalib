@@ -331,7 +331,7 @@ test("the render filter is offered folders, never flags", async ({ page }) => {
   // ...and it landed on the render step, not the ingest step.
   const text = await page.locator(".m2-editor").inputValue();
   expect(text.indexOf("only_render_labels")).toBeGreaterThan(
-    text.indexOf('function = "render_markdown"'),
+    text.indexOf('id = "bridge-mail/render_markdown"'),
   );
 });
 

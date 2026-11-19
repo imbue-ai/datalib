@@ -7,15 +7,14 @@ name = "Facebook"
 type = "facebook"
 
 [[steps]]
-group = "facebook"
-function = "ingest"
-command = "datalib-step"
+id = "facebook/ingest"
+command = "datalib-step run ingest facebook"
 
 [steps.params.export]
 path = "~/Downloads/facebook-export"
 
 [[steps]]
-group = "facebook"
-function = "render_markdown"
-command = "datalib-step"
+id = "facebook/render_markdown"
+command = "datalib-step run render_markdown facebook"
 inputs = ["facebook/ingest"]
+reads = "pinned"

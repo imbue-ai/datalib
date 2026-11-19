@@ -1,6 +1,6 @@
 //! A config in a shape the server can bring forward unattended is
 //! rewritten in place as soon as the server sees it: at boot, on a save
-//! through the API, and whenever the file changes. Seven rewrites, in
+//! through the API, and whenever the file changes. Eight rewrites, in
 //! order: an id that names a folder and has capitals in it
 //! (`datalib_migrate_config::upgrade_lowercase_ids`), a `qmd_index` step from
 //! before `qmd_aggregator` (`datalib_migrate_config::upgrade_qmd_steps`),
@@ -9,11 +9,15 @@
 //! time-series sources and no time-series index
 //! (`datalib_migrate_config::upgrade_time_series_steps`), a
 //! time-series source with an `embed` step
-//! (`datalib_migrate_config::upgrade_time_series_embeds`), and a step of
+//! (`datalib_migrate_config::upgrade_time_series_embeds`), a step of
 //! datalib's own that does not name `datalib-step` as its `command`
-//! (`datalib_migrate_config::upgrade_step_commands`), and a Todoist
+//! (`datalib_migrate_config::upgrade_step_commands`), a Todoist
 //! ingest whose window is still named `completed_since`
-//! (`datalib_migrate_config::upgrade_todoist_since`). The text they
+//! (`datalib_migrate_config::upgrade_todoist_since`), and last a step
+//! written as `group` + `function`, whose `datalib-step` arguments, locks
+//! and `reads` the runner used to work out
+//! (`datalib_migrate_config::upgrade_explicit_steps`). Every rewrite
+//! before the last reads the shape from before it. The text they
 //! replaced is kept as `config.toml.bak`.
 //!
 //! At boot only, [`move_index_dir`] then brings the document index's tree
@@ -31,7 +35,7 @@ use crate::watch::{RootEvent, RootFrame};
 type Rewrite = fn(&str) -> anyhow::Result<Option<String>>;
 
 /// Each unattended rewrite: what it is for, in the log, and what it does.
-const REWRITES: [(&str, &str, Rewrite); 7] = [
+const REWRITES: [(&str, &str, Rewrite); 8] = [
     (
         "has an id with capitals in it",
         "every group, step and applet id, and every function, is lower case, \
@@ -74,6 +78,13 @@ const REWRITES: [(&str, &str, Rewrite); 7] = [
          `since` does",
         datalib_migrate_config::upgrade_todoist_since,
     ),
+    (
+        "has a step whose program's arguments, locks and reads the runner worked out",
+        "every step writes its `id` and its whole `datalib-step run …` command, \
+         and the locks and `reads` it holds; the runner no longer knows \
+         datalib-step's steps from any other program's",
+        datalib_migrate_config::upgrade_explicit_steps,
+    ),
 ];
 
 /// A rewrite reads the file and writes it back, so a save landing between
@@ -91,6 +102,21 @@ pub fn save(root: &Path, text: &str) -> std::io::Result<()> {
     datalib_runtime::atomic::write_owner_only(&path, text.as_bytes())?;
     upgrade_in_turn(root);
     Ok(())
+}
+
+/// `text` with every rewrite that applies made, as [`save`] would leave
+/// it on disk; `None` when none applies. A rewrite that fails is skipped,
+/// as at a save.
+pub fn upgraded(text: &str) -> Option<String> {
+    let mut out = text.to_string();
+    let mut any = false;
+    for (_, _, rewrite) in REWRITES {
+        if let Ok(Some(next)) = rewrite(&out) {
+            out = next;
+            any = true;
+        }
+    }
+    any.then_some(out)
 }
 
 /// Rewrite the root's config if it is in an old shape, and say so in the

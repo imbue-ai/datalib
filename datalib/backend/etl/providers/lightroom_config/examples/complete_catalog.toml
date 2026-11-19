@@ -6,9 +6,8 @@ name = "Lightroom"
 type = "lightroom"
 
 [[steps]]
-group = "lightroom"
-function = "ingest"
-command = "datalib-step"
+id = "lightroom/ingest"
+command = "datalib-step run ingest lightroom"
 
 # Which tables and columns to mirror. Globs: `*` and `?` only.
 [steps.params]
@@ -38,7 +37,7 @@ path = "~/Pictures/Lightroom/Enterprise.lrcat"
 # `datalib-doltlite`. This step writes the storage report every source
 # gets, which is what puts Lightroom in the grid.
 [[steps]]
-group = "lightroom"
-function = "render_markdown"
-command = "datalib-step"
+id = "lightroom/render_markdown"
+command = "datalib-step run render_markdown lightroom"
 inputs = ["lightroom/ingest"]
+reads = "pinned"

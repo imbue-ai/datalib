@@ -1,0 +1,30 @@
+# Gmail, fetching each part of the mailbox as far back as it is useful: all
+# of the Inbox, whose old unanswered mail matters, and only recent Sent mail,
+# which says who the account has written to. The Add source form cannot write
+# this: edit the config.
+[[groups]]
+id = "email"
+name = "Gmail"
+type = "email"
+
+[[steps]]
+group = "email"
+function = "ingest"
+command = "datalib-step"
+
+# Sections add up: what is fetched is the union of them, and a label two
+# sections name goes as far back as either asks. `fetch` replaces
+# `only_extract_labels`, `whole_threads` and `gmail.since`.
+[[steps.params.gmail.fetch]]
+labels = ["Inbox"]  # named as `only_extract_labels` names them; unset is the whole mailbox
+
+[[steps.params.gmail.fetch]]
+labels = ["Sent"]
+since = "-90d"          # oldest mail this section takes, as `gmail.since` says it; default all of it
+whole_threads = false   # keep only the messages under these labels; default true brings their threads
+
+[[steps]]
+group = "email"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["email/ingest"]

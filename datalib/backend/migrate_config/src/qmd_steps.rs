@@ -22,7 +22,7 @@ use std::ops::Range;
 use anyhow::{Context as _, Result};
 use serde::Deserialize;
 
-use datalib_dag::config::names_datalib_step;
+use crate::retired::names_datalib_step;
 use datalib_dag::config_array::edit_string_array;
 use datalib_dag::config_order::sort_config;
 
@@ -65,6 +65,17 @@ impl StepView {
     fn inputs(&self) -> &[String] {
         self.inputs.as_ref().map_or(&[], |s| s.get_ref())
     }
+}
+
+/// The ids of the `qmd_index` steps the rewrite turns into the aggregator.
+pub fn retired_ids(text: &str) -> Result<BTreeSet<String>> {
+    let view: View = toml::from_str(text).context("parse the config")?;
+    Ok(view
+        .steps
+        .iter()
+        .filter(|s| s.is_builtin("qmd_index"))
+        .filter_map(StepView::id)
+        .collect())
 }
 
 pub fn is_retired(text: &str) -> Result<bool> {
@@ -312,7 +323,7 @@ inputs = [\"mail/embed\"]
     }
 
     fn loads_clean(text: &str) {
-        let check = datalib_dag::config::check_text(text);
+        let check = crate::check_as_current(text);
         assert!(check.is_clean(), "{:?}\n{text}", check.diagnostics);
     }
 

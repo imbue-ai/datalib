@@ -7,9 +7,8 @@ name = "WhatsApp"
 type = "whatsapp"
 
 [[steps]]
-group = "whatsapp"
-function = "ingest"
-command = "datalib-step"
+id = "whatsapp/ingest"
+command = "datalib-step run ingest whatsapp"
 
 # The decrypted database is mirrored table for table; these pick the tables.
 [steps.params]
@@ -27,21 +26,23 @@ key_env_var = "WHATSAPP_ENTERPRISE_PHONE_KEY"  # the variable holding the key as
                                                # default WHATSAPP_BACKUP_DECRYPTION_KEY
 
 [[steps]]
-group = "whatsapp"
-function = "render_markdown"
-command = "datalib-step"
+id = "whatsapp/render_markdown"
+command = "datalib-step run render_markdown whatsapp"
 inputs = ["whatsapp/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "whatsapp"
-function = "keyword_index"
-command = "datalib-step"
+id = "whatsapp/keyword_index"
+command = "datalib-step run keyword_index whatsapp"
 inputs = ["whatsapp/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "whatsapp"
-function = "embed"
-command = "datalib-step"
+id = "whatsapp/embed"
+command = "datalib-step run embed whatsapp"
 inputs = ["whatsapp/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]

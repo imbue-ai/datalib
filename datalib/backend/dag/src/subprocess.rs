@@ -29,20 +29,9 @@ pub const ENV_STEP: &str = datalib_env::DATALIB_DAG_STEP;
 /// joinable back to the run.
 pub const ENV_RUN_ID: &str = datalib_env::DATALIB_DAG_RUN_ID;
 pub const ENV_ATTEMPT: &str = datalib_env::DATALIB_DAG_ATTEMPT;
-/// The step's group id, its group's `type`, and its function — the two
-/// halves the step id is composed from, plus the type. Only set for a
-/// step declared under a `[[groups]]` entry; `ENV_GROUP_TYPE` only when
-/// the group declares a type.
-pub const ENV_GROUP: &str = datalib_env::DATALIB_DAG_GROUP;
-pub const ENV_GROUP_TYPE: &str = datalib_env::DATALIB_DAG_GROUP_TYPE;
-/// Under a diff group only: the group named by its `source` and that
-/// group's `type` — whose raw store the step reads, and which renderer
-/// it runs. Set by the loader in the step's `env` rather than by the
-/// runner, so they are fingerprinted like any other env entry.
-pub const ENV_SOURCE_GROUP: &str = datalib_env::DATALIB_DAG_SOURCE_GROUP;
-pub const ENV_SOURCE_GROUP_TYPE: &str = datalib_env::DATALIB_DAG_SOURCE_GROUP_TYPE;
-pub const ENV_FUNCTION: &str = datalib_env::DATALIB_DAG_FUNCTION;
 pub const ENV_DATA_ROOT: &str = datalib_env::DATALIB_DAG_DATA_ROOT;
+/// The step's `params`, as JSON. Set only when it has some.
+pub const ENV_PARAMS: &str = datalib_env::DATALIB_DAG_PARAMS;
 pub const ENV_INPUTS: &str = datalib_env::DATALIB_DAG_INPUTS;
 pub const ENV_CHANGED_INPUTS: &str = datalib_env::DATALIB_DAG_CHANGED_INPUTS;
 pub const ENV_FAILED_INPUTS: &str = datalib_env::DATALIB_DAG_FAILED_INPUTS;
@@ -52,22 +41,11 @@ pub const ENV_READS: &str = datalib_env::DATALIB_READS;
 /// step so all stamped outputs agree. Steps that record times should
 /// prefer it over sampling their own clock.
 pub const ENV_NOW: &str = datalib_env::DATALIB_DAG_NOW;
-/// Appended, with the part to empty (`store`), by `datalib-dag --reset`:
-/// the step does no work but empty that part, commit and exit. The runner
-/// then forgets the step ever succeeded, so the next run does its work
-/// from the start. A verb rides on argv rather than in the environment so
-/// that a command which does not know it refuses it instead of running.
-pub const RESET_FLAG: &str = "--reset";
-/// Appended by a launch after an upgrade, to a step that takes it
-/// (`StepSpec::migrates`): the step brings what it wrote to this build's
-/// shape where it can do that in place, fetches nothing, and says in its
-/// outcome when it cannot (`needs_rerun`).
-pub const MIGRATE_FLAG: &str = "--migrate";
-/// Appended by `datalib-dag --compact` or `--collect`, to a step that
-/// takes them (`StepSpec::compacts`): the step gives back disk its store
-/// holds and runs nothing else (`step_protocol.md` § Compact and collect).
-/// Collecting keeps every commit; compacting also folds away the history
-/// nothing reads.
+/// The verb `datalib-dag --compact` or `--collect` sends, to a step whose
+/// program takes it: the step gives back disk its store holds and runs
+/// nothing else (`step_protocol.md` § Compact and collect). Collecting
+/// keeps every commit; compacting also folds away the history nothing
+/// reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shrink {
     Collect,
@@ -75,22 +53,13 @@ pub enum Shrink {
 }
 
 impl Shrink {
-    pub fn flag(self) -> &'static str {
+    pub fn verb(self) -> crate::step::Verb {
         match self {
-            Shrink::Collect => "--collect",
-            Shrink::Compact => "--compact",
+            Shrink::Collect => crate::step::Verb::Collect,
+            Shrink::Compact => crate::step::Verb::Compact,
         }
     }
 }
-
-/// Seconds between a step's checkpoints, at most — see
-/// `config::CheckpointCadence`.
-pub const ENV_CHECKPOINT_CADENCE: &str = datalib_env::DATALIB_DAG_CHECKPOINT_CADENCE;
-/// How much a render reads at once — see `config::RenderPages`.
-pub const ENV_RENDER_PAGES: &str = datalib_env::DATALIB_DAG_RENDER_PAGES;
-/// How many embedding contexts an embed step gives qmd — see
-/// `config::DagConfig::embed_contexts`.
-pub const ENV_EMBED_CONTEXTS: &str = datalib_env::DATALIB_DAG_EMBED_CONTEXTS;
 
 /// The flag a step's params arrive on: the path of a JSON file holding
 /// the entry's `params` subtree. A file rather than an argument because
@@ -171,7 +140,7 @@ impl WireOutcome {
                     msg: format!(
                         "reported output {:?} with no version; content-hashing it \
                          instead. Steps report a content-derived version per \
-                         output — see `datalib-step help step-protocol`",
+                         output — see docs/dev/step_protocol.md",
                         row.path.as_str()
                     ),
                     ts: None,
@@ -230,13 +199,6 @@ pub(crate) async fn run_subprocess(
     let inputs: Vec<&str> = ctx.inputs.iter().map(|a| a.as_str()).collect();
     let changed: Vec<&str> = ctx.changed_inputs.iter().map(|a| a.as_str()).collect();
     let failed: Vec<&str> = ctx.failed_inputs.iter().map(|a| a.as_str()).collect();
-    // Held until the child has exited: dropping it deletes the file.
-    let params_file = match params {
-        Some(json) => {
-            Some(write_params_file(&ctx.data_root, &ctx.step_id, json).map_err(internal)?)
-        }
-        None => None,
-    };
     // A relative path with a `/` in it (a package's program) is relative
     // to the data root, the child's working directory; joined here so it
     // does not depend on how the platform resolves one.
@@ -249,21 +211,12 @@ pub(crate) async fn run_subprocess(
     // Before the run's and the step's own `env`, so either may turn it back on.
     #[cfg(target_os = "macos")]
     cmd.env(datalib_env::MALLOC_LARGE_CACHE, "0");
-    if let Some(f) = &params_file {
-        cmd.arg(PARAMS_FILE_FLAG).arg(f.path());
-    }
-    for (key, value) in [
-        (ENV_GROUP, &ctx.group),
-        (ENV_GROUP_TYPE, &ctx.group_type),
-        (ENV_FUNCTION, &ctx.function),
-    ] {
-        match value {
-            Some(v) => cmd.env(key, v),
-            // Unset for a step outside any group, even if the runner's own
-            // environment carries one.
-            None => cmd.env_remove(key),
-        };
-    }
+    match params {
+        Some(json) => cmd.env(ENV_PARAMS, json),
+        // Unset for a step with no params, even if the runner's own
+        // environment carries one.
+        None => cmd.env_remove(ENV_PARAMS),
+    };
     cmd.env(ENV_STEP, &ctx.step_id)
         .env(ENV_ATTEMPT, attempt.to_string())
         .env(ENV_DATA_ROOT, &ctx.data_root)
@@ -285,14 +238,7 @@ pub(crate) async fn run_subprocess(
         // If the runner dies (or a step future is dropped), don't
         // leave an orphaned download running.
         .kill_on_drop(true);
-    let mut named = params.map(env_vars_named_in).unwrap_or_default();
-    if crate::config::is_datalib_step(prog) {
-        named.extend(
-            datalib_env::BUILT_IN_SOURCE_KEYS
-                .iter()
-                .map(|k| k.to_string()),
-        );
-    }
+    let named = params.map(env_vars_named_in).unwrap_or_default();
     datalib_env::inherit_only(cmd.as_std_mut(), datalib_env::Child::Step, &named);
 
     // Every step is handed the runner's pipe, and reading EOF on it is
@@ -435,9 +381,12 @@ pub(crate) async fn run_subprocess(
                             }
                             continue;
                         }
-                        Event::Capabilities { streams_output, .. } => {
-                            ctx.declare_streams_output(*streams_output)
-                        }
+                        // A capability is only ever claimed: an event that
+                        // carries just a `version` leaves streaming as it was.
+                        Event::Capabilities {
+                            streams_output: true,
+                            ..
+                        } => ctx.declare_streams_output(true),
                         _ => {}
                     }
                     sink.emit(&retag(ev, &ctx.step_id))
@@ -716,13 +665,7 @@ pub fn parse_envelope(line: &str) -> Option<Envelope> {
 fn retag(ev: Event, id: &str) -> Event {
     let id = id.to_string();
     match ev {
-        Event::StepStart {
-            attempt, builtin, ..
-        } => Event::StepStart {
-            step: id,
-            attempt,
-            builtin,
-        },
+        Event::StepStart { attempt, .. } => Event::StepStart { step: id, attempt },
         Event::StepFinish {
             status,
             error,
@@ -754,9 +697,14 @@ fn retag(ev: Event, id: &str) -> Event {
             version,
             rows,
         },
-        Event::Capabilities { streams_output, .. } => Event::Capabilities {
+        Event::Capabilities {
+            streams_output,
+            version,
+            ..
+        } => Event::Capabilities {
             step: id,
             streams_output,
+            version,
         },
         Event::ProgressLength { total, .. } => Event::ProgressLength { step: id, total },
         Event::ProgressInc { delta, .. } => Event::ProgressInc { step: id, delta },
@@ -887,7 +835,7 @@ mod tests {
     use super::*;
     use crate::graph::Graph;
     use crate::scheduler::{Runner, StepStatus};
-    use crate::step::{StepRun, StepSpec};
+    use crate::step::{StepRun, StepSpec, Verb};
 
     #[derive(Default)]
     struct Recorder(Mutex<Vec<Event>>);
@@ -1215,52 +1163,40 @@ mod tests {
         assert!(reads["src/raw"].ends_with(":v7"), "{reads:?}");
     }
 
-    /// Params reach the child as a file only its owner can read, named
-    /// on `--params-file`, and the file is gone once the step exits.
+    /// Params reach the child as JSON in `DATALIB_DAG_PARAMS`, and
+    /// nothing is appended to its argv for them; a step with none sees
+    /// the variable unset.
     #[tokio::test]
-    async fn params_arrive_in_an_owner_only_file_that_does_not_outlive_the_step() {
+    async fn params_arrive_in_the_environment_and_nothing_rides_on_argv() {
         let root = tempfile::tempdir().unwrap();
-        let spec = StepSpec::new(
-            "p/out",
-            StepRun::Subprocess {
-                argv: vec![
-                    "/bin/sh".into(),
-                    "-c".into(),
-                    // `$0` is the script name; the runner appends the
-                    // flag and the path after it, so they land in $1 $2.
-                    r#"
-                        mkdir -p p/out
-                        [ "$1" = "--params-file" ] || exit 3
-                        stat -f '%Lp' "$2" > p/out/mode.txt 2>/dev/null || stat -c '%a' "$2" > p/out/mode.txt
-                        cp "$2" p/out/params.json
-                    "#
-                    .into(),
-                    "sh".into(),
-                ],
-                env: BTreeMap::new(),
-                params: Some(r#"{"token":"s3cret"}"#.into()),
-            },
-        );
-        let g = Graph::build(vec![spec]).unwrap();
+        let probe = |id: &str, params: Option<&str>| {
+            StepSpec::new(
+                id,
+                StepRun::Subprocess {
+                    argv: vec![
+                        "/bin/sh".into(),
+                        "-c".into(),
+                        format!(
+                            r#"mkdir -p {id}
+                            printf '%s|%s' "$#" "${{DATALIB_DAG_PARAMS-unset}}" > {id}/probe.txt"#
+                        ),
+                    ],
+                    env: BTreeMap::new(),
+                    params: params.map(str::to_string),
+                },
+            )
+        };
+        let g = Graph::build(vec![
+            probe("p/with", Some(r#"{"token":"s3cret"}"#)),
+            probe("p/without", None),
+        ])
+        .unwrap();
         let rep = Runner::new(root.path()).run(&g).await.unwrap();
         assert!(rep.all_ok(), "{rep:#?}");
-        assert_eq!(
-            std::fs::read_to_string(root.path().join("p/out/params.json")).unwrap(),
-            r#"{"token":"s3cret"}"#
-        );
-        assert_eq!(
-            std::fs::read_to_string(root.path().join("p/out/mode.txt"))
-                .unwrap()
-                .trim(),
-            "600"
-        );
-        let leftover: Vec<_> = std::fs::read_dir(root.path().join(super::PARAMS_DIR_REL_PATH))
-            .unwrap()
-            .collect();
-        assert!(
-            leftover.is_empty(),
-            "params file outlived the step: {leftover:?}"
-        );
+        let read =
+            |id: &str| std::fs::read_to_string(root.path().join(id).join("probe.txt")).unwrap();
+        assert_eq!(read("p/with"), r#"0|{"token":"s3cret"}"#);
+        assert_eq!(read("p/without"), "0|unset");
     }
 
     /// A step written against the older protocol reports
@@ -1316,6 +1252,8 @@ mod tests {
                 mkdir -p "$out"
                 echo rows > "$out/data.md"
                 echo '{"event":"capabilities","step":"me","streams_output":true}'
+                # Naming its commit later must not take the claim back.
+                echo '{"event":"capabilities","step":"me","version":"c0ffee12"}'
                 i=0
                 while [ $i -lt 200 ]; do
                     echo '{"event":"checkpoint","step":"me","version":"v1","rows":7}'
@@ -1786,20 +1724,20 @@ mod tests {
         assert_eq!(read("cache/on"), "1\n", "a step's own env wins");
     }
 
-    /// `--reset` appends `--reset store` to the step's argv, and forgets
-    /// the step's last success, so the next run runs it again with nothing
-    /// marked as changed. A verb on argv, not in the environment: a command
-    /// that does not know it refuses it rather than running as if synced.
+    /// A step whose program takes `--reset` is invoked once with it (and
+    /// nothing after it), and its last success is forgotten, so the next
+    /// run runs it again with nothing marked as changed.
     #[tokio::test]
-    async fn a_reset_invokes_the_step_with_the_part_and_forgets_its_success() {
+    async fn a_reset_invokes_a_step_that_takes_it_and_forgets_its_success() {
         let root = tempfile::tempdir().unwrap();
-        let spec = StepSpec::new(
+        let mut spec = StepSpec::new(
             "src/raw",
             sh(r#"
                 mkdir -p src/raw
-                if [ "$0" = --reset ]; then echo "$1"; else echo run; fi >> src/raw/log.txt
+                if [ "$0" = --reset ]; then echo "reset $#"; else echo run; fi >> src/raw/log.txt
             "#),
         );
+        spec.verbs.insert(Verb::Reset);
         let g = Graph::build(vec![spec]).unwrap();
         let log = root.path().join("src/raw/log.txt");
         let r = Runner::new(root.path());
@@ -1809,8 +1747,8 @@ mod tests {
         r.reset(&g, &["src/raw".to_string()]).await.unwrap();
         assert_eq!(
             std::fs::read_to_string(&log).unwrap(),
-            "run\nstore\n",
-            "the reset invocation names the part and does nothing else"
+            "run\nreset 0\n",
+            "the reset invocation is the verb alone, and does nothing else"
         );
         let after = crate::supervisor::record::recorded(root.path())
             .await
@@ -1826,21 +1764,60 @@ mod tests {
         assert!(err.to_string().contains("no such step"), "{err:#}");
     }
 
-    /// `--migrate` is appended to argv. A step that migrated in place
+    /// A step whose program does not take `--reset` is never sent it: the
+    /// runner deletes its tree, forgets its success, and moves the version
+    /// what reads it sees, so the emptiness reaches them.
+    #[tokio::test]
+    async fn a_reset_deletes_the_tree_of_a_step_that_does_not_take_it() {
+        let root = tempfile::tempdir().unwrap();
+        let spec = StepSpec::new(
+            "src/raw",
+            sh(r#"
+                mkdir -p src/raw
+                echo "$0" >> src/raw/log.txt
+                echo '{"event":"outcome","outputs":[{"path":"src/raw","version":"v1"}]}'
+            "#),
+        );
+        let g = Graph::build(vec![spec]).unwrap();
+        let r = Runner::new(root.path());
+        assert!(r.run(&g).await.unwrap().all_ok());
+        let before = crate::supervisor::record::recorded(root.path()).await.steps["src/raw"]
+            .version
+            .clone();
+        assert!(root.path().join("src/raw/log.txt").exists());
+
+        r.reset(&g, &["src/raw".to_string()]).await.unwrap();
+        assert!(
+            !root.path().join("src/raw").exists(),
+            "the tree is deleted, and the step was not invoked to recreate it"
+        );
+        let after = crate::supervisor::record::recorded(root.path())
+            .await
+            .steps
+            .remove("src/raw")
+            .unwrap_or_default();
+        assert!(!after.succeeded);
+        assert!(after.version.is_some(), "{after:?}");
+        assert_ne!(after.version, before, "what reads it sees a new version");
+        // A tree already gone is not an error.
+        r.reset(&g, &["src/raw".to_string()]).await.unwrap();
+    }
+
+    /// `--prepare` is appended to argv. A step that prepared in place
     /// reports its new version, which the record takes and keeps its last
     /// success; one that cannot answers `needs_rerun`, which the record
     /// keeps and the rerun offer names until the step next succeeds.
     #[tokio::test]
-    async fn a_migrate_records_each_steps_answer_and_keeps_its_success() {
+    async fn a_prepare_records_each_steps_answer_and_keeps_its_success() {
         let root = tempfile::tempdir().unwrap();
         let answering = |id: &'static str, answer: &'static str| {
-            StepSpec::new(
+            let mut spec = StepSpec::new(
                 id,
                 sh(&format!(
                     r#"
                     mkdir -p {id}
-                    if [ "$0" = --migrate ]; then
-                        echo migrate >> {id}/log.txt
+                    if [ "$0" = --prepare ]; then
+                        echo prepare >> {id}/log.txt
                         echo '{answer}'
                     else
                         echo run >> {id}/log.txt
@@ -1848,7 +1825,9 @@ mod tests {
                     fi
                 "#
                 )),
-            )
+            );
+            spec.verbs.insert(Verb::Prepare);
+            spec
         };
         let g = Graph::build(vec![
             answering(
@@ -1866,7 +1845,7 @@ mod tests {
         let before = crate::supervisor::record::recorded(root.path()).await;
 
         let asked: Vec<String> = vec!["raw/ingest".into(), "doc/render".into()];
-        let answers = r.migrate(&g, &asked).await.unwrap();
+        let answers = r.prepare(&g, &asked).await.unwrap();
         assert_eq!(
             answers.iter().map(|m| m.answer.clone()).collect::<Vec<_>>(),
             [Ok(false), Ok(true)]
@@ -1874,7 +1853,7 @@ mod tests {
         for id in ["raw/ingest", "doc/render"] {
             assert_eq!(
                 std::fs::read_to_string(root.path().join(id).join("log.txt")).unwrap(),
-                "run\nmigrate\n"
+                "run\nprepare\n"
             );
         }
         let after = crate::supervisor::record::recorded(root.path()).await;
@@ -1884,13 +1863,66 @@ mod tests {
         assert_eq!(
             (raw.succeeded, &raw.last_success_at),
             (true, &before.steps["raw/ingest"].last_success_at),
-            "a migrate is not a run"
+            "a prepare is not a run"
         );
         assert!(doc.needs_rerun);
         assert_eq!(doc.version, before.steps["doc/render"].version);
         assert_eq!(
             crate::supervisor::round::rerun_offer(&g, &after),
             ["doc/render"]
+        );
+    }
+
+    /// A step that refuses `--prepare` (failure kind `incompatible`) is
+    /// turned off by the runner; a later prepare it does not refuse turns
+    /// it back on. A step a person turned off stays off either way.
+    #[tokio::test]
+    async fn a_refused_prepare_turns_the_step_off_until_it_no_longer_refuses() {
+        use crate::scheduler::{PrepareError, REFUSED_PREPARE};
+        let root = tempfile::tempdir().unwrap();
+        let refusing = |id: &'static str| {
+            let mut spec = StepSpec::new(
+                id,
+                sh(&format!(
+                    r#"
+                    mkdir -p {id}
+                    if [ -f refuse ]; then
+                        echo 'written by a newer build' >&2
+                        echo '{{"event":"outcome","failure":"incompatible"}}'
+                        exit 1
+                    fi
+                "#
+                )),
+            );
+            spec.verbs.insert(Verb::Prepare);
+            spec
+        };
+        let g = Graph::build(vec![refusing("a/out"), refusing("b/out")]).unwrap();
+        let r = Runner::new(root.path());
+        let store = crate::supervisor::store::Store::open(root.path())
+            .await
+            .unwrap();
+        store.turn_off("b/out", "a person").await.unwrap();
+        let asked: Vec<String> = vec!["a/out".into(), "b/out".into()];
+
+        std::fs::write(root.path().join("refuse"), "").unwrap();
+        let answers = r.prepare(&g, &asked).await.unwrap();
+        assert!(
+            matches!(&answers[0].answer, Err(PrepareError::Refused(why)) if why.contains("newer build")),
+            "{answers:?}"
+        );
+        let off = store.turned_off().await.unwrap();
+        assert!(off["a/out"].starts_with(REFUSED_PREPARE), "{off:?}");
+
+        std::fs::remove_file(root.path().join("refuse")).unwrap();
+        let answers = r.prepare(&g, &asked).await.unwrap();
+        assert_eq!(answers[0].answer, Ok(false), "{answers:?}");
+        let off = store.turned_off().await.unwrap();
+        assert!(!off.contains_key("a/out"), "turned back on: {off:?}");
+        assert_eq!(
+            off.get("b/out").map(String::as_str),
+            Some("a person"),
+            "a person's turning off is not the runner's to undo"
         );
     }
 

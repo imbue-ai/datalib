@@ -6,9 +6,8 @@ name = "Gmail"
 type = "email"
 
 [[steps]]
-group = "email"
-function = "ingest"
-command = "datalib-step"
+id = "email/ingest"
+command = "datalib-step run ingest email"
 
 # Mirror only mail under these labels. Labels are full paths and match
 # exactly: `Work` does not take in `Work/Projects`, so list nested ones.
@@ -57,10 +56,10 @@ message_budget = 20000                # stop after this many messages and finish
 path = "~/Takeout/Mail"
 
 [[steps]]
-group = "email"
-function = "render_markdown"
-command = "datalib-step"
+id = "email/render_markdown"
+command = "datalib-step run render_markdown email"
 inputs = ["email/ingest"]
+reads = "pinned"
 
 [steps.params]
 outlink_format = "gmail"        # each message's `↗` link opens it in Gmail; omit for no link
@@ -70,13 +69,15 @@ only_render_labels = ["Inbox"]  # render only threads with a message under these
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "email"
-function = "keyword_index"
-command = "datalib-step"
+id = "email/keyword_index"
+command = "datalib-step run keyword_index email"
 inputs = ["email/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "email"
-function = "embed"
-command = "datalib-step"
+id = "email/embed"
+command = "datalib-step run embed email"
 inputs = ["email/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]

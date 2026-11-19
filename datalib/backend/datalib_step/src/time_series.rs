@@ -63,7 +63,7 @@ pub async fn run_render(
 ) -> Result<Vec<OutputClaim>> {
     let source_type = SourceType::parse(env.source_type()?)
         .with_context(|| format!("unknown source type {:?}", env.group_type))?;
-    let raw = data_root.join(env.raw_store_rel());
+    let raw = data_root.join(env.raw_store_rel()?);
     let (wanted, unreadable) = read(source_type, &raw, &env.group)?;
     // A file that could not be read costs its own time series and
     // nothing else; the Manage row counts it as a warning.
@@ -209,8 +209,6 @@ async fn seal(
 
 #[cfg(test)]
 mod tests {
-    use strum::VariantArray;
-
     use super::*;
 
     /// The index step reads each source's store where its render step
@@ -247,8 +245,7 @@ mod tests {
             step: index_rel(),
             group: datalib_core::layout::UNIFIED_TIME_SERIES_INDEX_DIR.into(),
             group_type: None,
-            source_group: None,
-            source_group_type: None,
+            diff_source_type: None,
             function: crate::function::Function::TimeSeriesIndex,
             inputs: vec![
                 "riker/render_time_series".into(),
@@ -277,19 +274,5 @@ mod tests {
         assert_eq!(sources[0].commit_hash, riker_head);
         assert_eq!(root.join(&sources[0].store), db);
         index.close().await;
-    }
-
-    /// The config side adds `render_time_series` steps for the types its
-    /// own list names; this binary must agree on which those are.
-    #[test]
-    fn the_config_and_this_binary_agree_on_which_types_have_time_series() {
-        for &t in SourceType::VARIANTS {
-            assert_eq!(
-                t.renders_time_series(),
-                datalib_dag::config::TIME_SERIES_SOURCE_TYPES.contains(&t.as_str()),
-                "{}",
-                t.as_str()
-            );
-        }
     }
 }

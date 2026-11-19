@@ -7,9 +7,8 @@ name = "Notion"
 type = "notion"
 
 [[steps]]
-group = "notion"
-function = "ingest"
-command = "datalib-step"
+id = "notion/ingest"
+command = "datalib-step run ingest notion"
 
 # When to give up on rate limits. The download always honours a 429's
 # Retry-After and backs off; these only decide when to stop.
@@ -38,21 +37,23 @@ comments = true          # comment threads; default true
 attachments = true       # files attached to pages; default true
 
 [[steps]]
-group = "notion"
-function = "render_markdown"
-command = "datalib-step"
+id = "notion/render_markdown"
+command = "datalib-step run render_markdown notion"
 inputs = ["notion/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "notion"
-function = "keyword_index"
-command = "datalib-step"
+id = "notion/keyword_index"
+command = "datalib-step run keyword_index notion"
 inputs = ["notion/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "notion"
-function = "embed"
-command = "datalib-step"
+id = "notion/embed"
+command = "datalib-step run embed notion"
 inputs = ["notion/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]

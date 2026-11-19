@@ -195,16 +195,15 @@ type = "${type}"
 name = "${type} (replayed)"
 
 [[steps]]
-group = "${id}"
-function = "ingest"
-command = "'${STEP_BIN}'"
+id = "${id}/ingest"
+command = "'${STEP_BIN}' run ingest ${type}"
 [steps.params.api]
 
 [[steps]]
-group = "${id}"
-function = "render_markdown"
-command = "'${STEP_BIN}'"
+id = "${id}/render_markdown"
+command = "'${STEP_BIN}' run render_markdown ${type}"
 inputs = ["${id}/ingest"]
+reads = "pinned"
 `;
   const config = (
     sources: readonly (readonly [string, string])[] = [
@@ -213,18 +212,27 @@ inputs = ["${id}/ingest"]
     ],
   ) => `data_root = "${dataRoot}"
 
-[checkpoint_cadence]
-at_most_every_secs = 0
+[env]
+DATALIB_STEP_CHECKPOINT_CADENCE = "0"
+
+[[programs]]
+command = "${STEP_BIN}"
+verbs = ["reset", "prepare", "compact", "collect"]
+
+[[locks]]
+name = "index"
+slots = 2
 
 [[groups]]
 id = "unified_document_index"
 name = "Document Index"
 
 [[steps]]
-group = "unified_document_index"
-function = "grid_index"
-command = "'${STEP_BIN}'"
+id = "unified_document_index/grid_index"
+command = "'${STEP_BIN}' run grid_index"
 inputs = [${sources.map(([id]) => `"${id}/render_markdown"`).join(", ")}]
+reads = "pinned"
+locks = ["index"]
 ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
 
   test("every stage is in flight at once, and rows reach the grid mid-download", async ({

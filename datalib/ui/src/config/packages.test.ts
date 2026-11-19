@@ -64,8 +64,7 @@ id = "slack"
 type = "slack"
 
 [[steps]]
-group = "slack"
-function = "ingest"
+id = "slack/ingest"
 `;
 
 describe("addPackage", () => {

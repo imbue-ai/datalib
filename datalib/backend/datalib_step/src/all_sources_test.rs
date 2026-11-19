@@ -5,6 +5,7 @@
 
 use strum::VariantArray;
 
+use crate::function::Function;
 use crate::methods::ingest_methods;
 use crate::source_docs::{source_docs, with_group_id};
 use crate::source_type::SourceType;
@@ -30,19 +31,19 @@ const HEAD: &str = r#"# Every source datalib can mirror, one group per way in, r
 # how to sign one in or where its data comes from. Copy the groups you want,
 # and the index groups' inputs that name them.
 #
-# Shape: each source is a `[[groups]]` entry with a `type`, and steps under
-# it, each declared as `group` + `function`. `ingest` brings the data into
-# `<group>/ingest` (its `params` hold one method table, `[steps.params.api]`,
-# `[steps.params.export]`, …, and the options every method shares);
-# `render_markdown` turns that raw store into documents under
-# `<group>/render_markdown`; `keyword_index` and `embed` put them in the
-# search index; a source whose data is also numbers over time adds
-# `render_time_series`. Neither writes a `command`: a step without one is
-# the built-in `datalib-step`. A step's id is `<group>/<function>`, never
-# written; it is what another step's `inputs` name.
+# Shape: each source is a `[[groups]]` entry with a `type`, and steps whose
+# `id` is `<group>/<function>`: the tree the step writes, and what another
+# step's `inputs` name. Each runs `datalib-step run <function> <type>`.
+# `ingest` brings the data into `<group>/ingest` (its `params` hold one
+# method table, `[steps.params.api]`, `[steps.params.export]`, …, and the
+# options every method shares); `render_markdown` turns that raw store into
+# documents under `<group>/render_markdown`; `keyword_index` and `embed` put
+# them in the search index; a source whose data is also numbers over time
+# adds `render_time_series`. `reads` and `locks` say what a step may run
+# beside; the `[[programs]]` entry, which verbs `datalib-step` takes.
 #
 # TOML shape: a table header ends the table it sits in, so within a step
-# the plain keys (`group`, `function`, `inputs`) come first and the params
+# the plain keys (`id`, `command`, `inputs`) come first and the params
 # headers last, and `data_root` comes before the first `[[…]]` header.
 #
 # A group's `id` is the folder under `data_root` its data goes in, chosen
@@ -84,7 +85,10 @@ fn sources() -> Vec<Source> {
                 .cfg
                 .steps
                 .iter()
-                .filter_map(|s| Some((s.id.clone(), s.function.clone()?)))
+                .filter_map(|s| {
+                    let args = crate::step_entry::run_args(&s.command)?.ok()?;
+                    Some((s.id.clone(), args.function))
+                })
                 .collect();
             out.push(Source {
                 title: format!("{t} by `{}`", m.path),
@@ -96,14 +100,17 @@ fn sources() -> Vec<Source> {
     out
 }
 
-fn inputs(sources: &[Source], functions: &[&str]) -> String {
+/// The `[[steps]]` entry of the index step `group/function`, reading
+/// every source step of `functions`, one per line.
+fn index_step(sources: &[Source], group: &str, function: Function, functions: &[&str]) -> String {
     let ids: Vec<String> = sources
         .iter()
         .flat_map(|s| &s.steps)
         .filter(|(_, f)| functions.contains(&f.as_str()))
         .map(|(id, _)| format!("  \"{id}\",\n"))
         .collect();
-    format!("inputs = [\n{}]\n", ids.concat())
+    crate::step_entry::entry(group, function, None, &[])
+        .replace("inputs = []\n", &format!("inputs = [\n{}]\n", ids.concat()))
 }
 
 fn rule(title: &str) -> String {
@@ -118,14 +125,22 @@ fn generate() -> String {
     let sources = sources();
     let mut out = String::from(HEAD);
     out.push('\n');
+    out.push_str(&rule("The program and the locks its steps hold"));
+    out.push('\n');
+    out.push_str(&crate::step_entry::programs_entry());
+    for (name, _) in crate::step_entry::LOCKS {
+        out.push('\n');
+        out.push_str(&crate::step_entry::locks_entry(name).expect("one of LOCKS"));
+    }
+    out.push('\n');
     out.push_str(&rule("The indexes every source feeds"));
     out.push_str(&format!(
         "\n# The SQL index behind the grid and search reads every source's documents;\n\
          # the search index's aggregator reads every source's keyword index and\n\
          # embeddings, and keeps the search index to the sources it names.\n\
          [[groups]]\nid = \"{DOCUMENT_INDEX}\"\nname = \"Document Index\"\n\n\
-         [[steps]]\ngroup = \"{DOCUMENT_INDEX}\"\nfunction = \"grid_index\"\ncommand = \"datalib-step\"\n{}\n\
-         [[steps]]\ngroup = \"{DOCUMENT_INDEX}\"\nfunction = \"qmd_aggregator\"\ncommand = \"datalib-step\"\n{}\n\
+         {}\n\
+         {}\n\
          # The app's search, grid and document view.\n\
          [[applets]]\ngroup = \"{DOCUMENT_INDEX}\"\nid = \"{DOCUMENT_INDEX}\"\n\
          command = \"datalib-applet {DOCUMENT_INDEX}\"\n\n\
@@ -136,12 +151,27 @@ fn generate() -> String {
          # The time-series index reads every source's time series, without copying\n\
          # the points, for the charts.\n\
          [[groups]]\nid = \"{TIME_SERIES_INDEX}\"\nname = \"Time Series Index\"\n\n\
-         [[steps]]\ngroup = \"{TIME_SERIES_INDEX}\"\nfunction = \"time_series_index\"\ncommand = \"datalib-step\"\n{}\n\
+         {}\n\
          [[applets]]\ngroup = \"{TIME_SERIES_INDEX}\"\nid = \"{TIME_SERIES_INDEX}\"\n\
          command = \"datalib-applet {TIME_SERIES_INDEX}\"\n",
-        inputs(&sources, &["render_markdown"]),
-        inputs(&sources, &["keyword_index", "embed"]),
-        inputs(&sources, &["render_time_series"]),
+        index_step(
+            &sources,
+            DOCUMENT_INDEX,
+            Function::GridIndex,
+            &["render_markdown"]
+        ),
+        index_step(
+            &sources,
+            DOCUMENT_INDEX,
+            Function::QmdAggregator,
+            &["keyword_index", "embed"]
+        ),
+        index_step(
+            &sources,
+            TIME_SERIES_INDEX,
+            Function::TimeSeriesIndex,
+            &["render_time_series"]
+        ),
     ));
     for s in &sources {
         out.push('\n');

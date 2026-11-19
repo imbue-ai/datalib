@@ -6,9 +6,8 @@ name = "Calendar export"
 type = "calendar"
 
 [[steps]]
-group = "calendar"
-function = "ingest"
-command = "datalib-step"
+id = "calendar/ingest"
+command = "datalib-step run ingest calendar"
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
 # Nothing reads it and it grows every run.
@@ -19,34 +18,36 @@ enabled = false
 path = "~/Downloads/calendar-export"  # the folder; each `.ics` file in it is one calendar
 
 [[steps]]
-group = "calendar"
-function = "render_markdown"
-command = "datalib-step"
+id = "calendar/render_markdown"
+command = "datalib-step run render_markdown calendar"
 inputs = ["calendar/ingest"]
+reads = "pinned"
 
 # Free-text search: keyword (BM25), then embeddings for search by meaning.
 # Add both to `unified_document_index/qmd_aggregator`'s inputs.
 [[steps]]
-group = "calendar"
-function = "keyword_index"
-command = "datalib-step"
+id = "calendar/keyword_index"
+command = "datalib-step run keyword_index calendar"
 inputs = ["calendar/render_markdown"]
+reads = "files"
+locks = ["qmd_keyword"]
 
 [[steps]]
-group = "calendar"
-function = "embed"
-command = "datalib-step"
+id = "calendar/embed"
+command = "datalib-step run embed calendar"
 inputs = ["calendar/keyword_index"]
+reads = "files"
+locks = ["qmd_embed"]
 
 # Every occurrence of every event in a window of days around now, one row
 # each, the way Google's `singleEvents=true` lists them, in
 # render_occurrences/occurrences.doltlite_db. The window moves when the
 # step runs, which is when ingest has stored something new.
 [[steps]]
-group = "calendar"
-function = "render_occurrences"
-command = "datalib-step"
+id = "calendar/render_occurrences"
+command = "datalib-step run render_occurrences calendar"
 inputs = ["calendar/ingest"]
+reads = "pinned"
 
 [steps.params]
 days_back = 30    # the default

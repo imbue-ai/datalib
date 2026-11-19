@@ -27,16 +27,17 @@ chats.
    type = "beeper"
 
    [[steps]]
-   group = "beeper"
-   function = "ingest"
+   id = "beeper/ingest"
+   command = "datalib-step run ingest beeper"
    [steps.params.texts]
    media = true
    # path = "~/Library/Application Support/BeeperTexts"   # the default
 
    [[steps]]
-   group = "beeper"
-   function = "render_markdown"
+   id = "beeper/render_markdown"
+   command = "datalib-step run render_markdown beeper"
    inputs = ["beeper/ingest"]
+   reads = "pinned"
    [steps.params]
    # period = "month"                     # or "day", "year", "all"
    # networks = ["signal", "googlechat"]  # unset: every network
