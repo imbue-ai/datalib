@@ -1,8 +1,9 @@
 # The document viewer, drawn from blocks
 
-*Proposal (2026-11-19). Steps 1 to 3 landed (#1889, #1891, #1902), with
-search quoting a hit from its one message (#1896); step 4 is built on
-the branch after them. Steps 5 to 7 are not built. It picks up where
+*Proposal (2026-11-19). Steps 1 to 4 landed (#1889, #1891, #1902,
+#1909), with search quoting a hit from its one message (#1896); step 6
+is built on the branch after them, ahead of step 5. Steps 5 and 7 are
+not built. It picks up where
 [`documents_to_blocks.md`](documents_to_blocks.md) step 5 stopped
 ("paging through what is read together comes after"), and chooses a
 layout by kind through the registry
@@ -186,10 +187,8 @@ alone. Joined, with each fold drawn, the pieces are still `body`.
 - **Checked by:** every render snapshot and the index text unchanged;
   the isolation tests, with a hostile body inside a fold.
 
-Paging (step 6) lists blocks, not pieces, and a page must carry its own
-folds; whether a block is a tool step, and which version it is on,
-become facts of the block then, and the folds are drawn from them. A
-page never ends inside a fold.
+Paging (step 6) pages through the document's own order, a fold whole,
+so a page never ends inside one and the folds need no other facts.
 
 ### Step 4: one header for every renderer
 
@@ -239,27 +238,53 @@ stored drawing, then take it out of the drawing.
 
 ### Step 6: a window that grows both ways
 
-`/children/{uuid}?with=pieces` answers a page of blocks as step 3's
-pieces and folds. The viewer keeps a window of them.
+Done before step 5, which has nothing a person would notice and is
+wanted most by step 7.
 
-- **Where it opens:** at a block for a search hit or a link to a
-  message; at the first unread, or else the newest, for a chat; at the
-  start for anything else.
-- **Paging:** a cursor at each end, as `/children` already answers.
-  `pagedWindow.ts` grows one way only (the grid's list), so the viewer
-  needs a two-ended version in the same pure-core shape. When a page
-  lands above, it holds the reader still by measuring the block on
-  screen before and after.
-- **Small containers load whole**, so ⌘F and select-all work as today.
-  Past a page or two, find-in-page sees only what is loaded, as in
-  Slack and Gmail.
-- **Live updates** ask for what is past the newest cursor and again for
-  the window on screen; only the blocks whose content changed redraw,
-  so the reader keeps their place.
-- **Deletes:** the whole-document fetch and JSON compare in `DocCard`'s
-  `refresh`, and checking a document's remote images all at once.
-- **Notices:** a long chat opens fast and the reader's place holds
+A document is read in its own order, not in time order: ChatGPT's other
+versions sit where they forked, and a run of tool steps where it
+happened. So the viewer pages through the render store's order, each
+piece's place in its document, rather than through `/children`, which
+lists by time. A page is a run of the document's top-level nodes (step
+3): a fold travels whole, so a page never ends inside one.
+
+- **The route.** `/chat/{uuid}?pieces=true&limit=N` answers a page: at a
+  message (`at=<uuid>`), else from the start, or the page `before=` or
+  `after=` a cursor, with the cursors either side of it and the store
+  `version` the page was read at. A cursor is a piece's place in the
+  document, good for that version. Without `limit` the answer is the
+  whole document, as before, so a script sees no change.
+- **The store reads only the page.** The outline of a document, how
+  many pieces it has and where its folds open and close, is a small
+  read; a pure function turns it into the top-level spans and picks a
+  window of them; only the pieces in that window are read and spelled.
+- **Small documents load whole.** One with no more top-level nodes than
+  a page answers whole, so ⌘F and select-all work as today. Past that,
+  find-in-page sees only what is loaded, as in Slack and Gmail.
+- **The viewer** keeps a window that grows both ways. Scrolling near an
+  end asks for the next page; a page that lands above holds the reader
+  still. Pages are inserted beside what is drawn, so an open fold or an
+  expanded message stays as it is. A selected message the window does
+  not hold loads its own page.
+- **Live updates** ask for the window again only when the store moved
+  (`version`), around the message on screen.
+- **Where it opens** stays where it opens today: at the message a link
+  or a search hit names, else at the start. Opening a chat at its first
+  unread or its end is a choice for step 7.
+- **Deletes:** fetching, sanitizing and drawing a whole long document to
+  show its first screen, and the whole-document compare on every
+  `index_changed`.
+- **Notices:** a long chat opens fast, and the reader's place holds
   through a sync.
+
+**A possibility, not planned:** once a window holds only part of a
+document, the frame's scrollbar measures only what is loaded. A very
+long chat could get a scrubber beside it, as Google Photos has: a bar
+for the whole document, the date under the pointer shown while dragging,
+and a jump to that place on release. The server would answer an outline
+of a few hundred marks spaced by length, each with its date and a
+cursor; only a document longer than a page, whose messages carry times,
+would show one.
 
 ### Step 7: layouts by kind
 

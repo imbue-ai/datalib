@@ -298,6 +298,15 @@ export type ChatResponse = {
   /// pieces it holds, so each message renders as a fragment of its own
   /// (`renderDocument.ts`). Empty for a picture.
   pieces: BodyNode[];
+  /// Asked for a page: the cursor of the page above it, or null at the
+  /// document's start.
+  before?: number | null;
+  /// Asked for a page: the cursor of the page below it, or null at the
+  /// document's end.
+  after?: number | null;
+  /// The render store's commit the pieces were read at; a cursor is good
+  /// for that version only.
+  version?: string | null;
   outgoing_edges: EdgeOut[];
   /// What render could not fully do to this document, errors first.
   problems: DocProblem[];
@@ -836,12 +845,36 @@ export async function fetchGroups<Row = SearchRow>(
   return r;
 }
 
-export function fetchChat(markdownUuid: string, signal?: AbortSignal): Promise<ChatResponse> {
+/// Where a page of a document starts: at an item's piece, or before or
+/// after a cursor a page gave; the first page with none.
+export type ChatPage = { limit: number; at?: string; before?: number; after?: number };
+
+export function fetchChat(
+  markdownUuid: string,
+  page?: ChatPage,
+  signal?: AbortSignal,
+): Promise<ChatResponse> {
   // A document's id names it alone — no disambiguation needed.
+  const q = new URLSearchParams({ pieces: "true" });
+  if (page) {
+    q.set("limit", String(page.limit));
+    if (page.at !== undefined) q.set("at", page.at);
+    if (page.before !== undefined) q.set("before", String(page.before));
+    if (page.after !== undefined) q.set("after", String(page.after));
+  }
   return getJson<ChatResponse>(
-    `${UNIFIED_GRID_AND_SEARCH_INDEX}/chat/${encodeURIComponent(markdownUuid)}?pieces=true`,
+    `${UNIFIED_GRID_AND_SEARCH_INDEX}/chat/${encodeURIComponent(markdownUuid)}?${q}`,
     signal,
   );
+}
+
+/// A document's markdown whole, as one string.
+export async function fetchChatBody(markdownUuid: string, signal?: AbortSignal): Promise<string> {
+  const doc = await getJson<{ body?: string }>(
+    `${UNIFIED_GRID_AND_SEARCH_INDEX}/chat/${encodeURIComponent(markdownUuid)}`,
+    signal,
+  );
+  return doc.body ?? "";
 }
 
 // --- Config / setup API ----------------------------------------------------

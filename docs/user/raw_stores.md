@@ -554,7 +554,7 @@ counts.
 ## Slack (`slack`)
 
 Slack's objects are kept as its API returned them: `payload` is the
-user, channel or message JSON from `users.list`,
+user, bot, channel or message JSON from `users.list`, `bots.info`,
 `conversations.list`, `conversations.history` and
 `conversations.replies`.
 
@@ -564,6 +564,7 @@ user, channel or message JSON from `users.list`,
 |---|---|
 | a workspace (team) id `T…` | `workspaces.id`, and `team_id` on users and messages |
 | a user id `U…` | `users.id`, `messages.user_id` |
+| a bot id `B…` | `bots.id`, and `bot_id` in a message's payload |
 | a conversation id `C…`, `D…`, `G…` | `channels.id`, `messages.channel_id` |
 | a message's `ts` in a conversation | `messages.ts`; the row's `id` is `<team id>#<channel id>#<ts>` |
 | a thread (its root's `ts`) | `messages.thread_root_uuid`, equal to the root's `messages.id` |
@@ -673,7 +674,8 @@ by default); older deletions are never noticed. A deleted reply is noticed the n
 replies in that thread.
 
 **Set aside from the payload** (in `volatile_payload`): a user's
-`updated` and `profile.status_*`, `profile.huddle_*`; a channel's
+`updated` and `profile.status_*`, `profile.huddle_*`; a bot's
+`updated`; a channel's
 `updated` and `num_members`; a message's `subscribed` and the
 `block_id` of each block; everything in `channel_read_states` but
 `last_read`, which is in `read_marks`.
@@ -702,6 +704,24 @@ One row per person or bot the download has seen.
 | `name` | the handle |
 | `real_name` | the full name |
 | `display_name` | the name Slack shows, when they set one |
+
+### `bots`
+
+One row per bot a stored message names: an app or an integration,
+which posts with a `bot_id` and often no user, so its messages do not
+carry its name. A row with a NULL `payload` has not been looked up yet;
+the next sync asks `bots.info` for it.
+
+| column | what it holds |
+|---|---|
+| `id` | the bot id, `B…` |
+| `payload` | Slack's bot object, from `bots.info` |
+| `name` | the bot's name |
+
+A message's author, then, is `users` by `messages.user_id` for a
+person, and for a bot the payload's `username` (an integration's name
+for that message), else its `bot_profile.name`, else `bots.name` by its
+`bot_id`.
 
 ### `channels`
 
