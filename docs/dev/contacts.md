@@ -342,7 +342,7 @@ avatars are in the source's blob store already (an avatar counts only
 when the store holds it as an image). A vCard carries its photo inside
 the card: the contacts download decodes each inline `PHOTO` into the
 source's blob store before the card is stored, and the source's
-`--migrate` does the same for every card a store already holds. Render
+`--prepare` does the same for every card a store already holds. Render
 hashes the card's decoded photo and links it. A photo the blob store
 lacks leaves the contact with no photo and a `blob_missing` problem on
 its page.

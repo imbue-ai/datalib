@@ -19,8 +19,7 @@ const CONFIG: &str = r#"
 id = "g"
 
 [[steps]]
-group = "g"
-function = "out"
+id = "g/out"
 command = '''sh -c 'out="$DATALIB_DAG_DATA_ROOT/g/out" && mkdir -p "$out" && printf "%s\n%s\n" "$DATALIB_DAG_DATA_ROOT" "$PATH" > "$out/env.tmp" && mv "$out/env.tmp" "$out/env"' '''
 "#;
 

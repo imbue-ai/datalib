@@ -163,8 +163,8 @@ The `api` block of a `github` source (`github_config`):
 
 ## Run it
 
-Outside a sync, run `datalib-step` by hand with
-`DATALIB_DAG_GROUP_TYPE=github` and the step's params as JSON, such as
+Outside a sync, run `datalib-step run ingest github` by hand with the
+step's params as JSON in `DATALIB_DAG_PARAMS`, such as
 `{"api": {"pull_requests": ["<owner>/<repo>#<num>"]}}`
 ([`first_time_dev.md`](/docs/dev/first_time_dev.md) §"One source's
 download, with no config").

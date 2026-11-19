@@ -8,21 +8,20 @@ name = "Garmin Connect"
 type = "garmin"
 
 [[steps]]
-group = "garmin"
-function = "ingest"
-command = "datalib-step"
+id = "garmin/ingest"
+command = "datalib-step run ingest garmin"
 
 [steps.params.api]
 
 [[steps]]
-group = "garmin"
-function = "render_markdown"
-command = "datalib-step"
+id = "garmin/render_markdown"
+command = "datalib-step run render_markdown garmin"
 inputs = ["garmin/ingest"]
+reads = "pinned"
 
 # Its numbers as time series, for charts and the time-series index.
 [[steps]]
-group = "garmin"
-function = "render_time_series"
-command = "datalib-step"
+id = "garmin/render_time_series"
+command = "datalib-step run render_time_series garmin"
 inputs = ["garmin/ingest"]
+reads = "pinned"

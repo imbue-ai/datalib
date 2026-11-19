@@ -158,16 +158,11 @@ pub fn run_ingest_step(
     params: &Value,
     playback: Option<&Path>,
 ) -> anyhow::Result<()> {
-    let params_file = data_root.with_extension("params.json");
-    std::fs::write(&params_file, params.to_string()).context("write the step's params")?;
     let bin = std::env::var_os("DATALIB_STEP_BIN").context("DATALIB_STEP_BIN is not set")?;
     let mut step = Command::new(bin);
-    step.arg("--params-file")
-        .arg(&params_file)
+    step.args(["run", "ingest", "email"])
+        .env("DATALIB_DAG_PARAMS", params.to_string())
         .env("DATALIB_DAG_STEP", format!("{group}/ingest"))
-        .env("DATALIB_DAG_GROUP", group)
-        .env("DATALIB_DAG_GROUP_TYPE", "email")
-        .env("DATALIB_DAG_FUNCTION", "ingest")
         .env("DATALIB_DAG_DATA_ROOT", data_root)
         .stdin(Stdio::null());
     if let Some(playback) = playback {

@@ -78,16 +78,15 @@ id = "${TAPED}"
 type = "chatgpt"
 
 [[steps]]
-group = "${TAPED}"
-function = "ingest"
-command = "'${STEP_BIN}'"
+id = "${TAPED}/ingest"
+command = "'${STEP_BIN}' run ingest chatgpt"
 [steps.params.api]
 
 [[steps]]
-group = "${TAPED}"
-function = "render_markdown"
-command = "'${STEP_BIN}'"
+id = "${TAPED}/render_markdown"
+command = "'${STEP_BIN}' run render_markdown chatgpt"
 inputs = ["${TAPED_UP}"]
+reads = "pinned"
 `;
 
 /// This spec's own data root, asked of the backend rather than read
@@ -184,31 +183,33 @@ test.describe("a real sync, driven from the grid", () => {
 
   const config = () => `data_root = "${dataRoot}"
 
+[[programs]]
+command = "${STEP_BIN}"
+verbs = ["reset", "prepare", "compact", "collect"]
+
 [[groups]]
 id = "pdfs"
 type = "pdf"
 
 [[steps]]
-group = "pdfs"
-function = "ingest"
-command = "'${STEP_BIN}'"
+id = "pdfs/ingest"
+command = "'${STEP_BIN}' run ingest pdf"
 [steps.params.fswalk]
 path = "${PDF_DIR}"
 
 [[steps]]
-group = "pdfs"
-function = "render_markdown"
-command = "'${STEP_BIN}'"
+id = "pdfs/render_markdown"
+command = "'${STEP_BIN}' run render_markdown pdf"
 inputs = ["pdfs/ingest"]
+reads = "pinned"
 
 [[groups]]
 id = "docs"
 type = "file_inventory"
 
 [[steps]]
-group = "docs"
-function = "ingest"
-command = "'${STEP_BIN}'"
+id = "docs/ingest"
+command = "'${STEP_BIN}' run ingest file_inventory"
 [steps.params.fswalk]
 path = "${dataRoot}/file_inventory_scan"
 
@@ -223,9 +224,8 @@ id = "unsynced"
 type = "file_inventory"
 
 [[steps]]
-group = "unsynced"
-function = "ingest"
-command = "'${STEP_BIN}'"
+id = "unsynced/ingest"
+command = "'${STEP_BIN}' run ingest file_inventory"
 [steps.params.fswalk]
 path = "${dataRoot}/file_inventory_scan"
 ${applets()}`;
@@ -624,8 +624,7 @@ id = "flaky"
 type = "pdf"
 
 [[steps]]
-group = "flaky"
-function = "ingest"
+id = "flaky/ingest"
 command = "/bin/sh -c 'echo walking page 1 >&2; echo listing failed: 429 too many requests >&2; exit 1'"
 `;
     await writeConfig(page, flaky);
@@ -699,8 +698,7 @@ id = "chipped"
 type = "pdf"
 
 [[steps]]
-group = "chipped"
-function = "ingest"
+id = "chipped/ingest"
 command = "/bin/true"
 `,
     );
@@ -735,8 +733,7 @@ name = "Named PDFs"
 type = "pdf"
 
 [[steps]]
-group = "named"
-function = "ingest"
+id = "named/ingest"
 command = "/bin/true"
 `,
     );
@@ -774,8 +771,7 @@ id = "soured"
 type = "pdf"
 
 [[steps]]
-group = "soured"
-function = "ingest"
+id = "soured/ingest"
 command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo upstream went away >&2; exit 1; fi; touch ${once}'"
 `;
     await writeConfig(page, soured);

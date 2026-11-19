@@ -38,7 +38,7 @@ merge conflict waiting to happen.
 - [`datalib/backend/dag/README.md`](datalib/backend/dag/README.md) — the runner's rules: graph, staleness, versions, diagnostics, locks, progress. **Start here.**
 - [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md) — how to write a custom step command; `datalib-step` is the reference implementation.
 - [`docs/dev/packages.md`](docs/dev/packages.md) — packages: custom steps and applets published at a URL, added to a library and pinned in its config.
-- [`docs/dev/config_model.md`](docs/dev/config_model.md) — what a config is made of: groups, steps as `(group, function)`, ingest methods and their reach, the fan-ins' `inputs`. [`configs/dag_example.toml`](configs/dag_example.toml) is a complete, commented one.
+- [`docs/dev/config_model.md`](docs/dev/config_model.md) — what a config is made of: groups, steps as an `id` and a `command`, ingest methods and their reach, the fan-ins' `inputs`. [`configs/dag_example.toml`](configs/dag_example.toml) is a complete, commented one.
 - [`docs/dev/logging.md`](docs/dev/logging.md) — the one log store, who writes it, how to add a line from each writer and how to read it. Read before adding a `tracing` line, a UI event or a log endpoint.
 
 **Data architecture**
@@ -100,7 +100,7 @@ it properly — then bring the existing data along:
 
 - **A raw store whose shape changes** gets a rung on its migration
   ladder (`datalib/backend/etl/README.md` §"The migration ladder"),
-  which the launch's migrate pass climbs
+  which the ingest's `--prepare`, asked at every start, climbs
   (`datalib/backend/dag/README.md` §"Upgrading a root"). The raw shape
   every release left is kept in `datalib_step/raw_shapes/`, and a test
   migrates each one.
@@ -216,14 +216,16 @@ truer comments beat more of them.
 ```
 datalib/
   backend/     Rust workspace.
-    dag/           `datalib-dag`: the DAG runner. `//datalib/backend:bin`
-                   stages every shipped binary under its public
-                   `datalib-*` name in one directory (`:dist`); build
-                   that whenever you need to actually run a pipeline.
-    datalib_step/  `datalib-step`: the step program datalib ships. A
-                   step runs it with `command = "datalib-step"`; it
-                   reads its function and its group's type from the
-                   environment.
+    dag/           `datalib-dag`: the DAG runner. It knows no program
+                   by name, `datalib-step` included.
+                   `//datalib/backend:bin` stages every shipped binary
+                   under its public `datalib-*` name in one directory
+                   (`:dist`); build that whenever you need to actually
+                   run a pipeline.
+    datalib_step/  `datalib-step`: the step program Datalib ships. A
+                   step runs it with `command = "datalib-step run
+                   <function> <type>"`, and it reads its params from
+                   `DATALIB_DAG_PARAMS`.
     etl/           shared ingest machinery (raw stores, blob CAS, render
                    cursors) — the download side, and where a
                    downloader's dependencies stop.
@@ -261,8 +263,8 @@ datalib/
                    `system/packages/` (docs/dev/packages.md).
     probe/         what "Check connection" and a picker's "Load" ask
                    and answer, alone.
-    migrate_config/ `datalib-migrate-config`: rewrites the one retired
-                   config shape into the current one.
+    migrate_config/ `datalib-migrate-config`: rewrites a config in any
+                   retired shape into the current one.
     lightroom_retime/ `datalib-lightroom-retime`: applies a file of
                    capture-time edits to a Lightroom catalog, the one
                    thing here that writes a catalog. Not shipped.
@@ -363,12 +365,18 @@ separate crates").
 
 ## The sync pipeline
 
-`datalib-dag <config.toml>` runs a DAG of subprocess steps. A
-`[[groups]]` entry is one thing on the Manage screen (a source is a
-group with a `type`); a `[[steps]]` entry is `group` + `function`, its
-id composed as `<group>/<function>`, the one tree it writes, and its
-`inputs` name steps by that id; an `[[applets]]` entry is a server the
-gateway spawns. What each is made of:
+`datalib-dag <config.toml>` runs a DAG of subprocess steps. A `[[groups]]`
+entry is one thing on the Manage screen (a source is a group with a
+`type`); a `[[steps]]` entry is an `id` — the one tree it writes, whose
+first part is its group — and the `command` it runs; `inputs` name steps
+by that id, or every step of one function by a pattern
+(`*/render_markdown`), and are the edges; an `[[applets]]` entry is a
+server the gateway spawns. Datalib's own steps run `datalib-step run
+<function> [<type>]` (so their ids are `<group>/<function>`) and write
+out the `reads` and `locks` they need; the `[[programs]]` entry for
+`datalib-step` lists the verbs it takes (`--reset`, `--prepare`,
+`--compact`, `--collect`), and the runner sends no verb a program does
+not list. What each is made of:
 [`config_model.md`](docs/dev/config_model.md) §"Three kinds of entry".
 
 Each source has an `ingest` step and (most) a `render_markdown` step, and
@@ -408,7 +416,9 @@ the loop `datalib-dag` runs, in-process (`http/src/supervisor.rs`), holding
 `runner-lock` for its life; a sync, a stop, a step turned off is a row it writes
 there (`POST /api/requests`, `/api/steps/<id>/turn_off`); the Manage tab
 edits the config; a root with no config gets the launcher and the
-first-run screen.
+first-run screen, which writes Datalib's starter config
+(`http/src/starter.rs`: the grid and search index and the applets).
+`datalib-dag init` writes a config with no steps instead.
 
 ## Ingest and render are separate crates
 
@@ -810,7 +820,7 @@ upstream (block types, MIME types), free-form display text
 | who names a latchkey account a browser login adds | `AccountNaming` | `http/src/connect.rs` |
 | what kind of trouble a sign-in or probe ran into | `IssueKind` | `probe/src/issue.rs` (`datalib_probe`) |
 | a probe the wizard polls | `ProbeState` | `http/src/probe.rs` |
-| how a pass (the launch's migrate, a wipe that frees disk) stands with one step | `PassState` | `dag/src/supervisor/pass.rs` |
+| how a pass (the prepare pass at a start, a wipe that frees disk) stands with one step | `PassState` | `dag/src/supervisor/pass.rs` |
 | the list a picker loads | `ProbeList` | `probe/src/lib.rs` (`datalib_probe`) |
 | the `grid_rows.provider` tag | `Provider` | `schema/src/providers.rs` |
 | what a step could not fully do to a record | `Outcome`, `Reason`, `ScopeKind`, `Severity`, `Stage` | `problems/src/lib.rs` (`datalib_problems`) |

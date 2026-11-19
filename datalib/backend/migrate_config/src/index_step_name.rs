@@ -12,8 +12,8 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
+use crate::retired::names_datalib_step;
 use anyhow::{Context as _, Result};
-use datalib_dag::config::names_datalib_step;
 use datalib_dag::config_array::edit_string_array;
 use serde::Deserialize;
 use toml::Spanned;
@@ -154,7 +154,7 @@ inputs = ["*/embed"]
             ),
             "{after}"
         );
-        let check = datalib_dag::config::check_text(&after);
+        let check = crate::check_as_current(&after);
         assert_eq!(check.dropped(), 0, "{}", check.render("c.toml".as_ref()));
         let id = "unified_grid_and_search_index/unified_grid_and_search_index";
         let step = |id: &str| check.cfg.steps.iter().find(|s| s.id == id).unwrap();

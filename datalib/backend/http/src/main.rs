@@ -134,7 +134,7 @@ async fn main() -> anyhow::Result<()> {
     let _log = datalib_http::logging::init(&root);
     datalib_http::boot::clear_protected_temp(&root);
 
-    if args.init && datalib_dag::starter::write_starter_config(&root)? {
+    if args.init && datalib_http::starter::write_starter_config(&root)? {
         tracing::info!("wrote the starter config");
     }
 

@@ -9,8 +9,8 @@
 //! after `index_step_name.rs`, so it finds the step by its current
 //! function.
 
+use crate::retired::names_datalib_step;
 use anyhow::{Context as _, Result};
-use datalib_dag::config::names_datalib_step;
 use datalib_dag::config_array::edit_string_array;
 use serde::Deserialize;
 
@@ -168,7 +168,7 @@ inputs = ["*/render_time_series"]
 "#;
 
     fn check(text: &str) -> datalib_dag::config::ConfigCheck {
-        let check = datalib_dag::config::check_text(text);
+        let check = crate::check_as_current(text);
         assert_eq!(check.dropped(), 0, "{}", check.render("c.toml".as_ref()));
         check
     }

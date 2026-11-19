@@ -1,6 +1,6 @@
 # Search: one filter, two rankers
 
-**Status: step 1 built (2026-11-19), and step 2's "no stemming" (2026-11-19); the rest of steps 2 and 3 proposed.** Answers
+**Status: steps 1 and 2 built (2026-11-19); step 3 proposed.** Answers
 [#1887](https://github.com/imbue-ai/datalib/issues/1887). Four tests
 reproduce what step 1 fixes; they are listed under "What goes wrong
 today". [`docs/user/searching.md`](../../user/searching.md) says what
@@ -39,6 +39,34 @@ read of the table (1.5 s cold, 0.25 s warm, on a copy). With
 but in all eleven filter-key indexes that is 424 MB more of text, on
 indexes already 1,011 MB beside a 1,047 MB table. Step 2's integer ids
 make the same covering a few bytes an entry, so it waits for them.
+
+Step 2 as built differs from its description below in three ways.
+
+- **The search index keeps naming rows by uuid.** A row's id is its
+  `grid_rows` rowid, which `rows.row_id` now is; it holds while the row
+  is written in place, and a row removed and written again (a source
+  reset, then rendered anew) gets another. The keyword tables are
+  rewritten only when a document's text changes, so row ids there would
+  name the wrong rows after a reset. The filter reads integers
+  throughout and hands the rankers uuids, as before. Measured on a
+  clone of a real library: what `source:` keeps of an 82k-row source
+  went from 1.16 s (cold; 0.07 s warm) to 0.03 s, with no new index on
+  `grid_rows`.
+- **Which terms are the document's.** Of 957,854 rows inside documents,
+  every one held its document's title and named its document as a
+  container: 1.9M of 6.5M terms, gone. Participant and subject terms
+  were already on the document's row alone. Names (a channel, an
+  account) are the row's own and stay: 8 of 566,628 differ from their
+  document's.
+- **`id:` is not a terms key.** Every row has an upstream id and 117k of
+  1.2M are uuids; a term for each would add a million values to the
+  three value indexes. A uuid typed after `id:` reads its `UpstreamId`
+  term, which every uuid-shaped upstream id now has, in one spelling;
+  anything else compares the column as written. The column itself
+  stays as the source wrote it, since the row's uuid is minted from it
+  (`docs/dev/entity_ids.md`). `account` and `project` are stored with a
+  uuid in one spelling. In the real library no uuid was stored any other
+  way, so no answer there changes.
 
 ## The model
 
@@ -192,6 +220,15 @@ shape costs a rebuild, not a migration (AGENTS.md).
   is a word form with `semantic:off`, or in a source not embedded:
   measure it with `scripts/search_eval.py` before and after. Only the
   keyword tables are rebuilt; no chunk is embedded again.
+
+  **Measured, then reversed in part.** Without stems, 454 queries on a
+  real library with `semantic:off` went from 54% to 52% found in the
+  top 10, and lost 15 targets. With meaning on, 7 of those came back;
+  most of the other 8 were long descriptions of a passage in one long
+  page. So bare words (`+word` and `-word` too) match on a second
+  table, `search_stems` (`porter unicode61 remove_diacritics 2`), and a
+  quoted phrase on `search_fts`, words as written. The cost is the
+  second table.
 - **A uuid stored one way.** #1886 matches a uuid however it is typed by
   asking each key for four spellings (dashed or not, lowercase or
   capitals, `IN (SELECT value FROM json_each(?))`), and the pasted-id
@@ -227,8 +264,9 @@ a real library before deciding.
   Gmail, Slack, SQLite FTS5 and Postgres's `plainto_tsquery` (Lucene's
   default is any). They are not a filter: meaning still finds a document
   holding none of them. Unchanged from today.
-- **Meaning, not stemming, covers word forms**, and a quoted phrase is
-  exact: step 2.
+- **A bare word matches its other forms (porter stems), and a quoted
+  phrase is exact**: step 2. First built as no stemming at all, leaving
+  word forms to meaning; that lost recall with meaning off.
 - **No prefix matching.** The search runs on Enter.
 
 ## What changes in `searching.md`

@@ -14,9 +14,7 @@ use tokio::sync::watch;
 use crate::config::DagConfig;
 use crate::run_state::RunState;
 use crate::runs_sink::RunStoreSink;
-use crate::subprocess::{
-    ENV_CHECKPOINT_CADENCE, ENV_MODAL_MAX_SANDBOXES, ENV_NOW, ENV_RENDER_PAGES, ENV_RUN_ID,
-};
+use crate::subprocess::{ENV_NOW, ENV_RUN_ID};
 use crate::supervisor::announce::{Listener, CONFIG_CHANGED};
 use crate::supervisor::store::{RequestOutcome, RequestRow, Store, WipeKind, WipeRow};
 use strum::VariantArray;
@@ -123,7 +121,7 @@ pub fn step_env(
     run_id: &str,
 ) -> Result<StepEnv> {
     let mut vars = BTreeMap::new();
-    // So a `command` can name `datalib-step` bare.
+    // So a `command` can name a program in the binary directory bare.
     let dirs: Vec<PathBuf> = crate::config::resolve_binary_dir(cfg, binary_dir)
         .into_iter()
         .chain(extra_path.iter().cloned())
@@ -142,15 +140,8 @@ pub fn step_env(
     // default: its progress lines would arrive in 4KB lumps, long after
     // the stderr they belong beside. Rust and sh need no help.
     vars.insert("PYTHONUNBUFFERED".into(), "1".into());
-    if let Some(cadence) = cfg.checkpoint_cadence {
-        vars.insert(ENV_CHECKPOINT_CADENCE.into(), cadence.encode());
-    }
-    if let Some(pages) = cfg.render_pages {
-        vars.insert(ENV_RENDER_PAGES.into(), pages.encode());
-    }
-    if let Some(n) = cfg.modal.and_then(|m| m.max_sandboxes) {
-        vars.insert(ENV_MODAL_MAX_SANDBOXES.into(), n.to_string());
-    }
+    // The config's `[env]`, below each step's own `env`.
+    vars.extend(cfg.env.clone());
     // A `RUST_LOG` already in the environment is a person's choice and
     // wins; else the config's level.
     let log_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| cfg.log_filter());
@@ -260,13 +251,12 @@ fn named(names: &[&str]) -> String {
 }
 
 /// Why the launch's pass over the steps is running.
-pub fn migrate_start(build: &str) -> RunStart {
+pub fn prepare_start() -> RunStart {
     RunStart {
         kind: RunKind::Migrate,
-        reason: format!(
-            "the first launch of build {build}: each step updates what it stored, \
-             and nothing is downloaded"
-        ),
+        reason: "the loop started: each step whose program takes --prepare makes what it \
+                 stored usable, and nothing is downloaded"
+            .to_string(),
     }
 }
 
@@ -618,55 +608,16 @@ mod tests {
         );
     }
 
-    /// A config's `[checkpoint_cadence]` reaches every step, in the form a
-    /// step decodes; a config without one leaves the step its default.
+    /// A config's `[env]` reaches every step; a config without one adds
+    /// nothing.
     #[test]
-    fn the_configs_checkpoint_cadence_reaches_every_step() {
-        let with =
-            crate::config::parse("[checkpoint_cadence]\nat_most_every_secs = 2.5\n").unwrap();
+    fn the_configs_env_reaches_every_step() {
+        let with = crate::config::parse("[env]\nSOME_KNOB = \"8,256\"\n").unwrap();
         let env = step_env(&with, None, &[], "now", "run").unwrap();
-        let cadence = crate::config::CheckpointCadence::decode(&env.vars[ENV_CHECKPOINT_CADENCE]);
-        assert_eq!(cadence.map(|c| c.at_most_every_secs), Some(2.5));
+        assert_eq!(env.vars["SOME_KNOB"], "8,256");
 
         let without = crate::config::parse("").unwrap();
         let env = step_env(&without, None, &[], "now", "run").unwrap();
-        assert!(!env.vars.contains_key(ENV_CHECKPOINT_CADENCE));
-    }
-
-    /// A config's `[render_pages]` reaches every step the same way.
-    #[test]
-    fn the_configs_render_pages_reach_every_step() {
-        let with = crate::config::parse(
-            "[render_pages]
-buckets = 200
-",
-        )
-        .unwrap();
-        let env = step_env(&with, None, &[], "now", "run").unwrap();
-        let pages = crate::config::RenderPages::decode(&env.vars[ENV_RENDER_PAGES]);
-        assert_eq!(
-            pages,
-            Some(crate::config::RenderPages {
-                buckets: Some(200),
-                blob_mb: None,
-            })
-        );
-
-        let without = crate::config::parse("").unwrap();
-        let env = step_env(&without, None, &[], "now", "run").unwrap();
-        assert!(!env.vars.contains_key(ENV_RENDER_PAGES));
-    }
-
-    /// A config's `[modal]` reaches every step, and a config without one
-    /// leaves the step its default.
-    #[test]
-    fn the_configs_modal_sandboxes_reach_every_step() {
-        let with = crate::config::parse("[modal]\nmax_sandboxes = 100\n").unwrap();
-        let env = step_env(&with, None, &[], "now", "run").unwrap();
-        assert_eq!(env.vars[ENV_MODAL_MAX_SANDBOXES], "100");
-
-        let without = crate::config::parse("").unwrap();
-        let env = step_env(&without, None, &[], "now", "run").unwrap();
-        assert!(!env.vars.contains_key(ENV_MODAL_MAX_SANDBOXES));
+        assert!(!env.vars.contains_key("SOME_KNOB"));
     }
 }

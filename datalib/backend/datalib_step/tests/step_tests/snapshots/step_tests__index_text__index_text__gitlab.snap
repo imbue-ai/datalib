@@ -34,18 +34,30 @@ Add Earl Grey, hot to replicator menu (!17)
 *merged* — Jean-Luc Picard — `picard/earl-grey` → `main`
 
 ## Description
+## Jean-Luc Picard Tue Apr 15th, 2369 at 08:00
+
 Tea. Earl Grey. Hot.
 ## General discussion
-Jean-Luc Picard *(reply)* · Tue Apr 15th, 2369 at 10:05
+## Jean-Luc Picard reply Tue Apr 15th, 2369 at 10:05
 
 Adopted. Make it so.
-Worf · Tue Apr 15th, 2369 at 10:30
+## Worf Tue Apr 15th, 2369 at 10:30
 
 I will set the standard temperature to be served warm in case of crisis. Klingon ambassadors will not accept tepid beverages.
 ## Inline comments
 
 ### `src/replicator/menu.rs:88`
-William T. Riker · Tue Apr 15th, 2369 at 10:00
+
+--- chunk 1
+title: Add Earl Grey, hot to replicator menu | text: Source: GitLab
+Project: enterprise-d/holodeck
+Merge request: 17
+State: merged
+Author: Jean-Luc Picard
+Branch: picard/earl-grey
+Into: main
+
+## William T. Riker Tue Apr 15th, 2369 at 10:00
 
 Use `enum Tea { EarlGrey, Chamomile, ... }` here rather than a string match — it'll catch typos at compile time.
 
@@ -64,15 +76,17 @@ Holodeck safety interlock regression test (!18)
 *opened* — Jean-Luc Picard — `picard/safety-regression` → `main`
 
 ## Description
+## Jean-Luc Picard Tue Apr 15th, 2369 at 12:00
+
 Adds a regression test that asserts holodeck weapons cannot fire while safeties are engaged. Closes #41.
 ## General discussion
-Geordi La Forge *(reply)* · Tue Apr 15th, 2369 at 14:10
+## Geordi La Forge reply Tue Apr 15th, 2369 at 14:10
 
 Agreed — I can wire that into the simulator harness if Data writes the assertion.
-Jean-Luc Picard *(reply)* · Tue Apr 15th, 2369 at 14:20
+## Jean-Luc Picard reply Tue Apr 15th, 2369 at 14:20
 
 Concur. Make it so.
-Beverly Crusher · Tue Apr 15th, 2369 at 14:30
+## Beverly Crusher Tue Apr 15th, 2369 at 14:30
 
 Please ensure the medical override path is preserved — Sickbay must be able to disable safeties on a holodeck program in a triage scenario.
 
@@ -88,6 +102,6 @@ Into: main
 ## Inline comments
 
 ### `tests/safety.rs:42`
-Lt. Cmdr. Data · Tue Apr 15th, 2369 at 14:00
+## Lt. Cmdr. Data Tue Apr 15th, 2369 at 14:00
 
 The assertion only checks the safety flag *before* arming. We should also assert that arming the weapon while safeties are engaged returns Err(SafetyEngaged).

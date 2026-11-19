@@ -14,12 +14,12 @@ fn ingest(root: &Path, group_type: &str, params: Value) -> Ran {
     let file = root.join("params.json");
     std::fs::write(&file, params.to_string()).unwrap();
     let out = Command::new(std::env::var_os("DATALIB_STEP_BIN").expect("DATALIB_STEP_BIN"))
-        .arg("--params-file")
-        .arg(&file)
+        .env(
+            "DATALIB_DAG_PARAMS",
+            std::fs::read_to_string(&file).unwrap(),
+        )
         .env("DATALIB_DAG_STEP", "source/ingest")
-        .env("DATALIB_DAG_GROUP", "source")
-        .env("DATALIB_DAG_GROUP_TYPE", group_type)
-        .env("DATALIB_DAG_FUNCTION", "ingest")
+        .args(["run", "ingest", group_type])
         .env("DATALIB_DAG_DATA_ROOT", root)
         .env("DATALIB_CACHE_DIR", root.join("cache"))
         .stdin(Stdio::null())

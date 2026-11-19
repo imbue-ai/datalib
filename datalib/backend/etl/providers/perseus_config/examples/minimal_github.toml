@@ -7,14 +7,13 @@ name = "Perseus"
 type = "perseus"
 
 [[steps]]
-group = "perseus"
-function = "ingest"
-command = "datalib-step"
+id = "perseus/ingest"
+command = "datalib-step run ingest perseus"
 
 [steps.params.github]
 
 [[steps]]
-group = "perseus"
-function = "render_markdown"
-command = "datalib-step"
+id = "perseus/render_markdown"
+command = "datalib-step run render_markdown perseus"
 inputs = ["perseus/ingest"]
+reads = "files"

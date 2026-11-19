@@ -1,6 +1,7 @@
 //! The reset verb: empty what this step wrote, so the next run does its
 //! work from the start. The runner invokes the step with `--reset`
-//! naming the part to empty (`docs/dev/step_protocol.md` § Reset); the store's history keeps every row. It then reports the
+//! (`docs/dev/step_protocol.md` § Verbs); the store's history keeps every
+//! row. It then reports the
 //! counts a run reports, taken off the emptied store, because the Manage
 //! row shows a step's newest count and the one from before the reset
 //! would otherwise stand until the step next runs.
@@ -16,16 +17,11 @@ use crate::events::{Emitter, OutputClaim};
 use crate::function::Function;
 use crate::source::StepEnv;
 
-pub async fn run(
-    env: &StepEnv,
-    data_root: &Path,
-    part: &str,
-    emitter: &Emitter,
-) -> Result<Vec<OutputClaim>> {
+pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<Vec<OutputClaim>> {
     let tree = data_root.join(&env.step);
     anyhow::ensure!(
-        part == "store" && env.function.resets(),
-        "`{}` has no {part:?} to reset",
+        env.function.resets(),
+        "`{}` has nothing to reset: it is rebuilt from what it reads on its next run",
         env.function
     );
     match env.function {
@@ -50,7 +46,7 @@ pub async fn run(
         Function::EmbeddingMap => crate::embedding_map::reset(data_root)?,
         other => unreachable!("`Function::resets` lets {other} through with no reset"),
     }
-    tracing::info!(step = %env.step, part, "reset: emptied what the step wrote");
+    tracing::info!(step = %env.step, "reset: emptied what the step wrote");
     Ok(Vec::new())
 }
 

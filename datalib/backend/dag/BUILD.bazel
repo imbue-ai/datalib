@@ -91,12 +91,10 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":datalib_dag",
-        "//datalib/backend/env:datalib_env",
         "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/runtime:datalib_runtime",
-        "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
@@ -125,7 +123,6 @@ rust_test(
     },
     deps = [
         "//datalib/backend/runtime:datalib_runtime",
-        "//datalib/backend/store_meta:datalib_store_meta",
         "@datalib_crates//:libc",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",

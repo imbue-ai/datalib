@@ -61,23 +61,25 @@ id = "contacts"
 type = "contacts"
 
 [[steps]]
-group = "contacts"
-function = "ingest"
+id = "contacts/ingest"
+command = "datalib-step run ingest contacts"
 [steps.params.vcf]
 path = "$fixture_dir"
 
 [[steps]]
-group = "contacts"
-function = "render_markdown"
+id = "contacts/render_markdown"
+command = "datalib-step run render_markdown contacts"
 inputs = ["contacts/ingest"]
+reads = "pinned"
 
 [[groups]]
 id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_grid_and_search_index"
-function = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "datalib-step run unified_grid_and_search_index"
 inputs = ["contacts/render_markdown"]
+reads = "pinned"
 [steps.params]
 not_searched = ["contacts"]
 CONFIG

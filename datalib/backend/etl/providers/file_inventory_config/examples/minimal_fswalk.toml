@@ -7,9 +7,8 @@ name = "Local files"
 type = "file_inventory"
 
 [[steps]]
-group = "file_inventory"
-function = "ingest"
-command = "datalib-step"
+id = "file_inventory/ingest"
+command = "datalib-step run ingest file_inventory"
 
 [steps.params.fswalk]
 path = "~/Documents/starfleet"
@@ -17,7 +16,7 @@ path = "~/Documents/starfleet"
 # Renders no documents, only the storage report every source gets, which
 # is what puts the source in the grid.
 [[steps]]
-group = "file_inventory"
-function = "render_markdown"
-command = "datalib-step"
+id = "file_inventory/render_markdown"
+command = "datalib-step run render_markdown file_inventory"
 inputs = ["file_inventory/ingest"]
+reads = "pinned"

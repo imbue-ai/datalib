@@ -1,14 +1,19 @@
-//! The migrate verb (`--migrate`): bring what this step wrote to this
-//! build's shape where that can be done in place, fetching nothing, and say
-//! when it cannot. A launch asks every built-in step once per build,
-//! before it takes any request (`docs/dev/step_protocol.md` § Migrate).
-//! What each function writes is its own business: the runner only hears
-//! the answer.
+//! The prepare verb (`--prepare`), sent each time the runner starts: bring
+//! what this step wrote to this build's shape where that can be done in
+//! place, fetching nothing; say when it cannot (`needs_rerun`); and refuse,
+//! as failure kind `incompatible`, a store a newer build wrote
+//! (`docs/dev/step_protocol.md` § Verbs). The runner asks at every
+//! start, so a store this build has already opened costs a read of its
+//! `_datalib_meta` and nothing else; only a store an earlier build left,
+//! or a build that cannot name its commit, makes an ingest build a
+//! scratch store to compare shapes with. What each function writes is its own
+//! business: the runner only hears the answer.
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::raw_layout::entities_db;
+use datalib_store_meta::Meta;
 
 use crate::events::{Emitter, OutputClaim};
 use crate::function::Function;
@@ -17,7 +22,7 @@ use crate::source::StepEnv;
 pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<Vec<OutputClaim>> {
     let tree = data_root.join(&env.step);
     match env.function {
-        Function::Ingest => migrate_raw_store(env, &tree, emitter).await,
+        Function::Ingest => prepare_raw_store(env, &tree, emitter).await,
         // A derived store is a function of another; one in another shape is
         // rebuilt by running the step, never migrated in place.
         Function::RenderMarkdown => {
@@ -33,7 +38,7 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
             if retired.exists() {
                 tracing::info!(
                     step = %env.step,
-                    "migrate: the grid index is still the doltlite store; it needs a rerun"
+                    "prepare: the grid index is still the doltlite store; it needs a rerun"
                 );
                 emitter.needs_rerun();
                 return Ok(Vec::new());
@@ -43,7 +48,7 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
             if search_index_is_stale(env, data_root).await? {
                 tracing::info!(
                     step = %env.step,
-                    "migrate: the search index is in another shape or was drawn by another \
+                    "prepare: the search index is in another shape or was drawn by another \
                      version; it needs a rerun"
                 );
                 emitter.needs_rerun();
@@ -68,7 +73,7 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
             Ok(Vec::new())
         }
         Function::Embed | Function::EmbeddingMap => {
-            tracing::info!(step = %env.step, "migrate: nothing of ours to bring up to date");
+            tracing::debug!(step = %env.step, "prepare: nothing of ours to bring up to date");
             Ok(Vec::new())
         }
     }
@@ -101,26 +106,56 @@ async fn stale_in(reader: &datalib_search_index::Reader, env: &StepEnv) -> Resul
     Ok(false)
 }
 
-async fn migrate_raw_store(
+/// What `store`'s `_datalib_meta` says, or a refusal when a newer line of
+/// datalib wrote it: opening it would drop what that build knew.
+async fn meta_of(store: &Path) -> Result<Option<Meta>> {
+    let meta = datalib_store_meta::guard::read_at(store)
+        .await
+        .with_context(|| format!("read {}'s _datalib_meta", store.display()))?;
+    datalib_store_meta::refuse_if_newer(store, meta.as_ref())?;
+    Ok(meta)
+}
+
+/// Where an older build kept a source's blob store, which opening the raw
+/// store converts (`datalib_etl::blob_cas`, whose name for it is private).
+const DOLTLITE_BLOB_STORE: &str = "blobs.doltlite_db";
+
+async fn prepare_raw_store(
     env: &StepEnv,
     tree: &Path,
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
+    let db = entities_db(tree);
     // A source that has never downloaded is created at this build's shape
     // by its first download; opening it here would only make it empty.
-    if !entities_db(tree).exists() {
-        tracing::info!(step = %env.step, "migrate: no raw store yet");
+    if !db.exists() {
+        tracing::debug!(step = %env.step, "prepare: no raw store yet");
         return Ok(Vec::new());
+    }
+    let source_type = env.source_type()?;
+    let meta = meta_of(&db).await?;
+    // The raw store's meta says nothing of the blob store beside it, which
+    // an older build left in doltlite's format and the open converts.
+    let blobs_to_convert = tree.join(DOLTLITE_BLOB_STORE).exists();
+    if let (Some(meta), false) = (&meta, blobs_to_convert) {
+        if opened_by_this_build(meta) {
+            tracing::debug!(step = %env.step, "prepare: this build has opened the raw store");
+            return Ok(Vec::new());
+        }
+        if in_this_builds_shape(meta, &this_builds_raw_shape(source_type).await?) {
+            tracing::debug!(step = %env.step, "prepare: the raw store is in this build's shape");
+            return Ok(Vec::new());
+        }
     }
     // This step's name says download; its log has to say otherwise from
     // the start, or a long migration reads as one.
     const UPDATING: &str = "updating the raw store for this build; nothing is downloaded";
-    tracing::info!(step = %env.step, "migrate: {UPDATING}");
+    tracing::info!(step = %env.step, "prepare: {UPDATING}");
     emitter.progress().set_message(UPDATING);
-    bring_raw_store_up_to_date(env.source_type()?, &env.group, tree)
+    bring_raw_store_up_to_date(source_type, &env.group, tree)
         .await
-        .with_context(|| format!("migrate {}", env.step))?;
-    tracing::info!(step = %env.step, "migrate: the raw store is in this build's shape");
+        .with_context(|| format!("prepare {}", env.step))?;
+    tracing::info!(step = %env.step, "prepare: the raw store is in this build's shape");
     Ok(crate::ingest::raw_store_version(tree)
         .await?
         .map(|version| OutputClaim {
@@ -130,6 +165,41 @@ async fn migrate_raw_store(
         })
         .into_iter()
         .collect())
+}
+
+/// Whether this very build has opened the store: the owner rewrites the
+/// build's version and commit into `_datalib_meta` on every open, after
+/// its migrations, so a store that names both is in this build's shape.
+/// A build that cannot name its commit cannot tell, and compares shapes.
+fn opened_by_this_build(stored: &Meta) -> bool {
+    let commit = datalib_runtime::build_id::git_hash();
+    commit.is_some()
+        && stored.git_hash == commit
+        && stored.datalib_version == datalib_runtime::build_id::DATALIB_VERSION
+}
+
+/// What a store a source of `source_type` opens at this build records in
+/// its `_datalib_meta`: read off a new one made in a scratch directory,
+/// since only the provider's open knows its DDL and its ladders.
+async fn this_builds_raw_shape(source_type: &str) -> Result<Meta> {
+    let scratch = tempfile::tempdir().context("a scratch directory for this build's shape")?;
+    let raw = scratch.path().join("ingest");
+    crate::dispatch::migrate(source_type, &raw).await?;
+    datalib_store_meta::guard::read_at(&entities_db(&raw))
+        .await?
+        .with_context(|| format!("a new {source_type} store records no _datalib_meta"))
+}
+
+/// Whether a store whose meta says `stored` needs nothing from this build:
+/// the same shape on both ladders, written by this release. A store an
+/// older release wrote in the same shape is still opened once, since a
+/// provider's open may also fill in what that release left out (contacts'
+/// photos).
+fn in_this_builds_shape(stored: &Meta, this_build: &Meta) -> bool {
+    stored.schema_hash == this_build.schema_hash
+        && stored.schema_version == this_build.schema_version
+        && stored.shared_schema_version == this_build.shared_schema_version
+        && stored.datalib_version == this_build.datalib_version
 }
 
 /// The source's own migration, then its older problems named.
@@ -150,7 +220,7 @@ async fn adopt_sourceless_problems(group: &str, tree: &Path) -> Result<()> {
         if n > 0 {
             datalib_etl::doltlite_raw::commit_run(
                 &pool,
-                &format!("migrate {group}: name the source on {n} problems"),
+                &format!("prepare {group}: name the source on {n} problems"),
             )
             .await?;
         }
@@ -163,7 +233,7 @@ async fn adopt_sourceless_problems(group: &str, tree: &Path) -> Result<()> {
         tracing::info!(
             group,
             problems = n,
-            "migrate: named the source on older problems"
+            "prepare: named the source on older problems"
         );
     }
     Ok(())
@@ -179,17 +249,15 @@ async fn ask_for_a_rerun_if(
     shape: &str,
 ) -> Result<()> {
     if !store.exists() {
-        tracing::info!(step = %env.step, "migrate: no store yet");
+        tracing::debug!(step = %env.step, "prepare: no store yet");
         return Ok(());
     }
-    let meta = datalib_store_meta::guard::read_at(store)
-        .await
-        .with_context(|| format!("read {}'s _datalib_meta", store.display()))?;
+    let meta = meta_of(store).await?;
     if meta.is_none_or(|m| m.schema_hash != shape) {
-        tracing::info!(step = %env.step, "migrate: the store is in another shape; it needs a rerun");
+        tracing::info!(step = %env.step, "prepare: the store is in another shape; it needs a rerun");
         emitter.needs_rerun();
     } else {
-        tracing::info!(step = %env.step, "migrate: the store is in this build's shape");
+        tracing::debug!(step = %env.step, "prepare: the store is in this build's shape");
     }
     Ok(())
 }
@@ -574,6 +642,42 @@ mod tests {
     /// Migrating a store already in this build's shape commits nothing, so
     /// a launch on an up-to-date root moves no version and re-renders
     /// nothing.
+    /// The shortcut holds only for this very build, and only when it can
+    /// name its commit: a store another commit or release opened, or one
+    /// stamped `unknown`, still has its shape compared.
+    #[test]
+    fn only_a_store_this_build_opened_skips_the_comparison() {
+        let mine = Meta {
+            datalib_version: datalib_runtime::build_id::DATALIB_VERSION.to_string(),
+            git_hash: datalib_runtime::build_id::git_hash(),
+            doltlite_version: None,
+            schema_hash: "any".into(),
+            schema_version: 0,
+            shared_schema_version: 0,
+            store_kind: None,
+            written_at_utc: "2369-04-15T00:00:00Z".into(),
+        };
+        assert_eq!(
+            opened_by_this_build(&mine),
+            datalib_runtime::build_id::git_hash().is_some()
+        );
+        let other_commit = Meta {
+            git_hash: Some("not-this-commit".into()),
+            ..mine.clone()
+        };
+        assert!(!opened_by_this_build(&other_commit));
+        let other_release = Meta {
+            datalib_version: "0.0.0-elsewhere".into(),
+            ..mine.clone()
+        };
+        assert!(!opened_by_this_build(&other_release));
+        let unstamped = Meta {
+            git_hash: None,
+            ..mine
+        };
+        assert!(!opened_by_this_build(&unstamped));
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_store_in_this_builds_shape_migrates_to_the_same_commit() {
         for &t in SourceType::VARIANTS {
@@ -586,16 +690,161 @@ mod tests {
     }
 
     fn env_of(step: &str, function: Function) -> StepEnv {
-        let (group, _) = step.split_once('/').unwrap();
-        StepEnv {
-            step: step.into(),
-            group: group.into(),
+        let args = crate::source::RunArgs {
+            function: function.as_str().into(),
             group_type: Some("email".into()),
-            source_group: None,
-            source_group_type: None,
-            function,
-            inputs: Vec::new(),
+            source_type: None,
+        };
+        StepEnv::new(step.into(), &args, Vec::new()).unwrap()
+    }
+
+    /// Set one `_datalib_meta` row of a store and commit it.
+    async fn set_meta(db: &Path, key: &str, value: &str) {
+        let pool = plain_pool(db).await;
+        sqlx::query("UPDATE _datalib_meta SET value = ? WHERE key = ?")
+            .bind(value)
+            .bind(key)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("SELECT dolt_commit('-Am', 'set a meta row')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+    }
+
+    /// The runner asks at every start, so a raw store this release already
+    /// shaped is left alone: no claim, no commit, even where opening it
+    /// would have moved a meta row (another commit of the same release).
+    /// A store an older release wrote is opened once, and its new version
+    /// reported.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_raw_store_this_release_shaped_is_not_opened() {
+        let root = tempfile::tempdir().unwrap();
+        let env = env_of("mail/ingest", Function::Ingest);
+        let tree = root.path().join(&env.step);
+        crate::dispatch::migrate("email", &tree).await.unwrap();
+        let db = entities_db(&tree);
+        set_meta(&db, "git_hash", "another commit of this release").await;
+        let before = crate::ingest::raw_store_version(&tree).await.unwrap();
+        let emitter = Emitter::new(env.step.clone());
+        let claims = run(&env, root.path(), &emitter).await.unwrap();
+        assert!(claims.is_empty(), "{claims:?}");
+        assert!(!emitter.asked_for_a_rerun());
+        assert_eq!(
+            crate::ingest::raw_store_version(&tree).await.unwrap(),
+            before,
+            "nothing sealed"
+        );
+
+        set_meta(&db, "datalib_version", "0.1.0").await;
+        let claims = run(&env, root.path(), &Emitter::new(env.step.clone()))
+            .await
+            .unwrap();
+        assert_eq!(claims.len(), 1, "an older release's store is opened");
+        let meta = datalib_store_meta::guard::read_at(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            meta.datalib_version,
+            datalib_runtime::build_id::DATALIB_VERSION
+        );
+    }
+
+    /// A raw store in this release's shape is still opened while an older
+    /// build's doltlite blob store sits beside it, since the open is what
+    /// moves those blobs into the plain file; skipped, they would read as
+    /// missing for good.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_old_blob_store_beside_a_current_raw_store_is_converted() {
+        let root = tempfile::tempdir().unwrap();
+        let env = env_of("mail/ingest", Function::Ingest);
+        let tree = root.path().join(&env.step);
+        crate::dispatch::migrate("email", &tree).await.unwrap();
+        let plain = tree.join(datalib_etl::raw_layout::BLOBS_DB);
+        if plain.exists() {
+            std::fs::remove_file(&plain).unwrap();
         }
+        let old = tree.join(DOLTLITE_BLOB_STORE);
+        let pool = datalib_etl::doltlite_raw::open(&old, &[datalib_etl::blob_cas::CAS_OBJECTS_DDL])
+            .await
+            .unwrap();
+        let hash = "a".repeat(64);
+        sqlx::query("INSERT INTO cas_objects VALUES (?, 5, 'text/plain', x'68656c6c6f')")
+            .bind(&hash)
+            .execute(&pool)
+            .await
+            .unwrap();
+        datalib_etl::doltlite_raw::commit_run(&pool, "download: blobs")
+            .await
+            .unwrap();
+        pool.close().await;
+
+        run(&env, root.path(), &Emitter::new(env.step.clone()))
+            .await
+            .unwrap();
+        assert!(!old.exists(), "the old blob store is converted and removed");
+        let cas = datalib_etl::blob_cas::BlobCas::open_reader(&plain)
+            .await
+            .unwrap();
+        assert!(
+            cas.describe(&hash).await.unwrap().is_some(),
+            "the blob moved"
+        );
+        cas.close().await;
+    }
+
+    /// A store a newer line of datalib wrote is refused, whichever step
+    /// owns it, as `incompatible`, and is left as it is.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_store_a_newer_build_wrote_is_refused_as_incompatible() {
+        let root = tempfile::tempdir().unwrap();
+        let ingest = env_of("mail/ingest", Function::Ingest);
+        let tree = root.path().join(&ingest.step);
+        crate::dispatch::migrate("email", &tree).await.unwrap();
+        let db = entities_db(&tree);
+        set_meta(&db, "datalib_version", "99.0.0").await;
+        let before = crate::ingest::raw_store_version(&tree).await.unwrap();
+        let err = run(&ingest, root.path(), &Emitter::new(ingest.step.clone()))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            crate::hints::classify(&err),
+            datalib_dag::FailureKind::Incompatible,
+            "{err:#}"
+        );
+        assert_eq!(
+            crate::ingest::raw_store_version(&tree).await.unwrap(),
+            before
+        );
+
+        let render = env_of("mail/render_markdown", Function::RenderMarkdown);
+        let tree = root.path().join(&render.step);
+        tokio::task::spawn_blocking({
+            let tree = tree.clone();
+            move || {
+                datalib_etl_render::indexed_markdown::IndexedMarkdownStore::open(&tree)
+                    .unwrap()
+                    .close()
+            }
+        })
+        .await
+        .unwrap();
+        set_meta(
+            &datalib_etl_render::indexed_markdown::path_for(&tree),
+            "datalib_version",
+            "99.0.0",
+        )
+        .await;
+        let err = run(&render, root.path(), &Emitter::new(render.step.clone()))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            crate::hints::classify(&err),
+            datalib_dag::FailureKind::Incompatible
+        );
     }
 
     /// What `_datalib_meta` says this store's shape is, as an older build
@@ -683,7 +932,7 @@ mod tests {
     }
 
     /// A new version of the index's drawing or chunking moves nothing the
-    /// `unified_grid_and_search_index` step's keyword pass reads, so the migrate pass asks for it:
+    /// `unified_grid_and_search_index` step's keyword pass reads, so the prepare verb asks for it:
     /// when a source it reads was drawn by another version, and not before
     /// there is an index or once it is this build's; and when the index's
     /// tables are in another shape, which its next writer empties.
@@ -755,20 +1004,12 @@ mod tests {
         assert!(ask().await, "tables in an older shape");
     }
 
-    /// A source that has never downloaded gets no store from a migrate:
+    /// A source that has never downloaded gets no store from a prepare:
     /// its first download creates one.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_source_with_no_store_is_left_without_one() {
         let root = tempfile::tempdir().unwrap();
-        let env = StepEnv {
-            step: "mail/ingest".into(),
-            group: "mail".into(),
-            group_type: Some("email".into()),
-            source_group: None,
-            source_group_type: None,
-            function: Function::Ingest,
-            inputs: Vec::new(),
-        };
+        let env = env_of("mail/ingest", Function::Ingest);
         let claims = run(&env, root.path(), &Emitter::new(env.step.clone()))
             .await
             .unwrap();

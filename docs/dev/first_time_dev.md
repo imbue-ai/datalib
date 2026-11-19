@@ -224,9 +224,9 @@ readable without a token — they're what tells an agent how to get one.
 Ingestion is a DAG of subprocess steps orchestrated by `datalib-dag`
 (`//datalib/backend/dag:datalib_dag_bin`), which reads the data root's
 `config.toml` (the `[[groups]]` + `[[steps]]` format) and runs each step
-as a subprocess. Datalib's own steps write `command = "datalib-step"`
-(`//datalib/backend/datalib_step:datalib_step`), which
-reads its function and its group's type from the environment — `ingest`
+as a subprocess. Datalib's own steps write
+`command = "datalib-step run <function> <type>"`
+(`//datalib/backend/datalib_step:datalib_step`) — `ingest`
 brings a source's data into its raw store, `render_markdown` renders
 markdown + its store, and `unified_grid_and_search_index` loads every render store into
 `<root>/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`. See
@@ -253,17 +253,15 @@ downstream of them.
 
 There is no per-provider download program: `datalib-step` is the one,
 and it runs without the runner too. Give it the environment the runner
-would, the step's params as JSON, and the data root as its working
+would, with the step's params as JSON, and the data root as its working
 directory. For a Lightroom catalog:
 
 ```sh
 bin=$PWD/bazel-bin/datalib/backend/bin
 mkdir -p ~/lr-root && cd ~/lr-root
-echo '{"catalog": {"path": "/Users/me/Pictures/Catalog.lrcat"}}' > ../lr-params.json
 DATALIB_DAG_DATA_ROOT=$PWD DATALIB_DAG_STEP=lightroom/ingest \
-DATALIB_DAG_GROUP=lightroom DATALIB_DAG_FUNCTION=ingest \
-DATALIB_DAG_GROUP_TYPE=lightroom \
-  $bin/datalib-step --params-file ../lr-params.json
+DATALIB_DAG_PARAMS='{"catalog": {"path": "/Users/me/Pictures/Catalog.lrcat"}}' \
+  $bin/datalib-step run ingest lightroom
 ```
 
 The params are the step's `[steps.params]` table as JSON (each

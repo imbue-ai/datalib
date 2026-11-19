@@ -252,7 +252,8 @@ pub struct GridRow {
     /// nothing — which makes the backpointer verifiable rather than
     /// decorative.
     ///
-    /// Searched as `id:`, whole and as written.
+    /// Searched as `id:`: whole and as written, or a uuid however it is
+    /// written, through its `UpstreamId` search term.
     #[col(sql = "VARCHAR(128)", search = "id")]
     pub upstream_id: Option<String>,
     /// What sort of upstream thing this row is, in the provider's own

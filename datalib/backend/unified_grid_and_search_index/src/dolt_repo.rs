@@ -409,7 +409,9 @@ impl DoltRepo {
         }
         match query.fetch_all(&mut *at.tx).await {
             Ok(rows) => Ok(rows),
-            Err(e) if is_missing_table(&e, "grid_rows") => Ok(Vec::new()),
+            Err(e) if is_missing_table(&e, "grid_rows") || is_missing_table(&e, "rows") => {
+                Ok(Vec::new())
+            }
             Err(e) => Err(RepoError::Internal(e.to_string())),
         }
     }
@@ -553,10 +555,7 @@ pub fn term_values_sql(
     let among = if where_sql.is_empty() {
         String::new()
     } else {
-        format!(
-            " AND t.row_id IN (SELECT r.row_id FROM rows r \
-             WHERE r.uuid IN (SELECT uuid FROM {grid_rows}{where_sql}))"
-        )
+        format!(" AND t.row_id IN (SELECT rowid FROM {grid_rows}{where_sql})")
     };
     format!(
         "SELECT v.value, count(DISTINCT t.row_id) FROM terms t \

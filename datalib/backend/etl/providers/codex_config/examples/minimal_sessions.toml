@@ -7,14 +7,13 @@ name = "Codex"
 type = "codex"
 
 [[steps]]
-group = "codex"
-function = "ingest"
-command = "datalib-step"
+id = "codex/ingest"
+command = "datalib-step run ingest codex"
 
 [steps.params.sessions]
 
 [[steps]]
-group = "codex"
-function = "render_markdown"
-command = "datalib-step"
+id = "codex/render_markdown"
+command = "datalib-step run render_markdown codex"
 inputs = ["codex/ingest"]
+reads = "pinned"

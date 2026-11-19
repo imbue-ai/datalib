@@ -35,6 +35,14 @@ pub fn save(root: &Path, text: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+/// `text` with every rewrite that applies made, as [`save`] would leave
+/// it on disk; `None` when none applies. A rewrite that refuses is
+/// skipped, as at a save.
+pub fn upgraded(text: &str) -> Option<String> {
+    let upgraded = datalib_migrate_config::upgrade_unattended(text);
+    (!upgraded.done.is_empty()).then_some(upgraded.text)
+}
+
 /// Rewrite the root's config if it is in an old shape, and say so in the
 /// log. Returns where the old text went, when it did.
 pub fn upgrade(root: &Path) -> Option<PathBuf> {

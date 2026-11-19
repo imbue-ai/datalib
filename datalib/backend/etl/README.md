@@ -830,9 +830,10 @@ store whole and the next open starts over.
 **A render opens the CAS through `open_cas_for_render`**, never by
 testing for `blobs.sqlite` itself. Until it is converted, that reads an
 older build's `blobs.doltlite_db` in place, read-only: a render may not
-write the raw directory. `datalib-http` reads only the plain file, but a
-launch converts every source's CAS before any render runs, since each
-source's `--migrate` opens its raw store and its CAS with it.
+write the raw directory. `datalib-http` reads only the plain file, but
+each start of the loop converts every source's CAS before any render
+runs, since an ingest's `--prepare` opens its raw store and its CAS
+with it when the store is older than this build.
 
 **Filenames dedupe on the content hash, not on the derived name** (for
 the bytes render writes beside a page). A blob's

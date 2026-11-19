@@ -16,7 +16,7 @@ use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline, escape_name_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets, Lookup};
-use datalib_etl_render::message::{chip_link, message_stamp_text_html};
+use datalib_etl_render::message::MessageHeader;
 use datalib_etl_render::section::Section;
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
@@ -49,7 +49,9 @@ use datalib_etl_render::pages::batches;
 /// v14: a comment's time keeps Notion's `Z`: its clock is unknown.
 /// v15: a page's text is a block keyed by its row, its front matter
 ///      layout around it.
-pub const RENDER_VERSION: u32 = 15;
+/// v16: a comment opens with the one message header every renderer
+///      writes.
+pub const RENDER_VERSION: u32 = 16;
 pub fn notion_url(page_id: &str) -> String {
     format!("https://www.notion.so/{}", page_id.replace('-', ""))
 }
@@ -340,11 +342,17 @@ fn thread_sections(
             .and_then(|v| v.as_str())
             .unwrap_or("(unknown)");
         let when = c.get("created_time").and_then(|v| v.as_str()).unwrap_or("");
-        let who = match author_of(c) {
-            Some(h) => chip_link(author, &h),
-            None => format!("**{}**", escape_name_inline(author)),
-        };
-        out.push_str(&format!("{who} · {}\n\n", message_stamp_text_html(when)));
+        let handle = author_of(c);
+        out.push_str(
+            &MessageHeader {
+                author,
+                handle: handle.as_ref(),
+                stamp: Some(when),
+                ..Default::default()
+            }
+            .render(),
+        );
+        out.push_str("\n\n");
         out.push_str(&escape_md_block(&plain(c.get("rich_text"))));
         out.push_str("\n\n");
         sections.push(Section::boxed(
@@ -1138,7 +1146,7 @@ mod tests {
         assert!(md.find("> Warp core alignment") < md.find("Recommend recalibration"));
         assert!(
             md.contains(
-                "[Data](mailto:data@enterprise.test \"Data <data@enterprise.test>\") · <time"
+                "## [Data](mailto:data@enterprise.test \"Data <data@enterprise.test>\") <time"
             ),
             "an author with an address is a chip: {md}"
         );
@@ -1161,7 +1169,12 @@ mod tests {
             .expect("front matter, then the body");
         assert!(!body.contains("<script>"), "{md}");
         assert!(body.starts_with(&format!("> {escaped}\n")), "{md}");
-        assert!(body.contains(&format!("**{escaped}** · ")), "{md}");
+        assert!(
+            body.contains(&format!(
+                "## <span class=\"msg-author\">{escaped}</span> <time"
+            )),
+            "{md}"
+        );
         assert!(body.contains(&format!("\n{escaped}\n")), "{md}");
 
         let page = json!({"id":"p1","properties":{

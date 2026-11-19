@@ -333,26 +333,19 @@ class RenderContractTest(unittest.TestCase):
         contract then only asks that cold refuse it the same way."""
         gtype = next(g["type"] for g in self.config["groups"] if g["id"] == group)
         step = next(
-            s
-            for s in self.config["steps"]
-            if s["group"] == group and s["function"] == "render_markdown"
+            s for s in self.config["steps"] if s["id"] == f"{group}/render_markdown"
         )
         env = {
             **os.environ,
             "DATALIB_POOL_ACQUIRE_SECS": str(_POOL_ACQUIRE_SECS),
             "DATALIB_DAG_DATA_ROOT": str(data_root),
             "DATALIB_DAG_STEP": f"{group}/render_markdown",
-            "DATALIB_DAG_GROUP": group,
-            "DATALIB_DAG_GROUP_TYPE": gtype,
-            "DATALIB_DAG_FUNCTION": "render_markdown",
             "DATALIB_DAG_INPUTS": f"{group}/ingest",
             "DATALIB_DAG_NOW": self.now,
         }
-        argv = [str(self.cwd / self.step_bin)]
         if step.get("params"):
-            params_file = data_root / f"{group}.render.params.json"
-            params_file.write_text(json.dumps(step["params"]))
-            argv += ["--params-file", str(params_file)]
+            env["DATALIB_DAG_PARAMS"] = json.dumps(step["params"])
+        argv = [str(self.cwd / self.step_bin), "run", "render_markdown", gtype]
         try:
             result = _run(argv, cwd=str(self.cwd), env=env, timeout=_SPAWN_TIMEOUT_SECS)
         except subprocess.TimeoutExpired as hung:
@@ -723,9 +716,9 @@ class RenderContractTest(unittest.TestCase):
     def _sources(self) -> list[str]:
         """Groups with a render step and a doltlite raw store."""
         rendered = {
-            s["group"]
+            s["id"].split("/")[0]
             for s in self.config["steps"]
-            if s["function"] == "render_markdown"
+            if s["id"].split("/", 1)[1:] == ["render_markdown"]
         }
         return sorted(
             g

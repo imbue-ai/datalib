@@ -7,9 +7,8 @@ name = "Apple Messages"
 type = "apple_messages"
 
 [[steps]]
-group = "apple_messages"
-function = "ingest"
-command = "datalib-step"
+id = "apple_messages/ingest"
+command = "datalib-step run ingest apple_messages"
 
 # Which tables and columns to mirror. Globs: `*` and `?` only.
 [steps.params]
@@ -32,15 +31,16 @@ gc = false           # collect unreachable chunks each run: a smaller store,
 path = "~/Library/Messages"
 
 [[steps]]
-group = "apple_messages"
-function = "render_markdown"
-command = "datalib-step"
+id = "apple_messages/render_markdown"
+command = "datalib-step run render_markdown apple_messages"
 inputs = ["apple_messages/ingest"]
+reads = "pinned"
 
 # Search by meaning: cuts this source's documents into chunks and embeds
 # them. Leave it out and keyword search still finds it.
 [[steps]]
-group = "apple_messages"
-function = "embed"
-command = "datalib-step"
+id = "apple_messages/embed"
+command = "datalib-step run embed apple_messages"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]

@@ -7,9 +7,8 @@ name = "PDFs"
 type = "pdf"
 
 [[steps]]
-group = "pdf"
-function = "ingest"
-command = "datalib-step"
+id = "pdf/ingest"
+command = "datalib-step run ingest pdf"
 
 [steps.params]
 ignore = ["drafts/**", "**/.Trash/**"]  # gitignore-style patterns to skip, on top of any
@@ -28,15 +27,16 @@ path = "~/Documents/papers"  # the folder to scan, and everything under it
 # Render needs no params: it reads the scan root back out of the raw
 # store, so it converts exactly the tree the ingest step walked.
 [[steps]]
-group = "pdf"
-function = "render_markdown"
-command = "datalib-step"
+id = "pdf/render_markdown"
+command = "datalib-step run render_markdown pdf"
 inputs = ["pdf/ingest"]
+reads = "pinned"
 
 # Search by meaning: cuts this source's documents into chunks and embeds
 # them. Leave it out and keyword search still finds it.
 [[steps]]
-group = "pdf"
-function = "embed"
-command = "datalib-step"
+id = "pdf/embed"
+command = "datalib-step run embed pdf"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]

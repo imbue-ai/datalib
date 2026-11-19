@@ -7,14 +7,13 @@ name = "Fastmail Contacts"
 type = "contacts"
 
 [[steps]]
-group = "contacts"
-function = "ingest"
-command = "datalib-step"
+id = "contacts/ingest"
+command = "datalib-step run ingest contacts"
 
 [steps.params.fastmail]
 
 [[steps]]
-group = "contacts"
-function = "render_markdown"
-command = "datalib-step"
+id = "contacts/render_markdown"
+command = "datalib-step run render_markdown contacts"
 inputs = ["contacts/ingest"]
+reads = "pinned"

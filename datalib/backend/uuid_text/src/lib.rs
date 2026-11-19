@@ -50,23 +50,6 @@ pub fn at_end(word: &str) -> Option<String> {
     })
 }
 
-/// Every way a source may store the uuid `s` is: dashed or not, lowercase
-/// or capitals. What a lookup asks for, so a uuid matches however it was
-/// typed and however its source stored it.
-pub fn spellings(s: &str) -> Option<Vec<String>> {
-    let dashed = canonical(s)?;
-    let bare = dashed.replace('-', "");
-    let mut all = vec![
-        dashed.to_ascii_uppercase(),
-        dashed,
-        bare.to_ascii_uppercase(),
-        bare,
-    ];
-    all.sort();
-    all.dedup();
-    Some(all)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,27 +118,5 @@ mod tests {
     fn a_word_split_mid_character_is_no_uuid() {
         let word = format!("é{}", "a".repeat(35));
         assert_eq!(at_end(&word), None);
-    }
-
-    #[test]
-    fn a_uuid_is_spelled_dashed_or_not_in_either_case() {
-        let all = [
-            "1701D000-ABCD-4E00-A000-0000000000EF",
-            "1701D000ABCD4E00A0000000000000EF",
-            "1701d000-abcd-4e00-a000-0000000000ef",
-            "1701d000abcd4e00a0000000000000ef",
-        ];
-        for typed in all {
-            assert_eq!(spellings(typed).unwrap(), all, "{typed}");
-        }
-        assert_eq!(
-            spellings("00000001-1701-4000-8000-000000000001").unwrap(),
-            [
-                "00000001-1701-4000-8000-000000000001",
-                "00000001170140008000000000000001"
-            ],
-            "digits alone have one case"
-        );
-        assert_eq!(spellings("M-ncc1701-0042"), None);
     }
 }

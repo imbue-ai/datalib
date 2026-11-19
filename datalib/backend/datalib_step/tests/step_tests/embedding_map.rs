@@ -35,14 +35,13 @@ fn run(root: &Path, reset: bool) -> Value {
     let bin = std::env::var_os("DATALIB_STEP_BIN").expect("DATALIB_STEP_BIN");
     let mut cmd = Command::new(bin);
     cmd.env("DATALIB_DAG_STEP", STEP)
-        .env("DATALIB_DAG_GROUP", "unified_grid_and_search_index")
-        .env("DATALIB_DAG_FUNCTION", "embedding_map")
+        .args(["run", "embedding_map"])
         .env("DATALIB_DAG_INPUTS", r#"["slack/embed"]"#)
         .env("DATALIB_DAG_DATA_ROOT", root)
         .env("DATALIB_DAG_NOW", "2026-09-25T00:00:00+00:00")
         .stdin(Stdio::null());
     if reset {
-        cmd.args(["--reset", "store"]);
+        cmd.arg("--reset");
     }
     let out = cmd.output().expect("spawn datalib-step");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();

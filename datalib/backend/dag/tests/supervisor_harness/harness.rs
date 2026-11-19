@@ -50,7 +50,7 @@ impl Default for Clocks {
 
 /// A step in the harness's config: a puppet, reading `inputs`, holding
 /// `locks` (as the config writes them, `locks = …`), reading as `reads`
-/// says and starting as `start` says.
+/// says (pinned when it says nothing) and starting as `start` says.
 #[derive(Clone, Debug, Default)]
 pub struct Step {
     pub id: String,
@@ -98,8 +98,7 @@ impl Step {
 /// `[[locks]]` entries every harness config has: the default budgets wide
 /// enough that no scenario waits on one it does not mean to.
 const WIDE_DEFAULTS: &str = "[[locks]]\nname = \"network\"\nslots = 8\n\n\
-                             [[locks]]\nname = \"cpu\"\nslots = 8\n\n\
-                             [[locks]]\nname = \"index\"\nslots = 8\n\n";
+                             [[locks]]\nname = \"cpu\"\nslots = 8\n\n";
 
 #[derive(Debug, Clone)]
 pub enum Seen {
@@ -322,7 +321,11 @@ impl Harness {
     }
 
     fn config_text(&self, steps: &[Step], locks: &str) -> String {
-        let mut text = format!("{WIDE_DEFAULTS}{locks}");
+        // The puppet answers `--reset` itself.
+        let mut text = format!(
+            "[[programs]]\ncommand = {:?}\nverbs = [\"reset\"]\n\n{WIDE_DEFAULTS}{locks}",
+            self.puppet_bin
+        );
         for s in steps {
             let inputs: Vec<String> = s.inputs.iter().map(|i| format!("{i:?}")).collect();
             text.push_str(&format!(
@@ -334,9 +337,10 @@ impl Harness {
             if let Some(locks) = &s.locks {
                 text.push_str(&format!("locks = {locks}\n"));
             }
-            if let Some(reads) = s.reads {
-                text.push_str(&format!("reads = {reads:?}\n"));
-            }
+            // Pinned unless a scenario says files: most scenarios are about
+            // a consumer running beside its producer.
+            let reads = s.reads.unwrap_or("pinned");
+            text.push_str(&format!("reads = {reads:?}\n"));
             if let Some(start) = s.start {
                 text.push_str(&format!("start = {start:?}\n"));
             }

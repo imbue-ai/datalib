@@ -425,15 +425,6 @@
   width: auto;
   height: auto;
 }
-.chat-body .msg-meta {
-  color: var(--datalib-muted, #94a3b8);
-  font-size: 0.85rem;
-  margin: 0 0 0.5rem;
-}
-.chat-body .msg-meta a {
-  color: inherit;
-  text-decoration: underline;
-}
 /* The chat-common message header.
    It is a real `## ` heading in the file; on screen it should read as
    Slack's one-line "Name  time", not as a document section, hence the
@@ -520,6 +511,17 @@
   /* The full instant is in `title`; say so with the cursor. */
   cursor: help;
 }
+/* A word the source says about a message beside its author (a review's
+   `APPROVED`, `reply`): small and muted, as the time is. */
+.chat-body .msg-tag {
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: var(--datalib-muted, #94a3b8);
+  text-transform: lowercase;
+  padding: 0 0.35em;
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-radius: 999px;
+}
 /* A version of the conversation the account left (an edited prompt, a
    regenerated answer), folded in where it forked. Dashed, so it reads as
    beside the conversation rather than part of it. */
@@ -560,6 +562,12 @@
 .chat-body details.tool-group .msg h2:has(> .msg-author, > a.chip) {
   font-size: 0.8em;
   opacity: 0.7;
+}
+/* A section with no header line has its 🆔 at its top, set to the right
+   rather than on a line of its own. */
+.chat-body [data-section-uuid] > button.copy-uuid:first-child {
+  float: right;
+  margin-left: 0.5em;
 }
 .chat-body button.copy-uuid {
   /* The 🆔 glyph is a saturated purple that outshouts the message it

@@ -1,39 +1,50 @@
 # `datalib-dag` — the runner
 
-Reads a `config.toml`, builds a DAG from it, and runs the steps. This
-file holds the rules you cannot recover by reading the code; the
-contract a step author needs is
-[`step_protocol.md`](../../../docs/dev/step_protocol.md). The set of
-steps is fixed before a run starts, so a step that *discovers* more work
-(a fan-out per conversation, say) does it inside itself rather than
-growing the graph.
+Reads a `config.toml`, builds a DAG from it, and runs the steps. This file
+holds the rules you cannot recover by reading the code; the contract a
+step author needs is
+[`docs/dev/step_protocol.md`](../../../docs/dev/step_protocol.md). A
+step that *discovers* downstream work (a fan-out per conversation, say)
+does it inside one step rather than adding steps: the graph changes only
+when the config does (§"What the loop runs, and what makes a step
+stale").
 
-## A step is (group, function); its id is composed
+**The runner knows no program by name.** Everything it does with a step
+follows from that step's config entry and from facts every step has,
+never from which program the step runs. `datalib-step`,
+the step program Datalib ships, is one program among others: a Datalib
+config spells out in its own entries what the runner should do with it
+(its `reads`, its `locks`, the verbs its `[[programs]]` entry lists).
 
-A `[[groups]]` entry is the container a person thinks of as one thing —
-"Work Slack" — with an `id`, a `name` and, for a source, a `type`. A
-`[[steps]]` entry names the group it belongs to and the function it
-performs there, and the loader composes its id as `<group>/<function>`.
-Nothing writes that id and nothing downstream splits it: it is the tree
-the step writes, the key its state is recorded under, and what another
-step's `inputs` name. Both halves are permanent — a step never changes
-group and a fetch never becomes a render — so the composed id is stable
-by construction. The group's `name` and `description` (free text a
-person typed) are free to change: they are never forwarded to a step and
-never fingerprinted, so editing them re-runs nothing. Its `type` is
-forwarded and fingerprinted, so changing it re-runs every step under the
-group.
+## A step is an id and a command
 
-A step outside any group is a custom executable and writes its `id`
-verbatim. That is the only place a step id is written.
+A `[[steps]]` entry's `id` is the tree the step writes, the key its
+state is recorded under, and what another step's `inputs` name. Its
+`command` is required: the program the step runs and every argument it
+needs, split shell-style. A step's id never changes; renaming it is a
+new step, with a new tree.
 
-Every step under a group gets the two halves and the type in its
-environment (`DATALIB_DAG_GROUP`, `DATALIB_DAG_FUNCTION`,
-`DATALIB_DAG_GROUP_TYPE`) beside the composed `DATALIB_DAG_STEP`.
-`datalib-step` dispatches on that environment, which is why a built-in
-step's function is the directory it writes (`ingest`, `render_markdown`,
-`embed`, …) and why the loader requires such a step to be under a
-group. The runner never interprets the function itself.
+The id's first `/`-separated part is the step's **group**. A
+`[[groups]]` entry with that id is the container a person thinks of as
+one thing — "Work Slack" — with an `id`, a `name`, and optionally a
+`type` and a `description`. A step whose first part names no
+`[[groups]]` entry is a step outside any group. A group is used for
+these things only:
+
+- the Manage screen files the group's steps under it, and labels them
+  with its `name`;
+- `POST /api/requests` opens one request per group its roots belong to,
+  so each source's sync has a Stop of its own (§"The record");
+- a purge deletes the tree of a group the config no longer names
+  (§"Resets and purges");
+- a group whose entry is dropped drops every step under it
+  (§"Diagnostics: severity is blast radius, not mood").
+
+None of a group's keys is handed to a step or fingerprinted. A rename
+re-runs nothing. The `type` is opaque to the runner: it is for whoever
+shows the pipeline, and a program that needs it takes it on its command
+line, as `datalib-step run ingest slack` does. Changing a `type` alone
+re-runs nothing; changing the command that carries it does.
 
 ## The graph is declared, not derived
 
@@ -41,18 +52,19 @@ Step A → step B iff B names A's id in its `inputs`. A step's id is also the
 one tree it writes, so an input is simultaneously a step reference and an
 artifact path, and nothing has to be matched against anything.
 
-One input may name many steps: `*/render_markdown` is every step whose id is
-`<group>/render_markdown`. The loader expands it to those ids before anything
+One input may name many steps: `*/render_markdown` is every step whose id has
+two parts, the second `render_markdown`. The loader expands it to those ids before anything
 else sees the step (`src/input_pattern.rs`), so the graph, the fingerprint and
-the step's `--inputs` hold ids only, and a source added to the file is read
+the step's `DATALIB_DAG_INPUTS` hold ids only, and a source added to the file is read
 without its readers being edited. A pattern is still written in the config:
 the edges stay where a person can read them, and `--check` prints what each
 pattern stood for.
 
 Validation is correspondingly small: group ids are one segment and
-unique, a grouped step's group exists and its function is one segment,
-composed and verbatim ids are unique and un-nested, every input names a
-declared step, no step consumes its own output, no cycles.
+unique, every part of a step id is a usable directory name, step ids
+are unique and un-nested, no step writes under `system/` or
+`datalib_curated/`, every lock a step holds is declared, every input
+names a declared step, no step consumes its own output, no cycles.
 
 **A step that breaks one of those is left out of the graph, not carried in
 it with a failed status.** The scheduler's invariant is that every artifact
@@ -137,10 +149,10 @@ starts** in a tick, visited in topological order, iff:
    again. One that says it failed has failed, whatever it was asked;
 5. **it is due**: it is **stale** (it has never succeeded, an input's
    version differs from the one it read at its last success, its
-   fingerprint — its id, group type, argv, params, env, declared inputs
-   and `code_version` — differs from the one recorded then, or it
-   answered a launch's `--migrate` with `needs_rerun` and has not
-   succeeded since), or it declares no inputs and has not run since the
+   fingerprint — its id, argv, params, env, declared inputs and
+   `code_version` — differs from the one recorded then, or it answered
+   a start's `--prepare` with `needs_rerun` and has not succeeded
+   since), or it declares no inputs and has not run since the
    request opened, since a source's real input is outside the graph. A
    fan-in whose `inputs` are patterns that match no step yet (`*/embed`
    where no source is searched by meaning) reads nothing too, but it
@@ -225,8 +237,8 @@ definition it started with and records that one, so the edit leaves it
 stale and it runs again if a request still wants it. A config that drops
 a step still running, or still named by an open request, is taken on once
 the loop is done with that step: a config saved mid-edit must not cost a
-long download. The step environment (`PATH`, log level, checkpoint
-cadence) stays the one the busy period started with.
+long download. The step environment (`PATH`, log level, the config's
+`[env]`) stays the one the busy period started with.
 
 A reset, a purge and freeing disk space are carried out by the loop too
 (§"Resets and purges").
@@ -274,42 +286,57 @@ and keeps the samples in `system/disk_stats.sqlite`.
 
 ## Upgrading a root
 
-A new build can change the shape of what a step wrote: a raw store's
-tables, a render store's, the grid index's. The runner does not know any
-of those shapes; each step answers for its own. The first time a build
-runs on a root (the record's `launch_passes` table says which builds
-have), the process that holds `runner-lock` (the http server when it
-starts, `datalib-dag` when it runs on its own) invokes every step that
-takes the verb (`StepSpec::migrates`) once with `--migrate`, producers
-first, before the loop takes any request (`Runner::migrate`;
-[`step_protocol.md`](../../../docs/dev/step_protocol.md#migrate)).
+A new build of a program can change the shape of what its steps wrote:
+for `datalib-step`, a raw store's tables, a render store's, the grid
+index's. The runner knows none of those shapes, nor when a program
+changed; each step answers for its own. **Each time the loop starts**,
+the process that holds `runner-lock` (the http server when it takes the
+lock, `datalib-dag` when it runs on its own) asks every step whose
+program's `[[programs]]` entry lists the `prepare` verb, producers
+first, before the loop takes any request: `Runner::prepare` invokes
+each once with `--prepare` appended
+(`docs/dev/step_protocol.md` § Prepare). Since it asks at every start,
+a step answers quickly when there is nothing to do. It answers in one
+of four ways:
 
-- **A raw store is migrated in place.** The step reports its new head,
-  which the record takes as its version while keeping the step's last
-  success, so what reads it is stale.
-- **A derived store in another shape is rebuilt**, so its step answers
-  `needs_rerun`: a render store, the grid index, or the search index
-  when a source it reads was drawn by another version of the index text
-  or its chunking (`INDEX_TEXT_VERSION`), which no render moved. The
-  record keeps the flag (`steps.needs_rerun`), the tick holds the step
-  due until it next succeeds (rule 5), and `round::rerun_offer` lists it
-  for the app, which asks whether to re-render now and opens one request
-  rooted at the list if so. A sync that does not reach such a step
-  leaves it alone; the grid index reads a render store in another shape
-  as it had it, with a warning. A rebuilt index keeps nothing, so a
-  source whose render step stays turned off has no rows, and no search
-  results, until it re-renders.
-- **A step that fails to answer costs that source only.**
+1. **Nothing to do.** The record is left as it was.
+2. **Brought up to date in place.** The step reports its output's new
+   version, which the record takes while keeping the step's last
+   success, so what reads the output is stale. A `datalib-step` raw
+   store is migrated this way.
+3. **`needs_rerun`.** What the step wrote can only be rebuilt by running
+   it. The record keeps the flag (`steps.needs_rerun`), the tick holds
+   the step due until it next succeeds (rule 5), and
+   `round::rerun_offer` lists it for the app, which asks whether to run
+   it now and opens one request rooted at the list if so. A sync that
+   does not reach such a step leaves it alone. A `datalib-step` render
+   store or the grid index in another shape answers this way, and so
+   does `unified_grid_and_search_index` when a source it reads was drawn
+   into the search index by another version of the index text or its
+   chunking (`INDEX_TEXT_VERSION`), which no render moved.
+4. **Refused** (`failure: incompatible`). What the step wrote is in a
+   shape its program cannot use, such as a newer build's. The runner
+   turns the step off, as turned off by `the runner, because the step
+   refused --prepare` (`scheduler::REFUSED_PREPARE`), and a later
+   start whose `--prepare` does not refuse turns it back on. A step a
+   person turned off keeps its switch.
 
-The pass writes only raw stores, each in place, so the app stays usable
-while it runs: a pill where the sync indicator sits says how each source
-is going, every Sync on the Sources card is disabled
-(`ManageResponse::sync_paused`), and a request opened another way waits
-for the pass. After it, the pill stays red for a source the pass could
-not update until it is dismissed. The pass is held in the server's
-memory (`/api/config`'s `upgrade`) and announced as `pass_changed` on
-`/api/sync/stream`; freeing disk space is drawn by the same pill
-(§"Resets and purges").
+A step that fails to answer costs that step only, and the rest are
+asked. For `datalib-step`'s own steps: the grid index reads a render
+store in another shape as the index had it, with a warning; a rebuild of
+the index has nothing to keep, so a source whose render step stays
+turned off then has no rows until it re-renders. Its documents stay in
+the search index with their vectors, and a search reads only the
+sources the grid holds, so it leaves search too and costs a search
+nothing. In the app, the pass writes only what each step brings up to
+date in place, so the app stays usable while it runs: a pill where the
+sync indicator sits says how each step is going, and every Sync on the
+Sources card is disabled (`ManageResponse::sync_paused`); a request
+opened another way waits for the pass. After it, the pill stays red for
+a step the pass could not prepare until it is dismissed. The pass is
+held in the server's memory (`/api/config`'s `upgrade`) and announced as
+`pass_changed` on `/api/sync/stream`; freeing disk space is drawn by the
+same pill (§"Resets and purges").
 
 Before any of that, the http server moves each tree a config rewrite
 renamed to its new path, with the record's rows for its steps
@@ -327,41 +354,47 @@ What keeps steps apart is locks, and every one is in the config or
 follows from it:
 
 - **A sink is a read/write lock.** Its writer holds `write`. A step that
-  reads it off disk (`reads = "files"`) holds `read`: no writer of what
-  it reads runs beside it, in either order. A step that reads at a pinned
-  commit (the default) holds nothing: it reads a snapshot, and the writer
-  may go on writing. Whether a consumer may *start* on a producer that is
-  still running is not a lock but rule 6: only on a producer that
-  declares `streams_output`, so a seal it reads is a whole one.
+  reads it off disk (`reads = "files"`, the default) holds `read`: no
+  writer of what it reads runs beside it, in either order. A step that
+  says `reads = "pinned"` holds nothing: it promises to read only the
+  commit `DATALIB_READS` names, and the writer may go on writing.
+  Whether a consumer may *start* on a producer that is still running is
+  not a lock but rule 6: only on a producer that declares
+  `streams_output`, so a seal it reads is a whole one.
 - **A named lock** is a `[[locks]]` entry: a `name` and `slots` (default
   1, a mutex). A step names what it holds: `locks = ["quota"]` takes one
   slot, `locks = { gpu = "exclusive" }` takes them all. For what the
-  graph does not show: two sources on one account's rate limit, a GPU.
-- **Every config has four default locks** (`supervisor/locks.rs`). The
-  three budgets are `network` (4 slots), `cpu` (4) and `index` (2). A
-  step that names no locks holds one of them: `network` for a step that
-  declares no inputs, `cpu` for a step with inputs under a group with a
-  `type`, `index` for any other step, a fan-in whose patterns match
-  nothing yet among them; so a download waiting out a
-  rate limit never keeps a render from starting. The fourth, `embedder`
-  (1 slot), is what every built-in `embed` that names no locks holds
-  instead, so one embedding model is loaded at a time and one step
-  writes the inference cache, which the runner cannot see as shared.
-  The index step, `unified_grid_and_search_index`, needs no lock of its
-  own: it is the one writer of the grid index's file, and an `embed`
-  reads that file off disk, so the two never run together. A `[[locks]]` entry of the same name resizes
-  one, and `--parallelism N` sets `network` and `cpu` to N, over the
-  config.
+  graph does not show: two sources on one account's rate limit, a GPU,
+  several steps writing one file. A step that holds a lock no
+  `[[locks]]` entry declares is dropped.
+- **Every config has two default locks** (`supervisor/locks.rs`):
+  `network` (4 slots) and `cpu` (4). A step that names no locks holds
+  one of them: `network` for a step that declares no inputs, `cpu` for
+  any other, a fan-in whose patterns match nothing yet among them, so a
+  download waiting out a rate limit never keeps a render from starting.
+  A `[[locks]]` entry of the same name resizes one, and `--parallelism
+  N` sets both to N, over the config.
+
+A Datalib config declares two more, and its `datalib-step` entries name
+them:
+
+| lock | slots | held by | why |
+|---|---|---|---|
+| `embedder` | 1 | every `embed` | each loads the embedding model and writes the search index's inference cache, which the runner cannot see as shared |
+| `index` | 2 | the index steps (`unified_grid_and_search_index`, `time_series_index`, `embedding_map`) | a budget of its own, apart from the renders' `cpu` |
+
+The index step, `unified_grid_and_search_index`, needs no lock of its
+own: it is the one writer of the grid index's file, and an `embed` reads
+that file off disk, so the two never run together.
 
 None of `locks`, `reads` and `start` is in the fingerprint: they change
-when a step may run, not what it makes. A config edit that changes only them
-is still taken on mid-sync, like any other. The built-in steps that read
-files are marked by the loader (`UNPINNED_BUILTINS` in `config.rs`:
-`embed`, which reads the search index as it is rather than at the
-version its input names; `embedding_map`, which reads the search index
-and its inference cache;
-and perseus's render,
-which reads its TEI files); any step may say `reads` itself.
+when a step may run, not what it makes. A config edit that changes only
+them is still taken on mid-sync, like any other. A Datalib config
+writes `reads = "files"` on the `datalib-step` steps that read their
+inputs off disk (`embed`, which reads the search index as it is;
+`embedding_map`, which reads the search index and its inference cache;
+and perseus's render, which reads its TEI files) and `reads = "pinned"`
+on the rest that have inputs.
 
 ## What a sink owes its consumers
 
@@ -500,13 +533,21 @@ them would be the cheaper code and the worse error message.
 
 A group whose id is bad costs the group *and* every step under it, and
 those steps are `Blocked`, not `Rejected`: nothing is wrong with them,
-and the fix is on the group's line. A retired shape is `Rejected`,
-since it no longer runs, and its diagnostic names
-`datalib-migrate-config`; a key that no longer does anything is a
-`Warning`, since the step still runs. What the loader drops and what it
-warns about, entry by entry, is in
-[`config_model.md`](../../../docs/dev/config_model.md) § "What the
-loader checks". A warning passes the strict door too
+and the fix is on the group's line. The two warnings: a group nothing
+is filed under, and an applet filed under a group that does not exist.
+The Manage screen's System row counts the warnings and shows their
+words on hover. A config in the shape from before the runner stopped
+knowing `datalib-step` is refused entry by entry, each refusal naming
+the rewrite (`config::RETIRED_SHAPE_HELP`): a step that writes `group`
+or `function`, or has no `command`, is `Rejected`, and so is a
+`[[groups]]` entry with `source`; a top-level `checkpoint_cadence`,
+`render_pages`, `[modal]`, `embed_contexts` or `embed_search_index` is
+`Rejected` and the steps still load. The app rewrites such a config when it next reads it, and
+`datalib-migrate-config` does from a terminal
+([`config_model.md`](../../../docs/dev/config_model.md) §"The retired
+shapes").
+The full list of what the loader drops is in
+[`config_model.md`](../../../docs/dev/config_model.md) § "What the loader checks". A warning passes the strict door too
 (`config::parse`, and the `PUT /api/config` behind the editor): it
 changes nothing about what runs, and refusing it would make the editor
 unable to save a config the app is happily running on.
@@ -712,8 +753,8 @@ does not wait for the sync to end. What it decides is in
   `collecting unused space`. A compaction or a collection holds the steps
   it asks and every step that reads one, since a reader on a commit the
   fold drops would be left reading nothing, and either rewrites the file
-  under a reader; with no targets it asks every step that takes the verbs
-  (`StepSpec::compacts`). It leaves the requests that
+  under a reader; with no targets it asks every step whose program
+  takes the verb (`StepSpec::takes`). It leaves the requests that
   named it as a root, so a reset does not refill a download, and a purged
   group's config change is not waited on; a request left with nothing is
   stopped.
@@ -723,16 +764,14 @@ does not wait for the sync to end. What it decides is in
   (its outcome's `store_bytes`), or failed with why. Each write is
   announced, which the server turns into `pass_changed`, and
   `/api/config`'s `free_space` is the newest one since the server
-  started. The toolbar draws it with the migrate pass's pill: amber with
+  started. The toolbar draws it with the prepare pass's pill: amber with
   "Freeing space · 7 of 20 · 5.2 GB freed" while it runs, then green
   with what it freed (red with a source it could not shrink) until
   dismissed. Its run is a `shrink`, its reason who asked.
-- **Then it does it, in the loop.** A reset invokes each step with
-  `--reset store` and records it emptied in the loop's own record, then
-  opens a request for what reads it (`wipe::after_reset`): a reset step
-  that reads something is rebuilt at once, and a reset download is not
-  refilled, so what reads it runs and its documents leave the grid; its
-  next Sync downloads everything again. A purge waits
+- **Then it does it, in the loop.** A reset invokes each step whose
+  program takes the verb with `--reset`, deletes the tree of any other,
+  and records it emptied in the loop's own record, then
+  opens a request for what reads it (`wipe::after_reset`). A purge waits
   until the loop has taken on the config without the group, then deletes
   `<root>/<group>/` and forgets the group's steps.
 - **Refused, with why**, against the config on disk: a reset of a step it
