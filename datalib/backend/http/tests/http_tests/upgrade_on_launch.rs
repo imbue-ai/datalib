@@ -205,25 +205,29 @@ async fn a_launch_asks_every_step_before_any_sync_at_every_start() {
     state.sync.shutdown(Duration::from_secs(10)).await;
 }
 
-/// While the first step is still migrating, the run's record already lists
+/// While the first step is still preparing, the run's record already lists
 /// every step the pass will ask, the rest as pending, so a person can see
-/// how many are left (#1678: a migrate run listed only the steps reached).
+/// how many are left (#1678: the pass's run listed only the steps reached).
 #[tokio::test]
-async fn the_migrate_run_lists_every_step_it_will_ask_from_the_start() {
+async fn the_prepare_run_lists_every_step_it_will_ask_from_the_start() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
     let bin = bin_dir_with_fake_step(td.path());
-    std::fs::write(root.join("config.toml"), source("a") + &source("b")).unwrap();
+    std::fs::write(
+        root.join("config.toml"),
+        PROGRAMS.to_string() + &source("a") + &source("b"),
+    )
+    .unwrap();
     std::fs::write(root.join("hold"), "").unwrap();
 
     let state = boot(&root, &bin).await;
     let deadline = Instant::now() + Duration::from_secs(30);
     let first = loop {
         if let Some(line) = invoked(&root).first() {
-            break line.trim_start_matches("migrate ").to_string();
+            break line.trim_start_matches("prepare ").to_string();
         }
-        assert!(Instant::now() < deadline, "no step was asked to migrate");
+        assert!(Instant::now() < deadline, "no step was asked to prepare");
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
     let steps = [
@@ -252,7 +256,7 @@ async fn the_migrate_run_lists_every_step_it_will_ask_from_the_start() {
         }
         assert!(
             Instant::now() < deadline,
-            "while {first} migrates, the run's rows never read {want:?}: {:?} {got:?}",
+            "while {first} prepares, the run's rows never read {want:?}: {:?} {got:?}",
             snap.kind
         );
         tokio::time::sleep(Duration::from_millis(50)).await;

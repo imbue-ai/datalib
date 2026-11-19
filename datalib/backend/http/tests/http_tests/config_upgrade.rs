@@ -48,9 +48,9 @@ async fn boot(root: &Path) -> datalib_http::AppState {
 fn is_upgraded(text: &str) -> bool {
     text.contains("id = \"unified_grid_and_search_index/unified_grid_and_search_index\"")
         && text.contains("id = \"mail/embed\"")
-        && !text.contains("qmd_aggregator")
-        && !text.contains("keyword_index")
-        && !text.contains("qmd_index")
+        && !text.contains("/qmd_aggregator\"")
+        && !text.contains("/keyword_index\"")
+        && !text.contains("/qmd_index\"")
         && !text.contains("function = ")
 }
 

@@ -138,8 +138,8 @@ mod tests {
     fn an_embed_step_s_threshold_is_planned() {
         let embed = |params: &str| {
             check(&format!(
-                "[[groups]]\nid = \"slack\"\ntype = \"slack\"\n\n[[steps]]\ngroup = \"slack\"\n\
-                 function = \"embed\"\n{params}"
+                "[[groups]]\nid = \"slack\"\ntype = \"slack\"\n\n[[steps]]\nid = \"slack/embed\"\n\
+                 command = \"datalib-step run embed slack\"\n{params}"
             ))
         };
         assert!(embed("").is_empty());

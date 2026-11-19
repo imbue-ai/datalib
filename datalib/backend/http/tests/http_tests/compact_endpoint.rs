@@ -242,7 +242,7 @@ async fn free_disk_space_dropping_old_versions_compacts() {
 const FAKE_STEP_REPORTING: &str = r#"#!/bin/sh
 case " $* " in
   *" --collect "*) mode=collect ;;
-  *" --migrate "*) mode=migrate ;;
+  *" --prepare "*) mode=prepare ;;
   *) mode=sync ;;
 esac
 echo "$mode $DATALIB_DAG_STEP" >> "$DATALIB_DAG_DATA_ROOT/invoked"
