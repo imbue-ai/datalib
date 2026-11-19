@@ -48,10 +48,8 @@ Four details are worth carrying into anything you write yourself:
 
 Everything below is that same command unpacked, plus how to point
 datalib at data of your own. Every shell block in sections 1 and 2 is
-run against every published release image by
-`datalib/docker/doc_test.sh`, so those are known to work as written;
-the one above is not, because its `open` is macOS-only, and neither is
-section 3.
+run against each release image as written; the one above (its `open`
+is macOS-only) and section 3 are not.
 
 Set a few variables once, in the shell you'll use for the rest of this
 page:
@@ -274,12 +272,11 @@ pbpaste | docker run --rm -i -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" \
 
 The browser login flows (`latchkey auth browser slack`, `google-gmail`,
 `github`, `fastmail`, `chatgpt`) cannot run inside the container, which has no
-browser. Run them on your host as usual (with the `latchkey` the
-datalib installer put on your `PATH`, or `npx -y latchkey@<version>` if
-you have only the image, with the version `LATCHKEY_VERSION` pins in
-[`node_runtime.rs`](../../datalib/backend/runtime/src/node_runtime.rs)), then re-encrypt the result into the container's store. The
-first container run against the folder creates its key; the re-encrypt
-reads that key from standard input:
+browser. Run them on your host with the `latchkey` a datalib install
+puts on your `PATH` ([the first-time guide](first_time_user.md#1-install-the-tools-and-make-a-data-root-here-its-datalib)),
+then re-encrypt the result into the container's store. The first
+container run against the folder creates its key; the re-encrypt reads
+that key from standard input:
 
 ```sh
 docker run --rm -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" latchkey auth list
@@ -368,7 +365,6 @@ Nothing else. In particular, don't mount your home directory, and don't
 run the container with `--privileged`; the point of the container is
 that the blast radius of a bad day is the folders in this table.
 
-The image bundles the search model, so search by meaning never
-downloads anything; the image fetches nothing at run time at all.
-Building the image yourself, and what is in it, is in
-[`docs/dev/docker.md`](../dev/docker.md).
+The image bundles the search model and the Node runtime latchkey runs
+on, so it fetches nothing at run time. Building the image yourself is
+covered in `docs/dev/docker.md` in the repo.

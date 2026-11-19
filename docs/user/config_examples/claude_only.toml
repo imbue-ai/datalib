@@ -1,7 +1,7 @@
 # Minimal config in the format `datalib-dag` runs: one source (claude.ai
-# conversations) — a group and its two steps — plus the unified grid and search index
-# group with its shared index step. See configs/dag_example.toml
-# for a walkthrough of the format.
+# conversations) — a group and its three steps — plus the grid and search
+# index group with its shared index step and the app's applets.
+# `datalib-step help dag-example` walks through the format.
 
 # Where the downloaded data gets written. Top-level keys have to come
 # before the first [[…]] header — everything after a table header
