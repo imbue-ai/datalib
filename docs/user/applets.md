@@ -87,7 +87,7 @@ has the parameters.
 | `GET /search/groups?q=&by=` | how many rows each group of a column holds |
 | `GET /search/keys`, `GET /search/values?key=&typed=&q=` | every key the search takes, and the values one takes |
 | `GET /docs` | the documents |
-| `GET /chat/{markdown_uuid}` | one document: its markdown as `body`, where each message in it begins as `sections`, and what the index knows of it |
+| `GET /chat/{markdown_uuid}` | one document: its markdown as `body`, or with `?pieces=true` as `pieces`, each message its own, and what the index knows of it |
 | `GET /children/{uuid}?at=&limit=` | a container's children in order, a page each way around an anchor (below) |
 | `POST /people` | `{"handles": […]}`: every source's record of each handle, best first |
 | `GET /problems?q=` | what a step could not fully do to a record; each row says whether a person muted it (`muted`), and `muted:no` leaves the muted ones out |

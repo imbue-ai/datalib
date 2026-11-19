@@ -12,26 +12,16 @@ use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
 use datalib_etl_render::section::SpelledSection;
 use datalib_unified_grid_and_search_index::repo::DocumentStore;
 
-use super::body_sections::SectionSpan;
-
-/// One document spelled out: its text, and where each section of it lies.
+/// One document spelled out, section by section in order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Spelled {
-    pub text: String,
-    pub layout: Vec<SectionSpan>,
+    pub sections: Vec<SpelledSection>,
 }
 
 impl Spelled {
-    fn of(sections: Vec<SpelledSection>) -> Self {
-        let layout = sections
-            .iter()
-            .map(|p| SectionSpan {
-                uuid: p.uuid.clone(),
-                bytes: p.md.len(),
-            })
-            .collect();
-        let text = sections.into_iter().map(|p| p.md).collect();
-        Self { text, layout }
+    /// The document's markdown: its sections joined.
+    pub fn text(&self) -> String {
+        self.sections.iter().map(|s| s.md.as_str()).collect()
     }
 }
 
@@ -60,7 +50,7 @@ pub fn spell(
         };
         let read = documents.iter().try_for_each(|&document| {
             if let Some(sections) = store.document(document)? {
-                out.insert(document.to_string(), Spelled::of(sections));
+                out.insert(document.to_string(), Spelled { sections });
             }
             anyhow::Ok(())
         });

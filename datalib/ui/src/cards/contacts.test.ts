@@ -602,9 +602,7 @@ describe("a message's own header", () => {
         `Ask [Number One](mailto:riker@enterprise.test).\n\n## [The Captain](mailto:riker@enterprise.test) says pay`,
       ),
     ];
-    const { html } = renderDocument(pieces.join(""), {
-      sections: pieces.map((md, i) => ({ uuid: `u${i + 1}`, len: md.length })),
-    });
+    const { html } = renderDocument(pieces.map((md, i) => ({ uuid: `u${i + 1}`, md })));
     const root = document.body.appendChild(dom(html));
     await decorateHandles(root);
     root.remove();
@@ -623,7 +621,7 @@ describe("a message's own header", () => {
       "email:q@continuum.test",
       `<a class="chip" data-chip-header data-handle="email:q@continuum.test" href="mailto:q@continuum.test">Picard</a>`,
     );
-    const { html } = renderDocument(md, { sections: [{ uuid: "u3", len: md.length }] });
+    const { html } = renderDocument([{ uuid: "u3", md }]);
     const marked = [...dom(html).querySelectorAll<HTMLElement>("[data-chip-header]")];
     expect(marked.map((a) => a.textContent)).toEqual(["Q"]);
   });
@@ -653,7 +651,7 @@ describe("your contact's name", () => {
       `<div id="m-y1" data-section-uuid="y1" class="msg msg--email">\n\n` +
       `## [${forged}](mailto:riker@enterprise.example "${forged} <riker@enterprise.example>") ` +
       `<time class="msg-ts" datetime="2369-04-15T10:05:00+02:00">x</time>\n\nPay.\n\n</div>\n\n`;
-    const { html } = renderDocument(md, { sections: [{ uuid: "y1", len: md.length }] });
+    const { html } = renderDocument([{ uuid: "y1", md }]);
     const root = document.body.appendChild(dom(html));
     await decorateHandles(root);
     root.remove();

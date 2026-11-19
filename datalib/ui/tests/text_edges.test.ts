@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { BodySection } from "../src/api";
 import { renderDocument } from "../src/cards/renderDocument";
 
 /// The text-edge library (`datalib/backend/etl/text_edges/`): each case's
@@ -42,10 +41,8 @@ const edges: Edges = (await import(/* @vite-ignore */ corpusPath)).default.edges
 const FIRST = "00000000-0000-8000-8000-0000000e0001";
 
 function page(r: Rendered): HTMLElement {
-  const sections: BodySection[] | null =
-    r.sections?.map((s) => ({ uuid: s.uuid, len: s.md.length })) ?? null;
   const root = document.createElement("div");
-  root.innerHTML = renderDocument(r.body, { sections }).html;
+  root.innerHTML = renderDocument(r.sections ?? r.body).html;
   return root;
 }
 

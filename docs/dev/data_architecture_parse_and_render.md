@@ -346,17 +346,17 @@ fragment's end, so nothing in one message can wrap or replace the next.
 
 **Where the messages begin comes from the projection, never from the
 text.** Upstream text can contain any bytes, the wrapper's included,
-but it cannot move a length the renderer recorded. A renderer hands
-its document over as `Section`s (`etl/render/src/section.rs`): keyed
-pieces, one per message, each keyed by its `data-section-uuid`, and
-unkeyed ones (the front matter and title, the `<details>` opener and
-closer around a run of tool steps). Joined in order they are the
+but it cannot move where one piece ends and the next begins. A renderer
+hands its document over as `Section`s (`etl/render/src/section.rs`):
+keyed pieces, one per message, each keyed by its `data-section-uuid`,
+and unkeyed ones (the front matter and title, the `<details>` opener
+and closer around a run of tool steps). Joined in order they are the
 document. The render store keeps them, and spelling a document back
-gives each piece's uuid or none and its length; the document route
-returns that layout beside the body as `sections`, each length counted
-in UTF-16 code units, the way JavaScript indexes a string.
+gives each piece's uuid or none and its text; the document route, asked
+with `?pieces=true`, sends them as they are, as `pieces`, and the UI
+never sees them joined.
 
-How the UI draws a body with a layout (`ui/src/cards/renderDocument.ts`):
+How the UI draws the pieces (`ui/src/cards/renderDocument.ts`):
 
 - **The unkeyed pieces are the page's frame.** They are rendered
   together, as one markdown string with a placeholder where each
@@ -376,19 +376,20 @@ How the UI draws a body with a layout (`ui/src/cards/renderDocument.ts`):
   gives every wrapper `contain: paint`, so `position: fixed`, a
   negative margin or a transform in one message cannot cover another.
 
-A renderer that declares no sections stores no layout, and its body is
-drawn as one fragment, as every body was before; its wrappers still get
-`contain: paint`. Garmin, Perseus, Notion, Google Takeout's My Maps
-pages and the time-series pages declare none. `grep -rln 'Section::keyed' datalib/backend/etl`
-lists the renderers that declare them. Teaching another one is filling
-`RenderedMarkdown::sections`, and the next render stores its layout.
+A renderer that keys none of its sections hands its page over as
+unkeyed pieces, drawn as one fragment, as every body was before; its
+wrappers still get `contain: paint`. Garmin, Perseus, Notion, Google
+Takeout's My Maps pages and the time-series pages key none.
+`grep -rln 'Section::keyed' datalib/backend/etl` lists the renderers
+that do. Teaching another one is keying its `RenderedMarkdown::sections`,
+and the next render stores them.
 
 The cost is a sanitizer pass per message: in the unit tests' jsdom, a
 2,000-message conversation took about 0.7 s piece by piece against
 0.4 s whole. `ui/tests/section_isolation.test.ts` holds the rule, and
 `ui/tests/e2e/section-isolation.spec.ts` checks it in a browser on a
 real document, with a control that shows the same text does hide the
-next message once the layout is taken away.
+next message once its pieces are joined into one.
 
 ## 3. The projection
 
