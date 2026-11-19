@@ -130,7 +130,6 @@ impl Default for RenderOptions {
 
 pub fn render_all(
     parsed: &ParsedExport,
-    root: &std::path::Path,
     source_id: &str,
     options: RenderOptions,
     progress: &Progress,
@@ -169,7 +168,6 @@ pub fn render_all(
     let profile = profile();
     let mut renderer = ChatRenderer::new(
         &profile,
-        root,
         source_id,
         chats.iter().map(|c| c.buckets.len()).sum(),
         progress,
@@ -203,7 +201,6 @@ pub fn render_all(
         let projects = cc_render_all(
             &project_profile(),
             &project_chats,
-            root,
             source_id,
             &no_blobs,
             progress,
@@ -1544,11 +1541,9 @@ mod tree_tests {
             conversations: vec![conversation("c1", Some("p1")), conversation("c2", None)],
             ..Default::default()
         };
-        let out = tempfile::tempdir().unwrap();
         let mut docs = Vec::new();
         render_all(
             &parsed,
-            out.path(),
             "cl",
             RenderOptions::default(),
             &Progress::noop(),

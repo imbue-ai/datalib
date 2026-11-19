@@ -1428,6 +1428,9 @@ pub struct DagRecord {
     /// step id → the Items cell: what its store held the last time it
     /// counted, and the series behind that. Only render steps report it.
     pub items: std::collections::HashMap<String, datalib_columns::Timeseries>,
+    /// step id → the Modal spend cell: what its Sandboxes cost over the
+    /// runs the store keeps. Only an `embed` that used Modal reports it.
+    pub spend: std::collections::HashMap<String, datalib_columns::Timeseries>,
     /// step id → what its own queue still held when its last run ended.
     pub owed: std::collections::HashMap<String, manage::Owed>,
     /// How long each read took, for the line a slow Manage answer writes.
@@ -1492,6 +1495,11 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         &datalib_runs::latest_metric(root, datalib_metrics::DOCUMENTS).await,
         &datalib_runs::metric_history(root, datalib_metrics::ITEMS, &since).await,
     );
+    let spend = manage::spend_by_step(
+        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_COST).await,
+        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_SANDBOXES).await,
+        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_SANDBOX_SECONDS).await,
+    );
     let owed =
         manage::owed_by_step(&datalib_runs::latest_metric(root, datalib_metrics::OWED).await);
     let took = RecordTimings {
@@ -1508,6 +1516,7 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         problems,
         problem_rows,
         items,
+        spend,
         owed,
         took,
     }
@@ -1545,6 +1554,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
         problems: _,
         problem_rows: _,
         items: _,
+        spend: _,
         owed: _,
         took: _,
     } = dag_record(&s.root, &s.sync).await;

@@ -1,19 +1,19 @@
-# datalib — Project Data Liberation ✊
+# Datalib ✊
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/mission-dark.png">
   <img src="docs/assets/mission-light.png" width="480" alt="Organize the world's (struck out) your own information and make it universally (struck out) accessible and useful to you, your way.">
 </picture>
 
-Liberate and own your data. Run powerful AI tools on it, on your terms.
+Datalib is about ***personal data sovereignty***. It liberates your data from silos and helps you run powerful AI tools on it, locally, on your own terms.
 
 > [!NOTE]
-> **datalib is alpha.** We don't promise stable bytes at rest yet: an
+> **Datalib is alpha.** We don't promise stable bytes at rest yet: an
 > upgrade may change how your data is stored on disk, and now and then
 > one may ask you to re-download a source. We aim to carry every data
 > folder forward through upgrades, and to make that a promise soon.
 
-datalib mirrors your personal data — chats, email, messages, contacts,
+Datalib mirrors your personal data — chats, email, messages, contacts,
 documents, photos, health and fitness — out of the services that hold it and into one place
 you own: a folder on your own computer, in open formats, with history.
 Once it is there you can search it, join it across sources, and point
@@ -24,7 +24,7 @@ its own data, in laptop-sized packaging. Hat tips to
 [Perkeep](https://perkeep.org/) and
 [Dogsheep](https://dogsheep.github.io/), which got there first.
 
-datalib is an early Imbue project. It is read-only today: it brings
+Datalib is an early Imbue project. It is read-only today: it brings
 data in and never writes anything back to a source.
 
 ## Get started
@@ -42,7 +42,7 @@ Three ways in, from least to most hands-on:
 3. **Hand it to your agent.** Point an AI coding agent at this
    repository and ask it to set you up.
    [`docs/agent_user.md`](docs/agent_user.md) is written for an agent
-   running datalib on your behalf, and once the tools are installed
+   running Datalib on your behalf, and once the tools are installed
    `datalib-step help` prints it and every doc it links to, no checkout
    needed; [`AGENTS.md`](AGENTS.md) is for one working on the code.
 
@@ -53,8 +53,8 @@ look before you hand it anything of yours.
 
 ## Read this before you point an agent at it
 
-datalib is Plain Old Software. Running a sync invokes no cloud AI model and no
-agent, and sends no telemetry: the only network traffic is datalib reading
+Datalib is Plain Old Software. Running a sync invokes no cloud AI model and no
+agent, and sends no telemetry: the only network traffic is Datalib reading
 from the services you configured, which means sending them your sign-in and
 your requests, plus one-time downloads the first time they are needed: the
 search model, its CUDA module on a Linux machine with an NVIDIA GPU, and (for
@@ -73,7 +73,7 @@ place — and most of it was written by other people. Three things follow:
   session cookies and API tokens on your machine. Any process that can
   run commands as you can use them to act as you on those services, with
   no further prompt. Only do this on a machine you trust. macOS can lock
-  a secret so only one signed app reads it, but datalib doesn't do that
+  a secret so only one signed app reads it, but Datalib doesn't do that
   yet, and such a lock is weaker than it sounds:
   [who can use your sign-ins, and why](docs/user/first_time_user.md#who-can-use-your-sign-ins-and-why).
 - **Agents.** Before you let an agent loose on the mirror, read about the
@@ -197,7 +197,9 @@ ready-made steps:
 - `render_markdown` turns the raw records into readable markdown (most
   sources have one).
 - `embed` adds semantic search, which matches on meaning rather than
-  words. It is slow, so you can turn it off per source.
+  words. Its embedding model runs on your own machine, unless you
+  choose to run it on your own Modal account. It is slow, so you can
+  turn it off per source.
 
 Across all the sources, `unified_grid_and_search_index` builds one SQL table of every
 message and document (`grid_rows`) and puts their words in a keyword
@@ -260,9 +262,9 @@ back into other apps.
 
 A mirror you can't leave is just another silo, so the exits are plain:
 
-- **Markdown** — `<source id>/render_markdown/` is ordinary `.md` files, one
-  per conversation or document, and `datalib-step markdown <data_root>
-  --out <folder>` writes the same files anywhere you like.
+- **Markdown** — `datalib-step markdown <data_root> --out <folder>`
+  writes every conversation or document as an ordinary `.md` file, one
+  each, from the render stores that keep them.
 - **Search** — `datalib-applet search <data_root> '<query>'` answers as
   the app's search box does, as JSON, with no server: for scripts and
   agents.
@@ -294,11 +296,11 @@ the commit history and per-sync diffs in
 - [**Running in Docker**](docs/user/docker.md) — the sandboxed way in:
   the demo, your own exports, credentials in the container.
 - [**Agent user guide**](docs/agent_user.md) — for AI agents operating
-  datalib on a user's behalf: config, sync, querying, custom steps.
+  Datalib on a user's behalf: config, sync, querying, custom steps.
 - [**First-time dev guide**](docs/dev/first_time_dev.md) — build and
-  hack on datalib from source.
+  hack on Datalib from source.
 - [**Contributor runbook**](AGENTS.md) — for humans and AI agents
-  working *on* datalib: the doc map, repo layout, testing rules, and
+  working *on* Datalib: the doc map, repo layout, testing rules, and
   conventions.
 
 ## License

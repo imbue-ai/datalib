@@ -64,7 +64,7 @@ impl SourceRender for PdfRender {
         );
 
         let mut on_doc = |md| ctx.emit_doc(md);
-        let s = render::render_targets(&to_render, ctx.root, ctx.name, ctx.progress, &mut on_doc)
+        let s = render::render_targets(&to_render, ctx.name, ctx.progress, &mut on_doc)
             .context("pdf render")?;
         // A failed conversion's page is stale rather than gone: its
         // bucket is declared failed, so the page stays, even on a full

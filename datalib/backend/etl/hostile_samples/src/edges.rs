@@ -4,7 +4,6 @@
 //! `datalib/ui/tests/text_edges.test.ts`.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
 
 use anyhow::{bail, Context, Result};
 use datalib_etl::progress::Progress;
@@ -16,7 +15,7 @@ use datalib_etl_chat_common::{
 };
 use datalib_etl_forge_render_common::{ChangeRequest, Comment, ForgeProfile, Parsed};
 use datalib_etl_render::inputs::Inputs;
-use datalib_etl_render::section::Section;
+use datalib_etl_render::section::{join, nodes, Node, Section, SpelledSection};
 use datalib_etl_slack_render::render::mrkdwn::{to_commonmark, Labels};
 use datalib_schema::plain_text::plain_text;
 use datalib_schema::providers::Provider;
@@ -102,35 +101,28 @@ struct CaseOut {
 /// would hold it.
 #[derive(Serialize)]
 struct Rendered {
-    /// The file, front matter included.
+    /// The document, front matter included.
     file: String,
-    /// The file after its front matter: what the page draws.
+    /// The document after its front matter: what the page draws.
     body: String,
-    /// The body's sections, as the route sends their layout; `None` when
-    /// the renderer declares none and the page draws the body whole.
-    sections: Option<Vec<SectionOut>>,
+    /// The body's pieces, as the route sends them; `None` when the
+    /// renderer declares none and the page draws the body whole.
+    sections: Option<Vec<Node>>,
     /// The body as the grid's text (`plain_text`).
     grid_text: String,
     next_uuid: &'static str,
     next_text: &'static str,
 }
 
-#[derive(Serialize)]
-struct SectionOut {
-    uuid: Option<String>,
-    md: String,
-}
-
-pub fn edges(scratch: &Path) -> Result<Edges> {
+pub fn edges() -> Result<Edges> {
     let parsed: Cases = toml::from_str(CASES).context("parse text_edges/cases.toml")?;
     let mut seen = std::collections::BTreeSet::new();
     let mut cases = Vec::new();
-    for (i, c) in parsed.case.into_iter().enumerate() {
+    for c in parsed.case {
         if !seen.insert(c.id.clone()) {
             bail!("text_edges: two cases are named {}", c.id);
         }
-        let dir = scratch.join(format!("edge-{i}"));
-        let rendered = render(c.enters, &c.text, &dir).with_context(|| c.id.clone())?;
+        let rendered = render(c.enters, &c.text).with_context(|| c.id.clone())?;
         cases.push(CaseOut {
             id: c.id,
             edge: c.edge,
@@ -152,24 +144,18 @@ pub fn edges(scratch: &Path) -> Result<Edges> {
         Enters::EmailHtml,
         Enters::Plain,
     ] {
-        let dir = scratch.join(format!("baseline-{enters:?}"));
         let name = serde_json::to_value(enters)?
             .as_str()
             .unwrap_or_default()
             .to_string();
-        baselines.insert(name, render(enters, BASELINE_TEXT, &dir)?);
+        baselines.insert(name, render(enters, BASELINE_TEXT)?);
     }
     Ok(Edges { cases, baselines })
 }
 
-fn render(enters: Enters, text: &str, dir: &Path) -> Result<Rendered> {
+fn render(enters: Enters, text: &str) -> Result<Rendered> {
     let (file, sections) = match enters {
-        Enters::Markdown => chat(
-            Provider::Claude,
-            TextFormat::Markdown,
-            text.to_string(),
-            dir,
-        )?,
+        Enters::Markdown => chat(Provider::Claude, TextFormat::Markdown, text.to_string())?,
         Enters::Slack => {
             let inputs = Inputs::default();
             let none = BTreeMap::new();
@@ -182,25 +168,24 @@ fn render(enters: Enters, text: &str, dir: &Path) -> Result<Rendered> {
                 Provider::Slack,
                 TextFormat::Markdown,
                 to_commonmark(text, labels),
-                dir,
             )?
         }
         Enters::EmailHtml => chat(
             Provider::Email,
             TextFormat::Markdown,
             datalib_etl_email_render::render::render::html_markdown(text),
-            dir,
         )?,
-        Enters::Plain => chat(Provider::Signal, TextFormat::Plain, text.to_string(), dir)?,
-        Enters::Forge => forge(text, dir)?,
+        Enters::Plain => chat(Provider::Signal, TextFormat::Plain, text.to_string())?,
+        Enters::Forge => forge(text)?,
     };
     let skip = front_matter_len(&file);
     let body = file[skip..].to_string();
-    let sections = sections.map(|mut s| {
-        if let Some(first) = s.first_mut() {
+    let sections = sections.map(|s| {
+        let mut spelled: Vec<SpelledSection> = s.iter().map(SpelledSection::of).collect();
+        if let Some(first) = spelled.first_mut() {
             first.md = first.md[skip.min(first.md.len())..].to_string();
         }
-        s
+        nodes(spelled)
     });
     Ok(Rendered {
         grid_text: plain_text(&body, usize::MAX),
@@ -220,26 +205,13 @@ fn front_matter_len(file: &str) -> usize {
     rest.find("\n---\n").map_or(0, |end| 4 + end + 5)
 }
 
-type Pieces = Option<Vec<SectionOut>>;
+type Pieces = Option<Vec<Section>>;
 
 fn pieces(sections: Vec<Section>) -> Pieces {
-    (!sections.is_empty()).then(|| {
-        sections
-            .into_iter()
-            .map(|s| SectionOut {
-                uuid: s.uuid,
-                md: s.md,
-            })
-            .collect()
-    })
+    (!sections.is_empty()).then_some(sections)
 }
 
-fn chat(
-    provider: Provider,
-    format: TextFormat,
-    text: String,
-    dir: &Path,
-) -> Result<(String, Pieces)> {
+fn chat(provider: Provider, format: TextFormat, text: String) -> Result<(String, Pieces)> {
     let profile = RenderProfile {
         provider,
         source_label: "Text edges".to_string(),
@@ -308,19 +280,18 @@ fn chat(
     datalib_etl_chat_common::render_all(
         &profile,
         &[chat],
-        dir,
         "text-edges",
         &HashMap::new(),
         &Progress::noop(),
         &mut |doc| {
-            docs.push((doc.md_path, doc.sections));
+            docs.push(doc.sections);
             Ok(())
         },
     )?;
     one_doc(docs)
 }
 
-fn forge(text: &str, dir: &Path) -> Result<(String, Pieces)> {
+fn forge(text: &str) -> Result<(String, Pieces)> {
     let profile = ForgeProfile {
         provider: Provider::Github,
         tag: "github",
@@ -386,21 +357,18 @@ fn forge(text: &str, dir: &Path) -> Result<(String, Pieces)> {
     datalib_etl_forge_render_common::render_all(
         &profile,
         &parsed,
-        dir,
         "text-edges",
         &Progress::noop(),
         &mut |doc| {
-            docs.push((doc.md_path, doc.sections));
+            docs.push(doc.sections);
             Ok(())
         },
     )?;
     one_doc(docs)
 }
 
-fn one_doc(docs: Vec<(std::path::PathBuf, Vec<Section>)>) -> Result<(String, Pieces)> {
-    let [(path, sections)] = <[_; 1]>::try_from(docs)
+fn one_doc(docs: Vec<Vec<Section>>) -> Result<(String, Pieces)> {
+    let [sections] = <[_; 1]>::try_from(docs)
         .map_err(|d| anyhow::anyhow!("expected one document, got {}", d.len()))?;
-    let file =
-        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    Ok((file, pieces(sections)))
+    Ok((join(&sections), pieces(sections)))
 }

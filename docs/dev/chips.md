@@ -1,28 +1,27 @@
 # Chips: a link the app resolves, drawn as what it names
 
-A **chip** is how datalib shows something inline: a person, a source
-group, a pipeline step, a date. It has a name, a picture or a mark, and behind
-it a stable identifier the app looks up to learn what that thing is
-*now* — the contact a person linked, the name the config gives a
-group today, whether a step is running. The same chip is drawn in a
-rendered document, in a grid cell and in the run log, and it behaves
-the same in each: the same tooltip, right-click menu and double-click,
-and the same text when copied.
+A **chip** is how Datalib shows something inline: a person, a source
+group, a pipeline step, a document, a date. It has a name, a picture or
+a mark, and behind it a stable identifier the app looks up to learn what
+that thing is *now*: the contact a person linked, the name the config
+gives a group today, whether a step is running. A chip is drawn the same
+in a rendered document, a grid cell and the run log, with the same
+tooltip, right-click menu, double-click and copied text.
 
-Start here to add a new kind of chip or a new place that draws them.
-What a document promises any viewer — the link a person is written as,
-the `<time>` a date is, the attachment addresses — is
-[showing a rendered document in your app](../user/rendered_documents.md),
-the contract an app builder reads; this page is how datalib's own
-viewer keeps it. What makes a *person* who they are — handles, each
-source's record, the contacts app — is [`contacts.md`](contacts.md).
+What a document promises any viewer (the link a person is written as,
+the `<time>` a date is) is
+[showing a rendered document in your app](../user/rendered_documents.md);
+this page is how Datalib's own viewer keeps it, and where to start to add
+a kind of chip or a place that draws them. What makes a *person* who
+they are (handles, each source's record, the contacts app) is
+[`contacts.md`](contacts.md).
 
 ## Words
 
 | word | means |
 |---|---|
 | **entity** | what a chip names: a person (by a handle), a group, a step, a document, a date |
-| **chip link** | how a chip is written down: a markdown link, `[text](href "title")` |
+| **chip link** | how a chip is written down: a markdown link with a title (below) |
 | **entity URI** | the href, which names the entity (see [The link](#the-link)) |
 | **resolver** | the one place in the page that asks the server what an entity is now, for one kind of entity |
 | **producer** | whoever writes a chip down: a render writing markdown, or a server sending a grid row |
@@ -30,10 +29,10 @@ source's record, the contacts app — is [`contacts.md`](contacts.md).
 ## The link
 
 **A chip is a markdown link whose href the app knows how to resolve.**
-In a `.md` file it is an ordinary link, so any markdown viewer shows a
-named link with a tooltip; datalib recognizes the href and draws a
-chip. Nothing about how the chip looks is written into the file. The
-link carries only what the producer knew when it wrote it:
+In the markdown it is an ordinary link, so any markdown viewer shows a
+named link with a tooltip; Datalib recognizes the href and draws a
+chip. Nothing about how the chip looks is written down. The link
+carries only what the producer knew when it wrote it:
 
 ```markdown
 ## [Will Riker](mailto:riker@enterprise.org "Will Riker <riker@enterprise.org>") <time …>…</time>
@@ -45,8 +44,8 @@ link carries only what the producer knew when it wrote it:
   source showed for a person, the id for a group, the function for a
   step.
 - **href** — the entity URI.
-- **title** — the hover any other viewer shows. Datalib replaces it
-  with a live tooltip.
+- **title** — the hover any other viewer shows; Datalib shows a live
+  tooltip instead.
 
 The URI for each kind of handle, and the trust rule a viewer keeps, are
 in [the document contract](../user/rendered_documents.md#a-person). The
@@ -67,13 +66,12 @@ writes the same URIs in `ui/src/cards/chipLinks.js` (`handleFromUri`,
 tested over the same cases, so they cannot drift apart without a test
 failing.
 
-Who writes chips today: calendar-common for an event's organizer and
+Who writes chips: calendar-common for an event's organizer and
 each guest with an address; forge-render-common for a pull or merge
 request's author and each comment's; Notion for a comment's author and
 a user mentioned in a page; Google Drive for a person chip in a Doc;
 Todoist for a task's assignee; chat-common for a message's author,
-recipients and reactors (`chat-common/README.md` §"The message
-header"); Slack for a `<@U…>` mention in a body, and email for an `@`
+recipients and reactors; Slack for a `<@U…>` mention in a body, and email for an `@`
 mention; contact-common for
 the person a contact's page is about, as its heading, and for each
 member of a group of contacts that has a handle; the storage report
@@ -105,11 +103,11 @@ each store's step in a column.
    is decoration: hidden from screen readers and not copied. A photo
    the browser cannot draw falls back to what the chip draws without
    one. A contact you made with no photo of its own shows the first
-   one its handles' records have, the face their chips show. The name is its own element (`.chip-text`), and a chip is
-   never wider than what holds it: with less room than it needs, its
-   name ends in "…", and the tooltip has it whole. In a wrapping row,
-   such as a message header, it still moves to a line of its own
-   before it shrinks.
+   one its handles' records have. The name is its own element
+   (`.chip-text`), and a chip is never wider than what holds it: short
+   of room, its name ends in "…" and the tooltip has it whole. In a
+   wrapping row, such as a message header, it moves to a line of its
+   own before it shrinks.
 
 What goes into the look is each kind's own rule, pure and unit-tested:
 
@@ -119,11 +117,11 @@ What goes into the look is each kind's own rule, pure and unit-tested:
   header, shows the name that message gave instead of the source's
   (see [Trust](#trust)). A name that spells out an address or another
   handle the person does not hold is never shown; the chip shows its
-  own identifier instead. The kind's mark while it is not
-  linked to a contact, and a quiet "+" when a contacts app is there to
-  link it. A chip linked to one of your contacts is blue, and one that
-  is not is grey (`chip.css`). [`contacts.md`](contacts.md)
-  §"In the UI" has the ranking.
+  own identifier instead. A chip not linked to a contact shows its
+  kind's mark, and a quiet "+" when a contacts app is there to link it.
+  A chip linked to one of your contacts is blue, and one that is not is
+  grey (`chip.css`). [`contacts.md`](contacts.md) §"In the UI" has the
+  ranking.
 - **A group or a step** — `entityLook` and `entityTitle` in
   `entities.ts`: the name the config gives it now (a step is named
   under its group: "Work Slack · Ingest"), or the producer's until the
@@ -158,12 +156,12 @@ gave its author**, as any mail client does, so a forged `From:` shows
 on the forged message and on no other. The source's name for the
 person is decided across everything they wrote, not by any one message
 ([`contacts.md`](contacts.md) §"In the UI"). The viewer knows a header
-by its place: `renderDocument.ts` renders each message's inside alone
-once its wrapper checks out, and `chipLinks.js` marks a link opening
+by its place: `renderDocument.ts` renders what is inside each message's
+box alone, and `chipLinks.js` marks a link opening
 that fragment's first line, an `h2`, with `data-chip-header`. Nothing a
 message carries comes before its header, and the sanitizer takes the
 attribute off any link the plugin did not sign. A body rendered whole,
-without its sections, has no header chips.
+as one string rather than as its pieces, has no header chips.
 
 ## Resolving
 
@@ -197,19 +195,17 @@ The two instances:
 | goes stale when | a person edits a contact (create, link, unlink, no longer works): in this page the call forgets the handles it changed; from anywhere else — another window, an agent — the contacts app's commit reaches every page as a `curated` frame, on which `people` and `contactsById` revalidate (`movesPeople`), as on a resync | a sync moves a status, or the config changes: `entities` follows the live connection and revalidates on every frame `movesEntities` names, and on a resync |
 
 Why the viewer joins this itself rather than the producer sending
-finished chips: the producer still resolves what only it can (the name
-a source showed, the name the config gives a group), but a contact a
-person linked and a step's status are live state that moves while the
-row does not. Joining them where they are live is what lets one link
-made in a document redraw every grid already open beside it.
-[`cards.md`](cards.md) §"Typed tables" records this as the one join
+finished chips: a contact a person linked and a step's status are live
+state that moves while the row does not. The producer still resolves
+what only it can (the name a source showed, the name the config gives a
+group). Joining where the state is live is what lets one link made in a
+document redraw every grid already open beside it. It is the one join
 the viewer does.
 
 ## In a grid
 
-A grid draws a chip from an `identity` typed cell
-(`{id, label, icon, detail, entity}`, [`cards.md`](cards.md)
-§"Typed tables"):
+A grid draws a chip from an `identity` typed cell,
+`{id, label, icon, detail, entity}`:
 
 - **A person**: the cell's `id` is the handle as a URI and its `label`
   the name the source showed. The search grid's Author column is one
@@ -276,10 +272,10 @@ run log draws its Group and Step columns as chips the same way
 Sources table do: a double-click on a chip there opens its card
 (`openCard`) instead of the cell's in-place edit, and its right-click
 is still the row's menu. In every grid a single click on a chip selects
-its row, as a click anywhere else in the row does. The chip's href is
-stopped by a click listener on the grid's box, which the click reaches
-after the grid has selected the row: SlickGrid selects nothing for a
-click already `preventDefault`ed when it sees it. A group row of an identity column draws its
+its row, as a click anywhere else in the row does; the chip's href is
+stopped on the grid's box, after the grid has selected the row, because
+SlickGrid selects nothing for a click already `preventDefault`ed. A
+group row of an identity column draws its
 value as the chip of the group's first row, where the rows are loaded
 (`typedColumns.ts`), and the run log's Group and Step group rows draw
 theirs too ("Source: Work Slack (12)"). `tableGrid.css` keeps the grid theme's link
@@ -305,7 +301,8 @@ document does:
 - **The app's chrome:** each row of the toolbar's "what is syncing"
   menu, the pass pills' lists (upgrading, freeing disk space) and the
   re-render dialog's list.
-  The search index keeps its plain name there ("Search index").
+  The index group, `unified_grid_and_search_index`, is called "Search
+  index" there.
 
 It looks the entity up in `entities`, redraws when the answer moves,
 and takes its double-click and right-click from `chipActions`. A single
@@ -336,13 +333,11 @@ offers the same way. The chip is a CodeMirror widget whose DOM is
 `entities`, `people` or `contactsById` and redrawn when one answers;
 the query text under it is unchanged. The field's host includes `chip.css`.
 
-Its clicks are a text field's: a click selects the chip whole, a
-double-click opens it as text to be edited, the one place a
-double-click does not open what the chip names. The right-click menu
-is the field's (Edit as text, Exclude) followed by `entityMenu`'s or
-`chipMenu`'s, so the dashboard, the log or "Everything with" is still a
-right-click away; linking a handle stays the popover's
-(`ui/src/search/chipMenu.ts`).
+Its clicks are a text field's: a click selects the chip whole, and a
+double-click opens it as text to edit, the one place a double-click
+does not open what the chip names. The right-click menu is the field's
+(Edit as text, Exclude) followed by `entityMenu`'s or `chipMenu`'s;
+linking a handle stays the popover's (`ui/src/search/chipMenu.ts`).
 
 ## A document
 
@@ -362,20 +357,19 @@ from the cell alone, and a new search shows the new title.
   Copy title and link, which puts a link on the clipboard —
   `<a href="datalib:doc/<uuid>">Captain's log</a>` for whatever pastes
   rich text, `Captain's log (datalib:doc/<uuid>)` as plain text. The
-  href is the document's name, which datalib reads; no app registers
-  the scheme, so outside datalib it is a name, not a link that opens
+  href is the document's name, which Datalib reads; no app registers
+  the scheme, so outside Datalib it is a name, not a link that opens
   anything. The rest of the title
   bar's menu (`documentMenu.ts`: open at the source, feedback) needs the
   document itself, which a chip does not hold.
-- **drag**: it drags as a link. `chipDragQuery` writes no search for
-  it, though `datalib_document_id:` could now name one.
+- **drag**: it drags as a link, with no search
+  (`chipDragQuery`).
 
 ## A date
 
 **Every stamp in a document is a chip too.** A render writes one as
 `<time datetime="…" title="…">short form</time>`
-([`data_architecture_parse_and_render.md`](data_architecture_parse_and_render.md)
-§"A stamp on a page"), and `decorateDates` in `ui/src/cards/dates.ts`
+([the contract](../user/rendered_documents.md#a-time)), and `decorateDates` in `ui/src/cards/dates.ts`
 draws each `<time>` whose `datetime` it can read as a chip. Its value is
 the whole of what it names, so there is no URI and no resolver; the
 `<time>` element is the chip link. `dates.ts` is the one formatter, and
@@ -385,15 +379,13 @@ the rules are pure functions over the parsed stamp and the **time view**.
 app, chips and every other stamp (`ui/src/config/timeView.ts`, kept per
 browser). A click or a right-click on it picks the zone — this
 computer's, **as written** (each stamp in the offset its source wrote it
-in: an email in its `Date:`'s), UTC, the last few named zones, or any zone found by place or offset —
+in), UTC, the last few named zones, or any zone found by place or offset —
 and how a date is written: `Wed, Apr 15, 2026` or `2026-04-15`, on a 24-
 or 12-hour clock. The clock shows the time now in that zone, outlined
 when it is not this computer's. Under "as written", a stamp with no
 offset of its own reads as this computer does; a day is the same day in
-every zone, and so is a stamp in `Z` (or RFC 3339's older `-00:00`),
-which since RFC 9557 names no clock and which a render writes for a
-time whose source names none
-([the contract](../user/rendered_documents.md#a-time) says which).
+every zone, and so is a stamp in `Z` (or the older `-00:00`), which a
+render writes for a time whose source names no clock.
 Picking any other zone reads every stamp in that zone, whatever its
 offset (`parseStamp` in `dates.ts`, `parseInstant` in `timeView.ts`). Anything that formats a stamp goes through `timeView.ts`, and
 anything that draws one into the page itself (a grid, a document, the
@@ -474,15 +466,13 @@ typed. A step names no search and drags as a link.
 | **copy** | `Will Riker <riker@enterprise.org>` as text, a working `mailto:` link as HTML | `Work Slack (datalib:group/slack)`, and the link | the same |
 
 **A group or step chip's menu is its row of the Sources table.**
-`/api/entities` answers each with its `row`, so the menu is built as the
-right-click lands, by the same `rowMenu` the Sources table uses
-(`chipActions.ts::entityChipMenu`). It leaves out what needs the
-config's text, which only the Sources card holds (Edit settings, Rename,
-Remove, Compare), and what the chip's own entries already are (its
-dashboard, its id). An entry runs through `rowActions` on the rows read
-fresh at that moment, so a group's steps are there and nothing acts on
-a stale state; what it says is a toast. Until the answer lands, the
-chip offers its own entries alone.
+`/api/entities` answers each with its `row`, and the menu is built as
+the right-click lands by the Sources table's own `rowMenu`
+(`chipActions.ts::entityChipMenu`), less what needs the config's text
+(Edit settings, Rename, Remove, Compare) and what the chip's own entries
+already are. An entry runs through `rowActions` on rows read fresh at
+that moment, and says what it did in a toast. Until the answer lands,
+the chip offers its own entries alone.
 
 **`ui/src/cards/chipActions.ts` is the one place a chip's clicks are
 decided**: which chip a press landed on (`chipElAt`, `chipOf`), what its
@@ -492,18 +482,18 @@ entry does (`runChipAction`). A surface only draws the menu — the
 floating `ChipMenu.ce.vue` over a document or a card, a grid's context
 menu, the search field's tooltip — and hands it a `ChipHost` saying
 what it can do there: open a card, search in place, link a handle. The
-search grid narrows its own query for "Everything with", and replaces
-it for a chip's own Browse (the one a group chip offers before its row
-is known); everywhere else both open a search beside the card. The
-row's Browse opens its browse card, with the source's columns, from
-every surface. A
-contact chip (`data-contact`) has no card of its own yet, so it
-offers copy and "Everything with" only. A click with a modifier on a person chip opens its link
-outside the app, as on any link, when it is a web, mail or phone link; a
-`slack://` one goes nowhere, and no click on a `datalib:` link ever
-leaves the app (`externalLinks.ts`). The mail
-app opens only from the menu's Compose entry, through `openExternal`. A
-double-click opens a card by its card source (`cardSources.ts`, which
+search grid narrows its own query for "Everything with" and replaces it
+for a group chip's own Browse; everywhere else both open a search
+beside the card. The row's Browse opens its browse card, with the
+source's columns, from every surface. A contact chip (`data-contact`)
+has no card of its own yet, so it offers copy and "Everything with"
+only.
+
+A click with a modifier on a person chip opens a web, mail or phone
+link outside the app, as on any link; a `slack://` one goes nowhere, and
+no click on a `datalib:` link ever leaves the app (`externalLinks.ts`).
+The mail app opens only from the menu's Compose entry (`openExternal`).
+A double-click opens a card by its card source (`cardSources.ts`, which
 carries no components, so naming a card does not load it).
 
 ## Adding a kind of chip
@@ -556,5 +546,6 @@ A system event as a chip ("Worf joined the channel"), which needs each
 provider to carry the handle on its system events; a chip for a
 channel; a document chip in a rendered page (a `datalib:doc/` link in
 markdown is not marked as one yet, and would need a resolver for its
-title) or in the search field (no `doc:` key in the search grid); and
-the title bar's whole menu on a document chip.
+title) or in the search field; a search when a document chip is
+dragged (`datalib_document_id:` could name it); and the title bar's
+whole menu on a document chip.

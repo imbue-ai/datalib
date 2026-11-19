@@ -1,35 +1,30 @@
 # `grid_rows` — the union table behind the grid
 
-The grid in `datalib/ui` shows one row per displayable thing in the
-mirror: a conversation, a message, a content block, a PR, a page, a
+The grid shows one row per displayable thing in the mirror: a
+conversation, a message, a content block, a PR, a page, a channel, a
 storage measurement. Every source's render writes a denormalized
 projection of its records into one table, **`grid_rows`**, and the
-`unified_grid_and_search_index` applet reads it with one query and no per-provider
-branches.
+`unified_grid_and_search_index` applet reads it with one query and no
+per-provider branches.
 
-The index also holds `problems`, which the grid does not read: the
-`unified_grid_and_search_index` step's own rows about a render store it could not read. The
-applet serves every step's problems at `/problems`, each read where its
-step keeps it, which filters, sorts, groups
-(`/problems/groups`) and pages the way `/search` does, through the keys
+The same file, the grid index, also holds `problems`, which the grid
+does not read: the index step's own rows about a render store it could
+not read. The applet serves every step's problems at `/problems`, each
+read where its step keeps it, filtered, sorted, grouped
+(`/problems/groups`) and paged the way `/search` is, through the keys
 declared on `ProblemRow`.
 
 ## Why a union table
 
-1. **One definition of each column.** When the grid grows a column
-   (`channel`, `source_url`, …), one struct moves; the DDL, the column
-   list and the search keys are derived from it.
-2. **One query path.** Adding a provider adds rows, not a query: the
-   query, filter and sort code in `datalib/backend/unified_grid_and_search_index/`
-   stays put.
+1. **One definition of each column.** A new column moves one struct;
+   the DDL, the column list and the search keys are derived from it.
+2. **One query path.** Adding a provider adds rows, not a query.
 3. **No joins at query time.** A message row already carries its
-   conversation's name, account and project, so the grid renders
-   straight off the projection.
+   conversation's name, account and project.
 
-**Not a materialized view.** The mapping is not pure SQL — timestamps
-are bumped to order blocks, JSON fields are parsed out of raw payloads
-— so the rows are built in Rust beside the rest of the render code,
-with no dependence on Dolt-specific features.
+It is not a materialized view: the mapping is not pure SQL (timestamps
+are bumped to order blocks, JSON is parsed out of raw payloads), so the
+rows are built in Rust with the rest of the render code.
 
 ## Source of truth
 
@@ -45,75 +40,76 @@ is no codegen step. Each field carries:
 - a doc comment saying what the column *means*.
 
 `#[derive(PortableTable)]` (in `datalib/backend/etl/macros`) produces
-the `DDL`, `COLUMNS` and `TABLES` consts from the struct; `init_schema`
-in `etl/render/src/grid_index.rs` applies the DDL. The authoritative
-list of every store's tables and columns is the `schema_inventory`
-golden,
-`datalib/backend/schema_inventory/tests/snapshots/inventory__schema_inventory.snap`.
-The TypeScript side (`SearchRow` in `datalib/ui/src/api.ts`) is kept
-by hand.
+the `DDL`, `COLUMNS` and `TABLES` consts from the struct. In a checkout,
+the `schema_inventory` golden
+(`datalib/backend/schema_inventory/tests/snapshots/inventory__schema_inventory.snap`)
+lists every store's tables and columns. On a data root, ask a store for
+its `.schema`: the grid index, `db.sqlite`, is plain SQLite, and a
+render store opens as [`doltlite.md`](doltlite.md) says. The TypeScript
+side (`SearchRow` in `datalib/ui/src/api.ts`) is kept by hand.
 
 ## Producer side
 
 A source's render crate (`datalib/backend/etl/providers/<p>_render/`)
-builds its rows with `GridRow::builder()` — most of them through a
-shared layer rather than directly: `chat-common` for every chat-shaped
-source, `contact-common`, `calendar-common`, `forge-render-common`
-(github, gitlab) and `timeseries_render`. It writes them into the
-source's own render store,
-`<root>/<source_id>/render_markdown/indexed_markdown.doltlite_db`. The
-`unified_grid_and_search_index` step (`build_grid_index` in
+builds its rows with `GridRow::builder()`, most of them through a
+shared layer: `chat-common` for every chat-shaped source,
+`contact-common`, `calendar-common`, `forge-render-common` (GitHub,
+GitLab) and `timeseries_render`. It writes them into the source's own
+render store,
+`<root>/<source_id>/render_markdown/indexed_markdown.doltlite_db`.
+
+The `unified_grid_and_search_index` step (`build_grid_index` in
 `datalib/backend/etl/render/src/grid_index.rs`) stacks those stores
-into the unified grid and search index: it asks each one for the `dolt_diff` between
-the commit the index last consumed (`source_cursors`) and that store's
-HEAD, applies each changed document's row set, and copies the
-corresponding `markdowns` row across. The cursor keeps that commit's
-tree too: when the store's history has been folded and the commit is
-gone, the diff starts from the commit that holds the same tree. Each source is one transaction
-and one commit, its cursor moving inside it, so a stopped or failed
-pass keeps every source it finished.
+into the grid index. It asks each store for the `dolt_diff` between the
+commit the index last consumed (`source_cursors`) and the store's HEAD,
+applies each changed document's rows, and copies its `markdowns` row
+across. The cursor keeps that commit's tree too, so when the store's
+history has been folded and the commit is gone, the diff starts from
+the commit that holds the same tree. Each source is one transaction,
+its cursor moving inside it, so a stopped or failed pass keeps every
+source it finished.
 
 ## Consumer side
 
-The applet's search lists the matching uuids in order
-(`ordered_uuids` in `datalib/backend/unified_grid_and_search_index/src/dolt_repo.rs`,
-over the `WHERE` that `build_where` in `unified_grid_and_search_index/src/db.rs` makes
-from the query's structured terms), then reads the rows for one page
-(`rows_by_uuids`, `search_row_from`) into `SearchRow`s with `preview`
-as the Contents cell. The order is newest first: `touched_at_utc`
-descending, a document row ahead of the rows inside it at the same
-moment.
+The applet's search lists the matching uuids in order (`ordered_uuids`
+in `unified_grid_and_search_index/src/dolt_repo.rs`, over the `WHERE`
+that `build_where` in `db.rs` makes from the query's structured terms),
+then reads the rows for one page (`rows_by_uuids`, `search_row_from`)
+into `SearchRow`s, with `preview` as the Contents cell. The order is
+newest first: `touched_at_utc` descending, a document row ahead of the
+rows inside it at the same moment.
 
 The keys the search bar takes are declared on `GridRow`'s own columns
-(`#[col(…, search = "datalib_document_id", uuid)]`, and `search(order = …, range = …,
-ranked)` on the struct; [`etl/macros/README.md`](../../datalib/backend/etl/macros/README.md)
-§"Searched tables"), and the derive turns them into a `SearchTable`
-(`datalib_query::table`) that the `WHERE`, the order and the grouping
-are all built from. The grid's own column ids (`source_ref`, `snippet`)
-map onto `grid_rows` columns in `unified_grid_and_search_index/src/grid_columns.rs`.
+(`#[col(…, search = "datalib_document_id", uuid)]`, and `search(order =
+…, range = …, ranked)` on the struct; `datalib/backend/etl/macros/README.md`
+§"Searched tables" in the repo). The derive turns them into a
+`SearchTable` (`datalib_query::table`) that the `WHERE`, the order and
+the grouping are all built from. The grid's own column ids
+(`source_ref`, `snippet`) map onto `grid_rows` columns in
+`unified_grid_and_search_index/src/grid_columns.rs`.
 
-Every read happens inside one read transaction on a read-only
-connection (`DoltRepo::pinned`), so a request sees one commit and the
-plain table's indexes serve it. `grid_rows` carries one index for the
-newest-first order and one per key the search bar filters on, each
-`(key, touched_at_utc, is_document, uuid)`; a filter on a key without
-one reads and sorts the whole table
-([query plans](doltlite.md#query-plans-and-indexes)). They are declared on the struct
-(`#[portable_table(index = …)]`) and created only in the unified
-index, not in the render stores that also hold a `grid_rows`.
+Every request reads inside one read transaction on a read-only
+connection (`DoltRepo::pinned`), so it sees one state of the index.
+`grid_rows` carries one index for the newest-first order and one per
+key the search bar filters on, each `(key, touched_at_utc, is_document,
+uuid)`; a filter on a key without one reads and sorts the whole table
+([query plans](doltlite.md#query-plans-and-indexes)). They are declared
+on the struct (`#[portable_table(index = …)]`) and created only in the
+grid index, not in the render stores that also hold a `grid_rows`.
 `every_filter_key_is_served_by_an_index` fails when a key has none.
 
 Free text never reaches `grid_rows`' SQL: the applet ranks it in the
 search index, by its words and by its meaning, maps the hits to rows by
-their document's id (below), keeps the ones the query's structured
-terms also match (`filter_uuids`), and shows each hit's own matched
-lines as its Contents cell. There is no weaker search in its place:
-before the first sync builds the search index, free text finds only
-what the grid's own search terms hold, words they do not hold find no
-rows, and the answer says `search_index_missing`, which the grid shows
+their document's id (`markdown_uuid`), keeps the ones the query's
+structured terms also match (`filter_uuids`), and shows each hit's own
+matched lines as its Contents cell. Before the first sync builds the
+search index, free text finds only what the grid's own search terms
+hold, and the answer says `search_index_missing`, which the grid shows
 as a note rather than an error.
 
 ## Adding a column
+
+From a checkout:
 
 1. Add the field to the `GridRow` struct in
    `datalib/backend/schema/src/grid_rows.rs`, with a `#[col(sql = "…")]`
@@ -146,22 +142,23 @@ as a note rather than an error.
    the other.
 6. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
-On an existing root, a render store and the grid index change shape only
-when the step that writes them runs. The first launch of the new build
-asks each of them (`--migrate`); each compares its store's recorded
-shape with this build's and answers that it needs to run again, and the
-app offers to re-render them all, downloading nothing; until then a
-source's own sync re-renders that source
-([dag README](../../datalib/backend/dag/README.md) § "Upgrading a
-root"). The render step then sees its own DDL hash moved (it is one of
-the render params, `_store_schema`) and re-renders every document into
-the new shape, and the grid index rebuilds itself from the stores.
+On an existing root, a render store and the grid index change shape
+only when the step that writes them runs. The first launch of the new
+build asks each step (`--migrate`) whether its store's recorded shape is
+this build's; the app then offers to re-render them all, downloading
+nothing, and until then a source's own sync re-renders that source
+([the runner](../../datalib/backend/dag/README.md#upgrading-a-root)).
+The render step sees its own DDL hash moved (`_store_schema`, one of
+its params) and re-renders every document into the new shape, and the
+grid index rebuilds itself from the stores.
 
 ## Adding a provider
 
+From a checkout:
+
 1. Add the provider's crates under `datalib/backend/etl/providers/`
-   (`<p>`, `<p>_render`, `<p>_config`; see AGENTS.md § "Ingest and
-   render are separate crates"), a `Provider` variant
+   (`<p>`, `<p>_render`, `<p>_config`; `AGENTS.md` §"Ingest and render
+   are separate crates" in the repo), a `Provider` variant
    (`schema/src/providers.rs`) and an `IdNamespace` variant
    (`datalib/backend/id/src/lib.rs`). The render crate emits `GridRow`s
    with the right `provider` / `kind` / `source_label` — through a
@@ -189,8 +186,10 @@ the TNG fixture's goldens show the result per provider.
 Minted by `datalib_id` for every provider: the record's `created_at` in
 the leading bits where it has one of its own, then a hash of
 `(provider, source_id, upstream_account, upstream_entity_kind,
-upstream_id)`. The recipe, which rows carry a stamp, and the account
-each provider names are in [`entity_ids.md`](entity_ids.md).
+upstream_id)`, so re-rendering a record gives it the same uuid. A
+document's own row carries no stamp. The recipe, which rows carry a
+stamp, and the account each provider names are in
+`docs/dev/entity_ids.md` in the repo.
 
 ### `kind` and `source_label`
 
@@ -201,7 +200,7 @@ the plain product name ("Claude", "Slack").
 
 ### `is_document`
 
-True on exactly one row per rendered markdown document — the row
+True on exactly one row per rendered document — the row
 whose `uuid` is the document's `markdown_uuid` — and false on every
 row inside it. Every row a document carries has a `markdown_uuid`, so
 this is not "has a document"; it is "opening this row opens a whole
@@ -218,9 +217,9 @@ Post` and `LinkedIn Skills`.
 
 ### `created_at`, `modified_at` and `touched_at`
 
-All three are the record's own stamps, kept as the source wrote them
-(see the timestamp convention in AGENTS.md); each gets a `_utc` twin
-and an offset column at index time. `touched_at_utc` is what the grid
+All three are the record's own stamps, kept as the source wrote them,
+offset included; each gets a `_utc` twin and an offset column at index
+time. `touched_at_utc` is what the grid
 sorts on, newest first, and what `before:`/`after:` filter on; Touched
 is the one date column the grid shows by default (a calendar's Browse
 shows Created instead).
@@ -267,23 +266,23 @@ LinkedIn connection, a Facebook friend, all written by
 `contact-common`. `contact` is who the row is about, the person or the
 group, and `email` and `phone` are the card's first address and number
 as the source wrote them, a number with or without its country code.
-The grid's Contact column is drawn from the three, and from the
-contact's handles in `source_contact_handles` where neither the address
-nor the number makes one ([`chips.md`](chips.md) §"In a grid"), and so
-is the Subject cell on such a row. A card is its own subject, so `conversation_name` is the
-contact's name too, and `channel` holds the address book or list it is
-filed in. `author` stays null: nobody wrote a contact.
+The grid's Contact column, and the Subject cell on such a row, is the
+contact's chip, drawn from the three, else from the contact's handles
+in `source_contact_handles` ([`chips.md`](chips.md) §"In a grid"). A
+card is its own subject, so `conversation_name` is the contact's name
+too, and `channel` holds the address book or list it is filed in.
+`author` stays null: nobody wrote a contact.
 
 ### `conversation_name` and `channel`: the subject, and where it is filed
 
 `conversation_name` is the row's **subject**: the conversation,
 thread, page, event or card the row belongs to, carried onto every row
 in it, and on a document's own row its own title. The grid shows it as
-the Subject column (`subject_ref`, which on a contact's row is the
-card's chip and in a conversation named by its people a chip for each,
-from its `subject` terms), and `subject:` finds it by its whole name, `conversation:`
-being the same key; `datalib_document_id:` names the conversation by id, and is
-what the cell's Keep only writes. `id:` is the row's `upstream_id`.
+the Subject column (`subject_ref`: on a contact's row the card's chip,
+in a conversation named after its people a chip for each). `subject:`
+(or `conversation:`) finds it by its whole name; `datalib_document_id:`
+finds the conversation by its `conversation_uuid`, and is what the
+cell's Keep only writes. `id:` is the row's `upstream_id`.
 
 `channel` is where a row is filed when that is *not* its subject: a
 card's address book, an event's calendar, a sensor's device, LinkedIn's
@@ -309,7 +308,7 @@ the row on no page. A container that is also a row of its document (a
 thread, a chat) takes that row's sort key unless its renderer gave it
 one. The applet's `GET /children/{uuid}` lists a container's children
 in that order, a page each way around an anchor
-([the applets](../user/applets.md#unified_grid_and_search_index)), off indexes
+([the route](../user/applets.md#a-containers-children)), off indexes
 on `(parent_uuid, sort_key, uuid)` that only the grid index has
 (`data_nodes::CHILDREN_INDEXES`). A container is **read together** (what a
 search groups by and the viewer opens: a thread, a chat, a page) or a
@@ -317,8 +316,7 @@ search groups by and the viewer opens: a thread, a chat, a page) or a
 both; `read_uuid` and `place_uuid` are the nearest container above the
 row of each kind, so grouping by either is one column. Besides its
 parent a row or container may be filed under others, an email thread
-under each of its labels: those are `filings` rows. Why, and what the
-tree is for: `docs/dev/plans/documents_to_blocks.md`.
+under each of its labels: those are `filings` rows.
 
 **Every container is a row.** Most are already a document's row: a
 thread or a chat is the document that holds its messages, under the
@@ -362,7 +360,7 @@ out its asides, and an email's mailbox labels are not in it at all.
 Changing what a producer puts there changes every row it wrote, so it
 takes a `RENDER_VERSION` bump to reach a store already rendered.
 
-### `source_id`, and where a document's file is
+### `source_id`
 
 `source_id` is the id of the source a row is filed under: its group's
 id, the directory under the data root, never the display name the
@@ -374,23 +372,11 @@ row (provider `datalib`) under `datalib`
 (`RenderedMarkdown::source_id` empty) is refused, and its render fails
 rather than filing rows under nothing. The `source:` filter compares it.
 
-A row names its document by `markdown_uuid`, and the document's file,
-relative to the data root, is `markdowns.md_path`:
-`<source_id>/render_markdown/<xx>/<markdown_uuid>.md`, where `<xx>` is
-the id's last two characters. Those come from the id's hash, so they
-spread documents over 256 folders; the first characters are a stamp or
-zeros and would not. Every renderer gets the path from one function,
-`datalib_etl_render::grid_index::doc_md_path`, and the store refuses a
-document filed any other way, or a row of another document
-(`misfiled` in `grid_index.rs`).
-
-So a search hit's path *is* its document's id
-(`grid_rows::markdown_uuid_of_path`): the search reads the id out of
-the path and finds the document's rows through `grid_rows_by_markdown`,
-with no lookup by path. Changing the layout is a bump of
-`grid_index::DOC_LAYOUT`, which every source carries in its render
-params, so every source renders again; each document's old file is
-deleted as the new one is written.
+A row names its document by `markdown_uuid`. The document's markdown is
+kept in its source's render store under that id, and nowhere else; the
+store refuses a document holding a row of another document (`misfiled`
+in `grid_index.rs`). A search hit names its document by that id and
+finds the document's rows through `grid_rows_by_markdown`.
 
 ### `byte_size`, `item_count`
 
@@ -412,20 +398,19 @@ Two nullable measurements. What each one measures is decided per
 | garmin.Garmin Activity | — | 1 |
 | a GitHub PR, a GitLab MR, a Notion comment thread | — | itself and its comments; each comment row 1 |
 | todoist.Todoist Project | — | its tasks, open and completed, and its comments; each task or comment row 1 |
+| baby_connect.Child (a child's month) | — | its entries; each entry row 1 |
 | a calendar event, a contact, a Notion page, a Perseus book or chapter | — | 1 |
 | lightroom.Photo, lightroom.Video | — | 1 |
 | notion.Notion Table of Contents | — | 0: a list of the source's pages adds nothing to its count |
 
 On a `datalib.*` row, `byte_size` is bytes on disk **as of the last
-render that rewrote the row** — see "Storage rows" below for why that
-is not "now". On a chat-common row it is the message body — the same
-string it passes as the body — and nothing else: not the attachments,
-whose sizes only some providers know, and not the raw payload, which
-the renderer never sees. So a conversation's `byte_size` is exactly the
-sum of its item rows', and its `item_count` is how many of them were
-said: a tool call, its result and a system note are in the transcript
-but are not messages, so their rows carry no count. Reactions have
-their own rows but are not messages, so they carry neither.
+render that rewrote the row** (see "Storage rows" below). On a
+chat-common row it is the message body and nothing else: not the
+attachments, whose sizes only some providers know, and not the raw
+payload. So a conversation's `byte_size` is exactly the sum of its item
+rows', and its `item_count` is how many of them were said: a tool call,
+its result, a system note and a reaction are not messages, so their
+rows carry no count.
 
 **Every document row carries an `item_count`**; the render store
 refuses one that does not. It is what the Manage screen's Items column
@@ -433,20 +418,15 @@ sums, through `markdowns.item_count` — a copy, like the document's
 stamps — so a new renderer has to decide what its documents count.
 
 Bytes on disk and a byte length of content are different measurements,
-and one kind must never mix them: a producer that measures a file
-reports the file, and a producer that can only compute a logical size
-for something that *has* an on-disk size leaves the column NULL. Adding
-a kind here means adding a row to this table.
-
-`item_count` is deliberately unitless. What is being counted is `kind`'s
-job to say: a Table counts rows, a Source Size counts files, a
-conversation counts messages, a sensor page counts readings.
+and one kind never mixes them: a producer that can only compute a
+logical size for something that *has* an on-disk size leaves the column
+NULL. `item_count` has no unit; what it counts is `kind`'s to say.
+Adding a kind here means adding a row to this table.
 
 ### `diff_status`, `diff_changed_columns`
 
-**NULL on every row a real source renders.** Set only by a diff group
-(`docs/dev/plans/completed/diff_renderer.md`), whose rows are two renders of the
-same source subtracted: `diff_status` is `added`, `removed`, `modified`
+**NULL on every row a real source renders.** Set only by a diff group,
+whose rows are two renders of the same source subtracted: `diff_status` is `added`, `removed`, `modified`
 or `unchanged` (`datalib_schema::diff_status::DiffStatus`), and for a
 modified row `diff_changed_columns` names the columns that differ,
 sorted and `|`-joined. A non-NULL `diff_status` is the one thing that
@@ -459,9 +439,9 @@ says a row came from a diff tree; nothing else about the row changes —
 (`datalib:photo/<uuid>`), never an address: the UI asks which applet
 serves the name's kind and draws the thumbnail from it, so moving the
 bytes moves no row. The search grid's Picture column (column type
-`image`) is hidden until a row in the results has one. `latitude` and `longitude` are where the thing was,
-in degrees. All three are null on every row but a Lightroom photo's
-today.
+`image`) is hidden until a row in the results has one. `latitude` and
+`longitude` are where the thing was, in degrees. All three are null on
+every row but a Lightroom photo's.
 
 ### `h3`
 
@@ -469,26 +449,25 @@ The finest [H3](https://h3geo.org) cell holding `latitude` and
 `longitude`, as an integer, which the builder sets from `.geo(…)`: a
 render gives a row a location and nothing else. `place:<cell>` and
 `near:<cell>` are ranges of this one indexed column, at any resolution
-(`datalib/backend/h3/README.md`).
+(`datalib-step help search`).
 
-**A photo's document has no file.** It has a `markdowns.md_path` like
-any document's, so the id-from-path rule holds, but render never writes
-the file: the `photos` applet draws the photo from the
+**A photo's document has no text.** Its render store keeps its rows and
+no markdown: the `photos` applet draws the photo from the
 `NormalizedPhoto` its document carries in `source_photos`
 (`datalib_photo_schema`), which the index copies the way it copies
 `source_contacts`. `/chat/<uuid>` answers such a document with its
-`image` and an empty body, and the document card hands it to the
-applet's card. The search index holds nothing for it, which is why a photo's
+`image` and no text, and the document card hands it to the applet's
+card. The search index holds nothing for it, which is why a photo's
 caption is a `caption:` term.
 
-**A document can be in the grid and not in the search index.** One filed with
-`grid_index::unindexed_doc_md_path`, under `render_markdown/unindexed/`, has
-its rows and opens like any other, and is stored with `markdowns.searchable`
-false, which `unified_grid_and_search_index`'s keyword pass, the embeddings
-and the "without vectors" count read. Use it for a document that only
-repeats what others say, so a free-text search does not return it and nothing
-embeds it: Notion's table of contents is the one today. Its row is still found
-by its own columns.
+**A document can be in the grid and not in the search index.** One its
+renderer hands over with `RenderedMarkdown::searchable` false has its rows
+and opens like any other, and is stored with `markdowns.searchable` false,
+which the keyword index, the source's `embed` and the "without vectors"
+count read. Use it for a document that only repeats what others say, so
+a free-text search does not return it and nothing embeds it: Notion's
+table of contents is the one. Its row is still found by its own
+columns.
 
 ### `supplied_terms`
 
@@ -502,76 +481,50 @@ when there are none. A renderer sets it with
 `GridRow::supplied_terms`.
 
 **Nothing searches this column.** SQLite cannot index the elements of
-a JSON array, so the search bar never looks inside it. The transaction
-that writes a row to the grid index melts it into the index's search
-terms (`etl/render/src/search_terms.rs`), one indexed row per term,
-these together with the terms its other columns give
-(`search_terms_of`); a row written again unchanged is not touched. The wide row is what is stored; the tall,
-indexed form is derived from it.
+a JSON array. The transaction that writes a row to the grid index
+expands it into the index's search terms, one indexed row per term,
+together with the terms the row's other columns give
+(`search_terms_of`); a row written again unchanged is not touched.
 
-The terms live on the row so that they go wherever the row goes. When
-a row moves to another document, the document that takes it over
-writes the row and its terms in one step. A table of their own, owned
-by document, leaves a moved row's terms behind with the document it
-left, and every full read of that store then fails (#1202).
+The terms live on the row so that they go wherever the row goes: a row
+that moves to another document takes its terms with it, in one write.
 
 ## Storage rows: what a source weighs
 
-Every source's render wave ends by measuring its own raw store and
-emitting a handful of rows tagged `provider = "datalib"`, `source_label
-= "Storage"`, kinds `Source Size`, `Store` and `Table`. That is what
-gives a download-only source — `file_inventory`, `media` — a place in the grid
-at all: they render no documents, so without this they appear nowhere.
-`source:datalib` is "show me what everything weighs". The code is
-`datalib/backend/datalib_step/src/introspect.rs`; its header has the
-reasons behind the rules below.
+Every source's render ends by measuring its own raw store and emitting
+a handful of rows tagged `provider = "datalib"`, `source_label =
+"Storage"`, kinds `Source Size`, `Store` and `Table`. That gives a
+download-only source (`file_inventory`, `media`) a place in the grid at
+all. `source:datalib` is "show me what everything weighs". The code,
+with the reasons behind these rules in its header, is
+`datalib/backend/datalib_step/src/introspect.rs`.
 
-**They are filed under `datalib`, not under the source they measure.**
-The report's markdown sits in the measured source's
-`render_markdown/`, the one tree the render step may write, so its
-document belongs to that source. `grid_rows::filed_under` asks
-`provider` first, so a `datalib` row gets `source_id = datalib`
-whatever store it came out of, and "what claude weighs" never lands
-in the same bucket as the Claude conversations. Which source a
-measurement describes is `markdowns.source_id`, the row's
-`conversation_name` (`<source_id> storage`), and its `upstream_id` (the
-measured path). A group configured with the literal id `datalib` would
-collide with this.
-
-**The grid holds the current value; the history lives elsewhere.** Each
-measurement is one row, keyed on `(source, kind, measured path)` and
-nothing else, so a re-render overwrites it. The series behind it
-accumulates in `source_measurements`, a table in the same per-source
-`indexed_markdown.doltlite_db` that `problems` lives in, keyed
-`(subject, measured_at_utc)`. It stays out of `grid_rows` because a
-series row's id must carry its time, and the grid would then return a
-copy of every file per run and bury real data under measurements.
-
-**A `Table` row carries no byte size.** Doltlite has no `dbstat`
-([query plans](doltlite.md#query-plans-and-indexes)), and its chunks
-are shared between tables and between commits, so no honest per-table
-number exists. The amalgamation could walk a table's chunks
-(`doltlite_chunk_walk.c`), but none of that is exposed to SQL.
-
-**Scope is `<name>/ingest`, not the whole tree.** `render_markdown` is
-datalib's own output, `system/disk_stats.sqlite` already tracks it per
-step, and measuring it from inside the thing that writes it would grow
-the store it just measured on every run.
-
-**What re-renders the report is a count, never a byte.** A doltlite
-store's size is not reproducible — rebuilding the TNG fixture from
-byte-identical inputs moves six of its sixteen sources by 1-22 bytes,
-in a different direction each time — and a bookkeeping mutation
-rewrites chunks with no row added. So byte sizes are reported but
-never compared (`introspect::counts_unchanged`), and datalib's own
-tables (`doltlite_raw::SHARED_TABLES` — `sync_runs`, `sync_scope_state`
-and the like — and every `<table>_bookkeeping` sidecar) are left out of
-the report. Otherwise every run would rewrite the report and hand
-`unified_grid_and_search_index` a diff forever. This is the download side's *volatile
-field* idea in another shape: the bytes are signal, so they are
-**reported but not hashed**, neither sorted nor dropped.
+- **They are filed under `datalib`, not under the source they
+  measure**, so "what claude weighs" never lands beside the Claude
+  conversations. The report is a document in the measured source's
+  render store, the one store its render may write; which source it
+  describes is `markdowns.source_id`, the row's `conversation_name`
+  (`<source_id> storage`) and its `upstream_id` (the measured path). A
+  group configured with the literal id `datalib` would collide with
+  this.
+- **The grid holds the current value.** Each measurement is one row,
+  keyed on `(source, kind, measured path)`, which a re-render
+  overwrites. The series accumulates in `source_measurements`, a table
+  in the same render store, keyed `(subject, measured_at_utc)`.
+- **A `Table` row carries no byte size.** Doltlite shares chunks
+  between tables and between commits, so no honest per-table number
+  exists ([query plans](doltlite.md#query-plans-and-indexes)).
+- **Scope is `<name>/ingest`.** The render's own output is Datalib's,
+  and `system/disk_stats.sqlite` already tracks it per step.
+- **What re-renders the report is a count, never a byte.** A doltlite
+  store's size is not reproducible from identical inputs, and
+  bookkeeping rewrites chunks with no row added, so byte sizes are
+  reported but never compared (`introspect::counts_unchanged`), and
+  Datalib's own tables (`sync_runs`, `sync_scope_state`, every
+  `<table>_bookkeeping` sidecar) are left out of the report. Otherwise
+  every run would rewrite it.
 
 So read `byte_size` on a storage row as **how big the raw store was
 the last time this source's contents changed**, not as how big it is
 now. For bytes on their own cadence, `system/disk_stats.sqlite` keeps a
-per-step series in plain SQLite, which is what lets it sample freely.
+per-step series in plain SQLite.

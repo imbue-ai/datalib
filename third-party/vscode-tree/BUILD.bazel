@@ -1,0 +1,85 @@
+load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_run_binary", "js_test")
+load("@bazel_lib//lib:copy_to_bin.bzl", "copy_to_bin")
+load("@npm_vscode_tree//:defs.bzl", "npm_link_all_packages")
+load("@npm_vscode_tree//third-party/vscode-tree:playwright/package_json.bzl", playwright_bin = "bin")
+
+# VS Code's tree widget as a <vs-tree> custom element (README.md). Built
+# from this package alone: its own lockfile, its own node_modules, and
+# nothing from the rest of the tree.
+
+# The playwright pin, read by //tools:version_pins_test.
+exports_files(["package.json"])
+
+npm_link_all_packages(name = "node_modules")
+
+js_binary(
+    name = "build_tool",
+    data = [":node_modules"],
+    entry_point = "build.mjs",
+    # Show the build's one-line summary (modules, stylesheets, bytes).
+    env = {"JS_BINARY__SILENT_ON_SUCCESS": ""},
+)
+
+# One ES module, upstream's CSS inside it, and VS Code's license beside it;
+# what a page imports. The source is VS Code's own, pinned in MODULE.bazel.
+copy_to_bin(
+    name = "element_src",
+    srcs = ["src/vs-tree.js"],
+)
+
+# VS Code's files are read where Bazel fetched them: rules_js copies no file
+# from another repository into the output tree, hence `copy_srcs_to_bin`.
+js_run_binary(
+    name = "vs_tree",
+    srcs = [
+        ":element_src",
+        ":node_modules",
+        "@vscode_source//:LICENSE.txt",
+        "@vscode_source//:base",
+    ],
+    outs = [
+        "dist/vs-tree.LICENSE.txt",
+        "dist/vs-tree.js",
+    ],
+    args = [
+        "dist/vs-tree.js",
+        "$(execpath @vscode_source//:LICENSE.txt)",
+    ],
+    chdir = package_name(),
+    copy_srcs_to_bin = False,
+    tool = ":build_tool",
+    visibility = ["//visibility:public"],
+)
+
+# The pinned Playwright's CLI, to install the browser the facts test needs:
+#   bazelisk run //third-party/vscode-tree:playwright -- install chromium
+playwright_bin.playwright_binary(name = "playwright")
+
+# The facts README.md lists, one test each, in Chromium. Run it after a
+# VS Code bump: a fact that moved fails by name.
+#
+# The browser is Playwright's own, found the way the e2e suite finds it:
+# PLAYWRIGHT_BROWSERS_PATH, which CI passes to every test and points at the
+# image's baked cache, or Playwright's default cache under HOME. The
+# playwright pin is the one datalib/ui's lockfile resolves, so it is the
+# browser that suite already installed. DATALIB_TEST_CHROMIUM names a
+# Chromium binary instead, for a machine whose browser belongs to another
+# Playwright.
+js_test(
+    name = "facts_test",
+    size = "medium",
+    data = [
+        "tests/harness.html",
+        "tests/harness.js",
+        ":node_modules",
+        ":vs_tree",
+    ],
+    entry_point = "tests/facts.test.mjs",
+    env_inherit = [
+        "DATALIB_TEST_CHROMIUM",
+        "HOME",
+        "PLAYWRIGHT_BROWSERS_PATH",
+    ],
+    # The browser is in the host's cache, which a remote executor has not got.
+    tags = ["no-remote-exec"],
+)

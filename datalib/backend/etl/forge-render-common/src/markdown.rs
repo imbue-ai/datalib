@@ -6,32 +6,14 @@
 //! open cannot reach the next. Everything else here is plain text and is
 //! escaped.
 
-use std::fs;
-use std::path::Path;
-
-use anyhow::{Context, Result};
 use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::html::{escape_md_inline, escape_name_inline, md_code_span};
 use datalib_etl_render::message::{chip_link, message_stamp_text_html, source_link};
-use datalib_etl_render::section::{join, msg_div_open, Section, MSG_DIV_CLOSE};
+use datalib_etl_render::section::{msg_class, Section};
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
 
 use crate::{ordered, ChangeRequest, Comment, ForgeProfile};
-
-pub(crate) fn write(
-    profile: &ForgeProfile,
-    cr: &ChangeRequest,
-    comments: &[&Comment],
-    md_path: &Path,
-) -> Result<Vec<Section>> {
-    if let Some(dir) = md_path.parent() {
-        fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-    }
-    let sections = render(profile, cr, comments);
-    fs::write(md_path, join(&sections)).with_context(|| format!("write {}", md_path.display()))?;
-    Ok(sections)
-}
 
 /// The document's front matter.
 pub(crate) fn front(profile: &ForgeProfile, cr: &ChangeRequest) -> Front {
@@ -53,7 +35,11 @@ pub(crate) fn front(profile: &ForgeProfile, cr: &ChangeRequest) -> Front {
 
 /// The document as sections: the frame (front matter, title, the part
 /// headings) unkeyed, and each message keyed by its uuid.
-fn render(profile: &ForgeProfile, cr: &ChangeRequest, comments: &[&Comment]) -> Vec<Section> {
+pub(crate) fn render(
+    profile: &ForgeProfile,
+    cr: &ChangeRequest,
+    comments: &[&Comment],
+) -> Vec<Section> {
     let mut sections = Vec::new();
     let mut out = String::new();
     out.push_str(&front(profile, cr).draw());
@@ -144,8 +130,7 @@ fn push_comment(
 /// as its author wrote it. A review with no body is a bare approval, so
 /// its header says everything; a comment with none says it is empty.
 fn message(profile: &ForgeProfile, uuid: &str, header: Option<&str>, body: &str) -> Section {
-    let mut md = msg_div_open(uuid, profile.provider);
-    md.push_str("\n\n");
+    let mut md = String::new();
     if let Some(header) = header {
         md.push_str(header);
         md.push_str("\n\n");
@@ -157,9 +142,7 @@ fn message(profile: &ForgeProfile, uuid: &str, header: Option<&str>, body: &str)
     } else if header.is_none() {
         md.push_str("*(empty)*\n\n");
     }
-    md.push_str(MSG_DIV_CLOSE);
-    md.push_str("\n\n");
-    Section::keyed(uuid, md)
+    Section::boxed(uuid, msg_class(profile.provider, &[]), &md)
 }
 
 /// Who wrote something: a chip where the forge gave an account, else
@@ -202,6 +185,7 @@ fn header(c: &Comment) -> String {
 mod tests {
     use super::*;
     use crate::Section;
+    use datalib_etl_render::section::join;
     use datalib_schema::providers::Provider;
 
     const MARKUP: &str = "<script>x</script> & co";

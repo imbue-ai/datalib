@@ -523,7 +523,7 @@ defeats latchkey's security property either way.
 The fix would be upstream: a **`latchkey imap-gateway`**, the analogue
 of `latchkey gateway`, that terminates the client connection on
 localhost, does SASL upstream and keeps latchkey in the data path.
-Until something like that exists, datalib does not extract secrets from
+Until something like that exists, Datalib does not extract secrets from
 latchkey, and a non-HTTP provider needs a different plan.
 
 ## 6. The Apple Mail mode

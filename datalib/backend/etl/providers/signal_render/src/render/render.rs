@@ -5,8 +5,6 @@
 //! the progress accounting parse's skip-load needs, and the render
 //! cursor.
 
-use std::path::Path;
-
 use anyhow::Result;
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
@@ -74,7 +72,6 @@ pub fn profile() -> RenderProfile {
 
 pub fn render_all(
     parsed: &ParsedSignal,
-    out_dir: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -104,14 +101,8 @@ pub fn render_all(
 
     let (chats, unrendered) = to_chats(parsed, source_id);
     let profile = profile();
-    let mut renderer = ChatRenderer::new(
-        &profile,
-        out_dir,
-        source_id,
-        chats.len(),
-        progress,
-        on_doc_complete,
-    );
+    let mut renderer =
+        ChatRenderer::new(&profile, source_id, chats.len(), progress, on_doc_complete);
     match &parsed.blobs_at {
         Some(at) => render_batched_at(
             at,

@@ -1,7 +1,7 @@
-# Building a datalib card (agent guide)
+# Building a Datalib card (agent guide)
 
 You were pointed here by a "wayfinder" snippet copied out of the
-datalib UI. It named a **component alias** (e.g. `card_a1b2c3`) and
+Datalib UI. It named a **component alias** (e.g. `card_a1b2c3`) and
 asked you either to define it (a new component) or to modify an
 existing one. This doc tells you how. (Editing the data-source config
 instead? Read `<origin>/agent/config.md`.)
@@ -80,7 +80,7 @@ export default (args) => (root, ctx) => {
 
 3. **Look at the result.** The card lives at the column URL in your
    wayfinder. Render it headlessly and inspect the screenshot (this
-   needs a datalib checkout with `pnpm install` run in `datalib/ui`):
+   needs a Datalib checkout with `pnpm install` run in `datalib/ui`):
 
    ```sh
    node datalib/ui/scripts/render.mjs '<cardUrl>' --out /tmp/card.png \

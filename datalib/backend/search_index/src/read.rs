@@ -124,126 +124,6 @@ impl Reader {
         }
     }
 
-    /// Pages (documents that are no conversation) holding every one of
-    /// `terms`, each an FTS5 query, somewhere among their pieces, and none
-    /// of `excluded`, of `sources` and `among` (all when `None`): a page's
-    /// pieces are parts of one thing, where a conversation's messages are
-    /// each said on their own. Best
-    /// first by the sum of each term's best piece's BM25, at most `limit`,
-    /// each landing on the piece holding the most of the terms, an item
-    /// before the text above them.
-    pub async fn page_words(
-        &self,
-        terms: &[String],
-        excluded: &[String],
-        sources: Option<&[String]>,
-        among: Option<&HashSet<String>>,
-        limit: usize,
-    ) -> Result<Vec<MessageHit>> {
-        let mut pages: HashMap<i64, Page> = HashMap::new();
-        for (i, term) in terms.iter().enumerate() {
-            let candidates: Vec<i64> = pages.keys().copied().collect();
-            let rows = self
-                .term_pieces(
-                    term,
-                    sources,
-                    among,
-                    (i > 0).then_some(candidates.as_slice()),
-                )
-                .await?;
-            let mut next: HashMap<i64, Page> = HashMap::new();
-            for (doc_id, markdown_uuid, seq, uuid, score) in rows {
-                let page = match pages.get(&doc_id) {
-                    Some(held) if i > 0 => next.entry(doc_id).or_insert_with(|| held.clone()),
-                    None if i == 0 => next.entry(doc_id).or_insert_with(|| Page {
-                        markdown_uuid,
-                        best: Vec::new(),
-                        holds: HashMap::new(),
-                    }),
-                    _ => continue,
-                };
-                if page.best.len() == i {
-                    page.best.push(score);
-                } else if let Some(b) = page.best.get_mut(i) {
-                    *b = b.max(score);
-                }
-                page.holds.entry(seq).or_insert((uuid, 0)).1 |= 1u64 << i.min(63);
-            }
-            pages = next;
-            if pages.is_empty() {
-                return Ok(Vec::new());
-            }
-        }
-        for term in excluded {
-            let candidates: Vec<i64> = pages.keys().copied().collect();
-            for (doc_id, ..) in self
-                .term_pieces(term, sources, among, Some(&candidates))
-                .await?
-            {
-                pages.remove(&doc_id);
-            }
-        }
-        let mut hits: Vec<MessageHit> = pages
-            .into_values()
-            .map(|p| {
-                let landing = p
-                    .holds
-                    .iter()
-                    .max_by_key(|(seq, (uuid, held))| {
-                        (held.count_ones(), uuid.is_some(), std::cmp::Reverse(**seq))
-                    })
-                    .and_then(|(_, (uuid, _))| uuid.clone());
-                MessageHit {
-                    markdown_uuid: p.markdown_uuid,
-                    score: p.best.iter().sum(),
-                    uuid: landing,
-                }
-            })
-            .collect();
-        hits.sort_by(|a, b| {
-            b.score
-                .total_cmp(&a.score)
-                .then_with(|| a.markdown_uuid.cmp(&b.markdown_uuid))
-        });
-        hits.truncate(limit);
-        Ok(hits)
-    }
-
-    /// The pieces of pages holding `term`: `(doc_id, markdown_uuid, seq,
-    /// uuid, score)`, of `within` documents when given.
-    async fn term_pieces(
-        &self,
-        term: &str,
-        sources: Option<&[String]>,
-        among: Option<&HashSet<String>>,
-        within: Option<&[i64]>,
-    ) -> Result<Vec<(i64, String, i64, Option<String>, f64)>> {
-        sqlx::query_as(
-            "WITH m AS MATERIALIZED ( \
-                 SELECT rowid AS section_id, -bm25(search_fts, 2.0, 1.0) AS score \
-                   FROM search_fts WHERE search_fts MATCH ?1) \
-             SELECT d.doc_id, d.markdown_uuid, s.seq, s.uuid, m.score \
-               FROM m JOIN search_sections s ON s.section_id = m.section_id \
-               JOIN search_documents d ON d.doc_id = s.doc_id \
-              WHERE d.conversation = 0 \
-                AND (NOT ?2 OR d.source_id IN (SELECT value FROM json_each(?3))) \
-                AND (NOT ?4 OR d.markdown_uuid IN (SELECT value FROM json_each(?5))) \
-                AND (NOT ?6 OR d.doc_id IN (SELECT value FROM json_each(?7)))",
-        )
-        .bind(term)
-        .bind(sources.is_some())
-        .bind(serde_json::to_string(&sources.unwrap_or_default())?)
-        .bind(among.is_some())
-        .bind(serde_json::to_string(
-            &among.map(|a| a.iter().collect::<Vec<_>>()),
-        )?)
-        .bind(within.is_some())
-        .bind(serde_json::to_string(&within.unwrap_or_default())?)
-        .fetch_all(&self.index)
-        .await
-        .with_context(|| format!("match {term:?} in the search index's pages"))
-    }
-
     /// Whether the index's tables are in this build's shape. A writer in
     /// this build empties tables in another, so every source's keyword
     /// pass must run again, which the launch's migrate pass asks for.
@@ -420,41 +300,6 @@ impl Reader {
             .context("read the search index's generation")
     }
 
-    /// The documents whose best message holds `query`, an FTS5 query, of
-    /// `sources` and `among` (all when `None`), best first by that
-    /// message's BM25, at most `limit`, each with that message.
-    pub async fn words(
-        &self,
-        query: &str,
-        sources: Option<&[String]>,
-        among: Option<&HashSet<String>>,
-        limit: usize,
-    ) -> Result<Vec<MessageHit>> {
-        let rows: Vec<(String, Option<String>, f64)> = sqlx::query_as(
-            "WITH m AS MATERIALIZED ( \
-                 SELECT rowid AS section_id, -bm25(search_fts, 2.0, 1.0) AS score \
-                   FROM search_fts WHERE search_fts MATCH ?1) \
-             SELECT d.markdown_uuid, s.uuid, m.score \
-               FROM m JOIN search_sections s ON s.section_id = m.section_id \
-               JOIN search_documents d ON d.doc_id = s.doc_id \
-              WHERE (NOT ?2 OR d.source_id IN (SELECT value FROM json_each(?3))) \
-                AND (NOT ?4 OR d.markdown_uuid IN (SELECT value FROM json_each(?5))) \
-              ORDER BY m.score DESC LIMIT ?6",
-        )
-        .bind(query)
-        .bind(sources.is_some())
-        .bind(serde_json::to_string(&sources.unwrap_or_default())?)
-        .bind(among.is_some())
-        .bind(serde_json::to_string(
-            &among.map(|a| a.iter().collect::<Vec<_>>()),
-        )?)
-        .bind(i64::try_from(limit.saturating_mul(MESSAGES_PER_DOCUMENT))?)
-        .fetch_all(&self.index)
-        .await
-        .with_context(|| format!("match {query:?} in the search index"))?;
-        Ok(best_per_document(rows, limit))
-    }
-
     /// Every chunk `model` has a vector for, with its document. A chunk the
     /// cache has no vector for yet is left out: it has not been embedded.
     pub async fn held(&self, model: &str) -> Result<Held> {
@@ -604,11 +449,6 @@ fn unit(v: &mut [f32]) -> bool {
     true
 }
 
-/// How many messages a words search reads for each document it may
-/// answer: a document's later matches are dropped, so a cut of `limit`
-/// messages could hold far fewer documents.
-const MESSAGES_PER_DOCUMENT: usize = 8;
-
 /// A page being matched: each term's best piece score so far, and which
 /// of the terms each piece holds, a bit per term.
 #[derive(Clone)]
@@ -627,18 +467,192 @@ pub struct MessageHit {
     pub uuid: Option<String>,
 }
 
-/// `rows`, best first, kept at each document's first, at most `limit`.
-fn best_per_document(rows: Vec<(String, Option<String>, f64)>, limit: usize) -> Vec<MessageHit> {
-    let mut seen = HashSet::new();
-    rows.into_iter()
-        .filter(|(doc, ..)| seen.insert(doc.clone()))
-        .take(limit)
-        .map(|(markdown_uuid, uuid, score)| MessageHit {
-            markdown_uuid,
-            score,
-            uuid,
-        })
-        .collect()
+/// What a search's filters keep: the documents they keep whole, and the
+/// messages they keep of the rest, by uuid.
+pub struct KeptRows<'a> {
+    pub whole: Vec<&'a str>,
+    pub messages: Vec<&'a str>,
+}
+
+/// [`KeptRows`] as each words statement binds it: whether there is a
+/// filter, then the messages and the documents it keeps, each a JSON array.
+type Bound = (bool, String, String);
+
+fn bound(kept: Option<&KeptRows<'_>>) -> Result<Bound> {
+    Ok(match kept {
+        Some(k) => (
+            true,
+            serde_json::to_string(&k.messages)?,
+            serde_json::to_string(&k.whole)?,
+        ),
+        None => (false, "[]".to_string(), "[]".to_string()),
+    })
+}
+
+/// The condition on a `hit` row that keeps it, taking a [`Bound`]: no
+/// filter, its message kept, or its document kept whole.
+const KEEPS: &str = "(NOT ? OR hit.uuid IN (SELECT value FROM json_each(?)) \
+     OR hit.markdown_uuid IN (SELECT value FROM json_each(?)))";
+
+impl Reader {
+    /// The documents whose best message `kept` keeps holds `query`, an FTS5
+    /// query, of `sources` (all when `None`), best first by that message's
+    /// BM25, at most `limit`, each with that message. Each document's best
+    /// is taken before the cut (SQLite gives a bare column of the row
+    /// `MAX` chose), so one long chat cannot fill it.
+    pub async fn words(
+        &self,
+        query: &str,
+        sources: Option<&[String]>,
+        kept: Option<&KeptRows<'_>>,
+        limit: usize,
+    ) -> Result<Vec<MessageHit>> {
+        let (filtered, messages, whole) = bound(kept)?;
+        // Audited: `KEEPS` is a literal.
+        let sql = format!(
+            "WITH m AS MATERIALIZED ( \
+                 SELECT rowid AS section_id, -bm25(search_fts, 2.0, 1.0) AS score \
+                   FROM search_fts WHERE search_fts MATCH ?), \
+             hit AS MATERIALIZED ( \
+                 SELECT d.markdown_uuid, s.uuid, m.score \
+                   FROM m JOIN search_sections s ON s.section_id = m.section_id \
+                   JOIN search_documents d ON d.doc_id = s.doc_id \
+                  WHERE NOT ? OR d.source_id IN (SELECT value FROM json_each(?))) \
+             SELECT markdown_uuid, uuid, MAX(score) AS score FROM hit WHERE {KEEPS} \
+              GROUP BY markdown_uuid ORDER BY score DESC, markdown_uuid LIMIT ?"
+        );
+        let rows: Vec<(String, Option<String>, f64)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .bind(query)
+            .bind(sources.is_some())
+            .bind(serde_json::to_string(&sources.unwrap_or_default())?)
+            .bind(filtered)
+            .bind(messages)
+            .bind(whole)
+            .bind(i64::try_from(limit)?)
+            .fetch_all(&self.index)
+            .await
+            .with_context(|| format!("match {query:?} in the search index"))?;
+        Ok(rows
+            .into_iter()
+            .map(|(markdown_uuid, uuid, score)| MessageHit {
+                markdown_uuid,
+                score,
+                uuid,
+            })
+            .collect())
+    }
+
+    /// Pages (documents that are no conversation) holding every one of
+    /// `terms`, each an FTS5 query, somewhere among the pieces `kept`
+    /// keeps, of `sources` (all when `None`): a page's pieces are parts of
+    /// one thing, where a conversation's messages are each said on their
+    /// own. Best first by the sum of each term's best piece's BM25, at most
+    /// `limit`, each landing on the piece holding the most of the terms, an
+    /// item before the text above them.
+    pub async fn page_words(
+        &self,
+        terms: &[String],
+        sources: Option<&[String]>,
+        kept: Option<&KeptRows<'_>>,
+        limit: usize,
+    ) -> Result<Vec<MessageHit>> {
+        let kept = bound(kept)?;
+        let mut pages: HashMap<i64, Page> = HashMap::new();
+        for (i, term) in terms.iter().enumerate() {
+            let candidates: Vec<i64> = pages.keys().copied().collect();
+            let rows = self
+                .term_pieces(
+                    term,
+                    sources,
+                    &kept,
+                    (i > 0).then_some(candidates.as_slice()),
+                )
+                .await?;
+            let mut next: HashMap<i64, Page> = HashMap::new();
+            for (doc_id, markdown_uuid, seq, uuid, score) in rows {
+                let page = match pages.get(&doc_id) {
+                    Some(held) if i > 0 => next.entry(doc_id).or_insert_with(|| held.clone()),
+                    None if i == 0 => next.entry(doc_id).or_insert_with(|| Page {
+                        markdown_uuid,
+                        best: Vec::new(),
+                        holds: HashMap::new(),
+                    }),
+                    _ => continue,
+                };
+                if page.best.len() == i {
+                    page.best.push(score);
+                } else if let Some(b) = page.best.get_mut(i) {
+                    *b = b.max(score);
+                }
+                page.holds.entry(seq).or_insert((uuid, 0)).1 |= 1u64 << i.min(63);
+            }
+            pages = next;
+            if pages.is_empty() {
+                return Ok(Vec::new());
+            }
+        }
+        let mut hits: Vec<MessageHit> = pages
+            .into_values()
+            .map(|p| {
+                let landing = p
+                    .holds
+                    .iter()
+                    .max_by_key(|(seq, (uuid, held))| {
+                        (held.count_ones(), uuid.is_some(), std::cmp::Reverse(**seq))
+                    })
+                    .and_then(|(_, (uuid, _))| uuid.clone());
+                MessageHit {
+                    markdown_uuid: p.markdown_uuid,
+                    score: p.best.iter().sum(),
+                    uuid: landing,
+                }
+            })
+            .collect();
+        hits.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then_with(|| a.markdown_uuid.cmp(&b.markdown_uuid))
+        });
+        hits.truncate(limit);
+        Ok(hits)
+    }
+
+    /// The pieces of pages holding `term` that `kept` keeps: `(doc_id,
+    /// markdown_uuid, seq, uuid, score)`, of `within` documents when given.
+    async fn term_pieces(
+        &self,
+        term: &str,
+        sources: Option<&[String]>,
+        (filtered, messages, whole): &Bound,
+        within: Option<&[i64]>,
+    ) -> Result<Vec<(i64, String, i64, Option<String>, f64)>> {
+        // Audited: `KEEPS` is a literal.
+        let sql = format!(
+            "WITH m AS MATERIALIZED ( \
+                 SELECT rowid AS section_id, -bm25(search_fts, 2.0, 1.0) AS score \
+                   FROM search_fts WHERE search_fts MATCH ?), \
+             hit AS MATERIALIZED ( \
+                 SELECT d.doc_id, d.markdown_uuid, s.seq, s.uuid, m.score \
+                   FROM m JOIN search_sections s ON s.section_id = m.section_id \
+                   JOIN search_documents d ON d.doc_id = s.doc_id \
+                  WHERE d.conversation = 0 \
+                    AND (NOT ? OR d.source_id IN (SELECT value FROM json_each(?))) \
+                    AND (NOT ? OR d.doc_id IN (SELECT value FROM json_each(?)))) \
+             SELECT doc_id, markdown_uuid, seq, uuid, score FROM hit WHERE {KEEPS}"
+        );
+        sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .bind(term)
+            .bind(sources.is_some())
+            .bind(serde_json::to_string(&sources.unwrap_or_default())?)
+            .bind(within.is_some())
+            .bind(serde_json::to_string(&within.unwrap_or_default())?)
+            .bind(filtered)
+            .bind(messages)
+            .bind(whole)
+            .fetch_all(&self.index)
+            .await
+            .with_context(|| format!("match {term:?} in the search index's pages"))
+    }
 }
 
 pub(crate) async fn connect(path: &Path) -> Result<SqlitePool> {

@@ -115,6 +115,10 @@ fn chat_profile(provider: Provider, label: &str, thread: &str, message: &str) ->
     }
 }
 
+/// The id the thread's source gave it: a uuid, as a Notion page's or a
+/// Claude conversation's is.
+const RIKER_THREAD_ID: &str = "1701d000-abcd-4e00-a000-0000000000ef";
+
 /// Riker writes to Picard, copying Troi, in Picard's mailbox.
 fn riker_email() -> NormalizedChat {
     let mut item = message(
@@ -146,6 +150,7 @@ fn riker_email() -> NormalizedChat {
         Some("picard@enterprise.org"),
         item,
     );
+    thread.external_id = Some(RIKER_THREAD_ID.into());
     // The mailbox is Picard's, so his address is the account's own.
     let mut picard =
         NormalizedContact::new("mail", "email:picard@enterprise.org", ContactKind::Person);
@@ -273,7 +278,6 @@ async fn render_cast(root: &Path) -> HashSet<(String, SearchTermKind, String)> {
     datalib_etl_chat_common::render_all(
         &chat_profile(Provider::Email, "Mail", "Email Thread", "Email"),
         &[riker_email()],
-        root,
         "mail",
         &none,
         &progress,
@@ -283,7 +287,6 @@ async fn render_cast(root: &Path) -> HashSet<(String, SearchTermKind, String)> {
     datalib_etl_chat_common::render_all(
         &chat_profile(Provider::Slack, "Slack", "Slack Thread", "Slack Message"),
         &[worf_slack(), worf_to_data()],
-        root,
         "slack",
         &none,
         &progress,
@@ -298,7 +301,6 @@ async fn render_cast(root: &Path) -> HashSet<(String, SearchTermKind, String)> {
             "Message",
         ),
         &[picard_text()],
-        root,
         "messages",
         &none,
         &progress,
@@ -316,15 +318,8 @@ async fn render_cast(root: &Path) -> HashSet<(String, SearchTermKind, String)> {
             account: None,
             render_version: 1,
         };
-        datalib_etl_contact_common::render_all(
-            &profile,
-            &[doc],
-            root,
-            "contacts",
-            &progress,
-            &mut keep,
-        )
-        .unwrap();
+        datalib_etl_contact_common::render_all(&profile, &[doc], "contacts", &progress, &mut keep)
+            .unwrap();
     }
 
     let supplied = docs
@@ -342,7 +337,7 @@ async fn render_cast(root: &Path) -> HashSet<(String, SearchTermKind, String)> {
         .unwrap();
     let lock = WriteLock::for_index(pool.clone());
     for md in &docs {
-        apply_one(&lock, root, md).await.unwrap();
+        apply_one(&lock, md).await.unwrap();
     }
     datalib_etl_render::grid_index::seal(&lock).await.unwrap();
     pool.close().await;
@@ -638,6 +633,21 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         ),
         // A row by the id its source gave it: here an email's.
         ("id:M-ncc1701-0042", vec!["riker-email"]),
+        // A uuid however it is written: Notion's links drop the dashes.
+        (
+            "id:1701d000-abcd-4e00-a000-0000000000ef",
+            vec!["riker-thread"],
+        ),
+        ("id:1701d000abcd4e00a0000000000000ef", vec!["riker-thread"]),
+        (
+            "id:1701D000-ABCD-4E00-A000-0000000000EF",
+            vec!["riker-thread"],
+        ),
+        ("id:1701D000abcd4E00A0000000000000ef", vec!["riker-thread"]),
+        (
+            "account:picard@enterprise.org -id:1701D000ABCD4E00A0000000000000EF",
+            vec!["riker-email"],
+        ),
         // Keys combine with AND.
         ("with:picard kind:Email", vec!["riker-email"]),
     ] {
@@ -667,6 +677,10 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         // `id:` is the source's id, whole: not part of it, not datalib's.
         "id:ncc1701",
         "id:riker-email",
+        "id:1701d000-abcd",
+        // Only a uuid is read in another spelling; any other id is exact.
+        "id:m-ncc1701-0042",
+        "id:Mncc17010042",
         // The email column holds a card's first address only.
         "email:jean-luc@chateau-picard.example",
         // `email:` is that column, not a person's address: Riker has no
@@ -681,36 +695,6 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         "label:me",
     ] {
         assert_eq!(found(&s, q, None).await, Vec::<String>::new(), "{q}");
-    }
-
-    // The fields matches free text against every term a row answers
-    // to: a bare word as the start of one, a quoted word whole.
-    let fields = Some(Part::Fields);
-    for (q, want) in [
-        // The two ids that start with it, and riker-email's author too.
-        ("rik", vec!["riker-email", "riker-thread"]),
-        ("riker", vec!["riker-email", "riker-thread"]),
-        // Only the start of a word here, where from:iker finds Riker.
-        ("iker", vec![]),
-        // Riker's name, not the ids it begins.
-        (r#""riker""#, vec!["riker-email"]),
-        (r#""rik""#, vec![]),
-        ("riker-email", vec!["riker-email"]),
-        // A row's own terms only: the person keys' name-to-handle reach
-        // is not here, so the email to Picard's address is not found.
-        ("jean", vec!["picard-card"]),
-        (r#""Jean-Luc Picard""#, vec!["picard-card"]),
-        // riker-email and riker-thread hold Picard's mailbox as a name.
-        ("picard", vec!["picard-card", "riker-email", "riker-thread"]),
-        ("senior", vec!["senior-staff-card"]),
-        // The word in the thread's title.
-        (r#""Away""#, vec!["riker-email", "riker-thread"]),
-        // A handle is one word, so a word inside it starts nothing.
-        ("chateau", vec![]),
-        // Keys narrow it as anywhere else.
-        ("riker -from:riker", vec!["riker-thread"]),
-    ] {
-        assert_eq!(found(&s, q, fields).await, want, "fields: {q}");
     }
 
     // `convo:` was `datalib_document_id:`'s old name, and is gone: refused by name.
@@ -730,7 +714,7 @@ async fn a_row_links_to_its_page_at_the_row() {
     let tmp = tempfile::tempdir().unwrap();
     render_cast(tmp.path()).await;
     let s = index_over(tmp.path()).await;
-    let r = search_part(&s, "riker", Part::Fields, 0, 50).await;
+    let r = search(&s, "with:troi", None, 50, None).await;
     let link_of = |uuid: &str| {
         let row = r.rows.iter().find(|row| row.uuid == uuid).unwrap();
         (row.markdown_uuid.clone().unwrap(), row.link.clone())

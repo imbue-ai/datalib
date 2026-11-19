@@ -20,6 +20,7 @@ use datalib_etl_github::processor::plan_ingest;
 use datalib_etl_github_config::{GithubApiSync, GithubConfig};
 use datalib_etl_github_render::render::{parse_api_dir, render_github};
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_render::section::join;
 use datalib_etl_web::playback;
 use datalib_obs::diagnostics::Diagnostics;
 
@@ -159,7 +160,6 @@ async fn every_seal_holds_each_pull_request_whole() {
 /// in order, as `(bucket key, the markdown)`.
 fn render_each_seal(
     raw: &Path,
-    out: &Path,
     cursor: &mut Option<String>,
     seals: &[String],
 ) -> Vec<(String, String)> {
@@ -172,10 +172,10 @@ fn render_each_seal(
             stale: Some(&none),
         };
         let parsed = parse_api_dir(raw, "github", range).unwrap();
-        render_github(&parsed, out, "github", &Progress::noop(), &mut |doc| {
+        render_github(&parsed, "github", &Progress::noop(), &mut |doc| {
             written.push((
                 doc.bucket_key.clone().unwrap_or_default(),
-                std::fs::read_to_string(&doc.md_path).unwrap(),
+                join(&doc.sections),
             ));
             Ok(())
         })
@@ -195,16 +195,15 @@ async fn a_render_on_every_seal_writes_each_document_once() {
     let d = tempfile::tempdir().unwrap();
     let raw = d.path().join("raw");
     std::fs::create_dir_all(&raw).unwrap();
-    let out = d.path().join("out");
 
     let seals = ingest(&raw, &tape(d.path(), Edition::Before), NOW).await;
     let mut cursor = None;
-    let first = render_each_seal(&raw, &out, &mut cursor, &seals);
+    let first = render_each_seal(&raw, &mut cursor, &seals);
     let keys: Vec<&str> = first.iter().map(|(key, _)| key.as_str()).collect();
     assert_eq!(keys, [format!("{REPO}#1"), format!("{REPO}#2")]);
 
     let seals = ingest(&raw, &tape(d.path(), Edition::After), LATER).await;
-    let later = render_each_seal(&raw, &out, &mut cursor, &seals);
+    let later = render_each_seal(&raw, &mut cursor, &seals);
     let keys: Vec<&str> = later.iter().map(|(key, _)| key.as_str()).collect();
     assert_eq!(
         keys,

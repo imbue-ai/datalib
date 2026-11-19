@@ -7,7 +7,7 @@ entry when it starts and keeps it running, so an applet's routes answer
 only while the app is up. A sync needs no applet; it is the steps that
 write the data, and the applets read it.
 
-This page says what the applets datalib ships serve, for an agent
+This page says what the applets Datalib ships serve, for an agent
 calling them or a person deciding which to keep. To write your own, see
 [writing an applet](../dev/applets.md).
 
@@ -87,7 +87,7 @@ has the parameters.
 | `GET /search/groups?q=&by=` | how many rows each group of a column holds |
 | `GET /search/keys`, `GET /search/values?key=&typed=&q=` | every key the search takes, and the values one takes |
 | `GET /docs` | the documents |
-| `GET /chat/{markdown_uuid}` | one document: its markdown as `body`, where each message in it begins as `sections`, and what the index knows of it |
+| `GET /chat/{markdown_uuid}` | one document: its markdown as `body`, or with `?pieces=true` as `pieces`, each message its own, and what the index knows of it |
 | `GET /children/{uuid}?at=&limit=` | a container's children in order, a page each way around an anchor (below) |
 | `POST /people` | `{"handles": […]}`: every source's record of each handle, best first |
 | `GET /problems?q=` | what a step could not fully do to a record; each row says whether a person muted it (`muted`), and `muted:no` leaves the muted ones out |
@@ -99,6 +99,29 @@ has the parameters.
 
 How a document names people, times and attachments, for an app that
 shows one: [showing a rendered document](rendered_documents.md).
+
+### What `/search` answers
+
+A page of `rows`: `limit=` rows from `offset=`, with `total` and the
+`next_offset` to send for the next page (null at the end). `sort=` and
+`within=` sort and narrow it as [the query
+language](searching.md#sorting-and-grouping) says. Each row carries:
+
+- **`link`**, where opening it goes, `datalib:doc/<page>#<section>`: its
+  document, at the row when it is one message of it.
+- **`snippet`**, the row's preview, or for free text the words it
+  matched.
+- **`score`**, when the query has free text. Free text made only of ids
+  and handles (an email address, `tel:+…`, a uuid) is looked up, not
+  ranked, and `score` says how the row answers to it: 5 its own id, 4 its
+  author or an addressee, 3 copied, mentioned, or what it is in, 2 its
+  title or a label, 1 a name it shows. Any other free text is ranked over
+  words, fields and meaning, one row a document, and `score` only orders
+  the rows.
+
+`query_echo` says how the query was read; `refused`, `query_echo.partial`
+and `errors` say what it could not do ([when the search says
+no](searching.md#when-the-search-says-no)).
 
 ### A container's children
 
@@ -187,7 +210,8 @@ ask '{"store": "system/runs/runs.sqlite",
 The request:
 
 - **`store`** is the file's path under the data root: a `.doltlite_db`
-  or `.sqlite` file in a step's tree (`<group>/<step>/…`), or one of
+  or `.sqlite` file in a step's tree (`<group>/<step>/…`) or an app's
+  (`datalib_curated/datalib_contacts/contacts.doltlite_db`), or one of
   `system/runs/runs.sqlite` (the log and every run's metrics),
   `system/supervisor.sqlite` (sync requests and each step's state),
   `system/feedback.doltlite_db`, `system/remote_media.doltlite_db`,

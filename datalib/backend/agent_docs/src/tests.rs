@@ -5,16 +5,7 @@ const REF: &str = "abc123";
 /// The files a guide links to that are not compiled in, each printed as
 /// its raw file at the build's commit. Contributor material only: a doc an
 /// agent needs to use datalib goes in `DOCS` instead.
-const GUIDE_LINKS_SERVED_RAW: &[&str] = &[
-    "AGENTS.md",
-    "docs/dev/docker.md",
-    "datalib/backend/runtime/src/node_runtime.rs",
-    "datalib/backend/etl/providers/baby_connect/INGEST.md",
-    "datalib/backend/etl/providers/calendar/INGEST.md",
-    "datalib/backend/etl/providers/linear/INGEST.md",
-    "datalib/backend/etl/providers/todoist/INGEST.md",
-    "datalib/backend/etl/providers/whatsapp/INGEST.md",
-];
+const GUIDE_LINKS_SERVED_RAW: &[&str] = &["AGENTS.md"];
 
 fn markdown_docs() -> impl Iterator<Item = &'static Doc> {
     DOCS.iter().filter(|d| d.kind != Kind::Config)

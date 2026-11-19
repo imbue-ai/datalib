@@ -23,7 +23,7 @@ person sees it:
   the index, and only then does a Manage count or "Needs you" show it.
   A failed fetch shows two steps after the download that hit it, and
   not at all while the source's render is turned off or failing.
-- **It is not part of the step protocol.** Only datalib's own steps
+- **It is not part of the step protocol.** Only Datalib's own steps
   write problem rows. A package's step can send a
   `problems{severity=…}` metric, which the Manage row draws as a grey
   count that opens nothing.
@@ -45,7 +45,7 @@ the problem's id; and a problem links to what it is about.
 them, and never copied.** One shape, `ProblemRow`, everywhere:
 
 - **A step with a store keeps them in that store's `problems` table**,
-  as datalib's steps already do: the download in its raw store, render
+  as Datalib's steps already do: the download in its raw store, render
   in its render store, `render_time_series` and `render_occurrences` in
   theirs, `grid_index` its own rows in the index. That table is also
   the step's working state (a download writes a failure in the same
@@ -81,7 +81,7 @@ A step that does not write its file sends, beside `metric` and `log`
 ```
 
 A `problem` line is a `ProblemRow` without the columns its writer
-fills (its id, its source, its stamps), so its words are datalib's
+fills (its id, its source, its stamps), so its words are Datalib's
 closed sets (`Reason`, `Outcome`). `scope_key` says what it is about
 within the step (`<table>:<id>`, `file:<path>`, `listing:<name>`,
 `phase:<name>`), and `covered` says what the run checked again: `all`,
@@ -135,7 +135,7 @@ skills and PDF pages. The exceptions, none of which a problem needs:
 **Upstream values on the row: yes, but contacts.** Every provider
 fills `upstream_entity_kind` and `upstream_id`, except that a contact
 with an empty key gets no `upstream_id`. A time-bucketed chat's
-document row (a Beeper or Signal month) has an id datalib composed;
+document row (a Beeper or Signal month) has an id Datalib composed;
 its messages' ids are upstream's.
 
 **A download's failure key: rarely the row's values.** Today a failed

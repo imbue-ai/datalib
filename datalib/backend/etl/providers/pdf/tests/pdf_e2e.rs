@@ -8,6 +8,7 @@ use sqlx::Row;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_pdf::ingest::{self, RawDb};
 use datalib_etl_pdf_render::render;
+use datalib_etl_render::section::join;
 
 const NOW: &str = "2364-04-13T08:45:00-07:00";
 
@@ -28,31 +29,25 @@ fn fixture_dir() -> PathBuf {
     up
 }
 
-/// The stanza name this harness renders under. Both the render's
-/// `source_id` argument and the `<stanza>/` prefix of every path it
-/// writes, exactly as the step wires them (`processor.rs`).
+/// The stanza name this harness renders under: the render's
+/// `source_id`, as the step wires it (`processor.rs`).
 const STANZA: &str = "logs";
 
 struct Harness {
     _tmp: tempfile::TempDir,
     raw_dir: PathBuf,
     root: PathBuf,
-    /// The *data* root — the prefix `grid_index::apply_one` strips off
-    /// `md_path` to produce `markdowns.md_path`.
-    data_root: PathBuf,
 }
 
 impl Harness {
     fn new() -> Self {
         let tmp = tempfile::tempdir().unwrap();
         let raw_dir = tmp.path().join("raw");
-        let data_root = tmp.path().join("data");
         std::fs::create_dir_all(&raw_dir).unwrap();
         Self {
             root: fixture_dir(),
             _tmp: tmp,
             raw_dir,
-            data_root,
         }
     }
 
@@ -121,7 +116,6 @@ impl Harness {
         };
         let s = render::render(
             &self.raw_dir,
-            &self.data_root,
             STANZA,
             &datalib_etl::progress::Progress::noop(),
             &mut sink,
@@ -271,7 +265,7 @@ async fn a_mixed_document_renders_its_readable_pages() -> Result<()> {
 
     // Page 2 is in the markdown as a note, not as a hole. The note gets
     // no section anchor, because there is nothing to navigate to.
-    let body = std::fs::read_to_string(&survey.md_path)?;
+    let body = join(&survey.sections);
     assert!(body.contains("Ablative plating"), "page 1 body missing");
     assert!(
         body.contains(&datalib_etl_pdf_render::render::convert::note_for_page(2)),
@@ -524,7 +518,7 @@ async fn render_emits_markdown_with_page_anchors_matching_grid_rows() -> Result<
     // page row's uuid must appear as a section anchor in its markdown,
     // or row→preview navigation silently breaks (see `etl::section`).
     for m in &emitted {
-        let body = std::fs::read_to_string(&m.md_path)?;
+        let body = join(&m.sections);
         assert!(body.contains("provider: pdf"), "frontmatter missing");
         let page_rows: Vec<_> = m.rows.iter().filter(|r| r.kind == "PDF Page").collect();
         assert!(!page_rows.is_empty(), "a rendered doc must have pages");
@@ -533,11 +527,11 @@ async fn render_emits_markdown_with_page_anchors_matching_grid_rows() -> Result<
                 body.contains(&format!(r#"data-section-uuid="{}""#, r.uuid)),
                 "page row {} has no anchor in {}",
                 r.uuid,
-                m.md_path.display()
+                m.markdown_uuid
             );
         }
         // What the `unified_grid_and_search_index` step consumes rides on the emitted
-        // document itself now, not in a file beside the markdown.
+        // document itself.
         assert!(!m.rows.is_empty(), "{} projected no rows", m.markdown_uuid);
     }
 
@@ -548,7 +542,7 @@ async fn render_emits_markdown_with_page_anchors_matching_grid_rows() -> Result<
         .iter()
         .find(|m| m.rows.iter().filter(|r| r.kind == "PDF Page").count() == 2)
         .expect("the two-page captains log revision should have rendered");
-    let body = std::fs::read_to_string(&v2.md_path)?;
+    let body = join(&v2.sections);
     assert!(body.contains("Deneb IV"), "body text missing");
     assert!(body.contains("Addendum filed"), "v2's second page missing");
 
@@ -562,7 +556,7 @@ async fn render_emits_markdown_with_page_anchors_matching_grid_rows() -> Result<
                     .any(|r| r.conversation_name.as_deref() == Some("Captain's Log"))
         })
         .expect("the one-page captains log should have rendered");
-    let body1 = std::fs::read_to_string(&v1.md_path)?;
+    let body1 = join(&v1.sections);
     assert!(
         !body1.contains("Addendum filed"),
         "v1 must not carry v2 content"
@@ -570,10 +564,9 @@ async fn render_emits_markdown_with_page_anchors_matching_grid_rows() -> Result<
     Ok(())
 }
 
-/// Regression: each document is written to the file its id names, under
-/// the stanza's render tree, and every row it emits is one of its rows.
+/// Regression: every row a document emits names that document.
 #[tokio::test(flavor = "multi_thread")]
-async fn every_document_is_filed_where_its_id_names() -> Result<()> {
+async fn every_row_names_the_document_it_rides_on() -> Result<()> {
     let h = Harness::new();
     h.scan().await?;
     let (_, emitted) = h.render().await?;
@@ -583,25 +576,6 @@ async fn every_document_is_filed_where_its_id_names() -> Result<()> {
     );
 
     for m in &emitted {
-        assert_eq!(
-            m.md_path,
-            datalib_etl_render::grid_index::doc_md_path(
-                &datalib_etl::layout::render_markdown_root(&h.data_root, STANZA),
-                &m.markdown_uuid,
-            ),
-            "not the file its id names"
-        );
-        // Exactly what `apply_one` does to reach `markdowns.md_path`.
-        let stored_md_path = m
-            .md_path
-            .strip_prefix(&h.data_root)
-            .expect("rendered files must live under the data root")
-            .to_string_lossy()
-            .to_string();
-        assert!(
-            stored_md_path.starts_with(&format!("{STANZA}/render_markdown/")),
-            "md_path {stored_md_path} is not under the stanza's render_markdown tree"
-        );
         assert!(!m.rows.is_empty(), "a rendered doc must emit rows");
         for r in &m.rows {
             assert_eq!(
@@ -624,7 +598,7 @@ async fn scanned_documents_are_recorded_but_not_rendered() -> Result<()> {
 
     // No emitted document may come from the image-only fixture.
     for m in &emitted {
-        let body = std::fs::read_to_string(&m.md_path)?;
+        let body = join(&m.sections);
         assert!(
             !body.contains("scanned_blueprint"),
             "the scanned fixture must not render until OCR lands"
@@ -986,7 +960,7 @@ async fn a_document_whose_file_changed_since_the_download_is_a_stand_in() -> Res
         "{}",
         doc.problems[0].sample
     );
-    let page = std::fs::read_to_string(&doc.md_path)?;
+    let page = join(&doc.sections);
     assert!(
         page.contains("has changed since the last sync read it"),
         "{page}"

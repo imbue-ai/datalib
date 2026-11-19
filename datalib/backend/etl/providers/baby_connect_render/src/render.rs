@@ -5,18 +5,14 @@
 //! TRANSLATE.md says what becomes what.
 
 use std::collections::BTreeMap;
-use std::fs;
-use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 use chrono::{Duration, LocalResult, NaiveDate, NaiveDateTime, NaiveTime};
-use datalib_etl::layout::render_markdown_root;
 use datalib_etl_render::front_matter::Front;
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline, escape_name_inline};
 use datalib_etl_render::inputs::Inputs;
 use datalib_etl_render::message::{stamp_html, stamp_text_html, timestamp_html};
-use datalib_etl_render::section::{join, msg_div_open_with, Section, MSG_DIV_CLOSE};
+use datalib_etl_render::section::{msg_class, Section};
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
 use datalib_id::Identity;
@@ -109,27 +105,8 @@ fn person(store: &Store, inputs: &Inputs, by: Option<String>) -> Option<Person> 
 }
 
 /// `2068-10` as "October 2068".
-/// One child: what the store holds of them, written to its `.md` under
-/// `root`. `inputs` gets every raw row it read.
-pub fn render_child(
-    root: &Path,
-    source_id: &str,
-    store: &Store,
-    kid: &str,
-    zone: Option<&NamedZone>,
-    inputs: &Inputs,
-) -> Result<RenderedMarkdown> {
-    let doc = build(source_id, store, kid, zone, inputs);
-    let md_path = root.join(&doc.md_path);
-    let dir = md_path.parent().expect("a document's file has a folder");
-    fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
-    fs::write(&md_path, join(&doc.sections))
-        .with_context(|| format!("write {}", md_path.display()))?;
-    Ok(RenderedMarkdown { md_path, ..doc })
-}
-
-/// [`render_child`] without the file: the document as it would be
-/// stored, its `md_path` relative to the data root.
+/// One child's document: what the store holds of them. `inputs` gets
+/// every raw row it read.
 pub fn build(
     source_id: &str,
     store: &Store,
@@ -144,9 +121,6 @@ pub fn build(
         .map(String::from)
         .unwrap_or_else(|| format!("Child {kid}"));
     let id = ids::kid(source_id, kid);
-    let rel = doc_md_path(&render_markdown_root(Path::new(""), source_id), &id.uuid)
-        .to_string_lossy()
-        .into_owned();
     let title = kid_name.clone();
     let front = front(&id, &title, kid);
 
@@ -232,13 +206,12 @@ pub fn build(
         .build_or_record(source_id, &id.natural_key, RENDER_VERSION, &mut problems);
     rows.splice(0..0, doc_row);
     RenderedMarkdown {
-        section_layout: None,
+        searchable: true,
         content_hash: None,
         markdown_uuid: id.uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
         bucket_key: Some(kid.to_string()),
-        md_path: PathBuf::from(&rel),
         render_version: RENDER_VERSION,
         rows,
         sections,
@@ -325,8 +298,7 @@ impl Out<'_> {
         let text = str_of(e, "Txt");
         let note = str_of(e, "n");
 
-        let mut s = msg_div_open_with(&id.uuid, Provider::BabyConnect, &["baby-connect-entry"]);
-        s.push_str("\n\n");
+        let mut s = String::new();
         let mut line = Vec::new();
         if let Some((_, html)) = &time {
             line.push(html.clone());
@@ -349,9 +321,11 @@ impl Out<'_> {
             }
             s.push('\n');
         }
-        s.push_str(MSG_DIV_CLOSE);
-        s.push_str("\n\n");
-        self.sections.push(Section::keyed(&id.uuid, s));
+        self.sections.push(Section::boxed(
+            &id.uuid,
+            msg_class(Provider::BabyConnect, &["baby-connect-entry"]),
+            &s,
+        ));
 
         let body = [text, note]
             .into_iter()
@@ -386,6 +360,7 @@ impl Out<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datalib_etl_render::section::join;
     use serde_json::json;
 
     fn la() -> NamedZone {

@@ -267,3 +267,49 @@ async fn replace_keeps_the_stamps_of_the_unchanged_and_joins_two_reasons() {
     assert_eq!(rows[1].sample, "x; y");
     file.finish(&[], Ended::Succeeded).await.unwrap();
 }
+
+/// A store an older build wrote, its `problems` table short of a column
+/// this build reads, is reported as in an older shape rather than as a
+/// failure to read: a turned-off render kept one for good, and the
+/// Manage screen logged it as an error on every refresh.
+#[tokio::test]
+async fn a_problems_table_an_older_build_wrote_is_an_older_shape_not_a_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut file = StepFile::open(dir.path(), STEP, at(1)).await.unwrap();
+    file.record(vec![row("messages:1")]).await.unwrap();
+    file.finish(&[], Ended::Succeeded).await.unwrap();
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_with(datalib_sqlite_open::file(&file_of(dir.path(), STEP)))
+        .await
+        .unwrap();
+    sqlx::query("ALTER TABLE problems DROP COLUMN upstream_entity_kind")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    let read = of_step(dir.path(), STEP).await;
+    assert!(read.unread.is_empty(), "{:?}", read.unread);
+    assert!(read.rows.is_empty());
+    assert_eq!(read.older_shape, [file_of(dir.path(), STEP)]);
+    let steps = of_steps(dir.path()).await;
+    assert_eq!(steps.len(), 1, "the step is listed for what it holds");
+}
+
+/// Each thing a reader could not read is said the first pass it appears
+/// in and not again while it stays, and again once it has gone and come
+/// back.
+#[test]
+fn what_could_not_be_read_is_said_once_while_it_lasts() {
+    use std::collections::BTreeSet;
+    let one = |what: &str, older: bool| (STEP.to_string(), what.to_string(), older);
+    let pass1: BTreeSet<Said> = [one("locked", false), one("old.doltlite_db", true)].into();
+    assert_eq!(newly(&BTreeSet::new(), &pass1).len(), 2);
+    assert!(newly(&pass1, &pass1).is_empty(), "nothing new to say");
+    let pass3: BTreeSet<Said> = [one("old.doltlite_db", true)].into();
+    assert!(newly(&pass1, &pass3).is_empty());
+    assert_eq!(newly(&pass3, &pass1), [one("locked", false)], "back again");
+}

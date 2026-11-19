@@ -275,26 +275,23 @@ async fn the_map_matches_structured_terms_without_a_search_index() {
     assert!(!matched.markdown_uuids.is_empty());
 }
 
-/// A root no sync has built a search index for still answers what the grid's
-/// own terms hold, and says the rest is missing. Words the terms do not hold
-/// get no rows and `search_index_missing`, on the grid and its groups: a state
-/// the grid explains, not a failure it shows as an error, and not an empty
-/// result that reads as "no matches". The map says why in its errors.
+/// A root no sync has built a search index for answers its filters, a
+/// pasted address among them, and says words are missing: no rows and
+/// `search_index_missing`, on the grid and its groups, a state the grid
+/// explains, not a failure it shows as an error, and not an empty result
+/// that reads as "no matches". The map says why in its errors.
 #[tokio::test]
 async fn free_text_without_a_search_index_says_it_is_not_built() {
     let root = tempfile::tempdir().unwrap();
     datalib_search_fixture::copy_grid_index(root.path());
     let s = index_over(root.path()).await;
 
-    let named = search(&s, "enterprise", None, 10, None).await;
-    assert!(!named.rows.is_empty(), "the terms answer without the index");
+    let pasted = search(&s, "riker@enterprise.starfleet", None, 10, None).await;
     assert!(
-        named.query_echo["partial"]
-            .as_str()
-            .is_some_and(|why| why.contains("search index")),
-        "{:?}",
-        named.query_echo
+        !pasted.rows.is_empty(),
+        "a filter answers without the index"
     );
+    assert!(!search_index_missing(&pasted), "{:?}", pasted.query_echo);
 
     const NOWHERE: &str = "xyzzyplugh";
     let r = search(&s, NOWHERE, None, 10, None).await;
@@ -321,35 +318,13 @@ async fn free_text_without_a_search_index_says_it_is_not_built() {
     assert_eq!(matched.errors.len(), 1, "{:?}", matched.errors);
 }
 
-/// Each part of a search answers the same words its own way: fields from the
-/// search terms, each row saying which of its terms matched unless its title
-/// did; words by BM25 over the search index's messages, best first;
-/// meaning from its vectors alone.
+/// Each part of a search answers the same words its own way: words by BM25
+/// over the search index's messages, best first; meaning from its vectors
+/// alone.
 #[tokio::test]
 async fn each_part_answers_free_text_its_own_way() {
     let root = fixture_root();
     let s = index_over(root.path()).await;
-
-    let fields = search_part(&s, "enterprise", Part::Fields, 0, 1_000).await;
-    assert!(
-        !fields.rows.is_empty(),
-        "no row's terms start with the word"
-    );
-    for row in &fields.rows {
-        // A row its title matched is already called by it, and keeps its
-        // own opening words.
-        let by_term = row.snippet.split_once(": ").filter(|(kind, _)| {
-            datalib_schema::search_terms::SearchTermKind::parse(kind).is_some()
-        });
-        match by_term {
-            Some((_, value)) => assert!(value.to_lowercase().contains("enterprise"), "{value}"),
-            None => assert!(
-                row.conversation_name.to_lowercase().contains("enterprise"),
-                "{:?} names no term and its title does not match",
-                row.snippet
-            ),
-        }
-    }
 
     let words = search_part(&s, QUERY, Part::Words, 0, 1_000).await;
     assert_eq!(search_error(&words), None);
@@ -370,32 +345,43 @@ async fn each_part_answers_free_text_its_own_way() {
 }
 
 /// A pasted address finds the emails it was copied on, not only the ones
-/// it wrote, and a label is a field like any other: both are terms the
-/// email render supplies, beyond the row's own columns.
+/// it wrote: a filter on every term a row answers to. A label is in the
+/// text the words search, so a word of it finds its emails.
 #[tokio::test]
 async fn an_address_finds_the_emails_it_received_and_a_label_its_emails() {
     let root = fixture_root();
     let s = index_over(root.path()).await;
-    let snippets = |r: &SearchResponse| -> HashSet<String> {
-        r.rows.iter().map(|row| row.snippet.clone()).collect()
+    let rows = |r: SearchResponse| -> HashSet<String> {
+        assert!(r.errors.is_empty() && r.refused.is_empty(), "{r:?}");
+        uuids(&r).into_iter().map(String::from).collect()
     };
+    let address = "riker@enterprise.starfleet";
+    let pasted = rows(search(&s, address, None, 1_000, None).await);
+    for key in ["from", "cc"] {
+        let by_key = rows(search(&s, &format!("{key}:{address}"), None, 1_000, None).await);
+        assert!(!by_key.is_empty(), "{key}: the fixture has such rows");
+        assert!(
+            by_key.is_subset(&pasted),
+            "{key}: {:?}",
+            by_key.difference(&pasted)
+        );
+    }
 
-    let riker = search(&s, "riker@enterprise.starfleet", None, 1_000, None).await;
-    let matched = snippets(&riker);
+    let labelled = search(&s, "label:Inbox", None, 1_000, None).await;
+    let labelled: HashSet<String> = labelled
+        .rows
+        .iter()
+        .filter_map(|row| row.markdown_uuid.clone())
+        .collect();
     assert!(
-        matched.contains("cc: email:riker@enterprise.starfleet"),
-        "{matched:?}"
+        !labelled.is_empty(),
+        "the fixture files emails in the Inbox"
     );
+    let by_word = documents_of(&search(&s, "inbox semantic:off", None, 1_000, None).await);
     assert!(
-        matched.contains("from: email:riker@enterprise.starfleet"),
-        "{matched:?}"
-    );
-
-    let inbox = search_part(&s, "inbox", Part::Fields, 0, 1_000).await;
-    assert!(
-        snippets(&inbox).contains("label: Inbox"),
+        labelled.is_subset(&by_word),
         "{:?}",
-        snippets(&inbox)
+        labelled.difference(&by_word)
     );
 }
 
@@ -406,20 +392,23 @@ async fn an_address_finds_the_emails_it_received_and_a_label_its_emails() {
 async fn a_person_is_found_where_they_were_blind_copied_or_mentioned() {
     let root = fixture_root();
     let s = index_over(root.path()).await;
-    for (q, matched) in [
-        (
-            "troi@enterprise.starfleet",
-            "bcc: email:troi@enterprise.starfleet",
-        ),
-        (
-            "laforge@enterprise.starfleet",
-            "mention: email:laforge@enterprise.starfleet",
-        ),
-        ("+17015550101", "mention: tel:+17015550101"),
+    let rows = |r: SearchResponse| -> HashSet<String> {
+        assert!(r.errors.is_empty() && r.refused.is_empty(), "{r:?}");
+        uuids(&r).into_iter().map(String::from).collect()
+    };
+    for (pasted, key) in [
+        ("troi@enterprise.starfleet", "bcc"),
+        ("laforge@enterprise.starfleet", "mention"),
+        ("+17015550101", "mention"),
     ] {
-        let found = search(&s, q, None, 1_000, None).await;
-        let snippets: HashSet<&str> = found.rows.iter().map(|r| r.snippet.as_str()).collect();
-        assert!(snippets.contains(matched), "{q}: {snippets:?}");
+        let by_key = rows(search(&s, &format!("{key}:{pasted}"), None, 1_000, None).await);
+        assert!(!by_key.is_empty(), "{key}:{pasted}: the fixture has one");
+        let found = rows(search(&s, pasted, None, 1_000, None).await);
+        assert!(
+            by_key.is_subset(&found),
+            "{pasted}: {:?}",
+            by_key.difference(&found)
+        );
     }
 }
 
@@ -709,4 +698,90 @@ async fn a_search_naming_a_tab_is_refused() {
     let r = super::answer_search(&s, params).await;
     assert!(r.rows.is_empty());
     assert!(r.refused[0].contains("semantic:off"), "{:?}", r.refused);
+}
+
+/// The fixture's documents whose keyword index holds `fts` (an FTS5
+/// query) in some piece, or, with `every_piece`, in every one of them.
+async fn documents_holding(
+    root: &std::path::Path,
+    fts: &str,
+    every_piece: bool,
+) -> HashSet<String> {
+    let mut grid = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(datalib_runtime::layout::grid_index_db(root))
+        .read_only(true)
+        .connect()
+        .await
+        .unwrap();
+    let held: Vec<String> = sqlx::query_scalar(
+        "WITH hold AS (SELECT s.doc_id, count(*) AS n FROM search_fts f \
+                         JOIN search_sections s ON s.section_id = f.rowid \
+                        WHERE search_fts MATCH ?1 GROUP BY s.doc_id), \
+              pieces AS (SELECT doc_id, count(*) AS n FROM search_sections GROUP BY doc_id) \
+         SELECT d.markdown_uuid FROM hold JOIN pieces USING (doc_id) \
+           JOIN search_documents d USING (doc_id) \
+          WHERE NOT ?2 OR hold.n = pieces.n",
+    )
+    .bind(fts)
+    .bind(every_piece)
+    .fetch_all(&mut grid)
+    .await
+    .unwrap();
+    sqlx::Connection::close(grid).await.unwrap();
+    held.into_iter().collect()
+}
+
+fn documents_of(r: &SearchResponse) -> HashSet<String> {
+    r.rows
+        .iter()
+        .map(|row| {
+            row.markdown_uuid
+                .clone()
+                .expect("a ranked row is in a document")
+        })
+        .collect()
+}
+
+/// Repro (#1887): a quoted phrase is required only of the words matcher.
+/// Meaning embeds the phrase without its quotes and adds every document
+/// near it, so `"warp core"` lists documents that never say it.
+#[tokio::test]
+async fn a_quoted_phrase_is_held_by_every_document_found() {
+    let root = fixture_root();
+    let s = index_over(root.path()).await;
+    let holding = documents_holding(root.path(), "\"warp core\"", false).await;
+    assert!(!holding.is_empty(), "the fixture says it");
+
+    let found = search(&s, "\"warp core\"", None, 1_000, None).await;
+    assert_eq!(search_error(&found), None);
+    let lacking: Vec<String> = documents_of(&found).difference(&holding).cloned().collect();
+    assert!(
+        lacking.is_empty(),
+        "{} of {} documents found never say \"warp core\": {lacking:?}",
+        lacking.len(),
+        found.rows.len()
+    );
+}
+
+/// Repro (#1887): `-word` is applied by the words matcher alone, to one
+/// message at a time. Meaning drops it before it embeds, so a document
+/// every piece of which says the word is still found.
+#[tokio::test]
+async fn an_excluded_word_keeps_out_a_document_that_says_it_everywhere() {
+    let root = fixture_root();
+    let s = index_over(root.path()).await;
+    let saturated = documents_holding(root.path(), "enterprise", true).await;
+    assert!(!saturated.is_empty(), "the fixture has such documents");
+
+    let found = search(&s, "starship -enterprise", None, 1_000, None).await;
+    assert_eq!(search_error(&found), None);
+    let leaked: Vec<String> = documents_of(&found)
+        .intersection(&saturated)
+        .cloned()
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "{} documents that say `enterprise` in every piece came back: {leaked:?}",
+        leaked.len()
+    );
 }

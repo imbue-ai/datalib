@@ -6,7 +6,7 @@
 
 use datalib_etl_render::html::{escape_md_block, escape_text};
 use datalib_etl_render::message::MessageHeader;
-use datalib_etl_render::section::{msg_div_open, Section, MSG_DIV_CLOSE};
+use datalib_etl_render::section::{msg_class, Section};
 use std::collections::BTreeMap;
 
 use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact, Seen};
@@ -195,20 +195,17 @@ pub fn sections(t: &Thread) -> Vec<Section> {
         let ellipsis = if cut.len() < q.len() { "…" } else { "" };
         summary.push_str(&format!(" on “{cut}{ellipsis}”"));
     }
-    let mut open = format!(
-        "<details class=\"comment-thread\">\n<summary>{}</summary>\n\n",
-        escape_text(&summary)
-    );
+    // Kept as text search reads, as the thread's summary and quote are.
+    let mut open = Section::fold_open("comment-thread", &escape_text(&summary)).kept_whole();
     if let Some(q) = &t.quote {
-        open.push_str(&format!(
+        open = open.then(&format!(
             "> {}\n\n",
             escape_md_block(q.trim()).replace('\n', "\n> ")
         ));
     }
-    let mut out = vec![Section::unkeyed(open)];
+    let mut out = vec![open];
     for m in &t.messages {
-        let mut s = msg_div_open(&m.id.uuid, Provider::GoogleDrive);
-        s.push_str("\n\n");
+        let mut s = String::new();
         s.push_str(
             &MessageHeader {
                 author: &m.author,
@@ -230,11 +227,13 @@ pub fn sections(t: &Thread) -> Vec<Section> {
         if let Some(note) = m.note {
             s.push_str(&format!("*{note}*\n\n"));
         }
-        s.push_str(MSG_DIV_CLOSE);
-        s.push_str("\n\n");
-        out.push(Section::keyed(&m.id.uuid, s));
+        out.push(Section::boxed(
+            &m.id.uuid,
+            msg_class(Provider::GoogleDrive, &[]),
+            &s,
+        ));
     }
-    out.push(Section::unkeyed("</details>\n\n".to_string()));
+    out.push(Section::fold_close().kept_whole());
     out
 }
 

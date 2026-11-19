@@ -3,7 +3,6 @@
 //! grid-row plumbing to [`datalib_etl_chat_common::render::render_all`].
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -19,9 +18,9 @@ use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_handle::Handle;
 
-use super::emoji;
 use super::mrkdwn::{mentioned_users, resolve_mentions, to_commonmark, Labels};
 use super::parse::{ParsedSlack, Shared, SlackStore, SlackThreadBucket};
+use super::{cards, emoji};
 use super::{ids, slack_link, ts_to_ms, Message};
 use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::pages::{batches, PageSize};
@@ -75,7 +74,9 @@ use datalib_schema::providers::Provider;
 /// v21: a thread sits in its channel, in its workspace.
 /// v22: a message's time names no clock (`Z`): a profile's zone is where
 ///     its author is now, not where they were when they wrote it.
-pub const RENDER_VERSION: u32 = 22;
+/// v23: a message's blocks and attachments are drawn — a forward, a link
+///     preview, a bot's card — and only what is still not drawn is noted.
+pub const RENDER_VERSION: u32 = 23;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
@@ -149,10 +150,8 @@ impl<'a> Lookups<'a> {
 
 /// Renders every thread `store` hands out, a page at a time; `on_page`
 /// hears how each page ended before the next is read.
-#[allow(clippy::too_many_arguments)]
 pub fn render_store(
     store: &SlackStore,
-    out_dir: &Path,
     source_id: &str,
     size: PageSize,
     progress: &Progress,
@@ -171,7 +170,6 @@ pub fn render_store(
     let profile = profile();
     let mut renderer = ChatRenderer::new(
         &profile,
-        out_dir,
         source_id,
         store.threads,
         progress,
@@ -207,7 +205,6 @@ pub fn render_store(
 /// Renders every thread in `parsed`, its attachments already loaded.
 pub fn render_all(
     parsed: &ParsedSlack,
-    out_dir: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -216,7 +213,6 @@ pub fn render_all(
     let profile = profile();
     let mut renderer = ChatRenderer::new(
         &profile,
-        out_dir,
         source_id,
         parsed.threads.len(),
         progress,
@@ -344,16 +340,18 @@ fn build_chat(
     };
     // What the page shows under the root, a broadcast reply among them.
     let held_replies = bucket.messages.iter().filter(|m| !m.is_thread_root).count() as u64;
+    let mut not_shown: Vec<Vec<String>> = Vec::with_capacity(bucket.messages.len());
     let mut items: Vec<NormalizedChatItem> = bucket
         .messages
         .iter()
         .map(|m| {
-            let mut item = build_item(source_id, m, root, team_url, labels, unread(m));
+            let (mut item, parts) = build_item(source_id, m, root, team_url, labels, unread(m));
             item.replies = replies_of(m, held_replies, &mut item.problems);
+            not_shown.push(parts);
             item
         })
         .collect();
-    note_what_is_not_shown(&bucket.messages, &mut items);
+    note_what_is_not_shown(&not_shown, &mut items);
 
     // "#channel: <root snippet>" preserves the old scannable H1; the
     // bare "#channel" remains the conversation_name (via `display`).
@@ -451,43 +449,39 @@ fn authors_of(bucket: &SlackThreadBucket) -> impl Iterator<Item = &str> {
         .filter(move |u| seen.insert(*u))
 }
 
-/// Whether a message holds something its `text` and `files` do not: a card, a
-/// link preview or a forwarded message. Nearly every message's `blocks` are
-/// `rich_text` repeating its `text`, and a divider or a row of buttons says
-/// nothing, so those do not count.
-fn holds_what_is_not_shown(raw: &Value) -> bool {
-    let list = |key| raw.get(key).and_then(Value::as_array);
-    list("attachments").is_some_and(|a| !a.is_empty())
-        || list("blocks").is_some_and(|blocks| {
-            blocks.iter().any(|b| {
-                !matches!(
-                    b.get("type").and_then(Value::as_str),
-                    Some("rich_text" | "divider" | "actions")
-                )
-            })
-        })
-}
-
-/// One row a document, on the first message it is about. At `info`: it shows on
-/// the page, and a workspace with bots has it on a quarter of its documents,
-/// which as warnings would be thousands on the Manage row.
-fn note_what_is_not_shown(messages: &[Message], items: &mut [NormalizedChatItem]) {
-    let holding: Vec<usize> = messages
-        .iter()
-        .enumerate()
-        .filter(|(_, m)| holds_what_is_not_shown(&m.raw_json))
-        .map(|(i, _)| i)
+/// One row a document, on the first message holding a part nothing draws
+/// (`not_shown`, each message's), naming the kinds. At `info`: it shows on
+/// the page, and is no fault of the sync.
+fn note_what_is_not_shown(not_shown: &[Vec<String>], items: &mut [NormalizedChatItem]) {
+    let holding: Vec<usize> = (0..not_shown.len())
+        .filter(|&i| !not_shown[i].is_empty())
         .collect();
-    let (Some(first), count) = (holding.first(), holding.len()) else {
+    let (Some(&first), count) = (holding.first(), holding.len()) else {
         return;
     };
-    let many = if count == 1 { "message" } else { "messages" };
-    items[*first].problems.push(
+    let mut kinds: Vec<&str> = Vec::new();
+    for kind in holding.iter().flat_map(|&i| &not_shown[i]) {
+        if !kinds.contains(&kind.as_str()) {
+            kinds.push(kind);
+        }
+    }
+    let field = if kinds.iter().all(|k| k.ends_with(" block")) {
+        "blocks"
+    } else {
+        "attachments"
+    };
+    let (many, hold) = if count == 1 {
+        ("message", "holds")
+    } else {
+        ("messages", "hold")
+    };
+    items[first].problems.push(
         Problem::explained(
             Reason::UncoveredType,
-            Some("attachments".to_string()),
+            Some(field.to_string()),
             &format!(
-                "{count} {many} here hold cards, link previews or forwards that are not shown"
+                "{count} {many} here {hold} what is not shown: {}",
+                kinds.join(", ")
             ),
         )
         .severity(Severity::Info),
@@ -501,13 +495,14 @@ fn build_item(
     team_url: Option<&str>,
     labels: Labels<'_>,
     unread: bool,
-) -> NormalizedChatItem {
+) -> (NormalizedChatItem, Vec<String>) {
     let author_display = m
         .user_id
         .as_deref()
         .and_then(|u| labels.users.get(u).cloned())
         .unwrap_or_else(|| m.user_id.clone().unwrap_or_else(|| "unknown".into()));
-    let body = to_commonmark(m.text.trim_end(), labels);
+    let drawn = cards::draw(&m.raw_json, labels);
+    let body = drawn.body(to_commonmark(m.text.trim_end(), labels));
     let attachments = build_attachments(&m.raw_json);
     let reactions = build_reactions(source_id, &m.raw_json, m, labels.users);
     let kind = if attachments.is_empty() {
@@ -520,7 +515,7 @@ fn build_item(
     // will not parse is a record with a name and no place in time.
     let mut problems = Vec::new();
     let date_ms = own_stamp_ms(Some(&m.ts), "ts", ts_to_ms, &mut problems);
-    NormalizedChatItem {
+    let item = NormalizedChatItem {
         reply_to: None,
         message_uuid: msg_id.uuid.clone(),
         author_handle: m
@@ -559,7 +554,8 @@ fn build_item(
         recipients: Vec::new(),
         mentions: mentioned_users(&m.text, &m.team_id),
         problems,
-    }
+    };
+    (item, drawn.not_shown)
 }
 
 fn replies_of(m: &Message, held: u64, problems: &mut Vec<Problem>) -> Option<Replies> {
@@ -754,30 +750,23 @@ mod reaction_tests {
         assert_eq!(shown, ["👍🏻", "🤔", ":ferengi-dance:"]);
     }
 
-    /// A forward, a preview or a bot's card once left a message blank with
-    /// nothing to say so. Rich text repeats the message's `text`, so it is no
-    /// loss, and it is on nearly every message.
+    /// A document says which parts of its messages nothing draws, once,
+    /// on the first message holding one; a forward or a bot's section is
+    /// drawn and says nothing.
     #[test]
-    fn a_document_says_when_a_message_holds_what_is_not_shown() {
-        let holding = |raw: Value| holds_what_is_not_shown(&raw);
-        assert!(holding(
-            json!({"attachments": [{"from_url": "https://memory-alpha.example"}]})
-        ));
-        assert!(holding(json!({"blocks": [{"type": "section"}]})));
-        assert!(!holding(json!({"attachments": []})));
-        assert!(!holding(
-            json!({"blocks": [{"type": "rich_text"}, {"type": "divider"}]})
-        ));
-        assert!(!holding(json!({"text": "Engage."})));
-
+    fn a_document_names_what_its_messages_hold_that_is_not_shown() {
         let with = |raw: Value| Message {
             raw_json: raw,
             ..reacted(json!([]))
         };
         let messages = [
             with(json!({"text": "Engage."})),
-            with(json!({"attachments": [{"is_share": true}]})),
-            with(json!({"blocks": [{"type": "section"}]})),
+            with(json!({"blocks": [{"type": "call", "call_id": "R1"}]})),
+            with(json!({"attachments": [{"is_share": true, "text": "Make it so."}]})),
+            with(
+                json!({"blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "Red alert"}}]}),
+            ),
+            with(json!({"attachments": [{"actions": [{"type": "button"}]}]})),
         ];
         let shared = Shared::default();
         let lookups = Lookups {
@@ -794,16 +783,17 @@ mod reaction_tests {
             inputs: Inputs::default(),
         };
         let chat = build_chat(&lookups, &bucket, "src");
-        let problems: Vec<_> = chat.buckets[0]
-            .items
-            .iter()
-            .map(|item| item.problems.as_slice())
-            .collect();
-        assert!(problems[0].is_empty());
-        assert_eq!(problems[1].len(), 1, "one row a document");
-        assert_eq!(problems[1][0].severity, Some(Severity::Info));
-        assert!(problems[1][0].sample.starts_with("2 messages here "));
-        assert!(problems[2].is_empty());
+        let items = &chat.buckets[0].items;
+        let rows: Vec<usize> = items.iter().map(|item| item.problems.len()).collect();
+        assert_eq!(rows, [0, 1, 0, 0, 0], "one row a document");
+        let row = &items[1].problems[0];
+        assert_eq!(row.severity, Some(Severity::Info));
+        assert_eq!(
+            row.sample,
+            "2 messages here hold what is not shown: call block, attachment with nothing to show"
+        );
+        assert_eq!(items[2].text.as_deref(), Some("Engage.\n\n> Make it so."));
+        assert_eq!(items[3].text.as_deref(), Some("Red alert"));
     }
 
     /// A message was put on its author's profile clock, which is where
@@ -936,9 +926,8 @@ mod tests {
                 inputs: Inputs::default(),
             }],
         };
-        let out = tempfile::tempdir().unwrap();
         let mut docs = Vec::new();
-        render_all(&parsed, out.path(), "src", &Progress::noop(), &mut |d| {
+        render_all(&parsed, "src", &Progress::noop(), &mut |d| {
             docs.push(d);
             Ok(())
         })

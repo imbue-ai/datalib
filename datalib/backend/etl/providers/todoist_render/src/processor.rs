@@ -12,7 +12,7 @@ use datalib_etl_todoist::ingest::{db_path_for, RawDb};
 use datalib_etl_todoist_config::TodoistRenderConfig;
 
 use crate::ids;
-use crate::render::{render_project, RENDER_VERSION};
+use crate::render::{build, RENDER_VERSION};
 use crate::store::{self, flag};
 
 pub fn plan_render(
@@ -78,7 +78,7 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>) -> Result<String> {
             continue;
         }
         let inputs = Inputs::default();
-        let md = render_project(ctx.root, ctx.name, &store, project, &inputs)?;
+        let md = build(ctx.name, &store, project, &inputs);
         ctx.emit_doc(md)
             .with_context(|| format!("store the document for project {project}"))?;
         buckets.push(Bucket {

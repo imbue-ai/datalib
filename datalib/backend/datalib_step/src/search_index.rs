@@ -866,7 +866,7 @@ pub(crate) fn model_file(models_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_etl_render::grid_index::{doc_md_path, unindexed_doc_md_path, RenderedMarkdown};
+    use datalib_etl_render::grid_index::RenderedMarkdown;
     use datalib_etl_render::section::{join, Section};
     use datalib_schema::grid_rows::GridRow;
     use datalib_schema::providers::Provider;
@@ -885,19 +885,12 @@ mod tests {
         datalib_etl::layout::render_markdown_root(root, group)
     }
 
-    /// A document as a renderer hands it over, its file written.
-    fn rendered_doc(uuid: &str, sections: Vec<Section>, md_path: PathBuf) -> RenderedMarkdown {
-        rendered_doc_of(GROUP, uuid, sections, md_path)
+    /// A document as a renderer hands it over.
+    fn rendered_doc(uuid: &str, sections: Vec<Section>) -> RenderedMarkdown {
+        rendered_doc_of(GROUP, uuid, sections)
     }
 
-    fn rendered_doc_of(
-        group: &str,
-        uuid: &str,
-        sections: Vec<Section>,
-        md_path: PathBuf,
-    ) -> RenderedMarkdown {
-        std::fs::create_dir_all(md_path.parent().unwrap()).unwrap();
-        std::fs::write(&md_path, join(&sections)).unwrap();
+    fn rendered_doc_of(group: &str, uuid: &str, sections: Vec<Section>) -> RenderedMarkdown {
         let row = GridRow::builder()
             .uuid(uuid)
             .provider(Provider::Test)
@@ -913,13 +906,12 @@ mod tests {
             .build()
             .unwrap();
         RenderedMarkdown {
-            section_layout: None,
+            searchable: true,
             content_hash: None,
             markdown_uuid: uuid.to_string(),
             source_id: group.to_string(),
             upstream_cursor: None,
             bucket_key: None,
-            md_path,
             render_version: 1,
             rows: vec![row],
             sections,
@@ -950,10 +942,10 @@ mod tests {
     fn commit_of(root: &Path, group: &str, docs: &[RenderedMarkdown], removed: &[String]) {
         let store = IndexedMarkdownStore::open(&render_root_of(root, group)).unwrap();
         for d in docs {
-            store.put_document(root, d).unwrap();
+            store.put_document(d).unwrap();
         }
         if !removed.is_empty() {
-            store.remove_documents(root, removed).unwrap();
+            store.remove_documents(removed).unwrap();
         }
         store.commit("test").unwrap();
         store.close();
@@ -982,8 +974,7 @@ mod tests {
 
     /// One document, `uuid`, saying `text`, committed under `group`.
     fn one_doc(root: &Path, group: &str, uuid: &str, text: &str) {
-        let rr = render_root_of(root, group);
-        let doc = rendered_doc_of(group, uuid, thread(text), doc_md_path(&rr, uuid));
+        let doc = rendered_doc_of(group, uuid, thread(text));
         commit_of(root, group, &[doc], &[]);
     }
 
@@ -1106,10 +1097,9 @@ mod tests {
     async fn keyword_progress_counts_the_documents_owed() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
-        let rr = render_root(root);
         let docs: Vec<RenderedMarkdown> = ["d-tea", "d-hush"]
             .into_iter()
-            .map(|u| rendered_doc(u, thread(u), doc_md_path(&rr, u)))
+            .map(|u| rendered_doc(u, thread(u)))
             .collect();
         commit(root, &docs, &[]);
         let bar = Recorder::default();
@@ -1422,20 +1412,16 @@ mod tests {
 
     /// The keyword pass takes what the render store holds, by its content
     /// hash: a new document is put, a changed one put again, an unchanged
-    /// one left, a removed one removed, and one filed under `unindexed/`
+    /// one left, a removed one removed, and one kept for the grid alone
     /// never indexed.
     #[tokio::test(flavor = "multi_thread")]
     async fn the_keyword_pass_follows_the_render_store() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
-        let rr = render_root(root);
-        let tea = rendered_doc("d-tea", thread("Tea, Earl Grey"), doc_md_path(&rr, "d-tea"));
-        let hush = rendered_doc("d-hush", thread("Shields up"), doc_md_path(&rr, "d-hush"));
-        let quiet = rendered_doc(
-            "d-quiet",
-            thread("a repeat"),
-            unindexed_doc_md_path(&rr, "d-quiet"),
-        );
+        let tea = rendered_doc("d-tea", thread("Tea, Earl Grey"));
+        let hush = rendered_doc("d-hush", thread("Shields up"));
+        let mut quiet = rendered_doc("d-quiet", thread("a repeat"));
+        quiet.searchable = false;
         commit(root, &[tea.clone(), hush.clone(), quiet], &[]);
 
         assert_eq!(
@@ -1446,16 +1432,19 @@ mod tests {
             }
         );
         let held = indexed(root).await;
-        let file = std::fs::read(&tea.md_path).unwrap();
+        let text = join(&tea.sections);
         assert_eq!(
             held["d-tea"],
-            format!("{}.t{INDEX_TEXT_VERSION}", blake3::hash(&file).to_hex())
+            format!(
+                "{}.t{INDEX_TEXT_VERSION}",
+                blake3::hash(text.as_bytes()).to_hex()
+            )
         );
         assert!(!held.contains_key("d-quiet"));
 
         assert_eq!(update(root).await, Done::default(), "nothing changed");
 
-        let tea2 = rendered_doc("d-tea", thread("Tea, hot"), doc_md_path(&rr, "d-tea"));
+        let tea2 = rendered_doc("d-tea", thread("Tea, hot"));
         commit(root, &[tea2], &["d-hush".to_string()]);
         assert_eq!(
             update(root).await,
@@ -1479,8 +1468,7 @@ mod tests {
         std::fs::create_dir_all(old.parent().unwrap()).unwrap();
         std::fs::write(&old, b"an older build's index").unwrap();
         std::fs::write(format!("{}-wal", old.display()), b"its log").unwrap();
-        let rr = render_root(root);
-        let tea = rendered_doc("d-tea", thread("Tea"), doc_md_path(&rr, "d-tea"));
+        let tea = rendered_doc("d-tea", thread("Tea"));
         commit(root, &[tea], &[]);
 
         update(root).await;
@@ -1499,7 +1487,7 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         let rr = render_root(root);
-        let tea = rendered_doc("d-tea", thread("Tea, Earl Grey"), doc_md_path(&rr, "d-tea"));
+        let tea = rendered_doc("d-tea", thread("Tea, Earl Grey"));
         commit(root, &[tea], &[]);
         assert_eq!(update(root).await.put, 1);
 
@@ -1512,7 +1500,6 @@ mod tests {
         .unwrap();
         for sql in [
             "ALTER TABLE markdowns DROP COLUMN content_hash",
-            "ALTER TABLE markdowns DROP COLUMN section_layout",
             "UPDATE _datalib_meta SET value = 'an-older-shape' WHERE key = 'schema_hash'",
         ] {
             sqlx::query(sql).execute(&writer).await.unwrap();
@@ -1526,15 +1513,14 @@ mod tests {
         assert_eq!(indexed(root).await.keys().collect::<Vec<_>>(), ["d-tea"]);
     }
 
-    /// The index draws a document's text from the render store, not its
-    /// file: an item is its envelope and its body, with none of the markup
-    /// the file draws around it, and a piece kept whole is drawn as it is.
+    /// The index draws a document's text from what the render store keeps:
+    /// an item is its envelope and its body, with none of the markup drawn
+    /// around it, and a section kept whole is drawn as it is.
     #[tokio::test(flavor = "multi_thread")]
-    async fn the_index_draws_from_the_store_not_the_file() {
+    async fn the_index_draws_from_what_the_store_keeps() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
-        let rr = render_root(root);
-        let mut tea = rendered_doc("d-tea", Vec::new(), doc_md_path(&rr, "d-tea"));
+        let mut tea = rendered_doc("d-tea", Vec::new());
         tea.sections = vec![
             Section::frame("---\n---\n\n# Ten Forward\n\n".into()),
             Section::item(
@@ -1545,16 +1531,10 @@ mod tests {
             ),
             Section::unkeyed("Page 2: the replicator manual\n".into()),
         ];
-        std::fs::write(&tea.md_path, join(&tea.sections)).unwrap();
         tea.rows[0].author = Some("Will Riker".into());
         tea.rows[0].uuid = "m1".into();
         tea.rows[0].created_at = Some("2026-03-03T14:05:00-08:00".into());
         commit(root, &[tea], &[]);
-        std::fs::write(
-            doc_md_path(&rr, "d-tea"),
-            "the file is no longer read".repeat(10),
-        )
-        .unwrap();
 
         let docs = draw_batch(root, GROUP, vec!["d-tea".into()]).await.unwrap();
         let texts: Vec<&str> = docs[0].sections.iter().map(|s| s.text.as_str()).collect();
@@ -2094,5 +2074,51 @@ mod tests {
             [2, 1, 2, 1, 1],
             "each slice of two, then its one missing prompt"
         );
+    }
+
+    /// Many Sandboxes answering while the step is slow to read: each
+    /// slice waiting on stdout once added a `drain` listener of its own,
+    /// and past ten Node printed `MaxListenersExceededWarning` on every
+    /// write, which the step logged as the driver's own lines.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn many_slices_waiting_on_a_full_stdout_share_one_wait() {
+        use tokio::io::AsyncReadExt;
+        const SLICES: usize = 20;
+        let fake = FakeModal::new();
+        let modal = fake.modal_with(0, true, &[], SLICES);
+        let mut driver = (modal.driver)().unwrap();
+        driver.options.slice = 1;
+        let mut child = driver.command().unwrap().spawn().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let mut stdout = child.stdout.take().unwrap();
+        let mut stderr = child.stderr.take().unwrap();
+        // A hash longer than a pipe holds, so every answer's write fills it.
+        let long = "h".repeat(128 * 1024);
+        for i in 0..SLICES {
+            let line = modal::request_line(&format!("{i:02}{long}"), "tea");
+            stdin.write_all(line.as_bytes()).await.unwrap();
+        }
+        drop(stdin);
+
+        // Nothing reads stdout until every Sandbox has ended, so each
+        // slice is waiting on it by then.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while fake.sandboxes().len() < SLICES {
+            assert!(
+                Instant::now() < deadline,
+                "only {} of {SLICES} Sandboxes ended",
+                fake.sandboxes().len()
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let mut out = String::new();
+        stdout.read_to_string(&mut out).await.unwrap();
+        let mut err = String::new();
+        stderr.read_to_string(&mut err).await.unwrap();
+        assert!(child.wait().await.unwrap().success(), "{err}");
+
+        let vectors = out.lines().filter(|l| l.contains("\"vector\"")).count();
+        assert_eq!(vectors, SLICES, "every answer arrived");
+        assert!(!err.contains("MaxListenersExceededWarning"), "{err}");
     }
 }

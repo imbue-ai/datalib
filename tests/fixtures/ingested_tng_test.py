@@ -228,6 +228,15 @@ WHATSAPP_PHOTO_NOT_IN_BACKUP = (
     "|attachment|fetch_failed|Media/WhatsApp Images/holodeck-poker-night.jpg"
     " is not among the media files the backup holds"
 )
+# The away team's call is the one part of a Slack message the fixture
+# holds that the render does not draw; its document says so.
+SLACK_CALL_NOT_SHOWN = (
+    "1860e56d-3cbf-504d-ab0b-df061b1bfe4a"
+    "|info|parse|markdown"
+    "|00000000-0000-80d6-b5a5-2617d0679dab"
+    "|0b7698ff-2340-8846-8c6a-4796fd32ae08"
+    "|blocks|uncovered_type|1 message here holds what is not shown: call block"
+)
 TAKEOUT_POST_NOT_A_VIDEO = (
     "50d82e65-dc5d-522f-afdd-0ded04b3d8f0"
     "|warning|fetch|entity"
@@ -338,6 +347,7 @@ EXPECTED_PROBLEMS = {
     ),
     "tng_pdfs": [PDFS_WITH_NO_TEXT, PDF_THAT_WILL_NOT_IDENTIFY],
     "whatsapp": [WHATSAPP_PHOTO_NOT_IN_BACKUP],
+    "slack": [SLACK_CALL_NOT_SHOWN],
     "google-takeout": sorted(
         [
             TAKEOUT_POST_NOT_A_VIDEO,
@@ -735,26 +745,50 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         return [tuple(r.split("|", 2)) for r in rows]  # type: ignore[misc]
 
+    def _document(self, group: str, uuid: str) -> str | None:
+        """A document's markdown as `datalib-step markdown` prints it from
+        its render store; `None` when the store does not hold it."""
+        result = subprocess.run(
+            [
+                str(Path(self.cwd) / self.step_bin),
+                "markdown",
+                str(self.workspace),
+                "--source",
+                group,
+                "--document",
+                uuid,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout if result.returncode == 0 else None
+
+    def _spelled(self, group: str, uuid: str) -> str:
+        text = self._document(group, uuid)
+        self.assertIsNotNone(text, f"{group}'s render store does not hold {uuid}")
+        assert text is not None
+        return text
+
     def _markdown(self, group: str, needle: str) -> str:
-        """A group's one document whose rows' preview carries `needle`,
-        off the tree."""
-        md_path = self._scalar(
+        """A group's one document whose rows' preview carries `needle`."""
+        uuid = self._scalar(
             self._index_db,
-            "SELECT DISTINCT m.md_path FROM grid_rows g JOIN markdowns m "
+            "SELECT DISTINCT m.markdown_uuid FROM grid_rows g JOIN markdowns m "
             "ON g.markdown_uuid = m.markdown_uuid "
             f"WHERE m.source_id = '{group}' AND g.preview LIKE '%{needle}%';",
         )
-        return (self.workspace / md_path).read_text()
+        return self._spelled(group, uuid)
 
     def _contact_markdown(self, group: str, contact: str) -> str:
-        """A contacts group's page for `contact`, off the tree."""
-        md_path = self._scalar(
+        """A contacts group's page for `contact`."""
+        uuid = self._scalar(
             self._index_db,
-            "SELECT DISTINCT m.md_path FROM grid_rows g JOIN markdowns m "
+            "SELECT DISTINCT m.markdown_uuid FROM grid_rows g JOIN markdowns m "
             "ON g.markdown_uuid = m.markdown_uuid "
             f"WHERE m.source_id = '{group}' AND g.contact = '{contact}';",
         )
-        return (self.workspace / md_path).read_text()
+        return self._spelled(group, uuid)
 
     def _pdf_shape(self) -> dict[str, int]:
         """The `pdf` source's contribution, by grid_rows kind.
@@ -993,8 +1027,12 @@ class IngestedTngPipelineTest(unittest.TestCase):
         linked: list[str] = []
         missing: list[str] = []
         placeholders: list[str] = []
-        for md in sorted(self.workspace.glob("whatsapp/render_markdown/**/*.md")):
-            body = md.read_text(encoding="utf-8")
+        for md in self._query(
+            self._index_db,
+            "SELECT markdown_uuid FROM markdowns WHERE source_id = 'whatsapp' "
+            "ORDER BY markdown_uuid;",
+        ):
+            body = self._spelled("whatsapp", md)
             placeholders += [
                 line.strip() for line in body.splitlines() if "not yet fetched" in line
             ]
@@ -1003,7 +1041,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ):
                 linked.append(digest)
                 if not self._blob_held(step, digest):
-                    missing.append(f"{md.name} -> /data/{step}/blob/{digest}")
+                    missing.append(f"{md} -> /data/{step}/blob/{digest}")
         return linked, missing, placeholders
 
     def _blob_held(self, step: str, digest: str) -> bool:
@@ -2027,7 +2065,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._query(
                 self._index_db,
                 "SELECT provider, COUNT(*) FROM markdowns "
-                "WHERE front IS NULL OR section_layout IS NULL "
+                "WHERE front IS NULL OR content_hash IS NULL "
                 "GROUP BY provider ORDER BY provider;",
             ),
             [],
@@ -2351,17 +2389,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
             f"fixture must have rendered claude conversation {victim}, "
             "or this run asserts nothing",
         )
-        doomed_files = [
-            self.workspace / p
-            for p in self._query(
-                self._index_db,
-                "SELECT md_path FROM markdowns "
-                f"WHERE markdown_uuid IN ({_sql_in(doomed_docs)}) "
-                "AND md_path IS NOT NULL;",
-            )
-        ]
-        for f in doomed_files:
-            self.assertTrue(f.is_file(), f"expected a rendered markdown at {f}")
+        for doc in doomed_docs:
+            self._spelled("claude-api", doc)
         survivors = set(self._index_ids()["grid_rows"]) - set(
             self._query(
                 self._index_db,
@@ -2413,12 +2442,12 @@ class IngestedTngPipelineTest(unittest.TestCase):
             [],
             "and so must its markdowns rows",
         )
-        for f in doomed_files:
-            self.assertFalse(
-                f.is_file(),
-                f"{f} outlived the conversation it renders. The grid no "
-                "longer lists it, but /applet/unified_grid_and_search_index/chat/{uuid} "
-                "still resolves — a deletion the user can read",
+        for doc in doomed_docs:
+            self.assertIsNone(
+                self._document("claude-api", doc),
+                f"{doc} outlived the conversation it renders in its render "
+                "store. The grid no longer lists it, but an export still "
+                "writes it — a deletion the user can read",
             )
         # Nothing else moved. A sweep that takes the neighbours with it is
         # worse than one that never fires.

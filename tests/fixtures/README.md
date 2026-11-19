@@ -1,8 +1,8 @@
 # The TNG corpus
 
-datalib's test data is a made-up mirror of the crew of the USS
+Datalib's test data is a made-up mirror of the crew of the USS
 Enterprise-D, from *Star Trek: The Next Generation*. Every source
-datalib reads has a fixture in that world: Picard's email and Codex
+Datalib reads has a fixture in that world: Picard's email and Codex
 sessions, Data's ChatGPT account, the ship's air-quality monitors. Together they are the **TNG corpus**.
 
 It exists so that:
@@ -182,9 +182,9 @@ random id (`store_generation`) so a reader can tell a rebuilt index
 from the one it read, and doltlite stamps two of its own commits with
 the wall clock, so every commit hash after them moves
 ([`doltlite.md`](../../docs/dev/doltlite.md#plain-sqlite-files-and-sqlite-compatibility)).
-The rendered markdown is stable too, except the "Store" section of
-`yolink/render_markdown/index.md`, which reports the store's commit log.
-Test the rows, not the files. To check stability yourself, build into
+The rendered documents are stable too, except the "Store" section of
+YoLink's page, which reports the store's commit log. Test the rows, not
+the files. To check stability yourself, build into
 two fresh roots more than a second apart: two builds in the same second
 can agree by luck.
 

@@ -389,15 +389,19 @@ fn duration(ms: u64) -> String {
 /// draws them and `/metrics` exports them.
 pub(crate) fn report(progress: &Progress, usage: &Usage, options: &Options) {
     let gpu = [("gpu", options.gpu.as_str())];
-    progress.metric("modal_sandboxes_total", &gpu, usage.sandboxes as i64);
+    progress.metric(
+        datalib_metrics::MODAL_SANDBOXES,
+        &gpu,
+        usage.sandboxes as i64,
+    );
     progress.metric("modal_sandboxes_failed_total", &gpu, usage.failed as i64);
     progress.metric(
-        "modal_sandbox_seconds_total",
+        datalib_metrics::MODAL_SANDBOX_SECONDS,
         &gpu,
         (usage.sandbox_ms / 1000) as i64,
     );
     if let Some(micro) = estimated_micro_usd(usage, options) {
-        progress.metric("modal_cost_estimate_micro_usd_total", &gpu, micro as i64);
+        progress.metric(datalib_metrics::MODAL_COST, &gpu, micro as i64);
     }
 }
 

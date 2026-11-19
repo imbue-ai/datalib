@@ -3,7 +3,7 @@
 //! [`crate::dolt_repo::DoltRepo`].
 
 use crate::group::like_pattern;
-use crate::query::{extract_uuid_suffix, Field, FilterTerm, ParsedQuery};
+use crate::query::{Field, FilterTerm, ParsedQuery};
 use crate::terms_keys::{self, Cells, TermsKey, TermsValue};
 use datalib_query::table::{Column, FreeText, SearchTable};
 use datalib_schema::grid_rows::GridRowColumn;
@@ -68,10 +68,17 @@ pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
     // repeating the same field with different values produces an empty
     // result, which matches the "keep only X then keep only Y"
     // tree-zoom UX.
+    let pk = <C::Table as SearchTable>::PRIMARY_KEY.as_str();
     for term in &q.terms {
-        if let Field::Terms(key) = term.field {
-            let pk = <C::Table as SearchTable>::PRIMARY_KEY.as_str();
-            let (clause, bound) = terms_clause(pk, key, term);
+        let (clause, bound) = match term.field {
+            Field::Terms(key) => terms_clause(pk, key, term),
+            Field::Names => names_clause(pk, term),
+            Field::Text => text_clause(pk, term),
+            Field::Before | Field::After | Field::Is(_) | Field::Column(_) => {
+                (String::new(), Vec::new())
+            }
+        };
+        if !clause.is_empty() {
             clauses.push(clause);
             params.extend(bound);
             continue;
@@ -91,19 +98,28 @@ pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
             });
             continue;
         }
+        // A uuid key takes its uuid at the end of a slug or a link too.
+        let value = key
+            .uuid
+            .then(|| datalib_uuid_text::at_end(&term.value))
+            .flatten()
+            .unwrap_or_else(|| term.value.clone());
+        let (is, is_not, bound) = match datalib_uuid_text::spellings(&value) {
+            Some(spellings) => (
+                "IN (SELECT value FROM json_each(?))",
+                "NOT IN (SELECT value FROM json_each(?))",
+                serde_json::to_string(&spellings).expect("strings serialize"),
+            ),
+            None => ("= ?", "!= ?", value),
+        };
         if term.negate {
             // Nullable columns: NULL would pass `col != ?` as unknown
             // and be dropped, which surprises users who didn't ask to
             // exclude unset values. Explicitly keep nulls.
-            clauses.push(format!("({col} IS NULL OR {col} != ?)"));
+            clauses.push(format!("({col} IS NULL OR {col} {is_not})"));
         } else {
-            clauses.push(format!("{col} = ?"));
+            clauses.push(format!("{col} {is}"));
         }
-        let bound = if key.uuid {
-            extract_uuid_suffix(&term.value).to_string()
-        } else {
-            term.value.clone()
-        };
         params.push(bound);
     }
 
@@ -186,8 +202,54 @@ fn documents_and_sources_only(q: &ParsedQuery<GridRowColumn>) -> bool {
         && q.terms.iter().all(|t| match t.field {
             Field::Is(column) => column == GridRowColumn::IsDocument,
             Field::Column(key) => key.column == GridRowColumn::SourceId,
-            Field::Before | Field::After | Field::Terms(_) => false,
+            Field::Before | Field::After | Field::Terms(_) | Field::Text | Field::Names => false,
         })
+}
+
+/// `text` as an FTS5 phrase over the search index's titles and bodies: its
+/// words in order, each whole.
+pub fn fts5_phrase(text: &str) -> String {
+    format!("{{title body}} : (\"{}\")", text.replace('"', "\"\""))
+}
+
+/// The rows whose text holds `term`'s words in order, or with `-`, does
+/// not: a row a message is when its message holds them, a document's own
+/// row (whose uuid is its document's) when any piece of it does. A row
+/// the search index does not hold holds no words.
+fn text_clause<C>(pk: &str, term: &FilterTerm<C>) -> (String, Vec<String>) {
+    let not = if term.negate { "NOT " } else { "" };
+    let phrase = fts5_phrase(&term.value);
+    (
+        format!(
+            "{pk} {not}IN (SELECT s.uuid FROM search_fts f \
+             JOIN search_sections s ON s.section_id = f.rowid \
+             WHERE search_fts MATCH ? AND s.uuid IS NOT NULL \
+             UNION SELECT d.markdown_uuid FROM search_fts f \
+             JOIN search_sections s ON s.section_id = f.rowid \
+             JOIN search_documents d ON d.doc_id = s.doc_id WHERE search_fts MATCH ?)"
+        ),
+        vec![phrase.clone(), phrase],
+    )
+}
+
+/// The rows that name `term`'s id or handle, whole and case-blind, in any
+/// of their terms, or with `-`, do not.
+/// Both spellings are asked for, as a person key asks: the handle, and the
+/// address as typed, which an author with no handle is filed under.
+fn names_clause<C>(pk: &str, term: &FilterTerm<C>) -> (String, Vec<String>) {
+    let not = if term.negate { "NOT " } else { "" };
+    let mut values = vec![term.value.clone()];
+    if let Some(id) = crate::query::identifier(&term.value).filter(|id| *id != term.value) {
+        values.push(id);
+    }
+    let any = vec!["value = ? COLLATE NOCASE"; values.len()].join(" OR ");
+    (
+        format!(
+            "{pk} {not}IN (SELECT r.uuid FROM terms t JOIN rows r ON r.row_id = t.row_id \
+             WHERE t.val_id IN (SELECT val_id FROM vals WHERE {any}))"
+        ),
+        values,
+    )
 }
 
 /// The rows whose search terms of `key`'s kinds hold `value`, as one
@@ -527,5 +589,43 @@ mod tests {
             sql.contains("(diff_status IS NULL OR diff_status != ?)"),
             "{sql}"
         );
+    }
+
+    /// A uuid typed without dashes (a Notion link's) found nothing
+    /// stored with them.
+    #[test]
+    fn a_uuid_value_matches_each_of_its_spellings() {
+        let (sql, params) = build_where(&parse_query("id:1701D000abcd4e00A0000000000000ef"));
+        assert!(
+            sql.contains("upstream_id IN (SELECT value FROM json_each(?))"),
+            "{sql}"
+        );
+        let spellings: Vec<String> = serde_json::from_str(&params[0]).unwrap();
+        assert!(spellings.contains(&"1701d000-abcd-4e00-a000-0000000000ef".to_string()));
+        let (sql, _) = build_where(&parse_query("-id:1701d000-abcd-4e00-a000-0000000000ef"));
+        assert!(
+            sql.contains(
+                "(upstream_id IS NULL OR upstream_id NOT IN (SELECT value FROM json_each(?)))"
+            ),
+            "{sql}"
+        );
+        let (sql, params) = build_where(&parse_query("id:M-ncc1701-0042"));
+        assert!(sql.contains("upstream_id = ?"), "{sql}");
+        assert_eq!(params, vec!["M-ncc1701-0042".to_string()]);
+    }
+
+    /// A key that holds a uuid takes it at the end of a page's link, as
+    /// Notion writes it, without dashes.
+    #[test]
+    fn a_uuid_key_reads_its_uuid_off_a_link() {
+        let (sql, params) = build_where(&parse_query(
+            "notion_page:https://www.notion.so/Away-Team-1701d000abcd4e00a0000000000000ef?pvs=4",
+        ));
+        assert!(
+            sql.contains("notion_page_uuid IN (SELECT value FROM json_each(?))"),
+            "{sql}"
+        );
+        let spellings: Vec<String> = serde_json::from_str(&params[0]).unwrap();
+        assert!(spellings.contains(&"1701d000-abcd-4e00-a000-0000000000ef".to_string()));
     }
 }

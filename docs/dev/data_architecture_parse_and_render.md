@@ -77,9 +77,9 @@ The cross-provider contract is the **render store**: one doltlite
 database per source, at
 `<data_root>/<name>/render_markdown/indexed_markdown.doltlite_db`, holding
 
-  - `markdowns` — one row per rendered document: its `markdown_uuid`
-    (the primary key for the `.md`), its `renderer_version`, its
-    `md_path` and the `bucket_key` it was rendered from. Nothing on it
+  - `markdowns` — one row per rendered document: its `markdown_uuid`,
+    its `renderer_version`, the `bucket_key` it was rendered from, and
+    whether the search indexes it (`searchable`). Nothing on it
     is stamped per run — a re-render of an unchanged document writes
     an identical row. Its `front` is the document's front
     matter as its renderer handed it: facts in order
@@ -118,13 +118,14 @@ database per source, at
     escapes. The grid index does not copy it
     ([`documents_to_blocks.md`](plans/documents_to_blocks.md)
     §"Store the body, format on read").
-  - `drawn_pieces` — how each piece is drawn where `sections` does not
+  - `drawings` — how each piece is drawn where `sections` does not
     hold it as drawn: a split item's whole drawing with its body cut out
     and where to put it back (`body_at`), and each frame piece whole.
     With `sections` it spells the document byte for byte
-    (`IndexedMarkdownStore::document`), which a step test checks against
-    every fixture document's file, so the markdown files are not the
-    only copy of what a document looks like.
+    (`IndexedMarkdownStore::document`), which is the one copy of what a
+    document looks like: the viewer and `datalib-step markdown` read it.
+    A search's quote reads only the `sections` row of the item the hit
+    landed on (`IndexedMarkdownStore::item_texts`).
   - `source_contacts` and `source_contact_handles` — the people it
     describes or mentions, each as its source describes them (a
     `NormalizedContact`, `contact_schema/`), and the handles that reach
@@ -138,8 +139,9 @@ database per source, at
   - `source_measurements` — the storage report's samples
     ([`grid_rows.md`](grid_rows.md)).
 
-The human artifact stays a file: a `.md` with YAML frontmatter. An
-attachment its source's blob store holds is linked there, at
+The human artifact is markdown with YAML frontmatter, spelled from the
+store; `datalib-step markdown` writes it out as `.md` files for whoever
+wants them. An attachment its source's blob store holds is linked there, at
 `/data/<group>/<function>/blob/<hash>`, which `datalib-http` answers
 ([`blob_store/README.md`](../../datalib/backend/blob_store/README.md)).
 An email's attachments and inline images are MIME parts of the `.eml`
@@ -166,8 +168,7 @@ This part of the pipeline aspires to the same properties as download:
     can read. A run killed after N of M documents has N of them
     committed; the next run diffs from the cursor it last *sealed*, so
     it re-renders the range once more — to identical rows, which cost
-    nothing — and continues. The `.md` files are plain files, so a
-    partial one left by a SIGKILL mid-write is rewritten next run.
+    nothing — and continues.
 
 ### Why the projection is a database and not a file tree
 
@@ -201,25 +202,25 @@ rows and the record of what was dropped or nulled getting them there
 live in one database with one writer, so they commit in one transaction
 and can never disagree about which run they came from. A document whose
 every row was dropped is stored as no document at all — no `markdowns`
-row, no `.md` file — and its problem rows are the whole record of it.
+row, no sections — and its problem rows are the whole record of it.
 
-### What is still a file: the markdown
+### The markdown is in the store too
 
-The rendered `.md` lives on disk rather than in a table. Search does
-not read it: `unified_grid_and_search_index`'s keyword pass and each source's `embed`
-(`datalib/backend/datalib_step/src/search_index.rs`) draw a document's
-text from the render store (`IndexedMarkdownStore::index_docs`), and
-`embed` runs the embedding model in process. What keeps the file is
-the document view, which serves it (below), and that the markdown is
-deliberately human-readable and greppable on disk.
-Moving the markdown into the store saves space only if the file tree
-then goes away; `plans/multimodal_retrieval.md` §4 measured the same
-text already stored five times on a real data root.
+There is no `.md` file. A renderer hands each document over as
+`RenderedMarkdown::sections`, and the store keeps them in `sections` and
+`drawings`, versioned with the document's rows, so a reader at a
+commit sees that commit's text. Search draws a document's text from the
+store (`IndexedMarkdownStore::index_docs`); the document view and
+`datalib-step markdown` spell it (`IndexedMarkdownStore::document`). A
+hit lands on the item the search index names, by its id, and its quote
+reads only what that item says (`IndexedMarkdownStore::item_texts`). Files an earlier build wrote beside
+the store are deleted the next time the source renders
+(`datalib_step/src/old_markdown.rs`).
 
-Whatever the medium, the *contract* holds: render emits a human
-artifact and a separate machine-readable projection, and the index
-reads the projection — **it never re-parses markdown** (AGENTS.md's
-"Rendered markdown is write-only"), whatever database the markdown sits in.
+The *contract* holds as before: render emits a human artifact and a
+separate machine-readable projection, and the index reads the
+projection — **it never re-parses markdown** (AGENTS.md's "Rendered
+markdown is never parsed back").
 
 ### Upstream text is escaped where it becomes markup
 
@@ -347,52 +348,60 @@ fragment's end, so nothing in one message can wrap or replace the next.
 
 **Where the messages begin comes from the projection, never from the
 text.** Upstream text can contain any bytes, the wrapper's included,
-but it cannot move a length the renderer recorded. A renderer hands
-its document over as `Section`s (`etl/render/src/section.rs`): keyed
-pieces, one per message, each keyed by its `data-section-uuid`, and
-unkeyed ones (the front matter and title, the `<details>` opener and
-closer around a run of tool steps). Joined in order they are the `.md`.
-The render store keeps their layout, each piece's uuid or none and its
-length in bytes, in the document's `markdowns.section_layout`; the grid
-index copies it; and the document route returns it beside the body as
-`sections`, each length counted in UTF-16 code units, the way
-JavaScript indexes a string. The route checks the layout against the
-file it read and sends none if they disagree, which only happens while
-a render is rewriting that file.
+but it cannot move where one piece ends and the next begins. A renderer
+hands its document over as `Section`s (`etl/render/src/section.rs`):
+keyed pieces, one per message, each keyed by its `data-section-uuid`,
+and unkeyed ones (the front matter and title, the `<details>` opener
+and closer around a run of tool steps). Joined in order they are the
+document. A message is drawn in its **box**, `<div id="m-{uuid}"
+data-section-uuid="{uuid}" class="…">`, and every renderer draws it
+one way, `Section::boxed`, so the store keeps the box's class
+(`sections.class`) and knows the box from the uuid and the class alone.
+A **fold**, a `<details>` around a run of pieces (a run of tool steps,
+another version, a Drive comment thread, Todoist's completed tasks), is
+drawn one way too, by `Section::fold_open` and `Section::fold_close`,
+and the store keeps each one's class and summary in `folds`. The render
+store keeps the pieces, and spelling a document back gives each piece's
+uuid or none, its box's class, the fold it opens or closes, and its
+text; the document route, asked with `?pieces=true`, sends them as
+`pieces` (`section::nodes`): a boxed one as its class and what is inside
+the box, a fold as a node around the pieces it holds. The UI never sees
+them joined.
 
-How the UI draws a body with a layout (`ui/src/cards/renderDocument.ts`):
+How the UI draws the pieces (`ui/src/cards/renderDocument.ts`):
 
-- **The unkeyed pieces are the page's frame.** They are rendered
-  together, as one markdown string with a placeholder where each
-  message goes, so a `<details>` opened in one still closes in a later
-  one. They hold only what the renderer writes itself; the title in
-  them is escaped.
-- **Each keyed piece is rendered and sanitized alone.** One that opens
-  with the renderer's wrapper line (`<div id="m-{uuid}"
-  data-section-uuid="{uuid}" …>`, its uuid the piece's key) and ends
-  with `</div>` is drawn as that wrapper with the inside rendered as a
-  fragment of its own, so a `</div>` in a message cannot close the
-  wrapper early either.
-- **Only the renderer's wrapper answers to a message's id.** Inside a
-  piece, an `id="m-…"` or a `data-section-uuid` that names any message
-  of the document is taken off.
+- **Every piece is rendered alone**, the unkeyed ones (the title,
+  headings between messages) too, so nothing one opens reaches the
+  next. A fold is drawn by the UI around its pieces, its summary
+  sanitized like any other text, so no piece opens or closes it.
+- **Each keyed piece is rendered and sanitized alone.** The UI draws a
+  boxed one's box itself, around what is inside it rendered as a
+  fragment of its own, so a `</div>` in a message cannot close its box
+  early either.
+- **Only the box answers to a message's id.** What answers to an id is
+  the outermost element naming it (`sectionEl` in `chatSections.js`),
+  and every lookup by id goes through it: a selection, an edge, a
+  problem's jump, the 🆔 button, the feedback menu. A copy of another
+  message's wrapper inside a message sits in that message's box, so it
+  is left as written and never found first. A keyed piece in no box
+  answers by its own wrapper, where it draws one.
 - **A message draws only inside its own box.** `documentBody.css`
-  gives every wrapper `contain: paint`, so `position: fixed`, a
-  negative margin or a transform in one message cannot cover another.
+  gives every box `contain: paint`, so `position: fixed`, a negative
+  margin or a transform in one message cannot cover another.
 
-A renderer that declares no sections stores no layout, and its body is
-drawn as one fragment, as every body was before; its wrappers still get
-`contain: paint`. Garmin, Perseus, Notion, Google Takeout's My Maps
-pages and the time-series pages declare none. `grep -rln 'Section::keyed' datalib/backend/etl`
-lists the renderers that declare them. Teaching another one is filling
-`RenderedMarkdown::sections`, and the next render stores its layout.
+A renderer that keys none of its sections hands its page over as
+unkeyed pieces, drawn as one fragment, as every body was before; its
+boxes still get `contain: paint`. `grep -rlnE 'Section::(keyed|boxed)'
+datalib/backend/etl` lists the renderers that key theirs. Teaching
+another one is keying its `RenderedMarkdown::sections`, and the next
+render stores them.
 
 The cost is a sanitizer pass per message: in the unit tests' jsdom, a
 2,000-message conversation took about 0.7 s piece by piece against
 0.4 s whole. `ui/tests/section_isolation.test.ts` holds the rule, and
 `ui/tests/e2e/section-isolation.spec.ts` checks it in a browser on a
 real document, with a control that shows the same text does hide the
-next message once the layout is taken away.
+next message once its pieces are joined into one.
 
 ## 3. The projection
 
@@ -814,8 +823,7 @@ that derived stores are rebuilt anyway, a mechanism would automate what
 the churn already does. Once a derived store starts living a long time,
 it needs building. The raw store is not covered by that argument: it is
 the copy we cannot re-fetch. Documents a source no longer produces are
-not part of the problem — §5's sweep removes their rows and `.md` files
-in the run that stops producing them; only the store's *history* of
+not part of the problem — §5's sweep removes them in the run that stops producing them; only the store's *history* of
 them stays.
 
 ## 5. Incrementality and deletion
@@ -951,7 +959,7 @@ in the same transaction as the storage report and the cursor
 
   | the processor said | the bucket's documents |
   |---|---|
-  | `declare_bucket` with the rows it read | replaced by what it emitted; any other document under the key is removed, rows and `.md` file (a bucket that re-rendered to fewer documents drops the extra ones) |
+  | `declare_bucket` with the rows it read | replaced by what it emitted; any other document under the key is removed (a bucket that re-rendered to fewer documents drops the extra ones) |
   | `declare_bucket` with no rows, and emitted nothing | removed **only when its rows left it**: a row the bucket was last built from (its `render_inputs` as they stood before the run) left — the raw diff reports it `removed`, or its table, emptied since, held it at the cursor — or every one of those rows is now read by a bucket that is new this run (it had no `render_inputs` before) — the key the bucket is minted from changed (a renamed address book re-keys its cards), and its rows build that bucket instead. A bucket that already read those rows is no evidence: a calendar series reads every row of its changed occurrences, and a Claude project page's rows are all read by its conversations. Otherwise they stay as they were, each with a `no_document` warning, and the bucket keeps its old `render_inputs` |
   | `exclude_bucket` — left out on purpose (email's label filter), or known gone (a calendar reads every event row each run, so a key no event mints is gone though its row is still there: a "this and following" edit moves an occurrence to a new UID) | removed, on the renderer's word |
   | `fail_bucket(why)` — its build failed | kept, each with a `render_failed` error carrying `why`, even on a full walk |
@@ -983,12 +991,10 @@ a document with a render-stage `render_failed` or `no_document`
 problem, so one bucket that will not build neither fails the step nor
 makes every later run a full walk.
 
-The `.md` file matters as much as the rows: `md_path` is what
-`/applet/unified_grid_and_search_index/chat/{uuid}` serves, so a
-document deleted from the store but left on disk is a deletion the user
-can still read. A document that comes back at a different path loses
-the file at its old one (`put_document`). `unified_grid_and_search_index` needs no part in
-any of this — it learns of a removal from the render store's own diff.
+A removed document goes from the store whole, its text with its rows,
+so nothing of it is left for `/applet/unified_grid_and_search_index/chat/{uuid}`
+or an export to show. `unified_grid_and_search_index` needs no part in
+this — it learns of a removal from the render store's own diff.
 
 Across a version bump or a params change the store is **kept**: its
 history, the commit `unified_grid_and_search_index` last consumed, and the cursor. "Render
@@ -1028,8 +1034,8 @@ removes.
 
 4. **Removed rows.** The diff names them, the reverse lookup names the
    buckets that read them, and each renders to fewer documents or to
-   none and is declared so. The per-bucket sweep removes the rest,
-   `.md` files included — nothing sits waiting for a collector.
+   none and is declared so. The per-bucket sweep removes the rest —
+   nothing sits waiting for a collector.
 
 5. **Multi-commit ranges.** Five ingest runs between two renders are
    one diff from the cursor to the pin; a row that left and came back

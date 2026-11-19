@@ -12,10 +12,10 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::blake3_hex;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::Front;
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{close_open_blocks, escape_name_inline};
 use datalib_etl_render::inputs::{Bucket, Buckets, Input, RawRange};
-use datalib_etl_render::section::{join, msg_div_open, Section, MSG_DIV_CLOSE};
+use datalib_etl_render::section::{msg_class, Section};
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 
 pub use convert::RENDER_VERSION;
@@ -127,7 +127,6 @@ pub fn buckets_of(
 
 pub fn render_targets(
     targets: &[RenderTarget],
-    data_root: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -143,7 +142,6 @@ pub fn render_targets(
         return Ok(summary);
     }
     progress.set_length(Some(targets.len() as u64));
-    let render_root = datalib_etl::layout::render_markdown_root(data_root, source_id);
 
     for t in targets {
         progress.inc(1);
@@ -153,14 +151,13 @@ pub fn render_targets(
             grid_rows::document_stamp(t.doc_created_at.as_deref(), t.doc_modified_at.as_deref()),
         )
         .uuid;
-        let md_path = doc_md_path(&render_root, &doc_uuid);
         let content = match read_document(t) {
             Ok(Some(bytes)) => convert::convert(&bytes, &t.abs_path).map(Content::Pages),
             Ok(None) => Ok(Content::FileChanged),
             Err(e) => Err(e),
         };
         let changed = matches!(content, Ok(Content::FileChanged));
-        match content.and_then(|c| render_one(t, c, &md_path, source_id, &doc_uuid)) {
+        match content.map(|c| render_one(t, c, source_id, &doc_uuid)) {
             Ok(rendered) => {
                 if changed {
                     summary.changed += 1;
@@ -194,7 +191,6 @@ pub fn render_targets(
 /// caller that does not need the two phases apart.
 pub async fn render(
     raw_dir: &Path,
-    data_root: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -202,7 +198,7 @@ pub async fn render(
     // An unreadable store renders nothing. This wrapper does no deleting,
     // so unlike the processor's path it can treat the two alike.
     let targets = load_targets(raw_dir).await?.unwrap_or_default();
-    render_targets(&targets, data_root, source_id, progress, on_doc_complete)
+    render_targets(&targets, source_id, progress, on_doc_complete)
 }
 
 /// The document's bytes, or `None` when its file no longer holds them. The
@@ -246,10 +242,9 @@ fn front(t: &RenderTarget, title: &str) -> Front {
 fn render_one(
     t: &RenderTarget,
     content: Content,
-    md_path: &Path,
     source_id: &str,
     doc_uuid: &str,
-) -> Result<RenderedMarkdown> {
+) -> RenderedMarkdown {
     let title = grid_rows::display_title(t.title.as_deref(), &t.rel_path);
 
     let front = front(t, &title);
@@ -263,7 +258,6 @@ fn render_one(
             let (pages, page_rows) = pages_markdown(&title, &converted.pages, page_uuid);
             sections.push(Section::unkeyed(std::mem::take(&mut body)));
             sections.extend(pages);
-            body = join(&sections);
             // A warning: the document is here, and short of what the file holds.
             let problems = converted.absent.map(|said| {
                 ProblemRow::new(
@@ -290,7 +284,7 @@ fn render_one(
 ",
                 escape_name_inline(&title)
             ));
-            sections.push(Section::unkeyed(body.clone()));
+            sections.push(Section::unkeyed(std::mem::take(&mut body)));
             let problem = ProblemRow::new(
                 source_id,
                 Stage::Render,
@@ -307,11 +301,6 @@ fn render_one(
         }
     };
 
-    if let Some(parent) = md_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(md_path, &body).with_context(|| format!("write {}", md_path.display()))?;
-
     let meta = grid_rows::DocumentMeta {
         blake3: &t.blake3,
         abs_path: &t.abs_path,
@@ -325,8 +314,8 @@ fn render_one(
     let rows = grid_rows::rows_for_document(source_id, &meta, &page_rows);
     let node = grid_rows::document_node(source_id, &meta);
 
-    Ok(RenderedMarkdown {
-        section_layout: None,
+    RenderedMarkdown {
+        searchable: true,
         content_hash: None,
         markdown_uuid: doc_uuid.to_string(),
         source_id: source_id.to_string(),
@@ -334,7 +323,6 @@ fn render_one(
         // The bucket is the raw row, not the document: the id carries a
         // stamp the diff cannot see.
         bucket_key: Some(t.blake3.clone()),
-        md_path: md_path.to_path_buf(),
         render_version: RENDER_VERSION,
         rows,
         sections,
@@ -345,7 +333,7 @@ fn render_one(
         photos: Vec::new(),
         problems,
         front,
-    })
+    }
 }
 
 /// The document under its title: one section per readable page, and the
@@ -380,15 +368,14 @@ fn pages_markdown(
             sections.push(Section::unkeyed(std::mem::take(&mut body)));
         }
         let uuid = page_uuid(p.number);
-        let mut page = msg_div_open(&uuid, grid_rows::PROVIDER);
-        page.push_str("\n\n");
         // pdf-inspector writes the page as markdown, the words in it as
         // the PDF had them.
-        page.push_str(&close_open_blocks(&p.text));
-        page.push('\n');
-        page.push_str(MSG_DIV_CLOSE);
-        page.push_str("\n\n");
-        sections.push(Section::keyed(&uuid, page));
+        let page = format!("{}\n", close_open_blocks(&p.text));
+        sections.push(Section::boxed(
+            &uuid,
+            msg_class(grid_rows::PROVIDER, &[]),
+            &page,
+        ));
         page_rows.push((p.number, p.text.clone()));
     }
     if !body.is_empty() {
@@ -400,6 +387,7 @@ fn pages_markdown(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datalib_etl_render::section::join;
 
     /// A PDF's title is text; each page is markdown pdf-inspector wrote,
     /// in a wrapper and a section of its own, so the page renders each
@@ -448,9 +436,6 @@ mod tests {
     /// render's, so search still found the old pages' words.
     #[test]
     fn a_changed_file_is_kept_as_the_note_it_is_drawn_as() {
-        let td = tempfile::tempdir().unwrap();
-        let dir = td.path();
-        let md_path = dir.join("doc.md");
         let t = RenderTarget {
             blake3: "b3".into(),
             title: Some("Warp core".into()),
@@ -459,19 +444,18 @@ mod tests {
             pdf_type: "text".into(),
             doc_created_at: None,
             doc_modified_at: None,
-            abs_path: dir.join("warp.pdf"),
+            abs_path: "/corpus/warp.pdf".into(),
             rel_path: "warp.pdf".into(),
             copy_count: 1,
             path_ids: vec!["p1".into()],
         };
-        let md = render_one(&t, Content::FileChanged, &md_path, "pdfs", "doc").unwrap();
-        let written = std::fs::read_to_string(&md_path).unwrap();
+        let md = render_one(&t, Content::FileChanged, "pdfs", "doc");
         assert!(
             !md.sections.is_empty(),
             "the note is a piece the store keeps"
         );
-        assert_eq!(join(&md.sections), written);
-        assert!(written.contains(FILE_CHANGED), "{written}");
+        let kept = join(&md.sections);
+        assert!(kept.contains(FILE_CHANGED), "{kept}");
     }
 }
 

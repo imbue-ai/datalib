@@ -131,7 +131,7 @@ impl VerifiedModels for ModelGate {
             State::Idle => "there is no search index to embed for yet".to_string(),
             State::Provisioning => "the search model is still being fetched and verified (about \
                  300 MB the first time); searching by meaning starts once it is in place, and \
-                 the Words and Fields tabs work now"
+                 searching by words works now"
                 .to_string(),
             State::Failed(e) => failed_because(e),
         };

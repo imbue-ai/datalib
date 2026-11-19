@@ -1,9 +1,9 @@
 //! Golden test for `slack::render` against the TNG fixture.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::PathBuf;
 
+use datalib_etl_render::section::join;
 use datalib_etl_slack_render::render::{ids, parse_raw_json_dir, render::render_all};
 use insta::{assert_json_snapshot, assert_snapshot};
 
@@ -14,27 +14,9 @@ fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/slack_api")
 }
 
-fn collect_md(root: &std::path::Path) -> BTreeMap<String, String> {
-    let mut out = BTreeMap::new();
-    fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut BTreeMap<String, String>) {
-        for e in fs::read_dir(dir).unwrap().flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                walk(&p, root, out);
-            } else if p.extension().and_then(|s| s.to_str()) == Some("md") {
-                let rel = p.strip_prefix(root).unwrap().to_string_lossy().to_string();
-                out.insert(rel, fs::read_to_string(&p).unwrap());
-            }
-        }
-    }
-    walk(root, root, &mut out);
-    out
-}
-
 #[test]
 fn renders_tng_fixture() {
     let parsed = parse_raw_json_dir(&fixture_root()).expect("parse");
-    let tmp = tempfile::tempdir().expect("tmp");
     let mut docs: Vec<datalib_etl_render::grid_index::RenderedMarkdown> = Vec::new();
     let mut on_done =
         |doc: datalib_etl_render::grid_index::RenderedMarkdown| -> anyhow::Result<()> {
@@ -43,7 +25,6 @@ fn renders_tng_fixture() {
         };
     let summary = render_all(
         &parsed,
-        tmp.path(),
         "slack_api",
         &datalib_etl::progress::Progress::noop(),
         &mut on_done,
@@ -55,16 +36,47 @@ fn renders_tng_fixture() {
     assert_eq!(summary.threads_rendered, 11);
     assert_eq!(docs.len(), 11);
 
-    let md_tree = collect_md(tmp.path());
+    let md_tree: BTreeMap<&str, String> = docs
+        .iter()
+        .map(|d| (d.markdown_uuid.as_str(), join(&d.sections)))
+        .collect();
     let mut bundle = String::new();
-    for (path, body) in &md_tree {
+    for (uuid, body) in &md_tree {
         bundle.push_str("=== ");
-        bundle.push_str(path);
+        bundle.push_str(uuid);
         bundle.push_str(" ===\n");
         bundle.push_str(body);
         bundle.push('\n');
     }
     assert_snapshot!("tng_md_tree", bundle);
+
+    // The fixture's forward, link preview, card and bot blocks are drawn
+    // (in the snapshot above); the away team's call is the one part left
+    // that nothing draws, and its document alone says so.
+    let not_shown: Vec<(&str, &str)> = docs
+        .iter()
+        .flat_map(|d| {
+            d.problems
+                .iter()
+                .map(move |p| (d.markdown_uuid.as_str(), p))
+        })
+        .filter(|(_, p)| matches!(p.field.as_deref(), Some("blocks" | "attachments")))
+        .map(|(doc, p)| (doc, p.sample.as_str()))
+        .collect();
+    let away_team = ids::thread(
+        "slack_api",
+        "T_NCC1701D",
+        "G_AWAYTEAM",
+        "12604000904.000904",
+    )
+    .uuid;
+    assert_eq!(
+        not_shown,
+        [(
+            away_team.as_str(),
+            "1 message here holds what is not shown: call block"
+        )]
+    );
 
     // Emitted-document spot-check. This used to walk the tree counting
     // `*.grid_rows.json` files; the renderer no longer writes those, so
@@ -77,7 +89,6 @@ fn renders_tng_fixture() {
 #[test]
 fn renders_tng_fixture_grid_rows() {
     let parsed = parse_raw_json_dir(&fixture_root()).expect("parse");
-    let tmp = tempfile::tempdir().expect("tmp");
 
     // Capture every grid row the chat-common renderer emits.
     let mut rows: Vec<serde_json::Value> = Vec::new();
@@ -91,7 +102,6 @@ fn renders_tng_fixture_grid_rows() {
             };
         render_all(
             &parsed,
-            tmp.path(),
             "slack_api",
             &datalib_etl::progress::Progress::noop(),
             &mut on_done,

@@ -75,7 +75,6 @@ const PROJECT_KIND: &str = "Claude Code Project";
 #[allow(clippy::too_many_arguments)]
 pub fn render(
     raw_dir: &Path,
-    out_root: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -93,7 +92,6 @@ pub fn render(
         range,
         size,
         RenderTarget {
-            out_root,
             source_id,
             progress,
             on_doc_complete,
@@ -955,12 +953,10 @@ mod tree_tests {
 
     /// What chat-common makes of `chats`: each document's data_nodes and rows.
     fn rendered(chats: &[NormalizedChat]) -> Vec<RenderedMarkdown> {
-        let out = tempfile::tempdir().unwrap();
         let mut docs = Vec::new();
         datalib_etl_chat_common::render::render_all(
             &profile(),
             chats,
-            out.path(),
             SRC,
             &HashMap::new(),
             &Progress::noop(),

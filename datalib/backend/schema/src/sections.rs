@@ -1,7 +1,7 @@
 // What each piece of a rendered document says, in order, kept apart from
 // how it is drawn, so the viewer, an export and the search index can each
 // draw it their own way (docs/dev/plans/documents_to_blocks.md
-// §"Store the body, format on read"); `drawn_pieces` keeps how the
+// §"Store the body, format on read"); `drawings` keeps how the
 // document drew it. Held by the render store alone; the grid index never
 // copies it.
 
@@ -37,6 +37,11 @@ pub struct SectionRow {
     /// labels and mailboxes. A JSON list of strings; null for none.
     #[col(sql = "TEXT")]
     pub labels: Option<String>,
+    /// The class of the box the piece is drawn in, where it is in one:
+    /// a `<div>` naming the item, around what the piece says
+    /// (`Section::boxed`). Null for a piece in no box.
+    #[col(sql = "TEXT")]
+    pub class: Option<String>,
 }
 
 /// One person an item was addressed to, as the item names them.

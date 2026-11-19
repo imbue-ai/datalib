@@ -4,13 +4,15 @@
 // server which of its remote references may load before the first
 // paint — and the chat body renders it the same way.
 //
-// A body that comes with its sections is rendered one message at a
-// time, so that markup one message leaves open cannot reach the next:
+// A body comes as the renderer's pieces and every piece is rendered alone,
+// so that markup one leaves open cannot reach the next:
 // docs/dev/data_architecture_parse_and_render.md §"One section cannot
-// reach the next".
+// reach the next". A message in a box comes as the box's class and what
+// is inside it, and a fold as a node around its pieces; both are drawn
+// here.
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
-import type { BodySection } from "@/api";
+import type { BodyFold, BodyNode, BodyPiece } from "@/api";
 import { chipLinks } from "./chipLinks";
 import { sanitizeRenderedHtml, type Sanitized, type SanitizeOptions } from "./sanitize";
 
@@ -33,24 +35,53 @@ const md = new MarkdownIt({
 });
 md.use(chipLinks);
 
-export type RenderOptions = Pick<SanitizeOptions, "accept" | "context"> & {
-  /** Where each section of the body lies, as the document route sends
-   *  it. Absent: the body is rendered whole. */
-  sections?: readonly BodySection[] | null;
-};
+export type RenderOptions = Pick<SanitizeOptions, "accept" | "context">;
 
-type Piece = { uuid: string | null; md: string };
 type Signed = SanitizeOptions & { chipMark: string };
+
+/// A document's markdown whole: its pieces joined, each box and fold drawn
+/// as render draws it (`section::Node::draw`).
+export function bodyOf(doc: { pieces: readonly BodyNode[] }): string {
+  return doc.pieces.map(drawn).join("");
+}
+
+function drawn(node: BodyNode): string {
+  if (isFold(node)) {
+    return `${foldOpen(node)}\n<summary>${node.summary}</summary>\n\n${node.pieces.map(drawn).join("")}</details>\n\n`;
+  }
+  return node.uuid !== null && node.class
+    ? `${boxOpen(node.uuid, node.class)}\n\n${node.md}</div>\n\n`
+    : node.md;
+}
+
+export function isFold(node: BodyNode): node is BodyFold {
+  return "fold" in node;
+}
+
+const attr = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/// The opening tag of a message's box (`section::box_open`).
+function boxOpen(uuid: string, cls: string): string {
+  return `<div id="m-${attr(uuid)}" data-section-uuid="${attr(uuid)}" class="${attr(cls)}">`;
+}
+
+/// The opening tag of a fold (`section::draw_fold_open`).
+function foldOpen(fold: BodyFold): string {
+  return `<details class="${attr(fold.fold)}">`;
+}
 
 /// The body as HTML for the page: rendered, then sanitized, because the
 /// body is whatever the source sent and `html: true` lets it through as
-/// HTML.
-export function renderDocument(body: string, options: RenderOptions = {}): Sanitized {
-  const { sections, ...rest } = options;
+/// HTML. A string is markdown with no messages marked in it, rendered
+/// whole.
+export function renderDocument(
+  body: readonly BodyNode[] | string,
+  options: RenderOptions = {},
+): Sanitized {
   // Fresh each render, so a body cannot carry one forward.
-  const signed = { ...rest, chipMark: crypto.randomUUID() };
-  const pieces = sections ? cut(body, sections) : null;
-  return pieces ? renderPieces(pieces, signed) : renderWhole(body, signed);
+  const signed = { ...options, chipMark: crypto.randomUUID() };
+  return typeof body === "string" ? renderWhole(body, signed) : renderNodes(body, signed);
 }
 
 function renderWhole(body: string, options: Signed, messageHeader = false): Sanitized {
@@ -60,79 +91,32 @@ function renderWhole(body: string, options: Signed, messageHeader = false): Sani
   );
 }
 
-function cut(body: string, sections: readonly BodySection[]): Piece[] | null {
-  const total = sections.reduce((n, s) => n + s.len, 0);
-  if (total !== body.length) {
-    // The server checked the layout against the file; this is a bug.
-    console.error(`sections cover ${total} of the body's ${body.length} characters`);
-    return null;
-  }
-  let at = 0;
-  return sections.map((s) => ({ uuid: s.uuid, md: body.slice(at, (at += s.len)) }));
+function renderNodes(nodes: readonly BodyNode[], options: Signed): Sanitized {
+  const drawn = nodes.map((n) => (isFold(n) ? renderFold(n, options) : renderPiece(n, options)));
+  return { html: drawn.map((d) => d.html).join(""), remote: drawn.flatMap((d) => d.remote) };
 }
 
-/// The pieces of the page's frame — title, `<details>` openers and
-/// closers — are rendered together, so a `<details>` opened in one closes
-/// in a later one, with a placeholder for each message; each message is
-/// rendered alone and put in its place.
-function renderPieces(pieces: Piece[], options: Signed): Sanitized {
-  const messages = new Set(pieces.flatMap((p) => (p.uuid === null ? [] : [p.uuid])));
-  const slot = crypto.randomUUID();
-  const frameMd = pieces
-    .map((p, i) => (p.uuid === null ? p.md : `\n<div data-slot="${slot}-${i}"></div>\n\n`))
-    .join("");
-  const frame = renderWhole(frameMd, options);
-  const drawn = new Map<number, Sanitized>();
-  pieces.forEach((p, i) => {
-    if (p.uuid !== null) drawn.set(i, renderMessage(p.md, p.uuid, messages, options));
-  });
-  let placed = 0;
-  const html = frame.html.replace(
-    new RegExp(`<div data-slot="${slot}-(\\d+)"></div>`, "g"),
-    (_, i: string) => {
-      placed += 1;
-      return drawn.get(Number(i))?.html ?? "";
-    },
-  );
-  if (placed !== drawn.size) {
-    // A frame piece swallowed a placeholder (an unclosed comment, say):
-    // every piece alone keeps every message, without the folds.
-    console.error(`placed ${placed} of ${drawn.size} messages; drawing each piece alone`);
-    const alone = pieces.map(
-      (p, i) => drawn.get(i) ?? renderWhole(p.md, { ...options, reservedSections: messages }),
-    );
-    return { html: alone.map((a) => a.html).join(""), remote: alone.flatMap((a) => a.remote) };
-  }
-  const remote = [...frame.remote, ...[...drawn.values()].flatMap((d) => d.remote)];
-  return { html, remote };
+/// A fold, drawn here around its pieces, so no piece opens or closes it;
+/// its summary is the HTML the renderer escaped, sanitized like any other.
+function renderFold(fold: BodyFold, options: Signed): Sanitized {
+  const summary = sanitizeRenderedHtml(fold.summary, options);
+  const inside = renderNodes(fold.pieces, options);
+  return {
+    html: `${foldOpen(fold)}<summary>${summary.html}</summary>${inside.html}</details>`,
+    remote: [...summary.remote, ...inside.remote],
+  };
 }
 
-/// The renderer's wrapper: its own line opening the piece, its `</div>`
-/// closing it.
-const WRAPPER = /^(<div\b[^>\n]*>)\n([\s\S]*)\n<\/div>\s*$/;
-const DRAWN_WRAPPER = /^<div\b[^>]*\sdata-section-uuid="([^"]*)"[^>]*><\/div>$/;
-
-/// One message, as a fragment of its own. A piece in the wrapper's shape
-/// has its inside rendered as a further fragment, so a `</div>` in the
-/// message cannot close the wrapper early; only the wrapper answers to
-/// the message's id.
-function renderMessage(
-  text: string,
-  uuid: string,
-  messages: ReadonlySet<string>,
-  options: Signed,
-): Sanitized {
-  const parts = WRAPPER.exec(text);
-  if (parts) {
-    const shell = sanitizeRenderedHtml(`${parts[1]}</div>`, options).html;
-    if (DRAWN_WRAPPER.exec(shell)?.[1] === uuid) {
-      const inside = renderWhole(parts[2], { ...options, reservedSections: messages }, true);
-      return {
-        html: shell.slice(0, -"</div>".length) + inside.html + "</div>",
-        remote: inside.remote,
-      };
-    }
-  }
-  const others = new Set([...messages].filter((m) => m !== uuid));
-  return renderWhole(text, { ...options, reservedSections: others });
+/// One piece, as a fragment of its own. A message in a box has the box
+/// drawn around it here, so nothing inside can close the box early; the
+/// box is then the outermost element naming the message, which is what
+/// answers to its id (`sectionEl` in `chatSections.js`), whatever the
+/// message holds.
+function renderPiece(piece: BodyPiece, options: Signed): Sanitized {
+  if (piece.uuid === null || !piece.class) return renderWhole(piece.md, options);
+  const inside = renderWhole(piece.md, options, true);
+  return {
+    html: `${boxOpen(piece.uuid, piece.class)}${inside.html}</div>`,
+    remote: inside.remote,
+  };
 }

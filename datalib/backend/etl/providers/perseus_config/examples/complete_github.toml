@@ -41,8 +41,8 @@ alignment_pairs = [["perseus-grc2", "perseus-eng4"]]
 # [steps.params.common]
 # input_path = "~/Downloads/perseus-tei"
 
-# Search by meaning: the embeddings of what the grid index's keyword
-# pass cut of this source. Leave it out and keyword search still finds it.
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
 [[steps]]
 group = "perseus"
 function = "embed"

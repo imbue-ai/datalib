@@ -27,6 +27,7 @@ mod methods;
 mod migrate;
 mod modal;
 mod occurrences;
+mod old_markdown;
 mod probe;
 mod published;
 mod render;
@@ -81,7 +82,7 @@ sync, and keep a config in the order data flows.";
 
 const EXAMPLES: &[Example] = &[
     Example {
-        what: "how to set datalib up from a shell, step by step",
+        what: "how to set Datalib up from a shell, step by step",
         command: "datalib-step help",
     },
     Example {
@@ -213,7 +214,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// How to set datalib up from a shell: the steps, the source types,
+    /// How to set Datalib up from a shell: the steps, the source types,
     /// the step functions, and the docs whole (`help agent`, and `help
     /// docs` for the rest).
     Help {

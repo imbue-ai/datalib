@@ -15,6 +15,7 @@ use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
 use datalib_etl_render::pages::PageSize;
+use datalib_etl_render::section::join;
 
 const STANZA: &str = "codex";
 const THREAD_1: &str = "41b8781c-6a77-7fbf-9c78-8125d1a37f24";
@@ -178,11 +179,9 @@ async fn the_tng_fixture_ingests_and_renders() {
         .unwrap();
     db.close().await;
 
-    let out_root = root.join("render");
     let mut docs: Vec<RenderedMarkdown> = Vec::new();
     let outcome = render(
         &raw_path,
-        &out_root,
         STANZA,
         &Progress::default(),
         &mut |md| {
@@ -210,7 +209,7 @@ async fn the_tng_fixture_ingests_and_renders() {
             .unwrap_or_else(|| panic!("no document titled like {needle:?}"))
     };
     let t1 = by_title("The deflector dish drifts");
-    let md = std::fs::read_to_string(&t1.md_path).unwrap();
+    let md = join(&t1.sections);
     assert!(md.contains("Tool call: shell"), "{md}");
     assert!(md.contains("Tool call: apply_patch"), "{md}");
     assert!(
@@ -254,7 +253,7 @@ async fn the_tng_fixture_ingests_and_renders() {
         .all(|r| r.project.as_deref() == Some("enterprise")));
 
     let agent = by_title("Data — sub-agent of The deflector dish");
-    let md = std::fs::read_to_string(&agent.md_path).unwrap();
+    let md = join(&agent.sections);
     assert!(md.contains("Tool call: shell"));
     assert!(md.contains("aft-sensors.log"));
 
@@ -262,7 +261,7 @@ async fn the_tng_fixture_ingests_and_renders() {
     // `exec` tool's JavaScript is the call, and a list of content items
     // is its output.
     let t3 = by_title("Audit the warp core containment logs");
-    let md = std::fs::read_to_string(&t3.md_path).unwrap();
+    let md = join(&t3.sections);
     assert!(md.contains("Tool call: exec"), "{md}");
     assert!(md.contains("tools.exec_command"));
     assert!(md.contains("Tool result: exec"));
@@ -297,7 +296,7 @@ async fn the_tng_fixture_ingests_and_renders() {
         .any(|r| r.author.as_deref() == Some("gpt-5.6-terra")));
 
     let t2 = by_title("Why does the replicator return cold Earl Grey");
-    let md = std::fs::read_to_string(&t2.md_path).unwrap();
+    let md = join(&t2.sections);
     assert!(md.contains("Tool result: shell (error)"));
     assert!(md.contains("1 image(s) not shown"));
     assert!(md.contains("gpt-5.2-codex"));

@@ -31,8 +31,12 @@ pub mod sections {
     include!("sections.rs");
 }
 
-pub mod drawn_pieces {
-    include!("drawn_pieces.rs");
+pub mod drawings {
+    include!("drawings.rs");
+}
+
+pub mod folds {
+    include!("folds.rs");
 }
 
 pub mod search_terms {
@@ -146,11 +150,9 @@ mod tests {
     created_at VARCHAR(40),
     modified_at VARCHAR(40),
     item_count BIGINT,
-    md_path VARCHAR(1024),
     upstream_cursor VARCHAR(64),
     renderer_version VARCHAR(32),
     bucket_key VARCHAR(256),
-    section_layout TEXT,
     content_hash VARCHAR(64),
     front TEXT,
     searchable INTEGER NOT NULL,

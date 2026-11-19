@@ -485,7 +485,7 @@ mod builder_tests {
     /// filed it; a path filed any other way names no document.
     #[test]
     fn a_document_is_filed_by_its_id_and_read_back_from_its_path() {
-        let id = "00000000-0000-8005-8b12-1a825fd6bafa";
+        let id = "00000000-0000-8017-80ad-0000bead00fa";
         assert_eq!(doc_file_rel(id), format!("fa/{id}.md"));
         let path = format!("slack/render_markdown/fa/{id}.md");
         assert_eq!(markdown_uuid_of_path(&path), Some(id));

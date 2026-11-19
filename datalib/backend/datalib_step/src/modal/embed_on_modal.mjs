@@ -34,9 +34,19 @@ function say(line) {
   process.stderr.write(`[modal] ${line}\n`);
 }
 
+// Every slice writing while stdout is full waits on this one drain, not
+// on a listener of its own: past ten, Node warns on every write.
+let draining = null;
 async function emit(obj) {
+  while (draining) await draining;
   if (!process.stdout.write(JSON.stringify(obj) + "\n")) {
-    await new Promise((resolve) => process.stdout.once("drain", resolve));
+    draining = new Promise((resolve) =>
+      process.stdout.once("drain", () => {
+        draining = null;
+        resolve();
+      }),
+    );
+    await draining;
   }
 }
 

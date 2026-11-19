@@ -41,7 +41,6 @@ impl SourceRender for AppleMessagesRender {
         let mut on_doc = |md| ctx.emit_doc(md);
         let crate::render::Rendered { outcome, dropped } = crate::render::render(
             raw_path,
-            ctx.root,
             ctx.name,
             ctx.progress,
             ctx.raw_range(),

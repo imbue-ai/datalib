@@ -156,23 +156,6 @@ impl PageBody {
     }
 }
 
-/// Dash-format a bare 32-hex Notion id. Returns the input unchanged if
-/// it isn't 32 hex characters.
-pub fn dash_uuid(s: &str) -> String {
-    let raw: String = s.chars().filter(|c| *c != '-').collect();
-    if raw.len() != 32 || !raw.chars().all(|c| c.is_ascii_hexdigit()) {
-        return s.to_string();
-    }
-    format!(
-        "{}-{}-{}-{}-{}",
-        &raw[0..8],
-        &raw[8..12],
-        &raw[12..16],
-        &raw[16..20],
-        &raw[20..32]
-    )
-}
-
 /// The last 32-hex run in a Notion URL, dashed. Notion page links carry
 /// the id in the final path segment (`…/Title-<hex32>`), and an
 /// `<unknown>` marker carries it in the fragment.
@@ -193,7 +176,7 @@ fn id_in_url(url: &str) -> Option<String> {
             _ => {}
         }
     }
-    best.map(dash_uuid)
+    best.and_then(datalib_uuid_text::canonical)
 }
 
 fn attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
@@ -275,7 +258,7 @@ pub fn parse(resp: &serde_json::Value) -> PageBody {
     // missing content, so they must not be inferred away from the body.
     if let Some(arr) = resp.get("unresolved_block_ids").and_then(|v| v.as_array()) {
         for v in arr.iter().filter_map(|v| v.as_str()) {
-            let id = dash_uuid(v);
+            let id = datalib_uuid_text::canonical(v).unwrap_or_else(|| v.to_string());
             if !unresolved.iter().any(|u| u.block_id == id) {
                 unresolved.push(Unresolved {
                     block_id: id,
@@ -315,17 +298,6 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    #[test]
-    fn dashes_a_bare_hex_id() {
-        assert_eq!(
-            dash_uuid("348a550faf9580a08973e679d9e1c6c9"),
-            "348a550f-af95-80a0-8973-e679d9e1c6c9"
-        );
-        let already = "348a550f-af95-80a0-8973-e679d9e1c6c9";
-        assert_eq!(dash_uuid(already), already);
-        assert_eq!(dash_uuid("not-an-id"), "not-an-id");
-    }
-
     /// Real shapes: `<page url="https://app.notion.com/p/Title-<hex32>">`
     /// and `<mention-page url="https://app.notion.com/p/<hex32>"/>`, read
     /// in the order they appear. A `<database>` link is not a page.
@@ -333,14 +305,14 @@ mod tests {
     fn linked_pages_are_read_from_child_and_mention_tags() {
         let body = parse(&json!({"markdown":
             "Ask <mention-page url=\"https://app.notion.com/p/1701d000000040008000000000000e01\"/> first.\n\
-             <page url=\"https://app.notion.com/p/Standup-Notes-37ba550faf9580e7a583fc322a3ed287\">Standup Notes</page>\n\
-             <database url=\"https://app.notion.com/p/Tasks-2e2a550faf9580498b0ecee9468fa146\">Tasks</database>\n\
+             <page url=\"https://app.notion.com/p/Away-Team-Briefing-1701d000a0004000800000000000d006\">Away Team Briefing</page>\n\
+             <database url=\"https://app.notion.com/p/Crew-Manifest-1701d000a0004000800000000000d003\">Crew Manifest</database>\n\
              Again: <mention-page url=\"https://app.notion.com/p/1701d000000040008000000000000e01\"/>\n"}));
         assert_eq!(
             body.linked_pages,
             vec![
                 "1701d000-0000-4000-8000-000000000e01",
-                "37ba550f-af95-80e7-a583-fc322a3ed287"
+                "1701d000-a000-4000-8000-00000000d006"
             ]
         );
     }
@@ -351,15 +323,15 @@ mod tests {
     #[test]
     fn alt_separates_permanent_holes_from_fetchable_ones() {
         let body = parse(&json!({"truncated": true, "markdown":
-            "<unknown url=\"https://app.notion.com/p/x#253a550faf95817babfeee3c8c58dec5\"/>\n\
-             <unknown url=\"https://app.notion.com/p/x#348a550faf95803780d8c19ae5c2c9cd\" alt=\"button\"/>\n"}));
+            "<unknown url=\"https://app.notion.com/p/x#1701d000a0004000800000000000d001\"/>\n\
+             <unknown url=\"https://app.notion.com/p/x#1701d000a0004000800000000000d004\" alt=\"button\"/>\n"}));
         assert!(body.truncated);
         let fetchable: Vec<_> = body.fetchable_holes().map(|u| &u.block_id).collect();
-        assert_eq!(fetchable, vec!["253a550f-af95-817b-abfe-ee3c8c58dec5"]);
+        assert_eq!(fetchable, vec!["1701d000-a000-4000-8000-00000000d001"]);
         assert_eq!(
             body.permanent_holes(),
             vec![(
-                "348a550f-af95-8037-80d8-c19ae5c2c9cd".to_string(),
+                "1701d000-a000-4000-8000-00000000d004".to_string(),
                 "button".to_string()
             )]
         );
@@ -371,16 +343,16 @@ mod tests {
     #[test]
     fn a_database_hole_becomes_a_database_link() {
         let mut body = parse(&json!({"truncated": true, "markdown":
-            "Duty roster: <unknown url=\"https://app.notion.com/p/x#253a550faf95817babfeee3c8c58dec5\"/>\n\
-             <unknown url=\"https://app.notion.com/p/x#348a550faf95803780d8c19ae5c2c9cd\"/>\n"}));
-        body.link_database("253a550f-af95-817b-abfe-ee3c8c58dec5", "Crew");
+            "Duty roster: <unknown url=\"https://app.notion.com/p/x#1701d000a0004000800000000000d001\"/>\n\
+             <unknown url=\"https://app.notion.com/p/x#1701d000a0004000800000000000d004\"/>\n"}));
+        body.link_database("1701d000-a000-4000-8000-00000000d001", "Crew");
         assert_eq!(
             body.markdown,
-            "Duty roster: <database url=\"https://app.notion.com/p/253a550faf95817babfeee3c8c58dec5\">Crew</database>\n\
-             <unknown url=\"https://app.notion.com/p/x#348a550faf95803780d8c19ae5c2c9cd\"/>\n"
+            "Duty roster: <database url=\"https://app.notion.com/p/1701d000a0004000800000000000d001\">Crew</database>\n\
+             <unknown url=\"https://app.notion.com/p/x#1701d000a0004000800000000000d004\"/>\n"
         );
         let holes: Vec<_> = body.fetchable_holes().map(|u| &u.block_id).collect();
-        assert_eq!(holes, vec!["348a550f-af95-8037-80d8-c19ae5c2c9cd"]);
+        assert_eq!(holes, vec!["1701d000-a000-4000-8000-00000000d004"]);
     }
 
     /// An id listed in `unresolved_block_ids` with no marker in the text
@@ -391,7 +363,7 @@ mod tests {
         let body = parse(&json!({
             "truncated": true,
             "markdown": "just text, no markers\n",
-            "unresolved_block_ids": ["253a550faf9581a4b80cfea90ee3c960"],
+            "unresolved_block_ids": ["1701d000a0004000800000000000d002"],
         }));
         assert_eq!(body.unresolved.len(), 1);
         assert!(body.unresolved[0].is_fetchable());

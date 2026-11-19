@@ -1,16 +1,16 @@
-# Building an app on datalib
+# Building an app on Datalib
 
 This guide is for an app that reads a person's mail, chat or calendar
-through datalib instead of calling Gmail, Slack or Google Calendar
-itself. datalib keeps a local mirror of each source, and your app reads
+through Datalib instead of calling Gmail, Slack or Google Calendar
+itself. Datalib keeps a local mirror of each source, and your app reads
 the mirror. The app's job shrinks to three things: ask for a sync when
 it wants fresher data, read what is there, and, if it derives data of
-its own, do that as a step in datalib's pipeline so it runs whenever
+its own, do that as a step in Datalib's pipeline so it runs whenever
 the mirror moves.
 
 The payoff is real. The Today app (a list of what you owe people,
 built from Gmail, Slack and Google Calendar) moved its data gathering
-onto datalib. On the same 11 work items it went from 46 live API calls
+onto Datalib. On the same 11 work items it went from 46 live API calls
 in 17.1 s to 1 call in 1.7 s, and the records it saved were
 byte-identical to the ones the API path produced.
 
@@ -21,7 +21,7 @@ meets after that.
 
 ## Nothing syncs on its own: your app asks
 
-datalib has no schedule. Nothing in the config, the command line or
+Datalib has no schedule. Nothing in the config, the command line or
 the app (`datalib-http`) syncs on a timer; a sync happens when someone
 asks for one. So an app that wants fresh data asks, from cron, from
 launchd, or from its own loop:
@@ -414,49 +414,52 @@ A few things to keep in mind:
 
 ## Reading from your program
 
-Stock SQLite cannot open a raw store, so your program needs one of
-three things, in this order:
+Stock SQLite cannot open a raw store. Your program reads one in one of
+three ways:
 
-1. **A connection in your own process.** A query on an open connection
-   takes about 0.01 ms. From Python, under any interpreter, uv's included,
+1. **SQL over HTTP.** With the app up, `POST
+   /applet/unified_grid_and_search_index/sql` runs one `SELECT` you write
+   against any store under the data root (a raw store, a render store,
+   the grid index, the log) and answers a page of rows as JSON:
+
+   ```sh
+   curl -s -H "Authorization: Bearer $(cat <data_root>/system/api-token)" \
+     -H "Content-Type: application/json" \
+     -d '{"store": "gmail/ingest/entities.doltlite_db",
+          "sql": "SELECT id, subject FROM emails WHERE datetime(received_at) > :after ORDER BY datetime(received_at)",
+          "params": {"after": "2026-11-01"}, "limit": 100}' \
+     <origin>/applet/unified_grid_and_search_index/sql
+   ```
+
+   It needs nothing installed, so it suits an agent or app that can make
+   HTTP requests and run nothing else, in a container or on another
+   machine. It reads and nothing else, and stops a query after 20
+   seconds. It costs a store open per page and works only while the app
+   runs, so [a step of your own in the
+   pipeline](#your-apps-derived-data-as-a-step), which may run with no app
+   up, reads the store itself.
+   Listing the stores, parameters, paging across commits and errors:
+   [the applets](applets.md#reading-any-store-with-sql).
+2. **A connection in your own process**, the fastest: a query on an open
+   connection takes about 0.01 ms. From Python, under any interpreter,
    `uv add imbue-datalib-reader==<version>`, the version `datalib-dag --version`
    prints ([Reading a store from Python](../dev/doltlite.md#reading-a-store-from-python)).
-   It calls `libdoltlite`, which a release also installs beside
-   `datalib-doltlite` under `lib/`. The library has SQLite's C API, so any
-   language that can call C can do the same. It is built from the same
-   source as the binaries, so it matches your stores.
-2. **The shell, as a subprocess.** `datalib-doltlite -readonly -json`
+   It calls `libdoltlite`, which a release installs under `lib/`, built
+   from the same source as the binaries. The library has SQLite's C API,
+   so any language that can call C can do the same.
+3. **The shell, as a subprocess.** `datalib-doltlite -readonly -json`
    costs a process start and a store open per query, about 15 ms. Use it
-   where there is no library: outside Python on a musl tarball, or on an Intel
-   Mac.
-3. **The app, over HTTP.** With the app up, `POST
-   /applet/unified_grid_and_search_index/sql` runs one `SELECT` against any store,
-   its parameters bound by name (`:source`) or position, and answers a
-   page of rows as JSON, behind the API token
-   ([applets.md](applets.md#reading-any-store-with-sql)). It needs
-   nothing installed and no shell, so it suits an agent that can make
-   HTTP requests and run nothing else, or one in a container. It costs a
-   store open per page and works only while the app runs, so a step,
-   which may run with no app up, reads the store itself. It reads and
-   nothing else, and stops a query after 20 seconds.
+   where there is no library and no app: outside Python on a musl
+   tarball, or on an Intel Mac.
 
 ## Showing a rendered document
 
-The rendered documents (an email thread, a Slack thread) are
-markdown, served by `GET /applet/unified_grid_and_search_index/chat/{markdown_uuid}`.
-Two shapes in them are a contract your app can build on:
-
-- **A person** is a link whose href is their handle as a URI:
-  `[Will Riker](mailto:riker@enterprise.org "Will Riker <riker@enterprise.org>")`.
-  Identify them by the href, never the text, and ask
-  `POST /applet/unified_grid_and_search_index/people` who each handle is.
-- **A time** is `<time datetime="2026-01-05T09:00:00+01:00" …>…</time>`,
-  on the sender's clock where the source knows it, and in `Z` where it
-  does not. Format the `datetime` yourself, in your reader's zone.
-
-Attachments are linked at `/data/…` on the same server, behind the same
-token. [Showing a rendered document in your app](rendered_documents.md)
-has every shape, and what a viewer must sanitize.
+`GET /applet/unified_grid_and_search_index/chat/{markdown_uuid}` serves
+a document (an email thread, a Slack thread) as markdown. A person in it
+is a link whose href is their handle, a time is a `<time datetime=…>`,
+and an attachment is a `/data/…` link behind the same token. [Showing a
+rendered document in your app](rendered_documents.md) has each shape,
+how to treat it, and what a viewer must sanitize.
 
 ## Your app's derived data as a step
 
@@ -641,7 +644,7 @@ ask. The full column list is in [raw_stores.md](raw_stores.md)
 ## Shared rate limits
 
 The mirror and your app spend the same allowance when they use the
-same account, and datalib does nothing to share it out. During a
+same account, and Datalib does nothing to share it out. During a
 first sync a download makes calls as fast as the service lets it, so
 your app's own calls can be refused.
 
@@ -669,9 +672,8 @@ what the stopped run sealed is kept.
 **With no app up**, the loop is a `datalib-dag`, and it reads the
 config only when it goes from idle to busy. A `datalib-dag --sync`
 started after your edit hands its request to that loop, which runs it
-with the **old** params and does not say so
-([#1363](https://github.com/imbue-ai/datalib/issues/1363), open). Until
-that is fixed, after editing, let the open requests finish (or stop
+with the **old** params and does not say so (a known bug, Datalib issue
+1363). Until that is fixed, after editing, let the open requests finish (or stop
 them) before syncing again. A `datalib-dag --sync` waits for its own
 request and exits when it closes (0 done, 2 failed, 130 stopped), so
 wait for the one you started to exit: run it in the foreground, or
@@ -697,7 +699,7 @@ downloads everything again.
 
 ## Your app's own writes
 
-datalib only reads. It never sends a message, files a label or makes
+Datalib only reads. It never sends a message, files a label or makes
 an event, so what your app does to a service reaches the mirror only
 through the next sync of that source. If your app needs to read its own
 write back from the mirror, ask for a sync of the source after the

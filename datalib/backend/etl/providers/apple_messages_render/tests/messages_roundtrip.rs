@@ -17,6 +17,7 @@ use datalib_etl_apple_messages_config::AppleMessagesConfig;
 use datalib_etl_apple_messages_render::render::{chat_uuid, render, Dropped, Rendered};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
+use datalib_etl_render::section::join;
 use datalib_etl_sqlite_mirror::mirror;
 use datalib_schema::edges::EdgeKind;
 use datalib_source_common::LocalPath;
@@ -29,7 +30,6 @@ struct Fixture {
     messages: PathBuf,
     db: PathBuf,
     raw: PathBuf,
-    out: PathBuf,
 }
 
 impl Fixture {
@@ -45,7 +45,6 @@ impl Fixture {
         let raw = dir.path().join("ingest");
         std::fs::create_dir_all(&raw).expect("mkdir ingest");
         Self {
-            out: dir.path().join("render_markdown"),
             _dir: dir,
             messages,
             db,
@@ -80,11 +79,7 @@ impl Fixture {
     /// One render pass: the documents it emitted, the chats it named
     /// with nothing (gone), and what it consumed and dropped.
     async fn render(&self, cursor: Option<&str>) -> (Vec<RenderedMarkdown>, Vec<String>, Rendered) {
-        let (raw, out, cursor) = (
-            self.raw.clone(),
-            self.out.clone(),
-            cursor.map(str::to_string),
-        );
+        let (raw, cursor) = (self.raw.clone(), cursor.map(str::to_string));
         tokio::task::spawn_blocking(move || {
             let stale = HashSet::new();
             let range = RawRange {
@@ -97,15 +92,8 @@ impl Fixture {
                 docs.push(md);
                 Ok(())
             };
-            let rendered = render(
-                &raw,
-                &out,
-                "messages",
-                &Progress::noop(),
-                range,
-                &mut on_doc,
-            )
-            .expect("render");
+            let rendered =
+                render(&raw, "messages", &Progress::noop(), range, &mut on_doc).expect("render");
             let written: HashSet<&str> = rendered
                 .outcome
                 .buckets
@@ -159,7 +147,7 @@ fn pages(docs: &[RenderedMarkdown], chat_guid: &str) -> String {
         .iter()
         .filter(|d| d.bucket_key.as_deref() == Some(&uuid))
     {
-        out.push_str(&std::fs::read_to_string(&doc.md_path).expect("read rendered page"));
+        out.push_str(&join(&doc.sections));
     }
     assert!(!out.is_empty(), "no document for {chat_guid}");
     out
@@ -183,7 +171,7 @@ async fn bodies_tapbacks_and_attachments_render() -> Result<()> {
         docs.len(),
         2,
         "{:?}",
-        docs.iter().map(|d| &d.md_path).collect::<Vec<_>>()
+        docs.iter().map(|d| &d.markdown_uuid).collect::<Vec<_>>()
     );
 
     let riker = pages(&docs, RIKER);
@@ -350,7 +338,7 @@ async fn a_second_run_renders_only_what_moved() -> Result<()> {
         docs.len(),
         1,
         "{:?}",
-        docs.iter().map(|d| &d.md_path).collect::<Vec<_>>()
+        docs.iter().map(|d| &d.markdown_uuid).collect::<Vec<_>>()
     );
     assert_eq!(
         docs[0].bucket_key.as_deref(),
@@ -467,7 +455,7 @@ async fn a_chat_spanning_two_months_is_one_document() -> Result<()> {
         .collect();
     assert_eq!(riker_docs.len(), 1);
     assert_eq!(riker_docs[0].markdown_uuid, riker);
-    let page = std::fs::read_to_string(&riker_docs[0].md_path)?;
+    let page = join(&riker_docs[0].sections);
     assert!(page.contains("Make it so."), "April's message: {page}");
     assert!(
         page.contains("Captain's log, supplemental."),

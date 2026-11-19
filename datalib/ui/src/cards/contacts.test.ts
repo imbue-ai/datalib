@@ -33,6 +33,7 @@ import {
   chipCell,
 } from "./contacts";
 import { chipMenuOf, chipName, chipOf } from "./chipActions";
+import type { BodyPiece } from "@/api";
 import { renderDocument } from "./renderDocument";
 
 function dom(html: string): HTMLElement {
@@ -570,16 +571,16 @@ describe("a name that is someone else's handle", () => {
 describe("a message's own header", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  /** A message, as chat-common writes it: the wrapper, then the header
-   *  line `MessageHeader::render` writes, then the body. */
-  function message(uuid: string, author: string, handle: string, body: string): string {
+  /** A message, as the document route sends one of chat-common's: in
+   *  its box, the header line `MessageHeader::render` writes, then the
+   *  body. */
+  function message(uuid: string, author: string, handle: string, body: string): BodyPiece {
     const addr = handle.slice("email:".length);
-    return (
-      `<div id="m-${uuid}" data-section-uuid="${uuid}" class="msg msg--email">\n\n` +
+    const md =
       `## [${author}](mailto:${addr} "${author} <${addr}>") ` +
       `<time class="msg-ts" datetime="2369-04-15T10:05:00+02:00">Tue Apr 15th, 2369 at 10:05</time>\n\n` +
-      `${body}\n\n</div>\n\n`
-    );
+      `${body}\n\n`;
+    return { uuid, class: "msg msg--email", md };
   }
 
   /** One forged message showed its name on every message from the same
@@ -602,9 +603,7 @@ describe("a message's own header", () => {
         `Ask [Number One](mailto:riker@enterprise.test).\n\n## [The Captain](mailto:riker@enterprise.test) says pay`,
       ),
     ];
-    const { html } = renderDocument(pieces.join(""), {
-      sections: pieces.map((md, i) => ({ uuid: `u${i + 1}`, len: md.length })),
-    });
+    const { html } = renderDocument(pieces);
     const root = document.body.appendChild(dom(html));
     await decorateHandles(root);
     root.remove();
@@ -617,13 +616,13 @@ describe("a message's own header", () => {
 
   /** A body cannot claim to be a header by writing the attribute. */
   it("is not a body's link that names itself one", () => {
-    const md = message(
+    const piece = message(
       "u3",
       "Q",
       "email:q@continuum.test",
       `<a class="chip" data-chip-header data-handle="email:q@continuum.test" href="mailto:q@continuum.test">Picard</a>`,
     );
-    const { html } = renderDocument(md, { sections: [{ uuid: "u3", len: md.length }] });
+    const { html } = renderDocument([piece]);
     const marked = [...dom(html).querySelectorAll<HTMLElement>("[data-chip-header]")];
     expect(marked.map((a) => a.textContent)).toEqual(["Q"]);
   });
@@ -650,10 +649,9 @@ describe("your contact's name", () => {
     });
     const forged = "PAY INVOICE NOW - Riker";
     const md =
-      `<div id="m-y1" data-section-uuid="y1" class="msg msg--email">\n\n` +
       `## [${forged}](mailto:riker@enterprise.example "${forged} <riker@enterprise.example>") ` +
-      `<time class="msg-ts" datetime="2369-04-15T10:05:00+02:00">x</time>\n\nPay.\n\n</div>\n\n`;
-    const { html } = renderDocument(md, { sections: [{ uuid: "y1", len: md.length }] });
+      `<time class="msg-ts" datetime="2369-04-15T10:05:00+02:00">x</time>\n\nPay.\n\n`;
+    const { html } = renderDocument([{ uuid: "y1", class: "msg msg--email", md }]);
     const root = document.body.appendChild(dom(html));
     await decorateHandles(root);
     root.remove();

@@ -1,6 +1,6 @@
-# Running datalib in Docker
+# Running Datalib in Docker
 
-The container is the cautious way to try datalib. It sees only the
+The container is the cautious way to try Datalib. It sees only the
 folders you mount into it, so the binaries never touch your host, and
 neither do the credentials you give them. The image is
 `ghcr.io/imbue-ai/datalib`, built for Linux on x86_64 and arm64, and it
@@ -47,11 +47,9 @@ Four details are worth carrying into anything you write yourself:
   at something else. This page moves to the new digest after each release.
 
 Everything below is that same command unpacked, plus how to point
-datalib at data of your own. Every shell block in sections 1 and 2 is
-run against every published release image by
-`datalib/docker/doc_test.sh`, so those are known to work as written;
-the one above is not, because its `open` is macOS-only, and neither is
-section 3.
+Datalib at data of your own. Every shell block in sections 1 and 2 is
+run against each release image as written; the one above (its `open`
+is macOS-only) and section 3 are not.
 
 Set a few variables once, in the shell you'll use for the rest of this
 page:
@@ -274,12 +272,11 @@ pbpaste | docker run --rm -i -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" \
 
 The browser login flows (`latchkey auth browser slack`, `google-gmail`,
 `github`, `fastmail`, `chatgpt`) cannot run inside the container, which has no
-browser. Run them on your host as usual (with the `latchkey` the
-datalib installer put on your `PATH`, or `npx -y latchkey@<version>` if
-you have only the image, with the version `LATCHKEY_VERSION` pins in
-[`node_runtime.rs`](../../datalib/backend/runtime/src/node_runtime.rs)), then re-encrypt the result into the container's store. The
-first container run against the folder creates its key; the re-encrypt
-reads that key from standard input:
+browser. Run them on your host with the `latchkey` a Datalib install
+puts on your `PATH` ([the first-time guide](first_time_user.md#1-install-the-tools-and-make-a-data-root-here-its-datalib)),
+then re-encrypt the result into the container's store. The first
+container run against the folder creates its key; the re-encrypt reads
+that key from standard input:
 
 ```sh
 docker run --rm -v "$LATCHKEY_DIR:/root/.latchkey" "$IMG" latchkey auth list
@@ -311,7 +308,7 @@ works too.
 Search by meaning embeds every chunk of your data once, which takes
 hours on a CPU. On a Linux machine with an NVIDIA GPU, run the `-cuda`
 variant of the image instead: the same image plus NVIDIA's cuBLAS and
-datalib's CUDA module, x86_64 only. It needs NVIDIA's driver and the
+Datalib's CUDA module, x86_64 only. It needs NVIDIA's driver and the
 NVIDIA Container Toolkit on the host, and `--gpus all` on every `docker
 run`. Each release publishes its digest beside the plain image's:
 
@@ -329,14 +326,14 @@ No release machine has a GPU, so unlike sections 1 and 2 this is not
 run against each release. Releases after v0.54.1 publish the variant.
 
 The CUDA pieces are NVIDIA's, and their use is governed by NVIDIA's CUDA
-Toolkit license rather than datalib's MIT license; the image carries the
+Toolkit license rather than Datalib's MIT license; the image carries the
 notice beside them (`/opt/datalib/licenses/CUDA-NOTICE.md`), with
 NVIDIA's own license text for each.
 
 ## Checking who built the image
 
 The digest says which image you run, and this page names the one the
-release made. To see for yourself that an image was built by datalib's
+release made. To see for yourself that an image was built by Datalib's
 release workflow from a release's own commit, ask for its *build
 provenance attestation*, a statement that workflow signed when it
 pushed the image. You need GitHub's CLI, `gh`, signed in to any
@@ -368,7 +365,6 @@ Nothing else. In particular, don't mount your home directory, and don't
 run the container with `--privileged`; the point of the container is
 that the blast radius of a bad day is the folders in this table.
 
-The image bundles the search model, so search by meaning never
-downloads anything; the image fetches nothing at run time at all.
-Building the image yourself, and what is in it, is in
-[`docs/dev/docker.md`](../dev/docker.md).
+The image bundles the search model and the Node runtime latchkey runs
+on, so it fetches nothing at run time. Building the image yourself is
+covered in `docs/dev/docker.md` in the repo.

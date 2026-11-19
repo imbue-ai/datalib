@@ -347,7 +347,7 @@ async fn install_plugin_for(service: &str) -> Result<(), String> {
         .map_err(|e| format!("could not install latchkey's {service} plugin: {e}"))?;
     match found {
         plugins::Found::Theirs => {
-            tracing::info!(service, dir = %dir.display(), "left a latchkey plugin datalib did not install")
+            tracing::info!(service, dir = %dir.display(), "left a latchkey plugin Datalib did not install")
         }
         plugins::Found::Ours(v) if v == plugin.version => {}
         _ => tracing::info!(service, dir = %dir.display(), "installed a latchkey plugin"),

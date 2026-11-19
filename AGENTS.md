@@ -1,9 +1,9 @@
-# datalib — agent runbook
+# Datalib — agent runbook
 
-Quick references for AI/human contributors working **on the datalib
+Quick references for AI/human contributors working **on the Datalib
 codebase**: where the docs are, how the repo is laid out, and the
 conventions that aren't obvious from the code. If you are an agent
-*using* datalib (running syncs, querying a user's mirror, writing a
+*using* Datalib (running syncs, querying a user's mirror, writing a
 custom step), start with [`agent_user.md`](docs/agent_user.md) instead.
 
 ## Doc map
@@ -90,7 +90,7 @@ merge conflict waiting to happen.
 ## Keep a forward path for existing data
 
 **A data root that works today should still work after an upgrade.**
-datalib is alpha and we don't promise stable bytes at rest yet, but we
+Datalib is alpha and we don't promise stable bytes at rest yet, but we
 are aiming to, so treat every existing store and config as something
 the next build has to carry forward. A raw store may hold what upstream
 has since deleted; re-downloading is not a free undo.
@@ -162,7 +162,7 @@ already shares your context. Plainspoken means *clear*, not *long*.
 ## Explain a change by what it does, before and after
 
 **A PR description, a review, or any explanation of a change says what
-was true before, what is true now, and what a person using datalib
+was true before, what is true now, and what a person using Datalib
 will notice.** Write it for a reader who knows the product but has not
 read the code:
 
@@ -301,7 +301,10 @@ datalib/
                    over quick-xml's HTML5 table; the one decoder.
     handle/        `Handle`: one identifier for a person (`email:`, `tel:`,
                    `slack:`), normalized; what renders write as
-                   `data-handle`. No first-party deps.
+                   `data-handle`. Its one first-party dep is uuid_text.
+    uuid_text/     a uuid read however it is written (dashed or not,
+                   either case, at the end of a slug or a link) and
+                   written lowercase with dashes; the one reader. No deps.
     contact_schema/ `NormalizedContact`: a person as one source describes
                    them. Only the shape; contact-common renders it.
     photo_schema/  `NormalizedPhoto`: a photo or video as one source
@@ -443,11 +446,12 @@ from every source's render store and the `unified_grid_and_search_index` applet 
 with one SELECT — no per-provider branches in the query path.
 `docs/dev/grid_rows.md` has the checklist for adding a column.
 
-## Rendered markdown is write-only
+## Rendered markdown is never parsed back
 
-The render step emits markdown; the backend serves it **verbatim**, as
-the render store spells it (the viewer and search quotes read the store,
-not the `.md` files), and never parses it back. Structured fields come from
+The render step hands each document over as markdown, section by
+section, and its render store keeps it; there are no `.md` files. The
+backend serves a document **verbatim**, as the store spells it, and
+never parses it back. Structured fields come from
 `grid_rows`. Per-section anchors come from the
 `<div id="m-{uuid}" data-section-uuid="{uuid}" class="msg …">` wrappers
 the renderer emits — those two attributes are load-bearing
@@ -705,6 +709,13 @@ bazelisk build //datalib/backend:bin                  # stage every shipped bina
 bazel-bin/datalib/backend/bin/datalib-dag <data_root>/config.toml
 ```
 
+## "Datalib" in prose, `datalib` in code
+
+**The product is Datalib, capitalized, wherever a doc's prose names
+it**, headings included. Lowercase `datalib` is an
+identifier — a crate, a binary (`datalib-step`), a path, the repo, the
+`datalib:` link scheme — and goes in backticks when prose mentions it.
+
 ## "Claude", not "Anthropic"
 
 **Every source type is named for the product a person recognizes, never
@@ -809,7 +820,7 @@ upstream (block types, MIME types), free-form display text
 | what a term is to its grid row | `SearchTermKind` | `schema/src/search_terms.rs` (`datalib_schema`) |
 | a config's source type | `SourceType` | `datalib_step/src/source_type.rs` |
 | whether an ingest method reaches a service or reads files | `Reach` | `source_common/src/lib.rs` |
-| which of datalib's stores a file is, in its `_datalib_meta` | `StoreKind` | `store_meta/src/lib.rs` (`datalib_store_meta`) |
+| which of Datalib's stores a file is, in its `_datalib_meta` | `StoreKind` | `store_meta/src/lib.rs` (`datalib_store_meta`) |
 | what namespace a handle is in | `HandleKind` | `handle/src/lib.rs` (`datalib_handle`) |
 | what a time-series point's `t` counts | `TimeKind` | `time_series_schema/src/lib.rs` (`datalib_time_series_schema`) |
 | what every value of a time series is | `ValueType` | `time_series_schema/src/lib.rs` (`datalib_time_series_schema`) |

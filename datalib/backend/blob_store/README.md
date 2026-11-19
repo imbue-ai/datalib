@@ -36,7 +36,7 @@ that shape is written down. The download side writes through it
 
 A step written by anyone, in any language, that keeps a file of this
 shape in its tree has its attachments served with no change to
-datalib.
+Datalib.
 
 ## What the server does with an address
 

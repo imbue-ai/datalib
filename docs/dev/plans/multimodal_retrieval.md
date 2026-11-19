@@ -1,4 +1,4 @@
-# Design: multimodal retrieval layer for datalib
+# Design: multimodal retrieval layer for Datalib
 
 **Status:** Draft / proposal. Nothing here is built.
 **Scope:** Replace the `qmd_index` step for high-volume sources with a
@@ -16,7 +16,7 @@ X" as verified and a marked one as not.
 
 ## 1. Problem
 
-datalib exposes three read surfaces over mirrored data:
+Datalib exposes three read surfaces over mirrored data:
 
 - **SQL** — the `grid_rows` union table (one row per message/document,
   with `provider`, `kind`, `created_at`, `author`, `channel`,
@@ -62,12 +62,12 @@ Every friction point traces back to its origin as a personal-notes tool:
 | One global `vectors_vec` table keyed `hash_seq` | Cannot hold two vector spaces |
 | `vec0` is brute-force with no ANN index | Every query scans the full float32 corpus |
 | Stores the document body twice internally (§4.2) | 2.2× the source text before a single posting is written |
-| TypeScript + node-llama-cpp, invoked via `npx` | Foreign to datalib's Bazel/Rust stack; inherits bun-vs-node ABI and launcher issues |
+| TypeScript + node-llama-cpp, invoked via `npx` | Foreign to Datalib's Bazel/Rust stack; inherits bun-vs-node ABI and launcher issues |
 
-Forking was rejected: datalib consumes QMD as a pinned npm package
+Forking was rejected: Datalib consumes QMD as a pinned npm package
 (`DEFAULT_QMD_VERSION` in
 [`runtime/src/qmd.rs`](../../../datalib/backend/runtime/src/qmd.rs)),
-so a fork forces datalib onto that fork, and the files needing permanent
+so a fork forces Datalib onto that fork, and the files needing permanent
 ownership (`store.ts` search SQL, the indexing path) are exactly the ones
 churning upstream.
 
@@ -521,7 +521,7 @@ Either way, fix #172 first. Both branches depend on it.
 ### 5.1 Threads, not messages
 
 Index one document per thread, using `conversation_uuid` from
-`grid_rows`. datalib already renders one markdown document per
+`grid_rows`. Datalib already renders one markdown document per
 conversation for chat sources; mail is the same shape.
 
 - **Volume.** 250k messages → an estimated 25–40k threads.
@@ -564,7 +564,7 @@ new copy either.
 
 ---
 
-## 6. Integration with datalib
+## 6. Integration with Datalib
 
 ### 6.1 A custom step, writing a sidecar DB
 
@@ -586,7 +586,7 @@ derived, so history has no value and would cost real bytes.
 
 ### 6.2 Language boundary
 
-datalib is Bazel, Python, and Rust. Leaving QMD is the opportunity to
+Datalib is Bazel, Python, and Rust. Leaving QMD is the opportunity to
 **drop the Node dependency entirely**.
 
 The previous draft proposed Python via `llama-cpp-python`. Worth

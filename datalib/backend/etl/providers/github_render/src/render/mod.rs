@@ -5,8 +5,6 @@
 pub mod ids;
 pub mod parse;
 
-use std::path::Path;
-
 use anyhow::Result;
 use datalib_etl::progress::Progress;
 use datalib_etl_forge_render_common::{render_all, ForgeProfile};
@@ -48,10 +46,9 @@ pub const PROFILE: ForgeProfile = ForgeProfile {
 
 pub fn render_github(
     parsed: &Parsed,
-    root: &Path,
     stanza: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
-    render_all(&PROFILE, parsed, root, stanza, progress, on_doc_complete)
+    render_all(&PROFILE, parsed, stanza, progress, on_doc_complete)
 }

@@ -32,8 +32,11 @@ was added to do them: no cache, no timer, no flag.
 |---|---|---|
 | 1 | a refresh after an index commit blurred the grid and dropped clicks | a refresh leaves the rows usable; only a search a person asked for shows the spinner |
 | 8, rate-limited retry | the runner re-ran a rate-limited step in full 1 s, then 2 s, after its own retries ran out | it fails at once, like `incomplete`, and the next run resumes (`step_protocol.md` §"Failure classification") |
-| 9, filtered search | the ranking was cut to 1,000 before the filters ran | it is cut once, after them, so `from:ann meeting` keeps Ann's matches wherever they ranked |
 | not listed above | the search grid's first search waited for `/api/accounts`, which reads `accounts.json`, a file nothing writes | the route, the map and its formatters are gone |
+
+Finding 9's filtered search was fixed on `main` instead, by #1892: the
+names-and-ids ranking that filtered after its cut is gone, and every part
+of a search applies the filters before it ranks (#1887 has the detail).
 
 ## What is already sound
 
@@ -272,14 +275,19 @@ and returns nothing until all three are done.
 
 ### 9. Two things that are wrong results, not slowness
 
-- **A filtered search can drop name and id matches** (verified).
-  - *Cause:* when other terms narrow the search, the name/id ranking is
-    fetched unbounded (`mod.rs:1160-1185`), cut to its best 1,000
-    (`:1232`), and only then filtered (`entries_kept`, `:1086`).
-  - *What a person notices:* `from:ann meeting` keeps whichever of the
-    library-wide best 1,000 "meeting" name matches are Ann's, which may
-    be none.
-  - *Fix:* filter inside the query, or cut after filtering.
+- **A filtered search can drop matches found only by a name or id**
+  (verified). Fixed on `main` by #1892; see #1887.
+  - *Cause:* free text is matched three ways: by the words, by meaning,
+    and by names and ids (titles, people, handles, ids in the `terms`
+    table). The first two apply the filters before they rank. The names
+    and ids lookup took no filter: when other terms narrow the search it
+    fetched every match (`mod.rs:1160-1185`), but the rankings were then
+    cut to their best 1,000 (`:1232`, `:1298`) before `entries_kept`
+    filtered them (`:1086`). A positive `source:` counted as a scope, so
+    that lookup stopped at 1,000 across the whole library.
+  - *What a person notices:* `picard kind:Email` or `picard
+    source:tng_email` can miss emails whose only match is the author's
+    name, once that name matches more than 1,000 newer rows elsewhere.
 - **The index step's queue reads 0** (item 7) is a wrong number, not
   only a stale one.
 

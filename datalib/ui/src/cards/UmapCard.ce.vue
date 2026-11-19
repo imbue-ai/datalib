@@ -11,6 +11,7 @@ import { subscribeLive, changed } from "@/live";
 import { confirmAction } from "@/desktop";
 import { formatStamp } from "@/config/timeFormat";
 import { useApi } from "./cardApi";
+import { bodyOf } from "./renderDocument";
 import { isBrowserClick } from "./chatLink";
 import {
   COLOR_BY,
@@ -455,7 +456,7 @@ function loadPreview(uuid: string) {
   previewTimer = setTimeout(async () => {
     try {
       const chat = await api.fetchChat(uuid);
-      previews.set(uuid, previewText(chat.body));
+      previews.set(uuid, previewText(bodyOf(chat)));
     } catch {
       previews.set(uuid, "");
     }

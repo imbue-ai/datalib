@@ -1,10 +1,10 @@
 # Packages
 
-A **package** is a set of programs from outside datalib that a library
-runs as steps and applets: a source type datalib doesn't ship, with the
+A **package** is a set of programs from outside Datalib that a library
+runs as steps and applets: a source type Datalib doesn't ship, with the
 cards that show it. A package is published as one manifest file at a URL, usually an
 asset of a GitHub release. There is no server of ours in between: anyone
-who knows the link can add the package, and the gallery of packages datalib
+who knows the link can add the package, and the gallery of packages Datalib
 suggests is one more file listing links (§"The gallery").
 
 Which packages a library uses is part of the library, not of the app. The
@@ -48,13 +48,13 @@ id = "chart"
 command = "bin/weather-chart"
 ```
 
-- **`artifacts`**: a key is a target triple datalib is released for, or
+- **`artifacts`**: a key is a target triple Datalib is released for, or
   `any` for a build that runs everywhere (a script). A URL is relative to
   the manifest's own and stays in its directory once parsed (no `..`,
   spelled or percent-encoded), or is an absolute `https` link. A
   `file://` build is taken only from a `file://` manifest, so a
   published manifest cannot name a file on the machine that fetches it.
-  The platform datalib runs on takes its own build first, then `any`.
+  The platform Datalib runs on takes its own build first, then `any`.
 - **`sources`**: `commands` maps a function to the command its step
   runs. `ingest` is required. `render_markdown` and `render_time_series`
   are optional; each is a step that reads the ingest's tree and writes
@@ -79,7 +79,7 @@ command = "bin/weather-chart"
   contract; the command's first word is a path inside the package, as
   for a step.
 
-The platforms datalib is released for (`.github/workflows/release.yml`),
+The platforms Datalib is released for (`.github/workflows/release.yml`),
 and so the keys `artifacts` may use:
 
 | key | platform |
@@ -154,15 +154,15 @@ command = "system/packages/3f9a1c2e3f9a1c2e/bin/fetch-weather"
 ## Rendering
 
 A package source's `render_markdown` and `render_time_series` programs
-write what datalib's own render steps write, in the same place:
+write what Datalib's own render steps write, in the same place:
 
-- **`<group>/render_markdown/indexed_markdown.doltlite_db`** and the
-  `.md` files beside it. `unified_grid_and_search_index` reads the store into the grid,
+- **`<group>/render_markdown/indexed_markdown.doltlite_db`**, which
+  keeps every document. `unified_grid_and_search_index` reads the store into the grid,
   and its keyword pass and the source's `embed` draw what search sees
   from its `sections` table alone: a document whose pieces it does not
-  keep there is found by its title and nothing else. The viewer and a
-  search's quotes read each document as the store spells it
-  (`sections` and `drawn_pieces`), not the files. The step reports the
+  keep there is found by its title and nothing else. The viewer reads
+  each document as the store spells it (`sections` and `drawings`); a
+  search's quote reads the one item a hit landed on. The step reports the
   store's tree hash as its version.
 - **`<group>/render_time_series/time_series.doltlite_db`**, which
   `time_series_index` lists and the Time series card charts. The step
@@ -174,7 +174,7 @@ built-in source's; where a config names its inputs one by one, the
 wizard adds them (`setTimeSeriesStep` in `config/sourceSteps.ts`). Nothing in
 the indexes asks a store which type or provider wrote it.
 
-These stores are datalib's own formats, not a published interface. A
+These stores are Datalib's own formats, not a published interface. A
 writer has to match them exactly:
 
 1. **The tables, byte for byte.** `unified_grid_and_search_index` reads a render store only
@@ -186,10 +186,10 @@ writer has to match them exactly:
 2. **The doltlite writer rules.** Write on the `datalib_writer` branch
    and move `main` to it when a run ends; readers only look at `main`
    (`datalib/backend/etl/src/doltlite_raw.rs`, `commit_run`).
-3. **`_datalib_meta.datalib_version`.** A store naming a newer datalib
+3. **`_datalib_meta.datalib_version`.** A store naming a newer Datalib
    than the one running makes the app refuse the whole data root
    (`datalib/backend/store_meta/src/guard.rs`). A package should write a value that is
-   not a datalib version.
+   not a Datalib version.
 4. **The time-series chunk encoding** (`time_series.md` §"The chunk
    encoding"). A time-series store the index cannot read fails
    `time_series_index` for every source, not only that one.
@@ -261,7 +261,7 @@ until they review and accept an update.
 
 ## The gallery
 
-The gallery is the list of packages datalib suggests:
+The gallery is the list of packages Datalib suggests:
 `datalib/ui/src/config/packageGallery.ts`, one entry per package with its
 `source`, a name and a one-line description. It ships in the app, so a
 change to it reaches people with the next release. Both places that add

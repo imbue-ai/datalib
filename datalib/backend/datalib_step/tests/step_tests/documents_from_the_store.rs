@@ -1,60 +1,41 @@
-//! Every document of the fixture, spelled back from what its render store
-//! keeps (`IndexedMarkdownStore::document`), is the `.md` file its render
-//! wrote, byte for byte. What lets the files stop being written: whatever
-//! reads a document can read the store instead and get the same text.
+//! Every document of the fixture spells back from what its render store
+//! keeps (`IndexedMarkdownStore::document_text`): with no `.md` files, the
+//! store is the only place a document's markdown lives.
 
 use std::collections::BTreeMap;
 
 use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
 
 #[test]
-fn the_store_spells_every_document_as_its_file() {
+fn the_store_spells_every_document() {
     let td = tempfile::tempdir().unwrap();
     let tarball = std::env::var_os("INGESTED_RENDERED_TAR").expect("INGESTED_RENDERED_TAR");
     tar::Archive::new(std::fs::File::open(tarball).unwrap())
         .unpack(td.path())
         .unwrap();
     let root = td.path().join("root");
-    let mut checked: BTreeMap<String, usize> = BTreeMap::new();
-    let mut without_a_file: BTreeMap<String, usize> = BTreeMap::new();
-    for entry in std::fs::read_dir(&root).unwrap() {
-        let source = entry.unwrap().file_name().to_string_lossy().to_string();
+    let mut spelled: BTreeMap<String, usize> = BTreeMap::new();
+    let mut unspelled: BTreeMap<String, usize> = BTreeMap::new();
+    for source in datalib_etl_render::grid_index::discover_sources(&root) {
         let rendered = root.join(&source).join("render_markdown");
-        let Some(store) = IndexedMarkdownStore::open_for_reading(&rendered, None).unwrap() else {
-            continue;
-        };
+        let store = IndexedMarkdownStore::open_for_reading(&rendered, None)
+            .unwrap()
+            .unwrap();
         for row in store.markdown_rows().unwrap() {
-            let Some(md_path) = row.md_path.as_deref() else {
-                continue;
-            };
-            let file = root.join(md_path);
-            if !file.exists() {
-                *without_a_file.entry(row.provider.clone()).or_default() += 1;
-                continue;
+            match store.document_text(&row.markdown_uuid).unwrap() {
+                Some(text) if !text.is_empty() => *spelled.entry(source.clone()).or_default() += 1,
+                _ => *unspelled.entry(row.provider.clone()).or_default() += 1,
             }
-            let written = std::fs::read_to_string(&file).unwrap();
-            let pieces = store
-                .document(&row.markdown_uuid)
-                .unwrap()
-                .unwrap_or_else(|| panic!("{source}: the store cannot spell {md_path}"));
-            let spelled: String = pieces.iter().map(|p| p.md.as_str()).collect();
-            assert!(
-                spelled == written,
-                "{source}: {md_path} spelled from the store differs from its file\n\
-                 --- file\n{written}\n--- store\n{spelled}"
-            );
-            *checked.entry(source.clone()).or_default() += 1;
         }
         store.close();
     }
     assert!(
-        checked.len() >= 20,
-        "the fixture's rendering sources: {checked:?}"
+        spelled.len() >= 20,
+        "the fixture's rendering sources: {spelled:?}"
     );
-    // A photo's document is its row alone: Lightroom names a file it never
-    // writes, and the viewer draws the picture instead.
+    // A photo's document is its row alone: the viewer draws the picture.
     assert!(
-        without_a_file.keys().all(|p| p == "lightroom"),
-        "documents with no file: {without_a_file:?}"
+        unspelled.keys().all(|p| p == "lightroom"),
+        "documents the store cannot spell: {unspelled:?}"
     );
 }

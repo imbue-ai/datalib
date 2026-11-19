@@ -34,8 +34,9 @@ test("an index commit clears a problem the open document no longer has", async (
 
   const commit = await stubStream(page);
   let stale = true;
+  const chat = `/applet/unified_grid_and_search_index/chat/${pick!.markdown_uuid}`;
   await page.route(
-    `**/applet/unified_grid_and_search_index/chat/${pick!.markdown_uuid}`,
+    (url) => url.pathname === chat,
     async (route) => {
       const response = await route.fetch();
       const body = (await response.json()) as { problems?: unknown[] };

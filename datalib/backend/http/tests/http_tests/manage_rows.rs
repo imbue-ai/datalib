@@ -172,6 +172,7 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
             "actions",
             "status",
             "timeseries",
+            "timeseries",
             "timestamp",
             "timestamp",
             "timeseries"
@@ -1148,6 +1149,91 @@ async fn item_counts_and_their_history_reach_the_rows_from_the_run_store() {
             rows[key]["items"]["value"],
             serde_json::Value::Null,
             "{key}: never counted is blank, not zero"
+        );
+    }
+}
+
+/// The Modal spend cell sums what each run's `embed` came to, with the
+/// total climbing run by run behind it: the step's row and its group's
+/// show it, and a step that never used Modal stays blank.
+#[tokio::test]
+async fn modal_spend_adds_up_over_runs_and_reaches_the_rows() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = format!(
+        "{CONFIG}\n[[steps]]\ngroup = \"slack\"\nfunction = \"embed\"\n\
+         inputs = [\"unified_grid_and_search_index/unified_grid_and_search_index\"]\n"
+    );
+    write_root(tmp.path(), &config, None).await;
+    let ago = |hours: i64| {
+        datalib_time::IsoOffsetTimestamp::now_local()
+            .bump_micros(-hours * 3_600_000_000)
+            .to_utc_and_offset()
+            .0
+    };
+    for (run, stamp, micro_usd, sandboxes) in
+        [("r1", ago(30), 30_000, 2), ("r2", ago(2), 8_250_000, 121)]
+    {
+        let w = datalib_runs::RunWriter::start(
+            tmp.path(),
+            run,
+            run,
+            None,
+            datalib_runs::Retention::default(),
+        )
+        .unwrap();
+        let metric = |name: &str, value: i64| datalib_runs::MetricRow {
+            run_id: run.into(),
+            step: "slack/embed".into(),
+            name: name.into(),
+            labels: "gpu=T4".into(),
+            value,
+            updated_at_utc: stamp.clone(),
+            tz_offset: None,
+        };
+        w.metric(metric(datalib_metrics::MODAL_COST, micro_usd));
+        w.metric(metric(datalib_metrics::MODAL_SANDBOXES, sandboxes));
+        w.metric(metric(datalib_metrics::MODAL_SANDBOX_SECONDS, 38_000));
+        w.flush().await;
+    }
+
+    let got = get_rows(tmp.path()).await;
+    let column = got["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["field"] == "spend")
+        .cloned()
+        .unwrap();
+    assert_eq!(column["hide_when_uniform"], true, "{column}");
+    let rows = by_key(&got);
+    let embed = &rows["slack/embed"]["spend"];
+    assert_eq!(embed["value"], 8_280_000, "{embed}");
+    assert_eq!(embed["unit"], "micro_usd");
+    let totals: Vec<i64> = embed["samples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["value"].as_i64().unwrap())
+        .collect();
+    assert_eq!(totals, [30_000, 8_280_000]);
+    let detail = embed["detail"].as_str().unwrap();
+    assert!(
+        detail.starts_with("about $8.28 at Modal's list price over the 2 runs"),
+        "{detail}"
+    );
+    assert!(
+        detail.contains("The latest: $8.25, 121 T4 Sandboxes"),
+        "{detail}"
+    );
+    assert_eq!(
+        rows["group:slack"]["spend"], *embed,
+        "the group shows its embed's"
+    );
+    for key in ["slack/render_markdown", "slack/ingest", "system"] {
+        assert_eq!(
+            rows[key]["spend"]["value"],
+            serde_json::Value::Null,
+            "{key}"
         );
     }
 }

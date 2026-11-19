@@ -238,7 +238,13 @@ pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
         row.notion_page_uuid.as_deref(),
     ];
     let names = [row.channel.as_deref(), row.account.as_deref()];
-    let upstream_id = row.upstream_id.as_deref().filter(|id| is_dashed_uuid(id));
+    // Only an upstream id shaped like a uuid is a term: a pasted id is read
+    // as a uuid or a handle (`query::identifier`), and `id:` reads the
+    // column.
+    let upstream_id = row
+        .upstream_id
+        .as_deref()
+        .filter(|id| datalib_uuid_text::is_dashed(id));
     let candidates = std::iter::once((SearchTermKind::Id, Some(row.uuid.as_str())))
         .chain(std::iter::once((SearchTermKind::UpstreamId, upstream_id)))
         .chain(
@@ -273,17 +279,6 @@ pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
         }
     }
     out
-}
-
-/// Only an upstream id shaped like a uuid is a term: the rest are often
-/// keys datalib composed (a period, a path), which the Fields tab would
-/// match by their opening words.
-fn is_dashed_uuid(s: &str) -> bool {
-    s.len() == 36
-        && s.bytes().enumerate().all(|(i, c)| match i {
-            8 | 13 | 18 | 23 => c == b'-',
-            _ => c.is_ascii_hexdigit(),
-        })
 }
 
 /// What [`search_terms_of`] derives and how [`TERMS_DDL`] lays it out. It

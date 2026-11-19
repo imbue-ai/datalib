@@ -1,6 +1,6 @@
-# Project Data Liberation ✊ - First-time dev guide
+# Datalib (Project Data Liberation ✊) — first-time dev guide
 
-This guide is for people who want to **build and hack on** datalib. If you
+This guide is for people who want to **build and hack on** Datalib. If you
 just want to *run* the released tools against your own data, start with the
 [**first-time user guide**](../user/first_time_user.md) instead.
 
@@ -86,7 +86,7 @@ Two coupled projects that mirror personal data into a queryable local store:
 - **`datalib/backend/`** — Rust workspace that downloads + ingests LLM
   chat exports and other sources (Claude, ChatGPT, Slack, GitHub, GitLab,
   Notion, and more — see the [README](../../README.md) table) into a
-  doltlite DB, renders one Markdown file per document, builds a
+  doltlite DB, renders each document's markdown into a store, builds a
   search index, and serves the result over axum / Tauri.
 - **`datalib/ui/`** — Vue 3 UI that searches and views the mirrored
   data, packaged as a Tauri desktop app and a Docker image.
@@ -142,7 +142,7 @@ bilingual `edges` UI.
 
 ### Run the desktop app
 
-The desktop app is the main way to use datalib. To build it from this
+The desktop app is the main way to use Datalib. To build it from this
 checkout and launch it (macOS):
 
 ```sh

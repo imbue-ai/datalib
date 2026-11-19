@@ -344,6 +344,9 @@ pub async fn read(path: &Path) -> Result<Vec<ProblemRow>> {
 struct Held {
     rows: Vec<ProblemRow>,
     items: Vec<(String, String)>,
+    /// Its `problems` table lacks a column this build reads: an older
+    /// build wrote it, and its step's next run writes it in this shape.
+    older_shape: bool,
 }
 
 async fn read_with(path: &Path, opts: SqliteConnectOptions) -> Result<Held> {
@@ -363,7 +366,16 @@ async fn read_with(path: &Path, opts: SqliteConnectOptions) -> Result<Held> {
         .await?;
         let has = |name: &str| tables.iter().any(|t| t == name);
         let mut held = Held::default();
-        if has("problems") {
+        let older = async {
+            let have: Vec<String> =
+                sqlx::query_scalar("SELECT name FROM pragma_table_info('problems')")
+                    .fetch_all(&pool)
+                    .await?;
+            anyhow::Ok(older_shape(&have))
+        };
+        if has("problems") && older.await? {
+            held.older_shape = true;
+        } else if has("problems") {
             held.rows = sqlx::query("SELECT * FROM problems ORDER BY scope_key, problem_uuid")
                 .fetch_all(&pool)
                 .await?
@@ -384,6 +396,13 @@ async fn read_with(path: &Path, opts: SqliteConnectOptions) -> Result<Held> {
     .with_context(|| format!("read the problems in {}", path.display()));
     pool.close().await;
     held
+}
+
+/// Whether a `problems` table with these columns predates this build:
+/// it lacks one that `ProblemRow` reads.
+fn older_shape(have: &[String]) -> bool {
+    let (_, want) = datalib_problems::COLUMNS[0];
+    want.iter().any(|c| !have.iter().any(|h| h == c))
 }
 
 /// What a file looked like when it was read: its modification time and
@@ -438,6 +457,10 @@ pub struct OfStep {
     /// download's problem names to the grid row it belongs to.
     pub items: Vec<(String, String)>,
     pub unread: Vec<String>,
+    /// Stores an older build wrote, whose problems this build does not
+    /// read until the step runs again and rewrites them. Not a failure:
+    /// a step turned off after an upgrade keeps one for good.
+    pub older_shape: Vec<PathBuf>,
 }
 
 /// What a step's problems are: the `problems` table of every store
@@ -449,6 +472,7 @@ pub async fn of_step(data_root: &Path, step_id: &str) -> OfStep {
         rows: Vec::new(),
         items: Vec::new(),
         unread: Vec::new(),
+        older_shape: Vec::new(),
     };
     let dir = data_root.join(step_id);
     let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -466,6 +490,9 @@ pub async fn of_step(data_root: &Path, step_id: &str) -> OfStep {
         };
         match read {
             Ok(held) => {
+                if held.older_shape {
+                    out.older_shape.push(file.clone());
+                }
                 out.rows.extend(held.rows);
                 out.items.extend(held.items);
             }
@@ -495,12 +522,69 @@ pub async fn of_steps(data_root: &Path) -> Vec<OfStep> {
     let mut out = Vec::with_capacity(steps.len());
     for step in steps {
         let read = of_step(data_root, &step).await;
-        if !read.rows.is_empty() || !read.items.is_empty() || !read.unread.is_empty() {
+        if !read.rows.is_empty()
+            || !read.items.is_empty()
+            || !read.unread.is_empty()
+            || !read.older_shape.is_empty()
+        {
             out.push(read);
         }
     }
     link(&mut out);
     out
+}
+
+/// One thing [`say_unread`] says about a step: why a store could not be
+/// read, or which store is in an older shape.
+type Said = (String, String, bool);
+
+/// What a reader of every step's problems logs of what it could not read:
+/// each thing once, the first pass it appears in, and again only after a
+/// pass without it. The Manage screen reads them on every refresh, so
+/// saying each every time drowned the log (26,830 lines in two hours on
+/// one library). One reader per process, so one record of what it said.
+pub fn say_unread(steps: &[OfStep]) {
+    static SAID: std::sync::Mutex<std::collections::BTreeSet<Said>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    let now = unread_of(steps);
+    let mut said = SAID.lock().expect("unpoisoned");
+    for (step, what, older) in newly(&said, &now) {
+        if older {
+            tracing::info!(
+                step = %step,
+                store = %what,
+                "an older build wrote this step's problems; they are read once the step runs again"
+            );
+        } else {
+            tracing::error!(step = %step, error = %what, "could not read a step's problems");
+        }
+    }
+    *said = now;
+}
+
+fn unread_of(steps: &[OfStep]) -> std::collections::BTreeSet<Said> {
+    steps
+        .iter()
+        .flat_map(|s| {
+            let why = s
+                .unread
+                .iter()
+                .map(|w| (s.step_id.clone(), w.clone(), false));
+            let older = s
+                .older_shape
+                .iter()
+                .map(|p| (s.step_id.clone(), p.display().to_string(), true));
+            why.chain(older)
+        })
+        .collect()
+}
+
+/// What is in `now` and was not in `said`: what to say this pass.
+fn newly(
+    said: &std::collections::BTreeSet<Said>,
+    now: &std::collections::BTreeSet<Said>,
+) -> Vec<Said> {
+    now.difference(said).cloned().collect()
 }
 
 /// Fill in `item_uuid` on each download problem that names none, from

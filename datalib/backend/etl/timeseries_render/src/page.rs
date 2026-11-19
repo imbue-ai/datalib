@@ -5,16 +5,14 @@
 //! [`PageProfile`].
 
 use std::fmt::Write as _;
-use std::fs;
-use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::Front;
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_inline, md_code_span};
 use datalib_etl_render::processor::RenderCtx;
-use datalib_etl_render::section::{self, Section};
+use datalib_etl_render::section::Section;
 use datalib_etl_render::title::Title;
 use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::data_nodes::{DataNodeRow, Lineage};
@@ -184,17 +182,10 @@ pub fn skip_if_current(ctx: &RenderCtx<'_>, provider: &str, page_uuid: &str) -> 
 pub fn render_all(
     profile: &PageProfile,
     page: &Page<'_>,
-    root: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<RenderSummary> {
-    let page_dir = datalib_etl::layout::render_markdown_root(root, source_id);
-    fs::create_dir_all(&page_dir).with_context(|| format!("mkdir -p {}", page_dir.display()))?;
-    // Where an earlier build wrote one Plotly page per quantity; a chart
-    // is now drawn from the time-series store.
-    remove_dir_if_there(&page_dir.join("plots"))?;
-
     let mut summary = RenderSummary {
         devices: page.devices.len(),
         series: page.series.len(),
@@ -219,7 +210,6 @@ pub fn render_all(
     let node = page_node(profile, source_id, &m_uuid);
 
     write_page(
-        root,
         source_id,
         &m_uuid,
         front,
@@ -244,7 +234,6 @@ pub fn render_all(
 
 #[allow(clippy::too_many_arguments)]
 pub fn write_page(
-    root: &Path,
     source_id: &str,
     m_uuid: &str,
     front: Front,
@@ -254,20 +243,11 @@ pub fn write_page(
     build_rows: impl FnOnce(&mut Vec<ProblemRow>) -> Vec<GridRow>,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
-    let md_path = doc_md_path(
-        &datalib_etl::layout::render_markdown_root(root, source_id),
-        m_uuid,
-    );
-    let dir = md_path.parent().expect("a document's file has a folder");
-    fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
-    fs::write(&md_path, section::join(&sections))
-        .with_context(|| format!("write {}", md_path.display()))?;
-
     let mut problems: Vec<ProblemRow> = Vec::new();
     let rows = build_rows(&mut problems);
 
     on_doc_complete(RenderedMarkdown {
-        section_layout: None,
+        searchable: true,
         content_hash: None,
         markdown_uuid: m_uuid.to_string(),
         source_id: source_id.to_string(),
@@ -275,7 +255,6 @@ pub fn write_page(
         // content did not change may carry nothing per-run.
         upstream_cursor: None,
         bucket_key: Some(m_uuid.to_string()),
-        md_path,
         render_version,
         rows,
         sections,
@@ -288,14 +267,6 @@ pub fn write_page(
         problems,
     })
     .with_context(|| format!("on_doc_complete {m_uuid}"))
-}
-
-fn remove_dir_if_there(dir: &Path) -> Result<()> {
-    match fs::remove_dir_all(dir) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e).with_context(|| format!("remove {}", dir.display())),
-    }
 }
 
 /// What the markdown needs to know about one quantity's chart.
@@ -465,7 +436,11 @@ fn render_device_sections(
     for dev in &page.devices {
         let uuid = profile.device_uuid(source_id, &dev.key);
         let series = by_device.get(dev.key.as_str()).map(Vec::as_slice);
-        out.keyed(&uuid, device_section(profile, &uuid, dev, series));
+        out.boxed(
+            &uuid,
+            format!("msg msg--{}", profile.tag),
+            &device_section(profile, dev, series),
+        );
     }
 
     // Values can exist for a device the store no longer names. Say so
@@ -494,18 +469,8 @@ fn render_device_sections(
     }
 }
 
-fn device_section(
-    profile: &PageProfile,
-    uuid: &str,
-    dev: &Device,
-    series: Option<&[&Series]>,
-) -> String {
+fn device_section(profile: &PageProfile, dev: &Device, series: Option<&[&Series]>) -> String {
     let mut out = String::new();
-    let _ = writeln!(
-        out,
-        "<div id=\"m-{uuid}\" data-section-uuid=\"{uuid}\" class=\"msg msg--{}\">\n",
-        profile.tag
-    );
     let _ = writeln!(out, "### {}\n", escape_md_inline(&dev.name));
     let _ = writeln!(out, "*{}*\n", dev.facts);
     match series {
@@ -514,7 +479,6 @@ fn device_section(
             let _ = write!(out, "*(no {})*\n\n", profile.noun);
         }
     }
-    out.push_str("</div>\n\n");
     out
 }
 
@@ -716,7 +680,7 @@ mod tests {
             sections[1].uuid.as_deref(),
             Some(PROFILE.device_uuid("s", "k1").as_str())
         );
-        let out = section::join(&sections);
+        let out = datalib_etl_render::section::join(&sections);
         assert!(
             out.contains("### &lt;script&gt;x&lt;/script&gt; &amp; co\n"),
             "{out}"

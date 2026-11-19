@@ -2,8 +2,9 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 # A handle: one identifier for a person in one namespace, normalized
 # (`email:…`, `tel:+…`, `slack:T/U`). Renders write them into the markdown
-# and the contacts app links them to contacts. No first-party deps, so a
-# render crate and an applet can both take it. Bazel-only.
+# and the contacts app links them to contacts. Its one first-party dep,
+# uuid_text, has none, so a render crate and an applet can both take it.
+# Bazel-only.
 rust_library(
     name = "datalib_handle",
     srcs = ["src/lib.rs"],
@@ -11,6 +12,7 @@ rust_library(
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
+        "//datalib/backend/uuid_text:datalib_uuid_text",
         "@datalib_crates//:serde",
         "@datalib_crates//:strum",
     ],

@@ -128,7 +128,7 @@ async fn main() -> Result<()> {
     if !newer.is_empty() {
         let lines: Vec<String> = newer.iter().map(ToString::to_string).collect();
         bail!(
-            "{} was written by a newer datalib; this build ({}) will not touch it:\n{}",
+            "{} was written by a newer Datalib; this build ({}) will not touch it:\n{}",
             data_root.display(),
             datalib_runtime::build_id::DATALIB_VERSION,
             lines.join("\n")

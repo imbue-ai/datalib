@@ -38,6 +38,14 @@ succeeds, so it never keeps a signed-out session. The login page does
 not send a signed-in browser elsewhere, so signing in again once the
 session has ended needs a person.
 
+**Tick Remember Me when signing in.** The form posts it as
+`remember=on`, and the server then sets `seacloud1` to expire a year
+later (measured November 2026). A captured session has ended within a
+day before, the next morning's `/home2` a 302 to the login page; that
+is what a session without the box looks like. latchkey keeps only the
+cookies' values, not their expiry, so nothing says which kind of
+session was captured.
+
 ## What one run does
 
 `src/ingest/mod.rs`:

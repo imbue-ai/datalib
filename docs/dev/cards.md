@@ -1,6 +1,6 @@
 # Cards — source-defined cards and the layouts that host them
 
-The datalib UI is a surface of cards: each card is defined by its
+The Datalib UI is a surface of cards: each card is defined by its
 source, a call the user can read (and edit) in the card's header bar in
 edit mode. The host parses that source and calls what it names to
 produce the card's content.
@@ -133,7 +133,7 @@ a `data:image/…` URL; anything else draws the generic component glyph.
 
 A card kind can also say it is a **developer tool** (`devTool` in
 `BUILTIN_META`, `"dev_tool": true` in a `<name>.json`): a tool for
-working on the library or on datalib itself — its logs, its config, its
+working on the library or on Datalib itself — its logs, its config, its
 pipeline, its components — or a building block of a composite that is
 rarely wanted alone, such as a Dashboard section, rather than a view of
 the data. The gallery
@@ -699,7 +699,7 @@ besides components:
   names each side by the minute it was made and counts what the
   commits between them added, deleted and modified, each summed on
   its own. Every count on
-  the card is over the tables that hold records, not datalib's own
+  the card is over the tables that hold records, not Datalib's own
   (`datalib_history::holds_records`). The pairing rules are
   `config/compareCommits.ts`.
 - `logLineView(seq)` — one log line in full (`cards/LogLineCard.ce.vue`,

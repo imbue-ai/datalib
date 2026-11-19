@@ -59,7 +59,7 @@ trap 'rm -rf "$work"' EXIT
 md="$work/md"
 mkdir -p "$md"
 
-# The fixture tar holds `root/<source>/render_markdown/…`; strip the `root/`
+# The fixture tar holds `root/<source>/<id>.md`; strip the `root/`
 # so a document's label starts with the source that wrote it.
 tar -xf "$fixture_tar" -C "$md" --strip-components=1
 

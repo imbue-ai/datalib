@@ -109,7 +109,6 @@ fn a_conversation_branched_into_a_new_chat_mints_its_own_row_ids() {
     let mut docs = Vec::new();
     render_all(
         &parsed,
-        &tmp.path().join("out"),
         "chatgpt_api",
         &datalib_etl::progress::Progress::noop(),
         &mut |doc| {

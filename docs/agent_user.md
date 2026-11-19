@@ -1,41 +1,34 @@
-# datalib — agent user guide
+# Datalib — agent user guide
 
-You are (probably) an AI agent helping a user run **datalib**: mirror
+You are (probably) an AI agent helping a user run **Datalib**: mirror
 their personal data (chats, email, messages, contacts, …) into a local
 store and do useful things with it. This doc maps the surfaces you'll
 touch — config, sync, querying, extending — and points to the deeper
-docs for each. It is about *using* datalib; for working on the datalib
+docs for each. It is about *using* Datalib; for working on the Datalib
 codebase itself, see [`AGENTS.md`](../AGENTS.md).
 
 From a shell, **`datalib-step help`** is the map: the steps from an
-empty directory to a first sync, each with its command, and
+empty directory to a first sync, each with its command, then
 `datalib-step help <type>` (what a source mirrors, how it signs in, its
-ingest methods) and `datalib-step help <function>` (what a step does
-and how to run it) from there. `datalib-step help agent` prints this
-guide, and every doc it links to is compiled in the same way:
-`datalib-step help docs` lists them, and a link from one to another
-prints as the command that prints it. A release also carries each
-beside its binaries, this one as `docs/agent_user.md`. Every binary's
-`--help` ends with examples.
+ingest methods) and `datalib-step help <function>` (what a step does).
+`datalib-step help docs` lists every doc compiled in, this one among
+them; a link from one to another prints as the command that prints it.
+Every binary's `--help` ends with examples.
 
-The human-facing guides are worth reading first, and worth pointing the
-user at: the [first-time user guide](user/first_time_user.md) is the
-walkthrough from install to first sync, with the warnings about what a
-pile of private data in one place means and what these credentials can
-do; [getting your data](user/getting_your_data.md) is the per-source
-recipe for credentials and exports; and [running in
-Docker](user/docker.md) is the sandboxed way to try it, with a demo
-library already loaded. The README's source table and "what we are
-aiming for" say what datalib is for and where it is going, which is
-the context for anything the user asks you to build on top of it.
+Worth pointing the user at: the [first-time user
+guide](user/first_time_user.md), from install to first sync, with the
+warnings about what a pile of private data in one place means and what
+these credentials can do; [getting your data](user/getting_your_data.md),
+each source's sign-in or export; and [running in Docker](user/docker.md),
+the sandboxed way to try it, with a demo library already loaded.
 
 ## The mental model
 
 Everything lives under one **data root** directory. A sync is a DAG of
 steps run by `datalib-dag`: per source (a `[[groups]]` entry) a
 `<group>/ingest` step (bring the raw data in) and a
-`<group>/render_markdown` step (raw → markdown + a per-source index
-database), `unified_grid_and_search_index` under the `unified_grid_and_search_index` group (the SQL
+`<group>/render_markdown` step (raw → each document's markdown and
+rows, in a per-source store), `unified_grid_and_search_index` under the `unified_grid_and_search_index` group (the SQL
 index, which also puts every source it reads in the keyword search but
 those its `params.not_searched` lists), and, for a source searched by
 meaning, `<group>/embed`, which embeds that source's part of the search
@@ -51,8 +44,8 @@ its vectors to the one cache in
 ├── <group>/ingest/                 # per-source raw stores (<group> is the source's id)
 │   ├── entities.doltlite_db        #   (doltlite = SQLite + git-shaped history)
 │   └── blobs.sqlite                #   attachment bytes by blake3 (plain SQLite)
-├── <group>/render_markdown/        # per-source markdown tree
-│   └── indexed_markdown.doltlite_db  #   its rows, edges + render problems
+├── <group>/render_markdown/        # per-source render store
+│   └── indexed_markdown.doltlite_db  #   its documents, rows, edges + render problems
 ├── unified_grid_and_search_index/                  # derived; carries a CACHEDIR.TAG
 │   ├── unified_grid_and_search_index/db.sqlite  # the grid_rows SQL index, each row's search terms and the search index (plain SQLite) — query this
 │   └── search_index/inference_cache.sqlite  # each chunk's vector, by its prompt's hash
@@ -110,14 +103,13 @@ header, and a step's `params` sub-tables come after its plain keys — a
 - **Every source, every option**:
   [`docs/user/config_examples/all_sources.toml`](user/config_examples/all_sources.toml)
   — one commented group per way into each source, with its steps and
-  every option set, and the index groups reading them all. It is
-  generated from the complete stanzas `datalib-step examples <type>`
-  prints, so it is always one that loads. A release ships both files
-  beside this guide, at the same paths under its directory. A `config.toml` in the retired
-  shape (steps naming a `datalib-step download …` command) is refused;
-  rewrite it once with `datalib-migrate-config <data_root> --force`.
-- **Credentials**: web-API sources authenticate through
-  [`latchkey`](https://github.com/imbue-ai/latchkey). Per-source
+  every option set, generated from the stanzas `datalib-step examples
+  <type>` prints, so it always loads.
+- **An old config:** one in the retired shape (steps naming a
+  `datalib-step download …` command) is refused; rewrite it once with
+  `datalib-migrate-config <data_root> --force`.
+- **Credentials**: web-API sources authenticate through `latchkey`,
+  which ships beside the binaries. Per-source
   walkthroughs for getting cookies/tokens/exports:
   [`docs/user/getting_your_data.md`](user/getting_your_data.md).
   On auth failure, sync events include a `hint` with the exact
@@ -156,7 +148,7 @@ one per typo. It also has `datalib-step` plan every built-in step's
 params, so a misspelled or misplaced option is reported at its line
 before a sync rather than when the step runs. Exit 0 when every entry
 loads and every step's params plan, 1 if the file is not a config at
-all (or the root was written by a newer datalib), 2 if some entries
+all (or the root was written by a newer Datalib), 2 if some entries
 were dropped or some step's params would be refused.
 
 `datalib-step examples <type>` prints each source's config stanzas:
@@ -315,7 +307,7 @@ several times what it holds. Freeing disk space gives it back:
 | free disk space | chunks no commit reaches, in every store | every commit of every store |
 | … and drop old versions on derived data | the same, and the older commits of each render store | every commit of every download store; the latest of each render store |
 
-The first loses nothing. Derived data is what datalib rebuilds from the
+The first loses nothing. Derived data is what Datalib rebuilds from the
 downloads: each source's rendered documents. Dropping its old versions
 loses their history, which nothing but the History card reads. The grid
 index is plain SQLite and is not touched.
@@ -351,7 +343,7 @@ server-sent-event stream that pushes a `root` frame whenever any of
 this moves.
 
 All of it is one file, `<data_root>/system/runs/runs.sqlite`: every
-line any datalib process wrote — the runner, each step, the server,
+line any Datalib process wrote — the runner, each step, the server,
 the applets. It is plain SQLite, so stock `sqlite3` reads it with no
 server up. `log` holds one row per line, `processes` says who wrote
 each (join on `process_id`), `runs` and `step_runs` hold each run and
@@ -375,7 +367,7 @@ is not null` lists the steps that failed. Every table and column is in
 If you are building an app that reads this data instead of calling the
 services (when to sync, how fresh the mirror is, deriving your own data
 as a step, when to ask the service after all), read [building on
-datalib](user/building_on_datalib.md).
+Datalib](user/building_on_datalib.md).
 
 Pick the surface that fits the question:
 
@@ -405,58 +397,66 @@ Pick the surface that fits the question:
   message/document/entity across all sources, with `provider`, `kind`,
   `created_at`, `modified_at`, `touched_at`, `author`, `channel`, `conversation_uuid`,
   `preview` (the first 240 characters of the row's text; the whole text
-  is in the rendered markdown), `entire_chat`, etc. `is_document = 1`
+  is in the document's markdown), `entire_chat`, etc. `is_document = 1`
   picks the one row per rendered document — the thread, the
   conversation, the PR, the page — and leaves out the messages inside
-  them, which is usually the row count you meant.
+  them, which is usually the row count you meant. Every column:
+  [grid rows](dev/grid_rows.md); the links between documents:
+  [edges](dev/edges.md).
 
-  Read it with **`datalib-doltlite`**, which is in the release tarball
-  and so sits next to `datalib-dag` in `~/.local/bin` (it is plain
-  `doltlite` in the docker image, and
-  `bazelisk build //third-party/doltlite:doltlite` from a checkout).
-  Its argv is `sqlite3`'s. **Always pass `-readonly`**: the index is
-  the `unified_grid_and_search_index` step's to write, and a transaction a writable session
-  holds open stalls the sync:
+  Two ways to run SQL, against the grid index or any other store:
 
-  ```sh
-  datalib-doltlite -readonly unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
-    "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
-  ```
+  - **Over HTTP, with nothing installed:** with the app up, `POST
+    /applet/unified_grid_and_search_index/sql` runs one `SELECT` you
+    write against any store under the data root (the grid index, every
+    raw and render store, the log, the loop's record) and answers a page
+    of rows as JSON. It reads only. This is the way in from a container,
+    another machine, or anywhere you can make an HTTP request but not run
+    `datalib-doltlite`. `GET …/sql/stores` lists the stores.
 
-  The index is plain SQLite in WAL mode, rebuilt from the sources and
-  keeping no history. Stock `sqlite3 -readonly` refuses a WAL file that
-  nothing else has open (`unable to open database file`), which
-  `datalib-doltlite` does not. One pipe writes a standalone copy any
-  tool opens, and the same pipe turns a source's doltlite store, which
-  stock `sqlite3` cannot read at all, into plain SQLite:
+    ```sh
+    curl -s -H "Authorization: Bearer $(cat <data_root>/system/api-token)" \
+      -H "Content-Type: application/json" \
+      -d '{"store": "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite",
+           "sql": "SELECT provider, count(*) FROM grid_rows GROUP BY 1"}' \
+      <origin>/applet/unified_grid_and_search_index/sql
+    ```
 
-  ```sh
-  datalib-doltlite -readonly unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite .dump \
-    | sqlite3 grid.sqlite
-  ```
+    Parameters, paging, a doltlite store's commits and what it refuses:
+    [the applets](user/applets.md#reading-any-store-with-sql).
 
-  A copy of a doltlite store carries the data, not the commit history —
-  see [`docs/dev/doltlite.md`](dev/doltlite.md) for what that costs and
-  for a single-table variant. A Python program that runs many queries
-  can keep a store open with `imbue-datalib-reader` instead of starting
-  the shell for each one: see that doc's §"Reading a store from Python".
-  If you would rather not
-  touch the store at all, `datalib-http`'s endpoints below serve the
-  same rows, and `POST /applet/unified_grid_and_search_index/sql` runs your
-  own `SELECT` against this or any other store, the raw stores and the
-  log included, a page at a time ([the applets](user/applets.md#reading-any-store-with-sql)).
+  - **From a shell:** **`datalib-doltlite`** ships beside `datalib-dag`
+    (plain `doltlite` in the docker image). Its argv is `sqlite3`'s.
+    **Always pass `-readonly`**: a transaction a writable session holds
+    open stalls the sync.
 
-  Column semantics: [`docs/dev/grid_rows.md`](dev/grid_rows.md).
-  Cross-document links: [`docs/dev/edges.md`](dev/edges.md).
-  doltlite recipes (history, diffs, a crashed writer):
-  [`docs/dev/doltlite.md`](dev/doltlite.md).
+    ```sh
+    datalib-doltlite -readonly unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
+      "SELECT provider, count(*) FROM grid_rows GROUP BY 1;"
+    ```
+
+    The grid index is plain SQLite in WAL mode, rebuilt from the sources
+    and keeping no history. Stock `sqlite3 -readonly` refuses a WAL file
+    nothing else has open (`unable to open database file`), and cannot
+    read a doltlite store at all; `datalib-doltlite` reads both. One pipe
+    turns either into a standalone plain SQLite copy (a doltlite store's
+    copy carries its data, not its history):
+
+    ```sh
+    datalib-doltlite -readonly unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite .dump \
+      | sqlite3 grid.sqlite
+    ```
+
+    A Python program that runs many queries can keep a store open with
+    `imbue-datalib-reader` instead. [doltlite](dev/doltlite.md) has
+    that, history, diffs and a crashed writer.
 - **Markdown** — each conversation or document as human-readable
   markdown: `datalib-step markdown <data root> --source <group> --document
   <markdown_uuid>` prints one, `--out <folder>` writes every one as
   `<folder>/<group>/<markdown_uuid>.md`, and `GET
   /applet/unified_grid_and_search_index/chat/{markdown_uuid}` serves it.
-  The files under `<group>/render_markdown/` are going away; read the
-  text through one of these.
+  The render store keeps every document; there are no `.md` files under
+  `<group>/render_markdown/` to read.
 - **Raw stores** — the per-source doltlite stores under
   `<group>/ingest/` keep what the service sent, when the rendered form
   isn't enough: Slack's and Google Calendar's JSON, Gmail's original
@@ -488,38 +488,16 @@ Pick the surface that fits the question:
   `start_time` is in the event's own. The columns:
   [Reading the raw stores](user/raw_stores.md) § "A calendar's
   occurrences".
-- **Semantic search** — `datalib-applet search <data_root> '<words>'`
-  (above) searches by meaning as well as by words.
-- **HTTP API** — `datalib-http <data_root>` serves the UI plus:
-  `GET /applet/unified_grid_and_search_index/search?q=…` (the query
-  language, `from:me` and the cutoff on meaning included, and what a
-  refusal or a partial answer says, are [Searching your
-  mirror](user/searching.md); `GET …/search/keys` lists every key and
-  `…/search/values?key=…&typed=…&q=…` the values one takes. Free text
-  made only of uuids and handles (an email address, `tel:+…`,
-  `slack:T…/U…`) is looked up in the grid index's search terms, not ranked
-  by text: every row that answers to each one, best match first, with
-  `score` saying how (5 its own id, 4 its author or an addressee,
-  3 someone copied or mentioned, or what it is in, 2 its title or a label, 1 a name
-  it shows) and `snippet` naming the match.
-  Other free text's `score` is reciprocal rank fusion of the
-  search terms (any word as the start of one), every document's text by BM25
-  (over each message) and the documents nearest the text by cosine over
-  the search index's vectors, one row a document. Each row's `link` is
-  where opening it goes, `datalib:doc/<page>#<section>`: its page, at
-  the row when it is a message of the page. It answers a page: `limit=`
-  rows from `offset=`, with `total` and the `next_offset`; `sort=`,
-  `GET …/search/groups?q=…&by=kind` and `within=[["kind","Chat"]]` on
-  `search` sort and group as the search page's §"Sorting and grouping"
-  says), `GET /api/log?q=…` (the log lines in the same grammar, a page
-  at a time: [logging](dev/logging.md) §"Reading it"),
-  `GET /applet/unified_grid_and_search_index/docs`, `GET /applet/unified_grid_and_search_index/chat/{uuid}`,
-  `GET /applet/unified_grid_and_search_index/children/{uuid}?at=…` (what a
-  thread, channel or label holds, in order, a page each way around a
-  message, a moment or `now`: [the applets](user/applets.md#a-containers-children)),
-  `GET /data/<group>/<function>/blob/<hash>` (an attachment or photo a
-  page links), `GET /api/dag` (the derived step
-  graph), and the config/sync endpoints above.
+- **HTTP API** — `datalib-http <data_root>` serves the app and, under
+  `/applet/unified_grid_and_search_index/`, the search (`/search?q=…`,
+  in [the query language](user/searching.md)), each document
+  (`/chat/{uuid}`), what a thread, channel or label holds
+  (`/children/{uuid}`), who a handle is (`POST /people`) and `/sql`
+  above: [the applets](user/applets.md) lists every route and what each
+  answers. Beside them, `GET /data/<group>/<function>/blob/<hash>` is an
+  attachment or photo a page links, `GET /api/log?q=…` the log in the
+  search's grammar ([logging](dev/logging.md) §"Reading it"), `GET
+  /api/dag` the step graph, and the sync routes above.
 
   Every route needs the server's per-process API token — loopback does
   not keep a *web page* out, and `PUT /api/config` runs arbitrary
@@ -536,14 +514,14 @@ Pick the surface that fits the question:
   guides at `<origin>/agent/cards.md` and `<origin>/agent/config.md`
   are readable without it.
 
-## Building a tool or app on datalib
+## Building a tool or app on Datalib
 
-[Building on datalib](user/building_on_datalib.md) has the details.
+[Building on Datalib](user/building_on_datalib.md) has the details.
 Two decisions come first: whether to read the mirror at all, and where
 to keep what your app adds to it.
 
 **Decide what belongs on the mirror and what belongs on the API.**
-datalib is, for now, about getting your data out of its silos en masse.
+Datalib is, for now, about getting your data out of its silos en masse.
 It can also take a targeted part of a source: only recent history
 (`since`), particular Slack channels (`channels`), particular mail
 labels (`only_extract_labels`). Some things make less sense to build on
@@ -553,17 +531,17 @@ it:
   better querying the service's API directly. The mirror is only as
   fresh as its last sync.
 - An app that publishes (sends a message, files a label, makes an
-  event) must use the API to do so. datalib only reads.
+  event) must use the API to do so. Datalib only reads.
 
 Many apps successfully combine the two, say reading history in bulk
 from the mirror and using the API for the newest items and for every
-write. datalib is designed for this: a raw store re-uses the service's
+write. Datalib is designed for this: a raw store re-uses the service's
 identifiers, so an id from an API response finds its row in the mirror,
 and a row in the mirror names what to send the API. A few ids are
 normalized on the way in, such as Gmail's, which are padded to 16 hex
 digits; the "Which id is which" tables in [Reading the raw
 stores](user/raw_stores.md) give the mapping. [Building on
-datalib](user/building_on_datalib.md) § "When to ask the service
+Datalib](user/building_on_datalib.md) § "When to ask the service
 instead" lists, source by source, what the mirror does not hold, and §
 "Your app's own writes" says how a write reaches it.
 
@@ -597,7 +575,7 @@ have, but you can't recover history you never kept. `datalib-doltlite
 
 Where it lives depends on whether it can be rebuilt. Data computed from
 the mirror belongs in a step's own tree ([Building on
-datalib](user/building_on_datalib.md) § "Your app's derived data as a
+Datalib](user/building_on_datalib.md) § "Your app's derived data as a
 step"), which then runs whenever the mirror moves. Data nothing could
 rebuild, such as a person's notes, stays out of `<data_root>/<group>/`,
 because deleting a group deletes that directory. An app writing such
@@ -606,7 +584,7 @@ directory per app, which no reset or deletion of a source touches, or
 in a clearly marked folder of its own under the data root, with a name
 no group uses. Neither is for a step, which writes only its own tree.
 
-The contacts app is this pattern in datalib itself. Its store,
+The contacts app is this pattern in Datalib itself. Its store,
 `datalib_curated/datalib_contacts/contacts.doltlite_db`, is a doltlite
 file of its own that makes every write a commit, and no reset or removal
 of a source touches it. It adds who a handle is without changing any
@@ -615,7 +593,7 @@ raw store. Its rows refer to a person's handles
 person spans many sources. See [the contacts
 doc](dev/contacts.md) § "The contacts app".
 
-## Extending datalib
+## Extending Datalib
 
 - **Custom step commands** — the headline extension point. Any
   executable can be a pipeline step: declare it in `config.toml` with
@@ -666,11 +644,12 @@ Something broken, missing, or confusing? **File an issue at
 <https://github.com/imbue-ai/datalib/issues>** — that is the preferred
 channel, and every report is welcome. Two kinds are equally wanted:
 what exists and misbehaves (a one-line "this doc is wrong", a full
-bug), and what would make datalib easier to wield for whatever you and
+bug), and what would make Datalib easier to wield for whatever you and
 the user are trying to do with it — a surface that fought you, a query
 you had to work around, a use case it doesn't serve yet. Paste the
 `datalib-dag --check` output or the failing step's `step_finish` event
-where you have one; it saves a round-trip. **The tracker is public:
+where you have one; it saves a round-trip. If you cannot reach GitHub,
+write the report out for the user to file. **The tracker is public:
 keep the user's private data out of it.** Log lines and events can
 quote message text, email addresses, channel names and file paths —
 redact before pasting, and never attach a store or a rendered

@@ -2,7 +2,6 @@
 //! shared calendar renderer.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 use anyhow::Result;
 use datalib_etl::progress::Progress;
@@ -48,7 +47,6 @@ pub struct Rendered {
 
 pub fn render_all(
     parsed: &Parsed,
-    out_dir: &Path,
     source_id: &str,
     progress: &Progress,
     range: RawRange<'_>,
@@ -94,14 +92,7 @@ pub fn render_all(
     if let Some(render) = &render {
         events.retain(|e| render.contains(&e.event_uuid));
     }
-    let summary = cc_render_all(
-        &profile,
-        &events,
-        out_dir,
-        source_id,
-        progress,
-        on_doc_complete,
-    )?;
+    let summary = cc_render_all(&profile, &events, source_id, progress, on_doc_complete)?;
     buckets.extend(summary.buckets);
     Ok(Rendered { buckets, gone })
 }

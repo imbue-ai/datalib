@@ -1,18 +1,14 @@
 //! Render one document per book plus one per (chapter, edition), each
 //! emitting into the render store all rows for that doc.
 
-use std::fs;
-use std::path::{Path, PathBuf};
-
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
-use datalib_etl::layout::render_markdown_root;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::Front;
-use datalib_etl_render::grid_index::{doc_md_path, RenderedMarkdown};
+use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline};
-use datalib_etl_render::section::{join, Section as DocSection};
+use datalib_etl_render::section::Section as DocSection;
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
@@ -57,7 +53,6 @@ pub fn bucket_key(source_id: &str) -> String {
 pub fn render_all(
     parsed: &ParsedPerseus,
     alignments: &PerseusAlignments,
-    out_dir: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
@@ -87,7 +82,7 @@ pub fn render_all(
     progress.set_length(Some(total as u64));
 
     for book in &parsed.books {
-        render_book(book, out_dir, source_id, &mut summary, on_doc_complete)?;
+        render_book(book, source_id, &mut summary, on_doc_complete)?;
         progress.inc(1);
 
         for chapter in &book.chapters {
@@ -100,7 +95,6 @@ pub fn render_all(
                     chapter,
                     edition,
                     alignments,
-                    out_dir,
                     source_id,
                     &mut summary,
                     on_doc_complete,
@@ -121,14 +115,12 @@ fn chapter_covers(chapter: &Chapter, edition_id: &str) -> bool {
 
 fn render_book(
     book: &Book,
-    out_dir: &Path,
     source_id: &str,
     summary: &mut RenderSummary,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
     let m_uuid = ids::book(source_id, &book.n).uuid;
     let (front, md) = render_book_md(book);
-    let md_path = write_doc(out_dir, source_id, &m_uuid, &md)?;
 
     let mut problems: Vec<ProblemRow> = Vec::new();
     let mut rows: Vec<GridRow> = book_grid_row(source_id, book, &m_uuid, &mut problems)
@@ -140,13 +132,12 @@ fn render_book(
 
     summary.rows_emitted += rows.len();
     on_doc_complete(RenderedMarkdown {
-        section_layout: None,
+        searchable: true,
         content_hash: None,
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
         bucket_key: Some(bucket_key(source_id)),
-        md_path,
         render_version: RENDER_VERSION,
         rows,
         front,
@@ -164,20 +155,17 @@ fn render_book(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn render_chapter(
     book: &Book,
     chapter: &Chapter,
     edition: &Edition,
     alignments: &PerseusAlignments,
-    out_dir: &Path,
     source_id: &str,
     summary: &mut RenderSummary,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 ) -> Result<()> {
     let m_uuid = ids::chapter(source_id, &book.n, &chapter.n, &edition.id).uuid;
     let (front, sections) = render_chapter_sections(source_id, chapter, edition, alignments);
-    let md_path = write_doc(out_dir, source_id, &m_uuid, &join(&sections))?;
 
     let mut problems: Vec<ProblemRow> = Vec::new();
     let mut rows: Vec<GridRow> = Vec::with_capacity(1 + chapter.sections.len());
@@ -221,13 +209,12 @@ fn render_chapter(
 
     summary.rows_emitted += rows.len();
     on_doc_complete(RenderedMarkdown {
-        section_layout: None,
+        searchable: true,
         content_hash: None,
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
         bucket_key: Some(bucket_key(source_id)),
-        md_path,
         render_version: RENDER_VERSION,
         rows,
         front,
@@ -250,15 +237,6 @@ fn render_chapter(
     Ok(())
 }
 
-/// Write a document to the file its id names, and return that path.
-fn write_doc(out_dir: &Path, source_id: &str, m_uuid: &str, md: &str) -> Result<PathBuf> {
-    let md_path = doc_md_path(&render_markdown_root(out_dir, source_id), m_uuid);
-    let dir = md_path.parent().expect("a document's file has a folder");
-    fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
-    fs::write(&md_path, md).with_context(|| format!("write {}", md_path.display()))?;
-    Ok(md_path)
-}
-
 fn chapter_locator(book_n: &str, ch_n: &str) -> String {
     let bn: u32 = book_n.parse().unwrap_or(0);
     let ci: u32 = ch_n.parse().unwrap_or(0);
@@ -273,14 +251,6 @@ fn book_title(book_n: &str) -> String {
     let bn: u32 = book_n.parse().unwrap_or(0);
     format!("{WORK_SHORT} Book {bn}")
 }
-
-fn section_div_open(section_uuid: &str) -> String {
-    format!(
-        "<div id=\"m-{section_uuid}\" data-section-uuid=\"{section_uuid}\" class=\"msg msg--perseus\">"
-    )
-}
-
-const SECTION_DIV_CLOSE: &str = "</div>";
 
 fn render_book_md(book: &Book) -> (Front, String) {
     let title = book_title(&book.n);
@@ -337,15 +307,15 @@ fn render_chapter_sections(
         } else {
             escape_md_block(text)
         };
-        let md = format!(
-            "{}\n\n### {}.{}.{}\n\n{}\n\n{SECTION_DIV_CLOSE}\n\n",
-            section_div_open(&s_uuid),
-            chapter.book_n,
-            chapter.n,
-            sec.n,
-            body
+        let inside = format!(
+            "### {}.{}.{}\n\n{}\n\n",
+            chapter.book_n, chapter.n, sec.n, body
         );
-        sections.push(DocSection::keyed(&s_uuid, md));
+        sections.push(DocSection::boxed(
+            &s_uuid,
+            "msg msg--perseus".to_string(),
+            &inside,
+        ));
     }
     (front, sections)
 }
@@ -614,6 +584,7 @@ fn chapter_edges(
 mod tests {
     use super::*;
     use crate::render::parse::{Book, Chapter, Edition, Section};
+    use datalib_etl_render::section::join;
     use std::collections::BTreeMap;
 
     fn render_chapter_md(
@@ -663,12 +634,10 @@ mod tests {
             editions: vec![ed],
             ..ParsedPerseus::default()
         };
-        let dir = tempfile::tempdir().unwrap();
         let mut docs = Vec::new();
         render_all(
             &parsed,
             &PerseusAlignments::default(),
-            dir.path(),
             "perseus",
             &Progress::noop(),
             &mut |d| {

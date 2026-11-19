@@ -73,7 +73,7 @@ and the next local `embed` finds it there and skips the chunk.
 
 It goes to the person's own Modal account, signed in the way Modal's own
 tools sign in (`~/.modal.toml`, or `MODAL_TOKEN_ID` and
-`MODAL_TOKEN_SECRET`). datalib never copies that credential. The text
+`MODAL_TOKEN_SECRET`). Datalib never copies that credential. The text
 crosses Modal's TLS connection into a container that lives for the run
 and is gone after it, the slice a file in its filesystem; whether Modal
 keeps a container's files or logs is _to check_, and the step prints
@@ -166,7 +166,7 @@ NVIDIA's libraries are not open source. The module carries the CUDA
 runtime and the `-cuda` image cuBLAS, both of which the CUDA Toolkit
 EULA's Attachment A lists as redistributable. Each archive carries
 `third-party/llama_cpp/CUDA-NOTICE.md`, which says their use is governed
-by that EULA and not by datalib's MIT license, and NVIDIA's own
+by that EULA and not by Datalib's MIT license, and NVIDIA's own
 `LICENSE` for the component, verbatim from the archive Bazel fetched it
 in. Whether a release publishes them is the user's decision
 (`AGENTS.md` § "License: MIT, and what may come in").
@@ -334,6 +334,11 @@ into `datalib-step` and run with `node --eval`; it imports npm's `modal`
   the driver could not end (a SIGKILL) goes uncounted. _To check_
   against the bill on the first live run, which also measures what a
   Sandbox uses, so the assumption can be set from that.
+- **The Manage screen's Modal spend column** sums the estimate over the
+  runs the run store keeps, per `embed` step and for its group, with
+  the total climbing run by run behind it, and the latest run's
+  Sandboxes and Sandbox time in its hover (`http/src/manage/spend.rs`).
+  It hides while no row has spent anything.
 - **The run ends with one line** on its Manage row's Status (a hover)
   and in its log: "embedded 8192 chunks on Modal: 3 T4 Sandbox(es), 6
   min 0 s of Sandbox time, about $0.08 at list price". A failed run puts

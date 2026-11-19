@@ -20,10 +20,10 @@ pub use datalib_runtime::build_id::{
 pub use query::{key_names, log_query, log_values, LogCursor, LogQuery, QueryError};
 pub use store::{
     after_every_write, canonical_labels, close_abandoned_run, last_log_seq, latest_metric,
-    latest_metrics, log_after, log_line, metric_history, new_process_id, open_or_create, process,
-    process_log_after, processes, runs, runs_of_steps, snapshot, snapshot_of, step_problem_lines,
-    step_samples, versions, ClosedRun, LogLine, LogSink, ProcessLogWriter, RunWriter, Snapshot,
-    QUEUE_WINDOW,
+    latest_metrics, log_after, log_line, metric_by_run, metric_history, new_process_id,
+    open_or_create, process, process_log_after, processes, runs, runs_of_steps, snapshot,
+    snapshot_of, step_problem_lines, step_samples, versions, ClosedRun, LogLine, LogSink,
+    ProcessLogWriter, RunWriter, Snapshot, QUEUE_WINDOW,
 };
 pub use tracing_layer::{default_filter, filter_at, StoreLayer, DEFAULT_LEVEL};
 

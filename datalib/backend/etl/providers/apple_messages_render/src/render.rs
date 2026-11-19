@@ -143,7 +143,6 @@ impl Dropped {
 
 pub fn render(
     raw_dir: &Path,
-    out_root: &Path,
     source_id: &str,
     progress: &Progress,
     range: RawRange<'_>,
@@ -189,7 +188,6 @@ pub fn render(
     let summary = datalib_etl_chat_common::render_all(
         &profile(),
         &changed.chats,
-        out_root,
         source_id,
         &HashMap::new(),
         progress,

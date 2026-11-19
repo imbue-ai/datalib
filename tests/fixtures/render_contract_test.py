@@ -32,7 +32,6 @@ exactly the shipped code.
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import json
 import os
 import re
@@ -686,19 +685,16 @@ class RenderContractTest(unittest.TestCase):
 
     def _logical_dump(self, source_dir: Path) -> dict[str, list[str]]:
         """Every row the provider wrote to the render store, minus the
-        volatile stamps, plus the `.md` tree as (path, digest) — the
-        content two renders of one raw store must agree on. Datalib's own
+        volatile stamps — its documents among them, as `sections` and
+        `drawings` — the content two renders of one raw store must
+        agree on. Datalib's own
         storage report is left out: it carries a byte-count history, so
         it is a function of the run, not of the raw store. One doltlite
         invocation for all the tables: spawning the shell is what this
         test's runtime is made of."""
         db = source_dir / "render_markdown" / "indexed_markdown.doltlite_db"
         out: dict[str, list[str]] = {}
-        storage: set[str] = set()
         if db.is_file():
-            storage = set(
-                self._rows(db, "SELECT md_path FROM markdowns WHERE kind = 'storage';")
-            )
             selects = []
             for t, cols in self._render_columns(db).items():
                 keep = [c for c in cols if c not in _VOLATILE.get(t, ())]
@@ -710,17 +706,6 @@ class RenderContractTest(unittest.TestCase):
                     f"ORDER BY {', '.join(keep)};"
                 )
             out = self._split_by_sentinel(self._rows(db, " ".join(selects)))
-        files = []
-        root = source_dir / "render_markdown"
-        for p in sorted(root.rglob("*")):
-            if (
-                p.is_file()
-                and p.suffix == ".md"
-                and str(p.relative_to(source_dir.parent)) not in storage
-            ):
-                digest = hashlib.sha256(p.read_bytes()).hexdigest()[:16]
-                files.append(f"{p.relative_to(root)} {digest}")
-        out["files"] = files
         return out
 
     def _diff(self, want: dict[str, list[str]], got: dict[str, list[str]]) -> str:

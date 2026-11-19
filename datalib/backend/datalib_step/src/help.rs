@@ -31,8 +31,8 @@ const SETUP: &[SetupStep] = &[
     SetupStep {
         say: "Make a data root: one directory holding config.toml and everything synced \
               into it. `datalib-dag init` writes a starter config with the index steps and \
-              no sources, and nothing else. The commented example config, \
-              `configs/dag_example.toml`, is in the repo and beside the binaries in a release.",
+              no sources, and nothing else. `datalib-step help dag-example` prints a \
+              complete config with every line commented.",
         commands: &[Example {
             what: "start a data root",
             command: "datalib-dag init ~/datalib",
@@ -92,10 +92,11 @@ const SETUP: &[SetupStep] = &[
               after:2026-10-01'` (`''` lists every row; `datalib-applet search --help` has \
               the flags). For SQL, `datalib-doltlite -readonly \
               <data_root>/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \"SELECT provider, \
-              count(*) FROM grid_rows GROUP BY 1\"` (stock sqlite3 opens it read-only only \
-              while its writer is running). Or serve \
-              the app with `datalib-http <data_root>`. `datalib-step help search` has the \
-              search's query language, and `datalib-step help agent` the rest.",
+              count(*) FROM grid_rows GROUP BY 1\"`. Or serve the app with `datalib-http \
+              <data_root>`: then `POST /applet/unified_grid_and_search_index/sql` runs a \
+              `SELECT` against any store over HTTP, with nothing else installed \
+              (`datalib-step help applets`). `datalib-step help search` has the search's \
+              query language, and `datalib-step help agent` the rest.",
         commands: &[],
     },
     SetupStep {
@@ -156,15 +157,16 @@ fn docs_page() -> String {
         "The docs compiled into datalib-step. `datalib-step help <topic>` prints one whole, \
          and a release carries each beside its binaries at the path shown. A link from \
          one to another prints as the command that prints it; a link to anything else in \
-         the repo, as its raw file at this build's commit.",
+         the repo, as its raw file on GitHub at this build's commit, which a sandbox \
+         may not reach.",
         0,
         0,
     );
     for (kind, heading) in [
-        (Kind::Guide, "Guides, for using datalib:"),
+        (Kind::Guide, "Guides, for using Datalib:"),
         (
             Kind::Reference,
-            "References, written for datalib's contributors too:",
+            "References, written for Datalib's contributors too:",
         ),
         (Kind::Config, "Example configs, each one that loads:"),
     ] {
@@ -323,9 +325,9 @@ fn examples_intro(t: SourceType) -> Vec<String> {
 }
 
 fn overview(commands: &[String]) -> String {
-    let mut out = String::from("datalib-step help: setting datalib up from a shell\n\n");
+    let mut out = String::from("datalib-step help: setting Datalib up from a shell\n\n");
     out.push_str(&wrap(
-        "datalib mirrors a person's data (chats, email, messages, contacts, …) into one \
+        "Datalib mirrors a person's data (chats, email, messages, contacts, …) into one \
          directory, the data root, and indexes it for search. Its config.toml lists the \
          sources, and datalib-dag syncs them. To set a source up:",
         0,
@@ -351,7 +353,8 @@ fn overview(commands: &[String]) -> String {
         ),
         (
             "datalib-step help applets",
-            "the servers the app runs, listed below: what each serves, how to call them",
+            "the servers the app runs, listed below: what each serves, how to call them, \
+             SQL over HTTP against any store",
         ),
         (
             "datalib-step help docs",
@@ -382,16 +385,26 @@ fn overview(commands: &[String]) -> String {
     out.push_str("\nSource types:\n");
     out.push_str(&wrap(&types.join(", "), 2, 2));
     out.push_str("\nFunctions (a step's id is <group>/<function>):\n");
+    let width = Function::VARIANTS
+        .iter()
+        .map(|f| f.as_str().len())
+        .max()
+        .unwrap_or(0);
     for f in Function::VARIANTS {
         out.push_str(&format!(
-            "  {:<20} {}\n",
+            "  {:<width$} {}\n",
             f.as_str(),
             first_sentence(f.describe())
         ));
     }
     out.push_str("\nApplets (reached at /applet/<id>/ on datalib-http once the app runs):\n");
+    let width = datalib_agent_docs::APPLETS
+        .iter()
+        .map(|a| a.name.len())
+        .max()
+        .unwrap_or(0);
     for a in datalib_agent_docs::APPLETS {
-        out.push_str(&format!("  {:<26} {}\n", a.name, a.does));
+        out.push_str(&format!("  {:<width$} {}\n", a.name, a.does));
     }
     out.push_str("\nCommands:\n");
     out.push_str(&wrap(&commands.join(", "), 2, 2));
@@ -688,9 +701,9 @@ mod tests {
     #[test]
     fn every_doc_prints_by_its_topic_with_no_relative_link_left() {
         for (word, title) in [
-            ("agent", "# datalib — agent user guide"),
+            ("agent", "# Datalib — agent user guide"),
             ("raw-stores", "# Reading the raw stores"),
-            ("apps", "# Building an app on datalib"),
+            ("apps", "# Building an app on Datalib"),
             ("search", "# Searching your mirror"),
             ("step-protocol", "# Writing a step command"),
         ] {

@@ -1,10 +1,9 @@
 <script setup lang="ts">
-// Renders a chat conversation. The backend serves the markdown body verbatim
-// (CommonMark + per-section `<div id="m-{uuid}" data-section-uuid="…">`
-// wrappers emitted by the ingest renderer — one wrapper per message,
-// plus nested ones for tool_use / tool_result / thinking blocks);
-// `renderDocument` runs markdown-it and the sanitizer over it, one
-// message at a time where `sections` says where each lies.
+// Renders a chat conversation. The backend serves the markdown as the
+// renderer's pieces (CommonMark + per-section `<div id="m-{uuid}"
+// data-section-uuid="…">` wrappers — one wrapper per message, plus nested
+// ones for tool_use / tool_result / thinking blocks); `renderDocument`
+// runs markdown-it and the sanitizer over it, one message at a time.
 //
 // The body is drawn inside a frame whose policy runs no script
 // (`docFrame.ts`). `body` is the frame's `<body>`: the decorations below
@@ -20,7 +19,7 @@
 // inside a shadow root, so document-head styles don't reach it. The
 // body's stylesheet (`documentBody.css`) goes in with the frame's document.
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from "vue";
-import type { BodySection, EdgeOut } from "@/api";
+import type { BodyNode, EdgeOut } from "@/api";
 import { decorateRemoteMedia, type RemoteContext, type RemoteRef } from "./remoteMedia";
 import {
   copyWithHandles,
@@ -64,12 +63,12 @@ import {
   injectCopyUuidButtons,
   openEnclosingDetails,
   scrollSectionToTop,
+  sectionEl,
 } from "./chatSections.js";
 
 const props = defineProps<{
-  body: string;
-  /** Where each section of `body` lies (`renderDocument`). */
-  sections?: BodySection[] | null;
+  /** The body as the renderer's pieces (`renderDocument`). */
+  pieces: BodyNode[];
   selectedSectionUuid?: string | null;
   /**
    * Outgoing edges for the doc we're rendering. ChatBody decorates
@@ -137,10 +136,9 @@ const emit = defineEmits<{
 }>();
 
 const sanitized = computed(() =>
-  renderDocument(props.body || "", {
+  renderDocument(props.pieces, {
     accept: props.remoteAccept,
     context: props.remoteContext,
-    sections: props.sections,
   }),
 );
 const html = computed(() => sanitized.value.html);
@@ -157,7 +155,7 @@ let frameStops: (() => void)[] = [];
 // reader back to the selected section; only a new body earns that.
 let bodyChanged = true;
 watch(
-  () => props.body,
+  () => props.pieces,
   () => {
     bodyChanged = true;
   },
@@ -360,19 +358,16 @@ const edgeBySrcAnchor = computed<Map<string, EdgeOut>>(() => {
 });
 
 /**
- * Walk the rendered body and decorate every `[data-section-uuid]`
- * whose value matches a span-source edge. We stamp `data-edge-id` on
- * the element and add `.edge-source` so the CSS picks up the subtle
- * background. Click handling lives below via `onBodyEdgeClick`.
+ * Decorate the element each span-source edge starts at: stamp
+ * `data-edge-id` on it and add `.edge-source` so the CSS picks up the
+ * subtle background. Click handling lives below via `onBodyEdgeClick`.
  */
 function decorateEdgeSources() {
-  if (!body.value) return;
-  const lookup = edgeBySrcAnchor.value;
-  if (lookup.size === 0) return;
-  for (const el of body.value.querySelectorAll<HTMLElement>("[data-section-uuid]")) {
-    const anchor = el.getAttribute("data-section-uuid") ?? "";
-    const edge = lookup.get(anchor);
-    if (!edge) continue;
+  const root = body.value;
+  if (!root) return;
+  for (const [anchor, edge] of edgeBySrcAnchor.value) {
+    const el = sectionEl(root, anchor);
+    if (!el) continue;
     el.classList.add("edge-source");
     el.dataset.edgeId = edge.edge_uuid;
   }
@@ -428,10 +423,7 @@ function applyHoverDst() {
   }
   const anchor = props.hoverAnchorUuid;
   if (!anchor) return;
-  const target = body.value.querySelector<HTMLElement>(
-    `[data-section-uuid="${anchor.replace(/"/g, '\\"')}"]`,
-  );
-  if (target) target.classList.add("hover-dst");
+  sectionEl(body.value, anchor)?.classList.add("hover-dst");
 }
 
 function applySelection(scroll = true) {
@@ -440,14 +432,7 @@ function applySelection(scroll = true) {
     el.classList.remove("selected");
   }
   if (!props.selectedSectionUuid) return;
-  // Attribute-selector lookup avoids the CSS-id escaping minefield —
-  // tool_use block ids look like `tu-toolu_01ABC…`, which is a valid
-  // HTML id but not a valid bare CSS selector (the digit-prefixed
-  // chunks need escaping). `[data-section-uuid="…"]` keeps the
-  // matching pure string equality.
-  const target = body.value.querySelector<HTMLElement>(
-    `[data-section-uuid="${props.selectedSectionUuid.replace(/"/g, '\\"')}"]`,
-  );
+  const target = sectionEl(body.value, props.selectedSectionUuid);
   if (!target) return;
   target.classList.add("selected");
   openEnclosingDetails(target);

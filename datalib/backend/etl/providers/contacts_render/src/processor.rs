@@ -46,7 +46,6 @@ impl SourceRender for ContactsRender {
         let mut on_doc = |md| ctx.emit_doc(md);
         let buckets = render::render_all(
             &parsed,
-            ctx.root,
             ctx.name,
             ctx.progress,
             ctx.raw_range(),

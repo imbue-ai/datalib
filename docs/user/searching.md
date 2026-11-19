@@ -1,15 +1,13 @@
 # Searching your mirror
 
-One query language answers everywhere you can search datalib: the
+One query language answers everywhere you can search Datalib: the
 search box at the top of the app (Enter runs it in the search tab you are on,
 or a new tab from anywhere else; ⌘Enter always opens a new tab; and its arrow
 opens Advanced search, whose every setting writes the same
 words into the box), `datalib-applet search <data_root> '<query>'`
 from a shell (no app or server needed; it prints JSON), and
 `GET /applet/unified_grid_and_search_index/search?q=…` on a running
-`datalib-http`. This page is that language. `datalib-step help search`
-prints it, and a release ships it beside the binaries as
-`docs/user/searching.md`.
+`datalib-http`. This page is that language.
 
 ```sh
 datalib-applet search ~/datalib 'from:me after:2026-10-20'
@@ -18,25 +16,47 @@ datalib-applet search ~/datalib 'warp core -from:riker is:document'
 
 ## Words, and how they are matched
 
-A query is free text and `key:value` terms, in any order; everything
-must match. There is no `OR`: typed between two words it is searched
-as the word "or", so `sam OR samuel` asks for documents holding both
-names. Search for each separately. Free text looks for words in your documents:
+A query is free text and `key:value` terms, in any order. Its terms and
+some of its free text are **filters**, which every result must pass; the
+rest of its free text is **words to rank by**.
 
-- **By their fields:** every word as the start of a value a row is filed
-  under: a name, an address, an id, a title, a label.
-- **By their words:** the words themselves. A conversation (a thread, a chat,
-  an agent session) matches when one of its messages holds every word, and
-  opens at that message. A page (a document, a calendar, a device's readings)
-  also matches when its parts hold the words between them, ranked below every
-  document that says them in one place. Words typed together in that order
-  rank first.
+| you write | it is |
+|---|---|
+| `key:value`, `-key:value` (below) | a filter on a row's fields |
+| `"two words"` | a filter: the row's text holds those words, in that order. Also ranked by |
+| `+word` | a filter: the row's text holds the word. Also ranked by |
+| `-word`, `-"two words"` | a filter: the row's text does not hold it |
+| an id, a link ending in one, an address or a number (below) | a filter: the row names it |
+| any other word | ranked by |
+
+A row's text is its message, for a row inside a conversation (a thread, a
+chat, an agent session), and the whole document for a document's own row.
+So `warp -breach` finds a thread whose other message says "breach", at the
+message that does not; a thread every message of which says "breach" is
+not found at all.
+
+Every filter is applied before anything is ranked. The words are ranked
+two ways, and the two lists merged, documents that rank well in both
+first:
+
+- **By their words:** a conversation matches when one of its messages holds
+  every word, and opens at that message. A page (a document, a calendar, a
+  device's readings) also matches when its parts hold the words between
+  them, ranked below every document that says them in one place. Words
+  typed together in that order rank first.
 - **By their meaning:** the documents closest in meaning, even with none of
-  your words in them. With a key that keeps only some of a document's messages
-  (`from:riker`, a day), the document is judged by those messages alone.
+  your words in them. With a filter that keeps only some of a document's
+  messages (`from:riker`, a day, `-breach`), the document is judged by
+  those messages alone.
 
-All three are merged into one list, documents that rank well in more than one
-first.
+There is no `OR`: typed between two words it is searched as the word
+"or", so `sam OR samuel` asks for documents holding both names. Search
+for each separately. A search without words to rank by lists what its
+filters keep, newest first.
+
+Words match as written, ignoring case and accents: "runs" does not find
+"running", and a quoted phrase is exact. Meaning finds the other forms of
+a word, and its synonyms.
 
 Every document has some similarity to any words, so meaning needs a cutoff, or
 every search would find every document:
@@ -47,37 +67,42 @@ every search would find every document:
 | `semantic:0.4` | ask for a closer match; from 0 to 1, where 0 keeps every document |
 | `semantic:off` | leave meaning out. Faster from a shell, which then loads no model |
 
-A word or a field that matches counts however far off its meaning is.
+A document whose words match counts however far off its meaning is.
 
 A search can be in another language than the document. Meaning crosses
 languages: a question in German or Italian finds an English document,
 and the other way round, though often at a lower similarity, so lower the
-cutoff if a foreign question finds little. Words and fields match what you
-typed, so across languages they find only what the two spellings share, such as
-a name. Meaning covers a source only once its `embed` step has run, so a source
-with that step turned off answers in the words it is written in. A line above
-the results says how many of the documents the search could have found have no
-vectors, and hovering says which sources they are in. From a shell or the API
-it is `query_echo.without_vectors`. While a sync is writing the index, meaning
-and that line answer from what the search last read, so a
-search stays quick; what the sync added counts once the index has been still
-for half a minute.
+cutoff if a foreign question finds little. Words match what you typed, so
+across languages they find only what the two spellings share, such as a
+name.
 
-A search covers the sources the document index holds. A source turned off can
-leave it after an upgrade changes how documents are stored, because a turned-off
-source does not re-render, and a warning on its row says so. Turn it on and sync
-it to bring it back; what it has already embedded is kept.
+### What a search covers
 
-Free text made only of ids and addresses (`picard@enterprise.org`,
-`tel:+12025550101`, a row's uuid) is looked up directly: every row that names it, the ones it is most about first. A source's
-own id for a record counts too, where it is a uuid, dashed or not, and so
-does a link that ends in one: paste a Notion page's link to find the page.
-A source id that is not a uuid, such as a Gmail id, is not looked up
-this way; search for it with `id:` (below).
+A source's words are searchable once `unified_grid_and_search_index` has run
+after its render; until then words to rank by, and the quoted, `+` and `-`
+filters, find nothing there, and the answer says why. A source that step's `not_searched` lists is never searched. Meaning covers
+a source only once its own `embed` step has run, so a source with that step
+turned off is found by its words alone. A line above the results
+says how many of the documents the search could have found have no vectors,
+and hovering says which sources they are in; from a shell or the API it is
+`query_echo.without_vectors`. While a sync is writing the index, meaning and
+that line answer from what the search last read, so a search stays quick; what
+the sync added counts once the index has been still for half a minute.
 
-A source's words are searchable once `unified_grid_and_search_index` has run after its
-render; until then free text finds nothing there and the answer says
-why. A source `unified_grid_and_search_index` lists in `not_searched` is never searched.
+A turned-off source does not re-render, so it can drop out of search when an
+upgrade changes how documents are stored; a warning on its row says so. Turn
+it on and sync it to bring it back; what it has already embedded is kept.
+
+### Ids as free text
+
+An id, an address or a number typed as free text (`picard@enterprise.org`,
+`+12025550101`, a row's uuid) is a filter: every row that names it, in any
+role, newest first. A source's own id for a record counts too, where it is
+a uuid, dashed or not, and so does a link that ends in one: paste a Notion
+page's link to find the page. A source id that is not a uuid, such as a
+Gmail id, is not read this way; search for it with `id:` (below).
+
+### The text a search reads
 
 What the words and the meaning search over is each item drawn plainly:
 who wrote it (with their address, where it is an email or a phone
@@ -102,25 +127,34 @@ The keys for what a row is and where it lives are `source:` (a
 source by its id in the config; also `source_id:`), `kind:` (`Email`,
 `Slack Message`, …), `subject:` (also `conversation:`), `channel:`,
 `account:`, `project:`, `id:` (a row by the id its source gave it),
-`datalib_document_id:` (a document by datalib's id for it, and every
+`datalib_document_id:` (a document by Datalib's id for it, and every
 row in it), `contact:` and `email:` (an address book's columns), and
 the id of any other column the grid shows (`org_name:`, `created_at:`,
 …). These match the whole value as stored, case and all: `kind:Email`,
-not `kind:email`.
+not `kind:email`. A uuid is the one exception: 32 hex digits, with or
+without the four dashes, match the same uuid however it is written and
+however its source stored it, dashed or not, in capitals or not.
+`datalib_document_id:` and `notion_page:` also take their uuid at the
+end of a slug or a link, so a Notion page's link can follow
+`notion_page:` as it is.
 
 `id:` takes the id as the source spells it: an email's id in Gmail or
 on a JMAP server (not its `Message-ID` header), a Notion page's id, a
-Claude or ChatGPT conversation's. Where one id is not enough to name a
-record, the value joins several with `#`: a Slack message is
-`<channel>#<ts>`, a GitHub comment `<owner>/<repo>#<id>`. Two sources
-can use the same id, so add `source:` when that matters.
+Claude or ChatGPT conversation's. A Notion page's id can be copied from
+the end of its link, where Notion leaves out the dashes:
+`id:1701d000abcd4e00a0000000000000ef` finds the page whose id Notion's
+API writes `1701d000-abcd-4e00-a000-0000000000ef`. Any id that is not a
+uuid matches only as written, case and all, since some sources' ids
+differ only in case (two comments on one Google Doc can). Where one id
+is not enough to name a record, the value joins several with `#`: a
+Slack message is `<channel>#<ts>`, a GitHub comment
+`<owner>/<repo>#<id>`. Two sources can use the same id, so add
+`source:` when that matters.
 
-Pasting an id as free text (above) finds every row that names it,
-ranked. `id:` is the exact match: the rows whose source id is that
-value, and nothing else, and it combines with other keys like any key
-does.
+`id:` is the exact match, unlike an id pasted as free text (above):
+the rows whose source id is that value, and nothing else.
 
-`datalib_document_id:` takes the id datalib gave a document (a thread,
+`datalib_document_id:` takes the id Datalib gave a document (a thread,
 a conversation, a page) and keeps that document and every row in it,
 over every month of a chat; Keep only on a Subject cell writes it. A
 message's own id finds nothing, since a message is a row inside a
@@ -146,11 +180,9 @@ Anything else is refused, with a line saying why, rather than ignored.
 `after:` and `before:` keep each message by its own time, and a
 document (a thread, a chat, an agent session) by its last message. A
 chat that runs over several days is kept for any day it was active,
-and without free text you see only that day's messages. With free text, meaning
-ranks the chat by its messages in the window alone, while words rank it by its
-best message holding every word, from any day, then open it at the message in
-the window holding the most of your words. So a chat can rank for words it said
-on another day, and open on a message that does not hold them.
+and without free text you see only that day's messages. With free text,
+both its words and its meaning rank the chat by its messages in the
+window alone, and it opens at one of them.
 
 `GET …/search/keys` lists every key a root has, and
 `…/search/values?key=…&typed=…` the values one takes, most rows first.
@@ -172,7 +204,7 @@ A person is found by the part they played:
 | `label:` (also `in:`, as Gmail writes `in:sent`) | (not a person) an email's labels and mailboxes; a photo's keywords (and the keywords above them), the people tagged in it and its albums |
 | `place:` | (not a person) where a photo was taken: a city or a landmark; or, given an [H3](https://h3geo.org) cell at any resolution (`place:86283082fffffff`), every row whose location falls in it |
 | `near:` | (not a person) given an H3 cell, every row in it or in one of its six neighbours: what the photo card's "photos in this area" writes. `place:` with a cell can miss a row just inside the cell's edge, because H3's coarse cells do not exactly hold their finer ones; `near:` never does, and also finds some rows just outside |
-| `caption:` | (not a person) a photo's caption; the free text in the search box does not reach photos, which have no page |
+| `caption:` | (not a person) a photo's caption. Free text finds it too, on the photo's page, unless the photo's source is in `not_searched` |
 | `keyword:` (also `tag:`) | (not a person) a photo's keywords, and the keywords above them in the keyword tree |
 | `rating:` | (not a person) a photo's stars, `1` to `5`: `rating:4` exactly, or compared, `rating:>=3`, `rating:<2` (`>`, `>=`, `<`, `<=`). `-rating:*` is the unrated ones |
 | `collection:` (also `album:`) | (not a person) the collections a photo is in: in Lightroom its collections, the Quick Collection, a saved book, slideshow, print or web gallery, and a publish service's collections (Flickr, Hard Drive, …). A collection inside a set answers to its own name, each set's name above it, and its whole path, `"Trips › Japan"`. A smart collection is a saved search, not a list of photos, and is not one |
@@ -180,7 +212,7 @@ A person is found by the part they played:
 The value can be:
 
 - **An address or number** (`riker@enterprise.org`, `+12025550101`), or
-  any handle as datalib writes it (`email:…`, `tel:…`,
+  any handle as Datalib writes it (`email:…`, `tel:…`,
   `slack:T…/U…`, `github:jlpicard`): that person exactly.
 - **A quoted name** (`from:"Will Riker"`): any name holding those
   words in that order, each whole (`from:"Riker"` finds "Will Riker
@@ -284,14 +316,14 @@ every group with its count, then each group's rows a page at a time.
 
 A part of the search that cannot answer costs that part, not the rest: while
 the embedding model is still downloading on a first launch, you still get what
-your words and fields match, with a line above the results saying what is
-missing, `query_echo.partial`.
+your words match, with a line above the results saying what is missing,
+`query_echo.partial`.
 
-The answer's `refused` says why a query was not run: `tab=` or `--tab`, which a
-search no longer has, a key the search
+The answer's `refused` says why a query was not run: a key the search
 does not have, `is:` with a word it does not know, a `contact:` on a
-root without the contacts app, or `me` on a root whose index has not
-synced since it learned which handles are yours.
+root without the contacts app, `me` on a root whose index has not
+synced since it learned which handles are yours, or `tab=` / `--tab`
+(a search has one answer, every way of matching merged).
 
 Either way `datalib-applet search` prints what it has and the reason, and
 exits 1, so a script cannot take a refusal or a partial answer for an

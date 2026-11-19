@@ -18,6 +18,7 @@ use datalib_etl_chatgpt::synthesize::ChatgptSynth;
 use datalib_etl_chatgpt_render::render::parse::parse_loaded;
 use datalib_etl_chatgpt_render::render::render::render_all;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_render::section::join;
 use datalib_etl_web::owed;
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
@@ -114,32 +115,22 @@ async fn ingest_export(
     s
 }
 
-/// Every markdown file render writes from the store at `raw`.
+/// Every document render makes from the store at `raw`, its markdown by
+/// its uuid.
 fn rendered(raw: &Path) -> BTreeMap<String, String> {
     let parsed = parse_loaded(block_on_load_all(&db_path_for(raw)).unwrap());
-    let out = tempfile::tempdir().unwrap();
+    let mut md = BTreeMap::new();
     render_all(
         &parsed,
-        out.path(),
         "chatgpt",
         &datalib_etl::progress::Progress::noop(),
-        &mut |_| Ok(()),
+        &mut |doc| {
+            md.insert(doc.markdown_uuid.clone(), join(&doc.sections));
+            Ok(())
+        },
         1,
     )
     .unwrap();
-    let mut md = BTreeMap::new();
-    let mut todo = vec![out.path().to_path_buf()];
-    while let Some(d) = todo.pop() {
-        for e in fs::read_dir(&d).unwrap() {
-            let p = e.unwrap().path();
-            if p.is_dir() {
-                todo.push(p);
-            } else if p.extension().is_some_and(|x| x == "md") {
-                let rel = p.strip_prefix(out.path()).unwrap().display().to_string();
-                md.insert(rel, fs::read_to_string(&p).unwrap());
-            }
-        }
-    }
     md
 }
 
@@ -413,15 +404,15 @@ async fn an_export_renders_every_message_but_tool_and_system_ones() {
         export_md.keys().collect::<Vec<_>>()
     );
     let mut left_out = 0;
-    for (path, page) in &api_md {
-        let (from_api, from_export) = (sections(page), sections(&export_md[path]));
+    for (uuid, page) in &api_md {
+        let (from_api, from_export) = (sections(page), sections(&export_md[uuid]));
         let but_tools: Vec<_> = from_api
             .iter()
             .filter(|(_, author)| author != "Tool" && author != "System")
             .cloned()
             .collect();
         left_out += from_api.len() - but_tools.len();
-        assert_eq!(from_export, but_tools, "{path}");
+        assert_eq!(from_export, but_tools, "{uuid}");
     }
     assert_eq!(
         left_out, 4,

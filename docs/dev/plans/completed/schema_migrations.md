@@ -17,7 +17,7 @@ mechanisms we already have for surviving a schema change are sound,
 which are only sound under an assumption that is about to break, and
 what is missing altogether.
 
-"Schema" here means every shape a running datalib reads back from a
+"Schema" here means every shape a running Datalib reads back from a
 data root and would misread if an older or newer build had written it:
 the tables in every doltlite store, the plain-SQLite run store, the
 JSON files, the config, the uuid recipes, and the strings an enum is
@@ -42,7 +42,7 @@ have least need of.
 | SQLite-mirror stores (lightroom, apple_photos, whatsapp, apple_messages) | *upstream's* schema, rebuilt from `PRAGMA table_xinfo` every run | not applicable: every run drops every mirror table and refills from the source file, doltlite dedups | upstream drift is absorbed by construction | none (but the source file's own version, where it has one, is in the mirror) |
 | Render store `<group>/render_markdown/indexed_markdown.doltlite_db` | `indexed_markdown::store_ddl()` — `grid_rows`, `markdowns`, `edges`, `problems`, `measurements`, `render_cursor`, `render_inputs` | the **same** per-table reconcile as the raw store (`open_derived`) | same as raw — but see §1.2: the render cursor is **not** among the cursors it clears | `markdowns.renderer_version` per document, `"rust-v1.<RENDER_VERSION>"` |
 | Grid index `unified_index/grid_index/db.doltlite_db` | `grid_index::index_ddl()` | `reconcile_index_schema`, column names, all tables together | drop **every** index table and rebuild from the render stores; `source_cursors` goes with them, deliberately | none |
-| qmd index `unified_index/qmd_index/` | qmd's own (plain SQLite) | qmd's; datalib only reconciles the collection list | a collection no group claims is retired; the one migration so far (`mirror` → per-source) is hand-coded in `qmd_index.rs` | qmd's, plus `DEFAULT_QMD_VERSION` pinned in `datalib_runtime` |
+| qmd index `unified_index/qmd_index/` | qmd's own (plain SQLite) | qmd's; Datalib only reconciles the collection list | a collection no group claims is retired; the one migration so far (`mirror` → per-source) is hand-coded in `qmd_index.rs` | qmd's, plus `DEFAULT_QMD_VERSION` pinned in `datalib_runtime` |
 | Run store `system/runs/runs.sqlite` | `app_schema::runs` | `PRAGMA user_version` against `datalib_runs::SCHEMA_VERSION` (7; it has moved in six commits since 2026-09-11) | **delete the file and remake it** | `user_version` |
 | Feedback `system/feedback.doltlite_db` | `app_schema::feedback` | `CREATE TABLE IF NOT EXISTS` — i.e. not detected — plus one hand-written probe (`app_store_migrate`: "is `created_at` still there?") | the one known rename is migrated in place and dolt-committed; any other change goes unnoticed until a query names a column that is not there | none |
 | Jobs `system/jobs.doltlite_db`, usage `system/usage.doltlite_db` | `app_schema::sync_jobs`, `disk_usage` | same as feedback | same | none |
@@ -148,7 +148,7 @@ changes nothing. `LAYOUT_VERSION` in the render params is what
 actually does this job for the chat providers.
 
 **(f) There is no downgrade guard anywhere.** Nothing records which
-datalib wrote a root, and nothing refuses a root written by a newer
+Datalib wrote a root, and nothing refuses a root written by a newer
 one. An older build opening a newer root does, in order: the raw
 reconcile sees the newer columns as "extra" and **drops and
 recreates** those tables (losing the columns and, per (a), possibly
@@ -156,7 +156,7 @@ the rows); the run store sees a `user_version` it does not know and
 deletes the file; `dag_state.json` drops the fields it does not know;
 the app stores keep the newer shape and fail on the first query that
 names a renamed column. This is not hypothetical: the Minds template
-runs a *pinned* datalib against a root the desktop app may have
+runs a *pinned* Datalib against a root the desktop app may have
 written with a newer one.
 
 **(g) Nothing records which build wrote a store.** No table, no
@@ -289,7 +289,7 @@ conservatively.
 the one whose absence has hurt least.** What a store should carry, in
 order of use:
 
-1. **Which build wrote it** — the datalib version and git hash. This
+1. **Which build wrote it** — the Datalib version and git hash. This
    is what a downgrade guard reads, what a bug report needs, and what
    a migration checks first. Nothing carries it today (§1.2(g)).
 2. **What shape it is in** — a hash of the DDL list the owner opened
@@ -524,7 +524,7 @@ landed (`datalib_store_meta::guard`):
   `app_ready: false`. The UI gates on it ahead of first-run and
   config-error, with a screen of its own (`NewerRootView`), since
   there is nothing to edit. The Minds case (§1.2(f)) is that screen.
-  Checked at boot only: the fix is to run another datalib, which is
+  Checked at boot only: the fix is to run another Datalib, which is
   a restart either way.
 - Not guarded: readers. A pinned reader on a newer store fails at
   prepare time on a column it does not know, which is loud enough,

@@ -384,8 +384,8 @@ fn assumed_utc(source_id: &str, uuid: &str) -> ProblemRow {
     )
 }
 
-/// The photo as text, for a diff of two renders: there is no page on
-/// disk, and this is what one would say.
+/// The photo's page as text: what a diff of two renders compares and
+/// free-text search reads.
 fn summary(photo: &NormalizedPhoto) -> String {
     let title = photo
         .title

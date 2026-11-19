@@ -132,7 +132,7 @@ mod tests {
     #[test]
     fn roots_narrow_the_mirror() {
         let cfg: NotionConfig = serde_json::from_str(
-            r#"{"api":{"roots":["https://app.notion.com/p/Proj-348a550faf9580a08973e679d9e1c6c9"]}}"#,
+            r#"{"api":{"roots":["https://app.notion.com/p/Proj-1701d000a0004000800000000000d005"]}}"#,
         )
         .unwrap();
         assert!(cfg.validate().is_ok());
