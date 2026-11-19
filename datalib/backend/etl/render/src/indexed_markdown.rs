@@ -1007,6 +1007,29 @@ impl IndexedMarkdownStore {
         })
     }
 
+    /// What each of these items says, as the store keeps it, by its uuid:
+    /// its body where its renderer split one off, else its piece whole
+    /// with the class of the box it is in. Read only for these documents'
+    /// pieces; an item the store does not hold is left out.
+    pub fn item_texts(
+        &self,
+        markdown_uuids: &[String],
+        uuids: &[String],
+    ) -> Result<Vec<(String, String, Option<String>)>> {
+        blocking(async {
+            sqlx::query_as(
+                "SELECT uuid, text, class FROM sections \
+                 WHERE markdown_uuid IN (SELECT value FROM json_each(?)) \
+                 AND uuid IN (SELECT value FROM json_each(?))",
+            )
+            .bind(serde_json::to_string(markdown_uuids)?)
+            .bind(serde_json::to_string(uuids)?)
+            .fetch_all(&self.pool)
+            .await
+            .context("read items' texts")
+        })
+    }
+
     /// [`Self::document`] as one string: the document's markdown.
     pub fn document_text(&self, markdown_uuid: &str) -> Result<Option<String>> {
         Ok(self

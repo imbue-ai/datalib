@@ -123,8 +123,9 @@ database per source, at
     and where to put it back (`body_at`), and each frame piece whole.
     With `sections` it spells the document byte for byte
     (`IndexedMarkdownStore::document`), which is the one copy of what a
-    document looks like: the viewer, a search's quotes and
-    `datalib-step markdown` all read it.
+    document looks like: the viewer and `datalib-step markdown` read it.
+    A search's quote reads only the `sections` row of the item the hit
+    landed on (`IndexedMarkdownStore::item_texts`).
   - `source_contacts` and `source_contact_handles` — the people it
     describes or mentions, each as its source describes them (a
     `NormalizedContact`, `contact_schema/`), and the handles that reach
@@ -209,9 +210,10 @@ There is no `.md` file. A renderer hands each document over as
 `RenderedMarkdown::sections`, and the store keeps them in `sections` and
 `drawings`, versioned with the document's rows, so a reader at a
 commit sees that commit's text. Search draws a document's text from the
-store (`IndexedMarkdownStore::index_docs`); the document view, a
-search's quotes and `datalib-step markdown` spell it
-(`IndexedMarkdownStore::document`). Files an earlier build wrote beside
+store (`IndexedMarkdownStore::index_docs`); the document view and
+`datalib-step markdown` spell it (`IndexedMarkdownStore::document`). A
+hit lands on the item the search index names, by its id, and its quote
+reads only what that item says (`IndexedMarkdownStore::item_texts`). Files an earlier build wrote beside
 the store are deleted the next time the source renders
 (`datalib_step/src/old_markdown.rs`).
 
