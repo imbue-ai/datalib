@@ -51,7 +51,8 @@ pub struct DocInput<'a> {
     pub native: Result<&'a Value, &'a Problem>,
     pub images: &'a BlobBundle,
     pub comments: &'a [(String, Value)],
-    /// Every folder and shared drive the store holds.
+    /// Every folder and shared drive the store holds, and the folders
+    /// each file is in as of the newest listing.
     pub places: &'a Places,
 }
 

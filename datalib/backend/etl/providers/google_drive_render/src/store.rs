@@ -1,8 +1,8 @@
 //! What a render reads from the `google_drive` raw store at its pin: the
 //! listing entries, each file's newest capture and its parts, the
-//! comments, and the folders and shared drives, all small enough to read
-//! whole. A Doc's native JSON and its
-//! images are read one file at a time, as it renders.
+//! comments, and the folders, shared drives and file parents, all small
+//! enough to read whole. A Doc's native JSON and its images are read one
+//! file at a time, as it renders.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read as _;
