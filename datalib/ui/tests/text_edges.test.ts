@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BodyPiece } from "../src/api";
+import { sectionEl } from "../src/cards/chatSections.js";
 import { bodyOf, renderDocument } from "../src/cards/renderDocument";
 
 /// The text-edge library (`datalib/backend/etl/text_edges/`): each case's
@@ -50,7 +51,7 @@ function page(r: Rendered): HTMLElement {
 /// What the case's own text drew: its message's wrapper, or the whole
 /// page where the renderer declares no messages.
 function scope(root: HTMLElement, r: Rendered): Element {
-  return (r.sections && root.querySelector(`[data-section-uuid="${FIRST}"]`)) || root;
+  return (r.sections && sectionEl(root, FIRST)) || root;
 }
 
 /// The words a reader sees, a `<br>` as a line break.
@@ -127,7 +128,8 @@ function problems(c: Case, baseline: Rendered): string[] {
 }
 
 /// The message after the case's must come through whole: shown, not in
-/// code, and the only element that answers to its id.
+/// code, and in the element that answers to its id, the box the viewer
+/// drew at the top of the page.
 function nextMessageProblems(root: HTMLElement, r: Rendered): string[] {
   const out: string[] = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -140,13 +142,12 @@ function nextMessageProblems(root: HTMLElement, r: Rendered): string[] {
     out.push(`the next message's ${JSON.stringify(r.next_text)} is not shown as text`);
   }
   if (r.sections) {
-    const answering = root.querySelectorAll(`[data-section-uuid="${r.next_uuid}"]`);
-    const ids = root.querySelectorAll(`[id="m-${r.next_uuid}"]`);
-    if (answering.length !== 1 || ids.length !== 1) {
-      out.push(`${answering.length} elements answer to the next message, ${ids.length} by id`);
+    const answering = sectionEl(root, r.next_uuid);
+    if (answering?.parentElement !== root) {
+      out.push("what answers to the next message's id is not its box");
     }
-    if (!shown.some((h) => h.closest("[data-section-uuid]") === answering[0])) {
-      out.push("the next message's text is not in its own wrapper");
+    if (!shown.some((h) => h.closest("[data-section-uuid]") === answering)) {
+      out.push("the next message's text is not in its own box");
     }
   }
   return out;

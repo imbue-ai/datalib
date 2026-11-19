@@ -81,7 +81,6 @@ function renderWhole(body: string, options: Signed, messageHeader = false): Sani
 /// in a later one, with a placeholder for each message; each message is
 /// rendered alone and put in its place.
 function renderPieces(pieces: readonly BodyPiece[], options: Signed): Sanitized {
-  const messages = new Set(pieces.flatMap((p) => (p.uuid === null ? [] : [p.uuid])));
   const slot = crypto.randomUUID();
   const frameMd = pieces
     .map((p, i) => (p.uuid === null ? p.md : `\n<div data-slot="${slot}-${i}"></div>\n\n`))
@@ -89,7 +88,7 @@ function renderPieces(pieces: readonly BodyPiece[], options: Signed): Sanitized 
   const frame = renderWhole(frameMd, options);
   const drawn = new Map<number, Sanitized>();
   pieces.forEach((p, i) => {
-    if (p.uuid !== null) drawn.set(i, renderMessage({ ...p, uuid: p.uuid }, messages, options));
+    if (p.uuid !== null) drawn.set(i, renderMessage({ ...p, uuid: p.uuid }, options));
   });
   let placed = 0;
   const html = frame.html.replace(
@@ -103,9 +102,7 @@ function renderPieces(pieces: readonly BodyPiece[], options: Signed): Sanitized 
     // A frame piece swallowed a placeholder (an unclosed comment, say):
     // every piece alone keeps every message, without the folds.
     console.error(`placed ${placed} of ${drawn.size} messages; drawing each piece alone`);
-    const alone = pieces.map(
-      (p, i) => drawn.get(i) ?? renderWhole(p.md, { ...options, reservedSections: messages }),
-    );
+    const alone = pieces.map((p, i) => drawn.get(i) ?? renderWhole(p.md, options));
     return { html: alone.map((a) => a.html).join(""), remote: alone.flatMap((a) => a.remote) };
   }
   const remote = [...frame.remote, ...[...drawn.values()].flatMap((d) => d.remote)];
@@ -113,21 +110,14 @@ function renderPieces(pieces: readonly BodyPiece[], options: Signed): Sanitized 
 }
 
 /// One message, as a fragment of its own. One in a box has the box drawn
-/// around it here, so nothing inside can close the box early, and only the
-/// box answers to the message's id. One in no box answers to its own id
-/// wherever it carries it, and to no other message's.
-function renderMessage(
-  piece: BodyPiece & { uuid: string },
-  messages: ReadonlySet<string>,
-  options: Signed,
-): Sanitized {
-  if (piece.class) {
-    const inside = renderWhole(piece.md, { ...options, reservedSections: messages }, true);
-    return {
-      html: `${boxOpen(piece.uuid, piece.class)}${inside.html}</div>`,
-      remote: inside.remote,
-    };
-  }
-  const others = new Set([...messages].filter((m) => m !== piece.uuid));
-  return renderWhole(piece.md, { ...options, reservedSections: others });
+/// around it here, so nothing inside can close the box early; the box is
+/// then the outermost element naming the message, which is what answers to
+/// its id (`sectionEl` in `chatSections.js`), whatever the message holds.
+function renderMessage(piece: BodyPiece & { uuid: string }, options: Signed): Sanitized {
+  if (!piece.class) return renderWhole(piece.md, options);
+  const inside = renderWhole(piece.md, options, true);
+  return {
+    html: `${boxOpen(piece.uuid, piece.class)}${inside.html}</div>`,
+    remote: inside.remote,
+  };
 }

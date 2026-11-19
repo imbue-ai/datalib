@@ -1,7 +1,7 @@
 # The document viewer, drawn from blocks
 
-*Proposal (2026-11-19). Step 1 landed in #1889; step 2 is built on the
-branch after it; nothing else is. It picks up where
+*Proposal (2026-11-19). Step 1 landed in #1889; step 2 is #1891.
+Nothing else is built. It picks up where
 [`documents_to_blocks.md`](documents_to_blocks.md) step 5 stopped
 ("paging through what is read together comes after"), and chooses a
 layout by kind through the registry
@@ -136,7 +136,8 @@ give way to facts.
 - **Deletes:** both wrapper regexes in `renderDocument.ts`, and the
   sanitizer pass over the wrapper alone; each renderer's own wrapper
   code (`msg_div_open`, `MSG_DIV_CLOSE`, Perseus's, Garmin's, the time
-  series', Notion's).
+  series', Notion's); stripping copied ids out of bodies
+  (`reservedSections`).
 - **Adds:** one constructor, one nullable column, a `class` on a piece.
 - **Re-render:** once, as every change to the render store's shape
   does.
@@ -145,12 +146,17 @@ give way to facts.
   whose hostile bodies still cannot close a box early or answer to
   another message's id.
 
-Two things this step does not remove. Stripping copies of a message's
-id from inside a body (`reservedSections`) stays while anything finds a
-message by searching the page for its id; it goes when lookups go
-through the boxes the viewer made. `close_open_blocks` in chat-common
-stays while `body` joins messages into one string, which agents and the
-export still read.
+Stripping copies of a message's id out of a body (`reservedSections` in
+the sanitizer) went with it: a lookup by id now takes the outermost
+element naming it, which is the box the viewer drew, so a copy inside a
+message is never found first and can be left as written.
+
+`close_open_blocks` in chat-common stays, for a reason inside one
+message: the body is followed, in the same markdown, by the
+attachments, the reactions and the replies line render draws after it,
+and a code fence the body leaves open would turn those into code. It
+goes in step 5, when those are drawn from facts and the body is
+rendered alone.
 
 ### Step 3: folds are structure
 
@@ -211,7 +217,10 @@ stored drawing, then take it out of the drawing.
 | a system event | an italic line in the drawing | the row's kind |
 
 - **Deletes:** most of `drawings`. When the last of these moves, the
-  export draws from facts too, and the table goes.
+  export draws from facts too, and the table goes. With nothing drawn
+  after a body in its own markdown, chat-common's `close_open_blocks`
+  goes from the viewer's path; only a join (the export, `body`) closes
+  what a body leaves open.
 - **Notices:** nothing. A read mark that moves today re-renders every
   document it crossed (chat-common README §"Unread messages"); once
   unread is a column, that render rewrites rows, not drawings.

@@ -372,9 +372,13 @@ How the UI draws the pieces (`ui/src/cards/renderDocument.ts`):
   boxed one's box itself, around what is inside it rendered as a
   fragment of its own, so a `</div>` in a message cannot close its box
   early either.
-- **Only the box answers to a message's id.** Inside a piece, an
-  `id="m-…"` or a `data-section-uuid` that names any message of the
-  document is taken off; a keyed piece in no box keeps its own.
+- **Only the box answers to a message's id.** What answers to an id is
+  the outermost element naming it (`sectionEl` in `chatSections.js`),
+  and every lookup by id goes through it: a selection, an edge, a
+  problem's jump, the 🆔 button, the feedback menu. A copy of another
+  message's wrapper inside a message sits in that message's box, so it
+  is left as written and never found first. A keyed piece in no box
+  answers by its own wrapper, where it draws one.
 - **A message draws only inside its own box.** `documentBody.css`
   gives every box `contain: paint`, so `position: fixed`, a negative
   margin or a transform in one message cannot cover another.

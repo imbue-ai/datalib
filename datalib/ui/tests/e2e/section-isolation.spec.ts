@@ -6,8 +6,8 @@
 // `<div style="display:none">`, and a copy of the next message's wrapper.
 //
 // Two guards stand between the payload and the next message: the UI renders
-// each message as a fragment of its own, from the pieces the route sends,
-// and every wrapper has `contain: paint`. The first test has both on; each
+// each message as a fragment of its own, in a box it draws, from the pieces
+// the route sends, and every box has `contain: paint`. The first test has both on; each
 // control turns one off and shows the payload then does reach the next
 // message, so a green first test is the guards at work.
 
@@ -114,9 +114,13 @@ test("a message's payload neither hides, replaces nor covers the next message", 
   const doc = await aConversation(page);
   await open(page, doc, withPayload(doc));
   const frame = page.frameLocator("iframe.doc-frame");
-  // Only the renderer's wrapper answers to the next message's id, and it shows.
-  await expect(frame.locator(`[data-section-uuid="${doc.next}"]`)).toHaveCount(1);
-  await expect(frame.locator(`[id="m-${doc.next}"]`)).toBeVisible();
+  // The next message's box is where the viewer drew it, and it shows; the
+  // copy of its wrapper is still there, inside the first message's box,
+  // where nothing that looks a message up by its id finds it first.
+  await expect(frame.locator(`body > [data-section-uuid="${doc.next}"]`)).toBeVisible();
+  await expect(
+    frame.locator(`body > [data-section-uuid="${doc.first}"] [data-section-uuid="${doc.next}"]`),
+  ).toHaveCount(1);
   // The cover stays inside the first message's box.
   await expect.poll(() => touchedAtNext(page, doc.next)).toBe(doc.next);
 });
