@@ -1,6 +1,6 @@
 # Datalib (Project Data Liberation ✊) — first-time user guide
 
-Datalib is about ***personal data sovereignty***. It liberates your data from silos and helps you run powerful AI tools on it locally, on your own terms.
+Datalib is about ***personal data sovereignty***. It liberates your data from silos and helps you run powerful AI tools on it, locally, on your own terms.
 
 This guide installs the command-line tools and walks you through your
 first mirror. Two other ways in, if this one doesn't fit: the macOS

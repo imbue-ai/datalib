@@ -5,7 +5,7 @@
   <img src="docs/assets/mission-light.png" width="480" alt="Organize the world's (struck out) your own information and make it universally (struck out) accessible and useful to you, your way.">
 </picture>
 
-Datalib is about ***personal data sovereignty***. It liberates your data from silos and helps you run powerful AI tools on it locally, on your own terms.
+Datalib is about ***personal data sovereignty***. It liberates your data from silos and helps you run powerful AI tools on it, locally, on your own terms.
 
 > [!NOTE]
 > **Datalib is alpha.** We don't promise stable bytes at rest yet: an
