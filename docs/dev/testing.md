@@ -478,8 +478,8 @@ DATALIB_HTTP_PLAYBACK=/tmp/tapes DATALIB_HTTP_PLAYBACK_DELAY_MS=1500 \
   bazel-bin/datalib/backend/bin/datalib-dag <root>/config.toml
 ```
 
-with `[checkpoint_cadence] at_most_every_secs = 2` at the top of that
-config and a `chatgpt` group whose ingest step's params are
+with `DATALIB_STEP_CHECKPOINT_CADENCE = "2"` in that config's `[env]`
+table and a `chatgpt` group whose ingest step's params are
 `[steps.params.api]`. The NDJSON on stderr shows the chain: a
 `checkpoint` from the ingest, a `step_start` for its render within
 milliseconds, and one for `unified_grid_and_search_index/unified_grid_and_search_index` right after.

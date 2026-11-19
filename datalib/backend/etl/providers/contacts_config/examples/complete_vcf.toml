@@ -6,9 +6,8 @@ name = "Contacts export"
 type = "contacts"
 
 [[steps]]
-group = "contacts"
-function = "ingest"
-command = "datalib-step"
+id = "contacts/ingest"
+command = "datalib-step run ingest contacts"
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
 # Nothing reads it and it grows every run.
@@ -22,15 +21,16 @@ enabled = false
 path = "~/Downloads/contacts-export"
 
 [[steps]]
-group = "contacts"
-function = "render_markdown"
-command = "datalib-step"
+id = "contacts/render_markdown"
+command = "datalib-step run render_markdown contacts"
 inputs = ["contacts/ingest"]
+reads = "pinned"
 
 # Search by meaning: cuts this source's documents into chunks and embeds
 # them. Leave it out and keyword search still finds it.
 [[steps]]
-group = "contacts"
-function = "embed"
-command = "datalib-step"
+id = "contacts/embed"
+command = "datalib-step run embed contacts"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]

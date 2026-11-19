@@ -33,6 +33,7 @@ import {
   type ColorBy,
   type View,
 } from "./embeddingMap";
+import { withDeclarations } from "@/config/sourceSteps";
 import { TOPIC_CONFIG_WRITTEN, type CardCtx } from "./types";
 
 const props = defineProps<{ ctx: CardCtx; opts: { q?: string; by?: string } }>();
@@ -250,7 +251,7 @@ async function layOutAfresh() {
 function addStep() {
   return act("adding the step", async () => {
     const cfg = await api.fetchConfig();
-    const res = await api.saveConfig(`${cfg.text.trimEnd()}\n${stepStanza()}`);
+    const res = await api.saveConfig(withDeclarations(`${cfg.text.trimEnd()}\n${stepStanza()}`));
     if (!res.ok) throw new Error(res.error ?? "config.toml refused the step");
     props.ctx.bus.publish(TOPIC_CONFIG_WRITTEN, null);
     await api.openRequest([EMBEDDING_MAP_STEP]);

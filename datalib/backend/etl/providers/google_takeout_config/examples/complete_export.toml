@@ -6,9 +6,8 @@ name = "Google Takeout"
 type = "google_takeout"
 
 [[steps]]
-group = "google_takeout"
-function = "ingest"
-command = "datalib-step"
+id = "google_takeout/ingest"
+command = "datalib-step run ingest google_takeout"
 
 # Each Takeout is a complete snapshot of the products you ticked: a record a
 # newer export no longer holds leaves the mirror on the next sync. A product
@@ -30,15 +29,16 @@ youtube_watch_history = true       # every video you watched
 youtube_subscriptions = true       # the channels you subscribe to
 
 [[steps]]
-group = "google_takeout"
-function = "render_markdown"
-command = "datalib-step"
+id = "google_takeout/render_markdown"
+command = "datalib-step run render_markdown google_takeout"
 inputs = ["google_takeout/ingest"]
+reads = "pinned"
 
 # Search by meaning: cuts this source's documents into chunks and embeds
 # them. Leave it out and keyword search still finds it.
 [[steps]]
-group = "google_takeout"
-function = "embed"
-command = "datalib-step"
+id = "google_takeout/embed"
+command = "datalib-step run embed google_takeout"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]

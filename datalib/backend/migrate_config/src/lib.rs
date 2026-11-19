@@ -30,14 +30,18 @@
 //! which finds them by their current functions; then `unread_inputs.rs`:
 //! the index step stops naming the `render_time_series` and
 //! `render_occurrences` steps it does not read; then `lock_names.rs`:
-//! the `qmd_embed` lock is `embedder` and `qmd_keyword` goes. Every
-//! rewrite after
-//! `convert.rs` is also one `datalib-http` makes by itself
-//! ([`UNATTENDED`]).
+//! the `qmd_embed` lock is `embedder` and `qmd_keyword` goes; and last
+//! `explicit_steps.rs`: each step writes its `id`, its whole
+//! `datalib-step run …` command, and the locks and `reads` the runner
+//! used to work out for it, and the file its `[[programs]]`, `[[locks]]`
+//! and `[env]`. Every rewrite after `convert.rs` is also one
+//! `datalib-http` makes by itself ([`UNATTENDED`]), and every one before
+//! `explicit_steps.rs` reads the shape from before it.
 
 pub mod aggregator_drop;
 pub mod conversation_settings;
 pub mod convert;
+pub mod explicit_steps;
 pub mod index_name;
 pub mod index_step_name;
 pub mod input_patterns;
@@ -45,6 +49,7 @@ pub mod keyword_fold;
 pub mod lock_names;
 pub mod lowercase_ids;
 pub mod qmd_steps;
+mod retired;
 pub mod step_commands;
 pub mod time_series_embeds;
 pub mod time_series_steps;
@@ -109,6 +114,9 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if lock_names::is_retired(text)? {
         return Ok(LegacyFormat::SearchLockNames);
     }
+    if explicit_steps::is_retired(text)? {
+        return Ok(LegacyFormat::InferredByTheRunner);
+    }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
@@ -126,7 +134,8 @@ pub fn convert(text: &str) -> Result<String> {
         | LegacyFormat::AggregatorStep
         | LegacyFormat::GridIndexStep
         | LegacyFormat::UnreadGridInputs
-        | LegacyFormat::SearchLockNames => text.to_string(),
+        | LegacyFormat::SearchLockNames
+        | LegacyFormat::InferredByTheRunner => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = lowercase_ids::rewrite(&out)?;
@@ -147,6 +156,11 @@ pub fn convert(text: &str) -> Result<String> {
     let out = input_patterns::rewrite(&out)?;
     let out = unread_inputs::rewrite(&out)?;
     let out = lock_names::rewrite(&out)?;
+    let out = if explicit_steps::is_retired(&out)? {
+        explicit_steps::rewrite(&out)?
+    } else {
+        out
+    };
     // The conversion is value-level, so anything the loader would refuse in
     // the result surfaces here rather than on the next run. Report what the
     // runner rejected and let the message speak.
@@ -167,7 +181,11 @@ pub fn upgrade_qmd_steps(text: &str) -> Result<Option<String>> {
         return Ok(None);
     }
     let out = qmd_steps::rewrite(text)?;
-    refuse_a_loss(text, &out, |e| e.to_string())?;
+    let gone: Vec<String> = qmd_steps::retired_ids(text)?
+        .into_iter()
+        .map(|id| format!("step {id}"))
+        .collect();
+    refuse_a_loss_but(text, &out, |e| e.to_string(), &gone)?;
     Ok(Some(out))
 }
 
@@ -252,6 +270,38 @@ pub fn upgrade_todoist_since(text: &str) -> Result<Option<String>> {
     let out = todoist_since::rewrite(text)?;
     refuse_a_loss(text, &out, str::to_string)?;
     Ok(Some(out))
+}
+
+/// Write into the file what the runner used to work out for
+/// `datalib-step`'s steps (`explicit_steps.rs`). Refused when the result
+/// would lose a group, applet or lock the original loaded, or drop more
+/// entries than the original. The runner refuses every step of the
+/// original, so its steps cannot be compared; the tests hold the rewrite
+/// of every config this repo shipped to the runner it was written for.
+pub fn upgrade_explicit_steps(text: &str) -> Result<Option<String>> {
+    if !explicit_steps::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = explicit_steps::rewrite(text)?;
+    refuse_a_loss_between(
+        datalib_dag::config::check_text(text),
+        datalib_dag::config::check_text(&out),
+        str::to_string,
+        &[],
+    )?;
+    Ok(Some(out))
+}
+
+/// What the loader makes of `text` once [`folded`] and then
+/// `explicit_steps.rs` have brought it to the shape the runner reads,
+/// which every other rewrite's text is a step or more short of.
+pub(crate) fn check_as_current(text: &str) -> datalib_dag::config::ConfigCheck {
+    let folded = folded(text);
+    let current = match explicit_steps::is_retired(&folded) {
+        Ok(true) => explicit_steps::rewrite(&folded).ok(),
+        _ => None,
+    };
+    datalib_dag::config::check_text(current.as_deref().unwrap_or(&folded))
 }
 
 /// Fold each source's `keyword_index` into `grid_index`
@@ -371,7 +421,7 @@ pub struct Rewrite {
 /// Every unattended rewrite, in the order they are made. `datalib-http`
 /// runs these on its config, and a config the repo ships or documents is
 /// tested to need none of them.
-pub const UNATTENDED: [Rewrite; 14] = [
+pub const UNATTENDED: [Rewrite; 15] = [
     Rewrite {
         why: "has an id with capitals in it",
         what: "every group, step and applet id, and every function, is lower case, \
@@ -462,6 +512,13 @@ pub const UNATTENDED: [Rewrite; 14] = [
                and a step that named it holds its default lock",
         run: upgrade_lock_names,
     },
+    Rewrite {
+        why: "has a step whose program's arguments, locks and reads the runner worked out",
+        what: "every step writes its `id` and its whole `datalib-step run …` command, \
+               and the locks and `reads` it holds; the runner no longer knows \
+               datalib-step's steps from any other program's",
+        run: upgrade_explicit_steps,
+    },
 ];
 
 /// What [`upgrade_unattended`] made of a config.
@@ -502,13 +559,27 @@ fn refuse_a_loss_but(
     follow: impl Fn(&str) -> String,
     meant: &[String],
 ) -> Result<()> {
-    let before = datalib_dag::config::check_text(&folded(text));
-    let after = datalib_dag::config::check_text(&folded(out));
+    refuse_a_loss_between(check_as_current(text), check_as_current(out), follow, meant)
+}
+
+fn refuse_a_loss_between(
+    before: datalib_dag::config::ConfigCheck,
+    after: datalib_dag::config::ConfigCheck,
+    follow: impl Fn(&str) -> String,
+    meant: &[String],
+) -> Result<()> {
     let kept = loaded(&after.cfg);
     let lost: Vec<String> = loaded(&before.cfg)
         .into_iter()
         .map(|e| follow(&e))
         .filter(|e| !kept.contains(e) && !meant.contains(e))
+        // A lock `explicit_steps.rs` declares because a step holds it
+        // goes with the step that held it.
+        .filter(|e| {
+            !explicit_steps::RETIRED_DEFAULT_LOCKS
+                .iter()
+                .any(|(name, _, _)| *e == format!("lock {name}"))
+        })
         .collect();
     if !lost.is_empty() || after.dropped() > before.dropped() {
         bail!(
@@ -760,9 +831,9 @@ function = "grid_index"
 inputs = ["slack/render_markdown"]
 "#;
 
-    /// The top-level tables ride through a rewrite untouched. A rewrite
-    /// that dropped one would silently reset the retention or the
-    /// checkpoint cadence a person had set.
+    /// The top-level tables ride through a rewrite, the checkpoint cadence
+    /// into `[env]`. A rewrite that dropped one would silently reset the
+    /// retention or the checkpoint cadence a person had set.
     #[test]
     fn top_level_tables_survive_the_rewrite() {
         let text = format!(
@@ -779,8 +850,10 @@ inputs = ["slack/render_markdown"]
             })
         );
         assert_eq!(
-            cfg.checkpoint_cadence.map(|c| c.at_most_every_secs),
-            Some(30.0)
+            cfg.env
+                .get(datalib_env::DATALIB_STEP_CHECKPOINT_CADENCE)
+                .map(String::as_str),
+            Some("30")
         );
     }
 
@@ -924,23 +997,25 @@ inputs = ["slack/render_markdown"]
         // The name moves from the download step to the group.
         assert_eq!(out.matches("name = \"Work Slack\"").count(), 1, "{out}");
         assert!(
-            out.contains("group = \"slack\"\nfunction = \"ingest\""),
-            "{out}"
-        );
-        assert!(
-            out.contains("group = \"slack\"\nfunction = \"render_markdown\""),
+            out.contains("id = \"slack/ingest\"\ncommand = \"datalib-step run ingest slack\""),
             "{out}"
         );
         assert!(
             out.contains(
-                "group = \"unified_grid_and_search_index\"\n\
-                 function = \"unified_grid_and_search_index\""
+                "id = \"slack/render_markdown\"\ncommand = \"datalib-step run render_markdown slack\""
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "id = \"unified_grid_and_search_index/unified_grid_and_search_index\"\n\
+                 command = \"datalib-step run unified_grid_and_search_index\""
             ),
             "{out}"
         );
         assert!(!out.contains("id = \"slack/raw\""), "{out}");
         assert!(
-            !out.contains("datalib-step "),
+            !out.contains("download") && !out.contains("slack_api"),
             "the provider word leaves: {out}"
         );
         // …and the method table with it, under its current name.
@@ -975,7 +1050,10 @@ inputs = ["slack/render_markdown"]
     #[test]
     fn a_grouped_config_with_subcommands_loses_them_and_renames_its_functions() {
         let out = convert(GROUPED_WITH_COMMANDS).unwrap();
-        assert!(!out.contains("datalib-step "), "{out}");
+        assert!(
+            !out.contains("download") && !out.contains("render slack"),
+            "{out}"
+        );
         assert!(
             !out.contains("\"raw\"") && !out.contains("rendered_md"),
             "{out}"
@@ -991,7 +1069,7 @@ inputs = ["slack/render_markdown"]
         assert!(
             cfg.steps
                 .iter()
-                .all(|s| s.command.as_deref() == Some("datalib-step")),
+                .all(|s| s.command.starts_with("datalib-step run ")),
             "{out}"
         );
     }
@@ -1068,7 +1146,7 @@ inputs = ["mail/render_markdown"]
         let out = upgrade_qmd_steps(SHARED_QMD_INDEX).unwrap().unwrap();
         assert!(out.contains("function = \"keyword_index\""), "{out}");
         assert!(out.contains("function = \"embed\""), "{out}");
-        let check = datalib_dag::config::check_text(&folded(&out));
+        let check = check_as_current(&out);
         assert!(check.is_clean(), "{:?}\n{out}", check.diagnostics);
         assert_eq!(upgrade_qmd_steps(&out).unwrap(), None);
         assert_eq!(upgrade_qmd_steps("not [ toml").unwrap(), None);
@@ -1085,10 +1163,10 @@ inputs = ["mail/render_markdown"]
     fn the_unattended_upgrade_refuses_a_rewrite_that_drops_an_entry() {
         let extra = "mail/embed/extra";
         let clash = format!(
-            "{SHARED_QMD_INDEX}\n[[steps]]\nid = \"{extra}\"\ncommand = \"x\"\ninputs = [\"mail/render_markdown\"]\n"
+            "{SHARED_QMD_INDEX}\n[[steps]]\nid = \"{extra}\"\ncommand = \"x\"\ninputs = [\"unified_index/qmd_index\"]\n"
         );
         let runs = |text: &str| {
-            let check = datalib_dag::config::check_text(&folded(text));
+            let check = check_as_current(text);
             check.cfg.steps.iter().any(|s| s.id == extra)
         };
         assert!(runs(&clash));
@@ -1110,14 +1188,17 @@ inputs = ["mail/render_markdown"]
                       group = \"tasks\"\nfunction = \"ingest\"\ncommand = \"datalib-step\"\n\
                       [steps.params.api]\ncompleted_since = \"2364-01-01\"\n";
         let loads = |text: &str| {
-            let check = datalib_dag::config::check_text(text);
+            let check = check_as_current(text);
             check.cfg.steps.iter().any(|s| s.id == "tasks/ingest")
         };
         let out = upgrade_todoist_since(before).unwrap().unwrap();
         assert!(out.contains("\nsince = \"2364-01-01\"\n"), "{out}");
         assert!(loads(&out), "{out}");
         assert_eq!(upgrade_todoist_since(&out).unwrap(), None);
-        assert_eq!(convert(before).unwrap(), out);
+        assert_eq!(
+            convert(before).unwrap(),
+            explicit_steps::rewrite(&out).unwrap()
+        );
     }
 
     /// A ChatGPT source written with the old setting names is renamed by
@@ -1129,14 +1210,17 @@ inputs = ["mail/render_markdown"]
                       group = \"gpt\"\nfunction = \"ingest\"\ncommand = \"datalib-step\"\n\
                       [steps.params.api]\nlimit = 10\n";
         let loads = |text: &str| {
-            let check = datalib_dag::config::check_text(text);
+            let check = check_as_current(text);
             check.cfg.steps.iter().any(|s| s.id == "gpt/ingest")
         };
         let out = upgrade_conversation_settings(before).unwrap().unwrap();
         assert!(out.contains("\nmax_conversations_per_run = 10\n"), "{out}");
         assert!(loads(&out), "{out}");
         assert_eq!(upgrade_conversation_settings(&out).unwrap(), None);
-        assert_eq!(convert(before).unwrap(), out);
+        assert_eq!(
+            convert(before).unwrap(),
+            explicit_steps::rewrite(&out).unwrap()
+        );
     }
 
     /// The server runs the unattended rewrites in turn; each one after the
@@ -1153,7 +1237,7 @@ inputs = ["mail/render_markdown"]
         let out = upgrade_index_step_name(&out).unwrap().unwrap();
         assert_eq!(upgrade_index_step_name(&out).unwrap(), None);
         let out = upgrade_input_patterns(&out).unwrap().unwrap_or(out);
-        let check = datalib_dag::config::check_text(&out);
+        let check = check_as_current(&out);
         assert!(check.is_clean(), "{:?}\n{out}", check.diagnostics);
         assert!(check
             .cfg
@@ -1165,6 +1249,9 @@ inputs = ["mail/render_markdown"]
         assert!(!out.contains("\"unified_index"), "{out}");
         assert_eq!(upgrade_index_name(&out).unwrap(), None);
         assert_eq!(upgrade_index_name("not [ toml").unwrap(), None);
+        let out = upgrade_explicit_steps(&out).unwrap().unwrap();
+        assert_eq!(upgrade_explicit_steps(&out).unwrap(), None);
+        assert!(datalib_dag::config::check_text(&out).is_clean(), "{out}");
         assert_eq!(convert(SHARED_QMD_INDEX).unwrap(), out);
     }
 
@@ -1181,7 +1268,7 @@ inputs = ["mail/render_markdown"]
              command = \"x\"\ninputs = [\"mail/render_markdown\"]\n"
         );
         let loads = |text: &str| {
-            let check = datalib_dag::config::check_text(text);
+            let check = check_as_current(text);
             check
                 .cfg
                 .steps
@@ -1202,9 +1289,11 @@ inputs = ["mail/render_markdown"]
                    [[steps]]\ngroup = \"mail\"\nfunction = \"ingest\"\n";
         let first = upgrade_unattended(old);
         assert!(first.refused.is_empty());
-        assert_eq!(first.done, [UNATTENDED[5].what]);
+        assert_eq!(first.done, [UNATTENDED[5].what, UNATTENDED[14].what]);
         assert!(
-            first.text.contains("command = \"datalib-step\""),
+            first
+                .text
+                .contains("command = \"datalib-step run ingest email\""),
             "{}",
             first.text
         );
@@ -1241,7 +1330,8 @@ inputs = ["mail/render_markdown"]
         assert_eq!(detect(&old).unwrap(), LegacyFormat::UnreadGridInputs);
         let first = upgrade_unattended(&old);
         assert!(first.refused.is_empty());
-        assert_eq!(first.done, [UNATTENDED[12].what]);
+        let current = explicit_steps::rewrite(current).unwrap();
+        assert_eq!(first.done, [UNATTENDED[12].what, UNATTENDED[14].what]);
         assert_eq!(first.text, current);
         assert_eq!(convert(&old).unwrap(), current);
         let second = upgrade_unattended(&first.text);
@@ -1253,7 +1343,14 @@ inputs = ["mail/render_markdown"]
         );
         let both = upgrade_unattended(&older);
         assert!(both.refused.is_empty(), "{:?}", both.refused);
-        assert_eq!(both.done, [UNATTENDED[10].what, UNATTENDED[12].what]);
+        assert_eq!(
+            both.done,
+            [
+                UNATTENDED[10].what,
+                UNATTENDED[12].what,
+                UNATTENDED[14].what
+            ]
+        );
         assert_eq!(both.text, current);
         assert_eq!(convert(&older).unwrap(), current);
     }

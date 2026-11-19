@@ -7,9 +7,8 @@ name = "Perseus"
 type = "perseus"
 
 [[steps]]
-group = "perseus"
-function = "ingest"
-command = "datalib-step"
+id = "perseus/ingest"
+command = "datalib-step run ingest perseus"
 
 # A JSONL copy of every row written, under ingest/events/, for debugging.
 # Nothing reads it and it grows every run.
@@ -26,10 +25,10 @@ files = [
 ]
 
 [[steps]]
-group = "perseus"
-function = "render_markdown"
-command = "datalib-step"
+id = "perseus/render_markdown"
+command = "datalib-step run render_markdown perseus"
 inputs = ["perseus/ingest"]
+reads = "files"
 
 [steps.params]
 # Edition pairs to align sentence by sentence; default none. Aligning
@@ -44,7 +43,8 @@ alignment_pairs = [["perseus-grc2", "perseus-eng4"]]
 # Search by meaning: cuts this source's documents into chunks and embeds
 # them. Leave it out and keyword search still finds it.
 [[steps]]
-group = "perseus"
-function = "embed"
-command = "datalib-step"
+id = "perseus/embed"
+command = "datalib-step run embed perseus"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]

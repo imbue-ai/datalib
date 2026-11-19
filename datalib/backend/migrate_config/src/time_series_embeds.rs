@@ -1,4 +1,4 @@
-//! A config whose time-series sources (`datalib_dag::config::TIME_SERIES_SOURCE_TYPES`)
+//! A config whose time-series sources (`crate::retired::TIME_SERIES_SOURCE_TYPES`)
 //! still have an `embed` step. Their markdown is daily summaries of
 //! numbers, which the keyword index already finds, and embedding it costs
 //! minutes and gigabytes a run; the wizard no longer offers it
@@ -9,8 +9,8 @@
 use std::collections::BTreeSet;
 use std::ops::Range;
 
+use crate::retired::{names_datalib_step, TIME_SERIES_SOURCE_TYPES};
 use anyhow::{Context as _, Result};
-use datalib_dag::config::{names_datalib_step, TIME_SERIES_SOURCE_TYPES};
 use datalib_dag::config_array::edit_string_array;
 use datalib_dag::config_order::entry_ranges;
 use serde::Deserialize;
@@ -207,7 +207,7 @@ inputs = [
 "#;
 
     fn step_ids(text: &str) -> Vec<String> {
-        let check = datalib_dag::config::check_text(&crate::folded(text));
+        let check = crate::check_as_current(text);
         assert_eq!(
             check.dropped(),
             0,

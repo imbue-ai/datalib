@@ -15,16 +15,15 @@ name = "Claude export"
 type = "claude"
 
 [[steps]]
-group = "claude-export"
-function = "ingest"
-command = "datalib-step"
+id = "claude-export/ingest"
+command = "datalib-step run ingest claude"
 [steps.params.export]
 path = "/opt/datalib/demo-sources/claude-export"
 
 [[steps]]
-group = "claude-export"
-function = "render_markdown"
-command = "datalib-step"
+id = "claude-export/render_markdown"
+command = "datalib-step run render_markdown claude"
+reads = "pinned"
 inputs = ["claude-export/ingest"]
 
 # Google Takeout Gmail: the `mbox` table selects the file-backed method;
@@ -35,9 +34,8 @@ name = "Gmail (Takeout .mbox)"
 type = "email"
 
 [[steps]]
-group = "gmail-takeout"
-function = "ingest"
-command = "datalib-step"
+id = "gmail-takeout/ingest"
+command = "datalib-step run ingest email"
 [steps.params.mbox]
 path = "/opt/datalib/demo-sources/gmail-takeout/star_trek.mbox"
 account_id = "picard@enterprise.starfleet"
@@ -46,9 +44,9 @@ email_address = "picard@enterprise.starfleet"
 is_personal = true
 
 [[steps]]
-group = "gmail-takeout"
-function = "render_markdown"
-command = "datalib-step"
+id = "gmail-takeout/render_markdown"
+command = "datalib-step run render_markdown email"
+reads = "pinned"
 inputs = ["gmail-takeout/ingest"]
 [steps.params]
 outlink_format = "gmail"
@@ -59,9 +57,8 @@ name = "Google Takeout (Chat + Voice)"
 type = "google_takeout"
 
 [[steps]]
-group = "google-takeout"
-function = "ingest"
-command = "datalib-step"
+id = "google-takeout/ingest"
+command = "datalib-step run ingest google_takeout"
 [steps.params.export]
 path = "/opt/datalib/demo-sources/google-takeout/Takeout"
 google_chat = true
@@ -69,9 +66,9 @@ google_voice = true
 google_voice_include_spam = true
 
 [[steps]]
-group = "google-takeout"
-function = "render_markdown"
-command = "datalib-step"
+id = "google-takeout/render_markdown"
+command = "datalib-step run render_markdown google_takeout"
+reads = "pinned"
 inputs = ["google-takeout/ingest"]
 
 [[groups]]
@@ -80,16 +77,15 @@ name = "SMS & calls"
 type = "sms_backup_restore"
 
 [[steps]]
-group = "sms-backup-restore"
-function = "ingest"
-command = "datalib-step"
+id = "sms-backup-restore/ingest"
+command = "datalib-step run ingest sms_backup_restore"
 [steps.params.backup]
 path = "/opt/datalib/demo-sources/sms-backup-restore"
 
 [[steps]]
-group = "sms-backup-restore"
-function = "render_markdown"
-command = "datalib-step"
+id = "sms-backup-restore/render_markdown"
+command = "datalib-step run render_markdown sms_backup_restore"
+reads = "pinned"
 inputs = ["sms-backup-restore/ingest"]
 
 [[groups]]
@@ -98,16 +94,15 @@ name = "LinkedIn export"
 type = "linkedin"
 
 [[steps]]
-group = "linkedin"
-function = "ingest"
-command = "datalib-step"
+id = "linkedin/ingest"
+command = "datalib-step run ingest linkedin"
 [steps.params.export]
 path = "/opt/datalib/demo-sources/linkedin"
 
 [[steps]]
-group = "linkedin"
-function = "render_markdown"
-command = "datalib-step"
+id = "linkedin/render_markdown"
+command = "datalib-step run render_markdown linkedin"
+reads = "pinned"
 inputs = ["linkedin/ingest"]
 
 # The `vcf` table selects the file-backed method: `.vcf` files under `path`.
@@ -117,16 +112,15 @@ name = "Contacts (vCard)"
 type = "contacts"
 
 [[steps]]
-group = "contacts"
-function = "ingest"
-command = "datalib-step"
+id = "contacts/ingest"
+command = "datalib-step run ingest contacts"
 [steps.params.vcf]
 path = "/opt/datalib/demo-sources/contacts"
 
 [[steps]]
-group = "contacts"
-function = "render_markdown"
-command = "datalib-step"
+id = "contacts/render_markdown"
+command = "datalib-step run render_markdown contacts"
+reads = "pinned"
 inputs = ["contacts/ingest"]
 
 [[groups]]
@@ -135,25 +129,25 @@ name = "PDFs"
 type = "pdf"
 
 [[steps]]
-group = "pdfs"
-function = "ingest"
-command = "datalib-step"
+id = "pdfs/ingest"
+command = "datalib-step run ingest pdf"
 [steps.params.fswalk]
 path = "/opt/datalib/demo-sources/pdfs"
 
 [[steps]]
-group = "pdfs"
-function = "render_markdown"
-command = "datalib-step"
+id = "pdfs/render_markdown"
+command = "datalib-step run render_markdown pdf"
+reads = "pinned"
 inputs = ["pdfs/ingest"]
 
 [[groups]]
 id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_grid_and_search_index"
-function = "unified_grid_and_search_index"
-command = "datalib-step"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "datalib-step run unified_grid_and_search_index"
+reads = "pinned"
+locks = ["index"]
 inputs = ["*/render_markdown"]
 
 [[applets]]
@@ -163,43 +157,65 @@ command = "datalib-applet unified_grid_and_search_index"
 
 # Each source's embeddings, over the keywords baked into the image.
 [[steps]]
-group = "claude-export"
-function = "embed"
-command = "datalib-step"
+id = "claude-export/embed"
+command = "datalib-step run embed claude"
+reads = "files"
+locks = ["embedder"]
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[steps]]
-group = "gmail-takeout"
-function = "embed"
-command = "datalib-step"
+id = "gmail-takeout/embed"
+command = "datalib-step run embed email"
+reads = "files"
+locks = ["embedder"]
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[steps]]
-group = "google-takeout"
-function = "embed"
-command = "datalib-step"
+id = "google-takeout/embed"
+command = "datalib-step run embed google_takeout"
+reads = "files"
+locks = ["embedder"]
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[steps]]
-group = "sms-backup-restore"
-function = "embed"
-command = "datalib-step"
+id = "sms-backup-restore/embed"
+command = "datalib-step run embed sms_backup_restore"
+reads = "files"
+locks = ["embedder"]
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[steps]]
-group = "linkedin"
-function = "embed"
-command = "datalib-step"
+id = "linkedin/embed"
+command = "datalib-step run embed linkedin"
+reads = "files"
+locks = ["embedder"]
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[steps]]
-group = "contacts"
-function = "embed"
-command = "datalib-step"
+id = "contacts/embed"
+command = "datalib-step run embed contacts"
+reads = "files"
+locks = ["embedder"]
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[steps]]
-group = "pdfs"
-function = "embed"
-command = "datalib-step"
+id = "pdfs/embed"
+command = "datalib-step run embed pdf"
+reads = "files"
+locks = ["embedder"]
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# The verbs `datalib-step` takes (docs/dev/step_protocol.md § Verbs).
+[[programs]]
+command = "datalib-step"
+verbs = ["reset", "prepare", "compact", "collect"]
+
+# One embed at a time: each loads the model and writes the search index.
+[[locks]]
+name = "embedder"
+slots = 1
+
+# The fan-ins that read every source.
+[[locks]]
+name = "index"
+slots = 2

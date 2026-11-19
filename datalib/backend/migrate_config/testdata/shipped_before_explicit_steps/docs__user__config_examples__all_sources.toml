@@ -1,0 +1,2325 @@
+# Every source datalib can mirror, one group per way in, ready to copy.
+#
+# GENERATED: each group below is its source's complete example stanza,
+# `datalib/backend/etl/providers/<type>_config/examples/complete_<method>.toml`,
+# which a test loads and plans against the source's own config structs.
+# Edit those, then regenerate this file:
+#
+#   bazel run //datalib/backend/datalib_step:all_sources.update
+#
+# `datalib-step examples <type>` prints the same stanzas and the minimal
+# ones, and `datalib-step help <type> <method>` lists every option.
+#
+# This is a reference, not a turn-key config: running it would sync every
+# source at once, and most need credentials (through latchkey), a backup
+# pulled off a phone, or an export on disk; `datalib-step help <type>` says
+# how to sign one in or where its data comes from. Copy the groups you want:
+# the index groups read every source by pattern (`*/render_markdown`).
+#
+# Shape: each source is a `[[groups]]` entry with a `type`, and steps under
+# it, each declared as `group` + `function`. `ingest` brings the data into
+# `<group>/ingest` (its `params` hold one method table, `[steps.params.api]`,
+# `[steps.params.export]`, …, and the options every method shares);
+# `render_markdown` turns that raw store into documents under
+# `<group>/render_markdown`, which `unified_grid_and_search_index` puts in
+# the grid and the keyword search; `embed` puts them in the search by
+# meaning; a source whose data is also numbers over time adds
+# `render_time_series`. Each runs the built-in `datalib-step`. A step's id
+# is `<group>/<function>`, never written; it is what another step's
+# `inputs` name.
+#
+# TOML shape: a table header ends the table it sits in, so within a step
+# the plain keys (`group`, `function`, `inputs`) come first and the params
+# headers last, and `data_root` comes before the first `[[…]]` header.
+#
+# A group's `id` is the folder under `data_root` its data goes in, chosen
+# once; its `name` is free text the app shows and can change any time.
+#
+# Any `*_bytes` option takes an integer of bytes or a string with a unit:
+# "5 MB", "512 KiB". KB/MB/GB are ×1000, KiB/MiB/GiB ×1024.
+#
+# Every value here is made up. Never commit a real token, key or address.
+
+data_root = "~/datalib"
+
+# --- The indexes every source feeds -------------------------------------
+
+# The SQL index behind the grid and search reads every source's documents
+# into the grid and the keyword search; `params.not_searched` would keep a
+# source out of search.
+[[groups]]
+id = "unified_grid_and_search_index"
+name = "Grid and Search Index"
+
+[[steps]]
+group = "unified_grid_and_search_index"
+function = "unified_grid_and_search_index"
+command = "datalib-step"
+inputs = ["*/render_markdown"]
+
+# The app's search, grid and document view.
+[[applets]]
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
+
+# The contacts app: your own record of who a handle is, which the person
+# chips and search read. `datalib-step help contacts-app`.
+[[applets]]
+group = "unified_grid_and_search_index"
+id = "datalib_contacts"
+command = "datalib-applet datalib_contacts"
+
+# The time-series index reads every source's time series, without copying
+# the points, for the charts.
+[[groups]]
+id = "unified_time_series_index"
+name = "Time Series Index"
+
+[[steps]]
+group = "unified_time_series_index"
+function = "time_series_index"
+command = "datalib-step"
+inputs = ["*/render_time_series"]
+
+[[applets]]
+group = "unified_time_series_index"
+id = "unified_time_series_index"
+command = "datalib-applet unified_time_series_index"
+
+# --- airvisual by `export` ----------------------------------------------
+
+# AirVisual Pros' own history files, read off each unit's Samba share
+# (`smb://<ip>/airvisual`, mounted in the Finder) or a copy of that folder,
+# with every option set, and searchable. No sign-in.
+[[groups]]
+id = "airvisual"
+name = "AirVisual"
+type = "airvisual"
+
+[[steps]]
+group = "airvisual"
+function = "ingest"
+command = "datalib-step"
+
+# One entry per monitor. Every `YYYYMM_AirVisual_values.txt` under `path`
+# is read, the `archive*/` folders too.
+[[steps.params.export.devices]]
+path = "/Volumes/airvisual"  # the mounted share, or a copy of it
+serial = "NCC1701D"          # the device's serial, which keys every sample; default:
+                             # read from the folder's latest_config_measurements.json
+                             # (set it for a copy without that file)
+name = "Bridge"              # what to call it; default: the name the device gives
+                             # itself, then the serial
+
+[[steps.params.export.devices]]
+path = "~/Downloads/airvisual-export/ten-forward"
+
+# One page with a chart per quantity (particulates, AQI, CO2, temperature,
+# humidity, VOC), every device a series. No options.
+[[steps]]
+group = "airvisual"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["airvisual/ingest"]
+
+# The readings as time series, for the charts.
+[[steps]]
+group = "airvisual"
+function = "render_time_series"
+command = "datalib-step"
+inputs = ["airvisual/ingest"]
+
+# --- apple_messages by `messages` ---------------------------------------
+
+# The Messages app's own database (`chat.db`), mirrored table for table, with
+# every option set, and searchable. No sign-in. macOS protects
+# `~/Library/Messages`: the terminal running the sync needs Full Disk Access.
+[[groups]]
+id = "apple_messages"
+name = "Apple Messages"
+type = "apple_messages"
+
+[[steps]]
+group = "apple_messages"
+function = "ingest"
+command = "datalib-step"
+
+# Which tables and columns to mirror. Globs: `*` and `?` only.
+[steps.params]
+include_tables = ["*"]                          # the default: every table
+exclude_tables = ["recoverable_message_part"]   # skip these, after include_tables;
+                                                # default none (this one is "recently deleted" text)
+exclude_columns = ["message.payload_data"]      # `Table.column` globs left out entirely; default none
+skip_churn = true    # leave out the app's counters, settings, Spotlight and CloudKit
+                     # queues and every `index_state` column, which the daemons rewrite
+                     # constantly; with it off every run commits; default true
+snapshot = true      # read a `VACUUM INTO` copy, not the live file Messages keeps
+                     # open; default true
+gc = false           # collect unreachable chunks each run: a smaller store,
+                     # history kept, but it rewrites the store; default false
+
+# The Messages folder, or a `chat.db` file directly (a copy, or an iPhone
+# backup's `3d0d7e5fb2ce288813306e4d4636395e047a3d28`, the same database).
+# Prefer the folder: the snapshot also reads the `chat.db-wal` beside it.
+[steps.params.messages]
+path = "~/Library/Messages"
+
+[[steps]]
+group = "apple_messages"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["apple_messages/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "apple_messages"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- apple_photos by `library` ------------------------------------------
+
+# An Apple Photos library's database (`database/Photos.sqlite`) mirrored table
+# for table, with every option set. No sign-in. macOS protects the library:
+# the terminal running the sync needs Full Disk Access.
+[[groups]]
+id = "apple_photos"
+name = "Apple Photos"
+type = "apple_photos"
+
+[[steps]]
+group = "apple_photos"
+function = "ingest"
+command = "datalib-step"
+
+# Which tables and columns to mirror. Globs: `*` and `?` only.
+[steps.params]
+include_tables = ["*"]                          # the default: every table
+exclude_tables = ["ZCLOUD*"]                    # skip these, after include_tables; default none
+exclude_columns = ["ZASSET.*HIGHLIGHTBEING*"]   # `Table.column` globs left out entirely; default none
+skip_history = true  # leave out Core Data's change log, the daemons' work queue and
+                     # counters, and every row's `Z_OPT`, which Photos rewrites
+                     # constantly; with it off every run commits; default true
+# Photos keys its tables on `Z_PK`, a rowid it renumbers on a library repair;
+# `ZUUID` is the stable id beside it. A table with one of these columns is
+# keyed on it when it is unique on every row; [] keys every table on what it
+# declares. Default ["ZUUID"].
+stable_key_columns = ["ZUUID"]
+# Pin a table's key yourself, `table = [columns]`; an empty list mirrors the
+# table with no key. Default none.
+primary_keys = { ZDETECTEDFACE = ["Z_PK"] }
+snapshot = true      # read a `VACUUM INTO` copy, not the live file Photos keeps
+                     # open; default true
+gc = false           # collect unreachable chunks each run: a smaller store,
+                     # history kept, but it rewrites the store; default false
+
+# The `.photoslibrary` bundle, or its `database/Photos.sqlite` directly.
+[steps.params.library]
+path = "~/Pictures/Photos Library.photoslibrary"
+
+# Apple Photos renders no documents: query the raw store with
+# `datalib-doltlite`. This step writes the storage report every source
+# gets, which is what puts Apple Photos in the grid.
+[[steps]]
+group = "apple_photos"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["apple_photos/ingest"]
+
+# --- baby_connect by `api` ----------------------------------------------
+
+# Your Baby Connect history, signed in through latchkey (by browser), with
+# every option set.
+[[groups]]
+id = "baby_connect"
+name = "Baby Connect"
+type = "baby_connect"
+
+[[steps]]
+group = "baby_connect"
+function = "ingest"
+command = "datalib-step"
+
+# When to give up on failed requests. The download retries and backs off
+# on its own; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "beverly@enterprise.test"
+
+# Baby Connect answers one day at a time. `since` and `until` bound the
+# days read: a day ("2368-01-01"), an RFC 3339 instant, or an offset back
+# from each sync ("-90d"). Without them the read starts at the eldest
+# child's birthday and ends today.
+[steps.params.api]
+since = "2368-01-01"
+until = "2372-12-31"
+
+# One document per child: every entry, with its notes. Baby
+# Connect keeps a time as a clock reading with no zone; `time_zone` (an IANA
+# name) says where the clock was, daylight saving included. Unset reads the
+# times as UTC, and the Manage row says so.
+[[steps]]
+group = "baby_connect"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["baby_connect/ingest"]
+
+[steps.params]
+time_zone = "America/Los_Angeles"
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "baby_connect"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- beeper by `texts` --------------------------------------------------
+
+# The Beeper Texts desktop app's local data, with every option set, and
+# searchable. No sign-in; it reads the app's data directory.
+[[groups]]
+id = "beeper"
+name = "Beeper"
+type = "beeper"
+
+[[steps]]
+group = "beeper"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params.texts]
+path = "~/Library/Application Support/BeeperTexts"  # the app's data directory; this is
+                                                    # the default on macOS
+media = true         # copy the app's cached media into blobs; false keeps the
+                     # attachments' names without their bytes; default true
+
+[[steps]]
+group = "beeper"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["beeper/ingest"]
+
+[steps.params]
+networks = ["signal", "googlechat"]  # which networks to render; omit for every one
+                                     # (the ingest mirrors them all either way)
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "beeper"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- calendar by `google` -----------------------------------------------
+
+# Google Calendar through Google's API, signed in through latchkey, with
+# every option set, and searchable.
+[[groups]]
+id = "calendar-google"
+name = "Google Calendar"
+type = "calendar"
+
+[[steps]]
+group = "calendar-google"
+function = "ingest"
+command = "datalib-step"
+
+# When to give up on a failing server. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard@example.com"
+
+[steps.params.google]
+calendars = ["Bridge Duty", "Away Missions"]  # names as the service shows them, or ids;
+                                               # omit for every calendar. One added later
+                                               # downloads whole on the next run
+since = "-2d"   # first day mirrored: a day ("2024-01-01"), or days from the sync's
+                # own ("-2d" moves with it); omit for all of history
+until = "+21d"  # last day mirrored, included, the same way; omit for no end. With
+                # either set, the calendar is listed whole every run rather than
+                # resumed, and an event the window no longer reaches is dropped
+
+[[steps]]
+group = "calendar-google"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["calendar-google/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "calendar-google"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# Every occurrence of every event in a window of days around now, one row
+# each, the way Google's `singleEvents=true` lists them, in
+# render_occurrences/occurrences.doltlite_db. The window moves when the
+# step runs, which is when ingest has stored something new.
+[[steps]]
+group = "calendar-google"
+function = "render_occurrences"
+command = "datalib-step"
+inputs = ["calendar-google/ingest"]
+
+[steps.params]
+days_back = 30    # the default
+days_ahead = 400  # the default
+
+# --- calendar by `fastmail` ---------------------------------------------
+
+# Fastmail's calendars over CalDAV, signed in through latchkey's
+# `fastmail-dav` service with a read-only app password, with every option
+# set, and searchable.
+[[groups]]
+id = "calendar-fastmail"
+name = "Fastmail Calendar"
+type = "calendar"
+
+[[steps]]
+group = "calendar-fastmail"
+function = "ingest"
+command = "datalib-step"
+
+# When to give up on a failing server. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+# Fastmail's calendar and contacts app passwords share `fastmail-dav`, so
+# each is stored under its own name.
+[steps.params.latchkey_settings]
+account = "picard@example.com calendar"
+
+[steps.params.fastmail]
+calendars = ["Bridge Duty", "Away Missions"]  # names as the service shows them, or ids;
+                                               # omit for every calendar. One added later
+                                               # downloads whole on the next run
+since = "2024-01-01"  # first day mirrored: a day, or days from the sync's own ("-2d");
+                      # omit for all of history
+until = "2026-12-31"  # last day mirrored, included; omit for no end. With either set,
+                      # the calendar is listed whole every run rather than resumed
+
+[[steps]]
+group = "calendar-fastmail"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["calendar-fastmail/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "calendar-fastmail"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# Every occurrence of every event in a window of days around now, one row
+# each, the way Google's `singleEvents=true` lists them, in
+# render_occurrences/occurrences.doltlite_db. The window moves when the
+# step runs, which is when ingest has stored something new.
+[[steps]]
+group = "calendar-fastmail"
+function = "render_occurrences"
+command = "datalib-step"
+inputs = ["calendar-fastmail/ingest"]
+
+[steps.params]
+days_back = 30    # the default
+days_ahead = 400  # the default
+
+# --- calendar by `caldav` -----------------------------------------------
+
+# Any other CalDAV server, signed in through a latchkey service
+# registered for its host, with every option set, and searchable.
+[[groups]]
+id = "calendar-caldav"
+name = "CalDAV Calendar"
+type = "calendar"
+
+[[steps]]
+group = "calendar-caldav"
+function = "ingest"
+command = "datalib-step"
+
+# When to give up on a failing server. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard@example.com"
+
+[steps.params.caldav]
+# Where discovery starts. The host alone is usually enough: discovery tries
+# `/.well-known/caldav` when it does not answer.
+server_url = "https://cloud.example.com/remote.php/dav/"
+calendars = ["Bridge Duty", "Away Missions"]  # names as the service shows them, or ids;
+                                               # omit for every calendar. One added later
+                                               # downloads whole on the next run
+since = "2024-01-01"  # first day mirrored: a day, or days from the sync's own ("-2d");
+                      # omit for all of history
+until = "2026-12-31"  # last day mirrored, included; omit for no end. With either set,
+                      # the calendar is listed whole every run rather than resumed
+
+[[steps]]
+group = "calendar-caldav"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["calendar-caldav/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "calendar-caldav"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# Every occurrence of every event in a window of days around now, one row
+# each, the way Google's `singleEvents=true` lists them, in
+# render_occurrences/occurrences.doltlite_db. The window moves when the
+# step runs, which is when ingest has stored something new.
+[[steps]]
+group = "calendar-caldav"
+function = "render_occurrences"
+command = "datalib-step"
+inputs = ["calendar-caldav/ingest"]
+
+[steps.params]
+days_back = 30    # the default
+days_ahead = 400  # the default
+
+# --- calendar by `calendly` ---------------------------------------------
+
+# The meetings booked with you on Calendly, through Calendly's API,
+# signed in through latchkey's `calendly` service with a personal access
+# token, with every option set, and searchable.
+[[groups]]
+id = "calendar-calendly"
+name = "Calendly"
+type = "calendar"
+
+[[steps]]
+group = "calendar-calendly"
+function = "ingest"
+command = "datalib-step"
+
+# When to give up on a failing server. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard@example.com"
+
+[steps.params.calendly]
+since = "2024-01-01"  # first day mirrored: a day, or days from the sync's own ("-30d"
+                      # moves with it). Meetings that start on or after it; omit for
+                      # all of history
+until = "+21d"        # last day mirrored, included, the same way; omit for no end. A
+                      # meeting that leaves the range is dropped from the copy
+
+[[steps]]
+group = "calendar-calendly"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["calendar-calendly/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "calendar-calendly"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# Every meeting in a window of days around now, one row each, in
+# render_occurrences/occurrences.doltlite_db, the way the other calendar
+# methods list their occurrences. The window moves when the step runs,
+# which is when ingest has stored something new.
+[[steps]]
+group = "calendar-calendly"
+function = "render_occurrences"
+command = "datalib-step"
+inputs = ["calendar-calendly/ingest"]
+
+[steps.params]
+days_back = 30    # the default
+days_ahead = 400  # the default
+
+# --- calendar by `ics` --------------------------------------------------
+
+# A folder of `.ics` files on disk (Google Takeout's `Calendar/`, an
+# Apple Calendar export), with every option set, and searchable. No sign-in.
+[[groups]]
+id = "calendar-ics"
+name = "Calendar export"
+type = "calendar"
+
+[[steps]]
+group = "calendar-ics"
+function = "ingest"
+command = "datalib-step"
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+[steps.params.ics]
+path = "~/Downloads/calendar-export"  # the folder; each `.ics` file in it is one calendar
+
+[[steps]]
+group = "calendar-ics"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["calendar-ics/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "calendar-ics"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# Every occurrence of every event in a window of days around now, one row
+# each, the way Google's `singleEvents=true` lists them, in
+# render_occurrences/occurrences.doltlite_db. The window moves when the
+# step runs, which is when ingest has stored something new.
+[[steps]]
+group = "calendar-ics"
+function = "render_occurrences"
+command = "datalib-step"
+inputs = ["calendar-ics/ingest"]
+
+[steps.params]
+days_back = 30    # the default
+days_ahead = 400  # the default
+
+# --- chatgpt by `api` ---------------------------------------------------
+
+# ChatGPT conversations over chatgpt.com's web API, signed in through
+# latchkey, with every option set, and searchable.
+[[groups]]
+id = "chatgpt-api"
+name = "ChatGPT"
+type = "chatgpt"
+
+[[steps]]
+group = "chatgpt-api"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params]
+# What becomes of the copy of a conversation you delete on chatgpt.com:
+# "delete_local_copy" (the default) deletes it here too; "keep_local_copy"
+# keeps it, so you can delete it upstream for privacy and still have it.
+when_deleted_upstream = "keep_local_copy"
+
+# When to give up on rate limits. The download always honours a 429's
+# Retry-After and backs off; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard"
+
+[steps.params.api]
+since = "2025-01-01"              # only conversations updated at or after this (a day,
+                                  # RFC 3339, or "-30d" from the sync); move it back later
+                                  # to backfill; default: all
+max_listing_pages = 20            # stop listing after this many pages (100 conversations
+                                  # each); a listing cut short deletes nothing; default: all
+max_conversations_per_run = 100   # fetch at most this many per run, the never-fetched
+                                  # first; default: every one that changed
+refetch_newest_conversations = 3  # fetch the 3 most recently updated conversations
+                                  # again every run; unset fetches only what changed
+seconds_between_requests = 0.5    # wait between requests (0 to 3600); default: none
+conv_uuids = [                    # only these conversations, by id or pasted link, and
+  "https://chatgpt.com/c/abc123de-f456-7890-abcd-ef0123456789",  # no listing, so every
+]                                 # setting above but the wait is ignored, with a
+                                  # warning; omit for all
+
+# Start from a data export of this same account: the `.zip`, or the
+# folder it was unzipped into. It fills in every conversation the store
+# does not have yet, so they and their files are not downloaded; the API
+# then fetches what moved since, newer than `since` if set. Only the API's
+# listing deletes. The export is read again only when it changes. Omit
+# the table to download every conversation.
+[steps.params.export]
+path = "~/Downloads/chatgpt-export.zip"
+
+[[steps]]
+group = "chatgpt-api"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["chatgpt-api/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "chatgpt-api"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- chatgpt by `export` ------------------------------------------------
+
+# A ChatGPT data export on disk, zipped or not, with every option set, and
+# searchable. No sign-in. The export is a complete snapshot: a
+# conversation a newer export no longer holds leaves the mirror. To keep
+# it current afterwards, add an `api` table beside this one (the chatgpt
+# INGEST.md, "An export and the API together"): the API then fetches only
+# what moved, and the export no longer prunes.
+[[groups]]
+id = "chatgpt-export"
+name = "ChatGPT export"
+type = "chatgpt"
+
+[[steps]]
+group = "chatgpt-export"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params]
+# What becomes of the copy of a conversation a newer export no longer holds:
+# "delete_local_copy" (the default) deletes it here too; "keep_local_copy"
+# keeps it, so you can delete it upstream for privacy and still have it.
+when_deleted_upstream = "keep_local_copy"
+
+[steps.params.export]
+path = "~/Downloads/chatgpt-export.zip"  # the .zip, or the folder it was unzipped into
+
+[[steps]]
+group = "chatgpt-export"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["chatgpt-export/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "chatgpt-export"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- claude by `api` ----------------------------------------------------
+
+# Claude.ai conversations and projects over its web API, signed in through
+# latchkey's `claude-ai` service with your browser's `sessionKey` cookie,
+# with every option set, and searchable.
+[[groups]]
+id = "claude-api"
+name = "Claude"
+type = "claude"
+
+[[steps]]
+group = "claude-api"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params]
+# What becomes of the copy of a conversation you delete on claude.ai:
+# "delete_local_copy" (the default) deletes it here too; "keep_local_copy"
+# keeps it, so you can delete it upstream for privacy and still have it.
+when_deleted_upstream = "keep_local_copy"
+
+# When to give up on rate limits. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "enterprise"
+
+[steps.params.api]
+since = "2025-01-01"                  # only conversations updated on or after this (a day,
+                                      # RFC 3339, or "-30d" from the sync); move it back to
+                                      # backfill; unset is all
+max_conversations_per_run = 100       # fetch at most this many per run, the never-fetched
+                                      # first; default: every one that changed
+refetch_newest_conversations = 3      # fetch each org's 3 most recently updated conversations
+                                      # again every run; unset fetches only what changed
+seconds_between_requests = 0.5        # wait between requests (0 to 3600); default: none
+conv_uuids = [                        # only these conversations, by id or pasted link, and
+  "https://claude.ai/chat/550e8400-e29b-41d4-a716-446655440000",  # no listing, so every
+]                                     # setting above but the wait is ignored, with a
+                                      # warning; default [] is all
+projects = true                       # also mirror Claude Projects: description, instructions
+                                      # and knowledge documents; default true
+project_uuids = [                     # only these projects, by id or pasted link;
+  "6ba7b810-9dad-11d1-80b4-00c04fd430c8",                         # default [] is all
+]
+cowork = true                         # also mirror Cowork tasks run in the cloud, each as a
+                                      # conversation; default true
+cowork_session_ids = [                # only these Cowork tasks, by id or pasted link;
+  "https://claude.ai/cowork/cse_01AbCdEfGhJkMnPqRsTuVw",          # default [] is all
+]
+
+[[steps]]
+group = "claude-api"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["claude-api/ingest"]
+
+[steps.params]
+max_project_doc_bytes = 131072  # cut a project knowledge document's text at this many
+                                # bytes on the project's page; default 131072 (128 KiB)
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "claude-api"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- claude by `export` -------------------------------------------------
+
+# An unpacked Claude data export on disk, with every option set, and
+# searchable. No sign-in. The export is a complete snapshot: a
+# conversation a newer export no longer holds leaves the mirror.
+[[groups]]
+id = "claude-export"
+name = "Claude export"
+type = "claude"
+
+[[steps]]
+group = "claude-export"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params]
+# What becomes of the copy of a conversation a newer export no longer holds:
+# "delete_local_copy" (the default) deletes it here too; "keep_local_copy"
+# keeps it, so you can delete it upstream for privacy and still have it.
+when_deleted_upstream = "keep_local_copy"
+
+[steps.params.export]
+path = "~/Downloads/claude-export"  # the folder holding `conversations.json`
+
+[[steps]]
+group = "claude-export"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["claude-export/ingest"]
+
+[steps.params]
+max_project_doc_bytes = 131072  # cut a project knowledge document's text at this many
+                                # bytes on the project's page; default 131072 (128 KiB)
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "claude-export"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- claude_code by `sessions` ------------------------------------------
+
+# Claude Code sessions read off a copy of another machine's transcripts,
+# with every option set, and searchable. No sign-in: the files are read
+# off disk.
+[[groups]]
+id = "claude_code"
+name = "Claude Code"
+type = "claude_code"
+
+[[steps]]
+group = "claude_code"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params.sessions]
+path = "~/Downloads/claude-code-backup/projects"  # a copy of another machine's
+                                                  # ~/.claude/projects; default
+                                                  # ~/.claude/projects
+
+[[steps]]
+group = "claude_code"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["claude_code/ingest"]
+
+# How much of one tool result reaches the page. The raw store keeps all of
+# it; a result that echoes a whole file is cut here, with a marker saying
+# so. Raising it and re-rendering fills the pages back in.
+[steps.params]
+max_tool_result_bytes = 16384  # the default
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "claude_code"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- codex by `sessions` ------------------------------------------------
+
+# Codex CLI threads read off a copy of another machine's Codex home, with
+# every option set, and searchable. No sign-in: the files are read off
+# disk.
+[[groups]]
+id = "codex"
+name = "Codex"
+type = "codex"
+
+[[steps]]
+group = "codex"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params.sessions]
+path = "~/Downloads/codex-backup"  # a copy of another machine's Codex home, the folder
+                                   # holding sessions/ and archived_sessions/;
+                                   # default ~/.codex
+
+[[steps]]
+group = "codex"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["codex/ingest"]
+
+# How much of one tool output reaches the page. The raw store keeps all of
+# it; an output that echoes a whole file is cut here, with a marker saying
+# so. Raising it and re-rendering fills the pages back in.
+[steps.params]
+max_tool_result_bytes = 16384  # the default
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "codex"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- contacts by `fastmail` ---------------------------------------------
+
+# Fastmail's address books over CardDAV, signed in through latchkey's
+# `fastmail-dav` service with a read-only app password, with every option
+# set, and searchable.
+[[groups]]
+id = "contacts-fastmail"
+name = "Fastmail Contacts"
+type = "contacts"
+
+[[steps]]
+group = "contacts-fastmail"
+function = "ingest"
+command = "datalib-step"
+
+# When to give up on a failing server. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+# Fastmail's contacts and calendar app passwords share `fastmail-dav`, so
+# each is stored under its own name.
+[steps.params.latchkey_settings]
+account = "picard@example.com contacts"
+
+[steps.params.fastmail]
+addressbooks = ["Enterprise Crew"]  # names as the server shows them, matched exactly;
+                                    # omit for every address book
+
+[[steps]]
+group = "contacts-fastmail"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["contacts-fastmail/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "contacts-fastmail"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- contacts by `carddav` ----------------------------------------------
+
+# Any other CardDAV server, signed in through a latchkey service
+# registered for its host, with every option set, and searchable.
+[[groups]]
+id = "contacts-carddav"
+name = "CardDAV Contacts"
+type = "contacts"
+
+[[steps]]
+group = "contacts-carddav"
+function = "ingest"
+command = "datalib-step"
+
+# When to give up on a failing server. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard@example.com"
+
+[steps.params.carddav]
+# Where discovery starts. The host alone is usually enough: discovery tries
+# `/.well-known/carddav` when it does not answer.
+server_url = "https://cloud.example.com/remote.php/dav/"
+addressbooks = ["Enterprise Crew"]  # names as the server shows them, matched exactly;
+                                    # omit for every address book
+
+[[steps]]
+group = "contacts-carddav"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["contacts-carddav/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "contacts-carddav"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- contacts by `vcf` --------------------------------------------------
+
+# A folder of `.vcf` (vCard) files on disk, with every option set, and
+# searchable. No sign-in.
+[[groups]]
+id = "contacts-vcf"
+name = "Contacts export"
+type = "contacts"
+
+[[steps]]
+group = "contacts-vcf"
+function = "ingest"
+command = "datalib-step"
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+[steps.params.vcf]
+# The folder. Each `.vcf` in it is an address book: a card a file no longer
+# carries, or every card of a file that is gone, leaves the mirror on the
+# next sync.
+path = "~/Downloads/contacts-export"
+
+[[steps]]
+group = "contacts-vcf"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["contacts-vcf/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "contacts-vcf"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- email by `jmap` ----------------------------------------------------
+
+# Fastmail mail over JMAP, signed in through latchkey, with every option set,
+# and searchable.
+[[groups]]
+id = "email-jmap"
+name = "Fastmail"
+type = "email"
+
+[[steps]]
+group = "email-jmap"
+function = "ingest"
+command = "datalib-step"
+
+# Mirror only mail under these mailboxes. Labels are full paths and match
+# exactly: `Work` does not take in `Work/Projects`, so list nested ones.
+# Several labels add up. The default, [], mirrors everything.
+[steps.params]
+only_extract_labels = ["Inbox", "Starfleet/Reports"]
+whole_threads = true  # also keep the rest of the thread of a message the labels keep; default true
+
+[steps.params.common]
+blob_size_limit_bytes = "25 MB"  # skip a message (its .eml, attachments and all) larger
+                                 # than this; unset is no limit
+
+# When to give up on a failing server. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard@example.com"
+
+[steps.params.jmap]
+hostname = "api.fastmail.com"  # the JMAP server; its session is at https://<hostname>/.well-known/jmap
+account_id = "u1701d"          # which JMAP account; default the session's primary mail account
+blob_download_concurrency = 8  # .eml files downloaded at once; default 8, 1 is one at a time
+
+[[steps]]
+group = "email-jmap"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["email-jmap/ingest"]
+
+[steps.params]
+outlink_format = "fastmail"     # each message's `↗` link opens it in Fastmail; omit for no link
+only_render_labels = ["Inbox"]  # render only threads with a message under these labels
+                                # (exact paths, like `only_extract_labels`); default [] is all
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "email-jmap"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- email by `gmail` ---------------------------------------------------
+
+# Gmail over the Gmail API, signed in through latchkey, with every option set,
+# and searchable.
+[[groups]]
+id = "email-gmail"
+name = "Gmail"
+type = "email"
+
+[[steps]]
+group = "email-gmail"
+function = "ingest"
+command = "datalib-step"
+
+# Mirror only mail under these labels. Labels are full paths and match
+# exactly: `Work` does not take in `Work/Projects`, so list nested ones.
+# Several labels add up, each costing one more walk of the mailbox. The
+# default, [], mirrors everything.
+[steps.params]
+only_extract_labels = ["Inbox", "Starfleet/Reports"]
+whole_threads = true  # also keep the rest of the thread of a message the labels keep; default true
+
+[steps.params.common]
+blob_size_limit_bytes = "25 MB"  # skip a message (its .eml, attachments and all) larger
+                                 # than this; unset is no limit
+
+# When to give up on a failing server. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one; name it once `google-gmail` holds two.
+[steps.params.latchkey_settings]
+account = "picard@example.com"
+
+[steps.params.gmail]
+user_id = "me"                        # Gmail's userId; the default `me` is the signed-in account
+account_id = "picard@example.com"     # id of the account row; default the address Gmail reports
+display_name = "Jean-Luc Picard"      # the account row's name; default its account_id
+email_address = "picard@example.com"  # the account row's address; default the one Gmail reports
+since = "-30d"                        # oldest mail to mirror: a day, an RFC 3339 instant, or
+                                      # an offset from the sync; older mail it slides past
+                                      # stays; default: the whole mailbox
+quota_units_per_minute = 5000         # ceiling on Gmail quota spent a minute (Google allows
+                                      # 6000, and a message costs 60); default 5000, lowered on
+                                      # its own when rate-limited
+message_budget = 20000                # stop after this many messages and finish the rest next
+                                      # run; unset (the default) has no limit
+
+# Start from a Google Takeout of this same account: the folder holding
+# its .zip or .tgz parts as Google sent them, or unpacked, the `.mbox` or
+# the Takeout's Mail folder. Its messages are not downloaded again; Gmail
+# sends their labels and the mail newer than the Takeout. Only `path`
+# is read here; the account is the one Gmail signs in as. Omit the
+# table to download every message.
+[steps.params.mbox]
+path = "~/Takeout/Mail"
+
+[[steps]]
+group = "email-gmail"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["email-gmail/ingest"]
+
+[steps.params]
+outlink_format = "gmail"        # each message's `↗` link opens it in Gmail; omit for no link
+only_render_labels = ["Inbox"]  # render only threads with a message under these labels
+                                # (exact paths, like `only_extract_labels`); default [] is all
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "email-gmail"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- email by `mbox` ----------------------------------------------------
+
+# An `.mbox` file on disk, such as the Mail product of a Google Takeout
+# export, with every option set, and searchable. No sign-in. The .mbox is
+# a complete snapshot: a message a newer one no longer holds leaves the
+# mirror on the next sync.
+[[groups]]
+id = "email-mbox"
+name = "Gmail Takeout"
+type = "email"
+
+[[steps]]
+group = "email-mbox"
+function = "ingest"
+command = "datalib-step"
+
+# Mirror only messages carrying these Gmail labels (the `X-Gmail-Labels`
+# header). Labels are full paths and match exactly: `Work` does not take
+# in `Work/Projects`. Several labels add up. The default, [], is all.
+[steps.params]
+only_extract_labels = ["Inbox", "Starfleet/Reports"]
+whole_threads = true  # also keep the rest of the thread of a message the labels keep; default true
+
+# Everything but `path` names the account row the mailbox is filed under.
+[steps.params.mbox]
+path = "~/Downloads/email-export/All mail Including Spam and Trash.mbox"  # the file, a folder holding one, or a Takeout's .zip or folder of parts
+account_id = "picard_gmail"           # the account's id; default made from the file's name
+display_name = "Picard's Gmail"       # the account's name; default its account_id
+email_address = "picard@example.com"  # the account's address; unset by default
+is_personal = true                    # a personal (not work) account; default true
+
+[[steps]]
+group = "email-mbox"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["email-mbox/ingest"]
+
+[steps.params]
+outlink_format = "gmail"        # each message's `↗` link opens it in Gmail; omit for no link
+only_render_labels = ["Inbox"]  # render only threads with a message under these labels
+                                # (exact paths, like `only_extract_labels`); default [] is all
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "email-mbox"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- email by `apple_mail` ----------------------------------------------
+
+# The Mail app on this Mac, with every option set, and searchable. No
+# sign-in. Mail's own index says what each account holds, so a message
+# deleted in Mail leaves the mirror on the next sync.
+[[groups]]
+id = "email-apple_mail"
+name = "Apple Mail"
+type = "email"
+
+[[steps]]
+group = "email-apple_mail"
+function = "ingest"
+command = "datalib-step"
+
+# Mirror only messages in these mailboxes, named as Mail shows them, with
+# a nested one as its full path. Several add up. The default, [], is all.
+[steps.params]
+only_extract_labels = ["Inbox", "Starfleet/Reports"]
+whole_threads = true  # also keep the rest of the thread of a message the mailboxes keep; default true
+
+# Without `account`, every account in Mail that holds mail is copied, each
+# under its own account id. `account` copies just that one, and the rest
+# name its account row (they need `account`).
+[steps.params.apple_mail]
+path = "~/Library/Mail"                          # Mail's folder (the default), or a copy of it
+account = "1F0B8A52-0000-4000-8000-00000000E1D0"  # copy only this account: its folder under ~/Library/Mail/V10; default every account
+account_id = "picard_mail"                       # the account's id; default made from Mail's
+display_name = "Picard's mail"                   # the account's name; default its account_id
+email_address = "picard@example.com"             # the account's address; unset by default
+is_personal = true                               # a personal (not work) account; default true
+
+[[steps]]
+group = "email-apple_mail"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["email-apple_mail/ingest"]
+
+[steps.params]
+only_render_labels = ["Inbox"]  # render only threads with a message in these mailboxes; default [] is all
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "email-apple_mail"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- facebook by `export` -----------------------------------------------
+
+# Facebook's "Download your information" export, in JSON, unzipped into one
+# folder, with every option set, and searchable. No sign-in. Each export is
+# a complete snapshot: what a newer one no longer holds leaves the mirror.
+[[groups]]
+id = "facebook"
+name = "Facebook"
+type = "facebook"
+
+[[steps]]
+group = "facebook"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params.export]
+path = "~/Downloads/facebook-export"  # the folder the export's zips were unzipped into
+
+[[steps]]
+group = "facebook"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["facebook/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "facebook"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- file_inventory by `fswalk` -----------------------------------------
+
+# An index of a local directory tree, with every option set. Nothing to
+# sign in to; with `stamp` off the scan only reads the folder `path` names.
+[[groups]]
+id = "file_inventory"
+name = "Local files"
+type = "file_inventory"
+
+[[steps]]
+group = "file_inventory"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params]
+stamp = false  # true writes `.file_inventory.toml` UUID breadcrumbs into each directory
+               # that opts in with `stamp_me_with_uuid`; default false
+
+[steps.params.fswalk]
+path = "~/Documents/starfleet"  # the tree to scan; `~` is your home folder
+
+# Renders no documents, only the storage report every source gets, which
+# is what puts the source in the grid. No options.
+[[steps]]
+group = "file_inventory"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["file_inventory/ingest"]
+
+# --- garmin by `api` ----------------------------------------------------
+
+# Garmin Connect over the API the Connect phone app uses, signed in through
+# latchkey's Garmin plugin, with every option set, and keyword-searchable.
+[[groups]]
+id = "garmin"
+name = "Garmin Connect"
+type = "garmin"
+
+[[steps]]
+group = "garmin"
+function = "ingest"
+command = "datalib-step"
+
+# When to give up on rate limits. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard@example.com"
+
+# Quote the dates: a bare 2024-01-01 is a TOML date, not the string
+# this source checks.
+[steps.params.api]
+since = "2024-01-01"       # earliest day to mirror, or days from the sync's own ("-90d");
+                           # default a year before the first run.
+                           # Move it earlier to backfill
+until = "2025-12-31"       # last day to mirror; default today. A past day fixes the
+                           # window, so the mirror stops growing: omit it to keep up
+refresh_days = 7           # days after a day ends that every run fetches it again
+                           # (late watch syncs, recomputed sleep); default 7
+metrics = ["daily_summary", "heart_rate", "sleep", "stress", "body_battery", "hrv"]
+                           # which per-day metrics to mirror; default all twenty.
+                           # An unknown name is refused with the full list
+activity_files = true      # each activity's original FIT file, into the blob store; default true
+wellness_files = false     # each day's wellness FIT bundle (one zip a day, sensor
+                           # resolution); default false
+
+# The weigh-ins and devices, a page per family of daily metrics, a daily
+# log with a row per day, a page per activity, and the personal records,
+# badges, gear, workouts and goals. No options.
+[[steps]]
+group = "garmin"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["garmin/ingest"]
+
+# Its numbers as time series, for charts and the time-series index.
+[[steps]]
+group = "garmin"
+function = "render_time_series"
+command = "datalib-step"
+inputs = ["garmin/ingest"]
+
+# --- github by `api` ----------------------------------------------------
+
+# GitHub pull requests and their review threads, over GitHub's API, signed
+# in through latchkey, with every option set, and searchable.
+[[groups]]
+id = "github"
+name = "GitHub"
+type = "github"
+
+[[steps]]
+group = "github"
+function = "ingest"
+command = "datalib-step"
+
+# When to give up on rate limits. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard"
+
+[steps.params.api]
+refresh_window_days = 30  # how many trailing days each run's search must have covered;
+                          # default 0, which sets no limit
+max_prs = 50              # fetch at most this many PRs a run; the rest wait for the
+                          # next run. Default: no cap
+pull_requests = [         # only these PRs, as `owner/repo#NUM` or a github.com PR URL;
+  "enterprise/warp-core#42",  # set, it skips finding your PRs. Default: empty, find them
+  "https://github.com/enterprise/warp-core/pull/43",
+]
+
+[[steps]]
+group = "github"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["github/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "github"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- gitlab by `api` ----------------------------------------------------
+
+# GitLab merge requests and their discussions, over GitLab's API, signed
+# in through latchkey with a personal access token you create, with every
+# option set, and searchable.
+[[groups]]
+id = "gitlab"
+name = "GitLab"
+type = "gitlab"
+
+[[steps]]
+group = "gitlab"
+function = "ingest"
+command = "datalib-step"
+
+# When to give up on rate limits. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "riker"
+
+[steps.params.api]
+refresh_window_days = 30  # how many trailing days each run's listing must have covered;
+                          # default 0, which sets no limit
+max_mrs = 50              # fetch at most this many MRs a run; the rest wait for the
+                          # next run. Default: no cap
+merge_requests = [        # only these MRs, as `namespace/project!IID` or a gitlab.com
+  "enterprise/warp-core!7",   # MR URL; set, it skips finding your MRs. Default: empty, find them
+  "https://gitlab.com/enterprise/warp-core/-/merge_requests/8",
+]
+
+[[steps]]
+group = "gitlab"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["gitlab/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "gitlab"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- google_drive by `api` ----------------------------------------------
+
+# A backup of a Google account's Docs, Sheets and Slides, signed in through
+# four latchkey services as the same account (google-drive, google-docs,
+# google-sheets and google-slides), with every option set.
+[[groups]]
+id = "google_drive"
+name = "Google Drive"
+type = "google_drive"
+
+[[steps]]
+group = "google_drive"
+function = "ingest"
+command = "datalib-step"
+
+# When to give up on rate limits. The download always backs off and
+# retries; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one. All four services need an account by this name.
+[steps.params.latchkey_settings]
+account = "data@example.com"
+
+[steps.params.api]
+kinds = ["document", "spreadsheet", "presentation"]  # which kinds of file; default all three
+exports = ["odf", "pdf"]   # converted copies kept beside Google's own JSON: "odf"
+                           # (.odt/.ods/.odp), "ooxml" (.docx/.xlsx/.pptx), "pdf".
+                           # Default none: the JSON is the backup. Each is 1-4 MB a
+                           # version, since Google embeds fonts
+revision_exports = ["odf"] # the same, of every revision Drive lists for a Doc or a
+                           # Sheet, fetched once each: the only copy of a version from
+                           # before the first sync (a deck's links ignore the revision,
+                           # so decks get none). Default none
+owned_only = false         # true: only the files the account owns, not ones shared
+                           # with it; default false
+file_ids = [               # only these files, as a bare id or a pasted docs.google.com
+  "1EnterpriseNCC1701DWarpCoreLog",  # link. Default: empty, every file
+  "https://docs.google.com/document/d/1PicardCaptainsLogStardate41153/edit",
+]
+
+# Each Doc as one document, its comment threads folded in; Sheets and
+# Slides are kept but not rendered yet. No options.
+[[steps]]
+group = "google_drive"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["google_drive/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "google_drive"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- google_takeout by `export` -----------------------------------------
+
+# A Google Takeout export on disk (takeout.google.com), with every option
+# set, and searchable. No sign-in: the export is a file you downloaded.
+[[groups]]
+id = "google_takeout"
+name = "Google Takeout"
+type = "google_takeout"
+
+[[steps]]
+group = "google_takeout"
+function = "ingest"
+command = "datalib-step"
+
+# Each Takeout is a complete snapshot of the products you ticked: a record a
+# newer export no longer holds leaves the mirror on the next sync. A product
+# missing from the export altogether deletes nothing. Every feed defaults to
+# false, so you turn on each one you want.
+[steps.params.export]
+path = "~/Downloads/takeout-export"  # the `Takeout/` folder, or a folder of one export's .zip/.tgz parts
+google_chat = true                 # Chat DMs, spaces and bots, with attachments
+google_voice = true                # Voice texts, voicemails, calls and bills
+google_voice_include_spam = false  # also read Voice/Spam/ (needs google_voice)
+gemini_apps = true                 # Gemini prompts and responses
+maps_reviews = true                # your Maps reviews
+maps_saved_places = true           # places you starred in Maps
+maps_saved_lists = true            # Maps lists under Saved/, with the notes on their places
+maps_photos = false                # photos you added to Maps
+my_maps = true                     # My Maps maps: pins, lines, shapes and their text
+play_books = true                  # Play Books highlights, notes, bookmarks, listening positions
+youtube_watch_history = true       # every video you watched
+youtube_subscriptions = true       # the channels you subscribe to
+
+[[steps]]
+group = "google_takeout"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["google_takeout/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "google_takeout"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- lightroom by `catalog` ---------------------------------------------
+
+# An Adobe Lightroom Classic catalog (the `.lrcat` file) mirrored table for
+# table, with every option set. No sign-in.
+[[groups]]
+id = "lightroom-catalog"
+name = "Lightroom"
+type = "lightroom"
+
+[[steps]]
+group = "lightroom-catalog"
+function = "ingest"
+command = "datalib-step"
+
+# Which tables and columns to mirror. Globs: `*` and `?` only.
+[steps.params]
+include_tables = ["*"]                              # the default: every table
+exclude_tables = ["Ag*Oz*"]                         # skip these, after include_tables; default none
+exclude_columns = ["Adobe_AdditionalMetadata.xmp"]  # `Table.column` globs left out entirely; default none
+skip_xmp = false     # true also leaves out the per-image XMP packet and the
+                     # flattened search indexes, the bulkiest derived columns; default false
+# Lightroom keys its tables on `id_local`, which it may renumber on a catalog
+# upgrade; `id_global` is the stable id beside it. A table with one of these
+# columns as a single-column UNIQUE index is keyed on it (first match wins);
+# [] keys every table on what it declares. Default ["id_global"].
+stable_key_columns = ["id_global"]
+# Pin a table's key yourself, `table = [columns]`; an empty list mirrors the
+# table with no key. The key is applied as a real PRIMARY KEY, so a column
+# that turns out not to be unique fails the whole run. Default none.
+primary_keys = { AgOzSpaceIds = [] }
+snapshot = true      # read a `VACUUM INTO` copy, not the live file; default true
+gc = false           # collect unreachable chunks each run: a smaller store,
+                     # history kept, but it rewrites the store; default false
+
+# The `.lrcat` to mirror, or one of Lightroom's backup `.zip` files.
+[steps.params.catalog]
+path = "~/Pictures/Lightroom/Enterprise.lrcat"
+
+# Lightroom's render writes no markdown: it puts a grid row per photo
+# and video in the grid, and is what the photos applet draws from.
+[[steps]]
+group = "lightroom-catalog"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["lightroom-catalog/ingest"]
+
+# --- lightroom by `backups` ---------------------------------------------
+
+# The folder of backups Adobe Lightroom Classic writes, replayed as the
+# catalog's history, with every option set. No sign-in.
+[[groups]]
+id = "lightroom-backups"
+name = "Lightroom"
+type = "lightroom"
+
+[[steps]]
+group = "lightroom-backups"
+function = "ingest"
+command = "datalib-step"
+
+# Which tables and columns to mirror. Globs: `*` and `?` only.
+[steps.params]
+include_tables = ["*"]                              # the default: every table
+exclude_tables = ["Ag*Oz*"]                         # skip these, after include_tables; default none
+exclude_columns = ["Adobe_AdditionalMetadata.xmp"]  # `Table.column` globs left out entirely; default none
+skip_xmp = false     # true also leaves out the per-image XMP packet and the
+                     # flattened search indexes, the bulkiest derived columns; default false
+# Lightroom keys its tables on `id_local`, which it may renumber on a catalog
+# upgrade; `id_global` is the stable id beside it. A table with one of these
+# columns as a single-column UNIQUE index is keyed on it (first match wins);
+# [] keys every table on what it declares. Default ["id_global"].
+stable_key_columns = ["id_global"]
+# Pin a table's key yourself, `table = [columns]`; an empty list mirrors the
+# table with no key. The key is applied as a real PRIMARY KEY, so a column
+# that turns out not to be unique fails the whole run. Default none.
+primary_keys = { AgOzSpaceIds = [] }
+snapshot = true      # read a `VACUUM INTO` copy, not the live file; default true
+gc = false           # collect unreachable chunks each run: a smaller store,
+                     # history kept, but it rewrites the store; default false
+
+# The folder Lightroom writes its backups into, one subfolder per backup
+# (named like `2026-09-27 1650`). Each backup not yet in the store becomes a
+# commit of its own, oldest first, dated when it was taken. A source may set
+# `catalog` beside it: the backups are replayed first, the catalog on top.
+[steps.params.backups]
+path = "~/Pictures/Lightroom/Backups"
+
+# Lightroom's render writes no markdown: it puts a grid row per photo
+# and video in the grid, and is what the photos applet draws from.
+[[steps]]
+group = "lightroom-backups"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["lightroom-backups/ingest"]
+
+# --- linear by `api` ----------------------------------------------------
+
+# A Linear workspace over its GraphQL API, signed in through latchkey, with
+# every option set.
+[[groups]]
+id = "linear"
+name = "Linear"
+type = "linear"
+
+[[steps]]
+group = "linear"
+function = "ingest"
+command = "datalib-step"
+
+# When to give up on failed requests. The download retries and backs off
+# on its own; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "enterprise"
+
+# Both lists empty (or omitted) copies the whole workspace. Otherwise an
+# issue is copied when its team or its project is named; most issues
+# belong to no project, so name their teams.
+[steps.params.api]
+teams = ["ENG"]                 # by key (any case) or by name
+projects = ["Warp core refit"]  # by name, as Linear shows it
+
+# Nothing renders as documents; this step writes the storage report that
+# puts the source in the grid and counts its issues.
+[[steps]]
+group = "linear"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["linear/ingest"]
+
+# --- linkedin by `export` -----------------------------------------------
+
+# LinkedIn's "Get a copy of your data" export, unzipped, with every option
+# set, and searchable. Render emits the message threads and your
+# connections as contacts. Unzip each newer export over the folder.
+[[groups]]
+id = "linkedin"
+name = "LinkedIn"
+type = "linkedin"
+
+[[steps]]
+group = "linkedin"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params.export]
+path = "~/Downloads/linkedin-export"  # the unzipped export: the folder of CSVs
+
+[[steps]]
+group = "linkedin"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["linkedin/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "linkedin"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- media by `fswalk` --------------------------------------------------
+
+# A folder of music, photos and video on disk, with every option set. Files
+# are keyed on content hash, so one song in three folders is one row with
+# three locations. See the provider's INGEST.md for queries.
+[[groups]]
+id = "media"
+name = "Media"
+type = "media"
+
+[[steps]]
+group = "media"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params]
+ignore = ["**/.Trash/**", "**/Thumbnails/**"]  # gitignore-style patterns left out of the
+                                               # scan, on top of any .gitignore; default none
+max_bytes = "64 GB"            # skip a larger file, with a warning naming it; unset is no limit
+payload_max_bytes = "8 GiB"    # above this, skip the tag-independent payload hash
+                               # (`payload_blake3` stays NULL); default 8 GiB
+playlists = true               # index .m3u / .m3u8 playlists; default true
+skip_dataless = true           # skip cloud placeholders (Dropbox online-only, iCloud
+                               # evicted files) rather than download them; default true
+
+[steps.params.fswalk]
+path = "~/Music"  # the folder to scan
+
+# Media renders no documents: query the raw store with `datalib-doltlite`.
+# This step writes the storage report every source gets, which is what
+# puts Media in the grid.
+[[steps]]
+group = "media"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["media/ingest"]
+
+# --- notion by `api` ----------------------------------------------------
+
+# Notion over its API, signed in through latchkey with one stored credential
+# carrying both the token and the version header, with every option set, and
+# searchable.
+[[groups]]
+id = "notion"
+name = "Notion"
+type = "notion"
+
+[[steps]]
+group = "notion"
+function = "ingest"
+command = "datalib-step"
+
+# When to give up on rate limits. The download always honours a 429's
+# Retry-After and backs off; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "enterprise"
+
+[steps.params.api]
+# Mirror only these pages and databases and what hangs under them (sub-pages
+# at any depth, a database's rows and theirs), plus the pages a root links or
+# mentions; by id or pasted link. Omit for the whole workspace.
+roots = [
+  "https://www.notion.so/enterprise/Bridge-Crew-Rota-0123456789abcdef0123456789abcdef",
+  "fedcba9876543210fedcba9876543210",
+]
+refresh_window_days = 7  # whole-workspace mirror: re-list this many days of edits before
+                         # the newest seen, so a page shared late is caught; default 0
+max_pages = 5000         # stop after mirroring this many pages, a guard against a
+                         # mis-scoped run; unset is no limit (0 is refused)
+comments = true          # comment threads; default true
+attachments = true       # files attached to pages; default true
+
+[[steps]]
+group = "notion"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["notion/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "notion"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- pdf by `fswalk` ----------------------------------------------------
+
+# Every PDF under a folder on this machine, with every option set, and
+# searchable. No account and no credentials. A scanned, image-only PDF is
+# recorded but gives no text, as there is no OCR yet; one warning counts them.
+[[groups]]
+id = "pdf"
+name = "PDFs"
+type = "pdf"
+
+[[steps]]
+group = "pdf"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params]
+ignore = ["drafts/**", "**/.Trash/**"]  # gitignore-style patterns to skip, on top of any
+                                        # .gitignore in the tree; default none
+max_bytes = "512 MiB"  # skip a larger file, with a warning naming it; the default
+ocr = false            # OCR for pages with no text: not supported yet, so it must stay false
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+[steps.params.fswalk]
+path = "~/Documents/papers"  # the folder to scan, and everything under it
+
+# Render needs no params: it reads the scan root back out of the raw
+# store, so it converts exactly the tree the ingest step walked.
+[[steps]]
+group = "pdf"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["pdf/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "pdf"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- perseus by `github` ------------------------------------------------
+
+# Greek and Latin texts from the Perseus Digital Library, fetched from
+# PerseusDL's public GitHub repository, with every option set, and
+# searchable. No credentials.
+[[groups]]
+id = "perseus"
+name = "Perseus"
+type = "perseus"
+
+[[steps]]
+group = "perseus"
+function = "ingest"
+command = "datalib-step"
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+[steps.params.github]
+# TEI files to fetch, as paths inside PerseusDL/canonical-greekLit's
+# `data/` tree. Default: the Thucydides Histories in every edition there.
+files = [
+  "tlg0003/tlg001/__cts__.xml",
+  "tlg0003/tlg001/tlg0003.tlg001.perseus-grc2.xml",
+  "tlg0003/tlg001/tlg0003.tlg001.perseus-eng4.xml",
+]
+
+[[steps]]
+group = "perseus"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["perseus/ingest"]
+
+[steps.params]
+# Edition pairs to align sentence by sentence; default none. Aligning
+# fetches a ~450 MB model once, into ~/.cache/datalib/models.
+alignment_pairs = [["perseus-grc2", "perseus-eng4"]]
+
+# A tree of TEI files staged by hand, read instead of what the ingest step
+# fetched. Only for a source with no ingest step, so it stays off here.
+# [steps.params.common]
+# input_path = "~/Downloads/perseus-tei"
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "perseus"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- signal by `backup` -------------------------------------------------
+
+# Signal messages from the Android app's local backups, with every option
+# set, and searchable. Each snapshot in `backup.path` is decrypted with
+# the passphrase held in the environment variable `aep_env_var` names:
+#   export SIGNAL_BACKUP_PASSPHRASE_PICARD='<your 30-digit passphrase>'
+[[groups]]
+id = "signal"
+name = "Signal"
+type = "signal"
+
+[[steps]]
+group = "signal"
+function = "ingest"
+command = "datalib-step"
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+[steps.params.backup]
+path = "~/Downloads/signal-backup"  # the folder holding the signal-backup-* snapshots
+aep_env_var = "SIGNAL_BACKUP_PASSPHRASE_PICARD"  # env var holding the passphrase;
+                                                 # default SIGNAL_BACKUP_PASSPHRASE
+
+[[steps]]
+group = "signal"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["signal/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "signal"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- slack by `api` -----------------------------------------------------
+
+# Slack over its API, signed in through latchkey, with every option set, and
+# searchable.
+[[groups]]
+id = "slack"
+name = "Slack"
+type = "slack"
+
+[[steps]]
+group = "slack"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params.common]
+blob_size_limit_bytes = "1 MB"  # skip an attachment larger than this; unset is no limit
+
+# When to give up on rate limits. The download always honours a 429's
+# Retry-After and backs off; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 100       # Slack rate-limits hard; the default is 50
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "enterprise"
+
+[steps.params.api]
+since = "2025-01-01"           # oldest message: a day ("2025-01-01"), an RFC 3339 instant
+                               # ("2025-01-01T09:00:00-08:00"), or an offset back from each
+                               # sync ("-30d", "-2w": a rolling window). Omit it for the whole
+                               # history; a first sync of a big workspace then takes hours
+channels = ["bridge", "engineering"]  # by name, without `#`; omit for every channel you are in
+all_channels = false           # also channels you can see but are not in (ignored with `channels`)
+archived = false               # also archived channels, each read once; meant with
+                               # `all_channels` (Slack drops members on archive). A
+                               # channel named in `channels` is mirrored either way
+media = true                   # download attachments into blobs; on unless set, so a
+                               # first sync fetches every file in range
+dms = true                     # direct messages, 1:1 and group: off unless set
+dm_conversations = ["D024BE7LH", "https://enterprise.slack.com/archives/G0ABC12DE"]
+                               # only these DMs, by id or pasted link; needs `dms = true`.
+                               # Unset, every DM: each is read once, then when Slack
+                               # shows it open with new messages, and daily if closed
+refresh_window_days = 30       # re-walk this many trailing days for edits, reactions
+                               # and deletions; default 30, 0 turns it off
+refresh_every_minutes = 60     # re-walk that window at most this often; default 60,
+                               # 0 re-walks it on every sync
+list_every_hours = 6           # re-read the user list and bookmarks at most this often;
+                               # default 6, 0 re-reads them on every sync. New authors are
+                               # looked up as their messages land either way
+scope = "involves_me"          # walk only the channels where something involves you;
+                               # default "every_conversation". DMs follow `dms` either way
+involves_me = ["mention", "from_me", "broadcast"]
+                               # what counts: a mention of you, your own message,
+                               # @here / @channel; unset is all three
+context_before = "-1d"         # walk a channel from this long before the oldest such
+                               # message; default "-1d"
+context_after = "+2d"          # walk only this long after each one; unset walks up to now
+
+[[steps]]
+group = "slack"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["slack/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "slack"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- sms_backup_restore by `backup` -------------------------------------
+
+# Android texts and call logs from the SMS Backup & Restore app's XML
+# export, with every option set, and searchable. No credentials.
+[[groups]]
+id = "sms_backup_restore"
+name = "SMS Backup & Restore"
+type = "sms_backup_restore"
+
+[[steps]]
+group = "sms_backup_restore"
+function = "ingest"
+command = "datalib-step"
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+# The directory is the whole archive: every *.xml in it is read, and a
+# message no backup file still holds leaves the mirror on the next sync.
+[steps.params.backup]
+path = "~/Downloads/sms-backup"
+
+[[steps]]
+group = "sms_backup_restore"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["sms_backup_restore/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "sms_backup_restore"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- todoist by `api` ---------------------------------------------------
+
+# Your Todoist over its API, signed in through latchkey (by browser, or with
+# the API token from Settings → Integrations → Developer), with every option
+# set.
+[[groups]]
+id = "todoist"
+name = "Todoist"
+type = "todoist"
+
+[[steps]]
+group = "todoist"
+function = "ingest"
+command = "datalib-step"
+
+# When to give up on failed requests. The download retries and backs off
+# on its own; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard@enterprise.test"
+
+# Open tasks always come. Completed ones come too unless `completed` is
+# false; `since` stops the first run's read of them at a day ("2024-01-01"),
+# an RFC 3339 instant, or an offset back from each sync ("-90d"), rather
+# than at the day the account joined Todoist.
+[steps.params.api]
+completed = true
+since = "2024-01-01"
+
+# One document per project: its sections, its tasks and their comments,
+# completed tasks folded under each section. No options.
+[[steps]]
+group = "todoist"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["todoist/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "todoist"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- whatsapp by `backup` -----------------------------------------------
+
+# WhatsApp from an Android end-to-end-encrypted backup, with every option
+# set, and searchable. The 64-digit key is read from the environment
+# variable `key_env_var` names, never from this file.
+[[groups]]
+id = "whatsapp"
+name = "WhatsApp"
+type = "whatsapp"
+
+[[steps]]
+group = "whatsapp"
+function = "ingest"
+command = "datalib-step"
+
+# The decrypted database is mirrored table for table; these pick the tables.
+[steps.params]
+include_tables = ["*"]                  # table-name globs to mirror (`*` and `?`); default ["*"], every table
+exclude_tables = ["ai_thread_*"]        # table-name globs to skip, after include_tables; default none
+exclude_columns = ["message_media.media_key"]  # `table.column` globs to drop; default none
+skip_churn = true                       # leave out props, backup_changes and frequent, which change
+                                        # on every backup; default true
+gc = false                              # reclaim unused space in the store at the start of each run;
+                                        # default false
+
+[steps.params.backup]
+path = "~/Downloads/whatsapp-backup"         # holds Databases/msgstore.db.crypt15 and Media/
+key_env_var = "WHATSAPP_ENTERPRISE_PHONE_KEY"  # the variable holding the key as 64 hex digits;
+                                               # default WHATSAPP_BACKUP_DECRYPTION_KEY
+
+[[steps]]
+group = "whatsapp"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["whatsapp/ingest"]
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+group = "whatsapp"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# --- yolink by `api` ----------------------------------------------------
+
+# YoLink sensor history, one CSV download per device, with every option
+# set, and searchable by keyword. No sign-in: a device's two ids are what
+# let anyone fetch its history, so keep a config that holds real ones to
+# yourself. YoLink serves only about two months back, so sync often.
+[[groups]]
+id = "yolink"
+name = "YoLink"
+type = "yolink"
+
+[[steps]]
+group = "yolink"
+function = "ingest"
+command = "datalib-step"
+
+# When to give up on failed requests. The download retries and backs off
+# on its own; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+[steps.params.api]
+window_days = 7       # days of history asked for in one request; default 7
+overlap_minutes = 5   # ask again for this many minutes before each window, for
+                      # readings a sensor reported late; default 5
+
+# One table per device. `name` keys its history, so renaming a device
+# later orphans what was fetched under the old name. Quote `start`: a bare
+# 2026-01-01 is a TOML date, not the string expected.
+[[steps.params.api.devices]]
+name = "ten_forward_freezer"
+kind = "temperature_humidity"                     # or "watermeter"
+start = "2026-01-01"                              # earliest day to fetch, YYYY-MM-DD
+family_device_id = "0123456789abcdef0123456789abcdef"  # 32 lowercase hex digits, from the
+                                                       # device's CSV download link
+device_udid = "fedcba9876543210fedcba9876543210"  # 32 lowercase hex digits, the device's
+                                                  # `deviceUDID` in YoLink's API
+
+[[steps.params.api.devices]]
+name = "sickbay_water_meter"
+kind = "watermeter"
+start = "2026-03-15"
+family_device_id = "00112233445566778899aabbccddeeff"
+device_udid = "ffeeddccbbaa99887766554433221100"
+
+# The whole store renders as one page: a summary per device and a chart per
+# quantity (temperature, humidity, water), every device a series.
+[[steps]]
+group = "yolink"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["yolink/ingest"]
+
+# Its numbers as time series, for charts and the time-series index.
+[[steps]]
+group = "yolink"
+function = "render_time_series"
+command = "datalib-step"
+inputs = ["yolink/ingest"]

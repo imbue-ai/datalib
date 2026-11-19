@@ -24,10 +24,6 @@ pub enum Event {
     StepStart {
         step: StepId,
         attempt: u32,
-        /// Whether the attempt runs the built-in step program — the
-        /// same build as the runner, which is then the attempt's commit.
-        #[serde(default)]
-        builtin: bool,
     },
     /// A streaming pass of the step ended: its process is over, and this
     /// is how, but the step is not — the final pass is still to come, so
@@ -72,7 +68,13 @@ pub enum Event {
         step: StepId,
         /// P2 in `datalib/backend/dag/README.md` § "What a sink owes its consumers":
         /// may a consumer read this output while it is being written?
+        #[serde(default)]
         streams_output: bool,
+        /// The commit the step's program was built from, which the run
+        /// store records for the attempt's process: what a structured log
+        /// line's file and line are relative to.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
     },
     /// A step sealed part of its output and is still running.
     ///

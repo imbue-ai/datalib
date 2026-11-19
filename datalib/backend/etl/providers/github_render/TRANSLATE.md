@@ -35,9 +35,12 @@ crate reads the raw tables into it (`src/render/parse.rs`), mints the ids
    stays together even if the diff has moved. Each links to
    `#discussion_rN`.
 
-An empty section says so (`*(no reviews)*` and the like). Each comment
-is a header line, `**@user** *(state)* *(reply)* @ <ts> — [link](...)`,
-over its body as a blockquote.
+An empty section says so (`*(no reviews)*` and the like). The
+description and each comment open with the one message header every
+renderer writes (`datalib_etl_render::message::MessageHeader`): who
+wrote it, a chip where GitHub names the account and `@user` otherwise,
+the review's state and `reply` as tags, the time, and `↗` to it on
+GitHub; then its body as its author wrote it.
 
 ## Rows
 

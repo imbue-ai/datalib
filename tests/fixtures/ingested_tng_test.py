@@ -558,9 +558,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
         """Every download step the pipeline's config declares."""
         config = tomllib.loads((self.workspace / "dag.toml").read_text())
         return sorted(
-            f"{s['group']}/ingest"
+            s["id"]
             for s in config.get("steps", [])
-            if s.get("function") == "ingest"
+            if s["id"].split("/", 1)[1:] == ["ingest"]
         )
 
     def _index_step_inputs(self) -> tuple[str, ...]:
@@ -571,11 +571,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
         config = tomllib.loads((self.workspace / "dag.toml").read_text())
         steps = config.get("steps", [])
         (step,) = [
-            s for s in steps if s.get("function") == "unified_grid_and_search_index"
+            s
+            for s in steps
+            if s["id"].split("/", 1)[1:] == ["unified_grid_and_search_index"]
         ]
-        ids = [
-            f"{s['group']}/{s['function']}" if "group" in s else s["id"] for s in steps
-        ]
+        ids = [s["id"] for s in steps]
         # A pattern (`*/render_markdown`) stands for every step of its
         # function, as the loader expands it before the step sees it.
         out: list[str] = []
@@ -1208,9 +1208,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
     ) -> subprocess.CompletedProcess:
         """Run one `datalib-step` invocation the way the runner would.
 
-        A step takes everything from the environment: its function, its
-        group and the group's type, the composed id (the tree it writes)
-        and the trees it reads. So a single step is drivable without the
+        A step takes its function and its group's type on the command
+        line, and its id (the tree it writes) and the trees it reads from
+        the environment. So a single step is drivable without the
         runner. Used to re-render and re-index one source without the
         ingest step in front of it — `datalib-dag --sync` cannot express
         that, since it only accepts source steps (those with no inputs)
@@ -1220,15 +1220,14 @@ class IngestedTngPipelineTest(unittest.TestCase):
             **os.environ,
             "DATALIB_DAG_DATA_ROOT": str(self.workspace),
             "DATALIB_DAG_STEP": f"{group}/{function}",
-            "DATALIB_DAG_GROUP": group,
-            "DATALIB_DAG_FUNCTION": function,
             "DATALIB_DAG_INPUTS": "\n".join(inputs),
             "DATALIB_DAG_NOW": self.now,
         }
+        argv = [str(Path(self.cwd) / self.step_bin), "run", function]
         if group_type is not None:
-            env["DATALIB_DAG_GROUP_TYPE"] = group_type
+            argv.append(group_type)
         result = subprocess.run(
-            [str(Path(self.cwd) / self.step_bin)],
+            argv,
             check=False,
             cwd=str(self.cwd),
             env=env,

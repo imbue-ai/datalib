@@ -20,7 +20,7 @@ const FAKE_STEP: &str = r#"#!/bin/sh
 case " $* " in
   *" --compact "*) mode=compact ;;
   *" --collect "*) mode=collect ;;
-  *" --migrate "*) mode=migrate ;;
+  *" --prepare "*) mode=prepare ;;
   *) mode=sync ;;
 esac
 echo "$mode $DATALIB_DAG_STEP" >> "$DATALIB_DAG_DATA_ROOT/invoked"
@@ -36,12 +36,15 @@ fn bin_dir_with_fake_step(dir: &Path) -> PathBuf {
     bin
 }
 
-const CONFIG: &str = "[[groups]]\nid = \"enterprise\"\ntype = \"calendar\"\n\n\
-    [[steps]]\ngroup = \"enterprise\"\nfunction = \"ingest\"\n\n\
-    [[steps]]\ngroup = \"enterprise\"\nfunction = \"render_markdown\"\n\
-    inputs = [\"enterprise/ingest\"]\n\n\
-    [[steps]]\ngroup = \"enterprise\"\nfunction = \"captains_log\"\n\
-    command = \"true\"\ninputs = [\"enterprise/render_markdown\"]\n";
+const CONFIG: &str = "[[programs]]\ncommand = \"datalib-step\"\n\
+    verbs = [\"reset\", \"prepare\", \"compact\", \"collect\"]\n\n\
+    [[groups]]\nid = \"enterprise\"\ntype = \"calendar\"\n\n\
+    [[steps]]\nid = \"enterprise/ingest\"\ncommand = \"datalib-step run ingest calendar\"\n\n\
+    [[steps]]\nid = \"enterprise/render_markdown\"\n\
+    command = \"datalib-step run render_markdown calendar\"\n\
+    inputs = [\"enterprise/ingest\"]\nreads = \"pinned\"\n\n\
+    [[steps]]\nid = \"enterprise/captains_log\"\n\
+    command = \"true\"\ninputs = [\"enterprise/render_markdown\"]\nreads = \"pinned\"\n";
 
 /// The steps invoked with `verb`, sorted.
 fn asked(root: &Path, verb: &str) -> Vec<String> {
@@ -66,11 +69,11 @@ async fn boot(root: &Path, bin: &Path) -> AppState {
     )
     .await
     .expect("the server boots");
-    // The launch's migrate pass comes first; wait it out.
+    // The launch's prepare pass comes first; wait it out.
     let deadline = Instant::now() + Duration::from_secs(30);
     while !std::fs::read_to_string(root.join("invoked"))
         .unwrap_or_default()
-        .contains("migrate enterprise/render_markdown")
+        .contains("prepare enterprise/render_markdown")
     {
         assert!(Instant::now() < deadline, "the launch pass never ran");
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -239,7 +242,7 @@ async fn free_disk_space_dropping_old_versions_compacts() {
 const FAKE_STEP_REPORTING: &str = r#"#!/bin/sh
 case " $* " in
   *" --collect "*) mode=collect ;;
-  *" --migrate "*) mode=migrate ;;
+  *" --prepare "*) mode=prepare ;;
   *) mode=sync ;;
 esac
 echo "$mode $DATALIB_DAG_STEP" >> "$DATALIB_DAG_DATA_ROOT/invoked"

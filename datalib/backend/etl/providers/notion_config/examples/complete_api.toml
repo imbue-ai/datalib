@@ -7,9 +7,8 @@ name = "Notion"
 type = "notion"
 
 [[steps]]
-group = "notion"
-function = "ingest"
-command = "datalib-step"
+id = "notion/ingest"
+command = "datalib-step run ingest notion"
 
 # When to give up on rate limits. The download always honours a 429's
 # Retry-After and backs off; these only decide when to stop.
@@ -38,15 +37,16 @@ comments = true          # comment threads; default true
 attachments = true       # files attached to pages; default true
 
 [[steps]]
-group = "notion"
-function = "render_markdown"
-command = "datalib-step"
+id = "notion/render_markdown"
+command = "datalib-step run render_markdown notion"
 inputs = ["notion/ingest"]
+reads = "pinned"
 
 # Search by meaning: cuts this source's documents into chunks and embeds
 # them. Leave it out and keyword search still finds it.
 [[steps]]
-group = "notion"
-function = "embed"
-command = "datalib-step"
+id = "notion/embed"
+command = "datalib-step run embed notion"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]

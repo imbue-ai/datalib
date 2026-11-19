@@ -96,7 +96,7 @@ pub(crate) fn not_signed_in(group: &str, owed: usize, threshold: u64, detail: &s
     )
 }
 
-/// Sandboxes at once when the config's `[modal]` names no number. Modal's
+/// Sandboxes at once when the config's `[env]` names no number. Modal's
 /// own concurrency limit for the account may hold a run to fewer; the
 /// rest wait their turn there.
 pub(crate) const DEFAULT_SANDBOXES: usize = 100;
@@ -148,7 +148,7 @@ pub(crate) struct Options {
     /// Prompts per Sandbox: [`slice_for`] what is owed, at most
     /// [`MOST_A_SLICE`].
     pub(crate) slice: usize,
-    /// Sandboxes at once: the config's `[modal] max_sandboxes`, else
+    /// Sandboxes at once: the config's `DATALIB_STEP_MODAL_MAX_SANDBOXES`, else
     /// [`DEFAULT_SANDBOXES`].
     pub(crate) sandboxes: usize,
     /// One Sandbox's longest life: the image's pull, the model's load,
@@ -180,7 +180,7 @@ impl Options {
             app: "datalib-embed".to_string(),
             slice: MOST_A_SLICE,
             sandboxes: sandboxes(
-                var(SANDBOXES_ENV).or_else(|| var(datalib_env::DATALIB_DAG_MODAL_MAX_SANDBOXES)),
+                var(SANDBOXES_ENV).or_else(|| var(datalib_env::DATALIB_STEP_MODAL_MAX_SANDBOXES)),
             ),
             timeout_ms: 15 * 60 * 1000,
         }

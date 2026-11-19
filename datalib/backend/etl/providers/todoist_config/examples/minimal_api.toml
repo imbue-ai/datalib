@@ -7,15 +7,14 @@ name = "Todoist"
 type = "todoist"
 
 [[steps]]
-group = "todoist"
-function = "ingest"
-command = "datalib-step"
+id = "todoist/ingest"
+command = "datalib-step run ingest todoist"
 
 [steps.params.api]
 
 # One document per project: its sections, its tasks and their comments.
 [[steps]]
-group = "todoist"
-function = "render_markdown"
-command = "datalib-step"
+id = "todoist/render_markdown"
+command = "datalib-step run render_markdown todoist"
 inputs = ["todoist/ingest"]
+reads = "pinned"

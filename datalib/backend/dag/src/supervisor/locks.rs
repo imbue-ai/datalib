@@ -52,23 +52,19 @@ pub struct LockSpec {
     pub slots: usize,
 }
 
-/// A download: one per source a person syncs, so a rate limit on one
-/// keeps no render from starting.
+/// The budget a step that declares no inputs holds when it names no lock:
+/// in practice a download, so a rate limit on one keeps no render from
+/// starting.
 pub const NETWORK: &str = "network";
-/// A render: a step in a group with a `type` that reads something.
+/// The budget a step that reads something holds when it names no lock.
 pub const CPU: &str = "cpu";
-/// An index: a step outside any typed group that reads something.
-pub const INDEX: &str = "index";
-/// Whatever embeds into the search index. One slot: two embeds race on the
-/// cache's vector table, and share one GPU besides.
-pub const EMBEDDER: &str = "embedder";
 
-/// The locks every config has, whether or not it declares them: the three
-/// budgets, as `--parallelism 4` sizes them, and the embedder's. A
-/// config's `[[locks]]` entry of the same name resizes one;
-/// `--parallelism N` sets `network` and `cpu` to N, over the config.
+/// The locks every config has, whether or not it declares them: the two
+/// budgets, as `--parallelism 4` sizes them. A config's `[[locks]]` entry
+/// of the same name resizes one; `--parallelism N` sets both to N, over
+/// the config. Any other lock a step holds, the config declares.
 pub fn defaults() -> Vec<LockSpec> {
-    [(NETWORK, 4), (CPU, 4), (INDEX, 2), (EMBEDDER, 1)]
+    [(NETWORK, 4), (CPU, 4)]
         .into_iter()
         .map(|(name, slots)| LockSpec {
             name: name.to_string(),
@@ -77,15 +73,12 @@ pub fn defaults() -> Vec<LockSpec> {
         .collect()
 }
 
-/// The lock a step holds when it names none: `network` for a source (a
-/// download), `cpu` for one in a group with a `type` (a source's render),
-/// `index` for any other step, a fan-in whose patterns match nothing yet
-/// among them.
+/// The lock a step holds when it names none: `network` for a step that
+/// declares no inputs, `cpu` for any other, a fan-in whose patterns match
+/// nothing yet among them.
 pub fn default_for(spec: &StepSpec) -> &'static str {
     if spec.is_source() {
         NETWORK
-    } else if spec.group_type.is_none() {
-        INDEX
     } else {
         CPU
     }

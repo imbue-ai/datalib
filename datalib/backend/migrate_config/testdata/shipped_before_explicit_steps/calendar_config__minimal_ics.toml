@@ -1,0 +1,28 @@
+# A folder of `.ics` files on disk: Google Takeout's `Calendar/` folder,
+# or an export from Apple Calendar. Each file is one calendar. No sign-in.
+[[groups]]
+id = "calendar"
+name = "Calendar export"
+type = "calendar"
+
+[[steps]]
+group = "calendar"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params.ics]
+path = "~/Downloads/calendar-export"
+
+[[steps]]
+group = "calendar"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["calendar/ingest"]
+
+# Every occurrence of every event from 30 days back to 400 ahead, one row
+# each, the way Google's `singleEvents=true` lists them.
+[[steps]]
+group = "calendar"
+function = "render_occurrences"
+command = "datalib-step"
+inputs = ["calendar/ingest"]

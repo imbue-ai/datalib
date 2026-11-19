@@ -8,8 +8,8 @@
 use std::collections::BTreeSet;
 use std::ops::Range;
 
+use crate::retired::names_datalib_step;
 use anyhow::{Context as _, Result};
-use datalib_dag::config::names_datalib_step;
 use datalib_dag::config_array::edit_string_array;
 use datalib_dag::config_order::entry_ranges;
 use serde::Deserialize;
@@ -153,7 +153,7 @@ inputs = ["unified_grid_and_search_index/qmd_aggregator"]
         assert!(!after.contains("qmd_aggregator"), "{after}");
         assert!(!after.contains("runs after every embed"), "{after}");
         assert!(after.contains("# the map"), "{after}");
-        let check = datalib_dag::config::check_text(&crate::folded(&after));
+        let check = crate::check_as_current(&after);
         assert_eq!(check.dropped(), 0, "{}", check.render("c.toml".as_ref()));
         let map = check
             .cfg

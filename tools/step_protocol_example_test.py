@@ -93,20 +93,18 @@ class StepProtocolExample(unittest.TestCase):
                 id = "report"
 
                 [[steps]]
-                group = "a"
-                function = "make"
+                id = "a/make"
                 command = "{producer}"
 
                 [[steps]]
-                group = "b"
-                function = "make"
+                id = "b/make"
                 command = "{producer}"
 
                 [[steps]]
-                group = "report"
-                function = "build"
+                id = "report/build"
                 command = "{example}"
                 inputs = ["a/make", "b/make"]
+                reads = "pinned"
                 """
             )
         )

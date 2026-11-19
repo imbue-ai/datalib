@@ -52,13 +52,26 @@ cat > "$ROOT/config.toml" <<EOF
 data_root = "$ROOT"
 binary_dir = "$BIN_DIR"
 
+[[programs]]
+command = "datalib-step"
+verbs = ["reset", "prepare", "compact", "collect"]
+
+[[locks]]
+name = "index"
+slots = 2
+
+[[locks]]
+name = "embedder"
+slots = 1
+
 [[groups]]
 id = "perseus"
 type = "perseus"
 
 [[steps]]
-group = "perseus"
-function = "render_markdown"
+id = "perseus/render_markdown"
+command = "datalib-step run render_markdown perseus"
+reads = "files"
 [steps.params.common]
 input_path = "$PERSEUS_FIXTURE_DIR"
 
@@ -66,14 +79,18 @@ input_path = "$PERSEUS_FIXTURE_DIR"
 id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_grid_and_search_index"
-function = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "datalib-step run unified_grid_and_search_index"
 inputs = ["*/render_markdown"]
+reads = "pinned"
+locks = ["index"]
 
 [[steps]]
-group = "perseus"
-function = "embed"
+id = "perseus/embed"
+command = "datalib-step run embed perseus"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]
 
 # Serves the grid, the document view and the document picker.
 [[applets]]

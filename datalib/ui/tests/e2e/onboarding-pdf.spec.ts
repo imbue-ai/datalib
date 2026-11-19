@@ -202,9 +202,9 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     const toml = wizard.locator("pre");
     await expect(toml).toContainText('id = "pdfs"');
     await expect(toml).toContainText('type = "pdf"');
-    await expect(toml).toContainText('function = "ingest"');
+    await expect(toml).toContainText('id = "pdfs/ingest"');
     await expect(toml).toContainText(`path = "${SCAN_DIR}"`);
-    await expect(toml).toContainText('function = "render_markdown"');
+    await expect(toml).toContainText('id = "pdfs/render_markdown"');
     await expect(toml).toContainText('inputs = ["pdfs/ingest"]');
 
     await leaveOutOfSearch(page);
@@ -235,7 +235,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     const wired = await (await request.get(`${BASE}/api/config`)).json();
     expect(wired.parsed_ok, wired.error ?? "config must load").toBe(true);
     expect(wired.text).toContain('"*/render_markdown"');
-    expect(wired.text).not.toContain('"pdfs/render_markdown"');
+    expect(wired.text).not.toMatch(/inputs = \[[^\]]*"pdfs\/render_markdown"/);
 
     // ── 7-8. run it ──────────────────────────────────────────────────
     const firstRun = await stampsBefore(page, SYNCED_ROWS);

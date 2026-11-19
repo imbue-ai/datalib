@@ -511,8 +511,8 @@ impl Reader {
         // Audited: `KEEPS` is a literal.
         let sql = format!(
             "WITH m AS MATERIALIZED ( \
-                 SELECT rowid AS section_id, -bm25(search_fts, 2.0, 1.0) AS score \
-                   FROM search_fts WHERE search_fts MATCH ?), \
+                 SELECT rowid AS section_id, -bm25(search_stems, 2.0, 1.0) AS score \
+                   FROM search_stems WHERE search_stems MATCH ?), \
              hit AS MATERIALIZED ( \
                  SELECT d.markdown_uuid, s.uuid, m.score \
                    FROM m JOIN search_sections s ON s.section_id = m.section_id \
@@ -629,8 +629,8 @@ impl Reader {
         // Audited: `KEEPS` is a literal.
         let sql = format!(
             "WITH m AS MATERIALIZED ( \
-                 SELECT rowid AS section_id, -bm25(search_fts, 2.0, 1.0) AS score \
-                   FROM search_fts WHERE search_fts MATCH ?), \
+                 SELECT rowid AS section_id, -bm25(search_stems, 2.0, 1.0) AS score \
+                   FROM search_stems WHERE search_stems MATCH ?), \
              hit AS MATERIALIZED ( \
                  SELECT d.doc_id, d.markdown_uuid, s.seq, s.uuid, m.score \
                    FROM m JOIN search_sections s ON s.section_id = m.section_id \

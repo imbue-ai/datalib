@@ -7,9 +7,8 @@ name = "Codex"
 type = "codex"
 
 [[steps]]
-group = "codex"
-function = "ingest"
-command = "datalib-step"
+id = "codex/ingest"
+command = "datalib-step run ingest codex"
 
 [steps.params.sessions]
 path = "~/Downloads/codex-backup"  # a copy of another machine's Codex home, the folder
@@ -17,10 +16,10 @@ path = "~/Downloads/codex-backup"  # a copy of another machine's Codex home, the
                                    # default ~/.codex
 
 [[steps]]
-group = "codex"
-function = "render_markdown"
-command = "datalib-step"
+id = "codex/render_markdown"
+command = "datalib-step run render_markdown codex"
 inputs = ["codex/ingest"]
+reads = "pinned"
 
 # How much of one tool output reaches the page. The raw store keeps all of
 # it; an output that echoes a whole file is cut here, with a marker saying
@@ -31,7 +30,8 @@ max_tool_result_bytes = 16384  # the default
 # Search by meaning: cuts this source's documents into chunks and embeds
 # them. Leave it out and keyword search still finds it.
 [[steps]]
-group = "codex"
-function = "embed"
-command = "datalib-step"
+id = "codex/embed"
+command = "datalib-step run embed codex"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]

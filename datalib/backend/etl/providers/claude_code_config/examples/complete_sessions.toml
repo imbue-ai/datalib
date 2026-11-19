@@ -7,9 +7,8 @@ name = "Claude Code"
 type = "claude_code"
 
 [[steps]]
-group = "claude_code"
-function = "ingest"
-command = "datalib-step"
+id = "claude_code/ingest"
+command = "datalib-step run ingest claude_code"
 
 [steps.params.sessions]
 path = "~/Downloads/claude-code-backup/projects"  # a copy of another machine's
@@ -17,10 +16,10 @@ path = "~/Downloads/claude-code-backup/projects"  # a copy of another machine's
                                                   # ~/.claude/projects
 
 [[steps]]
-group = "claude_code"
-function = "render_markdown"
-command = "datalib-step"
+id = "claude_code/render_markdown"
+command = "datalib-step run render_markdown claude_code"
 inputs = ["claude_code/ingest"]
+reads = "pinned"
 
 # How much of one tool result reaches the page. The raw store keeps all of
 # it; a result that echoes a whole file is cut here, with a marker saying
@@ -31,7 +30,8 @@ max_tool_result_bytes = 16384  # the default
 # Search by meaning: cuts this source's documents into chunks and embeds
 # them. Leave it out and keyword search still finds it.
 [[steps]]
-group = "claude_code"
-function = "embed"
-command = "datalib-step"
+id = "claude_code/embed"
+command = "datalib-step run embed claude_code"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]

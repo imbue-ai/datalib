@@ -18,7 +18,7 @@ use crate::graph::Graph;
 use crate::run_state::RunState;
 use crate::step::{
     ArtifactState, FailureKind, StepCtx, StepError, StepId, StepOutcome, StepRun, StepSpec,
-    StopSignal,
+    StopSignal, Verb,
 };
 use crate::subprocess::Shrink;
 use crate::supervisor::record::{LastRun, Record};
@@ -47,13 +47,15 @@ impl RetryPolicy {
             // Auth: a human has to act. Data: retrying won't help.
             // Cancelled: the user asked us to stop. Incomplete and
             // RateLimited: the step's own retries, which honour
-            // Retry-After, already ran out.
+            // Retry-After, already ran out. Incompatible: what it wrote
+            // will not change by asking again.
             FailureKind::RateLimited
             | FailureKind::Auth
             | FailureKind::Permission
             | FailureKind::Data
             | FailureKind::Cancelled
-            | FailureKind::Incomplete => 1,
+            | FailureKind::Incomplete
+            | FailureKind::Incompatible => 1,
         }
     }
 }
@@ -138,9 +140,10 @@ impl Runner {
 
 impl Runner {
     /// Empty what the named steps wrote and forget that they ever ran, so
-    /// the next run does their work from the start. Each step is invoked
-    /// once with `--reset store` appended; what that empties is the
-    /// step's to say (`step_protocol.md` § Reset).
+    /// the next run does their work from the start. A step whose program
+    /// takes `--reset` is invoked once with it appended, and what that
+    /// empties is the step's to say; any other has its tree deleted
+    /// (`step_protocol.md` § Verbs).
     /// Nothing else runs: the caller holds the runner lock, which is what
     /// makes emptying a store safe.
     pub async fn reset(&self, graph: &Graph, steps: &[StepId]) -> Result<()> {
@@ -172,19 +175,37 @@ impl Runner {
         Ok(())
     }
 
-    /// `step` invoked once with `--reset store`; its index, and the version
-    /// its emptied tree is at. Emptied, not gone: what reads it sees a new
+    /// `step` reset: invoked once with `--reset` when its program takes
+    /// the verb, else its tree deleted. Its index, and the version its
+    /// emptied tree is at. Emptied, not gone: what reads it sees a new
     /// version and runs, which is how the emptiness reaches the grid.
     pub(crate) async fn reset_one(&self, graph: &Graph, step: &StepId) -> Result<(usize, String)> {
-        let (i, outcome) = self
-            .invoke_once(graph, step, &[crate::subprocess::RESET_FLAG, "store"])
-            .await
-            .map_err(|e| anyhow::anyhow!("reset {step}: {e}"))?;
+        let &i = graph
+            .by_id
+            .get(step)
+            .ok_or_else(|| anyhow::anyhow!("reset {step}: no such step"))?;
         let fingerprint = &graph.fingerprints[i];
-        let version = reported_version(&graph.steps[i], fingerprint, &outcome.outputs)?
-            .unwrap_or_else(|| {
-                fresh_version(fingerprint, &format!("reset-{}", uuid::Uuid::now_v7()))
-            });
+        let reported = if graph.steps[i].takes(Verb::Reset) {
+            let (_, outcome) = self
+                .invoke_once(graph, step, Verb::Reset)
+                .await
+                .map_err(|e| anyhow::anyhow!("reset {step}: {e}"))?;
+            reported_version(&graph.steps[i], fingerprint, &outcome.outputs)?
+        } else {
+            let tree = self.data_root.join(step);
+            match std::fs::remove_dir_all(&tree) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    return Err(anyhow::Error::new(e))
+                        .with_context(|| format!("reset {step}: delete {}", tree.display()))
+                }
+            }
+            None
+        };
+        let version = reported.unwrap_or_else(|| {
+            fresh_version(fingerprint, &format!("reset-{}", uuid::Uuid::now_v7()))
+        });
         Ok((i, version))
     }
 
@@ -200,27 +221,40 @@ impl Runner {
         self.sink.emit(&Event::RunPlan { steps: planned });
     }
 
-    /// Ask each named step to bring what it wrote to this build's shape,
-    /// fetching nothing: each is invoked once with `--migrate` appended
-    /// (`step_protocol.md` § Migrate). What a step can migrate in place it
-    /// does, and reports its new version; what it cannot it answers
-    /// `needs_rerun`, which the record keeps until the step next succeeds.
-    /// One that fails is reported and the rest go on.
-    pub async fn migrate(&self, graph: &Graph, steps: &[StepId]) -> Result<Vec<Migrated>> {
+    /// Ask each named step to make what it wrote usable by its program,
+    /// fetching nothing: each is invoked once with `--prepare` appended
+    /// (`step_protocol.md` § Verbs). What a step can bring to its
+    /// program's shape in place it does, and reports its new version; what
+    /// it cannot it answers `needs_rerun`, which the record keeps until the
+    /// step next succeeds; what a newer program wrote it refuses
+    /// ([`FailureKind::Incompatible`]), and the step is turned off, by
+    /// [`REFUSED_PREPARE`], until a later prepare pass finds it willing.
+    /// One that fails otherwise is reported and the rest go on.
+    pub async fn prepare(&self, graph: &Graph, steps: &[StepId]) -> Result<Vec<Prepared>> {
         let store = crate::supervisor::store::Store::open(&self.data_root).await?;
+        let turned_off = store.turned_off().await?;
         let mut out = Vec::new();
         for step in steps {
-            let answer = match self
-                .invoke_once(graph, step, &[crate::subprocess::MIGRATE_FLAG])
-                .await
-            {
+            let answer = match self.invoke_once(graph, step, Verb::Prepare).await {
                 Ok((i, outcome)) => match record_answer(graph, i, &outcome, &store).await {
                     Ok(()) => Ok(outcome.needs_rerun),
-                    Err(e) => Err(format!("{e:#}")),
+                    Err(e) => Err(PrepareError::Failed(format!("{e:#}"))),
                 },
-                Err(e) => Err(e),
+                Err(InvokeError::Refused(why)) => {
+                    store
+                        .turn_off(step, &format!("{REFUSED_PREPARE}: {why}"))
+                        .await?;
+                    Err(PrepareError::Refused(why))
+                }
+                Err(InvokeError::Failed(e)) => Err(PrepareError::Failed(e)),
             };
-            out.push(Migrated {
+            let refused_before = turned_off
+                .get(step)
+                .is_some_and(|by| by.starts_with(REFUSED_PREPARE));
+            if refused_before && !matches!(answer, Err(PrepareError::Refused(_))) {
+                store.turn_on(step).await?;
+            }
+            out.push(Prepared {
                 step: step.clone(),
                 answer,
             });
@@ -239,13 +273,13 @@ impl Runner {
     pub async fn shrink(&self, graph: &Graph, how: Shrink) -> Result<Vec<Shrunk>> {
         let store = crate::supervisor::store::Store::open(&self.data_root).await?;
         let mut out = Vec::new();
-        let steps = crate::supervisor::wipe::compact_targets(graph, &[]);
+        let steps = crate::supervisor::wipe::compact_targets(graph, &[], how);
         for step in steps.iter().map(|&i| &graph.steps[i].id) {
-            let answer = match self.invoke_once(graph, step, &[how.flag()]).await {
+            let answer = match self.invoke_once(graph, step, how.verb()).await {
                 Ok((i, outcome)) => record_answer(graph, i, &outcome, &store)
                     .await
                     .map_err(|e| format!("{e:#}")),
-                Err(e) => Err(e),
+                Err(e) => Err(e.to_string()),
             };
             out.push(Shrunk {
                 step: step.clone(),
@@ -264,33 +298,34 @@ impl Runner {
         step: &StepId,
         how: Shrink,
     ) -> std::result::Result<(Option<String>, Option<crate::step::StoreBytes>), String> {
-        let (i, outcome) = self.invoke_once(graph, step, &[how.flag()]).await?;
+        let (i, outcome) = self
+            .invoke_once(graph, step, how.verb())
+            .await
+            .map_err(|e| e.to_string())?;
         let version = reported_version(&graph.steps[i], &graph.fingerprints[i], &outcome.outputs)
             .map_err(|e| format!("{e:#}"))?;
         Ok((version, outcome.store_bytes))
     }
 
     /// One invocation of `step` with `verb` appended to its argv, outside
-    /// any run of the loop: no inputs, no retries, no stop.
+    /// any run of the loop: no inputs, no retries, no stop. Its params go
+    /// with it, as with any run.
     async fn invoke_once(
         &self,
         graph: &Graph,
         step: &StepId,
-        verb: &[&str],
-    ) -> std::result::Result<(usize, StepOutcome), String> {
+        verb: Verb,
+    ) -> std::result::Result<(usize, StepOutcome), InvokeError> {
         let &i = graph
             .by_id
             .get(step)
-            .ok_or_else(|| "no such step".to_string())?;
+            .ok_or_else(|| InvokeError::Failed("no such step".to_string()))?;
         let spec = &graph.steps[i];
-        let StepRun::Subprocess { argv, env, .. } = &spec.run else {
-            return Err("not a subprocess step".to_string());
+        let StepRun::Subprocess { argv, env, params } = &spec.run else {
+            return Err(InvokeError::Failed("not a subprocess step".to_string()));
         };
         let ctx = StepCtx {
             step_id: spec.id.clone(),
-            group: spec.group.clone(),
-            group_type: spec.group_type.clone(),
-            function: spec.function.clone(),
             data_root: self.data_root.clone(),
             inputs: vec![],
             changed_inputs: vec![],
@@ -300,22 +335,15 @@ impl Runner {
             checkpoint: crate::step::CheckpointSink::disconnected(),
             stop: StopSignal::never(),
         };
-        let argv: Vec<String> = argv
-            .iter()
-            .cloned()
-            .chain(verb.iter().map(|a| a.to_string()))
-            .collect();
+        let argv: Vec<String> = argv.iter().cloned().chain([verb.flag()]).collect();
         self.sink.emit(&Event::StepStart {
             step: spec.id.clone(),
             attempt: 1,
-            builtin: argv
-                .first()
-                .is_some_and(|prog| crate::config::is_datalib_step(prog)),
         });
         let result = crate::subprocess::run_subprocess(
             &argv,
             env,
-            None,
+            params.as_deref(),
             &self.child_env,
             1,
             &ctx,
@@ -340,10 +368,34 @@ impl Runner {
         });
         match result {
             Ok(o) => Ok((i, o)),
-            Err(_) => Err(error.unwrap_or_default()),
+            Err(e) if e.kind == FailureKind::Incompatible => {
+                Err(InvokeError::Refused(error.unwrap_or_default()))
+            }
+            Err(_) => Err(InvokeError::Failed(error.unwrap_or_default())),
         }
     }
 }
+
+/// Why a verb's invocation did not succeed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum InvokeError {
+    /// The step refused: what it wrote is a newer program's.
+    Refused(String),
+    Failed(String),
+}
+
+impl std::fmt::Display for InvokeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InvokeError::Refused(why) | InvokeError::Failed(why) => f.write_str(why),
+        }
+    }
+}
+
+/// Who a step is turned off by when it refused `--prepare`: the start of
+/// its `turned_off_by`, which the next prepare pass looks for to turn it
+/// back on.
+pub const REFUSED_PREPARE: &str = "the runner, because the step refused --prepare";
 
 /// What a step answered a verb with, in the record. A step that reports a
 /// new version is recorded at it, so what reads it is stale; one that
@@ -372,12 +424,20 @@ async fn record_answer(
         .context("save the record")
 }
 
-/// How one step answered `--migrate`: whether it needs to run again, or
+/// How one step answered `--prepare`: whether it needs to run again, or
 /// why it could not answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Migrated {
+pub struct Prepared {
     pub step: StepId,
-    pub answer: std::result::Result<bool, String>,
+    pub answer: std::result::Result<bool, PrepareError>,
+}
+
+/// Why a step's `--prepare` did not succeed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrepareError {
+    /// What it wrote is a newer program's; it stays blocked.
+    Refused(String),
+    Failed(String),
 }
 
 /// How one step answered `--compact` or `--collect`, or why it could not.
@@ -793,18 +853,11 @@ pub(crate) async fn invoke_with_retry(
     sink: &Arc<dyn EventSink>,
     child_env: &BTreeMap<String, String>,
 ) -> (u32, Result<StepOutcome, StepError>) {
-    let builtin = match run {
-        StepRun::Subprocess { argv, .. } => argv
-            .first()
-            .is_some_and(|prog| crate::config::is_datalib_step(prog)),
-        StepRun::InProcess(_) => false,
-    };
     let mut attempt = 1u32;
     loop {
         sink.emit(&Event::StepStart {
             step: ctx.step_id.clone(),
             attempt,
-            builtin,
         });
         let res = match run {
             StepRun::InProcess(f) => f(ctx.clone()).await,

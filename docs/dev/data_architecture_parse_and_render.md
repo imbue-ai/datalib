@@ -1102,10 +1102,11 @@ split, so one very large chat is still one batch. Only email's bundles
 hold bytes, its `.eml`s, which it renders from; everyone else's name the
 blob store that holds them.
 
-**The size is the person's to choose.** A config's `[render_pages]`
-table sets `buckets` (per page) and `blob_mb` (per blob batch); the
-runner hands it to every step as `DATALIB_DAG_RENDER_PAGES`, and a
-processor reads it as `RenderCtx::page_size`. Changing it changes no
+**The size is the person's to choose.** A config's `[env]` table sets
+`DATALIB_STEP_RENDER_PAGES = "<buckets>,<blob_mb>"`: `buckets` per page
+and `blob_mb` per blob batch, either side left empty for its default.
+The runner hands `[env]` to every step, and a processor reads the
+value as `RenderCtx::page_size`. Changing it changes no
 document, so it is not a render param and re-renders nothing. The
 defaults, 500 buckets and 64 MB, sit where a page's queries already
 cost little next to rendering it.

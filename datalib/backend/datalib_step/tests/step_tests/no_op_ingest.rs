@@ -19,12 +19,12 @@ const STEP: &str = "work-slack/ingest";
 /// The run's outcome line, and every checkpoint version it announced.
 fn ingest(root: &Path, playback: &Path, params: &Path, now: &str) -> (String, Vec<String>) {
     let out = Command::new(std::env::var_os("DATALIB_STEP_BIN").expect("DATALIB_STEP_BIN"))
-        .arg("--params-file")
-        .arg(params)
+        .env(
+            "DATALIB_DAG_PARAMS",
+            std::fs::read_to_string(params).unwrap(),
+        )
         .env("DATALIB_DAG_STEP", STEP)
-        .env("DATALIB_DAG_GROUP", "work-slack")
-        .env("DATALIB_DAG_GROUP_TYPE", "slack")
-        .env("DATALIB_DAG_FUNCTION", "ingest")
+        .args(["run", "ingest", "slack"])
         .env("DATALIB_DAG_DATA_ROOT", root)
         .env("DATALIB_DAG_NOW", now)
         .env("DATALIB_HTTP_PLAYBACK", playback)

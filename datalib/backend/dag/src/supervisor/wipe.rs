@@ -18,7 +18,10 @@ use crate::supervisor::store::WipeKind;
 pub fn held(graph: &Graph, kind: WipeKind, targets: &[String]) -> Vec<usize> {
     match kind {
         WipeKind::Compact | WipeKind::Collect => {
-            let asked = compact_targets(graph, targets);
+            let Some(how) = kind.shrink() else {
+                return Vec::new();
+            };
+            let asked = compact_targets(graph, targets, how);
             let readers = asked
                 .iter()
                 .flat_map(|&i| graph.dependents[i].iter().copied());
@@ -45,10 +48,16 @@ pub fn refusal(latest: &Graph, kind: WipeKind, targets: &[String]) -> Option<Str
         WipeKind::Compact | WipeKind::Collect => {
             targets.iter().find_map(|t| match latest.by_id.get(t) {
                 None => Some(format!("the config has no step {t:?}")),
-                Some(&i) if !latest.steps[i].compacts => Some(format!(
-                    "{t:?} does not take {}",
-                    kind.shrink().map_or("", |s| s.flag())
-                )),
+                Some(&i)
+                    if !kind
+                        .shrink()
+                        .is_some_and(|how| latest.steps[i].takes(how.verb())) =>
+                {
+                    Some(format!(
+                        "{t:?} does not take {}",
+                        kind.shrink().map_or(String::new(), |s| s.verb().flag())
+                    ))
+                }
                 Some(_) => None,
             })
         }
@@ -71,13 +80,17 @@ pub fn refusal(latest: &Graph, kind: WipeKind, targets: &[String]) -> Option<Str
 
 /// The steps a compaction or a collection asks, in graph order: its targets, or with none
 /// named, every step that takes the verb.
-pub fn compact_targets(graph: &Graph, targets: &[String]) -> Vec<usize> {
+pub fn compact_targets(
+    graph: &Graph,
+    targets: &[String],
+    how: crate::subprocess::Shrink,
+) -> Vec<usize> {
     if targets.is_empty() {
         return graph
             .topo
             .iter()
             .copied()
-            .filter(|&i| graph.steps[i].compacts)
+            .filter(|&i| graph.steps[i].takes(how.verb()))
             .collect();
     }
     graph
@@ -217,7 +230,8 @@ mod tests {
     }
 
     /// A compaction holds the steps it asks and every step reading one; with
-    /// no targets it asks every step that takes the verb.
+    /// no targets it asks every step that takes the verb — that verb, not
+    /// the other one.
     #[test]
     fn a_compaction_holds_what_it_asks_and_what_reads_it() {
         let mut g = graph(&[
@@ -229,7 +243,10 @@ mod tests {
         ]);
         for id in ["a/ingest", "a/render", "b/render", "idx/grid"] {
             let i = g.by_id[id];
-            g.steps[i].compacts = true;
+            g.steps[i].verbs.insert(crate::step::Verb::Compact);
+            if id != "b/render" {
+                g.steps[i].verbs.insert(crate::step::Verb::Collect);
+            }
         }
         let names = |ix: Vec<usize>| -> Vec<String> {
             let mut out: Vec<String> = ix.into_iter().map(|i| g.steps[i].id.clone()).collect();
@@ -241,8 +258,12 @@ mod tests {
             ["a/render", "idx/grid"]
         );
         assert_eq!(
-            names(compact_targets(&g, &[])),
+            names(compact_targets(&g, &[], crate::subprocess::Shrink::Compact)),
             ["a/ingest", "a/render", "b/render", "idx/grid"]
+        );
+        assert_eq!(
+            names(compact_targets(&g, &[], crate::subprocess::Shrink::Collect)),
+            ["a/ingest", "a/render", "idx/grid"]
         );
         assert_eq!(
             names(held(&g, WipeKind::Compact, &[])),
@@ -256,11 +277,14 @@ mod tests {
             .unwrap()
             .contains("no step"));
 
-        // A collection rewrites the same files, so it holds the same steps.
+        // A collection holds what it asks and what reads that.
         assert_eq!(
             names(held(&g, WipeKind::Collect, &[])),
-            names(held(&g, WipeKind::Compact, &[]))
+            ["a/ingest", "a/render", "idx/grid", "idx/qmd"]
         );
+        assert!(refusal(&g, WipeKind::Collect, &strings(&["b/render"]))
+            .unwrap()
+            .contains("does not take --collect"));
         assert_eq!(refusal(&g, WipeKind::Collect, &[]), None);
         assert!(refusal(&g, WipeKind::Collect, &strings(&["idx/qmd"]))
             .unwrap()

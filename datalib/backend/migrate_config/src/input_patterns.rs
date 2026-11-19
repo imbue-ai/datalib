@@ -6,8 +6,8 @@
 //! today and every one added later. A list that leaves a step out is left
 //! as written: whoever wrote it may have meant it.
 
+use crate::retired::FAN_INS;
 use anyhow::{Context as _, Result};
-use datalib_dag::config::FAN_INS;
 use datalib_dag::config_array::edit_string_array;
 use datalib_dag::input_pattern::{names, WILDCARD_GROUP};
 use serde::Deserialize;
@@ -185,7 +185,7 @@ inputs = ["picard/render_markdown", "riker/render_markdown"]
 "#;
 
     fn loaded_inputs(text: &str, step: &str) -> Vec<String> {
-        let check = datalib_dag::config::check_text(text);
+        let check = crate::check_as_current(text);
         assert_eq!(check.dropped(), 0, "{}", check.render("c.toml".as_ref()));
         check
             .cfg

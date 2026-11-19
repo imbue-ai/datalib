@@ -7,14 +7,13 @@ name = "GitHub"
 type = "github"
 
 [[steps]]
-group = "github"
-function = "ingest"
-command = "datalib-step"
+id = "github/ingest"
+command = "datalib-step run ingest github"
 
 [steps.params.api]
 
 [[steps]]
-group = "github"
-function = "render_markdown"
-command = "datalib-step"
+id = "github/render_markdown"
+command = "datalib-step run render_markdown github"
 inputs = ["github/ingest"]
+reads = "pinned"

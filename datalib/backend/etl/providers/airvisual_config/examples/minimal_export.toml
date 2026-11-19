@@ -7,22 +7,21 @@ name = "AirVisual"
 type = "airvisual"
 
 [[steps]]
-group = "airvisual"
-function = "ingest"
-command = "datalib-step"
+id = "airvisual/ingest"
+command = "datalib-step run ingest airvisual"
 
 [[steps.params.export.devices]]
 path = "/Volumes/airvisual"
 
 [[steps]]
-group = "airvisual"
-function = "render_markdown"
-command = "datalib-step"
+id = "airvisual/render_markdown"
+command = "datalib-step run render_markdown airvisual"
 inputs = ["airvisual/ingest"]
+reads = "pinned"
 
 # The readings as time series, for the charts.
 [[steps]]
-group = "airvisual"
-function = "render_time_series"
-command = "datalib-step"
+id = "airvisual/render_time_series"
+command = "datalib-step run render_time_series airvisual"
 inputs = ["airvisual/ingest"]
+reads = "pinned"

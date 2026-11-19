@@ -124,10 +124,10 @@ test("a config warning drops nothing, and the System row counts it", async ({ pa
 
 test("a step naming a group the config lacks says so on its Edit button", async ({ page }) => {
   // Only reachable by writing the file: the PUT refuses a config that
-  // drops an entry. The step has a `group`, so it must not be told it
-  // is "outside a group" — the declared groups are what it is missing
+  // drops an entry. The step's id names a group, so it must not be told
+  // it is "outside a group" — the declared groups are what it is missing
   // from, and that is what the disabled button has to say.
-  writeConfig(`${original}\n[[steps]]\ngroup = "ghost"\nfunction = "ingest"\n`);
+  writeConfig(`${original}\n[[steps]]\nid = "ghost/ingest"\ncommand = "datalib-step run ingest"\n`);
 
   await page.goto("/data_sources");
   await expectSyncEverything(page);
