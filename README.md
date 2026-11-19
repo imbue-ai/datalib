@@ -5,7 +5,7 @@
   <img src="docs/assets/mission-light.png" width="480" alt="Organize the world's (struck out) your own information and make it universally (struck out) accessible and useful to you, your way.">
 </picture>
 
-Datalib is about ***personal data sovereignty***. It liberates your data from silos and helps you run powerful AI tools on it, on your own terms.
+Datalib is about ***personal data sovereignty***. It liberates your data from silos and helps you run powerful AI tools on it locally, on your own terms.
 
 > [!NOTE]
 > **Datalib is alpha.** We don't promise stable bytes at rest yet: an
@@ -197,7 +197,9 @@ ready-made steps:
 - `render_markdown` turns the raw records into readable markdown (most
   sources have one).
 - `embed` adds semantic search, which matches on meaning rather than
-  words. It is slow, so you can turn it off per source.
+  words. Its embedding model runs on your own machine, unless you
+  choose to run it on your own Modal account. It is slow, so you can
+  turn it off per source.
 
 Across all the sources, `unified_grid_and_search_index` builds one SQL table of every
 message and document (`grid_rows`) and puts their words in a keyword
