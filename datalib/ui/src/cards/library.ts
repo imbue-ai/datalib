@@ -29,28 +29,36 @@ export function sourceTop(groupId: string): string {
 export type TreeNode = {
   id: string;
   label: string;
-  kind: string;
+  /// An image's URL, drawn before the label: a source's mark.
+  icon?: string;
+  kind?: string;
   description?: string;
   hasChildren: boolean;
 };
 
 /// The library's top: each configured source, in the config's order, as a
 /// node whose children are the places it holds at its top, opening only
-/// where `holdsPlaces` says it holds some. A group with no type
+/// where `holdsPlaces` says it holds some. A source shows its mark, the
+/// one its Manage row leads with (`markUrl` turns its name into an
+/// image's URL), and its type in words only where it has none. A group with no type
 /// is not a source (the index's own group), nor is a comparison of two of
 /// a source's commits (a `diff` group): neither holds places.
 export function sourceNodes(
   rows: ManageRow[],
   holdsPlaces: (id: string) => boolean = () => true,
+  markUrl: (name: string | null | undefined) => string | null = () => null,
 ): TreeNode[] {
   return rows
     .filter((r) => r.kind === "group" && r.type !== null && r.type.id !== "diff")
-    .map((r) => ({
-      id: sourceTop(r.id),
-      label: r.name.label,
-      kind: r.type?.label ?? "Source",
-      hasChildren: holdsPlaces(sourceTop(r.id)),
-    }));
+    .map((r) => {
+      const icon = markUrl(r.name.icon ?? r.type?.icon);
+      return {
+        id: sourceTop(r.id),
+        label: r.name.label,
+        ...(icon ? { icon } : { kind: r.type?.label ?? "Source" }),
+        hasChildren: holdsPlaces(sourceTop(r.id)),
+      };
+    });
 }
 
 /// A level of places, as `/children?places=true` listed it: in the

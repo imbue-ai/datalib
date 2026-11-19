@@ -50,6 +50,24 @@ describe("sourceNodes", () => {
     ]);
   });
 
+  /** A source shows its mark instead of its type in capitals; a source
+   *  with no mark keeps the words. */
+  it("shows a source's mark, and its type only where it has none", () => {
+    const slack = {
+      ...group("slack", "Slack", "Slack"),
+      name: { id: "slack", label: "Slack", icon: "slack" },
+    };
+    const nodes = sourceNodes(
+      [slack, group("notion", "Notion", "Notion")],
+      () => true,
+      (name) => (name === "slack" ? "/assets/slack.svg" : null),
+    );
+    expect(nodes.map((n) => [n.label, n.icon, n.kind])).toEqual([
+      ["Slack", "/assets/slack.svg", undefined],
+      ["Notion", undefined, "Notion"],
+    ]);
+  });
+
   it("lists each typed group as a source's top, in order", () => {
     const rows = [
       group("tng_email", "Picard's mail", "Email"),

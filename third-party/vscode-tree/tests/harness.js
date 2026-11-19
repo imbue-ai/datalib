@@ -37,6 +37,9 @@ const driveFolders = Array.from({ length: 2000 }, (_, i) =>
   node(`drive/f${i}`, `Stardate log ${41000 + i}`, 'Folder', i % 50 === 0 ? [node(`drive/f${i}/a`, 'Attachments', 'Folder')] : null),
 );
 
+// A mark for a source, as a page hands one: a URL the row draws.
+const MARK = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="teal"/></svg>');
+
 const LIBRARY = [
   node('folder/work', 'Starfleet', 'Folder', [
     node('src/email', 'Email', 'Source', [
@@ -60,6 +63,9 @@ const LIBRARY = [
   ]),
   node('folder/personal', 'Personal', 'Folder', [node('src/chatgpt', 'ChatGPT', 'Source', null, 'no places below')]),
 ];
+
+// Slack's row draws a mark; the others draw none.
+LIBRARY[0].kids.find((n) => n.id === 'src/slack').icon = MARK;
 
 const fetched = [];
 const dataSource = {

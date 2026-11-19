@@ -299,6 +299,17 @@ describe('vs-tree', () => {
     await page.close();
   });
 
+  test('a_node_draws_its_icon', async () => {
+    const { page } = await openHarness();
+    await page.evaluate(() => window.harness.mountElement());
+    await openRow(page, 'Starfleet', 'Slack');
+    const slack = row(page, 'Slack').locator('img.icon');
+    await slack.waitFor({ timeout: 5000 });
+    assert.match(await slack.getAttribute('src'), /^data:image\/svg\+xml/);
+    assert.equal(await row(page, 'Email').locator('img.icon').isVisible(), false);
+    await page.close();
+  });
+
   test('colours_follow_the_pages_variables', async () => {
     const { page } = await openHarness();
     await page.evaluate(() => window.harness.mountElement());

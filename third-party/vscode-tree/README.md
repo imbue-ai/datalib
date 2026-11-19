@@ -50,14 +50,16 @@ tree.viewState = saved;                 // optional, from an earlier `tree.viewS
 tree.dataSource = {
   // null asks for the top level
   async getChildren(node) {
-    return [{ id, label, kind, description, hasChildren }];
+    return [{ id, label, icon, kind, description, hasChildren }];
   },
 };
 tree.addEventListener('select', (e) => e.detail.nodes);
 tree.addEventListener('viewstatechange', () => save(tree.viewState));
 ```
 
-`viewState` is `{ expanded, focus, selection, scrollTop }`, the first
+`icon` is an image URL drawn before the label, at 16 pixels; `kind`
+and `description` are drawn after it, quieter. `viewState` is
+`{ expanded, focus, selection, scrollTop }`, the first
 three lists of node ids. `select` fires as the selection moves, and
 `open`, with the node, on a double-click or Enter. The element sizes
 itself to its box, so give it one.
@@ -142,6 +144,8 @@ test, then whatever in `src/vs-tree.js` leaned on it.
   opening the parent brings it back open.
 - `a_double_click_or_enter_opens_a_node` — either fires `open` with
   the node.
+- `a_node_draws_its_icon` — a node with an `icon` draws it before its
+  label; one without draws none.
 - `colours_follow_the_pages_variables` — a selected row takes
   `--vs-tree-selected-bg` from the page.
 - `view_state_round_trips` — the open nodes, the selection and the

@@ -14,6 +14,7 @@ import type { CardCtx, Teardown } from "./types";
 import { parseCardSource } from "./cardCall";
 import { nodeSource, type NodeViewOpts } from "./cardSources";
 import { nodeView } from "./libs/nodeView";
+import { iconUrl } from "@/config/icons";
 import { placeNodes, sourceNodes, type TreeNode } from "./library";
 
 const props = defineProps<{ ctx: CardCtx }>();
@@ -69,7 +70,7 @@ const dataSource = {
     if (node !== null) return placesUnder(node.id);
     const rows = (await api.fetchManageRows()).rows;
     const held = await sourcesWithPlaces(sourceNodes(rows).map((n) => n.id));
-    return sourceNodes(rows, (id) => held.has(id));
+    return sourceNodes(rows, (id) => held.has(id), iconUrl);
   },
 };
 

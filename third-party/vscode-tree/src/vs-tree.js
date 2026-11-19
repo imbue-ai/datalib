@@ -1,6 +1,6 @@
 // <vs-tree>: VS Code's AsyncDataTree, built from VS Code's own source, as a
 // custom element with its own shadow root. The page hands it a data
-// source of plain nodes, `{ id, label, kind?, description?, hasChildren }`;
+// source of plain nodes, `{ id, label, icon?, kind?, description?, hasChildren }`;
 // the element keeps VS Code's renderer and delegate plumbing to itself and
 // says what is open by id, so a page can save and restore it. It fires
 // `select` as the selection moves and `open` on a double-click or Enter.
@@ -59,6 +59,8 @@ const OWN_CSS = `
   border-radius: 50%; transform: none; animation: vs-tree-spin .8s linear infinite; }
 @keyframes vs-tree-spin { to { transform: rotate(360deg); } }
 .row { display: flex; gap: 6px; align-items: baseline; white-space: nowrap; overflow: hidden; }
+.icon { flex: 0 0 auto; width: 16px; height: 16px; align-self: center; object-fit: contain; }
+.icon[hidden] { display: none; }
 .label { overflow: hidden; text-overflow: ellipsis; }
 .kind { opacity: .55; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
 .desc { opacity: .6; font-size: 12px; }
@@ -71,15 +73,21 @@ class Renderer {
   renderTemplate(container) {
     const row = container.appendChild(document.createElement('div'));
     row.className = 'row';
+    const icon = row.appendChild(document.createElement('img'));
+    icon.className = 'icon';
+    icon.alt = '';
     const part = (cls) => {
       const el = row.appendChild(document.createElement('span'));
       el.className = cls;
       return el;
     };
-    return { label: part('label'), kind: part('kind'), desc: part('desc') };
+    return { icon, label: part('label'), kind: part('kind'), desc: part('desc') };
   }
   renderElement(treeNode, _index, template) {
     const node = treeNode.element;
+    if (node.icon) template.icon.src = node.icon;
+    else template.icon.removeAttribute('src');
+    template.icon.hidden = !node.icon;
     template.label.textContent = node.label;
     template.kind.textContent = node.kind ?? '';
     template.desc.textContent = node.description ?? '';

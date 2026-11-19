@@ -5,6 +5,7 @@ declare module "vs-tree" {
   export type VsTreeNode = {
     id: string;
     label: string;
+    icon?: string;
     kind?: string;
     description?: string;
     hasChildren: boolean;
