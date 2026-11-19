@@ -76,8 +76,9 @@ use datalib_schema::providers::Provider;
 ///     its author is now, not where they were when they wrote it.
 /// v23: a message's blocks and attachments are drawn — a forward, a link
 ///     preview, a bot's card — and only what is still not drawn is noted.
-///     A bot's thread is titled by what its blocks show.
-pub const RENDER_VERSION: u32 = 23;
+/// v24: a bot's thread is titled by what its blocks show, and an image
+///     block whose address is not a web one keeps its label.
+pub const RENDER_VERSION: u32 = 24;
 
 #[derive(Debug, Default)]
 pub struct RenderSummary {
