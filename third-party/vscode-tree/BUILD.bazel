@@ -1,0 +1,65 @@
+load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_run_binary", "js_test")
+load("@npm_vscode_tree//:defs.bzl", "npm_link_all_packages")
+load("@npm_vscode_tree//third-party/vscode-tree:playwright/package_json.bzl", playwright_bin = "bin")
+
+# VS Code's tree widget as a <vs-tree> custom element (README.md). Built
+# from this package alone: its own lockfile, its own node_modules, and
+# nothing from the rest of the tree.
+
+# The playwright pin, read by //tools:version_pins_test.
+exports_files(["package.json"])
+
+npm_link_all_packages(name = "node_modules")
+
+js_binary(
+    name = "build_tool",
+    data = [":node_modules"],
+    entry_point = "build.mjs",
+)
+
+# One ES module, upstream's CSS inside it; what a page imports.
+js_run_binary(
+    name = "vs_tree",
+    srcs = [
+        "src/vs-tree.js",
+        ":node_modules",
+    ],
+    outs = ["dist/vs-tree.js"],
+    args = ["dist/vs-tree.js"],
+    chdir = package_name(),
+    tool = ":build_tool",
+    visibility = ["//visibility:public"],
+)
+
+# The pinned Playwright's CLI, to install the browser the facts test needs:
+#   bazelisk run //third-party/vscode-tree:playwright -- install chromium
+playwright_bin.playwright_binary(name = "playwright")
+
+# The facts README.md lists, one test each, in Chromium. Run it after a
+# monaco-editor bump: a fact that moved fails by name.
+#
+# The browser is Playwright's own, found the way the e2e suite finds it:
+# PLAYWRIGHT_BROWSERS_PATH, which CI passes to every test and points at the
+# image's baked cache, or Playwright's default cache under HOME. The
+# playwright pin is the one datalib/ui's lockfile resolves, so it is the
+# browser that suite already installed. DATALIB_TEST_CHROMIUM names a
+# Chromium binary instead, for a machine whose browser belongs to another
+# Playwright.
+js_test(
+    name = "facts_test",
+    size = "medium",
+    data = [
+        "tests/harness.html",
+        "tests/harness.js",
+        ":node_modules",
+        ":vs_tree",
+    ],
+    entry_point = "tests/facts.test.mjs",
+    env_inherit = [
+        "DATALIB_TEST_CHROMIUM",
+        "HOME",
+        "PLAYWRIGHT_BROWSERS_PATH",
+    ],
+    # The browser is in the host's cache, which a remote executor has not got.
+    tags = ["no-remote-exec"],
+)
