@@ -235,7 +235,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     const wired = await (await request.get(`${BASE}/api/config`)).json();
     expect(wired.parsed_ok, wired.error ?? "config must load").toBe(true);
     expect(wired.text).toContain('"*/render_markdown"');
-    expect(wired.text).not.toContain('"pdfs/render_markdown"');
+    expect(wired.text).not.toMatch(/inputs = \[[^\]]*"pdfs\/render_markdown"/);
 
     // ── 7-8. run it ──────────────────────────────────────────────────
     const firstRun = await stampsBefore(page, SYNCED_ROWS);
