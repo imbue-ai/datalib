@@ -85,24 +85,16 @@ export function openEnclosingDetails(el) {
 }
 
 /**
- * Where a section's copy button goes: the chat-common message header
- * (the `## ` line whose author is a `.msg-author` span or a chip link,
- * then a `.msg-ts`),
- * else an explicit `.msg-meta` div, else the first `<p><em>…</em></p>`
- * some renderers emit as an italic meta line. Block sections have none
- * of the three and get the button at the top of the section.
+ * A section's header, where its controls go: the `## ` line every
+ * renderer writes for a message with an author and a time
+ * (`MessageHeader`), which always carries the `.msg-ts` time. A section
+ * with none, a page or a system note, gets its controls at its top.
  * @param {HTMLElement} el
  * @returns {HTMLElement | null}
  */
 export function metaHost(el) {
-  const header = el.querySelector(":scope > h2 > .msg-author, :scope > h2 > a.chip");
-  if (header?.parentElement) return header.parentElement;
-  const meta = el.querySelector(":scope > .msg-meta");
-  if (meta) return meta;
-  for (const p of el.querySelectorAll(":scope > p")) {
-    if (p.firstElementChild?.tagName === "EM" && p.children.length === 1) return p;
-  }
-  return null;
+  const h2 = el.querySelector(":scope > h2");
+  return h2?.querySelector(":scope > .msg-ts") ? /** @type {HTMLElement} */ (h2) : null;
 }
 
 /**
@@ -153,7 +145,7 @@ export function injectCopyUuidButtons(root, { pageTitle = true } = {}) {
   )) {
     if (
       el.querySelector(
-        ":scope > h2 .copy-uuid, :scope > .msg-meta .copy-uuid, :scope > p .copy-uuid, :scope > .copy-uuid",
+        ":scope > h2 .copy-uuid, :scope > .copy-uuid",
       )
     )
       continue;

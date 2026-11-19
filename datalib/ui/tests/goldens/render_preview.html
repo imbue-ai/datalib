@@ -707,15 +707,6 @@ code.hljs {
   width: auto;
   height: auto;
 }
-.chat-body .msg-meta {
-  color: var(--datalib-muted, #94a3b8);
-  font-size: 0.85rem;
-  margin: 0 0 0.5rem;
-}
-.chat-body .msg-meta a {
-  color: inherit;
-  text-decoration: underline;
-}
 /* The chat-common message header.
    It is a real `## ` heading in the file; on screen it should read as
    Slack's one-line "Name  time", not as a document section, hence the
@@ -802,6 +793,17 @@ code.hljs {
   /* The full instant is in `title`; say so with the cursor. */
   cursor: help;
 }
+/* A word the source says about a message beside its author (a review's
+   `APPROVED`, `reply`): small and muted, as the time is. */
+.chat-body .msg-tag {
+  font-size: 0.7rem;
+  font-weight: 400;
+  color: var(--datalib-muted, #94a3b8);
+  text-transform: lowercase;
+  padding: 0 0.35em;
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-radius: 999px;
+}
 /* A version of the conversation the account left (an edited prompt, a
    regenerated answer), folded in where it forked. Dashed, so it reads as
    beside the conversation rather than part of it. */
@@ -842,6 +844,12 @@ code.hljs {
 .chat-body details.tool-group .msg h2:has(> .msg-author, > a.chip) {
   font-size: 0.8em;
   opacity: 0.7;
+}
+/* A section with no header line has its 🆔 at its top, set to the right
+   rather than on a line of its own. */
+.chat-body [data-section-uuid] > button.copy-uuid:first-child {
+  float: right;
+  margin-left: 0.5em;
 }
 .chat-body button.copy-uuid {
   /* The 🆔 glyph is a saturated purple that outshouts the message it
@@ -4690,26 +4698,27 @@ And take Data with you.</p>
 <p><em>closed</em> — <a href="datalib:handle/github/jlpicard" title="jlpicard" class="chip" data-handle="github:jlpicard">jlpicard</a> — <code>picard/earl-grey-temp</code> → <code>main</code></p>
 <h2>Description</h2>
 <div id="m-0b75b9f9-4400-87fe-99ef-2db45ad92cb6" data-section-uuid="0b75b9f9-4400-87fe-99ef-2db45ad92cb6" class="msg msg--github">
+<h2><a href="datalib:handle/github/jlpicard" title="jlpicard" class="chip" data-handle="github:jlpicard">jlpicard</a> <time class="msg-ts" datetime="2369-04-15T08:00:00Z" title="2369-04-15 08:00:00 UTC">Tue Apr 15th, 2369 at 08:00</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/42" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Adjusts the steeping target to 85 degC. Tea is meant to be HOT.</p>
 </div>
 <h2>Reviews</h2>
 <div id="m-0b75ba67-2100-8e00-a40a-a94d0cda3e7d" data-section-uuid="0b75ba67-2100-8e00-a40a-a94d0cda3e7d" class="msg msg--github">
-<p><a href="datalib:handle/github/wtriker" title="wtriker" class="chip" data-handle="github:wtriker">wtriker</a> <em>(APPROVED)</em> · <time class="msg-ts" datetime="2369-04-15T10:00:00Z" title="2369-04-15 10:00:00 UTC">Tue Apr 15th, 2369 at 10:00</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/42#pullrequestreview-4200077" target="_blank" rel="noopener noreferrer">↗</a></p>
+<h2><a href="datalib:handle/github/wtriker" title="wtriker" class="chip" data-handle="github:wtriker">wtriker</a> <span class="msg-tag">APPROVED</span> <time class="msg-ts" datetime="2369-04-15T10:00:00Z" title="2369-04-15 10:00:00 UTC">Tue Apr 15th, 2369 at 10:00</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/42#pullrequestreview-4200077" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>LGTM, Captain. Make it so.</p>
 </div>
 <h2>General discussion</h2>
 <div id="m-0b75ba4b-a9c0-8e4f-98c7-cd7e6a61a4d3" data-section-uuid="0b75ba4b-a9c0-8e4f-98c7-cd7e6a61a4d3" class="msg msg--github">
-<p><a href="datalib:handle/github/geordi-laforge" title="geordi-laforge" class="chip" data-handle="github:geordi-laforge">geordi-laforge</a> · <time class="msg-ts" datetime="2369-04-15T09:30:00Z" title="2369-04-15 09:30:00 UTC">Tue Apr 15th, 2369 at 09:30</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/42#issuecomment-4242001" target="_blank" rel="noopener noreferrer">↗</a></p>
+<h2><a href="datalib:handle/github/geordi-laforge" title="geordi-laforge" class="chip" data-handle="github:geordi-laforge">geordi-laforge</a> <time class="msg-ts" datetime="2369-04-15T09:30:00Z" title="2369-04-15 09:30:00 UTC">Tue Apr 15th, 2369 at 09:30</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/42#issuecomment-4242001" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Did you account for water temperature drift on long-duration replicator runs?</p>
 </div>
 <h2>Inline comments</h2>
 <h3><code>src/replicator/tea.c:17</code></h3>
 <div id="m-0b75ba67-24e8-805b-9bd2-36cb40a41cb8" data-section-uuid="0b75ba67-24e8-805b-9bd2-36cb40a41cb8" class="msg msg--github">
-<p><a href="datalib:handle/github/wtriker" title="wtriker" class="chip" data-handle="github:wtriker">wtriker</a> · <time class="msg-ts" datetime="2369-04-15T10:00:01Z" title="2369-04-15 10:00:01 UTC">Tue Apr 15th, 2369 at 10:00</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/42#discussion_r4200201" target="_blank" rel="noopener noreferrer">↗</a></p>
+<h2><a href="datalib:handle/github/wtriker" title="wtriker" class="chip" data-handle="github:wtriker">wtriker</a> <time class="msg-ts" datetime="2369-04-15T10:00:01Z" title="2369-04-15 10:00:01 UTC">Tue Apr 15th, 2369 at 10:00</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/42#discussion_r4200201" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Should be 85 degC, not 82. Earl Grey wants it HOT.</p>
 </div>
 <div id="m-0b75ba6b-b4e0-8cd3-a7f1-9a10e37b4091" data-section-uuid="0b75ba6b-b4e0-8cd3-a7f1-9a10e37b4091" class="msg msg--github">
-<p><a href="datalib:handle/github/jlpicard" title="jlpicard" class="chip" data-handle="github:jlpicard">jlpicard</a> <em>(reply)</em> · <time class="msg-ts" datetime="2369-04-15T10:05:00Z" title="2369-04-15 10:05:00 UTC">Tue Apr 15th, 2369 at 10:05</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/42#discussion_r4200202" target="_blank" rel="noopener noreferrer">↗</a></p>
+<h2><a href="datalib:handle/github/jlpicard" title="jlpicard" class="chip" data-handle="github:jlpicard">jlpicard</a> <span class="msg-tag">reply</span> <time class="msg-ts" datetime="2369-04-15T10:05:00Z" title="2369-04-15 10:05:00 UTC">Tue Apr 15th, 2369 at 10:05</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/42#discussion_r4200202" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Quite right, Number One. Fixed in the next push.</p>
 </div>
 </div>
@@ -4720,28 +4729,29 @@ And take Data with you.</p>
 <p><em>open</em> — <a href="datalib:handle/github/jlpicard" title="jlpicard" class="chip" data-handle="github:jlpicard">jlpicard</a> — <code>picard/holodeck-safety</code> → <code>main</code></p>
 <h2>Description</h2>
 <div id="m-0b75bad4-fe00-82b8-ab37-5a103480b51c" data-section-uuid="0b75bad4-fe00-82b8-ab37-5a103480b51c" class="msg msg--github">
+<h2><a href="datalib:handle/github/jlpicard" title="jlpicard" class="chip" data-handle="github:jlpicard">jlpicard</a> <time class="msg-ts" datetime="2369-04-15T12:00:00Z" title="2369-04-15 12:00:00 UTC">Tue Apr 15th, 2369 at 12:00</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/43" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Disables holodeck weapons fire when safeties are off, with audible warning.</p>
 <p>Fixes #41.</p>
 </div>
 <h2>Reviews</h2>
 <div id="m-0b75bb42-db00-8e46-8fa7-79619e17107e" data-section-uuid="0b75bb42-db00-8e46-8fa7-79619e17107e" class="msg msg--github">
-<p><a href="datalib:handle/github/data-soong" title="data-soong" class="chip" data-handle="github:data-soong">data-soong</a> <em>(COMMENTED)</em> · <time class="msg-ts" datetime="2369-04-15T14:00:00Z" title="2369-04-15 14:00:00 UTC">Tue Apr 15th, 2369 at 14:00</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/43#pullrequestreview-4300088" target="_blank" rel="noopener noreferrer">↗</a></p>
+<h2><a href="datalib:handle/github/data-soong" title="data-soong" class="chip" data-handle="github:data-soong">data-soong</a> <span class="msg-tag">COMMENTED</span> <time class="msg-ts" datetime="2369-04-15T14:00:00Z" title="2369-04-15 14:00:00 UTC">Tue Apr 15th, 2369 at 14:00</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/43#pullrequestreview-4300088" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>I have run 47 simulations against this branch. Two edge cases warrant attention; see inline.</p>
 </div>
 <h2>General discussion</h2>
 <div id="m-0b75bb27-63c0-8116-b4ff-00bdd74fe630" data-section-uuid="0b75bb27-63c0-8116-b4ff-00bdd74fe630" class="msg msg--github">
-<p><a href="datalib:handle/github/worf-rozhenko" title="worf-rozhenko" class="chip" data-handle="github:worf-rozhenko">worf-rozhenko</a> · <time class="msg-ts" datetime="2369-04-15T13:30:00Z" title="2369-04-15 13:30:00 UTC">Tue Apr 15th, 2369 at 13:30</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/43#issuecomment-4343001" target="_blank" rel="noopener noreferrer">↗</a></p>
+<h2><a href="datalib:handle/github/worf-rozhenko" title="worf-rozhenko" class="chip" data-handle="github:worf-rozhenko">worf-rozhenko</a> <time class="msg-ts" datetime="2369-04-15T13:30:00Z" title="2369-04-15 13:30:00 UTC">Tue Apr 15th, 2369 at 13:30</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/43#issuecomment-4343001" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Approved. Honor demands no compromise on safety.</p>
 </div>
 <h2>Inline comments</h2>
 <h3><code>src/holodeck/safety.c:200</code></h3>
 <div id="m-0b75bb42-dee8-86c3-b802-bc72e8807da8" data-section-uuid="0b75bb42-dee8-86c3-b802-bc72e8807da8" class="msg msg--github">
-<p><a href="datalib:handle/github/data-soong" title="data-soong" class="chip" data-handle="github:data-soong">data-soong</a> · <time class="msg-ts" datetime="2369-04-15T14:00:01Z" title="2369-04-15 14:00:01 UTC">Tue Apr 15th, 2369 at 14:00</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/43#discussion_r4300301" target="_blank" rel="noopener noreferrer">↗</a></p>
+<h2><a href="datalib:handle/github/data-soong" title="data-soong" class="chip" data-handle="github:data-soong">data-soong</a> <time class="msg-ts" datetime="2369-04-15T14:00:01Z" title="2369-04-15 14:00:01 UTC">Tue Apr 15th, 2369 at 14:00</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/43#discussion_r4300301" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>If <code>safeties_engaged</code> is read after <code>weapons_armed</code> is set, there is a 12-microsecond window in which a discharge could occur. I recommend reordering the checks.</p>
 </div>
 <h3><code>src/holodeck/safety.c:215</code></h3>
 <div id="m-0b75bb42-e2d0-8488-a5a6-2dc5b65a9b3e" data-section-uuid="0b75bb42-e2d0-8488-a5a6-2dc5b65a9b3e" class="msg msg--github">
-<p><a href="datalib:handle/github/data-soong" title="data-soong" class="chip" data-handle="github:data-soong">data-soong</a> · <time class="msg-ts" datetime="2369-04-15T14:00:02Z" title="2369-04-15 14:00:02 UTC">Tue Apr 15th, 2369 at 14:00</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/43#discussion_r4300302" target="_blank" rel="noopener noreferrer">↗</a></p>
+<h2><a href="datalib:handle/github/data-soong" title="data-soong" class="chip" data-handle="github:data-soong">data-soong</a> <time class="msg-ts" datetime="2369-04-15T14:00:02Z" title="2369-04-15 14:00:02 UTC">Tue Apr 15th, 2369 at 14:00</time> <a class="source-link" href="https://github.com/enterprise-d/replicator-firmware/pull/43#discussion_r4300302" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>The audible warning loops indefinitely. Counsellor Troi has noted that this may induce undue anxiety in trainees; consider capping the loop at 10 cycles.</p>
 </div>
 </div>
@@ -4831,21 +4841,22 @@ And take Data with you.</p>
 <p><em>merged</em> — <a href="datalib:handle/gitlab/gitlab.com/jlpicard" title="Jean-Luc Picard (gitlab:gitlab.com/jlpicard)" class="chip" data-handle="gitlab:gitlab.com/jlpicard">Jean-Luc Picard</a> — <code>picard/earl-grey</code> → <code>main</code></p>
 <h2>Description</h2>
 <div id="m-0b75b9f9-4400-887d-bae6-937c2e6ee3a6" data-section-uuid="0b75b9f9-4400-887d-bae6-937c2e6ee3a6" class="msg msg--gitlab">
+<h2><a href="datalib:handle/gitlab/gitlab.com/jlpicard" title="Jean-Luc Picard (gitlab:gitlab.com/jlpicard)" class="chip" data-handle="gitlab:gitlab.com/jlpicard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-04-15T08:00:00Z" title="2369-04-15 08:00:00 UTC">Tue Apr 15th, 2369 at 08:00</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/17" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Tea. Earl Grey. Hot.</p>
 </div>
 <h2>General discussion</h2>
 <div id="m-0b75ba6b-b4e0-8d87-b39b-6e62030598db" data-section-uuid="0b75ba6b-b4e0-8d87-b39b-6e62030598db" class="msg msg--gitlab">
-<p><a href="datalib:handle/gitlab/gitlab.com/jlpicard" title="Jean-Luc Picard (gitlab:gitlab.com/jlpicard)" class="chip" data-handle="gitlab:gitlab.com/jlpicard">Jean-Luc Picard</a> <em>(reply)</em> · <time class="msg-ts" datetime="2369-04-15T10:05:00Z" title="2369-04-15 10:05:00 UTC">Tue Apr 15th, 2369 at 10:05</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/17#note_1700017002" target="_blank" rel="noopener noreferrer">↗</a></p>
+<h2><a href="datalib:handle/gitlab/gitlab.com/jlpicard" title="Jean-Luc Picard (gitlab:gitlab.com/jlpicard)" class="chip" data-handle="gitlab:gitlab.com/jlpicard">Jean-Luc Picard</a> <span class="msg-tag">reply</span> <time class="msg-ts" datetime="2369-04-15T10:05:00Z" title="2369-04-15 10:05:00 UTC">Tue Apr 15th, 2369 at 10:05</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/17#note_1700017002" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Adopted. Make it so.</p>
 </div>
 <div id="m-0b75ba82-9840-81d6-88bc-01156ea95dd6" data-section-uuid="0b75ba82-9840-81d6-88bc-01156ea95dd6" class="msg msg--gitlab">
-<p><a href="datalib:handle/gitlab/gitlab.com/worf-rozhenko" title="Worf (gitlab:gitlab.com/worf-rozhenko)" class="chip" data-handle="gitlab:gitlab.com/worf-rozhenko">Worf</a> · <time class="msg-ts" datetime="2369-04-15T10:30:00Z" title="2369-04-15 10:30:00 UTC">Tue Apr 15th, 2369 at 10:30</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/17#note_1700017003" target="_blank" rel="noopener noreferrer">↗</a></p>
+<h2><a href="datalib:handle/gitlab/gitlab.com/worf-rozhenko" title="Worf (gitlab:gitlab.com/worf-rozhenko)" class="chip" data-handle="gitlab:gitlab.com/worf-rozhenko">Worf</a> <time class="msg-ts" datetime="2369-04-15T10:30:00Z" title="2369-04-15 10:30:00 UTC">Tue Apr 15th, 2369 at 10:30</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/17#note_1700017003" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>I will set the standard temperature to be served warm in case of crisis. Klingon ambassadors will not accept tepid beverages.</p>
 </div>
 <h2>Inline comments</h2>
 <h3><code>src/replicator/menu.rs:88</code></h3>
 <div id="m-0b75ba67-2100-8cc2-a0d4-510cce260212" data-section-uuid="0b75ba67-2100-8cc2-a0d4-510cce260212" class="msg msg--gitlab">
-<p><a href="datalib:handle/gitlab/gitlab.com/wtriker" title="William T. Riker (gitlab:gitlab.com/wtriker)" class="chip" data-handle="gitlab:gitlab.com/wtriker">William T. Riker</a> · <time class="msg-ts" datetime="2369-04-15T10:00:00Z" title="2369-04-15 10:00:00 UTC">Tue Apr 15th, 2369 at 10:00</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/17#note_1700017001" target="_blank" rel="noopener noreferrer">↗</a></p>
+<h2><a href="datalib:handle/gitlab/gitlab.com/wtriker" title="William T. Riker (gitlab:gitlab.com/wtriker)" class="chip" data-handle="gitlab:gitlab.com/wtriker">William T. Riker</a> <time class="msg-ts" datetime="2369-04-15T10:00:00Z" title="2369-04-15 10:00:00 UTC">Tue Apr 15th, 2369 at 10:00</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/17#note_1700017001" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Use <code>enum Tea { EarlGrey, Chamomile, ... }</code> here rather than a string match — it'll catch typos at compile time.</p>
 </div>
 </div>
@@ -4856,25 +4867,26 @@ And take Data with you.</p>
 <p><em>opened</em> — <a href="datalib:handle/gitlab/gitlab.com/jlpicard" title="Jean-Luc Picard (gitlab:gitlab.com/jlpicard)" class="chip" data-handle="gitlab:gitlab.com/jlpicard">Jean-Luc Picard</a> — <code>picard/safety-regression</code> → <code>main</code></p>
 <h2>Description</h2>
 <div id="m-0b75bad4-fe00-8155-aa7c-9db9f663482a" data-section-uuid="0b75bad4-fe00-8155-aa7c-9db9f663482a" class="msg msg--gitlab">
+<h2><a href="datalib:handle/gitlab/gitlab.com/jlpicard" title="Jean-Luc Picard (gitlab:gitlab.com/jlpicard)" class="chip" data-handle="gitlab:gitlab.com/jlpicard">Jean-Luc Picard</a> <time class="msg-ts" datetime="2369-04-15T12:00:00Z" title="2369-04-15 12:00:00 UTC">Tue Apr 15th, 2369 at 12:00</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/18" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Adds a regression test that asserts holodeck weapons cannot fire while safeties are engaged. Closes #41.</p>
 </div>
 <h2>General discussion</h2>
 <div id="m-0b75bb4c-02c0-816b-93e3-fa09181a699d" data-section-uuid="0b75bb4c-02c0-816b-93e3-fa09181a699d" class="msg msg--gitlab">
-<p><a href="datalib:handle/gitlab/gitlab.com/geordi-laforge" title="Geordi La Forge (gitlab:gitlab.com/geordi-laforge)" class="chip" data-handle="gitlab:gitlab.com/geordi-laforge">Geordi La Forge</a> <em>(reply)</em> · <time class="msg-ts" datetime="2369-04-15T14:10:00Z" title="2369-04-15 14:10:00 UTC">Tue Apr 15th, 2369 at 14:10</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/18#note_1700018002" target="_blank" rel="noopener noreferrer">↗</a></p>
+<h2><a href="datalib:handle/gitlab/gitlab.com/geordi-laforge" title="Geordi La Forge (gitlab:gitlab.com/geordi-laforge)" class="chip" data-handle="gitlab:gitlab.com/geordi-laforge">Geordi La Forge</a> <span class="msg-tag">reply</span> <time class="msg-ts" datetime="2369-04-15T14:10:00Z" title="2369-04-15 14:10:00 UTC">Tue Apr 15th, 2369 at 14:10</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/18#note_1700018002" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Agreed — I can wire that into the simulator harness if Data writes the assertion.</p>
 </div>
 <div id="m-0b75bb55-2a80-8a4c-abf0-af3670ee359e" data-section-uuid="0b75bb55-2a80-8a4c-abf0-af3670ee359e" class="msg msg--gitlab">
-<p><a href="datalib:handle/gitlab/gitlab.com/jlpicard" title="Jean-Luc Picard (gitlab:gitlab.com/jlpicard)" class="chip" data-handle="gitlab:gitlab.com/jlpicard">Jean-Luc Picard</a> <em>(reply)</em> · <time class="msg-ts" datetime="2369-04-15T14:20:00Z" title="2369-04-15 14:20:00 UTC">Tue Apr 15th, 2369 at 14:20</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/18#note_1700018003" target="_blank" rel="noopener noreferrer">↗</a></p>
+<h2><a href="datalib:handle/gitlab/gitlab.com/jlpicard" title="Jean-Luc Picard (gitlab:gitlab.com/jlpicard)" class="chip" data-handle="gitlab:gitlab.com/jlpicard">Jean-Luc Picard</a> <span class="msg-tag">reply</span> <time class="msg-ts" datetime="2369-04-15T14:20:00Z" title="2369-04-15 14:20:00 UTC">Tue Apr 15th, 2369 at 14:20</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/18#note_1700018003" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Concur. Make it so.</p>
 </div>
 <div id="m-0b75bb5e-5240-8a34-b5b2-12c9558a6379" data-section-uuid="0b75bb5e-5240-8a34-b5b2-12c9558a6379" class="msg msg--gitlab">
-<p><a href="datalib:handle/gitlab/gitlab.com/bcrusher" title="Beverly Crusher (gitlab:gitlab.com/bcrusher)" class="chip" data-handle="gitlab:gitlab.com/bcrusher">Beverly Crusher</a> · <time class="msg-ts" datetime="2369-04-15T14:30:00Z" title="2369-04-15 14:30:00 UTC">Tue Apr 15th, 2369 at 14:30</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/18#note_1700018004" target="_blank" rel="noopener noreferrer">↗</a></p>
+<h2><a href="datalib:handle/gitlab/gitlab.com/bcrusher" title="Beverly Crusher (gitlab:gitlab.com/bcrusher)" class="chip" data-handle="gitlab:gitlab.com/bcrusher">Beverly Crusher</a> <time class="msg-ts" datetime="2369-04-15T14:30:00Z" title="2369-04-15 14:30:00 UTC">Tue Apr 15th, 2369 at 14:30</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/18#note_1700018004" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>Please ensure the medical override path is preserved — Sickbay must be able to disable safeties on a holodeck program in a triage scenario.</p>
 </div>
 <h2>Inline comments</h2>
 <h3><code>tests/safety.rs:42</code></h3>
 <div id="m-0b75bb42-db00-8df2-988c-d4c436597bec" data-section-uuid="0b75bb42-db00-8df2-988c-d4c436597bec" class="msg msg--gitlab">
-<p><a href="datalib:handle/gitlab/gitlab.com/data-soong" title="Lt. Cmdr. Data (gitlab:gitlab.com/data-soong)" class="chip" data-handle="gitlab:gitlab.com/data-soong">Lt. Cmdr. Data</a> · <time class="msg-ts" datetime="2369-04-15T14:00:00Z" title="2369-04-15 14:00:00 UTC">Tue Apr 15th, 2369 at 14:00</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/18#note_1700018001" target="_blank" rel="noopener noreferrer">↗</a></p>
+<h2><a href="datalib:handle/gitlab/gitlab.com/data-soong" title="Lt. Cmdr. Data (gitlab:gitlab.com/data-soong)" class="chip" data-handle="gitlab:gitlab.com/data-soong">Lt. Cmdr. Data</a> <time class="msg-ts" datetime="2369-04-15T14:00:00Z" title="2369-04-15 14:00:00 UTC">Tue Apr 15th, 2369 at 14:00</time> <a class="source-link" href="https://gitlab.com/enterprise-d/holodeck/-/merge_requests/18#note_1700018001" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p>The assertion only checks the safety flag <em>before</em> arming. We should also assert that arming the weapon while safeties are engaged returns Err(SafetyEngaged).</p>
 </div>
 </div>
@@ -5885,11 +5897,11 @@ Ask for the green drink.</p>
 <p>The USS Enterprise-D is on a deep-space survey near the Romulan Neutral Zone. Coordinate any sensor sweeps with Data before adjusting sensor gain.</p>
 </blockquote>
 <div id="m-0b75b878-be80-8789-947e-32dbd1d21be8" data-section-uuid="0b75b878-be80-8789-947e-32dbd1d21be8" class="msg msg--notion">
-<p><a href="mailto:geordi.laforge@enterprise.starfleet.invalid" title="Geordi La Forge &lt;geordi.laforge@enterprise.starfleet.invalid&gt;" class="chip" data-handle="email:geordi.laforge@enterprise.starfleet.invalid">Geordi La Forge</a> · <time class="msg-ts" datetime="2369-04-15T01:00:00Z" title="2369-04-15 01:00:00 UTC">Tue Apr 15th, 2369 at 01:00</time></p>
+<h2><a href="mailto:geordi.laforge@enterprise.starfleet.invalid" title="Geordi La Forge &lt;geordi.laforge@enterprise.starfleet.invalid&gt;" class="chip" data-handle="email:geordi.laforge@enterprise.starfleet.invalid">Geordi La Forge</a> <time class="msg-ts" datetime="2369-04-15T01:00:00Z" title="2369-04-15 01:00:00 UTC">Tue Apr 15th, 2369 at 01:00</time></h2>
 <p>Recommend we lower sensor gain to avoid tipping off the Romulans.</p>
 </div>
 <div id="m-0b75b87d-5260-8b4d-85ae-d86bbfcc6a45" data-section-uuid="0b75b87d-5260-8b4d-85ae-d86bbfcc6a45" class="msg msg--notion">
-<p><a href="mailto:data@enterprise.starfleet.invalid" title="Data &lt;data@enterprise.starfleet.invalid&gt;" class="chip" data-handle="email:data@enterprise.starfleet.invalid">Data</a> · <time class="msg-ts" datetime="2369-04-15T01:05:00Z" title="2369-04-15 01:05:00 UTC">Tue Apr 15th, 2369 at 01:05</time></p>
+<h2><a href="mailto:data@enterprise.starfleet.invalid" title="Data &lt;data@enterprise.starfleet.invalid&gt;" class="chip" data-handle="email:data@enterprise.starfleet.invalid">Data</a> <time class="msg-ts" datetime="2369-04-15T01:05:00Z" title="2369-04-15 01:05:00 UTC">Tue Apr 15th, 2369 at 01:05</time></h2>
 <p>Concur, Commander. Reducing gain by 30%.</p>
 </div>
 </div>
@@ -5911,7 +5923,7 @@ Ask for the green drink.</p>
 <div class="preview-doc">
 <h3 class="preview-name">notion/00000000-0000-86d5-851e-a6d36ec0864a.md</h3>
 <div class="chat-body markdown-body"><div id="m-0b75b881-e640-8c48-8004-7b48d5b94f90" data-section-uuid="0b75b881-e640-8c48-8004-7b48d5b94f90" class="msg msg--notion">
-<p><a href="mailto:beverly.crusher@enterprise.starfleet.invalid" title="Beverly Crusher &lt;beverly.crusher@enterprise.starfleet.invalid&gt;" class="chip" data-handle="email:beverly.crusher@enterprise.starfleet.invalid">Beverly Crusher</a> · <time class="msg-ts" datetime="2369-04-15T01:10:00Z" title="2369-04-15 01:10:00 UTC">Tue Apr 15th, 2369 at 01:10</time></p>
+<h2><a href="mailto:beverly.crusher@enterprise.starfleet.invalid" title="Beverly Crusher &lt;beverly.crusher@enterprise.starfleet.invalid&gt;" class="chip" data-handle="email:beverly.crusher@enterprise.starfleet.invalid">Beverly Crusher</a> <time class="msg-ts" datetime="2369-04-15T01:10:00Z" title="2369-04-15 01:10:00 UTC">Tue Apr 15th, 2369 at 01:10</time></h2>
 <p>Make it so.</p>
 </div>
 </div>
@@ -9850,24 +9862,16 @@ export function openEnclosingDetails(el) {
 }
 
 /**
- * Where a section's copy button goes: the chat-common message header
- * (the `## ` line whose author is a `.msg-author` span or a chip link,
- * then a `.msg-ts`),
- * else an explicit `.msg-meta` div, else the first `<p><em>…</em></p>`
- * some renderers emit as an italic meta line. Block sections have none
- * of the three and get the button at the top of the section.
+ * A section's header, where its controls go: the `## ` line every
+ * renderer writes for a message with an author and a time
+ * (`MessageHeader`), which always carries the `.msg-ts` time. A section
+ * with none, a page or a system note, gets its controls at its top.
  * @param {HTMLElement} el
  * @returns {HTMLElement | null}
  */
 export function metaHost(el) {
-  const header = el.querySelector(":scope > h2 > .msg-author, :scope > h2 > a.chip");
-  if (header?.parentElement) return header.parentElement;
-  const meta = el.querySelector(":scope > .msg-meta");
-  if (meta) return meta;
-  for (const p of el.querySelectorAll(":scope > p")) {
-    if (p.firstElementChild?.tagName === "EM" && p.children.length === 1) return p;
-  }
-  return null;
+  const h2 = el.querySelector(":scope > h2");
+  return h2?.querySelector(":scope > .msg-ts") ? /** @type {HTMLElement} */ (h2) : null;
 }
 
 /**
@@ -9918,7 +9922,7 @@ export function injectCopyUuidButtons(root, { pageTitle = true } = {}) {
   )) {
     if (
       el.querySelector(
-        ":scope > h2 .copy-uuid, :scope > .msg-meta .copy-uuid, :scope > p .copy-uuid, :scope > .copy-uuid",
+        ":scope > h2 .copy-uuid, :scope > .copy-uuid",
       )
     )
       continue;

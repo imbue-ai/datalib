@@ -646,6 +646,7 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
                     date_ms: item.date_ms,
                     offset_secs: item.date_offset_secs,
                     source_url: item.source_url.as_deref(),
+                    ..Default::default()
                 }
                 .render(),
             );
