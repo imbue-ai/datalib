@@ -802,6 +802,44 @@ mod diffs {
         .await;
         assert_eq!(rows, Vec::<String>::new(), "the rows did not change");
     }
+
+    /// A table keyed `(doc, id)` diffs one row per key with both columns on
+    /// each side, and a row moved to another document is one removed and
+    /// one added: its key changed. A scan reading
+    /// `coalesce(to_doc, from_doc)` names both documents.
+    #[tokio::test]
+    async fn a_composite_key_diffs_each_row_and_a_move_is_a_remove_and_an_add() {
+        let s = Store::new();
+        let mut w = s.rw().await;
+        ok(
+            &mut w,
+            "CREATE TABLE g (doc TEXT NOT NULL, id TEXT NOT NULL, v INTEGER, \
+             PRIMARY KEY (doc, id))",
+        )
+        .await;
+        ok(
+            &mut w,
+            "INSERT INTO g VALUES ('d1', 'a', 1), ('d1', 'b', 2), ('d2', 'c', 3)",
+        )
+        .await;
+        let before = commit(&mut w, "rows").await;
+        ok(&mut w, "UPDATE g SET v = 10 WHERE doc = 'd1' AND id = 'a'").await;
+        ok(&mut w, "UPDATE g SET doc = 'd2' WHERE id = 'b'").await;
+        commit(&mut w, "edit a, move b").await;
+        let rows = texts(
+            &mut w,
+            &format!(
+                "SELECT coalesce(from_doc, '-') || '>' || coalesce(to_doc, '-') || ':' \
+                 || coalesce(to_id, from_id) || ':' || diff_type \
+                 FROM dolt_diff_g('{before}', 'HEAD')"
+            ),
+        )
+        .await;
+        assert_eq!(
+            rows,
+            vec!["->d2:b:added", "d1>-:b:removed", "d1>d1:a:modified"]
+        );
+    }
 }
 
 // ── Reverting a commit ──────────────────────────────────────────────
@@ -1533,6 +1571,62 @@ mod plans {
         assert!(!(a == 1 && b == 2), "rowids count up again: {a}, {b}");
     }
 
+    /// A table keyed `(doc, id)`, with a unique index on `id`, as a render
+    /// store's rows would be keyed by their document: reading and deleting
+    /// one document's rows search the key, and the render's upsert on `id`
+    /// with its "same document" guard writes nothing for an `id` another
+    /// document holds — which is how the render tells a moved row — while
+    /// an upsert that sets `doc` moves the row.
+    #[tokio::test]
+    async fn a_document_keyed_table_searches_its_key_and_upserts_on_a_unique_index() {
+        let s = Store::new();
+        let mut w = s.rw().await;
+        ok(
+            &mut w,
+            "CREATE TABLE g (doc TEXT NOT NULL, id TEXT NOT NULL, v TEXT, \
+             PRIMARY KEY (doc, id))",
+        )
+        .await;
+        ok(&mut w, "CREATE UNIQUE INDEX g_by_id ON g (id)").await;
+        ok(
+            &mut w,
+            "INSERT INTO g VALUES ('d1', 'a', 'x'), ('d1', 'b', 'y')",
+        )
+        .await;
+        for sql in [
+            "SELECT v FROM g WHERE doc = 'd1' ORDER BY id",
+            "DELETE FROM g WHERE doc = 'd1' AND id NOT IN ('a')",
+        ] {
+            let p = plan(&mut w, sql).await;
+            assert!(
+                p.contains("SEARCH g") && p.contains("sqlite_autoindex_g_1 (doc=?)"),
+                "{sql}: {p}"
+            );
+        }
+        let guarded = "INSERT INTO g VALUES ('d2', 'a', 'z') ON CONFLICT (id) \
+                       DO UPDATE SET v = excluded.v WHERE g.doc IS excluded.doc";
+        let written = sqlx::query(guarded)
+            .execute(&mut w)
+            .await
+            .expect("guarded upsert")
+            .rows_affected();
+        assert_eq!(written, 0, "the guard let another document's id through");
+        assert_eq!(
+            texts(&mut w, "SELECT doc || id || v FROM g").await,
+            vec!["d1ax", "d1by"]
+        );
+        ok(
+            &mut w,
+            "INSERT INTO g VALUES ('d2', 'a', 'w') ON CONFLICT (id) \
+             DO UPDATE SET doc = excluded.doc, v = excluded.v",
+        )
+        .await;
+        assert_eq!(
+            texts(&mut w, "SELECT doc || id || v FROM g").await,
+            vec!["d1by", "d2aw"]
+        );
+    }
+
     #[tokio::test]
     async fn dbstat_is_not_supported() {
         let (s, _) = store_with_rows().await;
@@ -1603,6 +1697,59 @@ mod write_cost {
         assert!(
             many_narrow * 10 < many_wide,
             "50 marks: {many_narrow} bytes in a narrow table, {many_wide} beside 1 KB payloads"
+        );
+    }
+
+    /// Bytes the file grew by when one commit rewrote every row of 40 of
+    /// 1,000 documents of 8 rows each, the documents' rows spread through
+    /// the id order as messages of threads that interleave in time are.
+    async fn rewrite_documents(ddl: &[&str]) -> u64 {
+        let s = Store::new();
+        let mut w = s.rw().await;
+        for stmt in ddl {
+            ok(&mut w, stmt).await;
+        }
+        ok(
+            &mut w,
+            "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < 7999) \
+             INSERT INTO g (id, doc, v) \
+             SELECT printf('%08d', i), printf('d%04d', i % 1000), hex(randomblob(100)) FROM n",
+        )
+        .await;
+        commit(&mut w, "fill").await;
+        let before = s.size();
+        ok(
+            &mut w,
+            "UPDATE g SET v = hex(randomblob(100)) WHERE doc IN \
+             (SELECT printf('d%04d', i * 25) FROM \
+              (WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i < 39) \
+               SELECT i FROM k))",
+        )
+        .await;
+        commit(&mut w, "rewrite 40 documents").await;
+        s.size() - before
+    }
+
+    /// The tree is sorted by the whole primary key, a text composite one
+    /// included: with the document leading the key, one document's rows
+    /// sit in one or two leaves, so rewriting a document writes a few
+    /// pages instead of one per row. 3,148 rows of a 320k-row table cost
+    /// 756 bytes a row keyed `(doc, id)` and 4,771 keyed by `id` (0.51.13).
+    #[tokio::test]
+    async fn rows_keyed_by_their_document_sit_together() {
+        let by_row = rewrite_documents(&[
+            "CREATE TABLE g (id TEXT PRIMARY KEY, doc TEXT NOT NULL, v TEXT)",
+            "CREATE INDEX g_by_doc ON g (doc)",
+        ])
+        .await;
+        let by_document = rewrite_documents(&[
+            "CREATE TABLE g (doc TEXT NOT NULL, id TEXT NOT NULL, v TEXT, PRIMARY KEY (doc, id))",
+            "CREATE UNIQUE INDEX g_by_id ON g (id)",
+        ])
+        .await;
+        assert!(
+            by_document * 3 < by_row,
+            "rewriting 40 documents: {by_document} bytes keyed by document, {by_row} keyed by row"
         );
     }
 }
