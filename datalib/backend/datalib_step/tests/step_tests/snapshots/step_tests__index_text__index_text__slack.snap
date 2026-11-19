@@ -35,12 +35,23 @@ title: #bridge | text: Lt. Cmdr. Data — Wed 28 May 2369 15:20
 
 Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271 mark 4.
 
+> Memory Alpha · **Romulan Star Empire**
+>
+> The Romulan Star Empire is an interstellar state founded by colonists from Vulcan.
+
 
 === slack 00000000-0000-81d7-a9c9-0ee77752a4e6 #engineering
 --- chunk 0
 title: #engineering | text: Lt. Cmdr. Data — Wed 28 May 2369 15:15
 
 Warp core efficiency at 99.7%.
+
+- **Antimatter flow**
+  0.97 cochranes
+- **Checked by**
+  @Lt. Cmdr. Data
+
+Main Engineering · Stardate 47988.1
 
 
 === slack 00000000-0000-828b-b39d-73c49d6cb65c slack storage
@@ -101,12 +112,25 @@ title: @William T. Riker | text: William T. Riker — Wed 28 May 2369 15:21
 
 Captain, the away team roster is ready for your review.
 
+> Worf · original message
+>
+> I recommend raising shields, Captain.
+
 
 === slack 00000000-0000-89a0-9bd6-7e928c9b2396 @Lt. Cmdr. Data
 --- chunk 0
 title: @Lt. Cmdr. Data | text: Lt. Cmdr. Data — Wed 28 May 2369 15:21
 
 Sir, I have completed my analysis of the Romulan signature.
+
+Sensor analysis attached
+
+> **Romulan signature**
+>
+> Cloaked vessel, **D'deridex** class.
+>
+> - **Bearing:** 271 mark 4
+> - **Confidence:** 87%
 
 
 === slack 00000000-0000-8ac1-a181-7b8e737cbd85 @William T. Riker

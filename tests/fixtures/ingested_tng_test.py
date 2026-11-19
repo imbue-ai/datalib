@@ -228,6 +228,15 @@ WHATSAPP_PHOTO_NOT_IN_BACKUP = (
     "|attachment|fetch_failed|Media/WhatsApp Images/holodeck-poker-night.jpg"
     " is not among the media files the backup holds"
 )
+# The away team's call is the one part of a Slack message the fixture
+# holds that the render does not draw; its document says so.
+SLACK_CALL_NOT_SHOWN = (
+    "1860e56d-3cbf-504d-ab0b-df061b1bfe4a"
+    "|info|parse|markdown"
+    "|00000000-0000-80d6-b5a5-2617d0679dab"
+    "|0b7698ff-2340-8846-8c6a-4796fd32ae08"
+    "|blocks|uncovered_type|1 message here holds what is not shown: call block"
+)
 TAKEOUT_POST_NOT_A_VIDEO = (
     "50d82e65-dc5d-522f-afdd-0ded04b3d8f0"
     "|warning|fetch|entity"
@@ -338,6 +347,7 @@ EXPECTED_PROBLEMS = {
     ),
     "tng_pdfs": [PDFS_WITH_NO_TEXT, PDF_THAT_WILL_NOT_IDENTIFY],
     "whatsapp": [WHATSAPP_PHOTO_NOT_IN_BACKUP],
+    "slack": [SLACK_CALL_NOT_SHOWN],
     "google-takeout": sorted(
         [
             TAKEOUT_POST_NOT_A_VIDEO,

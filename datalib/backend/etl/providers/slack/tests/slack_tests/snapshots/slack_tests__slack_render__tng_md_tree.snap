@@ -69,6 +69,10 @@ item_count: 1
 
 Captain, the away team roster is ready for your review.
 
+> [Worf](slack://user?team=T_NCC1701D&id=U_WORF "Worf (slack:T_NCC1701D/U_WORF)") · [original message](https://enterprise-d.slack.com/archives/C_BRIDGE/p12604000400000400)
+>
+> I recommend raising shields, Captain.
+
 </div>
 
 
@@ -179,6 +183,13 @@ item_count: 1
 
 Warp core efficiency at 99.7%.
 
+- **Antimatter flow**
+  0.97 cochranes
+- **Checked by**
+  [@Lt. Cmdr. Data](slack://user?team=T_NCC1701D&id=U_DATA "@Lt. Cmdr. Data (slack:T_NCC1701D/U_DATA)")
+
+Main Engineering · Stardate 47988.1
+
 </div>
 
 
@@ -278,6 +289,15 @@ item_count: 1
 
 Sir, I have completed my analysis of the Romulan signature.
 
+Sensor analysis attached
+
+> **[Romulan signature](https://sensors.enterprise.example/sweeps/47988)**
+>
+> Cloaked vessel, **D'deridex** class.
+>
+> - **Bearing:** 271 mark 4
+> - **Confidence:** 87%
+
 - <span id="m-0b7698ff-1b70-8308-adf1-23c26d30e013" data-section-uuid="0b7698ff-1b70-8308-adf1-23c26d30e013">👍 [Jean-Luc Picard](slack://user?team=T_NCC1701D&id=U_PICARD "Jean-Luc Picard (slack:T_NCC1701D/U_PICARD)")</span>
 
 </div>
@@ -303,5 +323,9 @@ item_count: 1
 ## [Lt. Cmdr. Data](slack://user?team=T_NCC1701D&id=U_DATA "Lt. Cmdr. Data (slack:T_NCC1701D/U_DATA)") <time class="msg-ts" datetime="2369-05-28T15:20:00Z" title="2369-05-28 15:20:00 UTC">Wed May 28th, 2369 at 15:20</time> <a class="source-link" href="https://enterprise-d.slack.com/archives/C_BRIDGE/p12604000800000800" target="_blank" rel="noopener noreferrer">↗</a>
 
 Captain's Log, Stardate 47988.1. Sensors detect a Romulan signature bearing 271 mark 4.
+
+> Memory Alpha · **[Romulan Star Empire](https://memory-alpha.example/wiki/Romulan_Star_Empire)**
+>
+> The Romulan Star Empire is an interstellar state founded by colonists from Vulcan.
 
 </div>

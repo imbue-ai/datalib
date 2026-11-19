@@ -50,6 +50,34 @@ fn renders_tng_fixture() {
     }
     assert_snapshot!("tng_md_tree", bundle);
 
+    // The fixture's forward, link preview, card and bot blocks are drawn
+    // (in the snapshot above); the away team's call is the one part left
+    // that nothing draws, and its document alone says so.
+    let not_shown: Vec<(&str, &str)> = docs
+        .iter()
+        .flat_map(|d| {
+            d.problems
+                .iter()
+                .map(move |p| (d.markdown_uuid.as_str(), p))
+        })
+        .filter(|(_, p)| matches!(p.field.as_deref(), Some("blocks" | "attachments")))
+        .map(|(doc, p)| (doc, p.sample.as_str()))
+        .collect();
+    let away_team = ids::thread(
+        "slack_api",
+        "T_NCC1701D",
+        "G_AWAYTEAM",
+        "12604000904.000904",
+    )
+    .uuid;
+    assert_eq!(
+        not_shown,
+        [(
+            away_team.as_str(),
+            "1 message here holds what is not shown: call block"
+        )]
+    );
+
     // Emitted-document spot-check. This used to walk the tree counting
     // `*.grid_rows.json` files; the renderer no longer writes those, so
     // it checks what it hands to its callback — which is what both the
