@@ -10,7 +10,7 @@ source's `api` method reads Cowork tasks run in the cloud since
 mirror the transcripts of the coding and desktop agents — Claude Code
 (local and cloud), Claude Cowork, OpenAI's Codex (local and cloud), the
 ChatGPT bulk export the `chatgpt` source still lacks, and Google's
-Gemini CLI — into datalib. Everything marked *measured* was checked on
+Gemini CLI — into Datalib. Everything marked *measured* was checked on
 one mac on that date; everything marked *from source* was read out of
 the vendor's own client rather than guessed; the rest is marked as
 unverified.

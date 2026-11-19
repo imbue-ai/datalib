@@ -4,6 +4,11 @@
 
 import { AsyncDataTree, unthemedListStyles } from '/vs-tree.js';
 
+// What the page threw and nobody caught, recorded in the task that threw it,
+// so a test reading it after an action sees everything that action raised.
+const pageErrors = [];
+window.addEventListener('error', (e) => pageErrors.push(String(e.message)));
+
 customElements.define(
   'fake-card',
   class extends HTMLElement {
@@ -85,7 +90,7 @@ function mountElement(viewState) {
 
 // Upstream's AsyncDataTree with nothing of ours around it but what it
 // needs to draw, for the facts about upstream itself.
-async function mountUpstream(options = {}) {
+async function mountUpstream(options = {}, viewState) {
   fetched.length = 0;
   const frame = freshCard().body.appendChild(document.createElement('div'));
   const renderer = {
@@ -107,7 +112,7 @@ async function mountUpstream(options = {}) {
     { identityProvider: { getId: (n) => n.id }, ...options },
   );
   tree.layout(frame.clientHeight, frame.clientWidth);
-  await tree.setInput(ROOT);
+  await tree.setInput(ROOT, viewState);
   window.upstream = tree;
 }
 
@@ -115,6 +120,7 @@ window.harness = {
   mountElement,
   mountUpstream,
   fetched,
+  pageErrors,
   find: (id) => {
     const walk = (list) => {
       for (const n of list ?? []) {

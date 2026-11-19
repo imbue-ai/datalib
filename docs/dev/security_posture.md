@@ -11,7 +11,7 @@ review of the tree goes in [`audits/`](audits/), not here.
 
 ## What is worth taking
 
-datalib holds a person's email, messages, documents and health data, and
+Datalib holds a person's email, messages, documents and health data, and
 the sign-ins that fetch more of it. So there are two prizes:
 
 - **One person's library**, reached through something that person
@@ -216,7 +216,7 @@ tag ruleset says nothing about this: no tag moves.
   says what GitHub says ran, and it is entered in Sigstore's public
   transparency log, `rekor.sigstore.dev`, which GitHub cannot quietly edit
   (measured on a `latchkey-curl-shims` attestation, and on v0.55.0's,
-  datalib's first). GitHub also attests each immutable release
+  Datalib's first). GitHub also attests each immutable release
   (`gh release verify v0.51.0` passes). As we read it, that says what a release
   held when it locked, not who built it, so a writer's own release on an old
   tag would likely get one too (not tried); the build attestation is the one
@@ -336,7 +336,7 @@ is not what this section defends, and the desktop app does not use it.
 | An applet's own port | Each applet requires the secret in `system/applet-secret` (`datalib_env::secret_file`) | A published applet that skips the check or hands the secret on | Measured on two real applets: `401` with what `ps` shows, `200` through the gateway. `applet_tests` |
 
 **`TMPDIR` only moves what follows it.** Rust's `temp_dir()` and Node's
-`os.tmpdir()` do, and they are what datalib's code and latchkey use. macOS's own
+`os.tmpdir()` do, and they are what Datalib's code and latchkey use. macOS's own
 `mktemp` does not, with or without `-t`, even when it is run outside the app
 (measured on macOS 26), so a custom step's shell script that calls it writes
 outside the folder. Name the path instead: `mktemp "$TMPDIR/x.XXXXXX"`. A
@@ -394,7 +394,7 @@ An `embed` step whose params set `embed_on_modal_from_n_chunks` sends
 the text of a source's chunks to the person's own [Modal](https://modal.com)
 account to be embedded on rented GPUs
 ([`plans/embed_on_modal.md`](plans/embed_on_modal.md)). This is the one
-place datalib hands a person's content to a service other than the one
+place Datalib hands a person's content to a service other than the one
 it came from, so it gets its own section.
 
 ### What goes, and to whom
@@ -413,7 +413,7 @@ it came from, so it gets its own section.
   maybe; their health data, never.
 - **To Modal, as the person's processor**, under the person's own
   account and sign-in (`~/.modal.toml`, or `MODAL_TOKEN_ID` and
-  `MODAL_TOKEN_SECRET`). datalib never reads the token's value, copies
+  `MODAL_TOKEN_SECRET`). Datalib never reads the token's value, copies
   it or stores it. The text crosses Modal's TLS connection into a
   Sandbox that runs our own published `-cuda` image and lives for one
   slice of the run.
@@ -478,7 +478,7 @@ code before repeating it as current.
 | A crafted mail or PDF takes over the parser that reads it, in the docker image | a stranger | Nothing in the image runs as root: everything runs as uid 1000, which owns only the data root, the credential store and the demo, and cannot write the binaries. Reasoned, not measured: no exploit was tried | [`docker.md`](docker.md) § "Permissions and signals" |
 | A secret reaches a log, an error or a child process | any of the above, or an accident | A child process gets a named environment, and an error carries only a safe form of a URL | `datalib/backend/env/src/lib.rs` |
 | A link makes a card run code | a website, or a stranger who sent the link | A card's source is data, opening a card never writes, and nothing a query says runs as code: the DACTAL frame has no `eval` and no `'unsafe-eval'` | [`cards.md`](cards.md) § "Card source", [`dactal.md`](dactal.md) caveat 5 |
-| datalib reports on you without saying so | us, or a dependency | Nothing we ship sends telemetry: every `latchkey` we start, or that a person runs from our launcher, has its usage count off. A check of the real package, not a scan for others | `latchkey_counting_test`, `README.md` §"Read this before you point an agent at it" |
+| Datalib reports on you without saying so | us, or a dependency | Nothing we ship sends telemetry: every `latchkey` we start, or that a person runs from our launcher, has its usage count off. A check of the real package, not a scan for others | `latchkey_counting_test`, `README.md` §"Read this before you point an agent at it" |
 | A source's text goes to Modal without the person choosing it | us, by a bug | Only an `embed` step with `embed_on_modal_from_n_chunks` set sends anything, and only what it owes | § "What leaves the machine for Modal" above |
 | A downloaded runtime or model is swapped | whoever controls the host | Every Bazel download, the runtime and CUDA module fetches and the embedding models are pinned by sha256; the docker image fetches nothing at run time (`DATALIB_NO_FETCH`) | [`runtime_fetch.md`](runtime_fetch.md) |
 | A person's data lands in this public repo | us, by accident | A rule, not a check | AGENTS.md §"Real data stays out of the repo" |

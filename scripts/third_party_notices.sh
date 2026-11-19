@@ -97,7 +97,7 @@ log "cargo about generate (datalib/backend)"
 cat > "$dest/README.md" <<'EOF'
 # Third-party notices
 
-datalib is MIT-licensed (LICENSE at the root of the repository). It
+Datalib is MIT-licensed (LICENSE at the root of the repository). It
 ships with third-party software under permissive licenses that ask for
 their copyright notices to travel with binary distributions. This
 directory is those notices.

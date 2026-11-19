@@ -1,6 +1,6 @@
 # The impersonating curl
 
-Some of the hosts datalib mirrors — `claude.ai` and `chatgpt.com`
+Some of the hosts Datalib mirrors — `claude.ai` and `chatgpt.com`
 among them — sit behind Cloudflare's bot wall, which rejects any client
 whose TLS handshake does not look like a browser's. A stock `curl` gets
 a `403` with `cf-mitigated: challenge`, whatever cookies it carries. So
@@ -17,23 +17,23 @@ The two binaries involved are built and released by
 [`imbue-ai/latchkey-curl-shims`](https://github.com/imbue-ai/latchkey-curl-shims);
 its README is the reference for what each does, how the impersonator is
 built from source, and how its upstream pin is bumped. This page is
-about how datalib consumes that release and what in this tree depends
+about how Datalib consumes that release and what in this tree depends
 on the two names.
 
 ## The three pieces
 
 | | |
 |---|---|
-| `latchkey-curl-router` | The `curl` that `LATCHKEY_CURL` points at. An invocation carrying the private `X-Imbue-Impersonate` header is rewritten — that header and any `User-Agent` dropped, `--compressed --noproxy '*' --impersonate <profile>` put in front — and handed to the impersonating curl; anything else goes to the system curl untouched. `--noproxy '*'` keeps `HTTP(S)_PROXY` and the macOS proxy pane away from a request that carries credentials. It can also send a request out through the latchkey gateway on the user's own computer, chosen by URL from the file `LATCHKEY_DESKTOP_PROXY_CONFIG` names; datalib plays no part in that decision. |
+| `latchkey-curl-router` | The `curl` that `LATCHKEY_CURL` points at. An invocation carrying the private `X-Imbue-Impersonate` header is rewritten — that header and any `User-Agent` dropped, `--compressed --noproxy '*' --impersonate <profile>` put in front — and handed to the impersonating curl; anything else goes to the system curl untouched. `--noproxy '*'` keeps `HTTP(S)_PROXY` and the macOS proxy pane away from a request that carries credentials. It can also send a request out through the latchkey gateway on the user's own computer, chosen by URL from the file `LATCHKEY_DESKTOP_PROXY_CONFIG` names; Datalib plays no part in that decision. |
 | `curl-impersonate` | Upstream `curl-impersonate`, unmodified. It ships next to the router in every release tarball and in the app bundle, and the router finds it only as a sibling of that exact name. **On its own it does not impersonate**: without `--impersonate` it is a plain curl 8.x and gets the same `403` as one. |
-| `DATALIB_IMPERSONATE_PROFILE` | The `--impersonate` target, default `chrome150`. The marker's value plays no part: datalib sends `1`, and `X-Imbue-Impersonate: chrome131` still gets `chrome150`. Passed through as-is; a name curl-impersonate does not know fails the request with exit 43 and a message naming a valid one. |
+| `DATALIB_IMPERSONATE_PROFILE` | The `--impersonate` target, default `chrome150`. The marker's value plays no part: Datalib sends `1`, and `X-Imbue-Impersonate: chrome131` still gets `chrome150`. Passed through as-is; a name curl-impersonate does not know fails the request with exit 43 and a message naming a valid one. |
 
 This table describes the router this tree pins (`LATCHKEY_CURL_SHIMS_RELEASE`,
 below), which is the one the desktop app and a local run use. A request
 sent through a latchkey gateway (`LATCHKEY_GATEWAY` set) meets the router
 on the gateway's machine instead. This tree does not pin that one, so it
 can be a later release, and from v0.7.1 a router hands the reply on as the
-server sent it and leaves the decoding to its caller. That is why datalib
+server sent it and leaves the decoding to its caller. That is why Datalib
 passes `--compressed` beside the marker on every impersonated request.
 With the pinned router the flag is simply given twice.
 
@@ -83,7 +83,7 @@ In this tree:
    staging, the Tauri sidecar list and the Docker image.
 
 Nothing here is compiled. The repo's old `curl-impersonate-v*` tags
-are ignored by `tools/workspace_status.sh` when it derives datalib's
+are ignored by `tools/workspace_status.sh` when it derives Datalib's
 own version.
 
 ## Bumping the pin
@@ -112,7 +112,7 @@ only which build you get:
   one rather than inheriting it.
 - It drops the caller's browser-identity headers as well as `User-Agent`:
   `Accept-Encoding`, `Accept-Language`, client hints and `Sec-Fetch-*`.
-- It leaves the decoding to its caller, which datalib already handles.
+- It leaves the decoding to its caller, which Datalib already handles.
 - A profile named in the marker selects that profile, and `1` means the
   default.
 - `LATCHKEY_DESKTOP_PROXY_CONFIG` is keyed by latchkey service name, not

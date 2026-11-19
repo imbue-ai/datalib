@@ -21,7 +21,7 @@ is not settled; see §"Open questions".
 
 ## The problem
 
-Every record datalib renders goes into a markdown file, and the file
+Every record Datalib renders goes into a markdown file, and the file
 is the unit everything else is built on. qmd forced that: it could
 only index files. Now that search reads its own index
 ([`search_index_from_ram.md`](search_index_from_ram.md)), the file is

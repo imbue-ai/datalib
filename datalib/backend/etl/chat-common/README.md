@@ -323,8 +323,9 @@ Nor can one message reach the next: the UI renders and sanitizes each
 message as a fragment of its own, from the sections this crate hands
 over (`docs/dev/data_architecture_parse_and_render.md` §"One section
 cannot reach the next"). Keep the pieces honest: a message is one
-`Section::boxed`, and the `<details>` openers and closers are unkeyed
-pieces of their own.
+`Section::boxed`, and a fold around a run of them opens with
+`Section::fold_open` and closes with `Section::fold_close`, so the UI
+draws the `<details>` itself.
 
 The sanitizer is not the boundary, though. The page draws the body in a
 frame whose policy is `script-src 'none'` (`ui/src/cards/docFrame.ts`),

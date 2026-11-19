@@ -38,18 +38,16 @@ mod sql;
 mod stored_text;
 pub(crate) mod warm;
 
-use body_pieces::{body_pieces, BodyPiece};
+use body_pieces::body_pieces;
 use datalib_columns::Identity;
+use datalib_etl_render::section::Node;
 use datalib_schema::grid_rows::{GridRow, GridRowColumn};
-use datalib_unified_grid_and_search_index::db::datalib_source_id;
 use datalib_unified_grid_and_search_index::grid_columns::GridColumn;
 use datalib_unified_grid_and_search_index::group::Within;
 use datalib_unified_grid_and_search_index::hits::index_state::{DocReport, IndexStamp};
 use datalib_unified_grid_and_search_index::hits::vectors::Freshness;
-use datalib_unified_grid_and_search_index::hits::{
-    display_snippet, CollectionScope, GridIndex, IndexSummary,
-};
-use datalib_unified_grid_and_search_index::query::{parse_query, Field, ParsedQuery, Semantic};
+use datalib_unified_grid_and_search_index::hits::{display_snippet, GridIndex, IndexSummary};
+use datalib_unified_grid_and_search_index::query::{parse_query, ParsedQuery, Semantic};
 use datalib_unified_grid_and_search_index::repo::{DocRow, DynIndexRepo, EdgeRowOut};
 use datalib_unified_grid_and_search_index::search::SearchRow;
 use datalib_unified_grid_and_search_index::sort::{newest_first_by_date, Sort};
@@ -255,7 +253,7 @@ pub(crate) async fn require_gateway(
         .status(StatusCode::UNAUTHORIZED)
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
-            r#"{"error":"this port answers only to the datalib gateway"}"#,
+            r#"{"error":"this port answers only to the Datalib gateway"}"#,
         ))
         .unwrap_or_else(|_| Response::new(Body::empty()))
 }
@@ -381,10 +379,11 @@ pub struct ChatResponse {
     /// The markdown, unless `pieces` was asked for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
-    /// The markdown as the renderer's pieces in order, so the UI renders
-    /// each message as a fragment of its own; only when asked for.
+    /// The markdown as the renderer's pieces in order, each fold a node
+    /// around the pieces it holds, so the UI renders each message as a
+    /// fragment of its own; only when asked for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pieces: Option<Vec<BodyPiece>>,
+    pub pieces: Option<Vec<Node>>,
     /// What render could not fully do to this document, errors first.
     /// Drawn above the body.
     pub problems: Vec<problems::DocProblem>,
@@ -809,7 +808,7 @@ async fn without_vectors(
     q: &str,
     parsed: &ParsedQuery,
 ) -> Result<Option<results::WithoutVectors>, SearchFailure> {
-    if !embeds(parsed) || search_terms::identifiers(&parsed.free_text).is_some() {
+    if !embeds(parsed) {
         return Ok(None);
     }
     if !datalib_runtime::layout::grid_index_db(&s.root).exists() {
@@ -897,31 +896,15 @@ async fn land(
         .map_err(index)?;
     let where_kept = s.repo.document_stores(&documents).await.map_err(index)?;
     let fetched = started.elapsed();
-    // Every term, `source:` too: a source's file can hold rows filed
-    // under another, which its collection's ranking does not drop.
-    let kept: Option<std::collections::HashSet<String>> = if parsed.terms.is_empty() {
-        None
-    } else if let Some(keyed) = keyed(s, parsed).await? {
-        Some(
-            refs.iter()
-                .filter(|r| keyed.rows.contains(&r.uuid))
-                .map(|r| r.uuid.clone())
-                .collect(),
-        )
-    } else {
-        let uuids: Vec<String> = refs.iter().map(|r| r.uuid.clone()).collect();
-        let listing = s
-            .repo
-            .filter_uuids(parsed, &uuids, &[], &[])
-            .await
-            .map_err(index)?;
-        Some(listing.uuids.into_iter().collect())
-    };
+    let kept: Option<std::collections::HashSet<String>> = keyed(s, parsed).await?.map(|keyed| {
+        refs.iter()
+            .filter(|r| keyed.rows.contains(&r.uuid))
+            .map(|r| r.uuid.clone())
+            .collect()
+    });
     let filtered = started.elapsed();
     let n_refs = refs.len();
-    let words =
-        datalib_unified_grid_and_search_index::hits::lex::strip_lex_syntax(&parsed.free_text);
-    let idx = GridIndex::new(refs).with_terms(&words);
+    let idx = GridIndex::new(refs).with_terms(&parsed.free_text);
     let idx = match kept {
         Some(kept) => idx.within(kept),
         None => idx,
@@ -1018,12 +1001,13 @@ async fn search_results(
             return Ok((ranked, answer.at, partial));
         }
         // Sorting or grouping by a column reads every row's column, so
-        // every hit is landed first: the slow way, and the rare one.
+        // every hit is landed first: the slow way, and the rare one. The
+        // rows it lands on are the filters' already: they are only ordered.
         land(s, parsed, &ranked).await?;
         let uuids: Vec<String> = ranked.iter().map(|e| e.row().to_string()).collect();
         let listing = s
             .repo
-            .filter_uuids(parsed, &uuids, sort, within)
+            .filter_uuids(&parse_query(""), &uuids, sort, within)
             .await
             .map_err(index)?;
         let hit_of: std::collections::HashMap<&str, &results::Entry> =
@@ -1097,12 +1081,17 @@ async fn ranked(
         return Ok(cached(list, key.at));
     }
     let answer = fused_ranking(s, parsed).await?;
-    let (list, at) = entries_kept(s, parsed, answer.ranking, key.at.clone()).await?;
-    // Terms written for another commit than the rows were read at may be
-    // a pass out, and a part that failed may answer next time: answer with
-    // them, and ask again.
-    let keep = answer.terms_at.is_none_or(|t| t == at) && answer.partial.is_none();
-    let list: Arc<Vec<results::Entry>> = Arc::new(list);
+    let at = key.at.clone();
+    // A part that failed may answer next time: answer without it, and ask
+    // again.
+    let keep = answer.partial.is_none();
+    let list: Arc<Vec<results::Entry>> = Arc::new(
+        answer
+            .ranking
+            .into_iter()
+            .map(|(uuid, hit)| results::Entry::new(uuid, Some(hit)))
+            .collect(),
+    );
     if keep {
         s.results.put(
             results::Key {
@@ -1120,115 +1109,19 @@ async fn ranked(
     })
 }
 
-/// A ranking's entries the search's terms keep, and the commit they were
-/// read at. A document's hit was narrowed by them before it was ranked, and
-/// lands on a row they keep.
-async fn entries_kept(
-    s: &Index,
-    parsed: &ParsedQuery,
-    ranking: Ranking,
-    at: Option<String>,
-) -> Result<(Vec<results::Entry>, Option<String>), SearchFailure> {
-    let rows: Vec<String> = ranking
-        .iter()
-        .filter(|(_, hit)| hit.document.is_none())
-        .map(|(uuid, _)| uuid.clone())
-        .collect();
-    // The keys, once worked out, answer from memory; a list of documents
-    // alone asks nothing.
-    let (kept, at): (std::collections::HashSet<String>, Option<String>) = if rows.is_empty() {
-        (Default::default(), at)
-    } else if let Some(keyed) = keyed(s, parsed).await? {
-        let kept = rows
-            .into_iter()
-            .filter(|r| keyed.rows.contains(r))
-            .collect();
-        (kept, at)
-    } else {
-        let listing = s
-            .repo
-            .filter_uuids(parsed, &rows, &[], &[])
-            .await
-            .map_err(index)?;
-        (listing.uuids.into_iter().collect(), listing.at)
-    };
-    let list = ranking
-        .into_iter()
-        .filter(|(uuid, hit)| hit.document.is_some() || kept.contains(uuid))
-        .map(|(uuid, hit)| results::Entry::new(uuid, Some(hit)))
-        .collect();
-    Ok((list, at))
-}
-
-/// One ranking of a search's rows, best first, each with its score and
-/// the words it matched.
+/// One ranking of a search's documents, best first, each with its score
+/// and the hit still to land on a message.
 type Ranking = Vec<(String, results::Hit)>;
 
-/// The search terms' ranking, and the grid generation it was read at.
-type TermsRanking = (Ranking, Option<Option<String>>);
-
-/// The ids, people, titles and names a row answers to, from the grid
-/// index's search terms.
-/// Every match when other terms narrow the search, since they are applied
-/// after this list.
-async fn fields_ranking(s: &Index, parsed: &ParsedQuery) -> Result<TermsRanking, SearchFailure> {
-    let Some(m) = search_terms::fields(&parsed.free_text) else {
-        return Ok((Vec::new(), None));
-    };
-    let depth = if narrows_documents(parsed) {
-        usize::MAX
-    } else {
-        RANK_DEPTH
-    };
-    let found = search_terms::lookup(&s.root, &m, depth)
-        .await
-        .map_err(index)?;
-    let found = found.ok_or(SearchFailure::NoIndex)?;
-    let ranking = search_terms::rank(&found)
-        .into_iter()
-        .map(|(uuid, (score, snippet))| {
-            let hit = results::Hit {
-                score,
-                snippet,
-                document: None,
-            };
-            (uuid, hit)
-        })
-        .collect();
-    Ok((ranking, Some(found.grid_generation)))
-}
-
-/// A search's one ranking: its words, its fields and, unless `semantic:off`,
-/// its meaning, each narrowed by the search's other terms, fused by
-/// reciprocal rank, one entry a document. A search of identifiers alone is
-/// the fields', whose match is exact.
+/// A search's one ranking: its words and, unless `semantic:off`, its
+/// meaning, each within the rows the search's filters keep, fused by
+/// reciprocal rank, one entry a document, cut once.
 ///
 /// A part that fails costs that part and says so, since the rest are still
 /// true matches and search by meaning has a model to wait for: the first
 /// launch downloads it. With nothing else to show, the failure is the answer.
 async fn fused_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Answer, SearchFailure> {
-    if search_terms::identifiers(&parsed.free_text).is_some() {
-        let (ranking, terms_at) = fields_ranking(s, parsed).await?;
-        return Ok(Answer {
-            ranking,
-            terms_at,
-            partial: None,
-        });
-    }
-    let (fields, words, meaning) = tokio::join!(
-        fields_ranking(s, parsed),
-        words_ranking(s, parsed),
-        meaning_ranking(s, parsed),
-    );
-    let (fields, terms_at) = match fields {
-        Ok(fields) => (fields.0, fields.1),
-        Err(SearchFailure::Index(e)) => return Err(SearchFailure::Index(e)),
-        Err(e) => {
-            // The terms are the index's own: they fail with it.
-            tracing::warn!(error = %e, "the search terms could not answer");
-            (Vec::new(), None)
-        }
-    };
+    let (words, meaning) = tokio::join!(words_ranking(s, parsed), meaning_ranking(s, parsed));
     let mut failed: Option<SearchFailure> = None;
     let mut part = |name: &str, answer: Result<Ranking, SearchFailure>| match answer {
         Ok(ranking) => ranking,
@@ -1240,62 +1133,40 @@ async fn fused_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Answer, Search
     };
     let words = part("words", words);
     let meaning = part("meaning", meaning);
-    let mut rankings: [Ranking; 3] = [words, meaning, fields];
-    for r in &mut rankings {
-        // Each cut to the depth fused: a rank past it adds next to nothing.
-        r.truncate(RANK_DEPTH);
-    }
+    let rankings: [Ranking; 2] = [words, meaning];
     let partial = match failed {
         Some(failure) if rankings.iter().all(Vec::is_empty) => return Err(failure),
         Some(SearchFailure::Index(e)) => return Err(SearchFailure::Index(e)),
-        Some(failure) => Some(match failure {
-            SearchFailure::NoIndex => {
-                "No sync has built the search index yet, so these results match names and ids only"
-                    .to_string()
-            }
-            other => {
-                format!("Part of this search could not answer, so results may be missing: {other}")
-            }
-        }),
+        Some(failure) => Some(format!(
+            "Part of this search could not answer, so results may be missing: {failure}"
+        )),
         None => None,
     };
-    let uuids: Vec<String> = rankings.iter().flatten().map(|(u, _)| u.clone()).collect();
-    let doc_of = s.repo.markdowns_of(&uuids).await.map_err(index)?;
     Ok(Answer {
-        ranking: fuse(&rankings, &doc_of),
-        terms_at,
+        ranking: fuse(&rankings),
         partial,
     })
 }
 
-/// A ranking, the grid generation the terms in it were read at, and what
-/// part of the search could not answer.
+/// A ranking, and what part of the search could not answer.
 struct Answer {
     ranking: Ranking,
-    terms_at: Option<Option<String>>,
     partial: Option<String>,
 }
 
 /// Reciprocal rank fusion, by document: a document scores the sum, over
-/// the rankings it is in, of `1 / (K + rank)`, its rank in each being its
-/// place among that ranking's documents, so one near the top of two beats
-/// one at the top of one, and a chat that matched on several messages
-/// counts once. It is shown on the row, and with the words, of the first
-/// ranking that found it, so put the most precise first. `doc_of` names
-/// each row's document; a row it does not name is its own.
-fn fuse(rankings: &[Ranking], doc_of: &std::collections::HashMap<String, String>) -> Ranking {
+/// the rankings it is in, of `1 / (K + rank)`, so one near the top of two
+/// beats one at the top of one. It is shown with the hit of the first
+/// ranking that found it, so put the most precise first. Cut once, here:
+/// every filter was applied before any ranking was.
+fn fuse(rankings: &[Ranking]) -> Ranking {
     const K: f64 = 60.0;
     let mut fused: Ranking = Vec::new();
     let mut at: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for ranking in rankings {
-        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        for (uuid, hit) in ranking {
-            let doc = doc_of.get(uuid).map_or(uuid.as_str(), String::as_str);
-            if !seen.insert(doc) {
-                continue;
-            }
-            let score = 1.0 / (K + seen.len() as f64);
-            match at.get(doc) {
+        for (rank, (doc, hit)) in ranking.iter().enumerate() {
+            let score = 1.0 / (K + (rank + 1) as f64);
+            match at.get(doc.as_str()) {
                 Some(&i) => fused[i].1.score += score,
                 None => {
                     at.insert(doc, fused.len());
@@ -1303,7 +1174,7 @@ fn fuse(rankings: &[Ranking], doc_of: &std::collections::HashMap<String, String>
                         score,
                         ..hit.clone()
                     };
-                    fused.push((uuid.clone(), hit));
+                    fused.push((doc.clone(), hit));
                 }
             }
         }
@@ -1324,69 +1195,21 @@ async fn words_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, Searc
 type DocumentHit = datalib_unified_grid_and_search_index::search_index::DocumentHit;
 
 async fn word_hits(s: &Index, parsed: &ParsedQuery) -> Result<Vec<DocumentHit>, SearchFailure> {
-    use datalib_unified_grid_and_search_index::hits::lex;
-    let Some(query) = lex::fts5_query(&parsed.free_text) else {
-        return Ok(Vec::new());
-    };
     // Narrowed before the cut, as Meaning is: a common word's best
     // thousand documents rarely include the one the other terms ask for.
     let keyed = keyed(s, parsed).await?;
-    let among = keyed.as_deref().map(|k| &k.documents);
-    let scope = search_scope(s, parsed).await?;
-    // The words as typed come first: BM25 alone ranks a place that says
-    // the sentence below short ones that merely hold each word.
-    let phrase = lex::fts5_phrase_query(&parsed.free_text);
-    let mut hits = Vec::new();
-    for query in phrase.iter().chain([&query]) {
-        let found = datalib_unified_grid_and_search_index::search_index::word_hits(
-            &s.root,
-            query,
-            scope.names(),
-            among,
-            RANK_DEPTH,
-        )
-        .await
-        .map_err(|e| SearchFailure::Ranking(format!("the search index's words: {e:#}")))?
-        .ok_or(SearchFailure::NoIndex)?;
-        append_below(&mut hits, found);
-    }
-    // Then pages holding the words between their pieces: a page's heading and its rows are parts of
-    // one thing. A conversation's messages are each said on their own, so a conversation is found
-    // only by a message holding every word.
-    if let Some(terms) = lex::fts5_page_terms(&parsed.free_text) {
-        let found = datalib_unified_grid_and_search_index::search_index::page_word_hits(
-            &s.root,
-            &terms,
-            scope.names(),
-            among,
-            RANK_DEPTH,
-        )
-        .await
-        .map_err(|e| SearchFailure::Ranking(format!("the search index's pages: {e:#}")))?
-        .ok_or(SearchFailure::NoIndex)?;
-        append_below(&mut hits, found);
-    }
-    hits.truncate(RANK_DEPTH);
-    Ok(hits)
-}
-
-/// `found`, a later query's hits, after `hits`: each document once, and no
-/// later hit scored above one before it, so sorting by score keeps the
-/// order the queries ranked them in.
-fn append_below(hits: &mut Vec<DocumentHit>, found: Vec<DocumentHit>) {
-    let seen: std::collections::HashSet<String> = hits.iter().map(|(d, _)| d.clone()).collect();
-    let floor = hits.last().map(|(_, h)| h.score);
-    hits.extend(
-        found
-            .into_iter()
-            .filter(|(d, _)| !seen.contains(d))
-            .map(|(d, mut h)| {
-                if let Some(floor) = floor {
-                    h.score = h.score.min(floor);
-                }
-                (d, h)
-            }),
-    );
+    let kept = keyed.as_deref().map(results::Keyed::kept_rows);
+    let scope = search_scope(s).await?;
+    datalib_unified_grid_and_search_index::search_index::word_hits(
+        &s.root,
+        &parsed.free_text,
+        Some(scope.as_slice()),
+        kept.as_ref(),
+        RANK_DEPTH,
+    )
+    .await
+    .map_err(|e| SearchFailure::Ranking(format!("the search index's words: {e:#}")))?
+    .ok_or(SearchFailure::NoIndex)
 }
 
 /// The documents nearest the free text by cosine, scored here over the
@@ -1395,15 +1218,10 @@ fn append_below(hits: &mut Vec<DocumentHit>, found: Vec<DocumentHit>) {
 /// scored, so a filter never empties a ranking cut too shallow to hold its
 /// rows. The search index's vectors, with the query embedded here.
 async fn meaning_ranking(s: &Index, parsed: &ParsedQuery) -> Result<Ranking, SearchFailure> {
-    use datalib_unified_grid_and_search_index::hits::lex::{has_lex_syntax, strip_lex_syntax};
     let Some(cutoff) = parsed.semantic.cutoff() else {
         return Ok(Vec::new());
     };
-    let text = if has_lex_syntax(&parsed.free_text) {
-        strip_lex_syntax(&parsed.free_text)
-    } else {
-        parsed.free_text.clone()
-    };
+    let text = parsed.free_text.clone();
     if text.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -1444,10 +1262,17 @@ async fn search_index_nearest(
     let keyed = keyed(s, parsed).await?;
     let among = keyed.as_deref().map(|k| &k.kept);
     let narrowed = started.elapsed();
-    let scope = search_scope(s, parsed).await?;
+    let scope = search_scope(s).await?;
     let hits = s
         .held_vectors
-        .nearest(&s.root, &query, scope.names(), among, RANK_DEPTH, fresh)
+        .nearest(
+            &s.root,
+            &query,
+            Some(scope.as_slice()),
+            among,
+            RANK_DEPTH,
+            fresh,
+        )
         .await
         .map_err(embedding_failed)?
         .ok_or(SearchFailure::NoIndex)?;
@@ -1491,14 +1316,14 @@ fn kept_of(
         .collect()
 }
 
-/// What the search's structured terms keep, worked out once for this query
-/// and the index's commit and shared by every answer and page of it.
-/// `None` when they keep whole sources, which `collection_scope` narrows.
+/// What the search's filters keep, worked out once for this query and the
+/// index's commit and shared by every answer and page of it. `None` when
+/// there is no filter.
 async fn keyed(
     s: &Index,
     parsed: &ParsedQuery,
 ) -> Result<Option<Arc<results::Keyed>>, SearchFailure> {
-    if !narrows_documents(parsed) {
+    if parsed.terms.is_empty() {
         return Ok(None);
     }
     let key = (
@@ -1520,18 +1345,6 @@ async fn keyed(
     });
     cache.put(key, keyed.clone());
     Ok(Some(keyed))
-}
-
-/// Whether a search's structured terms narrow it below whole sources,
-/// which `collection_scope` already does for a positive `source:`.
-fn narrows_documents(parsed: &ParsedQuery) -> bool {
-    let scoped = collection_scope(parsed);
-    parsed.terms.iter().any(|t| {
-        let scopes = matches!(t.field, Field::Column(k) if k.column == GridRowColumn::SourceId)
-            && !t.negate
-            && scoped.names().is_some_and(|n| n.contains(&t.value));
-        !scopes
-    })
 }
 
 /// How many hits the search ranks for one free-text search: every page of it is
@@ -1624,56 +1437,15 @@ async fn grid_sources(s: &Index) -> Result<Arc<Vec<String>>, SearchFailure> {
     Ok(sources)
 }
 
-/// What a ranking reads: what the query names, of the sources the grid holds.
+/// What a ranking reads: the sources the grid holds.
 ///
 /// The search index can hold a source the grid does not: one turned off keeps
 /// its collection, so its embeddings survive, while the grid leaves out a
 /// render store it can no longer read. A hit there has no row to show, yet
 /// it would take a place in the ranking's cut and its vectors would be held
 /// and scored.
-async fn search_scope(s: &Index, parsed: &ParsedQuery) -> Result<CollectionScope, SearchFailure> {
-    let held = grid_sources(s).await?;
-    Ok(CollectionScope::Only(match collection_scope(parsed) {
-        CollectionScope::All => held.to_vec(),
-        CollectionScope::Only(named) => named.into_iter().filter(|n| held.contains(n)).collect(),
-    }))
-}
-
-/// The sources a parsed query asks for.
-///
-/// There is one collection per group, named after it, and
-/// `source:` names a group — so a scoped query becomes a scoped
-/// retrieval instead of a filter over whatever the global top-N happened
-/// to contain. That difference is the whole point: a source whose hits
-/// never enter the global list cannot be recovered by filtering, so
-/// `source:x <text>` used to come back empty while `x` matched
-/// strongly on its own.
-///
-/// Only positive terms scope. A negated `-source:x` is "every
-/// collection but this one", which needs a list this function has no way
-/// to obtain; it stays unscoped and is left to the SQL filter, which is
-/// no worse than before.
-///
-/// `source:datalib` names no collection: the storage rows are filed
-/// under datalib but their markdown still sits in the measured source's
-/// tree, so there is nothing called `datalib` to retrieve from. It is
-/// dropped here and left to the SQL filter — scoping to a collection
-/// that does not exist would come back empty.
-fn collection_scope(parsed: &ParsedQuery) -> CollectionScope {
-    let names: Vec<String> = parsed
-        .terms
-        .iter()
-        .filter(|t| {
-            matches!(t.field, Field::Column(k) if k.column == GridRowColumn::SourceId) && !t.negate
-        })
-        .filter(|t| t.value != datalib_source_id())
-        .map(|t| t.value.clone())
-        .collect();
-    if names.is_empty() {
-        CollectionScope::All
-    } else {
-        CollectionScope::Only(names)
-    }
+async fn search_scope(s: &Index) -> Result<Arc<Vec<String>>, SearchFailure> {
+    grid_sources(s).await
 }
 
 /// Cap on how many documents one `/index_state` call may ask about, which
@@ -2201,24 +1973,6 @@ mod tests {
         );
     }
 
-    /// What `source:` hands the search: every positive id; nothing for a
-    /// negated one or for `datalib`, which has no collection.
-    #[test]
-    fn source_ids_become_the_search_scope() {
-        let scope = |q: &str| collection_scope(&parse_query(q));
-        let only =
-            |names: &[&str]| CollectionScope::Only(names.iter().map(|n| n.to_string()).collect());
-        assert_eq!(scope("tea"), CollectionScope::All);
-        assert_eq!(scope("tea source:a"), only(&["a"]));
-        assert_eq!(scope("tea source:a source:b"), only(&["a", "b"]));
-        assert_eq!(scope("tea -source:a"), CollectionScope::All);
-        assert_eq!(scope("tea -source:a source:b"), only(&["b"]));
-        assert_eq!(
-            scope(&format!("tea source:{}", datalib_source_id())),
-            CollectionScope::All
-        );
-    }
-
     /// A chat whose last message falls in a date window keeps its own row
     /// as well as that day's messages; meaning must rank it by those
     /// messages, not by every day of it.
@@ -2401,13 +2155,18 @@ mod tests {
         let class = || "msg msg--claude".to_string();
         let sections = vec![
             Section::unkeyed("---\ntitle: \"Ten Forward\"\n---\n\n# Ten Forward\n\n".into()),
+            Section::fold_open("tool-group", "🛠 1 tool step"),
             Section::boxed(
                 "m1",
                 class(),
                 "Tea, Earl Grey 🫖 <div style=\"display:none\">\n\n",
             ),
+            Section::fold_close(),
             Section::boxed("m2", class(), "Make it so.\n\n"),
         ];
+        let body = datalib_etl_render::section::join(&sections)
+            .strip_prefix("---\ntitle: \"Ten Forward\"\n---\n")
+            .map(str::to_string);
         let mut doc = own_document(
             document_row(uuid, "2026-01-01T00:00:00Z", "Chat")
                 .build()
@@ -2418,18 +2177,31 @@ mod tests {
 
         let s = index_over(root).await;
         let got = pieces_of(&s, uuid).await;
+        let boxed = |uuid: &str, md: &str| Node::Piece {
+            uuid: Some(uuid.into()),
+            class: Some(class()),
+            md: md.into(),
+        };
         assert_eq!(
-            got.iter().map(|p| p.uuid.as_deref()).collect::<Vec<_>>(),
-            [None, Some("m1"), Some("m2")]
+            got,
+            vec![
+                Node::Piece {
+                    uuid: None,
+                    class: None,
+                    md: "\n# Ten Forward\n\n".into()
+                },
+                Node::Fold {
+                    fold: "tool-group".into(),
+                    summary: "🛠 1 tool step".into(),
+                    pieces: vec![boxed(
+                        "m1",
+                        "Tea, Earl Grey 🫖 <div style=\"display:none\">\n\n"
+                    )],
+                },
+                boxed("m2", "Make it so.\n\n"),
+            ],
+            "front matter dropped, a message what is inside its box, a fold around its pieces"
         );
-        assert_eq!(got[0].md, "\n# Ten Forward\n\n", "front matter dropped");
-        assert_eq!(got[0].class, None, "the frame is in no box");
-        assert_eq!(
-            got[1].md, "Tea, Earl Grey 🫖 <div style=\"display:none\">\n\n",
-            "a message is what is inside its box"
-        );
-        assert_eq!(got[2].class.as_deref(), Some("msg msg--claude"));
-        assert_eq!(got[2].drawn(), sections[2].md);
         let Json(whole) = chat(
             State(s.clone()),
             Path(uuid.to_string()),
@@ -2437,13 +2209,11 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(whole.body, Some(body_pieces::joined(&got)));
         assert_eq!(
-            whole.body.as_deref(),
-            datalib_etl_render::section::join(&sections)
-                .strip_prefix("---\ntitle: \"Ten Forward\"\n---\n"),
+            whole.body, body,
             "the body is the document, front matter dropped"
         );
+        assert_eq!(Some(body_pieces::joined(&got)), body);
         assert_eq!(whole.pieces, None, "pieces only when asked");
 
         let mut since = doc.clone();
@@ -2461,8 +2231,8 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            pieces_of(&s, uuid).await[2].drawn(),
-            sections[2].md,
+            Some(body_pieces::joined(&pieces_of(&s, uuid).await)),
+            body,
             "what the index read"
         );
 
@@ -2472,7 +2242,7 @@ mod tests {
     }
 
     /// The document's pieces, as the route answers them when asked.
-    async fn pieces_of(s: &Index, uuid: &str) -> Vec<BodyPiece> {
+    async fn pieces_of(s: &Index, uuid: &str) -> Vec<Node> {
         let Json(got) = chat(
             State(s.clone()),
             Path(uuid.to_string()),
@@ -2574,17 +2344,177 @@ mod tests {
         assert_eq!(without.rows[0].uuid, m1, "the message without the word");
     }
 
-    /// Whether this process has a file open whose inode is `ino` and,
-    /// with `deleted`, that no name links to any more. A deleted file's
-    /// number is free for the next file created, by any test in this
-    /// process, so after a delete only the link count tells them apart.
-    fn held_open(ino: u64, deleted: bool) -> bool {
+    /// A row titled `Holodeck safety review`, of `source`.
+    fn holodeck_row(
+        uuid: &str,
+        at: &str,
+        kind: &str,
+        source: &str,
+    ) -> datalib_schema::grid_rows::GridRow {
+        let mut row = document_row(uuid, at, kind)
+            .conversation_name(Some("Holodeck safety review".to_string()))
+            .build()
+            .unwrap();
+        row.source_id = Some(source.to_string());
+        row
+    }
+
+    /// `docs` in the grid index, and in the search index with `title`, each
+    /// row one piece saying `text`: a message's piece its own, a document
+    /// with no messages one page.
+    async fn index_with_text(
+        root: &std::path::Path,
+        docs: &[datalib_etl_render::grid_index::RenderedMarkdown],
+        title: &str,
+        text: &str,
+    ) {
+        use datalib_etl_render::grid_index::{apply_one, open_index, seal, WriteLock};
+        use datalib_search_index::{IndexDoc, IndexSection};
+        let pool = open_index(&datalib_runtime::layout::grid_index_db(root))
+            .await
+            .unwrap();
+        let lock = WriteLock::for_index(pool.clone());
+        for doc in docs {
+            apply_one(&lock, doc).await.unwrap();
+        }
+        seal(&lock).await.unwrap();
+        pool.close().await;
+        let index =
+            datalib_search_index::Index::open(&datalib_runtime::layout::grid_index_db(root))
+                .await
+                .unwrap();
+        let indexed: Vec<IndexDoc> = docs
+            .iter()
+            .map(|doc| {
+                let messages: Vec<IndexSection> = doc
+                    .rows
+                    .iter()
+                    .filter(|r| !r.is_document)
+                    .map(|r| IndexSection {
+                        uuid: Some(r.uuid.clone()),
+                        text: text.to_string(),
+                        lead: Some("Holodeck log".to_string()),
+                    })
+                    .collect();
+                let sections = if messages.is_empty() {
+                    vec![IndexSection {
+                        uuid: None,
+                        text: text.to_string(),
+                        lead: None,
+                    }]
+                } else {
+                    messages
+                };
+                IndexDoc {
+                    source_id: doc.source_id.clone(),
+                    markdown_uuid: doc.markdown_uuid.clone(),
+                    content_hash: "h".into(),
+                    title: title.into(),
+                    head: None,
+                    sections,
+                }
+            })
+            .collect();
+        index.put(&indexed).await.unwrap();
+        index.close().await;
+    }
+
+    /// Repro (#1887): a filter was applied after a ranking's cut. A thousand
+    /// newer chats say "holodeck" as often as an older email does, so the
+    /// email ranks past the depth, and `source:` must keep it before the
+    /// cut. The names ranker, which lost it, is gone; this guards the words.
+    #[tokio::test]
+    async fn a_source_keeps_a_match_ranked_past_the_depth() {
+        let tmp = tempfile::tempdir().unwrap();
+        let email = "00000000-0000-4000-8000-00000000e0e0";
+        let mut docs = vec![own_document(holodeck_row(
+            email,
+            "2026-01-01T09:00:00+00:00",
+            "Email",
+            "tng_email",
+        ))];
+        docs.extend((0..RANK_DEPTH).map(|i| {
+            own_document(holodeck_row(
+                &format!("00000000-0000-4000-8000-{i:012}"),
+                "2026-02-01T09:00:00+00:00",
+                "Chat",
+                "holodeck_logs",
+            ))
+        }));
+        index_with_text(tmp.path(), &docs, "Safety review", "holodeck drill").await;
+        let s = index_over(tmp.path()).await;
+        let every = search(&s, "holodeck semantic:off", None, 10, None).await;
+        assert_eq!(every.total, RANK_DEPTH as u64, "{:?}", every.query_echo);
+        let kept = search(&s, "holodeck source:tng_email semantic:off", None, 10, None).await;
+        assert_eq!(uuids(&kept), [email], "{:?}", kept.query_echo);
+    }
+
+    /// Repro (#1887): a ranking cut its matches, not its documents, before
+    /// keeping one per document: one long chat whose every message says the
+    /// word filled the cut, and an older document saying it was never
+    /// found. The names ranker did this with a chat's title on each
+    /// message, and the words with the best eight thousand messages.
+    #[tokio::test]
+    async fn one_long_conversation_does_not_crowd_out_another_document() {
+        let tmp = tempfile::tempdir().unwrap();
+        let older = "00000000-0000-4000-8000-00000000e0e0";
+        let long = "00000000-0000-4000-8000-00000000c0c0";
+        let mut chat = own_document(holodeck_row(
+            long,
+            "2026-02-01T09:00:00+00:00",
+            "Chat",
+            "holodeck_logs",
+        ));
+        for i in 0..RANK_DEPTH * 8 + 1 {
+            let mut message = holodeck_row(
+                &format!("00000000-0000-4000-8000-{i:012}"),
+                "2026-02-01T09:00:00+00:00",
+                "Message",
+                "holodeck_logs",
+            );
+            message.is_document = false;
+            message.markdown_uuid = Some(long.to_string());
+            message.conversation_uuid = long.to_string();
+            chat.rows.push(message);
+        }
+        let email = own_document(holodeck_row(
+            older,
+            "2026-01-01T09:00:00+00:00",
+            "Email",
+            "tng_email",
+        ));
+        index_with_text(
+            tmp.path(),
+            &[chat, email],
+            "Safety review",
+            "holodeck drill",
+        )
+        .await;
+
+        let s = index_over(tmp.path()).await;
+        let found = search(&s, "holodeck semantic:off", None, 10, None).await;
+        let documents: std::collections::HashSet<Option<&str>> = found
+            .rows
+            .iter()
+            .map(|r| r.markdown_uuid.as_deref())
+            .collect();
+        assert!(
+            documents.contains(&Some(older)) && documents.contains(&Some(long)),
+            "found only {documents:?} ({:?})",
+            found.query_echo
+        );
+    }
+
+    /// Whether any test in this process has the file `(dev, ino)` open.
+    /// The caller keeps a name linked to that file, so its number cannot
+    /// be handed to another test's file while it looks.
+    fn held_open((dev, ino): (u64, u64)) -> bool {
         use std::os::unix::fs::MetadataExt;
         std::fs::read_dir("/dev/fd")
             .unwrap()
             .flatten()
             .filter_map(|fd| std::fs::metadata(fd.path()).ok())
-            .any(|m| m.ino() == ino && (!deleted || m.nlink() == 0))
+            .any(|m| (m.dev(), m.ino()) == (dev, ino))
     }
 
     /// A reset deletes the grid index, and the next pass makes a new file
@@ -2611,11 +2541,11 @@ mod tests {
         assert_eq!(found(s.repo.rows_by_uuids(&uuids).await.unwrap()), [a, b]);
 
         let db = datalib_runtime::layout::grid_index_db(root);
-        let before = std::fs::metadata(&db).unwrap().ino();
-        assert!(
-            held_open(before, false),
-            "the first read left no reader open"
-        );
+        let before = std::fs::metadata(&db).map(|m| (m.dev(), m.ino())).unwrap();
+        assert!(held_open(before), "the first read left no reader open");
+        // Freed, the inode's number goes to the next file made on this
+        // disk, by any test; a second name keeps it ours.
+        std::fs::hard_link(&db, root.join("the deleted grid index")).unwrap();
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{suffix}", db.display()));
         }
@@ -2623,15 +2553,15 @@ mod tests {
 
         assert_eq!(found(s.repo.rows_by_uuids(&uuids).await.unwrap()), [c]);
         assert!(
-            !held_open(before, true),
+            !held_open(before),
             "the reader still holds the grid index a reset deleted"
         );
     }
 
-    /// A pasted uuid or address is answered from the search terms, never by
-    /// the search index, which this root does not have yet.
+    /// A pasted uuid or address is a filter on the search terms, answered
+    /// without the search index, which this root does not have yet.
     #[tokio::test]
-    async fn an_identifier_search_is_answered_from_the_terms_without_ranking() {
+    async fn a_pasted_id_or_address_is_a_filter_without_the_search_index() {
         let tmp = tempfile::tempdir().unwrap();
         let (a, b) = (
             "00000000-0000-4000-8000-0000000000a1",
@@ -2656,11 +2586,11 @@ mod tests {
         let by_id = search(&s, a, None, 10, None).await;
         assert!(!index_missing(&by_id), "{:?}", by_id.query_echo);
         assert_eq!(uuids(&by_id), [a]);
-        assert_eq!(by_id.rows[0].snippet, format!("id: {a}"));
 
         let by_address = search(&s, "Bo@Example.com", None, 10, None).await;
         assert_eq!(uuids(&by_address), [b]);
-        assert_eq!(by_address.rows[0].snippet, "from: email:bo@example.com");
+        let without = search(&s, "-bo@example.com", None, 10, None).await;
+        assert_eq!(uuids(&without), [a]);
 
         let kept = search(&s, &format!("{a} kind:Chat"), None, 10, None).await;
         assert_eq!(uuids(&kept), [a]);
@@ -3210,7 +3140,6 @@ mod tests {
     /// merged answer would hide a part's misses behind another's hits.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(super) enum Part {
-        Fields,
         Words,
         Meaning,
     }
@@ -3226,13 +3155,14 @@ mod tests {
         assert_eq!(parsed.refusal(), None, "{q}");
         let (parsed, _) = with_people(&s.root, q, parsed).await.unwrap();
         let ranking = match part {
-            Part::Fields => fields_ranking(s, &parsed).await.map(|r| r.0),
             Part::Words => words_ranking(s, &parsed).await,
             Part::Meaning => meaning_ranking(s, &parsed).await,
         };
         let answered = async {
-            let at = s.repo.head().await.map_err(index)?;
-            let (list, _) = entries_kept(s, &parsed, ranking?, at).await?;
+            let list: Vec<results::Entry> = ranking?
+                .into_iter()
+                .map(|(uuid, hit)| results::Entry::new(uuid, Some(hit)))
+                .collect();
             let (mut rows, next_offset) = page_rows(s, &parsed, &list, offset, limit).await?;
             let sources = columns::Sources::read(&s.root);
             for row in &mut rows {
@@ -3397,14 +3327,14 @@ mod tests {
     /// A hit shows the words it matched; one that matched nothing readable
     /// (front matter, markup) keeps the row's own opening words rather
     /// than blanking the Contents cell.
-    /// A chat each ranking found on a different message is one entry,
-    /// placed on the first ranking's message with its words, scored by
-    /// every ranking that found it; repeats within a ranking push no other
-    /// document down (#1438).
+    /// A document both rankings found is one entry, shown with the first
+    /// ranking's hit and scored by both, so one near the top of two beats
+    /// one at the top of one.
     #[test]
-    fn fusion_lists_each_document_once_on_the_first_rankings_row() {
-        let ranking = |rows: &[(&str, &str)]| -> Ranking {
-            rows.iter()
+    fn fusion_lists_each_document_once_with_the_first_rankings_hit() {
+        let ranking = |documents: &[(&str, &str)]| -> Ranking {
+            documents
+                .iter()
                 .map(|(uuid, words)| {
                     let hit = results::Hit {
                         score: 1.0,
@@ -3415,23 +3345,19 @@ mod tests {
                 })
                 .collect()
         };
-        let doc_of: std::collections::HashMap<String, String> = ["m12", "m40", "m3", "m5"]
-            .into_iter()
-            .map(|m| (m.to_string(), "away-team-chat".to_string()))
-            .collect();
-        let fused = fuse(
-            &[
-                ranking(&[("m12", "warp core breach"), ("email", "warp")]),
-                ranking(&[("m40", "a chunk"), ("email", "")]),
-                ranking(&[("m3", ""), ("m5", ""), ("email", "from: riker")]),
-            ],
-            &doc_of,
-        );
+        let fused = fuse(&[
+            ranking(&[("away-team-chat", "warp core breach"), ("email", "warp")]),
+            ranking(&[
+                ("lone-top", "a chunk"),
+                ("away-team-chat", ""),
+                ("email", ""),
+            ]),
+        ]);
         let order: Vec<&str> = fused.iter().map(|(uuid, _)| uuid.as_str()).collect();
-        assert_eq!(order, ["m12", "email"]);
+        assert_eq!(order, ["away-team-chat", "email", "lone-top"]);
         assert_eq!(fused[0].1.snippet, "warp core breach");
-        assert_eq!(fused[0].1.score, 3.0 / 61.0);
-        assert_eq!(fused[1].1.score, 3.0 / 62.0, "second in each ranking");
+        assert_eq!(fused[0].1.score, 1.0 / 61.0 + 1.0 / 62.0);
+        assert_eq!(fused[1].1.score, 1.0 / 62.0 + 1.0 / 63.0);
     }
 
     #[test]

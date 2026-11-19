@@ -1,7 +1,7 @@
-# Shipping datalib as a toolchain for agents
+# Shipping Datalib as a toolchain for agents
 
 > **Status: proposal.** Nothing in §3 is built except where a paragraph
-> says it already ships. Written 2026-09-03 against datalib `main` @
+> says it already ships. Written 2026-09-03 against Datalib `main` @
 > `5ccc7950`, prompted by
 > [`imbue-ai/default-workspace-template#534`](https://github.com/imbue-ai/default-workspace-template/pull/534).
 >
@@ -35,7 +35,7 @@ destination.
 
 ### On-disk ingestion is further along than the docs suggest
 
-The mental model "datalib mirrors personal data from web APIs" is how
+The mental model "Datalib mirrors personal data from web APIs" is how
 the project is described, and it undersells the tree: **five of the
 twenty providers never touch the network.**
 
@@ -94,7 +94,7 @@ endpoints behind them.
 
 ### The incremental contract is a capability, not a protocol
 
-This is probably the strongest thing datalib has to offer someone
+This is probably the strongest thing Datalib has to offer someone
 building on it, and until now the doc mentioned it once, in passing, as
 a tradeoff.
 
@@ -278,7 +278,7 @@ version), retry by failure class, live progress, graceful cancellation,
 and multi-step composition. Four things to package it:
 
 1. A page — "datalib-dag as a pipeline harness" — opening with a config
-   containing no datalib providers at all.
+   containing no Datalib providers at all.
 2. A ~40-line stdlib `dag_step.py` a skill vendors rather than reading
    a spec for: read `--params-file`, parse `--inputs`, read
    `DATALIB_DAG_CHANGED_INPUTS`, emit progress/outcome, hash a tree for
@@ -330,7 +330,7 @@ labels  = "$.labels"
 edges   = "$.relations[*].targetId"
 ```
 
-Note what is *not* there: any field name datalib knows about. The
+Note what is *not* there: any field name Datalib knows about. The
 fallback lists are the caller's. Shipping a built-in vocabulary of
 source field names is how this becomes a parser for whichever corpus we
 happened to test against.
@@ -393,7 +393,7 @@ been run at that size and we have no other corpus that big.
 shortcut:
 
 - a config key that only makes sense for that corpus;
-- a built-in vocabulary of field names datalib goes looking for (the
+- a built-in vocabulary of field names Datalib goes looking for (the
   *mechanism* to follow a field-name indirection is general and fine; a
   hardcoded list of names is not);
 - tuning retrieval weights or chunk sizes to its question set;

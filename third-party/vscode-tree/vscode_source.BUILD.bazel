@@ -1,0 +1,25 @@
+# The part of VS Code's source the <vs-tree> bundle reads: the `vs/base`
+# layer and the one module above it that layer imports.
+
+filegroup(
+    name = "base",
+    srcs = glob(
+        [
+            "src/vs/base/**/*.ts",
+            "src/vs/base/**/*.css",
+            # Upstream libraries VS Code keeps as plain modules: marked, DOMPurify.
+            "src/vs/base/**/*.js",
+            "src/vs/base/**/*.license.txt",
+        ],
+        exclude = [
+            "**/test/**",
+            "**/*.d.ts",
+        ],
+    ) + ["src/vs/nls.ts"],
+    visibility = ["//visibility:public"],
+)
+
+exports_files(
+    ["LICENSE.txt"],
+    visibility = ["//visibility:public"],
+)

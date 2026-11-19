@@ -16,7 +16,7 @@ ways in (email's are `jmap`, `gmail`, `mbox` and `apple_mail`). A table
 that reads files carries its own `path`.
 
 Conventions: exports land under `~/backups/`; adjust to taste and point
-the source at them. `latchkey` is the one the datalib installer put on
+the source at them. `latchkey` is the one the Datalib installer put on
 your `PATH`. Wherever a command takes a secret, it is written as
 `$(pbpaste)`: copy the secret to your clipboard, then run the command,
 and your shell history keeps `$(pbpaste)` rather than the secret.
@@ -120,6 +120,8 @@ latchkey services register babyconnect \
 latchkey auth browser babyconnect
 ```
 
+Tick **Remember Me** on the sign-in page: Baby Connect then keeps the
+session for a year, where without it the session can end within a day.
 Once the session ends, signing in again needs you at the browser.
 
 Baby Connect answers one day at a time, so the first sync asks once for

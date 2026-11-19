@@ -43,7 +43,7 @@ sentence below describes the skill, it keeps the skill's word; where it
 describes us, it says render.
 
 The **data-quality surface does not converge**, and there we are behind.
-The pattern is consistent and has an obvious cause: datalib grew from
+The pattern is consistent and has an obvious cause: Datalib grew from
 the download side, where the interesting failures are network-shaped
 (timeouts, 429s, expired cookies), and we built real machinery for
 those. The skill grew from the parse side, where failures are

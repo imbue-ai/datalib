@@ -28,9 +28,9 @@ impl std::fmt::Display for NewerBuild {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} was written by datalib {}, and this is datalib {}: an older build \
+            "{} was written by Datalib {}, and this is Datalib {}: an older build \
              cannot open a store a newer one wrote without losing what the newer \
-             one knew. Run datalib {} or later against this data root, or point \
+             one knew. Run Datalib {} or later against this data root, or point \
              this one at another root.",
             self.store.display(),
             self.wrote,
@@ -278,6 +278,6 @@ mod tests {
         );
         assert!(refused[0]
             .to_string()
-            .contains("was written by datalib 99.0.0"));
+            .contains("was written by Datalib 99.0.0"));
     }
 }

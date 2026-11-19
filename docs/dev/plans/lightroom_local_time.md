@@ -7,14 +7,14 @@ this plan builds on it and does not repeat it.
 
 ## 1. The goal
 
-- **datalib treats the Lightroom catalog as correct**, time zones
+- **Datalib treats the Lightroom catalog as correct**, time zones
   included, and fills a time zone in where the catalog has none.
 - **There is a good way to make a catalog correct**, run by its owner.
 - **Each photo carries the time zone it was taken in, and Lightroom shows
   its local time.**
 - **Only photos in the same folder are expected to sort correctly against
   each other** in Lightroom, so a folder is expected to be in one time
-  zone. Across folders, only datalib compares, by the moment.
+  zone. Across folders, only Datalib compares, by the moment.
 
 Decided with the catalog's owner:
 
@@ -53,8 +53,8 @@ clock; a "capture time" that is really a save or import time
 
 | piece | where | does |
 |---|---|---|
-| the render reads the catalog as correct, and reports where it is not | datalib | §5 |
-| the evidence an agent works from | datalib | §6 |
+| the render reads the catalog as correct, and reports where it is not | Datalib | §5 |
+| the evidence an agent works from | Datalib | §6 |
 | the edits file: one target time per photo | an agent, with the owner | §6 |
 | the applier: writes the edits into the catalog | `datalib-lightroom-retime`, not shipped | §8 |
 
@@ -133,8 +133,8 @@ that are already correct, and it says where the rest are.
 
 ## 6. Phase 2: the evidence, and the edits file
 
-An agent makes the edits file from evidence datalib already holds in the
-mirror, without opening the catalog. datalib's part is a documented way
+An agent makes the edits file from evidence Datalib already holds in the
+mirror, without opening the catalog. Datalib's part is a documented way
 to get, per photo:
 
 - `id_global`, folder, file name, camera model and serial;
@@ -163,11 +163,11 @@ its zone on that date, and a folder's rows agree on a zone unless marked.
 ## 7. The time-zone map
 
 The usual map of time-zone boundaries, timezone-boundary-builder, is
-ODbL, and datalib takes only permissively licensed code and data
+ODbL, and Datalib takes only permissively licensed code and data
 (`datalib/backend/deny.toml`; the photos plan's §9). Once the catalog is
-correct, datalib needs no map: the offset is in the catalog. So the map
+correct, Datalib needs no map: the offset is in the catalog. So the map
 belongs with the agent, outside this repository, where its share-alike
-terms apply to that repository's choices, not datalib's; the applier
+terms apply to that repository's choices, not Datalib's; the applier
 here takes only the times the agent settled on.
 Whether a lookup's result (an offset per photo, written into the
 catalog) is a work its terms reach is for whoever publishes that

@@ -15,20 +15,28 @@ can move to a repository of its own.
 
 ## Where the code comes from
 
-The tree's code is **not checked in**. It comes from npm's
-`monaco-editor` (MIT, Microsoft), which ships VS Code's `vs/base`
-layer as ES modules. `package.json` pins it, `pnpm-lock.yaml` holds its
-sha512, and Bazel fetches and checks it (`npm_vscode_tree` in
-`MODULE.bazel`). `build.mjs` bundles the part of it the tree imports —
-about 130 modules and 11 stylesheets — with `src/vs-tree.js` into one ES
-module, `dist/vs-tree.js`: 576 KB, 166 KB gzipped. The bundle carries
-the license notices of what it took, among them DOMPurify's
-(Apache-2.0 or MPL-2.0), which Monaco includes.
+The tree's code is **not checked in**. It is VS Code's own TypeScript
+(MIT, Microsoft), fetched by Bazel at the commit of the 1.145.0 release
+(`vscode_source` in `MODULE.bazel`; `vscode_source.BUILD.bazel` names
+the files read: the `vs/base` layer and `vs/nls.ts`). Bazel fetches it
+with git rather than as GitHub's tarball, because a cloud session's
+proxy serves git reads of a public repository but not its archive
+downloads; the commit hash is the pin.
 
-Monaco is the editor, not the workbench, and its build removes class
-members the editor never calls. Two of the tree's are gone
-(`view_state_methods_are_stripped` below); building from VS Code's
-TypeScript at a pinned commit instead would bring them back.
+`build.mjs` bundles the part the tree imports, about 155 modules and 13
+stylesheets, with `src/vs-tree.js` into one ES module,
+`dist/vs-tree.js`: 727 KB, 204 KB gzipped. esbuild compiles the
+TypeScript with the two options VS Code's own build depends on, legacy
+decorators and class fields that are assigned rather than defined.
+Beside the bundle, `dist/vs-tree.LICENSE.txt` holds VS Code's license
+and those of the two libraries VS Code keeps in `vs/base` and the bundle
+includes, DOMPurify (Apache-2.0 or MPL-2.0) and marked (MIT).
+
+`package.json` and `pnpm-lock.yaml` pin only the tools: esbuild, and the
+Playwright the facts test drives.
+
+To move to another VS Code release, change the commit in
+`MODULE.bazel`, run the facts test, and follow §"Facts".
 
 ## Using it
 
@@ -72,16 +80,20 @@ or set `DATALIB_TEST_CHROMIUM` to a Chromium binary.
 ## Facts
 
 **The facts are tests**: one each in `tests/facts.test.mjs`, under the
-name given here. Checked against monaco-editor 0.57.0. After a bump,
+name given here. Checked against VS Code 1.145.0. After a bump,
 run the test: a fact that moved fails by name. Fix it here, then the
 test, then whatever in `src/vs-tree.js` leaned on it.
 
-### Upstream, as monaco-editor ships it
+### Upstream, as VS Code's source has it
 
-- `view_state_methods_are_stripped` — `AsyncDataTree` has no
-  `getViewState()` and no `onDidOpen`. `setInput(input, viewState)`
-  still restores one, so the element keeps the set of open ids itself,
-  from `onDidChangeCollapseState`.
+- `view_state_keeps_what_a_closed_parent_hides` — `getViewState()`
+  lists every open node by id, including one whose parent has since
+  been closed.
+- `a_restore_skips_what_a_closed_parent_hides` — but
+  `setInput(input, viewState)` reopens only the nodes it loads, so one
+  under a closed parent is dropped, and stays closed when the parent is
+  opened later. The element keeps such ids, reports them in its
+  `viewState`, and reopens each when its parent opens.
 - `default_colours_are_dark` — `unthemedListStyles` is VS Code's dark
   theme (hover `#2A2D2E`, selection `#0E639C`), so the element passes
   its own.
@@ -116,6 +128,9 @@ test, then whatever in `src/vs-tree.js` leaned on it.
   at a time, keeps it on screen, and throws nothing.
 - `sticky_scroll_pins_the_ancestors` — scrolled into the 2,000-node
   level, its three ancestors stay pinned at the top, in order.
+- `a_restore_reopens_under_a_closed_parent` — a node that was open
+  under a closed parent is still in `viewState` after a remount, and
+  opening the parent brings it back open.
 - `view_state_round_trips` — the open nodes, the selection and the
   scroll position read from one mount come back on the next, which asks
   once for the top level and once for each open node.

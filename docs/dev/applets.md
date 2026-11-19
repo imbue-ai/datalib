@@ -1,6 +1,6 @@
 # Writing an applet
 
-What the applets datalib ships serve, and how to call them, is
+What the applets Datalib ships serve, and how to call them, is
 [`docs/user/applets.md`](../user/applets.md). This page is how to write one.
 
 An **applet** is a config-declared program that contributes a piece of

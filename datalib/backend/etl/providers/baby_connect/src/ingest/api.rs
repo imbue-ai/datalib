@@ -162,8 +162,8 @@ fn transport_error(e: HttpError, url: &str) -> BabyConnectError {
 
 pub fn sign_in() -> String {
     datalib_etl_web::latchkey::sign_in_advice(
-        "Sign in with `latchkey auth browser babyconnect`, after registering the service once \
-         as INGEST.md shows",
+        "Sign in with `latchkey auth browser babyconnect` and tick Remember Me, so the session \
+         lasts a year, after registering the service once as INGEST.md shows",
     )
 }
 

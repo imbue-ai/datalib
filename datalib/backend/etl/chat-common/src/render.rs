@@ -503,7 +503,7 @@ fn render_markdown(
             .count();
         while open_branches.len() > shared {
             open_branches.pop();
-            sections.push(Section::frame("</details>\n\n".to_string()));
+            sections.push(Section::fold_close());
         }
         while open_branches.len() < item.branch.len() {
             let depth = open_branches.len();
@@ -511,7 +511,7 @@ fn render_markdown(
                 .iter()
                 .take_while(|it| it.branch.get(..=depth) == item.branch.get(..=depth))
                 .count();
-            sections.push(Section::frame(branch_opener(inside)));
+            sections.push(branch_opener(inside));
             open_branches.push(&item.branch[depth]);
         }
         let run_end = doc.items[i..]
@@ -532,7 +532,7 @@ fn render_markdown(
         }
     }
     for _ in open_branches {
-        sections.push(Section::frame("</details>\n\n".to_string()));
+        sections.push(Section::fold_close());
     }
     if let Some(orphans) = render_orphan_reactions(doc) {
         sections.push(Section::frame(orphans));
@@ -543,10 +543,11 @@ fn render_markdown(
 /// A version of the conversation the account left, folded like a run of
 /// tool steps: outside the messages' own `<div>`s, so every anchor in it
 /// still works.
-fn branch_opener(messages: usize) -> String {
+fn branch_opener(messages: usize) -> Section {
     let plural = if messages == 1 { "" } else { "s" };
-    format!(
-        "<details class=\"branch\">\n<summary>✎ Another version · {messages} message{plural}</summary>\n\n"
+    Section::fold_open(
+        "branch",
+        &format!("✎ Another version · {messages} message{plural}"),
     )
 }
 
@@ -601,14 +602,14 @@ fn render_aside_run(
     first_unread: Option<usize>,
 ) {
     let plural = if items.len() == 1 { "" } else { "s" };
-    sections.push(Section::frame(format!(
-        "<details class=\"tool-group\">\n<summary>🛠 {n} tool step{plural}</summary>\n\n",
-        n = items.len(),
-    )));
+    sections.push(Section::fold_open(
+        "tool-group",
+        &format!("🛠 {n} tool step{plural}", n = items.len()),
+    ));
     for (i, item) in items.iter().enumerate() {
         sections.push(render_item(profile, item, first_unread == Some(i)));
     }
-    sections.push(Section::frame("</details>\n\n".to_string()));
+    sections.push(Section::fold_close());
 }
 
 fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread: bool) -> Section {

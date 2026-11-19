@@ -2098,7 +2098,7 @@ function submit() {
                 {{
                   protectedLibrary
                     ? "Your sign-in is kept by latchkey, in this library’s protected folder."
-                    : "Your sign-in is kept outside this library’s folder; datalib never stores it itself."
+                    : "Your sign-in is kept outside this library’s folder; Datalib never stores it itself."
                 }}
               </p>
               <details class="wiz-help wiz-conn-how">

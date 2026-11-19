@@ -654,6 +654,11 @@ name itself and then switches branches in SQL, so `doltlite -readonly
   equality in each commit, text keys included** (0.50.12 and later): on
   a 200k-row table with 42 commits, under 10 ms against ~0.8 s for the
   `dolt_diff_<table>` walk.
+- **A composite key diffs one row per key, with every key column on
+  both sides.** A row whose key changes, such as a row moved to another
+  document under `PRIMARY KEY (doc, id)`, reads as one `removed` and one
+  `added`, so `coalesce(to_doc, from_doc)` names both documents
+  (0.51.13; `a_composite_key_diffs_each_row_and_a_move_is_a_remove_and_an_add`).
 - **A keyless table's rows are keyed by a hidden rowid, and the diff
   pairs rows by rowid, not by content.** Drop and refill it in a
   different order, or with one row gone, and the diff reads as a run of
@@ -767,7 +772,16 @@ is the recipe in code.
 - **A `VIRTUAL` generated column with an index plans as an ordinary
   index search, not a covering one**; an expression index is covering.
 - **`rowid` on a table keyed by text is a hash of the key** and carries
-  no order; a keyless table's rowids count up from 1.
+  no order; a keyless table's rowids count up from 1. The rows
+  themselves are stored in key order ([What a write costs](#what-a-write-costs)).
+- **A table keyed by its document, `PRIMARY KEY (doc, id)`, reads and
+  deletes one document's rows by searching the key**
+  (`SEARCH ... sqlite_autoindex_<t>_1 (doc=?)`), and an upsert can
+  conflict on a unique secondary index instead: `INSERT ... ON CONFLICT
+  (id) DO UPDATE ... WHERE <t>.doc IS excluded.doc` writes nothing for
+  an `id` another document holds, and one that sets `doc` moves the row
+  (0.51.13;
+  `a_document_keyed_table_searches_its_key_and_upserts_on_a_unique_index`).
 - **`dbstat` is not supported**: the chunk store has no page layout.
 
 ### What a write costs
@@ -795,6 +809,18 @@ Three consequences, each measured with `scripts/doltlite_commit_cost.py`
   in one leaf each (400 rows: 39 KB against 1.75 MB written). Which of
   our keys are which: the repo's `datalib/backend/etl/README.md`
   § "What a write costs".
+  The order is the whole key's, a text composite key included: with a
+  document leading the key, rewriting every row of 400 documents (3,148
+  rows of 320k) wrote 756 bytes a row, against 4,771 with the same rows
+  keyed by their own id and spread through the table (0.51.13;
+  `rows_keyed_by_their_document_sit_together`). On rows modelled on a
+  Slack render store, whose ids are time-ordered so most of a thread's
+  rows already sit together, keying by document still read 5,000
+  documents of 930k rows 2.5× faster cold and re-rendered them in
+  2.25 s against 5.84 s, writing 55 MB against 96 MB, with the upsert
+  conflicting on the key; with a unique index on `uuid` to conflict on
+  instead, the re-render took 3.90 s (`scripts/doltlite_key_by_document.py`;
+  results in `hack/doltlite_key_by_document/README.md`).
 - **A row is stored whole.** Changing one small column rewrites the
   row and the leaf it sits in, whatever else the row holds: in 400
   rows, one integer changed on a 4 KB row grew the file by 15 KB, and
@@ -836,6 +862,13 @@ Creating and dropping a table in one open still appends chunks, though
   pass, and a later read at one of them has nothing to read. (An
   already-open connection kept reading its commit in a shell probe;
   see [Not yet measured](#not-yet-measured).)
+- **On a real render store most of the file is history.** A Slack render
+  store of 12.15 GB, after 84 commits over three weeks, three of them
+  full re-renders, came to 9.00 GB after `dolt_gc()` alone (296 s) and
+  1.78 GB after its history was folded into one commit and gc ran (49 s);
+  exported to plain SQLite it is 1.91 GB. So doltlite holds the live rows
+  in about what SQLite does, and gc alone gives back only the pages no
+  commit reached (0.51.13, measured on copies, 2026-11-19).
 - **`dolt_gc()` may run before or after `dolt_commit`**; at a million
   uncommitted rows both orders work.
 - **A pinned commit survives gc**: a `dolt_at_` read of an old commit
@@ -1137,7 +1170,7 @@ cause (network timeout, panic, OOM, etc.).
 
 ## When not to use the CLI
 
-- **Writably, on a store a sync may write.** Every writer datalib runs
+- **Writably, on a store a sync may write.** Every writer Datalib runs
   takes the store's writer lock; the CLI takes none, so a writable CLI
   session is exactly the second writer that lock exists to keep out.
 - **For routine reads from a program.** Open the file through sqlx, or

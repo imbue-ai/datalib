@@ -6,7 +6,7 @@ square metre). Each hexagon, a *cell*, is named by a 64-bit integer, and
 each cell below resolution 0 has one *parent* at every coarser
 resolution. [`h3o`](https://github.com/HydroniumLabs/h3o), a Rust port of
 Uber's library (BSD-3-Clause), does all the geometry; this crate is the
-few rules datalib keeps on top of it.
+few rules Datalib keeps on top of it.
 
 | resolution | a cell is about | as in |
 |---|---|---|

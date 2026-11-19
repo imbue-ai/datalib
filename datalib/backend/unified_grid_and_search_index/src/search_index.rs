@@ -9,10 +9,10 @@ use std::sync::Arc;
 
 use anyhow::{bail, Result};
 use datalib_runtime::layout;
-use datalib_search_index::{Held, HeldDoc, Reader};
+use datalib_search_index::{Held, HeldDoc, KeptRows, MessageHit, Reader};
 
 use crate::hits::index_state::IndexStamp;
-use crate::hits::lex::{Fts5Query, PageTerms};
+use crate::hits::lex;
 use crate::hits::mapping::Place;
 use crate::hits::vectors::{dot_and_norm, Freshness, Kept};
 use crate::hits::SearchHit;
@@ -28,57 +28,61 @@ async fn open(root: &Path) -> Result<Option<Reader>> {
     .await
 }
 
-/// The documents whose best message holds `query`, of `sources` (all when
-/// `None`) and `among` (all when `None`), best first, at most `limit`,
-/// each placed at that message. `None` when no step has written the index.
+/// The documents `words` find, of `sources`, within the rows `kept` keeps,
+/// best first, at most `limit`, each placed at its message: those saying
+/// the words in the order typed, then those with a message holding every
+/// word, then pages holding them between their pieces (a page's heading and
+/// its rows are parts of one thing, where a conversation's messages are
+/// each said on their own). BM25 alone ranks a place that says the sentence
+/// below short ones that merely hold each word. `None` when no step has
+/// written the index.
 pub async fn word_hits(
     root: &Path,
-    query: &Fts5Query,
+    words: &str,
     sources: Option<&[String]>,
-    among: Option<&HashSet<String>>,
+    kept: Option<&KeptRows<'_>>,
     limit: usize,
 ) -> Result<Option<Vec<DocumentHit>>> {
+    let Some(all) = lex::fts5_query(words) else {
+        return Ok(Some(Vec::new()));
+    };
     let Some(reader) = open(root).await? else {
         return Ok(None);
     };
-    let found = reader.words(&query.expr, sources, among, limit).await;
+    let found = async {
+        let mut hits: Vec<DocumentHit> = Vec::new();
+        for query in lex::fts5_phrase_query(words).iter().chain([&all]) {
+            let found = reader.words(&query.expr, sources, kept, limit).await?;
+            append_below(&mut hits, found);
+        }
+        if let Some(terms) = lex::fts5_page_terms(words) {
+            let found = reader.page_words(&terms, sources, kept, limit).await?;
+            append_below(&mut hits, found);
+        }
+        hits.truncate(limit);
+        anyhow::Ok(hits)
+    }
+    .await;
     reader.close().await;
-    Ok(Some(
-        found?
-            .into_iter()
-            .map(|h| {
-                let place = Place::Item { uuid: h.uuid };
-                (h.markdown_uuid, hit(h.score, place))
-            })
-            .collect(),
-    ))
+    found.map(Some)
 }
 
-/// Pages holding every one of `terms` between their pieces and none of
-/// `excluded` ([`Reader::page_words`]); `None` with no index yet.
-pub async fn page_word_hits(
-    root: &Path,
-    terms: &PageTerms,
-    sources: Option<&[String]>,
-    among: Option<&HashSet<String>>,
-    limit: usize,
-) -> Result<Option<Vec<DocumentHit>>> {
-    let Some(reader) = open(root).await? else {
-        return Ok(None);
-    };
-    let found = reader
-        .page_words(&terms.required, &terms.excluded, sources, among, limit)
-        .await;
-    reader.close().await;
-    Ok(Some(
-        found?
+/// `found`, a later query's hits, after `hits`: each document once, and no
+/// later hit scored above one before it, so sorting by score keeps the
+/// order the queries ranked them in.
+fn append_below(hits: &mut Vec<DocumentHit>, found: Vec<MessageHit>) {
+    let seen: HashSet<String> = hits.iter().map(|(d, _)| d.clone()).collect();
+    let floor = hits.last().map(|(_, h)| h.score);
+    hits.extend(
+        found
             .into_iter()
+            .filter(|h| !seen.contains(&h.markdown_uuid))
             .map(|h| {
+                let score = floor.map_or(h.score, |f| h.score.min(f));
                 let place = Place::Item { uuid: h.uuid };
-                (h.markdown_uuid, hit(h.score, place))
-            })
-            .collect(),
-    ))
+                (h.markdown_uuid, hit(score, place))
+            }),
+    );
 }
 
 /// The vectors as they are now, or `None` when `held` was read at the same

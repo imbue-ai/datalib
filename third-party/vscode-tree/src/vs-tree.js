@@ -1,12 +1,12 @@
-// <vs-tree>: VS Code's AsyncDataTree, taken from monaco-editor's ESM build,
-// as a custom element with its own shadow root. The page hands it a data
+// <vs-tree>: VS Code's AsyncDataTree, built from VS Code's own source, as a
+// custom element with its own shadow root. The page hands it a data
 // source of plain nodes, `{ id, label, kind?, description?, hasChildren }`;
 // the element keeps VS Code's renderer and delegate plumbing to itself and
 // says what is open by id, so a page can save and restore it.
 // What it relies on upstream is in README.md §"Facts", each a test.
 
-import { AsyncDataTree } from 'monaco-editor/base/browser/ui/tree/asyncDataTree.js';
-import { unthemedListStyles } from 'monaco-editor/base/browser/ui/list/listWidget.js';
+import { AsyncDataTree } from 'vscode/src/vs/base/browser/ui/tree/asyncDataTree.js';
+import { unthemedListStyles } from 'vscode/src/vs/base/browser/ui/list/listWidget.js';
 import { styles as upstreamCss } from 'css-registry';
 
 // The facts test reaches upstream through these, as the element does.
@@ -84,9 +84,14 @@ export class VsTree extends HTMLElement {
   #tree;
   #frame;
   #source;
-  #expanded = new Set();
   #restoring;
   #resize;
+  // Ids a restored view state had open that the tree has not reached yet:
+  // nodes under a parent that was closed when the state was saved. Upstream
+  // reopens only what it loads (`a_restore_skips_what_a_closed_parent_hides`),
+  // so these are reopened when their parent opens, and kept in `viewState`
+  // until then.
+  #pending = new Set();
 
   constructor() {
     super();
@@ -107,12 +112,8 @@ export class VsTree extends HTMLElement {
   // `{ expanded: id[], focus: id[], selection: id[], scrollTop }`, by node id.
   get viewState() {
     if (!this.#tree) return this.#restoring;
-    return {
-      expanded: [...this.#expanded],
-      focus: this.#tree.getFocus().map((n) => n.id),
-      selection: this.#tree.getSelection().map((n) => n.id),
-      scrollTop: this.#tree.scrollTop,
-    };
+    const state = this.#tree.getViewState();
+    return { ...state, expanded: [...new Set([...state.expanded, ...this.#pending])] };
   }
   set viewState(state) {
     this.#restoring = state;
@@ -165,19 +166,33 @@ export class VsTree extends HTMLElement {
     this.#tree = tree;
 
     const state = this.#restoring;
-    this.#expanded = new Set(state?.expanded ?? []);
+    this.#pending = new Set(state?.expanded ?? []);
     tree.onDidChangeCollapseState((e) => {
       const node = e.node.element?.element;
-      if (!node || node === ROOT) return;
-      if (e.node.collapsed) this.#expanded.delete(node.id);
-      else this.#expanded.add(node.id);
+      if (node && node !== ROOT && !e.node.collapsed) this.#reopenUnder(tree, node);
       this.#emit('viewstatechange');
     });
     tree.onDidChangeSelection((e) => this.#emit('select', { nodes: e.elements }));
     tree.onDidScroll(() => this.#emit('viewstatechange'));
 
     tree.layout(this.clientHeight, this.clientWidth);
-    tree.setInput(ROOT, state).then(() => this.#emit('ready'));
+    tree.setInput(ROOT, state).then(() => {
+      this.#reopenUnder(tree, ROOT);
+      this.#emit('ready');
+    });
+  }
+
+  // Once `parent`'s children are loaded and drawn, reopens those the restored
+  // state had open; each one that opens comes back here for its own.
+  async #reopenUnder(tree, parent) {
+    if (this.#pending.size === 0) return;
+    if (parent !== ROOT) await tree.expand(parent);
+    if (tree !== this.#tree) return;
+    for (const child of tree.getNode(parent).children) {
+      const node = child.element;
+      if (!this.#pending.delete(node.id)) continue;
+      if (child.collapsed) tree.expand(node);
+    }
   }
 
   // Upstream's PageUp/PageDown handler does not wait for the async page

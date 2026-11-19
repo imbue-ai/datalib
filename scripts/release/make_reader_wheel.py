@@ -42,7 +42,7 @@ def metadata(version: str, readme: str, license_names: list[str]) -> str:
         "Metadata-Version: 2.4",
         f"Name: {DISTRIBUTION}",
         f"Version: {version}",
-        "Summary: Read a datalib library's doltlite stores from any Python",
+        "Summary: Read a Datalib library's doltlite stores from any Python",
         "Author: Imbue",
         "License-Expression: MIT AND Apache-2.0 AND blessing",
         *[f"License-File: {name}" for name in license_names],

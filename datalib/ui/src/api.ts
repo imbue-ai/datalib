@@ -273,6 +273,11 @@ export type DocProblem = {
 /// piece of the page's frame (a title, a `<details>` opener). A message
 /// in a box names the box's `class`, and `md` is what is inside it.
 export type BodyPiece = { uuid: string | null; class?: string | null; md: string };
+/// A fold a renderer drew around a run of pieces (a run of tool steps,
+/// another version), with its class and its summary, HTML the renderer
+/// escaped.
+export type BodyFold = { fold: string; summary: string; pieces: BodyNode[] };
+export type BodyNode = BodyPiece | BodyFold;
 
 export type ChatResponse = {
   markdown_uuid: string;
@@ -289,9 +294,10 @@ export type ChatResponse = {
   /// The picture the document is, where it is one (`datalib:photo/…`):
   /// such a document has no page, and `pieces` is empty.
   image?: string | null;
-  /// The body as the renderer's pieces, so each message renders as a
-  /// fragment of its own (`renderDocument.ts`). Empty for a picture.
-  pieces: BodyPiece[];
+  /// The body as the renderer's pieces, each fold a node around the
+  /// pieces it holds, so each message renders as a fragment of its own
+  /// (`renderDocument.ts`). Empty for a picture.
+  pieces: BodyNode[];
   outgoing_edges: EdgeOut[];
   /// What render could not fully do to this document, errors first.
   problems: DocProblem[];

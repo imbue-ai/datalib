@@ -23,7 +23,7 @@ pub use cache::InferenceCache;
 pub use chunked::{carry_chunks_from_the_index, ChunkedDoc, FiledChunk};
 pub use holdings::{holdings, Holding};
 pub use owed::{owed, Owed};
-pub use read::{Held, HeldChunk, HeldDoc, MessageHit, Reader};
+pub use read::{Held, HeldChunk, HeldDoc, KeptRows, MessageHit, Reader};
 pub use store::Index;
 
 /// What every table of the index starts with. The index shares the grid

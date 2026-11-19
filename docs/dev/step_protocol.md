@@ -38,7 +38,7 @@ That step's id is `weather/ingest`, so it writes
 verbatim (`id = "weather/ingest"`, no `group` or `function`): the shape
 for a one-off executable that belongs to no source.
 
-`command = "datalib-step"` runs the step program datalib ships
+`command = "datalib-step"` runs the step program Datalib ships
 (§"How `datalib-step` fits"). It is legal only under a group, and a step
 with no `command` at all is read as that one.
 
@@ -162,7 +162,7 @@ What that means from your side:
 * **You may be started while an input is still being written, and run
   again.** A producer that declares `streams_output` (§ stdout, under
   `checkpoint`) lets the steps that read it start on each of its seals
-  while it carries on. The downloads datalib ships for Slack, mail,
+  while it carries on. The downloads Datalib ships for Slack, mail,
   Claude, ChatGPT, Notion, Google Drive, Linear, Todoist, Garmin, YoLink,
   GitHub, GitLab and Baby Connect declare it, and so does every
   `render_markdown`. You are run again after each later seal, and once
@@ -336,7 +336,7 @@ kinds of line and lets the runner write it:
 - **A `problem` line** is a row without the columns the writer fills:
   its id, its source (the step's group) and its stamps. `stage`,
   `scope_kind` (`entity` or `markdown`), `outcome`, `reason` and
-  `severity` are datalib's own closed sets; `sample` says what happened;
+  `severity` are Datalib's own closed sets; `sample` says what happened;
   `severity`, `item_uuid`, `field`, `path` and `rule` are optional.
 - **`scope_key`** is what the problem is about within your step:
   `<table>:<id>` for a record, `file:<path>` for a file, or

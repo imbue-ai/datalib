@@ -9,7 +9,7 @@ use std::path::PathBuf;
 const DEFAULT_BIND: &str = "127.0.0.1:8731";
 
 const LONG_ABOUT: &str = "\
-Serve the datalib app for one data root: the web UI, its API, and the \
+Serve the Datalib app for one data root: the web UI, its API, and the \
 sync loop, which runs the root's config.toml the way datalib-dag does.
 
 It listens on 127.0.0.1:8731, or DATALIB_BIND (127.0.0.1:0 lets the OS \
@@ -38,7 +38,7 @@ const EXAMPLES: &[Example] = &[
     name = "datalib-http",
     bin_name = "datalib-http",
     version = datalib_runtime::build_id::DATALIB_VERSION,
-    about = "Serve the datalib app (web UI, API and sync loop) for one data root.",
+    about = "Serve the Datalib app (web UI, API and sync loop) for one data root.",
     long_about = LONG_ABOUT,
     after_help = datalib_cli_help::render(EXAMPLES),
 )]

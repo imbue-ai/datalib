@@ -68,7 +68,7 @@ async fn a_root_a_newer_build_wrote_is_refused_before_any_step_runs() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(!out.status.success(), "{args:?} must fail: {stderr}");
         assert!(
-            stderr.contains("written by datalib 99.0.0"),
+            stderr.contains("written by Datalib 99.0.0"),
             "{args:?} names the version that wrote the store: {stderr}"
         );
         assert!(

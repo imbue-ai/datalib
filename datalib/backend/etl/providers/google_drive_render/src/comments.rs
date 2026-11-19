@@ -195,17 +195,15 @@ pub fn sections(t: &Thread) -> Vec<Section> {
         let ellipsis = if cut.len() < q.len() { "…" } else { "" };
         summary.push_str(&format!(" on “{cut}{ellipsis}”"));
     }
-    let mut open = format!(
-        "<details class=\"comment-thread\">\n<summary>{}</summary>\n\n",
-        escape_text(&summary)
-    );
+    // Kept as text search reads, as the thread's summary and quote are.
+    let mut open = Section::fold_open("comment-thread", &escape_text(&summary)).kept_whole();
     if let Some(q) = &t.quote {
-        open.push_str(&format!(
+        open = open.then(&format!(
             "> {}\n\n",
             escape_md_block(q.trim()).replace('\n', "\n> ")
         ));
     }
-    let mut out = vec![Section::unkeyed(open)];
+    let mut out = vec![open];
     for m in &t.messages {
         let mut s = String::new();
         s.push_str(
@@ -235,7 +233,7 @@ pub fn sections(t: &Thread) -> Vec<Section> {
             &s,
         ));
     }
-    out.push(Section::unkeyed("</details>\n\n".to_string()));
+    out.push(Section::fold_close().kept_whole());
     out
 }
 
