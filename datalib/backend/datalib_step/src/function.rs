@@ -93,8 +93,8 @@ impl Function {
             }
             Function::TimeSeriesIndex => {
                 "Index every source's time series, without copying the points. Goes \
-                 under the `unified_time_series_index` group; its inputs name each \
-                 source's `<group>/render_time_series`."
+                 under the `unified_time_series_index` group; inputs = \
+                 [\"*/render_time_series\"]."
             }
             Function::RenderOccurrences => {
                 "List every occurrence of a calendar's events in a window of days around \

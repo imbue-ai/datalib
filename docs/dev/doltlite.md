@@ -1,50 +1,41 @@
 # Doltlite: looking inside a store, and what the engine does
 
-This page is the one place for what doltlite does. Other docs and code
-comments state our rules — one writer per file, readers pinned — and
-link here for the engine facts under them. Each fact says which doltlite
-version it was checked on and, where one exists, the test or script
-that holds it. The pinned version is in `MODULE.bazel`;
-`doltlite --version` names the one a binary was built from.
+How to look inside a store by hand, and the engine facts our rules —
+one writer per file, readers pinned — rest on.
+`datalib-doltlite --version` names the doltlite a build carries.
 
-**The facts are tests.** `//datalib/backend/doltlite_facts:doltlite_facts_test`
-checks every single-process fact below in well under a second, one
-test each, in a module named for its section here;
-`//datalib/backend/etl:doltlite_two_process_test` checks the ones about
-a writer and a reader in two processes, and
+**The facts are tests** (in a checkout):
+`//datalib/backend/doltlite_facts:doltlite_facts_test` checks every
+single-process fact below, one test each, in a module named for its
+section here; `//datalib/backend/etl:doltlite_two_process_test` checks
+the ones about a writer and a reader in two processes;
 `//datalib/backend/doltlite_facts:python_package_test` and
 `:python_reader_test` the ones in
-[Reading a store from Python](#reading-a-store-from-python), and
+[Reading a store from Python](#reading-a-store-from-python); and
 `:vec1_facts_test` the ones in [Vector search: vec1](#vector-search-vec1).
-After a doltlite bump, run all five. A fact that moved fails by name: fix it here, then the test,
-then whatever in the tree leaned on it.
+After a doltlite bump, run all five. A fact that moved fails by name:
+fix it here, then the test, then whatever leaned on it.
 
-> **GUI option:** For a macOS sqlite-browser build patched to load
-> doltlite, grab a release from
-> <https://github.com/thadd3us/sqlitebrowser/releases>. The CLI recipes
-> below all still apply; the GUI is just nicer for exploring schema and
-> running ad-hoc SELECTs. In the desktop app, Browse on a download step
-> opens its `entities.doltlite_db` read-only: in that build (`-R`) when
-> it is what opens `.doltlite_db` files, otherwise in the bundled shell
-> (`-readonly`) in Terminal — `datalib/tauri/src/raw_store.rs`.
+> **GUI option:** a macOS sqlite-browser build patched to load
+> doltlite is at <https://github.com/thadd3us/sqlitebrowser/releases>.
+> In the desktop app, Browse on a download step opens its
+> `entities.doltlite_db` read-only: in that build when it is what opens
+> `.doltlite_db` files, otherwise in the bundled shell in Terminal.
 
 Every store the pipeline writes — the raw stores under
 `<data_root>/<group>/ingest/` and each source's render store — is a
 [doltlite](https://github.com/dolthub/doltlite) database: SQLite with
 content-addressed prolly-tree storage and a `git`-shaped commit history
-exposed through SQL. The bazel build statically links doltlite into our
-Rust binaries (see `third-party/doltlite/README.md`), but the
-**`doltlite` CLI** (a SQLite shell with the dolt extensions baked in)
-is the everyday tool for poking at one of these files by hand.
+exposed through SQL. Our binaries link doltlite in; the
+**`doltlite` CLI**, a SQLite shell with the dolt extensions built in,
+is the tool for looking at one of these files by hand.
 
-**Where to get it.** A release install already has it: the tarball
-`scripts/install.sh` unpacks contains **`datalib-doltlite`**, so it
-lands in `~/.local/bin` next to `datalib-dag`. In the docker image it
-is on `PATH` under the plain name `doltlite`. From a checkout, build
-it — `bazelisk build //third-party/doltlite:doltlite` — and prefer that
-over any host `doltlite` you may also have, because the Bazel target is
-version-locked to `MODULE.bazel`'s pin and so cannot disagree with what
-the pipeline wrote.
+**Where to get it.** A release install has it as
+**`datalib-doltlite`**, next to `datalib-dag` (in `~/.local/bin` for the
+install script). The docker image has it on `PATH` as `doltlite`. From
+a checkout, `bazelisk build //third-party/doltlite:doltlite` builds the
+one pinned to the tree; prefer it over any other `doltlite` you have,
+so it cannot disagree with what the pipeline wrote.
 
 Whichever you run, the argv is identical to `sqlite3`:
 `datalib-doltlite [OPTIONS] DBFILE [SQL...]`. Dot-commands, `-json`,
@@ -74,25 +65,19 @@ datalib-doltlite -readonly slack/render_markdown/indexed_markdown.doltlite_db .d
   | sqlite3 render.sqlite
 ```
 
-That is the whole export. A 16 MB store comes out as about 15 MB of
-SQL, well under a second each way, and its tables arrive with their
-schemas, primary keys and indexes intact. It works for the raw stores
-too — BLOB columns come through as hex
-literals. (A source's `blobs.sqlite` is plain SQLite already; stock
-`sqlite3` opens it.)
+That is the whole export: a 16 MB store takes well under a second each
+way, and its tables arrive with their schemas, primary keys and indexes
+intact. BLOB columns come through as hex literals. (A source's
+`blobs.sqlite` is plain SQLite already; stock `sqlite3` opens it.)
 
 What crosses and what doesn't:
 
 - **Crosses:** every user table, its schema, its indexes, its rows — the
   current state of the checked-out branch.
-- **Doesn't:** the version history. `.dump` emits the working set, so
-  the commit chain that lets you ask what upstream deleted last month
-  stays behind in the `.doltlite_db`. The `dolt_*` tables are virtual
-  and simply aren't in the dump, which is what you want — a
-  `dolt_log()` frozen into a plain SQLite file would be a lie.
-
-Keep the original if you care about history; the export is a snapshot
-for tools that speak only SQLite.
+- **Doesn't:** the version history. The commit chain that lets you
+  ask what upstream deleted last month stays behind in the
+  `.doltlite_db`; the `dolt_*` tables are virtual and are not in the
+  dump. The export is a snapshot for tools that speak only SQLite.
 
 Two variants worth knowing:
 
@@ -122,11 +107,10 @@ Two variants worth knowing:
 A program that runs many small queries should not start the shell for
 each one. There are two ways to keep a store open from Python:
 
-- **`imbue-datalib-reader`, which calls the library directly.** Reach for this
-  one. It works under
-  every Python we have tried, the ones `uv python install` fetches
-  included, and it restarts nothing, changes no environment variable and
-  leaves no temp file.
+- **`imbue-datalib-reader`, which calls the library directly.** Reach
+  for this one. It works under every Python we have tried, the ones
+  `uv python install` fetches included, and it restarts nothing, changes
+  no environment variable and leaves no temp file.
 - **`import doltlite`**, which makes Python's own `sqlite3` module run on
   doltlite. It is for code that needs that module itself, or SQLAlchemy,
   and it does not work under uv's Python
@@ -143,12 +127,12 @@ calls it:
 uv add imbue-datalib-reader==<version>   # or pip install; the version `datalib-dag --version` prints
 ```
 
-Its page, [`datalib/reader/README.md`](/datalib/reader/README.md), is
-what PyPI shows: the API, its errors, what it refuses and which wheels
-exist. Where no wheel fits (an Intel Mac, say), use the shell:
-`datalib-doltlite -readonly -json`. `Store(path, commit)` is the
-[detached open](#opening-a-revision-by-path) our own readers use. Beyond
-that page:
+[Reading the raw stores](../user/raw_stores.md) shows it in use; its
+PyPI page, <https://pypi.org/project/imbue-datalib-reader/>, has the
+whole API, its errors and which wheels exist. Where no wheel fits (an
+Intel Mac, say), use the shell: `datalib-doltlite -readonly -json`.
+`Store(path, commit)` is the [detached open](#opening-a-revision-by-path)
+our own readers use. Beyond that page:
 
 - **A connection kept open sees later seals**, and the one opened on a
   commit stays on that commit.
@@ -160,19 +144,18 @@ that page:
   If that upgrade changed the storage format, the store is refused until
   the program restarts.
 
-**From another language**, call the library a release install carries, at
-`lib/libdoltlite.so` (`.dylib` on a mac) beside `datalib-doltlite` in the unpacked
-tree, and in the docker image. The musl tarballs and the desktop app do not carry
-it. [`datalib_reader.py`](/datalib/reader/datalib_reader.py) shows which calls a
-reader needs.
+**From another language**, call the library a release install
+carries, at `lib/libdoltlite.so` (`.dylib` on a mac) beside
+`datalib-doltlite` in the unpacked tree, and in the docker image. The
+musl tarballs and the desktop app do not carry it. The package's one
+module, `datalib_reader.py`, which the wheel installs, shows which calls
+a reader needs.
 
-`//datalib/backend/doltlite_facts:python_reader_test` runs the package under the
-Python build uv fetches (python-build-standalone, which `rules_python` brings
-too), on CI's Linux x86_64 and on a mac. `python_package_test` runs it under the
-host's `python3`, which loads SQLite as a shared library.
-`scripts/release/check_reader_wheels.sh` installs the wheels themselves on glibc
-2.17, a current Debian, Alpine and a Mac, with `pip` and with `uv`
-([`release_steps.md`](release_steps.md) §"The reader wheels").
+`python_reader_test` runs the package under the Python build uv fetches
+(python-build-standalone), on Linux x86_64 and on a mac;
+`python_package_test` runs it under the host's `python3`, which loads
+SQLite as a shared library. A release installs the wheels themselves on
+glibc 2.17, a current Debian, Alpine and a Mac, with `pip` and with `uv`.
 
 Measured on a mac against real stores: a lookup by primary key on an open
 connection took about 0.01 ms. The same lookup cost about 15 ms when each
@@ -238,7 +221,7 @@ The app shows the same thing: right-click a row on the Manage screen
 and pick **Show commit history**, or ask `GET
 /api/pipeline/history?tree=<group or step id>` for it as JSON — every
 store under that tree, each commit with its per-table row counts and
-what the commit added, deleted and modified (`datalib/backend/history/`).
+what the commit added, deleted and modified.
 
 Each row is one `dolt_commit()` call from the ETL — e.g.
 `download slack: msgs=29 replies=51 media[...]` for a successful Slack
@@ -260,8 +243,8 @@ doltlite -readonly slack/ingest/entities.doltlite_db "SELECT * FROM dolt_branche
 Every connection lands on the file's stored default branch, `main`
 ([Branches, HEAD and the working set](#branches-head-and-the-working-set)).
 So `dolt_log()` and a plain `SELECT` show you `main`: sealed state, not
-whatever a run has in flight on `datalib_writer` (`etl/README.md` §"A
-writer works on its own branch" for why that branch exists).
+whatever a run has in flight on `datalib_writer`, the branch every
+writer works on until it seals.
 
 **To look at another branch or an old commit, open it by path**, still
 read-only ([Opening a revision by path](#opening-a-revision-by-path)):
@@ -351,11 +334,10 @@ resolved hashes ([Diffs](#diffs)).
 ### What the upstream deleted on you
 
 The reason to run the diff the other way around: a `removed` row is one
-the *provider* no longer has, and the raw store still does. This is the
-capability the versioned store buys that a plain mirror can't — see
-[Noticing when the *upstream* loses data](/docs/dev/data_architecture_ingestion.md#noticing-when-the-upstream-loses-data)
-for the preconditions (chiefly: the downloader has to re-enumerate, or
-this diff is empty no matter what happened upstream).
+the *provider* no longer has, and the raw store still does — what a
+versioned store buys that a plain mirror can't. It shows only for a
+source whose download lists upstream again and drops what is gone;
+otherwise this diff is empty whatever happened upstream.
 
 ```sh
 doltlite -readonly claude/ingest/entities.doltlite_db \
@@ -478,16 +460,14 @@ The common-use subset:
 
 ## How doltlite behaves
 
-The facts our rules rest on, checked on the pinned doltlite (0.51.13)
-by the tests below; a number measured on an older release names it. A fact in one process is a test in
-`doltlite_facts_test`, in the module named for its section. Anything
-about a writer and a reader in two processes is measured with
-`doltlite_two_process_test`, whose writer seals through the real
-`commit_run`: the shell's writer is not `commit_run`, and a shell probe
-has been wrong about contention before. "Shell probe" below marks a
-fact seen only in the `doltlite` shell on a scratch store. Upstream's
-own contract is `doc/doltlite/concurrency.md` and `doc/doltlite/refs.md`
-in the doltlite repo, at the pinned tag.
+Checked on the pinned doltlite (0.51.13) by the tests named at the top
+of this page; a number measured on an older release names it. The
+two-process facts are measured with a writer that seals through the
+real `commit_run`, since a shell probe has been wrong about contention
+before; "shell probe" below marks a fact seen only in the `doltlite`
+shell on a scratch store. Upstream's own contract is
+`doc/doltlite/concurrency.md` and `doc/doltlite/refs.md` in the
+doltlite repo, at the pinned tag.
 
 ### Branches, HEAD and the working set
 
@@ -600,8 +580,8 @@ in the doltlite repo, at the pinned tag.
 - **A `BEGIN` on a read-only connection holds one commit** for the whole
   transaction: plain tables read that commit, use their indexes, and the
   writer seals underneath untouched.
-  `a_held_read_transaction_is_a_snapshot_while_the_writer_seals`; at
-  1.3 GB on 0.50.3, `docs/dev/plans/paged_grids.md` § "Pinned and indexed".
+  `a_held_read_transaction_is_a_snapshot_while_the_writer_seals`; also
+  measured on a 1.3 GB store on 0.50.3.
 
 ### Three ways to read one commit
 
@@ -771,8 +751,9 @@ is the recipe in code.
 - **Plain tables plan as in SQLite**: on a read-only connection, inside
   a read transaction and on a detached open alike. No store runs
   `ANALYZE`, so between two one-column indexes the planner may take the
-  unselective one; how we pin and test a plan instead is in
-  [`etl/README.md`](../../datalib/backend/etl/README.md#indexes-the-planner-has-no-statistics-so-test-the-plan).
+  unselective one; how we pin and test a plan instead is in the repo's
+  `datalib/backend/etl/README.md` § "Indexes: the planner has no
+  statistics, so test the plan".
 - **`dolt_at_<table>` seeks only a primary-key equality** (text keys
   included, 0.50.12 and later). It never uses a secondary index, a
   primary-key range on a text key, or an `ORDER BY`: those scan the
@@ -812,7 +793,8 @@ Three consequences, each measured with `scripts/doltlite_commit_cost.py`
   The tree is sorted by primary key. Rows whose keys are adjacent land
   in one or two leaves; the same number of rows with random keys land
   in one leaf each (400 rows: 39 KB against 1.75 MB written). Which of
-  our keys are which: [`etl/README.md`](/datalib/backend/etl/README.md#what-a-write-costs-the-transaction-is-the-unit-and-the-key-decides-the-size).
+  our keys are which: the repo's `datalib/backend/etl/README.md`
+  § "What a write costs".
 - **A row is stored whole.** Changing one small column rewrites the
   row and the leaf it sits in, whatever else the row holds: in 400
   rows, one integer changed on a 4 KB row grew the file by 15 KB, and
@@ -1025,7 +1007,7 @@ codes, and a query reads only the `nprobe` buckets nearest it (default
   rollback journal (dolthub/doltlite#3740, fixed in 0.50.16; before
   that a plain file always kept a rollback journal). The run store
   asks for `wal`, because in a rollback journal its readers waited out
-  every commit (measured in [`logging.md`](logging.md) § One store), and
+  every commit (measured in [`logging.md`](logging.md#one-store)), and
   so do the grid index's file, the inference cache and a step's
   `problems.sqlite`, which are read while they are written; our other
   plain stores ask for `delete`. On a WAL file, doltlite's
@@ -1042,7 +1024,7 @@ codes, and a query reads only the `nprobe` buckets nearest it (default
   largest size, though, which one large transaction sets, until a write
   after a checkpoint finds `journal_size_limit` set, or a `wal_checkpoint
   (TRUNCATE)`; our plain stores in WAL mode (the run store, the grid
-  index's file for both its writers, and the inference cache) set it to
+  index's file and the inference cache) set it to
   `plain_sqlite::WAL_SIZE_LIMIT_BYTES`, 64 MB. Doltlite 0.51.3 never
   checkpointed by itself
   (dolthub/doltlite#4402): a live root's run store reached 4 GB in eight
@@ -1088,17 +1070,17 @@ Upstream freezes chunk-store format 12 for the DoltLite beta: every
 version-12 file stays readable and writable by later version-12 builds,
 so a bump that stays on 12 needs no store migration. A file whose
 format differs is refused at open (`SQLITE_NOTADB`, "written by an
-incompatible doltlite version"). `third-party/doltlite/README.md`
-§ "Upgrading doltlite" has the procedure for a bump.
+incompatible doltlite version"). The procedure for a bump is the
+repo's `third-party/doltlite/README.md` § "Upgrading doltlite".
 
 What each pin was taken for, newest first:
 
 | version | what it brought us |
 |---|---|
-| 0.51.13 | the amalgamation compiles BLAKE3's SIMD kernels itself, under `doltlite_*` names (dolthub/doltlite#4956), so our own kernel build, its symbol renames and the reader wheels' kernel compile are gone; `@blake3_c` stays for `blake3_kernels_test`'s header and test vectors. No fact moved. |
-| 0.51.12 | a plain SQLite file in WAL mode is checkpointed by itself (dolthub/doltlite#4402), and a writer waiting on one gets in between another process's transactions; under 0.51.3 the grid index's `-wal` reached 4 GB and its step failed to open the file while a `keyword_index` wrote. The amalgamation now guards the lines that turn BLAKE3's kernels off with `DOLTLITE_BLAKE3_SIMD_OBJECTS`, which we define in place of a patch. Seven facts moved: the first commit's message carries an id, a diff follows a table rename, `dolt_branch('-d')` drops a branch whose only change is uncommitted, a revert's message names the commit, a reader whose commit was folded away reads `is no longer available`, vec1 is 0.8, and the Python wheel reuses its library copy on macOS. |
-| 0.51.3 | upstream fixes to concurrent writes, merges and recovery. A `<store>@<commit>` open that finds the store busy now waits under the busy timeout, so the 0.50.17 failure is gone. 0.51.0 also put back the 0.50.14 encoding of a number just before a `DESC` field in a primary key or an index, with no migration; none of our tables has a `DESC` key, so no store of ours was written in the other encoding. Five facts moved: `dolt_commit` inside `BEGIN` leaves the transaction open, `dolt_branch('-d')` refuses uncommitted rows, a scalar sees another connection's commit at once, a hard reset works at the initialization commit, and a busy `dolt_branch` says `database is busy`. |
-| 0.50.16 | upstream fixes to concurrent writes and to recovery after an interrupted `VACUUM` or `dolt_gc()`. Three facts moved: a plain SQLite file honours `journal_mode` (dolthub/doltlite#3740), a `from_commit` / `to_commit` filter matches only adjacent pairs again, and a new empty store's first commit is `nothing to commit`. Like 0.50.15, it does not reuse the chunks 0.50.14 or earlier wrote: refilling such a table with the same rows appends about a copy of it that no commit reaches, once, and `datalib-dag --free-disk-space` takes it back. Later bumps reuse each other's chunks (dolthub/doltlite#4552; measured by hand, not held by a test). (0.50.17 was passed over: its read lock on a `<store>@<commit>` open gives up after about 100 ms, and readers here open that way.) |
+| 0.51.13 | the amalgamation compiles BLAKE3's SIMD kernels itself (dolthub/doltlite#4956), so ours are gone. No fact moved. |
+| 0.51.12 | a plain SQLite file in WAL mode is checkpointed by itself (dolthub/doltlite#4402), and a writer waiting on one gets in between another process's transactions; under 0.51.3 the grid index's `-wal` reached 4 GB and a second writer could not open the file. Seven facts moved (each named in its section). |
+| 0.51.3 | upstream fixes to concurrent writes, merges and recovery; a `<store>@<commit>` open that finds the store busy waits under the busy timeout. None of our tables has a `DESC` key, so 0.51.0's change to how one is encoded touched no store of ours. Five facts moved. |
+| 0.50.16 | upstream fixes to concurrent writes and to recovery after an interrupted `VACUUM` or `dolt_gc()`; a plain SQLite file honours `journal_mode` (dolthub/doltlite#3740). Three facts moved. It does not reuse chunks 0.50.14 or earlier wrote: refilling such a table with the same rows appends about a copy of it once, which `datalib-dag --free-disk-space` takes back. (0.50.17 was passed over: its read lock on a `<store>@<commit>` open gives up after about 100 ms, and our readers open that way.) |
 | 0.50.14 | a detached open runs `IN` and `DISTINCT` (dolthub/doltlite#3392), so readers open `<store>@<commit>` directly |
 | 0.50.13 | a revision opened by path works on any file name (dolthub/doltlite#3231); an unindexed filter plans as scan + sort |
 | 0.50.12 | per-table modules registered on first use; `dolt_at_` and `dolt_history_` seek a text primary key; a ref-moving reader no longer refuses the writer's seals |
@@ -1113,18 +1095,13 @@ What each pin was taken for, newest first:
 
 ### Build doltlite at `-O2`
 
-`third-party/doltlite/BUILD.bazel` compiles doltlite at `-O2` whatever
-`--compilation_mode` says. Bazel's `fastbuild` default is `-O0`, and on
-doltlite 0.11.x a 3.5 GB raw store built that way took ~60 s to open
-from Rust — past sqlx's 30 s acquire timeout — where the upstream CLI
-took 2.4 s. We never step-debug doltlite's C, so optimizing it costs
-nothing. `//hack/slack_open_debug/` times a raw `sqlite3_open_v2`
-against the same open through sqlx, to tell the two layers apart if
-opens slow down again.
-
-Don't add `-DSQLITE_DEFAULT_FOREIGN_KEYS=1`: the upstream CLI builds
-without it, and a caller that wants foreign keys enforced turns them on
-after connect (sqlx does).
+For contributors: `third-party/doltlite/BUILD.bazel` compiles doltlite
+at `-O2` whatever `--compilation_mode` says. At Bazel's `-O0` default a
+3.5 GB raw store once took ~60 s to open, past sqlx's 30 s acquire
+timeout, against 2.4 s for the upstream CLI. Don't add
+`-DSQLITE_DEFAULT_FOREIGN_KEYS=1`: the upstream CLI builds without it,
+and a caller that wants foreign keys turns them on after connect (sqlx
+does).
 
 ### A writer's open discards the working set
 
@@ -1160,17 +1137,13 @@ cause (network timeout, panic, OOM, etc.).
 
 ## When not to use the CLI
 
-- **During a live ETL run, writably.** Every writable open on the Rust
-  side takes the store's writer lock and pins its pool at
-  `max_connections = 1`, so doltlite's per-connection HEAD stays
-  coherent and no second writer gets in
-  ([`etl/README.md`](/datalib/backend/etl/README.md) §"Connection
-  pools"). The CLI takes no such lock, so a writable CLI session is
-  exactly the second writer that rule exists to keep out.
-- **For routine reads from app code.** Open the file via `sqlx` like
-  everything else in the backend, or from Python through
-  `imbue-datalib-reader` ([Reading a store from Python](#reading-a-store-from-python));
-  the CLI is for ad-hoc inspection.
+- **Writably, on a store a sync may write.** Every writer datalib runs
+  takes the store's writer lock; the CLI takes none, so a writable CLI
+  session is exactly the second writer that lock exists to keep out.
+- **For routine reads from a program.** Open the file through sqlx, or
+  from Python through `imbue-datalib-reader`
+  ([Reading a store from Python](#reading-a-store-from-python)); the
+  CLI is for ad-hoc inspection.
 - **To "fix" a wedged DB.** The next writer's `open` discards the
   uncommitted state itself. Only reach for `dolt_reset` /
   `dolt_checkout` against a copy of the file, never against the live

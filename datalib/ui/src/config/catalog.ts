@@ -175,8 +175,8 @@ export type CatalogEntry = {
   /// False → in the picker for completeness, but no form exists yet.
   wizard: boolean;
   /// False for a download-only provider, whose render step writes no
-  /// documents: only the storage report and the download's problems,
-  /// which is all that puts such a source in the grid. It always gets
+  /// documents: only the storage report, which is all that puts such a
+  /// source in the grid. It always gets
   /// that step, and the wizard offers no choice to render and no search
   /// steps, since there is no markdown to search.
   rendersDocuments?: boolean;

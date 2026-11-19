@@ -385,7 +385,11 @@ fn overview(commands: &[String]) -> String {
     out.push_str("\nSource types:\n");
     out.push_str(&wrap(&types.join(", "), 2, 2));
     out.push_str("\nFunctions (a step's id is <group>/<function>):\n");
-    let width = Function::VARIANTS.iter().map(|f| f.as_str().len()).max().unwrap_or(0);
+    let width = Function::VARIANTS
+        .iter()
+        .map(|f| f.as_str().len())
+        .max()
+        .unwrap_or(0);
     for f in Function::VARIANTS {
         out.push_str(&format!(
             "  {:<width$} {}\n",
@@ -394,7 +398,11 @@ fn overview(commands: &[String]) -> String {
         ));
     }
     out.push_str("\nApplets (reached at /applet/<id>/ on datalib-http once the app runs):\n");
-    let width = datalib_agent_docs::APPLETS.iter().map(|a| a.name.len()).max().unwrap_or(0);
+    let width = datalib_agent_docs::APPLETS
+        .iter()
+        .map(|a| a.name.len())
+        .max()
+        .unwrap_or(0);
     for a in datalib_agent_docs::APPLETS {
         out.push_str(&format!("  {:<width$} {}\n", a.name, a.does));
     }
