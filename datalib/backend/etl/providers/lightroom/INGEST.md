@@ -819,8 +819,8 @@ id = "lightroom"
 type = "lightroom"
 
 [[steps]]
-group = "lightroom"
-function = "ingest"
+id = "lightroom/ingest"
+command = "datalib-step run ingest lightroom"
 [steps.params.catalog]
 path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
 ```
@@ -828,8 +828,8 @@ path = "~/Pictures/Lightroom/Lightroom Catalog-v14.lrcat"
 and, for a folder of backups beside it or instead of it,
 `[steps.params.backups]` with `path = "~/Pictures/Lightroom/Backups"`.
 
-To run it with no config, run `datalib-step` by hand with those params
-as JSON; [`first_time_dev.md`](/docs/dev/first_time_dev.md) §"One
+To run it with no config, run `datalib-step run ingest lightroom` by
+hand with those params as JSON in `DATALIB_DAG_PARAMS`; [`first_time_dev.md`](/docs/dev/first_time_dev.md) §"One
 source's download, with no config" has this exact case. The backup is
 then `<root>/lightroom/ingest/entities.doltlite_db`.
 

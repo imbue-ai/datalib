@@ -7,14 +7,13 @@ name = "Beeper"
 type = "beeper"
 
 [[steps]]
-group = "beeper"
-function = "ingest"
-command = "datalib-step"
+id = "beeper/ingest"
+command = "datalib-step run ingest beeper"
 
 [steps.params.texts]
 
 [[steps]]
-group = "beeper"
-function = "render_markdown"
-command = "datalib-step"
+id = "beeper/render_markdown"
+command = "datalib-step run render_markdown beeper"
 inputs = ["beeper/ingest"]
+reads = "pinned"

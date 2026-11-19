@@ -6,9 +6,8 @@ name = "Slack"
 type = "slack"
 
 [[steps]]
-group = "slack"
-function = "ingest"
-command = "datalib-step"
+id = "slack/ingest"
+command = "datalib-step run ingest slack"
 
 [steps.params.common]
 blob_size_limit_bytes = "1 MB"  # skip an attachment larger than this; unset is no limit
@@ -63,15 +62,16 @@ context_before = "-1d"         # walk a channel from this long before the oldest
 context_after = "+2d"          # walk only this long after each one; unset walks up to now
 
 [[steps]]
-group = "slack"
-function = "render_markdown"
-command = "datalib-step"
+id = "slack/render_markdown"
+command = "datalib-step run render_markdown slack"
 inputs = ["slack/ingest"]
+reads = "pinned"
 
 # Search by meaning: cuts this source's documents into chunks and embeds
 # them. Leave it out and keyword search still finds it.
 [[steps]]
-group = "slack"
-function = "embed"
-command = "datalib-step"
+id = "slack/embed"
+command = "datalib-step run embed slack"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]

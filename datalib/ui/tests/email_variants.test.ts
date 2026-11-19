@@ -54,7 +54,7 @@ describe("writing a step", () => {
     // is the key that makes the table exist and is Gmail's own default.
     expect(toml).toContain("[steps.params.gmail]");
     expect(toml).toContain('user_id = "me"');
-    expect(toml).toContain('command = "datalib-step"');
+    expect(toml).toContain('command = "datalib-step run ingest email"');
     expect(toml).not.toContain("jmap");
   });
 
@@ -126,7 +126,7 @@ describe("writing a step", () => {
         inputs: ["mail/ingest"],
         values: seedFieldValues(entry),
       });
-      expect(toml).toContain('command = "datalib-step"');
+      expect(toml).toContain('command = "datalib-step run render_markdown email"');
       expect(toml).toContain(`outlink_format = "${outlink}"`);
       // The download-mode params must not leak onto the render step:
       // `EmailRenderConfig` is deny_unknown_fields, so one would make
@@ -158,14 +158,12 @@ id = "gmail"
 type = "email"
 
 [[steps]]
-group = "gmail"
-function = "ingest"
+id = "gmail/ingest"
 [steps.params.gmail]
 user_id = "me"
 
 [[steps]]
-group = "gmail"
-function = "render_markdown"
+id = "gmail/render_markdown"
 inputs = ["gmail/ingest"]
 [steps.params]
 outlink_format = "gmail"
@@ -175,14 +173,12 @@ id = "fastmail"
 type = "email"
 
 [[steps]]
-group = "fastmail"
-function = "ingest"
+id = "fastmail/ingest"
 [steps.params.jmap]
 hostname = "api.fastmail.com"
 
 [[steps]]
-group = "fastmail"
-function = "render_markdown"
+id = "fastmail/render_markdown"
 inputs = ["fastmail/ingest"]
 [steps.params]
 outlink_format = "fastmail"
@@ -192,8 +188,7 @@ id = "seeded"
 type = "email"
 
 [[steps]]
-group = "seeded"
-function = "ingest"
+id = "seeded/ingest"
 [steps.params.gmail]
 user_id = "me"
 [steps.params.mbox]
@@ -204,8 +199,7 @@ id = "archive"
 type = "email"
 
 [[steps]]
-group = "archive"
-function = "ingest"
+id = "archive/ingest"
 [steps.params.mbox]
 path = "~/takeout/mail.mbox"
 `;
@@ -260,8 +254,7 @@ path = "~/takeout/mail.mbox"
   /// models blocks Edit rather than being silently dropped on save.
   it("still refuses a step carrying something no field models", () => {
     const [step] = listSteps(`[[steps]]
-group = "gmail"
-function = "ingest"
+id = "gmail/ingest"
 [steps.params.gmail]
 user_id = "me"
 quota_units_per_minute = 4000

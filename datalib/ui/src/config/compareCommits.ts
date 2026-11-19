@@ -163,7 +163,9 @@ export function addComparison(
     maxDocuments: number;
   },
 ): { text: string; renderId: string } {
-  const built = buildDiffSource(opts);
+  const sourceType = listGroups(text).find((g) => g.id === opts.source)?.type;
+  if (!sourceType) throw new Error(`The config has no source ${opts.source} with a type.`);
+  const built = buildDiffSource({ ...opts, sourceType });
   let next = insertEntries(text, `${built.groupBody}\n\n${built.stepsBody}`);
   next = wireIntoFanIns(next, built.renderId);
   next = setSearchSteps(next, opts.id, "keyword_and_embed");

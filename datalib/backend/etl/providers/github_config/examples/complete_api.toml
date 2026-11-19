@@ -6,9 +6,8 @@ name = "GitHub"
 type = "github"
 
 [[steps]]
-group = "github"
-function = "ingest"
-command = "datalib-step"
+id = "github/ingest"
+command = "datalib-step run ingest github"
 
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
@@ -32,15 +31,16 @@ pull_requests = [         # only these PRs, as `owner/repo#NUM` or a github.com 
 ]
 
 [[steps]]
-group = "github"
-function = "render_markdown"
-command = "datalib-step"
+id = "github/render_markdown"
+command = "datalib-step run render_markdown github"
 inputs = ["github/ingest"]
+reads = "pinned"
 
 # Search by meaning: cuts this source's documents into chunks and embeds
 # them. Leave it out and keyword search still finds it.
 [[steps]]
-group = "github"
-function = "embed"
-command = "datalib-step"
+id = "github/embed"
+command = "datalib-step run embed github"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]

@@ -38,8 +38,8 @@ id = "media"
 type = "media"
 
 [[steps]]
-group = "media"
-function = "ingest"
+id = "media/ingest"
+command = "datalib-step run ingest media"
 
 [steps.params.fswalk]
 path = "${dataRoot(config)}/file_inventory_scan"

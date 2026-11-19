@@ -7,9 +7,8 @@ name = "WhatsApp"
 type = "whatsapp"
 
 [[steps]]
-group = "whatsapp"
-function = "ingest"
-command = "datalib-step"
+id = "whatsapp/ingest"
+command = "datalib-step run ingest whatsapp"
 
 # The decrypted database is mirrored table for table; these pick the tables.
 [steps.params]
@@ -27,15 +26,16 @@ key_env_var = "WHATSAPP_ENTERPRISE_PHONE_KEY"  # the variable holding the key as
                                                # default WHATSAPP_BACKUP_DECRYPTION_KEY
 
 [[steps]]
-group = "whatsapp"
-function = "render_markdown"
-command = "datalib-step"
+id = "whatsapp/render_markdown"
+command = "datalib-step run render_markdown whatsapp"
 inputs = ["whatsapp/ingest"]
+reads = "pinned"
 
 # Search by meaning: cuts this source's documents into chunks and embeds
 # them. Leave it out and keyword search still finds it.
 [[steps]]
-group = "whatsapp"
-function = "embed"
-command = "datalib-step"
+id = "whatsapp/embed"
+command = "datalib-step run embed whatsapp"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]

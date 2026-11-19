@@ -34,9 +34,7 @@ async fn an_file_inventory_render_reports_its_files_as_items() {
 
     let out = Command::new(std::env::var_os("DATALIB_STEP_BIN").expect("DATALIB_STEP_BIN"))
         .env("DATALIB_DAG_STEP", "tng/render_markdown")
-        .env("DATALIB_DAG_GROUP", "tng")
-        .env("DATALIB_DAG_GROUP_TYPE", "file_inventory")
-        .env("DATALIB_DAG_FUNCTION", "render_markdown")
+        .args(["run", "render_markdown", "file_inventory"])
         .env("DATALIB_DAG_INPUTS", "tng/ingest")
         .env("DATALIB_DAG_DATA_ROOT", root)
         .stdin(Stdio::null())

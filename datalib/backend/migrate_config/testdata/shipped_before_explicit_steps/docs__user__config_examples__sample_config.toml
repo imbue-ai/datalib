@@ -1,0 +1,151 @@
+# Sample config in the format `datalib-dag` runs: each source is a
+# `[[groups]]` entry with a `type` plus its steps (`ingest`,
+# `render_markdown` and `embed`, each written as `group` + `function`
+# with `command = "datalib-step"`, the program datalib ships), and the shared
+# index step under the `unified_grid_and_search_index` group, which every
+# source's rendered documents feed. A step's id is `<group>/<function>`,
+# composed rather than written; `inputs` name steps by that id.
+# `datalib-step help dag-example` walks through the format, and
+# `datalib-step help all-sources` shows every source.
+
+# Where the downloaded data gets written. Top-level keys have to come
+# before the first [[…]] header — everything after a table header
+# belongs to that table.
+data_root = "~/datalib"
+
+# The shared fan-in step: the SQL index behind the grid and the keyword
+# search, fed by every source's rendered documents.
+[[groups]]
+id = "unified_grid_and_search_index"
+
+[[steps]]
+group = "unified_grid_and_search_index"
+function = "unified_grid_and_search_index"
+command = "datalib-step"
+inputs = ["*/render_markdown"]
+
+# Google Takeout Gmail export. The `mbox` table is the method: it puts
+# the email provider in file-backed mode, reading the file at its
+# `path` instead of talking to a mail server. Point it at the .mbox
+# unpacked from your Takeout zip.
+[[groups]]
+id = "gmail-takeout"
+type = "email"
+
+[[steps]]
+group = "gmail-takeout"
+function = "ingest"
+command = "datalib-step"
+[steps.params.mbox]
+path = "~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox"
+
+[[steps]]
+group = "gmail-takeout"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["gmail-takeout/ingest"]
+
+[[steps]]
+group = "gmail-takeout"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# Slack workspace mirror. Credentials come from `latchkey` at runtime;
+# `datalib-step help slack` says how to sign in. `channels` restricts
+# the sync to the listed channels; omit it (or set `all_channels =
+# true`) to mirror every channel the account can see. `media = true`
+# pulls file attachments into blobs.
+[[groups]]
+id = "slack"
+type = "slack"
+
+[[steps]]
+group = "slack"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params.common]
+blob_size_limit_bytes = "1 MB"  # skip larger file uploads
+# Bound how long the download keeps retrying upstream rate limits
+# before giving up, and how many requests it has out at once. The
+# shared HTTP layer always honors a 429 `Retry-After` (else backs off
+# exponentially); the first two decide when to stop. Each request is a
+# `latchkey curl` process of about 80 MB, so the third bounds memory
+# too. Defaults shown.
+# [steps.params.common.download_params]
+# maximum_time_without_progress_in_minutes = 30
+# maximum_sequential_failed_requests = 50
+# maximum_requests_at_once = 8
+
+[steps.params.api]
+media = true
+channels = ["project-data-liberation"]
+# dms = true             # also mirror direct messages (1:1 and group).
+                         # Off unless set. `dm_conversations = ["D024BE7LH"]`
+                         # narrows them to particular conversations, by
+                         # Slack id or pasted link — a separate list
+                         # from `channels`, since a DM has no channel name.
+# since = "2025-01-01"   # oldest message to mirror (unset: everything).
+                         # This — not `refresh_window_days` — is how you
+                         # bound how far back the mirror goes.
+
+[[steps]]
+group = "slack"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["slack/ingest"]
+
+[[steps]]
+group = "slack"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# Claude (claude.ai) conversation mirror. Credentials come from
+# `latchkey` at runtime; `datalib-step help claude` says how to sign in.
+# An empty `api` table fetches every conversation, project and Cowork
+# task across every org the account can see; uncomment the knobs below
+# to bound the work.
+[[groups]]
+id = "claude-api"
+type = "claude"
+
+[[steps]]
+group = "claude-api"
+function = "ingest"
+command = "datalib-step"
+[steps.params.api]
+# refetch_newest_conversations = 3   # fetch the 3 newest again every sync
+# since = "2025-01-01"      # only sync conversations updated at/after this
+# projects = false          # skip Claude Projects (default: on)
+# project_uuids = [...]     # or: mirror only these projects (UUIDs or URLs)
+# cowork = false            # skip Cowork tasks (default: on)
+
+[[steps]]
+group = "claude-api"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["claude-api/ingest"]
+
+[[steps]]
+group = "claude-api"
+function = "embed"
+command = "datalib-step"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+
+# The app's own surface: `unified_grid_and_search_index` serves the grid, the document
+# view and the document picker. Without it the UI has no search — it is
+# an applet rather than a built-in so the backend does not have to know
+# what a grid row is.
+[[applets]]
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
+
+# The contacts app: your own record of who a handle is, which the person
+# chips and search read. `datalib-step help contacts-app`.
+[[applets]]
+group = "unified_grid_and_search_index"
+id = "datalib_contacts"
+command = "datalib-applet datalib_contacts"

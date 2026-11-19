@@ -8,9 +8,8 @@ name = "Gmail Takeout"
 type = "email"
 
 [[steps]]
-group = "email"
-function = "ingest"
-command = "datalib-step"
+id = "email/ingest"
+command = "datalib-step run ingest email"
 
 # Mirror only messages carrying these Gmail labels (the `X-Gmail-Labels`
 # header). Labels are full paths and match exactly: `Work` does not take
@@ -28,10 +27,10 @@ email_address = "picard@example.com"  # the account's address; unset by default
 is_personal = true                    # a personal (not work) account; default true
 
 [[steps]]
-group = "email"
-function = "render_markdown"
-command = "datalib-step"
+id = "email/render_markdown"
+command = "datalib-step run render_markdown email"
 inputs = ["email/ingest"]
+reads = "pinned"
 
 [steps.params]
 outlink_format = "gmail"        # each message's `↗` link opens it in Gmail; omit for no link
@@ -41,7 +40,8 @@ only_render_labels = ["Inbox"]  # render only threads with a message under these
 # Search by meaning: cuts this source's documents into chunks and embeds
 # them. Leave it out and keyword search still finds it.
 [[steps]]
-group = "email"
-function = "embed"
-command = "datalib-step"
+id = "email/embed"
+command = "datalib-step run embed email"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]

@@ -69,6 +69,6 @@ The `api` block of a `gitlab` source (`gitlab_config`):
 
 ## Run it
 
-As for GitHub (its `INGEST.md` §"Run it"), with
-`DATALIB_DAG_GROUP_TYPE=gitlab` and `{"api": {"merge_requests":
+As for GitHub (its `INGEST.md` §"Run it"), with `datalib-step run
+ingest gitlab` and `{"api": {"merge_requests":
 ["<group>/<project>!<iid>"]}}`.

@@ -7,15 +7,14 @@ name = "SMS Backup & Restore"
 type = "sms_backup_restore"
 
 [[steps]]
-group = "sms_backup_restore"
-function = "ingest"
-command = "datalib-step"
+id = "sms_backup_restore/ingest"
+command = "datalib-step run ingest sms_backup_restore"
 
 [steps.params.backup]
 path = "~/Downloads/sms-backup"
 
 [[steps]]
-group = "sms_backup_restore"
-function = "render_markdown"
-command = "datalib-step"
+id = "sms_backup_restore/render_markdown"
+command = "datalib-step run render_markdown sms_backup_restore"
 inputs = ["sms_backup_restore/ingest"]
+reads = "pinned"

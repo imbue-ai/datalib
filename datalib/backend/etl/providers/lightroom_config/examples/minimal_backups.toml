@@ -7,9 +7,8 @@ name = "Lightroom"
 type = "lightroom"
 
 [[steps]]
-group = "lightroom"
-function = "ingest"
-command = "datalib-step"
+id = "lightroom/ingest"
+command = "datalib-step run ingest lightroom"
 
 [steps.params.backups]
 path = "~/Pictures/Lightroom/Backups"
@@ -17,7 +16,7 @@ path = "~/Pictures/Lightroom/Backups"
 # Lightroom's render writes no markdown: it puts a grid row per photo
 # and video in the grid, and is what the photos applet draws from.
 [[steps]]
-group = "lightroom"
-function = "render_markdown"
-command = "datalib-step"
+id = "lightroom/render_markdown"
+command = "datalib-step run render_markdown lightroom"
 inputs = ["lightroom/ingest"]
+reads = "pinned"

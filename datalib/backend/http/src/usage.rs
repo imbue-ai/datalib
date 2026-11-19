@@ -669,13 +669,14 @@ id = "slack"
 type = "slack"
 
 [[steps]]
-group = "slack"
-function = "ingest"
+id = "slack/ingest"
+command = "datalib-step run ingest slack"
 
 [[steps]]
-group = "slack"
-function = "render_markdown"
+id = "slack/render_markdown"
+command = "datalib-step run render_markdown slack"
 inputs = ["slack/ingest"]
+reads = "pinned"
 
 [[steps]]
 id = "custom/out"

@@ -2,25 +2,27 @@
 #
 # Three kinds of entry. A `[[groups]]` entry is one thing on the
 # Manage screen — a source is a group with a `type`, and the grid and
-# search index is a group without one. A `[[steps]]` entry is `group` +
-# `function`: what it does within its group. Its id is composed as
-# `<group>/<function>` and never written; that id is the directory the
-# step writes, and what another step's `inputs` name. An `[[applets]]`
+# search index is a group without one. A `[[steps]]` entry is one process
+# the runner starts. Its `id` is `<group>/<function>`: the first part
+# names the group it is filed under, and the whole id is the directory the
+# step writes and what another step's `inputs` name. An `[[applets]]`
 # entry is a server the app runs, filed under a group for display.
 #
-# Every step names the program it runs in `command` (writing your own:
-# `datalib-step help step-protocol`); the runner writes `params` to an
-# owner-only JSON file it names with `--params-file`, appends `inputs`
-# as a `--inputs` JSON flag, and passes the composed id, the group, its
-# type and the function in the environment. Datalib's own steps run
-# `datalib-step`, which reads the function and the group's `type` from
-# that environment. Its functions used below are `ingest` (bring the
-# data in), `render_markdown` (turn the raw store into documents in a
-# render store), `embed` (a source's part of the search by meaning),
-# and, under the grid and search index group,
-# `unified_grid_and_search_index` (every render into the grid and the
-# keyword search) and `embedding_map` (lays out what the `embed` steps
-# embedded). `datalib-step help` lists the rest.
+# Every step names the program it runs, with all of its arguments, in
+# `command` (writing your own: `datalib-step help step-protocol`). The
+# runner hands it its `params` as JSON in `DATALIB_DAG_PARAMS` and its
+# `inputs` in `DATALIB_DAG_INPUTS`, and knows nothing else about it.
+# Datalib's own steps run `datalib-step run <function> [<type>]`: the
+# function, and the group's `type` for a step under a source. Its
+# functions used below are `ingest` (bring the data in),
+# `render_markdown` (turn the raw store into documents in a render
+# store), `embed` (a source's part of the search by meaning), and, under
+# the grid and search index group, `unified_grid_and_search_index`
+# (every render into the grid and the keyword search) and
+# `embedding_map` (lays out what the `embed` steps embedded).
+# `datalib-step help` lists the rest. Each also writes the `reads` and
+# `locks` it needs, and the `[[programs]]` entry at the end lists the
+# verbs `datalib-step` takes.
 # `params` is per-function — the ingest step carries the provider's
 # config, with where the data comes from as one table whose name is
 # read under the group's type (`api` is the product's own API;
@@ -34,8 +36,8 @@
 # likewise `data_root` below has to precede the first `[[…]]` header.
 #
 # Editing a step re-runs it. The runner fingerprints each step over its
-# command, `params`, `env`, declared paths and its group's `type`, so
-# changing any of them makes the step stale even when nothing it reads
+# id, `command`, `inputs`, `params` and `env`, so changing any of them
+# makes the step stale even when nothing it reads
 # has moved — widen a `since`, flip a render knob, and the next run
 # rebuilds that step's output. An optional `code_version = "..."` covers
 # the remaining case: a step whose behavior changed without its command
@@ -88,33 +90,14 @@ process_log_lines = 200000
 # run still listed keeps its chart.
 disk_usage_days = 30
 
-# How much a render holds in memory at once. It reads the raw store a
-# page of `buckets` at a time (threads, conversations: whatever the
-# source renders as one unit), and loads at most `blob_mb` of their
-# attachments together. Smaller pages hold less and cost more queries;
-# changing them changes no document. Omit the table, or either key, for
-# the defaults, which are these. Email and Slack read both; every other
-# render with attachments reads `blob_mb`.
-[render_pages]
-buckets = 500
-blob_mb = 64
-
-# What every `embed` step that sends its chunks to Modal shares (an
-# `embed` sends them only when its params set
-# `embed_on_modal_from_n_chunks`). `max_sandboxes` is how many Modal
-# Sandboxes, each a GPU, one step runs at once; it spreads what it owes
-# over them, at least 256 chunks to a Sandbox. Omit it for the default,
-# which is this. Your Modal account's own limit may hold it to fewer.
-[modal]
-max_sandboxes = 100
-
 # ── slack ──────────────────────────────────────────────────────────
 # A group has two names. Its `id` is the identity: unique, path-safe,
 # and the directory every step under it writes into — so changing it is
 # a migration rather than an edit. Its `name` is what a person types and
 # what every screen shows; optional, and free to change at any moment
 # because nothing depends on it. The `type` says what kind of data the
-# group mirrors, and which provider the built-in steps run. An optional
+# group mirrors; each `datalib-step` command under it names it again, so
+# the step knows which provider to run. An optional
 # `description` says what this source is to you; like the name it is
 # display text, and search does not read it.
 [[groups]]
@@ -124,18 +107,17 @@ type = "slack"
 description = "The company Slack, mostly the infra and on-call channels."
 
 [[steps]]
-group = "slack"
-function = "ingest"
-command = "datalib-step"
+id = "slack/ingest"
+command = "datalib-step run ingest slack"
 [steps.params.api]
 media = true
 channels = ["chat-qi"]
 since = "2026-06-15"
 
 [[steps]]
-group = "slack"
-function = "render_markdown"
-command = "datalib-step"
+id = "slack/render_markdown"
+command = "datalib-step run render_markdown slack"
+reads = "pinned"
 inputs = ["slack/ingest"]
 
 # A source's search by meaning. `unified_grid_and_search_index` puts
@@ -145,9 +127,10 @@ inputs = ["slack/ingest"]
 # keyword search still finds the source. `not_searched` on the index
 # step, below, keeps a source out of search entirely.
 [[steps]]
-group = "slack"
-function = "embed"
-command = "datalib-step"
+id = "slack/embed"
+command = "datalib-step run embed slack"
+reads = "files"
+locks = ["embedder"]
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 # Optional: a run that owes at least this many chunks embeds them on your
 # own Modal account's GPUs instead of here (`modal setup` signs you in),
@@ -166,29 +149,30 @@ id = "claude"
 type = "claude"
 
 [[steps]]
-group = "claude"
-function = "ingest"
-command = "datalib-step"
+id = "claude/ingest"
+command = "datalib-step run ingest claude"
 [steps.params.api]
 conv_uuids = ["f6e7d4bb-991e-433d-91f0-e19b2c8a1e37"]
 
 [[steps]]
-group = "claude"
-function = "render_markdown"
-command = "datalib-step"
+id = "claude/render_markdown"
+command = "datalib-step run render_markdown claude"
+reads = "pinned"
 inputs = ["claude/ingest"]
 
 [[steps]]
-group = "claude"
-function = "embed"
-command = "datalib-step"
+id = "claude/embed"
+command = "datalib-step run embed claude"
+reads = "files"
+locks = ["embedder"]
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # ── a diff group ───────────────────────────────────────────────────
 # What changed in a source between two of its raw store's commits, as
 # documents with the changes highlighted and grid rows with a
-# `diff_status`. `type = "diff"` and `source` make it one; its one step
-# is `render_markdown`, reading the source's ingest tree, with the two
+# `diff_status`. `type = "diff"` makes it one, and each of its commands
+# names the source's type after `--source-type`; its one render step is
+# `render_markdown`, reading the source's ingest tree, with the two
 # commits under `params.diff` — both required, a diff is asked for and
 # never keeps itself up to date. Read by the fan-ins like any source.
 # The Manage screen's "Compare…" writes one.
@@ -196,12 +180,11 @@ inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 id = "slack-diff"
 name = "Work Slack, this week's changes"
 type = "diff"
-source = "slack"
 
 [[steps]]
-group = "slack-diff"
-function = "render_markdown"
-command = "datalib-step"
+id = "slack-diff/render_markdown"
+command = "datalib-step run render_markdown diff --source-type slack"
+reads = "pinned"
 inputs = ["slack/ingest"]
 [steps.params.diff]
 from = "8f1c2b0d7e6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c"
@@ -211,19 +194,22 @@ to = "3b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c"
 max_documents = 200
 
 [[steps]]
-group = "slack-diff"
-function = "embed"
-command = "datalib-step"
+id = "slack-diff/embed"
+command = "datalib-step run embed diff --source-type slack"
+reads = "files"
+locks = ["embedder"]
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # ── locks ──────────────────────────────────────────────────────────
-# What keeps steps apart beyond the trees they write and read. Every
-# config has three budgets, `network` (4 slots), `cpu` (4) and `index`
-# (2), and a step that names none holds one of them by its shape: a
-# download `network`, a render `cpu`, an index `index`. Every `embed`
-# holds `embedder` instead, one slot, so one embedding model is loaded at
-# a time. Declare a budget to resize it, or add your own and name it on
-# the steps that hold it:
+# What keeps steps apart beyond the trees they write and read. The
+# runner has two budgets, `network` (4 slots) and `cpu` (4), and a step
+# that names no lock holds one of them: `network` if it declares no
+# inputs (a download), `cpu` if it does. Any other lock is declared with
+# a `[[locks]]` entry (the ones these steps hold are at the end of the
+# file) and named on the steps that hold it: every `embed` holds
+# `embedder`, one slot, so one embedding model is loaded at a time, and
+# the fan-ins that read every source hold `index`, so two of them at
+# most run at once. Declare a budget to resize it, or add your own:
 #
 #   [[locks]]
 #   name = "slack-api"   # two sources on one workspace's rate limit
@@ -257,9 +243,10 @@ inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_grid_and_search_index"
-function = "unified_grid_and_search_index"
-command = "datalib-step"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "datalib-step run unified_grid_and_search_index"
+reads = "pinned"
+locks = ["index"]
 inputs = ["*/render_markdown"]
 
 # The search's document embeddings laid out on a plane by UMAP, for the
@@ -267,9 +254,10 @@ inputs = ["*/render_markdown"]
 # run starts from the last map, so documents stay put as more arrive;
 # resetting the step lays the map out afresh.
 [[steps]]
-group = "unified_grid_and_search_index"
-function = "embedding_map"
-command = "datalib-step"
+id = "unified_grid_and_search_index/embedding_map"
+command = "datalib-step run embedding_map"
+reads = "files"
+locks = ["index"]
 inputs = ["*/embed"]
 
 # ── applets ────────────────────────────────────────────────────────
@@ -323,3 +311,37 @@ command = "datalib-applet unified_grid_and_search_index"
 group = "unified_grid_and_search_index"
 id = "datalib_contacts"
 command = "datalib-applet datalib_contacts"
+
+# Settings `datalib-step` reads, which the runner hands to every step as
+# environment variables.
+[env]
+# How much a render holds in memory at once. It reads the raw store a
+# page of `buckets` at a time (threads, conversations: whatever the
+# source renders as one unit), and loads at most `blob_mb` of their
+# attachments together. Smaller pages hold less and cost more queries;
+# changing them changes no document. The value is `<buckets>,<blob_mb>`;
+# leave it out, or either side empty, for the defaults, which are these. Email and Slack read both; every other
+# render with attachments reads `blob_mb`.
+DATALIB_STEP_RENDER_PAGES = "500,64"
+# What every `embed` step that sends its chunks to Modal shares (an
+# `embed` sends them only when its params set
+# `embed_on_modal_from_n_chunks`): how many Modal Sandboxes, each a GPU,
+# one step runs at once; it spreads what it owes
+# over them, at least 256 chunks to a Sandbox. Omit it for the default,
+# which is this. Your Modal account's own limit may hold it to fewer.
+DATALIB_STEP_MODAL_MAX_SANDBOXES = "100"
+
+# The verbs `datalib-step` takes (docs/dev/step_protocol.md § Verbs).
+[[programs]]
+command = "datalib-step"
+verbs = ["reset", "prepare", "compact", "collect"]
+
+# One embed at a time: each loads the model and writes the search index.
+[[locks]]
+name = "embedder"
+slots = 1
+
+# The fan-ins that read every source.
+[[locks]]
+name = "index"
+slots = 2

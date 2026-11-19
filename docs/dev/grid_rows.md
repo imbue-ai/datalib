@@ -143,9 +143,9 @@ From a checkout:
 6. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 On an existing root, a render store and the grid index change shape
-only when the step that writes them runs. The first launch of the new
-build asks each step (`--migrate`) whether its store's recorded shape is
-this build's; the app then offers to re-render them all, downloading
+only when the step that writes them runs. Each start of the loop asks
+each step (`--prepare`) whether its store's recorded shape is this
+build's; the app then offers to re-render them all, downloading
 nothing, and until then a source's own sync re-renders that source
 ([the runner](../../datalib/backend/dag/README.md#upgrading-a-root)).
 The render step sees its own DDL hash moved (`_store_schema`, one of

@@ -27,41 +27,61 @@ always means the server restarted and minted a new one.
 The sync pipeline is driven by `<root>/config.toml`, which holds three
 kinds of entry. `[[groups]]` is what a person sees as one thing: an
 `id` (one directory name), a `name`, and for a source a `type`.
-`[[steps]]` is the pipeline: each step names its `group` and the
-`function` it performs there and the `inputs` it reads; its id is
-composed as `<group>/<function>` — the one tree it writes — and is
-never written. Every step names the program it runs in `command`.
-Datalib's own steps write `command = "datalib-step"` (the functions
-`ingest`, `render_markdown`, `render_time_series`, `render_occurrences`,
-`embed`, `unified_grid_and_search_index`, `embedding_map` and
-`time_series_index`); a custom step names its own. `[[applets]]` is the app surface —
-long-lived servers that contribute card components and the endpoints
-behind them, filed under a group but declaring no inputs because they
-read what steps wrote. This guide is about groups and steps; for
-applets see `datalib-step help applets`. Edges are the declared `inputs`,
-which name steps by composed id — file order does not matter to the
-runner. It does to a person: the Sources screen lists groups and steps
-in file order, and writes them in the order data flows, each source
-above the `unified_grid_and_search_index` group and each step below the steps it
-reads. Write yours the same way. A step
-with no `inputs` is a **source step** (where a sync normally starts); every
-source feeds the fan-in step under the `unified_grid_and_search_index` group:
+`[[steps]]` is the pipeline: each step has an `id` — the one tree it
+writes, whose first part is its group — the `command` it runs, and the
+`inputs` it reads. Datalib's own steps run `datalib-step run <function>
+[<type>]` (the functions `ingest`, `render_markdown`,
+`render_time_series`, `render_occurrences`, `embed`,
+`unified_grid_and_search_index`, `embedding_map` and
+`time_series_index`), with an id of `<group>/<function>` and the
+group's `type` as `<type>`; a custom step names its own program.
+`[[applets]]` is the app surface — long-lived servers that contribute
+card components and the endpoints behind them, filed under a group but
+declaring no inputs because they read what steps wrote. This guide is
+about groups and steps; for applets see `datalib-step help applets`.
+Edges are the declared `inputs`, which name steps by id — file order
+does not matter to the runner. It does to a person: the Sources screen
+lists groups and steps in file order, and writes them in the order data
+flows, each source above the `unified_grid_and_search_index` group and
+each step below the steps it reads. Write yours the same way. A step
+with no `inputs` is a **source step** (where a sync normally starts);
+every source feeds the fan-in step under the
+`unified_grid_and_search_index` group.
+
+Each `datalib-step` step also says how it reads its inputs and which
+locks it holds, because the runner works out nothing from the program's
+name: copy `reads` and `locks` exactly as below. `locks` keeps the
+embeddings from loading the model twice at once, and the index steps to
+a budget of their own, and every lock a step holds needs a `[[locks]]`
+entry. The `[[programs]]` entry says which requests (a reset, the check
+at each start, freeing disk) `datalib-step` understands. A config the
+app wrote already has all three entries at the top:
 
 ```toml
+[[programs]]
+command = "datalib-step"
+verbs = ["reset", "prepare", "compact", "collect"]
+
+[[locks]]
+name = "index"
+slots = 2
+
+[[locks]]
+name = "embedder"
+slots = 1
+
 # One source = a group with a `type`, plus an ingest step and a
-# render step under it, each running `datalib-step`. The ingest step has
-# no inputs (that makes it a source step). `params` carries
-# per-provider config; credentials never live here (latchkey provides
-# them at runtime).
+# render step under it. The ingest step has no inputs (that makes it a
+# source step). `params` carries per-provider config; credentials never
+# live here (latchkey provides them at runtime).
 [[groups]]
 id = "slack"
 name = "Work Slack"
 type = "slack"
 
 [[steps]]
-group = "slack"
-function = "ingest"
-command = "datalib-step"
+id = "slack/ingest"
+command = "datalib-step run ingest slack"
 # A sub-table ends the table it sits in, so `params` goes after this
 # step's plain keys — and the next entry starts with its own [[…]].
 # The one table under it names how the data is reached: `api` is the
@@ -69,19 +89,20 @@ command = "datalib-step"
 [steps.params.api]
 
 [[steps]]
-group = "slack"
-function = "render_markdown"
-command = "datalib-step"
+id = "slack/render_markdown"
+command = "datalib-step run render_markdown slack"
 inputs = ["slack/ingest"]
+reads = "pinned"
 
-# The source's search by meaning: the embeddings of what `unified_grid_and_search_index`
-# put in the keyword search (the slow one). Leave it out and keyword
-# search still finds the source.
+# The source's search by meaning: the embeddings of what
+# `unified_grid_and_search_index` put in the keyword search (the slow
+# one). Leave it out and keyword search still finds the source.
 [[steps]]
-group = "slack"
-function = "embed"
-command = "datalib-step"
+id = "slack/embed"
+command = "datalib-step run embed slack"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]
 
 # The shared fan-in step. It reads every source's render by pattern, so
 # a source added above needs no edit here: `*/render_markdown` is every
@@ -93,11 +114,11 @@ inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_grid_and_search_index"
-function = "unified_grid_and_search_index"
-command = "datalib-step"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "datalib-step run unified_grid_and_search_index"
 inputs = ["*/render_markdown"]
-
+reads = "pinned"
+locks = ["index"]
 ```
 
 Any top-level keys (`data_root`, `binary_dir`) must be written *above*
@@ -139,8 +160,9 @@ body; it returns the same shape and writes nothing.
 From a terminal, `datalib-dag --check <data_root>/config.toml` prints
 the same diagnostics as `file:line:col: severity: message`, with the
 offending line and a `help:` line under each. Exit 0 when every entry
-loads, 1 if the file is not a config at all (or the data root was
-written by a newer Datalib), 2 if some entries were dropped.
+loads, 1 if the file is not a config at all, 2 if some entries were
+dropped. It does not check a step's params; the PUT and
+`POST /api/config/check` do, for every `datalib-step` step.
 
 ### A file already on disk is treated more leniently than your PUT
 
@@ -162,7 +184,7 @@ when it declares no `unified_grid_and_search_index` applet, or when the data roo
 written by a newer Datalib. The UI blocks on it.
 
 The config is always TOML in the shape above — the server reads and
-writes no other. A config in the retired shape (steps with a
+writes no other. A config in the oldest retired shape (steps with a
 `datalib-step download …` or `datalib-step render …` command) is
 refused, and the diagnostic says so; tell the user to rewrite it once
 with
@@ -170,20 +192,22 @@ with
 and you should not try to translate the file yourself. Every other
 older shape the server rewrites itself as soon as it reads the file,
 keeping the old text as `config.toml.bak`, so re-read the config after
-writing one: a `qmd_index`, `keyword_index` or `qmd_aggregator` step
-(each source's `embed` and `unified_grid_and_search_index` do that
-work, and a source that was not keyword-indexed is listed in the
-index step's `params.not_searched`), a `grid_index` step (the index step's old function), the index
-group under an earlier name (`unified_index`, `unified_document_index`),
-a lock named `qmd_embed` (now `embedder`), and an id with capitals in it
-(every id is lower case, since each names a folder, and the server
-moves the folder too). `datalib-step help config-model` lists every
-rewrite.
+writing one: steps written as `group` + `function`, a bare `command =
+"datalib-step"`, the top-level `checkpoint_cadence`, `render_pages` and
+`[modal]` (which become variables in `[env]`), a `qmd_index`,
+`keyword_index` or `qmd_aggregator` step (each source's `embed` and
+`unified_grid_and_search_index` do that work, and a source that was not
+keyword-indexed is listed in the index step's `params.not_searched`), a
+`grid_index` step (the index step's old function), the index group under
+an earlier name (`unified_index`, `unified_document_index`), a lock
+named `qmd_embed` (now `embedder`), and an id with capitals in it (every
+id is lower case, since each names a folder, and the server moves the
+folder too). `datalib-step help config-model` lists every rewrite.
 
 ## Adding your own step commands
 
-A step may name a `command`: an ordinary command line, for a step that
-is not one of the built-in functions. If the user's request needs a
+A step's `command` may be any ordinary command line, for a step that is
+not one of `datalib-step`'s functions. If the user's request needs a
 new program (a custom fetcher, a converter, …), write it and install
 it into the library's **`system/bin/`** — either the binary itself or a
 symlink to wherever it lives:

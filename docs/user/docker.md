@@ -133,15 +133,26 @@ config first:
 ```sh
 mkdir -p "$DATA_ROOT"
 cat > "$DATA_ROOT/config.toml" <<EOF
+[[programs]]
+command = "datalib-step"
+verbs = ["reset", "prepare", "compact", "collect"]
+
+[[locks]]
+name = "index"
+slots = 2
+
+[[locks]]
+name = "embedder"
+slots = 1
+
 [[groups]]
 id = "gmail"
 name = "Gmail (Takeout)"
 type = "email"
 
 [[steps]]
-group = "gmail"
-function = "ingest"
-command = "datalib-step"
+id = "gmail/ingest"
+command = "datalib-step run ingest email"
 [steps.params.mbox]
 path = "/import/$(basename "$MBOX")"
 account_id = "you@gmail.com"
@@ -150,10 +161,10 @@ email_address = "you@gmail.com"
 is_personal = true
 
 [[steps]]
-group = "gmail"
-function = "render_markdown"
-command = "datalib-step"
+id = "gmail/render_markdown"
+command = "datalib-step run render_markdown email"
 inputs = ["gmail/ingest"]
+reads = "pinned"
 [steps.params]
 outlink_format = "gmail"
 
@@ -161,16 +172,18 @@ outlink_format = "gmail"
 id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_grid_and_search_index"
-function = "unified_grid_and_search_index"
-command = "datalib-step"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "datalib-step run unified_grid_and_search_index"
 inputs = ["*/render_markdown"]
+reads = "pinned"
+locks = ["index"]
 
 [[steps]]
-group = "gmail"
-function = "embed"
-command = "datalib-step"
+id = "gmail/embed"
+command = "datalib-step run embed email"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]
 
 [[applets]]
 group = "unified_grid_and_search_index"

@@ -286,31 +286,39 @@ type = "${s.type}"
 name = "${name}"
 
 [[steps]]
-group = "${s.id}"
-function = "ingest"
-command = "'${STEP_BIN}'"
+id = "${s.id}/ingest"
+command = "'${STEP_BIN}' run ingest ${s.type}"
 ${s.params}
 
 [[steps]]
-group = "${s.id}"
-function = "render_markdown"
-command = "'${STEP_BIN}'"
+id = "${s.id}/render_markdown"
+command = "'${STEP_BIN}' run render_markdown ${s.type}"
 inputs = ["${ingestOf(s)}"]
+reads = "pinned"
 `;
 const config = (sources: Source[], names: Record<string, string> = {}) => `data_root = "${dataRoot}"
 
-[checkpoint_cadence]
-at_most_every_secs = 2
+[env]
+DATALIB_STEP_CHECKPOINT_CADENCE = "2"
+
+[[programs]]
+command = "${STEP_BIN}"
+verbs = ["reset", "prepare", "compact", "collect"]
+
+[[locks]]
+name = "index"
+slots = 2
 
 [[groups]]
 id = "unified_grid_and_search_index"
 name = "Grid and Search Index"
 
 [[steps]]
-group = "unified_grid_and_search_index"
-function = "unified_grid_and_search_index"
-command = "'${STEP_BIN}'"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "'${STEP_BIN}' run unified_grid_and_search_index"
 inputs = [${sources.map((s) => `"${renderOf(s)}"`).join(", ")}]
+reads = "pinned"
+locks = ["index"]
 ${sources.map((s) => stanza(s, names[s.id])).join("")}${applets()}`;
 
 async function writeConfigAndOpen(page: Page, sources: Source[], names?: Record<string, string>) {

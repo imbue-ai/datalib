@@ -13,10 +13,10 @@ other shape: one row per occurrence, the way Google's
 
 ```toml
 [[steps]]
-group = "calendar"
-function = "render_occurrences"
-command = "datalib-step"
+id = "calendar/render_occurrences"
+command = "datalib-step run render_occurrences calendar"
 inputs = ["calendar/ingest"]
+reads = "pinned"
 
 [steps.params]
 days_back = 30    # the default

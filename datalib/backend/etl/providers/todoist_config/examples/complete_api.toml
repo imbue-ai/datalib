@@ -7,9 +7,8 @@ name = "Todoist"
 type = "todoist"
 
 [[steps]]
-group = "todoist"
-function = "ingest"
-command = "datalib-step"
+id = "todoist/ingest"
+command = "datalib-step run ingest todoist"
 
 # When to give up on failed requests. The download retries and backs off
 # on its own; these only decide when to stop.
@@ -33,15 +32,16 @@ since = "2024-01-01"
 # One document per project: its sections, its tasks and their comments,
 # completed tasks folded under each section. No options.
 [[steps]]
-group = "todoist"
-function = "render_markdown"
-command = "datalib-step"
+id = "todoist/render_markdown"
+command = "datalib-step run render_markdown todoist"
 inputs = ["todoist/ingest"]
+reads = "pinned"
 
 # Search by meaning: cuts this source's documents into chunks and embeds
 # them. Leave it out and keyword search still finds it.
 [[steps]]
-group = "todoist"
-function = "embed"
-command = "datalib-step"
+id = "todoist/embed"
+command = "datalib-step run embed todoist"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]

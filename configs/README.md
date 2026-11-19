@@ -1,12 +1,12 @@
 # Example configs
 
 [`dag_example.toml`](dag_example.toml) is a complete, commented config:
-a `[[groups]]` entry per source, `[[steps]]` entries declared as
-`group` + `function`, each naming the program it runs in `command`
-(`datalib-step` for a built-in one), and edges
-from each step's declared `inputs`. Its header comment explains the
-shape; [`docs/dev/step_protocol.md`](../docs/dev/step_protocol.md) says
-what a step with a `command` must do.
+a `[[groups]]` entry per source, `[[steps]]` entries each written as an
+`id` (the tree it writes, whose first part is its group) and the
+`command` it runs, and edges from each step's declared `inputs`. Its
+header comment explains the shape;
+[`docs/dev/step_protocol.md`](../docs/dev/step_protocol.md) says what a
+step's command is given and must do.
 
 ## Running a config
 

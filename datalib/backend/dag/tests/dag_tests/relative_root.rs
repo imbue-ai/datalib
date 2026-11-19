@@ -17,8 +17,7 @@ const STEP: &str = r#"
 id = "g"
 
 [[steps]]
-group = "g"
-function = "out"
+id = "g/out"
 command = '''sh -c 'mkdir -p "$DATALIB_DAG_DATA_ROOT/g/out" && printf "%s\n%s\n" "$DATALIB_DAG_DATA_ROOT" "$PATH" > "$DATALIB_DAG_DATA_ROOT/g/out/env"' '''
 "#;
 

@@ -8,9 +8,8 @@ name = "Gmail"
 type = "email"
 
 [[steps]]
-group = "email"
-function = "ingest"
-command = "datalib-step"
+id = "email/ingest"
+command = "datalib-step run ingest email"
 
 # Sections add up: what is fetched is the union of them, and a label two
 # sections name goes as far back as either asks. `fetch` replaces
@@ -24,7 +23,7 @@ since = "-90d"          # oldest mail this section takes, as `gmail.since` says 
 whole_threads = false   # keep only the messages under these labels; default true brings their threads
 
 [[steps]]
-group = "email"
-function = "render_markdown"
-command = "datalib-step"
+id = "email/render_markdown"
+command = "datalib-step run render_markdown email"
 inputs = ["email/ingest"]
+reads = "pinned"

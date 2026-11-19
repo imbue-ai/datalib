@@ -137,7 +137,7 @@ fn source(root: &Path, group: &str, script: &str) -> String {
     std::fs::write(&path, script).unwrap();
     format!(
         "[[groups]]\nid = \"{group}\"\n\n\
-         [[steps]]\ngroup = \"{group}\"\nfunction = \"out\"\ncommand = \"/bin/sh {}\"\n\n",
+         [[steps]]\nid = \"{group}/out\"\ncommand = \"/bin/sh {}\"\n\n",
         path.display()
     )
 }
@@ -146,7 +146,7 @@ fn source(root: &Path, group: &str, script: &str) -> String {
 const HELD: &str = r#"
     out="$DATALIB_DAG_DATA_ROOT/$DATALIB_DAG_STEP"
     mkdir -p "$out"
-    touch "$DATALIB_DAG_DATA_ROOT/started-$DATALIB_DAG_GROUP"
+    touch "$DATALIB_DAG_DATA_ROOT/started-${DATALIB_DAG_STEP%%/*}"
     while [ ! -e "$DATALIB_DAG_DATA_ROOT/release" ]; do sleep 0.05; done
     echo done > "$out/f"
 "#;
@@ -290,8 +290,8 @@ async fn sync_everything_gives_each_source_a_stop_of_its_own() {
         + &source(root, "b", HELD)
         + &format!(
             "[[groups]]\nid = \"index\"\n\n\
-             [[steps]]\ngroup = \"index\"\nfunction = \"out\"\ncommand = \"/bin/sh {}\"\n\
-             inputs = [\"a/out\", \"b/out\"]\n",
+             [[steps]]\nid = \"index/out\"\ncommand = \"/bin/sh {}\"\n\
+             inputs = [\"a/out\", \"b/out\"]\nreads = \"pinned\"\n",
             index.display()
         );
     std::fs::write(root.join("config.toml"), config).unwrap();
@@ -379,8 +379,8 @@ async fn a_requests_root_reads_done_while_the_index_after_it_runs() {
     let config = source(root, "a", HELD)
         + &format!(
             "[[groups]]\nid = \"index\"\n\n\
-             [[steps]]\ngroup = \"index\"\nfunction = \"out\"\ncommand = \"/bin/sh {}\"\n\
-             inputs = [\"a/out\"]\n",
+             [[steps]]\nid = \"index/out\"\ncommand = \"/bin/sh {}\"\n\
+             inputs = [\"a/out\"]\nreads = \"pinned\"\n",
             index.display()
         );
     std::fs::write(root.join("config.toml"), config).unwrap();
@@ -705,9 +705,9 @@ fn chain(root: &Path, version: &str) -> String {
     };
     format!(
         "[[groups]]\nid = \"a\"\n\n\
-         [[steps]]\ngroup = \"a\"\nfunction = \"out\"\ncommand = \"/bin/sh {}\"\n\n\
-         [[steps]]\ngroup = \"a\"\nfunction = \"derived\"\ncommand = \"/bin/sh {} {version}\"\n\
-         inputs = [\"a/out\"]\n",
+         [[steps]]\nid = \"a/out\"\ncommand = \"/bin/sh {}\"\n\n\
+         [[steps]]\nid = \"a/derived\"\ncommand = \"/bin/sh {} {version}\"\n\
+         inputs = [\"a/out\"]\nreads = \"pinned\"\n",
         script("out"),
         script("derived"),
     )
