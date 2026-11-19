@@ -4,13 +4,13 @@
 // server which of its remote references may load before the first
 // paint — and the chat body renders it the same way.
 //
-// A body that comes with its sections is rendered one message at a
+// A body comes as the renderer's pieces and is rendered one message at a
 // time, so that markup one message leaves open cannot reach the next:
 // docs/dev/data_architecture_parse_and_render.md §"One section cannot
 // reach the next".
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
-import type { BodySection } from "@/api";
+import type { BodyPiece } from "@/api";
 import { chipLinks } from "./chipLinks";
 import { sanitizeRenderedHtml, type Sanitized, type SanitizeOptions } from "./sanitize";
 
@@ -33,24 +33,26 @@ const md = new MarkdownIt({
 });
 md.use(chipLinks);
 
-export type RenderOptions = Pick<SanitizeOptions, "accept" | "context"> & {
-  /** Where each section of the body lies, as the document route sends
-   *  it. Absent: the body is rendered whole. */
-  sections?: readonly BodySection[] | null;
-};
+export type RenderOptions = Pick<SanitizeOptions, "accept" | "context">;
 
-type Piece = { uuid: string | null; md: string };
 type Signed = SanitizeOptions & { chipMark: string };
+
+/// A document's markdown whole: its pieces joined.
+export function bodyOf(doc: { pieces: readonly BodyPiece[] }): string {
+  return doc.pieces.map((p) => p.md).join("");
+}
 
 /// The body as HTML for the page: rendered, then sanitized, because the
 /// body is whatever the source sent and `html: true` lets it through as
-/// HTML.
-export function renderDocument(body: string, options: RenderOptions = {}): Sanitized {
-  const { sections, ...rest } = options;
+/// HTML. A string is markdown with no messages marked in it, rendered
+/// whole.
+export function renderDocument(
+  body: readonly BodyPiece[] | string,
+  options: RenderOptions = {},
+): Sanitized {
   // Fresh each render, so a body cannot carry one forward.
-  const signed = { ...rest, chipMark: crypto.randomUUID() };
-  const pieces = sections ? cut(body, sections) : null;
-  return pieces ? renderPieces(pieces, signed) : renderWhole(body, signed);
+  const signed = { ...options, chipMark: crypto.randomUUID() };
+  return typeof body === "string" ? renderWhole(body, signed) : renderPieces(body, signed);
 }
 
 function renderWhole(body: string, options: Signed, messageHeader = false): Sanitized {
@@ -60,22 +62,11 @@ function renderWhole(body: string, options: Signed, messageHeader = false): Sani
   );
 }
 
-function cut(body: string, sections: readonly BodySection[]): Piece[] | null {
-  const total = sections.reduce((n, s) => n + s.len, 0);
-  if (total !== body.length) {
-    // The server checked the layout against the file; this is a bug.
-    console.error(`sections cover ${total} of the body's ${body.length} characters`);
-    return null;
-  }
-  let at = 0;
-  return sections.map((s) => ({ uuid: s.uuid, md: body.slice(at, (at += s.len)) }));
-}
-
 /// The pieces of the page's frame — title, `<details>` openers and
 /// closers — are rendered together, so a `<details>` opened in one closes
 /// in a later one, with a placeholder for each message; each message is
 /// rendered alone and put in its place.
-function renderPieces(pieces: Piece[], options: Signed): Sanitized {
+function renderPieces(pieces: readonly BodyPiece[], options: Signed): Sanitized {
   const messages = new Set(pieces.flatMap((p) => (p.uuid === null ? [] : [p.uuid])));
   const slot = crypto.randomUUID();
   const frameMd = pieces

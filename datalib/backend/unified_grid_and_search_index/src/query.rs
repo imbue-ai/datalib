@@ -662,8 +662,8 @@ mod tests {
     fn identifiers_are_uuids_and_handles_and_nothing_else() {
         let id = |w: &str| identifier(w);
         assert_eq!(
-            id("00000000-0000-8B8A-896D-63addc7b31ad").as_deref(),
-            Some("00000000-0000-8b8a-896d-63addc7b31ad")
+            id("00000000-0000-8BaD-8eeF-0000bead0002").as_deref(),
+            Some("00000000-0000-8bad-8eef-0000bead0002")
         );
         assert_eq!(
             id("away-team-00000000-0000-4000-8000-000000000001").as_deref(),

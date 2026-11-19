@@ -21,23 +21,22 @@ The `unified_grid_and_search_index` applet serves the documents, and
 - `GET /applet/unified_grid_and_search_index/chat/{markdown_uuid}` answers one,
   as JSON. `body` is the markdown, without its front matter; beside it
   are what the index knows of the document (`name`, `created_at`,
-  `source_url`, `problems`, its links to other documents).
+  `source_url`, `problems`, its links to other documents). Add
+  `?pieces=true` for the same markdown as `pieces` in place of `body`.
 
 The markdown mixes markdown with a little HTML. It quotes what strangers
 wrote, so **show it through an HTML sanitizer**, as you would any mail.
 Keep at least the `<time>` and `<div>` elements and the attributes this
 page names.
 
-Render it a message at a time, too, where the answer has `sections`: a
-list of `{uuid, len}` that cuts `body` into its pieces in order, `len`
-counted in UTF-16 code units (a JavaScript string's `length`). A piece
-with a `uuid` is one message; render and sanitize it on its own, and a
-tag it leaves open is closed at its end instead of hiding the messages
-after it. The pieces without one (the title, the folds around a run of
-tool steps) open and close elements between them, so render those
-together. Datalib's viewer does both in `ui/src/cards/renderDocument.ts`.
-A document whose source does not mark its messages comes without
-`sections`.
+Render it a message at a time, too: `pieces` is a list of `{uuid, md}`
+that, joined in order, is `body`. A piece with a `uuid` is one message;
+render and sanitize it on its own, and a tag it leaves open is closed at
+its end instead of hiding the messages after it. The pieces without one
+(the title, the folds around a run of tool steps) open and close
+elements between them, so render those together. Datalib's viewer does
+both in `ui/src/cards/renderDocument.ts`. A document whose source does
+not mark its messages comes as pieces without a `uuid`.
 
 ## The parts of a document
 

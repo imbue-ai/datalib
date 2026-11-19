@@ -20,6 +20,20 @@ const DDL: [&str; 1] = ["CREATE TABLE IF NOT EXISTS vectors (
         PRIMARY KEY (model, hash)
     ) WITHOUT ROWID"];
 
+/// The keys alone, a few percent of the table: every page of `vectors`
+/// holds a 3 KB vector, so asking it whether a vector is held reads a
+/// random page per chunk, and on a cache larger than the page cache that
+/// is a disk read each. SQLite picks this index for a lookup by `IN`,
+/// but the primary key for a correlated `NOT EXISTS`, so a query that only
+/// asks names it (`INDEXED BY`) rather than leave it to the planner.
+/// Kept out of [`DDL`]: the file's shape is a hash of it, and a cache in
+/// another shape is emptied.
+const KEYS: &str = "CREATE INDEX IF NOT EXISTS vectors_keys ON vectors (model, hash)";
+
+/// Of a model's vectors, the hashes held among a bound JSON array of them.
+const HELD_SQL: &str = "SELECT hash FROM vectors INDEXED BY vectors_keys WHERE model = ? \
+                          AND hash IN (SELECT value FROM json_each(?))";
+
 /// How many hashes go into one statement's bound JSON array.
 const BATCH: usize = 10_000;
 
@@ -42,6 +56,10 @@ impl InferenceCache {
         )
         .await
         .with_context(|| format!("open the inference cache at {}", path.display()))?;
+        if let Err(e) = sqlx::query(KEYS).execute(&pool).await {
+            pool.close().await;
+            return Err(e).with_context(|| format!("index the keys of {}", path.display()));
+        }
         Ok(InferenceCache { pool })
     }
 
@@ -54,15 +72,12 @@ impl InferenceCache {
     pub async fn missing(&self, model: &str, hashes: &[String]) -> Result<Vec<String>> {
         let mut held = HashSet::new();
         for batch in hashes.chunks(BATCH) {
-            let found: Vec<String> = sqlx::query_scalar(
-                "SELECT hash FROM vectors WHERE model = ? \
-                   AND hash IN (SELECT value FROM json_each(?))",
-            )
-            .bind(model)
-            .bind(serde_json::to_string(batch)?)
-            .fetch_all(&self.pool)
-            .await
-            .context("read the cached hashes")?;
+            let found: Vec<String> = sqlx::query_scalar(HELD_SQL)
+                .bind(model)
+                .bind(serde_json::to_string(batch)?)
+                .fetch_all(&self.pool)
+                .await
+                .context("read the cached hashes")?;
             held.extend(found);
         }
         let mut seen = HashSet::new();
@@ -162,5 +177,72 @@ mod tests {
         cache.close().await;
         let cache = InferenceCache::open(&path).await.unwrap();
         assert!(cache.missing("gemma", &[h("a")]).await.unwrap().is_empty());
+    }
+
+    async fn plan(cache: &InferenceCache, sql: &str, binds: [&str; 2]) -> Vec<String> {
+        // `sql` is one of this crate's own constant statements.
+        let explain = sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}"));
+        sqlx::query_as::<_, (i64, i64, i64, String)>(explain)
+            .bind(binds[0])
+            .bind(binds[1])
+            .fetch_all(&cache.pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(_, _, _, detail)| detail)
+            .collect()
+    }
+
+    /// Asking whether a vector is held reads the keys' index, not the
+    /// table of 3 KB vectors: an embed of a large source spent four
+    /// minutes on one random disk read per chunk before it did.
+    #[tokio::test]
+    async fn whether_a_vector_is_held_is_asked_of_the_keys_alone() {
+        let (_dir, cache) = open().await;
+        for (sql, binds) in [
+            (HELD_SQL, ["gemma", "[]"]),
+            (crate::chunked::OWED_SQL, ["mail", "gemma"]),
+        ] {
+            let plan = plan(&cache, sql, binds).await;
+            assert!(
+                plan.iter()
+                    .any(|d| d.contains("USING COVERING INDEX vectors_keys")),
+                "{plan:?}"
+            );
+        }
+    }
+
+    /// A cache an earlier build wrote, with no keys' index, keeps every
+    /// vector and gains the index when opened.
+    #[tokio::test]
+    async fn a_cache_from_before_the_keys_index_keeps_its_vectors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.sqlite");
+        let cache = InferenceCache::open(&path).await.unwrap();
+        cache.put("gemma", &[(h("a"), vec![0.5])]).await.unwrap();
+        sqlx::query("DROP INDEX vectors_keys")
+            .execute(&cache.pool)
+            .await
+            .unwrap();
+        cache.close().await;
+        let cache = InferenceCache::open(&path).await.unwrap();
+        assert!(cache.missing("gemma", &[h("a")]).await.unwrap().is_empty());
+        let indexed: Option<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE name = 'vectors_keys'")
+                .fetch_optional(&cache.pool)
+                .await
+                .unwrap();
+        assert_eq!(indexed.as_deref(), Some("vectors_keys"));
+    }
+
+    /// The vectors' shape is the one every library's cache records: a
+    /// change to [`DDL`] moves this hash, and opening a cache in another
+    /// shape empties it, which costs a library every embedding it holds.
+    #[test]
+    fn the_vectors_shape_is_the_one_libraries_hold() {
+        assert_eq!(
+            datalib_store_meta::schema_hash(DDL),
+            "819354133eed18be9605e86cc206456aecbf3859ed4dde8722162cc048f748e6",
+        );
     }
 }

@@ -455,7 +455,7 @@ function loadPreview(uuid: string) {
   previewTimer = setTimeout(async () => {
     try {
       const chat = await api.fetchChat(uuid);
-      previews.set(uuid, previewText(chat.body));
+      previews.set(uuid, previewText(chat.pieces.map((p) => p.md).join("")));
     } catch {
       previews.set(uuid, "");
     }

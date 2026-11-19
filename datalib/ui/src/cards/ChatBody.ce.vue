@@ -1,10 +1,9 @@
 <script setup lang="ts">
-// Renders a chat conversation. The backend serves the markdown body verbatim
-// (CommonMark + per-section `<div id="m-{uuid}" data-section-uuid="…">`
-// wrappers emitted by the ingest renderer — one wrapper per message,
-// plus nested ones for tool_use / tool_result / thinking blocks);
-// `renderDocument` runs markdown-it and the sanitizer over it, one
-// message at a time where `sections` says where each lies.
+// Renders a chat conversation. The backend serves the markdown as the
+// renderer's pieces (CommonMark + per-section `<div id="m-{uuid}"
+// data-section-uuid="…">` wrappers — one wrapper per message, plus nested
+// ones for tool_use / tool_result / thinking blocks); `renderDocument`
+// runs markdown-it and the sanitizer over it, one message at a time.
 //
 // The body is drawn inside a frame whose policy runs no script
 // (`docFrame.ts`). `body` is the frame's `<body>`: the decorations below
@@ -20,7 +19,7 @@
 // inside a shadow root, so document-head styles don't reach it. The
 // body's stylesheet (`documentBody.css`) goes in with the frame's document.
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from "vue";
-import type { BodySection, EdgeOut } from "@/api";
+import type { BodyPiece, EdgeOut } from "@/api";
 import { decorateRemoteMedia, type RemoteContext, type RemoteRef } from "./remoteMedia";
 import {
   copyWithHandles,
@@ -67,9 +66,8 @@ import {
 } from "./chatSections.js";
 
 const props = defineProps<{
-  body: string;
-  /** Where each section of `body` lies (`renderDocument`). */
-  sections?: BodySection[] | null;
+  /** The body as the renderer's pieces (`renderDocument`). */
+  pieces: BodyPiece[];
   selectedSectionUuid?: string | null;
   /**
    * Outgoing edges for the doc we're rendering. ChatBody decorates
@@ -137,10 +135,9 @@ const emit = defineEmits<{
 }>();
 
 const sanitized = computed(() =>
-  renderDocument(props.body || "", {
+  renderDocument(props.pieces, {
     accept: props.remoteAccept,
     context: props.remoteContext,
-    sections: props.sections,
   }),
 );
 const html = computed(() => sanitized.value.html);
@@ -157,7 +154,7 @@ let frameStops: (() => void)[] = [];
 // reader back to the selected section; only a new body earns that.
 let bodyChanged = true;
 watch(
-  () => props.body,
+  () => props.pieces,
   () => {
     bodyChanged = true;
   },
