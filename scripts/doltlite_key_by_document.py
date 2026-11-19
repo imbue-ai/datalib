@@ -157,11 +157,8 @@ def timed(path, sql, readonly=False):
     return time.monotonic() - started
 
 
-def median_of(path, sql, readonly=False):
-    """The middle of REPEATS cold runs: one cold run on a shared laptop
-    swings by half again."""
-    times = sorted(timed(path, sql, readonly) for _ in range(REPEATS))
-    return times[len(times) // 2], times
+def median(times):
+    return sorted(times)[len(times) // 2]
 
 
 def rerender_sql(picked, target):
@@ -191,34 +188,53 @@ def main():
     ids = "[" + ",".join(f'"{d}"' for d, _ in picked) + "]"
     read = f"SELECT count(*), sum(length(body)) FROM g WHERE markdown_uuid IN (SELECT value FROM json_each('{ids}'));\n"
     print(f"{n_docs} documents, {n_rows} rows of ~{PAYLOAD} bytes; K = {K} documents")
-    print(f"median of {REPEATS} cold runs each, every run listed after it")
+    paths, steps = {}, {}
     for name, (ddl, target) in LAYOUTS.items():
         body = rerender_sql(picked, target)
-        rolled_back = body + "\nROLLBACK;\n"
-        committed = body + "\nCOMMIT; SELECT dolt_commit('-Am', 'rerender');\n"
-        path = os.path.join(scratch, f"{name}.doltlite_db")
+        steps[name] = {
+            "read": (read, True),
+            "re-render, rolled back": (body + "\nROLLBACK;\n", False),
+            "committed": (
+                body + "\nCOMMIT; SELECT dolt_commit('-Am', 'rerender');\n",
+                False,
+            ),
+        }
+        path = paths[name] = os.path.join(scratch, f"{name}.doltlite_db")
         for p in (path, os.path.join(scratch, f".{name}.doltlite_db-lock")):
             if os.path.exists(p):
                 os.remove(p)
         started = time.monotonic()
         build(path, ddl, docs)
-        built = os.path.getsize(path)
         print(
-            f"{name}: built {built / 1e6:.0f} MB in {time.monotonic() - started:.0f} s"
+            f"{name}: built {os.path.getsize(path) / 1e6:.0f} MB "
+            f"in {time.monotonic() - started:.0f} s"
         )
-        for label, sql, ro in (
-            ("read", read, True),
-            ("re-render, rolled back", rolled_back, False),
-        ):
-            mid, all_runs = median_of(path, sql, ro)
-            print(f"  {label:24s} {mid:6.2f} s   {[round(t, 2) for t in all_runs]}")
-        # Committed once: each commit keeps its pages, so a repeat would
-        # time a different store.
-        before = os.path.getsize(path)
-        secs = timed(path, committed)
-        grew = os.path.getsize(path) - before
+    # Every repeat takes each layout in turn, so whatever else the machine
+    # is doing lands on all of them alike, not on whichever ran last.
+    runs = {(n, s): [] for n in LAYOUTS for s in ("read", "re-render, rolled back")}
+    for _ in range(REPEATS):
+        for name in LAYOUTS:
+            for step, times in runs.items():
+                if step[0] == name:
+                    sql, ro = steps[name][step[1]]
+                    times.append(timed(paths[name], sql, ro))
+    print(f"median of {REPEATS} cold runs, interleaved across layouts; each run listed")
+    for name in LAYOUTS:
+        print(name)
+        for step in ("read", "re-render, rolled back"):
+            times = runs[(name, step)]
+            print(
+                f"  {step:24s} {median(times):6.2f} s   {[round(t, 2) for t in times]}"
+            )
+    # Committed once: each commit keeps its pages, so a repeat would time a
+    # different store.
+    for name in LAYOUTS:
+        sql, _ = steps[name]["committed"]
+        before = os.path.getsize(paths[name])
+        secs = timed(paths[name], sql)
+        grew = os.path.getsize(paths[name]) - before
         print(
-            f"  {'re-render, committed':24s} {secs:6.2f} s   file grew {grew / 1e6:.1f} MB"
+            f"{name}: re-render, committed {secs:6.2f} s   file grew {grew / 1e6:.1f} MB"
         )
 
 
