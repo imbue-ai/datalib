@@ -71,10 +71,13 @@ async fn enterprise(root: &Path) -> (PathBuf, PathBuf) {
     std::os::unix::fs::symlink(bin("DATALIB_STEP_BIN"), root.join("bin/datalib-step")).unwrap();
     std::fs::write(
         root.join("config.toml"),
-        "[[groups]]\nid = \"enterprise\"\ntype = \"slack\"\n\n\
-         [[steps]]\ngroup = \"enterprise\"\nfunction = \"ingest\"\n\n\
-         [[steps]]\ngroup = \"enterprise\"\nfunction = \"render_markdown\"\n\
-         inputs = [\"enterprise/ingest\"]\n",
+        "[[programs]]\ncommand = \"datalib-step\"\n\
+         verbs = [\"reset\", \"prepare\", \"compact\", \"collect\"]\n\n\
+         [[groups]]\nid = \"enterprise\"\ntype = \"slack\"\n\n\
+         [[steps]]\nid = \"enterprise/ingest\"\ncommand = \"datalib-step run ingest slack\"\n\n\
+         [[steps]]\nid = \"enterprise/render_markdown\"\n\
+         command = \"datalib-step run render_markdown slack\"\n\
+         inputs = [\"enterprise/ingest\"]\nreads = \"pinned\"\n",
     )
     .unwrap();
     let render = root.join("enterprise/render_markdown/indexed_markdown.doltlite_db");
@@ -120,7 +123,7 @@ async fn commits(path: &Path) -> Vec<String> {
     log
 }
 
-/// Every commit `before` named is still in `after`. The launch's migrate
+/// Every commit `before` named is still in `after`. The launch's prepare
 /// pass may add one on top, applying the ingest's own schema to the test's.
 fn kept_every_commit(before: &[String], after: &[String]) -> bool {
     before.iter().all(|c| after.contains(c))

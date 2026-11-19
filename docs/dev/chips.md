@@ -52,7 +52,7 @@ in [the document contract](../user/rendered_documents.md#a-person). The
 backend writes a handle's URI with `Handle::to_uri`; one of your
 contacts is `datalib:contact/<id>` (`datalib_contacts::contact_uri`,
 read by `contactFromUri` in `chipLinks.js`); a group is
-`datalib:group/<id>` and a step `datalib:step/<group>/<function>`
+`datalib:group/<id>` and a step `datalib:step/<step id>`
 (`datalib_columns::Entity::uri`); a document is `datalib:doc/<uuid>`
 (`datalib_uri::Name::doc`, `ui/src/uri.ts::writeDoc`).
 

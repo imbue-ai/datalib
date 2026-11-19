@@ -98,14 +98,15 @@ on the struct (`#[portable_table(index = …)]`) and created only in the
 grid index, not in the render stores that also hold a `grid_rows`.
 `every_filter_key_is_served_by_an_index` fails when a key has none.
 
-Free text never reaches `grid_rows`' SQL: the applet ranks it in the
-search index, by its words and by its meaning, maps the hits to rows by
-their document's id (`markdown_uuid`), keeps the ones the query's
-structured terms also match (`filter_uuids`), and shows each hit's own
+Free text never reaches `grid_rows`' SQL: the applet works out what the
+query's filters keep first, as `grid_rows` row ids read from the
+indexes alone (`db::matching_sql`), ranks the words among those in the
+search index, by their words and by their meaning, maps the hits to rows
+by their document's id (`markdown_uuid`), and shows each hit's own
 matched lines as its Contents cell. Before the first sync builds the
-search index, free text finds only what the grid's own search terms
-hold, and the answer says `search_index_missing`, which the grid shows
-as a note rather than an error.
+search index, a search still answers its filters, a pasted id or
+address among them, finds no words, and says `search_index_missing`,
+which the grid shows as a note rather than an error.
 
 ## Adding a column
 
@@ -143,9 +144,9 @@ From a checkout:
 6. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 On an existing root, a render store and the grid index change shape
-only when the step that writes them runs. The first launch of the new
-build asks each step (`--migrate`) whether its store's recorded shape is
-this build's; the app then offers to re-render them all, downloading
+only when the step that writes them runs. Each start of the loop asks
+each step (`--prepare`) whether its store's recorded shape is this
+build's; the app then offers to re-render them all, downloading
 nothing, and until then a source's own sync re-renders that source
 ([the runner](../../datalib/backend/dag/README.md#upgrading-a-root)).
 The render step sees its own DDL hash moved (`_store_schema`, one of
@@ -484,7 +485,12 @@ when there are none. A renderer sets it with
 a JSON array. The transaction that writes a row to the grid index
 expands it into the index's search terms, one indexed row per term,
 together with the terms the row's other columns give
-(`search_terms_of`); a row written again unchanged is not touched.
+(`search_terms_of`); a row written again unchanged is not touched. A
+row inside a document has no term its document's own row holds for it:
+the document's id and title are on that row once, and the rows inside
+answer to them through it (`FROM_THE_DOCUMENT`). An id that is a uuid
+is a term in one spelling, lowercase with dashes, however its source
+wrote it.
 
 The terms live on the row so that they go wherever the row goes: a row
 that moves to another document takes its terms with it, in one write.

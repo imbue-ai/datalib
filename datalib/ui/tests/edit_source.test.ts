@@ -21,7 +21,7 @@ const STEP = { array: "steps", index: 0 };
 describe("setIn", () => {
   it("replaces a value where it stands, keeping comments around it", () => {
     const text = `[[steps]]
-group = "s"
+id = "s/ingest"
 # the channels we care about
 [steps.params.api]
 channels = ["a"] # trailing
@@ -34,12 +34,12 @@ media = false
 
   it("adds a key to the [header] table that holds its siblings", () => {
     const text = `[[steps]]
-group = "s"
+id = "s/ingest"
 [steps.params.api]
 channels = ["a"] # trailing
 
 [[steps]]
-group = "t"
+id = "t/ingest"
 `;
     expect(setIn(text, STEP, ["params", "api", "media"], "true")).toBe(
       text.replace("# trailing\n", "# trailing\nmedia = true\n"),
@@ -47,7 +47,7 @@ group = "t"
   });
 
   it("adds a key inside an inline table", () => {
-    const text = `[[steps]]\ngroup = "s"\n[steps.params]\napi = {}\nweb = { a = 1 }\n`;
+    const text = `[[steps]]\nid = "s/ingest"\n[steps.params]\napi = {}\nweb = { a = 1 }\n`;
     let next = setIn(text, STEP, ["params", "api", "media"], "true");
     expect(next).toContain("api = { media = true }");
     next = setIn(next, STEP, ["params", "web", "b"], "2");
@@ -55,23 +55,23 @@ group = "t"
   });
 
   it("adds a key beside the dotted keys that made its table", () => {
-    const text = `[[steps]]\ngroup = "s"\n[steps.params]\napi.channels = ["a"]\nother = 1\n`;
+    const text = `[[steps]]\nid = "s/ingest"\n[steps.params]\napi.channels = ["a"]\nother = 1\n`;
     expect(setIn(text, STEP, ["params", "api", "media"], "true")).toBe(
-      `[[steps]]\ngroup = "s"\n[steps.params]\napi.channels = ["a"]\napi.media = true\nother = 1\n`,
+      `[[steps]]\nid = "s/ingest"\n[steps.params]\napi.channels = ["a"]\napi.media = true\nother = 1\n`,
     );
   });
 
   it("starts a table of its own, inside the entry, when none exists", () => {
-    const text = `[[steps]]\ngroup = "s"\nfunction = "ingest"\n\n[[steps]]\ngroup = "t"\n`;
+    const text = `[[steps]]\nid = "s/ingest"\n\n[[steps]]\nid = "t/ingest"\n`;
     const next = setIn(text, STEP, ["params", "api", "media"], "true");
     expect(next).toBe(
-      `[[steps]]\ngroup = "s"\nfunction = "ingest"\n\n[steps.params.api]\nmedia = true\n\n[[steps]]\ngroup = "t"\n`,
+      `[[steps]]\nid = "s/ingest"\n\n[steps.params.api]\nmedia = true\n\n[[steps]]\nid = "t/ingest"\n`,
     );
     expect(listSteps(next)[1].params).toEqual({});
   });
 
   it("refuses an edit that cannot be made without changing something else", () => {
-    const text = `[[steps]]\ngroup = "s"\n[steps.params]\napi = true\n`;
+    const text = `[[steps]]\nid = "s/ingest"\n[steps.params]\napi = true\n`;
     expect(() => setIn(text, STEP, ["params", "api", "media"], "true")).toThrow();
   });
 });
@@ -107,8 +107,7 @@ id = "slack"
 type = "slack"
 
 [[steps]]
-group = "slack"
-function = "ingest"
+id = "slack/ingest"
 code_version = "2"
 env = { RUST_LOG = "debug" }
 # Only the channels that matter.
@@ -120,8 +119,7 @@ blob_size_limit_bytes = 5_000_000
 download_params = { maximum_sequential_failed_requests = 3 }
 
 [[steps]]
-group = "slack"
-function = "render_markdown"
+id = "slack/render_markdown"
 inputs = ["slack/ingest", "extra/ingest"]
 `;
 
@@ -182,7 +180,7 @@ describe("patchSource", () => {
   });
 
   it("re-adds the method table when the last key under it goes", () => {
-    const text = `[[groups]]\nid = "slack"\ntype = "slack"\n\n[[steps]]\ngroup = "slack"\nfunction = "ingest"\n[steps.params]\napi.channels = ["a"]\n`;
+    const text = `[[groups]]\nid = "slack"\ntype = "slack"\n\n[[steps]]\nid = "slack/ingest"\n[steps.params]\napi.channels = ["a"]\n`;
     const values = { ...seeded(text), "api.channels": [] };
     const after = patchSource(text, { entry: SLACK, group: "slack", values, renders: false });
     expect(listSteps(after)[0].params).toHaveProperty("api");
@@ -191,7 +189,7 @@ describe("patchSource", () => {
   /// A download-only source written before such sources got a render
   /// step gains one on its next save, so its problems reach the index.
   it("gives a download-only source its missing render step", () => {
-    const text = `[[groups]]\nid = "lin"\ntype = "linear"\n\n[[steps]]\ngroup = "lin"\nfunction = "ingest"\n[steps.params]\napi = {}\n`;
+    const text = `[[groups]]\nid = "lin"\ntype = "linear"\n\n[[steps]]\nid = "lin/ingest"\n[steps.params]\napi = {}\n`;
     const linear = catalogFor("linear")!;
     const after = patchSource(text, {
       entry: linear,
@@ -246,15 +244,13 @@ id = "gmail"
 type = "email"
 
 [[steps]]
-group = "gmail"
-function = "ingest"
-command = "datalib-step"
+id = "gmail/ingest"
+command = "datalib-step run ingest"
 
 ${method}${SECTIONS}
 [[steps]]
-group = "gmail"
-function = "render_markdown"
-command = "datalib-step"
+id = "gmail/render_markdown"
+command = "datalib-step run render_markdown"
 inputs = ["gmail/ingest"]
 ${render}`;
   // What the form wrote, with sections then added to it by hand.

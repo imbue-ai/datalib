@@ -58,10 +58,13 @@ pub struct DagConfig {
     /// (`supervisor::locks::defaults`).
     #[serde(default)]
     pub locks: Vec<LockEntry>,
-    /// How often a step seals what it has written, so a consumer can see it
-    /// before the step finishes. Omitted means the step's own default.
+    /// The verbs each program takes (`[[programs]]`). A step whose program
+    /// has no entry is sent none.
     #[serde(default)]
-    pub checkpoint_cadence: Option<CheckpointCadence>,
+    pub programs: Vec<ProgramEntry>,
+    /// Variables handed to every step, below each step's own `env`.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
     /// How much of the run store (`system/runs/runs.sqlite`: every run's step
     /// states, log lines and metrics) to keep. Omitted means the defaults
     /// in [`RunHistory`].
@@ -79,14 +82,6 @@ pub struct DagConfig {
     /// [`DiskFloor`].
     #[serde(default)]
     pub disk_space: Option<DiskFloor>,
-    /// How much a render reads at once. Omitted means the render's own
-    /// defaults.
-    #[serde(default)]
-    pub render_pages: Option<RenderPages>,
-    /// What every `embed` that sends its chunks to Modal shares
-    /// (`[modal]`). Omitted means the step's own defaults.
-    #[serde(default)]
-    pub modal: Option<ModalSettings>,
 }
 
 /// The retention rule for `system/runs/runs.sqlite`, as a person writes it in
@@ -153,91 +148,6 @@ impl RunHistory {
             process_log_lines: self.process_log_lines,
         }
     }
-}
-
-/// The latency/history tradeoff, in seconds, as a person writes it in
-/// `config.toml`: how long a step waits before its first checkpoint.
-/// `datalib-step` doubles the wait after each one
-/// (`datalib_etl::checkpointer::Cadence`).
-///
-/// Plain numbers rather than the `etl` type they become: the runner does not
-/// link `etl`, and does not need to — it forwards this to the step, which
-/// owns what a checkpoint *is*.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct CheckpointCadence {
-    pub at_most_every_secs: f64,
-}
-
-impl CheckpointCadence {
-    /// The wire form: the seconds, as text.
-    pub fn encode(&self) -> String {
-        self.at_most_every_secs.to_string()
-    }
-
-    /// `None` for anything this build cannot read — a malformed value from a
-    /// newer config is not a reason to fail the run, and the step's default
-    /// cadence is a safe answer.
-    pub fn decode(s: &str) -> Option<Self> {
-        let at_most_every_secs: f64 = s.trim().parse().ok()?;
-        if !at_most_every_secs.is_finite() || at_most_every_secs < 0.0 {
-            return None;
-        }
-        Some(Self { at_most_every_secs })
-    }
-}
-
-/// How much a render holds in memory at once, as a person writes it in
-/// `config.toml`: `buckets` threads (or conversations, or whatever the
-/// source renders as a unit) read from the raw store together, and at most
-/// `blob_mb` of their attachments loaded at a time. Smaller pages hold less
-/// and cost more queries. Either omitted means the render's default
-/// (`datalib_etl_render::pages::PageSize::DEFAULT`).
-///
-/// Plain numbers for the same reason as [`CheckpointCadence`]: the runner
-/// forwards them, and the step owns what a page is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RenderPages {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub buckets: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blob_mb: Option<u64>,
-}
-
-impl RenderPages {
-    /// The wire form: `<buckets>,<blob_mb>`, either side empty when omitted.
-    pub fn encode(&self) -> String {
-        let side = |v: Option<u64>| v.map(|n| n.to_string()).unwrap_or_default();
-        format!("{},{}", side(self.buckets), side(self.blob_mb))
-    }
-
-    /// `None` for anything this build cannot read, a zero included: the
-    /// step's defaults are a safe answer, as for [`CheckpointCadence`].
-    pub fn decode(s: &str) -> Option<Self> {
-        let (buckets, blob_mb) = s.trim().split_once(',')?;
-        let side = |v: &str| -> Option<Option<u64>> {
-            match v.trim() {
-                "" => Some(None),
-                n => n.parse::<u64>().ok().filter(|n| *n > 0).map(Some),
-            }
-        };
-        Some(Self {
-            buckets: side(buckets)?,
-            blob_mb: side(blob_mb)?,
-        })
-    }
-}
-
-/// `[modal]`, as a person writes it: at most `max_sandboxes` Modal
-/// Sandboxes at once for one `embed` step's chunks. Omitted means the
-/// step's default. The runner forwards the number as it is, and the step
-/// owns what a Sandbox does with it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ModalSettings {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_sandboxes: Option<u64>,
 }
 
 /// One `[[locks]]` entry: a named lock steps hold while they run, so that
@@ -362,10 +272,9 @@ pub struct GroupEntry {
     /// fingerprinted, so a rename re-runs nothing.
     #[serde(default)]
     pub name: Option<String>,
-    /// The kind of data this group mirrors (`slack`, `email`, …), which
-    /// is what makes it a *source*. Forwarded to every step under the group
-    /// and folded into their fingerprints. Absent for a group that mirrors
-    /// nothing, such as the unified grid and search index.
+    /// What kind of thing the group is, for whoever shows it (`slack`,
+    /// `email`, …). Opaque to the runner: never forwarded to a step and
+    /// never fingerprinted.
     #[serde(default)]
     pub r#type: Option<String>,
     /// What this source is to the person who owns it — "work Slack, mostly
@@ -374,20 +283,28 @@ pub struct GroupEntry {
     /// is the plan for making search use it.
     #[serde(default)]
     pub description: Option<String>,
-    /// For a group of type [`DIFF_GROUP_TYPE`] only: the source group whose
-    /// raw store its render step compares at two commits. The loader
-    /// checks it names a source that renders; the source's type reaches
-    /// the step as `DATALIB_DAG_SOURCE_GROUP_TYPE`. The raw store itself
-    /// still comes from the step's first input, as for any render.
+    /// Retired: a diff group's source now rides on its steps' commands.
+    /// Read only to say so.
     #[serde(default)]
-    pub source: Option<String>,
+    source: Option<toml::Value>,
 }
 
-/// The `type` of a group that mirrors nothing itself but renders what
-/// changed in another group's raw store between two commits — see
-/// `docs/dev/plans/completed/diff_renderer.md`. Not a provider: `datalib-step`
-/// runs the `source` group's renderer under it.
-pub const DIFF_GROUP_TYPE: &str = "diff";
+/// What a config in a retired shape is told to do about it.
+pub const RETIRED_SHAPE_HELP: &str = "the app rewrites the file itself when it next reads it, \
+     keeping the old one as `config.toml.bak`; from a terminal, \
+     `datalib-migrate-config <data root> --force`";
+
+/// One `[[programs]]` entry: the verbs a program takes. A step's program
+/// is the first word of its `command`, compared as written.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProgramEntry {
+    pub command: String,
+    #[serde(default)]
+    /// Spelled as written: a verb this build does not know costs that
+    /// verb, with a warning, not the whole file.
+    pub verbs: Vec<String>,
+}
 
 /// One `[[packages]]` entry: a package this root uses, pinned to one
 /// manifest and unpacked under [`PackageEntry::dir_rel`]. A step or applet
@@ -469,42 +386,26 @@ impl AppletEntry {
     }
 }
 
-/// One `[[steps]]` entry with its id settled. [`StepTable`] is the entry as
-/// written; this is what the rest of the crate sees, so nothing downstream
-/// has to know how an id came to be.
+/// One `[[steps]]` entry (`docs/dev/step_protocol.md` § The config entry).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(try_from = "StepTable")]
 pub struct StepEntry {
     /// The tree this step writes and the key its state is recorded under.
-    /// `<group>/<function>` for a grouped step, the written `id` otherwise.
+    /// Its first part is the step's group.
     pub id: String,
-    /// The `[[groups]]` entry this step belongs to. `None` for a custom step
-    /// that wrote a verbatim `id`.
-    pub group: Option<String>,
-    /// What this step does within its group. Always present with `group`
-    /// and never without it.
-    pub function: Option<String>,
-    /// Free text the runner never reads. On a grouped step the label comes
-    /// from the group and the function, so a `name` here is reported as
-    /// probably unintended; on an ungrouped step it is the only label.
+    /// Free text the runner never reads.
     pub name: Option<String>,
     /// The ids of the steps this one reads. A step id *is* the tree that step
     /// writes, so an entry here is both a step reference and an artifact path.
-    /// A directory staged by hand is the `path` of a method table in
-    /// `params` instead, and is not an artifact the DAG knows about.
     pub inputs: Vec<String>,
     /// The command to run, split shell-style into an argv. A bare program
     /// name is looked up in `binary_dir`, then the library's `system/bin`,
     /// then `PATH`; a relative path with a `/` in it is relative to the
     /// data root, the child's working directory, which is how a step runs
-    /// a package's program. `datalib-step`, the step program datalib
-    /// ships, reads its function and its group's type from the
-    /// environment, so its steps write it with no arguments and need a
-    /// group. `None` is read as `datalib-step`: configs written before
-    /// every step named its program left it out.
-    pub command: Option<String>,
-    /// Arbitrary step parameters, forwarded verbatim as the JSON in the
-    /// step's `--params-file`.
+    /// a package's program.
+    pub command: String,
+    /// Arbitrary step parameters, handed to the step as the JSON in
+    /// `DATALIB_DAG_PARAMS`.
     pub params: Option<toml::Value>,
     /// Extra environment for the child process.
     pub env: BTreeMap<String, String>,
@@ -512,30 +413,27 @@ pub struct StepEntry {
     /// without their command line changing. Bumping it re-runs the step once,
     /// even though none of its inputs moved.
     pub code_version: Option<String>,
-    /// The named locks it holds while it runs. `None` holds one default:
-    /// a built-in search step's own lock, else the one its shape gives it
-    /// (`supervisor::locks::default_for`).
+    /// The named locks it holds while it runs. `None` holds the default
+    /// its shape gives it (`supervisor::locks::default_for`).
     pub locks: Option<StepLocks>,
-    /// How it reads its inputs. `None` is at a pinned commit, but for the
-    /// built-in steps that read files (`UNPINNED_BUILTINS`).
+    /// How it reads its inputs. `None` is [`Reads::Files`].
     pub reads: Option<Reads>,
     /// When it may start on inputs still being written. `None` is
     /// [`StartWhen::OnEachSeal`].
     pub start: Option<StartWhen>,
 }
 
-/// A `[[steps]]` table exactly as a person writes it. Either `group` and
-/// `function` or `id`; the split is settled in `TryFrom` below so a
-/// mis-written entry is refused with the key it is about.
+/// A `[[steps]]` table exactly as a person writes it. `group` and
+/// `function` are the retired shape, read only to say so.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StepTable {
     #[serde(default)]
     id: Option<String>,
     #[serde(default)]
-    group: Option<String>,
+    group: Option<toml::Value>,
     #[serde(default)]
-    function: Option<String>,
+    function: Option<toml::Value>,
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
@@ -560,45 +458,26 @@ impl TryFrom<StepTable> for StepEntry {
     type Error = String;
 
     fn try_from(t: StepTable) -> std::result::Result<Self, String> {
-        let id = match (&t.id, &t.group, &t.function) {
-            (None, Some(g), Some(f)) => format!("{g}/{f}"),
-            (Some(id), None, None) => id.clone(),
-            (Some(_), Some(_), _) | (Some(_), None, Some(_)) => {
-                return Err(
-                    "`id` cannot be written on a step that has `group` or `function`: the \
-                     id of a grouped step is composed as `<group>/<function>`, so remove \
-                     `id` (or, for a custom step outside any group, remove the other two)"
-                        .to_string(),
-                )
-            }
-            (None, Some(_), None) => {
-                return Err(
-                    "missing field `function`: a step under a group says what it does \
-                     there, and that word names the directory it writes"
-                        .to_string(),
-                )
-            }
-            (None, None, Some(_)) => {
-                return Err(
-                    "missing field `group`: `function` only means something within a group"
-                        .to_string(),
-                )
-            }
-            (None, None, None) => {
-                return Err(
-                    "missing field `group`: a step is `group` + `function`, or a custom \
-                     step with a verbatim `id`"
-                        .to_string(),
-                )
-            }
+        if t.group.is_some() || t.function.is_some() {
+            return Err(format!(
+                "`group` and `function` are the shape from before a step wrote only its \
+                 `id`, `<group>/<function>`: {RETIRED_SHAPE_HELP}"
+            ));
+        }
+        let Some(id) = t.id else {
+            return Err("missing field `id`: the directory the step writes".to_string());
+        };
+        let Some(command) = t.command else {
+            return Err(format!(
+                "missing field `command`: every step names the program it runs. A step of \
+                 datalib's own written before this was required: {RETIRED_SHAPE_HELP}"
+            ));
         };
         Ok(StepEntry {
             id,
-            group: t.group,
-            function: t.function,
             name: t.name,
             inputs: t.inputs,
-            command: t.command,
+            command,
             params: t.params,
             env: t.env,
             code_version: t.code_version,
@@ -610,19 +489,21 @@ impl TryFrom<StepTable> for StepEntry {
 }
 
 impl StepEntry {
-    /// Whether it runs `datalib-step`. The runner still does more for that
-    /// program than for any other: the launch's migrate and compact
-    /// passes, the search locks and unpinned reads its functions default to,
-    /// and the params check against its sources' schemas.
-    pub fn runs_datalib_step(&self) -> bool {
-        names_datalib_step(self.command.as_deref())
+    /// The first part of its id, which names its group when a `[[groups]]`
+    /// entry has that id. `None` for an id of one part.
+    pub fn group(&self) -> Option<&str> {
+        group_of(&self.id)
+    }
+
+    /// The first word of its command: what a `[[programs]]` entry names.
+    pub fn program(&self) -> Option<String> {
+        shlex::split(&self.command).and_then(|argv| argv.into_iter().next())
     }
 }
 
-/// Whether a step's `command`, as written, runs `datalib-step`: it names
-/// that program, or it is left out.
-pub fn names_datalib_step(command: Option<&str>) -> bool {
-    command.is_none_or(|c| c.split_whitespace().next().is_some_and(is_datalib_step))
+/// The first part of a step id, for an id of more than one part.
+pub fn group_of(step_id: &str) -> Option<&str> {
+    step_id.split_once('/').map(|(g, _)| g)
 }
 
 /// The id a `[[steps]]` table would get, read off the raw TOML so a step
@@ -741,48 +622,6 @@ const RESERVED_DIRS: &[(&str, &str)] = &[
     (
         CURATED_DIR,
         "state a person curates by hand, which nothing can rebuild",
-    ),
-];
-
-/// Group ids only an index group (one with no `type`) may take: each
-/// names the tree a unified index's steps write, and `unified_index` is
-/// the document index's id from before it had a sibling, which a config
-/// upgrade renames and whose tree a launch moves.
-pub const RESERVED_STANZA_NAMES: &[&str] = &[
-    "unified_index",
-    "unified_document_index",
-    "unified_grid_and_search_index",
-    "unified_time_series_index",
-];
-
-/// The source types whose data is also time series: each such source gets
-/// a `render_time_series` step, read by the one `time_series_index` under
-/// [`TIME_SERIES_INDEX_GROUP`]. Mirrors `SourceType::renders_time_series`
-/// in `datalib-step`, which a test there holds to this list.
-pub const TIME_SERIES_SOURCE_TYPES: &[&str] = &["garmin", "yolink", "airvisual"];
-
-/// The group the time-series index is filed under, and the tree it writes.
-pub const TIME_SERIES_INDEX_GROUP: &str = "unified_time_series_index";
-
-/// Which index step reads every source's step of a function, as
-/// `(source function, index group, index function)`. The index step reads
-/// them by pattern (`*/render_markdown`), so a source added later is read
-/// without its entry being touched.
-pub const FAN_INS: &[(&str, &str, &str)] = &[
-    (
-        "render_markdown",
-        datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
-        "unified_grid_and_search_index",
-    ),
-    (
-        "embed",
-        datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
-        "embedding_map",
-    ),
-    (
-        "render_time_series",
-        TIME_SERIES_INDEX_GROUP,
-        "time_series_index",
     ),
 ];
 
@@ -1037,37 +876,28 @@ struct RawConfig {
     #[serde(default)]
     locks: Vec<toml::Spanned<toml::Value>>,
     #[serde(default)]
-    checkpoint_cadence: Option<CheckpointCadence>,
+    programs: Vec<ProgramEntry>,
+    #[serde(default)]
+    env: BTreeMap<String, String>,
     #[serde(default)]
     run_history: Option<RunHistory>,
     #[serde(default)]
     log_level: Option<datalib_runs::LogLevel>,
     #[serde(default)]
     disk_space: Option<DiskFloor>,
+    // The retired shape: knobs one step program reads, now set in `[env]`.
+    // Read only to say so.
     #[serde(default)]
-    render_pages: Option<RenderPages>,
+    checkpoint_cadence: Option<toml::Spanned<toml::Value>>,
     #[serde(default)]
-    modal: Option<ModalSettings>,
-    /// Retired with qmd; a file naming either still loads, and is warned
-    /// at the line ([`RETIRED_TOP_KEYS`]).
+    render_pages: Option<toml::Spanned<toml::Value>>,
     #[serde(default)]
     embed_contexts: Option<toml::Spanned<toml::Value>>,
     #[serde(default)]
     embed_search_index: Option<toml::Spanned<toml::Value>>,
+    #[serde(default)]
+    modal: Option<toml::Spanned<toml::Value>>,
 }
-
-/// Top-level keys that no longer do anything, with why.
-const RETIRED_TOP_KEYS: &[(&str, &str)] = &[
-    (
-        "embed_contexts",
-        "has no effect: it set how many contexts qmd embedded with, and the embed step \
-         runs the embedding model in process",
-    ),
-    (
-        "embed_search_index",
-        "has no effect: every embed step fills the search index's vectors now",
-    ),
-];
 
 /// One entry on its way in: where it sits in the file, and what it
 /// deserialized to. Generic so groups, steps and applets share the
@@ -1120,24 +950,32 @@ fn candidates<T: Clone>(
 
 /// Every entry on its way in, plus which groups anything *wrote* under.
 struct Candidates {
+    /// Not graded one by one: a program entry is a few words, and the
+    /// rules for it are `programs_problems`'.
+    programs: Vec<ProgramEntry>,
     locks: Vec<Candidate<LockEntry>>,
     packages: Vec<Candidate<PackageEntry>>,
     groups: Vec<Candidate<GroupEntry>>,
     steps: Vec<Candidate<StepEntry>>,
     applets: Vec<Candidate<AppletEntry>>,
-    /// Every `group = …` written on a step or an applet, counted before
-    /// anything is dropped: a group whose only step was rejected is still a
-    /// group somebody meant to fill, and calling it empty would send them to
-    /// the wrong entry.
+    /// Every group a step's id or an applet's `group` names, counted
+    /// before anything is dropped: a group whose only step was rejected is
+    /// still a group somebody meant to fill, and calling it empty would
+    /// send them to the wrong entry.
     named: BTreeSet<String>,
 }
 
 /// The strict door's candidates, from an already-deserialized config.
 fn cfg_candidates(cfg: &DagConfig) -> Candidates {
     let mut named = BTreeSet::new();
-    named.extend(cfg.steps.iter().filter_map(|s| s.group.clone()));
+    named.extend(
+        cfg.steps
+            .iter()
+            .filter_map(|s| s.group().map(str::to_string)),
+    );
     named.extend(cfg.applets.iter().filter_map(|a| a.group.clone()));
     Candidates {
+        programs: cfg.programs.clone(),
         locks: candidates(&cfg.locks, EntryRef::lock, |l| Some(l.name.clone())),
         packages: candidates(&cfg.packages, EntryRef::package, |p| Some(p.id.clone())),
         groups: candidates(&cfg.groups, EntryRef::group, |g| Some(g.id.clone())),
@@ -1173,36 +1011,34 @@ type Resolved = (
     Vec<crate::input_pattern::Expansion>,
 );
 
-/// A step the entry rules kept, with its `inputs` as written and what its
-/// spec is built from.
+/// A step the entry rules kept, with its `inputs` as written and the spec
+/// built from them.
 #[derive(Clone)]
 struct WrittenStep {
     entry: StepEntry,
-    group_type: Option<String>,
-    source_group: Option<(String, String)>,
+    spec: StepSpec,
 }
 
 /// `steps` with every pattern in their `inputs` expanded to the ids in
-/// `universe` it names, and their specs built from that.
+/// `universe` it names, and their specs reading those ids.
 fn resolve_inputs(steps: &[WrittenStep], universe: &[&str]) -> Resolved {
     let mut out = Vec::with_capacity(steps.len());
     let mut expansions = Vec::new();
     for w in steps {
         let (inputs, found) = crate::input_pattern::expand(&w.entry.id, &w.entry.inputs, universe);
         expansions.extend(found);
+        let mut spec = w.spec.clone();
+        // An expansion only puts ids of steps the entry rules kept in a
+        // pattern's place, and those ids parsed once already.
+        spec.inputs = inputs
+            .iter()
+            .map(|i| crate::ArtifactPath::parse(i))
+            .collect::<Result<_>>()
+            .expect("an accepted step's inputs parse with their patterns expanded");
         let entry = StepEntry {
             inputs,
             ..w.entry.clone()
         };
-        let source_group = w
-            .source_group
-            .as_ref()
-            .map(|(id, t)| (id.as_str(), t.as_str()));
-        // The entry rules built this spec once with the inputs as written;
-        // an expansion only puts ids of steps they kept in their place.
-        let mut spec = spec_of(&entry, w.group_type.as_deref(), source_group)
-            .expect("an accepted step's spec builds again with its patterns expanded");
-        spec.inputs_written = !w.entry.inputs.is_empty();
         out.push((entry, spec));
     }
     (out, expansions)
@@ -1230,6 +1066,8 @@ fn accept_entries(c: Candidates, text: Option<&str>) -> Accepted {
         .map(|p| (p.id.as_str(), p.dir_rel()))
         .collect();
 
+    let (verbs_by_program, program_diags) = accept_programs(&c.programs);
+    diags.extend(program_diags);
     let by_id: BTreeMap<&str, &GroupEntry> = groups.iter().map(|g| (g.id.as_str(), g)).collect();
     let (written, step_diags) = accept_steps(
         c.steps,
@@ -1237,6 +1075,7 @@ fn accept_entries(c: Candidates, text: Option<&str>) -> Accepted {
         &dropped_groups,
         &lock_specs,
         &package_dirs,
+        &verbs_by_program,
         text,
     );
     diags.extend(step_diags);
@@ -1338,28 +1177,19 @@ fn accept_groups(
     let mut accepted = Vec::with_capacity(candidates.len());
     let mut diags = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
-    // A diff group's `source` may name a group declared after it, so the
-    // check reads the whole file rather than what has been accepted so far.
-    let declared: BTreeMap<&str, &GroupEntry> = candidates
-        .iter()
-        .map(|c| (c.entry.id.as_str(), &c.entry))
-        .collect();
-    let source_problems: Vec<(String, String, Option<String>)> = candidates
-        .iter()
-        .filter_map(|c| {
-            diff_source_problem(&c.entry, &declared)
-                .map(|(msg, help)| (c.entry.id.clone(), msg, help))
-        })
-        .collect();
-
     for c in candidates {
         let id = c.entry.id.clone();
-        if let Some((_, msg, help)) = source_problems.iter().find(|(pid, _, _)| *pid == id) {
-            let mut d = c.diag(Severity::Rejected, text, Some("source"), msg.clone());
-            if let Some(help) = help {
-                d = d.with_help(help.clone());
-            }
-            diags.push(d);
+        if c.entry.source.is_some() {
+            diags.push(
+                c.diag(
+                    Severity::Rejected,
+                    text,
+                    Some("source"),
+                    "`source` is the shape from before a diff group's steps named their \
+                     source's type in their `command`",
+                )
+                .with_help(RETIRED_SHAPE_HELP),
+            );
             continue;
         }
         if !valid_folder_segment(&id) {
@@ -1383,18 +1213,6 @@ fn accept_groups(
                 format!(
                     "group id {dir:?} is reserved for {holds}; every step under it would \
                      write there."
-                ),
-            ));
-            continue;
-        }
-        if c.entry.r#type.is_some() && RESERVED_STANZA_NAMES.contains(&id.as_str()) {
-            diags.push(c.diag(
-                Severity::Rejected,
-                text,
-                Some("id"),
-                format!(
-                    "group id {id:?} is reserved for a unified index, which has no `type`; \
-                     a source needs an id of its own."
                 ),
             ));
             continue;
@@ -1425,48 +1243,6 @@ fn accept_groups(
         accepted.push(c.entry);
     }
     (accepted, diags)
-}
-
-/// Why a group's `source` is unusable, with the fix: a `diff` group has to
-/// name a source that renders, and only a `diff` group names one at all.
-fn diff_source_problem(
-    g: &GroupEntry,
-    declared: &BTreeMap<&str, &GroupEntry>,
-) -> Option<(String, Option<String>)> {
-    let is_diff = g.r#type.as_deref() == Some(DIFF_GROUP_TYPE);
-    match (&g.source, is_diff) {
-        (None, false) => None,
-        (Some(_), false) => Some((
-            "`source` is only for a group of type \"diff\": it names the group whose raw \
-             store the diff compares"
-                .to_string(),
-            Some("remove `source`, or make this a diff group with `type = \"diff\"`".into()),
-        )),
-        (None, true) => Some((
-            "a diff group needs a `source`: the id of the group whose raw store its \
-             render step compares at two commits"
-                .to_string(),
-            None,
-        )),
-        (Some(source), true) => match declared.get(source.as_str()) {
-            None => Some((
-                format!("source {source:?} names no declared group"),
-                Some(format!(
-                    "declared groups: {}",
-                    id_list(declared.keys().copied().filter(|k| *k != g.id.as_str()))
-                )),
-            )),
-            Some(src) if src.r#type.as_deref() == Some(DIFF_GROUP_TYPE) => Some((
-                format!("source {source:?} is itself a diff group; a diff compares a source's raw store, which a diff group does not have"),
-                None,
-            )),
-            Some(src) if src.r#type.is_none() => Some((
-                format!("source {source:?} has no `type`, so it mirrors nothing to compare"),
-                None,
-            )),
-            Some(_) => None,
-        },
-    }
 }
 
 /// The lock rules: a name is one id segment and declared once, and a lock
@@ -1521,11 +1297,58 @@ fn accept_locks(
     (accepted, specs, diags)
 }
 
-/// The step rules, applied entry by entry. A grouped step's `function` must
-/// be one directory name and its group must exist; a custom step's `id` must
-/// be a usable path. Every step's id is unique, un-nested with every other,
-/// and outside `system/`; the command must be runnable and `params` must be
-/// JSON-able.
+/// The `[[programs]]` rules: a program is named once, and a verb once per
+/// program. Returns each program's verbs.
+fn accept_programs(
+    programs: &[ProgramEntry],
+) -> (
+    BTreeMap<String, BTreeSet<crate::step::Verb>>,
+    Vec<Diagnostic>,
+) {
+    let mut out: BTreeMap<String, BTreeSet<crate::step::Verb>> = BTreeMap::new();
+    let mut diags = Vec::new();
+    for p in programs {
+        let command = p.command.trim();
+        if command.is_empty() || command.split_whitespace().count() != 1 {
+            diags.push(Diagnostic::new(
+                Severity::Rejected,
+                format!(
+                    "[[programs]] command {command:?} is not one program: it names the first \
+                     word of the steps' `command` it applies to"
+                ),
+            ));
+            continue;
+        }
+        if out.contains_key(command) {
+            diags.push(Diagnostic::new(
+                Severity::Rejected,
+                format!("[[programs]] {command:?} is declared twice; the first one stands"),
+            ));
+            continue;
+        }
+        let mut verbs = BTreeSet::new();
+        for word in &p.verbs {
+            match crate::step::Verb::parse(word) {
+                Some(verb) => {
+                    verbs.insert(verb);
+                }
+                None => diags.push(Diagnostic::new(
+                    Severity::Warning,
+                    format!(
+                        "[[programs]] {command:?}: {word:?} is not a verb this runner sends \
+                         (reset, prepare, compact, collect); it is ignored"
+                    ),
+                )),
+            }
+        }
+        out.insert(command.to_string(), verbs);
+    }
+    (out, diags)
+}
+
+/// The step rules, applied entry by entry. A step's `id` must be a usable
+/// path; it is unique, un-nested with every other, and outside `system/`;
+/// the command must be runnable and `params` must be JSON-able and small.
 ///
 /// The nesting rule is the load-bearing one: two steps under one tree is two
 /// writers on one `.doltlite_db`, sharing the working set of the branch they
@@ -1539,6 +1362,7 @@ fn accept_steps(
     dropped_groups: &BTreeSet<String>,
     locks: &[crate::supervisor::locks::LockSpec],
     packages: &BTreeMap<&str, String>,
+    programs: &BTreeMap<String, BTreeSet<crate::step::Verb>>,
     text: Option<&str>,
 ) -> (Vec<WrittenStep>, Vec<Diagnostic>) {
     let mut accepted: Vec<WrittenStep> = Vec::with_capacity(candidates.len());
@@ -1547,181 +1371,48 @@ fn accept_steps(
 
     for c in candidates {
         let id = c.entry.id.clone();
-        let mut group_type: Option<&str> = None;
-        let mut source_group: Option<(&str, &str)> = None;
-        match (&c.entry.group, &c.entry.function) {
-            (Some(g), Some(f)) => {
-                if !valid_folder_segment(f) {
-                    diags.push(c.diag(
-                        Severity::Rejected,
-                        text,
-                        Some("function"),
-                        format!(
-                            "function {f:?} is not a usable directory name. A step writes \
-                             `<group>/<function>/`, so the function must be one portable \
-                             filename — {FOLDER_RULE} — with no `/` in it."
-                        ),
-                    ));
-                    continue;
-                }
-                match groups.get(g.as_str()) {
-                    Some(group) => {
-                        group_type = group.r#type.as_deref();
-                        if group_type == Some(DIFF_GROUP_TYPE)
-                            && !SEARCH_SOURCE_FUNCTIONS.contains(&f.as_str())
-                        {
-                            if f != DIFF_GROUP_FUNCTION {
-                                diags.push(
-                                    c.diag(
-                                        Severity::Rejected,
-                                        text,
-                                        Some("function"),
-                                        format!(
-                                            "a diff group renders `{DIFF_GROUP_FUNCTION}` and \
-                                             indexes it; it has no raw store of its own to `{f}` \
-                                             into"
-                                        ),
-                                    )
-                                    .with_help(format!(
-                                        "the store it compares is group {:?}'s, named by this \
-                                         step's `inputs`",
-                                        group.source.as_deref().unwrap_or("?")
-                                    )),
-                                );
-                                continue;
-                            }
-                            // Accepted groups only: a `source` that failed its
-                            // own rules dropped the diff group with it.
-                            source_group = group
-                                .source
-                                .as_deref()
-                                .and_then(|s| groups.get(s))
-                                .and_then(|src| Some((src.id.as_str(), src.r#type.as_deref()?)));
-                            // Its raw store is its source's: named as the first
-                            // input, or — in a root with no ingest steps, like a
-                            // materialized fixture — not named at all, and read
-                            // from `<source>/ingest` by the step.
-                            let expected =
-                                format!("{}/ingest", group.source.as_deref().unwrap_or(""));
-                            if !c.entry.inputs.is_empty()
-                                && c.entry.inputs.first() != Some(&expected)
-                            {
-                                diags.push(c.diag(
-                                    Severity::Rejected,
-                                    text,
-                                    Some("inputs"),
-                                    format!(
-                                        "a diff group's render reads the raw store its first \
-                                             input names, which has to be its source's: `inputs = \
-                                             [{expected:?}]`"
-                                    ),
-                                ));
-                                continue;
-                            }
-                        }
-                    }
-                    None if dropped_groups.contains(g) => {
-                        diags.push(
-                            c.diag(
-                                Severity::Blocked,
-                                text,
-                                Some("group"),
-                                format!(
-                                    "cannot run: its group {g:?} was itself dropped from this \
-                                     config"
-                                ),
-                            )
-                            .with_help(format!(
-                                "nothing is wrong with this step — fix group {g:?} and this one \
-                                 runs again"
-                            )),
-                        );
-                        continue;
-                    }
-                    None => {
-                        diags.push(
-                            c.diag(
-                                Severity::Rejected,
-                                text,
-                                Some("group"),
-                                format!("group {g:?} names no declared group"),
-                            )
-                            .with_help(format!(
-                                "declare it with a `[[groups]]` entry whose `id` is {g:?}. \
-                                 Declared groups: {}",
-                                id_list(groups.keys().copied())
-                            )),
-                        );
-                        continue;
-                    }
-                }
-            }
-            _ => {
-                if id.is_empty() || !id.split('/').all(valid_folder_segment) {
-                    diags.push(c.diag(
-                        Severity::Rejected,
-                        text,
-                        Some("id"),
-                        format!(
-                            "id {id:?} is not a usable directory name. An id is the directory \
-                             the step writes, so every `/`-separated segment must be a portable \
-                             filename — {FOLDER_RULE}."
-                        ),
-                    ));
-                    continue;
-                }
-                // The retired `datalib-step <subcommand>` shape gets its own
-                // message below.
-                let retired = c.entry.command.as_deref().and_then(retired_subcommand);
-                if c.entry.runs_datalib_step() && retired.is_none() {
-                    diags.push(
-                        c.diag(
-                            Severity::Rejected,
-                            text,
-                            Some("id"),
-                            "a step that runs `datalib-step` gets the provider from its \
-                             group's `type` and the tree it writes from \
-                             `<group>/<function>` — so it has to be declared under a group",
-                        )
-                        .with_help(
-                            "write `group` and `function` instead of `id`, or give this step a \
-                             `command` of its own",
-                        ),
-                    );
-                    continue;
-                }
-            }
+        if id.is_empty() || !id.split('/').all(valid_folder_segment) {
+            diags.push(c.diag(
+                Severity::Rejected,
+                text,
+                Some("id"),
+                format!(
+                    "id {id:?} is not a usable directory name. An id is the directory the \
+                     step writes, so every `/`-separated segment must be a portable filename \
+                     — {FOLDER_RULE}."
+                ),
+            ));
+            continue;
         }
-        if let Some(word) = c.entry.command.as_deref().and_then(retired_subcommand) {
+        let group = c
+            .entry
+            .group()
+            .filter(|g| groups.contains_key(g))
+            .map(str::to_string);
+        if let Some(g) = c
+            .entry
+            .group()
+            .filter(|g| dropped_groups.contains(*g) && !groups.contains_key(g))
+        {
             diags.push(
                 c.diag(
-                    Severity::Rejected,
+                    Severity::Blocked,
                     text,
-                    Some("command"),
-                    format!(
-                        "`datalib-step {word} …` is the shape written before `datalib-step` read \
-                         its function from the environment, and it no longer runs. A built-in \
-                         step is `group` + `function` with no `command` at all."
-                    ),
+                    Some("id"),
+                    format!("cannot run: its group {g:?} was itself dropped from this config"),
                 )
-                .with_help("rewrite the file once: `datalib-migrate-config <data root> --force`"),
+                .with_help(format!(
+                    "nothing is wrong with this step — fix group {g:?} and this one runs again"
+                )),
             );
             continue;
         }
-        // Where the composed-vs-written distinction stops mattering: every
-        // rule below is about the id itself. A grouped step's id has no key
-        // of its own to point at, so its diagnostics land on the header.
-        let id_key = if c.entry.group.is_some() {
-            None
-        } else {
-            Some("id")
-        };
         let top = id.split('/').next().unwrap_or_default();
         if let Some((dir, holds)) = reserved_dir(top) {
             diags.push(c.diag(
                 Severity::Rejected,
                 text,
-                id_key,
+                Some("id"),
                 format!("id {id:?} writes under {dir:?}, which is reserved for {holds}."),
             ));
             continue;
@@ -1731,7 +1422,7 @@ fn accept_steps(
                 c.diag(
                     Severity::Rejected,
                     text,
-                    id_key,
+                    Some("id"),
                     format!(
                         "duplicate id {id:?}. A step's id is both its bookkeeping key and the \
                          tree it writes, so two steps sharing one would overwrite each \
@@ -1749,7 +1440,7 @@ fn accept_steps(
                 c.diag(
                     Severity::Rejected,
                     text,
-                    id_key,
+                    Some("id"),
                     format!(
                         "id {id:?} is nested with step {other:?}: one of these trees contains \
                          the other, so both steps write the same files. A step's id *is* the \
@@ -1757,71 +1448,18 @@ fn accept_steps(
                     ),
                 )
                 .with_help(
-                    "move one of them out from under the other — sibling functions under one \
-                     group, like `ingest` and `render_markdown`, are the usual shape",
+                    "move one of them out from under the other — sibling steps under one \
+                     group, like `slack/ingest` and `slack/render_markdown`, are the usual \
+                     shape",
                 ),
             );
             continue;
         }
-        if let Some((function, why)) = RETIRED_BUILTINS
-            .iter()
-            .find(|(function, _)| is_builtin(&c.entry, function))
-        {
-            diags.push(
-                c.diag(
-                    Severity::Rejected,
-                    text,
-                    Some("function"),
-                    format!("`{function}` is the shape from before {why}"),
-                )
-                .with_help(
-                    "the app rewrites the file itself when it next reads it, keeping the old \
-                     one as `config.toml.bak`; from a terminal, \
-                     `datalib-migrate-config <data root> --force`",
-                ),
-            );
-            continue;
-        }
-        if c.entry.group.is_some() && c.entry.name.is_some() {
-            diags.push(
-                c.diag(
-                    Severity::Warning,
-                    text,
-                    Some("name"),
-                    "`name` on a grouped step is not shown: a step's label comes from its \
-                     group's name and its function",
-                )
-                .with_help("name the group instead, in its `[[groups]]` entry"),
-            );
-        }
-        if c.entry.runs_datalib_step() {
-            for (path, why) in INERT_PARAM_PATHS {
-                if inert_path_is_written(c.entry.params.as_ref(), path) {
-                    let d = Diagnostic::new(Severity::Warning, format!("`{path}` {why}"))
-                        .at_entry(c.reference.clone())
-                        .with_help("delete this line");
-                    diags.push(match (text, &c.span) {
-                        (Some(t), Some(sp)) => {
-                            let key = path.rsplit('.').next().unwrap_or(path);
-                            let at = params_key_span(t, sp.clone(), key);
-                            d.at_span(t, at)
-                        }
-                        _ => d,
-                    });
-                }
-            }
-        }
-
-        if let Some(why) = c
-            .entry
-            .command
-            .as_deref()
-            .and_then(|command| unlisted_package(command, packages))
-        {
+        if let Some(why) = unlisted_package(&c.entry.command, packages) {
             diags.push(c.diag(Severity::Rejected, text, Some("command"), why));
             continue;
         }
-        let spec = match spec_of(&c.entry, group_type, source_group) {
+        let spec = match spec_of(&c.entry, group, programs) {
             Ok(spec) => spec,
             Err(e) => {
                 diags.push(c.diag(Severity::Rejected, text, Some("command"), format!("{e:#}")));
@@ -1855,283 +1493,68 @@ fn accept_steps(
         seen.insert(id);
         accepted.push(WrittenStep {
             entry: c.entry,
-            group_type: group_type.map(str::to_string),
-            source_group: source_group.map(|(id, t)| (id.to_string(), t.to_string())),
+            spec,
         });
     }
     (accepted, diags)
 }
 
-/// Whether a command's program is the built-in step program: the same
-/// build as the runner, so the runner's commit is its commit.
-pub fn is_datalib_step(prog: &str) -> bool {
-    prog == "datalib-step" || prog.ends_with("/datalib-step")
-}
-
-/// The retired shape: `datalib-step` with the function and the provider on
-/// its command line. Returns the subcommand word, for the message.
-/// Tokenised the way the migrator does, so the two agree on what the
-/// retired shape looks like.
-fn retired_subcommand(command: &str) -> Option<&str> {
-    let mut words = command.split_whitespace();
-    if !words.next().is_some_and(is_datalib_step) {
-        return None;
-    }
-    words
-        .next()
-        .filter(|w| matches!(*w, "download" | "render" | "grid_index" | "qmd_index"))
-}
-
-/// Params paths a built-in step may still carry that no longer do
-/// anything, with why. `datalib-step` drops them before it parses, so a
-/// config that writes one loads; this check is what tells the person.
-const INERT_PARAM_PATHS: &[(&str, &str)] = &[
-    (
-        "backup.period",
-        "has no effect: a chat is one document now, whatever its length",
-    ),
-    (
-        "common.always_clear_before_ingest",
-        "has no effect: a local source decides what its input's absence means",
-    ),
-    (
-        "export.fetch_photos",
-        "has no effect: linkedin.com shows a profile only to a signed-in visitor now, so \
-         connection photos can no longer be fetched; the ones already fetched are kept",
-    ),
-    (
-        "gmail.request_concurrency",
-        "has no effect: Gmail messages are fetched one at a time, and the per-minute quota \
-         (`quota_units_per_minute`) is what bounds the rate",
-    ),
-    (
-        "period",
-        "has no effect: a chat is one document now, whatever its length",
-    ),
-];
-
-fn inert_path_is_written(params: Option<&toml::Value>, path: &str) -> bool {
-    let mut at = params;
-    for key in path.split('.') {
-        at = at.and_then(|v| v.get(key));
-    }
-    at.is_some()
-}
-
-/// Where a step sits in the config text, for a problem found after the
-/// check (`datalib-step check-params`): the line of `key = …` in its
-/// params when a key is named and found there, else its `[[steps]]`
-/// header. `None` for a step the text does not declare.
-pub fn step_span(text: &str, step_id: &str, key: Option<&str>) -> Option<std::ops::Range<usize>> {
-    let header = entries_of(text).spans.get(step_id).cloned()?;
-    Some(match key {
-        Some(key) => params_key_span(text, header, key),
-        None => header,
-    })
-}
-
-/// What `datalib-step check-params` printed for this config, as
-/// diagnostics against its text: one `Rejected` per built-in step whose
-/// params a sync would refuse, at the line of the key the message names
-/// when it names one. The runner links no provider, so the step program
-/// is what reads params; `datalib-dag --check` and `PUT /api/config` both
-/// show its answer through here.
-pub fn params_diagnostics(text: &str, check_params_stdout: &str) -> Vec<Diagnostic> {
-    check_params_stdout
-        .lines()
-        .filter_map(|line| {
-            let problem: serde_json::Value = serde_json::from_str(line).ok()?;
-            let step = problem.get("step")?.as_str()?;
-            let message = problem.get("message")?.as_str()?;
-            let key = message
-                .split_once("unknown field `")
-                .and_then(|(_, rest)| rest.split_once('`'))
-                .map(|(key, _)| key);
-            let mut d = Diagnostic::new(
-                Severity::Rejected,
-                format!("a sync would refuse its params: {message}"),
-            )
-            .with_help("`datalib-step help <type> <method>` lists every option a source takes");
-            d.entry = Some(EntryRef::step_id(step));
-            if let Some(span) = step_span(text, step, key) {
-                d.set_span(text, span);
-            }
-            Some(d)
-        })
-        .collect()
-}
-
-/// Where `key = …` sits in this entry's body, its `[steps.params…]`
-/// sub-tables included, for a key nested in `params` that
-/// [`key_span`] stops short of. The entry's header when it is not found.
-fn params_key_span(
-    text: &str,
-    header: std::ops::Range<usize>,
-    key: &str,
-) -> std::ops::Range<usize> {
-    let mut at = header.end;
-    for line in text[header.end..].split_inclusive('\n') {
-        let line_start = at;
-        at += line.len();
-        if line.trim_start().starts_with("[[") {
-            break;
-        }
-        let mut from = 0;
-        while let Some(i) = line[from..].find(key) {
-            let start = from + i;
-            let end = start + key.len();
-            let word_before = line[..start]
-                .chars()
-                .next_back()
-                .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
-            if !word_before && line[end..].trim_start().starts_with('=') {
-                return line_start + start..line_start + end;
-            }
-            from = end;
-        }
-    }
-    header
-}
-
-/// Built-in functions that no longer run, each with what took its place.
-/// The config upgrade rewrites each away (`datalib_migrate_config`).
-const RETIRED_BUILTINS: &[(&str, &str)] = &[
-    (
-        "qmd_index",
-        "each source's `embed` and `unified_grid_and_search_index`'s keyword search did its work",
-    ),
-    (
-        "keyword_index",
-        "`unified_grid_and_search_index` put each source in the keyword search itself: it searches every \
-         source it reads but those its `params.not_searched` names",
-    ),
-    (
-        "qmd_aggregator",
-        "`unified_grid_and_search_index` kept the vector cache to what a chunk names and reported what search \
-         holds; `embedding_map` reads every `embed` itself",
-    ),
-    (
-        "grid_index",
-        "the index step took its group's name, `unified_grid_and_search_index`",
-    ),
-];
-
-fn is_builtin(e: &StepEntry, function: &str) -> bool {
-    e.runs_datalib_step() && e.function.as_deref() == Some(function)
+/// The byte range of a step's `[[steps]]` header in the config text, for
+/// a problem found after the check. `None` for a step the text does not
+/// declare.
+pub fn step_header_span(text: &str, step_id: &str) -> Option<std::ops::Range<usize>> {
+    entries_of(text).spans.get(step_id).cloned()
 }
 
 fn nests_with(a: &str, b: &str) -> bool {
     a.starts_with(&format!("{b}/")) || b.starts_with(&format!("{a}/"))
 }
 
-/// The declared group ids, for a diagnostic that has to say what the valid
-/// choices were.
-fn id_list<'a>(ids: impl Iterator<Item = &'a str>) -> String {
-    let all: Vec<&str> = ids.collect();
-    if all.is_empty() {
-        return "(none — this config declares no groups)".to_string();
-    }
-    all.join(", ")
-}
-
-/// The step program datalib ships, and what a step that writes no
-/// `command` runs. Resolved like any other bare name.
-pub const BUILTIN_STEP_PROGRAM: &str = "datalib-step";
-
-/// Built-in steps that read their inputs off disk rather than at a pinned
-/// commit: an embed and the embedding map read the search index's file as
-/// it is, and perseus renders straight from its ingest's TEI files.
-/// `(group type, function)`, `None` matching any type.
-const UNPINNED_BUILTINS: &[(Option<&str>, &str)] = &[
-    (None, "embed"),
-    (None, "embedding_map"),
-    (Some("perseus"), "render_markdown"),
-];
-
-/// The lock a built-in step holds when it names none, where its shape's
-/// budget would not keep it safe: every embed loads the model and writes
-/// the inference cache, which the runner cannot see as shared.
-const BUILTIN_LOCKS: &[(&str, &str)] = &[("embed", crate::supervisor::locks::EMBEDDER)];
-
-fn builtin_lock(function: Option<&str>) -> Option<&'static str> {
-    BUILTIN_LOCKS
-        .iter()
-        .find(|&&(f, _)| function == Some(f))
-        .map(|&(_, lock)| lock)
-}
-
-fn reads_unpinned(group_type: Option<&str>, function: Option<&str>) -> bool {
-    UNPINNED_BUILTINS
-        .iter()
-        .any(|&(t, f)| function == Some(f) && (t.is_none() || t == group_type))
-}
-
-/// The one function a diff group's step performs: the tree the fan-ins
-/// read a group's documents from is `<group>/render_markdown`, whoever
-/// wrote it.
-const DIFF_GROUP_FUNCTION: &str = "render_markdown";
-
-/// A source's own search step, which embeds what the `unified_grid_and_search_index` step's keyword
-/// pass cut of its `render_markdown` whoever wrote it — so a diff group
-/// may have it too.
-const SEARCH_SOURCE_FUNCTIONS: &[&str] = &["embed"];
+/// The most `params` a step may have, as JSON: they travel in an
+/// environment variable, and Linux refuses one string over 128 KiB.
+pub const MAX_PARAMS_BYTES: usize = 64 * 1024;
 
 fn spec_of(
     e: &StepEntry,
-    group_type: Option<&str>,
-    source_group: Option<(&str, &str)>,
+    group: Option<String>,
+    programs: &BTreeMap<String, BTreeSet<crate::step::Verb>>,
 ) -> Result<StepSpec> {
-    let mut argv = match &e.command {
-        Some(command) => shlex::split(command)
-            .with_context(|| format!("command {command:?} has unbalanced quoting"))?,
-        None => vec![BUILTIN_STEP_PROGRAM.to_string()],
-    };
-    if argv.is_empty() {
+    let argv = shlex::split(&e.command)
+        .with_context(|| format!("command {:?} has unbalanced quoting", e.command))?;
+    let Some(program) = argv.first() else {
         bail!("empty command");
-    }
+    };
     let params = match &e.params {
         Some(params) => {
-            Some(serde_json::to_string(&params_to_json(params, &e.id)?).context("params → JSON")?)
+            let json =
+                serde_json::to_string(&params_to_json(params, &e.id)?).context("params → JSON")?;
+            if json.len() > MAX_PARAMS_BYTES {
+                bail!(
+                    "params are {} bytes as JSON; a step's params may be at most {} KiB",
+                    json.len(),
+                    MAX_PARAMS_BYTES / 1024
+                );
+            }
+            Some(json)
         }
         None => None,
     };
-    if !e.inputs.is_empty() {
-        argv.push("--inputs".to_string());
-        argv.push(serde_json::to_string(&e.inputs).expect("string vec → JSON"));
-    }
-
-    // The source's id and type ride in the step's own environment:
-    // forwarded like any `env` entry, and in the fingerprint with it, so
-    // changing the source re-runs the diff.
-    let mut env = e.env.clone();
-    if let Some((id, t)) = source_group {
-        env.insert(
-            crate::subprocess::ENV_SOURCE_GROUP.to_string(),
-            id.to_string(),
-        );
-        env.insert(
-            crate::subprocess::ENV_SOURCE_GROUP_TYPE.to_string(),
-            t.to_string(),
-        );
-    }
-    let mut spec = StepSpec::new(&e.id, StepRun::Subprocess { argv, env, params });
+    let verbs = programs.get(program).cloned().unwrap_or_default();
+    let mut spec = StepSpec::new(
+        &e.id,
+        StepRun::Subprocess {
+            argv,
+            env: e.env.clone(),
+            params,
+        },
+    );
     spec.code_version = e.code_version.clone();
-    spec.migrates = e.runs_datalib_step();
-    spec.compacts = e.runs_datalib_step();
-    spec.group = e.group.clone();
-    spec.group_type = group_type.map(str::to_string);
-    spec.function = e.function.clone();
-    spec.reads_pinned = match e.reads {
-        Some(reads) => reads == Reads::Pinned,
-        None => !e.runs_datalib_step() || !reads_unpinned(group_type, e.function.as_deref()),
-    };
+    spec.verbs = verbs;
+    spec.group = group;
+    spec.reads_pinned = e.reads == Some(Reads::Pinned);
     spec.waits_for_settled_inputs = e.start == Some(StartWhen::AfterInputsSettle);
-    spec.locks = match &e.locks {
-        Some(locks) => Some(locks.held()),
-        None if e.runs_datalib_step() => builtin_lock(e.function.as_deref())
-            .map(|lock| vec![(lock.to_string(), crate::supervisor::locks::Hold::Shared)]),
-        None => None,
-    };
+    spec.locks = e.locks.as_ref().map(StepLocks::held);
+    spec.inputs_written = !e.inputs.is_empty();
     for i in &e.inputs {
         spec.inputs.push(crate::ArtifactPath::parse(i)?);
     }
@@ -2330,23 +1753,46 @@ fn entries_of(text: &str) -> Entries {
     };
 
     let mut diags = Vec::new();
-    for (key, written) in [
-        ("embed_contexts", &raw.embed_contexts),
-        ("embed_search_index", &raw.embed_search_index),
-    ] {
-        let Some(written) = written else { continue };
-        let why = RETIRED_TOP_KEYS
-            .iter()
-            .find(|(k, _)| *k == key)
-            .map_or("has no effect", |(_, why)| why);
-        diags.push(
-            Diagnostic::new(Severity::Warning, format!("`{key}` {why}"))
-                .with_help("delete this line")
-                .at_span(text, written.span()),
-        );
-    }
     let mut spans: BTreeMap<String, std::ops::Range<usize>> = BTreeMap::new();
     let mut named: BTreeSet<String> = BTreeSet::new();
+
+    for (key, value) in [
+        ("checkpoint_cadence", &raw.checkpoint_cadence),
+        ("render_pages", &raw.render_pages),
+        ("embed_contexts", &raw.embed_contexts),
+        ("embed_search_index", &raw.embed_search_index),
+        ("modal", &raw.modal),
+    ] {
+        if let Some(v) = value {
+            diags.push(
+                Diagnostic::new(
+                    Severity::Rejected,
+                    format!(
+                        "`{key}` is the shape from before settings a step program reads \
+                         moved into `[env]`; it is not used"
+                    ),
+                )
+                .with_help(RETIRED_SHAPE_HELP)
+                .at_span(text, v.span()),
+            );
+        }
+    }
+    for name in raw.env.keys() {
+        if !valid_env_name(name) {
+            diags.push(Diagnostic::new(
+                Severity::Rejected,
+                format!(
+                    "[env] {name:?} is not a variable name: letters, digits and `_`, not \
+                     starting with a digit; it is not handed to any step"
+                ),
+            ));
+        }
+    }
+    let env: BTreeMap<String, String> = raw
+        .env
+        .into_iter()
+        .filter(|(k, _)| valid_env_name(k))
+        .collect();
 
     let id_key = |v: &toml::Value| v.get("id").and_then(v_str);
     let locks = deserialize_each(
@@ -2373,10 +1819,10 @@ fn entries_of(text: &str) -> Entries {
         &mut diags,
         |v, span| {
             if let Some(id) = raw_step_id(v) {
+                named.extend(group_of(&id).map(str::to_string));
                 // First spelling wins, matching `accept_steps`.
                 spans.entry(id).or_insert(span);
             }
-            named.extend(v.get("group").and_then(v_str));
         },
     );
     let applets = deserialize_each(
@@ -2400,6 +1846,7 @@ fn entries_of(text: &str) -> Entries {
 
     let accepted = accept_entries(
         Candidates {
+            programs: raw.programs.clone(),
             locks,
             packages,
             groups,
@@ -2440,12 +1887,11 @@ fn entries_of(text: &str) -> Entries {
             applets: accepted.applets,
             packages: accepted.packages,
             locks: accepted.locks,
-            checkpoint_cadence: raw.checkpoint_cadence,
+            programs: raw.programs,
+            env,
             run_history: raw.run_history,
             log_level: raw.log_level,
             disk_space: raw.disk_space,
-            render_pages: raw.render_pages,
-            modal: raw.modal,
         },
         specs,
         lock_specs: accepted.lock_specs,
@@ -2455,6 +1901,13 @@ fn entries_of(text: &str) -> Entries {
         expansions: accepted.expansions,
         diagnostics: diags,
     }
+}
+
+/// Whether `name` can be an environment variable a config sets.
+fn valid_env_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 fn v_str(v: &toml::Value) -> Option<String> {
@@ -2641,108 +2094,12 @@ impl DagConfig {
             applets: Vec::new(),
             packages: Vec::new(),
             locks: Vec::new(),
-            checkpoint_cadence: None,
+            programs: Vec::new(),
+            env: BTreeMap::new(),
             run_history: None,
             log_level: None,
             disk_space: None,
-            render_pages: None,
-            modal: None,
         }
-    }
-}
-
-#[cfg(test)]
-mod cadence_tests {
-    use super::CheckpointCadence;
-
-    #[test]
-    fn a_cadence_survives_the_trip_through_the_env_var() {
-        let c = CheckpointCadence {
-            at_most_every_secs: 15.5,
-        };
-        assert_eq!(CheckpointCadence::decode(&c.encode()), Some(c));
-    }
-
-    /// A value this build cannot read is `None`, never a guess: the step
-    /// falls back to its own default and logs, rather than checkpointing on
-    /// a cadence nobody asked for.
-    #[test]
-    fn an_unreadable_cadence_is_none() {
-        for bad in ["", "fifteen", "-1", "nan", "inf", "2,15"] {
-            assert_eq!(
-                CheckpointCadence::decode(bad),
-                None,
-                "{bad:?} must not parse"
-            );
-        }
-    }
-}
-
-#[cfg(test)]
-mod render_pages_tests {
-    use super::RenderPages;
-
-    #[test]
-    fn render_pages_survive_the_trip_through_the_env_var() {
-        for pages in [
-            RenderPages::default(),
-            RenderPages {
-                buckets: Some(200),
-                blob_mb: None,
-            },
-            RenderPages {
-                buckets: None,
-                blob_mb: Some(16),
-            },
-            RenderPages {
-                buckets: Some(1),
-                blob_mb: Some(1),
-            },
-        ] {
-            assert_eq!(RenderPages::decode(&pages.encode()), Some(pages));
-        }
-    }
-
-    /// A zero or a word is `None`, never a guess: the render falls back
-    /// to its own page size and logs.
-    #[test]
-    fn unreadable_render_pages_are_none() {
-        for bad in ["", "500", "0,64", "500,0", "-1,64", "five,64", "500,64,1"] {
-            assert_eq!(RenderPages::decode(bad), None, "{bad:?} must not parse");
-        }
-    }
-}
-
-#[cfg(test)]
-mod params_diagnostics_tests {
-    use super::*;
-
-    const TEXT: &str = "[[groups]]\nid = \"slack\"\ntype = \"slack\"\n\n[[steps]]\n\
-                        group = \"slack\"\nfunction = \"ingest\"\n\n[steps.params.api]\n\
-                        chanels = [\"bridge\"]\n";
-
-    /// `check-params` names the step and serde names the key; the
-    /// diagnostic has to land on the key's own line, not the step's
-    /// header, or an editor highlights the wrong place.
-    #[test]
-    fn a_refused_param_lands_on_its_key() {
-        let out = r#"{"step":"slack/ingest","message":"unknown field `chanels`, expected one of `channels`"}"#;
-        let found = params_diagnostics(TEXT, out);
-        assert_eq!(found.len(), 1, "{found:?}");
-        let d = &found[0];
-        assert_eq!(d.severity, Severity::Rejected);
-        assert_eq!(d.entry, Some(EntryRef::step_id("slack/ingest")));
-        assert_eq!(d.line, Some(10), "{d:?}");
-        assert!(d.message.contains("chanels"), "{d:?}");
-    }
-
-    #[test]
-    fn a_problem_without_a_key_lands_on_the_step_and_noise_is_skipped() {
-        let out =
-            "not json\n{\"step\":\"slack/ingest\",\"message\":\"its group declares no type\"}\n";
-        let found = params_diagnostics(TEXT, out);
-        assert_eq!(found.len(), 1, "{found:?}");
-        assert_eq!(found[0].line, Some(5), "the step's [[steps]] header");
     }
 }
 
@@ -2812,36 +2169,6 @@ mod tests {
         assert_ne!(none.fingerprint_material(), v1.fingerprint_material());
     }
 
-    /// Only `datalib-step`'s own steps take the `--migrate` and
-    /// `--compact` verbs: a custom command that has never heard of one
-    /// would run as if synced.
-    #[test]
-    fn only_builtin_steps_are_asked_to_migrate_or_compact() {
-        let cfg: DagConfig = toml::from_str(
-            r#"
-            [[groups]]
-            id = "mail"
-            type = "email"
-
-            [[steps]]
-            group = "mail"
-            function = "ingest"
-
-            [[steps]]
-            id = "custom/render"
-            command = "render-it"
-            inputs = ["mail/ingest"]
-            "#,
-        )
-        .expect("parse");
-        let specs = to_specs(&cfg).expect("to_specs");
-        let spec = |id: &str| specs.iter().find(|s| s.id == id).unwrap().clone();
-        assert!(spec("mail/ingest").migrates);
-        assert!(!spec("custom/render").migrates);
-        assert!(spec("mail/ingest").compacts);
-        assert!(!spec("custom/render").compacts);
-    }
-
     /// Editing `params` changes the argv the runner executes, which is
     /// what makes a config edit re-run the step.
     #[test]
@@ -2864,137 +2191,26 @@ mod tests {
         );
     }
 
-    /// A built-in step writes no `command`: its argv is `datalib-step`
-    /// plus the declared fields as JSON flags, and the function, group and
-    /// type it dispatches on travel in the environment instead.
+    /// A group is display metadata, and its `type` is opaque to the
+    /// runner: editing any of the three re-runs nothing.
     #[test]
-    fn a_builtin_step_runs_datalib_step_with_declared_fields_as_json_flags() {
-        let cfg: DagConfig = toml::from_str(
-            r#"
-            [[groups]]
-            id = "slack"
-            type = "slack"
-
-            [[groups]]
-            id = "unified_grid_and_search_index"
-
-            [[steps]]
-            group = "slack"
-            function = "ingest"
-            params.api = {media = true, channels = ["chat-qi"], since = "2026-06-15"}
-
-            [[steps]]
-            group = "slack"
-            function = "render_markdown"
-            inputs = ["slack/ingest"]
-            params.api = {media = true, channels = ["chat-qi"], since = "2026-06-15"}
-
-            [[steps]]
-            group = "unified_grid_and_search_index"
-            function = "unified_grid_and_search_index"
-            inputs = ["slack/render_markdown"]
-            "#,
-        )
-        .unwrap();
-        let specs = to_specs(&cfg).unwrap();
-        assert_eq!(specs.len(), 3);
-
-        let run = |i: usize| match &specs[i].run {
-            StepRun::Subprocess { argv, params, .. } => (argv.clone(), params.clone()),
-            other => panic!("expected subprocess, got {other:?}"),
-        };
-        let (dl, dl_params) = run(0);
-        assert_eq!(dl[0], BUILTIN_STEP_PROGRAM);
-        let params: serde_json::Value =
-            serde_json::from_str(dl_params.as_deref().unwrap()).unwrap();
-        assert_eq!(params["api"]["channels"][0], "chat-qi");
-        // Params never reach argv (they hold tokens, and argv is public
-        // to every user through `ps`); with no inputs declared there is
-        // nothing else: the one tree a step writes is its id, which it
-        // reads from the environment, and so are the function and the
-        // provider.
-        assert_eq!(dl.len(), 1);
-
-        // TOML has no anchors, so the render step repeats the subtree —
-        // and must produce byte-identical JSON for it.
-        let (rn, rn_params) = run(1);
-        assert_eq!(rn_params, dl_params);
-        assert_eq!(&rn[1..], &["--inputs", r#"["slack/ingest"]"#]);
-
-        // Param-less step: just inputs, and no params file to read.
-        let (ix, ix_params) = run(2);
-        assert_eq!(
-            ix,
-            vec![
-                BUILTIN_STEP_PROGRAM,
-                "--inputs",
-                r#"["slack/render_markdown"]"#,
-            ]
-        );
-        assert_eq!(ix_params, None);
-
-        // The composed ids are what everything downstream sees.
-        assert_eq!(specs[0].id, "slack/ingest");
-        assert_eq!(
-            specs[2].id,
-            "unified_grid_and_search_index/unified_grid_and_search_index"
-        );
-        assert_eq!(specs[0].group.as_deref(), Some("slack"));
-        assert_eq!(specs[0].group_type.as_deref(), Some("slack"));
-        assert_eq!(specs[0].function.as_deref(), Some("ingest"));
-        assert_eq!(specs[2].group_type, None);
-    }
-
-    #[test]
-    fn a_groups_type_moves_the_fingerprint_and_its_name_does_not() {
-        let with = |group_line: &str| {
+    fn a_groups_type_name_and_description_move_no_fingerprint() {
+        let with = |group_lines: &str| {
             let cfg: DagConfig = toml::from_str(&format!(
                 r#"
                 [[groups]]
                 id = "mail"
-                {group_line}
-
-                [[steps]]
-                group = "mail"
-                function = "raw"
-                command = "my-fetcher"
-                "#
-            ))
-            .expect("parse");
-            to_specs(&cfg).expect("to_specs").remove(0)
-        };
-        let untyped = with("");
-        let email = with(r#"type = "email""#);
-        let slack = with(r#"type = "slack""#);
-        let named = with("type = \"email\"\nname = \"Fastmail\"");
-        assert_ne!(untyped.fingerprint_material(), email.fingerprint_material());
-        assert_ne!(email.fingerprint_material(), slack.fingerprint_material());
-        assert_eq!(email.fingerprint_material(), named.fingerprint_material());
-    }
-
-    /// Like `name`, a description is display text: it is not part of what
-    /// any step is, so editing one re-runs nothing.
-    #[test]
-    fn a_groups_description_moves_no_fingerprint() {
-        let with = |description_line: &str| {
-            let cfg: DagConfig = toml::from_str(&format!(
-                r#"
-                [[groups]]
-                id = "mail"
-                type = "email"
-                {description_line}
+                {group_lines}
 
                 [[groups]]
                 id = "unified_grid_and_search_index"
 
                 [[steps]]
-                group = "mail"
-                function = "ingest"
+                id = "mail/ingest"
                 command = "my-fetcher"
 
                 [[steps]]
-                group = "unified_grid_and_search_index"
-                function = "qmd_index"
+                id = "unified_document_index/qmd_index"
                 command = "my-indexer"
                 inputs = ["mail/ingest"]
                 "#
@@ -3003,87 +2219,21 @@ mod tests {
             to_specs(&cfg).expect("to_specs")
         };
         let bare = with("");
-        let described = with(r#"description = "Fastmail, mostly receipts""#);
-        for i in 0..2 {
-            assert_eq!(
-                bare[i].fingerprint_material(),
-                described[i].fingerprint_material()
-            );
+        for lines in [
+            r#"type = "email""#,
+            r#"type = "slack""#,
+            r#"name = "Fastmail""#,
+            r#"description = "Fastmail, mostly receipts""#,
+        ] {
+            let edited = with(lines);
+            for i in 0..2 {
+                assert_eq!(
+                    bare[i].fingerprint_material(),
+                    edited[i].fingerprint_material(),
+                    "{lines}"
+                );
+            }
         }
-    }
-
-    /// The built-in steps that read files off disk are the ones the runner
-    /// keeps apart from their writers; everything else reads pinned. A
-    /// custom command is taken at its word, which is to say pinned.
-    #[test]
-    fn the_built_in_steps_that_read_off_disk_are_marked_unpinned() {
-        let cfg: DagConfig = toml::from_str(
-            r#"
-            [[groups]]
-            id = "iliad"
-            type = "perseus"
-
-            [[groups]]
-            id = "mail"
-            type = "email"
-
-            [[groups]]
-            id = "unified_grid_and_search_index"
-
-            [[steps]]
-            group = "iliad"
-            function = "ingest"
-
-            [[steps]]
-            group = "iliad"
-            function = "render_markdown"
-            inputs = ["iliad/ingest"]
-
-            [[steps]]
-            group = "mail"
-            function = "ingest"
-
-            [[steps]]
-            group = "mail"
-            function = "render_markdown"
-            inputs = ["mail/ingest"]
-
-            [[steps]]
-            group = "mail"
-            function = "embed"
-            inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
-
-            [[steps]]
-            group = "unified_grid_and_search_index"
-            function = "unified_grid_and_search_index"
-            inputs = ["iliad/render_markdown", "mail/render_markdown"]
-
-            [[steps]]
-            group = "unified_grid_and_search_index"
-            function = "embedding_map"
-            inputs = ["*/embed"]
-
-            [[steps]]
-            id = "custom/qmd"
-            command = "my-indexer"
-            inputs = ["mail/render_markdown"]
-            "#,
-        )
-        .expect("parse");
-        let unpinned: Vec<String> = to_specs(&cfg)
-            .expect("to_specs")
-            .into_iter()
-            .filter(|s| !s.reads_pinned)
-            .map(|s| s.id)
-            .collect();
-        assert_eq!(
-            unpinned,
-            [
-                "iliad/render_markdown",
-                "mail/embed",
-                "unified_grid_and_search_index/embedding_map"
-            ]
-        );
     }
 
     #[test]
@@ -3157,141 +2307,6 @@ mod tests {
         assert!(err.contains("duplicate id"), "{err}");
         // Same rule, said the other way: two steps writing one tree.
         assert!(err.contains("tree it writes"), "{err}");
-    }
-
-    fn diff_config(group: &str, step: &str) -> String {
-        format!(
-            r#"
-            [[groups]]
-            id = "slack"
-            type = "slack"
-
-            [[groups]]
-            id = "notes"
-
-            [[groups]]
-            id = "slack-diff"
-            {group}
-
-            [[steps]]
-            group = "slack"
-            function = "ingest"
-            params.api = {{}}
-
-            [[steps]]
-            group = "slack-diff"
-            {step}
-            "#
-        )
-    }
-
-    /// A diff group is `type = "diff"` plus a `source`; its one step is
-    /// `render_markdown` reading the source's ingest tree, and the
-    /// source's type rides in that step's env, fingerprinted with it.
-    #[test]
-    fn a_diff_group_forwards_its_sources_type_in_the_steps_env() {
-        let cfg: DagConfig = toml::from_str(&diff_config(
-            r#"type = "diff"
-            source = "slack""#,
-            r#"function = "render_markdown"
-            inputs = ["slack/ingest"]
-            params.diff = { from = "aaa", to = "bbb" }"#,
-        ))
-        .unwrap();
-        let specs = to_specs(&cfg).unwrap();
-        let diff = specs
-            .iter()
-            .find(|s| s.id == "slack-diff/render_markdown")
-            .expect("the diff step is accepted");
-        assert_eq!(diff.group_type.as_deref(), Some(DIFF_GROUP_TYPE));
-        let StepRun::Subprocess { env, .. } = &diff.run else {
-            panic!("built-in step");
-        };
-        assert_eq!(
-            env.get(crate::subprocess::ENV_SOURCE_GROUP_TYPE)
-                .map(String::as_str),
-            Some("slack")
-        );
-        assert!(
-            diff.fingerprint_material()
-                .contains("DATALIB_DAG_SOURCE_GROUP_TYPE=slack"),
-            "the source's type is in the fingerprint"
-        );
-    }
-
-    /// A root with no ingest steps — a materialized fixture — declares
-    /// the diff step with no inputs, and the step reads `<source>/ingest`.
-    #[test]
-    fn a_diff_step_may_declare_no_inputs() {
-        let cfg: DagConfig = toml::from_str(&diff_config(
-            r#"type = "diff"
-            source = "slack""#,
-            r#"function = "render_markdown"
-            params.diff = { from = "aaa", to = "bbb" }"#,
-        ))
-        .unwrap();
-        let specs = to_specs(&cfg).unwrap();
-        assert!(specs.iter().any(|s| s.id == "slack-diff/render_markdown"));
-    }
-
-    /// Every way a diff group can be mis-declared names the rule it broke.
-    #[test]
-    fn a_diff_group_is_dropped_with_the_rule_it_broke() {
-        let cases: &[(&str, &str, &str)] = &[
-            (
-                r#"type = "diff""#,
-                r#"function = "render_markdown"
-                inputs = ["slack/ingest"]"#,
-                "needs a `source`",
-            ),
-            (
-                r#"type = "diff"
-                source = "nowhere""#,
-                r#"function = "render_markdown"
-                inputs = ["slack/ingest"]"#,
-                "names no declared group",
-            ),
-            (
-                r#"type = "diff"
-                source = "notes""#,
-                r#"function = "render_markdown"
-                inputs = ["slack/ingest"]"#,
-                "has no `type`",
-            ),
-            (
-                r#"type = "diff"
-                source = "slack-diff""#,
-                r#"function = "render_markdown"
-                inputs = ["slack/ingest"]"#,
-                "is itself a diff group",
-            ),
-            (
-                r#"type = "slack"
-                source = "slack""#,
-                r#"function = "render_markdown"
-                inputs = ["slack/ingest"]"#,
-                "only for a group of type \"diff\"",
-            ),
-            (
-                r#"type = "diff"
-                source = "slack""#,
-                r#"function = "ingest"
-                params.api = {}"#,
-                "no raw store of its own to `ingest` into",
-            ),
-            (
-                r#"type = "diff"
-                source = "slack""#,
-                r#"function = "render_markdown"
-                inputs = ["slack/render_markdown"]"#,
-                "has to be its source's",
-            ),
-        ];
-        for (group, step, expect) in cases {
-            let cfg: DagConfig = toml::from_str(&diff_config(group, step)).unwrap();
-            let err = to_specs(&cfg).unwrap_err().to_string();
-            assert!(err.contains(expect), "{group}\n{step}\n→ {err}");
-        }
     }
 
     /// Two sources of the same type, which is what "+ Data Source"
@@ -3388,9 +2403,9 @@ mod tests {
         }
         let check = check_text(
             "[[groups]]\nid = \"Email\"\n\n\
-             [[steps]]\ngroup = \"Email\"\nfunction = \"raw\"\ncommand = \"x\"\n\n\
+             [[steps]]\nid = \"Email/raw\"\ncommand = \"x\"\n\n\
              [[groups]]\nid = \"g\"\n\n\
-             [[steps]]\ngroup = \"g\"\nfunction = \"Raw\"\ncommand = \"x\"\n",
+             [[steps]]\nid = \"g/Raw\"\ncommand = \"x\"\n",
         );
         assert!(
             check.cfg.groups.iter().all(|g| g.id == "g"),
@@ -3402,28 +2417,6 @@ mod tests {
             toml::from_str("[[applets]]\nid = \"User\"\ncommand = \"x\"\n").unwrap();
         let err = validate_applets(&applet).unwrap_err().to_string();
         assert!(err.contains("lower case"), "{err}");
-    }
-
-    /// Only a source is kept off an index group's id; the index group
-    /// itself, which has no `type`, takes it.
-    #[test]
-    fn a_source_may_not_take_an_index_groups_id() {
-        for id in RESERVED_STANZA_NAMES {
-            let source = check_text(&format!(
-                "[[groups]]\nid = \"{id}\"\ntype = \"email\"\n\n\
-                 [[steps]]\ngroup = \"{id}\"\nfunction = \"ingest\"\n"
-            ));
-            assert!(
-                source.cfg.groups.is_empty(),
-                "{id}: {:?}",
-                source.diagnostics
-            );
-            let index = check_text(&format!(
-                "[[groups]]\nid = \"{id}\"\n\n\
-                 [[steps]]\ngroup = \"{id}\"\nfunction = \"unified_grid_and_search_index\"\n"
-            ));
-            assert!(index.is_clean(), "{id}: {:?}", index.diagnostics);
-        }
     }
 
     /// Among steps, the index needs no reserved-name rule: the index
@@ -3452,41 +2445,6 @@ mod tests {
         )
         .unwrap();
         assert!(to_specs(&clash).is_err());
-    }
-
-    /// No `command` means `datalib-step`, and `datalib-step` needs a group
-    /// to know what to do — so the one shape that gets neither is refused.
-    #[test]
-    fn a_step_with_no_command_needs_a_group() {
-        let cfg: DagConfig = toml::from_str(r#"steps = [{id = "x/out"}]"#).unwrap();
-        let err = to_specs(&cfg).unwrap_err().to_string();
-        assert!(err.contains("command"), "{err}");
-        assert!(err.contains("group"), "{err}");
-    }
-
-    /// A step is `group` + `function` or a verbatim `id`, and the loader
-    /// says which half is missing rather than accepting a half-step.
-    #[test]
-    fn a_step_is_group_and_function_or_a_verbatim_id() {
-        let err = |body: &str| {
-            toml::from_str::<DagConfig>(&format!("[[steps]]\n{body}\ncommand = \"x\"\n"))
-                .unwrap_err()
-                .to_string()
-        };
-        assert!(err("group = \"a\"").contains("missing field `function`"));
-        assert!(err("function = \"raw\"").contains("missing field `group`"));
-        assert!(err("").contains("missing field `group`"));
-        let both = err("id = \"a/raw\"\ngroup = \"a\"\nfunction = \"raw\"");
-        assert!(both.contains("`id` cannot be written"), "{both}");
-
-        let ok: DagConfig =
-            toml::from_str("[[steps]]\ngroup = \"a\"\nfunction = \"raw\"\ncommand = \"x\"\n")
-                .unwrap();
-        assert_eq!(ok.steps[0].id, "a/raw");
-        let custom: DagConfig =
-            toml::from_str("[[steps]]\nid = \"tools/csv\"\ncommand = \"x\"\n").unwrap();
-        assert_eq!(custom.steps[0].id, "tools/csv");
-        assert_eq!(custom.steps[0].group, None);
     }
 
     /// TOML dates are a distinct scalar type with no JSON counterpart;
@@ -3807,8 +2765,8 @@ command = "datalib-applet unified_grid_and_search_index"
 id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_grid_and_search_index"
-function = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "index-grid"
 
 [[applets]]
 group = "unified_grid_and_search_index"
@@ -4031,7 +2989,7 @@ inputs = ["a"]
              [[steps]]\nid = \"x/raw\"\ncommand = \"second\"\n",
         );
         assert_eq!(check.cfg.steps.len(), 1);
-        assert_eq!(check.cfg.steps[0].command.as_deref(), Some("first"));
+        assert_eq!(check.cfg.steps[0].command, "first");
         assert_eq!(
             check.diagnostics[0].line,
             Some(6),
@@ -4166,42 +3124,32 @@ mod pattern_tests {
     const CONFIG: &str = r#"
 [[groups]]
 id = "slack"
-type = "slack"
 
 [[steps]]
-group = "slack"
-function = "ingest"
-command = "datalib-step"
+id = "slack/fetch"
+command = "fetch slack"
 
 [[steps]]
-group = "slack"
-function = "render_markdown"
-command = "datalib-step"
-inputs = ["slack/ingest"]
+id = "slack/render"
+command = "render"
+inputs = ["slack/fetch"]
 
 [[groups]]
 id = "mail"
-type = "email"
 
 [[steps]]
-group = "mail"
-function = "ingest"
-command = "datalib-step"
+id = "mail/fetch"
+command = "fetch mail"
 
 [[steps]]
-group = "mail"
-function = "render_markdown"
-command = "datalib-step"
-inputs = ["mail/ingest"]
-
-[[groups]]
-id = "unified_grid_and_search_index"
+id = "mail/render"
+command = "render"
+inputs = ["mail/fetch"]
 
 [[steps]]
-group = "unified_grid_and_search_index"
-function = "unified_grid_and_search_index"
-command = "datalib-step"
-inputs = ["*/render_markdown"]
+id = "index/all"
+command = "index"
+inputs = ["*/render"]
 "#;
 
     fn inputs_of(check: &ConfigCheck, id: &str) -> Vec<String> {
@@ -4215,147 +3163,98 @@ inputs = ["*/render_markdown"]
             .clone()
     }
 
-    /// `*/render_markdown` reads every source's render, in the file's
-    /// order, and everything past the loader sees the ids: the entry, the
-    /// graph's edges and the command line the step is handed.
+    /// `*/render` reads every group's `render`, in the file's order, and
+    /// everything past the loader sees the ids: the entry, the graph's
+    /// edges and `--check`'s report.
     #[test]
-    fn a_pattern_reads_every_step_of_its_function() {
+    fn a_pattern_reads_every_step_of_its_last_part() {
         let check = check_text(CONFIG);
         assert!(check.is_clean(), "{}", check.render("c.toml".as_ref()));
-        let grid = "unified_grid_and_search_index/unified_grid_and_search_index";
         assert_eq!(
-            inputs_of(&check, grid),
-            ["slack/render_markdown", "mail/render_markdown"]
+            inputs_of(&check, "index/all"),
+            ["slack/render", "mail/render"]
         );
-        let spec = &check.graph.steps[check.graph.by_id[grid]];
+        let spec = &check.graph.steps[check.graph.by_id["index/all"]];
         let edges: Vec<&str> = spec.inputs.iter().map(|i| i.as_str()).collect();
-        assert_eq!(edges, ["slack/render_markdown", "mail/render_markdown"]);
-        let StepRun::Subprocess { argv, .. } = &spec.run else {
-            panic!("a subprocess step")
-        };
-        assert!(
-            argv.contains(&r#"["slack/render_markdown","mail/render_markdown"]"#.to_string()),
-            "{argv:?}"
-        );
+        assert_eq!(edges, ["slack/render", "mail/render"]);
         assert_eq!(
             expansion_lines(&check.expansions),
-            [format!(
-                "  {grid} reads */render_markdown = slack/render_markdown, mail/render_markdown"
-            )]
+            ["  index/all reads */render = slack/render, mail/render"]
         );
     }
 
-    /// A source added to the file is read without touching the index's
+    /// A group added to the file is read without touching the fan-in's
     /// entry, which is the point of writing a pattern.
     #[test]
-    fn a_source_added_later_is_read_without_editing_the_index() {
+    fn a_group_added_later_is_read_without_editing_the_fan_in() {
         let added = CONFIG.replace(
-            "[[groups]]\nid = \"unified_grid_and_search_index\"",
-            "[[groups]]\nid = \"notes\"\ntype = \"apple_notes\"\n\n[[steps]]\ngroup = \"notes\"\n\
-             function = \"render_markdown\"\ncommand = \"datalib-step\"\n\n\
-             [[groups]]\nid = \"unified_grid_and_search_index\"",
+            "[[steps]]\nid = \"index/all\"",
+            "[[steps]]\nid = \"notes/render\"\ncommand = \"render\"\n\n\
+             [[steps]]\nid = \"index/all\"",
         );
         let check = check_text(&added);
         assert_eq!(
-            inputs_of(
-                &check,
-                "unified_grid_and_search_index/unified_grid_and_search_index"
-            ),
-            [
-                "slack/render_markdown",
-                "mail/render_markdown",
-                "notes/render_markdown"
-            ]
+            inputs_of(&check, "index/all"),
+            ["slack/render", "mail/render", "notes/render"]
         );
     }
 
-    /// One source whose ingest was refused takes its own render with it,
-    /// and nothing else: the index that reads renders by pattern still
-    /// runs, over the source that works. Named by id, the same broken
-    /// render blocks the index, as it always has.
+    /// One group whose fetch was refused takes its own render with it, and
+    /// nothing else: the fan-in that reads renders by pattern still runs,
+    /// over the group that works. Named by id, the same broken render
+    /// blocks the fan-in, as it always has.
     #[test]
-    fn a_broken_source_does_not_block_what_reads_it_by_pattern() {
+    fn a_broken_step_does_not_block_what_reads_it_by_pattern() {
         let broken = CONFIG.replace(
-            "group = \"mail\"\nfunction = \"ingest\"\ncommand = \"datalib-step\"",
-            "group = \"mail\"\nfunction = \"ingest\"\ncommand = \"datalib-step\"\nbogus = 1",
+            "id = \"mail/fetch\"\ncommand = \"fetch mail\"",
+            "id = \"mail/fetch\"\ncommand = \"fetch mail\"\nbogus = 1",
         );
         let check = check_text(&broken);
-        let grid = "unified_grid_and_search_index/unified_grid_and_search_index";
-        assert_eq!(inputs_of(&check, grid), ["slack/render_markdown"]);
-        assert!(check.diagnostics.iter().all(|d| d.id() != Some(grid)));
+        assert_eq!(inputs_of(&check, "index/all"), ["slack/render"]);
+        assert!(check
+            .diagnostics
+            .iter()
+            .all(|d| d.id() != Some("index/all")));
         assert_eq!(
             check
                 .diagnostics
                 .iter()
-                .find(|d| d.id() == Some("mail/render_markdown"))
+                .find(|d| d.id() == Some("mail/render"))
                 .map(|d| d.severity),
             Some(Severity::Blocked)
         );
 
         let named = broken.replace(
-            r#"inputs = ["*/render_markdown"]"#,
-            r#"inputs = ["slack/render_markdown", "mail/render_markdown"]"#,
+            r#"inputs = ["*/render"]"#,
+            r#"inputs = ["slack/render", "mail/render"]"#,
         );
         let check = check_text(&named);
         assert_eq!(
             check
                 .diagnostics
                 .iter()
-                .find(|d| d.id() == Some(grid))
+                .find(|d| d.id() == Some("index/all"))
                 .map(|d| d.severity),
             Some(Severity::Blocked)
         );
     }
 
-    /// The map reads every embed by pattern.
+    /// A fan-in whose pattern matches nothing reads nothing, and it is still
+    /// no source: it holds `cpu`, not a `network` slot a download waits for.
     #[test]
-    fn the_embedding_map_reads_every_embed() {
+    fn a_fan_in_with_nothing_to_read_holds_no_network_slot() {
         let text = format!(
-            "{CONFIG}
-[[steps]]
-group = \"slack\"
-function = \"embed\"
-command = \"datalib-step\"
-inputs = [\"unified_grid_and_search_index/unified_grid_and_search_index\"]
-
-[[steps]]
-group = \"unified_grid_and_search_index\"
-function = \"embedding_map\"
-command = \"datalib-step\"
-inputs = [\"*/embed\"]
-"
+            "{CONFIG}\n[[steps]]\nid = \"map/all\"\ncommand = \"map\"\ninputs = [\"*/embed\"]\n"
         );
         let check = check_text(&text);
         assert!(check.is_clean(), "{}", check.render("c.toml".as_ref()));
-        assert_eq!(
-            inputs_of(&check, "unified_grid_and_search_index/embedding_map"),
-            ["slack/embed"]
-        );
-    }
-
-    /// With no `embed` anywhere the map reads nothing, and it is still no
-    /// download: it holds `index`, not a `network` slot a download waits
-    /// for.
-    #[test]
-    fn the_map_with_no_embed_to_read_holds_no_network_slot() {
-        let text = format!(
-            "{CONFIG}
-[[steps]]
-group = \"unified_grid_and_search_index\"
-function = \"embedding_map\"
-command = \"datalib-step\"
-inputs = [\"*/embed\"]
-"
-        );
-        let check = check_text(&text);
-        assert!(check.is_clean(), "{}", check.render("c.toml".as_ref()));
-        let map = "unified_grid_and_search_index/embedding_map";
-        let spec = &check.graph.steps[check.graph.by_id[map]];
+        let spec = &check.graph.steps[check.graph.by_id["map/all"]];
         assert!(spec.inputs.is_empty(), "{:?}", spec.inputs);
+        assert!(!spec.is_source());
         assert_eq!(
             crate::supervisor::locks::held_by(spec),
             [(
-                crate::supervisor::locks::INDEX.to_string(),
+                crate::supervisor::locks::CPU.to_string(),
                 crate::supervisor::locks::Hold::Shared
             )]
         );
@@ -4380,20 +3279,20 @@ name = "Work Slack"
 type = "slack"
 
 [[steps]]
-group = "work-slack"
-function = "ingest"
+id = "work-slack/ingest"
+command = "fetch-slack"
 
 [[steps]]
-group = "work-slack"
-function = "render_markdown"
+id = "work-slack/render_markdown"
+command = "render-slack"
 inputs = ["work-slack/ingest"]
 
 [[groups]]
 id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_grid_and_search_index"
-function = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "index-grid"
 inputs = ["work-slack/render_markdown"]
 
 [[applets]]
@@ -4402,10 +3301,10 @@ id = "unified_grid_and_search_index"
 command = "datalib-applet unified_grid_and_search_index"
 "#;
 
-    /// The plan's example shape loads clean, and the ids everything
-    /// downstream keys on are the composed ones.
+    /// Groups and the steps under them load clean, and each step's group
+    /// is its id's first part.
     #[test]
-    fn the_grouped_shape_loads_clean_with_composed_ids() {
+    fn the_grouped_shape_loads_clean() {
         let check = check_text(GROUPED);
         assert!(check.is_clean(), "{:?}", check.diagnostics);
         let mut ids: Vec<&str> = check.cfg.steps.iter().map(|s| s.id.as_str()).collect();
@@ -4425,43 +3324,24 @@ command = "datalib-applet unified_grid_and_search_index"
             Some("unified_grid_and_search_index")
         );
         assert!(check.graph.by_id.contains_key("work-slack/render_markdown"));
+        let render = &check.graph.steps[check.graph.by_id["work-slack/render_markdown"]];
+        assert_eq!(render.group.as_deref(), Some("work-slack"));
     }
 
-    /// A step naming a group that does not exist is unusable — its id
-    /// cannot be composed against anything — and the message lists what
-    /// does exist.
-    #[test]
-    fn a_step_under_an_undeclared_group_is_rejected() {
-        let check = check_text(
-            "[[groups]]\nid = \"slack\"\n\n\
-             [[steps]]\ngroup = \"slakc\"\nfunction = \"raw\"\ncommand = \"x\"\n",
-        );
-        let d = check
-            .diagnostics
-            .iter()
-            .find(|d| d.id() == Some("slakc/raw"))
-            .expect("a diagnostic for the step");
-        assert_eq!(d.severity, Severity::Rejected);
-        assert!(d.message.contains("names no declared group"), "{d:?}");
-        assert!(d.help.as_deref().unwrap().contains("slack"), "{d:?}");
-        assert_eq!(d.line, Some(5), "the `group =` line");
-        assert!(check.cfg.steps.is_empty());
-    }
-
-    /// A bad group id costs the group and every step under it — and those
-    /// steps are told the fix is on the group, not on them.
+    /// A rejected group costs the group and every step under it — and
+    /// those steps are told the fix is on the group, not on them.
     #[test]
     fn a_bad_group_takes_its_steps_with_it_as_blocked() {
         let check = check_text(
-            "[[groups]]\nid = \"a/b\"\n\n\
-             [[steps]]\ngroup = \"a/b\"\nfunction = \"raw\"\ncommand = \"x\"\n\n\
+            "[[groups]]\nid = \"a\"\nsource = \"x\"\n\n\
+             [[steps]]\nid = \"a/raw\"\ncommand = \"x\"\n\n\
              [[steps]]\nid = \"fine/raw\"\ncommand = \"y\"\n",
         );
-        assert_eq!(sev_of(&check.diagnostics, "a/b"), Some(Severity::Rejected));
+        assert_eq!(sev_of(&check.diagnostics, "a"), Some(Severity::Rejected));
         let step = check
             .diagnostics
             .iter()
-            .find(|d| d.id() == Some("a/b/raw"))
+            .find(|d| d.id() == Some("a/raw"))
             .unwrap();
         assert_eq!(step.severity, Severity::Blocked);
         assert!(step.message.contains("was itself dropped"), "{step:?}");
@@ -4480,38 +3360,21 @@ command = "datalib-applet unified_grid_and_search_index"
         }
         for good in ["a", "work-slack", "a.b_c", "unified_grid_and_search_index"] {
             let check = check_text(&format!(
-                "[[groups]]\nid = \"{good}\"\n[[steps]]\ngroup = \"{good}\"\n\
-                 function = \"raw\"\ncommand = \"x\"\n"
+                "[[groups]]\nid = \"{good}\"\n[[steps]]\nid = \"{good}/raw\"\n\
+                 command = \"x\"\n"
             ));
             assert!(check.is_clean(), "{good:?}: {:?}", check.diagnostics);
             assert!(usable_group_id(good), "{good:?}");
         }
     }
 
-    #[test]
-    fn a_function_is_one_segment() {
-        for bad in ["", "a/b", "..", "-x"] {
-            let check = check_text(&format!(
-                "[[groups]]\nid = \"g\"\n[[steps]]\ngroup = \"g\"\nfunction = \"{bad}\"\n\
-                 command = \"x\"\n"
-            ));
-            assert!(check.cfg.steps.is_empty(), "{bad:?} should be rejected");
-            let d = check
-                .diagnostics
-                .iter()
-                .find(|d| d.severity == Severity::Rejected)
-                .unwrap();
-            assert!(d.message.contains("function"), "{d:?}");
-        }
-    }
-
     /// Two groups with one id would both claim every step under it; the
-    /// first keeps the id, as with steps.
+    /// first keeps the id, as with steps, and the steps stay under it.
     #[test]
     fn the_first_of_two_duplicate_groups_wins() {
         let check = check_text(
             "[[groups]]\nid = \"g\"\nname = \"first\"\n\n[[groups]]\nid = \"g\"\nname = \"second\"\n\n\
-             [[steps]]\ngroup = \"g\"\nfunction = \"raw\"\ncommand = \"x\"\n",
+             [[steps]]\nid = \"g/raw\"\ncommand = \"x\"\n",
         );
         assert_eq!(check.cfg.groups.len(), 1);
         assert_eq!(check.cfg.groups[0].name.as_deref(), Some("first"));
@@ -4520,14 +3383,14 @@ command = "datalib-applet unified_grid_and_search_index"
         assert_eq!(check.diagnostics[0].severity, Severity::Rejected);
     }
 
-    /// A composed id and a verbatim one share one namespace: a custom step
-    /// cannot claim a tree a grouped step writes, and the collision is
-    /// reported the same way whichever was written first.
+    /// A declared group gives a step no namespace of its own: a step
+    /// claiming the tree of one under a group collides with it as any
+    /// other would.
     #[test]
-    fn composed_and_verbatim_ids_collide_in_one_namespace() {
+    fn grouped_and_ungrouped_ids_collide_in_one_namespace() {
         let check = check_text(
             "[[groups]]\nid = \"g\"\n\n\
-             [[steps]]\ngroup = \"g\"\nfunction = \"raw\"\ncommand = \"x\"\n\n\
+             [[steps]]\nid = \"g/raw\"\ncommand = \"x\"\n\n\
              [[steps]]\nid = \"g/raw\"\ncommand = \"y\"\n\n\
              [[steps]]\nid = \"g\"\ncommand = \"z\"\n",
         );
@@ -4541,13 +3404,13 @@ command = "datalib-applet unified_grid_and_search_index"
         assert!(msgs.iter().any(|m| m.contains("nested with")), "{msgs:?}");
     }
 
-    /// The two warnings: a group nothing is filed under, and a name written
-    /// on a grouped step. Neither drops anything.
+    /// A group nothing is filed under warns, and drops nothing; a step's
+    /// `name` says nothing at all.
     #[test]
-    fn empty_groups_and_step_names_warn_without_dropping() {
+    fn an_empty_group_warns_without_dropping() {
         let check = check_text(
             "[[groups]]\nid = \"lonely\"\n\n[[groups]]\nid = \"g\"\n\n\
-             [[steps]]\ngroup = \"g\"\nfunction = \"raw\"\nname = \"Nope\"\ncommand = \"x\"\n",
+             [[steps]]\nid = \"g/raw\"\nname = \"Raw\"\ncommand = \"x\"\n",
         );
         assert_eq!(check.dropped(), 0);
         assert!(check.nothing_dropped());
@@ -4561,161 +3424,7 @@ command = "datalib-applet unified_grid_and_search_index"
             .unwrap();
         assert_eq!(lonely.severity, Severity::Warning);
         assert!(lonely.message.contains("no steps"), "{lonely:?}");
-        let named = check
-            .diagnostics
-            .iter()
-            .find(|d| d.id() == Some("g/raw"))
-            .unwrap();
-        assert_eq!(named.severity, Severity::Warning);
-        assert_eq!(named.line, Some(10), "the `name =` line");
-    }
-
-    /// `always_clear_before_ingest` went, but a file still naming it has to
-    /// load: the step is kept and the warning points at the line to delete,
-    /// in a `[steps.params.common]` table and inline alike.
-    #[test]
-    fn a_retired_clear_before_ingest_key_only_warns_at_its_line() {
-        let check = check_text(
-            "[[groups]]\nid = \"phone\"\ntype = \"sms_backup_restore\"\n\n\
-             [[steps]]\ngroup = \"phone\"\nfunction = \"ingest\"\n\
-             [steps.params.backup]\npath = \"/b\"\n\
-             [steps.params.common]\nalways_clear_before_ingest = true\n\n\
-             [[groups]]\nid = \"li\"\ntype = \"linkedin\"\n\n\
-             [[steps]]\ngroup = \"li\"\nfunction = \"ingest\"\n\
-             params = { export = { path = \"/e\" }, common = { always_clear_before_ingest = false } }\n",
-        );
-        assert!(check.nothing_dropped(), "{:?}", check.diagnostics);
-        assert_eq!(check.cfg.steps.len(), 2);
-        let warned: Vec<_> = check
-            .diagnostics
-            .iter()
-            .map(|d| (d.severity, d.id(), d.line))
-            .collect();
-        assert_eq!(
-            warned,
-            vec![
-                (Severity::Warning, Some("phone/ingest"), Some(11)),
-                (Severity::Warning, Some("li/ingest"), Some(20)),
-            ]
-        );
-        let d = &check.diagnostics[0];
-        assert!(d.message.contains("has no effect"), "{d:?}");
-        assert_eq!(d.help.as_deref(), Some("delete this line"));
-        assert_eq!(d.column, Some(1), "{d:?}");
-    }
-
-    /// `embed_contexts` and `embed_search_index` went with qmd. A config
-    /// that still sets them loads whole, and each is warned at its line.
-    #[test]
-    fn the_retired_embed_keys_only_warn_at_their_lines() {
-        let check = check_text(
-            "embed_contexts = 4\nembed_search_index = true\n\n\
-             [[groups]]\nid = \"li\"\ntype = \"linkedin\"\n\n\
-             [[steps]]\ngroup = \"li\"\nfunction = \"ingest\"\n\
-             params = { export = { path = \"/e\" } }\n",
-        );
-        assert!(check.nothing_dropped(), "{:?}", check.diagnostics);
-        assert_eq!(check.cfg.steps.len(), 1);
-        let warned: Vec<_> = check
-            .diagnostics
-            .iter()
-            .map(|d| (d.severity, d.line, d.help.as_deref()))
-            .collect();
-        assert_eq!(
-            warned,
-            vec![
-                (Severity::Warning, Some(1), Some("delete this line")),
-                (Severity::Warning, Some(2), Some("delete this line")),
-            ]
-        );
-        assert!(check.diagnostics[0].message.contains("`embed_contexts`"));
-        assert!(check.diagnostics[1]
-            .message
-            .contains("`embed_search_index`"));
-    }
-
-    /// LinkedIn's photo fetch went when linkedin.com stopped showing a
-    /// profile to anyone signed out. A config that turned it on still
-    /// loads, and the warning says why at the line to delete.
-    #[test]
-    fn a_retired_linkedin_fetch_photos_key_only_warns_at_its_line() {
-        let check = check_text(
-            "[[groups]]\nid = \"li\"\ntype = \"linkedin\"\n\n\
-             [[steps]]\ngroup = \"li\"\nfunction = \"ingest\"\n\
-             [steps.params.export]\npath = \"/e\"\nfetch_photos = true\n\n\
-             [[groups]]\nid = \"li2\"\ntype = \"linkedin\"\n\n\
-             [[steps]]\ngroup = \"li2\"\nfunction = \"ingest\"\n\
-             params = { export = { path = \"/e\", fetch_photos = false } }\n",
-        );
-        assert!(check.nothing_dropped(), "{:?}", check.diagnostics);
-        assert_eq!(check.cfg.steps.len(), 2);
-        let warned: Vec<_> = check
-            .diagnostics
-            .iter()
-            .map(|d| (d.severity, d.id(), d.line))
-            .collect();
-        assert_eq!(
-            warned,
-            vec![
-                (Severity::Warning, Some("li/ingest"), Some(10)),
-                (Severity::Warning, Some("li2/ingest"), Some(19)),
-            ]
-        );
-        let d = &check.diagnostics[0];
-        assert!(
-            d.message.starts_with("`export.fetch_photos` has no effect"),
-            "{d:?}"
-        );
-        assert!(d.message.contains("signed-in"), "{d:?}");
-    }
-
-    /// `gmail.request_concurrency` was never read. A config that sets it
-    /// loads, and the warning says what bounds the rate instead.
-    #[test]
-    fn a_retired_gmail_request_concurrency_only_warns_at_its_line() {
-        let check = check_text(
-            "[[groups]]\nid = \"mail\"\ntype = \"email\"\n\n\
-             [[steps]]\ngroup = \"mail\"\nfunction = \"ingest\"\n\
-             [steps.params.gmail]\nrequest_concurrency = 16\n",
-        );
-        assert!(check.nothing_dropped(), "{:?}", check.diagnostics);
-        let d = &check.diagnostics[0];
-        assert_eq!((d.severity, d.line), (Severity::Warning, Some(9)), "{d:?}");
-        assert!(
-            d.message
-                .starts_with("`gmail.request_concurrency` has no effect"),
-            "{d:?}"
-        );
-        assert!(d.message.contains("quota_units_per_minute"), "{d:?}");
-    }
-
-    /// Beeper and Signal cut a chat into months or days by `period`; a chat
-    /// is one document now. A config that still sets it loads, and the
-    /// warning says why it does nothing.
-    #[test]
-    fn a_retired_period_only_warns_at_its_line() {
-        let check = check_text(
-            "[[groups]]\nid = \"texts\"\ntype = \"beeper\"\n\n\
-             [[steps]]\ngroup = \"texts\"\nfunction = \"render_markdown\"\n\
-             [steps.params]\nperiod = \"day\"\n",
-        );
-        assert!(check.nothing_dropped(), "{:?}", check.diagnostics);
-        let d = &check.diagnostics[0];
-        assert_eq!((d.severity, d.line), (Severity::Warning, Some(9)), "{d:?}");
-        assert!(d.message.starts_with("`period` has no effect"), "{d:?}");
-        assert!(d.message.contains("one document"), "{d:?}");
-    }
-
-    /// A group whose only step was rejected is not empty — somebody filled
-    /// it, and the entry to fix is the step.
-    #[test]
-    fn a_group_whose_step_was_rejected_is_not_called_empty() {
-        let check = check_text(
-            "[[groups]]\nid = \"g\"\n\n\
-             [[steps]]\ngroup = \"g\"\nfunction = \"raw\"\ncommand = \"x\"\ntitle = 1\n",
-        );
-        assert_eq!(check.diagnostics.len(), 1);
-        assert_eq!(check.diagnostics[0].id(), Some("g/raw"));
+        assert_eq!(check.diagnostics.len(), 1, "{:?}", check.diagnostics);
     }
 
     /// An applet's group is a filing, so a wrong one is advice rather than a
@@ -4741,38 +3450,6 @@ command = "datalib-applet unified_grid_and_search_index"
         let spec = &check.graph.steps[0];
         assert_eq!(spec.id, "exports/csv");
         assert_eq!(spec.group, None);
-        assert_eq!(spec.function, None);
-    }
-
-    /// The shape written before `datalib-step` read its function from the
-    /// environment cannot run any more, so it is refused rather than run
-    /// into an "unrecognized subcommand" at sync time — and the refusal
-    /// names the migrator, whether the step was grouped or not.
-    #[test]
-    fn the_retired_subcommand_shape_is_rejected_and_names_the_migrator() {
-        for text in [
-            "[[steps]]\nid = \"slack/raw\"\ncommand = \"datalib-step download slack_api\"\n",
-            "[[groups]]\nid = \"slack\"\ntype = \"slack_api\"\n\n\
-             [[steps]]\ngroup = \"slack\"\nfunction = \"raw\"\ncommand = \"datalib-step download slack_api\"\n",
-            "[[groups]]\nid = \"unified_grid_and_search_index\"\n\n\
-             [[steps]]\ngroup = \"unified_grid_and_search_index\"\nfunction = \"grid\"\ncommand = \"datalib-step grid_index\"\n",
-        ] {
-            let check = check_text(text);
-            assert_eq!(check.dropped(), 1, "{text}\n{:?}", check.diagnostics);
-            let d = check
-                .diagnostics
-                .iter()
-                .find(|d| d.severity == Severity::Rejected)
-                .expect("rejected");
-            assert!(d.describe().contains("datalib-migrate-config"), "{}", d.describe());
-        }
-        // An explicit `datalib-step` with no subcommand is the built-in
-        // step spelled out, and fine.
-        let check = check_text(
-            "[[groups]]\nid = \"slack\"\ntype = \"slack_api\"\n\n\
-             [[steps]]\ngroup = \"slack\"\nfunction = \"ingest\"\ncommand = \"datalib-step --playback-root /tmp/pb\"\n",
-        );
-        assert!(check.is_clean(), "{:?}", check.diagnostics);
     }
 }
 
@@ -4830,7 +3507,79 @@ inputs = ["a"]
         let b = step(&check, "b");
         assert_eq!(b.locks, Some(vec![("gpu".to_string(), Hold::Exclusive)]));
         assert!(!b.reads_pinned);
-        assert!(step(&check, "a").reads_pinned);
+    }
+
+    /// A step reads files off disk unless it says it reads pinned, so a
+    /// step that says nothing never runs beside a writer of its inputs.
+    #[test]
+    fn reads_defaults_to_files() {
+        let check = check_text(
+            "[[steps]]\nid = \"a\"\ncommand = \"x\"\n\n\
+             [[steps]]\nid = \"b\"\ncommand = \"x\"\ninputs = [\"a\"]\n\n\
+             [[steps]]\nid = \"c\"\ncommand = \"x\"\ninputs = [\"a\"]\nreads = \"pinned\"\n",
+        );
+        assert!(check.is_clean(), "{:?}", check.diagnostics);
+        assert!(!step(&check, "b").reads_pinned, "unsaid is files");
+        assert!(step(&check, "c").reads_pinned);
+    }
+
+    /// A step that names no lock holds `network` when it reads nothing
+    /// and `cpu` when it reads something, whatever its group or program.
+    #[test]
+    fn a_step_that_names_no_lock_holds_network_or_cpu_by_its_inputs() {
+        let check = check_text(
+            r#"
+[[groups]]
+id = "mail"
+type = "email"
+
+[[groups]]
+id = "unified_document_index"
+
+[[steps]]
+id = "mail/ingest"
+command = "fetch"
+
+[[steps]]
+id = "mail/render_markdown"
+command = "render"
+inputs = ["mail/ingest"]
+
+[[steps]]
+id = "unified_document_index/grid_index"
+command = "index"
+inputs = ["mail/render_markdown"]
+
+[[steps]]
+id = "loose"
+command = "x"
+inputs = ["mail/ingest"]
+"#,
+        );
+        assert!(check.is_clean(), "{:?}", check.diagnostics);
+        let held = |id: &str| {
+            crate::supervisor::locks::held_by(step(&check, id))
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(held("mail/ingest"), ["network"]);
+        assert_eq!(held("mail/render_markdown"), ["cpu"]);
+        assert_eq!(held("unified_document_index/grid_index"), ["cpu"]);
+        assert_eq!(held("loose"), ["cpu"]);
+    }
+
+    /// The runner defines two locks; any other a step holds, the config
+    /// declares — the qmd locks included.
+    #[test]
+    fn only_network_and_cpu_need_no_declaring() {
+        for name in ["index", "qmd_keyword", "qmd_embed"] {
+            let check = check_text(&format!(
+                "[[steps]]\nid = \"a\"\ncommand = \"x\"\nlocks = [\"{name}\"]\n"
+            ));
+            assert!(check.graph.steps.is_empty(), "{name}");
+            assert!(check.diagnostics[0].message.contains(name), "{name}");
+        }
     }
 
     #[test]
@@ -4883,275 +3632,9 @@ inputs = ["a"]
         let check = check_text("[[locks]]\nname = \"network\"\nslots = 1\n");
         assert!(check.is_clean(), "{:?}", check.diagnostics);
         let names: Vec<&str> = check.graph.locks.iter().map(|l| l.name.as_str()).collect();
-        assert_eq!(names, ["network", "cpu", "index", "embedder"]);
+        assert_eq!(names, ["network", "cpu"]);
         assert_eq!(slots(&check, "network"), Some(1));
         assert_eq!(slots(&check, "cpu"), Some(4));
-    }
-
-    /// Every embed holds the one-slot `embedder` lock, so one model is
-    /// loaded at a time. The index step, the one writer of the grid index's
-    /// file, needs no lock of its own: no other step writes that file, and
-    /// an embed reading it off disk keeps it from running beside one. It
-    /// holds the `index` budget, as any index step does. A step that names
-    /// its own locks, or runs its own command, keeps those.
-    #[test]
-    fn every_embed_holds_the_embedder_lock() {
-        let check = check_text(
-            r#"
-[[groups]]
-id = "mail"
-type = "email"
-
-[[groups]]
-id = "riker"
-type = "email"
-
-[[groups]]
-id = "unified_grid_and_search_index"
-
-[[steps]]
-group = "mail"
-function = "render_markdown"
-
-[[steps]]
-group = "mail"
-function = "embed"
-inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
-
-[[steps]]
-group = "riker"
-function = "render_markdown"
-
-[[steps]]
-group = "riker"
-function = "embed"
-inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
-locks = ["cpu"]
-
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "unified_grid_and_search_index"
-inputs = ["mail/render_markdown", "riker/render_markdown"]
-
-[[steps]]
-id = "custom/embed"
-command = "x"
-inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
-"#,
-        );
-        assert!(check.is_clean(), "{:?}", check.diagnostics);
-        let held = |id: &str| {
-            let spec = check.graph.steps.iter().find(|s| s.id == id).unwrap();
-            crate::supervisor::locks::held_by(spec)
-                .into_iter()
-                .map(|(name, _)| name)
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            held("unified_grid_and_search_index/unified_grid_and_search_index"),
-            ["index"]
-        );
-        assert_eq!(held("mail/embed"), ["embedder"]);
-        assert_eq!(held("riker/embed"), ["cpu"], "named locks win");
-        assert_eq!(
-            held("custom/embed"),
-            ["index"],
-            "a custom command is not built in"
-        );
-        assert_eq!(slots(&check, "embedder"), Some(1));
-        assert_eq!(slots(&check, "qmd_keyword"), None);
-    }
-
-    /// `qmd_index` did the search's work in one fan-in. A config still
-    /// naming the old step is refused, naming the tool that rewrites it,
-    /// and loses that entry alone. `keyword_index` and `qmd_aggregator`
-    /// are refused the same way (`RETIRED_BUILTINS`).
-    #[test]
-    fn a_qmd_index_step_is_refused_and_names_the_migrator() {
-        let check = check_text(
-            r#"
-[[groups]]
-id = "mail"
-type = "email"
-
-[[groups]]
-id = "unified_grid_and_search_index"
-
-[[steps]]
-group = "mail"
-function = "render_markdown"
-
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "qmd_index"
-inputs = ["mail/render_markdown"]
-"#,
-        );
-        let refused: Vec<&Diagnostic> = check
-            .diagnostics
-            .iter()
-            .filter(|d| d.id() == Some("unified_grid_and_search_index/qmd_index"))
-            .collect();
-        assert_eq!(refused.len(), 1, "{:?}", check.diagnostics);
-        assert_eq!(refused[0].severity, Severity::Rejected);
-        assert!(refused[0].describe().contains("datalib-migrate-config"));
-        assert!(check
-            .graph
-            .steps
-            .iter()
-            .any(|s| s.id == "mail/render_markdown"));
-    }
-
-    /// `keyword_index` was each source's own keyword pass; `unified_grid_and_search_index`
-    /// does it now. A config still naming the step is refused, naming the
-    /// tool that rewrites it, and loses that entry alone.
-    #[test]
-    fn a_keyword_index_step_is_refused_and_names_the_migrator() {
-        let check = check_text(
-            r#"
-[[groups]]
-id = "mail"
-type = "email"
-
-[[steps]]
-group = "mail"
-function = "render_markdown"
-
-[[steps]]
-group = "mail"
-function = "keyword_index"
-inputs = ["mail/render_markdown"]
-"#,
-        );
-        let refused: Vec<&Diagnostic> = check
-            .diagnostics
-            .iter()
-            .filter(|d| d.id() == Some("mail/keyword_index"))
-            .collect();
-        assert_eq!(refused.len(), 1, "{:?}", check.diagnostics);
-        assert_eq!(refused[0].severity, Severity::Rejected);
-        assert!(refused[0].describe().contains("not_searched"));
-        assert!(refused[0].describe().contains("datalib-migrate-config"));
-        assert!(check
-            .graph
-            .steps
-            .iter()
-            .any(|s| s.id == "mail/render_markdown"));
-    }
-
-    /// `qmd_aggregator` swept the vectors and reported; `unified_grid_and_search_index` does
-    /// both now. A config still naming it is refused, naming the tool that
-    /// rewrites it, and loses that entry alone.
-    #[test]
-    fn a_qmd_aggregator_step_is_refused_and_names_the_migrator() {
-        let check = check_text(
-            r#"
-[[groups]]
-id = "unified_grid_and_search_index"
-
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "unified_grid_and_search_index"
-
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "qmd_aggregator"
-inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
-"#,
-        );
-        let refused: Vec<&Diagnostic> = check
-            .diagnostics
-            .iter()
-            .filter(|d| d.id() == Some("unified_grid_and_search_index/qmd_aggregator"))
-            .collect();
-        assert_eq!(refused.len(), 1, "{:?}", check.diagnostics);
-        assert_eq!(refused[0].severity, Severity::Rejected);
-        assert!(refused[0].describe().contains("datalib-migrate-config"));
-        assert_eq!(check.graph.steps.len(), 1);
-    }
-
-    /// `grid_index` was the index step's function before it took its
-    /// group's name. A config still naming it is refused, naming the tool
-    /// that rewrites it, and loses that entry alone.
-    #[test]
-    fn a_grid_index_step_is_refused_and_names_the_migrator() {
-        let check = check_text(
-            r#"
-[[groups]]
-id = "mail"
-type = "email"
-
-[[groups]]
-id = "unified_grid_and_search_index"
-
-[[steps]]
-group = "mail"
-function = "render_markdown"
-
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "grid_index"
-inputs = ["*/render_markdown"]
-"#,
-        );
-        let refused: Vec<&Diagnostic> = check
-            .diagnostics
-            .iter()
-            .filter(|d| d.id() == Some("unified_grid_and_search_index/grid_index"))
-            .collect();
-        assert_eq!(refused.len(), 1, "{:?}", check.diagnostics);
-        assert_eq!(refused[0].severity, Severity::Rejected);
-        assert!(refused[0].describe().contains("datalib-migrate-config"));
-        assert!(refused[0]
-            .describe()
-            .contains("`unified_grid_and_search_index`"));
-        assert!(check
-            .graph
-            .steps
-            .iter()
-            .any(|s| s.id == "mail/render_markdown"));
-    }
-
-    /// A comparison is searched like any source, so its group may carry
-    /// an embed beside its one render.
-    #[test]
-    fn a_diff_group_may_carry_its_embed() {
-        let check = check_text(
-            r#"
-[[groups]]
-id = "slack"
-type = "slack"
-
-[[groups]]
-id = "slack-diff"
-type = "diff"
-source = "slack"
-
-[[groups]]
-id = "unified_grid_and_search_index"
-
-[[steps]]
-group = "slack-diff"
-function = "render_markdown"
-
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "unified_grid_and_search_index"
-inputs = ["*/render_markdown"]
-
-[[steps]]
-group = "slack-diff"
-function = "embed"
-inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
-"#,
-        );
-        let dropped: Vec<_> = check
-            .diagnostics
-            .iter()
-            .filter(|d| d.severity.drops_the_entry())
-            .collect();
-        assert!(dropped.is_empty(), "{dropped:?}");
-        assert_eq!(check.graph.steps.len(), 3);
     }
 
     /// When a step may run is not what it makes: neither re-runs anything.
@@ -5192,7 +3675,7 @@ inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
         format!(
             "[[packages]]\nid = \"weather\"\nurl = \"https://h/datalib-package.toml\"\n\
              sha256 = \"{PACKAGE_SHA}\"\n\n[[groups]]\nid = \"sfo\"\ntype = \"weather\"\n\n\
-             [[steps]]\ngroup = \"sfo\"\nfunction = \"ingest\"\n{step}\n"
+             [[steps]]\nid = \"sfo/ingest\"\n{step}\n"
         )
     }
 
@@ -5223,8 +3706,6 @@ inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
                 "KSFO".to_string()
             ]
         );
-        assert!(!check.cfg.steps[0].runs_datalib_step());
-        assert!(!check.graph.steps[0].migrates);
     }
 
     #[test]
@@ -5234,7 +3715,7 @@ inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
             with_package(&format!("command = \"{other}\"")),
             format!(
                 "{}\n[[applets]]\nid = \"chart\"\ncommand = \"{other}\"\n",
-                with_package("command = \"datalib-step\"")
+                with_package("command = \"fetch\"")
             ),
         ] {
             let check = check_text(&text);
@@ -5250,28 +3731,212 @@ inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
         }
     }
 
-    /// `command = "datalib-step"` and no `command` are one step: the second
-    /// is how a config written before every step named its program reads.
-    #[test]
-    fn datalib_step_written_or_left_out_is_the_same_step() {
-        let written = check_text(&with_package("command = \"datalib-step\""));
-        let left_out = check_text(&with_package(""));
-        for check in [&written, &left_out] {
-            assert!(check.nothing_dropped(), "{:?}", check.diagnostics);
-            assert!(check.cfg.steps[0].runs_datalib_step());
-            assert!(check.graph.steps[0].migrates && check.graph.steps[0].compacts);
-            assert_eq!(argv_of(check, "sfo/ingest"), [BUILTIN_STEP_PROGRAM]);
-        }
-    }
-
     #[test]
     fn a_package_pin_must_be_a_sha256() {
-        let text = with_package("").replace(PACKAGE_SHA, "abc");
+        let text = with_package("command = \"fetch\"").replace(PACKAGE_SHA, "abc");
         let check = check_text(&text);
         assert!(check.cfg.packages.is_empty());
         assert!(check
             .diagnostics
             .iter()
             .any(|d| d.message.contains("not a sha256")));
+    }
+}
+
+#[cfg(test)]
+mod protocol_tests {
+    use super::*;
+    use crate::step::Verb;
+
+    fn spec<'a>(check: &'a ConfigCheck, id: &str) -> &'a StepSpec {
+        &check.graph.steps[check.graph.by_id[id]]
+    }
+
+    fn rejection<'a>(check: &'a ConfigCheck, needle: &str) -> &'a Diagnostic {
+        check
+            .diagnostics
+            .iter()
+            .find(|d| d.severity == Severity::Rejected && d.describe().contains(needle))
+            .unwrap_or_else(|| panic!("no rejection naming {needle:?}: {:?}", check.diagnostics))
+    }
+
+    /// A step's group is its id's first part when a `[[groups]]` entry
+    /// has that id, and none otherwise; nothing about the step says it.
+    #[test]
+    fn a_steps_group_is_its_ids_first_part_when_declared() {
+        let check = check_text(
+            "[[groups]]\nid = \"mail\"\n\n\
+             [[steps]]\nid = \"mail/ingest\"\ncommand = \"x\"\n\n\
+             [[steps]]\nid = \"mail/deep/out\"\ncommand = \"x\"\n\n\
+             [[steps]]\nid = \"loose/out\"\ncommand = \"x\"\n\n\
+             [[steps]]\nid = \"mail_like\"\ncommand = \"x\"\n",
+        );
+        assert!(check.is_clean(), "{:?}", check.diagnostics);
+        assert_eq!(spec(&check, "mail/ingest").group.as_deref(), Some("mail"));
+        assert_eq!(spec(&check, "mail/deep/out").group.as_deref(), Some("mail"));
+        assert_eq!(spec(&check, "loose/out").group, None);
+        assert_eq!(spec(&check, "mail_like").group, None);
+    }
+
+    /// Each way a config can still be in the shape from before the runner
+    /// stopped knowing `datalib-step` is refused, and each refusal names
+    /// the rewrite.
+    #[test]
+    fn each_retired_shape_is_refused_and_names_the_rewrite() {
+        let step_cases = [
+            (
+                "[[groups]]\nid = \"g\"\n\n[[steps]]\ngroup = \"g\"\nfunction = \"raw\"\ncommand = \"x\"\n",
+                "`group` and `function`",
+            ),
+            (
+                "[[steps]]\nid = \"g/raw\"\nfunction = \"raw\"\ncommand = \"x\"\n",
+                "`group` and `function`",
+            ),
+            ("[[steps]]\nid = \"g/raw\"\n", "missing field `command`"),
+        ];
+        for (text, said) in step_cases {
+            let check = check_text(text);
+            assert!(check.graph.steps.is_empty(), "{text}");
+            let d = rejection(&check, said);
+            assert!(
+                d.describe().contains(RETIRED_SHAPE_HELP),
+                "{}",
+                d.describe()
+            );
+        }
+
+        for (text, key) in [
+            (
+                "[checkpoint_cadence]\nat_most_every_secs = 2.5\n",
+                "checkpoint_cadence",
+            ),
+            ("[render_pages]\nbuckets = 200\n", "render_pages"),
+            ("embed_contexts = 4\n", "embed_contexts"),
+            ("embed_search_index = true\n", "embed_search_index"),
+            ("[modal]\nmax_sandboxes = 10\n", "modal"),
+        ] {
+            let check = check_text(&format!("{text}\n[[steps]]\nid = \"a\"\ncommand = \"x\"\n"));
+            assert!(!check.is_fatal(), "{key}: {:?}", check.diagnostics);
+            let d = rejection(&check, key);
+            assert!(
+                d.describe().contains(RETIRED_SHAPE_HELP),
+                "{}",
+                d.describe()
+            );
+            assert_eq!(d.line, Some(1), "{key}: points at the key");
+            assert_eq!(check.graph.steps.len(), 1, "{key}: the steps still load");
+        }
+
+        let check = check_text("[[groups]]\nid = \"d\"\ntype = \"diff\"\nsource = \"slack\"\n");
+        assert!(check.cfg.groups.is_empty());
+        let d = rejection(&check, "`source`");
+        assert!(
+            d.describe().contains(RETIRED_SHAPE_HELP),
+            "{}",
+            d.describe()
+        );
+    }
+
+    /// A step is sent a verb only if its program's `[[programs]]` entry
+    /// lists it, the program being its command's first word as written.
+    #[test]
+    fn a_steps_verbs_are_its_programs_entry() {
+        let check = check_text(
+            "[[programs]]\ncommand = \"fetch\"\nverbs = [\"reset\", \"prepare\"]\n\n\
+             [[programs]]\ncommand = \"bin/shrink\"\nverbs = [\"compact\", \"collect\"]\n\n\
+             [[steps]]\nid = \"a\"\ncommand = \"fetch --since 2026\"\n\n\
+             [[steps]]\nid = \"b\"\ncommand = \"./fetch\"\n\n\
+             [[steps]]\nid = \"c\"\ncommand = \"bin/shrink\"\n\n\
+             [[steps]]\nid = \"d\"\ncommand = \"other fetch\"\n",
+        );
+        assert!(check.is_clean(), "{:?}", check.diagnostics);
+        let verbs = |id: &str| spec(&check, id).verbs.iter().copied().collect::<Vec<_>>();
+        assert_eq!(verbs("a"), [Verb::Reset, Verb::Prepare]);
+        assert_eq!(verbs("b"), [], "compared as written");
+        assert_eq!(verbs("c"), [Verb::Compact, Verb::Collect]);
+        assert_eq!(verbs("d"), [], "only the first word is the program");
+    }
+
+    #[test]
+    fn a_programs_entry_names_one_program_once() {
+        let check = check_text(
+            "[[programs]]\ncommand = \"fetch\"\nverbs = [\"reset\"]\n\n\
+             [[programs]]\ncommand = \"fetch\"\nverbs = [\"prepare\"]\n\n\
+             [[programs]]\ncommand = \"fetch --x\"\nverbs = [\"prepare\"]\n\n\
+             [[steps]]\nid = \"a\"\ncommand = \"fetch\"\n",
+        );
+        rejection(&check, "declared twice");
+        rejection(&check, "not one program");
+        assert_eq!(
+            spec(&check, "a").verbs.iter().copied().collect::<Vec<_>>(),
+            [Verb::Reset],
+            "the first entry stands"
+        );
+    }
+
+    /// A misspelled verb costs that verb, with a warning, and the file and
+    /// the program's other verbs load.
+    #[test]
+    fn an_unknown_verb_is_a_warning_and_the_rest_load() {
+        let check = check_text(
+            "[[programs]]\ncommand = \"fetch\"\nverbs = [\"reset\", \"prepair\"]\n\n\
+             [[steps]]\nid = \"a\"\ncommand = \"fetch\"\n",
+        );
+        assert!(!check.is_fatal());
+        assert!(
+            check
+                .diagnostics
+                .iter()
+                .any(|d| d.severity == Severity::Warning && d.message.contains("\"prepair\"")),
+            "{:?}",
+            check.diagnostics
+        );
+        assert_eq!(
+            spec(&check, "a").verbs.iter().copied().collect::<Vec<_>>(),
+            [Verb::Reset]
+        );
+    }
+
+    /// strum and serde spell a verb independently: the config is read
+    /// with strum, and the step's spec serializes it with serde.
+    #[test]
+    fn verb_as_str_matches_the_serde_spelling() {
+        use strum::VariantArray;
+        for &v in Verb::VARIANTS {
+            let json = serde_json::to_string(&v).unwrap();
+            assert_eq!(json, format!("\"{}\"", v.as_str()), "{v:?}");
+            assert_eq!(Verb::parse(v.as_str()), Some(v));
+            assert_eq!(v.flag(), format!("--{}", v.as_str()));
+        }
+    }
+
+    /// Params travel in one environment variable, which Linux caps; a
+    /// step whose params would not fit is refused at load, not at spawn.
+    #[test]
+    fn params_over_the_limit_are_refused() {
+        let with = |n: usize| {
+            check_text(&format!(
+                "[[steps]]\nid = \"a\"\ncommand = \"x\"\nparams.blob = \"{}\"\n",
+                "x".repeat(n)
+            ))
+        };
+        let fits = with(MAX_PARAMS_BYTES - 64);
+        assert!(fits.is_clean(), "{:?}", fits.diagnostics);
+        let over = with(MAX_PARAMS_BYTES);
+        assert!(over.graph.steps.is_empty());
+        rejection(&over, "at most 64 KiB");
+    }
+
+    /// `[env]` is kept for the host to hand on; a key that cannot be a
+    /// variable is refused and left out.
+    #[test]
+    fn env_keys_must_be_variable_names() {
+        let check = check_text("[env]\nGOOD_1 = \"a\"\n\"1BAD\" = \"b\"\n\"A-B\" = \"c\"\n");
+        assert_eq!(
+            check.cfg.env,
+            BTreeMap::from([("GOOD_1".to_string(), "a".to_string())])
+        );
+        rejection(&check, "\"1BAD\"");
+        rejection(&check, "\"A-B\"");
     }
 }

@@ -1335,9 +1335,10 @@ fn groups_with(cfg_text: &str, function: &str) -> std::collections::BTreeSet<Str
         .and_then(toml::Value::as_array)
         .into_iter()
         .flatten()
-        .filter(|s| s.get("function").and_then(toml::Value::as_str) == Some(function))
-        .filter_map(|s| s.get("group").and_then(toml::Value::as_str))
-        .map(str::to_string)
+        .filter_map(|s| s.get("id").and_then(toml::Value::as_str))
+        .filter_map(|id| id.split_once('/'))
+        .filter(|(_, f)| *f == function)
+        .map(|(g, _)| g.to_string())
         .collect()
 }
 
@@ -1351,7 +1352,10 @@ fn searched_groups(cfg_text: &str) -> std::collections::BTreeSet<String> {
         .into_iter()
         .flatten()
         .filter(|s| {
-            s.get("function").and_then(toml::Value::as_str) == Some("unified_grid_and_search_index")
+            s.get("id")
+                .and_then(toml::Value::as_str)
+                .and_then(|id| id.split_once('/'))
+                .is_some_and(|(_, f)| f == "unified_grid_and_search_index")
         })
         .filter_map(|s| s.get("params")?.get("not_searched")?.as_array().cloned())
         .flatten()
@@ -2039,7 +2043,7 @@ fn rewrite_config(text: &str) -> String {
     let mut doc: toml::Table = toml::from_str(text).expect("parse config toml");
     doc.remove("data_root");
 
-    // A step is `group` + `function`; its provider is the group's `type`.
+    // A step's id is `<group>/<function>`; its provider is the group's `type`.
     let slack_groups: Vec<String> = doc
         .get("groups")
         .and_then(|v| v.as_array())
@@ -2064,8 +2068,8 @@ fn rewrite_config(text: &str) -> String {
         let Some(m) = step.as_table_mut() else {
             continue;
         };
-        let function = m.get("function").and_then(|v| v.as_str()).unwrap_or("");
-        let group = m.get("group").and_then(|v| v.as_str()).unwrap_or("");
+        let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let (group, function) = id.split_once('/').unwrap_or((id, ""));
         if function != "ingest" || !slack_groups.iter().any(|g| g == group) {
             continue;
         }

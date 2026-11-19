@@ -1,9 +1,9 @@
 //! The server's side of the supervisor loop (`dag/README.md`
 //! §"Two locks, two files"): it holds `runner-lock` for as long as it is up, runs the loop
 //! whenever a request or a reset or purge is open, and between busy
-//! periods settles a step turned off or on into the record. The first time
-//! a build runs on the root it asks every step to migrate before the first
-//! request (`dag/README.md` §"Upgrading a root").
+//! periods settles a step turned off or on into the record. Each time it
+//! takes the loop it asks every step whose program takes `--prepare` to
+//! prepare before the first request (`dag/README.md` §"Upgrading a root").
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -32,7 +32,7 @@ pub enum WipeAnswer {
 /// "queued": long enough for its steps to stop and the loop to do it.
 const WIPE_WAIT: Duration = Duration::from_secs(10);
 
-/// The launch's migrate pass, as `/api/config` reports it.
+/// The prepare pass at this server's start, as `/api/config` reports it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Upgrade {
     /// The pass is running: nothing syncs until it is done.
@@ -45,7 +45,7 @@ pub struct Upgrade {
 }
 
 /// The newest "Free up disk space" this server has seen asked for, as
-/// `/api/config` reports it: the same rows as the migrate pass, each with
+/// `/api/config` reports it: the same rows as the prepare pass, each with
 /// what its store gave back.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct FreeSpace {
@@ -235,7 +235,7 @@ pub struct HostConfig {
     /// `datalib-dag --now` is to one run. For fixtures, whose output must
     /// not depend on the day they were built.
     pub now: Option<String>,
-    /// Where the migrate pass says it moved, so the page asks again.
+    /// Where the prepare pass says it moved, so the page asks again.
     pub announce: Option<crate::watch::RootTx>,
 }
 
@@ -275,7 +275,7 @@ async fn host(cfg: &HostConfig) {
         }
         Err(e) => tracing::error!("supervisor: could not take over from the last loop: {e:#}"),
     }
-    migrate_on_launch(cfg, &store).await;
+    prepare_on_launch(cfg).await;
     cfg.control
         .upgrade
         .lock()
@@ -303,31 +303,25 @@ impl host::Periods for ServerPeriods<'_> {
     }
 }
 
-/// The first time this build runs on the root, ask every step that takes
-/// the verb to migrate, one at a time, before the loop takes any request:
-/// no render then reads a raw store in an old shape. What a step cannot
-/// migrate in place it answers `needs_rerun`, which the page offers to run.
-/// A request opened meanwhile waits for the loop. A step that fails is
-/// reported and the rest go on.
-async fn migrate_on_launch(cfg: &HostConfig, store: &Store) {
+/// Each time this process takes the loop, ask every step whose program
+/// takes `--prepare` to make what it stored usable, one at a time, before
+/// the loop takes any request: no render then reads a raw store in an old
+/// shape. What a step cannot bring up to date in place it answers
+/// `needs_rerun`, which the page offers to run; what a newer build wrote
+/// it refuses, and the runner turns it off. A request opened meanwhile
+/// waits for the loop. A step that fails is reported and the rest go on.
+async fn prepare_on_launch(cfg: &HostConfig) {
     let root = cfg.control.root.clone();
     let Ok(checked) = load_config(&root) else {
         return;
     };
-    let build = datalib_dag::supervisor::upgrade::this_build();
-    match store.launch_pass_done(&build).await {
-        Ok(false) => {}
-        Ok(true) => return,
-        Err(e) => {
-            tracing::error!("supervisor: could not read the launch passes, so none runs: {e:#}");
-            return;
-        }
-    }
     let asked = datalib_dag::supervisor::upgrade::steps_to_ask(&checked.graph);
+    if asked.is_empty() {
+        return;
+    }
     tracing::info!(
-        build,
         steps = asked.len(),
-        "supervisor: asking each step to migrate for this build"
+        "supervisor: asking each step to prepare"
     );
     let set = |f: &dyn Fn(&mut Upgrade)| {
         f(&mut cfg
@@ -362,15 +356,8 @@ async fn migrate_on_launch(cfg: &HostConfig, store: &Store) {
     cfg.control.busy.store(true, Ordering::SeqCst);
     let run_id = datalib_dag::scheduler::new_run_id();
     let now = now(cfg);
-    let runner = host::step_env(
-        &checked.cfg,
-        cfg.binary_dir.as_deref(),
-        &extra_path(&root),
-        &now,
-        &run_id,
-    )
-    .map(|env| {
-        let started = host::migrate_start(&build);
+    let runner = steps_env(cfg, &checked.cfg, &root, &now, &run_id).map(|env| {
+        let started = host::prepare_start();
         let sink: Arc<dyn EventSink> =
             match host::start_record(&root, &checked.cfg, &run_id, &now, started) {
                 Some(record) => Arc::new(record),
@@ -385,13 +372,13 @@ async fn migrate_on_launch(cfg: &HostConfig, store: &Store) {
         set(&|u| u.steps[i].state = PassState::Running);
         let answer = match &runner {
             Ok(runner) => match runner
-                .migrate(&checked.graph, std::slice::from_ref(step))
+                .prepare(&checked.graph, std::slice::from_ref(step))
                 .await
             {
                 Ok(done) => done
                     .into_iter()
                     .next()
-                    .map(|m| m.answer)
+                    .map(|m| m.answer.map_err(|e| prepare_error(&e)))
                     .unwrap_or(Ok(false)),
                 Err(e) => Err(format!("{e:#}")),
             },
@@ -399,8 +386,8 @@ async fn migrate_on_launch(cfg: &HostConfig, store: &Store) {
         };
         match &answer {
             Ok(false) => {}
-            Ok(true) => tracing::info!(step, "supervisor: needs to run again for this build"),
-            Err(why) => tracing::error!(step, "supervisor: could not migrate: {why}"),
+            Ok(true) => tracing::info!(step, "supervisor: needs to run again before it is current"),
+            Err(why) => tracing::error!(step, "supervisor: could not prepare: {why}"),
         }
         set(&|u| {
             (u.steps[i].state, u.steps[i].error) = match &answer {
@@ -409,14 +396,44 @@ async fn migrate_on_launch(cfg: &HostConfig, store: &Store) {
             };
         });
     }
-    if let Err(e) = store.record_launch_pass(&build).await {
-        tracing::error!(
-            "supervisor: could not record the launch pass, so the next launch asks again: {e:#}"
-        );
-    }
     cfg.control.busy.store(false, Ordering::SeqCst);
     set(&|u| u.migrating = false);
     rows_changed();
+}
+
+/// The environment every step this server runs gets: the runner's, plus
+/// the backup secrets `datalib-step`'s WhatsApp and Signal sources read
+/// when the config names no variable of its own, when this server was
+/// started with them.
+fn steps_env(
+    cfg: &HostConfig,
+    dag: &datalib_dag::config::DagConfig,
+    root: &std::path::Path,
+    now: &str,
+    run_id: &str,
+) -> anyhow::Result<host::StepEnv> {
+    let mut env = host::step_env(
+        dag,
+        cfg.binary_dir.as_deref(),
+        &extra_path(root),
+        now,
+        run_id,
+    )?;
+    for key in datalib_env::BACKUP_SECRET_KEYS {
+        if let Ok(value) = std::env::var(key) {
+            env.vars.entry(key.to_string()).or_insert(value);
+        }
+    }
+    Ok(env)
+}
+
+fn prepare_error(e: &datalib_dag::scheduler::PrepareError) -> String {
+    match e {
+        datalib_dag::scheduler::PrepareError::Refused(why) => {
+            format!("refused, and is turned off until it no longer refuses: {why}")
+        }
+        datalib_dag::scheduler::PrepareError::Failed(why) => why.clone(),
+    }
 }
 
 /// The lock, once whoever holds it lets go. Until then a `datalib-dag`
@@ -518,13 +535,7 @@ async fn serve_period(cfg: &HostConfig, store: &Store) {
     };
     let run_id = datalib_dag::scheduler::new_run_id();
     let now = now(cfg);
-    let env = match host::step_env(
-        &checked.cfg,
-        cfg.binary_dir.as_deref(),
-        &extra_path(&root),
-        &now,
-        &run_id,
-    ) {
+    let env = match steps_env(cfg, &checked.cfg, &root, &now, &run_id) {
         Ok(env) => env,
         Err(e) => return fail_open_requests(store, &format!("{e:#}")).await,
     };
@@ -659,7 +670,7 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         std::fs::write(
             datalib_dag::config::root_config_path(td.path()),
-            "[[groups]]\nid = \"keep\"\n[[steps]]\ngroup = \"keep\"\nfunction = \"raw\"\ncommand = \"x\"\n",
+            "[[groups]]\nid = \"keep\"\n[[steps]]\nid = \"keep/raw\"\ncommand = \"x\"\n",
         )
         .unwrap();
         td

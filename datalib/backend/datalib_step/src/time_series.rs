@@ -64,7 +64,7 @@ pub async fn run_render(
 ) -> Result<Vec<OutputClaim>> {
     let source_type = SourceType::parse(env.source_type()?)
         .with_context(|| format!("unknown source type {:?}", env.group_type))?;
-    let raw = data_root.join(env.raw_store_rel());
+    let raw = data_root.join(env.raw_store_rel()?);
     let (wanted, unreadable) = read(source_type, &raw, &env.group)?;
     // A file that could not be read costs its own time series and
     // nothing else; it is a warning row, which `unified_grid_and_search_index` copies into
@@ -214,8 +214,6 @@ async fn seal(
 
 #[cfg(test)]
 mod tests {
-    use strum::VariantArray;
-
     use super::*;
 
     /// The index step reads each source's store where its render step
@@ -252,8 +250,7 @@ mod tests {
             step: index_rel(),
             group: datalib_core::layout::UNIFIED_TIME_SERIES_INDEX_DIR.into(),
             group_type: None,
-            source_group: None,
-            source_group_type: None,
+            diff_source_type: None,
             function: crate::function::Function::TimeSeriesIndex,
             inputs: vec![
                 "riker/render_time_series".into(),
@@ -334,8 +331,7 @@ mod tests {
             step: "riker/render_time_series".into(),
             group: "riker".into(),
             group_type: Some("garmin".into()),
-            source_group: None,
-            source_group_type: None,
+            diff_source_type: None,
             function: crate::function::Function::RenderTimeSeries,
             inputs: vec!["riker/ingest".into()],
         };
@@ -364,8 +360,7 @@ mod tests {
                 step: crate::unified_grid_and_search_index::out_rel(),
                 group: datalib_core::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR.into(),
                 group_type: None,
-                source_group: None,
-                source_group_type: None,
+                diff_source_type: None,
                 function: crate::function::Function::UnifiedGridAndSearchIndex,
                 inputs: vec!["riker/render_time_series".into()],
             },
@@ -380,19 +375,5 @@ mod tests {
             datalib_step_problems::of_step(root, &crate::unified_grid_and_search_index::out_rel())
                 .await;
         assert!(index.rows.is_empty(), "the index copied {:?}", index.rows);
-    }
-
-    /// The config side adds `render_time_series` steps for the types its
-    /// own list names; this binary must agree on which those are.
-    #[test]
-    fn the_config_and_this_binary_agree_on_which_types_have_time_series() {
-        for &t in SourceType::VARIANTS {
-            assert_eq!(
-                t.renders_time_series(),
-                datalib_dag::config::TIME_SERIES_SOURCE_TYPES.contains(&t.as_str()),
-                "{}",
-                t.as_str()
-            );
-        }
     }
 }

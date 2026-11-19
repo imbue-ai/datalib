@@ -1,10 +1,10 @@
-//! `datalib-step` — the built-in step program for the DAG runner.
+//! `datalib-step` — the step program Datalib ships.
 //!
-//! Run with no subcommand it is a step: it reads which function to
-//! perform, which group it is under and what tree to write from the
-//! environment the runner sets (`DATALIB_DAG_FUNCTION`, `DATALIB_DAG_GROUP`,
-//! `DATALIB_DAG_GROUP_TYPE`, `DATALIB_DAG_STEP`). The subcommands are
-//! utilities that are not steps.
+//! `datalib-step run <function> [<type>]` is a step: its config entry's
+//! `command` names the function and its group's type, and the runner's
+//! environment its id (`DATALIB_DAG_STEP`) and its params
+//! (`DATALIB_DAG_PARAMS`). The other subcommands are utilities that are
+//! not steps.
 
 mod append;
 mod check_params;
@@ -24,10 +24,10 @@ mod ingest;
 mod introspect;
 mod markdown;
 mod methods;
-mod migrate;
 mod modal;
 mod occurrences;
 mod old_markdown;
+mod prepare;
 mod probe;
 mod published;
 mod render;
@@ -39,6 +39,7 @@ mod search_index;
 mod source;
 mod source_docs;
 mod source_type;
+mod step_entry;
 mod synth;
 mod time_series;
 mod topo_sort_config;
@@ -58,19 +59,22 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use datalib_cli_help::Example;
-use datalib_dag::subprocess::{ENV_CHECKPOINT_CADENCE, ENV_DATA_ROOT, ENV_NOW, ENV_STEP};
+use datalib_dag::subprocess::{ENV_DATA_ROOT, ENV_NOW, ENV_STEP};
 use datalib_dag::FailureKind;
 
 use crate::events::Emitter;
 use crate::function::Function;
-use crate::source::StepEnv;
+use crate::source::{RunArgs, StepEnv};
+
+/// Seconds between a step's checkpoints, at most; set in the config's `[env]`.
+const CHECKPOINT_CADENCE_ENV: &str = datalib_env::DATALIB_STEP_CHECKPOINT_CADENCE;
 
 const LONG_ABOUT: &str = "\
-The built-in step program: datalib-dag runs it for every step in a config \
-with no `command`, and tells it through the environment which function to \
-perform (ingest, render_markdown, unified_grid_and_search_index, …) for \
-which group. To run one step in a data root, `datalib-dag <config> --sync \
-<group>/<function>` runs it, and every step that reads it after it, and records what it published. \
+The step program Datalib ships: a step whose config entry says `command = \
+\"datalib-step run <function> <type>\"` runs it, and it performs that function \
+(ingest, render_markdown, unified_grid_and_search_index, …) for that type of source. To run one \
+step in a data root, `datalib-dag <config> --sync <group>/<function>` runs \
+it, and every step that reads it after it, and records what it published. \
 `datalib-step help <function>` shows how for each. Run by hand, with the \
 variables `datalib-step help step-protocol` lists under \"Running \
 datalib-step by hand\", it works the same, but no step that reads it learns \
@@ -138,7 +142,7 @@ const EXAMPLES: &[Example] = &[
         command: "datalib-step embed-prompts",
     },
     Example {
-        what: "say which built-in steps' params a sync would refuse (datalib-dag --check runs this)",
+        what: "say which datalib-step steps' params a sync would refuse (the app runs this on save)",
         command: "datalib-step check-params ~/datalib/config.toml",
     },
     Example {
@@ -152,36 +156,30 @@ const EXAMPLES: &[Example] = &[
     name = "datalib-step",
     bin_name = "datalib-step",
     version = datalib_runtime::build_id::DATALIB_VERSION,
-    about = "The built-in step program datalib-dag runs, and tools for setting a source up",
+    about = "The step program Datalib ships, and tools for setting a source up",
     long_about = LONG_ABOUT,
     after_help = datalib_cli_help::render(EXAMPLES),
     disable_help_subcommand = true
 )]
 struct Cli {
-    /// Absent means "be a step": the function, group and tree come from
-    /// the environment the runner sets.
     #[command(subcommand)]
-    cmd: Option<Cmd>,
-    /// A JSON file holding the step's params — the runner writes the
-    /// config entry's `params` there and appends the flag. Phase-specific:
-    /// for `ingest` it is the provider's download config subtree, for
-    /// `render_markdown` the slim render config (render knobs only);
-    /// absent means an empty one. A file, not an argument: params carry
-    /// tokens, and argv is readable by every user on the machine.
-    #[arg(long = "params-file", global = true)]
-    params_file: Option<PathBuf>,
-    /// Declared input step ids (JSON string array), appended by the
-    /// runner from the config entry's `inputs`. Accepted so every step
-    /// command shares one flag surface; the resolved list this binary
-    /// acts on is `DATALIB_DAG_INPUTS`.
-    #[arg(long, global = true)]
-    inputs: Option<String>,
+    cmd: Cmd,
     /// Fixed "now" timestamp (RFC 3339), stamped wherever this step
     /// type records times (raw bookkeeping, `markdowns.rendered_at_utc`).
     /// Falls back to `$DATALIB_DAG_NOW` (the runner exports one
     /// value so the whole run agrees), then the local clock.
     #[arg(long, global = true)]
     now: Option<String>,
+    #[command(flatten)]
+    obs: datalib_obs::ObsArgs,
+}
+
+/// `run`'s words and flags: what the step's `command` says, and the verb
+/// the runner may append.
+#[derive(clap::Args)]
+struct Run {
+    #[command(flatten)]
+    args: RunArgs,
     /// Ingest only: HTTP playback fixture tree (hermetic runs); sets
     /// `DATALIB_HTTP_PLAYBACK` for every provider transport.
     #[arg(long)]
@@ -190,15 +188,16 @@ struct Cli {
     /// model, whose tokenizer cuts the chunks and whose weights embed them.
     #[arg(long)]
     models_dir: Option<PathBuf>,
-    /// Appended by `datalib-dag --reset`: empty this part of what the step
-    /// wrote (`store`) and do nothing else (`step_protocol.md` § Reset).
-    #[arg(long, value_name = "PART", conflicts_with_all = ["migrate", "compact", "collect"])]
-    reset: Option<String>,
-    /// Appended by a launch after an upgrade: bring what the step wrote to
+    /// Appended by `datalib-dag --reset`: empty what the step wrote and do
+    /// nothing else (`step_protocol.md` § Verbs).
+    #[arg(long, conflicts_with_all = ["prepare", "compact", "collect"])]
+    reset: bool,
+    /// Appended each time the runner starts: bring what the step wrote to
     /// this build's shape where that can be done in place, fetch nothing,
-    /// and say when it cannot (`step_protocol.md` § Migrate).
+    /// and say when it cannot, or when a newer build wrote it
+    /// (`step_protocol.md` § Verbs).
     #[arg(long, conflicts_with_all = ["compact", "collect"])]
-    migrate: bool,
+    prepare: bool,
     /// Appended by `datalib-dag --compact`: fold the history of a store
     /// nothing reads the history of into one commit, collect any other,
     /// and give back the disk (`step_protocol.md` § Compact and collect).
@@ -208,12 +207,15 @@ struct Cli {
     /// step's store reaches, keeping every commit.
     #[arg(long)]
     collect: bool,
-    #[command(flatten)]
-    obs: datalib_obs::ObsArgs,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Be a step: perform `<function>` for a group of `<type>`, writing the
+    /// tree the step's id names. A config entry's `command` says this; the
+    /// runner sets the id (`DATALIB_DAG_STEP`) and the params
+    /// (`DATALIB_DAG_PARAMS`, JSON).
+    Run(Run),
     /// How to set Datalib up from a shell: the steps, the source types,
     /// the step functions, and the docs whole (`help agent`, and `help
     /// docs` for the rest).
@@ -265,11 +267,16 @@ enum Cmd {
         /// `labels`, `mailboxes`, `calendars` or `addressbooks`.
         #[arg(long)]
         list: Option<String>,
+        /// A JSON file holding the source's ingest params. A file, not an
+        /// argument: params carry tokens, and argv is readable by every
+        /// user on the machine.
+        #[arg(long = "params-file")]
+        params_file: Option<PathBuf>,
     },
-    /// Utility (not a pipeline step): plan every built-in step's params
+    /// Utility (not a pipeline step): plan every datalib-step step's params
     /// in a config the way a sync would, and run nothing. Prints one JSON
     /// object per step a sync would refuse, `{"step", "message"}`; nothing
-    /// when every one plans. `datalib-dag --check` runs it.
+    /// when every one plans. The app runs it when a config is saved.
     CheckParams {
         /// The config file: `<data root>/config.toml`.
         path: PathBuf,
@@ -403,7 +410,30 @@ enum Cmd {
         /// Output directory for the playback fixture tree.
         #[arg(long)]
         out: PathBuf,
+        /// A JSON file naming the raw fixture tree, `{"fixture_path": …}`.
+        #[arg(long = "params-file")]
+        params_file: Option<PathBuf>,
     },
+}
+
+fn asked_to_stop(stop: &datalib_etl::stop::StopFlag) -> bool {
+    stop.requested() && stop.gave_up().is_none()
+}
+
+/// What a step that did not finish reports: the version its store is
+/// at. Nothing for a command that is not a step.
+async fn published_claims(env: Option<&StepEnv>, data_root: &Path) -> Vec<events::OutputClaim> {
+    match env {
+        Some(env) => published::claims(env, data_root).await,
+        None => Vec::new(),
+    }
+}
+
+/// The seconds `DATALIB_STEP_CHECKPOINT_CADENCE` holds; `None` for
+/// anything this build cannot read.
+fn decode_cadence(raw: &str) -> Option<f64> {
+    let secs: f64 = raw.trim().parse().ok()?;
+    (secs.is_finite() && secs >= 0.0).then_some(secs)
 }
 
 /// The cadence the config asked for, as the `etl` type.
@@ -412,29 +442,16 @@ enum Cmd {
 /// from a newer config should not take the run down, and the step's own
 /// default is a safe answer. It is logged, though — a fallback that fires
 /// silently is the kind this repo has been burned by.
-fn asked_to_stop(stop: &datalib_etl::stop::StopFlag) -> bool {
-    stop.requested() && stop.gave_up().is_none()
-}
-
-/// What a step that did not finish reports: the version its store is
-/// at. Nothing for a command that is not a step.
-async fn published_claims(data_root: &Path) -> Vec<events::OutputClaim> {
-    match StepEnv::from_env() {
-        Ok(env) => published::claims(&env, data_root).await,
-        Err(_) => Vec::new(),
-    }
-}
-
 fn checkpoint_cadence() -> Option<datalib_etl::checkpointer::Cadence> {
-    let raw = std::env::var(ENV_CHECKPOINT_CADENCE).ok()?;
-    match datalib_dag::config::CheckpointCadence::decode(&raw) {
-        Some(c) => Some(datalib_etl::checkpointer::Cadence {
-            at_most_every: std::time::Duration::from_secs_f64(c.at_most_every_secs),
+    let raw = std::env::var(CHECKPOINT_CADENCE_ENV).ok()?;
+    match decode_cadence(&raw) {
+        Some(secs) => Some(datalib_etl::checkpointer::Cadence {
+            at_most_every: std::time::Duration::from_secs_f64(secs),
         }),
         None => {
             tracing::warn!(
                 raw = %raw,
-                "{ENV_CHECKPOINT_CADENCE} is not a readable cadence; using the default"
+                "{CHECKPOINT_CADENCE_ENV} is not a readable cadence; using the default"
             );
             None
         }
@@ -450,14 +467,14 @@ const INTERRUPT_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 async fn main() {
     let cli = Cli::parse();
     match &cli.cmd {
-        Some(Cmd::Help { topic }) => std::process::exit(print_help(topic)),
-        Some(Cmd::Markdown {
+        Cmd::Help { topic } => std::process::exit(print_help(topic)),
+        Cmd::Markdown {
             data_root,
             source,
             document,
             at,
             out,
-        }) => std::process::exit(markdown::run_cli(
+        } => std::process::exit(markdown::run_cli(
             data_root,
             &markdown::Ask {
                 source: source.as_deref(),
@@ -466,13 +483,13 @@ async fn main() {
                 out: out.as_deref(),
             },
         )),
-        Some(Cmd::IndexText {
+        Cmd::IndexText {
             data_root,
             source,
             document,
             at,
             chunks,
-        }) => std::process::exit(index_text::run_cli(
+        } => std::process::exit(index_text::run_cli(
             data_root,
             &index_text::Ask {
                 source: source.as_deref(),
@@ -481,22 +498,22 @@ async fn main() {
                 chunks: *chunks,
             },
         )),
-        Some(Cmd::Examples {
+        Cmd::Examples {
             source_type,
             append: Some(config),
             method,
             id,
-        }) => std::process::exit(append::run_cli(
+        } => std::process::exit(append::run_cli(
             source_type,
             config,
             method.as_deref(),
             id.as_deref(),
         )),
-        Some(Cmd::Examples {
+        Cmd::Examples {
             source_type,
             method,
             ..
-        }) => std::process::exit(print_page(help::examples_page(
+        } => std::process::exit(print_page(help::examples_page(
             source_type,
             method.as_deref(),
         ))),
@@ -505,7 +522,7 @@ async fn main() {
     // A probe run by hand says on stderr only what went wrong; the
     // step's own default keeps everything, for the runner to store.
     let mut obs = cli.obs.clone();
-    if matches!(cli.cmd, Some(Cmd::Probe { .. })) {
+    if matches!(cli.cmd, Cmd::Probe { .. }) {
         obs.log_level.get_or_insert_with(|| "warn".to_string());
     }
     let _obs_guard = datalib_obs::init(&obs, "datalib-step").ok();
@@ -522,22 +539,23 @@ async fn main() {
     // owns no tree, claims no outputs and must leave stdout holding
     // exactly one JSON object, so an `outcome` event line after it
     // would corrupt the only thing its caller reads.
-    if let Some(Cmd::Probe {
+    if let Cmd::Probe {
         source_type,
         method,
         list,
-    }) = &cli.cmd
+        params_file,
+    } = &cli.cmd
     {
         probe::run_cli(
             source_type,
             method.as_deref(),
             list.as_deref(),
-            cli.params_file.as_deref(),
+            params_file.as_deref(),
         )
         .await;
     }
     // `pull-models` likewise: nothing here is a step.
-    if let Some(Cmd::PullModels { models_dir }) = &cli.cmd {
+    if let Cmd::PullModels { models_dir } = &cli.cmd {
         let dir = models_dir
             .clone()
             .unwrap_or_else(datalib_embedding_models::shared_models_dir);
@@ -577,12 +595,12 @@ async fn main() {
         }
     }
     // `embed-prompts` likewise; its stdout holds only vectors.
-    if let Some(Cmd::EmbedPrompts {
+    if let Cmd::EmbedPrompts {
         models_dir,
         model,
         cpu,
         batching,
-    }) = &cli.cmd
+    } = &cli.cmd
     {
         let (models_dir, model, cpu, batching) =
             (models_dir.clone(), model.clone(), *cpu, *batching);
@@ -604,7 +622,7 @@ async fn main() {
     }
     // `pull-runtime` likewise. Off the async runtime for the same
     // reason as `pull-models`.
-    if let Some(Cmd::PullRuntime { into }) = &cli.cmd {
+    if let Cmd::PullRuntime { into } = &cli.cmd {
         let into = into.clone();
         let out = tokio::task::spawn_blocking(move || pull_runtime(into.as_deref()))
             .await
@@ -620,7 +638,7 @@ async fn main() {
             }
         }
     }
-    if let Some(Cmd::PullCuda) = &cli.cmd {
+    if let Cmd::PullCuda = &cli.cmd {
         let out = tokio::task::spawn_blocking(pull_cuda)
             .await
             .expect("pull-cuda task panicked");
@@ -635,11 +653,11 @@ async fn main() {
             }
         }
     }
-    if let Some(Cmd::CheckParams { path }) = &cli.cmd {
+    if let Cmd::CheckParams { path } = &cli.cmd {
         std::process::exit(check_params::run_cli(path));
     }
     // `topo-sort-config` likewise: it reads and writes one file.
-    if let Some(Cmd::TopoSortConfig { path, check }) = &cli.cmd {
+    if let Cmd::TopoSortConfig { path, check } = &cli.cmd {
         std::process::exit(topo_sort_config::run_cli(path, *check));
     }
 
@@ -649,10 +667,20 @@ async fn main() {
         .or_else(|| std::env::current_dir().ok())
         .expect("no data root: set DATALIB_DAG_DATA_ROOT or run inside one");
     let emitter = Emitter::new(step_id);
+    // The step's own commit, before anything else it says, so the run
+    // store files every line of this process against the right source.
+    emitter.declare_version();
     // A store's migration rung can run for many minutes; whatever verb
     // opened the store, the step's row says which rung and statement.
     let rung_progress = emitter.progress();
     datalib_store_meta::ladder::report_to(move |msg| rung_progress.set_message(msg));
+    // Read before anything runs, so a failed step can still say what it
+    // published; an env that does not parse fails the step below.
+    let step_env = match &cli.cmd {
+        Cmd::Run(run) => Some(StepEnv::from_env(&run.args)),
+        _ => None,
+    };
+    let known_env = step_env.as_ref().and_then(|e| e.as_ref().ok()).cloned();
 
     // SIGINT (terminal Ctrl-C, or forwarded by the runner on cancel) or
     // SIGTERM (a process manager stopping a step run by hand, as
@@ -717,7 +745,7 @@ async fn main() {
         // Dropped on a panic's unwind too, so a step that dies still says
         // what it recorded.
         let _log = LogRecordedProblems;
-        run(cli, &data_root, &now, &control, &emitter).await
+        run(cli, step_env, &data_root, &now, &control, &emitter).await
     };
     match result {
         // A run that ended because it was asked to is not a success, even
@@ -735,7 +763,7 @@ async fn main() {
         Err(e) if asked_to_stop(&stop) => {
             tracing::info!("stopped: {e:#}");
             emitter.outcome(
-                &published_claims(&data_root).await,
+                &published_claims(known_env.as_ref(), &data_root).await,
                 Some(FailureKind::Cancelled),
             );
             std::process::exit(130);
@@ -748,7 +776,10 @@ async fn main() {
             let kind = hints::classify(&e);
             // A failed-but-incremental step may still have committed
             // partial output, and reports what it published.
-            emitter.outcome(&published_claims(&data_root).await, Some(kind));
+            emitter.outcome(
+                &published_claims(known_env.as_ref(), &data_root).await,
+                Some(kind),
+            );
             // `tracing::error!` alone, never a `status_line!` beside it.
             // Both land on the same stderr, so a second copy is a second
             // row in the run store -- one with no `target`, because a
@@ -779,52 +810,57 @@ impl Drop for LogRecordedProblems {
 
 async fn run(
     cli: Cli,
+    step_env: Option<Result<StepEnv>>,
     data_root: &Path,
     now: &str,
     control: &datalib_etl::control::DownloadControl,
     emitter: &Emitter,
 ) -> Result<Vec<events::OutputClaim>> {
-    let params = source::read_params(cli.params_file.as_deref())?;
     match cli.cmd {
-        Some(Cmd::Synthesize {
+        Cmd::Synthesize {
             source_type,
             name,
             out,
-        }) => synth::run(&source_type, &name, &params, data_root, &out, emitter),
+            params_file,
+        } => {
+            let params = source::read_params(params_file.as_deref())?;
+            synth::run(&source_type, &name, &params, data_root, &out, emitter)
+        }
         // Handled in `main` before the step machinery starts; see
         // there for why it cannot come through the outcome path.
-        Some(Cmd::Probe { .. }) => unreachable!("probe is answered in main"),
-        Some(Cmd::Help { .. }) => unreachable!("help is answered in main"),
-        Some(Cmd::IndexText { .. }) => unreachable!("index-text is answered in main"),
-        Some(Cmd::Markdown { .. }) => unreachable!("markdown is answered in main"),
-        Some(Cmd::Examples { .. }) => unreachable!("examples is answered in main"),
-        Some(Cmd::CheckParams { .. }) => unreachable!("check-params is answered in main"),
-        Some(Cmd::PullModels { .. }) => unreachable!("pull-models is answered in main"),
-        Some(Cmd::EmbedPrompts { .. }) => unreachable!("embed-prompts is answered in main"),
-        Some(Cmd::PullRuntime { .. }) => unreachable!("pull-runtime is answered in main"),
-        Some(Cmd::PullCuda) => unreachable!("pull-cuda is answered in main"),
-        Some(Cmd::TopoSortConfig { .. }) => {
+        Cmd::Probe { .. } => unreachable!("probe is answered in main"),
+        Cmd::Help { .. } => unreachable!("help is answered in main"),
+        Cmd::IndexText { .. } => unreachable!("index-text is answered in main"),
+        Cmd::Markdown { .. } => unreachable!("markdown is answered in main"),
+        Cmd::Examples { .. } => unreachable!("examples is answered in main"),
+        Cmd::CheckParams { .. } => unreachable!("check-params is answered in main"),
+        Cmd::PullModels { .. } => unreachable!("pull-models is answered in main"),
+        Cmd::EmbedPrompts { .. } => unreachable!("embed-prompts is answered in main"),
+        Cmd::PullRuntime { .. } => unreachable!("pull-runtime is answered in main"),
+        Cmd::PullCuda => unreachable!("pull-cuda is answered in main"),
+        Cmd::TopoSortConfig { .. } => {
             unreachable!("topo-sort-config is answered in main")
         }
-        None => {
-            let env = StepEnv::from_env()?;
+        Cmd::Run(run) => {
+            let env = step_env.expect("`run` reads its step env in main")?;
             datalib_schema::problems::set_step_source(&env.group);
-            if let Some(part) = &cli.reset {
-                return reset::run(&env, data_root, part, emitter).await;
+            if run.reset {
+                return reset::run(&env, data_root, emitter).await;
             }
-            if cli.migrate {
-                return migrate::run(&env, data_root, emitter).await;
+            if run.prepare {
+                return prepare::run(&env, data_root, emitter).await;
             }
-            if cli.compact {
+            if run.compact {
                 return compact::run(&env, data_root, compact::Verb::Compact, emitter).await;
             }
-            if cli.collect {
+            if run.collect {
                 return compact::run(&env, data_root, compact::Verb::Collect, emitter).await;
             }
+            let params = source::params_from_env()?;
             run_function(
                 env,
-                cli.playback_root,
-                cli.models_dir,
+                run.playback_root,
+                run.models_dir,
                 params,
                 data_root,
                 now,
@@ -865,7 +901,7 @@ async fn run_function(
             res
         }
         Function::RenderMarkdown if env.is_diff_group() => {
-            let raw_rel = env.raw_store_rel();
+            let raw_rel = env.raw_store_rel()?;
             let (pair, params) = render_diff::split_params(params)?;
             let planned = dispatch::plan(
                 env.diff_source_type()?,
@@ -877,7 +913,7 @@ async fn run_function(
             render_diff::run(planned, &env, data_root, now, emitter, control, &pair).await
         }
         Function::RenderMarkdown => {
-            let raw_rel = env.raw_store_rel();
+            let raw_rel = env.raw_store_rel()?;
             let planned = dispatch::plan(
                 env.source_type()?,
                 dispatch::Phase::Render,
@@ -1166,7 +1202,53 @@ fn embed_prompts_cli(
 
 #[cfg(test)]
 mod cli_tests {
-    use clap::CommandFactory;
+    use clap::{CommandFactory, Parser};
+
+    /// What the runner sends: the command's words, then a verb.
+    #[test]
+    fn a_step_command_with_a_verb_parses() {
+        let cli = super::Cli::try_parse_from([
+            "datalib-step",
+            "run",
+            "render_markdown",
+            "diff",
+            "--source-type",
+            "slack",
+            "--prepare",
+        ])
+        .unwrap();
+        let super::Cmd::Run(run) = cli.cmd else {
+            panic!("not run")
+        };
+        assert_eq!(run.args.function, "render_markdown");
+        assert_eq!(run.args.group_type.as_deref(), Some("diff"));
+        assert_eq!(run.args.source_type.as_deref(), Some("slack"));
+        assert!(run.prepare && !run.reset);
+        let cli = super::Cli::try_parse_from([
+            "datalib-step",
+            "run",
+            "unified_grid_and_search_index",
+            "--reset",
+        ])
+        .unwrap();
+        let super::Cmd::Run(run) = cli.cmd else {
+            panic!("not run")
+        };
+        assert!(run.reset && run.args.group_type.is_none());
+        // The retired spellings are refused, not taken for something else.
+        assert!(
+            super::Cli::try_parse_from(["datalib-step", "run", "ingest", "--migrate"]).is_err()
+        );
+        assert!(super::Cli::try_parse_from(["datalib-step"]).is_err());
+    }
+
+    #[test]
+    fn a_checkpoint_cadence_is_read_or_left_to_the_default() {
+        assert_eq!(super::decode_cadence("15.5"), Some(15.5));
+        for bad in ["", "fifteen", "-1", "nan", "inf", "2,15"] {
+            assert_eq!(super::decode_cadence(bad), None, "{bad:?} must not parse");
+        }
+    }
 
     #[test]
     fn the_help_examples_parse() {

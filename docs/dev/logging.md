@@ -15,8 +15,8 @@ writes it for the life of the server. The tables:
 | table | one row per |
 |---|---|
 | `processes` | a process that took part (below) |
-| `runs` | a run of the runner: what it is for (`kind`: a sync, a migration on a build's first launch, or giving back disk) and why it started (`reason`, also the run's first line) |
-| `step_runs` | a step in a run: state, attempt, error, message. While a run is live every step of the config is here, `pending` until reached; when it ends, the ones no request reached go. A run whose runner died keeps them, as `stopped` |
+| `runs` | a run of the runner: what it is for (`kind`: a sync, the prepare pass at a start, or giving back disk) and why it started (`reason`, also the run's first line). Empty for a run an older build recorded |
+| `step_runs` | a step in a run: state, attempt, error, message. While a run is live every step of the config is here, `pending` until reached; when it ends, the ones no request reached go, so a closed run holds the steps it ran. A run whose runner died keeps them, as `stopped`: nothing settled them, so any might have been about to run |
 | `log` | a line |
 | `metrics`, `metric_samples` | a step's numbers — the newest value, and a sparse time series |
 | `store_changes` | a part of the store a reader can depend on (`runs`, `step_runs`, `metrics`, `processes`, a run's lines, the server's lines), with a counter each write bumps |
@@ -107,9 +107,11 @@ different builds sit in one file. It comes from the
 `DATALIB_GIT_HASH` environment variable, else a `git-hash` file beside
 the binaries, which a release carries; the process logs which at boot
 (`build commit read from …`). One with neither warns and records
-nothing, and the log's source links point at `main`. A step running
-`datalib-step` shares the runner's commit; a custom command has none; a
-page has the server's.
+nothing, and the log's source links point at `main`. A step attempt's
+commit is the `version` its program reports in a `capabilities` event
+(`step_protocol.md` §"stdout: the event protocol"): `datalib-step`
+reports the commit it was built from, and a program that reports none
+has none. A page has the server's.
 
 ## Where a line comes from
 
@@ -117,7 +119,7 @@ page has the server's.
 |---|---|---|
 | Rust in the runner or the server | `tracing::info!(target: "…", key = value, "the sentence")` | a row with `target`, `msg`, and the keys as a JSON object in `fields`; `filename` / `line_number` added |
 | the runner, about a step — a checkpoint sealed, a pass that failed, why it ended, a hint | nothing — the runner writes these itself | `target:datalib_dag::runner` under the step, with the runner as author |
-| Rust in a built-in step (`datalib-step`) | the same `tracing` call | a JSON envelope on the step's stderr, which the runner unwraps into the same columns; the line's own timestamp wins |
+| Rust in `datalib-step`'s steps | the same `tracing` call | a JSON envelope on the step's stderr, which the runner unwraps into the same columns; the line's own timestamp wins |
 | Rust in an applet (`datalib-applet`) | the same `tracing` call | a JSON envelope on the applet's stderr, which the gateway logs again as the server's line at the envelope's level: `target:datalib_http::applets`, with `applet` naming it and the applet's own target and fields in `applet_target` and `applet_fields`. The row's `filename` / `line_number` are the gateway's; the applet's are inside `applet_fields` ([`applets.md`](applets.md)) |
 | a custom step, any language | print a line on stderr (or a non-event line on stdout) | an `info` row with `stream` set; the last lines before a non-zero exit also become the step's error |
 | the server, per request | nothing — the server logs every request | `target:http.request`: method, path, query, status, `ms`, `bytes`, the `page` that asked, and the `card` and `card_type` when a card asked (`ui.card_open` says what source that card ran). These are pages asking this server, not traffic off the machine. `debug` when it succeeded and only read (below), `info` for what changes something or was refused, `warn` for a 5xx |

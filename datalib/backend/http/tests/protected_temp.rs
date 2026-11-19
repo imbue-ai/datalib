@@ -12,8 +12,7 @@ const WRITES_ITS_TEMP_DIR: &str = r#"
 id = "g"
 
 [[steps]]
-group = "g"
-function = "out"
+id = "g/out"
 command = '''sh -c 'mkdir -p "$DATALIB_DAG_DATA_ROOT/g/out" && printf "%s" "$TMPDIR" > "$DATALIB_DAG_DATA_ROOT/g/out/tmpdir.partial" && mv "$DATALIB_DAG_DATA_ROOT/g/out/tmpdir.partial" "$DATALIB_DAG_DATA_ROOT/g/out/tmpdir"' '''
 "#;
 

@@ -227,7 +227,7 @@ name = "gpu"
 "#;
 
     fn held(text: &str, id: &str) -> Vec<String> {
-        let check = datalib_dag::config::check_text(text);
+        let check = crate::check_as_current(text);
         let spec = check.graph.steps.iter().find(|s| s.id == id).unwrap();
         datalib_dag::supervisor::locks::held_by(spec)
             .into_iter()
@@ -265,7 +265,7 @@ name = "gpu"
             "no blank lines pile up:\n{after}"
         );
 
-        let check = datalib_dag::config::check_text(&after);
+        let check = crate::check_as_current(&after);
         assert_eq!(check.dropped(), 0, "{}", check.render("c.toml".as_ref()));
         assert_eq!(held(&after, "picard/embed"), ["embedder", "gpu"]);
         assert_eq!(held(&after, "riker/embed"), ["embedder"]);
@@ -281,7 +281,7 @@ name = "gpu"
     }
 
     /// Both were built in, so a step named them without declaring them.
-    /// The loader now refuses such a step; the rewrite gives it back.
+    /// The runner of the day refused such a step; the rewrite gives it back.
     #[test]
     fn a_step_naming_an_old_lock_it_never_declared_loads_again() {
         let before = r#"[[groups]]
@@ -306,10 +306,9 @@ command = "x"
 inputs = ["picard/render_markdown"]
 locks = ["qmd_keyword"]
 "#;
-        let check = datalib_dag::config::check_text(before);
-        assert_eq!(check.dropped(), 2, "{}", check.render("c.toml".as_ref()));
+        assert!(is_retired(before).unwrap());
         let after = rewrite(before).unwrap();
-        let check = datalib_dag::config::check_text(&after);
+        let check = crate::check_as_current(&after);
         assert_eq!(check.dropped(), 0, "{}", check.render("c.toml".as_ref()));
         assert_eq!(held(&after, "picard/embed"), ["embedder"]);
         assert_eq!(held(&after, "custom/writer"), ["index"]);

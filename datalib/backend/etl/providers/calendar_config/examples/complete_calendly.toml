@@ -7,9 +7,8 @@ name = "Calendly"
 type = "calendar"
 
 [[steps]]
-group = "calendar"
-function = "ingest"
-command = "datalib-step"
+id = "calendar/ingest"
+command = "datalib-step run ingest calendar"
 
 # When to give up on a failing server. The download always backs off and
 # retries; these only decide when to stop.
@@ -35,28 +34,29 @@ until = "+21d"        # last day mirrored, included, the same way; omit for no e
                       # meeting that leaves the range is dropped from the copy
 
 [[steps]]
-group = "calendar"
-function = "render_markdown"
-command = "datalib-step"
+id = "calendar/render_markdown"
+command = "datalib-step run render_markdown calendar"
 inputs = ["calendar/ingest"]
+reads = "pinned"
 
 # Search by meaning: cuts this source's documents into chunks and embeds
 # them. Leave it out and keyword search still finds it.
 [[steps]]
-group = "calendar"
-function = "embed"
-command = "datalib-step"
+id = "calendar/embed"
+command = "datalib-step run embed calendar"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]
 
 # Every meeting in a window of days around now, one row each, in
 # render_occurrences/occurrences.doltlite_db, the way the other calendar
 # methods list their occurrences. The window moves when the step runs,
 # which is when ingest has stored something new.
 [[steps]]
-group = "calendar"
-function = "render_occurrences"
-command = "datalib-step"
+id = "calendar/render_occurrences"
+command = "datalib-step run render_occurrences calendar"
 inputs = ["calendar/ingest"]
+reads = "pinned"
 
 [steps.params]
 days_back = 30    # the default

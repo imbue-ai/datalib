@@ -169,10 +169,16 @@ function bareRoot(prefix: string): string {
 id = "unified_grid_and_search_index"
 name = "Grid and Search Index"
 
+[[locks]]
+name = "index"
+slots = 2
+
 [[steps]]
-group = "unified_grid_and_search_index"
-function = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "datalib-step run unified_grid_and_search_index"
 inputs = ["*/render_markdown"]
+reads = "pinned"
+locks = ["index"]
 
 [[applets]]
 group = "unified_grid_and_search_index"

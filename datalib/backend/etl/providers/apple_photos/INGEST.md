@@ -175,16 +175,16 @@ id = "apple_photos"
 type = "apple_photos"
 
 [[steps]]
-group = "apple_photos"
-function = "ingest"
+id = "apple_photos/ingest"
+command = "datalib-step run ingest apple_photos"
 [steps.params.library]
 path = "~/Pictures/Photos Library.photoslibrary"
 ```
 
 `library.path` may name the bundle or the `Photos.sqlite` inside it.
 
-To run it with no config, run `datalib-step` by hand with
-`DATALIB_DAG_GROUP_TYPE=apple_photos` and those params as JSON,
+To run it with no config, run `datalib-step run ingest apple_photos`
+by hand with those params as JSON in `DATALIB_DAG_PARAMS`,
 `{"library": {"path": "…"}}`
 ([`first_time_dev.md`](/docs/dev/first_time_dev.md) §"One source's
 download, with no config"). The backup is then

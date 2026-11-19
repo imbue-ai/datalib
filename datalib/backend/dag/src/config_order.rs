@@ -3,7 +3,7 @@
 //! written: an entry moves only when it has to, and the comments above it
 //! move with it. The runner reads only `inputs`; the order is for the
 //! person reading the file, and for the Sources screen, which lists
-//! entries as the file does. `datalib-step topo-sort-config` runs it.
+//! entries as the file does. A program that rewrites a config calls it.
 //!
 //! The file is cut into entries as text, never re-serialized, and the
 //! result is refused unless it parses to the same entries as the input.
@@ -88,11 +88,16 @@ impl Entry {
             });
         }
         if let Some(s) = only("steps") {
-            let group = text(s, "group");
-            let step = match (&group, text(s, "function")) {
+            // The retired shape writes `group` and `function`; the current
+            // one only `id`, whose first part is the group.
+            let step = match (text(s, "group"), text(s, "function")) {
                 (Some(g), Some(f)) => Some(format!("{g}/{f}")),
                 _ => text(s, "id"),
             };
+            let group = step
+                .as_deref()
+                .and_then(crate::config::group_of)
+                .map(str::to_string);
             let inputs = s
                 .get("inputs")
                 .and_then(|v| v.as_array())
@@ -447,6 +452,27 @@ group = "unified_grid_and_search_index"
 function = "unified_grid_and_search_index"
 inputs = ["slack/render_markdown"]
 "#;
+
+    /// A step that writes only `id` is filed under the group its id's first
+    /// part names, so its group's applets stay below it rather than being
+    /// moved above. The starter config is this shape.
+    #[test]
+    fn a_step_written_by_id_stays_with_its_groups_applets() {
+        let text = r#"[[groups]]
+id = "unified_document_index"
+
+[[steps]]
+id = "unified_document_index/grid_index"
+command = "index-it"
+inputs = []
+
+[[applets]]
+group = "unified_document_index"
+id = "unified_document_index"
+command = "serve-it"
+"#;
+        assert_eq!(sort_config(text).unwrap(), None);
+    }
 
     /// A file already in order is left byte for byte, whatever its
     /// spacing.

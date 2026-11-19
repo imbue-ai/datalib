@@ -16,15 +16,13 @@ name = "WhatsApp"
 type = "whatsapp"
 
 [[steps]]
-group = "whatsapp"
-function = "ingest"
+id = "whatsapp/ingest"
 [steps.params.backup]
 path = "${BACKUP}"   # the old phone
 key_env_var = "WHATSAPP_BACKUP_DECRYPTION_KEY"
 
 [[steps]]
-group = "whatsapp"
-function = "render_markdown"
+id = "whatsapp/render_markdown"
 inputs = ["whatsapp/ingest"]
 `;
 

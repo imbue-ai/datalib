@@ -177,7 +177,10 @@ test("Compare two versions writes a comparison of the two commits and syncs it",
   await expect(compare).toHaveCount(0);
   expect(saved).toHaveLength(1);
   expect(saved[0]).toContain('id = "slack-e2e-changes"');
-  expect(saved[0]).toContain('source = "slack"');
+  expect(saved[0]).toContain(
+    'command = "datalib-step run render_markdown diff --source-type slack"',
+  );
+  expect(saved[0]).not.toContain('source = "slack"');
   expect(saved[0]).toContain(`from = "${"a".repeat(32)}"`);
   expect(saved[0]).toContain(`to = "${"b".repeat(32)}"`);
   expect(asked).toEqual([["slack-e2e-changes/render_markdown"]]);

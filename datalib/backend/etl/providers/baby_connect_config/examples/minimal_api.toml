@@ -7,19 +7,18 @@ name = "Baby Connect"
 type = "baby_connect"
 
 [[steps]]
-group = "baby_connect"
-function = "ingest"
-command = "datalib-step"
+id = "baby_connect/ingest"
+command = "datalib-step run ingest baby_connect"
 
 [steps.params.api]
 
 # One document per child: every entry, with its notes, its time
 # read in the zone you logged in.
 [[steps]]
-group = "baby_connect"
-function = "render_markdown"
-command = "datalib-step"
+id = "baby_connect/render_markdown"
+command = "datalib-step run render_markdown baby_connect"
 inputs = ["baby_connect/ingest"]
+reads = "pinned"
 
 [steps.params]
 time_zone = "America/Los_Angeles"

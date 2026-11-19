@@ -889,16 +889,40 @@ fn searched_index(plan: &[String]) -> Option<&str> {
 /// A search narrowed to documents, alone or within sources, reads the
 /// documents' index and no row of the table: fetching each document's
 /// row took seconds a search on a cold disk, in a library of 60k
-/// documents. Beside any other key the plan is the planner's.
+/// documents. Beside any other key the plan is the planner's, but a key
+/// on a column still reads that key's index alone: what a filter keeps
+/// comes out of it as row ids, and the row and its document are read
+/// from `rows` by those. Reading each kept row's document from the table
+/// took 1.2 s for one source of 82k rows, cold.
 #[tokio::test]
 async fn a_narrowing_to_documents_reads_their_index_alone() {
     let db_path = unique_db_path();
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let writer = writer(&root).await;
     crate::children::create_tree(&writer).await;
-    for (_t, ddl) in GRID_INDEXES.iter() {
-        sqlx::query(*ddl).execute(&writer).await.expect("create");
+    for ddl in GRID_INDEXES
+        .iter()
+        .map(|(_t, ddl)| *ddl)
+        .chain(datalib_schema::search_terms::TERMS_DDL.iter().copied())
+    {
+        sqlx::query(ddl).execute(&writer).await.expect("create");
     }
+    let plan_of = |sql: String, params: Vec<String>| {
+        let writer = writer.clone();
+        async move {
+            let mut explain = sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")));
+            for p in &params {
+                explain = explain.bind(p.clone());
+            }
+            explain
+                .fetch_all(&writer)
+                .await
+                .expect("explain")
+                .iter()
+                .map(|r| sqlx::Row::get::<String, _>(r, "detail"))
+                .collect::<Vec<String>>()
+        }
+    };
     let covered = format!("SEARCH grid_rows USING COVERING INDEX {DOCUMENTS_INDEX} ");
     for q in [
         "is:document",
@@ -907,22 +931,27 @@ async fn a_narrowing_to_documents_reads_their_index_alone() {
     ] {
         for columns in [KEPT_ROWS, KEPT_DOCUMENTS] {
             let (sql, params) = matching_sql("grid_rows", columns, &parse_query(q));
-            let mut explain = sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")));
-            for p in &params {
-                explain = explain.bind(p.clone());
-            }
-            let plan: Vec<String> = explain
-                .fetch_all(&writer)
-                .await
-                .expect("explain")
-                .iter()
-                .map(|r| sqlx::Row::get::<String, _>(r, "detail"))
-                .collect();
+            let plan = plan_of(sql, params).await;
             assert!(
                 plan.iter().any(|d| d.starts_with(&covered)),
                 "{q:?} reading {columns:?}: {plan:?}"
             );
         }
+    }
+    for q in [
+        "source:x",
+        "kind:x",
+        "channel:x",
+        "id:x",
+        "from:riker source:x",
+    ] {
+        let (sql, params) = matching_sql("grid_rows", KEPT_ROWS, &parse_query(q));
+        let plan = plan_of(sql, params).await;
+        let reads_the_table = plan
+            .iter()
+            .filter(|d| d.contains(" grid_rows ") || d.ends_with(" grid_rows"))
+            .any(|d| !d.contains("COVERING INDEX"));
+        assert!(!reads_the_table, "{q:?}: {plan:?}");
     }
     for q in [
         "-is:document",

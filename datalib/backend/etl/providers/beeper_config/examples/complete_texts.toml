@@ -6,9 +6,8 @@ name = "Beeper"
 type = "beeper"
 
 [[steps]]
-group = "beeper"
-function = "ingest"
-command = "datalib-step"
+id = "beeper/ingest"
+command = "datalib-step run ingest beeper"
 
 [steps.params.texts]
 path = "~/Library/Application Support/BeeperTexts"  # the app's data directory; this is
@@ -17,10 +16,10 @@ media = true         # copy the app's cached media into blobs; false keeps the
                      # attachments' names without their bytes; default true
 
 [[steps]]
-group = "beeper"
-function = "render_markdown"
-command = "datalib-step"
+id = "beeper/render_markdown"
+command = "datalib-step run render_markdown beeper"
 inputs = ["beeper/ingest"]
+reads = "pinned"
 
 [steps.params]
 networks = ["signal", "googlechat"]  # which networks to render; omit for every one
@@ -29,7 +28,8 @@ networks = ["signal", "googlechat"]  # which networks to render; omit for every 
 # Search by meaning: cuts this source's documents into chunks and embeds
 # them. Leave it out and keyword search still finds it.
 [[steps]]
-group = "beeper"
-function = "embed"
-command = "datalib-step"
+id = "beeper/embed"
+command = "datalib-step run embed beeper"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]

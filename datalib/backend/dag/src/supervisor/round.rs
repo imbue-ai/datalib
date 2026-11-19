@@ -1050,7 +1050,7 @@ impl Runner {
         facts: &mut Facts,
         store: &Store,
     ) -> Result<()> {
-        let asked = wipe::compact_targets(graph, &w.targets);
+        let asked = wipe::compact_targets(graph, &w.targets, how);
         let ids: Vec<&str> = asked.iter().map(|&i| graph.steps[i].id.as_str()).collect();
         store.begin_wipe_steps(&w.id, &ids).await?;
         let mut failed: BTreeMap<String, Vec<&str>> = BTreeMap::new();
@@ -1164,9 +1164,6 @@ impl Runner {
         );
         StepCtx {
             step_id: spec.id.clone(),
-            group: spec.group.clone(),
-            group_type: spec.group_type.clone(),
-            function: spec.function.clone(),
             data_root: self.data_root.clone(),
             inputs: graph.resolved_inputs[i].clone(),
             changed_inputs,

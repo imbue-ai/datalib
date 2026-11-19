@@ -12,25 +12,21 @@ id = "away-team"
 type = "${type}"
 
 [[steps]]
-group = "away-team"
-function = "ingest"
+id = "away-team/ingest"
 
 [[steps]]
-group = "away-team"
-function = "render_markdown"
+id = "away-team/render_markdown"
 inputs = ["away-team/ingest"]
 
 [[groups]]
 id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_grid_and_search_index"
-function = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
 inputs = ["*/render_markdown"]
 
 [[steps]]
-group = "unified_grid_and_search_index"
-function = "embedding_map"
+id = "unified_grid_and_search_index/embedding_map"
 inputs = ["*/embed"]
 `;
 

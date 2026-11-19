@@ -47,8 +47,9 @@ def time_series_sources(config_body: str) -> list[str]:
         if not table.startswith("[steps]]"):
             continue
         keys = dict(re.findall(r'^(\w+) = "([^"]*)"$', table, flags=re.MULTILINE))
-        if keys.get("function") == "render_time_series":
-            out.append(keys["group"])
+        group, _, function = keys.get("id", "").partition("/")
+        if function == "render_time_series":
+            out.append(group)
     return out
 
 

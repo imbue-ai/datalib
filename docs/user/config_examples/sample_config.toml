@@ -1,10 +1,11 @@
 # Sample config in the format `datalib-dag` runs: each source is a
 # `[[groups]]` entry with a `type` plus its steps (`ingest`,
-# `render_markdown` and `embed`, each written as `group` + `function`
-# with `command = "datalib-step"`, the program Datalib ships), and the shared
-# index step under the `unified_grid_and_search_index` group, which every
-# source's rendered documents feed. A step's id is `<group>/<function>`,
-# composed rather than written; `inputs` name steps by that id.
+# `render_markdown` and `embed`), and the shared index step under the
+# `unified_grid_and_search_index` group, which every source's rendered
+# documents feed. A step's `id` is `<group>/<function>`, and `inputs`
+# name steps by that id. Each step's `command` runs `datalib-step run
+# <function>`, the program Datalib ships, followed by the group's `type`
+# for a step under a source.
 # `datalib-step help dag-example` walks through the format, and
 # `datalib-step help all-sources` shows every source.
 
@@ -19,9 +20,10 @@ data_root = "~/datalib"
 id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_grid_and_search_index"
-function = "unified_grid_and_search_index"
-command = "datalib-step"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "datalib-step run unified_grid_and_search_index"
+reads = "pinned"
+locks = ["index"]
 inputs = ["*/render_markdown"]
 
 # Google Takeout Gmail export. The `mbox` table is the method: it puts
@@ -33,22 +35,22 @@ id = "gmail-takeout"
 type = "email"
 
 [[steps]]
-group = "gmail-takeout"
-function = "ingest"
-command = "datalib-step"
+id = "gmail-takeout/ingest"
+command = "datalib-step run ingest email"
 [steps.params.mbox]
 path = "~/backups/Takeout/Mail/All mail Including Spam and Trash.mbox"
 
 [[steps]]
-group = "gmail-takeout"
-function = "render_markdown"
-command = "datalib-step"
+id = "gmail-takeout/render_markdown"
+command = "datalib-step run render_markdown email"
+reads = "pinned"
 inputs = ["gmail-takeout/ingest"]
 
 [[steps]]
-group = "gmail-takeout"
-function = "embed"
-command = "datalib-step"
+id = "gmail-takeout/embed"
+command = "datalib-step run embed email"
+reads = "files"
+locks = ["embedder"]
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # Slack workspace mirror. Credentials come from `latchkey` at runtime;
@@ -61,9 +63,8 @@ id = "slack"
 type = "slack"
 
 [[steps]]
-group = "slack"
-function = "ingest"
-command = "datalib-step"
+id = "slack/ingest"
+command = "datalib-step run ingest slack"
 
 [steps.params.common]
 blob_size_limit_bytes = "1 MB"  # skip larger file uploads
@@ -91,15 +92,16 @@ channels = ["project-data-liberation"]
                          # bound how far back the mirror goes.
 
 [[steps]]
-group = "slack"
-function = "render_markdown"
-command = "datalib-step"
+id = "slack/render_markdown"
+command = "datalib-step run render_markdown slack"
+reads = "pinned"
 inputs = ["slack/ingest"]
 
 [[steps]]
-group = "slack"
-function = "embed"
-command = "datalib-step"
+id = "slack/embed"
+command = "datalib-step run embed slack"
+reads = "files"
+locks = ["embedder"]
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # Claude (claude.ai) conversation mirror. Credentials come from
@@ -112,9 +114,8 @@ id = "claude-api"
 type = "claude"
 
 [[steps]]
-group = "claude-api"
-function = "ingest"
-command = "datalib-step"
+id = "claude-api/ingest"
+command = "datalib-step run ingest claude"
 [steps.params.api]
 # refetch_newest_conversations = 3   # fetch the 3 newest again every sync
 # since = "2025-01-01"      # only sync conversations updated at/after this
@@ -123,15 +124,16 @@ command = "datalib-step"
 # cowork = false            # skip Cowork tasks (default: on)
 
 [[steps]]
-group = "claude-api"
-function = "render_markdown"
-command = "datalib-step"
+id = "claude-api/render_markdown"
+command = "datalib-step run render_markdown claude"
+reads = "pinned"
 inputs = ["claude-api/ingest"]
 
 [[steps]]
-group = "claude-api"
-function = "embed"
-command = "datalib-step"
+id = "claude-api/embed"
+command = "datalib-step run embed claude"
+reads = "files"
+locks = ["embedder"]
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 # The app's own surface: `unified_grid_and_search_index` serves the grid, the document
@@ -149,3 +151,18 @@ command = "datalib-applet unified_grid_and_search_index"
 group = "unified_grid_and_search_index"
 id = "datalib_contacts"
 command = "datalib-applet datalib_contacts"
+
+# The verbs `datalib-step` takes (docs/dev/step_protocol.md § Verbs).
+[[programs]]
+command = "datalib-step"
+verbs = ["reset", "prepare", "compact", "collect"]
+
+# One embed at a time: each loads the model and writes the search index.
+[[locks]]
+name = "embedder"
+slots = 1
+
+# The fan-ins that read every source.
+[[locks]]
+name = "index"
+slots = 2

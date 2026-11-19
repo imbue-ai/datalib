@@ -7,9 +7,8 @@ name = "GitLab"
 type = "gitlab"
 
 [[steps]]
-group = "gitlab"
-function = "ingest"
-command = "datalib-step"
+id = "gitlab/ingest"
+command = "datalib-step run ingest gitlab"
 
 # When to give up on rate limits. The download always backs off and
 # retries; these only decide when to stop.
@@ -33,15 +32,16 @@ merge_requests = [        # only these MRs, as `namespace/project!IID` or a gitl
 ]
 
 [[steps]]
-group = "gitlab"
-function = "render_markdown"
-command = "datalib-step"
+id = "gitlab/render_markdown"
+command = "datalib-step run render_markdown gitlab"
 inputs = ["gitlab/ingest"]
+reads = "pinned"
 
 # Search by meaning: cuts this source's documents into chunks and embeds
 # them. Leave it out and keyword search still finds it.
 [[steps]]
-group = "gitlab"
-function = "embed"
-command = "datalib-step"
+id = "gitlab/embed"
+command = "datalib-step run embed gitlab"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]

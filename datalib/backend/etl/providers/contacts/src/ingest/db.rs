@@ -217,8 +217,9 @@ impl RawDb {
     }
 
     /// The photos of every card the store holds, for a store an older
-    /// build filled before the download kept them. `--migrate` runs it,
-    /// once a build; a photo already there is not written again.
+    /// build filled before the download kept them. `--prepare` runs it on
+    /// a store an older release wrote; a photo already there is not
+    /// written again.
     /// Returns how many photos the cards carry.
     pub async fn put_photos_of_held_cards(&self) -> Result<usize> {
         let mut rows = sqlx::query_scalar::<_, Option<String>>(

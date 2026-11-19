@@ -59,13 +59,13 @@ def main() -> int:
         env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "DATALIB_DAG_DATA_ROOT": str(root),
-            "DATALIB_DAG_GROUP": "unified_grid_and_search_index",
-            "DATALIB_DAG_FUNCTION": "unified_grid_and_search_index",
             "DATALIB_DAG_STEP": "unified_grid_and_search_index/unified_grid_and_search_index",
             "DATALIB_DAG_INPUTS": "\n".join(f"{g}/render_markdown" for g in groups),
             "DATALIB_MODELS_NO_FETCH": "1",
         }
-        subprocess.run([step], env=env, check=True)
+        subprocess.run(
+            [step, "run", "unified_grid_and_search_index"], env=env, check=True
+        )
         chunks = Path(tmp) / "chunks.sqlite"
         subprocess.run(
             [prompts_bin, str(root), model, out_prompts, str(chunks)], check=True

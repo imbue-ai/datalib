@@ -87,36 +87,30 @@ describe("reading a step back", () => {
   const STEPS = listSteps(`data_root = "~/datalib"
 ${["g", "f", "c", "y", "i"].map((id) => `\n[[groups]]\nid = "${id}"\ntype = "calendar"\n`).join("")}
 [[steps]]
-group = "g"
-function = "ingest"
+id = "g/ingest"
 [steps.params.google]
 
 [[steps]]
-group = "g"
-function = "render_markdown"
+id = "g/render_markdown"
 inputs = ["g/ingest"]
 
 [[steps]]
-group = "f"
-function = "ingest"
+id = "f/ingest"
 [steps.params.fastmail]
 calendars = ["Work"]
 
 [[steps]]
-group = "c"
-function = "ingest"
+id = "c/ingest"
 [steps.params.caldav]
 server_url = "https://caldav.icloud.com/"
 
 [[steps]]
-group = "y"
-function = "ingest"
+id = "y/ingest"
 [steps.params.calendly]
 since = "2026-01-01"
 
 [[steps]]
-group = "i"
-function = "ingest"
+id = "i/ingest"
 [steps.params.ics]
 path = "~/Takeout/Calendar"
 `);

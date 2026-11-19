@@ -12,6 +12,9 @@ const SENTENCE: &str = "the quarterly budget review moved to thursday afternoon"
 const CONTENTLESS: &str = "CREATE VIRTUAL TABLE t USING fts5(title, body, \
      content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2')";
 
+const STEMMED: &str = "CREATE VIRTUAL TABLE stems USING fts5(title, body, \
+     content='', contentless_delete=1, tokenize='porter unicode61 remove_diacritics 2')";
+
 async fn open(dir: &tempfile::TempDir) -> (SqliteConnection, std::path::PathBuf) {
     let path = dir.path().join("index.sqlite");
     let opts = SqliteConnectOptions::new()
@@ -182,9 +185,9 @@ async fn a_phrase_matches_only_adjacent_words() {
     assert_eq!(matching(&mut c, "t", "budget review").await, vec![1, 2]);
 }
 
-/// The index matches a word as written, so a quoted phrase is exact: another
-/// form of the word is not it, while case and accents fold. A stemming
-/// table, the control, matches the other form.
+/// `search_fts` matches a word as written, so a quoted phrase is exact:
+/// another form of the word is not it, while case and accents fold.
+/// `search_stems`, with porter, matches the other form, accents folded too.
 #[tokio::test]
 async fn a_word_matches_as_written_with_case_and_accents_folded() {
     let dir = tempfile::tempdir().unwrap();
@@ -196,11 +199,17 @@ async fn a_word_matches_as_written_with_case_and_accents_folded() {
     assert_eq!(matching(&mut c, "t", "\"MEETINGS were\"").await, vec![1]);
     assert_eq!(matching(&mut c, "t", "cafe").await, vec![1]);
 
-    ok(
+    ok(&mut c, STEMMED).await;
+    insert(
         &mut c,
-        "CREATE VIRTUAL TABLE stemmed USING fts5(title, body, tokenize='porter unicode61')",
+        "stems",
+        1,
+        "",
+        "two meetings were moved to the Café",
     )
     .await;
-    insert(&mut c, "stemmed", 1, "", "two meetings were moved").await;
-    assert_eq!(matching(&mut c, "stemmed", "meeting").await, vec![1]);
+    assert_eq!(matching(&mut c, "stems", "meeting").await, vec![1]);
+    assert_eq!(matching(&mut c, "stems", "moving").await, vec![1]);
+    assert_eq!(matching(&mut c, "stems", "\"meeting were\"").await, vec![1]);
+    assert_eq!(matching(&mut c, "stems", "cafe").await, vec![1]);
 }

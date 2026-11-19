@@ -1144,8 +1144,7 @@ mod tests {
             step: "unified_grid_and_search_index/unified_grid_and_search_index".into(),
             group: "unified_grid_and_search_index".into(),
             group_type: None,
-            source_group: None,
-            source_group_type: None,
+            diff_source_type: None,
             function: crate::function::Function::UnifiedGridAndSearchIndex,
             inputs: vec![
                 format!("{GROUP}/render_markdown"),
@@ -1237,8 +1236,7 @@ mod tests {
             step: "unified_grid_and_search_index/unified_grid_and_search_index".into(),
             group: "unified_grid_and_search_index".into(),
             group_type: None,
-            source_group: None,
-            source_group_type: None,
+            diff_source_type: None,
             function: crate::function::Function::UnifiedGridAndSearchIndex,
             inputs: groups
                 .iter()

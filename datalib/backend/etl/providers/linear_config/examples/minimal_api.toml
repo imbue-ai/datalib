@@ -7,16 +7,15 @@ name = "Linear"
 type = "linear"
 
 [[steps]]
-group = "linear"
-function = "ingest"
-command = "datalib-step"
+id = "linear/ingest"
+command = "datalib-step run ingest linear"
 
 [steps.params.api]
 
 # Nothing renders as documents; this step writes the storage report that
 # puts the source in the grid and counts its issues.
 [[steps]]
-group = "linear"
-function = "render_markdown"
-command = "datalib-step"
+id = "linear/render_markdown"
+command = "datalib-step run render_markdown linear"
 inputs = ["linear/ingest"]
+reads = "pinned"

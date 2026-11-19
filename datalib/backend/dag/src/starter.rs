@@ -1,66 +1,27 @@
-//! The starter `config.toml` a new data root gets: the index group's
-//! fan-in step, with nothing to read yet, and the applets every app
-//! needs. `datalib-dag init`, `datalib-http --init` and the app's
-//! first-run screen all write this one text.
+//! The `config.toml` `datalib-dag init` writes into a new data root: no
+//! steps, and comments saying what an entry is. A program that sets up
+//! roots of its own (datalib's app) writes its own starter instead.
 
 use std::io::Write;
 use std::path::Path;
 
 use crate::config::{owner_only_options, root_config_path};
 
-/// Non-empty on purpose: the index step is source-independent and
-/// belongs in every pipeline. It reads every source by pattern, so adding
-/// a source only writes it above this block.
 /// `data_root` is left out: it defaults to the file's own directory,
 /// keeping the root self-contained.
-pub const STARTER_CONFIG: &str = r##"# ── the unified grid and search index ──────────────────────────────────
-# A group is one thing on the Manage screen; its steps are what run.
-# Every source feeds this one — the grid reads its rendered markdown
-# and puts it in the keyword search. A step's id is
-# `<group>/<function>`, the tree it writes, and `inputs` names the
-# steps it reads by that id, or every step of one function at once:
-# `*/render_markdown` is each source's render, those added later too.
-# `command` is the program a step runs; `datalib-step` is the one
-# datalib ships.
+pub const STARTER_CONFIG: &str = r##"# A datalib-dag config: the steps to run, each a program that writes
+# one directory under this data root.
 #
-# Sources go above this block: a [[groups]] entry with a `type`, then
-# its steps. The file then reads in the order data flows, each step
-# below the steps it reads, which is where the Sources screen writes
-# them and the order it lists them in. The runner follows `inputs`,
-# not the file. Anything above the first [[…]] header is a top-level
-# key (data_root, binary_dir), not part of an entry. See
-# `datalib-step help config-model`.
-
-[[groups]]
-id = "unified_grid_and_search_index"
-name = "Grid and Search Index"
-
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "unified_grid_and_search_index"
-command = "datalib-step"
-inputs = ["*/render_markdown"]
-
-# The applet that serves the grid: the app has no search, no document
-# view and no document picker without it. It is an applet like any
-# other — a server the gateway spawns and proxies at
-# `/applet/unified_grid_and_search_index/` — which is why it is written here rather
-# than compiled into the backend.
-
-[[applets]]
-group = "unified_grid_and_search_index"
-id = "unified_grid_and_search_index"
-command = "datalib-applet unified_grid_and_search_index"
-
-# The contacts app: the contacts a person makes and the handles they
-# link to them, which the person chips and search read. Without it the
-# chips still show what each source says about a person, with nothing
-# to link. Its store is `datalib_curated/datalib_contacts/`.
-
-[[applets]]
-group = "unified_grid_and_search_index"
-id = "datalib_contacts"
-command = "datalib-applet datalib_contacts"
+#   [[steps]]
+#   id      = "weather/fetch"            # the directory it writes
+#   command = "./bin/fetch-weather.sh"   # the program, split shell-style
+#
+#   [[steps]]
+#   id      = "weather/chart"
+#   command = "python3 bin/chart.py"
+#   inputs  = ["weather/fetch"]          # runs again when this changes
+#
+# docs/dev/step_protocol.md is what a step is given and what it reports.
 "##;
 
 /// Write [`STARTER_CONFIG`] as `root`'s config, creating the root, unless

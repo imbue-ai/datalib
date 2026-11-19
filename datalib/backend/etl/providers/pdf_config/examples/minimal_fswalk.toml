@@ -6,15 +6,14 @@ name = "PDFs"
 type = "pdf"
 
 [[steps]]
-group = "pdf"
-function = "ingest"
-command = "datalib-step"
+id = "pdf/ingest"
+command = "datalib-step run ingest pdf"
 
 [steps.params.fswalk]
 path = "~/Documents/papers"
 
 [[steps]]
-group = "pdf"
-function = "render_markdown"
-command = "datalib-step"
+id = "pdf/render_markdown"
+command = "datalib-step run render_markdown pdf"
 inputs = ["pdf/ingest"]
+reads = "pinned"

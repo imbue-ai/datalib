@@ -1,7 +1,8 @@
-//! A config in an old shape — a `qmd_index` step, or the index group
-//! under an earlier name — is rewritten by the server itself, at
-//! boot and on a hand edit, with the old text kept as `config.toml.bak`;
-//! at boot the index's tree and the loop's record of it follow.
+//! A config in an old shape — a `qmd_index` step, the index group under
+//! an earlier name, a step written as `group` + `function` — is
+//! rewritten by the server itself, at boot, on a hand edit and on a save,
+//! with the old text kept as `config.toml.bak`; at boot the index's tree
+//! and the loop's record of it follow.
 
 use datalib_http::ApiToken;
 use std::path::Path;
@@ -45,11 +46,12 @@ async fn boot(root: &Path) -> datalib_http::AppState {
 }
 
 fn is_upgraded(text: &str) -> bool {
-    text.contains("function = \"unified_grid_and_search_index\"")
-        && text.contains("function = \"embed\"")
-        && !text.contains("function = \"qmd_aggregator\"")
-        && !text.contains("function = \"keyword_index\"")
-        && !text.contains("function = \"qmd_index\"")
+    text.contains("id = \"unified_grid_and_search_index/unified_grid_and_search_index\"")
+        && text.contains("id = \"mail/embed\"")
+        && !text.contains("/qmd_aggregator\"")
+        && !text.contains("/keyword_index\"")
+        && !text.contains("/qmd_index\"")
+        && !text.contains("function = ")
 }
 
 /// The scaffold as a build before the first rename wrote it.
@@ -307,8 +309,9 @@ async fn a_hand_edit_in_the_old_shape_is_upgraded_while_running() {
     );
 }
 
-/// A time-series source from before `render_time_series`: a shape the
-/// loader still takes, so a save can write it.
+/// A time-series source from before `render_time_series`, written as
+/// `group` + `function`: a shape the loader refuses, which a save upgrades
+/// before it is judged.
 const NO_TIME_SERIES_INDEX: &str = r#"# my sources
 [[groups]]
 id = "watch"
@@ -358,7 +361,7 @@ async fn a_save_in_the_old_shape_lands_upgraded() {
     assert_eq!(verdict["ok"], true, "{verdict}");
 
     let text = std::fs::read_to_string(tmp.path().join("config.toml")).unwrap();
-    assert!(text.contains("function = \"render_time_series\""), "{text}");
+    assert!(text.contains("id = \"watch/render_time_series\""), "{text}");
     assert!(
         text.contains("id = \"unified_time_series_index\""),
         "{text}"

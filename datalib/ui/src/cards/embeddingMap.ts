@@ -4,6 +4,7 @@
 // (UmapCard.ce.vue) draws and listens; everything it decides is here.
 
 import type { MapPoint } from "@/api";
+import { stepToml } from "@/config/sourceSteps";
 
 export type ColorBy = "provider" | "source" | "kind" | "year" | "account";
 
@@ -222,15 +223,19 @@ export function encodeState(st: MapState): string {
 }
 
 /// The TOML stanza that declares the step, for a config that lacks it:
-/// it reads every source's embeddings, so it runs after every `embed`.
+/// it reads every source's embeddings by pattern, so it runs after every
+/// `embed`. A config it is added to also needs the `index` lock
+/// (`withDeclarations`).
 export function stepStanza(): string {
+  const step = stepToml({
+    group: "unified_grid_and_search_index",
+    fn: "embedding_map",
+    type: null,
+    inputs: ["*/embed"],
+  });
   return `
 # The search index's document embeddings laid out on a plane, for the map card.
 # Each run starts from the last map; resetting the step lays one out afresh.
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "embedding_map"
-command = "datalib-step"
-inputs = ["*/embed"]
+${step}
 `;
 }

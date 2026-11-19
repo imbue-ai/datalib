@@ -7,23 +7,23 @@ name = "Facebook"
 type = "facebook"
 
 [[steps]]
-group = "facebook"
-function = "ingest"
-command = "datalib-step"
+id = "facebook/ingest"
+command = "datalib-step run ingest facebook"
 
 [steps.params.export]
 path = "~/Downloads/facebook-export"  # the folder the export's zips were unzipped into
 
 [[steps]]
-group = "facebook"
-function = "render_markdown"
-command = "datalib-step"
+id = "facebook/render_markdown"
+command = "datalib-step run render_markdown facebook"
 inputs = ["facebook/ingest"]
+reads = "pinned"
 
 # Search by meaning: cuts this source's documents into chunks and embeds
 # them. Leave it out and keyword search still finds it.
 [[steps]]
-group = "facebook"
-function = "embed"
-command = "datalib-step"
+id = "facebook/embed"
+command = "datalib-step run embed facebook"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]

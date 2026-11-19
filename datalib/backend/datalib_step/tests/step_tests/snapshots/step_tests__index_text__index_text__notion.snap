@@ -7,10 +7,10 @@ expression: text
 title: Bridge Operations Handbook | text: Source: Notion
 
 > The USS Enterprise-D is on a deep-space survey near the Romulan Neutral Zone. Coordinate any sensor sweeps with Data before adjusting sensor gain.
-Geordi La Forge <geordi.laforge@enterprise.starfleet.invalid> · Tue Apr 15th, 2369 at 01:00
+## Geordi La Forge <geordi.laforge@enterprise.starfleet.invalid> Tue Apr 15th, 2369 at 01:00
 
 Recommend we lower sensor gain to avoid tipping off the Romulans.
-Data <data@enterprise.starfleet.invalid> · Tue Apr 15th, 2369 at 01:05
+## Data <data@enterprise.starfleet.invalid> Tue Apr 15th, 2369 at 01:05
 
 Concur, Commander. Reducing gain by 30%.
 
@@ -18,7 +18,7 @@ Concur, Commander. Reducing gain by 30%.
 --- chunk 0
 title: Bridge Operations Handbook | text: Source: Notion
 
-Beverly Crusher <beverly.crusher@enterprise.starfleet.invalid> · Tue Apr 15th, 2369 at 01:10
+## Beverly Crusher <beverly.crusher@enterprise.starfleet.invalid> Tue Apr 15th, 2369 at 01:10
 
 Make it so.
 

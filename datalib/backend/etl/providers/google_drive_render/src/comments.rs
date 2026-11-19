@@ -216,6 +216,7 @@ pub fn sections(t: &Thread) -> Vec<Section> {
                     .as_deref()
                     .and_then(datalib_time::written_offset_secs),
                 source_url: None,
+                ..Default::default()
             }
             .render(),
         );

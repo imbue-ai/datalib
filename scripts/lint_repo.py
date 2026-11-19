@@ -45,6 +45,9 @@ instead from `bazel run //:precommit` and as a plain step in
      grant in release.yml sits on the one job allowed it, none of which
      runs a build, and what a build made reaches those jobs only outside
      the checkout, unpacked by the script that checks it.
+ 23. The runner's code outside its tests never names `datalib-step`:
+     it gives datalib's own step program nothing another program could
+     not ask for with the same config keys.
 
 Checks 4, 5 and 6 — a render read must be pinned, a reader must not
 open writably, a download takes its store rather than opening one —
@@ -357,6 +360,7 @@ def main() -> int:
     rc |= _check_no_ui_code_sinks(root)
     rc |= _check_card_children_carry_styles(root)
     rc |= _check_stores_open_by_literal_path(root)
+    rc |= _check_runner_names_no_step_program(root)
     return rc
 
 
@@ -1711,6 +1715,62 @@ def _check_card_children_carry_styles(root: Path) -> int:
         "  the document head, which does not reach it. Rename the file to .ce.vue\n"
         "  and add it to its card's `styleSources`, or move the styles to a .css\n"
         "  file the card includes (docs/dev/cards.md)."
+    )
+    return 1
+
+
+# --- Check 23: the runner never names datalib's own step program ---------
+#
+# `datalib-dag` is a general supervisor: everything it does with a step
+# comes from the step's config entry, never from which program the step
+# runs (docs/dev/plans/dag_and_step_decoupling.md). A `datalib-step` in its
+# code is how a special case for one program starts. Its tests may name
+# it; a `#[cfg(test)] mod` block is cut out, its lines kept as blank so a
+# hit's line number is the file's.
+_RUNNER_SRC = "datalib/backend/dag/src/"
+_STEP_PROGRAM = "datalib-step"
+_TEST_MODULE_START = re.compile(r"^#\[cfg\(test\)\]\s*\nmod\s+\w+\s*\{", re.MULTILINE)
+
+
+def outside_test_modules(text: str) -> str:
+    """`text` with every top-level `#[cfg(test)] mod … { … }` blanked."""
+    out = text
+    for m in reversed(list(_TEST_MODULE_START.finditer(text))):
+        end = text.find("\n}", m.end())
+        end = len(text) if end == -1 else end + 2
+        out = out[: m.start()] + re.sub(r"[^\n]", "", text[m.start() : end]) + out[end:]
+    return out
+
+
+def step_program_mentions(text: str) -> list[int]:
+    """The 1-based lines outside test modules that name `datalib-step`."""
+    return [
+        i
+        for i, line in enumerate(outside_test_modules(text).splitlines(), 1)
+        if _STEP_PROGRAM in line
+    ]
+
+
+def _check_runner_names_no_step_program(root: Path) -> int:
+    hits: list[str] = []
+    for rel in _git_ls_files(root, f"{_RUNNER_SRC}*.rs"):
+        path = root / rel
+        if not path.is_file():
+            continue
+        text = path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        for lineno in step_program_mentions(text):
+            hits.append(f"  {rel}:{lineno}: {lines[lineno - 1].strip()}")
+    if not hits:
+        print(f"OK: {_RUNNER_SRC} names {_STEP_PROGRAM} only in its tests.")
+        return 0
+    print(
+        f"ERROR: the runner's code names {_STEP_PROGRAM} outside its tests:\n\n"
+        + "\n".join(hits)
+        + "\n\n  The runner treats every step program alike. Give the behaviour a\n"
+        "  config key, a verb, an event or an environment variable any program\n"
+        "  may use, and leave the program's name out. See lint_repo.py check 23.",
+        file=sys.stderr,
     )
     return 1
 

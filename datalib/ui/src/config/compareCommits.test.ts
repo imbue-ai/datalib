@@ -96,7 +96,12 @@ describe("compareCommits", () => {
       maxDocuments: 50,
     });
     expect(renderId).toBe("enterprise-changes/render_markdown");
-    expect(text).toContain('source = "enterprise"');
+    expect(text).toContain('inputs = ["enterprise/ingest"]');
+    // The group no longer names its source; the step's command carries
+    // the source's type, and `datalib-step` gets its verbs.
+    expect(text).not.toContain('source = "enterprise"');
+    expect(text).toContain('command = "datalib-step run render_markdown diff --source-type slack"');
+    expect(text).toContain('[[programs]]\ncommand = "datalib-step"');
     expect(text).toContain('from = "e2"');
     expect(text).toContain('to = "e3"');
     expect(text).toContain("max_documents = 50");

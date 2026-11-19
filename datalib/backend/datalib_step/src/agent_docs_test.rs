@@ -18,7 +18,9 @@ fn markdown_docs() -> impl Iterator<Item = &'static datalib_agent_docs::Doc> {
 
 // The config a block is, with a stand-in step for every input it names and
 // does not declare, so a stanza that reads a source (`inputs =
-// ["gmail/ingest"]`) loads without that source's whole stanza.
+// ["gmail/ingest"]`) loads without that source's whole stanza, and with
+// datalib-step's locks where the block does not declare them, as a
+// stanza copied into a config finds them there.
 fn config_for(name: &str, block: &str) -> String {
     let table: toml::Table =
         toml::from_str(block).unwrap_or_else(|e| panic!("{name}: not TOML: {e}"));
@@ -29,11 +31,7 @@ fn config_for(name: &str, block: &str) -> String {
         .unwrap_or_default();
     let declared: BTreeSet<String> = steps
         .iter()
-        .filter_map(|s| match (s.get("id"), s.get("group"), s.get("function")) {
-            (Some(id), ..) => id.as_str().map(str::to_string),
-            (None, Some(g), Some(f)) => Some(format!("{}/{}", g.as_str()?, f.as_str()?)),
-            _ => None,
-        })
+        .filter_map(|s| s.get("id")?.as_str().map(str::to_string))
         .collect();
     let read: BTreeSet<String> = steps
         .iter()
@@ -42,7 +40,20 @@ fn config_for(name: &str, block: &str) -> String {
         .filter_map(|i| i.as_str().map(str::to_string))
         .filter(|i| datalib_dag::input_pattern::pattern_function(i).is_none())
         .collect();
+    let locked: BTreeSet<String> = table
+        .get("locks")
+        .and_then(|l| l.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|l| l.get("name")?.as_str().map(str::to_string))
+        .collect();
     let mut config = block.to_string();
+    for (lock, _) in crate::step_entry::LOCKS {
+        if !locked.contains(*lock) {
+            config.push('\n');
+            config.push_str(&crate::step_entry::locks_entry(lock).expect("one of LOCKS"));
+        }
+    }
     for input in read.difference(&declared) {
         config.push_str(&format!(
             "\n[[steps]]\nid = \"{input}\"\ncommand = \"true\"\n"

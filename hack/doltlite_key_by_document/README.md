@@ -74,3 +74,34 @@ the first, keyed by document with the `uuid` index re-rendered in 5.79 s
 against 3.14 s keyed by row; in the second, the same in 19.07 s against
 5.32 s, with spreads of 3 s to 24 s. Whichever layout ran while the
 machine was busiest looked slowest; interleaving the repeats is the fix.
+
+## Replaying a real render — 2026-11-19
+
+The same three layouts, built from a real Slack render store's
+`grid_rows` as it stood before one incremental render (440,998 rows;
+453–509 MB built and gc'd, no history), then given that render's own
+write: for each of the 55,767 documents it changed, the delete and the
+per-row upserts `grid_index.rs` issues, with the rows as the render left
+them (152,087). The rows stayed on the machine and were deleted after;
+only these numbers leave it.
+
+```
+re-render rolled back, cold, 3 runs interleaved across layouts:
+  by_row                       median  37.75 s   [57.4, 18.97, 37.75]
+  by_document                  median  31.77 s   [51.63, 22.02, 31.77]
+  by_document_no_uuid_index    median  18.95 s   [18.49, 19.75, 18.95]
+re-render committed once, cold:
+  by_row                        20.58 s   file grew 422.8 MB
+  by_document                   18.43 s   file grew 412.8 MB
+  by_document_no_uuid_index     17.85 s   file grew 350.6 MB
+```
+
+The gain is far smaller than on the modelled rows: committed, 10% faster
+with the `uuid` index and 13% without, and 2% or 17% less written. The
+reason is the change itself: 53,537 of the 55,767 documents (96%) and
+143,909 of the 152,087 rows were new, a download filling in older
+history, so the render inserted far more than it rewrote, and keying by
+document mostly helps a rewrite. The modelled benchmark above is all
+rewrites. The replay's stores are also freshly built with no history,
+unlike the 12 GB store the render ran against, so they do not show what
+history does to the seeks.
