@@ -1707,10 +1707,8 @@ const KNOWN_STAMP_LEAKS: &[(&str, &str)] = &[];
 
 /// Every document `stanza`'s render store holds, as the store spells it
 /// (what the viewer shows and `datalib-step markdown` exports), at
-/// `<stanza>/render_markdown/<shard>/<id>.md`: where render wrote the page
-/// as a file until the store became its one copy, so a page's diff runs
-/// across that change. Which documents search covers is the `markdowns`
-/// table's `searchable`, in the store's own snapshot beside these.
+/// `<stanza>/render_markdown/<id>.md`, beside the store's own snapshot.
+/// Which documents search covers is that snapshot's `markdowns.searchable`.
 fn snapshot_documents(data_root: &Path, stanza: &str, manifest: &mut Vec<String>) {
     let dir = data_root.join(stanza).join("render_markdown");
     if !dir.is_dir() {
@@ -1725,12 +1723,11 @@ fn snapshot_documents(data_root: &Path, stanza: &str, manifest: &mut Vec<String>
     let texts = store.document_texts().expect("read the documents");
     store.close();
     for (uuid, s) in texts {
-        let shard = &uuid[uuid.len() - 2..];
-        let key = format!("{stanza}/render_markdown/{shard}/{uuid}.md");
+        let key = format!("{stanza}/render_markdown/{uuid}.md");
         manifest.push(key.clone());
         let s = normalize_str(&s);
         insta::with_settings!({
-            snapshot_path => snap_base().join(stanza).join("render_markdown").join(shard).display().to_string(),
+            snapshot_path => snap_base().join(stanza).join("render_markdown").display().to_string(),
             prepend_module_to_snapshot => false,
             description => key,
         }, {
@@ -1740,7 +1737,7 @@ fn snapshot_documents(data_root: &Path, stanza: &str, manifest: &mut Vec<String>
 }
 
 /// Every searchable document's text as the search index embeds it, chunk
-/// by chunk, beside its rendered page: `<source>/index_text/<shard>/<id>.txt`,
+/// by chunk, beside its rendered page: `<source>/index_text/<id>.txt`,
 /// for each source `unified_grid_and_search_index` searches.
 /// Drawn by `datalib-step index-text --chunks`, the call the keyword and
 /// embed passes make, so a change to what search reads (the envelope line,
@@ -1769,11 +1766,10 @@ fn snapshot_index_text(data_root: &Path, cfg_text: &str, manifest: &mut Vec<Stri
         if !searched.contains(&source) {
             continue;
         }
-        let shard = &uuid[uuid.len() - 2..];
-        let key = format!("{source}/index_text/{shard}/{uuid}.txt");
+        let key = format!("{source}/index_text/{uuid}.txt");
         manifest.push(key.clone());
         insta::with_settings!({
-            snapshot_path => snap_base().join(&source).join("index_text").join(shard).display().to_string(),
+            snapshot_path => snap_base().join(&source).join("index_text").display().to_string(),
             prepend_module_to_snapshot => false,
             description => key,
         }, {

@@ -563,7 +563,7 @@ The test makes three pipeline runs, each asserting something different:
    (each group's `ingest/`, `render_markdown/` and, for a time-series
    source, `render_time_series/`, plus the time-series index), one per
    document a render store holds, as the store spells it, at
-   `<group>/render_markdown/<shard>/<id>.md`, a manifest and the
+   `<group>/render_markdown/<id>.md`, a manifest and the
    layout invariants. A snapshot of a file the bake no
    longer writes is deleted, and so is the folder of a group that is no
    longer in the root, which is what renaming a group leaves. Then it makes the contacts listed in
