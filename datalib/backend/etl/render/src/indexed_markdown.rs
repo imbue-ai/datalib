@@ -298,10 +298,15 @@ fn lookup_indexes() -> impl Iterator<Item = &'static str> {
     crate::grid_index::DOCUMENT_LOOKUP_INDEXES
         .iter()
         .copied()
-        .chain(std::iter::once(
+        .chain([
             "CREATE INDEX IF NOT EXISTS problems_by_scope ON problems (scope_kind, scope_key)",
-        ))
+            // The render asks it at every checkpoint (`documents_for_buckets`).
+            "CREATE INDEX IF NOT EXISTS markdowns_by_bucket ON markdowns (bucket_key)",
+        ])
 }
+
+const DOCUMENTS_FOR_BUCKETS: &str = "SELECT bucket_key, markdown_uuid FROM markdowns \
+                                     WHERE bucket_key IN (SELECT value FROM json_each(?))";
 
 /// This store's shape: what its `_datalib_meta` records, what the render
 /// step folds into its params so a change to any render-store table
@@ -836,33 +841,16 @@ impl IndexedMarkdownStore {
     }
 
     /// Every document rendered under any of `bucket_keys`, as
-    /// `(bucket, document)`. One chunked query rather than one per
-    /// bucket — a run declares as many buckets as it rendered.
+    /// `(bucket, document)`. One query rather than one per bucket — a run
+    /// declares as many buckets as it rendered.
     pub fn documents_for_buckets(&self, bucket_keys: &[&str]) -> Result<Vec<(String, String)>> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
-            let mut out = Vec::new();
-            for chunk in bucket_keys.chunks(datalib_etl::bulk::SQL_CHUNK) {
-                let mut sql = String::from(
-                    "SELECT bucket_key, markdown_uuid FROM markdowns WHERE bucket_key IN (",
-                );
-                datalib_etl::bulk::push_placeholder_list(&mut sql, chunk.len());
-                sql.push(')');
-                // Audited: a placeholder run sized from the chunk; every
-                // key is bound.
-                let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
-                for key in chunk {
-                    q = q.bind(*key);
-                }
-                let rows = q
-                    .fetch_all(&mut **guard.conn())
-                    .await
-                    .context("documents for buckets")?;
-                for r in rows {
-                    out.push((r.try_get::<String, _>(0)?, r.try_get::<String, _>(1)?));
-                }
-            }
-            Ok(out)
+            sqlx::query_as::<_, (String, String)>(DOCUMENTS_FOR_BUCKETS)
+                .bind(serde_json::to_string(bucket_keys)?)
+                .fetch_all(&mut **guard.conn())
+                .await
+                .context("documents for buckets")
         })
     }
 
@@ -1857,13 +1845,16 @@ mod tests {
     }
 
     /// Every per-document lookup `put_document` and `remove_documents`
-    /// make goes through an index: without them a full render is
-    /// quadratic in the store's size.
+    /// make, and the lookup of a bucket's documents at each checkpoint,
+    /// goes through an index: without them a full render is quadratic in
+    /// the store's size. The bucket lookup scanned `markdowns` at every
+    /// checkpoint of a 135k-document render.
     #[test]
     fn replacing_a_document_finds_its_old_rows_by_index() {
         let td = tempfile::tempdir().unwrap();
         let st = store(td.path());
         let mut statements = vec![
+            DOCUMENTS_FOR_BUCKETS,
             "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?",
             crate::grid_index::DELETE_DOCUMENT_GRID_ROWS,
             REMOVED_PROBLEMS,
