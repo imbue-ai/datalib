@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { BodyPiece as Piece } from "../src/api";
+import type { BodyNode, BodyPiece as Piece } from "../src/api";
 import { sectionEl } from "../src/cards/chatSections.js";
 import { bodyOf, renderDocument } from "../src/cards/renderDocument";
 
@@ -25,7 +25,7 @@ const TITLE: Piece = {
 };
 const PICARD = boxed("u2", "Picard", "Make it so.");
 
-function page(pieces: Piece[], asPieces: boolean): HTMLElement {
+function page(pieces: BodyNode[], asPieces: boolean): HTMLElement {
   const root = document.createElement("div");
   const body = asPieces ? pieces : bodyOf({ pieces });
   root.innerHTML = renderDocument(body).html;
@@ -96,23 +96,31 @@ describe("one message cannot reach the next", () => {
     );
   });
 
-  it("a fold the renderer opens in one piece still closes in a later one", () => {
+  it("a fold is drawn around its pieces, and what one holds cannot reach past it", () => {
     const step = boxed("u3", "Data", "Running a level-3 diagnostic.");
     const root = page(
-      [
-        TITLE,
-        unclosed,
-        { uuid: null, md: '<details class="tool-group">\n<summary>🛠 1 tool step</summary>\n\n' },
-        step,
-        { uuid: null, md: "</details>\n\n" },
-        PICARD,
-      ],
+      [TITLE, { fold: "tool-group", summary: "🛠 2 tool steps", pieces: [unclosed, step] }, PICARD],
       true,
     );
     const fold = root.querySelector(":scope > details.tool-group")!;
+    expect(fold.querySelector(":scope > summary")?.textContent).toBe("🛠 2 tool steps");
     expect(fold.querySelector(':scope > [data-section-uuid="u3"]')).toBe(sectionEl(root, "u3"));
     expect(shown(root, "u2")).toEqual(WHOLE);
     expect(root.querySelector(':scope > [data-section-uuid="u2"]')).toBe(sectionEl(root, "u2"));
+  });
+
+  it("a fold's summary is sanitized like any other text", () => {
+    const root = page(
+      [{ fold: "tool-group", summary: '<img src=x onerror="alert(1)">steps', pieces: [PICARD] }],
+      true,
+    );
+    expect(root.querySelector("summary")?.innerHTML).not.toContain("onerror");
+  });
+
+  it("a piece between messages cannot hide the next either", () => {
+    const between: Piece = { uuid: null, md: '<div style="display:none">\n\n' };
+    const root = page([TITLE, boxed("u1", "Quark", "Latinum is up."), between, PICARD], true);
+    expect(shown(root, "u2")).toEqual(WHOLE);
   });
 
   it("a piece in no box is still a fragment of its own", () => {

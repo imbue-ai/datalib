@@ -11,6 +11,7 @@ rust_library(
         "src/filings.rs",
         "src/sections.rs",
         "src/drawings.rs",
+        "src/folds.rs",
         "src/search_terms.rs",
         "src/markdowns.rs",
         "src/providers.rs",

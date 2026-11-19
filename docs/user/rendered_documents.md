@@ -37,11 +37,15 @@ on its own, and a tag it leaves open is closed at its end instead of
 hiding the messages after it. A message with a `class` is in a box
 (below): `md` is what is inside it, and the box is yours to draw, as
 `<div id="m-{uuid}" data-section-uuid="{uuid}" class="{class}">`, a
-blank line, `md`, `</div>` and a blank line. Joined in order, with each
-box drawn, the pieces are `body`. The pieces without one
-(the title, the folds around a run of tool steps) open and close
-elements between them, so render those together. A document whose
-source does not mark its messages comes as pieces without a `uuid`.
+blank line, `md`, `</div>` and a blank line. A piece without a `uuid`
+(the title, a heading between messages) renders on its own too. A fold
+around a run of messages (a run of tool steps, another version of a
+conversation) comes as `{fold, summary, pieces}`: draw it as `<details
+class="{fold}">`, a line break, `<summary>{summary}</summary>` (HTML,
+escaped), a blank line, its pieces, `</details>` and a blank line.
+Joined in order, with each box and fold drawn, the pieces are `body`. A
+document whose source does not mark its messages comes as pieces
+without a `uuid`.
 
 ## The parts of a document
 
