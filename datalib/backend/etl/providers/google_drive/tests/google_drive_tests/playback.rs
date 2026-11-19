@@ -21,6 +21,9 @@ pub const TABLES: &[&str] = &[
     "captures",
     "capture_parts",
     "revision_exports",
+    "folders",
+    "drives",
+    "file_parents",
 ];
 
 pub async fn run(playback: &Path, store: &Path) -> FetchSummary {
@@ -248,6 +251,242 @@ async fn a_first_sync_captures_every_file_in_its_native_form() {
         .await
         .unwrap();
     assert_eq!(gone, "warning");
+    db.close().await;
+}
+
+/// The download listed no folders, so a file's `parents` named ids
+/// nothing could name. Every folder is kept as listed, My Drive's root
+/// with them, and each shared drive by its name.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn every_folder_and_shared_drive_is_kept_as_listed() {
+    let d = tempfile::tempdir().unwrap();
+    let store = d.path().join("store");
+    let s = run(&tape::tape(d.path(), Edition::Before), &store).await;
+    assert_eq!((s.folders, s.drives), (4, 1), "{s:?}");
+    let db = open(&store).await;
+    let folders: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, json(payload) FROM folders ORDER BY id")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+    let folders: Vec<(&str, serde_json::Value)> = folders
+        .iter()
+        .map(|(id, p)| (id.as_str(), serde_json::from_str(p).unwrap()))
+        .collect();
+    assert_eq!(
+        folders,
+        vec![
+            (
+                tape::ROOT,
+                serde_json::json!({"id": tape::ROOT, "name": "My Drive"})
+            ),
+            (
+                "1FolderAwayTeams",
+                serde_json::json!({"id": "1FolderAwayTeams", "name": "Away teams",
+                                   "parents": [tape::ROOT, "1FolderLogs"]}),
+            ),
+            (
+                "1FolderBriefings",
+                serde_json::json!({"id": "1FolderBriefings", "name": "Briefings",
+                                   "parents": [tape::BRIDGE_DRIVE],
+                                   "driveId": tape::BRIDGE_DRIVE}),
+            ),
+            (
+                "1FolderLogs",
+                serde_json::json!({"id": "1FolderLogs", "name": "Captain's logs",
+                                   "parents": [tape::ROOT]}),
+            ),
+        ],
+        "parents is sorted, so a second read stores the same bytes"
+    );
+    let drive: String =
+        sqlx::query_scalar("SELECT payload->>'$.name' FROM drives WHERE id = '0ABridgeDrive'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(drive, "Bridge");
+    db.close().await;
+}
+
+/// Nothing is owed for a folder: its listing entry is all there is, so a
+/// rename lands on the next run, and a folder that leaves the listing
+/// keeps its row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_renamed_folder_is_renamed_on_the_next_run() {
+    let d = tempfile::tempdir().unwrap();
+    let store = d.path().join("store");
+    run(&tape::tape(d.path(), Edition::Before), &store).await;
+    let t = tape::tape(d.path(), Edition::After);
+    let mut folders = tape::folders();
+    folders[0]["name"] = "Personal logs".into();
+    folders.pop();
+    tape::places(&t, folders);
+    run(&t, &store).await;
+    let db = open(&store).await;
+    let names: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, payload->>'$.name' FROM folders ORDER BY id")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(
+        names,
+        [
+            (tape::ROOT, "My Drive"),
+            ("1FolderAwayTeams", "Away teams"),
+            ("1FolderBriefings", "Briefings"),
+            ("1FolderLogs", "Personal logs"),
+        ]
+        .map(|(id, name)| (id.to_string(), name.to_string()))
+    );
+    db.close().await;
+}
+
+/// Moving a file need not move its `version`, and when it does a second
+/// capture of an unedited file is waste. Either way the folders it is in
+/// are taken from every run's listing, and nothing is captured for it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_moved_file_is_moved_on_the_next_run_without_a_capture() {
+    let d = tempfile::tempdir().unwrap();
+    let store = d.path().join("store");
+    run(&tape::tape(d.path(), Edition::Before), &store).await;
+    let parents = |db: &RawDb| {
+        let pool = db.pool().clone();
+        async move {
+            let got: String =
+                sqlx::query_scalar("SELECT json(payload) FROM file_parents WHERE id = ?")
+                    .bind(DOC)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            serde_json::from_str::<serde_json::Value>(&got).unwrap()
+        }
+    };
+    let db = open(&store).await;
+    assert_eq!(parents(&db).await, serde_json::json!({"id": DOC}));
+    let files_before = dump_tables(db.pool(), &["files", "captures"])
+        .await
+        .unwrap();
+    db.close().await;
+
+    // A tape with the listing and nothing else: a capture would miss.
+    let moved = d.path().join("moved");
+    let mut doc = tape::entry(
+        DOC,
+        FileKind::Document,
+        12,
+        "Captain's log, supplemental",
+        2,
+    );
+    doc["parents"] = serde_json::json!(["1FolderLogs", "1FolderAwayTeams"]);
+    tape::listing(
+        &moved,
+        vec![
+            doc,
+            tape::entry(
+                SHEET,
+                FileKind::Spreadsheet,
+                7,
+                "Engineering duty roster",
+                2,
+            ),
+        ],
+        vec![tape::entry(
+            DECK,
+            FileKind::Presentation,
+            30,
+            "Away team briefing",
+            2,
+        )],
+    );
+    let s = run(&moved, &store).await;
+    assert_eq!((s.owed, s.captured, s.failed), (0, 0, 0), "{s:?}");
+    let db = open(&store).await;
+    assert_eq!(
+        parents(&db).await,
+        serde_json::json!({"id": DOC, "parents": ["1FolderAwayTeams", "1FolderLogs"]})
+    );
+    assert_eq!(
+        dump_tables(db.pool(), &["files", "captures"])
+            .await
+            .unwrap(),
+        files_before
+    );
+    db.close().await;
+}
+
+/// A store from before the download listed folders gets them, and every
+/// file's parents, from the next run's listing alone: the open creates
+/// the tables, nothing held is owed again, and nothing is captured.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_store_from_before_folders_gets_them_without_a_capture() {
+    let d = tempfile::tempdir().unwrap();
+    let store = d.path().join("store");
+    run(&tape::tape(d.path(), Edition::Before), &store).await;
+    let db = open(&store).await;
+    for table in ["folders", "drives", "file_parents"] {
+        for t in [table.to_string(), format!("{table}_bookkeeping")] {
+            sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE {t}")))
+                .execute(db.pool())
+                .await
+                .unwrap();
+        }
+    }
+    db.commit_all("the shape before folders").await.unwrap();
+    assert_eq!(
+        scalar(
+            &db,
+            "SELECT COUNT(*) FROM sqlite_master WHERE name IN ('folders', 'drives', 'file_parents')"
+        )
+        .await,
+        0
+    );
+    let held = dump_tables(db.pool(), &["files", "captures", "capture_parts"])
+        .await
+        .unwrap();
+    db.close().await;
+
+    let only_listing = d.path().join("only-listing");
+    tape::listing(
+        &only_listing,
+        vec![
+            tape::entry(
+                DOC,
+                FileKind::Document,
+                12,
+                "Captain's log, supplemental",
+                2,
+            ),
+            tape::entry(
+                SHEET,
+                FileKind::Spreadsheet,
+                7,
+                "Engineering duty roster",
+                2,
+            ),
+        ],
+        vec![tape::entry(
+            DECK,
+            FileKind::Presentation,
+            30,
+            "Away team briefing",
+            2,
+        )],
+    );
+    let s = run(&only_listing, &store).await;
+    assert_eq!(
+        (s.owed, s.captured, s.folders, s.drives),
+        (0, 0, 4, 1),
+        "{s:?}"
+    );
+    let db = open(&store).await;
+    assert_eq!(scalar(&db, "SELECT COUNT(*) FROM folders").await, 4);
+    assert_eq!(scalar(&db, "SELECT COUNT(*) FROM file_parents").await, 3);
+    assert_eq!(
+        dump_tables(db.pool(), &["files", "captures", "capture_parts"])
+            .await
+            .unwrap(),
+        held
+    );
     db.close().await;
 }
 

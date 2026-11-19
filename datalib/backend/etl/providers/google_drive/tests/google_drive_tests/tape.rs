@@ -11,6 +11,9 @@
 //! download; its revision 29's link answers that Drive no longer has it.
 //! [`view_only_doc`] adds a fourth file, a Doc the account may only view.
 //!
+//! Three folders, one of them in a shared drive, sit beside every
+//! listing ([`places`]); the account's files name none of them.
+//!
 //! The listing spans two pages. [`Edition::After`] moves the Doc to a new
 //! version with a new comment, and lists the other two unchanged except
 //! for the fields Drive changes on every read.
@@ -439,8 +442,54 @@ pub fn bumped_deck(dir: &Path) -> PathBuf {
     t
 }
 
-/// The listing as two pages.
+pub const ROOT: &str = "0ATapeMyDrive";
+pub const BRIDGE_DRIVE: &str = "0ABridgeDrive";
+
+/// The folders the account sees: two in My Drive, one of them in the
+/// other as well, and one in a shared drive. `parents` comes in no fixed
+/// order.
+pub fn folders() -> Vec<Value> {
+    vec![
+        json!({"id": "1FolderLogs", "name": "Captain's logs", "parents": [ROOT]}),
+        json!({"id": "1FolderBriefings", "name": "Briefings",
+               "parents": [BRIDGE_DRIVE], "driveId": BRIDGE_DRIVE}),
+        json!({"id": "1FolderAwayTeams", "name": "Away teams",
+               "parents": ["1FolderLogs", ROOT]}),
+    ]
+}
+
+/// The folder listing as two pages, My Drive's root, and the shared
+/// drives.
+pub fn places(t: &Path, folders: Vec<Value>) {
+    let (first, second) = folders.split_at(folders.len().min(2));
+    put(
+        t,
+        api::req_json(&api::folders_url(None)),
+        json_response(&json!({"kind": "drive#fileList", "incompleteSearch": false,
+                              "nextPageToken": "folders-page-2", "files": first})),
+    );
+    put(
+        t,
+        api::req_json(&api::folders_url(Some("folders-page-2"))),
+        json_response(&json!({"kind": "drive#fileList", "incompleteSearch": false,
+                              "files": second})),
+    );
+    put(
+        t,
+        api::req_json(&api::root_url()),
+        json_response(&json!({"id": ROOT, "name": "My Drive"})),
+    );
+    put(
+        t,
+        api::req_json(&api::drives_url(None)),
+        json_response(&json!({"kind": "drive#driveList",
+                              "drives": [{"id": BRIDGE_DRIVE, "name": "Bridge"}]})),
+    );
+}
+
+/// The listing as two pages, and the places it sits in.
 pub fn listing(t: &Path, first: Vec<Value>, second: Vec<Value>) {
+    places(t, folders());
     put(
         t,
         api::req_json(&api::list_url(KINDS, false, None)),

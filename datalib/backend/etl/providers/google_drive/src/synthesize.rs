@@ -18,10 +18,18 @@ use serde_json::{json, Value};
 use crate::ingest::api;
 
 /// The spec file: the files the account can see, each with everything
-/// a capture reads.
+/// a capture reads, and the folders and shared drives they sit in.
 #[derive(Debug, Deserialize)]
 pub struct DriveSpec {
     pub files: Vec<SpecFile>,
+    /// Every folder but My Drive's root, as `files.list` returns it.
+    #[serde(default)]
+    pub folders: Vec<Value>,
+    /// My Drive's root folder, as `files/root` returns it.
+    pub root: Value,
+    /// The shared drives, as `drives.list` returns them.
+    #[serde(default)]
+    pub drives: Vec<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +83,16 @@ impl Synthesizer for GoogleDriveSynth {
             api::req_json(&api::list_url(&config.kinds, config.owned_only, None)),
             json_response(&json!({"kind": "drive#fileList", "incompleteSearch": false,
                                   "files": entries})),
+        )?;
+        put(
+            api::req_json(&api::folders_url(None)),
+            json_response(&json!({"kind": "drive#fileList", "incompleteSearch": false,
+                                  "files": spec.folders})),
+        )?;
+        put(api::req_json(&api::root_url()), json_response(&spec.root))?;
+        put(
+            api::req_json(&api::drives_url(None)),
+            json_response(&json!({"kind": "drive#driveList", "drives": spec.drives})),
         )?;
         for file in &spec.files {
             let id = file.entry["id"].as_str().context("a file with no id")?;

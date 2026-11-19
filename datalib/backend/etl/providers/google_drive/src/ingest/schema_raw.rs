@@ -20,6 +20,9 @@ pub const COMMENTS: &str = "comments";
 pub const CAPTURES: &str = "captures";
 pub const CAPTURE_PARTS: &str = "capture_parts";
 pub const REVISION_EXPORTS: &str = "revision_exports";
+pub const FOLDERS: &str = "folders";
+pub const DRIVES: &str = "drives";
+pub const FILE_PARENTS: &str = "file_parents";
 
 pub const DATA_TABLES: &[&str] = &[
     FILES,
@@ -28,6 +31,9 @@ pub const DATA_TABLES: &[&str] = &[
     CAPTURES,
     CAPTURE_PARTS,
     REVISION_EXPORTS,
+    FOLDERS,
+    DRIVES,
+    FILE_PARENTS,
 ];
 
 /// `files` — one row per file, keyed by Drive's file id: the file's
@@ -146,6 +152,39 @@ pub struct RevisionExportRow {
     pub blake3: Option<String>,
 }
 
+/// `folders` — one row per folder the account can see, keyed by Drive's
+/// folder id: its listing entry (`id`, `name`, `parents`, `driveId`),
+/// `parents` sorted. Every run lists every folder and upserts each, so a
+/// rename or a move lands on the next run; a folder that leaves the
+/// listing keeps its row. My Drive's own root is here too, read by
+/// `files/root`, since a listing of folders never names it.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "folders")]
+pub struct FolderRow {
+    pub id_and_payload: WirePayload,
+}
+
+/// `drives` — one row per shared drive the account belongs to, keyed by
+/// the drive's id: `drives.list`'s entry (`id`, `name`). A shared drive's
+/// root folder has the drive's id, so it is what the top folders of that
+/// drive name as their parent.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "drives")]
+pub struct DriveRow {
+    pub id_and_payload: WirePayload,
+}
+
+/// `file_parents` — the folders each listed file is in, keyed by file
+/// id: `{"id", "parents"}` from this run's listing, `parents` sorted and
+/// absent for a file in none. `files` holds the listing entry as of the
+/// newest capture, and a move is not worth a capture, so this is
+/// upserted from every run's listing and a move lands on the next run.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "file_parents")]
+pub struct FileParentsRow {
+    pub id_and_payload: WirePayload,
+}
+
 pub const PART_NATIVE: &str = "native.json.gz";
 pub const NATIVE_CONTENT_TYPE: &str = "application/gzip";
 
@@ -168,6 +207,9 @@ pub fn full_ddl() -> Vec<String> {
     out.extend(CaptureRow::all_ddl());
     out.extend(CapturePartRow::all_ddl());
     out.extend(RevisionExportRow::all_ddl());
+    out.push(FolderRow::ddl());
+    out.push(DriveRow::ddl());
+    out.push(FileParentsRow::ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }

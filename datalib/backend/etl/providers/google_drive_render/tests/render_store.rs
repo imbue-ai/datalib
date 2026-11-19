@@ -4,17 +4,20 @@
 //! tests cannot reach.
 
 use datalib_etl::doltlite_raw::{commit_run, WirePayload};
-use datalib_etl_google_drive::ingest::db::{store_captures, Body, Capture, Part, Split};
+use datalib_etl_google_drive::ingest::db::{
+    store_captures, store_places, Body, Capture, Part, Places, Split,
+};
 use datalib_etl_google_drive::ingest::schema_raw::{
     image_part, CaptureRow, CommentRow, FileRow, PART_NATIVE,
 };
 use datalib_etl_google_drive::ingest::shape::gzip;
 use datalib_etl_google_drive::ingest::RawDb;
 use datalib_etl_google_drive_render::render::{render_doc, DocInput};
-use datalib_etl_google_drive_render::{ids, store};
+use datalib_etl_google_drive_render::{ids, store, tree};
 use datalib_etl_render::inputs::{Inputs, RawRange};
 use datalib_etl_render::section::join;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 const DOC: &str = "1PicardLogSupplemental";
 const SHEET: &str = "1LaForgeDutyRoster";
@@ -135,6 +138,19 @@ async fn a_doc_in_the_store_renders_with_its_image_and_its_thread() {
     let mut tx = db.pool().begin().await.unwrap();
     store_captures(&mut tx, &[&doc, &sheet]).await.unwrap();
     tx.commit().await.unwrap();
+    // The Doc was captured in no folder and has since moved into one in a
+    // shared drive.
+    store_places(
+        db.pool(),
+        &Places {
+            folders: vec![json!({"id": "1Logs", "name": "Logs",
+                                 "parents": ["0Bridge"], "driveId": "0Bridge"})],
+            drives: vec![json!({"id": "0Bridge", "name": "Bridge"})],
+            file_parents: vec![json!({"id": DOC, "parents": ["1Logs"]})],
+        },
+    )
+    .await
+    .unwrap();
     commit_run(db.pool(), "test fixture").await.unwrap();
     db.close().await;
 
@@ -168,10 +184,26 @@ async fn a_doc_in_the_store_renders_with_its_image_and_its_thread() {
             native: Ok(&native),
             images: &images,
             comments: &listing.comments[DOC],
+            places: &listing.places,
         },
         &inputs,
     );
     db.close().await;
+
+    let places: Vec<(&str, Option<&str>)> = md
+        .data_nodes
+        .iter()
+        .filter(|n| n.is_place)
+        .map(|n| (n.kind.as_str(), n.name.as_deref()))
+        .collect();
+    assert_eq!(
+        places,
+        vec![("Shared drive", Some("Bridge")), ("Folder", Some("Logs"))]
+    );
+    assert_eq!(
+        md.rows[0].place_uuid,
+        Some(ids::folder("drive", "1Logs").uuid)
+    );
 
     let text = join(&md.sections);
     let image = text
@@ -227,7 +259,15 @@ async fn a_doc_in_the_store_renders_with_its_image_and_its_thread() {
         .iter()
         .map(|i| format!("{}:{}", i.table, i.id))
         .collect();
-    for table in ["files", "captures", "capture_parts", "comments"] {
+    for table in [
+        "files",
+        "captures",
+        "capture_parts",
+        "comments",
+        "file_parents",
+        "folders",
+        "drives",
+    ] {
         assert!(
             read.iter().any(|r| r.starts_with(&format!("{table}:"))),
             "{table} not declared: {read:?}"
@@ -256,6 +296,7 @@ fn a_doc_whose_text_is_lost_renders_with_the_loss_on_it() {
             native: Err(&lost),
             images: &Default::default(),
             comments: &[],
+            places: &Default::default(),
         },
         &Inputs::default(),
     );
@@ -270,7 +311,8 @@ fn a_doc_whose_text_is_lost_renders_with_the_loss_on_it() {
 
 /// A Doc sits in its folder, a place, and is read together; a comment
 /// thread is read together inside it, its first comment where the thread
-/// sits and each reply inside the thread.
+/// sits and each reply inside the thread. The folder is named, under the
+/// folder above it.
 #[test]
 fn a_doc_sits_in_its_folder_and_its_threads_inside_it() {
     let entry = json!({
@@ -295,33 +337,70 @@ fn a_doc_sits_in_its_folder_and_its_threads_inside_it() {
             native: Ok(&native()),
             images: &Default::default(),
             comments: &[(format!("{DOC}#c1"), comment)],
+            places: &tree::Places {
+                folders: HashMap::from([
+                    (
+                        "0BridgeLogs".to_string(),
+                        tree::Folder {
+                            name: Some("Bridge logs".into()),
+                            parent: Some("0Root".into()),
+                        },
+                    ),
+                    (
+                        "0Root".to_string(),
+                        tree::Folder {
+                            name: Some("My Drive".into()),
+                            parent: None,
+                        },
+                    ),
+                ]),
+                drives: HashMap::new(),
+                file_parents: HashMap::new(),
+            },
         },
         &Inputs::default(),
     );
-    let roles: Vec<(&str, bool, bool, Option<&str>)> = md
+    // kind, name, is a place, read together, parent
+    type Role<'a> = (&'a str, Option<&'a str>, bool, bool, Option<&'a str>);
+    let roles: Vec<Role> = md
         .data_nodes
         .iter()
         .map(|n| {
             (
                 n.kind.as_str(),
+                n.name.as_deref(),
                 n.is_place,
                 n.read_together,
                 n.parent_uuid.as_deref(),
             )
         })
         .collect();
+    let root = ids::folder("drive", "0Root").uuid;
     let folder = ids::folder("drive", "0BridgeLogs").uuid;
     let file = md.markdown_uuid.as_str();
     let thread = md.rows[1].uuid.as_str();
     assert_eq!(
         roles,
         vec![
-            ("Google Drive folder", true, false, None),
-            ("Google Doc", false, true, Some(folder.as_str())),
-            ("Google Doc comment thread", false, true, Some(file)),
+            ("Folder", Some("My Drive"), true, false, None),
+            (
+                "Folder",
+                Some("Bridge logs"),
+                true,
+                false,
+                Some(root.as_str())
+            ),
+            (
+                "Google Doc",
+                Some("Captain's log, supplemental"),
+                false,
+                true,
+                Some(folder.as_str())
+            ),
+            ("Google Doc comment thread", None, false, true, Some(file)),
         ]
     );
-    assert_eq!(md.data_nodes[2].uuid, thread);
+    assert_eq!(md.data_nodes[3].uuid, thread);
     let at: Vec<(Option<&str>, Option<&str>, Option<&str>)> = md
         .rows
         .iter()

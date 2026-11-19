@@ -774,7 +774,9 @@ file whose version moved,
 whole and in Google's own form, beside its comments, its revision list
 and the images it shows. It can also keep a copy LibreOffice opens
 (`exports`, below). Older versions stay, and a file you delete from
-Drive stays in the backup.
+Drive stays in the backup. Each sync also reads every folder and shared
+drive's name, so a Doc sits in the library under its folders, from My
+Drive or its shared drive down, and moves when you move or rename them.
 
 The download reaches four Google APIs, and latchkey signs each with its
 own service, so it needs all four signed in as the same account. In the

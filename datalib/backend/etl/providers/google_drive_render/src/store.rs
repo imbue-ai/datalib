@@ -1,6 +1,7 @@
 //! What a render reads from the `google_drive` raw store at its pin: the
-//! listing entries, each file's newest capture and its parts, and the
-//! comments, all small enough to read whole. A Doc's native JSON and its
+//! listing entries, each file's newest capture and its parts, the
+//! comments, and the folders and shared drives, all small enough to read
+//! whole. A Doc's native JSON and its
 //! images are read one file at a time, as it renders.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -8,8 +9,9 @@ use std::io::Read as _;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
+use datalib_etl_google_drive::ingest::api::FOLDER_MIME;
 use datalib_etl_google_drive::ingest::schema_raw::{
-    CAPTURES, CAPTURE_PARTS, COMMENTS, FILES, PART_NATIVE,
+    CAPTURES, CAPTURE_PARTS, COMMENTS, DRIVES, FILES, FILE_PARENTS, FOLDERS, PART_NATIVE,
 };
 use datalib_etl_google_drive::ingest::RawDb;
 use datalib_etl_render::inputs::{changed_rows, RawRange};
@@ -17,12 +19,14 @@ use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Seve
 use serde_json::Value;
 use sqlx::Row as _;
 
-pub const DOC_MIME: &str = "application/vnd.google-apps.document";
-const FOLDER_MIME: &str = "application/vnd.google-apps.folder";
+use crate::tree::{parents, Folder, Places};
 
-/// Every table a file's document reads; the forward scan diffs each.
-/// Every key in them starts with the file id, then `#`.
-const TABLES: [&str; 4] = [FILES, CAPTURES, CAPTURE_PARTS, COMMENTS];
+pub const DOC_MIME: &str = "application/vnd.google-apps.document";
+
+/// Every table a file's document reads by its key; the forward scan
+/// diffs each. Every key in them is the file id, or starts with it and
+/// `#`.
+const TABLES: [&str; 5] = [FILES, CAPTURES, CAPTURE_PARTS, COMMENTS, FILE_PARENTS];
 
 /// A file's newest capture and the parts it holds bytes for or not.
 #[derive(Debug, Clone)]
@@ -52,6 +56,7 @@ pub struct Listing {
     pub listed: HashSet<String>,
     /// The files to render; `None` renders every Doc.
     pub render: Option<HashSet<String>>,
+    pub places: Places,
 }
 
 impl Listing {
@@ -194,6 +199,58 @@ pub async fn load(db: &RawDb, range: RawRange<'_>) -> Result<Listing> {
         let comment: Value = serde_json::from_str(&payload)
             .with_context(|| format!("comments row {id} is not JSON"))?;
         out.comments.entry(file).or_default().push((id, comment));
+    }
+    out.places = places(db).await?;
+    Ok(out)
+}
+
+/// Every folder, shared drive and file's parents, read whole: one rename
+/// moves every Doc under it. A store written before the download listed
+/// them has none of the three tables.
+async fn places(db: &RawDb) -> Result<Places> {
+    let mut out = Places::default();
+    for (table, sql) in [
+        (FOLDERS, "SELECT id, json(payload) AS payload FROM folders"),
+        (DRIVES, "SELECT id, json(payload) AS payload FROM drives"),
+        (
+            FILE_PARENTS,
+            "SELECT id, json(payload) AS payload FROM file_parents",
+        ),
+    ] {
+        let exists: Option<String> =
+            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+                .bind(table)
+                .fetch_optional(db.pool())
+                .await?;
+        if exists.is_none() {
+            continue;
+        }
+        for row in sqlx::query(sql)
+            .fetch_all(db.pool())
+            .await
+            .with_context(|| format!("read {table}"))?
+        {
+            let id: String = row.try_get("id")?;
+            let payload: Option<String> = row.try_get("payload")?;
+            let entry: Value = match payload {
+                Some(p) => serde_json::from_str(&p)
+                    .with_context(|| format!("{table} row {id} is not JSON"))?,
+                None => Value::Null,
+            };
+            match table {
+                FOLDERS => {
+                    out.folders.insert(id, Folder::of(&entry));
+                }
+                DRIVES => {
+                    if let Some(name) = entry.get("name").and_then(Value::as_str) {
+                        out.drives.insert(id, name.to_string());
+                    }
+                }
+                _ => {
+                    out.file_parents.insert(id, parents(&entry));
+                }
+            }
+        }
     }
     Ok(out)
 }
