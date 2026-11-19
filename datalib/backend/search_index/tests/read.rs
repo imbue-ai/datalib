@@ -1,10 +1,10 @@
 //! The reader against an index and cache the writers filled.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use datalib_search_index::{
     chunk::{chunk_hash, four_bytes_a_token},
-    ChunkedDoc, Index, IndexDoc, IndexSection, InferenceCache, Reader,
+    ChunkedDoc, Index, IndexDoc, IndexSection, InferenceCache, KeptRows, Reader,
 };
 
 fn doc(source: &str, uuid: &str, sections: &[(Option<&str>, &str)]) -> IndexDoc {
@@ -156,10 +156,10 @@ async fn a_document_answers_once_at_its_best_message() {
             .len(),
         1
     );
-    let among = HashSet::from(["other".to_string()]);
+    let kept = only_document("other");
     let narrowed = f
         .reader
-        .words(&all_of(&["warp"]), None, Some(&among), 10)
+        .words(&all_of(&["warp"]), None, Some(&kept), 10)
         .await
         .unwrap();
     assert_eq!(ids(&narrowed), ["other"]);
@@ -407,50 +407,46 @@ async fn a_page_holds_the_words_between_its_pieces() {
     let f = fixture(&[page("page"), conversation()], &[]).await;
     let hits = f
         .reader
-        .page_words(
-            &page_terms(&["bedroom", "air", "quality"]),
-            &[],
-            None,
-            None,
-            10,
-        )
+        .page_words(&page_terms(&["bedroom", "air", "quality"]), None, None, 10)
         .await
         .unwrap();
     assert_eq!(ids(&hits), ["page"]);
     assert_eq!(hits[0].uuid.as_deref(), Some("bedroom"));
     let missing = f
         .reader
-        .page_words(&page_terms(&["bedroom", "tribble"]), &[], None, None, 10)
+        .page_words(&page_terms(&["bedroom", "tribble"]), None, None, 10)
         .await
         .unwrap();
     assert!(missing.is_empty(), "a page lacking a word: {missing:?}");
     f.reader.close().await;
 }
 
-/// An excluded word anywhere on a page drops it; `sources` and `among`
-/// narrow what is read.
+/// The rows a search keeps, and `sources`, narrow the pages read.
 #[tokio::test]
-async fn an_excluded_word_anywhere_drops_the_page() {
+async fn the_kept_rows_and_the_sources_narrow_the_pages() {
     let f = fixture(&[page("page"), page("other")], &[]).await;
     let terms = page_terms(&["bedroom", "quality"]);
-    let excluded = f
-        .reader
-        .page_words(&terms, &[page_term("kitchen")], None, None, 10)
-        .await
-        .unwrap();
-    assert!(excluded.is_empty(), "{excluded:?}");
-    let among: HashSet<String> = ["other".to_string()].into();
+    let kept = only_document("other");
     let narrowed = f
         .reader
-        .page_words(&terms, &[], None, Some(&among), 10)
+        .page_words(&terms, None, Some(&kept), 10)
         .await
         .unwrap();
     assert_eq!(ids(&narrowed), ["other"]);
     let elsewhere = f
         .reader
-        .page_words(&terms, &[], Some(&["slack".to_string()]), None, 10)
+        .page_words(&terms, Some(&["slack".to_string()]), None, 10)
         .await
         .unwrap();
     assert!(elsewhere.is_empty(), "{elsewhere:?}");
     f.reader.close().await;
+}
+
+/// What a search keeps when its filters keep `document` whole and
+/// nothing else.
+fn only_document(document: &str) -> KeptRows<'_> {
+    KeptRows {
+        whole: vec![document],
+        messages: Vec::new(),
+    }
 }

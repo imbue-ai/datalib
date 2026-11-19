@@ -68,10 +68,17 @@ pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
     // repeating the same field with different values produces an empty
     // result, which matches the "keep only X then keep only Y"
     // tree-zoom UX.
+    let pk = <C::Table as SearchTable>::PRIMARY_KEY.as_str();
     for term in &q.terms {
-        if let Field::Terms(key) = term.field {
-            let pk = <C::Table as SearchTable>::PRIMARY_KEY.as_str();
-            let (clause, bound) = terms_clause(pk, key, term);
+        let (clause, bound) = match term.field {
+            Field::Terms(key) => terms_clause(pk, key, term),
+            Field::Names => names_clause(pk, term),
+            Field::Text => text_clause(pk, term),
+            Field::Before | Field::After | Field::Is(_) | Field::Column(_) => {
+                (String::new(), Vec::new())
+            }
+        };
+        if !clause.is_empty() {
             clauses.push(clause);
             params.extend(bound);
             continue;
@@ -195,8 +202,54 @@ fn documents_and_sources_only(q: &ParsedQuery<GridRowColumn>) -> bool {
         && q.terms.iter().all(|t| match t.field {
             Field::Is(column) => column == GridRowColumn::IsDocument,
             Field::Column(key) => key.column == GridRowColumn::SourceId,
-            Field::Before | Field::After | Field::Terms(_) => false,
+            Field::Before | Field::After | Field::Terms(_) | Field::Text | Field::Names => false,
         })
+}
+
+/// `text` as an FTS5 phrase over the search index's titles and bodies: its
+/// words in order, each whole.
+pub fn fts5_phrase(text: &str) -> String {
+    format!("{{title body}} : (\"{}\")", text.replace('"', "\"\""))
+}
+
+/// The rows whose text holds `term`'s words in order, or with `-`, does
+/// not: a row a message is when its message holds them, a document's own
+/// row (whose uuid is its document's) when any piece of it does. A row
+/// the search index does not hold holds no words.
+fn text_clause<C>(pk: &str, term: &FilterTerm<C>) -> (String, Vec<String>) {
+    let not = if term.negate { "NOT " } else { "" };
+    let phrase = fts5_phrase(&term.value);
+    (
+        format!(
+            "{pk} {not}IN (SELECT s.uuid FROM search_fts f \
+             JOIN search_sections s ON s.section_id = f.rowid \
+             WHERE search_fts MATCH ? AND s.uuid IS NOT NULL \
+             UNION SELECT d.markdown_uuid FROM search_fts f \
+             JOIN search_sections s ON s.section_id = f.rowid \
+             JOIN search_documents d ON d.doc_id = s.doc_id WHERE search_fts MATCH ?)"
+        ),
+        vec![phrase.clone(), phrase],
+    )
+}
+
+/// The rows that name `term`'s id or handle, whole and case-blind, in any
+/// of their terms, or with `-`, do not.
+/// Both spellings are asked for, as a person key asks: the handle, and the
+/// address as typed, which an author with no handle is filed under.
+fn names_clause<C>(pk: &str, term: &FilterTerm<C>) -> (String, Vec<String>) {
+    let not = if term.negate { "NOT " } else { "" };
+    let mut values = vec![term.value.clone()];
+    if let Some(id) = crate::query::identifier(&term.value).filter(|id| *id != term.value) {
+        values.push(id);
+    }
+    let any = vec!["value = ? COLLATE NOCASE"; values.len()].join(" OR ");
+    (
+        format!(
+            "{pk} {not}IN (SELECT r.uuid FROM terms t JOIN rows r ON r.row_id = t.row_id \
+             WHERE t.val_id IN (SELECT val_id FROM vals WHERE {any}))"
+        ),
+        values,
+    )
 }
 
 /// The rows whose search terms of `key`'s kinds hold `value`, as one

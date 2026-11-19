@@ -1,7 +1,7 @@
-// A pasted uuid is answered from the grid index's search terms, which the
-// fixture's own `unified_grid_and_search_index` step wrote, not from the
-// ranked search: the row comes back first, saying it matched as its own
-// id.
+// A pasted uuid is a filter on the grid index's search terms, which the
+// fixture's own `unified_grid_and_search_index` step wrote, not words to
+// rank: the rows naming it are listed, unscored, and its own row comes
+// back first, since no newer row names it.
 
 import { test, expect, type Page } from "@playwright/test";
 import { EVERY_ROW, SEARCH_ROWS, searchAndSettle, type GridApi } from "./grid-helpers";
@@ -11,7 +11,7 @@ const firstUuid = (page: Page) =>
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.uuidAt(0),
   ) as Promise<string | null>;
 
-test("a pasted uuid finds its row from the terms, first", async ({ page, request }) => {
+test("a pasted uuid is a filter: its row comes back first", async ({ page, request }) => {
   const all = await request.get("/applet/unified_grid_and_search_index/search?q=&limit=50");
   expect(all.ok()).toBeTruthy();
   const { rows } = (await all.json()) as { rows: { uuid: string }[] };
@@ -26,8 +26,7 @@ test("a pasted uuid finds its row from the terms, first", async ({ page, request
     query_echo: { search_error?: string | null };
   };
   expect(answer.rows[0]?.uuid).toBe(uuid);
-  expect(answer.rows[0]?.snippet).toBe(`id: ${uuid}`);
-  expect(answer.rows[0]?.score).toBe(5);
+  expect(answer.rows[0]?.score ?? null, "a filter ranks nothing").toBeNull();
   expect(answer.query_echo.search_error ?? null).toBeNull();
 
   await page.goto(EVERY_ROW);

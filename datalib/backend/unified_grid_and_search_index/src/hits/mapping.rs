@@ -4,25 +4,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-/// Which collections a search may draw from: every one, or exactly these.
-/// Sources are scoped by group, so these are group ids; an empty
-/// list matches nothing.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CollectionScope {
-    All,
-    Only(Vec<String>),
-}
-
-impl CollectionScope {
-    /// The names to scope to, or `None` for an unscoped search.
-    pub fn names(&self) -> Option<&[String]> {
-        match self {
-            CollectionScope::All => None,
-            CollectionScope::Only(names) => Some(names),
-        }
-    }
-}
-
 /// One document a ranking found: by its words or by its meaning.
 #[derive(Debug, Clone)]
 pub struct SearchHit {
