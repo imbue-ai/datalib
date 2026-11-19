@@ -1990,7 +1990,7 @@ markdowns
     item_count
     upstream_cursor
     renderer_version
-    bucket_key
+    render_unit_key
     content_hash
     front
     searchable
@@ -2022,7 +2022,7 @@ render_cursor
     rendered_at_utc
     tz_offset
 render_inputs
-    bucket_key
+    render_unit_key
     input_table
     input_id
 source_cursors

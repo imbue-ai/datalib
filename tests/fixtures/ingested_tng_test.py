@@ -2418,7 +2418,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
 
         # Delete it the way an upstream loss reaches us: the row goes, and
         # the store commits, so the render step's `dolt_diff` names the
-        # bucket as changed and finds nothing behind it.
+        # render unit as changed and finds nothing behind it.
         self._query(
             self._claude_entities_db,
             f"DELETE FROM conversations WHERE id = '{victim}'; "

@@ -105,7 +105,7 @@ Each row's `source_url` opens the Doc in Docs; a comment's opens that
 comment (`?disco=<comment id>`). The document's id is minted from the
 file id alone, so a fetch problem keyed `files:<id>` lands on it.
 
-**A bucket is a file.** It reads its `files` row, its newest `captures`
+**A render unit is a file.** It reads its `files` row, its newest `captures`
 row, that capture's `capture_parts` and its `comments`. Every key in
 those tables starts with the file id, which is how the forward scan maps
 a changed row to the Doc to render again.

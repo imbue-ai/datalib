@@ -79,10 +79,10 @@ impl SourceRender for BeeperRender {
         // chat, so chat-common never sees it: declared with nothing, its
         // documents go. The rendered ones follow and replace that.
         for room in parsed.scan.render.iter().flatten() {
-            ctx.declare_bucket(&crate::render::ids::room(ctx.name, room).uuid, &[])?;
+            ctx.declare_render_unit(&crate::render::ids::room(ctx.name, room).uuid, &[])?;
         }
         ctx.declare_empty(parsed.scan.gone.iter().map(String::as_str))?;
-        ctx.finish(&summary.buckets, parsed.scan.new_head.as_deref())?;
+        ctx.finish(&summary.render_units, parsed.scan.new_head.as_deref())?;
         Ok("rendered".into())
     }
 }

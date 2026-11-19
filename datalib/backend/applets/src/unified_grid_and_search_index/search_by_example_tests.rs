@@ -90,7 +90,7 @@ fn chat(
         source_url: None,
         org_uuid: None,
         org_name: None,
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             markdown_uuid: uuid.into(),
             source_ref: None,
             items: vec![item],

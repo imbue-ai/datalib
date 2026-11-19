@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_baby_connect::ingest::{db_path_for, RawDb};
 use datalib_etl_baby_connect_config::BabyConnectRenderConfig;
-use datalib_etl_render::inputs::{Bucket, Inputs};
+use datalib_etl_render::inputs::{Inputs, RenderUnit};
 use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
 
 use datalib_time::NamedZone;
@@ -71,18 +71,18 @@ impl SourceRender for BabyConnectRender {
 async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>, zone: Option<&NamedZone>) -> Result<String> {
     let head = db.pin().map(|p| p.commit().to_string());
     let store = store::load(db, ctx.raw_range()).await?;
-    let all = store.buckets();
+    let all = store.render_units();
     let todo: Vec<&String> = all.iter().filter(|b| store.renders(b)).collect();
     ctx.progress.set_length(Some(todo.len() as u64));
 
-    let mut buckets: Vec<Bucket> = Vec::new();
+    let mut render_units: Vec<RenderUnit> = Vec::new();
     for key in todo {
         ctx.progress.inc(1);
         let inputs = Inputs::default();
         let md = build(ctx.name, &store, key, zone, &inputs);
         ctx.emit_doc(md)
             .with_context(|| format!("store the document for {key}"))?;
-        buckets.push(Bucket {
+        render_units.push(RenderUnit {
             key: key.clone(),
             inputs: inputs.declared(),
         });
@@ -95,7 +95,7 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>, zone: Option<&NamedZone>) -
         .filter(|b| !all.contains(b))
         .collect();
     ctx.declare_empty(gone.iter().map(|s| s.as_str()))?;
-    let rendered = buckets.len();
-    ctx.finish(&buckets, head.as_deref())?;
+    let rendered = render_units.len();
+    ctx.finish(&render_units, head.as_deref())?;
     Ok(format!("rendered {rendered} child(ren)"))
 }

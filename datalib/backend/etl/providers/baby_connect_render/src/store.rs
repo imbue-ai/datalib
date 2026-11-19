@@ -37,11 +37,11 @@ pub fn id_of(v: &Value, k: &str) -> Option<String> {
 }
 
 impl Store {
-    /// The bucket a changed row of `table` belongs to, at the pin: the
+    /// The render unit a changed row of `table` belongs to, at the pin: the
     /// child an entry is for. A changed child or person is named on every
     /// child's document, so names none here and widens the render in
     /// [`load`].
-    pub fn bucket_of(&self, table: &str, id: &str) -> Option<String> {
+    pub fn render_unit_of(&self, table: &str, id: &str) -> Option<String> {
         if table != ENTRIES.table {
             return None;
         }
@@ -49,12 +49,12 @@ impl Store {
         id_of(e, "Kid")
     }
 
-    pub fn renders(&self, bucket: &str) -> bool {
-        self.render.as_ref().is_none_or(|r| r.contains(bucket))
+    pub fn renders(&self, render_unit: &str) -> bool {
+        self.render.as_ref().is_none_or(|r| r.contains(render_unit))
     }
 
     /// Every child with an entry, in order.
-    pub fn buckets(&self) -> Vec<String> {
+    pub fn render_units(&self) -> Vec<String> {
         let mut out: Vec<String> = self
             .entries
             .values()
@@ -107,7 +107,7 @@ pub async fn load(db: &RawDb, range: RawRange<'_>) -> Result<Store> {
             by_table
                 .iter()
                 .flat_map(|(table, ids)| ids.iter().map(move |id| (table, id)))
-                .filter_map(|(table, id)| store.bucket_of(table, id))
+                .filter_map(|(table, id)| store.render_unit_of(table, id))
                 .collect::<HashSet<String>>()
         })
     });
@@ -132,10 +132,10 @@ mod tests {
             json!({"Kid": "5629499534213121", "Pdt": 690101}),
         );
         assert_eq!(
-            s.bucket_of("entries", "1").as_deref(),
+            s.render_unit_of("entries", "1").as_deref(),
             Some("5629499534213121")
         );
-        assert_eq!(s.bucket_of("kids", "5629499534213121"), None);
-        assert_eq!(s.buckets(), vec!["5629499534213121".to_string()]);
+        assert_eq!(s.render_unit_of("kids", "5629499534213121"), None);
+        assert_eq!(s.render_units(), vec!["5629499534213121".to_string()]);
     }
 }

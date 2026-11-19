@@ -67,11 +67,11 @@ impl SourceRender for PdfRender {
         let s = render::render_targets(&to_render, ctx.name, ctx.progress, &mut on_doc)
             .context("pdf render")?;
         // A failed conversion's page is stale rather than gone: its
-        // bucket is declared failed, so the page stays, even on a full
+        // render unit is declared failed, so the page stays, even on a full
         // walk, and the problem says why.
         for f in &s.failures {
             ctx.report_document_failed(&f.doc_uuid, &f.error, Some(self.render_version()))?;
-            ctx.fail_bucket(&f.blake3, &f.error)?;
+            ctx.fail_render_unit(&f.blake3, &f.error)?;
         }
 
         // Every other document this run looked at is declared with
@@ -90,8 +90,10 @@ impl SourceRender for PdfRender {
             .filter(|t| !s.failed_blake3s.contains(&t.blake3))
             .cloned()
             .collect();
-        for bucket in render::buckets_of(looked_at.as_ref(), &converted, scan_meta_id.as_deref()) {
-            ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
+        for render_unit in
+            render::render_units_of(looked_at.as_ref(), &converted, scan_meta_id.as_deref())
+        {
+            ctx.declare_render_unit(&render_unit.key, &render_unit.inputs)?;
         }
 
         if let Some(head) = scan.new_head.as_deref() {

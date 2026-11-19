@@ -949,7 +949,7 @@ async fn a_document_whose_file_changed_since_the_download_is_a_stand_in() -> Res
     assert_eq!(s.failed, 0);
     let doc = emitted
         .iter()
-        .find(|d| d.bucket_key.as_deref() == Some(hull.as_str()))
+        .find(|d| d.render_unit_key.as_deref() == Some(hull.as_str()))
         .expect("the document is still emitted");
     assert_eq!(doc.rows.len(), 1, "its document row, and no pages");
     assert_eq!(doc.problems.len(), 1);

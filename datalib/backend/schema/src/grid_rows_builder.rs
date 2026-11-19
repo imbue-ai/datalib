@@ -557,7 +557,7 @@ mod builder_tests {
 
     /// A row is filed under the source whose store holds it, and a
     /// storage row under datalib, so the grid never shows a measurement
-    /// in the same bucket as the data it describes.
+    /// in the same render unit as the data it describes.
     #[test]
     fn a_row_is_filed_under_its_source_and_a_measurement_under_datalib() {
         assert_eq!(filed_under(Provider::Slack.as_str(), "slack"), "slack");

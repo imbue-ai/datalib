@@ -13,7 +13,7 @@ use datalib_etl_chat_common::types::{
 };
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::inputs::{changed_rows, keys_reading, Bucket, Input, Inputs, RawRange};
+use datalib_etl_render::inputs::{changed_rows, keys_reading, Input, Inputs, RawRange, RenderUnit};
 use datalib_handle::Handle;
 use serde_json::Value;
 
@@ -137,7 +137,7 @@ pub fn render(
         progress,
         on_doc_complete,
     )?;
-    outcome.buckets.extend(s.buckets);
+    outcome.render_units.extend(s.render_units);
     Ok(outcome)
 }
 
@@ -160,10 +160,10 @@ pub(crate) fn narrow_docs<T>(
     let render = range.narrow(forward.as_ref());
     let outcome = FeedOutcome {
         new_head: Some(new_head),
-        buckets: render
+        render_units: render
             .iter()
             .flatten()
-            .map(|key| Bucket {
+            .map(|key| RenderUnit {
                 key: key.clone(),
                 inputs: Vec::new(),
             })
@@ -271,7 +271,7 @@ fn build_chats(
             upstream_account: None,
             org_uuid: None,
             org_name: None,
-            buckets: vec![NormalizedDoc {
+            render_units: vec![NormalizedDoc {
                 orphan_reactions: Vec::new(),
                 markdown_uuid: conversation.uuid,
                 source_ref: None,
@@ -384,8 +384,8 @@ mod tests {
         let chats = build_chats("li", "messages", &with_ids(&payloads), None, &[]);
         assert_eq!(chats.len(), 2);
         let c1 = chats.iter().find(|c| c.id == "messages:c1").unwrap();
-        assert_eq!(c1.buckets[0].items.len(), 2);
-        assert_eq!(c1.buckets[0].items[0].text.as_deref(), Some("first"));
+        assert_eq!(c1.render_units[0].items.len(), 2);
+        assert_eq!(c1.render_units[0].items[0].text.as_deref(), Some("first"));
         assert_eq!(c1.display, "A, B");
         let named: Vec<&str> = c1.named_after.iter().map(|p| p.shown.as_str()).collect();
         assert_eq!(
@@ -412,7 +412,7 @@ mod tests {
             msg("c1", "Q", "A", "2026-01-01 00:01:00 UTC", "Hm."),
         ];
         let chats = build_chats("li", "messages", &with_ids(&payloads), None, &[]);
-        let handles: Vec<_> = chats[0].buckets[0]
+        let handles: Vec<_> = chats[0].render_units[0]
             .items
             .iter()
             .map(|i| i.author_handle.clone())
@@ -483,6 +483,6 @@ mod tests {
     fn undated_message_gets_a_null_timestamp() {
         let payloads = vec![msg("c1", "A", "B", "", "undated")];
         let chats = build_chats("li", "messages", &with_ids(&payloads), None, &[]);
-        assert_eq!(chats[0].buckets[0].items[0].date_ms, None);
+        assert_eq!(chats[0].render_units[0].items[0].date_ms, None);
     }
 }

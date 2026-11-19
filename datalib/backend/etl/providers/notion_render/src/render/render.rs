@@ -15,7 +15,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_block, escape_md_inline, escape_name_inline};
-use datalib_etl_render::inputs::{Bucket, Buckets, Lookup};
+use datalib_etl_render::inputs::{Lookup, RenderUnit, RenderUnits};
 use datalib_etl_render::message::MessageHeader;
 use datalib_etl_render::section::Section;
 use datalib_etl_render::title::Title;
@@ -502,7 +502,7 @@ pub fn render_notion(
 ) -> Result<RenderSummary> {
     let mut summary = RenderSummary::default();
     let contents = parsed
-        .renders(toc::BUCKET)
+        .renders(toc::RENDER_UNIT)
         .then(|| toc::document(&parsed.tree, &parsed.trashed, stanza))
         .flatten();
     if parsed.pages.is_empty() && parsed.comments.is_empty() && contents.is_none() {
@@ -581,7 +581,7 @@ pub fn render_notion(
                 markdown_uuid: markdown_uuid.clone(),
                 source_id: stanza.to_string(),
                 upstream_cursor: None,
-                bucket_key: Some(page_uuid.clone()),
+                render_unit_key: Some(page_uuid.clone()),
                 render_version: RENDER_VERSION,
                 rows,
                 front,
@@ -593,7 +593,7 @@ pub fn render_notion(
                 photos: Vec::new(),
                 problems: doc.problems.clone(),
             })?;
-            summary.buckets.push(Bucket {
+            summary.render_units.push(RenderUnit {
                 key: page_uuid.clone(),
                 inputs: inputs.declared(),
             });
@@ -637,7 +637,7 @@ pub fn render_notion(
             markdown_uuid: markdown_uuid.clone(),
             source_id: stanza.to_string(),
             upstream_cursor: None,
-            bucket_key: Some(discussion_uuid.clone()),
+            render_unit_key: Some(discussion_uuid.clone()),
             render_version: RENDER_VERSION,
             rows,
             front,
@@ -649,7 +649,7 @@ pub fn render_notion(
             photos: Vec::new(),
             problems: doc.problems.clone(),
         })?;
-        summary.buckets.push(Bucket {
+        summary.render_units.push(RenderUnit {
             key: discussion_uuid.clone(),
             inputs: inputs.declared(),
         });
@@ -664,7 +664,7 @@ pub fn render_notion(
             markdown_uuid: doc.markdown_uuid,
             source_id: stanza.to_string(),
             upstream_cursor: None,
-            bucket_key: Some(toc::BUCKET.to_string()),
+            render_unit_key: Some(toc::RENDER_UNIT.to_string()),
             render_version: RENDER_VERSION,
             rows,
             front: doc.front,
@@ -676,7 +676,7 @@ pub fn render_notion(
             photos: Vec::new(),
             problems: doc.problems,
         })?;
-        summary.buckets.push(toc::bucket());
+        summary.render_units.push(toc::render_unit());
         summary.rendered += 1;
         progress.inc(1);
     }
@@ -686,9 +686,9 @@ pub fn render_notion(
 #[derive(Debug, Default, Clone)]
 pub struct RenderSummary {
     pub rendered: usize,
-    /// Every bucket rendered, with what it read — page ids and
+    /// Every render unit rendered, with what it read — page ids and
     /// discussion ids, for the caller to declare.
-    pub buckets: Buckets,
+    pub render_units: RenderUnits,
 }
 
 #[cfg(test)]
@@ -927,18 +927,18 @@ mod tests {
         assert_eq!(emitted.len(), 2, "the page and the contents");
         let contents = emitted
             .iter()
-            .find(|d| d.bucket_key.as_deref() == Some(toc::BUCKET))
+            .find(|d| d.render_unit_key.as_deref() == Some(toc::RENDER_UNIT))
             .expect("the contents");
         let md = join(&contents.sections);
         assert!(md.contains(toc::TITLE), "{md}");
         assert!(md.contains("[Bridge](/chat/"), "{md}");
         assert!(!contents.searchable, "free-text search leaves it out");
-        let bucket = summary
-            .buckets
+        let render_unit = summary
+            .render_units
             .iter()
-            .find(|b| b.key == toc::BUCKET)
+            .find(|b| b.key == toc::RENDER_UNIT)
             .expect("declared");
-        let read: Vec<(&str, &str)> = bucket
+        let read: Vec<(&str, &str)> = render_unit
             .inputs
             .iter()
             .map(|i| (i.table.as_str(), i.id.as_str()))
@@ -959,7 +959,7 @@ mod tests {
         let (emitted, _) = render(&parsed);
         let page = emitted
             .iter()
-            .find(|d| d.bucket_key.as_deref() != Some(toc::BUCKET))
+            .find(|d| d.render_unit_key.as_deref() != Some(toc::RENDER_UNIT))
             .expect("the page");
         let row = page.rows.iter().find(|r| r.is_document).expect("its row");
         let shape: Vec<(Option<&str>, bool)> = page
@@ -979,12 +979,15 @@ mod tests {
     fn a_run_that_names_only_the_contents_renders_only_the_contents() {
         let parsed = ParsedNotion {
             tree: [top_row("Bridge")].into_iter().collect(),
-            render: Some([toc::BUCKET.to_string()].into_iter().collect()),
+            render: Some([toc::RENDER_UNIT.to_string()].into_iter().collect()),
             ..Default::default()
         };
         let (emitted, _) = render(&parsed);
-        let keys: Vec<_> = emitted.iter().map(|d| d.bucket_key.as_deref()).collect();
-        assert_eq!(keys, [Some(toc::BUCKET)]);
+        let keys: Vec<_> = emitted
+            .iter()
+            .map(|d| d.render_unit_key.as_deref())
+            .collect();
+        assert_eq!(keys, [Some(toc::RENDER_UNIT)]);
     }
 
     /// And a run that names a page and not the contents leaves it alone.
@@ -997,7 +1000,10 @@ mod tests {
             ..Default::default()
         };
         let (emitted, _) = render(&parsed);
-        let keys: Vec<_> = emitted.iter().map(|d| d.bucket_key.as_deref()).collect();
+        let keys: Vec<_> = emitted
+            .iter()
+            .map(|d| d.render_unit_key.as_deref())
+            .collect();
         assert_eq!(keys, [Some("Bridge")]);
     }
 
@@ -1015,7 +1021,7 @@ mod tests {
         let body = |key: &str| {
             let doc = emitted
                 .iter()
-                .find(|d| d.bucket_key.as_deref() == Some(key))
+                .find(|d| d.render_unit_key.as_deref() == Some(key))
                 .unwrap();
             join(&doc.sections)
         };

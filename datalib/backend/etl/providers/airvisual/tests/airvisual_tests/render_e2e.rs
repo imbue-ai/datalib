@@ -199,9 +199,9 @@ async fn renders_one_plot_per_quantity_with_data_then_skips_until_data_lands() {
     let md_1 = md.clone();
 
     assert_eq!(
-        doc.bucket_key.as_deref(),
+        doc.render_unit_key.as_deref(),
         Some(document_uuid(STANZA).as_str()),
-        "the page declares itself as one bucket"
+        "the page declares itself as one render unit"
     );
     assert!(
         doc.upstream_cursor.is_none(),
