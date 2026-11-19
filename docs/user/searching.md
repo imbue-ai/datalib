@@ -54,9 +54,11 @@ There is no `OR`: typed between two words it is searched as the word
 for each separately. A search without words to rank by lists what its
 filters keep, newest first.
 
-Words match as written, ignoring case and accents: "runs" does not find
-"running", and a quoted phrase is exact. Meaning finds the other forms of
-a word, and its synonyms.
+A bare word, `+word` and `-word` included, matches any form of it,
+ignoring case and accents: "runs" finds "running" (English forms only).
+A quoted phrase is exact: `"runs"` finds "runs" and not "running", though
+case, accents and punctuation still fold. Meaning finds a word's
+synonyms too.
 
 Every document has some similarity to any words, so meaning needs a cutoff, or
 every search would find every document:
