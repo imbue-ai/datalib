@@ -15,6 +15,7 @@ import { logView } from "./logView";
 import { logLineView } from "./logLineView";
 import { historyView } from "./historyView";
 import { umapView } from "./umapView";
+import { dataTreeView } from "./dataTreeView";
 import { syncDashboardView } from "./syncDashboardView";
 import { sourceView } from "./sourceView";
 import {
@@ -52,6 +53,7 @@ export const viewLibs: ViewLibs = {
   logLineView,
   historyView,
   umapView,
+  dataTreeView,
   syncDashboardView,
   sourceView,
   personView,

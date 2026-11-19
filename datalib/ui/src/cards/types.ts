@@ -213,6 +213,10 @@ export type ViewLibs = {
   // step so like sits near like; filter with the grid's grammar, colour
   // by a field, hover to preview, click to open. See cards/UmapCard.ce.vue.
   umapView: (opts?: { q?: string; by?: string }) => CardRender;
+  // The library as a tree: the person's folders of sources, then what
+  // each source holds, a page of children at a time. See
+  // cards/DataTreeCard.ce.vue.
+  dataTreeView: (opts?: { page?: number }) => CardRender;
   // A source's card on its Sync tab: the older name of `sourceView`,
   // kept so a saved layout or a link still opens.
   syncDashboardView: (opts: { group: string; step?: string }) => CardRender;

@@ -20,6 +20,9 @@ importers:
       '@codemirror/view':
         specifier: 6.43.15
         version: 6.43.15
+      '@headless-tree/core':
+        specifier: 1.8.0
+        version: 1.8.0
       '@slickgrid-universal/common':
         specifier: 11.0.0
         version: 11.0.0
@@ -327,6 +330,9 @@ packages:
 
   '@formkit/tempo@1.1.0':
     resolution: {integrity: sha512-LF36zxNFvNO+U2uS2RX5h0SJZuL4z/JpDHbMOgumhv+re6k/Jpt9S9mZuEMLaLUtpDZlRZZE3UkIiwSS+Forig==}
+
+  '@headless-tree/core@1.8.0':
+    resolution: {integrity: sha512-mTTTzA94KzIYbJ2605IIcAZiJ075qe4FiPHop72KKC/XXe7gv7CBGY/WIB7k8CmlDnJEZulp8nm6pmGXLenu5A==}
 
   '@jridgewell/gen-mapping@0.3.13':
     resolution: {integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==}
@@ -1661,6 +1667,8 @@ snapshots:
   '@exodus/bytes@1.16.0': {}
 
   '@formkit/tempo@1.1.0': {}
+
+  '@headless-tree/core@1.8.0': {}
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:

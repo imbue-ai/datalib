@@ -412,6 +412,65 @@ export function fetchDocs(signal?: AbortSignal): Promise<DocEntry[]> {
   return getJson<DocEntry[]>(`${UNIFIED_GRID_AND_SEARCH_INDEX}/docs`, signal);
 }
 
+// --- A container's children -------------------------------------------------
+// `GET /children/{uuid}` (docs/user/applets.md § "A container's children").
+// Hand-kept in step with `applets/src/unified_grid_and_search_index/children.rs`.
+
+export type TreeChild = {
+  uuid: string;
+  sort_key: string;
+  /// It holds children of its own.
+  container: boolean;
+  kind: string;
+  name: string | null;
+  author: string | null;
+  created_at: string | null;
+  preview: string | null;
+  /// The document its row is in; null for a container with no row.
+  markdown_uuid: string | null;
+  link?: string | null;
+};
+
+export type ChildrenPage = {
+  children: TreeChild[];
+  /// Cursors past each end of the page, null where nothing lies that way.
+  before: string | null;
+  after: string | null;
+};
+
+export type ChildrenAsk = { after?: string; before?: string; at?: string; limit?: number };
+
+export function fetchChildren(
+  uuid: string,
+  ask: ChildrenAsk = {},
+  signal?: AbortSignal,
+): Promise<ChildrenPage> {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(ask)) if (v !== undefined) params.set(k, String(v));
+  return getJson<ChildrenPage>(
+    `${UNIFIED_GRID_AND_SEARCH_INDEX}/children/${encodeURIComponent(uuid)}?${params}`,
+    signal,
+  );
+}
+
+/// `POST /sql`: one SELECT over a store under the data root
+/// (docs/user/applets.md § "Reading any store with SQL").
+export type SqlAnswer = { columns: string[]; rows: unknown[][]; next_offset: number | null };
+
+export async function fetchSql(
+  store: string,
+  sql: string,
+  params: Record<string, string | number>,
+  limit: number,
+): Promise<SqlAnswer> {
+  const r = await post(`${UNIFIED_GRID_AND_SEARCH_INDEX}/sql`, { store, sql, params, limit });
+  return (await r.json()) as SqlAnswer;
+}
+
+/// The grid index's file, as `/sql` names stores.
+export const GRID_INDEX_STORE =
+  "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite";
+
 // --- The embedding map ------------------------------------------------------
 // `unified_grid_and_search_index/embedding_map`, joined to the grid by the applet
 // (applets/src/unified_grid_and_search_index/map.rs). Hand-kept in step with it.

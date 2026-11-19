@@ -624,6 +624,18 @@ besides components:
   field and isolates on hover; hovering a point previews it, clicking
   opens `documentView` beside the card. Persists `q`/`by`/`sel`. The
   pure half — colours, view, hit-testing — is `cards/embeddingMap.ts`.
+- `dataTreeView(opts?: { page?: number })` — the library as a tree
+  (`cards/DataTreeCard.ce.vue`, drawn over
+  [Headless Tree](https://headless-tree.lukasbach.com/), which keeps
+  what is open, focused and selected, and the keyboard and drag). At
+  the top, the person's folders of sources, then each source; under a
+  source, the rows of the grid index with no container (read with the
+  applet's `POST /sql`, since `/children` needs a container), and below
+  them each container's children from `/children/{uuid}`, `page` at a
+  time (100 by default) with a "More…" row at each end that has more.
+  Double-click or Open opens `documentView` beside the card. Persists
+  what is open, focused and selected, and the folders. The pure half —
+  item ids, the folders, joining pages — is `cards/dataTree.ts`.
 - `galleryView()` — the new-card gallery (see "Titles, icons and edit mode"
   above): the views of the data, then the developer tools; replaces
   itself with whatever the user picks.

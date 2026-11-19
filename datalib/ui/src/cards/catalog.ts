@@ -59,6 +59,13 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     icon: "map",
     gallery: "umapView()",
   },
+  dataTreeView: {
+    title: "Library tree",
+    description:
+      "Browse your sources as a tree — workspaces, channels, threads, messages — and file sources into folders of your own.",
+    icon: "dag",
+    gallery: "dataTreeView()",
+  },
   logView: {
     title: "Logs",
     description:

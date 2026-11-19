@@ -30,6 +30,7 @@ describe("the card catalog", () => {
     const { views, devTools } = byAudience(galleryBuiltins());
     expect(views.map((e) => e.title)).toEqual([
       "Embedding map",
+      "Library tree",
       "Manage data sources",
       "Markdown Document",
       "Perseus corpus",
