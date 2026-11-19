@@ -1,9 +1,9 @@
-# datalib — agent runbook
+# Datalib — agent runbook
 
-Quick references for AI/human contributors working **on the datalib
+Quick references for AI/human contributors working **on the Datalib
 codebase**: where the docs are, how the repo is laid out, and the
 conventions that aren't obvious from the code. If you are an agent
-*using* datalib (running syncs, querying a user's mirror, writing a
+*using* Datalib (running syncs, querying a user's mirror, writing a
 custom step), start with [`agent_user.md`](docs/agent_user.md) instead.
 
 ## Doc map
@@ -90,7 +90,7 @@ merge conflict waiting to happen.
 ## Keep a forward path for existing data
 
 **A data root that works today should still work after an upgrade.**
-datalib is alpha and we don't promise stable bytes at rest yet, but we
+Datalib is alpha and we don't promise stable bytes at rest yet, but we
 are aiming to, so treat every existing store and config as something
 the next build has to carry forward. A raw store may hold what upstream
 has since deleted; re-downloading is not a free undo.
@@ -162,7 +162,7 @@ already shares your context. Plainspoken means *clear*, not *long*.
 ## Explain a change by what it does, before and after
 
 **A PR description, a review, or any explanation of a change says what
-was true before, what is true now, and what a person using datalib
+was true before, what is true now, and what a person using Datalib
 will notice.** Write it for a reader who knows the product but has not
 read the code:
 
@@ -222,7 +222,7 @@ datalib/
                    under its public `datalib-*` name in one directory
                    (`:dist`); build that whenever you need to actually
                    run a pipeline.
-    datalib_step/  `datalib-step`: the step program datalib ships. A
+    datalib_step/  `datalib-step`: the step program Datalib ships. A
                    step runs it with `command = "datalib-step run
                    <function> <type>"`, and it reads its params from
                    `DATALIB_DAG_PARAMS`.
@@ -416,7 +416,7 @@ the loop `datalib-dag` runs, in-process (`http/src/supervisor.rs`), holding
 `runner-lock` for its life; a sync, a stop, a step turned off is a row it writes
 there (`POST /api/requests`, `/api/steps/<id>/turn_off`); the Manage tab
 edits the config; a root with no config gets the launcher and the
-first-run screen, which writes datalib's starter config
+first-run screen, which writes Datalib's starter config
 (`http/src/starter.rs`: the grid and search index and the applets).
 `datalib-dag init` writes a config with no steps instead.
 
@@ -719,6 +719,13 @@ bazelisk build //datalib/backend:bin                  # stage every shipped bina
 bazel-bin/datalib/backend/bin/datalib-dag <data_root>/config.toml
 ```
 
+## "Datalib" in prose, `datalib` in code
+
+**The product is Datalib, capitalized, wherever a doc's prose names
+it**, headings included. Lowercase `datalib` is an
+identifier — a crate, a binary (`datalib-step`), a path, the repo, the
+`datalib:` link scheme — and goes in backticks when prose mentions it.
+
 ## "Claude", not "Anthropic"
 
 **Every source type is named for the product a person recognizes, never
@@ -823,7 +830,7 @@ upstream (block types, MIME types), free-form display text
 | what a term is to its grid row | `SearchTermKind` | `schema/src/search_terms.rs` (`datalib_schema`) |
 | a config's source type | `SourceType` | `datalib_step/src/source_type.rs` |
 | whether an ingest method reaches a service or reads files | `Reach` | `source_common/src/lib.rs` |
-| which of datalib's stores a file is, in its `_datalib_meta` | `StoreKind` | `store_meta/src/lib.rs` (`datalib_store_meta`) |
+| which of Datalib's stores a file is, in its `_datalib_meta` | `StoreKind` | `store_meta/src/lib.rs` (`datalib_store_meta`) |
 | what namespace a handle is in | `HandleKind` | `handle/src/lib.rs` (`datalib_handle`) |
 | what a time-series point's `t` counts | `TimeKind` | `time_series_schema/src/lib.rs` (`datalib_time_series_schema`) |
 | what every value of a time series is | `ValueType` | `time_series_schema/src/lib.rs` (`datalib_time_series_schema`) |

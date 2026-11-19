@@ -264,7 +264,7 @@ cross-check at most.
 4. **A markdown render.** Built for Docs
    ([`google_drive_render/TRANSLATE.md`](../../../datalib/backend/etl/providers/google_drive_render/TRANSLATE.md));
    Sheets and Slides are still to do. As first planned: the first render, because it is what the rest
-   of datalib reads. A `google_drive_render` crate and a
+   of Datalib reads. A `google_drive_render` crate and a
    `render_markdown` step would make each file one document, from its
    newest capture's native JSON:
    - *Docs:* headings, lists, tables and images as markdown;

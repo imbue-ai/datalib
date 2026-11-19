@@ -19,7 +19,7 @@
 // inside a shadow root, so document-head styles don't reach it. The
 // body's stylesheet (`documentBody.css`) goes in with the frame's document.
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from "vue";
-import type { BodyPiece, EdgeOut } from "@/api";
+import type { BodyNode, EdgeOut } from "@/api";
 import { decorateRemoteMedia, type RemoteContext, type RemoteRef } from "./remoteMedia";
 import {
   copyWithHandles,
@@ -68,7 +68,7 @@ import {
 
 const props = defineProps<{
   /** The body as the renderer's pieces (`renderDocument`). */
-  pieces: BodyPiece[];
+  pieces: BodyNode[];
   selectedSectionUuid?: string | null;
   /**
    * Outgoing edges for the doc we're rendering. ChatBody decorates

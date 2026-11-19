@@ -160,29 +160,35 @@ rendered alone.
 
 ### Step 3: folds are structure
 
-Render says, per block, whether it is a tool step and which other
-version it is on (two columns of `sections`). One Rust function groups
-a run of blocks into folds: the export draws them as `<details>`, and
-`/chat` sends them as a node holding its pieces. The viewer draws the
-`<details>` around them.
+Three renderers open a fold in one piece and close it in a later one,
+with messages between: chat-common (a run of tool steps, another
+version of a conversation), Drive's comment threads and Todoist's
+completed tasks. Every other `<details>` sits inside one message. All
+three draw a fold one way: `<details class="…">`, its `<summary>`, a
+blank line; then `</details>` and a blank line. `Section::fold_open` and
+`Section::fold_close` draw them for all three, and the render store
+keeps each fold's class and summary in a table of its own, `folds`:
+chat-common keeps its folds as layout and Drive and Todoist keep theirs
+as text that search reads, so neither `sections` nor `drawings` holds
+every one. `/chat` sends a fold as a node holding its pieces, and the
+viewer draws the `<details>` around them and renders every other piece
+alone. Joined, with each fold drawn, the pieces are still `body`.
 
 - **Deletes:** the placeholder frame, rendering the pieces between
-  messages together, and the fallback when a fold swallows a
-  placeholder. What is left of `renderDocument.ts` renders one piece.
-  The `<details>` openers and closers go from `drawings`.
-- **Adds:** two columns, one grouping function, a nested shape on the
+  messages together, and the fallback when a piece swallows a
+  placeholder. What is left of `renderDocument.ts` renders one piece,
+  or one fold around its pieces.
+- **Adds:** two constructors, a `folds` table, a nested shape on the
   wire.
 - **Re-render:** once.
 - **Notices:** nothing.
-- **Checked by:** the grouping drawn from the columns matches the folds
-  each fixture document draws today, before those are taken out of the
-  drawings. A test renders every fixture document's pieces each alone
-  and finds no piece that leaves an element open for the next, so no
-  renderer but chat-common hides a fold in its pieces.
+- **Checked by:** every render snapshot and the index text unchanged;
+  the isolation tests, with a hostile body inside a fold.
 
-Paging (step 6) lists blocks, not pieces; folds drawn from facts on the
-blocks are what let a page carry its own folds. A page never ends
-inside a fold.
+Paging (step 6) lists blocks, not pieces, and a page must carry its own
+folds; whether a block is a tool step, and which version it is on,
+become facts of the block then, and the folds are drawn from them. A
+page never ends inside a fold.
 
 ### Step 4: one header for every renderer
 

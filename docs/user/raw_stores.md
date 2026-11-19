@@ -9,26 +9,23 @@ stores: how to open one, how to read it at one moment and follow what
 changes, and, source by source, what each table and column holds.
 
 Most questions are better answered from the rendered side first: the
-`grid_rows` table, the markdown, the search
+grid, the documents, the search
 ([`agent_user.md`](../agent_user.md) § "Reading the mirrored data").
 Come here when you need a field the render dropped, an upstream id to
 call the service with, or the original bytes.
 
 This guide covers Gmail and the other mail sources (`email`), Slack
 (`slack`) and calendars (`calendar`), and the store that lists a
-calendar's occurrences one per date. For any other source,
-`.schema` in the shell below lists its tables; their meanings are not
-written down here yet. A test (`raw_stores_doc_test.rs`, beside
-`datalib-step`'s code) checks every table and column this guide names against the tables the
-code creates, so a column added or renamed fails the build until this
-page says what it holds.
+calendar's occurrences one per date. For any other source, `.schema` in
+the shell below lists its tables; their meanings are not written down
+here. A test holds every table and column named here to what the code
+creates.
 
-**Before upgrading a reader, read the release notes.** Each release on
-GitHub lists, under "Changes to the raw stores", every table and column
-added, removed or retyped since the release before, and every migration
-that rewrites existing rows. A migration can change what a value means
-while the column stays the same type, as when v0.46.0 changed Gmail's
-thread ids from decimal to hex.
+**Before upgrading a reader, read the release notes.** Each release
+lists, under "Changes to the raw stores", every table and column added,
+removed or retyped, and every migration that rewrites existing rows,
+including one that changes what a value means while its column keeps
+its type.
 
 ## Opening a store
 
@@ -57,43 +54,39 @@ datalib-doltlite -readonly -json gmail/ingest/entities.doltlite_db \
   "SELECT id, subject, received_at FROM emails LIMIT 5"
 ```
 
-**From Python**, under any version from 3.9 on, uv's builds included, install
-the reader at the version `datalib-dag --version` prints, and keep the store
-open:
+**From Python** (3.9 on, uv's builds included), install the reader at
+the version `datalib-dag --version` prints. It has wheels for
+Apple-silicon Macs and for Linux on x86_64 and aarch64, glibc and musl.
 
 ```sh
 uv add imbue-datalib-reader==<version>   # or pip install
 ```
 
 ```python
+import json
 from datalib_reader import Store
 
 with Store("gmail/ingest/entities.doltlite_db") as store:
     rows = store.query("SELECT id, subject FROM emails WHERE subject LIKE ?", "%invoice%")
+    payload = json.loads(store.query("SELECT json(payload) FROM emails LIMIT 1")[0][0])
 ```
 
-`query` returns a list of rows, each a tuple that also answers by column name (`row["subject"]`), and a write fails. **Select a payload as
-`json(payload)`**: a bare `payload` comes back as JSONB `bytes`, which
-`json.loads` refuses with a `UnicodeDecodeError` ([below](#payload-is-json-stored-as-jsonb)).
-
-```python
-import json
-payload = json.loads(store.query("SELECT json(payload) FROM emails LIMIT 1")[0][0])
-```
-
-It has wheels for
-Apple-silicon Macs and for Linux on x86_64 and aarch64, glibc and musl.
+A `Store` is read-only, and `Store(path, commit="<hash>")` reads one
+commit ([below](#reading-one-commit-and-following-changes)). `query`
+returns a list of rows, each a tuple that also answers by column name
+(`row["subject"]`). **Select a payload as `json(payload)`**: a bare
+`payload` comes back as JSONB `bytes`, which `json.loads` refuses
+([below](#payload-is-json-stored-as-jsonb)).
 [Reading a store from Python](../dev/doltlite.md#reading-a-store-from-python)
-has the rest, and says when to `import doltlite` instead, which makes the
-standard `sqlite3` module run on doltlite: only for code that needs that module
-or SQLAlchemy, and not under the builds `uv python install` fetches.
+has the rest, including when to `import doltlite` instead (only for code
+that needs the standard `sqlite3` module or SQLAlchemy, and never under
+the Python builds `uv python install` fetches).
 
 **From anything else**, run `datalib-doltlite -readonly -json` as a subprocess
 and parse its output. That costs a process start and a store open per query.
 
-For a tool that
-speaks only SQLite, one pipe writes a plain SQLite copy with the same
-tables (the data, not the history):
+For a tool that speaks only SQLite, one pipe writes a plain SQLite copy
+with the same tables (the data, not the history):
 
 ```sh
 datalib-doltlite -readonly gmail/ingest/entities.doltlite_db .dump | sqlite3 gmail.sqlite
@@ -123,7 +116,7 @@ branch only when it **seals**: at the end of a run, and at checkpoints
 along the way. A read-only open lands on `main`, so you never see half
 of a batch. During a long first sync the store is readable from the
 first checkpoint on, and lags the download by up to one checkpoint
-interval (see [building on datalib](building_on_datalib.md) § "How
+interval (see [building on Datalib](building_on_datalib.md) § "How
 fresh is the mirror?").
 
 ## `payload` is JSON, stored as JSONB
@@ -194,14 +187,12 @@ Name both commits as arguments, as above: a filter on `from_commit` or
 `to_commit` does something else. More recipes, and what each costs,
 are in [`doltlite.md`](../dev/doltlite.md#what-changed-between-two-commits).
 
-A raw store's history is never folded away (`datalib-dag
---free-disk-space` deletes only chunks no commit reaches, with
-`--drop-old-versions-on-derived-data` too), so a cursor stays readable. A reset of the
-source empties the tables in a new commit, which reads as every row
+A raw store's history is never folded away: `datalib-dag
+--free-disk-space`, even with `--drop-old-versions-on-derived-data`,
+keeps every commit of a download, so a cursor stays readable. A reset of
+the source empties the tables in a new commit, which reads as every row
 `removed`. If your cursor no longer resolves (the store was deleted and
-synced again), start over from a full read. A `datalib-dag diff` verb
-that would do this loop for you is proposed in
-[#637](https://github.com/imbue-ai/datalib/issues/637) and not built.
+synced again), start over from a full read.
 
 ## What every raw store has
 
@@ -260,9 +251,9 @@ document.
 ### `sync_runs`
 
 One row per download run, for the sources that reach a service over the
-network (not Garmin, YoLink or contacts), and for few that read local
+network (not Garmin, YoLink or contacts), and for a few that read local
 files. The start of the newest `ok` row is how recent the source
-is as a whole: [building on datalib](building_on_datalib.md) § "How
+is as a whole: [building on Datalib](building_on_datalib.md) § "How
 fresh is the mirror?".
 
 | column | what it holds |
@@ -272,7 +263,7 @@ fresh is the mirror?".
 | `finished_at_utc` | when it ended; NULL while it runs, or if it was killed |
 | `tz_offset` | the offset for the two stamps |
 | `config` | the step's params as that run saw them, JSON |
-| `status` | `running`, then how it ended: `ok` if it read everything it set out to; `partial` if it ended early, told to stop, giving up on a service that stopped answering, or over a budget such as `message_budget`; `error` if it failed; `interrupted` if it was killed before it could say, set when the next run starts. Rows written before `partial` existed say `ok` for a run that ended early |
+| `status` | `running`, then how it ended: `ok` if it read everything it set out to; `partial` if it ended early, told to stop, giving up on a service that stopped answering, or over a budget such as `message_budget`; `error` if it failed; `interrupted` if it was killed before it could say, set when the next run starts. An old row may say `ok` for a run that ended early, written by a build that had no `partial` |
 | `summary` | what it did, JSON (counts, and why it stopped early if it did). `cursors` lists each sync position the run moved, before and after; where more than five of one kind moved (a first Slack run checks every closed DM), they are one entry in `cursors_by_kind` instead: the kind, how many moved, how many are new, and three examples |
 
 ### `sync_scope_state`
@@ -528,7 +519,7 @@ Where each email's `.eml` is in `blobs.sqlite`.
 Every message the service has named to the download (JMAP and Gmail
 API; not mbox), whether or not it has been fetched yet. A message
 listed here with no `emails` row, or held at an older version, is still
-owed: [building on datalib](building_on_datalib.md) § "How fresh is the
+owed: [building on Datalib](building_on_datalib.md) § "How fresh is the
 mirror?" has the query.
 
 | column | what it holds |

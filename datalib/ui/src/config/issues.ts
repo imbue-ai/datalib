@@ -86,7 +86,7 @@ export function issueText(failure: Failure, service: string, where: SignInWhere)
       };
     case "rate_limited":
       return {
-        headline: `${service} asked datalib to slow down.`,
+        headline: `${service} asked Datalib to slow down.`,
         advice: "Wait a minute, then try again.",
       };
     case "service_error":
@@ -106,13 +106,13 @@ export function issueText(failure: Failure, service: string, where: SignInWhere)
       };
     case "unexpected_response":
       return {
-        headline: `${service} answered with something datalib didn't expect.`,
+        headline: `${service} answered with something Datalib didn't expect.`,
         advice: "Try again. If it keeps happening, the details are what to report.",
       };
     case "no_runtime":
       return {
-        headline: "datalib's bundled sign-in tool, latchkey, is missing.",
-        advice: "Reinstalling datalib puts it back. The details say where it was looked for.",
+        headline: "Datalib's bundled sign-in tool, latchkey, is missing.",
+        advice: "Reinstalling Datalib puts it back. The details say where it was looked for.",
       };
     case "no_browser":
       return {

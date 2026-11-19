@@ -54,7 +54,7 @@ if ! command -v corepack >/dev/null 2>&1; then
     cat >&2 <<'EOF'
 ERROR: neither `pnpm` nor `corepack` on PATH.
 
-The datalib UI uses pnpm (pinned via `packageManager` in
+The Datalib UI uses pnpm (pinned via `packageManager` in
 datalib/ui/package.json), provisioned through corepack. Node 25 and
 later no longer bundle corepack; install it on its own:
 

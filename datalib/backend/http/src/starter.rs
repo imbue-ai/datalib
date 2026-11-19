@@ -1,4 +1,4 @@
-//! The starter `config.toml` the app gives a new library: datalib's
+//! The starter `config.toml` the app gives a new library: Datalib's
 //! grid and search index, with nothing to read yet, and the applets every
 //! app needs. `datalib-http --init` and the first-run screen write it.
 //! `datalib-dag init` writes a config with no steps instead.
@@ -20,7 +20,7 @@ pub const STARTER_CONFIG: &str = r##"# ── the unified grid and search index 
 # reads by that id, or every step of one function at once:
 # `*/render_markdown` is each source's render, those added later too.
 # `command` is the program a step runs, and `datalib-step` is the one
-# datalib ships: `datalib-step run <function>`.
+# Datalib ships: `datalib-step run <function>`.
 #
 # Sources go above this block: a [[groups]] entry with a `type`, then
 # its steps. The file then reads in the order data flows, each step

@@ -1,6 +1,6 @@
-# Editing the datalib data-source config (agent guide)
+# Editing the Datalib data-source config (agent guide)
 
-This doc tells you how to change a datalib app's data-source config:
+This doc tells you how to change a Datalib app's data-source config:
 which sources it syncs and the steps that turn them into the grid and
 search. (Building a card instead? Read `<origin>/agent/cards.md`.)
 
@@ -181,7 +181,7 @@ entries it names. (A `warning` drops nothing and does not block a PUT.)
 `app_ready` on `GET /api/config` is the separate question of whether the
 app can serve anything at all: false when the file is not a config,
 when it declares no `unified_grid_and_search_index` applet, or when the data root was
-written by a newer datalib. The UI blocks on it.
+written by a newer Datalib. The UI blocks on it.
 
 The config is always TOML in the shape above — the server reads and
 writes no other. A config in the oldest retired shape (steps with a
@@ -218,7 +218,7 @@ ln -sf /path/to/my-fetcher <data_root>/system/bin/my-fetcher
 ```
 
 `<data_root>/system/bin` is on `PATH` whenever the pipeline runs, after
-datalib's own binaries, so a bare `command = "my-fetcher --out ."`
+Datalib's own binaries, so a bare `command = "my-fetcher --out ."`
 resolves. The same applies to an `[[applets]]` command, so one install
 location covers both kinds of entry. Keep step commands non-interactive; they run headless
 with their output captured into the run's log (the Manage tab shows it).

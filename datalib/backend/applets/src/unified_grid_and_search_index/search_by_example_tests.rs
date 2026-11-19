@@ -697,36 +697,6 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         assert_eq!(found(&s, q, None).await, Vec::<String>::new(), "{q}");
     }
 
-    // The fields matches free text against every term a row answers
-    // to: a bare word as the start of one, a quoted word whole.
-    let fields = Some(Part::Fields);
-    for (q, want) in [
-        // The two ids that start with it, and riker-email's author too.
-        ("rik", vec!["riker-email", "riker-thread"]),
-        ("riker", vec!["riker-email", "riker-thread"]),
-        // Only the start of a word here, where from:iker finds Riker.
-        ("iker", vec![]),
-        // Riker's name, not the ids it begins.
-        (r#""riker""#, vec!["riker-email"]),
-        (r#""rik""#, vec![]),
-        ("riker-email", vec!["riker-email"]),
-        // A row's own terms only: the person keys' name-to-handle reach
-        // is not here, so the email to Picard's address is not found.
-        ("jean", vec!["picard-card"]),
-        (r#""Jean-Luc Picard""#, vec!["picard-card"]),
-        // riker-email and riker-thread hold Picard's mailbox as a name.
-        ("picard", vec!["picard-card", "riker-email", "riker-thread"]),
-        ("senior", vec!["senior-staff-card"]),
-        // The word in the thread's title.
-        (r#""Away""#, vec!["riker-email", "riker-thread"]),
-        // A handle is one word, so a word inside it starts nothing.
-        ("chateau", vec![]),
-        // Keys narrow it as anywhere else.
-        ("riker -from:riker", vec!["riker-thread"]),
-    ] {
-        assert_eq!(found(&s, q, fields).await, want, "fields: {q}");
-    }
-
     // `convo:` was `datalib_document_id:`'s old name, and is gone: refused by name.
     let r = search(&s, "convo:riker-thread", None, 50, None).await;
     assert!(r.rows.is_empty(), "{:?}", uuids(&r));
@@ -744,7 +714,7 @@ async fn a_row_links_to_its_page_at_the_row() {
     let tmp = tempfile::tempdir().unwrap();
     render_cast(tmp.path()).await;
     let s = index_over(tmp.path()).await;
-    let r = search_part(&s, "riker", Part::Fields, 0, 50).await;
+    let r = search(&s, "with:troi", None, 50, None).await;
     let link_of = |uuid: &str| {
         let row = r.rows.iter().find(|row| row.uuid == uuid).unwrap();
         (row.markdown_uuid.clone().unwrap(), row.link.clone())

@@ -1,8 +1,8 @@
 # Attachments by address, not by copy
 
-*Mirror of the "Attachments" tab of the [datalib links](https://claude.ai/code/artifact/dd31c9e3-8ef9-4185-a85f-0c29a1318117) Claude Doc, which is the source of truth while this plan is under review. Edit the doc and re-mirror this file; don't edit it here. Proposal (2026-10-20); step 1 landed in PR #1305.*
+*Mirror of the "Attachments" tab of the [Datalib links](https://claude.ai/code/artifact/dd31c9e3-8ef9-4185-a85f-0c29a1318117) Claude Doc, which is the source of truth while this plan is under review. Edit the doc and re-mirror this file; don't edit it here. Proposal (2026-10-20); step 1 landed in PR #1305.*
 
-When datalib renders a page, it writes every attachment the page shows into a `blobs/` folder beside it, though the source's store already holds the same bytes. So every attachment is on disk twice, and most of the copies belong to old mail and chats nobody opens. The proposal: a page points at the bytes where they already are, at a `/data/…` address (first tab), and the server hands them out when someone opens the page.
+When Datalib renders a page, it writes every attachment the page shows into a `blobs/` folder beside it, though the source's store already holds the same bytes. So every attachment is on disk twice, and most of the copies belong to old mail and chats nobody opens. The proposal: a page points at the bytes where they already are, at a `/data/…` address (first tab), and the server hands them out when someone opens the page.
 
 **Status:** step 1 below (chat sources, Notion and Google Drive Docs as `blob` addresses, with the contract crate and the `/data/` route) landed in PR #1305. Email and contacts are not started.
 
@@ -45,7 +45,7 @@ A contact photo is kept once more, in the blob store, so the server never has to
 | Disk | each attachment kept twice | once | Less disk used; how much is to be measured on a real data root. |
 | Sync time | render reads and writes every attachment's bytes | render reads hashes only | Faster renders for sources heavy with attachments; to be measured. |
 | In the app | images shown; download links and players don't open | all of them go through `/data/…` | Links and players in chat pages open. |
-| Outside the app | a page's `.md` file sits beside its attachments and opens in any viewer | the `.md` has `/data/…` paths | Viewing attachments needs a running datalib, until an export exists. |
+| Outside the app | a page's `.md` file sits beside its attachments and opens in any viewer | the `.md` has `/data/…` paths | Viewing attachments needs a running Datalib, until an export exists. |
 | An agent reading the mirror | opens attachment files on disk | fetches `/data/…` with the API token | The agent guide says how. |
 | The first sync after upgrading | — | every chat source and Notion re-renders | One slower sync. |
 

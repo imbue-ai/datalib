@@ -8,7 +8,7 @@ CUDA module is looked for, § "The CUDA module"), `datalib/backend/fetch/`
 `runtime` and `publish-release` jobs in `.github/workflows/release.yml`
 (how it is published).
 
-`latchkey` (credentials) is a Node program. datalib runs it from a
+`latchkey` (credentials) is a Node program. Datalib runs it from a
 **runtime**: a pinned Node plus latchkey's full `node_modules` tree, and
 Modal's JavaScript SDK beside it (`modal/<v>/`, which an `embed` step
 imports to embed a source on the person's Modal account:
@@ -135,7 +135,7 @@ the models.
 
 ## When anything may be fetched
 
-One rule covers every download datalib makes for itself (the runtime
+One rule covers every download Datalib makes for itself (the runtime
 and the CUDA module here, the embedding model, the perseus embedder's model files, a package): it
 is pinned by sha256 before it is fetched, it is fetched on first use
 only because the install did not ship it, and a miss fails loudly. All

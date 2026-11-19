@@ -15,7 +15,7 @@ use datalib_etl_chat_common::{
 };
 use datalib_etl_forge_render_common::{ChangeRequest, Comment, ForgeProfile, Parsed};
 use datalib_etl_render::inputs::Inputs;
-use datalib_etl_render::section::{inside_box, join, Section};
+use datalib_etl_render::section::{join, nodes, Node, Section, SpelledSection};
 use datalib_etl_slack_render::render::mrkdwn::{to_commonmark, Labels};
 use datalib_schema::plain_text::plain_text;
 use datalib_schema::providers::Provider;
@@ -107,21 +107,11 @@ struct Rendered {
     body: String,
     /// The body's pieces, as the route sends them; `None` when the
     /// renderer declares none and the page draws the body whole.
-    sections: Option<Vec<SectionOut>>,
+    sections: Option<Vec<Node>>,
     /// The body as the grid's text (`plain_text`).
     grid_text: String,
     next_uuid: &'static str,
     next_text: &'static str,
-}
-
-#[derive(Serialize)]
-struct SectionOut {
-    uuid: Option<String>,
-    /// The class of its box, where it is in one; `md` is then what is
-    /// inside the box.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    class: Option<String>,
-    md: String,
 }
 
 pub fn edges() -> Result<Edges> {
@@ -190,11 +180,12 @@ fn render(enters: Enters, text: &str) -> Result<Rendered> {
     };
     let skip = front_matter_len(&file);
     let body = file[skip..].to_string();
-    let sections = sections.map(|mut s| {
-        if let Some(first) = s.first_mut() {
+    let sections = sections.map(|s| {
+        let mut spelled: Vec<SpelledSection> = s.iter().map(SpelledSection::of).collect();
+        if let Some(first) = spelled.first_mut() {
             first.md = first.md[skip.min(first.md.len())..].to_string();
         }
-        s
+        nodes(spelled)
     });
     Ok(Rendered {
         grid_text: plain_text(&body, usize::MAX),
@@ -214,25 +205,10 @@ fn front_matter_len(file: &str) -> usize {
     rest.find("\n---\n").map_or(0, |end| 4 + end + 5)
 }
 
-type Pieces = Option<Vec<SectionOut>>;
+type Pieces = Option<Vec<Section>>;
 
 fn pieces(sections: Vec<Section>) -> Pieces {
-    (!sections.is_empty()).then(|| {
-        sections
-            .into_iter()
-            .map(|s| {
-                let inside = match (&s.uuid, &s.class) {
-                    (Some(uuid), Some(class)) => inside_box(uuid, class, &s.md),
-                    _ => None,
-                };
-                SectionOut {
-                    md: inside.map_or_else(|| s.md.clone(), str::to_string),
-                    class: inside.and(s.class.clone()),
-                    uuid: s.uuid,
-                }
-            })
-            .collect()
-    })
+    (!sections.is_empty()).then_some(sections)
 }
 
 fn chat(provider: Provider, format: TextFormat, text: String) -> Result<(String, Pieces)> {

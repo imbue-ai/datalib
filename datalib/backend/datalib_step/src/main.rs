@@ -1,4 +1,4 @@
-//! `datalib-step` — the step program datalib ships.
+//! `datalib-step` — the step program Datalib ships.
 //!
 //! `datalib-step run <function> [<type>]` is a step: its config entry's
 //! `command` names the function and its group's type, and the runner's
@@ -70,7 +70,7 @@ use crate::source::{RunArgs, StepEnv};
 const CHECKPOINT_CADENCE_ENV: &str = datalib_env::DATALIB_STEP_CHECKPOINT_CADENCE;
 
 const LONG_ABOUT: &str = "\
-The step program datalib ships: a step whose config entry says `command = \
+The step program Datalib ships: a step whose config entry says `command = \
 \"datalib-step run <function> <type>\"` runs it, and it performs that function \
 (ingest, render_markdown, unified_grid_and_search_index, …) for that type of source. To run one \
 step in a data root, `datalib-dag <config> --sync <group>/<function>` runs \
@@ -86,7 +86,7 @@ sync, and keep a config in the order data flows.";
 
 const EXAMPLES: &[Example] = &[
     Example {
-        what: "how to set datalib up from a shell, step by step",
+        what: "how to set Datalib up from a shell, step by step",
         command: "datalib-step help",
     },
     Example {
@@ -156,7 +156,7 @@ const EXAMPLES: &[Example] = &[
     name = "datalib-step",
     bin_name = "datalib-step",
     version = datalib_runtime::build_id::DATALIB_VERSION,
-    about = "The step program datalib ships, and tools for setting a source up",
+    about = "The step program Datalib ships, and tools for setting a source up",
     long_about = LONG_ABOUT,
     after_help = datalib_cli_help::render(EXAMPLES),
     disable_help_subcommand = true
@@ -216,7 +216,7 @@ enum Cmd {
     /// runner sets the id (`DATALIB_DAG_STEP`) and the params
     /// (`DATALIB_DAG_PARAMS`, JSON).
     Run(Run),
-    /// How to set datalib up from a shell: the steps, the source types,
+    /// How to set Datalib up from a shell: the steps, the source types,
     /// the step functions, and the docs whole (`help agent`, and `help
     /// docs` for the rest).
     Help {

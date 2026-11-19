@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 use datalib_cli_help::Example;
 
 const LONG_ABOUT: &str = "\
-Sync a datalib data root: run the steps its config.toml declares, each \
+Sync a Datalib data root: run the steps its config.toml declares, each \
 after the steps it reads.
 
 A sync is a request in <data_root>/system/supervisor.sqlite, tagged --by. \
@@ -85,7 +85,7 @@ pub const EXAMPLES: &[Example] = &[
 #[command(
     name = "datalib-dag",
     bin_name = "datalib-dag",
-    about = "Sync a datalib data root: run the steps its config.toml declares.",
+    about = "Sync a Datalib data root: run the steps its config.toml declares.",
     long_about = LONG_ABOUT,
     after_help = datalib_cli_help::render(EXAMPLES),
     args_conflicts_with_subcommands = true,
@@ -121,7 +121,7 @@ pub struct Cli {
     #[arg(long)]
     pub free_disk_space: bool,
     /// With --free-disk-space, also keep only the latest version of the
-    /// derived data: what datalib rebuilds from the downloads, which is
+    /// derived data: what Datalib rebuilds from the downloads, which is
     /// each source's rendered documents. Loses their history; a download's
     /// history is always kept.
     #[arg(long, requires = "free_disk_space")]

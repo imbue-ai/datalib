@@ -44,7 +44,7 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({ page, re
   // The top bar names the library, which in the desktop app is the way
   // back to the other libraries. It has no search box: the grid behind
   // it is the 502.
-  await expect(page.getByRole("navigation", { name: "App" })).toContainText("Data Liberation");
+  await expect(page.getByRole("navigation", { name: "App" })).toContainText("Datalib");
   await expect(page.getByRole("searchbox", { name: "Search your data" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Initialize data library" }).click();

@@ -105,7 +105,7 @@ them than one synced once:
 - `sync_runs`, `_datalib_meta`, and the index's `source_cursors`;
 - `attempt_count` in a `*_bookkeeping` table;
 - `volatile_payload`, churn by construction;
-- datalib's measurements of its own stores (`source_measurements`, the
+- Datalib's measurements of its own stores (`source_measurements`, the
   `datalib` grid rows, each source's `_datalib/storage.md`): a reset
   keeps a store's history, so the file is bigger after one.
 

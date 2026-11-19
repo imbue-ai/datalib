@@ -4,7 +4,7 @@
 # `unified_grid_and_search_index` group, which every source's rendered
 # documents feed. A step's `id` is `<group>/<function>`, and `inputs`
 # name steps by that id. Each step's `command` runs `datalib-step run
-# <function>`, the program datalib ships, followed by the group's `type`
+# <function>`, the program Datalib ships, followed by the group's `type`
 # for a step under a source.
 # `datalib-step help dag-example` walks through the format, and
 # `datalib-step help all-sources` shows every source.

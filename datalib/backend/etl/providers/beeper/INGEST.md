@@ -77,7 +77,7 @@ picks which ones become documents.
 
 ## Matching a message to a phone's backup
 
-A Signal or WhatsApp chat can reach datalib twice: through Beeper's
+A Signal or WhatsApp chat can reach Datalib twice: through Beeper's
 on-device bridge, and through the phone's own backup (the `signal` and
 `whatsapp` sources). Nothing joins the two yet, but the ids that would
 are kept on both sides:

@@ -1,0 +1,16 @@
+{
+  "name": "vscode-tree",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "//": "The tools that build and test the <vs-tree> custom element (README.md); the tree's own code is VS Code's source, pinned in MODULE.bazel. playwright is pinned to the version datalib/ui's lockfile resolves, so the facts test finds the browser the e2e suite already installed.",
+  "type": "module",
+  "devDependencies": {
+    "esbuild": "0.27.7",
+    "playwright": "1.65.1"
+  },
+  "pnpm": {
+    "//": "No package's install scripts run: esbuild finds its binary in its platform package without its postinstall.",
+    "onlyBuiltDependencies": []
+  }
+}

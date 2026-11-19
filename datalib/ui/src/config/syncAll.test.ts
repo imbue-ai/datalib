@@ -12,7 +12,7 @@ describe("syncAllButton", () => {
   });
 
   it("is blocked, saying why, while the server has paused syncing", () => {
-    const why = "Sync is paused while datalib updates your data for this version.";
+    const why = "Sync is paused while Datalib updates your data for this version.";
     const b = syncAllButton([{ actions: [sync], stop_request_ids: [] }], why);
     expect(b.glyph).toBe("sync");
     expect(b.blocked).toBe(why);

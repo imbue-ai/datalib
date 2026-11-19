@@ -454,7 +454,7 @@ pub const UNATTENDED: [Rewrite; 15] = [
     },
     Rewrite {
         why: "has a step that does not name its program",
-        what: "every step names its program in `command`; datalib's own steps run \
+        what: "every step names its program in `command`; Datalib's own steps run \
                `datalib-step`",
         run: upgrade_step_commands,
     },

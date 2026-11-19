@@ -238,9 +238,9 @@ pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
         row.notion_page_uuid.as_deref(),
     ];
     let names = [row.channel.as_deref(), row.account.as_deref()];
-    // Only an upstream id shaped like a uuid is a term: the rest are often
-    // keys datalib composed (a period, a path), which the Fields tab would
-    // match by their opening words.
+    // Only an upstream id shaped like a uuid is a term: a pasted id is read
+    // as a uuid or a handle (`query::identifier`), and `id:` reads the
+    // column.
     let upstream_id = row
         .upstream_id
         .as_deref()

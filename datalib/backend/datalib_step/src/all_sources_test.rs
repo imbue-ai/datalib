@@ -13,7 +13,7 @@ use datalib_source_common::ExampleKind;
 
 const REL: &str = "docs/user/config_examples/all_sources.toml";
 
-const HEAD: &str = r#"# Every source datalib can mirror, one group per way in, ready to copy.
+const HEAD: &str = r#"# Every source Datalib can mirror, one group per way in, ready to copy.
 #
 # GENERATED: each group below is its source's complete example stanza,
 # `datalib/backend/etl/providers/<type>_config/examples/complete_<method>.toml`,
@@ -37,8 +37,9 @@ const HEAD: &str = r#"# Every source datalib can mirror, one group per way in, r
 # `ingest` brings the data into `<group>/ingest` (its `params` hold one
 # method table, `[steps.params.api]`, `[steps.params.export]`, …, and the
 # options every method shares); `render_markdown` turns that raw store into
-# documents under `<group>/render_markdown`, which the grid index puts in
-# the keyword search; `embed` puts them in the search by meaning; a source
+# documents under `<group>/render_markdown`, which
+# `unified_grid_and_search_index` puts in the grid and the keyword search;
+# `embed` puts them in the search by meaning; a source
 # whose data is also numbers over time adds `render_time_series`. `reads`
 # and `locks` say what a step may run beside; the `[[programs]]` entry,
 # which verbs `datalib-step` takes.

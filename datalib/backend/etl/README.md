@@ -617,7 +617,7 @@ migration ladder position, `0` until there is a ladder),
 `shared_schema_version` (the shared ladder's, above) and
 `store_kind`. Only a row whose value moved is rewritten, so an
 unchanged store costs no commit, and a schema commit that did move
-one is titled `schema: apply DDL (datalib <version>)`. The table is in
+one is titled `schema: apply DDL (Datalib <version>)`. The table is in
 `SHARED_TABLES`, so it is neither mirrored nor diffed nor counted.
 `datalib_store_meta::read` is how anyone asks; `None` means the store
 predates the table. A reader of a derived store asks it once per pass

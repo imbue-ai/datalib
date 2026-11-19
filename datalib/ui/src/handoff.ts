@@ -68,7 +68,7 @@ export function createWayfinder(name: string): string {
   // canonical "open this card alone" address an agent can render.
   const cardUrl = origin + encodeColumns([{ code: `${name}()`, state: "" }]);
   return [
-    `Build a datalib card by defining the component \`${name}\`.`,
+    `Build a Datalib card by defining the component \`${name}\`.`,
     ``,
     `Read the guide first: ${origin}/agent/cards.md (no token needed)`,
     ``,
@@ -86,7 +86,7 @@ function modifyWayfinder(name: string, cardSource: string, state: string): strin
   // the bare `name()` invocation.
   const cardUrl = origin + encodeColumns([{ code: cardSource, state }]);
   return [
-    `Modify the datalib component \`${name}\` — it renders a card the`,
+    `Modify the Datalib component \`${name}\` — it renders a card the`,
     `user is looking at right now.`,
     ``,
     `Read the guide first: ${origin}/agent/cards.md (no token needed)`,

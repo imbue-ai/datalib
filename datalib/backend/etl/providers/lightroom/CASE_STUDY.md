@@ -119,7 +119,7 @@ until you run a cleanup, `dolt_gc()`. Part 4 is about how much that is.
                    which rows, which columns             -> dolt_diff_<table>
 ```
 
-The tool that does this is [datalib](https://github.com/imbue-ai/datalib),
+The tool that does this is [Datalib](https://github.com/imbue-ai/datalib),
 an open-source (MIT) program that mirrors a person's own data from many
 services and files into local, queryable stores. Its Lightroom source is
 what this case study is about.
@@ -184,7 +184,7 @@ Lightroom's tables fall into three groups:
   check that no row has a NULL in it; otherwise (two or more, or a NULL)
   leave the table without a key and say so, because with several none is
   more the key than another. It never stops a sync, and the same rule
-  now applies to the other SQLite-backed sources in datalib.
+  now applies to the other SQLite-backed sources in Datalib.
 
 With the key in place, the same table showed **128 modified rows across
 four weekly backups**.
@@ -296,7 +296,7 @@ measurement is consistent with it:
 - **Deleting a row reclaims nothing.** The row stays reachable from the
   earlier commits. Space comes back only from chunks nothing reaches.
 
-In datalib this is the **"Collect unreachable chunks each sync"** option
+In Datalib this is the **"Collect unreachable chunks each sync"** option
 of a source, and it is off by default.
 
 ## Part 5. Try it on your own backups
@@ -390,7 +390,7 @@ Each wrong turn was cheap to make, and the data corrected it.
 - We measured the cleanup once, on a copy.
 - The free-disk need of the cleanup comes from doltlite's documentation,
   not from our own measurement.
-- The same key rule now applies to datalib's other SQLite-backed sources
+- The same key rule now applies to Datalib's other SQLite-backed sources
   (Apple Photos, Apple Messages, WhatsApp). We have not measured their
   comparisons the way we did Lightroom's.
 

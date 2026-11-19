@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a new datalib release — bump the workspace version, repin lockfiles, run the consistency tests, land the bump on main through a PR, tag vX.Y.Z (which triggers release.yml), watch the release publish, and bump the pin in imbue-ai/default-workspace-template (DWT). Use when asked to "make a new release", "cut a release", or "bump the version".
+description: Cut a new Datalib release — bump the workspace version, repin lockfiles, run the consistency tests, land the bump on main through a PR, tag vX.Y.Z (which triggers release.yml), watch the release publish, and bump the pin in imbue-ai/default-workspace-template (DWT). Use when asked to "make a new release", "cut a release", or "bump the version".
 ---
 
 # Release
@@ -205,13 +205,13 @@ published from a local machine — the tag is the trigger.
 13. Bump the pin in DWT, `imbue-ai/default-workspace-template`
     (§"Updating DWT"). Only after step 11 — every pin there is a
     tag-relative URL that has to resolve when a workspace first uses
-    datalib. This step is the one that gets dropped, so start by checking
+    Datalib. This step is the one that gets dropped, so start by checking
     what DWT actually pins rather than assuming it is one behind.
 
 ## Updating DWT
 
 `imbue-ai/default-workspace-template` is the template every Minds
-workspace starts from. Nothing of datalib is installed at boot: on first
+workspace starts from. Nothing of Datalib is installed at boot: on first
 use its `datalib` skill runs `scripts/install_datalib.sh`, which
 downloads the pinned release's musl build into
 `~/.local/share/datalib/<version>/` and saves that tag's
@@ -224,7 +224,7 @@ it reads cannot drift apart.
    gh repo clone imbue-ai/default-workspace-template   # or, in an existing clone:
    git fetch origin && git checkout -b bump-datalib-vX.Y.Z origin/main
    ```
-2. Replace the `v<old>` datalib pin with `vX.Y.Z` in exactly two files:
+2. Replace the `v<old>` Datalib pin with `vX.Y.Z` in exactly two files:
    `.agents/skills/datalib/scripts/install_datalib.sh` (`PINNED_VERSION`,
    the one place the binaries and the guide are fetched from) and
    `.agents/skills/datalib/SKILL.md` (the "pinned to datalib v..." prose,
@@ -247,7 +247,7 @@ it reads cannot drift apart.
    config, where the store lives), so a change to any of that lands here
    even when nothing about the install moved.
 4. Add the branch's note, `.agents/changelog/<branch>.md`: one paragraph
-   saying which datalib version the skill now installs and what it
+   saying which Datalib version the skill now installs and what it
    brings that an agent or a person would notice.
 5. Run the pin test (`uv run pytest system/apps/datalib/test_datalib_pin.py`),
    commit as `datalib: bump the pinned version to vX.Y.Z`, push the

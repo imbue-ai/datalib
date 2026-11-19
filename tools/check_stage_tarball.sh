@@ -109,7 +109,7 @@ check() { # triple, expected runtime triple
     done
 
     local guide="$dir/docs/agent_user.md"
-    grep -q '^# datalib — agent user guide' "$guide" || { echo "ERROR: docs/agent_user.md missing or not the guide" >&2; exit 1; }
+    grep -q '^# Datalib — agent user guide' "$guide" || { echo "ERROR: docs/agent_user.md missing or not the guide" >&2; exit 1; }
     grep -q 'raw.githubusercontent.com/imbue-ai/datalib/0123456789abcdef0123456789abcdef01234567/AGENTS.md' "$guide" \
         || { echo "ERROR: the guide's link to a file not compiled in does not name the release's commit" >&2; exit 1; }
     grep -q '(`datalib-step help step-protocol`)' "$guide" \
@@ -118,7 +118,7 @@ check() { # triple, expected runtime triple
         || { echo "ERROR: a doc links to a GitHub page" >&2; grep -rn 'github.com/imbue-ai/datalib/\(blob\|tree\)/' "$dir/docs" >&2; exit 1; }
     grep -q '^# Reading the raw stores' "$dir/docs/user/raw_stores.md" \
         || { echo "ERROR: docs/user/raw_stores.md missing or not the guide" >&2; exit 1; }
-    grep -q '^# Building an app on datalib' "$dir/docs/user/building_on_datalib.md" \
+    grep -q '^# Building an app on Datalib' "$dir/docs/user/building_on_datalib.md" \
         || { echo "ERROR: docs/user/building_on_datalib.md missing or not the guide" >&2; exit 1; }
     grep -q '^# Writing a step command' "$dir/docs/dev/step_protocol.md" \
         || { echo "ERROR: docs/dev/step_protocol.md missing or not the guide" >&2; exit 1; }

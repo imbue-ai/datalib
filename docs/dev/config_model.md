@@ -1,12 +1,13 @@
 # The config model: groups, steps and functions
 
 What a `config.toml` is made of, the naming rules, how an ingest step
-says where its data comes from, and which parts of the tree read
-each of those. The runner's own view — what it fingerprints, what it
-forwards, what a bad entry costs — is
-[`datalib/backend/dag/README.md`](../../datalib/backend/dag/README.md);
+says where its data comes from, and what checks each part. The runner's
+own view — what it fingerprints, what it forwards, what a bad entry
+costs — is [`datalib/backend/dag/README.md`](../../datalib/backend/dag/README.md);
 the contract a step command implements is
 [`step_protocol.md`](step_protocol.md).
+[`configs/dag_example.toml`](../../configs/dag_example.toml) is a
+complete config with every line commented.
 
 ## The kinds of entry
 
@@ -121,14 +122,15 @@ it like any render step.
 [`plans/completed/diff_renderer.md`](plans/completed/diff_renderer.md)
 has the design; `configs/dag_example.toml` has one.
 
-Its tree is worth nothing kept: both commits stay in the source's store,
-so comparing them again rebuilds it. Removing a diff group on the Manage
-screen therefore offers, checked by default, to delete the tree too —
-`POST /api/purge` with the group ids, once they are out of the config.
-The loop stops the group's steps if they run, deletes `<root>/<group>/`
-and forgets the group's steps in its record, without waiting for a sync
-to end (`datalib/backend/dag/README.md` §"Resets and purges"); without that, a group re-added under the
-same id and definition would read as up to date and write nothing.
+A diff group's tree is worth nothing kept: both commits stay in the
+source's store, so comparing them again rebuilds it. Removing a diff
+group on the Manage screen therefore offers, checked by default, to
+delete the tree too (`POST /api/purge` with the group ids, once they
+are out of the config): the loop stops the group's steps, deletes
+`<root>/<group>/` and forgets the steps in its record
+([`dag/README.md`](../../datalib/backend/dag/README.md#resets-and-purges)).
+Without that, a group re-added under the same id and definition would
+read as up to date and write nothing.
 
 A `[[packages]]` table lists the packages the library uses,
 each pinned by its manifest's hash. A step or applet runs one of a
@@ -173,9 +175,8 @@ package's programs by its path under the data root, in its `command`;
   `render_markdown`, reading its ingest: every occurrence of every event
   in a window of days around the run's now, one row each, the way
   Google's `singleEvents=true` lists them. Its params are `days_back`
-  (30) and `days_ahead` (400). Nothing reads it but whoever asks, so it
-  joins no index. The rows and their columns:
-  `datalib/backend/etl/providers/calendar_render/src/occurrences/README.md`.
+  (30) and `days_ahead` (400). No index reads it. The rows and their
+  columns: [`raw_stores.md`](../user/raw_stores.md#a-calendars-occurrences).
 - An `embed` step takes one parameter, `embed_on_modal_from_n_chunks`,
   a whole number. Absent, the source's chunks are embedded on this
   machine and never leave it. Present, a run that owes at least that
@@ -193,16 +194,14 @@ package's programs by its path under the data root, in its `command`;
   inference cache,
   `unified_grid_and_search_index/search_index/inference_cache.sqlite`,
   and `unified_grid_and_search_index` sweeps from it the vectors no
-  chunk names. The runner cannot see that file as shared, so every
-  `embed` holds the one-slot `embedder` lock (below), and an `embed`
-  reads `unified_grid_and_search_index` off disk, so the runner never
-  runs the two at once.
+  chunk names. So every `embed` holds the one-slot `embedder` lock
+  (below), and reads `unified_grid_and_search_index` off disk, so the
+  runner never runs the two at once.
 - A group's `type` names the thing mirrored, never the way it is
   reached — `claude` over the API or from an export, `contacts` over
   CardDAV or from `.vcf` files — and the product a person recognizes,
   not the vendor. Where a `grid_rows.provider` tag exists for a type,
-  the two spell it the same way. `SourceType` in
-  `datalib_step/src/source_type.rs` is the closed list.
+  the two spell it the same way.
 
 ## Where the data comes from: the method table
 
@@ -210,8 +209,7 @@ An `ingest` step's params hold one table per method, and the table's
 name is read *under the type*: a product has one API, so its table is
 just `api`, and a type that is not one product qualifies its sources
 (email's `jmap`, `gmail`, `mbox`). A table that reads files carries
-its own `path`. There is no global vocabulary — each provider's
-`<p>_config` crate declares its own two or three:
+its own `path`. Each type declares its own:
 
 | type | methods |
 |---|---|
@@ -226,21 +224,19 @@ its own `path`. There is no global vocabulary — each provider's
 | file_inventory, media, pdf | `fswalk` |
 | beeper `texts` · apple_messages `messages` · apple_photos `library` · claude_code `sessions` · codex `sessions` · perseus `github` | |
 
-That table is `ui/src/config/ingestMethods.json`, the one place to
-read the list from.
+`datalib-step help <type>` prints one source's methods and fields.
 
 A method is *held* when its path is written and its value is neither
 `null` nor `false`: a table counts by presence (`api = {}` is a
 complete selection). A provider with more than one table refuses a step
-naming two (its config's `validate`, e.g. `claude_config`'s), so a
-store is filled one way. Three pairs are the exception, each a past
-and a present of one thing, so a step may name both and the present
-lands on top: `lightroom`'s `backups` folder and its `catalog`; email's
-`mbox` beside `gmail`, a Takeout of the account the API starts from
-(`email_download_modes.md` §"Starting from a Takeout"); and
-`chatgpt`'s `export` beside `api`, which fills in the conversations
-the store has never held before the API runs (the provider's
-`INGEST.md` §"An export and the API together").
+naming two, so a store is filled one way. Three pairs are the
+exception, each a past and a present of one thing, so a step may name
+both and the present lands on top: `lightroom`'s `backups` folder and
+its `catalog`; email's `mbox` beside `gmail`, a Takeout of the account
+the API starts from ([Gmail](../user/getting_your_data.md#gmail)); and
+`chatgpt`'s `export` beside `api`, which fills in the conversations the
+store has never held before the API runs
+([ChatGPT](../user/getting_your_data.md#chatgpt)).
 
 Knobs that apply whatever the method (email's `only_extract_labels`,
 the `common.*` envelope) stay at the top level of `params`. Render
@@ -251,9 +247,8 @@ params on a `render_markdown` step are refused.
 
 A method that can mirror only part of a source's history takes
 `since`, the oldest thing to mirror; a calendar, Garmin and Baby
-Connect, whose days run forward, also take `until`. Both are keys of the method table, and
-every one reads the same grammar, `datalib_time::TimeBound`
-(`datalib/backend/time/src/window.rs`):
+Connect, whose days run forward, also take `until`. Both are keys of
+the method table, and every one reads the same grammar:
 
 | written | means |
 |---|---|
@@ -261,21 +256,14 @@ every one reads the same grammar, `datalib_time::TimeBound`
 | `2026-09-01T09:00:00-07:00` | that instant (RFC 3339, offset required); where a day is wanted, its date in its own offset |
 | `-30d`, `+21d`, `-12h`, `-2w` | that far from the run's `now` (`DATALIB_DAG_NOW`), sign required, in hours, days or weeks |
 
-A day or an offset is resolved once per run, against the run's `now`,
-and the download is handed an absolute value; so a relative window
-slides forward run by run. A day before 1970 reaches back past
-anything a source holds: Slack and Gmail, whose services count seconds
-from 1970, ask from 1970 itself rather than from a negative time. A config's `validate` reads
-every bound and refuses an `until` before its `since` wherever neither
-the run's clock nor its offset is needed to tell, so `datalib-dag
---check` names the key; a day against an offset or an instant is
-checked when a run resolves them. A method that cannot
-honor `until` has no such key, and naming one is refused as an unknown
-field.
-
-Leaving `since` out means everything, except where the table below
-says otherwise; Garmin's year is there because it costs one request per
-metric per day.
+A bound is resolved once per run, against the run's `now`, and the
+download is handed an absolute value; so a relative window slides
+forward run by run. A day before 1970 reaches back past anything a
+source holds: Slack and Gmail ask from 1970 itself. An `until` before
+its `since` is refused by `datalib-dag --check` where neither the run's
+clock nor its offset is needed to tell, and otherwise when a run
+resolves them. A method that cannot honor `until` has no such key, and
+naming one is refused as an unknown field.
 
 | method | keys, and unset | what the window bounds | a record the window leaves behind |
 |---|---|---|---|
@@ -285,18 +273,18 @@ metric per day.
 | todoist `api` | `since`: the day the account joined | a task's completion time | stays |
 | garmin `api` | `since`: a year before the first run, recorded; `until`: today | days | stays |
 | baby_connect `api` | `since`: the eldest child's birthday; `until`: today | days | stays |
-| calendar `google`, `fastmail`, `caldav` | `since`, `until`: no bound | events with any part inside | **dropped**: a windowed calendar is listed whole every run, and an event the listing no longer names goes (`calendar/INGEST.md` §"A window") |
+| calendar `google`, `fastmail`, `caldav` | `since`, `until`: no bound | events with any part inside | **dropped**: a windowed calendar is listed whole every run, and an event the listing no longer names goes |
 | calendar `calendly` | `since`, `until`: no bound | a meeting's start | **dropped**, as above |
 
-An earlier `since` backfills on the next run everywhere: each source
-owes what its listing now names and its store does not hold
-(`data_architecture_ingestion.md` §"What is left to fetch"). YoLink's
-per-device `start` predates the grammar and still takes a day only.
+Garmin's default is a year because it costs one request per metric per
+day. An earlier `since` backfills on the next run everywhere: each
+source owes what its listing now names and its store does not hold.
+YoLink's per-device `start` takes a day only.
 
 **Several things, each with its own window: `fetch`.** A method whose
 source has parts worth fetching to different depths takes repeated
-`fetch` sections, each saying what it selects, in that source's own words,
-and how far back:
+`fetch` sections, each saying what it selects, in that source's own
+words, and how far back:
 
 ```toml fragment
 [[steps.params.gmail.fetch]]
@@ -309,51 +297,39 @@ since = "-90d"
 
 Whatever the source, the sections mean the same:
 
-- **What is fetched is the union.** Sections only add, so their order says
-  nothing and a new one can never lose what another reaches.
-- **A thing two sections select gets the wider window**, and a section with
-  no `since` is the widest (`datalib_time::widest_start`).
-- **A section selecting nothing named takes everything** within its window.
-  A name upstream does not have selects nothing and is a `config:` problem,
-  and never reads as that.
-- **`fetch` replaces the method's own window and selection keys**, and the
-  older keys are read as one section. A config with both is refused, since
-  which of the two won would show only in what the mirror holds.
+- **What is fetched is the union.** Sections only add, so their order
+  says nothing and a new one can never lose what another reaches.
+- **A thing two sections select gets the wider window**, and a section
+  with no `since` is the widest.
+- **A section selecting nothing named takes everything** within its
+  window. A name upstream does not have selects nothing and is a
+  `config:` problem.
+- **`fetch` replaces the method's own window and selection keys**, and
+  the older keys are read as one section. A config with both is
+  refused.
 
-Only Gmail has it today (`labels`, `since`, `whole_threads`;
-[`getting_your_data.md`](../user/getting_your_data.md) § "Different labels to
-different depths" is the person's version). A new source's sections would
-select in its own words, as Slack's could by `channels` and `dms`.
-
-**No wizard form writes `fetch`.** A form's fields are single settings, and
-a repeated table is none. The config editor is the way in. Reopening such a
-source in its form lists `fetch` among the keys it keeps
-(`untouchedSettings`), but its answers read as if there were no filter, and
-choosing labels there writes the older keys beside `fetch`, which the load
-refuses. `datalib/ui/tests/edit_source.test.ts` pins the keeping.
+Only Gmail has it (`labels`, `since`, `whole_threads`;
+[Different labels to different depths](../user/getting_your_data.md#different-labels-to-different-depths)
+is the person's version). **No wizard form writes `fetch`**: edit the
+config. Reopening such a source in its form keeps `fetch`, but the form
+reads as if there were no filter, and choosing labels there writes the
+older keys beside `fetch`, which the load refuses.
 
 The window is a key of each method rather than one range under
-`[steps.params.common]`: `common` is per step too, so it would save no
-typing, and two places to say one thing would need a rule for which
-wins. Kept per method, what a source cannot honor is a missing key,
-which the schema and the field reference already say.
+`[steps.params.common]`, so what a source cannot honor is a missing
+key, which the schema and the field reference already say.
 
 ## Examples and the field reference
 
-Each config crate carries its own stanzas, `EXAMPLES`: a minimal and a
-complete one per ingest method, each a `[[groups]]` entry and its steps
-under the type's own name as the group id. Its structs derive
-`schemars::JsonSchema`, so the params' JSON Schema, doc comments
-included, is the field reference. `datalib_step/src/source_docs.rs`
-maps every `SourceType` to the two; `datalib-step examples <type>`
-prints the stanzas and `datalib-step help <type> <method>` the
-reference. A minimal stanza holds its method alone; a complete one may
-also hold the method it pairs with (Gmail's shows its Takeout). Its
-test loads and plans every stanza and holds each complete one to every
-option of its method's table; the shared
-`common` and `latchkey_settings` options are set only where a source
-reads them. A retired field a planner refuses stays readable by serde
-and leaves the schema with `#[schemars(skip)]`.
+Each source type carries its own example stanzas: a minimal and a
+complete one per ingest method, each a `[[groups]]` entry and its steps,
+with the type's own name as the group id. `datalib-step examples
+<type>` prints them (`--append` adds the minimal one to a config), and
+`datalib-step help <type> <method>` prints the field reference, the
+params' JSON Schema with each field's description. A minimal stanza
+holds its method alone; a complete one sets every option of its method
+and may also hold the method it pairs with (Gmail's shows its Takeout).
+A test loads and plans every stanza.
 
 `datalib-step check-params <config>` plans the params of every step
 that runs `datalib-step run` the way a sync would, and prints one JSON
@@ -368,28 +344,12 @@ itself reads. Another program's params are never asked about.
 ## `Reach`: origin or local
 
 Every method a provider accepts declares itself `Origin` (fetches from
-a live service) or `Local` (reads files already on this machine).
-The enum is `Reach` and the declaration is `impl IngestMethods for
-<P>Config` — a list of `IngestMethod { path, reach }` — both in
-`datalib/backend/source_common/src/lib.rs`. `datalib_step/src/methods.rs`
-maps a type to its list and applies the held rule; a step's reach is
-`Origin` if anything held reaches one, else `Local`.
-
-The UI reads the same declarations without a hand-kept copy:
-`ui/src/config/ingestMethods.json` is generated by
-`bazel run //datalib/backend/datalib_step:ingest_methods.update`, a
-test in `methods.rs` fails when it drifts, and
-`ui/src/config/ingestMethods.ts` applies the same held rule
-(`methodsHeld`, `ingestReach`, `ingestLabel`). Two things read it:
-
-- **The Manage row's label.** The server labels an ingest step
-  "Ingest" (`http/src/manage/mod.rs::child_label`); the browser
-  replaces that with "Download" for an origin method or "Import" for a
-  local one (`cards/SourcesCard.ce.vue`), off the step's written params.
-- **The wizard's account row.** A descriptor with a
-  `credentialService` shows its latchkey controls only while the
-  params the form would write reach an origin: an import has nothing
-  to log in to (`SourceWizard.vue`).
+a live service) or `Local` (reads files already on this machine). A
+step's reach is `Origin` if anything it holds reaches one, else
+`Local`. The UI reads the same declarations: a Manage row labels an
+ingest step "Download" for an origin method and "Import" for a local
+one, and the wizard shows a source's sign-in controls only while the
+params it would write reach an origin.
 
 `datalib-dag --reset` is *not* gated on it: it empties the step's store
 whatever the method, and the next sync reads its files or its origin in
@@ -470,7 +430,7 @@ can point elsewhere.
 A `[[locks]]` entry names a lock and its `slots`; a step's `locks` names
 the ones it holds (`["q"]` takes one slot, `{ q = "exclusive" }` all of
 them), and one that names none holds `network` (no inputs declared) or
-`cpu` (inputs declared), the two budgets every config has. A datalib
+`cpu` (inputs declared), the two budgets every config has. A Datalib
 config declares two more for `datalib-step`'s steps (§"The kinds of
 entry"): the one-slot `embedder`, held by every `embed`, so one
 embedding model is loaded at a time, and `index`, held by the index
@@ -491,37 +451,33 @@ An input is a step id, or a pattern that names every step of one
 function: `*/render_markdown` is `<group>/render_markdown` for every
 group that has one, those added later included. The loader expands a
 pattern to the ids it names, in the file's order, and never to the step
-itself (`dag/src/input_pattern.rs`); everything past the loader, the
-step's own `--inputs` included, sees ids only. A pattern names the steps
-that can run: a source whose step the loader drops (its ingest has a bad
-key, say) drops out of the pattern, where an input naming it by id
-blocks the step that names it. `datalib-dag --check` prints what each
-pattern stood for.
+itself; everything past the loader, the step's own `--inputs` included,
+sees ids only. A pattern names the steps that can run: a source whose
+step the loader drops (its ingest has a bad key, say) drops out of the
+pattern, where an input naming it by id blocks the step that names it.
+`datalib-dag --check` prints what each pattern stood for.
 
 The index steps read by pattern: `unified_grid_and_search_index` reads
 `*/render_markdown`, `embedding_map` reads `*/embed`, and
-`time_series_index` reads `*/render_time_series`
-(`datalib_dag::config::FAN_INS`). No index reads a
-`render_occurrences` step. `unified_grid_and_search_index` takes the groups it
-indexes from those inputs, the group being each input's first segment
-(`index_steps::groups_from_inputs`). It passes over a
+`time_series_index` reads `*/render_time_series`. No index reads a
+`render_occurrences` step. `unified_grid_and_search_index` indexes the
+groups its inputs name (each input's first segment) and passes over a
 `render_time_series` or `render_occurrences` input, which an older
-config may still name: their problems are read in their own stores
-(`etl/README.md` §"Problems stay in the step that found them"), and an
-unattended rewrite (`unread_inputs.rs`, below) takes them out.
-Nothing scans the root. A source removed
-from the config stops being indexed on the next run even while its
-render store is still on disk.
+config may still name. Nothing scans the root: a source removed from
+the config stops being indexed on the next run even while its render
+store is still on disk.
 
-After the grid, `unified_grid_and_search_index` puts each source it reads in the keyword
-search, but those its `params.not_searched` lists, and drops from the
-search index every source it no longer searches. Each source's pass
-reads its render store at one commit and is skipped when neither that
-commit nor the index text's version has moved since its last finished
-pass (`search_sources` in the search index). The step's version is the
-grid's generation and the search index's together, so a keyword change
-alone still reaches the embeds. The pass is SQLite's FTS5 and needs no
-embedding model. A source's `embed` (input: `unified_grid_and_search_index`) cuts its
+After the grid, `unified_grid_and_search_index` puts each source it
+reads in the keyword search (SQLite's FTS5, no embedding model), except
+those its `params.not_searched` lists, and drops from the search index
+every source it no longer searches. A source's pass is skipped when
+neither its render store's commit nor the index text's version has
+moved since its last finished pass. It then sweeps the vectors no chunk
+names from the inference cache, and reports each searched source's
+documents and how many are not embedded yet.
+
+A source's `embed` (input:
+`unified_grid_and_search_index/unified_grid_and_search_index`) cuts its
 documents into chunks with the model's tokenizer, files them in the
 inference cache and fills their vectors; it fetches the model when it
 is missing, and only once it has a document to cut or a chunk to
@@ -539,33 +495,33 @@ every `embed` with it. A `qmd_index`, `keyword_index` or
 refuses it, and `datalib-http` rewrites it (§"The retired shapes").
 
 So every source reaches the grid and the keyword search unless the
-config says otherwise, and leaving one out is something written down:
-its id in `unified_grid_and_search_index`'s `not_searched`, which keeps it out of search,
-or the other sources named one by one in place of the pattern, which
-keeps it out of the grid too. A source in `not_searched` is in the grid
-and its documents open and filter, but free text will not find it by
-its words or its meaning, only by the fields the grid holds. Turning off
-just its `embed` step keeps keyword search; embedding is the slow part
-of a sync.
+config says otherwise:
 
-The wizard maintains the rest (`ui/src/config/sourceSteps.ts`):
-`wireIntoFanIns` on create, which adds nothing where a pattern already
-names the step, `unwireFromFanIns` on delete and when a render step is
-removed, and `setSearchSteps` for the two search tickboxes under Rendering
-in Advanced options. "Keyword-index the markdown" takes the source out of
-`unified_grid_and_search_index`'s `not_searched`, or puts it in; "Embed it for search by
-meaning", which needs the first, adds or removes its `embed`. Removing
-any step takes every step that reads it (a fan-in loses the input
-instead), so removing `unified_grid_and_search_index` takes every source's `embed`
-(`removedWith`). A fan-in that
-names its inputs one by one has to be edited by hand, and the Manage
-screen flags a render step nothing consumes.
+- **Out of search**: its id in `unified_grid_and_search_index`'s
+  `params.not_searched`. It stays in the grid, and its documents open
+  and filter, but free text finds it only by the fields the grid holds.
+- **Out of search by meaning only**: no `embed` step, or its `embed`
+  turned off. Keyword search still works; embedding is the slow part of
+  a sync.
+- **Out of the grid too**: list the other sources' renders one by one
+  in place of the pattern.
+
+Removing `unified_grid_and_search_index` takes every `embed` with it.
+
+The wizard keeps the fan-ins in step: it wires a new source in (adding
+nothing where a pattern already names its step), unwires one it
+deletes, and offers two tickboxes under Rendering in Advanced options:
+"Keyword-index the markdown" (in or out of `not_searched`) and "Embed
+it for search by meaning" (adds or removes its `embed`; needs the
+first). Removing any step takes every step that reads it (a fan-in
+loses the input instead). A fan-in that names its inputs one by one has
+to be edited by hand, and the Manage screen flags a render step nothing
+reads.
 
 ## What the Manage screen and the wizard make of it
 
-One row per group, its steps and applets under a chevron. The group
-row's rules are in `http/src/manage/group.rs`: children in pipeline
-order; status running if any child is, else waiting, else failed, else
+One row per group, its steps and applets under a chevron. A group row's
+status is running if any child is, else waiting, else failed, else
 queued, else stopped, else the last step's, passing over a child turned
 off (the group reads off only when every child is) and one that has
 never run while a sibling has (it reads never run only when nothing
@@ -578,51 +534,43 @@ rest of its id after the group (its function, for a step of
 `datalib-step`), with the whole id muted beside it. The grid's Source
 column joins `source_id` to a group's `name`.
 
-The wizard (`SourceWizard.vue`, writers in `sourceSteps.ts`) edits a
-source as one thing: the group plus its `ingest` and `render_markdown`
-steps from one form, one name box for the group. The form is the
-catalog entry's `sections`, with the render fields and everything else
-no section names under Advanced options
-([`wizard_design.md`](wizard_design.md)). Editing renames the group in place and
-rewrites both steps where the first of them stood. A source missing one of its
-two steps gets it back on save. A download-only provider
-(`rendersDocuments: false` in `ui/src/config/catalog.ts`) still gets its
-render step: it renders no documents, but it writes the storage report and
-carries the download's problems into the index, so the Manage row's counts
-lead somewhere. The form offers it no Rendering section, since there is
-nothing to render or search.
+The wizard edits a source as one thing: the group plus its `ingest` and
+`render_markdown` steps from one form, one name box for the group.
+Render fields and everything no section of the form names go under
+Advanced options. Editing renames the group in place and rewrites both
+steps where the first of them stood; a source missing one of its two
+steps gets it back on save. A download-only source (Linear, media,
+Lightroom, Apple Photos) still gets its render step: it renders no documents, only
+the source's storage report, which is what puts the source in the grid.
+Its form offers no Rendering section.
 
-The screen lists groups, and the steps under each, in file order, and a
-header click's sort is undone by a third click. So the writers keep the
-file in the order data flows (`insertEntries`): a new source goes after
+The screen lists groups, and the steps under each, in file order. So
+the app keeps the file in the order data flows: a new source goes after
 the last one and above the `unified_grid_and_search_index` group, and
 each step below the steps it reads, so a source's `embed` goes below
-`unified_grid_and_search_index`. A file already out of that order where no place fits gets
-the new entries at the end. The runner itself reads only `inputs`.
+`unified_grid_and_search_index`. Where a file is already out of order
+and no place fits, new entries go at the end. The runner itself reads
+only `inputs`.
 
-Dragging a group by the grip at the left of its row is how a person
-changes that order (`moveGroup`). The group's `[[groups]]` entry and
-every step and applet filed under it move together, comments included,
-to just above the group it was dropped on — the block `topo-sort-config`
-moves a group as. A drop that would put a group above one it reads, or below one
-that reads it, is refused and the card says why (`moveAgainstDataFlow`),
-so a file in data-flow order stays in it.
+Dragging a group by the grip at the left of its row changes that order.
+The group's `[[groups]]` entry and every step and applet filed under it
+move together, comments included, to just above the group it was
+dropped on. A drop that would put a group above one it reads, or below
+one that reads it, is refused, and the card says why.
 
 `datalib-step topo-sort-config <root>/config.toml` puts a whole file in
-that order (`dag/src/config_order.rs`), keeping the old text as
-`config.toml.<UTC time>.bak`; `--check` only says whether it is. Each group, with
-its steps and applets, goes after the groups it reads, and inside a
-group each step after the steps it reads. Nothing else moves, and the
-comments above an entry move with it. Where two groups read each other
-it orders the steps one by one instead.
+that order, keeping the old text as `config.toml.<UTC time>.bak`;
+`--check` only says whether it is. Each group, with its steps and
+applets, goes after the groups it reads, and inside a group each step
+after the steps it reads. Nothing else moves, and the comments above an
+entry move with it. Where two groups read each other it orders the
+steps one by one instead.
 
-The UI and the config upgrades edit the text rather than re-serializing it.
-An `inputs` array is edited where it stands (`dag/src/config_array.rs` on the
-server, `ui/src/config/tomlText.ts` in the UI): one id per line stays one
-id per line, with its indentation, trailing comma and comments, and a
-one-line array stays on one line. Both cut the text with the same small
-lexer (`dag/src/config_lex.rs` beside the sorter; the UI keeps a copy),
-and refuse an edit that does not read back as what was asked for.
+The app and the config upgrades edit the text rather than
+re-serializing it: an `inputs` array is edited where it stands, one id
+per line staying one id per line with its indentation, trailing comma
+and comments, and a one-line array staying on one line. An edit that
+does not read back as what was asked for is refused.
 
 ## The retired shapes
 

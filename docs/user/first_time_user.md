@@ -1,6 +1,6 @@
-# datalib (Project Data Liberation ✊) — first-time user guide
+# Datalib (Project Data Liberation ✊) — first-time user guide
 
-Liberate and own your data. Run powerful AI tools on it, on your terms.
+Datalib is about ***personal data sovereignty***. It liberates your data from silos and helps you run powerful AI tools on it, locally, on your own terms.
 
 This guide installs the command-line tools and walks you through your
 first mirror. Two other ways in, if this one doesn't fit: the macOS
@@ -44,21 +44,22 @@ The sections on credentials (step 2) and on getting your data back out
 
 ## 0. Prerequisites
 
-None. The release tarball carries the binaries, and the first sync
-fetches the one other thing a sync runs: a Node runtime with the
-Node program the tools shell out to — `latchkey`, which holds your
-credentials — at the exact versions datalib was built and tested with,
-published beside the tarball on the same release and checked against
-the sha256 the tarball carries for it. It lands in
-`~/.cache/datalib/runtime`, one download per release. You do not need `node`,
-`npm` or `npx` installed. The `latchkey` command does not fetch it
-itself, so step 1 fetches it by hand with `datalib-step pull-runtime`;
-that is also how to fetch it ahead of time for an offline laptop.
-Every install on the machine shares that one directory, and it holds
-one release's runtime at a time: fetching a new release's removes the
-one an older install runs on. To try a release beside another, give it
-a cache of its own by setting `XDG_CACHE_HOME` (it then fetches into
-`$XDG_CACHE_HOME/datalib/runtime`) for every command of that install.
+None. The release tarball carries the binaries. The one other thing a
+sync runs is `latchkey`, the Node program that holds your credentials:
+Datalib fetches a Node runtime with latchkey in it, at the versions it
+was tested with, from the same release, checked against the sha256 the
+tarball carries. You do not need `node`, `npm` or `npx`. The `latchkey`
+command does not fetch it itself, so step 1 fetches it with
+`datalib-step pull-runtime`, into `~/.cache/datalib/runtime`.
+
+That cache holds one release's runtime at a time and every install on
+the machine shares it, so fetching a new release's removes the one an
+older install runs on. To run a release beside another, set
+`XDG_CACHE_HOME` for every command of that install. On a machine that
+cannot reach GitHub, unpack the release's `runtime-<platform>.tar.gz`
+into a folder named `runtime` beside the binaries
+(`~/.local/lib/datalib/runtime` for the installer's layout), which is
+where they look first.
 
 ## 1. Install the tools and make a data root (here it's `~/datalib`)
 
@@ -84,7 +85,7 @@ it into `~/.local/lib/datalib` and links the tools into
 - `datalib-doltlite` — the shell for reading and exporting your stores
   (step 8).
 - `datalib-migrate-config` — rewrites a config file from an older
-  datalib (step 3).
+  Datalib (step 3).
 
 Also installed: `latchkey` (the credential tool, step 2, running on
 the fetched Node runtime), `datalib-file-inventory` (a standalone directory
@@ -120,8 +121,8 @@ Three optional knobs:
 
 The script checks the tarball against a hash written into the script
 itself, so it installs exactly what the script names, and the script
-comes from datalib's `main` branch. To see for yourself that a download
-was built by datalib's release workflow from the release's own commit,
+comes from Datalib's `main` branch. To see for yourself that a download
+was built by Datalib's release workflow from the release's own commit,
 and not uploaded by hand, ask for its *build
 provenance attestation*: a statement that workflow signed when it built
 the file. You need GitHub's CLI, `gh`, signed in to any account. Set
@@ -186,10 +187,10 @@ runtime it runs on.
 
 Every program you start on your computer runs *as you*, and macOS and
 Linux mostly treat all of them alike: what one of them can read, the
-others can too. That covers both halves of what datalib keeps:
+others can too. That covers both halves of what Datalib keeps:
 
 - **Your mirror** is ordinary files in your data root. Any program
-  running as you can read everything datalib has downloaded.
+  running as you can read everything Datalib has downloaded.
 - **Your sign-ins** are encrypted in `~/.latchkey`, but a program
   doesn't need to break that encryption to use them: it can run
   `latchkey curl …`, and latchkey adds your sign-in to the request for
@@ -215,7 +216,7 @@ used to start Chrome with its remote-debugging switch turned on and
 read your cookies through it, until Chrome stopped allowing that
 switch on your everyday profile.
 
-What that means for datalib today:
+What that means for Datalib today:
 
 - **latchkey's encryption key is in your keychain**, and a Node you
   have allowed can read it without asking. If macOS asks whether `node`
@@ -223,36 +224,29 @@ What that means for datalib today:
   Node not on the list yet. Once one is on it, any program running as
   you can use your sign-ins.
 - **The desktop app can keep a library in a protected folder
-  (experimental), on macOS 15 or later.** When you make a new library,
-  tick **Keep it in a protected folder**. The library then lives in a folder macOS guards
-  for the Datalib app, signed by Imbue, so that permission lasts
-  through upgrades: Terminal, an AI agent's shell, Finder or any other
-  app that reaches in makes macOS ask you first. The exception is an
-  app with Full Disk Access: a Terminal holding it got in with no
-  prompt. It starts with no
-  sign-ins, in a latchkey store of its own inside the library, whose key
-  is a keychain item named `Datalib Latchkey - <folder name>`. macOS
-  does not ask for your password to use that item, because Datalib made
-  it. You sign
-  in to its sources in Datalib, and `latchkey curl` run anywhere else
-  cannot find those sign-ins. What you already signed in to in
-  `~/.latchkey` stays there, as reachable as it was. **Only the folder
-  protects these sign-ins, not the keychain:** any program running as
-  you can get the key, by running the Node inside the Datalib app. So
-  anything that lets a program reach the library's files gives it the
-  sign-ins too. Saying **Allow** lets that app in for as long as it
-  keeps running, so say no unless you mean it. Deleting the library is
-  permanent, after a confirmation: it skips the Trash, where its
-  sign-ins would sit outside the folder, and removes its keychain item.
+  (experimental, macOS 15 or later).** Tick **Keep it in a protected
+  folder** when you make a new library. macOS then guards the folder for
+  the Datalib app, signed by Imbue, so the permission lasts through
+  upgrades: Terminal, an AI agent's shell, Finder or any other app that
+  reaches in makes macOS ask you first. The exception is an app with
+  Full Disk Access, which gets in with no prompt. The library starts
+  with no sign-ins, in a latchkey store of its own inside it, whose key
+  is the keychain item `Datalib Latchkey - <folder name>`. You sign in
+  to its sources in Datalib, and `latchkey curl` run anywhere else
+  cannot find them; what you signed in to in `~/.latchkey` stays as
+  reachable as it was. **Only the folder protects these sign-ins, not
+  the keychain:** any program running as you can get the key by running
+  the Node inside the Datalib app, so whatever reaches the library's
+  files gets the sign-ins too. **Allow** lets an app in for as long as
+  it keeps running, so say no unless you mean it. Deleting the library
+  is permanent: it skips the Trash and removes its keychain item.
   CalDAV and CardDAV on a server of your own cannot sign in in a
   protected library yet, because that sign-in is made in a terminal.
-  What
-  is still unknown: whether an agent could get in by running one of
-  Datalib's own programs directly, and whether the Datalib app gets in
-  without asking at all; the first release with this option is what
-  answers both. It does not stop a program determined to steal from
-  you, which can try to steer Datalib itself.
-- **What you can do now:** run datalib on a computer where you trust
+  Not yet known: whether an agent could get in by running one of
+  Datalib's own programs directly, and whether the Datalib app itself
+  gets in without asking. It does not stop a program determined to
+  steal from you, which can try to steer Datalib itself.
+- **What you can do now:** run Datalib on a computer where you trust
   every program you run. Sign in with read-only access where the
   service offers it ([Fastmail](getting_your_data.md#fastmail) does,
   for example). Sign out of a service you stop syncing:
@@ -535,7 +529,7 @@ one source's entries, straight into `<data_root>/config.toml`:
 Each is compiled into `datalib-step` too, so a shell with no checkout
 prints it: `datalib-step help docs` names them.
 
-Upgrading from an earlier datalib? A `config.toml` written for one —
+Upgrading from an earlier Datalib? A `config.toml` written for one —
 steps naming a `datalib-step download …` command, a group `type`
 spelled for its method (`slack_api`, `claude_export`, `carddav`), or
 an ingest step whose params still say `sync` or `common.input_path` —
@@ -547,18 +541,21 @@ datalib-migrate-config ~/datalib --force     # rewrites ~/datalib/config.toml
 ```
 
 It keeps the original beside the result as `config.toml.orig`. Comments
-from the old file don't carry over, so review the result. A config with
-an older search or index step (a shared `qmd_index` step, or an index
-group called `unified_index` or `unified_document_index`) needs none of
-this: the app rewrites it the first time it reads the file and keeps the
-old one as `config.toml.bak`
-([the retired shapes](../dev/config_model.md#the-retired-shapes) lists
-every such rewrite). The same goes for a config whose steps are written
-as `group = …` and `function = …`: the app writes each step's `id` and
-whole `command` and the entries `datalib-step` needs, and every step
-runs once at the next sync, each fetching only what is new. A much older root with
-only a `config.yaml` is not convertible any more: set it up again from
-the app.
+from the old file don't carry over, so review the result. A config
+whose search or index steps have older names (the `qmd_*` steps,
+`keyword_index`, a `grid_index` step, an index group called
+`unified_index` or `unified_document_index`) needs none of this:
+`datalib-http` rewrites it, comments kept, the first time it reads the
+file, and keeps the old text as `config.toml.bak`. The same goes for a
+config whose steps are written as `group = …` and `function = …`: the
+app writes each step's `id` and whole `command` and the entries
+`datalib-step` needs, and every step runs once at the next sync, each
+fetching only what is new. `datalib-dag` makes no rewrites: it refuses
+those entries and names `datalib-migrate-config`, so start the app on
+such a root once, or run that, before syncing it from the terminal.
+[The retired shapes](../dev/config_model.md#the-retired-shapes) lists
+every rewrite. A much older root with only a `config.yaml` is not
+convertible any more: set it up again from the app.
 
 Credentials are never in the config — sources that need them ask
 `latchkey` at run time.
@@ -621,14 +618,20 @@ faster.
   then each source's words into the keyword search beside them.
 - An `embed` step per source: the embeddings of that source's part of
   search, which let a search match on meaning. The first `embed`
-  downloads its model once.
-  **The first embed is slow** — roughly 5–10
-  minutes per thousand chunks on CPU. It's resumable, so Ctrl-C and
-  re-run is safe, and one source's `embed` can be turned off on the
-  Data sources card without touching the others. Re-runs after the backlog
-  drains take seconds. A Garmin, YoLink or AirVisual source has no
-  `embed` step: its markdown is daily summaries of numbers, which the
-  keyword index already finds. The app takes out one a config already has.
+  downloads its model (about 330 MB) once. **The first embed is slow**
+  on a CPU, roughly 5–10 minutes per thousand chunks. It is resumable,
+  so Ctrl-C and re-run is safe, and one source's `embed` can be turned
+  off on the Data sources card without touching the others. Re-runs
+  after the backlog drains take seconds. A Mac embeds on its GPU
+  (Metal). On x86_64 Linux with an NVIDIA GPU and its driver, an
+  `embed` fetches Datalib's CUDA module and runs on the GPU
+  (`datalib-step pull-cuda` fetches it ahead of time). An `embed` can
+  also send its chunks to GPUs on your own Modal account once it owes
+  `embed_on_modal_from_n_chunks` of them; the text of each chunk then
+  leaves your machine (`datalib-step help dag-example` shows the
+  settings). A Garmin, YoLink or AirVisual source has no `embed`
+  step: its markdown is daily summaries of numbers, which keyword
+  search already finds.
 
 **On disk afterwards** (with `data_root = "~/datalib"`):
 
@@ -646,6 +649,7 @@ faster.
 │   └── render_markdown/
 ├── gmail-takeout/
 │   └── …
+├── datalib_curated/                # what you made by hand: contacts, muted problems
 ├── unified_grid_and_search_index/                  # the shared indexes, rebuildable
 │   ├── unified_grid_and_search_index/db.sqlite  #   grid rows + markdowns + edges + the search index
 │   └── search_index/inference_cache.sqlite  #   each passage's vector, for search by meaning
@@ -671,8 +675,9 @@ faster.
 > ```
 >
 > What's left in the backup is what you want to keep: every
-> `<group>/ingest/` store (the captured data), `config.toml`, and
-> `system/` (scheduler state, filed feedback, sync history). One
+> `<group>/ingest/` store (the captured data), `config.toml`,
+> `datalib_curated/`, and `system/` (scheduler state, filed feedback,
+> sync history). One
 > exception: `system/frontend/` carries a `CACHEDIR.TAG` too, so the
 > components you or an agent wrote in `system/frontend/user/` are
 > skipped — back that folder up separately if you have any.
@@ -741,13 +746,15 @@ datalib-applet search ~/datalib "hello"
 ## 8. Getting your data back out
 
 The point of mirroring your data locally is that it stays yours, so it
-is worth knowing the exit before you need it. The markdown is already
-in an open format, and one command turns each database into one:
+is worth knowing the exit before you need it. One command each turns
+the documents and the databases into open formats:
 
-- **The markdown.** `datalib-step markdown <data root> --out <folder>`
+- **The documents.** `datalib-step markdown <data root> --out <folder>`
   writes every conversation or document as an ordinary UTF-8 `.md`
-  file, one each, wherever you like. Every text editor and search tool
-  on your machine already reads it.
+  file, one each, at `<folder>/<source>/<id>.md`. Without `--out` it
+  prints them (`--source` and `--document` pick one). The render stores
+  are the only copy of the rendered text; nothing else under the data
+  root is a `.md` file.
 - **The databases.** The `.doltlite_db` files are
   [doltlite](https://github.com/dolthub/doltlite) stores — SQLite's SQL
   engine over a versioned, content-addressed file format, which is what
@@ -809,7 +816,7 @@ Something broken, missing, or confusing? **File an issue at
 <https://github.com/imbue-ai/datalib/issues>** — that is the preferred
 way to reach us, and every report is welcome. Two kinds are equally
 wanted: what exists and misbehaves (a typo in this guide, a sync that
-won't finish), and what would make datalib easier to wield for whatever
+won't finish), and what would make Datalib easier to wield for whatever
 you want to do with your data — a step that was harder than it should
 be, a use case it doesn't serve yet. For a bug, a copy of the error
 message and which source it happened on is plenty. **The tracker is

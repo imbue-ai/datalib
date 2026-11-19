@@ -12,7 +12,7 @@ stale").
 **The runner knows no program by name.** Everything it does with a step
 follows from that step's config entry and from facts every step has,
 never from which program the step runs. `datalib-step`,
-the step program datalib ships, is one program among others: a datalib
+the step program Datalib ships, is one program among others: a Datalib
 config spells out in its own entries what the runner should do with it
 (its `reads`, its `locks`, the verbs its `[[programs]]` entry lists).
 
@@ -240,13 +240,8 @@ the loop is done with that step: a config saved mid-edit must not cost a
 long download. The step environment (`PATH`, log level, the config's
 `[env]`) stays the one the busy period started with.
 
-**A reset** (`datalib-dag --reset`, the app's Reset, `POST /api/reset`)
-empties what a step wrote and records the tree's new version, forgetting
-that the step ever succeeded. The app then opens a request: a reset
-step that reads something is rebuilt at once, and a reset download is
-not refilled — what reads it runs instead, so its documents leave the
-grid, and its next Sync downloads everything again. The app's reset
-does not wait for a sync to end (§"Resets and purges").
+A reset, a purge and freeing disk space are carried out by the loop too
+(§"Resets and purges").
 
 ## When the disk runs low
 
@@ -280,15 +275,14 @@ A resume line under the pause line refuses the config, and
 
 The loop logs the crossing once each way (`WARN` going under the pause
 line, `INFO` reaching the resume line). Which side of the gap a disk is
-on is remembered for the length of a busy period, so a sync started
-anew with the disk between the lines runs. "Free" is what an unprivileged process may still write
-(`statvfs`'s `f_bavail`); on APFS that leaves out purgeable space, so it
-can read lower than Finder. A disk that cannot be measured holds
-nothing back, and says so once at ERROR. The floor is part of the
-graph, so an edit to it reaches a loop already running. The app's
-status bar draws the same number beside the root's size and raises a
-toast while the steps are held, and keeps the samples in
-`system/disk_stats.sqlite`'s `disk_free` table (`http/src/disk_free.rs`).
+on is remembered for one busy period, so a sync started anew with the
+disk between the lines runs. "Free" is what an unprivileged process may
+still write (`statvfs`'s `f_bavail`); on APFS that leaves out purgeable
+space, so it can read lower than Finder. A disk that cannot be measured
+holds nothing back, and says so once at ERROR. An edit to the floor
+reaches a loop already running. The app's status bar draws the same
+number beside the root's size, raises a toast while the steps are held,
+and keeps the samples in `system/disk_stats.sqlite`.
 
 ## Upgrading a root
 
@@ -345,14 +339,14 @@ held in the server's memory (`/api/config`'s `upgrade`) and announced as
 same pill (§"Resets and purges").
 
 Before any of that, the http server moves each tree a config rewrite
-renamed to its new path, and the record's rows for its steps with it
-(`http/src/config_upgrade.rs`): the index under an earlier group name, the index
-step's `grid_index/` tree, and a folder an older config spelled with
-capitals. [`config_model.md`](../../../docs/dev/config_model.md)
-§"The retired shapes" has each rewrite and its move.
+renamed to its new path, with the record's rows for its steps
+(`http/src/config_upgrade.rs`): the index under an earlier group name,
+the index step's `grid_index/` tree, and a folder an older config
+spelled with capitals.
+[`config_model.md`](../../../docs/dev/config_model.md#the-retired-shapes)
+has each rewrite and its move. In the repo,
 `datalib/backend/datalib_step/raw_shapes/` holds the raw shape every
-release left, and a test migrates each one
-([`raw_shapes/README.md`](../datalib_step/raw_shapes/README.md)).
+release left, and a test migrates each one to this build.
 
 ## What keeps steps apart: locks
 
@@ -381,7 +375,7 @@ follows from it:
   A `[[locks]]` entry of the same name resizes one, and `--parallelism
   N` sets both to N, over the config.
 
-A datalib config declares two more, and its `datalib-step` entries name
+A Datalib config declares two more, and its `datalib-step` entries name
 them:
 
 | lock | slots | held by | why |
@@ -395,7 +389,7 @@ that file off disk, so the two never run together.
 
 None of `locks`, `reads` and `start` is in the fingerprint: they change
 when a step may run, not what it makes. A config edit that changes only
-them is still taken on mid-sync, like any other. A datalib config
+them is still taken on mid-sync, like any other. A Datalib config
 writes `reads = "files"` on the `datalib-step` steps that read their
 inputs off disk (`embed`, which reads the search index as it is;
 `embedding_map`, which reads the search index and its inference cache;
@@ -404,9 +398,10 @@ on the rest that have inputs.
 
 ## What a sink owes its consumers
 
-A step's sink is whatever it writes: a doltlite store, the search index, a
-directory of markdown. A consumer relies on two separate properties, and
-conflating them produces a contract that is false for half the sinks.
+A step's sink is whatever it writes: a doltlite store, a plain SQLite
+file such as the grid index, a directory of files. A consumer relies on
+two separate properties, and conflating them produces a contract that is
+false for half the sinks.
 
 **P1. "Absent" is not "empty."** A sink never reports "there is nothing
 here" when it means "I could not read this." Every sink owes this,
@@ -423,8 +418,8 @@ stable view of a producer still writing only if the sink's engine gives
 one. A doltlite store does: a reader pins a commit, and the producer
 seals commits beside it
 ([`docs/dev/doltlite.md`](../../../docs/dev/doltlite.md#three-ways-to-read-one-commit)).
-An index rewritten in place, a directory being emitted and an appended
-file do not. So P2 is the step's to declare — a `capabilities` event
+A plain SQLite file rewritten in place, a directory being emitted and
+an appended file do not. So P2 is the step's to declare — a `capabilities` event
 with `streams_output` — and its default is no: an undeclared output
 keeps its edge a barrier (rule 6 above;
 `a_producer_that_does_not_declare_streams_output_dispatches_nobody_early`).
@@ -455,7 +450,7 @@ parameters it sets; no test sleeps.
 Beside the scenarios, a seeded random walk over all of it keeps the
 invariants after every episode. A failure prints its seed and the last
 40 things seen; `HARNESS_SEED=<n>` replays one walk,
-`HARNESS_SEEDS=<n>` runs that many (32 by default):
+`HARNESS_SEEDS=<n>` runs that many (32 by default). From a checkout:
 
 ```sh
 bazelisk test //datalib/backend/dag:supervisor_harness_test --test_env=HARNESS_SEED=27
@@ -499,25 +494,23 @@ again, as `make` would with no timestamps to compare. That is always safe
 and sometimes wasteful; the loop says so on the event stream when it
 happens, and a step that wants its readers to skip reports a version.
 
-**A failed or stopped step's reported version stands**: what it committed
-before it ended, its consumers read.
-`datalib-step` reports its store's version however it ends, so a commit
-its writer published at open, or at the stop, reaches them. One that reports
-nothing moves nothing, since its tree may be half-written. The one thing
-no report can carry: a step killed outright after publishing and before
-saying so reaches its consumers at its next run, not at once.
+**A failed or stopped step's reported version stands**: what it
+committed before it ended, its consumers read. `datalib-step` reports
+its store's version however it ends. One that reports nothing moves
+nothing, since its tree may be half-written. A step killed outright
+after publishing and before saying so reaches its consumers at its next
+run, not at once.
 
 A step that did not run contributes the version recorded for its output
 last time, or `UNKNOWN`, which compares equal to itself so two runs that
 both know nothing agree.
 
-**The step's fingerprint is folded into every version.** A step reports on
-its content and has no way to know its own definition changed. Without
-folding, a bumped `code_version` re-runs the step (its fingerprint moved)
-while the reported version stays identical, so consumers skip: the tree is
-rebuilt and the index keeps serving what the old definition produced. A
-real version therefore always contains a colon (`<fingerprint>:<version>`)
-and can never collide with `UNKNOWN`.
+**The step's fingerprint is folded into every version.** A step
+reports on its content and cannot know its own definition changed;
+without folding, a bumped `code_version` would re-run the step while its
+version stayed the same, so its consumers would skip and keep what the
+old definition produced. A real version therefore always contains a
+colon (`<fingerprint>:<version>`) and never equals `UNKNOWN`.
 
 ## Diagnostics: severity is blast radius, not mood
 
@@ -613,21 +606,16 @@ holder dies — a crashed process leaves no stale lock to reason about. The
 file's contents are advisory: they exist so a refusal can name the holder,
 and are never trusted to decide whether it is held.
 
-`FileLock::is_held` (`datalib_flock`) is a **read-only** probe, which is
-why it is separate from `FileLock::acquire`: acquiring creates the file if absent and rewrites its contents.
-Both are right for a process claiming the root and wrong for one merely
-asking — a caller on a timer would rewrite the file every few seconds, and a
-root that had never run would sprout a lock file from being looked at. It is
-racy by nature: the holder may let go a microsecond later. Don't build an
-invariant on it.
-
-Read-only does not mean invisible. `flock(2)` has no way to ask without
-taking, so the probe holds the lock for an instant, and a server that has
-not got the lock yet probes on every change under the root — most often
-just as a run starts. A
-`--reset` that finds the lock held therefore keeps trying for two seconds
-before it refuses; and a probe that found the lock free announces that it
-let go, so a sync that met the probe takes the lock at once.
+`FileLock::is_held` (`datalib_flock`) is a **read-only** probe, separate
+from `FileLock::acquire`, which creates the file and rewrites its
+contents: a caller asking on a timer must not rewrite the file, and a
+root that never ran must not sprout one. It is racy by nature (the
+holder may let go a microsecond later), so build no invariant on it.
+Nor is it invisible: `flock(2)` cannot ask without taking, so the probe
+holds the lock for an instant. A `--reset` that finds the lock held
+therefore keeps trying for two seconds before it refuses, and a probe
+that found the lock free announces that it let go, so a sync that met
+the probe takes the lock at once.
 
 ## Progress: the store takes positions, never deltas
 
@@ -658,25 +646,22 @@ the sink sets every `queued` series of that step to zero, its own and
 each `queued{from=…}`: a step that is not running has nothing ahead of
 it in this run.
 
-When the step ended short of done — stopped, turned off, failed, or
-given up with work owed (`incomplete`, a failure) — what its own
-`queued` held at that moment is what it still owes: the conversations,
-threads and files a Slack sync saw waiting and did not get to. The sink
-writes it first as the step's `owed` (`datalib_metrics::OWED`), which
-nothing zeroes. A step that succeeded owes nothing, whatever its bar
-still showed: a render or an embed often ends a successful run with
-thousands announced that it then found it had no need to do, and a
-download that cannot finish says so by ending `incomplete`. So every
-step a run invokes gets an `owed` as it ends — zero when it succeeded,
-when its own queue was empty or when it never counted — and the next
-run that invokes the step replaces it; a step the run did not invoke
-keeps its last (`runs_sink::owed_at_end`). A `queued{from=…}` is not owed — it is the producer's
-seals the step has not read, which its next run reads anyway. The
-Manage row of a step at rest draws it ("412 owed", and on the group the
-first of its steps that owes), and `datalib-dag status` lists it. A
-record the step reached and failed is usually counted done, so the
-count can fall short of what the store says is owed by the records
-that failed, which are errors on the row.
+When the step ended short of done (stopped, turned off, failed, or
+`incomplete`), what its own `queued` held at that moment is what it
+still owes: the conversations, threads and files a Slack sync saw
+waiting and did not get to. The sink writes it first as the step's
+`owed` (`datalib_metrics::OWED`), which nothing zeroes. A step that
+succeeded owes nothing, whatever its bar still showed: a render or an
+embed often ends a successful run with work announced that it then had
+no need to do, and a download that cannot finish says so by ending
+`incomplete`. So every step a run invokes gets an `owed` as it ends,
+zero when it succeeded or never counted, and the next run that invokes
+it replaces it (`runs_sink::owed_at_end`). A `queued{from=…}` is not
+owed: those are the producer's seals the step has not read, which its
+next run reads anyway. The Manage row of a step at rest draws it ("412
+owed"), and `datalib-dag status` lists it. A record the step reached and
+failed is usually counted done, so the count can fall short of what the
+store owes by the records that failed, which are errors on the row.
 
 The trap is that `done` accumulates across **everything** the step
 reported, while `total` is simply whichever length it announced last —
@@ -756,7 +741,7 @@ A **wipe** is a row in the mailbox's `wipes` table: a reset (empty what
 these steps wrote), a purge (delete the trees of groups the config no
 longer names, and forget their steps ran), a compaction (fold away the
 history nothing reads and collect the rest) or a collection (delete only
-what no commit reaches; `step_protocol.md` § Compact and collect). The loop carries one out as
+what no commit reaches; [`step_protocol.md`](../../../docs/dev/step_protocol.md#compact-and-collect)). The loop carries one out as
 soon as the steps it touches have stopped, whatever else is syncing; it
 does not wait for the sync to end. What it decides is in
 `supervisor/wipe.rs`, and the loop does it (`round.rs`,

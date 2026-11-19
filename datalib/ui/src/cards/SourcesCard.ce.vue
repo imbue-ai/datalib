@@ -212,7 +212,7 @@ const rowHeight = computed(() => Math.round(28 + 8 * density.value));
     </p>
     <div v-else-if="configError" class="sx-strip sx-strip-bad">
       <span class="sx-strip-text">
-        <b>datalib won’t run this config.</b> {{ configError }} Nothing syncs, and applets don’t
+        <b>Datalib won’t run this config.</b> {{ configError }} Nothing syncs, and applets don’t
         start, until it is fixed.
       </span>
       <button class="sx-btn" @click="openConfig">Show the config</button>

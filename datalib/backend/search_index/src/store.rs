@@ -41,10 +41,12 @@ const DDL: [&str; 6] = [
         UNIQUE (doc_id, seq)
     )",
     // One row per section, rowid = section_id. Contentless: the postings
-    // and no copy of the text (fts_facts_test).
+    // and no copy of the text (fts_facts_test). Each word as written, case
+    // and accents folded, so a quoted phrase is exact: another form of a
+    // word is meaning's to find, not a stemmer's.
     "CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
         title, body,
-        content='', contentless_delete=1, tokenize='porter unicode61'
+        content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2'
     )",
     // Raised by every write, so a reader holding what it read can tell
     // whether the index moved without stat-ing a file the grid also writes.

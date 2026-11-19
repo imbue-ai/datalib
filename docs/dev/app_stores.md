@@ -117,14 +117,14 @@
 
 Every store above but the JSON files, the blob stores and the
 `problems.sqlite` files carries a
-`_datalib_meta` table — which datalib and
+`_datalib_meta` table — which Datalib and
 git commit wrote it, the doltlite it was written with, a hash of the
 DDL it was opened with, and its kind — written by the owner on open
 and committed with the schema (`datalib_store_meta`;
 [`etl/README.md`](../../datalib/backend/etl/README.md) § "`_datalib_meta`:
 which build wrote this store"). A reader that wants to
 know what it is looking at reads that before its first query — and
-every owner does, refusing a store a newer `major.minor` of datalib
+every owner does, refusing a store a newer `major.minor` of Datalib
 wrote (`datalib_store_meta::guard`; the app server then boots only to
 show the screen that says so, and `datalib-dag` refuses the root).
 
@@ -133,7 +133,7 @@ per app, so each can be managed or deleted on its own. Nothing can
 rebuild it: no reset or source deletion touches it, and its store
 refuses a schema it cannot reach rather than rebuilding
 (`doltlite_raw::open_curated`). No group or step may claim the name
-(`datalib_dag::config::CURATED_DIR`). An app built outside datalib may
+(`datalib_dag::config::CURATED_DIR`). An app built outside Datalib may
 keep a directory of its own here too, so a store found here need not be
 ours.
 
@@ -196,7 +196,7 @@ is a timeseries — `datalib-http` walks the root every five seconds
 never walks), and appends a row per tree whose size moved, one
 transaction per walk — so the rows *are* the history. Between runs nothing writes the root, so the series
 deliberately has no samples there, and a change made from outside
-datalib carries the instant it was next *measured*. Reading it is
+Datalib carries the instant it was next *measured*. Reading it is
 `SELECT path, measured_at_utc, bytes FROM disk_usage`; it is compacted
 (no repeated value, nothing closer than five seconds), so carry the last
 value forward rather than assuming a fixed interval. Beside it,

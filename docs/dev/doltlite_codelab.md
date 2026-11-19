@@ -3,7 +3,7 @@
 **Duration:** ~7 minutes
 **You'll need:** `doltlite` on your PATH and a terminal.
 
-> If you have datalib installed, you already have the shell: it is
+> If you have Datalib installed, you already have the shell: it is
 > `datalib-doltlite`, from the release tarball. In a checkout,
 > `bazelisk build //third-party/doltlite:doltlite` builds the pinned
 > one. Either way you can skip this section — substitute your binary's

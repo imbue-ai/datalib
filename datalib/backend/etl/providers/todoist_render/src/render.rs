@@ -330,15 +330,17 @@ pub fn build(
         let mut done: Vec<&Task> = group.iter().copied().filter(|t| t.done).collect();
         done.sort_by(|a, b| (b.completed_at, b.id).cmp(&(a.completed_at, a.id)));
         if !done.is_empty() {
-            out.sections.push(Section::unkeyed(format!(
-                "<details class=\"todoist-completed\">\n<summary>{}</summary>\n\n",
-                escape_text(&format!("✓ {} completed", done.len()))
-            )));
+            out.sections.push(
+                Section::fold_open(
+                    "todoist-completed",
+                    &escape_text(&format!("✓ {} completed", done.len())),
+                )
+                .kept_whole(),
+            );
             for t in done {
                 out.task(t, 0, section_name, notes.get(t.id));
             }
-            out.sections
-                .push(Section::unkeyed("</details>\n\n".to_string()));
+            out.sections.push(Section::fold_close().kept_whole());
         }
     }
 

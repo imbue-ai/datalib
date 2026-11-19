@@ -1,7 +1,7 @@
 //! Every row of the TNG fixture, searched for by what it holds, is found:
 //! by each search key's value (exactly the rows holding that value), by
 //! each key that reads the search terms (`from:`, `to:`, `with:`, …), by
-//! each of its search terms on the fields, and each document by its
+//! each of its ids and addresses pasted as free text, and each document by its
 //! rarest word on the words and, nearly always, by its opening words
 //! on the meaning. Which source each search reached is a snapshot, so
 //! a fixture change that leaves a source unchecked by a search shows in
@@ -339,9 +339,9 @@ async fn every_row_is_found_by_what_it_holds() {
     let parts = [
         tokio::spawn(by_each_key(f.clone())),
         tokio::spawn(by_each_terms_key(f.clone())),
-        tokio::spawn(by_each_term_on_the_fields(f.clone())),
+        tokio::spawn(by_each_id_pasted(f.clone())),
         tokio::spawn(by_the_rarest_word_on_the_words(f.clone())),
-        tokio::spawn(the_table_of_contents_on_the_fields_alone(f.clone())),
+        tokio::spawn(the_table_of_contents_not_on_the_words(f.clone())),
         tokio::spawn(by_the_opening_words_on_the_meaning(f.clone())),
     ];
     let mut failures: Vec<String> = Vec::new();
@@ -468,14 +468,28 @@ async fn by_each_terms_key(f: Arc<Fixture>) -> Findings {
     found
 }
 
-/// A term is found by its value on the fields, among whatever else
-/// answers to the same words.
-async fn by_each_term_on_the_fields(f: Arc<Fixture>) -> Findings {
+/// A term that is an id or a handle finds its row when pasted as free
+/// text, among whatever else names it.
+async fn by_each_id_pasted(f: Arc<Fixture>) -> Findings {
     let s = index_over(&f.root).await;
     let mut found = Findings::default();
     for ((kind, value), holding) in terms_of(&f.root).await {
-        let q = format!("\"{value}\"");
-        let got: HashSet<String> = every_uuid(&s, &q, Some(Part::Fields))
+        // A person pastes an address or a number as written, not as the
+        // handle it is filed under. A handle spelled with another namespace
+        // (`slack:T/U`) reads as a key, and one with a space as two words:
+        // neither can be pasted bare.
+        let pasted = ["email:", "tel:"]
+            .iter()
+            .find_map(|ns| value.strip_prefix(ns))
+            .unwrap_or(&value);
+        let one_word = matches!(
+            datalib_query::parse(pasted).as_slice(),
+            [datalib_query::Token::Free(_)]
+        );
+        if !one_word || datalib_unified_grid_and_search_index::query::identifier(pasted).is_none() {
+            continue;
+        }
+        let got: HashSet<String> = every_uuid(&s, pasted, None)
             .await
             .into_iter()
             .map(|r| r.uuid)
@@ -487,14 +501,14 @@ async fn by_each_term_on_the_fields(f: Arc<Fixture>) -> Findings {
             .collect();
         if !missing.is_empty() {
             found.failures.push(format!(
-                "the fields's `{q}` ({kind}) missed [{}]",
+                "`{pasted}` pasted ({kind}) missed [{}]",
                 listed(&missing)
             ));
         }
         for uuid in &holding {
             found
                 .coverage
-                .checked(&format!("fields: {kind}"), &f.source_of(uuid));
+                .checked(&format!("pasted: {kind}"), &f.source_of(uuid));
         }
     }
     found
@@ -522,25 +536,16 @@ async fn by_the_rarest_word_on_the_words(f: Arc<Fixture>) -> Findings {
     found
 }
 
-/// Notion's table of contents is filed for the grid alone: its title
-/// finds its row on the fields, and the words, which reads the search
-/// index, does not return it.
-async fn the_table_of_contents_on_the_fields_alone(f: Arc<Fixture>) -> Findings {
+/// Notion's table of contents is filed for the grid alone: the words,
+/// which read the search index, do not return it.
+async fn the_table_of_contents_not_on_the_words(f: Arc<Fixture>) -> Findings {
     let s = index_over(&f.root).await;
     let mut found = Findings::default();
-    let contents_rows = |got: Vec<SearchRow>| {
-        got.iter()
-            .filter(|r| r.kind == "Notion Table of Contents")
-            .count()
-    };
-    let by_title = every_uuid(&s, "Table-of-Contents", Some(Part::Fields)).await;
-    if contents_rows(by_title) != 1 {
-        found
-            .failures
-            .push("the fields missed the table of contents by its title".to_string());
-    }
     let by_words = every_uuid(&s, "Table-of-Contents", Some(Part::Words)).await;
-    if contents_rows(by_words) != 0 {
+    if by_words
+        .iter()
+        .any(|r| r.kind == "Notion Table of Contents")
+    {
         found
             .failures
             .push("the words returned the table of contents".to_string());

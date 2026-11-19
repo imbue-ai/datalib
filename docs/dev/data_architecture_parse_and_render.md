@@ -123,8 +123,9 @@ database per source, at
     and where to put it back (`body_at`), and each frame piece whole.
     With `sections` it spells the document byte for byte
     (`IndexedMarkdownStore::document`), which is the one copy of what a
-    document looks like: the viewer, a search's quotes and
-    `datalib-step markdown` all read it.
+    document looks like: the viewer and `datalib-step markdown` read it.
+    A search's quote reads only the `sections` row of the item the hit
+    landed on (`IndexedMarkdownStore::item_texts`).
   - `source_contacts` and `source_contact_handles` — the people it
     describes or mentions, each as its source describes them (a
     `NormalizedContact`, `contact_schema/`), and the handles that reach
@@ -209,9 +210,10 @@ There is no `.md` file. A renderer hands each document over as
 `RenderedMarkdown::sections`, and the store keeps them in `sections` and
 `drawings`, versioned with the document's rows, so a reader at a
 commit sees that commit's text. Search draws a document's text from the
-store (`IndexedMarkdownStore::index_docs`); the document view, a
-search's quotes and `datalib-step markdown` spell it
-(`IndexedMarkdownStore::document`). Files an earlier build wrote beside
+store (`IndexedMarkdownStore::index_docs`); the document view and
+`datalib-step markdown` spell it (`IndexedMarkdownStore::document`). A
+hit lands on the item the search index names, by its id, and its quote
+reads only what that item says (`IndexedMarkdownStore::item_texts`). Files an earlier build wrote beside
 the store are deleted the next time the source renders
 (`datalib_step/src/old_markdown.rs`).
 
@@ -355,19 +357,23 @@ document. A message is drawn in its **box**, `<div id="m-{uuid}"
 data-section-uuid="{uuid}" class="…">`, and every renderer draws it
 one way, `Section::boxed`, so the store keeps the box's class
 (`sections.class`) and knows the box from the uuid and the class alone.
-The render store keeps the pieces, and spelling a document back gives
-each piece's uuid or none, its box's class and its text; the document
-route, asked with `?pieces=true`, sends them as `pieces`, a boxed one as
-its class and what is inside the box, and the UI never sees them
-joined.
+A **fold**, a `<details>` around a run of pieces (a run of tool steps,
+another version, a Drive comment thread, Todoist's completed tasks), is
+drawn one way too, by `Section::fold_open` and `Section::fold_close`,
+and the store keeps each one's class and summary in `folds`. The render
+store keeps the pieces, and spelling a document back gives each piece's
+uuid or none, its box's class, the fold it opens or closes, and its
+text; the document route, asked with `?pieces=true`, sends them as
+`pieces` (`section::nodes`): a boxed one as its class and what is inside
+the box, a fold as a node around the pieces it holds. The UI never sees
+them joined.
 
 How the UI draws the pieces (`ui/src/cards/renderDocument.ts`):
 
-- **The unkeyed pieces are the page's frame.** They are rendered
-  together, as one markdown string with a placeholder where each
-  message goes, so a `<details>` opened in one still closes in a later
-  one. They hold only what the renderer writes itself; the title in
-  them is escaped.
+- **Every piece is rendered alone**, the unkeyed ones (the title,
+  headings between messages) too, so nothing one opens reaches the
+  next. A fold is drawn by the UI around its pieces, its summary
+  sanitized like any other text, so no piece opens or closes it.
 - **Each keyed piece is rendered and sanitized alone.** The UI draws a
   boxed one's box itself, around what is inside it rendered as a
   fragment of its own, so a `</div>` in a message cannot close its box

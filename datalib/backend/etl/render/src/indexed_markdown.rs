@@ -51,6 +51,9 @@ const DOCUMENT_SECTIONS: &str = "DELETE FROM sections WHERE markdown_uuid = ?";
 const REMOVED_DRAWN: &str =
     "DELETE FROM drawings WHERE markdown_uuid IN (SELECT value FROM json_each(?))";
 const DOCUMENT_DRAWN: &str = "DELETE FROM drawings WHERE markdown_uuid = ?";
+const REMOVED_FOLDS: &str =
+    "DELETE FROM folds WHERE markdown_uuid IN (SELECT value FROM json_each(?))";
+const DOCUMENT_FOLDS: &str = "DELETE FROM folds WHERE markdown_uuid = ?";
 
 /// A kept section as [`IndexedMarkdownStore::kept_sections`] reads it.
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
@@ -118,7 +121,7 @@ async fn put_sections(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<(
     }
     let mut guard = write_lock.acquire().await?;
     let conn = guard.conn();
-    for sql in [DOCUMENT_SECTIONS, DOCUMENT_DRAWN] {
+    for sql in [DOCUMENT_SECTIONS, DOCUMENT_DRAWN, DOCUMENT_FOLDS] {
         sqlx::query(sql)
             .bind(&md.markdown_uuid)
             .execute(&mut **conn)
@@ -137,6 +140,16 @@ async fn put_sections(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<(
             .execute(&mut **conn)
             .await
             .with_context(|| format!("document {}: store drawing {}", md.markdown_uuid, row.seq))?;
+    }
+    for row in crate::section::folds(&md.markdown_uuid, &md.sections) {
+        sqlx::query("INSERT INTO folds (markdown_uuid, seq, class, summary) VALUES (?, ?, ?, ?)")
+            .bind(&row.markdown_uuid)
+            .bind(row.seq)
+            .bind(&row.class)
+            .bind(&row.summary)
+            .execute(&mut **conn)
+            .await
+            .with_context(|| format!("document {}: store fold {}", md.markdown_uuid, row.seq))?;
     }
     for row in crate::section::stored(&md.markdown_uuid, &md.sections) {
         sqlx::query(
@@ -194,6 +207,7 @@ pub(crate) fn store_tables() -> impl Iterator<Item = (&'static str, &'static str
         .chain(datalib_schema::filings::DDL.iter())
         .chain(datalib_schema::sections::DDL.iter())
         .chain(datalib_schema::drawings::DDL.iter())
+        .chain(datalib_schema::folds::DDL.iter())
         .chain(SOURCE_CONTACTS_DDL.iter())
         .chain(SOURCE_CONTACT_HANDLES_DDL.iter())
         .chain(SOURCE_PHOTOS_DDL.iter())
@@ -521,7 +535,7 @@ impl IndexedMarkdownStore {
                 crate::grid_index::delete_document_rows(conn, markdown_uuids)
                     .await
                     .context("remove documents from the store")?;
-                for sql in [REMOVED_SECTIONS, REMOVED_DRAWN] {
+                for sql in [REMOVED_SECTIONS, REMOVED_DRAWN, REMOVED_FOLDS] {
                     sqlx::query(sql)
                         .bind(&set)
                         .execute(&mut **conn)
@@ -1003,7 +1017,38 @@ impl IndexedMarkdownStore {
             if sections.is_empty() && drawn.is_empty() {
                 return Ok(None);
             }
-            Ok(crate::section::spell(&sections, &drawn))
+            let folds: Vec<datalib_schema::folds::FoldRow> = sqlx::query_as(
+                "SELECT markdown_uuid, seq, class, summary FROM folds \
+                 WHERE markdown_uuid = ? ORDER BY seq",
+            )
+            .bind(markdown_uuid)
+            .fetch_all(&self.pool)
+            .await
+            .context("read a document's folds")?;
+            Ok(crate::section::spell(&sections, &drawn, &folds))
+        })
+    }
+
+    /// What each of these items says, as the store keeps it, by its uuid:
+    /// its body where its renderer split one off, else its piece whole
+    /// with the class of the box it is in. Read only for these documents'
+    /// pieces; an item the store does not hold is left out.
+    pub fn item_texts(
+        &self,
+        markdown_uuids: &[String],
+        uuids: &[String],
+    ) -> Result<Vec<(String, String, Option<String>)>> {
+        blocking(async {
+            sqlx::query_as(
+                "SELECT uuid, text, class FROM sections \
+                 WHERE markdown_uuid IN (SELECT value FROM json_each(?)) \
+                 AND uuid IN (SELECT value FROM json_each(?))",
+            )
+            .bind(serde_json::to_string(markdown_uuids)?)
+            .bind(serde_json::to_string(uuids)?)
+            .fetch_all(&self.pool)
+            .await
+            .context("read items' texts")
         })
     }
 
@@ -1709,6 +1754,8 @@ mod tests {
             DOCUMENT_SECTIONS,
             REMOVED_DRAWN,
             DOCUMENT_DRAWN,
+            REMOVED_FOLDS,
+            DOCUMENT_FOLDS,
         ];
         statements.extend(crate::grid_index::DELETE_DOCUMENTS);
         blocking(crate::grid_index::assert_searched_by_index(

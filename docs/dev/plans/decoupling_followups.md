@@ -78,7 +78,7 @@ the steps each one needs, and writes `command = "datalib-step"`
 own programs to the wizard (`datalib/ui/src/config/catalog.ts:242`).
 The end state treats `datalib-step` the same way: a program that
 describes what it offers, which the wizard reads, with no list of
-datalib's sources compiled into the UI.
+Datalib's sources compiled into the UI.
 
 ### 4. The config upgrade rewrites datalib-step's steps
 
@@ -141,7 +141,7 @@ talks to it only through what another client could use:
   SIGTERM.
 - Who restarts the loop if it dies.
 
-### 7. datalib's constants live in the runner's crate
+### 7. Datalib's constants live in the runner's crate
 
 `datalib-http` reads these from `datalib_dag::config`, so they stay in
 the runner after the runner stops using them. They move out of the

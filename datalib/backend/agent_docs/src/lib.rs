@@ -97,7 +97,7 @@ pub const DOCS: &[Doc] = &[
         topic: "docker",
         path: "docs/user/docker.md",
         kind: Kind::Guide,
-        about: "running datalib in Docker, with a demo library",
+        about: "running Datalib in Docker, with a demo library",
         text: include_str!("../../../../docs/user/docker.md"),
     },
     Doc {
@@ -111,7 +111,8 @@ pub const DOCS: &[Doc] = &[
         topic: "apps",
         path: "docs/user/building_on_datalib.md",
         kind: Kind::Guide,
-        about: "building an app on datalib: syncing, freshness, a step of your own",
+        about: "building an app on Datalib: syncing, freshness, reading the stores, a step of \
+                your own",
         text: include_str!("../../../../docs/user/building_on_datalib.md"),
     },
     Doc {
@@ -132,7 +133,8 @@ pub const DOCS: &[Doc] = &[
         topic: "applets",
         path: "docs/user/applets.md",
         kind: Kind::Guide,
-        about: "the servers the app runs: what each serves, and how to call them",
+        about: "the servers the app runs: what each serves, how to call them, SQL over HTTP \
+                against any store",
         text: include_str!("../../../../docs/user/applets.md"),
     },
     Doc {
@@ -203,7 +205,7 @@ pub const DOCS: &[Doc] = &[
         topic: "chips",
         path: "docs/dev/chips.md",
         kind: Kind::Reference,
-        about: "how datalib's viewer draws a person, a group, a step or a date, and its clicks",
+        about: "how Datalib's viewer draws a person, a group, a step or a date, and its clicks",
         text: include_str!("../../../../docs/dev/chips.md"),
     },
     Doc {

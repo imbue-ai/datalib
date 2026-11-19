@@ -73,7 +73,7 @@ and the next local `embed` finds it there and skips the chunk.
 
 It goes to the person's own Modal account, signed in the way Modal's own
 tools sign in (`~/.modal.toml`, or `MODAL_TOKEN_ID` and
-`MODAL_TOKEN_SECRET`). datalib never copies that credential. The text
+`MODAL_TOKEN_SECRET`). Datalib never copies that credential. The text
 crosses Modal's TLS connection into a container that lives for the run
 and is gone after it, the slice a file in its filesystem; whether Modal
 keeps a container's files or logs is _to check_, and the step prints
@@ -166,7 +166,7 @@ NVIDIA's libraries are not open source. The module carries the CUDA
 runtime and the `-cuda` image cuBLAS, both of which the CUDA Toolkit
 EULA's Attachment A lists as redistributable. Each archive carries
 `third-party/llama_cpp/CUDA-NOTICE.md`, which says their use is governed
-by that EULA and not by datalib's MIT license, and NVIDIA's own
+by that EULA and not by Datalib's MIT license, and NVIDIA's own
 `LICENSE` for the component, verbatim from the archive Bazel fetched it
 in. Whether a release publishes them is the user's decision
 (`AGENTS.md` § "License: MIT, and what may come in").

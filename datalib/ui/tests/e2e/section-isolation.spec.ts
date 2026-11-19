@@ -15,7 +15,11 @@ import { test, expect, type Page } from "@playwright/test";
 
 /// What the document route sends the viewer, as far as these tests read it.
 type BodyPiece = { uuid: string | null; class?: string | null; md: string };
-type ChatResponse = { pieces: BodyPiece[] } & Record<string, unknown>;
+type BodyFold = { fold: string; summary: string; pieces: BodyNode[] };
+type BodyNode = BodyPiece | BodyFold;
+type ChatResponse = { pieces: BodyNode[] } & Record<string, unknown>;
+
+const isFold = (n: BodyNode): n is BodyFold => "fold" in n;
 
 const chatRoute = (uuid: string) => `/applet/unified_grid_and_search_index/chat/${uuid}`;
 
@@ -47,17 +51,14 @@ async function aConversation(page: Page): Promise<Doc> {
 /// Two messages side by side, neither inside a fold, so the second is
 /// on screen once scrolled to.
 function twoMessagesInARow(chat: ChatResponse): { first: string; next: string } | null {
-  let depth = 0;
   let previous: string | null = null;
-  for (const { uuid, md } of chat.pieces) {
-    if (uuid === null) {
-      if (md.startsWith("<details")) depth += 1;
-      if (md.startsWith("</details>")) depth -= 1;
+  for (const n of chat.pieces) {
+    if (isFold(n) || n.uuid === null) {
       previous = null;
-    } else if (depth === 0 && previous) {
-      return { first: previous, next: uuid };
+    } else if (previous) {
+      return { first: previous, next: n.uuid };
     } else {
-      previous = depth === 0 ? uuid : null;
+      previous = n.uuid;
     }
   }
   return null;
@@ -66,19 +67,21 @@ function twoMessagesInARow(chat: ChatResponse): { first: string; next: string } 
 /// The document with the payload at the end of its first message.
 function withPayload(doc: Doc): ChatResponse {
   const pieces = doc.chat.pieces.map((p) => ({ ...p }));
-  const first = pieces.find((p) => p.uuid === doc.first)!;
+  const first = pieces.find((p): p is BodyPiece => !isFold(p) && p.uuid === doc.first)!;
   expect(first.class, "the first message is in a box").toBeTruthy();
   first.md += payload(doc.next);
   return { ...doc.chat, pieces };
 }
 
-/// The pieces as one string, each box drawn as render draws it.
-const joined = (pieces: BodyPiece[]) =>
+/// The pieces as one string, each box and fold drawn as render draws it.
+const joined = (pieces: BodyNode[]): string =>
   pieces
     .map((p) =>
-      p.uuid && p.class
-        ? `<div id="m-${p.uuid}" data-section-uuid="${p.uuid}" class="${p.class}">\n\n${p.md}</div>\n\n`
-        : p.md,
+      isFold(p)
+        ? `<details class="${p.fold}">\n<summary>${p.summary}</summary>\n\n${joined(p.pieces)}</details>\n\n`
+        : p.uuid && p.class
+          ? `<div id="m-${p.uuid}" data-section-uuid="${p.uuid}" class="${p.class}">\n\n${p.md}</div>\n\n`
+          : p.md,
     )
     .join("");
 

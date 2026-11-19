@@ -55,14 +55,41 @@ renders its thread again, and the root's own row changes when Slack's
 count does. `slack_tests`'s `reply_count` module holds a thread whose
 read failed, then reads it, and checks the incremental render.
 
-## What a page leaves out
+## Blocks and attachments
 
-A message shows its `text` and `files`. Its `attachments` (a link preview, a
-forwarded message, a bot's card) and any `blocks` other than `rich_text`, a
-divider or a row of buttons are kept in the raw store and not drawn. A document
-holding such a message says so with one `info` row, on its banner. Not a warning:
-measured on two real workspaces, about a quarter of documents have one. `rich_text`
-does not count because it repeats `text`, and it is on nearly every message.
+Besides its `text` and `files`, a message can hold layout `blocks` and
+legacy `attachments`; `src/render/cards.rs` draws both as markdown after
+the text. Every piece of text in them goes through the same mrkdwn
+conversion as a message's text, so a `<@U…>` in a bot's card is a person
+too, and a `plain_text` object is escaped to read as typed.
+
+- **Blocks.** A `rich_text` block repeats `text`, and a divider or a row
+  of buttons says nothing, so those draw nothing. A `section` draws its
+  text and then its `fields` as a list; a `header` is a bold line; a
+  `context` joins its text elements with ` · `; an `image` or `video`
+  block is a link to it, never an image the page loads.
+- **Blocks replace `text`** when Slack would show them instead of it: a
+  bot's `text` is the notification's one-line summary of its blocks
+  ("This content can't be displayed." on some). They do so only when the
+  message has no `rich_text` block and every block is drawn; otherwise
+  `text` stays, as the one account of the block that is not drawn.
+- **Attachments** are each a blockquote, as Slack sets them off with a
+  bar, any `pretext` above it. A forwarded or unfurled message
+  (`is_share`, `is_msg_unfurl`) leads with its author, a person when
+  Slack names their user id, and a link to the original, then its text
+  and the names of its files. Anything else leads with what it has of
+  its service, author and linked title, then its text, its `fields` as
+  `title: value` and its own blocks. A link preview's description is
+  left out past 300 characters, and its image is not fetched. The
+  `fallback` stands in only for an attachment that draws nothing else.
+- A link is made only of an `http`, `https` or `mailto` address.
+
+What is still not drawn (a `call`, `table`, `input` or `file` block, an
+attachment with nothing to show) gets one `info` row on the document,
+on the first message holding it, naming the kinds:
+`2 messages here hold what is not shown: call block, table block`. Not a
+warning: it is no fault of the sync, and it shows on the document's
+banner.
 
 ## mrkdwn
 
@@ -76,7 +103,7 @@ does not count because it repeats `text`, and it is on nearly every message.
   mid-line, which markdown would read as a language name and an
   unclosed fence. A thread's title ends at a ```` ``` ````;
 - `<@U…>` is a chip link to the user, `[@Name](slack://user?team=T&id=U
-  "@Name (slack:T/U)")`, through `chip_link`, so datalib draws who that
+  "@Name (slack:T/U)")`, through `chip_link`, so Datalib draws who that
   is; inside code it is plain `@Name`, which code shows literally, and a
   thread's title, plain text, keeps `@Name` too;
 - `<#C…|name>`, `<!subteam^…>`, `<!here>` / `<!channel>` /
