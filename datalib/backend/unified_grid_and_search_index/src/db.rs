@@ -8,6 +8,7 @@ use crate::terms_keys::{self, Cells, TermsKey, TermsValue};
 use datalib_query::table::{Column, FreeText, SearchTable};
 use datalib_schema::grid_rows::GridRowColumn;
 use datalib_schema::providers::Provider;
+use datalib_schema::search_terms::{SearchTermKind, FROM_THE_DOCUMENT};
 
 /// The source id datalib's own rows are filed under — the storage
 /// reports, which describe a source's mirror rather than belonging to
@@ -71,8 +72,8 @@ pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
     let pk = <C::Table as SearchTable>::PRIMARY_KEY.as_str();
     for term in &q.terms {
         let (clause, bound) = match term.field {
-            Field::Terms(key) => terms_clause(pk, key, term),
-            Field::Names => names_clause(pk, term),
+            Field::Terms(key) => terms_clause(key, term),
+            Field::Names => names_clause(term),
             Field::Text => text_clause(pk, term),
             Field::Before | Field::After | Field::Is(_) | Field::Column(_) => {
                 (String::new(), Vec::new())
@@ -98,29 +99,36 @@ pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
             });
             continue;
         }
-        // A uuid key takes its uuid at the end of a slug or a link too.
-        let value = key
+        // A uuid is stored one way (`grid_index::uuids_one_way`), so it is
+        // typed that way too; a uuid key takes it at the end of a slug or a
+        // link as well.
+        let uuid = key
             .uuid
             .then(|| datalib_uuid_text::at_end(&term.value))
             .flatten()
-            .unwrap_or_else(|| term.value.clone());
-        let (is, is_not, bound) = match datalib_uuid_text::spellings(&value) {
-            Some(spellings) => (
-                "IN (SELECT value FROM json_each(?))",
-                "NOT IN (SELECT value FROM json_each(?))",
-                serde_json::to_string(&spellings).expect("strings serialize"),
-            ),
-            None => ("= ?", "!= ?", value),
-        };
+            .or_else(|| datalib_uuid_text::canonical(&term.value));
+        // `upstream_id` is as the source wrote it, which a uuid's term is
+        // not.
+        if let (Some(uuid), true) = (&uuid, col == GridRowColumn::UpstreamId.as_str()) {
+            let not = if term.negate { "NOT " } else { "" };
+            clauses.push(format!(
+                "rowid {not}IN (SELECT t.row_id FROM terms t WHERE t.kind = {} \
+                 AND t.val_id IN (SELECT val_id FROM vals WHERE value = ?))",
+                SearchTermKind::UpstreamId.code()
+            ));
+            params.push(uuid.clone());
+            continue;
+        }
+        let value = uuid.unwrap_or_else(|| term.value.clone());
         if term.negate {
             // Nullable columns: NULL would pass `col != ?` as unknown
             // and be dropped, which surprises users who didn't ask to
             // exclude unset values. Explicitly keep nulls.
-            clauses.push(format!("({col} IS NULL OR {col} {is_not})"));
+            clauses.push(format!("({col} IS NULL OR {col} != ?)"));
         } else {
-            clauses.push(format!("{col} {is}"));
+            clauses.push(format!("{col} = ?"));
         }
-        params.push(bound);
+        params.push(value);
     }
 
     // The range column is a UTC stamp, the one the grid sorts on, so
@@ -168,31 +176,34 @@ pub const DOCUMENTS_INDEX: &str = "grid_rows_by_is_document";
 
 /// What [`matching_sql`] reads of each row kept: the row, its document and
 /// whether it is the document's own; or each document once.
-pub const KEPT_ROWS: &str = "uuid, markdown_uuid, is_document";
-pub const KEPT_DOCUMENTS: &str = "DISTINCT markdown_uuid";
+pub const KEPT_ROWS: &str = "r.uuid AS uuid, d.uuid AS markdown_uuid, r.is_document AS is_document";
+pub const KEPT_DOCUMENTS: &str = "DISTINCT d.uuid AS markdown_uuid";
 
 /// The `columns` of every row of a document that `q`'s terms keep, and
-/// the values to bind: what a search narrows by before it ranks. Names
-/// [`DOCUMENTS_INDEX`] when the terms are `is:document` and `source:`
-/// alone, so the plan cannot drift back to the table.
+/// the values to bind: what a search narrows by before it ranks. The
+/// filter comes out of `grid_rows`' indexes as row ids, which every one
+/// of them ends in, and the row and its document are read from `rows`
+/// by those integers, never from the table. Names [`DOCUMENTS_INDEX`]
+/// when the terms are `is:document` and `source:` alone, so the plan
+/// cannot drift back to the table.
 pub fn matching_sql(
     grid_rows: &str,
     columns: &str,
     q: &ParsedQuery<GridRowColumn>,
 ) -> (String, Vec<String>) {
     let (where_sql, params) = build_where(q);
-    let clause = if where_sql.is_empty() {
-        " WHERE markdown_uuid IS NOT NULL".to_string()
-    } else {
-        format!("{where_sql} AND markdown_uuid IS NOT NULL")
-    };
     let indexed = if documents_and_sources_only(q) {
         format!(" INDEXED BY {DOCUMENTS_INDEX}")
     } else {
         String::new()
     };
+    let kept = if where_sql.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE r.row_id IN (SELECT rowid FROM {grid_rows}{indexed}{where_sql})")
+    };
     (
-        format!("SELECT {columns} FROM {grid_rows}{indexed}{clause}"),
+        format!("SELECT {columns} FROM rows r JOIN rows d ON d.row_id = r.doc_row_id{kept}"),
         params,
     )
 }
@@ -240,33 +251,46 @@ fn text_clause<C>(pk: &str, term: &FilterTerm<C>) -> (String, Vec<String>) {
 }
 
 /// The rows that name `term`'s id or handle, whole and case-blind, in any
-/// of their terms, or with `-`, do not.
+/// of their terms or, as one of [`FROM_THE_DOCUMENT`], in their
+/// document's; or with `-`, do not.
 /// Both spellings are asked for, as a person key asks: the handle, and the
 /// address as typed, which an author with no handle is filed under.
-fn names_clause<C>(pk: &str, term: &FilterTerm<C>) -> (String, Vec<String>) {
+fn names_clause<C>(term: &FilterTerm<C>) -> (String, Vec<String>) {
     let not = if term.negate { "NOT " } else { "" };
     let mut values = vec![term.value.clone()];
     if let Some(id) = crate::query::identifier(&term.value).filter(|id| *id != term.value) {
         values.push(id);
     }
     let any = vec!["value = ? COLLATE NOCASE"; values.len()].join(" OR ");
+    let named = format!("t.val_id IN (SELECT val_id FROM vals WHERE {any})");
     (
         format!(
-            "{pk} {not}IN (SELECT r.uuid FROM terms t JOIN rows r ON r.row_id = t.row_id \
-             WHERE t.val_id IN (SELECT val_id FROM vals WHERE {any}))"
+            "rowid {not}IN (SELECT t.row_id FROM terms t WHERE {named} \
+             UNION SELECT r.row_id FROM terms t JOIN rows r ON r.doc_row_id = t.row_id \
+             WHERE t.kind IN ({}) AND {named})",
+            codes(FROM_THE_DOCUMENT)
         ),
-        values,
+        values.iter().chain(&values).cloned().collect(),
     )
+}
+
+/// `kinds` as their codes, a list SQL reads. They are the enum's own
+/// numbers, so they are written in.
+fn codes(kinds: &[SearchTermKind]) -> String {
+    kinds
+        .iter()
+        .map(|k| k.code().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The rows whose search terms of `key`'s kinds hold `value`, as one
 /// clause over `pk` and the values it binds. The kinds are the enum's own
 /// codes, so they are written in; the value is bound.
-fn terms_clause<C>(pk: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, Vec<String>) {
+fn terms_clause<C>(key: &TermsKey, term: &FilterTerm<C>) -> (String, Vec<String>) {
     if let Some(clause) = cell_clause(key, term) {
         return (clause, Vec::new());
     }
-    let codes: Vec<String> = key.kinds().iter().map(|k| k.code().to_string()).collect();
     let (matched, bound) = match terms_keys::value_of(key, &term.value, term.quoted, ANY_VALUE) {
         TermsValue::Any => (String::new(), Vec::new()),
         // `vals_nocase` and `names_by_name` serve each `=`: a whole value,
@@ -351,9 +375,8 @@ fn terms_clause<C>(pk: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, V
     let not = if term.negate { "NOT " } else { "" };
     (
         format!(
-            "{pk} {not}IN (SELECT r.uuid FROM terms t JOIN rows r ON r.row_id = t.row_id \
-             WHERE t.kind IN ({}){matched})",
-            codes.join(", ")
+            "rowid {not}IN (SELECT t.row_id FROM terms t WHERE t.kind IN ({}){matched})",
+            codes(&key.kinds())
         ),
         bound,
     )
@@ -518,9 +541,8 @@ mod tests {
         let (sql, params) = build_where(&parse_query("from:Ann@Example.com"));
         assert_eq!(
             sql,
-            " WHERE uuid IN (SELECT r.uuid FROM terms t JOIN rows r \
-             ON r.row_id = t.row_id WHERE t.kind IN (3, 11) AND t.val_id IN \
-             (SELECT val_id FROM vals WHERE value = ? COLLATE NOCASE \
+            " WHERE rowid IN (SELECT t.row_id FROM terms t WHERE t.kind IN (3, 11) \
+             AND t.val_id IN (SELECT val_id FROM vals WHERE value = ? COLLATE NOCASE \
              OR value = ? COLLATE NOCASE))"
         );
         assert_eq!(params, ["email:ann@example.com", "Ann@Example.com"]);
@@ -554,7 +576,7 @@ mod tests {
         assert_eq!(params, [r#"["me:self","email:a@b.c"]"#]);
 
         let (sql, params) = build_where(&parse_query("-author:riker"));
-        assert!(sql.starts_with(" WHERE uuid NOT IN ("), "{sql}");
+        assert!(sql.starts_with(" WHERE rowid NOT IN ("), "{sql}");
         assert!(sql.contains("vals_tri MATCH ?"), "{sql}");
         assert!(sql.contains("names WHERE LOWER(name) LIKE ?"), "{sql}");
         assert_eq!(params, ["\"riker\"", "%riker%"]);
@@ -598,27 +620,27 @@ mod tests {
         );
     }
 
-    /// A uuid typed without dashes (a Notion link's) found nothing
-    /// stored with them.
+    /// A uuid typed without dashes (a Notion link's) or in capitals found
+    /// nothing stored with them. It is stored one way, so it is compared
+    /// that way, once: in the column, or for `id:` in its search term,
+    /// since the column keeps the source's spelling. Any other id as typed.
     #[test]
-    fn a_uuid_value_matches_each_of_its_spellings() {
+    fn a_uuid_value_is_compared_as_it_is_stored() {
+        let (sql, params) = build_where(&parse_query("account:1701D000abcd4e00A0000000000000ef"));
+        assert_eq!(sql, " WHERE account = ?");
+        assert_eq!(params, ["1701d000-abcd-4e00-a000-0000000000ef"]);
         let (sql, params) = build_where(&parse_query("id:1701D000abcd4e00A0000000000000ef"));
-        assert!(
-            sql.contains("upstream_id IN (SELECT value FROM json_each(?))"),
-            "{sql}"
+        assert_eq!(
+            sql,
+            " WHERE rowid IN (SELECT t.row_id FROM terms t WHERE t.kind = 15 \
+             AND t.val_id IN (SELECT val_id FROM vals WHERE value = ?))"
         );
-        let spellings: Vec<String> = serde_json::from_str(&params[0]).unwrap();
-        assert!(spellings.contains(&"1701d000-abcd-4e00-a000-0000000000ef".to_string()));
+        assert_eq!(params, ["1701d000-abcd-4e00-a000-0000000000ef"]);
         let (sql, _) = build_where(&parse_query("-id:1701d000-abcd-4e00-a000-0000000000ef"));
-        assert!(
-            sql.contains(
-                "(upstream_id IS NULL OR upstream_id NOT IN (SELECT value FROM json_each(?)))"
-            ),
-            "{sql}"
-        );
+        assert!(sql.starts_with(" WHERE rowid NOT IN ("), "{sql}");
         let (sql, params) = build_where(&parse_query("id:M-ncc1701-0042"));
-        assert!(sql.contains("upstream_id = ?"), "{sql}");
-        assert_eq!(params, vec!["M-ncc1701-0042".to_string()]);
+        assert_eq!(sql, " WHERE upstream_id = ?");
+        assert_eq!(params, ["M-ncc1701-0042"]);
     }
 
     /// A key that holds a uuid takes it at the end of a page's link, as
@@ -628,11 +650,24 @@ mod tests {
         let (sql, params) = build_where(&parse_query(
             "notion_page:https://www.notion.so/Away-Team-1701d000abcd4e00a0000000000000ef?pvs=4",
         ));
-        assert!(
-            sql.contains("notion_page_uuid IN (SELECT value FROM json_each(?))"),
-            "{sql}"
+        assert_eq!(sql, " WHERE notion_page_uuid = ?");
+        assert_eq!(params, ["1701d000-abcd-4e00-a000-0000000000ef"]);
+    }
+
+    /// A pasted id reaches a document's rows through the document's own
+    /// row, which alone holds its id and title; every other kind only
+    /// names the row that holds it.
+    #[test]
+    fn a_pasted_id_reaches_a_documents_rows_through_its_row() {
+        let (sql, params) = build_where(&parse_query("00000000-0000-4000-8000-0000000000e0"));
+        assert_eq!(
+            sql,
+            " WHERE rowid IN (SELECT t.row_id FROM terms t WHERE t.val_id IN \
+             (SELECT val_id FROM vals WHERE value = ? COLLATE NOCASE) \
+             UNION SELECT r.row_id FROM terms t JOIN rows r ON r.doc_row_id = t.row_id \
+             WHERE t.kind IN (1, 4) AND t.val_id IN \
+             (SELECT val_id FROM vals WHERE value = ? COLLATE NOCASE))"
         );
-        let spellings: Vec<String> = serde_json::from_str(&params[0]).unwrap();
-        assert!(spellings.contains(&"1701d000-abcd-4e00-a000-0000000000ef".to_string()));
+        assert_eq!(params.len(), 2);
     }
 }

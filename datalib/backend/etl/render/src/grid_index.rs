@@ -2225,6 +2225,27 @@ static PUT_GRID_ROW_SQL: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
+/// `row` with a uuid in `account` or `project` lowercase with dashes,
+/// however the source spelled it, so their keys compare it once. Both
+/// are for display; `upstream_id` stays as the source wrote it, since a
+/// row's uuid is minted from it, and `id:` reads its search term
+/// (`search_terms_of`). The ids Datalib mints are written this way already.
+fn uuids_one_way(row: &GridRow) -> std::borrow::Cow<'_, GridRow> {
+    let respelled = |id: &Option<String>| {
+        id.as_deref()
+            .and_then(datalib_uuid_text::canonical)
+            .filter(|c| Some(c.as_str()) != id.as_deref())
+    };
+    let (account, project) = (respelled(&row.account), respelled(&row.project));
+    if account.is_none() && project.is_none() {
+        return std::borrow::Cow::Borrowed(row);
+    }
+    let mut row = row.clone();
+    row.account = account.or(row.account);
+    row.project = project.or(row.project);
+    std::borrow::Cow::Owned(row)
+}
+
 /// Write one row, and settle a uuid another document holds by *who*
 /// wrote that document. One an earlier run wrote means the row has
 /// moved — a message re-bucketed into another period, a chat whose
@@ -2237,6 +2258,7 @@ async fn put_grid_row(
     write_lock: &WriteLock,
     row: &GridRow,
 ) -> Result<()> {
+    let row = &*uuids_one_way(row);
     let written = row
         .bind_into(sqlx::query(PUT_GRID_ROW_SQL.as_str()))
         .execute(&mut **conn)
