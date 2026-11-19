@@ -87,8 +87,7 @@ mod tests {
             step: step.to_string(),
             group: step.split('/').next().unwrap().to_string(),
             group_type: None,
-            source_group: None,
-            source_group_type: None,
+            diff_source_type: None,
             function,
             inputs: Vec::new(),
         }

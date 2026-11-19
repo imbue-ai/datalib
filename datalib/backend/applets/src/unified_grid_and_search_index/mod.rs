@@ -2449,6 +2449,44 @@ mod tests {
         assert_eq!(uuids(&kept), [email], "{:?}", kept.query_echo);
     }
 
+    /// A bare word, `+` and `-` ones too, matches any form of it; a quoted
+    /// one only as written. Each of these failed with one tokenizer for
+    /// both: without stems the bare forms found nothing, with them the
+    /// quote matched "drills".
+    #[tokio::test]
+    async fn a_bare_word_matches_its_other_forms_and_a_quoted_one_only_itself() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log = "00000000-0000-4000-8000-00000000e0e0";
+        let docs = [own_document(holodeck_row(
+            log,
+            "2026-01-01T09:00:00+00:00",
+            "Email",
+            "tng_email",
+        ))];
+        index_with_text(
+            tmp.path(),
+            &docs,
+            "Safety review",
+            "the drills were running late",
+        )
+        .await;
+        let s = index_over(tmp.path()).await;
+        for (q, found) in [
+            ("drill", true),
+            ("run", true),
+            ("+drill", true),
+            ("late -drill", false),
+            ("late", true),
+            ("\"drills were\"", true),
+            ("\"drill\"", false),
+            ("\"run\"", false),
+        ] {
+            let r = search(&s, &format!("{q} semantic:off"), None, 10, None).await;
+            let want: &[&str] = if found { &[log] } else { &[] };
+            assert_eq!(uuids(&r), want, "{q}: {:?}", r.query_echo);
+        }
+    }
+
     /// Repro (#1887): a ranking cut its matches, not its documents, before
     /// keeping one per document: one long chat whose every message says the
     /// word filled the cut, and an older document saying it was never
@@ -2507,13 +2545,25 @@ mod tests {
 
     /// Whether any test in this process has the file `(dev, ino)` open.
     /// The caller keeps a name linked to that file, so its number cannot
-    /// be handed to another test's file while it looks.
+    /// be handed to another test's file while it looks. Each descriptor
+    /// is asked with `fstat` on a copy of it: on macOS, `stat` of
+    /// `/dev/fd/N` answers with devfs's device number, not the file's.
     fn held_open((dev, ino): (u64, u64)) -> bool {
+        use std::os::fd::{BorrowedFd, RawFd};
         use std::os::unix::fs::MetadataExt;
         std::fs::read_dir("/dev/fd")
             .unwrap()
             .flatten()
-            .filter_map(|fd| std::fs::metadata(fd.path()).ok())
+            .filter_map(|entry| entry.file_name().to_str()?.parse::<RawFd>().ok())
+            .filter_map(|fd| {
+                // SAFETY: only `dup`ed. A descriptor another test closed
+                // meanwhile fails with EBADF or copies whatever took its
+                // number; neither touches the original.
+                unsafe { BorrowedFd::borrow_raw(fd) }
+                    .try_clone_to_owned()
+                    .ok()
+            })
+            .filter_map(|fd| std::fs::File::from(fd).metadata().ok())
             .any(|m| (m.dev(), m.ino()) == (dev, ino))
     }
 

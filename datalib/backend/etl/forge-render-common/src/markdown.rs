@@ -8,7 +8,7 @@
 
 use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::html::{escape_md_inline, escape_name_inline, md_code_span};
-use datalib_etl_render::message::{chip_link, message_stamp_text_html, source_link};
+use datalib_etl_render::message::{chip_link, MessageHeader};
 use datalib_etl_render::section::{msg_class, Section};
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
@@ -65,7 +65,14 @@ pub(crate) fn render(
         out.push_str("*(no description)*\n\n");
     } else {
         sections.push(Section::unkeyed(std::mem::take(&mut out)));
-        sections.push(message(profile, &cr.uuid, None, &cr.body));
+        let header = header_of(
+            cr.author.as_deref(),
+            cr.author_handle.as_ref(),
+            cr.created_at.as_deref(),
+            cr.url.as_deref(),
+            &[],
+        );
+        sections.push(message(profile, &cr.uuid, Some(&header), &cr.body));
     }
 
     let ordered = ordered(comments);
@@ -156,29 +163,40 @@ fn person(author: Option<&str>, handle: Option<&Handle>) -> String {
 }
 
 fn header(c: &Comment) -> String {
-    // A chip stands out on its own; a login as text is bolded instead.
-    let who = match &c.author_handle {
-        Some(_) => person(c.author.as_deref(), c.author_handle.as_ref()),
-        None => format!("**{}**", person(c.author.as_deref(), None)),
-    };
-    let when = message_stamp_text_html(&c.created_at);
-    let link = c
-        .url
-        .as_deref()
-        .map(|u| format!(" {}", source_link(u)))
-        .unwrap_or_default();
-    let state = c
-        .state
-        .as_deref()
-        .filter(|s| !s.is_empty())
-        .map(|s| format!(" *({})*", escape_md_inline(s)))
-        .unwrap_or_default();
-    let reply = if c.in_reply_to_id.is_some() {
-        " *(reply)*"
-    } else {
-        ""
-    };
-    format!("{who}{state}{reply} · {when}{link}")
+    let state = c.state.as_deref().filter(|s| !s.is_empty());
+    let reply = c.in_reply_to_id.is_some().then_some("reply");
+    let tags: Vec<&str> = state.into_iter().chain(reply).collect();
+    header_of(
+        c.author.as_deref(),
+        c.author_handle.as_ref(),
+        Some(&c.created_at),
+        c.url.as_deref(),
+        &tags,
+    )
+}
+
+/// The one message header, naming who wrote it as a chip where the forge
+/// gave an account, else as `@login`.
+fn header_of(
+    author: Option<&str>,
+    handle: Option<&Handle>,
+    stamp: Option<&str>,
+    source_url: Option<&str>,
+    tags: &[&str],
+) -> String {
+    let login = format!("@{}", author.unwrap_or("unknown"));
+    MessageHeader {
+        author: match handle {
+            Some(_) => author.unwrap_or("unknown"),
+            None => &login,
+        },
+        handle,
+        stamp,
+        source_url,
+        tags,
+        ..Default::default()
+    }
+    .render()
 }
 
 #[cfg(test)]
@@ -270,8 +288,8 @@ mod tests {
         let chip = "[Data](datalib:handle/github/data-soong \"Data (github:data-soong)\")";
         assert!(md.contains(&format!(" — {chip} — ")), "{md}");
         assert!(
-            md.contains(&format!("\n{chip} *(")),
-            "a header, not bold: {md}"
+            md.contains(&format!("\n## {chip} <span class=\"msg-tag\">")),
+            "the one message header: {md}"
         );
     }
 
@@ -294,7 +312,9 @@ mod tests {
         assert!(body.contains("### `` src/`a`.rs:3 ``"), "{body}");
         assert!(
             body.contains(&format!(
-                "**@{escaped}** *({escaped})* · <time datetime=\"2364-04-11\">Sat Apr 11th, 2364</time> \
+                "## <span class=\"msg-author\">@{escaped}</span> \
+                 <span class=\"msg-tag\">{escaped}</span> \
+                 <time class=\"msg-ts\" datetime=\"2364-04-11\">Sat Apr 11th, 2364</time> \
                  <a class=\"source-link\" href=\"https://e.invalid/c (1)\" target=\"_blank\" \
                  rel=\"noopener noreferrer\">↗</a>"
             )),

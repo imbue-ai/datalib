@@ -1,7 +1,7 @@
-//! The first launch of a build on a root: the server asks every step that
-//! takes the verb to `--migrate` before its loop takes any request, offers
-//! to run the ones that answer `needs_rerun`, and asks nobody on the next
-//! launch of the same build (`dag/README.md` §"Upgrading a root").
+//! Every launch on a root: the server asks every step whose program takes
+//! the verb to `--prepare` before its loop takes any request, and offers
+//! to run the ones that answer `needs_rerun` (`dag/README.md` §"Upgrading
+//! a root").
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -15,11 +15,11 @@ const TOKEN: &str = "upgrade-on-launch-test-token";
 
 /// Stands in for `datalib-step` on the binary path: logs how it was
 /// invoked, and as `b`'s render answers that it needs to run again. While
-/// a `hold` file is in the root, a migrate waits for it to go.
+/// a `hold` file is in the root, a prepare waits for it to go.
 const FAKE_STEP: &str = r#"#!/bin/sh
-case " $* " in *" --migrate "*) mode=migrate ;; *) mode=sync ;; esac
+case " $* " in *" --prepare "*) mode=prepare ;; *) mode=sync ;; esac
 echo "$mode $DATALIB_DAG_STEP" >> "$DATALIB_DAG_DATA_ROOT/invoked"
-if [ "$mode" = migrate ]; then
+if [ "$mode" = prepare ]; then
     while [ -e "$DATALIB_DAG_DATA_ROOT/hold" ]; do sleep 0.05; done
     if [ "$DATALIB_DAG_STEP" = b/render_markdown ]; then
         echo '{"event":"outcome","needs_rerun":true,"outputs":[]}'
@@ -40,12 +40,16 @@ fn bin_dir_with_fake_step(dir: &Path) -> PathBuf {
     bin
 }
 
+const PROGRAMS: &str = "[[programs]]\ncommand = \"datalib-step\"\n\
+    verbs = [\"reset\", \"prepare\", \"compact\", \"collect\"]\n\n";
+
 fn source(group: &str) -> String {
     format!(
         "[[groups]]\nid = \"{group}\"\ntype = \"calendar\"\n\n\
-         [[steps]]\ngroup = \"{group}\"\nfunction = \"ingest\"\n\n\
-         [[steps]]\ngroup = \"{group}\"\nfunction = \"render_markdown\"\n\
-         inputs = [\"{group}/ingest\"]\n\n"
+         [[steps]]\nid = \"{group}/ingest\"\ncommand = \"datalib-step run ingest calendar\"\n\n\
+         [[steps]]\nid = \"{group}/render_markdown\"\n\
+         command = \"datalib-step run render_markdown calendar\"\n\
+         inputs = [\"{group}/ingest\"]\nreads = \"pinned\"\n\n"
     )
 }
 
@@ -113,14 +117,19 @@ async fn get(state: &AppState, uri: &str) -> serde_json::Value {
 
 /// Every step is asked, producers first, before the sync opened at boot
 /// runs. `b`'s render, which said it needs to run again, is left alone by
-/// `a`'s sync and offered; the next launch of the same build asks nobody.
+/// `a`'s sync and offered; the next launch asks every step again, since
+/// the runner cannot tell whether a program changed in between.
 #[tokio::test]
-async fn a_launch_asks_every_step_once_per_build_before_any_sync() {
+async fn a_launch_asks_every_step_before_any_sync_at_every_start() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
     let bin = bin_dir_with_fake_step(td.path());
-    std::fs::write(root.join("config.toml"), source("a") + &source("b")).unwrap();
+    std::fs::write(
+        root.join("config.toml"),
+        PROGRAMS.to_string() + &source("a") + &source("b"),
+    )
+    .unwrap();
 
     sync_a_and_wait(&root).await;
     let state = boot(&root, &bin).await;
@@ -138,18 +147,18 @@ async fn a_launch_asks_every_step_once_per_build_before_any_sync() {
     assert_eq!(
         asked,
         [
-            "migrate a/ingest",
-            "migrate a/render_markdown",
-            "migrate b/ingest",
-            "migrate b/render_markdown",
+            "prepare a/ingest",
+            "prepare a/render_markdown",
+            "prepare b/ingest",
+            "prepare b/render_markdown",
         ],
         "every step is asked before anything syncs: {lines:?}"
     );
     assert_eq!(ran, ["sync a/ingest", "sync a/render_markdown"]);
     for group in ["a", "b"] {
         assert!(
-            at(&format!("migrate {group}/ingest"))
-                < at(&format!("migrate {group}/render_markdown")),
+            at(&format!("prepare {group}/ingest"))
+                < at(&format!("prepare {group}/render_markdown")),
             "a render is asked after its raw store: {lines:?}"
         );
     }
@@ -174,37 +183,51 @@ async fn a_launch_asks_every_step_once_per_build_before_any_sync() {
     sync_a_and_wait(&root).await;
     let state = boot(&root, &bin).await;
     until_invoked(&root, "sync a/render_markdown").await;
-    assert!(
-        !invoked(&root).iter().any(|l| l.starts_with("migrate")),
-        "the same build asks once: {:?}",
-        invoked(&root)
+    let mut asked: Vec<String> = invoked(&root)
+        .into_iter()
+        .filter(|l| l.starts_with("prepare"))
+        .collect();
+    asked.sort();
+    assert_eq!(
+        asked,
+        [
+            "prepare a/ingest",
+            "prepare a/render_markdown",
+            "prepare b/ingest",
+            "prepare b/render_markdown",
+        ],
+        "the next start asks every step again"
     );
     assert_eq!(
-        config(&state).await["upgrade"]["steps"],
-        serde_json::json!([])
+        config(&state).await["upgrade"]["rerender"],
+        serde_json::json!(["b/render_markdown"])
     );
     state.sync.shutdown(Duration::from_secs(10)).await;
 }
 
-/// While the first step is still migrating, the run's record already lists
+/// While the first step is still preparing, the run's record already lists
 /// every step the pass will ask, the rest as pending, so a person can see
-/// how many are left (#1678: a migrate run listed only the steps reached).
+/// how many are left (#1678: the pass's run listed only the steps reached).
 #[tokio::test]
-async fn the_migrate_run_lists_every_step_it_will_ask_from_the_start() {
+async fn the_prepare_run_lists_every_step_it_will_ask_from_the_start() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
     let bin = bin_dir_with_fake_step(td.path());
-    std::fs::write(root.join("config.toml"), source("a") + &source("b")).unwrap();
+    std::fs::write(
+        root.join("config.toml"),
+        PROGRAMS.to_string() + &source("a") + &source("b"),
+    )
+    .unwrap();
     std::fs::write(root.join("hold"), "").unwrap();
 
     let state = boot(&root, &bin).await;
     let deadline = Instant::now() + Duration::from_secs(30);
     let first = loop {
         if let Some(line) = invoked(&root).first() {
-            break line.trim_start_matches("migrate ").to_string();
+            break line.trim_start_matches("prepare ").to_string();
         }
-        assert!(Instant::now() < deadline, "no step was asked to migrate");
+        assert!(Instant::now() < deadline, "no step was asked to prepare");
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
     let steps = [
@@ -233,7 +256,7 @@ async fn the_migrate_run_lists_every_step_it_will_ask_from_the_start() {
         }
         assert!(
             Instant::now() < deadline,
-            "while {first} migrates, the run's rows never read {want:?}: {:?} {got:?}",
+            "while {first} prepares, the run's rows never read {want:?}: {:?} {got:?}",
             snap.kind
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -252,11 +275,15 @@ async fn every_sync_is_paused_while_the_pass_runs_and_offered_after() {
     let root = td.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
     let bin = bin_dir_with_fake_step(td.path());
-    std::fs::write(root.join("config.toml"), source("a")).unwrap();
+    std::fs::write(
+        root.join("config.toml"),
+        PROGRAMS.to_string() + &source("a"),
+    )
+    .unwrap();
     std::fs::write(root.join("hold"), "").unwrap();
 
     let state = boot(&root, &bin).await;
-    until_invoked(&root, "migrate a/ingest").await;
+    until_invoked(&root, "prepare a/ingest").await;
     assert_eq!(config(&state).await["upgrade"]["migrating"], true);
     let rows = get(&state, "/api/manage/rows").await;
     let paused = rows["sync_paused"]

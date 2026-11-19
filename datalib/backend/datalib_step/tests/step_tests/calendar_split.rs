@@ -21,15 +21,16 @@ fn step(root: &Path, function: &str) {
     .unwrap();
     let mut cmd = Command::new(std::env::var_os("DATALIB_STEP_BIN").expect("DATALIB_STEP_BIN"));
     if function == "ingest" {
-        cmd.arg("--params-file").arg(&params);
+        cmd.env(
+            "DATALIB_DAG_PARAMS",
+            std::fs::read_to_string(&params).unwrap(),
+        );
     } else {
         cmd.env("DATALIB_DAG_INPUTS", "bridge/ingest");
     }
     let out = cmd
         .env("DATALIB_DAG_STEP", format!("bridge/{function}"))
-        .env("DATALIB_DAG_GROUP", "bridge")
-        .env("DATALIB_DAG_GROUP_TYPE", "calendar")
-        .env("DATALIB_DAG_FUNCTION", function)
+        .args(["run", function, "calendar"])
         .env("DATALIB_DAG_DATA_ROOT", root)
         .env("DATALIB_CACHE_DIR", root.join("cache"))
         .stdin(Stdio::null())
@@ -121,13 +122,13 @@ async fn a_split_series_lists_each_occurrence_once() {
     let params = root.join("occurrences.json");
     std::fs::write(&params, r#"{"days_back": 14, "days_ahead": 30}"#).unwrap();
     let out = Command::new(std::env::var_os("DATALIB_STEP_BIN").expect("DATALIB_STEP_BIN"))
-        .arg("--params-file")
-        .arg(&params)
+        .env(
+            "DATALIB_DAG_PARAMS",
+            std::fs::read_to_string(&params).unwrap(),
+        )
         .env("DATALIB_DAG_INPUTS", "bridge/ingest")
         .env("DATALIB_DAG_STEP", "bridge/render_occurrences")
-        .env("DATALIB_DAG_GROUP", "bridge")
-        .env("DATALIB_DAG_GROUP_TYPE", "calendar")
-        .env("DATALIB_DAG_FUNCTION", "render_occurrences")
+        .args(["run", "render_occurrences", "calendar"])
         .env("DATALIB_DAG_DATA_ROOT", root)
         .env("DATALIB_DAG_NOW", "2026-10-15T12:00:00-07:00")
         .env("DATALIB_CACHE_DIR", root.join("cache"))

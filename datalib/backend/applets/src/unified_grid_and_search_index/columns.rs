@@ -457,10 +457,15 @@ impl Sources {
             })
             .collect();
         for v in tables("steps") {
-            if s(v, "function").as_deref() != Some("ingest") {
+            // A step's id is `<group>/<function>`.
+            let Some((group, "ingest")) = s(v, "id")
+                .as_deref()
+                .and_then(|id| id.split_once('/'))
+                .map(|(g, f)| (g.to_string(), f))
+            else {
                 continue;
-            }
-            let Some(g) = s(v, "group").and_then(|g| groups.get_mut(&g)) else {
+            };
+            let Some(g) = groups.get_mut(&group) else {
                 continue;
             };
             g.ingest_params = v
@@ -898,8 +903,8 @@ name = "Work mail"
 type = "email"
 
 [[steps]]
-group = "work-mail"
-function = "ingest"
+id = "work-mail/ingest"
+command = "datalib-step run ingest email"
 [steps.params.gmail]
 account = "x"
 "#,

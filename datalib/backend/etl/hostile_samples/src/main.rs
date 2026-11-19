@@ -170,6 +170,7 @@ fn header_and_title() -> Vec<Document> {
         date_ms: Some(12_602_794_200_000),
         offset_secs: None,
         source_url: None,
+        ..Default::default()
     }
     .render();
     let text = f.hostile("title text");

@@ -6,23 +6,22 @@ name = "Calendar export"
 type = "calendar"
 
 [[steps]]
-group = "calendar"
-function = "ingest"
-command = "datalib-step"
+id = "calendar/ingest"
+command = "datalib-step run ingest calendar"
 
 [steps.params.ics]
 path = "~/Downloads/calendar-export"
 
 [[steps]]
-group = "calendar"
-function = "render_markdown"
-command = "datalib-step"
+id = "calendar/render_markdown"
+command = "datalib-step run render_markdown calendar"
 inputs = ["calendar/ingest"]
+reads = "pinned"
 
 # Every occurrence of every event from 30 days back to 400 ahead, one row
 # each, the way Google's `singleEvents=true` lists them.
 [[steps]]
-group = "calendar"
-function = "render_occurrences"
-command = "datalib-step"
+id = "calendar/render_occurrences"
+command = "datalib-step run render_occurrences calendar"
 inputs = ["calendar/ingest"]
+reads = "pinned"

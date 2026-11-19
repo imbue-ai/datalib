@@ -31,10 +31,10 @@ pub fn whole_calendar_sources(cfg_text: &str) -> Vec<(String, String, String)> {
         .cloned()
         .unwrap_or_default();
     let of = |group: &str, function: &str| {
-        steps.iter().find(|s| {
-            s.get("group").and_then(|g| g.as_str()) == Some(group)
-                && s.get("function").and_then(|f| f.as_str()) == Some(function)
-        })
+        let id = format!("{group}/{function}");
+        steps
+            .iter()
+            .find(|s| s.get("id").and_then(|i| i.as_str()) == Some(id.as_str()))
     };
     let mut out = Vec::new();
     for g in doc

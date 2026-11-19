@@ -3,12 +3,10 @@
 //
 // A `[[groups]]` entry is a source: an `id` that is the directory its
 // steps write into, a `name` that is free text, and a `type`. A step
-// under it is `group` + `function`, and its id is composed as
-// `<group>/<function>` — never written, and never split. What a step is
-// (ingest, render, index) is read off its `function`; which group it
-// belongs to is read off `group`. Nothing here takes an id apart to
-// learn either. A step outside any group carries a verbatim `id` and is
-// a custom executable the wizard knows nothing about.
+// writes its `id` as `<group>/<function>`: the part before the first `/`
+// is its group, and the rest is what it does there (ingest, render,
+// index). A step whose first part names no `[[groups]]` entry is a custom
+// executable the wizard knows nothing about.
 //
 // The wizard writes a source as one unit — the group, its `ingest`
 // step and its `render_markdown` step — from one form. Adding and
@@ -33,23 +31,22 @@ import { editStringArray, quote } from "./tomlText";
 import { deleteIn, setIn } from "./tomlPatch";
 
 /// Which wave a step belongs to, for display and for picking the right
-/// half of a catalog entry's fields. Read off the step's `function`.
+/// half of a catalog entry's fields. Read off the function part of its id.
 export type StepPhase = "ingest" | "render" | "index" | "other";
 
 export type EntryKind = "step" | "applet";
 
 export type ConfiguredStep = {
-  /// Identity, and the tree this step writes: `<group>/<function>` for
-  /// a grouped step, the written `id` for one outside any group.
-  /// Path-safe, unique, and what the directory structure is formed
+  /// Identity, and the tree this step writes: its `id`, which a step
+  /// the wizard writes spells `<group>/<function>`. Path-safe, unique, and what the directory structure is formed
   /// from — so changing it moves data on disk and strands the paths the
   /// index recorded, which is why the wizard holds it fixed after
   /// creation.
   id: string;
   kind: EntryKind;
-  /// The `[[groups]]` entry this step is filed under, and what it does
-  /// there. Both null for a custom step with a verbatim id, and for an
-  /// applet.
+  /// The step's group, the first part of its id, and what it does
+  /// there, the rest. `function` is null for an id with no `/`; both are
+  /// null for an applet, whose `group` is its own key.
   group: string | null;
   function: string | null;
   /// What to show: the step's own `name =`; else, for a grouped step,
@@ -64,7 +61,7 @@ export type ConfiguredStep = {
   /// whose directory its command's program is in (`packageOfCommand`).
   package: string | null;
   /// The `command` it declares; null when it declares none, which the
-  /// loader reads as `datalib-step` (`isDatalibStep`).
+  /// loader refuses.
   command: string | null;
   /// The ids this step reads: its `inputs`, each pattern expanded.
   inputs: string[];
@@ -122,8 +119,8 @@ const PHASE_BY_FUNCTION: Record<string, StepPhase> = {
   embedding_map: "index",
 };
 
-/// A step's phase, from its function. A step outside any group has no
-/// function and is a custom executable: `other`.
+/// A step's phase, from its function. A step whose id has no function
+/// part is a custom executable: `other`.
 function phaseOfFunction(fn: string | null): StepPhase {
   return fn === null ? "other" : (PHASE_BY_FUNCTION[fn] ?? "other");
 }
@@ -148,7 +145,14 @@ export function defaultName(id: string): string {
 
 type ParsedConfig = {
   ast: ReturnType<typeof parseTOML>;
-  root: { groups?: unknown; steps?: unknown; applets?: unknown; packages?: unknown };
+  root: {
+    groups?: unknown;
+    steps?: unknown;
+    applets?: unknown;
+    packages?: unknown;
+    programs?: unknown;
+    locks?: unknown;
+  };
 };
 
 /// Parse the config text, throwing with the parser's message (and line,
@@ -216,17 +220,57 @@ export type ConfiguredPackage = {
   end: number;
 };
 
-/// The program every built-in step runs. It reads its function and its
-/// group's type from the environment, so it takes no arguments.
+/// The program every built-in step runs, told what to do by its
+/// arguments (`datalibStepCommand`).
 export const DATALIB_STEP = "datalib-step";
 
-/// Whether a step's `command` runs `datalib-step`. A step with no
-/// command does too: the loader reads one written before commands were
-/// spelled out that way.
+/// The verbs `datalib-step` takes, as its `[[programs]]` entry lists them.
+export const DATALIB_STEP_VERBS = ["reset", "prepare", "compact", "collect"];
+
+/// The first word of a command, split shell-style as the runner splits
+/// it: the program it starts, which a `[[programs]]` entry names.
+export function programOf(command: string): string {
+  let word = "";
+  let quote: string | null = null;
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i]!;
+    if (quote === "'") {
+      if (c === "'") quote = null;
+      else word += c;
+    } else if (quote === '"') {
+      if (c === '"') quote = null;
+      else if (c === "\\" && i + 1 < command.length) word += command[++i];
+      else word += c;
+    } else if (c === "'" || c === '"') {
+      quote = c;
+    } else if (c === "\\" && i + 1 < command.length) {
+      word += command[++i];
+    } else if (/\s/.test(c)) {
+      if (word) break;
+    } else {
+      word += c;
+    }
+  }
+  return word;
+}
+
+/// Whether a step's `command` runs `datalib-step`.
 export function isDatalibStep(command: string | null | undefined): boolean {
-  if (command === null || command === undefined) return true;
-  const program = command.trim().split(/\s+/)[0] ?? "";
+  const program = programOf(command ?? "");
   return program === DATALIB_STEP || program.endsWith(`/${DATALIB_STEP}`);
+}
+
+/// The command a built-in step runs: `datalib-step run <function>`, then
+/// its group's `type` when the group has one, then, under a comparison,
+/// the type of the source it compares.
+export function datalibStepCommand(
+  fn: string,
+  type: string | null | undefined,
+  sourceType?: string | null,
+): string {
+  return [DATALIB_STEP, "run", fn, type, sourceType ? `--source-type ${sourceType}` : null]
+    .filter((w) => w)
+    .join(" ");
 }
 
 /// Where the package pinned at `sha256` is unpacked, relative to the data
@@ -247,7 +291,7 @@ export function packageOfCommand(
   command: string | null,
   packages: ConfiguredPackage[],
 ): string | null {
-  const program = command?.trim().split(/\s+/)[0] ?? "";
+  const program = programOf(command ?? "");
   return packages.find((p) => program.startsWith(`${packageDir(p.sha256)}/`))?.id ?? null;
 }
 
@@ -296,24 +340,15 @@ export function listSteps(text: string): ConfiguredStep[] {
     root.steps.forEach((raw, i) => {
       const step = raw as {
         id?: unknown;
-        group?: unknown;
-        function?: unknown;
         name?: unknown;
         command?: unknown;
         inputs?: unknown;
         params?: unknown;
       } | null;
-      const group = typeof step?.group === "string" ? step.group : null;
-      const fn = typeof step?.function === "string" ? step.function : null;
-      // The id the loader composes — `<group>/<function>` — or the one
-      // written. A half-declared step is malformed and the loader will
-      // say so; it just needs to be addressable here.
-      const id =
-        group !== null && fn !== null
-          ? `${group}/${fn}`
-          : typeof step?.id === "string"
-            ? step.id
-            : "";
+      // A step with no id is malformed and the loader will say so; it
+      // just needs to be addressable here.
+      const id = typeof step?.id === "string" ? step.id : "";
+      const { group, fn } = splitStepId(id);
       const groupEntry = group !== null ? groupsById.get(group) : undefined;
       const phase = phaseOfFunction(fn);
       // Blank is the same as absent: the row falls back to the derived
@@ -335,7 +370,7 @@ export function listSteps(text: string): ConfiguredStep[] {
               : `step ${i + 1}`),
         phase,
         // The group's type is the only place a step's provider is
-        // written; a step outside any group has none.
+        // written; a step whose group has no entry has none.
         type: groupEntry?.type ?? null,
         package: packageOfCommand(
           typeof step?.command === "string" ? step.command : null,
@@ -405,6 +440,16 @@ export function listSteps(text: string): ConfiguredStep[] {
   // what a person editing the file expects to see; sibling fetch/render
   // pairs land adjacent because that is how they are written.
   return [...steps, ...applets];
+}
+
+/// A step id's group, the part before the first `/`, and its function,
+/// the rest: null for an id with no `/`.
+export function splitStepId(id: string): { group: string | null; fn: string | null } {
+  if (id === "") return { group: null, fn: null };
+  const slash = id.indexOf("/");
+  return slash < 0
+    ? { group: id, fn: null }
+    : { group: id.slice(0, slash), fn: id.slice(slash + 1) };
 }
 
 /// `datalib-applet unified_grid_and_search_index` → `unified_grid_and_search_index`. Null for anything
@@ -867,8 +912,7 @@ export function functionOf(phase: FieldPhase): string {
   return phase === "render" ? "render_markdown" : "ingest";
 }
 
-/// The id the loader composes for a group's step of this phase — the
-/// one place this side of the app puts a group and a function together.
+/// The id the wizard writes for a group's step of this phase.
 export function stepIdFor(group: string, phase: FieldPhase): string {
   return `${group}/${functionOf(phase)}`;
 }
@@ -908,8 +952,7 @@ function descriptionLine(description: string): string | null {
 
 /// One step, as a `[[steps]]` block. No name: a grouped step's label
 /// comes from its group and its function. A built-in step runs
-/// `datalib-step`, which reads the function and the group's type from the
-/// environment; a package source's step runs the package's program.
+/// `datalib-step`; a package source's step runs the package's program.
 export function buildStep(opts: {
   entry: CatalogEntry;
   group: string;
@@ -921,33 +964,80 @@ export function buildStep(opts: {
   const command = entry.package?.commands[functionOf(phase)];
   return stepToml({
     group,
-    phase,
+    fn: functionOf(phase),
+    type: entry.type,
     inputs: opts.inputs,
     command: entry.package && command ? inPackage(entry.package.dir, command) : undefined,
     params: paramsToml(entry, values, phase),
   });
 }
 
-/// The `[[steps]]` block itself: group, function, command, inputs, then
-/// a params body already rendered as TOML. What `buildStep` writes once
-/// it has turned form values into that body — the one place the shape of
-/// a step is spelled out.
+/// The functions whose `datalib-step` reads its inputs' files as they
+/// are, so no producer of an input may run beside it.
+const READS_FILES = new Set(["embed", "embedding_map"]);
+
+/// The lock a `datalib-step` function holds: every embed loads the model
+/// and writes the search index's vectors, so one runs at a time.
+const LOCK_OF_FUNCTION: Record<string, string> = {
+  embed: "embedder",
+};
+
+/// The locks a step the wizard writes may hold, and the slots each
+/// `[[locks]]` entry declares.
+export const LOCK_SLOTS: Record<string, number> = { embedder: 1, index: 2 };
+
+/// `reads` and `locks` for a step, by the rules `datalib-http`'s config
+/// upgrade writes (docs/dev/plans/dag_and_step_decoupling.md §"Existing
+/// configs"). A `datalib-step` step other than `ingest` gets both whether
+/// or not its inputs are empty yet (a fan-in's are, until a source is
+/// added); any other step only once it has inputs.
+function schedulingLines(opts: {
+  fn: string;
+  type: string | null;
+  inputs: string[] | undefined;
+  builtin: boolean;
+}): string[] {
+  const { fn, type, inputs, builtin } = opts;
+  const reads = builtin ? fn !== "ingest" : (inputs ?? []).length > 0;
+  if (!reads) return [];
+  const readsFiles =
+    builtin && (READS_FILES.has(fn) || (fn === "render_markdown" && type === "perseus"));
+  const lock = builtin ? LOCK_OF_FUNCTION[fn] : undefined;
+  const locks = lock ? [lock] : type ? [] : ["index"];
+  return [
+    `reads = ${quote(readsFiles ? "files" : "pinned")}`,
+    ...(locks.length ? [`locks = [${locks.map(quote).join(", ")}]`] : []),
+  ];
+}
+
+/// The `[[steps]]` block itself: id, command, inputs, how it reads and
+/// what it locks, then a params body already rendered as TOML. What
+/// `buildStep` writes once it has turned form values into that body — the
+/// one place the shape of a step is spelled out.
 export function stepToml(opts: {
   group: string;
-  phase: FieldPhase;
+  fn: string;
+  /// The group's `type`; null for a group with none.
+  type: string | null;
+  /// The compared source's type, for a step under a comparison.
+  sourceType?: string | null;
+  /// The steps it reads; written, even empty, when present.
   inputs?: string[];
-  /// What it runs; `datalib-step` when absent.
+  /// What it runs; `datalib-step run …` when absent.
   command?: string;
   params?: string;
 }): string {
-  const inputs = opts.inputs ?? [];
-  const inputsLine = inputs.length ? `\ninputs = [${inputs.map(quote).join(", ")}]` : "";
+  const { fn, type, inputs } = opts;
+  const command = opts.command ?? datalibStepCommand(fn, type, opts.sourceType);
+  const lines = [
+    "[[steps]]",
+    `id = ${quote(`${opts.group}/${fn}`)}`,
+    `command = ${quote(command)}`,
+    ...(inputs !== undefined ? [`inputs = [${inputs.map(quote).join(", ")}]`] : []),
+    ...schedulingLines({ fn, type, inputs, builtin: isDatalibStep(command) }),
+  ];
   const params = opts.params ?? "";
-  const block = `[[steps]]
-group = ${quote(opts.group)}
-function = ${quote(functionOf(opts.phase))}
-command = ${quote(opts.command ?? DATALIB_STEP)}${inputsLine}${params ? `\n${params}` : ""}`;
-  return block.trimEnd();
+  return `${lines.join("\n")}${params ? `\n${params}` : ""}`.trimEnd();
 }
 
 /// Whether a source of `entry` gets its render step, given what the
@@ -1010,18 +1100,17 @@ export function buildDiffSource(opts: {
   id: string;
   name: string;
   source: string;
+  /// The compared source's group `type`.
+  sourceType: string;
   from: string;
   to: string;
   maxDocuments: number;
 }): { groupBody: string; stepsBody: string; renderId: string } {
   const { id, source } = opts;
   const divider = `# ── ${id} ${"─".repeat(Math.max(4, 66 - id.length))}`;
-  const lines = [
-    `id = ${quote(id)}`,
-    nameLine(id, opts.name),
-    `type = ${quote(DIFF_TYPE)}`,
-    `source = ${quote(source)}`,
-  ].filter((l): l is string => l !== null);
+  const lines = [`id = ${quote(id)}`, nameLine(id, opts.name), `type = ${quote(DIFF_TYPE)}`].filter(
+    (l): l is string => l !== null,
+  );
   const params = [
     "[steps.params.diff]",
     `from = ${quote(opts.from)}`,
@@ -1032,7 +1121,9 @@ export function buildDiffSource(opts: {
     groupBody: `${divider}\n[[groups]]\n${lines.join("\n")}`,
     stepsBody: stepToml({
       group: id,
-      phase: "render",
+      fn: functionOf("render"),
+      type: DIFF_TYPE,
+      sourceType: opts.sourceType,
       inputs: [stepIdFor(source, "download")],
       params,
     }),
@@ -1095,17 +1186,13 @@ const STEP_TABLE = /(\[\[steps\]\])([\s\S]*?)(?=\n[ \t]*\[|$)/g;
 
 const INPUTS_OPEN = /^[ \t]*inputs[ \t]*=[ \t]*\[/m;
 
-/// Is this step body a fan-in — filed under one of `FAN_IN_GROUPS`, or,
-/// for a custom step, writing an id under one — and, when `only` names
-/// some, one of those?
+/// Is this step body a fan-in — its id under one of `FAN_IN_GROUPS` —
+/// and, when `only` names some, one of those?
 function isFanIn(body: string, only?: FanInFunction[]): boolean {
-  const verbatim = /id\s*=\s*"([^"/]*)\/([^"]*)"/.exec(body);
-  const filed = /group\s*=\s*"([^"]*)"/.exec(body)?.[1];
-  const underFanIn = verbatim !== null && FAN_IN_GROUPS.includes(verbatim[1]!);
-  if (!underFanIn && !(filed !== undefined && FAN_IN_GROUPS.includes(filed))) return false;
-  if (!only) return true;
-  const fn = /function\s*=\s*"([^"]*)"/.exec(body)?.[1] ?? (underFanIn ? verbatim?.[2] : undefined);
-  return only.includes(fn as FanInFunction);
+  const id = /^[ \t]*id[ \t]*=[ \t]*"([^"]*)"/m.exec(body)?.[1];
+  const { group, fn } = splitStepId(id ?? "");
+  if (group === null || !FAN_IN_GROUPS.includes(group)) return false;
+  return !only || only.includes(fn as FanInFunction);
 }
 
 /// Rewrite the `inputs` of the fan-ins `only` selects — all of them
@@ -1148,19 +1235,16 @@ export function unwireFromFanIns(text: string, stepId: string, only?: FanInFunct
   return editFanInInputs(text, only ? [only] : undefined, (ids) => ids.filter((t) => t !== stepId));
 }
 
-/// Which fan-in a step is, or null for a step that is not one. A
-/// grouped step says so with `group` + `function`; a custom step filed
-/// outside any group says it in the id it writes.
+/// Which fan-in a step is, or null for a step that is not one: the
+/// function of a step whose group is one of `FAN_IN_GROUPS`.
 export function fanInFunctionOf(step: ConfiguredStep): string | null {
-  if (step.group !== null && FAN_IN_GROUPS.includes(step.group)) return step.function;
-  const [group, fn] = step.id.split("/");
-  return step.group === null && group !== undefined && FAN_IN_GROUPS.includes(group)
-    ? (fn ?? null)
+  return step.kind === "step" && step.group !== null && FAN_IN_GROUPS.includes(step.group)
+    ? step.function
     : null;
 }
 
 /// The source types whose data is also time series. Mirrors
-/// `datalib_dag::config::TIME_SERIES_SOURCE_TYPES`; hand-kept in step with it.
+/// `SourceType::renders_time_series` in datalib-step; hand-kept in step with it.
 export const TIME_SERIES_TYPES = ["garmin", "yolink", "airvisual"];
 
 const TIME_SERIES_GROUP = "unified_time_series_index";
@@ -1191,19 +1275,30 @@ export function setTimeSeriesStep(
   const id = `${group}/render_time_series`;
   let next = text;
   if (!listSteps(next).some((s) => s.id === id)) {
-    const program = pkg && command ? inPackage(pkg.dir, command) : DATALIB_STEP;
     next = insertEntries(
       next,
-      `[[steps]]\ngroup = ${quote(group)}\nfunction = "render_time_series"\ncommand = ${quote(program)}\ninputs = [${quote(stepIdFor(group, "download"))}]`,
+      stepToml({
+        group,
+        fn: "render_time_series",
+        type,
+        command: pkg && command ? inPackage(pkg.dir, command) : undefined,
+        inputs: [stepIdFor(group, "download")],
+      }),
     );
   }
   if (!listSteps(next).some((s) => fanInFunctionOf(s) === "time_series_index")) {
-    next =
+    const index = stepToml({
+      group: TIME_SERIES_GROUP,
+      fn: "time_series_index",
+      type: null,
+      inputs: ["*/render_time_series"],
+    });
+    next = withDeclarations(
       `${next.replace(/\s*$/, "")}\n\n[[groups]]\nid = ${quote(TIME_SERIES_GROUP)}\n` +
-      `name = "Time Series Index"\n\n[[steps]]\ngroup = ${quote(TIME_SERIES_GROUP)}\n` +
-      `function = "time_series_index"\ncommand = ${quote(DATALIB_STEP)}\ninputs = ["*/render_time_series"]\n\n[[applets]]\n` +
-      `group = ${quote(TIME_SERIES_GROUP)}\nid = ${quote(TIME_SERIES_GROUP)}\n` +
-      `command = ${quote(`datalib-applet ${TIME_SERIES_GROUP}`)}\n`;
+        `name = "Time Series Index"\n\n${index}\n\n[[applets]]\n` +
+        `group = ${quote(TIME_SERIES_GROUP)}\nid = ${quote(TIME_SERIES_GROUP)}\n` +
+        `command = ${quote(`datalib-applet ${TIME_SERIES_GROUP}`)}\n`,
+    );
   }
   return wireIntoFanIns(next, id, "time_series_index");
 }
@@ -1222,7 +1317,12 @@ export function setOccurrencesStep(text: string, group: string, type: string): s
   if (listSteps(text).some((s) => s.id === id)) return text;
   return insertEntries(
     text,
-    `[[steps]]\ngroup = ${quote(group)}\nfunction = "render_occurrences"\ncommand = ${quote(DATALIB_STEP)}\ninputs = [${quote(stepIdFor(group, "download"))}]`,
+    stepToml({
+      group,
+      fn: "render_occurrences",
+      type,
+      inputs: [stepIdFor(group, "download")],
+    }),
   );
 }
 
@@ -1231,12 +1331,35 @@ const UNIFIED_GRID_AND_SEARCH_INDEX_STEP =
   "unified_grid_and_search_index/unified_grid_and_search_index";
 
 /// A source's own search step, as a `[[steps]]` block: its embeddings,
-/// which read the `unified_grid_and_search_index` step, whose keyword pass cuts what they embed.
-export function buildEmbedStep(group: string): { id: string; body: string } {
+/// which read the `unified_grid_and_search_index` step, whose keyword pass
+/// cuts what they embed. `type` is the group's, and `sourceType` the
+/// compared source's for a comparison.
+export function buildEmbedStep(
+  group: string,
+  type: string | null,
+  sourceType?: string | null,
+): { id: string; body: string } {
   return {
     id: `${group}/embed`,
-    body: `[[steps]]\ngroup = ${quote(group)}\nfunction = "embed"\ncommand = ${quote(DATALIB_STEP)}\ninputs = [${quote(UNIFIED_GRID_AND_SEARCH_INDEX_STEP)}]`,
+    body: stepToml({
+      group,
+      fn: "embed",
+      type,
+      sourceType,
+      inputs: [UNIFIED_GRID_AND_SEARCH_INDEX_STEP],
+    }),
   };
+}
+
+/// The compared source's type a comparison's steps run with, read off
+/// the `--source-type` of a step already under `group`.
+function sourceTypeIn(steps: ConfiguredStep[], group: string): string | null {
+  for (const s of steps) {
+    if (s.kind !== "step" || s.group !== group) continue;
+    const m = /(?:^|\s)--source-type\s+(\S+)/.exec(s.command ?? "");
+    if (m) return m[1]!;
+  }
+  return null;
 }
 
 /// How far into search a source goes: not at all, by its words, or by its
@@ -1289,7 +1412,11 @@ export function setSearchSteps(text: string, group: string, asked: SearchIndexin
   const hasIndexStep = steps.some(
     (s) => s.kind === "step" && s.id === UNIFIED_GRID_AND_SEARCH_INDEX_STEP,
   );
-  const embed = buildEmbedStep(group);
+  const embed = buildEmbedStep(
+    group,
+    type ?? null,
+    type === DIFF_TYPE ? sourceTypeIn(steps, group) : null,
+  );
   const has = steps.some((s) => s.id === embed.id);
   if (hasIndexStep && indexing === "keyword_and_embed") {
     if (!has) next = wireIntoFanIns(insertEntries(next, embed.body), embed.id, "embedding_map");
@@ -1349,9 +1476,84 @@ const INDEX_GROUP = "unified_grid_and_search_index";
 /// last source, just above the index every source feeds. A file already
 /// out of that order may have no such place; then the entries go at the
 /// end, which loads the same — the runner follows `inputs`, not the file.
+///
+/// The `[[programs]]` and `[[locks]]` entries the added steps need come
+/// with them (`withDeclarations`).
 export function insertEntries(text: string, body: string): string {
   const at = placeFor(text, body);
+  return withDeclarations(
+    at === null ? `${text.replace(/\s*$/, "")}\n\n${body}\n` : splice(text, at, at, body),
+  );
+}
+
+/// `text` with the top-level entries its steps need and it lacks: a
+/// `[[programs]]` entry for each spelling of `datalib-step` a step runs,
+/// listing the verbs it takes, and a `[[locks]]` entry for each lock of
+/// `LOCK_SLOTS` a step holds. Without the first the runner sends
+/// `datalib-step` no verb; without the second it refuses the step. They
+/// go after the file's last `[[packages]]`, `[[programs]]` or `[[locks]]`
+/// entry, else above its first table. Unchanged text when nothing is
+/// missing.
+export function withDeclarations(text: string): string {
+  const { ast, root } = parseConfig(text);
+  const entries = (v: unknown) =>
+    (Array.isArray(v) ? v : []).filter(
+      (e): e is Record<string, unknown> => e !== null && typeof e === "object",
+    );
+  const steps = entries(root.steps);
+  const programs = new Set(
+    entries(root.programs).map((p) => (typeof p.command === "string" ? p.command.trim() : "")),
+  );
+  const locks = new Set(entries(root.locks).map((l) => l.name));
+  const blocks: string[] = [];
+  const seen = new Set<string>();
+  for (const step of steps) {
+    const command = typeof step.command === "string" ? step.command : "";
+    const program = programOf(command);
+    // A `[[programs]]` entry names one word, so a path with a space in it
+    // cannot be declared.
+    if (!isDatalibStep(command) || /\s/.test(program)) continue;
+    if (programs.has(program) || seen.has(program)) continue;
+    seen.add(program);
+    blocks.push(
+      `[[programs]]\ncommand = ${quote(program)}\nverbs = [${DATALIB_STEP_VERBS.map(quote).join(", ")}]`,
+    );
+  }
+  for (const step of steps) {
+    for (const name of Array.isArray(step.locks) ? step.locks : []) {
+      if (typeof name !== "string" || !(name in LOCK_SLOTS)) continue;
+      if (locks.has(name) || seen.has(`lock:${name}`)) continue;
+      seen.add(`lock:${name}`);
+      blocks.push(`[[locks]]\nname = ${quote(name)}\nslots = ${LOCK_SLOTS[name]}`);
+    }
+  }
+  if (blocks.length === 0) return text;
+  const body = blocks.join("\n\n");
+  const after = ["packages", "programs", "locks"].flatMap((k) =>
+    [...ranges(ast, k).values()].map(([, end]) => end),
+  );
+  const at = after.length ? Math.max(...after) : firstTableStart(text);
   return at === null ? `${text.replace(/\s*$/, "")}\n\n${body}\n` : splice(text, at, at, body);
+}
+
+/// Where the first `[[…]]` table starts, with the comment lines directly
+/// above it (its banner); null when the file has none.
+function firstTableStart(text: string): number | null {
+  const m = /^[ \t]*\[\[/m.exec(text);
+  if (!m) return null;
+  let at = m.index;
+  while (at > 0) {
+    const prevStart = text.lastIndexOf("\n", at - 2) + 1;
+    if (
+      !text
+        .slice(prevStart, at - 1)
+        .trim()
+        .startsWith("#")
+    )
+      break;
+    at = prevStart;
+  }
+  return at;
 }
 
 /// Where [`insertEntries`] puts `body`, or null for the end. Always
@@ -1663,9 +1865,9 @@ export function untouchedSettings(
 }
 
 /// The keys of a `[[steps]]` entry the wizard writes or reads its
-/// meaning from. `inputs` is here because the form never changes a step's
-/// inputs, so there is nothing to warn about.
-const FORM_STEP_KEYS = new Set(["group", "function", "inputs", "params"]);
+/// meaning from. `command`, `inputs`, `reads` and `locks` are here because
+/// the form never changes them, so there is nothing to warn about.
+const FORM_STEP_KEYS = new Set(["id", "command", "inputs", "reads", "locks", "params"]);
 
 /// A human name reduced to something that can be a directory: NFKD
 /// normalize, drop combining marks, lowercase, every run of
@@ -1680,10 +1882,11 @@ export function slugify(name: string): string {
   return ascii.slice(0, 40).replace(/-+$/, "");
 }
 
-/// The ids a source may not take, mirroring `dag::config::RESERVED_DIRS`
-/// and `dag::config::RESERVED_STANZA_NAMES`. An id landing on one of these
-/// is suffixed like any other collision rather than rejected, so the
-/// wizard never proposes a name the loader would refuse.
+/// The ids a source may not take: the directories the runner reserves
+/// (`dag::config::RESERVED_DIRS`), and the index groups' ids, which a
+/// source would collide with. An id landing on one of these is suffixed
+/// like any other collision rather than rejected, so the wizard never
+/// proposes a name the loader would refuse or an index already holds.
 const RESERVED_IDS = new Set([
   "system",
   "datalib_curated",

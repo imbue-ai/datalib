@@ -14,6 +14,12 @@ use crate::events::{Emitter, OutputClaim};
 /// of our own. It reads types, never the words: whoever judged a refusal
 /// says so with an [`Upstream`] in the chain.
 pub fn classify(e: &anyhow::Error) -> FailureKind {
+    if e.chain().any(|c| {
+        c.is::<datalib_store_meta::guard::NewerBuild>()
+            || c.is::<datalib_store_meta::ladder::AheadOfLadder>()
+    }) {
+        return FailureKind::Incompatible;
+    }
     if e.chain()
         .any(|c| c.is::<datalib_etl::run_problems::GaveUp>())
     {
@@ -350,6 +356,24 @@ mod tests {
         assert_eq!(classify(&anyhow::Error::new(reset)), FailureKind::Transient);
         let other = anyhow::anyhow!("unparseable row 17");
         assert_eq!(classify(&other), FailureKind::Data);
+    }
+
+    /// A store a newer build wrote is not this build's to touch: the
+    /// runner turns a step that says so at `--prepare` off.
+    #[test]
+    fn a_store_from_a_newer_build_is_incompatible() {
+        let newer = datalib_store_meta::guard::NewerBuild {
+            store: "slack/ingest/entities.doltlite_db".into(),
+            wrote: "99.0.0".into(),
+            running: "0.1.0".into(),
+        };
+        let e = anyhow::Error::new(newer).context("open the raw store");
+        assert_eq!(classify(&e), FailureKind::Incompatible);
+        let ahead = datalib_store_meta::ladder::AheadOfLadder { stored: 9, top: 4 };
+        assert_eq!(
+            classify(&anyhow::Error::new(ahead)),
+            FailureKind::Incompatible
+        );
     }
 
     /// The words are never read. Gmail's spent daily quota is a 403 whose

@@ -6,15 +6,14 @@ name = "Gmail Takeout"
 type = "email"
 
 [[steps]]
-group = "email"
-function = "ingest"
-command = "datalib-step"
+id = "email/ingest"
+command = "datalib-step run ingest email"
 
 [steps.params.mbox]
 path = "~/Downloads/email-export"
 
 [[steps]]
-group = "email"
-function = "render_markdown"
-command = "datalib-step"
+id = "email/render_markdown"
+command = "datalib-step run render_markdown email"
 inputs = ["email/ingest"]
+reads = "pinned"

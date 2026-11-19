@@ -122,13 +122,11 @@ pub fn package_dir_rel(manifest_sha256: &str) -> String {
     format!("{PACKAGES_DIR_REL}/{short}")
 }
 
-// Stanza names a source may not take live with the code that enforces
-// them: `datalib_dag::config::RESERVED_STANZA_NAMES`, checked by
-// `validate_steps` on the path every entry point already takes. A
-// constant here had no callers at all, so nothing stopped a source
-// named `system`. `datalib-dag` deliberately doesn't depend on this
-// crate, so the policy lives where it is applied and the path constants
-// stay here.
+// The top-level directories no step may write live with the code that
+// enforces them: `datalib_dag::config::RESERVED_DIRS`, checked on the
+// path every entry point already takes. `datalib-dag` deliberately
+// doesn't depend on this crate, so the policy lives where it is applied
+// and the path constants stay here.
 
 pub fn system_dir(data_root: &Path) -> PathBuf {
     data_root.join(SYSTEM_DIR)

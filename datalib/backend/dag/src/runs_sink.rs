@@ -99,8 +99,6 @@ fn counter_fell(
 pub struct RunStoreSink {
     writer: Arc<RunWriter>,
     steps: Mutex<HashMap<StepId, Acc>>,
-    /// The runner's commit, which a built-in step's attempt shares.
-    git_hash: Option<String>,
 }
 
 /// The store's clock: UTC, with the runner's offset beside it.
@@ -137,7 +135,7 @@ impl RunStoreSink {
             data_root,
             run_id,
             started_at_utc,
-            git_hash.clone(),
+            git_hash,
             retention,
             started.clone(),
         )?;
@@ -157,7 +155,6 @@ impl RunStoreSink {
         Some(Self {
             writer: Arc::new(writer),
             steps: Mutex::new(HashMap::new()),
-            git_hash,
         })
     }
 
@@ -237,7 +234,7 @@ impl RunStoreSink {
             target: Some(RUNNER_TARGET.into()),
             msg: format!(
                 "{series} went down, {before} to {now}, but a name ending in `_total` says it only \
-                 grows; name it without the suffix if it can fall (`datalib-step help step-protocol`)"
+                 grows; name it without the suffix if it can fall (docs/dev/step_protocol.md)"
             ),
             fields: Some(
                 serde_json::json!({ "counter_fell": series, "from": before, "to": now })
@@ -396,11 +393,7 @@ impl EventSink for RunStoreSink {
             // A retry re-runs the step from zero, so the counters reset
             // with it — otherwise attempt 2 would appear to start
             // wherever attempt 1 died.
-            Event::StepStart {
-                step,
-                attempt,
-                builtin,
-            } => {
+            Event::StepStart { step, attempt } => {
                 // A retry goes straight to its next start.
                 self.say_slow_statements(step);
                 let (started_at_utc, tz_offset) = now();
@@ -411,7 +404,6 @@ impl EventSink for RunStoreSink {
                     attempt: Some(*attempt as i64),
                     started_at_utc: started_at_utc.clone(),
                     tz_offset,
-                    git_hash: builtin.then(|| self.git_hash.clone()).flatten(),
                     ..Default::default()
                 };
                 self.writer.process(process.clone());
@@ -654,8 +646,27 @@ impl EventSink for RunStoreSink {
                     ..Default::default()
                 })
             }
-            // Nothing to record: a capability is about what the step
-            // *can* do, and the summary repeats what `StepFinish` said.
+            // The commit a step says its program came from goes on its
+            // attempt's process row.
+            Event::Capabilities {
+                step,
+                version: Some(version),
+                ..
+            } => {
+                let mut row = None;
+                self.update(step, |a| {
+                    if let Some(p) = a.process.as_mut() {
+                        p.git_hash = Some(version.clone());
+                        row = Some(p.clone());
+                    }
+                });
+                if let Some(row) = row {
+                    self.writer.process(row);
+                }
+            }
+            // Nothing else to record: whether a sink streams is about what
+            // the step *can* do, and the summary repeats what `StepFinish`
+            // said.
             Event::Capabilities { .. } | Event::RunSummary { .. } => {}
         }
     }
@@ -729,7 +740,6 @@ mod tests {
             Event::StepStart {
                 step: "slack/render_markdown".into(),
                 attempt: 1,
-                builtin: true,
             },
             slow(2.0),
             slow(3.0),
@@ -821,7 +831,6 @@ mod tests {
             Event::StepStart {
                 step: "slack/ingest".into(),
                 attempt: 1,
-                builtin: true,
             },
             log("slack/ingest", Some(Stream::Stderr)),
             Event::StepFinish {
@@ -871,7 +880,6 @@ mod tests {
         let start = || Event::StepStart {
             step: "unified_grid_and_search_index/grid".into(),
             attempt: 1,
-            builtin: true,
         };
         let (td, snap) = run(&[
             start(),
@@ -912,7 +920,6 @@ mod tests {
         let start = || Event::StepStart {
             step: "evals/score".into(),
             attempt: 1,
-            builtin: false,
         };
         let (td, snap) = run(&[
             start(),
@@ -963,7 +970,6 @@ mod tests {
         let start = |attempt| Event::StepStart {
             step: "slack/raw".into(),
             attempt,
-            builtin: true,
         };
         let finish = |exit_code| Event::StepFinish {
             step: "slack/raw".into(),
@@ -994,15 +1000,19 @@ mod tests {
     }
 
     /// Each attempt of a step is a process of the run: what came out of
-    /// its pipes is its, the runner's commit is its when it runs the
-    /// built-in program, and how it ended goes on it.
+    /// its pipes is its, the commit its `capabilities` event names is its
+    /// (and never the runner's), and how it ended goes on it.
     #[tokio::test]
     async fn a_step_attempt_is_a_process_with_its_lines_and_its_exit() {
         let (td, _snap) = run(&[
             Event::StepStart {
                 step: "slack/raw".into(),
                 attempt: 1,
-                builtin: true,
+            },
+            Event::Capabilities {
+                step: "slack/raw".into(),
+                streams_output: false,
+                version: Some("c0ffee12".into()),
             },
             Event::Log {
                 step: "slack/raw".into(),
@@ -1024,7 +1034,6 @@ mod tests {
             Event::StepStart {
                 step: "slack/raw".into(),
                 attempt: 2,
-                builtin: true,
             },
             Event::StepFinish {
                 step: "slack/raw".into(),
@@ -1046,7 +1055,11 @@ mod tests {
         assert_eq!(attempts[0].run_id.as_deref(), Some("run-1"));
         assert_eq!(attempts[0].exit_code, Some(3));
         assert!(attempts[0].finished_at_utc.is_some());
-        assert_eq!(attempts[0].git_hash.as_deref(), Some("ae2d52f0"));
+        assert_eq!(attempts[0].git_hash.as_deref(), Some("c0ffee12"));
+        assert_eq!(
+            attempts[1].git_hash, None,
+            "an attempt that names no commit is not given the runner's"
+        );
         assert_eq!(attempts[1].exit_code, Some(0));
         let lines = log_after(td.path(), "run-1", None, 0, 10).await;
         let piped = lines
@@ -1070,7 +1083,6 @@ mod tests {
             Event::StepStart {
                 step: "slack/raw".into(),
                 attempt: 1,
-                builtin: true,
             },
             Event::ProgressLength {
                 step: "slack/raw".into(),
@@ -1108,7 +1120,6 @@ mod tests {
                 Event::StepStart {
                     step: "slack/raw".into(),
                     attempt: 1,
-                    builtin: true,
                 },
                 Event::ProgressLength {
                     step: "slack/raw".into(),
@@ -1168,7 +1179,6 @@ mod tests {
         let start = |step: &str| Event::StepStart {
             step: step.into(),
             attempt: 1,
-            builtin: true,
         };
         let length = |total| Event::ProgressLength {
             step: "slack/ingest".into(),
@@ -1283,7 +1293,6 @@ mod tests {
             Event::StepStart {
                 step: "slack/raw".into(),
                 attempt: 1,
-                builtin: true,
             },
             Event::ProgressLength {
                 step: "slack/raw".into(),
@@ -1293,7 +1302,6 @@ mod tests {
             Event::StepStart {
                 step: "slack/raw".into(),
                 attempt: 2,
-                builtin: true,
             },
             inc("slack/raw", 1),
         ])
@@ -1426,7 +1434,6 @@ mod tests {
             Event::StepStart {
                 step: "slack/raw".into(),
                 attempt: 1,
-                builtin: true,
             },
             Event::StepFinish {
                 step: "slack/raw".into(),
@@ -1456,7 +1463,6 @@ mod tests {
             Event::StepStart {
                 step: "slack/raw".into(),
                 attempt: 1,
-                builtin: true,
             },
             Event::ProgressMessage {
                 step: "slack/raw".into(),
@@ -1515,7 +1521,6 @@ mod tests {
             Event::StepStart {
                 step: "slack/raw".into(),
                 attempt: 2,
-                builtin: true,
             },
             Event::ProgressMessage {
                 step: "slack/raw".into(),

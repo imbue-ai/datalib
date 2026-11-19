@@ -74,20 +74,17 @@ describe("writing and reading a step", () => {
     const steps = listSteps(`data_root = "~/datalib"
 ${["f", "c", "v"].map((id) => `\n[[groups]]\nid = "${id}"\ntype = "contacts"\n`).join("")}
 [[steps]]
-group = "f"
-function = "ingest"
+id = "f/ingest"
 [steps.params.fastmail]
 addressbooks = ["Crew"]
 
 [[steps]]
-group = "c"
-function = "ingest"
+id = "c/ingest"
 [steps.params.carddav]
 server_url = "https://contacts.icloud.com/"
 
 [[steps]]
-group = "v"
-function = "ingest"
+id = "v/ingest"
 [steps.params.vcf]
 path = "~/backups/contacts"
 `);

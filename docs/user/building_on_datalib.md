@@ -195,12 +195,12 @@ pages it touched on disk for good. On a three-hour first sync, the
 last seals are more than an hour apart, so the mirror can be that far
 behind the download.
 
-The first interval is set for the whole data root by a table in
-`config.toml`:
+The first interval, in seconds, is set for the whole data root by a
+variable in `config.toml`'s `[env]` table, which every step is handed:
 
 ```toml
-[checkpoint_cadence]
-at_most_every_secs = 60
+[env]
+DATALIB_STEP_CHECKPOINT_CADENCE = "60"
 ```
 
 It moves where the doubling starts, not whether it doubles. Only `0`
@@ -475,15 +475,20 @@ id = "today"
 name = "Today"
 
 [[steps]]
-group = "today"
-function = "owed"
+id = "today/owed"
 command = "/Users/me/today/bin/derive-owed"
 inputs = ["gmail/ingest", "slack/ingest"]
+reads = "pinned"
 [steps.params]
 lookback_days = 14
 ```
 
-That step's id is `today/owed`. Its rules, in full, are in
+That step's id, `today/owed`, is the tree it writes, and its first part
+files it under the `today` group. `reads = "pinned"` promises that it
+reads each input only at the commit it is handed (below), which lets it
+run while a download is still writing; without it, the step runs only
+while nothing it reads is being written, and reads the files as they
+are. Its rules, in full, are in
 [`step_protocol.md`](../dev/step_protocol.md); the ones an app trips on
 first:
 
@@ -492,9 +497,10 @@ first:
   project is (`uv run --project /Users/me/today …`). It is split like a
   shell line but not run by one: no `$VAR`, globs or pipes unless you
   wrap it in `sh -c '…'`.
-- **It is handed flags.** The runner appends `--params-file <path>`
-  (your `params`, as JSON, in a file deleted when the step exits) and
-  `--inputs '["gmail/ingest","slack/ingest"]'`. Accept them.
+- **It is handed its params in the environment.** `DATALIB_DAG_PARAMS`
+  holds your `params` as JSON, and `DATALIB_DAG_INPUTS` the ids it
+  reads, one per line. Its command line is your `command` and nothing
+  else.
 - **It writes only its own tree**, `<data_root>/today/owed/`. Your app
   reads the result from there.
 - **It reads one moment of each input.** `DATALIB_READS` in its

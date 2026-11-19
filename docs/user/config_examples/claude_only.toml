@@ -13,31 +13,32 @@ id = "claude_chats"
 type = "claude"
 
 [[steps]]
-group = "claude_chats"
-function = "ingest"
-command = "datalib-step"
+id = "claude_chats/ingest"
+command = "datalib-step run ingest claude"
 [steps.params]
 api = {}
 
 [[steps]]
-group = "claude_chats"
-function = "render_markdown"
-command = "datalib-step"
+id = "claude_chats/render_markdown"
+command = "datalib-step run render_markdown claude"
+reads = "pinned"
 inputs = ["claude_chats/ingest"]
 
 [[steps]]
-group = "claude_chats"
-function = "embed"
-command = "datalib-step"
+id = "claude_chats/embed"
+command = "datalib-step run embed claude"
+reads = "files"
+locks = ["embedder"]
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 
 [[groups]]
 id = "unified_grid_and_search_index"
 
 [[steps]]
-group = "unified_grid_and_search_index"
-function = "unified_grid_and_search_index"
-command = "datalib-step"
+id = "unified_grid_and_search_index/unified_grid_and_search_index"
+command = "datalib-step run unified_grid_and_search_index"
+reads = "pinned"
+locks = ["index"]
 inputs = ["*/render_markdown"]
 
 # The app's own surface: `unified_grid_and_search_index` serves the grid, the document
@@ -55,3 +56,18 @@ command = "datalib-applet unified_grid_and_search_index"
 group = "unified_grid_and_search_index"
 id = "datalib_contacts"
 command = "datalib-applet datalib_contacts"
+
+# The verbs `datalib-step` takes (docs/dev/step_protocol.md § Verbs).
+[[programs]]
+command = "datalib-step"
+verbs = ["reset", "prepare", "compact", "collect"]
+
+# One embed at a time: each loads the model and writes the search index.
+[[locks]]
+name = "embedder"
+slots = 1
+
+# The fan-ins that read every source.
+[[locks]]
+name = "index"
+slots = 2

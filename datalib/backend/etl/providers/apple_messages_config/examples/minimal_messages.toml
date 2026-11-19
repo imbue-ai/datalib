@@ -7,15 +7,14 @@ name = "Apple Messages"
 type = "apple_messages"
 
 [[steps]]
-group = "apple_messages"
-function = "ingest"
-command = "datalib-step"
+id = "apple_messages/ingest"
+command = "datalib-step run ingest apple_messages"
 
 [steps.params.messages]
 path = "~/Library/Messages"
 
 [[steps]]
-group = "apple_messages"
-function = "render_markdown"
-command = "datalib-step"
+id = "apple_messages/render_markdown"
+command = "datalib-step run render_markdown apple_messages"
 inputs = ["apple_messages/ingest"]
+reads = "pinned"

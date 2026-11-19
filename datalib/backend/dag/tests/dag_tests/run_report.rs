@@ -38,7 +38,8 @@ echo '{"event":"outcome","outputs":[{"path":"a/src","version":"v2"}]}'
     std::fs::write(
         root.join("config.toml"),
         "[[steps]]\nid = \"a/src\"\ncommand = \"sh a.sh\"\n\n\
-         [[steps]]\nid = \"c/idx\"\ncommand = \"sh c.sh\"\ninputs = [\"a/src\"]\n",
+         [[steps]]\nid = \"c/idx\"\ncommand = \"sh c.sh\"\ninputs = [\"a/src\"]\n\
+         reads = \"pinned\"\n",
     )
     .unwrap();
     td

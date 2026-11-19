@@ -5,6 +5,7 @@
 
 use strum::VariantArray;
 
+use crate::function::Function;
 use crate::methods::ingest_methods;
 use crate::source_docs::{source_docs, with_group_id};
 use crate::source_type::SourceType;
@@ -30,20 +31,21 @@ const HEAD: &str = r#"# Every source Datalib can mirror, one group per way in, r
 # how to sign one in or where its data comes from. Copy the groups you want:
 # the index groups read every source by pattern (`*/render_markdown`).
 #
-# Shape: each source is a `[[groups]]` entry with a `type`, and steps under
-# it, each declared as `group` + `function`. `ingest` brings the data into
-# `<group>/ingest` (its `params` hold one method table, `[steps.params.api]`,
-# `[steps.params.export]`, …, and the options every method shares);
-# `render_markdown` turns that raw store into documents under
-# `<group>/render_markdown`, which `unified_grid_and_search_index` puts in
-# the grid and the keyword search; `embed` puts them in the search by
-# meaning; a source whose data is also numbers over time adds
-# `render_time_series`. Each runs the built-in `datalib-step`. A step's id
-# is `<group>/<function>`, never written; it is what another step's
-# `inputs` name.
+# Shape: each source is a `[[groups]]` entry with a `type`, and steps whose
+# `id` is `<group>/<function>`: the tree the step writes, and what another
+# step's `inputs` name. Each runs `datalib-step run <function> <type>`.
+# `ingest` brings the data into `<group>/ingest` (its `params` hold one
+# method table, `[steps.params.api]`, `[steps.params.export]`, …, and the
+# options every method shares); `render_markdown` turns that raw store into
+# documents under `<group>/render_markdown`, which
+# `unified_grid_and_search_index` puts in the grid and the keyword search;
+# `embed` puts them in the search by meaning; a source
+# whose data is also numbers over time adds `render_time_series`. `reads`
+# and `locks` say what a step may run beside; the `[[programs]]` entry,
+# which verbs `datalib-step` takes.
 #
 # TOML shape: a table header ends the table it sits in, so within a step
-# the plain keys (`group`, `function`, `inputs`) come first and the params
+# the plain keys (`id`, `command`, `inputs`) come first and the params
 # headers last, and `data_root` comes before the first `[[…]]` header.
 #
 # A group's `id` is the folder under `data_root` its data goes in, chosen
@@ -88,11 +90,12 @@ fn sources() -> Vec<Source> {
     out
 }
 
-/// An index step's `inputs`: every source's steps of each function, by
-/// pattern.
-fn inputs(functions: &[&str]) -> String {
-    let patterns: Vec<String> = functions.iter().map(|f| format!("\"*/{f}\"")).collect();
-    format!("inputs = [{}]\n", patterns.join(", "))
+/// The `[[steps]]` entry of the index step `group/function`, reading
+/// every source's steps of each of `functions` by pattern.
+fn index_step(group: &str, function: Function, functions: &[&str]) -> String {
+    let patterns: Vec<String> = functions.iter().map(|f| format!("*/{f}")).collect();
+    let patterns: Vec<&str> = patterns.iter().map(String::as_str).collect();
+    crate::step_entry::entry(group, function, None, &patterns)
 }
 
 fn rule(title: &str) -> String {
@@ -107,13 +110,21 @@ fn generate() -> String {
     let sources = sources();
     let mut out = String::from(HEAD);
     out.push('\n');
+    out.push_str(&rule("The program and the locks its steps hold"));
+    out.push('\n');
+    out.push_str(&crate::step_entry::programs_entry());
+    for (name, _) in crate::step_entry::LOCKS {
+        out.push('\n');
+        out.push_str(&crate::step_entry::locks_entry(name).expect("one of LOCKS"));
+    }
+    out.push('\n');
     out.push_str(&rule("The indexes every source feeds"));
     out.push_str(&format!(
         "\n# The SQL index behind the grid and search reads every source's documents\n\
          # into the grid and the keyword search; `params.not_searched` would keep a\n\
          # source out of search.\n\
          [[groups]]\nid = \"{DOCUMENT_INDEX}\"\nname = \"Grid and Search Index\"\n\n\
-         [[steps]]\ngroup = \"{DOCUMENT_INDEX}\"\nfunction = \"unified_grid_and_search_index\"\ncommand = \"datalib-step\"\n{}\n\
+         {}\n\
          # The app's search, grid and document view.\n\
          [[applets]]\ngroup = \"{DOCUMENT_INDEX}\"\nid = \"{DOCUMENT_INDEX}\"\n\
          command = \"datalib-applet {DOCUMENT_INDEX}\"\n\n\
@@ -124,11 +135,19 @@ fn generate() -> String {
          # The time-series index reads every source's time series, without copying\n\
          # the points, for the charts.\n\
          [[groups]]\nid = \"{TIME_SERIES_INDEX}\"\nname = \"Time Series Index\"\n\n\
-         [[steps]]\ngroup = \"{TIME_SERIES_INDEX}\"\nfunction = \"time_series_index\"\ncommand = \"datalib-step\"\n{}\n\
+         {}\n\
          [[applets]]\ngroup = \"{TIME_SERIES_INDEX}\"\nid = \"{TIME_SERIES_INDEX}\"\n\
          command = \"datalib-applet {TIME_SERIES_INDEX}\"\n",
-        inputs(&["render_markdown"]),
-        inputs(&["render_time_series"]),
+        index_step(
+            DOCUMENT_INDEX,
+            Function::UnifiedGridAndSearchIndex,
+            &["render_markdown"]
+        ),
+        index_step(
+            TIME_SERIES_INDEX,
+            Function::TimeSeriesIndex,
+            &["render_time_series"]
+        ),
     ));
     for s in &sources {
         out.push('\n');

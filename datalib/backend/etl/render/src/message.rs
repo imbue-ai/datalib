@@ -73,6 +73,14 @@ pub struct MessageHeader<'a> {
     /// with no clock of its own (a Unix stamp), which is written with the
     /// offset unknown (`Z`), for a viewer to show on its reader's clock.
     pub offset_secs: Option<i32>,
+    /// When, as text, for a source that keeps its stamps as RFC 3339 text
+    /// rather than Unix time: drawn by [`message_stamp_text_html`], and in
+    /// place of `date_ms`.
+    pub stamp: Option<&'a str>,
+    /// Words the source says about the message beside who wrote it, as it
+    /// wrote them: a review's `APPROVED`, `reply`. Each a `msg-tag` after
+    /// the author.
+    pub tags: &'a [&'a str],
     /// Public URL for this individual message (a Slack permalink, a
     /// GitHub comment anchor). Rendered as a trailing `↗`.
     pub source_url: Option<&'a str>,
@@ -100,7 +108,16 @@ impl MessageHeader<'_> {
             }
             s.push(' ');
         }
-        s.push_str(&timestamp_html(self.date_ms, self.offset_secs));
+        for tag in self.tags {
+            s.push_str(&format!(
+                "<span class=\"msg-tag\">{}</span> ",
+                escape_md_inline(tag)
+            ));
+        }
+        match self.stamp {
+            Some(stamp) => s.push_str(&message_stamp_text_html(stamp)),
+            None => s.push_str(&timestamp_html(self.date_ms, self.offset_secs)),
+        }
         if let Some(url) = self.source_url {
             s.push(' ');
             s.push_str(&source_link(url));
@@ -160,13 +177,17 @@ pub fn stamp_text_html(s: &str) -> String {
     }
 }
 
-/// A message's time kept as text, in a message header's form. A stamp
-/// whose source names no clock (`Z`, `-00:00`) stays `Z`, as
-/// [`timestamp_html`] writes one; anything else reads as
-/// [`stamp_text_html`].
+/// A message's time kept as text, in a message header's form, always
+/// marked `msg-ts`, which is how the viewer knows a header. A stamp whose
+/// source names no clock (`Z`, `-00:00`) stays `Z`, as [`timestamp_html`]
+/// writes one; a day is a day, and text that is neither is shown as
+/// written.
 pub fn message_stamp_text_html(s: &str) -> String {
     let Ok(t) = datalib_time::parse_strict(s) else {
-        return stamp_text_html(s);
+        return match datalib_time::short_day(s) {
+            Some(short) => format!("<time class=\"msg-ts\" datetime=\"{s}\">{short}</time>"),
+            None => format!("<span class=\"msg-ts\">{}</span>", escape_md_inline(s)),
+        };
     };
     let names_no_clock = s.ends_with(['Z', 'z']) || s.ends_with("-00:00");
     let iso = if names_no_clock {
@@ -208,6 +229,7 @@ mod tests {
             offset_secs: None,
             source_url: None,
             handle: None,
+            ..Default::default()
         };
         assert_eq!(
             h.render(),
@@ -279,7 +301,12 @@ mod tests {
         );
         assert_eq!(
             message_stamp_text_html("2369-03-18"),
-            "<time datetime=\"2369-03-18\">Tue Mar 18th, 2369</time>",
+            "<time class=\"msg-ts\" datetime=\"2369-03-18\">Tue Mar 18th, 2369</time>",
+        );
+        assert_eq!(
+            message_stamp_text_html("<b>soon</b>"),
+            "<span class=\"msg-ts\">&lt;b&gt;soon&lt;/b&gt;</span>",
+            "text that is no time is shown as written, still a header's time"
         );
     }
 
@@ -291,6 +318,7 @@ mod tests {
             offset_secs: None,
             source_url: None,
             handle: None,
+            ..Default::default()
         };
         let s = h.render();
         assert!(s.contains("&lt;script&gt;x&lt;/script&gt; &amp; co"), "{s}");
@@ -312,6 +340,7 @@ mod tests {
             offset_secs: None,
             source_url: None,
             handle: None,
+            ..Default::default()
         };
         assert!(
             h.render().starts_with(
@@ -331,6 +360,7 @@ mod tests {
             offset_secs: None,
             source_url: Some("https://example.invalid/m/1?a=b&c=d"),
             handle: None,
+            ..Default::default()
         };
         let s = h.render();
         assert!(s.ends_with("noreferrer\">↗</a>"), "{s}");
@@ -352,6 +382,7 @@ mod tests {
             date_ms: None,
             offset_secs: None,
             source_url: None,
+            ..Default::default()
         };
         assert!(
             h.render().starts_with(

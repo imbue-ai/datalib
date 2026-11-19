@@ -21,12 +21,12 @@ async fn a_download_ends_on_its_summary() {
     )
     .unwrap();
     let out = Command::new(std::env::var_os("DATALIB_STEP_BIN").expect("DATALIB_STEP_BIN"))
-        .arg("--params-file")
-        .arg(&params)
+        .env(
+            "DATALIB_DAG_PARAMS",
+            std::fs::read_to_string(&params).unwrap(),
+        )
         .env("DATALIB_DAG_STEP", "phone/ingest")
-        .env("DATALIB_DAG_GROUP", "phone")
-        .env("DATALIB_DAG_GROUP_TYPE", "sms_backup_restore")
-        .env("DATALIB_DAG_FUNCTION", "ingest")
+        .args(["run", "ingest", "sms_backup_restore"])
         .env("DATALIB_DAG_DATA_ROOT", root)
         .env("DATALIB_CACHE_DIR", root.join("cache"))
         .stdin(Stdio::null())

@@ -184,7 +184,7 @@ does not carry over to `createStore()` without being re-measured.
     and since the next update finds its hash unchanged, nothing repairs
     it. Scoped updates on different collections still share the
     `content` table, so scoping does not help. The per-source steps
-    therefore hold the runner's one-slot `qmd_keyword` lock, and so does
+    therefore hold the config's one-slot `qmd_keyword` lock, and so does
     `qmd_aggregator`, which registers collections too: registering
     through the SDK rewrites `index.yml` whole, and two of those at once
     would lose one's collection.
@@ -262,9 +262,10 @@ names (`qmd_indexer`, `qmd_sdk.mjs`) is deleted; git has it.
 indexes nothing. Each source has a `keyword_index` step (registers its
 own collection, then `update({collections:[g]})`, finding 1) and an
 `embed` step (embedding scoped to `g`), both driven through
-`qmd_indexer/src/js/qmd_sdk.mjs` and kept apart by the runner's
-one-slot `qmd_keyword` and `qmd_embed` locks
-(`dag/src/supervisor/locks.rs`; findings 5 and 12). Each step is its
+`qmd_indexer/src/js/qmd_sdk.mjs` and kept apart by the one-slot
+`qmd_keyword` and `qmd_embed` locks a datalib config declares in
+`[[locks]]` and names on those steps (`datalib_step/src/step_entry.rs`;
+findings 5 and 12). Each step is its
 own process, so each pays finding 8's model load; that is the price of
 per-source steps over one loop calling `embed({collection})`. Every
 embed is started with `QMD_EMBED_PARALLELISM` set from the config's

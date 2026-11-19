@@ -10,9 +10,8 @@ name = "ChatGPT export"
 type = "chatgpt"
 
 [[steps]]
-group = "chatgpt"
-function = "ingest"
-command = "datalib-step"
+id = "chatgpt/ingest"
+command = "datalib-step run ingest chatgpt"
 
 [steps.params]
 # What becomes of the copy of a conversation a newer export no longer holds:
@@ -24,15 +23,16 @@ when_deleted_upstream = "keep_local_copy"
 path = "~/Downloads/chatgpt-export.zip"  # the .zip, or the folder it was unzipped into
 
 [[steps]]
-group = "chatgpt"
-function = "render_markdown"
-command = "datalib-step"
+id = "chatgpt/render_markdown"
+command = "datalib-step run render_markdown chatgpt"
 inputs = ["chatgpt/ingest"]
+reads = "pinned"
 
 # Search by meaning: cuts this source's documents into chunks and embeds
 # them. Leave it out and keyword search still finds it.
 [[steps]]
-group = "chatgpt"
-function = "embed"
-command = "datalib-step"
+id = "chatgpt/embed"
+command = "datalib-step run embed chatgpt"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]

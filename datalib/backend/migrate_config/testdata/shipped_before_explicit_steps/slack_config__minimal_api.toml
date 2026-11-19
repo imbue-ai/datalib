@@ -1,0 +1,20 @@
+# Slack over its API, signed in through latchkey. An empty `api` table mirrors
+# every channel the account is a member of, its whole history; DMs stay off
+# unless asked for.
+[[groups]]
+id = "slack"
+name = "Slack"
+type = "slack"
+
+[[steps]]
+group = "slack"
+function = "ingest"
+command = "datalib-step"
+
+[steps.params.api]
+
+[[steps]]
+group = "slack"
+function = "render_markdown"
+command = "datalib-step"
+inputs = ["slack/ingest"]

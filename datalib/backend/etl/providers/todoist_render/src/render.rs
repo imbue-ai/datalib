@@ -756,6 +756,7 @@ impl Out<'_, '_, '_> {
                 date_ms: posted.and_then(datalib_time::record_stamp_ms),
                 offset_secs: posted.and_then(datalib_time::written_offset_secs),
                 source_url: None,
+                ..Default::default()
             }
             .render(),
         );

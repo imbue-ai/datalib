@@ -819,8 +819,11 @@ Three consequences, each measured with `scripts/doltlite_commit_cost.py`
   documents of 930k rows 2.5× faster cold and re-rendered them in
   2.25 s against 5.84 s, writing 55 MB against 96 MB, with the upsert
   conflicting on the key; with a unique index on `uuid` to conflict on
-  instead, the re-render took 3.90 s (`scripts/doltlite_key_by_document.py`;
-  results in `hack/doltlite_key_by_document/README.md`).
+  instead, the re-render took 3.90 s. Those are rewrites of existing
+  documents; replaying a real incremental render that was 96% new
+  documents, keying by document was only 10–13% faster and wrote 2–17%
+  less (`scripts/doltlite_key_by_document.py`; results in
+  `hack/doltlite_key_by_document/README.md`).
 - **A row is stored whole.** Changing one small column rewrites the
   row and the leaf it sits in, whatever else the row holds: in 400
   rows, one integer changed on a 4 KB row grew the file by 15 KB, and

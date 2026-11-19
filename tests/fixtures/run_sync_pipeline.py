@@ -180,22 +180,10 @@ FIXTURE_WHATSAPP_KEY = "0" * 64
 PRESEEDED_RAW = {"yolink"}
 
 # Source types whose data is also time series
-# (`datalib_dag::config::TIME_SERIES_SOURCE_TYPES`). Each gets a
+# (`SourceType::renders_time_series` in datalib-step). Each gets a
 # `render_time_series` step, and the time-series index reads them all,
 # so the materialized root has a Time series card to open.
 TIME_SERIES_TYPES = {"garmin", "yolink", "airvisual"}
-
-
-def _with_step_commands(text: str) -> str:
-    """Names `datalib-step` as every step's program, as the wizard writes
-    it. A step without one is a shape `datalib-http` rewrites on sight,
-    leaving a `config.toml.bak` in the materialized root."""
-    return re.sub(
-        r'^(function = "[^"]*")$',
-        r'\1\ncommand = "datalib-step"',
-        text,
-        flags=re.MULTILINE,
-    )
 
 
 @dataclass
@@ -495,6 +483,36 @@ def prepare(argv: list[str]) -> Prepared:
     # fan-in. The `embed` steps are left out here:
     # `:ingested_tng_search_index` builds the search index separately.
     notion_seed = _first_notion_page_id(notion_fx)
+
+    def step(
+        group: str, function: str, command: str, reads: str | None, lock: str | None
+    ) -> str:
+        """A `[[steps]]` header and its keys, as `datalib-step examples`
+        writes one: the id, the command, and the `reads` and `locks` the
+        runner no longer infers (docs/dev/plans/dag_and_step_decoupling.md)."""
+        text = f'[[steps]]\nid = "{group}/{function}"\ncommand = "{command}"'
+        if reads:
+            text += f'\nreads = "{reads}"'
+        if lock:
+            text += f'\nlocks = ["{lock}"]'
+        return text
+
+    def run(function: str, type_str: str = "") -> str:
+        return f"datalib-step run {function} {type_str}".rstrip()
+
+    # The program and the locks a datalib config declares, above every
+    # group: the runner gives `datalib-step` no verbs and no locks of its own.
+    preamble = """[[programs]]
+command = "datalib-step"
+verbs = ["reset", "prepare", "compact", "collect"]
+
+[[locks]]
+name = "index"
+slots = 2
+
+[[locks]]
+name = "embedder"
+slots = 1"""
     steps: list[str] = []
     root_entries: list[str] = []
     ingest_ids: list[str] = []
@@ -518,10 +536,9 @@ def prepare(argv: list[str]) -> Prepared:
         render_params_line = (
             f"\nparams = {_toml_value(render_params)}" if render_params else ""
         )
-        # One group per source; each step is `group` + `function`, and its
-        # id — the tree it writes — is composed from the two. Every step
-        # gets `command = "datalib-step"` in `config_texts`
-        # (`_with_step_commands`).
+        # One group per source; each step's id is `<group>/<function>`,
+        # the tree it writes, and its command names the function and the
+        # group's type to `datalib-step`.
         group_block = f"""[[groups]]
 id = "{name}"
 type = "{type_str}"
@@ -530,9 +547,8 @@ type = "{type_str}"
         ingest_block = (
             ""
             if name in PRESEEDED_RAW
-            else f"""[[steps]]
-group = "{name}"
-function = "ingest"
+            else step(name, "ingest", run("ingest", type_str), None, None)
+            + f"""
 params = {params}
 
 """
@@ -543,12 +559,22 @@ params = {params}
         inputs_line = "" if name in PRESEEDED_RAW else f'\ninputs = ["{name}/ingest"]'
         if name not in PRESEEDED_RAW:
             ingest_ids.append(f"{name}/ingest")
-        render_block = f'[[steps]]\ngroup = "{name}"\nfunction = "render_markdown"'
+        render_block = step(
+            name,
+            "render_markdown",
+            run("render_markdown", type_str),
+            "files" if type_str == "perseus" else "pinned",
+            None,
+        )
         series_block = ""
         if type_str in TIME_SERIES_TYPES:
             time_series_groups.add(name)
-            series_block = (
-                f'\n\n[[steps]]\ngroup = "{name}"\nfunction = "render_time_series"'
+            series_block = "\n\n" + step(
+                name,
+                "render_time_series",
+                run("render_time_series", type_str),
+                "pinned",
+                None,
             )
         steps.append(
             group_block
@@ -570,21 +596,27 @@ params = {params}
     ) -> tuple[str, str]:
         """The config with the first `count` sources (all by default),
         and a diff group per source whose two commits are known. A diff
-        group is `type = "diff"` + `source`; its one step is
-        `render_markdown` reading the source's ingest tree, and the
-        fan-in names it like any render step. Two texts: the DAG's own,
+        group is `type = "diff"`; its one step is `render_markdown`
+        reading the source's ingest tree, its command naming the source's
+        type, and the fan-in names it like any render step. Two texts: the DAG's own,
         and the body of a materialized root's, where the diff step — like
         every render step there — declares no inputs."""
         names = list(sources)[:count]
-        blocks = steps[: len(names)]
-        root_blocks = root_entries[: len(names)]
+        blocks = [preamble] + steps[: len(names)]
+        root_blocks = [preamble] + root_entries[: len(names)]
+        # How `datalib-step` is told each group's type: a diff group's
+        # steps also name the type of the source they compare.
+        type_args = {n: sources[n][0] for n in names}
         rendered = [f'"{n}/render_markdown"' for n in names]
         for source_id, (from_commit, to_commit) in diffs.items():
             group = DIFF_GROUPS[source_id]
-            group_block = (
-                f'[[groups]]\nid = "{group}"\ntype = "diff"\n'
-                f'source = "{source_id}"\n\n'
-                f'[[steps]]\ngroup = "{group}"\nfunction = "render_markdown"'
+            type_args[group] = f"diff --source-type {sources[source_id][0]}"
+            group_block = f'[[groups]]\nid = "{group}"\ntype = "diff"\n\n' + step(
+                group,
+                "render_markdown",
+                run("render_markdown", type_args[group]),
+                "pinned",
+                None,
             )
             params_line = (
                 f'params.diff = {{ from = "{from_commit}", to = "{to_commit}" }}'
@@ -603,22 +635,18 @@ params = {params}
             f"""[[groups]]
 id = "unified_grid_and_search_index"
 
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "unified_grid_and_search_index"
+{step("unified_grid_and_search_index", "unified_grid_and_search_index", run("unified_grid_and_search_index"), "pinned", "index")}
 inputs = [{grid_list}]"""
         )
         # The time-series index reads every source's `render_time_series`.
         # Declared here, so the app's config upgrade (which adds it to a
         # config without one) leaves this config as written.
         series_index = (
-            """[[groups]]
+            f"""[[groups]]
 id = "unified_time_series_index"
 name = "Time Series Index"
 
-[[steps]]
-group = "unified_time_series_index"
-function = "time_series_index"
+{step("unified_time_series_index", "time_series_index", run("time_series_index"), "pinned", "index")}
 inputs = ["*/render_time_series"]"""
             if series
             else ""
@@ -636,9 +664,7 @@ inputs = ["*/render_time_series"]"""
 id = "unified_grid_and_search_index"
 name = "Grid and Search Index"
 
-[[steps]]
-group = "unified_grid_and_search_index"
-function = "unified_grid_and_search_index"
+{step("unified_grid_and_search_index", "unified_grid_and_search_index", run("unified_grid_and_search_index"), "pinned", "index")}
 inputs = [{grid_list}]"""
         )
         # Each source cuts its documents into chunks and embeds them.
@@ -647,11 +673,13 @@ inputs = [{grid_list}]"""
             root_blocks.append(series_index)
         for group in groups:
             root_blocks.append(
-                f'[[steps]]\ngroup = "{group}"\nfunction = "embed"\n'
-                f'inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]'
+                step(
+                    group, "embed", run("embed", type_args[group]), "files", "embedder"
+                )
+                + '\ninputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]'
             )
         root_text = "\n\n".join(root_blocks) + "\n"
-        return _with_step_commands(dag_text), _with_step_commands(root_text)
+        return dag_text, root_text
 
     # Step commands resolve `datalib-step` via PATH; bazel names the
     # binary `datalib_step`, so stage a dash-named symlink dir and hand
@@ -971,11 +999,13 @@ def _source_config(
     elif type_str == "signal":
         # The signal extractor needs the directory where the
         # `signal-backup-*` subdirs live. AEP comes from the
-        # SIGNAL_BACKUP_PASSPHRASE env var.
+        # SIGNAL_BACKUP_PASSPHRASE env var, which the runner hands the
+        # step because its params name it.
         source["backup"] = {
             "path": str(
                 signal_snapshot_root if signal_snapshot_root is not None else input_path
-            )
+            ),
+            "aep_env_var": "SIGNAL_BACKUP_PASSPHRASE",
         }
     elif type_str == "email":
         # Mbox mode. Account metadata is supplied beside the path so the
@@ -992,9 +1022,11 @@ def _source_config(
     elif type_str == "whatsapp":
         # WhatsApp extractor needs the dir containing
         # `Databases/msgstore.db.crypt15` + `Media/`. Root key comes
-        # from the WHATSAPP_BACKUP_DECRYPTION_KEY env var.
+        # from the WHATSAPP_BACKUP_DECRYPTION_KEY env var, which the
+        # runner hands the step because its params name it.
         source["backup"] = {
-            "path": str(whatsapp_dir if whatsapp_dir is not None else input_path)
+            "path": str(whatsapp_dir if whatsapp_dir is not None else input_path),
+            "key_env_var": "WHATSAPP_BACKUP_DECRYPTION_KEY",
         }
     elif type_str == "linkedin":
         # File-backed CSV walk.

@@ -68,12 +68,12 @@ fn stops_at_a_channel_boundary_with_a_final_commit(signal: libc::c_int) {
 
     let bin = std::env::var_os("DATALIB_STEP_BIN").expect("DATALIB_STEP_BIN");
     let mut child = Command::new(bin)
-        .arg("--params-file")
-        .arg(&params)
+        .env(
+            "DATALIB_DAG_PARAMS",
+            std::fs::read_to_string(&params).unwrap(),
+        )
         .env("DATALIB_DAG_STEP", STEP)
-        .env("DATALIB_DAG_GROUP", "work-slack")
-        .env("DATALIB_DAG_GROUP_TYPE", "slack")
-        .env("DATALIB_DAG_FUNCTION", "ingest")
+        .args(["run", "ingest", "slack"])
         .env("DATALIB_DAG_DATA_ROOT", &root)
         .env("DATALIB_DAG_NOW", "2026-09-21T00:00:00+00:00")
         .env("DATALIB_HTTP_PLAYBACK", &playback)

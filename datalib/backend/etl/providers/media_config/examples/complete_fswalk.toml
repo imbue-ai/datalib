@@ -7,9 +7,8 @@ name = "Media"
 type = "media"
 
 [[steps]]
-group = "media"
-function = "ingest"
-command = "datalib-step"
+id = "media/ingest"
+command = "datalib-step run ingest media"
 
 [steps.params]
 ignore = ["**/.Trash/**", "**/Thumbnails/**"]  # gitignore-style patterns left out of the
@@ -28,7 +27,7 @@ path = "~/Music"  # the folder to scan
 # This step writes the storage report every source gets, which is what
 # puts Media in the grid.
 [[steps]]
-group = "media"
-function = "render_markdown"
-command = "datalib-step"
+id = "media/render_markdown"
+command = "datalib-step run render_markdown media"
 inputs = ["media/ingest"]
+reads = "pinned"

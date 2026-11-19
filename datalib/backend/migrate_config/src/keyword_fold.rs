@@ -11,8 +11,8 @@
 use std::collections::BTreeSet;
 use std::ops::Range;
 
+use crate::retired::names_datalib_step;
 use anyhow::{bail, Context as _, Result};
-use datalib_dag::config::names_datalib_step;
 use datalib_dag::config_array::edit_string_array;
 use datalib_dag::config_order::entry_ranges;
 use datalib_dag::input_pattern::names;
@@ -279,7 +279,7 @@ inputs = ["*/keyword_index", "*/embed"]
 "#;
 
     fn check(text: &str) -> datalib_dag::config::ConfigCheck {
-        let check = datalib_dag::config::check_text(&crate::folded(text));
+        let check = crate::check_as_current(text);
         assert_eq!(check.dropped(), 0, "{}", check.render("c.toml".as_ref()));
         check
     }

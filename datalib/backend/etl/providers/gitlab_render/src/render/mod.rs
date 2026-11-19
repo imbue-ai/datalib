@@ -26,7 +26,10 @@ pub use parse::parse_api_dir;
 /// v9: the description and each comment are a message of their own, and
 ///     their HTML goes in as written.
 /// v10: a comment's time keeps the forge's `Z`: its clock is unknown.
-pub const RENDER_VERSION: u32 = 10;
+/// v11: the description and each comment open with the one message
+///      header every renderer writes, the review's state and `reply` as
+///      tags in it.
+pub const RENDER_VERSION: u32 = 11;
 
 pub const PROFILE: ForgeProfile = ForgeProfile {
     provider: Provider::Gitlab,

@@ -1,13 +1,14 @@
-//! A config's built-in steps' params, held to what a sync would accept
-//! before `PUT /api/config` writes it. This server links no provider, so
-//! it asks `datalib-step check-params`, the way `datalib-dag --check`
-//! does; `datalib_dag::config::params_diagnostics` reads the answer.
+//! A config's datalib-step steps' params, held to what a sync would
+//! accept before `PUT /api/config` writes it. This server links no
+//! provider, so it asks `datalib-step check-params`, and [`diagnostics`]
+//! reads the answer. Only `datalib-step`'s steps are checked: see
+//! `docs/dev/plans/decoupling_followups.md` item 1.
 
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use datalib_dag::Diagnostic;
+use datalib_dag::{Diagnostic, EntryRef, Severity};
 
 /// `check-params` plans and runs nothing; one that has not answered by
 /// now is stuck, and the save goes on without it.
@@ -40,8 +41,10 @@ fn has_builtin_params(text: &str) -> bool {
         .steps
         .iter()
         .any(|s| {
-            s.runs_datalib_step()
-                && matches!(s.function.as_deref(), Some("ingest" | "render_markdown"))
+            matches!(
+                crate::step_program::datalib_step_function(&s.command).as_deref(),
+                Some("ingest" | "render_markdown")
+            )
         })
 }
 
@@ -70,10 +73,71 @@ pub async fn refused_by(step_bin: &Path, text: &str) -> Result<Vec<Diagnostic>> 
         step_bin.display(),
         String::from_utf8_lossy(&out.stderr).trim()
     );
-    Ok(datalib_dag::config::params_diagnostics(
-        text,
-        &String::from_utf8_lossy(&out.stdout),
-    ))
+    Ok(diagnostics(text, &String::from_utf8_lossy(&out.stdout)))
+}
+
+/// What `datalib-step check-params` printed for this config, as
+/// diagnostics against its text: one `Rejected` per step whose params a
+/// sync would refuse, at the line of the key the message names when it
+/// names one.
+fn diagnostics(text: &str, check_params_stdout: &str) -> Vec<Diagnostic> {
+    check_params_stdout
+        .lines()
+        .filter_map(|line| {
+            let problem: serde_json::Value = serde_json::from_str(line).ok()?;
+            let step = problem.get("step")?.as_str()?;
+            let message = problem.get("message")?.as_str()?;
+            let key = message
+                .split_once("unknown field `")
+                .and_then(|(_, rest)| rest.split_once('`'))
+                .map(|(key, _)| key);
+            let mut d = Diagnostic::new(
+                Severity::Rejected,
+                format!("a sync would refuse its params: {message}"),
+            )
+            .with_help("`datalib-step help <type> <method>` lists every option a source takes");
+            d.entry = Some(EntryRef::step_id(step));
+            if let Some(header) = datalib_dag::config::step_header_span(text, step) {
+                let span = match key {
+                    Some(key) => params_key_span(text, header, key),
+                    None => header,
+                };
+                d.set_span(text, span);
+            }
+            Some(d)
+        })
+        .collect()
+}
+
+/// Where `key = …` sits in a step's body, its `[steps.params…]`
+/// sub-tables included. The step's header when it is not found.
+fn params_key_span(
+    text: &str,
+    header: std::ops::Range<usize>,
+    key: &str,
+) -> std::ops::Range<usize> {
+    let mut at = header.end;
+    for line in text[header.end..].split_inclusive('\n') {
+        let line_start = at;
+        at += line.len();
+        if line.trim_start().starts_with("[[") {
+            break;
+        }
+        let mut from = 0;
+        while let Some(i) = line[from..].find(key) {
+            let start = from + i;
+            let end = start + key.len();
+            let word_before = line[..start]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+            if !word_before && line[end..].trim_start().starts_with('=') {
+                return line_start + start..line_start + end;
+            }
+            from = end;
+        }
+    }
+    header
 }
 
 #[cfg(test)]
@@ -81,8 +145,8 @@ mod tests {
     use super::*;
 
     const TEXT: &str = "[[groups]]\nid = \"slack\"\ntype = \"slack\"\n\n[[steps]]\n\
-                        group = \"slack\"\nfunction = \"ingest\"\n\n[steps.params.api]\n\
-                        chanels = [\"bridge\"]\n";
+                        id = \"slack/ingest\"\ncommand = \"datalib-step run ingest slack\"\n\n\
+                        [steps.params.api]\nchanels = [\"bridge\"]\n";
 
     // A stand-in for `datalib-step`: answers `check-params` with what the
     // real one prints for TEXT, so this tests the asking and the reading,

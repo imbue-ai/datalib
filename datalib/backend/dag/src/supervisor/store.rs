@@ -34,7 +34,7 @@ const RENAMED_COLUMNS: [(&str, &str, &str); 3] = [
     ("steps", "paused_by", "turned_off_by"),
 ];
 
-const DDL: [&str; 5] = [
+const DDL: [&str; 4] = [
     "CREATE TABLE IF NOT EXISTS requests (
         id TEXT PRIMARY KEY,
         roots TEXT NOT NULL,
@@ -51,14 +51,6 @@ const DDL: [&str; 5] = [
         step TEXT PRIMARY KEY,
         turned_off_by TEXT NOT NULL,
         turned_off_at_utc TEXT NOT NULL,
-        tz_offset TEXT NOT NULL
-    )",
-    // Each build that finished a launch's migrate pass on this root
-    // (`supervisor::upgrade`). The runner's record of itself, not of any
-    // store: it says only whether this build has asked yet.
-    "CREATE TABLE IF NOT EXISTS launch_passes (
-        build TEXT PRIMARY KEY,
-        finished_at_utc TEXT NOT NULL,
         tz_offset TEXT NOT NULL
     )",
     // `targets` is a JSON list: step ids for a reset, group ids for a
@@ -360,30 +352,6 @@ impl Store {
         Ok(sqlx::query_scalar("PRAGMA data_version")
             .fetch_one(&self.pool)
             .await?)
-    }
-
-    pub async fn launch_pass_done(&self, build: &str) -> Result<bool> {
-        Ok(
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM launch_passes WHERE build = ?")
-                .bind(build)
-                .fetch_one(&self.pool)
-                .await?
-                > 0,
-        )
-    }
-
-    pub async fn record_launch_pass(&self, build: &str) -> Result<()> {
-        let (now, tz_offset) = now_split();
-        sqlx::query(
-            "INSERT OR REPLACE INTO launch_passes (build, finished_at_utc, tz_offset) \
-             VALUES (?, ?, ?)",
-        )
-        .bind(build)
-        .bind(now)
-        .bind(tz_offset)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
     }
 
     pub async fn open_request(&self, roots: &[String], by: &str) -> Result<String> {

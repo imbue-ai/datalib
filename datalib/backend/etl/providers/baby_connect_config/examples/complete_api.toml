@@ -6,9 +6,8 @@ name = "Baby Connect"
 type = "baby_connect"
 
 [[steps]]
-group = "baby_connect"
-function = "ingest"
-command = "datalib-step"
+id = "baby_connect/ingest"
+command = "datalib-step run ingest baby_connect"
 
 # When to give up on failed requests. The download retries and backs off
 # on its own; these only decide when to stop.
@@ -34,10 +33,10 @@ until = "2372-12-31"
 # name) says where the clock was, daylight saving included. Unset reads the
 # times as UTC, and the Manage row says so.
 [[steps]]
-group = "baby_connect"
-function = "render_markdown"
-command = "datalib-step"
+id = "baby_connect/render_markdown"
+command = "datalib-step run render_markdown baby_connect"
 inputs = ["baby_connect/ingest"]
+reads = "pinned"
 
 [steps.params]
 time_zone = "America/Los_Angeles"
@@ -45,7 +44,8 @@ time_zone = "America/Los_Angeles"
 # Search by meaning: cuts this source's documents into chunks and embeds
 # them. Leave it out and keyword search still finds it.
 [[steps]]
-group = "baby_connect"
-function = "embed"
-command = "datalib-step"
+id = "baby_connect/embed"
+command = "datalib-step run embed baby_connect"
 inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]

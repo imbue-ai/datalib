@@ -20,6 +20,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/dag:datalib_dag",
+        "//datalib/backend/env:datalib_env",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",
         "@datalib_crates//:toml",
@@ -30,6 +31,11 @@ rust_test(
     name = "migrate_config_unittests",
     size = "small",
     crate = ":datalib_migrate_config",
+    # Configs this repo shipped before steps wrote their own `id`,
+    # `command`, locks and `reads`, as they were then: every whole config
+    # and the one-source stanzas a rule singles out
+    # (`explicit_steps::tests::SHIPPED_FILES`).
+    data = glob(["testdata/shipped_before_explicit_steps/*.toml"]),
     edition = "2021",
     deps = [
         "@datalib_crates//:tempfile",

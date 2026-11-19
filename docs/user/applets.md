@@ -41,9 +41,10 @@ as `/applet/unified_grid_and_search_index/` does.
 | `photos` | photos and videos | a contact sheet |
 | `slack` | one Slack mirror's channels and threads | a channel browser |
 
-`datalib-dag init` writes the first two. `datalib-step examples <type>
---append` adds the time-series index when a source that has time series
-is the first.
+The app's first-run screen writes the first two, and so does
+`datalib-step examples <type> --append` into a config that has no grid
+and search index yet; it adds the time-series index when a source that
+has time series is the first.
 
 In the app, **Add data source** lists the contacts app and the photos
 applet under "Apps that read every source", each with a button that

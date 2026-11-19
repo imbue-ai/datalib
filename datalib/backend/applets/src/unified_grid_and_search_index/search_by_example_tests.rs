@@ -116,8 +116,9 @@ fn chat_profile(provider: Provider, label: &str, thread: &str, message: &str) ->
 }
 
 /// The id the thread's source gave it: a uuid, as a Notion page's or a
-/// Claude conversation's is.
-const RIKER_THREAD_ID: &str = "1701d000-abcd-4e00-a000-0000000000ef";
+/// Claude conversation's is, written bare and in capitals as some sources
+/// write one. Every spelling of it finds the thread.
+const RIKER_THREAD_ID: &str = "1701D000ABCD4E00A0000000000000EF";
 
 /// Riker writes to Picard, copying Troi, in Picard's mailbox.
 fn riker_email() -> NormalizedChat {

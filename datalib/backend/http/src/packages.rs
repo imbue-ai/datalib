@@ -76,8 +76,8 @@ pub async fn list(State(s): State<AppState>) -> Json<PackagesResponse> {
         let mut used_by: Vec<String> = cfg
             .steps
             .iter()
-            .filter(|st| st.command.as_deref().is_some_and(runs_it))
-            .map(|st| st.group.clone().unwrap_or_else(|| st.id.clone()))
+            .filter(|st| runs_it(&st.command))
+            .map(|st| st.group().unwrap_or(&st.id).to_string())
             .chain(
                 cfg.applets
                     .iter()

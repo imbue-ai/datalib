@@ -32,13 +32,11 @@ id = "s"
 type = "${type}"
 
 [[steps]]
-group = "s"
-function = "ingest"
+id = "s/ingest"
 ${params}
 
 [[steps]]
-group = "s"
-function = "render_markdown"
+id = "s/render_markdown"
 inputs = ["s/ingest"]
 `);
 

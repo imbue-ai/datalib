@@ -128,8 +128,7 @@ url = "https://github.com/alice/datalib-weather/releases/download/v1.2.0/datalib
 sha256 = "…"   # the manifest's
 
 [[steps]]
-group = "sfo"
-function = "ingest"
+id = "sfo/ingest"
 command = "system/packages/3f9a1c2e3f9a1c2e/bin/fetch-weather"
 ```
 
@@ -194,10 +193,12 @@ writer has to match them exactly:
    encoding"). A time-series store the index cannot read fails
    `time_series_index` for every source, not only that one.
 
-A render step that runs `datalib-step` also gets something a package's
-does not: the launch's migrate and compact passes run only steps whose
-program is `datalib-step` (`datalib/backend/dag/src/config.rs`,
-`spec_of`), so a package's stores are never migrated in place.
+The runner sends `--prepare`, `--reset`, `--compact` and `--collect`
+only to a program a `[[programs]]` entry lists them for
+(`step_protocol.md` §"Verbs"), and the wizard writes no such entry for
+a package's programs. So a package's stores are never prepared or
+compacted in place, and a reset of one of its steps deletes the step's
+tree.
 
 The Hello package (`github:qi-imbue/datalib-hello`) writes both stores
 from a separate repo, with a copy of these formats kept in its own

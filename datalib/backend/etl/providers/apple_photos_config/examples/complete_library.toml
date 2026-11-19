@@ -7,9 +7,8 @@ name = "Apple Photos"
 type = "apple_photos"
 
 [[steps]]
-group = "apple_photos"
-function = "ingest"
-command = "datalib-step"
+id = "apple_photos/ingest"
+command = "datalib-step run ingest apple_photos"
 
 # Which tables and columns to mirror. Globs: `*` and `?` only.
 [steps.params]
@@ -40,7 +39,7 @@ path = "~/Pictures/Photos Library.photoslibrary"
 # `datalib-doltlite`. This step writes the storage report every source
 # gets, which is what puts Apple Photos in the grid.
 [[steps]]
-group = "apple_photos"
-function = "render_markdown"
-command = "datalib-step"
+id = "apple_photos/render_markdown"
+command = "datalib-step run render_markdown apple_photos"
 inputs = ["apple_photos/ingest"]
+reads = "pinned"
