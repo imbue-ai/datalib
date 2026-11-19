@@ -2,7 +2,8 @@
 //! opens under this build with a `threads` row held at that stamp,
 //! nothing to fetch again, and the old table gone: rung 1 of
 //! `schema_raw::LADDER`. And one whose read marks sat in its sidecars
-//! opens with them in `read_marks`: rung 2.
+//! opens with them in `read_marks`: rung 2. And one from before `bots`
+//! opens owing a `bots.info` for each bot its messages name: rung 3.
 
 use datalib_etl::doltlite_raw::{self as dr, WirePayloadRow};
 use datalib_etl::read_marks::{self, ReadMark};
@@ -256,5 +257,62 @@ async fn a_store_with_read_marks_in_its_sidecars_opens_with_them_in_read_marks()
     );
     let read_states = db.load_read_states().await.unwrap();
     assert_eq!(read_states[0]["last_read"], "1.5", "{read_states:?}");
+    db.close().await;
+}
+
+/// A store from before `bots` holds messages from bots it never named:
+/// rung 3 lists each bot once, owed a `bots.info`, and nothing else.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_store_from_before_bots_opens_owing_each_bot_its_messages_name() {
+    let d = tempfile::tempdir().unwrap();
+    let path = db_path_for(d.path());
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let ddl = [MessageRow::ddl(), dr::bookkeeping_ddl_for("messages")];
+    let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
+    let pool = dr::open(&path, &ddl).await.unwrap();
+    for (ts, payload) in [
+        (
+            "1.0",
+            r#"{"ts":"1.0","bot_id":"B_SENSORS","subtype":"bot_message"}"#,
+        ),
+        (
+            "2.0",
+            r#"{"ts":"2.0","bot_id":"B_SENSORS","username":"Red Alert"}"#,
+        ),
+        ("3.0", r#"{"ts":"3.0","bot_id":"B_ROSTER","user":"U2"}"#),
+        ("4.0", r#"{"ts":"4.0","user":"U1"}"#),
+    ] {
+        sqlx::query(
+            "INSERT INTO messages (id, payload, team_id, channel_id, ts, \
+             thread_root_uuid, is_thread_root) VALUES (?, jsonb(?), 'T1', 'C1', ?, ?, 1)",
+        )
+        .bind(slack_message_key("T1", "C1", ts))
+        .bind(payload)
+        .bind(ts)
+        .bind(slack_message_key("T1", "C1", ts))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    dr::commit_run(&pool, "an earlier build").await.unwrap();
+    pool.close().await;
+
+    let db = RawDb::open(&path).await.unwrap();
+    let mut conn = db.pool().acquire().await.unwrap();
+    let owed: Vec<String> = db
+        .bots_owed(&mut conn)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|l| l.key)
+        .collect();
+    drop(conn);
+    assert_eq!(owed, ["B_ROSTER", "B_SENSORS"]);
+    let version: String =
+        sqlx::query_scalar("SELECT value FROM _datalib_meta WHERE key = 'schema_version'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(version, LADDER.len().to_string());
     db.close().await;
 }

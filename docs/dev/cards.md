@@ -591,7 +591,12 @@ besides components:
   `q`/`sel`/`cols` state.
 - `documentView(markdownUuid?, sectionUuid?)` — renders one document
   (`/applet/unified_grid_and_search_index/chat/{markdownUuid}`), highlighting and scrolling to
-  `sectionUuid`. A different selection is a different card: the grid
+  `sectionUuid`. It reads a long document a page at a time, in the
+  document's own order: the page around `sectionUuid`, else the first,
+  then the page above or below as the reader nears that end, drawn
+  beside what is there so the reader keeps their place
+  (`cards/pieceWindow.ts`); a document no longer than a page comes
+  whole. A different selection is a different card: the grid
   opens a fresh card rather than mutating an existing one. Shows
   doc-level outgoing edges and decorates span-level edge sources
   (see [`edges.md`](edges.md)); clicking either opens the destination

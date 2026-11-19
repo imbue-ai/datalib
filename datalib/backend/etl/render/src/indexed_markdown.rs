@@ -172,6 +172,79 @@ async fn put_sections(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<(
     Ok(())
 }
 
+/// Where a page of a document starts ([`IndexedMarkdownStore::document_page`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PageAsk {
+    /// The first page.
+    Start,
+    /// The page around the piece of this item; the first page when the
+    /// document has no piece of it.
+    At(String),
+    /// The page from this cursor on.
+    After(i64),
+    /// The page ending just before this cursor.
+    Before(i64),
+}
+
+/// A page of a document: its pieces, spelled, and the cursors either side
+/// of them, `None` where the page reaches that end.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DocumentPage {
+    pub sections: Vec<crate::section::SpelledSection>,
+    pub before: Option<i64>,
+    pub after: Option<i64>,
+    /// The page starts at the document's first piece, where its front
+    /// matter is.
+    pub from_top: bool,
+}
+
+type Pieces = (
+    Vec<datalib_schema::sections::SectionRow>,
+    Vec<datalib_schema::drawings::DrawingRow>,
+    Vec<datalib_schema::folds::FoldRow>,
+);
+
+/// The rows the store keeps of a document's pieces from place `first` to
+/// `last`, both included.
+async fn pieces_between(
+    pool: &SqlitePool,
+    markdown_uuid: &str,
+    first: i64,
+    last: i64,
+) -> Result<Pieces> {
+    let sections = sqlx::query_as(
+        "SELECT markdown_uuid, seq, uuid, text, framed, addressed, labels, class \
+         FROM sections WHERE markdown_uuid = ? AND seq BETWEEN ? AND ? ORDER BY seq",
+    )
+    .bind(markdown_uuid)
+    .bind(first)
+    .bind(last)
+    .fetch_all(pool)
+    .await
+    .context("read a document's sections")?;
+    let drawn = sqlx::query_as(
+        "SELECT markdown_uuid, seq, md, body_at FROM drawings \
+         WHERE markdown_uuid = ? AND seq BETWEEN ? AND ? ORDER BY seq",
+    )
+    .bind(markdown_uuid)
+    .bind(first)
+    .bind(last)
+    .fetch_all(pool)
+    .await
+    .context("read a document's drawings")?;
+    let folds = sqlx::query_as(
+        "SELECT markdown_uuid, seq, class, summary FROM folds \
+         WHERE markdown_uuid = ? AND seq BETWEEN ? AND ? ORDER BY seq",
+    )
+    .bind(markdown_uuid)
+    .bind(first)
+    .bind(last)
+    .fetch_all(pool)
+    .await
+    .context("read a document's folds")?;
+    Ok((sections, drawn, folds))
+}
+
 pub fn path_for(rendered_root: &Path) -> PathBuf {
     rendered_root.join(STORE_FILE)
 }
@@ -991,25 +1064,41 @@ impl IndexedMarkdownStore {
         markdown_uuid: &str,
     ) -> Result<Option<Vec<crate::section::SpelledSection>>> {
         blocking(async {
-            let sections: Vec<datalib_schema::sections::SectionRow> = sqlx::query_as(
-                "SELECT markdown_uuid, seq, uuid, text, framed, addressed, labels, class \
-                 FROM sections WHERE markdown_uuid = ? ORDER BY seq",
-            )
-            .bind(markdown_uuid)
-            .fetch_all(&self.pool)
-            .await
-            .context("read a document's sections")?;
-            let drawn: Vec<datalib_schema::drawings::DrawingRow> = sqlx::query_as(
-                "SELECT markdown_uuid, seq, md, body_at FROM drawings \
-                 WHERE markdown_uuid = ? ORDER BY seq",
-            )
-            .bind(markdown_uuid)
-            .fetch_all(&self.pool)
-            .await
-            .context("read a document's drawings")?;
+            let (sections, drawn, folds) =
+                pieces_between(&self.pool, markdown_uuid, 0, i64::MAX).await?;
             if sections.is_empty() && drawn.is_empty() {
                 return Ok(None);
             }
+            Ok(crate::section::spell(&sections, &drawn, &folds))
+        })
+    }
+
+    /// A page of a document, in its own order: at most `limit` of its
+    /// top-level nodes where `ask` says ([`crate::document_window`]), and
+    /// the cursors either side of them. Only the page's pieces are read and
+    /// spelled. `None` for a document the store does not hold; a page past
+    /// either end is empty.
+    pub fn document_page(
+        &self,
+        markdown_uuid: &str,
+        ask: PageAsk,
+        limit: usize,
+    ) -> Result<Option<DocumentPage>> {
+        use crate::document_window::{spans, window, Ask};
+        blocking(async {
+            let len: Option<i64> = sqlx::query_scalar(
+                "SELECT MAX(m) + 1 FROM ( \
+                   SELECT MAX(seq) AS m FROM sections WHERE markdown_uuid = ? \
+                   UNION ALL SELECT MAX(seq) FROM drawings WHERE markdown_uuid = ?)",
+            )
+            .bind(markdown_uuid)
+            .bind(markdown_uuid)
+            .fetch_one(&self.pool)
+            .await
+            .context("read how many pieces a document has")?;
+            let Some(len) = len else {
+                return Ok(None);
+            };
             let folds: Vec<datalib_schema::folds::FoldRow> = sqlx::query_as(
                 "SELECT markdown_uuid, seq, class, summary FROM folds \
                  WHERE markdown_uuid = ? ORDER BY seq",
@@ -1018,7 +1107,35 @@ impl IndexedMarkdownStore {
             .fetch_all(&self.pool)
             .await
             .context("read a document's folds")?;
-            Ok(crate::section::spell(&sections, &drawn, &folds))
+            let ask = match ask {
+                PageAsk::Start => Ask::Start,
+                PageAsk::After(cursor) => Ask::After(cursor),
+                PageAsk::Before(cursor) => Ask::Before(cursor),
+                PageAsk::At(uuid) => {
+                    let seq: Option<i64> = sqlx::query_scalar(
+                        "SELECT seq FROM sections WHERE markdown_uuid = ? AND uuid = ?",
+                    )
+                    .bind(markdown_uuid)
+                    .bind(&uuid)
+                    .fetch_optional(&self.pool)
+                    .await
+                    .context("find a piece of a document")?;
+                    seq.map_or(Ask::Start, Ask::Around)
+                }
+            };
+            let Some(w) = window(&spans(len, &folds), ask, limit) else {
+                return Ok(Some(DocumentPage::default()));
+            };
+            let (sections, drawn, folds) =
+                pieces_between(&self.pool, markdown_uuid, w.first, w.last).await?;
+            Ok(
+                crate::section::spell(&sections, &drawn, &folds).map(|sections| DocumentPage {
+                    sections,
+                    before: w.before,
+                    after: w.after,
+                    from_top: w.first == 0,
+                }),
+            )
         })
     }
 
@@ -2899,5 +3016,57 @@ mod tests {
             .render_units_reading(&[Input::new("devices", "d-1")])
             .unwrap();
         assert!(stale.is_empty());
+    }
+
+    /// A document read a page at a time, from the start and on by each
+    /// page's cursor, is the document whole: every piece once and in order,
+    /// a fold never cut, and the front matter only on the first page. A
+    /// page around a piece holds it; back from the last page reads the same
+    /// pieces again.
+    #[test]
+    fn a_document_reads_the_same_a_page_at_a_time() {
+        use crate::section::{join, Section};
+        let td = tempfile::tempdir().unwrap();
+        let st = store(td.path());
+        let boxed = |u: &str| Section::boxed(u, "msg".into(), &format!("{u} said\n"));
+        let sections = vec![
+            Section::frame("---\ntitle: x\n---\n\n# Ten Forward\n\n".into()),
+            boxed("a"),
+            Section::fold_open("tool-group", "🛠 2 tool steps"),
+            boxed("b"),
+            boxed("c"),
+            Section::fold_close(),
+            boxed("d"),
+            boxed("e"),
+        ];
+        st.put_document(&RenderedMarkdown {
+            sections: sections.clone(),
+            ..doc("d1", "fp")
+        })
+        .unwrap();
+
+        let page = |ask| st.document_page("d1", ask, 2).unwrap().unwrap();
+        let text = |p: &DocumentPage| p.sections.iter().map(|s| s.md.as_str()).collect::<String>();
+        let mut pages = vec![page(PageAsk::Start)];
+        while let Some(after) = pages.last().unwrap().after {
+            pages.push(page(PageAsk::After(after)));
+        }
+        assert_eq!(
+            pages.iter().map(|p| p.sections.len()).collect::<Vec<_>>(),
+            [2, 5, 1],
+            "title and a; the fold whole and d; e"
+        );
+        assert!(pages[0].from_top && !pages[1].from_top);
+        assert_eq!(pages.iter().map(text).collect::<String>(), join(&sections));
+
+        let around = page(PageAsk::At("c".into()));
+        assert!(around
+            .sections
+            .iter()
+            .any(|s| s.uuid.as_deref() == Some("c")));
+        let back = page(PageAsk::Before(pages[1].after.unwrap()));
+        assert_eq!(text(&back), text(&pages[1]));
+        assert_eq!(st.document_page("nope", PageAsk::Start, 2).unwrap(), None);
+        st.close();
     }
 }

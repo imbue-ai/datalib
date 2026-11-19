@@ -228,14 +228,30 @@ WHATSAPP_PHOTO_NOT_IN_BACKUP = (
     "|attachment|fetch_failed|Media/WhatsApp Images/holodeck-poker-night.jpg"
     " is not among the media files the backup holds"
 )
-# The away team's call is the one part of a Slack message the fixture
-# holds that the render does not draw; its document says so.
+# The parts of Slack messages the fixture holds that the render does not
+# draw: the away team's call, the roster's input box and Worf's
+# attachment of buttons alone. Each one's document says so.
 SLACK_CALL_NOT_SHOWN = (
     "1860e56d-3cbf-504d-ab0b-df061b1bfe4a"
     "|info|parse|markdown"
     "|00000000-0000-80d6-b5a5-2617d0679dab"
     "|0b7698ff-2340-8846-8c6a-4796fd32ae08"
     "|blocks|uncovered_type|1 message here holds what is not shown: call block"
+)
+SLACK_INPUT_NOT_SHOWN = (
+    "422b80c3-339a-535d-9e2e-b6ec591efab5"
+    "|info|parse|markdown"
+    "|00000000-0000-8ac1-a181-7b8e737cbd85"
+    "|0b7698ff-1788-803e-99f1-66c2a1e051e2"
+    "|blocks|uncovered_type|1 message here holds what is not shown: input block"
+)
+SLACK_BUTTONS_NOT_SHOWN = (
+    "99912abf-ac81-583b-86fb-b024266b1050"
+    "|info|parse|markdown"
+    "|00000000-0000-8d9c-9316-43944fcd9e60"
+    "|0b7698ff-1f58-8154-ac8f-29f1f51d27f8"
+    "|attachments|uncovered_type"
+    "|1 message here holds what is not shown: attachment with nothing to show"
 )
 TAKEOUT_POST_NOT_A_VIDEO = (
     "50d82e65-dc5d-522f-afdd-0ded04b3d8f0"
@@ -347,7 +363,9 @@ EXPECTED_PROBLEMS = {
     ),
     "tng_pdfs": [PDFS_WITH_NO_TEXT, PDF_THAT_WILL_NOT_IDENTIFY],
     "whatsapp": [WHATSAPP_PHOTO_NOT_IN_BACKUP],
-    "slack": [SLACK_CALL_NOT_SHOWN],
+    "slack": sorted(
+        [SLACK_CALL_NOT_SHOWN, SLACK_INPUT_NOT_SHOWN, SLACK_BUTTONS_NOT_SHOWN]
+    ),
     "google-takeout": sorted(
         [
             TAKEOUT_POST_NOT_A_VIDEO,

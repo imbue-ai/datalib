@@ -11,6 +11,7 @@ use datalib_etl_macros::{CasEdgeRow, WirePayloadRow};
 pub const DATA_TABLES: &[&str] = &[
     "workspaces",
     "users",
+    BOTS,
     "channels",
     "messages",
     THREADS,
@@ -72,6 +73,22 @@ pub const USER_VOLATILE_PATHS: &[dr::VolatilePath] = &[
     &["profile", "huddle_state"],
     &["profile", "huddle_state_expiration_ts"],
 ];
+
+/// `bots` — one row per bot id a stored message names: an app or an
+/// integration, which posts with a `bot_id` and often no user, so its
+/// name is nowhere else. A row with no payload is owed a `bots.info`.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "bots")]
+pub struct BotRow {
+    pub id_and_payload: WirePayload,
+    pub name: Option<String>,
+}
+
+pub const BOTS: &str = "bots";
+
+/// Slack stamps a bot's `updated` epoch whenever its app changes; the
+/// name is what anything reads.
+pub const BOT_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["updated"]];
 
 /// `channels` — one row per Slack chat surface: public channel,
 /// private channel, DM, or MPIM.
@@ -352,6 +369,11 @@ pub const LADDER: &[Migration] = &[
         name: "read marks move out of the sidecars into read_marks",
         apply: |conn| Box::pin(read_marks_out_of_sidecars(conn)),
     },
+    Migration {
+        version: 3,
+        name: "a bots row for each bot the stored messages name",
+        apply: |conn| Box::pin(bots_from_messages(conn)),
+    },
 ];
 
 async fn table_exists(conn: &mut sqlx::SqliteConnection, table: &str) -> sqlx::Result<bool> {
@@ -461,10 +483,36 @@ async fn read_marks_out_of_sidecars(conn: &mut sqlx::SqliteConnection) -> anyhow
     Ok(())
 }
 
+/// Rung 3. A bot's name is in `bots`, which a run fills by asking
+/// `bots.info` for each row with no payload. The table is made here, one
+/// row for each `bot_id` a stored message carries, so the bots the store
+/// already holds messages from are owed too; left to the DDL it would be
+/// empty and clear the store-wide cursors.
+async fn bots_from_messages(conn: &mut sqlx::SqliteConnection) -> anyhow::Result<()> {
+    for ddl in [BotRow::ddl(), dr::bookkeeping_ddl_for(BOTS)] {
+        // Audited: this module's own DDL.
+        sqlx::query(sqlx::AssertSqlSafe(ddl))
+            .execute(&mut *conn)
+            .await?;
+    }
+    if !table_exists(conn, "messages").await? {
+        return Ok(());
+    }
+    sqlx::query(
+        "INSERT OR IGNORE INTO bots (id) \
+         SELECT DISTINCT json_extract(payload, '$.bot_id') FROM messages \
+         WHERE json_type(payload, '$.bot_id') = 'text'",
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
 pub fn full_ddl() -> Vec<String> {
     let mut out: Vec<String> = vec![
         WorkspaceRow::ddl(),
         UserRow::ddl(),
+        BotRow::ddl(),
         ChannelRow::ddl(),
         MessageRow::ddl(),
         MESSAGES_BY_CHANNEL_TS_INDEX_DDL.to_string(),

@@ -23,7 +23,9 @@ use datalib_etl_slack::ingest::db::db_path_for;
 use datalib_etl_slack::ingest::schema_raw::{
     is_thread_mark, slack_thread_key, split_key, SlackAttachmentRow,
 };
-use datalib_etl_slack::ingest::shapes::{M_AUTH_TEST, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS};
+use datalib_etl_slack::ingest::shapes::{
+    M_AUTH_TEST, M_BOT_INFO, M_CHANNELS, M_HISTORY, M_REPLIES, M_USERS,
+};
 
 use super::{ts_to_iso, Channel, Message, User, Workspace};
 
@@ -102,6 +104,8 @@ pub struct ReadMarks {
 pub struct Shared {
     pub workspace: Option<Workspace>,
     pub users: BTreeMap<String, User>,
+    /// Bot id → the name `bots.info` gave it.
+    pub bots: BTreeMap<String, String>,
     pub channels: BTreeMap<String, Channel>,
     pub read_marks: ReadMarks,
 }
@@ -305,6 +309,7 @@ async fn open_async(
     let mut unparsed: Vec<Unparsed> = Vec::new();
     let workspace = load_workspace(&pool).await?;
     let users = load_users(&pool, &mut unparsed).await?;
+    let bots = load_bots(&pool).await?;
     let channels = load_channels(&pool).await?;
     let threads = match &scan.render {
         None => thread_count(&pool).await?,
@@ -320,6 +325,7 @@ async fn open_async(
         shared: Shared {
             workspace,
             users,
+            bots,
             channels,
             read_marks,
         },
@@ -554,6 +560,26 @@ async fn load_users(
     Ok(out)
 }
 
+/// Each bot's name, as `bots.info` gave it. A store the download has
+/// not opened since `bots` arrived has no such table, and no names.
+async fn load_bots(pool: &SqlitePool) -> Result<BTreeMap<String, String>> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'bots')",
+    )
+    .fetch_one(pool)
+    .await
+    .context("look for the bots table")?;
+    if !exists {
+        return Ok(BTreeMap::new());
+    }
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, name FROM bots WHERE name IS NOT NULL AND name != ''")
+            .fetch_all(pool)
+            .await
+            .context("select bots")?;
+    Ok(rows.into_iter().collect())
+}
+
 async fn load_channels(pool: &SqlitePool) -> Result<BTreeMap<String, Channel>> {
     // The DM columns landed after the first stores were written, and
     // this pool is read-only — it never runs `doltlite_raw::open`'s
@@ -758,6 +784,13 @@ pub fn parse_raw_json_dir(out_dir: &Path) -> Result<ParsedSlack> {
             ingest_user(u, &team_id, &mut users);
         }
     }
+    let mut bots: BTreeMap<String, String> = BTreeMap::new();
+    for env in read_method_envelopes(&raw_dir, M_BOT_INFO)? {
+        let bot = env.pointer("/response/bot").cloned().unwrap_or(Value::Null);
+        if let (Some(id), Some(name)) = (opt_str(&bot, "id"), opt_str(&bot, "name")) {
+            bots.insert(id, name);
+        }
+    }
     for env in read_method_envelopes(&raw_dir, M_CHANNELS)? {
         let resp = env.get("response").cloned().unwrap_or(Value::Null);
         for c in array_field(&resp, "channels") {
@@ -858,6 +891,7 @@ pub fn parse_raw_json_dir(out_dir: &Path) -> Result<ParsedSlack> {
         shared: Shared {
             workspace,
             users,
+            bots,
             channels,
             read_marks: ReadMarks::default(),
         },
