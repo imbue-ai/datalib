@@ -1,6 +1,6 @@
 // The facts README.md lists, one test each, named as there. The first group
-// is about upstream's AsyncDataTree as monaco-editor ships it; the second is
-// what <vs-tree> promises a page. A monaco-editor bump that moves one fails
+// is about upstream's AsyncDataTree as VS Code's source has it; the second is
+// what <vs-tree> promises a page. A VS Code bump that moves one fails
 // it by name: fix README.md, then the test, then src/vs-tree.js.
 
 import { after, before, describe, test } from 'node:test';
@@ -49,15 +49,13 @@ after(async () => {
   server?.close();
 });
 
-// A fresh page with the harness loaded; `errors` collects what the page
-// threw and nobody caught.
+// A fresh page with the harness loaded. What it throws uncaught is in
+// `window.harness.pageErrors`.
 async function openHarness() {
   const page = await browser.newPage({ viewport: { width: 600, height: 600 } });
-  const errors = [];
-  page.on('pageerror', (e) => errors.push(e));
   await page.goto(base);
   await page.waitForFunction(() => window.harnessReady);
-  return { page, errors };
+  return { page };
 }
 
 async function waitFor(page, what, fn, arg) {
@@ -83,17 +81,28 @@ async function expandUpstream(page, ids) {
 const focusedIds = (page) => page.evaluate(() => window.tree.viewState.focus);
 
 describe('upstream', () => {
-  test('view_state_methods_are_stripped', async () => {
+  test('view_state_keeps_what_a_closed_parent_hides', async () => {
     const { page } = await openHarness();
-    const missing = await page.evaluate(() => {
-      const proto = window.harness.AsyncDataTree.prototype;
-      return {
-        getViewState: !('getViewState' in proto),
-        onDidOpen: !('onDidOpen' in proto),
-        setInputTakesState: proto.setInput.length === 2,
-      };
-    });
-    assert.deepEqual(missing, { getViewState: true, onDidOpen: true, setInputTakesState: true });
+    await page.evaluate(() => window.harness.mountUpstream());
+    await expandUpstream(page, ['folder/work', 'src/email']);
+    const open = () => page.evaluate(() => [...window.upstream.getViewState().expanded].sort());
+    assert.deepEqual(await open(), ['folder/work', 'src/email']);
+    // Closing a parent hides its open child without closing it, and the
+    // view state still lists the child.
+    await page.evaluate(() => window.upstream.collapse(window.harness.find('folder/work')));
+    assert.deepEqual(await open(), ['src/email']);
+    await page.close();
+  });
+
+  test('a_restore_skips_what_a_closed_parent_hides', async () => {
+    const { page } = await openHarness();
+    // The view state the fact above reads off: Email open, Starfleet above it closed.
+    await page.evaluate(() => window.harness.mountUpstream({}, { expanded: ['src/email'] }));
+    assert.deepEqual(await page.evaluate(() => [...window.harness.fetched]), [null]);
+    assert.deepEqual(await page.evaluate(() => window.upstream.getViewState().expanded), []);
+    // Opening Starfleet afterwards leaves Email closed: the state is gone.
+    await expandUpstream(page, ['folder/work']);
+    assert.equal(await page.evaluate(() => window.upstream.getNode(window.harness.find('src/email')).collapsed), true);
     await page.close();
   });
 
@@ -166,14 +175,17 @@ describe('upstream', () => {
   });
 
   test('page_down_throws_upstream', async () => {
-    const { page, errors } = await openHarness();
+    const { page } = await openHarness();
     await page.evaluate(() => window.harness.mountUpstream());
     await expandUpstream(page, ['folder/work', 'src/drive', 'drive/root']);
     await row(page, 'Stardate log 41001').click();
     for (let i = 0; i < 4; i++) await page.keyboard.press('PageDown');
-    await waitFor(page, 'the page went down', () => window.upstream.scrollTop > 0);
-    assert.ok(errors.length > 0, 'PageDown no longer throws: drop #page from src/vs-tree.js');
-    assert.match(String(errors[0].message), /reading 'size'/);
+    try {
+      await page.waitForFunction(() => window.harness.pageErrors.length > 0, null, { timeout: 5000 });
+    } catch {
+      assert.fail('PageDown no longer throws: drop #page from src/vs-tree.js');
+    }
+    assert.match((await page.evaluate(() => window.harness.pageErrors))[0], /reading 'size'/);
     await page.close();
   });
 });
@@ -212,20 +224,23 @@ describe('vs-tree', () => {
   });
 
   test('page_down_pages_without_throwing', async () => {
-    const { page, errors } = await openHarness();
+    const { page } = await openHarness();
     await page.evaluate(() => window.harness.mountElement());
     await openRow(page, 'Starfleet', 'Google Drive');
     await openRow(page, 'Google Drive', 'My Drive');
     await openRow(page, 'My Drive', 'Stardate log 41001');
     await row(page, 'Stardate log 41001').click();
     for (let i = 0; i < 6; i++) await page.keyboard.press('PageDown');
-    await waitFor(page, 'focus five pages down', () => {
+    // The six pages are taken one after another, so wait for where they end:
+    // focus well down the level, on a row that is drawn and marked focused.
+    await waitFor(page, 'the focused row, pages down, on screen', () => {
       const [id] = window.tree.viewState.focus;
-      return /^drive\/f\d+$/.test(id ?? '') && Number(id.slice('drive/f'.length)) > 80;
+      if (!/^drive\/f\d+$/.test(id ?? '') || Number(id.slice('drive/f'.length)) <= 80) return false;
+      const rows = document.querySelector('fake-card').shadowRoot.querySelector('vs-tree').shadowRoot
+        .querySelectorAll('.monaco-list-row.focused');
+      return rows.length === 1 && rows[0].textContent.includes(`Stardate log ${41000 + Number(id.slice('drive/f'.length))}`);
     });
-    const focused = await page.locator('vs-tree .monaco-list-row.focused').count();
-    assert.equal(focused, 1, 'the focused row is not on screen');
-    assert.deepEqual(errors, []);
+    assert.deepEqual(await page.evaluate(() => window.harness.pageErrors), []);
     await page.close();
   });
 
@@ -247,6 +262,28 @@ describe('vs-tree', () => {
         .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
         .map((r) => r.querySelector('.label').textContent));
     assert.deepEqual(pinned, ['Starfleet', 'Google Drive', 'My Drive']);
+    await page.close();
+  });
+
+  test('a_restore_reopens_under_a_closed_parent', async () => {
+    const { page } = await openHarness();
+    await page.evaluate(() => window.harness.mountElement());
+    await openRow(page, 'Starfleet', 'Email');
+    await openRow(page, 'Email', 'picard@enterprise.example');
+    await openRow(page, 'picard@enterprise.example', 'Missions');
+    await row(page, 'Starfleet').click();
+    await row(page, 'Email').waitFor({ state: 'hidden', timeout: 5000 });
+    const saved = await page.evaluate(() => window.tree.viewState);
+    assert.deepEqual([...saved.expanded].sort(), ['email/picard', 'src/email']);
+
+    await page.evaluate((s) => window.harness.mountElement(s), saved);
+    assert.deepEqual(await page.evaluate(() => [...window.tree.viewState.expanded].sort()), ['email/picard', 'src/email']);
+    await row(page, 'Starfleet').click();
+    await row(page, 'Missions').waitFor({ timeout: 5000 });
+    assert.deepEqual(
+      await page.evaluate(() => [...window.tree.viewState.expanded].sort()),
+      ['email/picard', 'folder/work', 'src/email'],
+    );
     await page.close();
   });
 

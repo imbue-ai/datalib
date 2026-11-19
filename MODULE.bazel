@@ -720,15 +720,27 @@ npm.npm_translate_lock(
 )
 use_repo(npm, "npm_modal")
 
-# VS Code's tree widget, built into a custom element from monaco-editor's
-# ESM build (third-party/vscode-tree/README.md). The tree's code is fetched
-# by this lockfile, never checked in; nothing datalib ships links it yet.
+# The build tools for VS Code's tree widget (third-party/vscode-tree/
+# README.md): esbuild, and the Playwright its facts test drives.
 npm.npm_translate_lock(
     name = "npm_vscode_tree",
     pnpm_lock = "//third-party/vscode-tree:pnpm-lock.yaml",
     verify_node_modules_ignored = "//:.bazelignore",
 )
 use_repo(npm, "npm_vscode_tree")
+
+# VS Code's own source, which third-party/vscode-tree bundles its tree from;
+# none of it is checked in. Fetched with git rather than as GitHub's
+# tarball: a cloud session's proxy serves git reads of a public repository
+# but not its archive downloads. The commit is the 1.145.0 release tag.
+new_git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "new_git_repository")
+
+new_git_repository(
+    name = "vscode_source",
+    build_file = "//third-party/vscode-tree:vscode_source.BUILD.bazel",
+    commit = "a717861c07586a53d83b80d742cd3f59b20a6273",
+    remote = "https://github.com/microsoft/vscode.git",
+)
 
 # Exposes the lockfile's pinned pnpm so `bazel run -- @pnpm --dir
 # datalib/ui install` works without a host install — useful for
