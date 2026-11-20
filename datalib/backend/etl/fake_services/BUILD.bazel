@@ -1,0 +1,77 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# The fake Slack, Linear and Google of github.com/imbue-ai/fake-services,
+# run for a test, with the real latchkey signed in to them: what a
+# downloader test needs to reach a fake at the service's real URL
+# (third-party/fake-services/README.md).
+rust_library(
+    name = "datalib_fake_services",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_fake_services",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:runfiles",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+    ],
+)
+
+# What a test that starts the fakes carries: the launcher's source and its
+# packages, the pinned latchkey and the Node both run on, each named by its
+# runfiles path so a moved target fails at analysis time.
+FAKE_SERVICES_DATA = [
+    "@fake_services//:launcher",
+    "@fake_services//:launcher/launcher.mjs",
+    "@fake_services//:linear_schema.graphql.gz",
+    "@fake_services//:curl_shim.sh",
+    "//third-party/fake-services/runtime:fake_services_tree",
+    "//third-party/fake-services/runtime:emulators_core_package_dir",
+    "//third-party/latchkey/runtime:latchkey_tree",
+    "//third-party/latchkey/runtime:latchkey_package_dir",
+    "@nodejs_host//:node_bin",
+]
+
+FAKE_SERVICES_ENV = {
+    "FAKE_SERVICES_LAUNCHER_RLOC": "$(rlocationpath @fake_services//:launcher/launcher.mjs)",
+    "FAKE_SERVICES_SCHEMA_RLOC": "$(rlocationpath @fake_services//:linear_schema.graphql.gz)",
+    "FAKE_SERVICES_SHIM_RLOC": "$(rlocationpath @fake_services//:curl_shim.sh)",
+    "FAKE_SERVICES_PACKAGE_RLOC": "$(rlocationpath //third-party/fake-services/runtime:emulators_core_package_dir)",
+    "LATCHKEY_PACKAGE_RLOC": "$(rlocationpath //third-party/latchkey/runtime:latchkey_package_dir)",
+    "NODE_RLOC": "$(rlocationpath @nodejs_host//:node_bin)",
+}
+
+# Every downloader against the fakes, in one binary;
+# `tests/fake_services_tests/main.rs` lists the modules. Each test signs
+# the process in to its own fakes through the environment latchkey reads,
+# which is process-wide, so the tests run one at a time.
+rust_test(
+    name = "fake_services_tests",
+    size = "large",
+    srcs = glob(["tests/fake_services_tests/*.rs"]),
+    args = ["--test-threads=1"],
+    crate_root = "tests/fake_services_tests/main.rs",
+    data = FAKE_SERVICES_DATA,
+    edition = "2021",
+    env = FAKE_SERVICES_ENV,
+    deps = [
+        ":datalib_fake_services",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/providers/calendar:datalib_etl_calendar",
+        "//datalib/backend/etl/providers/email:datalib_etl_email",
+        "//datalib/backend/etl/providers/linear:datalib_etl_linear",
+        "//datalib/backend/etl/providers/linear_config:datalib_etl_linear_config",
+        "//datalib/backend/etl/providers/slack:datalib_etl_slack",
+        "//datalib/backend/etl/providers/slack_config:datalib_etl_slack_config",
+        "//datalib/backend/probe:datalib_probe",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
