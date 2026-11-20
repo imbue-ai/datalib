@@ -4,6 +4,8 @@ expression: source.render()
 ---
 00000000-0000-8019-9aa4-27f8beac1d79  Lightroom section
   title: Folders
+00000000-0000-8043-8103-ba9c200e2e73  Lightroom folder
+  title: Bridge
 00000000-0000-809e-b933-e75384c6d8f5  Lightroom collection
   title: Risa
 00000000-0000-813a-8b8d-ee7bc67d1da6  Lightroom folder
@@ -14,13 +16,13 @@ expression: source.render()
   title: Hard Drive
 00000000-0000-84a3-8198-bb26b4b0b03a  Lightroom keyword
   title: Bridge
+00000000-0000-8560-a428-ea072e4bad7c  Lightroom folder
+  title: Pictures
 00000000-0000-859a-abe5-4e680cf8b249  Lightroom keyword
   title: Species
-00000000-0000-8628-bc92-41435e1a7fca  Lightroom folder
-  title: Pictures
 00000000-0000-865f-95c3-86ce398a758a  Lightroom keyword
   title: Crew
-00000000-0000-877b-b923-bd6ebee3fba8  Lightroom folder
+00000000-0000-8806-ae95-f6552b300bb2  Lightroom folder
   title: TenForward
 00000000-0000-89c8-8d99-e2fb8b4c94e0  Lightroom section
   title: Collections
@@ -34,8 +36,6 @@ expression: source.render()
   title: Keywords
 00000000-0000-8c83-81ca-7532ce9b8547  Lightroom keyword
   title: Android
-00000000-0000-8d2f-908d-7f8032ec90c8  Lightroom folder
-  title: Bridge
 00000000-0000-8f4a-a68d-f18df42707c2  Lightroom published collection
   title: Ship's newsletter
 00000000-0000-8fab-84e9-09a0cbe98f42  Lightroom catalog

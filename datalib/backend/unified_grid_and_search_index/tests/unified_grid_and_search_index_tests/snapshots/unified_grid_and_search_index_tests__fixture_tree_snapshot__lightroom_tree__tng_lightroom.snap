@@ -4,13 +4,9 @@ expression: text
 ---
 Lightroom catalog  00000000-0000-8fab-84e9-09a0cbe98f42 [place]
   Lightroom section "Folders"  00000000-0000-8019-9aa4-27f8beac1d79 [place]
-    Lightroom folder "Pictures"  00000000-0000-8628-bc92-41435e1a7fca [place]
+    Lightroom folder "Pictures"  00000000-0000-8560-a428-ea072e4bad7c [place]
       Lightroom folder "Enterprise"  00000000-0000-813a-8b8d-ee7bc67d1da6 [place]
-        Lightroom folder "TenForward"  00000000-0000-877b-b923-bd6ebee3fba8 [place]
-          Photo "troi_ten_forward.jpg"  00000000-0000-8b15-a812-933e52b8f203 [read]
-            also under 00000000-0000-809e-b933-e75384c6d8f5 (Lightroom collection)
-            also under 00000000-0000-865f-95c3-86ce398a758a (Lightroom keyword)
-        Lightroom folder "Bridge"  00000000-0000-8d2f-908d-7f8032ec90c8 [place]
+        Lightroom folder "Bridge"  00000000-0000-8043-8103-ba9c200e2e73 [place]
           Photo "picard_ready_room.dng"  00000000-0000-8459-895b-795f4dcdd90e [read]
             also under 00000000-0000-84a3-8198-bb26b4b0b03a (Lightroom keyword)
             also under 00000000-0000-865f-95c3-86ce398a758a (Lightroom keyword)
@@ -23,6 +19,10 @@ Lightroom catalog  00000000-0000-8fab-84e9-09a0cbe98f42 [place]
             also under 00000000-0000-8c83-81ca-7532ce9b8547 (Lightroom keyword)
           Photo "worf_tactical.dng"  00000000-0000-830c-ba62-fd6e0dce5b52 [read]
             also under 00000000-0000-89d7-b2a9-cf627a943d59 (Lightroom collection)
+        Lightroom folder "TenForward"  00000000-0000-8806-ae95-f6552b300bb2 [place]
+          Photo "troi_ten_forward.jpg"  00000000-0000-8b15-a812-933e52b8f203 [read]
+            also under 00000000-0000-809e-b933-e75384c6d8f5 (Lightroom collection)
+            also under 00000000-0000-865f-95c3-86ce398a758a (Lightroom keyword)
   Lightroom section "Collections"  00000000-0000-89c8-8d99-e2fb8b4c94e0 [place]
     Lightroom collection "Away missions"  00000000-0000-81eb-853e-6ac5813f22d4 [place]
       Lightroom collection "Risa"  00000000-0000-809e-b933-e75384c6d8f5 [place]
