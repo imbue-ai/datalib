@@ -129,12 +129,21 @@ pub(crate) async fn update_keywords(
     let rendered = indexed_markdown::path_for(&render_root).is_file();
     let store = match rendered {
         false => None,
-        true => tokio::task::spawn_blocking(move || {
+        true => match tokio::task::spawn_blocking(move || {
             IndexedMarkdownStore::open_for_reading(&render_root, None)
         })
         .await
-        .context("render store open panicked")??
-        .map(Arc::new),
+        .context("render store open panicked")?
+        {
+            Ok(store) => store.map(Arc::new),
+            // The grid pass files it as the source's problem, saying what
+            // to run; the search keeps the source as it had it until then.
+            Err(e) if datalib_store_meta::other_shape(&e).is_some() => {
+                tracing::debug!(group, error = %format!("{e:#}"), "left as the search had it");
+                return Ok(Done::default());
+            }
+            Err(e) => return Err(e),
+        },
     };
     let index = Index::open(&layout::grid_index_db(root)).await;
     let out = match index {
@@ -180,20 +189,9 @@ async fn keyword_pass(
         None => BTreeMap::new(),
         Some(store) => {
             let store = Arc::clone(store);
-            let rows = tokio::task::spawn_blocking(move || match store.in_this_shape()? {
-                true => store.markdown_rows().map(Some),
-                false => Ok(None),
-            })
-            .await
-            .context("render store read panicked")??;
-            let Some(rows) = rows else {
-                tracing::warn!(
-                    group = %group,
-                    "the render store was written by an older build; the search index takes \
-                     this source once its render has rewritten it"
-                );
-                return Ok(done);
-            };
+            let rows = tokio::task::spawn_blocking(move || store.markdown_rows())
+                .await
+                .context("render store read panicked")??;
             rows.into_iter()
                 .filter(searchable)
                 .map(|r| (r.markdown_uuid.clone(), r))

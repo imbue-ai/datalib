@@ -126,37 +126,78 @@ pub(crate) fn held_documents_sql(source_id: Option<&str>) -> &'static str {
     }
 }
 
+/// The step that writes the keyword index: the grid index's.
+fn index_step() -> String {
+    format!(
+        "{}/{}",
+        datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
+        datalib_runtime::layout::INDEX_STEP_DIR
+    )
+}
+
+/// What every source's `embed` writes, so any one brings it up to date.
+const CACHE_STEP: &str = "<source>/embed";
+
+/// The cache, and the chunks filed in it, in this build's shape.
+async fn require_cache(pool: &SqlitePool, path: &Path) -> Result<()> {
+    let (file, chunks) = crate::cache::shapes();
+    let meta = datalib_store_meta::read(pool).await?;
+    datalib_store_meta::require_run(path, Some(CACHE_STEP), meta.as_ref(), &file)?;
+    let filed =
+        datalib_store_meta::read_part(pool, datalib_store_meta::StoreKind::SearchChunks).await?;
+    datalib_store_meta::require_part(path, Some(CACHE_STEP), filed.as_deref(), &chunks)
+}
+
 impl Reader {
     /// `None` when no step has written the index yet: no file, or a grid
-    /// index's file without the index's tables. A missing cache reads as
-    /// one holding no vectors.
+    /// index's file that records no search index. A missing cache reads as
+    /// one holding no vectors. An index or a cache in another shape than
+    /// this build's is refused, naming the step that brings it there.
     pub async fn open(index: &Path, cache: &Path) -> Result<Option<Reader>> {
         if !index.exists() {
             return Ok(None);
         }
-        let index = connect(index).await?;
-        let written: Result<Option<i64>, sqlx::Error> = sqlx::query_scalar(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'search_state'",
-        )
-        .fetch_optional(&index)
+        let index_pool = connect(index).await?;
+        let written = async {
+            let Some(have) = datalib_store_meta::read_part(
+                &index_pool,
+                datalib_store_meta::StoreKind::SearchIndex,
+            )
+            .await?
+            else {
+                return anyhow::Ok(false);
+            };
+            datalib_store_meta::require_part(
+                index,
+                Some(&index_step()),
+                Some(&have),
+                &crate::store::shape(),
+            )?;
+            anyhow::Ok(true)
+        }
         .await;
         match written {
-            Ok(Some(_)) => {}
-            Ok(None) => {
-                index.close().await;
-                return Ok(None);
-            }
-            Err(e) => {
-                index.close().await;
-                return Err(e).context("look for the search index's tables");
+            Ok(true) => {}
+            other => {
+                index_pool.close().await;
+                return other.map(|_| None);
             }
         }
         let cache = if cache.exists() {
-            Some(connect(cache).await?)
+            let pool = connect(cache).await?;
+            if let Err(e) = require_cache(&pool, cache).await {
+                pool.close().await;
+                index_pool.close().await;
+                return Err(e);
+            }
+            Some(pool)
         } else {
             None
         };
-        Ok(Some(Reader { index, cache }))
+        Ok(Some(Reader {
+            index: index_pool,
+            cache,
+        }))
     }
 
     pub async fn close(self) {
@@ -164,21 +205,6 @@ impl Reader {
         if let Some(cache) = self.cache {
             cache.close().await;
         }
-    }
-
-    /// Whether the index's tables are in this build's shape. A writer in
-    /// this build empties tables in another, so every source's keyword
-    /// pass must run again, which the launch's migrate pass asks for.
-    pub async fn in_this_shape(&self) -> Result<bool> {
-        let recorded: Option<String> =
-            sqlx::query_scalar("SELECT value FROM _datalib_meta WHERE key = ?")
-                .bind(datalib_store_meta::part_key(
-                    datalib_store_meta::StoreKind::SearchIndex,
-                ))
-                .fetch_optional(&self.index)
-                .await
-                .context("read the search index's shape")?;
-        Ok(recorded.as_deref() == Some(crate::store::shape().as_str()))
     }
 
     /// Whether any of `source_id`'s documents was drawn by another
@@ -319,7 +345,7 @@ impl Reader {
         let mut out = HashSet::with_capacity(hashes.len());
         for batch in hashes.chunks(BATCH) {
             let rows: Vec<String> = sqlx::query_scalar(
-                "SELECT hash FROM vectors WHERE model = ? \
+                "SELECT hash FROM vectors INDEXED BY vectors_keys WHERE model = ? \
                    AND hash IN (SELECT value FROM json_each(?))",
             )
             .bind(model)
@@ -956,6 +982,82 @@ mod tests {
             missing: Vec::new(),
         };
         (id.to_string(), Arc::new(doc))
+    }
+
+    async fn set(path: &Path, key: &str, value: &str) {
+        let pool = connect_writable(path).await;
+        sqlx::query("UPDATE _datalib_meta SET value = ? WHERE key = ?")
+            .bind(value)
+            .bind(key)
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+    }
+
+    async fn connect_writable(path: &Path) -> SqlitePool {
+        SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(SqliteConnectOptions::new().filename(path))
+            .await
+            .unwrap()
+    }
+
+    /// A reader opens the keyword index and the cache only in this
+    /// build's shape: before either is written there is nothing to read,
+    /// and one in another shape is refused, naming what to run, where it
+    /// was read around (a missing table read as none, a missing index
+    /// left to the planner).
+    #[tokio::test]
+    async fn a_reader_refuses_an_index_or_a_cache_in_another_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let (index, cache) = (
+            dir.path().join("db.sqlite"),
+            dir.path().join("cache.sqlite"),
+        );
+        assert!(Reader::open(&index, &cache).await.unwrap().is_none());
+        crate::store::Index::open(&index)
+            .await
+            .unwrap()
+            .close()
+            .await;
+        crate::cache::InferenceCache::open(&cache)
+            .await
+            .unwrap()
+            .close()
+            .await;
+        Reader::open(&index, &cache)
+            .await
+            .unwrap()
+            .expect("written")
+            .close()
+            .await;
+
+        set(&cache, "index_hash", "fewer").await;
+        let e = Reader::open(&index, &cache).await.err().expect("refused");
+        let refused = datalib_store_meta::other_shape(&e).expect("for its shape");
+        assert_eq!(refused.step.as_deref(), Some(CACHE_STEP));
+        crate::cache::InferenceCache::open(&cache)
+            .await
+            .unwrap()
+            .close()
+            .await;
+        assert!(
+            Reader::open(&index, &cache).await.is_ok(),
+            "its writer makes the index"
+        );
+
+        set(
+            &index,
+            &datalib_store_meta::part_key(datalib_store_meta::StoreKind::SearchIndex),
+            "older",
+        )
+        .await;
+        let e = Reader::open(&index, &cache).await.err().expect("refused");
+        let refused = datalib_store_meta::other_shape(&e).expect("for its shape");
+        assert_eq!(refused.step, Some(index_step()));
     }
 
     /// A document's place is the direction its chunks share, at unit

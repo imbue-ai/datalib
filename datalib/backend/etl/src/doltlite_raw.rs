@@ -278,7 +278,7 @@ pub const PROBLEMS_DDL: &str = datalib_problems::DDL[0].1;
 pub const SHARED_DDL: &[&str] = &[SYNC_RUNS_DDL, SYNC_SCOPE_STATE_DDL, PROBLEMS_DDL];
 
 /// [`SHARED_DDL`]'s lookup indexes, created on every open of a raw store
-/// and left out of its recorded shape, as `lookup_indexes` are.
+/// and recorded apart from its tables, as `lookup_indexes` are.
 pub const SHARED_LOOKUP_INDEXES: &[&str] = &[datalib_problems::BY_SCOPE_INDEX_DDL];
 
 /// The framework's ladder, for the tables stores share rather than own:
@@ -308,6 +308,10 @@ pub const SHARED_LADDER: &[Migration] = &[Migration {
         })
     },
 }];
+
+// What a reader of a store's problems requires: the ladder's top, which is
+// its length, since its rungs are dense from 1.
+const _: () = assert!(SHARED_LADDER.len() as u32 == datalib_problems::SHAPE_VERSION);
 
 /// Shared tables no build declares any more. A store that still has one
 /// drops it on open, after its ladder (a rung may read it one last time),
@@ -790,6 +794,47 @@ pub fn recorded_shape<'a>(ddl: impl IntoIterator<Item = &'a str>) -> String {
     datalib_store_meta::schema_hash(std::iter::once(datalib_store_meta::DDL).chain(ddl))
 }
 
+/// The whole shape [`open_derived_indexed`] gives a store opened with
+/// `ddl` and `lookup_indexes`: what a reader of that store requires
+/// (`datalib_store_meta::require`).
+pub fn derived_shape(ddl: &[&str], lookup_indexes: &[&str]) -> datalib_store_meta::Shape {
+    shape_opened_with(ddl, lookup_indexes, false, &[])
+}
+
+/// The whole shape [`open_curated`] gives a store opened with `ddl` and
+/// `ladder`: what a reader of that store requires.
+pub fn curated_shape(ddl: &[&str], ladder: &[Migration]) -> datalib_store_meta::Shape {
+    shape_opened_with(ddl, &[], false, ladder)
+}
+
+/// The shape [`open_inner`] records for its arguments, and the one place
+/// it is computed.
+fn shape_opened_with(
+    extra_ddl: &[&str],
+    lookup_indexes: &[&str],
+    include_shared: bool,
+    ladder: &[Migration],
+) -> datalib_store_meta::Shape {
+    let (shared, shared_indexes): (&[&str], &[&str]) = if include_shared {
+        (SHARED_DDL, SHARED_LOOKUP_INDEXES)
+    } else {
+        (&[], &[])
+    };
+    let indexes: Vec<&str> = lookup_indexes
+        .iter()
+        .chain(shared_indexes)
+        .copied()
+        .collect();
+    datalib_store_meta::Shape {
+        tables: recorded_shape(extra_ddl.iter().chain(shared).copied()),
+        indexes: (!indexes.is_empty()).then(|| datalib_store_meta::schema_hash(indexes)),
+        versions: datalib_store_meta::Versions {
+            schema: datalib_store_meta::ladder::top(ladder),
+            shared: datalib_store_meta::ladder::top(SHARED_LADDER),
+        },
+    }
+}
+
 /// A raw store, for the process that owns it, with no migrations.
 /// [`OnSchemaBreak::Refuse`].
 pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
@@ -899,10 +944,13 @@ impl std::error::Error for SchemaBreak {}
 /// than a reader onto its working set; the caller decides what that means
 /// (a consumer does nothing that pass).
 ///
-/// A schema this store has not got yet is the owner's to add on its next run,
-/// and a read naming a table or column that commit lacks fails at prepare time
-/// saying so. Probe with [`column_exists`] and fall back where that is a real
-/// possibility; slack's `load_channels` is the worked example.
+/// A store a reader is handed is in this build's shape: the launch's prepare
+/// pass migrates every raw store, and a render refuses one it could not
+/// (`datalib_store_meta::require`). A read naming a table or column that
+/// commit lacks is a damaged store and fails, saying so; nothing probes
+/// and falls back. A mirrored store, whose tables are the upstream app's
+/// and vary with its version, is the one place to ask [`table_exists`] or
+/// [`column_exists`].
 pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<Reader>> {
     let pin = match commit {
         Some(commit) => crate::pin::Pin::at(commit)?,
@@ -1026,16 +1074,11 @@ async fn open_inner(
     let shared: &[&str] = if include_shared { SHARED_DDL } else { &[] };
     let bare = extra_ddl.is_empty() && shared.is_empty();
     let has_tables = !user_tables(&pool).await?.is_empty();
-    let mut tops = datalib_store_meta::Versions::default();
     // The shared ladder first: the framework's tables are below the
     // owner's, and an owner's rung may read them.
     for (which, rungs_of) in [(Ladder::Shared, SHARED_LADDER), (Ladder::Own, ladder)] {
         let stored = datalib_store_meta::ladder::stored_version(&pool, which).await?;
         let top = datalib_store_meta::ladder::top(rungs_of);
-        match which {
-            Ladder::Shared => tops.shared = top,
-            Ladder::Own => tops.schema = top,
-        }
         if bare {
             continue;
         }
@@ -1168,14 +1211,10 @@ async fn open_inner(
     if bare {
         return Ok(pool);
     }
-    let meta_moved = datalib_store_meta::write(
-        &pool,
-        kind,
-        &recorded_shape(extra_ddl.iter().chain(shared).copied()),
-        tops,
-    )
-    .await
-    .with_context(|| format!("write _datalib_meta for {}", db_path.display()))?;
+    let shape = shape_opened_with(extra_ddl, lookup_indexes, include_shared, ladder);
+    let meta_moved = datalib_store_meta::write(&pool, kind, &shape)
+        .await
+        .with_context(|| format!("write _datalib_meta for {}", db_path.display()))?;
     // Commit the schema before handing back the pool, so readers and the
     // run's deltas start from a commit that has every table. The message
     // names the build when the meta rows moved — a new
@@ -1269,10 +1308,9 @@ impl ColumnInfo {
     }
 }
 
-/// Whether `table` has `column`, for **read-only** consumers that never get
-/// [`open`]'s schema reconcile — the render side opens read-only, so naming a
-/// column an older store lacks would fail at prepare time and sink the step.
-/// A missing table reads as "no such column" rather than an error.
+/// Whether `table` has `column`, for a reader of a mirrored store, whose
+/// columns are the upstream app's and vary with its version. A missing
+/// table reads as "no such column" rather than an error.
 pub async fn column_exists(pool: &SqlitePool, table: &str, column: &str) -> Result<bool> {
     Ok(table_columns(pool, table)
         .await?
@@ -2166,8 +2204,7 @@ async fn read_at_path(
 }
 
 /// The raw store's whole-store problem counts by severity, read-only,
-/// for the step's report. Empty for a store that is not there yet or
-/// predates the table.
+/// for the step's report. Empty for a store that is not there yet.
 pub async fn problem_counts_at_path(
     db_path: &Path,
 ) -> Result<HashMap<datalib_problems::Severity, i64>> {
@@ -2185,11 +2222,7 @@ pub async fn problem_counts_at_path(
         .fetch_all(&pool)
         .await;
     pool.close().await;
-    let rows = match rows {
-        Ok(rows) => rows,
-        Err(e) if crate::pin::is_missing_table(&e, "problems") => return Ok(HashMap::new()),
-        Err(e) => return Err(e).context("count the raw store's problems"),
-    };
+    let rows = rows.context("count the store's problems")?;
     let mut out = HashMap::new();
     for r in rows {
         let word: String = r.try_get(0)?;
@@ -5987,7 +6020,8 @@ mod tests {
             .fetch_one(reader.pool())
             .await
             .unwrap();
-        assert_eq!(pinned, 7, "every meta row is at HEAD");
+        // Seven, and `index_hash` for the shared lookup indexes.
+        assert_eq!(pinned, 8, "every meta row is at HEAD");
         reader.close().await;
 
         // The shape moves: the hash moves with it, and the commit says so.

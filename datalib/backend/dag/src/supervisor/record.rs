@@ -71,7 +71,7 @@ pub struct StepRecord {
     pub fingerprint: String,
     /// It answered a launch's `--migrate` with `needs_rerun`: what it wrote
     /// is in a shape this build cannot reach in place. The tick holds it
-    /// due, and the app offers to run it, until it next succeeds.
+    /// due, and the loop runs it after the pass, until it next succeeds.
     pub needs_rerun: bool,
     /// What happened the last time a run reached it, whatever the
     /// outcome: what "last synced" says.

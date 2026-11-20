@@ -106,7 +106,7 @@ pub async fn run_index(
             .collect::<Vec<_>>()
             .join("/");
         let reader = if db.exists() {
-            doltlite_raw::open_reader(&db, None)
+            store::open_reader(&db, None, StoreKind::TimeSeries)
                 .await
                 .with_context(|| format!("read {source}'s time series"))?
         } else {

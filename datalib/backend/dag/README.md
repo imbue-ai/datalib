@@ -312,9 +312,11 @@ of four ways:
 3. **`needs_rerun`.** What the step wrote can only be rebuilt by running
    it. The record keeps the flag (`steps.needs_rerun`), the tick holds
    the step due until it next succeeds (rule 5), and
-   `round::rerun_offer` lists it for the app, which asks whether to run
-   it now and opens one request rooted at the list if so. A sync that
-   does not reach such a step leaves it alone. A `datalib-step` render
+   `round::rerun_offer` lists it. Once the pass is over, the loop opens
+   one request rooted at that list, by `upgrade`
+   (`serve::UPGRADE_REQUESTER`), unless one it opened is still open:
+   nothing reads a store in another shape, and none of these steps
+   downloads, so there is nothing to ask. A `datalib-step` render
    store or the grid index in another shape answers this way, and so
    does `unified_grid_and_search_index` when a source it reads was drawn
    into the search index by another version of the index text or its
@@ -327,18 +329,29 @@ of four ways:
    person turned off keeps its switch.
 
 A step that fails to answer costs that step only, and the rest are
-asked. For `datalib-step`'s own steps: the grid index reads a render
-store in another shape as the index had it, with a warning; a rebuild of
-the index has nothing to keep, so a source whose render step stays
-turned off then has no rows until it re-renders. Its documents stay in
+asked. For `datalib-step`'s own steps, a store is read only in this
+build's shape (`datalib/backend/store_meta/README.md`). A store whose
+indexes alone moved is brought up to date in place: prepare opens it as
+its owner, which makes them. Until a store in another shape is rebuilt,
+nothing reads it, and the refusal names the step to run. The grid index
+leaves such a source's rows as it had them, with a warning; while the
+grid index itself is in another shape, the grid and documents answer
+with that refusal. A rebuild of the index has nothing to keep, so a
+source whose render step stays turned off then has no rows until it
+re-renders. Its documents stay in
 the search index with their vectors, and a search reads only the
 sources the grid holds, so it leaves search too and costs a search
-nothing. In the app, the pass writes only what each step brings up to
-date in place, so the app stays usable while it runs: a pill where the
-sync indicator sits says how each step is going, and every Sync on the
-Sources card is disabled (`ManageResponse::sync_paused`); a request
-opened another way waits for the pass. After it, the pill stays red for
-a step the pass could not prepare until it is dismissed. The pass is
+nothing. In the app, an upgrade screen stands in front of the library
+while the pass runs and while any step it marked `needs_rerun` has not
+run since, saying how each source is going: the cards would only show
+refusals meanwhile. Its one button opens Sources, for a source whose
+re-run fails, and lifts the screen for that page. Every Sync on the
+Sources card is disabled while the pass runs
+(`ManageResponse::sync_paused`); a request opened another way waits for
+the pass. After it, a pill where the sync indicator sits stays red for a
+step the pass could not prepare until it is dismissed, and, once the
+screen is lifted, amber, with a button that runs them, while any step
+the pass marked `needs_rerun` has not run since. The pass is
 held in the server's memory (`/api/config`'s `upgrade`) and announced as
 `pass_changed` on `/api/sync/stream`; freeing disk space is drawn by the
 same pill (§"Resets and purges").

@@ -337,21 +337,9 @@ async fn carry_into(index: &SqlitePool, cache: &InferenceCache) -> Result<usize>
     Ok(carried)
 }
 
-/// What a reader finds filed in the cache: `markdown_uuid → (content
-/// hash, its chunks in order)`, of `uuids` (every document when `None`).
-/// Nothing before an `embed` of this build has written the tables.
 /// `markdown_uuid → content_hash` of every document cut into chunks: the
 /// rendering each was cut from.
 pub(crate) async fn read_cut(cache: &SqlitePool) -> Result<HashMap<String, String>> {
-    let tables: Option<i64> = sqlx::query_scalar(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'search_chunked'",
-    )
-    .fetch_optional(cache)
-    .await
-    .context("look for the filed chunks")?;
-    if tables.is_none() {
-        return Ok(HashMap::new());
-    }
     let rows: Vec<(String, String)> =
         sqlx::query_as("SELECT markdown_uuid, content_hash FROM search_chunked")
             .fetch_all(cache)
@@ -360,20 +348,13 @@ pub(crate) async fn read_cut(cache: &SqlitePool) -> Result<HashMap<String, Strin
     Ok(rows.into_iter().collect())
 }
 
+/// What a reader finds filed in the cache: `markdown_uuid → (content
+/// hash, its chunks in order)`, of `uuids` (every document when `None`).
 pub(crate) async fn read_filed(
     cache: &SqlitePool,
     uuids: Option<&[String]>,
 ) -> Result<BTreeMap<String, (String, Vec<FiledChunk>)>> {
-    let tables: Option<i64> = sqlx::query_scalar(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'search_chunked'",
-    )
-    .fetch_optional(cache)
-    .await
-    .context("look for the filed chunks")?;
     let mut out: BTreeMap<String, (String, Vec<FiledChunk>)> = BTreeMap::new();
-    if tables.is_none() {
-        return Ok(out);
-    }
     type Row = (
         String,
         String,

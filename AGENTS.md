@@ -44,6 +44,7 @@ merge conflict waiting to happen.
 **Data architecture**
 
 - [`datalib/backend/etl/README.md`](datalib/backend/etl/README.md) — the shared ingest machinery: keys, sidecars, volatile fields, **the doltlite pool rules**, schema changes and the migration ladder, the blob CAS. Read before opening any store.
+- [`datalib/backend/store_meta/README.md`](datalib/backend/store_meta/README.md) — the shape every store records and the one check every reader makes before it reads a row. **Start here** before changing a store's tables or indexes, or reading a store.
 - [`datalib/backend/etl/macros/README.md`](datalib/backend/etl/macros/README.md) — the four table derives.
 - [`docs/dev/data_architecture_ingestion.md`](docs/dev/data_architecture_ingestion.md), [`…_practices.md`](docs/dev/data_architecture_ingestion_practices.md) — download: principles, then how to build a provider. A provider's own quirks are in the `INGEST.md` beside its code, where it has one.
 - [`docs/dev/data_architecture_parse_and_render.md`](docs/dev/data_architecture_parse_and_render.md) — render: projection to `GridRow` + markdown, incrementality.
@@ -867,11 +868,31 @@ one goes there and into the `deps` that take it, then
 `tools/repin_cargo.sh`; `//:lint_repo` refuses an entry no `BUILD.bazel`
 names.
 
-## Fallbacks: prefer failing loudly to succeeding quietly
+## No fallbacks, no workarounds: one way to do it
 
-**Avoid fallbacks.** The dangerous ones *succeed*: a correct answer
-reached the slow or lossy way raises no error. If you add one anyway,
-log when it fires.
+**No fallbacks, no workarounds. Wherever possible, just one way to do
+it.** A second path is a path the tests rarely take, and the dangerous
+ones *succeed*: a correct answer reached the slow or lossy way raises no
+error, and a read that should have failed returns less. When the input
+is not what the one way expects, fail loudly, naming what was found and
+what was wanted; do not branch around it.
+
+- **A store is in this build's shape or it is refused.** Nothing reads
+  around a table, a column or an index an older build left out: the
+  prepare pass brings every store to this build's shape before anything
+  reads it, and every open checks the shape `_datalib_meta` records
+  (`datalib/backend/store_meta/README.md`). A "no such table" or "no
+  such column" from a store whose shape was checked is a bug, not "an
+  older store".
+- **A statement names the index it relies on** (`INDEXED BY`): an index
+  is part of the store's shape, so it is there.
+- **One reader, one writer, one spelling.** Where two functions do one
+  job, delete one; where a value has two names, keep one and migrate the
+  other.
+
+The exception is input a **person** wrote, which keeps a compatibility
+path (§"Keep a forward path for existing data"), and upstream data,
+whose shape is not ours to choose.
 
 **An error or a warning about a record goes through `problems`, never
 only to the log.** A record a download could not fetch goes through
