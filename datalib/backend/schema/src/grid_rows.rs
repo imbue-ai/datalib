@@ -135,16 +135,17 @@ pub struct GridRow {
     /// On a contact's own row (an address-book card, a LinkedIn
     /// connection, a group of contacts): the name of the person or group
     /// the row is about. What the grid's Contact chip is labelled with;
-    /// null on every other row.
-    #[col(sql = "VARCHAR(255)", search)]
+    /// null on every other row. No key reads it: `with:` finds a card by
+    /// its name, its addresses and its numbers (its `About` terms).
+    #[col(sql = "VARCHAR(255)")]
     pub contact: Option<String>,
     /// A contact's first email address, as the source wrote it. Null on
     /// every row that is not a contact.
-    #[col(sql = "VARCHAR(255)", search)]
+    #[col(sql = "VARCHAR(255)")]
     pub email: Option<String>,
     /// A contact's first phone number, as the source wrote it, with or
     /// without its country code. Null on every row that is not a contact.
-    #[col(sql = "VARCHAR(64)", search)]
+    #[col(sql = "VARCHAR(64)")]
     pub phone: Option<String>,
     /// Whose mirror this row came from — the login's email where the
     /// source stores one, else its name, else the provider's own id.

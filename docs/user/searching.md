@@ -131,9 +131,9 @@ source by its id in the config; also `source_id:`), `kind:` (`Email`,
 `Slack Message`, …), `subject:` (also `conversation:`), `channel:`,
 `account:`, `project:`, `id:` (a row by the id its source gave it),
 `datalib_document_id:` (a document by Datalib's id for it, and every
-row in it), `contact:` and `email:` (an address book's columns), and
-the id of any other column the grid shows (`org_name:`, `created_at:`,
-…). These match the whole value as stored, case and all: `kind:Email`,
+row in it), and the id of any other column the grid shows (`org_name:`,
+`created_at:`, …) but a contact card's name, email and phone: `with:`
+finds a card by any of those (below). These match the whole value as stored, case and all: `kind:Email`,
 not `kind:email`. A uuid is the one exception: 32 hex digits, with or
 without the four dashes, match the same uuid however it is written and
 however its source stored it, dashed or not, in capitals or not.

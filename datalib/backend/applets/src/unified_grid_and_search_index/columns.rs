@@ -730,9 +730,10 @@ mod tests {
 
     /// The search bar is the grid's one filter: every column a person
     /// might narrow by names its key, and a row field the grid can read
-    /// the term's value from.
+    /// the term's value from. A contact card's name, email and phone have
+    /// no key: `with:` finds a card.
     #[test]
-    fn every_column_but_score_contents_picture_and_document_says_how_to_search_it() {
+    fn every_column_but_score_contents_picture_document_and_a_cards_says_how_to_search_it() {
         // A row as the applet sends it, with what it resolves filled in.
         let mut row = SearchRow {
             author: "Worf".into(),
@@ -743,7 +744,11 @@ mod tests {
         for c in columns() {
             match (&c.search, c.field.as_str()) {
                 // No key names a document in the search grid.
-                (None, "score" | "snippet" | "image" | "document_ref") => {}
+                (
+                    None,
+                    "score" | "snippet" | "image" | "document_ref" | "contact_ref" | "email"
+                    | "phone",
+                ) => {}
                 (None, field) => panic!("{field} has no search key"),
                 (Some(s), field) => assert!(
                     row.get(&s.field).is_some(),
