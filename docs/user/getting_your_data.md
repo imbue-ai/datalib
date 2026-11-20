@@ -49,7 +49,7 @@ them.
 macOS protects Mail's folder. In the app, choose it with the picker in
 the "Apple Mail" form — that is what grants Datalib access (Cmd-Shift-G
 in the dialog reaches `~/Library/Mail`). A terminal running
-`datalib-dag` needs Full Disk Access instead (System Settings → Privacy
+`datalib-pipeline` needs Full Disk Access instead (System Settings → Privacy
 & Security).
 
 Each account is copied under its own id, made from the name of its folder

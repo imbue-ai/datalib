@@ -127,7 +127,7 @@ which build wrote this store"). A reader that wants to
 know what it is looking at reads that before its first query — and
 every owner does, refusing a store a newer `major.minor` of Datalib
 wrote (`datalib_store_meta::guard`; the app server then boots only to
-show the screen that says so, and `datalib-dag` refuses the root).
+show the screen that says so, and `datalib-pipeline` refuses the root).
 
 `datalib_curated/` holds what a person curates by hand, one directory
 per app, so each can be managed or deleted on its own. Nothing can
@@ -162,7 +162,7 @@ the search index's rows with it; `unified_grid_and_search_index` puts them back 
 next run. `runs.sqlite` is the other exception to doltlite: plain
 SQLite in WAL mode, written by whoever runs the loop (its
 runs) and the server (its own log) — one process while the server is
-up, two while a `datalib-dag` runs the loop — which SQLite's own locking
+up, two while a `datalib-pipeline` runs the loop — which SQLite's own locking
 makes ordinary; `runs_two_process_test` is the measurement.
 
 Who writes which line of it, how to add one, and how to read it is

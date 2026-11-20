@@ -1,6 +1,6 @@
 # Datalib — production runtime image.
 #
-# Ships the release tarball whole — the binaries (`datalib-dag`,
+# Ships the release tarball whole — the binaries (`datalib-pipeline`,
 # `datalib-step`, `datalib-http`, `datalib-migrate-config`,
 # `datalib-applet`, `datalib-doltlite`, `latchkey-curl-router`,
 # `curl-impersonate`) and the `latchkey` launcher — plus the
@@ -38,7 +38,7 @@
 # docs/user/docker.md), which uid 1000 must be able to write:
 #   /root/.latchkey                latchkey credentials store
 #                                  (RW for `auth set` / `services register`;
-#                                  may be RO for `datalib-dag`).
+#                                  may be RO for `datalib-pipeline`).
 #   /data                          the user's data root: config.toml, one
 #                                  directory per source, the indexes under
 #                                  unified_grid_and_search_index/, the server's state
@@ -174,7 +174,7 @@ RUN set -eux; \
     mkdir /opt/datalib/runtime; \
     tar --no-same-owner -xzf /tmp/release/runtime-*-linux-gnu.tar.gz -C /opt/datalib/runtime; \
     rm -rf /tmp/release; \
-    for bin in datalib-dag datalib-migrate-config datalib-step datalib-applet \
+    for bin in datalib-pipeline datalib-migrate-config datalib-step datalib-applet \
                datalib-http latchkey-curl-router curl-impersonate \
                datalib-doltlite latchkey; do \
         test -x "/opt/datalib/$bin"; \
@@ -192,7 +192,7 @@ RUN set -eux; \
     # Smoke: --version on the one binary that supports it. datalib-http
     # takes a positional DATA_ROOT and clap rejects --version before parsing
     # anything else, so we can't use it the same way here.
-    datalib-dag --version; \
+    datalib-pipeline --version; \
     doltlite --version; \
     /opt/datalib/runtime/node/bin/node --version; \
     # The CUDA variant: with cuBLAS beside it, the module may want nothing
@@ -250,13 +250,13 @@ FROM app
 # Dashboard's "Synced …" reads as a real past time.
 #
 # This layer is also the one smoke test that runs the shipped
-# pipeline end to end: a tarball whose datalib-dag or datalib-step
+# pipeline end to end: a tarball whose datalib-pipeline or datalib-step
 # cannot ingest the fixtures fails the image build here.
 COPY --chown=datalib:datalib demo/ /opt/datalib/demo-sources/
 RUN set -eux; \
     mv /opt/datalib/demo-sources/config.toml /opt/datalib/demo/config.toml; \
-    datalib-dag /opt/datalib/demo/config.toml; \
-    datalib-dag --check /opt/datalib/demo/config.toml; \
+    datalib-pipeline sync /opt/datalib/demo; \
+    datalib-pipeline check /opt/datalib/demo; \
     datalib-doltlite -readonly /opt/datalib/demo/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
         "SELECT count(*) FROM search_documents;" | grep -qv '^0$'; \
     datalib-doltlite -readonly /opt/datalib/demo/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
@@ -291,7 +291,7 @@ ENV DATALIB_BIND=0.0.0.0:8731
 # "No encryption key available." if `LATCHKEY_ENCRYPTION_KEY` isn't
 # set. That includes:
 #   * `latchkey services register` / `auth set` / `auth list` directly;
-#   * `datalib-dag` (whose download steps shell out to `latchkey curl`);
+#   * `datalib-pipeline` (whose download steps shell out to `latchkey curl`);
 #   * `datalib-http`, ditto for any authenticated upstream fetch.
 # The entrypoint reads the per-bind-mount key file (or provisions one
 # on first run — see the script header) so users don't have to remember
@@ -301,7 +301,7 @@ ENV DATALIB_BIND=0.0.0.0:8731
 # bundled `node`) and forwards SIGTERM cleanly to the long-lived
 # `datalib-http` case. Cheap enough to keep for short-lived runs too.
 #
-# No default CMD: this image is multi-entrypoint (`datalib-dag`,
+# No default CMD: this image is multi-entrypoint (`datalib-pipeline`,
 # `datalib-http`, `latchkey`), and forcing one would just make
 # `docker run <img> latchkey ...` more awkward.
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/datalib-entrypoint.sh"]

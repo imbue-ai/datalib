@@ -270,7 +270,7 @@ jobs:
         run: |
           set -euo pipefail
           for bin in \
-              bazel-bin/datalib/backend/dag/datalib_dag_bin \
+              bazel-bin/datalib/backend/dag/datalib_pipeline_bin \
               bazel-bin/datalib/backend/datalib_step/datalib_step \
               bazel-bin/datalib/backend/http/datalib_http_bin \
               bazel-bin/datalib/backend/migrate_config/datalib_migrate_config_bin \
@@ -462,7 +462,7 @@ jobs:
           persist-credentials: false
 
       # The tauri beforeBuildCommand bazel-builds the bundled
-      # datalib-http / datalib-dag / datalib-step binaries; no cache, as in
+      # datalib-http / datalib-pipeline / datalib-step binaries; no cache, as in
       # the build job above.
       - uses: bazel-contrib/setup-bazel@f34d6a05eae3c24acab7fa54587492daeaeffdab # 0.19.2
         with:
@@ -776,7 +776,7 @@ jobs:
       # once for publish) and the only thing it
       # uniquely caught was a regression in the entrypoint's
       # `LATCHKEY_ENCRYPTION_KEY` bootstrap. The other smoke checks
-      # (`datalib-dag --version`, `datalib-http --help`)
+      # (`datalib-pipeline --version`, `datalib-http --help`)
       # duplicate the binary-presence checks the
       # Dockerfile already runs inline. If the latchkey bootstrap ever
       # regresses, ghcr.io will briefly have a broken `:latest` until

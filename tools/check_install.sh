@@ -72,9 +72,9 @@ chmod +x "$stubs/uname" "$stubs/curl" "$stubs/getconf"
 
 stage="$work/datalib-0.0.0-x86_64-unknown-linux-gnu"
 mkdir -p "$stage/docs" "$stage/lib"
-touch "$stage/datalib-dag" "$stage/latchkey" "$stage/git-hash" "$stage/runtime.manifest" "$stage/docs/agent_user.md" \
+touch "$stage/datalib-pipeline" "$stage/latchkey" "$stage/git-hash" "$stage/runtime.manifest" "$stage/docs/agent_user.md" \
     "$stage/lib/libdoltlite.so"
-chmod +x "$stage/datalib-dag" "$stage/latchkey"
+chmod +x "$stage/datalib-pipeline" "$stage/latchkey"
 tarball="$work/datalib.tar.gz"
 tar -czf "$tarball" -C "$work" "$(basename "$stage")"
 
@@ -137,7 +137,7 @@ done
 expect_refused "need sha256sum or shasum" "no tool to check with" "$stubs:$tools"
 
 install
-for name in datalib-dag latchkey; do
+for name in datalib-pipeline latchkey; do
     [[ -L "$bin/$name" && -x "$bin/$name" ]] || complain "$name is not linked as an executable"
 done
 for name in git-hash runtime.manifest docs lib libdoltlite.so; do

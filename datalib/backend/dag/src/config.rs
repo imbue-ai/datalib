@@ -2022,7 +2022,7 @@ pub fn check_text(text: &str) -> ConfigCheck {
     }
 }
 
-/// What `datalib-dag --check` prints for the patterns: one line each,
+/// What `datalib-pipeline check` prints for the patterns: one line each,
 /// the step, the pattern and what it read.
 pub fn expansion_lines(expansions: &[crate::input_pattern::Expansion]) -> Vec<String> {
     expansions

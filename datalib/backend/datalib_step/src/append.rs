@@ -1,11 +1,11 @@
 //! `datalib-step examples <type> --append <config.toml>`: add one source's
 //! minimal stanza to a config, above the index groups, and add its steps
 //! to the `inputs` of the index steps that read them by id. A config
-//! without the grid and search index (`datalib-dag init` writes one with
+//! without the grid and search index (`datalib-pipeline init` writes one with
 //! no steps) gets it, and one without the `[[programs]]` and `[[locks]]` entries its
 //! datalib-step steps need gets those. The rest of the file stays as
 //! written, comments included; the result is checked the way
-//! `datalib-dag --check` checks a config before it is written.
+//! `datalib-pipeline check` checks a config before it is written.
 
 use std::collections::BTreeSet;
 use std::ops::Range;
@@ -460,7 +460,7 @@ fn is_index_entry(entry: &str) -> bool {
     group.is_some_and(|g| INDEX_GROUPS.contains(&g.as_str()))
 }
 
-/// What `datalib-dag --check` would refuse in `after` that it did not
+/// What `datalib-pipeline check` would refuse in `after` that it did not
 /// refuse in `before`: an entry it drops, or a step of `group` whose
 /// params a sync would refuse. Rendered against `path`, one per line.
 pub fn new_problems(path: &Path, before: &str, after: &str, group: &str) -> Vec<String> {
@@ -509,7 +509,7 @@ pub fn run_cli(word: &str, path: &Path, method: Option<&str>, id: Option<&str>) 
         Ok(t) => t,
         Err(e) => {
             status_line!(
-                "error: could not read {shown}: {e}. `datalib-dag init <data_root>` writes an \
+                "error: could not read {shown}: {e}. `datalib-pipeline init <data_root>` writes an \
                  empty one."
             );
             return 1;
@@ -567,9 +567,9 @@ pub fn run_cli(word: &str, path: &Path, method: Option<&str>, id: Option<&str>) 
     }
     status_line!(
         "Next: set its params (`datalib-step help {t} {method}`), sign it in if it needs \
-         it (`datalib-step help {t}`), then `datalib-dag --check {shown}`, \
+         it (`datalib-step help {t}`), then `datalib-pipeline check {shown}`, \
          `datalib-step check-params {shown}` and \
-         `datalib-dag {shown} --sync {group}/ingest --by <you>`."
+         `datalib-pipeline sync {shown} {group}/ingest --by <you>`."
     );
     0
 }
@@ -578,7 +578,7 @@ pub fn run_cli(word: &str, path: &Path, method: Option<&str>, id: Option<&str>) 
 mod tests {
     use super::*;
 
-    /// What `datalib-dag init` writes: comments, and no entry.
+    /// What `datalib-pipeline init` writes: comments, and no entry.
     const EMPTY: &str = datalib_dag::starter::STARTER_CONFIG;
 
     /// Each append kept the previous file as `<file>.bak`, so three in a
@@ -638,7 +638,7 @@ mod tests {
     }
 
     /// The case the command exists for: a source added to a new root
-    /// reaches the grid. `datalib-dag init` writes no steps, so the grid
+    /// reaches the grid. `datalib-pipeline init` writes no steps, so the grid
     /// and search index comes with the first source, and the
     /// `[[programs]]` and `[[locks]]` entries its steps need.
     #[test]

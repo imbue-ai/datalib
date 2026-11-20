@@ -787,7 +787,7 @@ jobs:
             --build_metadata=ROLE=CI \
             //datalib/backend:dist
           for bin in \
-              bazel-bin/datalib/backend/dag/datalib_dag_bin \
+              bazel-bin/datalib/backend/dag/datalib_pipeline_bin \
               bazel-bin/datalib/backend/datalib_step/datalib_step \
               bazel-bin/datalib/backend/http/datalib_http_bin \
               bazel-bin/third-party/latchkey-curl-shims/latchkey-curl-router \

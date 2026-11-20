@@ -12,7 +12,7 @@ beside `[[groups]]` and `[[steps]]`.
 | --- | --- | --- |
 | Lifetime | runs to completion during a sync | long-lived server, started with `datalib-http` |
 | Produces | artifacts on disk | HTTP responses and card components |
-| Scheduled by | `datalib-dag`, from artifact dependencies | the http gateway, one for each entry in the config |
+| Scheduled by | `datalib-pipeline`, from artifact dependencies | the http gateway, one for each entry in the config |
 | Declares | `id`, `command`, `inputs`, `params`, `reads`, `locks` | `id`, `command`, `params`, and optionally the `group` its Manage row is filed under |
 
 An applet declares no `inputs` because it is never scheduled and owns

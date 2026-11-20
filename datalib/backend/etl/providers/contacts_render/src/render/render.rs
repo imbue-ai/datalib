@@ -41,7 +41,9 @@ use datalib_schema::providers::Provider;
 /// the store lacks is a `blob_missing` problem.
 /// 17: a group's card is a place in its address book, and a card is filed
 /// under each group naming it and each of its categories.
-pub const RENDER_VERSION: u32 = 17;
+/// 18: a category is keyed by its address book's id, which a rename of
+/// the book keeps, not by the book's label.
+pub const RENDER_VERSION: u32 = 18;
 
 /// Every card by `(addressbook, UID)`, for a group to name its members.
 type Cards<'a> = HashMap<(&'a str, &'a str), &'a ParsedContact>;
@@ -165,8 +167,12 @@ fn filed_under(
         .filter_map(|g| group_nodes.get(&(g.addressbook.as_str(), g.uid.as_str())))
         .cloned()
         .collect();
+    let book = contact
+        .addressbook_id
+        .as_deref()
+        .unwrap_or(&contact.addressbook);
     for name in contact.categories.iter().filter_map(|c| category_name(c)) {
-        let id = ids::category(source_id, &contact.addressbook, &name);
+        let id = ids::category(source_id, book, &name);
         if out.iter().any(|n| n.uuid == id.uuid) {
             continue;
         }
@@ -665,6 +671,37 @@ mod tests {
         );
         let listed: Vec<&str> = n.contact.groups.iter().map(String::as_str).collect();
         assert_eq!(listed, vec!["Away Team", "Starred", "Bridge crew"]);
+    }
+
+    /// A category is keyed by its address book's id, so renaming the book
+    /// keeps every category in it; a card that names no book keys it by
+    /// the book's label.
+    #[test]
+    fn a_category_keeps_its_node_when_its_address_book_is_renamed() {
+        let card = |label: &str, book: Option<&str>| ParsedContact {
+            addressbook: label.to_string(),
+            addressbook_id: book.map(str::to_string),
+            categories: vec!["Bridge crew".to_string()],
+            ..sample()
+        };
+        let category = |c: &ParsedContact| {
+            filed_under(c, "tng_contacts", &Groups::new(), &HashMap::new())
+                .into_iter()
+                .find(|n| n.name.as_deref() == Some("Bridge crew"))
+                .expect("filed under its category")
+                .uuid
+        };
+        let before = category(&card("Bridge", Some("acct!/books/bridge/")));
+        let after = category(&card("Command crew", Some("acct!/books/bridge/")));
+        assert_eq!(before, after);
+        assert_eq!(
+            before,
+            ids::category("tng_contacts", "acct!/books/bridge/", "Bridge crew").uuid
+        );
+        assert_eq!(
+            category(&card("Bridge", None)),
+            ids::category("tng_contacts", "Bridge", "Bridge crew").uuid
+        );
     }
 
     /// A card's address book is a place keyed by the raw store's

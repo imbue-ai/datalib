@@ -83,7 +83,7 @@ compile() {
     # it names, with no install script run — never `pnpm dlx`.
     pnpm install --frozen-lockfile --ignore-scripts
     # The bundled binaries as the release tarballs build them: optimized,
-    # and stamped so `datalib-dag --version` names the release. Set here
+    # and stamped so `datalib-pipeline --version` names the release. Set here
     # rather than defaulted, since this is what ships.
     export DATALIB_COMPILATION_MODE=opt DATALIB_STAMP=1
     if [[ -n "${DATALIB_APP_VERSION:-}" ]]; then

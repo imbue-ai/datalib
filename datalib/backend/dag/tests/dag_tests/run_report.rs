@@ -1,4 +1,4 @@
-//! The report `datalib-dag` prints on stdout at the end of a sync: one
+//! The report `datalib-pipeline` prints on stdout at the end of a sync: one
 //! line per step, saying how the run went for it — not how its last pass
 //! went. A consumer of a streaming producer runs once per seal, so the two
 //! differ.
@@ -7,8 +7,8 @@ use std::path::Path;
 use std::process::Command;
 
 fn dag_bin() -> std::path::PathBuf {
-    std::path::absolute(std::env::var("DATALIB_DAG_BIN").expect("DATALIB_DAG_BIN is set"))
-        .expect("absolute DATALIB_DAG_BIN")
+    std::path::absolute(std::env::var("DATALIB_PIPELINE_BIN").expect("DATALIB_PIPELINE_BIN is set"))
+        .expect("absolute DATALIB_PIPELINE_BIN")
 }
 
 /// A producer that streams: it seals `v1`, waits for its consumer's first
@@ -50,9 +50,10 @@ const REPORTS_C1: &str =
 
 fn sync(root: &Path) -> (Option<i32>, String) {
     let out = Command::new(dag_bin())
-        .arg(root.join("config.toml"))
+        .arg("sync")
+        .arg(root)
         .output()
-        .expect("run datalib-dag");
+        .expect("run datalib-pipeline");
     assert!(root.join("c-pass-2").exists(), "c ran twice: {out:?}");
     (
         out.status.code(),

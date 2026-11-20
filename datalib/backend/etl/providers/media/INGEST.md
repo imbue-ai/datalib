@@ -460,7 +460,7 @@ its item stays. The rows stay in earlier commits. Pinned by
   XMP reader.
 - **Nothing in CI runs the step.** The e2e suite calls `ingest::fetch`
   directly, so `processor.rs` and the `RawStoreSession` commit around it
-  are covered only by hand-running `datalib-dag`; the `ingested_tng`
+  are covered only by hand-running `datalib-pipeline`; the `ingested_tng`
   fixture pipeline runs only sources that render.
   `download_only_sources_plan_a_download_and_no_render` in
   `datalib_step/src/dispatch.rs` covers the config and planning half.

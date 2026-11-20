@@ -2,7 +2,7 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 load("//tools:insta.bzl", "insta_update")
 
 # `datalib-step` — the step program datalib ships, which the runner
-# (//datalib/backend/dag:datalib_dag_bin) starts as `datalib-step run
+# (//datalib/backend/dag:datalib_pipeline_bin) starts as `datalib-step run
 # <function> [<type>]`, the step's `command`. Honors the step protocol
 # (NDJSON events on stdout, final outcome line).
 #
@@ -242,7 +242,7 @@ rust_test(
     crate_root = "tests/step_tests/main.rs",
     data = glob(["tests/step_tests/snapshots/*.snap"], allow_empty = True) + [
         ":datalib_step",
-        "//datalib/backend/dag:datalib_dag_bin",
+        "//datalib/backend/dag:datalib_pipeline_bin",
         "//datalib/backend/etl/providers/calendar:split_fixture",
         "//datalib/backend/etl/providers/sms_backup_restore:tng_fixture",
         "//tests/fixtures:ingested/inference_cache.sqlite",
@@ -255,7 +255,7 @@ rust_test(
     edition = "2021",
     env = {
         "CALENDAR_SPLIT_FIXTURE_DIR": "datalib/backend/etl/providers/calendar/tests/fixtures/calendar_split_tng",
-        "DATALIB_DAG_BIN": "$(rootpath //datalib/backend/dag:datalib_dag_bin)",
+        "DATALIB_PIPELINE_BIN": "$(rootpath //datalib/backend/dag:datalib_pipeline_bin)",
         "DATALIB_STEP_BIN": "$(rootpath :datalib_step)",
         "DOLTLITE_BIN": "$(rootpath //third-party/doltlite:doltlite)",
         "EMBED_MODEL": "$(rootpath //third-party/embedding_models:embeddinggemma)",

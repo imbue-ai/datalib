@@ -226,7 +226,7 @@ references when your provider doesn't look like chat:
     *immutable upstream*, so perseus deliberately doesn't use the
     incremental-fetch / cursor / refresh-window machinery. It uses the
     framework for the typed `GridRow` schema coupling, the unified
-    `datalib-dag` pipeline UX, the obs/progress contract, and the
+    `datalib-pipeline` pipeline UX, the obs/progress contract, and the
     bazel test rig. A useful reminder that the framework is valuable
     for more than just incremental delta-fetching.
 
@@ -249,7 +249,7 @@ Two halves to this:
     change to a raw store lands by `ADD COLUMN` on the next open, with
     rows and cursors kept; anything else refuses the open until the
     provider declares a rung on its migration ladder, or the user
-    resets the store with `datalib-dag --reset` (fine for a live API,
+    resets the store with `datalib-pipeline reset` (fine for a live API,
     costly or impossible for a one-shot import whose upstream is gone,
     which is why the ladder exists). A derived store — a render store,
     the grid index — is rebuilt from its input, since every row in it

@@ -1,4 +1,4 @@
-# `datalib-http`, `datalib-dag`, `datalib-step`, the doltlite shell and the two curl shims
+# `datalib-http`, `datalib-pipeline`, `datalib-step`, the doltlite shell and the two curl shims
 # staged here by tauri.conf.json's beforeBuildCommand (copied from
 # Bazel output) so they're bundled under the .app's Resources, plus the
 # `latchkey` wrapper from stage-runtime.sh. Build artifacts — not checked in.

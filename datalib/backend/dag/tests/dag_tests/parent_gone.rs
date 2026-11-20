@@ -1,7 +1,7 @@
 //! The runner exits with the process that started it, and its steps
 //! with the runner — including when the runner is the one that is
 //! SIGKILLed and so runs no code of its own. The app server's worker
-//! spawns `datalib-dag` on a parent pipe; when the server is SIGKILLed —
+//! spawns `datalib-pipeline` on a parent pipe; when the server is SIGKILLed —
 //! the desktop shell's way of stopping it — the run must not carry on
 //! with nobody to record how it ended. The steps write their pid first,
 //! so the test can check what was taken along.
@@ -66,8 +66,8 @@ fn the_runner_and_its_steps_exit_when_the_parent_is_sigkilled() {
     .unwrap();
 
     let mut parent = Command::new(env_path("PARENT_WATCH_PROBE"))
-        .args(["exec", &env_path("DATALIB_DAG_BIN")])
-        .arg(root.join("config.toml"))
+        .args(["exec", &env_path("DATALIB_PIPELINE_BIN"), "sync"])
+        .arg(&root)
         .stdout(Stdio::piped())
         .spawn()
         .expect("spawn the probe parent");
@@ -125,8 +125,8 @@ fn a_watching_step_exits_when_the_runner_itself_is_sigkilled() {
     .unwrap();
 
     let mut parent = Command::new(env_path("PARENT_WATCH_PROBE"))
-        .args(["exec", &env_path("DATALIB_DAG_BIN")])
-        .arg(root.join("config.toml"))
+        .args(["exec", &env_path("DATALIB_PIPELINE_BIN"), "sync"])
+        .arg(&root)
         .stdout(Stdio::piped())
         .spawn()
         .expect("spawn the probe parent");

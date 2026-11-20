@@ -74,14 +74,14 @@ rust_test(
 # runner's own directory) prepended to the children's PATH so commands
 # can say `datalib-step` bare (//datalib/backend/datalib_step).
 rust_binary(
-    name = "datalib_dag_bin",
-    srcs = ["src/bin/datalib_dag.rs"],
+    name = "datalib_pipeline_bin",
+    srcs = ["src/bin/datalib_pipeline.rs"],
     crate_name = "datalib_dag",
     edition = "2021",
     # Must match [package].version in datalib/backend/Cargo.toml;
     # //datalib/backend:version_consistency_test asserts that.
     version = "0.55.0",
-    # Stamp STABLE_GIT_DESCRIBE into `datalib-dag --version` (release.yml
+    # Stamp STABLE_GIT_DESCRIBE into `datalib-pipeline --version` (release.yml
     # smoke-tests that the published tarball reports the tag). `stamp = -1`
     # defers to the --stamp flag (on under --config=release); day-to-day
     # dev builds keep the literal placeholder, which main.rs renders as
@@ -114,13 +114,13 @@ rust_test(
     srcs = glob(["tests/dag_tests/*.rs"]),
     crate_root = "tests/dag_tests/main.rs",
     data = [
-        ":datalib_dag_bin",
+        ":datalib_pipeline_bin",
         "//datalib/backend/obs:log_probe",
         "//datalib/backend/parent_watch:parent_watch_probe",
     ],
     edition = "2021",
     env = {
-        "DATALIB_DAG_BIN": "$(rootpath :datalib_dag_bin)",
+        "DATALIB_PIPELINE_BIN": "$(rootpath :datalib_pipeline_bin)",
         "LOG_PROBE": "$(rootpath //datalib/backend/obs:log_probe)",
         "PARENT_WATCH_PROBE": "$(rootpath //datalib/backend/parent_watch:parent_watch_probe)",
     },
@@ -187,7 +187,7 @@ rust_test(
         "tests/manual_e2e_occurrences.rs",
     ],
     crate_root = "tests/manual_e2e_live_sync_golden.rs",
-    # The staged binary dir, not the two targets: it holds datalib-dag and
+    # The staged binary dir, not the two targets: it holds datalib-pipeline and
     # datalib-step side by side under their public names, which is what lets
     # the runner find the step binary without `--binary-dir`.
     data = ["//datalib/backend:bin"],

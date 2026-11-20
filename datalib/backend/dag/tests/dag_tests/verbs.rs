@@ -1,15 +1,15 @@
 //! The steering verbs, each run as its own process the way an agent at a
 //! shell runs them: `status`, `stop`, `turn-off`, `turn-on` write a row and
-//! return, and the loop — here another `datalib-dag` — acts on it.
+//! return, and the loop — here another `datalib-pipeline` — acts on it.
 
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 fn dag_bin() -> String {
-    let p = Path::new(&std::env::var("DATALIB_DAG_BIN").expect("DATALIB_DAG_BIN is set"))
+    let p = Path::new(&std::env::var("DATALIB_PIPELINE_BIN").expect("DATALIB_PIPELINE_BIN is set"))
         .canonicalize()
-        .expect("DATALIB_DAG_BIN");
+        .expect("DATALIB_PIPELINE_BIN");
     p.to_string_lossy().into_owned()
 }
 
@@ -25,17 +25,16 @@ fn root_with_a_source() -> tempfile::TempDir {
     td
 }
 
+/// `datalib-pipeline <verb> <root> <rest>`, the root named as the
+/// directory, the way a person types it.
 fn dag(root: &Path, args: &[&str]) -> Output {
-    let mut cmd = Command::new(dag_bin());
-    match args.split_first() {
-        Some((verb, rest))
-            if ["status", "stop", "turn-off", "turn-on", "pause", "resume"].contains(verb) =>
-        {
-            cmd.arg(verb).arg(root.join("config.toml")).args(rest)
-        }
-        _ => cmd.arg(root.join("config.toml")).args(args),
-    };
-    cmd.output().expect("run datalib-dag")
+    let (verb, rest) = args.split_first().expect("a verb");
+    Command::new(dag_bin())
+        .arg(verb)
+        .arg(root)
+        .args(rest)
+        .output()
+        .expect("run datalib-pipeline")
 }
 
 fn stdout(out: &Output) -> String {
@@ -56,16 +55,16 @@ fn wait_for(what: &str, ready: impl Fn() -> bool) {
 fn a_missing_config_names_init_and_init_makes_one() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path().join("lib");
-    let out = dag(&root, &["--check"]);
+    let out = dag(&root, &["check"]);
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(
-        err.contains(&format!("`datalib-dag init {}`", root.display())),
+        err.contains(&format!("`datalib-pipeline init {}`", root.display())),
         "{err}"
     );
     let out = dag(&root, &["status"]);
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("datalib-dag init"),
+        String::from_utf8_lossy(&out.stderr).contains("datalib-pipeline init"),
         "{out:?}"
     );
 
@@ -73,13 +72,13 @@ fn a_missing_config_names_init_and_init_makes_one() {
         .arg("init")
         .arg(&root)
         .output()
-        .expect("run datalib-dag init");
+        .expect("run datalib-pipeline init");
     assert!(out.status.success(), "{out:?}");
     let out = Command::new(dag_bin())
-        .arg("--check")
+        .arg("check")
         .arg(root.join("config.toml"))
         .output()
-        .expect("run datalib-dag --check");
+        .expect("run datalib-pipeline check");
     assert!(out.status.success(), "{out:?}");
 }
 
@@ -112,7 +111,7 @@ fn a_source_turned_off_does_not_run_until_it_is_turned_on() {
         "status names the step turned off and who did it"
     );
 
-    let out = dag(root, &["--sync", "a/src"]);
+    let out = dag(root, &["sync", "a/src"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert!(
         !root.join("a/src/started").exists(),
@@ -124,7 +123,7 @@ fn a_source_turned_off_does_not_run_until_it_is_turned_on() {
         stdout(&out).contains("which claude had turned off"),
         "{out:?}"
     );
-    let out = dag(root, &["--sync", "a/src"]);
+    let out = dag(root, &["sync", "a/src"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert!(root.join("a/src/started").exists(), "turned on, it runs");
 }
@@ -134,6 +133,7 @@ fn a_sync_is_stopped_from_another_shell_by_its_request_id() {
     let td = root_with_a_source();
     let root = td.path();
     let sync: Child = Command::new(dag_bin())
+        .arg("sync")
         .arg(root.join("config.toml"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -189,7 +189,7 @@ fi
     )
     .unwrap();
 
-    let out = dag(root, &["--sync", "a/src"]);
+    let out = dag(root, &["sync", "a/src"]);
     assert_eq!(out.status.code(), Some(2), "{out:?}");
     let status = stdout(&dag(root, &["status"]));
     assert!(
@@ -200,7 +200,7 @@ fi
     );
 
     std::fs::write(root.join("second"), "").unwrap();
-    let out = dag(root, &["--sync", "a/src"]);
+    let out = dag(root, &["sync", "a/src"]);
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     let status = stdout(&dag(root, &["status"]));
     assert_eq!(
@@ -209,11 +209,10 @@ fi
     );
 }
 
-/// `pause` is what `turn-off` was called, and a person may still type it.
 #[test]
 fn a_verb_on_a_step_the_config_lacks_says_which_steps_it_has() {
     let td = root_with_a_source();
-    let out = dag(td.path(), &["pause", "b/src"]);
+    let out = dag(td.path(), &["turn-off", "b/src"]);
     assert!(!out.status.success());
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("its steps: a/src"),

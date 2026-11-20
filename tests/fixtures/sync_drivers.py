@@ -1,4 +1,4 @@
-"""Two ways to run the TNG fixture's syncs: `datalib-dag` from a
+"""Two ways to run the TNG fixture's syncs: `datalib-pipeline` from a
 terminal, or `datalib-http` driven over the API the way the web client
 drives it. Both take the same four calls, so `run_sync_pipeline.py`
 reads the same whichever door it goes through.
@@ -83,22 +83,16 @@ def disk_hold_error(held: StepNow, root: Path) -> SystemExit:
 
 
 class CliDriver:
-    """`datalib-dag <config> --binary-dir … --now …`, one invocation per
-    call. The config lives beside the root as `dag.toml`."""
+    """`datalib-pipeline <verb> <config> … --binary-dir … --now …`, one
+    invocation per call. The config lives beside the root as `dag.toml`."""
 
     def __init__(
         self, dag_bin: Path, workspace: Path, bindir: Path, now: str, env: dict
     ):
         self.workspace = workspace
         self.config = workspace / "dag.toml"
-        self.argv = [
-            str(dag_bin),
-            str(self.config),
-            "--binary-dir",
-            str(bindir),
-            "--now",
-            now,
-        ]
+        self.dag_bin = str(dag_bin)
+        self.flags = ["--binary-dir", str(bindir), "--now", now]
         self.env = env
 
     def build_config(self, texts: list[str]) -> None:
@@ -106,15 +100,17 @@ class CliDriver:
             f"data_root = {json.dumps(str(self.workspace))}\n\n" + texts[-1]
         )
 
+    def _argv(self, verb: str, steps: list[str]) -> list[str]:
+        return [self.dag_bin, verb, str(self.config), *steps, *self.flags]
+
     def sync(
         self, roots: list[str] | None = None, deadline_secs: float = SYNC_DEADLINE_SECS
     ) -> None:
-        """Runs `datalib-dag` to its end, reading the loop's record in
-        `system/supervisor.sqlite` while it runs: a one-shot run keeps
+        """Runs `datalib-pipeline sync` to its end, reading the loop's record
+        in `system/supervisor.sqlite` while it runs: a one-shot run keeps
         waiting while the disk holds its steps, and says so only in its
         log."""
-        extra = ["--sync", ",".join(roots)] if roots else []
-        argv = [*self.argv, *extra]
+        argv = self._argv("sync", roots or [])
         print("[sync_drivers] $", " ".join(argv), flush=True)
         proc = subprocess.Popen(argv, env=self.env)
         deadline = time.monotonic() + deadline_secs
@@ -125,7 +121,7 @@ class CliDriver:
                     raise disk_hold_error(held, self.workspace)
                 if time.monotonic() > deadline:
                     raise SystemExit(
-                        f"datalib-dag still running after {deadline_secs:.0f}s; "
+                        f"datalib-pipeline still running after {deadline_secs:.0f}s; "
                         "steps not finished, as its record has them:\n"
                         + _unfinished(steps)
                     )
@@ -138,7 +134,7 @@ class CliDriver:
             raise subprocess.CalledProcessError(code, argv)
 
     def reset(self, targets: list[str]) -> None:
-        _run([*self.argv, "--reset", ",".join(targets)], self.env)
+        _run(self._argv("reset", targets), self.env)
 
     def close(self) -> None:
         pass

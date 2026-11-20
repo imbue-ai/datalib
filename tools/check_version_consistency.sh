@@ -2,7 +2,7 @@
 # Asserts that the version declared in datalib/backend/Cargo.toml's
 # [package] section matches:
 #   * the `version = "..."` attribute in each BUILD.bazel that stamps one
-#     (dag's datalib_dag_bin rust_binary; http's rust_library, which
+#     (dag's datalib_pipeline_bin rust_binary; http's rust_library, which
 #     feeds /api/health and, via the bundled binary, the desktop app;
 #     runtime's rust_library, which every store records in
 #     `_datalib_meta` as the build that wrote it).

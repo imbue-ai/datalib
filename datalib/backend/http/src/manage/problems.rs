@@ -253,7 +253,7 @@ fn draw(d: &Drawn) -> Vec<Chip> {
 
 /// The System row's chip: the config's warnings, each in words on
 /// hover. A warning drops nothing, so no entry's row says it; this is
-/// where the app shows what `datalib-dag --check` would print.
+/// where the app shows what `datalib-pipeline check` would print.
 pub fn config_warning_chips(diagnostics: &[datalib_dag::Diagnostic]) -> Vec<Chip> {
     let warnings: Vec<String> = diagnostics
         .iter()

@@ -112,8 +112,8 @@ it properly — then bring the existing data along:
   rebuilt from the raw stores; a change that costs a re-render or
   re-index is fine.
 
-Where no migration can be written, a reset (`datalib-dag --reset
-<step>`) is the last resort; say so, and why, in the commit message.
+Where no migration can be written, a reset (`datalib-pipeline reset
+<data_root> <step>`) is the last resort; say so, and why, in the commit message.
 Keep a compatibility path, too, where the input comes from a
 **person** rather than from our own code — a filter somebody typed
 into the search bar lives in their fingers and in their saved queries,
@@ -216,7 +216,7 @@ truer comments beat more of them.
 ```
 datalib/
   backend/     Rust workspace.
-    dag/           `datalib-dag`: the DAG runner. It knows no program
+    dag/           `datalib-pipeline`: the DAG runner. It knows no program
                    by name, `datalib-step` included.
                    `//datalib/backend:bin` stages every shipped binary
                    under its public `datalib-*` name in one directory
@@ -333,7 +333,7 @@ datalib/
     unified_grid_and_search_index/ the grid index, the search index's
                    query side, the query language over them. Linked by
                    datalib-step and datalib-applet — never by
-                   datalib-http or datalib-dag.
+                   datalib-http or datalib-pipeline.
     applets/       `datalib-applet`: the applet host, and `datalib-applet
                    search`, the search box with no server.
     history/       a doltlite store's commit log; its one first-party dep
@@ -368,7 +368,7 @@ separate crates").
 
 ## The sync pipeline
 
-`datalib-dag <config.toml>` runs a DAG of subprocess steps. A `[[groups]]`
+`datalib-pipeline sync <config.toml>` runs a DAG of subprocess steps. A `[[groups]]`
 entry is one thing on the Manage screen (a source is a group with a
 `type`); a `[[steps]]` entry is an `id` — the one tree it writes, whose
 first part is its group — and the `command` it runs; `inputs` name steps
@@ -412,16 +412,16 @@ share one transaction. The loop's record — each step's state now, its
 last run and success, each sink's version — is in
 `system/supervisor.sqlite`, and a Manage row's Status is that state. A
 config entry the loader cannot use costs that entry and nothing else;
-`datalib-dag --check <config>` says what went and why. A config the app
+`datalib-pipeline check <config>` says what went and why. A config the app
 cannot serve anything from comes back as `app_ready: false` and the UI
 shows `ConfigErrorView`, live in both directions. The http server runs
-the loop `datalib-dag serve` runs, in-process (`dag/src/supervisor/serve.rs`,
+the loop `datalib-pipeline serve` runs, in-process (`dag/src/supervisor/serve.rs`,
 called from `http/src/supervisor.rs`), holding `runner-lock` for its life; a sync, a stop, a step turned off is a row it writes
 there (`POST /api/requests`, `/api/steps/<id>/turn_off`); the Manage tab
 edits the config; a root with no config gets the launcher and the
 first-run screen, which writes Datalib's starter config
 (`http/src/starter.rs`: the grid and search index and the applets).
-`datalib-dag init` writes a config with no steps instead.
+`datalib-pipeline init` writes a config with no steps instead.
 
 ## Ingest and render are separate crates
 
@@ -719,7 +719,7 @@ bazelisk test //datalib/backend/...                   # narrower, still bazel
 bazelisk build //tests/fixtures:ingested_tng          # rebuild the fixture ingest
 bazelisk build //datalib/backend:bin                  # stage every shipped binary
 ./run-app.sh [<data_root>]                            # build and launch the desktop app (macOS)
-bazel-bin/datalib/backend/bin/datalib-dag <data_root>/config.toml
+bazel-bin/datalib/backend/bin/datalib-pipeline sync <data_root>
 ```
 
 ## "Datalib" in prose, `datalib` in code

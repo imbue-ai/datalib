@@ -7,7 +7,7 @@ use std::path::Path;
 /// wrapper by stage-runtime.sh (installed from scripts/latchkey-wrapper.sh).
 const STAGED_BINARIES: &[&str] = &[
     "binaries/datalib-http",
-    "binaries/datalib-dag",
+    "binaries/datalib-pipeline",
     "binaries/datalib-step",
     "binaries/datalib-applet",
     "binaries/datalib-migrate-config",

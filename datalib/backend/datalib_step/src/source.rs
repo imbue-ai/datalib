@@ -51,7 +51,7 @@ impl StepEnv {
         let step = std::env::var(STEP_ID_ENV).with_context(|| {
             format!(
                 "{STEP_ID_ENV} is not set. `datalib-step run` expects to be run by \
-                 `datalib-dag`, which sets it to the step's id."
+                 `datalib-pipeline`, which sets it to the step's id."
             )
         })?;
         let inputs = std::env::var(INPUTS_ENV)

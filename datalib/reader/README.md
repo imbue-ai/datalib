@@ -6,7 +6,7 @@ kept inside it, which Python's own `sqlite3` module cannot open. This package
 carries the doltlite library and a small module that calls it.
 
 ```sh
-uv add imbue-datalib-reader==<version>     # or pip install; the version `datalib-dag --version` prints
+uv add imbue-datalib-reader==<version>     # or pip install; the version `datalib-pipeline --version` prints
 ```
 
 ```python
@@ -64,7 +64,7 @@ extended result code in `code`. Each kind has its own class:
   SQLite's binary JSON (JSONB); selected bare it comes back as `bytes`, which
   `json.loads` refuses with a `UnicodeDecodeError`.
 - **Give each thread its own `Store`.**
-- **Take the version of your Datalib**, which `datalib-dag --version` prints.
+- **Take the version of your Datalib**, which `datalib-pipeline --version` prints.
   Each version carries the library that release's binaries were built from.
 
 Wheels exist for Apple-silicon Macs on macOS 11 or later, and for Linux on x86_64

@@ -234,7 +234,7 @@ and clears none, and does not rewrite the `config:` rows, since it did
 not check every named conversation. A run that was asked to stop
 clears none, and records nothing about a request the stop refused.
 
-A reset (`datalib-dag --reset`) empties all three tables and their
+A reset (`datalib-pipeline reset`) empties all three tables and their
 bookkeeping, so the next sync's diff against the pre-reset commit is
 exactly what upstream changed. The CAS bytes survive, but with the
 edge rows gone every attachment is fetched over the wire again and

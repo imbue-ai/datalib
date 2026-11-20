@@ -1,5 +1,5 @@
 //! The server's side of the supervisor loop (`dag/README.md`
-//! §"Two locks, two files"): it runs the loop `datalib-dag serve` runs
+//! §"Two locks, two files"): it runs the loop `datalib-pipeline serve` runs
 //! (`datalib_dag::supervisor::serve`) for as long as it is up, keeps what
 //! the loop says that no store holds — the prepare pass, whether a sync
 //! is running — and is how the handlers write to the loop's mailbox.
@@ -92,7 +92,7 @@ impl SyncControl {
 
     /// Is a sync running on this root? This server's answer while it runs
     /// the loop; before it has the lock, whether anyone holds it — a
-    /// `datalib-dag` that was running when the server started.
+    /// `datalib-pipeline` that was running when the server started.
     pub fn running(&self) -> bool {
         if self.runs_the_loop.load(Ordering::SeqCst) {
             self.busy.load(Ordering::SeqCst)
@@ -229,7 +229,7 @@ pub struct HostConfig {
     /// The step binaries' directory, ahead of the config's `binary_dir`.
     pub binary_dir: Option<PathBuf>,
     /// Every busy period's "now", in place of the clock: what
-    /// `datalib-dag --now` is to one run. For fixtures, whose output must
+    /// `datalib-pipeline --now` is to one run. For fixtures, whose output must
     /// not depend on the day they were built.
     pub now: Option<String>,
     /// Where the prepare pass says it moved, so the page asks again.
@@ -361,7 +361,7 @@ mod tests {
         let control = SyncControl::new(Arc::new(td.path().to_path_buf()));
         assert!(!control.running(), "idle root");
         let held = datalib_dag::lock::acquire_runner(td.path()).expect("claim");
-        assert!(control.running(), "a datalib-dag holds it");
+        assert!(control.running(), "a datalib-pipeline holds it");
 
         control.runs_the_loop.store(true, Ordering::SeqCst);
         assert!(!control.running(), "the server holds it, idle");

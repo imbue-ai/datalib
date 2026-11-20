@@ -127,7 +127,7 @@ async function openExplore(page: Page) {
 test.use({ video: "on", trace: "on" });
 
 test.describe("onboarding: empty folder → indexed PDFs", () => {
-  // One real `datalib-dag` run per sync, on a cold data root. The first
+  // One real `datalib-pipeline` run per sync, on a cold data root. The first
   // one creates the doltlite stores, which is most of its cost.
   test.setTimeout(120_000);
 

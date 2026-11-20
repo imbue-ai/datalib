@@ -1,4 +1,4 @@
-# Sample config in the format `datalib-dag` runs: each source is a
+# Sample config in the format `datalib-pipeline` runs: each source is a
 # `[[groups]]` entry with a `type` plus its steps (`ingest`,
 # `render_markdown` and `embed`), and the shared index step under the
 # `unified_grid_and_search_index` group, which every source's rendered

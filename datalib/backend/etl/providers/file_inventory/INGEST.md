@@ -113,7 +113,7 @@ cursor and digest together — into memory, and `fswalk::decide` compares
 each entry against them, skipping the `read(2)` + `blake3` on
 unchanged files.
 
-A reset (`datalib-dag --reset <group>/ingest`) empties the store but not this host's
+A reset (`datalib-pipeline reset <data_root> <group>/ingest`) empties the store but not this host's
 cache, which lives outside it; to force a full rehash, drop the cache
 file.
 

@@ -506,7 +506,7 @@ export function paramsAreRepresentable(
 }
 
 /// Keys a hand-written config may still carry that no longer do anything
-/// (`datalib-dag --check` warns at each). Saving the form drops them,
+/// (`datalib-pipeline check` warns at each). Saving the form drops them,
 /// which is what the warning asks for.
 const INERT = new Set([
   "backup.period",

@@ -119,7 +119,7 @@ class StepProtocolExample(unittest.TestCase):
     def sync(self) -> list[tuple[str, str]]:
         """Run every step once; return the example's new log lines."""
         run = subprocess.run(
-            [str(DAG), str(self.config), "--sync", "a/make,b/make"],
+            [str(DAG), "sync", str(self.config), "a/make,b/make"],
             check=False,
             capture_output=True,
             text=True,

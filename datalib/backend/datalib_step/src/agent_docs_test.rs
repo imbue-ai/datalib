@@ -1,7 +1,7 @@
 //! The examples in the docs `datalib-step help` prints, held to what this
 //! binary and the runner accept: every TOML block loads and plans as a
 //! config unless it says it is a `fragment`, every `datalib-step` and
-//! `datalib-dag` command in their shell blocks parses, and every
+//! `datalib-pipeline` command in their shell blocks parses, and every
 //! `datalib-step help …` they name is a page.
 
 use std::collections::BTreeSet;
@@ -205,7 +205,7 @@ fn every_datalib_step_and_datalib_dag_command_in_the_docs_parses() {
         ("datalib-step", crate::Cli::command()),
         // The binary adds `--version` at run time, with its stamped version.
         (
-            "datalib-dag",
+            "datalib-pipeline",
             datalib_dag::cli::Cli::command().version("stamped"),
         ),
     ] {

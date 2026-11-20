@@ -46,7 +46,7 @@ NO_DISK_HAS_THIS = "1000000 TB"
 class DiskHold(unittest.TestCase):
     def setUp(self) -> None:
         if len(sys.argv) < 3:
-            self.fail("usage: sync_drivers_test.py <datalib-dag> <datalib-http>")
+            self.fail("usage: sync_drivers_test.py <datalib-pipeline> <datalib-http>")
         self.dag = Path(sys.argv[1]).resolve()
         self.http = Path(sys.argv[2]).resolve()
         tmp = tempfile.TemporaryDirectory()

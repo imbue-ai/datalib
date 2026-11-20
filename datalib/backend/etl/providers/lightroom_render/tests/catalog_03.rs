@@ -9,7 +9,7 @@ use datalib_etl::doltlite_raw as dr;
 use datalib_etl::progress::Progress;
 use datalib_etl_lightroom::ingest::{self, mirror, FetchOptions, MirrorOptions};
 use datalib_etl_lightroom_render::photo::{self, Built, Context};
-use datalib_etl_lightroom_render::read;
+use datalib_etl_lightroom_render::{read, tree};
 use datalib_photo_schema::{MediaKind, OffsetFrom, Pictures};
 use datalib_schema::search_terms::SearchTermKind;
 
@@ -21,8 +21,8 @@ fn catalog() -> PathBuf {
     p
 }
 
-/// Every photo, by file name.
-async fn photos(zone: Option<&str>) -> BTreeMap<String, Built> {
+/// Catalog 03, mirrored the way the ingest step mirrors it and read back.
+async fn load() -> read::Catalog {
     let dir = tempfile::tempdir().unwrap();
     let store = dir.path().join("entities.doltlite_db");
     let pool = mirror::open_mirror(&store).await.unwrap();
@@ -57,7 +57,12 @@ async fn photos(zone: Option<&str>) -> BTreeMap<String, Built> {
         "{:?}",
         catalog.catalog_path
     );
+    catalog
+}
 
+/// Every photo, by file name.
+async fn photos(zone: Option<&str>) -> BTreeMap<String, Built> {
+    let catalog = load().await;
     let zone = zone.map(|z| datalib_time::NamedZone::get(z).unwrap());
     catalog
         .images
@@ -261,4 +266,32 @@ async fn a_photo_with_no_recorded_offset_uses_the_configured_zone() {
         Some("2020-06-01T01:49:28+02:00")
     );
     assert!(hesse.problems.is_empty());
+}
+
+/// Every folder a photo sits in is keyed by the catalog's id for it, which
+/// a rename keeps. Catalog 03 keeps its photos in their root folders, so
+/// this checks the roots; a level below one is read in `read.rs`'s tests.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_folder_is_keyed_by_its_catalog_id() {
+    let catalog = load().await;
+    let mut levels = 0;
+    for image in catalog.images.values() {
+        let folders: Vec<_> = tree::of("lr", image, None)
+            .data_nodes
+            .into_iter()
+            .filter(|n| n.kind == "Lightroom folder")
+            .collect();
+        assert!(!folders.is_empty(), "{} sits in no folder", image.base_name);
+        for f in folders {
+            let table = f.upstream_entity_kind.as_deref();
+            assert!(
+                matches!(table, Some(tree::ROOT_FOLDER_TABLE | tree::FOLDER_TABLE)),
+                "{:?} in {:?} is keyed by its path",
+                f.name,
+                image.folder
+            );
+            levels += 1;
+        }
+    }
+    assert_eq!(levels, catalog.images.len(), "each photo sits in its root");
 }

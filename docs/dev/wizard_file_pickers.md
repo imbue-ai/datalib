@@ -232,6 +232,6 @@ the durable fallback, and a lapse is recovered where it is seen:
   moved, and syncs the step. A browser has no picker and drops the
   button.
 
-None of this reaches the CLI. `datalib-dag <config>` from a terminal is
+None of this reaches the CLI. `datalib-pipeline sync <config>` from a terminal is
 attributed to the terminal, which has its own grants or prompts for
 them; the app's consent is irrelevant there.

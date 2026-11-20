@@ -632,7 +632,7 @@ impl Runner {
                 }
             }
             // The step's log, not only its row, says so: a one-shot
-            // `datalib-dag` prints the log and nothing of the row, and
+            // `datalib-pipeline` prints the log and nothing of the row, and
             // would otherwise sit with no word on its stream of why.
             for (i, slot) in slots.iter_mut().enumerate() {
                 let waiting = t.states[i] == Row::Waiting(Wait::DiskSpace);
@@ -2212,7 +2212,7 @@ mod tests {
     }
 
     /// A floor no disk can meet from the start: the step never starts,
-    /// and its log says why. A one-shot `datalib-dag` prints only the
+    /// and its log says why. A one-shot `datalib-pipeline` prints only the
     /// log, so without the line a run on a small disk sat silent until
     /// killed (the v0.45.0 docker doc test).
     #[tokio::test]

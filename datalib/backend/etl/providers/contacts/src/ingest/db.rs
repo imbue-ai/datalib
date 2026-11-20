@@ -461,8 +461,8 @@ impl RawDb {
         addressbook_id: &str,
     ) -> Result<usize> {
         for sql in [
-            "DELETE FROM contact_group_members WHERE addressbook_id = ?",
-            "DELETE FROM contact_categories WHERE addressbook_id = ?",
+            ADDRESSBOOK_GROUP_MEMBERS,
+            ADDRESSBOOK_CATEGORIES,
             "DELETE FROM contacts_bookkeeping WHERE id IN \
              (SELECT id FROM contacts WHERE addressbook_id = ?)",
         ] {
@@ -553,10 +553,88 @@ impl RawDb {
     }
 }
 
+/// An address book's derived rows, found through its cards: neither table
+/// has an index on `addressbook_id`, and each address book a `.vcf` folder
+/// lost would walk both.
+const ADDRESSBOOK_GROUP_MEMBERS: &str = "DELETE FROM contact_group_members \
+     INDEXED BY contact_group_members_by_group WHERE group_id IN \
+     (SELECT id FROM contacts INDEXED BY contacts_by_addressbook WHERE addressbook_id = ?)";
+const ADDRESSBOOK_CATEGORIES: &str = "DELETE FROM contact_categories \
+     INDEXED BY contact_categories_by_contact WHERE contact_id IN \
+     (SELECT id FROM contacts INDEXED BY contacts_by_addressbook WHERE addressbook_id = ?)";
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ingest::schema_raw::DATA_TABLES;
+
+    /// Deleting an address book deletes its cards' derived rows through
+    /// the cards' index, so a folder of `.vcf` files that lost many walks
+    /// neither table once per file.
+    #[tokio::test]
+    async fn an_addressbooks_derived_rows_are_deleted_by_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&dir.path().join("contacts.doltlite_db"))
+            .await
+            .unwrap();
+        for sql in [ADDRESSBOOK_GROUP_MEMBERS, ADDRESSBOOK_CATEGORIES] {
+            // Audited: a constant statement of this module.
+            let plan: Vec<String> =
+                sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
+                    .bind("ab")
+                    .fetch_all(db.pool())
+                    .await
+                    .unwrap()
+                    .iter()
+                    .map(|r| r.get::<String, _>("detail"))
+                    .collect();
+            assert!(
+                plan.iter().all(|d| !d.starts_with("SCAN")),
+                "{sql} scans a table: {plan:?}"
+            );
+            assert!(
+                plan.iter().any(|d| d.starts_with("SEARCH contacts USING ")
+                    && d.ends_with("INDEX contacts_by_addressbook (addressbook_id=?)")),
+                "{sql}: {plan:?}"
+            );
+        }
+        db.close().await;
+    }
+
+    /// An address book that goes takes its cards' memberships and labels,
+    /// and leaves another book's.
+    #[tokio::test]
+    async fn a_deleted_addressbook_takes_its_members_and_categories() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = RawDb::open(&dir.path().join("contacts.doltlite_db"))
+            .await
+            .unwrap();
+        db.upsert_contact(&group_row(&["tng-picard"]))
+            .await
+            .unwrap();
+        db.upsert_contact(&labelled("Bridge")).await.unwrap();
+        db.upsert_contact(&ContactRow::new(
+            "away".into(),
+            "tng-ro".into(),
+            "/cards/ro.vcf".into(),
+            None,
+            Some("Ro".into()),
+            None,
+            "BEGIN:VCARD\nVERSION:3.0\nUID:tng-ro\nFN:Ro\nCATEGORIES:Away\nEND:VCARD\n",
+        ))
+        .await
+        .unwrap();
+
+        assert_eq!(
+            db.delete_file_addressbook("ab", "contacts/test", "ab.vcf")
+                .await
+                .unwrap(),
+            2
+        );
+        assert!(members(&db).await.is_empty());
+        assert_eq!(categories(&db).await, vec!["Away"]);
+        db.close().await;
+    }
 
     #[tokio::test]
     async fn open_creates_data_and_bookkeeping_tables() {

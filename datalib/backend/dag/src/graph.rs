@@ -405,7 +405,7 @@ mod tests {
         );
     }
 
-    /// The fringe is what `--sync` may target: steps with no declared
+    /// The fringe is what a sync may name: steps with no declared
     /// input, whose real input is outside the graph.
     #[test]
     fn fringe_is_the_inputless_steps() {

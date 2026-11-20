@@ -5,7 +5,7 @@
 #   ./run-app.sh ~/my-root      # skip the picker, boot straight into a root
 #
 # `tauri build --debug` runs the config's beforeBuildCommand (bazel
-# builds `datalib-http` — UI embedded — plus the `datalib-dag`
+# builds `datalib-http` — UI embedded — plus the `datalib-pipeline`
 # runner and `datalib-step`, then stages them into binaries/ so they're bundled under the .app's
 # Resources) and produces the .app, so there are no prerequisite steps
 # to remember. The shell spawns the bundled `datalib-http` at

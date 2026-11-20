@@ -173,13 +173,13 @@ stamped with, and aged against, the run's pinned now
 (`DATALIB_DAG_NOW`), not the wall clock, so whether a run asks for a
 listing is the same on every replay of it.
 
-A reset (`datalib-dag --reset`) empties `sync_scope_state` with the
+A reset (`datalib-pipeline reset`) empties `sync_scope_state` with the
 rest, so the next sync sweeps every project again;
 `tests/claude_tests/reset_and_resync.rs` pins that the rows come back identical.
 
 **Project deletions are not mirrored.** A project or knowledge document
 removed upstream keeps its row (and keeps rendering): the project walk
-only upserts what the listing returns. A reset (`datalib-dag --reset`)
+only upserts what the listing returns. A reset (`datalib-pipeline reset`)
 is the way to drop them. A UUID in
 `api.project_uuids` that matches nothing in any visible org is a
 `config:project_uuids:<value>` problem rather than quietly mirroring
@@ -457,7 +457,7 @@ above is that it mostly won't.
 
 To force either one, make the API re-fetch: widen `api.since`, raise
 `refetch_newest_conversations`, name the conversations in
-`api.conv_uuids`, or `datalib-dag --reset` the whole store.
+`api.conv_uuids`, or `datalib-pipeline reset` the whole store.
 
 ### The hazard: don't leave both download steps pointed at one store
 

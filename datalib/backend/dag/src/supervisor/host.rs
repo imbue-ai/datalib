@@ -1,5 +1,5 @@
 //! What a process running the loop builds around it, the same whichever
-//! process that is (`datalib-dag`, or the app's server): the steps'
+//! process that is (`datalib-pipeline`, or the app's server): the steps'
 //! environment and the run store's record of one busy period, what it
 //! puts right when it takes the lock, and the loop's idle side.
 

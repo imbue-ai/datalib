@@ -1,4 +1,4 @@
-//! The `config.toml` `datalib-dag init` writes into a new data root: no
+//! The `config.toml` `datalib-pipeline init` writes into a new data root: no
 //! steps, and comments saying what an entry is. A program that sets up
 //! roots of its own (datalib's app) writes its own starter instead.
 
@@ -9,7 +9,7 @@ use crate::config::{owner_only_options, root_config_path};
 
 /// `data_root` is left out: it defaults to the file's own directory,
 /// keeping the root self-contained.
-pub const STARTER_CONFIG: &str = r##"# A datalib-dag config: the steps to run, each a program that writes
+pub const STARTER_CONFIG: &str = r##"# A datalib-pipeline config: the steps to run, each a program that writes
 # one directory under this data root.
 #
 #   [[steps]]
@@ -49,7 +49,7 @@ pub fn write_starter_config(root: &Path) -> std::io::Result<bool> {
 mod tests {
     use super::*;
 
-    /// `datalib-dag init` promises a root holding only its config: no
+    /// `datalib-pipeline init` promises a root holding only its config: no
     /// `system/`, no lock, nothing a server would leave. The root may not
     /// exist yet (the desktop app's new library), and the config holds
     /// credentials, so it is owner-only.

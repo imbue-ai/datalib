@@ -10,7 +10,7 @@ const DEFAULT_BIND: &str = "127.0.0.1:8731";
 
 const LONG_ABOUT: &str = "\
 Serve the Datalib app for one data root: the web UI, its API, and the \
-sync loop, which runs the root's config.toml the way datalib-dag does.
+sync loop, which runs the root's config.toml the way datalib-pipeline does.
 
 It listens on 127.0.0.1:8731, or DATALIB_BIND (127.0.0.1:0 lets the OS \
 pick a port). Every route needs the API token it writes to \
@@ -24,7 +24,7 @@ const EXAMPLES: &[Example] = &[
         command: "datalib-http ~/datalib",
     },
     Example {
-        what: "serve a new root, writing its starter config first (`datalib-dag init` writes it without a server)",
+        what: "serve a new root, writing its starter config first (`datalib-pipeline init` writes it without a server)",
         command: "datalib-http ~/datalib --init",
     },
     Example {
@@ -68,7 +68,7 @@ struct Args {
     url_stdout: bool,
 
     /// Run every sync as if it were this instant (RFC 3339, with an
-    /// offset) rather than the clock's, as `datalib-dag --now` does for
+    /// offset) rather than the clock's, as `datalib-pipeline --now` does for
     /// one run: for building fixtures, never for a person's root.
     #[arg(long, value_parser = rfc3339)]
     now: Option<String>,
@@ -76,7 +76,7 @@ struct Args {
     /// Write the starter `config.toml` first, when the root has none, so
     /// the app opens on the Dashboard rather than the first-run screen.
     /// The desktop app passes it for a library it has just created.
-    /// From a script, `datalib-dag init <data_root>` writes the same config
+    /// From a script, `datalib-pipeline init <data_root>` writes the same config
     /// without starting a server.
     #[arg(long)]
     init: bool,

@@ -1721,7 +1721,7 @@ def _check_card_children_carry_styles(root: Path) -> int:
 
 # --- Check 23: the runner never names datalib's own step program ---------
 #
-# `datalib-dag` is a general supervisor: everything it does with a step
+# `datalib-pipeline` is a general supervisor: everything it does with a step
 # comes from the step's config entry, never from which program the step
 # runs (docs/dev/plans/dag_and_step_decoupling.md). A `datalib-step` in its
 # code is how a special case for one program starts. Its tests may name

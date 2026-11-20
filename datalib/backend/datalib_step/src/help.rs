@@ -30,12 +30,12 @@ struct SetupStep {
 const SETUP: &[SetupStep] = &[
     SetupStep {
         say: "Make a data root: one directory holding config.toml and everything synced \
-              into it. `datalib-dag init` writes a starter config with the index steps and \
+              into it. `datalib-pipeline init` writes a starter config with the index steps and \
               no sources, and nothing else. `datalib-step help dag-example` prints a \
               complete config with every line commented.",
         commands: &[Example {
             what: "start a data root",
-            command: "datalib-dag init ~/datalib",
+            command: "datalib-pipeline init ~/datalib",
         }],
     },
     SetupStep {
@@ -69,7 +69,7 @@ const SETUP: &[SetupStep] = &[
         commands: &[
             Example {
                 what: "check the config",
-                command: "datalib-dag --check ~/datalib/config.toml",
+                command: "datalib-pipeline check ~/datalib/config.toml",
             },
             Example {
                 what: "check its sources' params",
@@ -90,7 +90,7 @@ const SETUP: &[SetupStep] = &[
         say: "Sync the source, and everything that reads it.",
         commands: &[Example {
             what: "sync it",
-            command: "datalib-dag ~/datalib/config.toml --sync slack/ingest --by claude",
+            command: "datalib-pipeline sync ~/datalib slack/ingest --by claude",
         }],
     },
     SetupStep {
@@ -304,7 +304,7 @@ fn examples_intro(t: SourceType) -> Vec<String> {
             "`datalib-step examples {t} --append <config>` appends the minimal stanza for \
              you, with `--method` to pick one and `--id` to rename its group, and does the \
              wiring below; it refuses an id the config already has, and a result \
-             `datalib-dag --check` would refuse."
+             `datalib-pipeline check` would refuse."
         ),
         format!(
             "A source's documents reach the grid and search only through the index groups. \
@@ -321,11 +321,11 @@ fn examples_intro(t: SourceType) -> Vec<String> {
             }
         ),
         format!(
-            "Then `datalib-dag --check <config>` reports every problem with the config at \
+            "Then `datalib-pipeline check <data_root>` reports every problem with the config at \
              once, each at its line, and `datalib-step check-params <config>` every param a \
              sync would refuse; `{}` asks the service which \
              account the credentials reach, if the method reaches one; and \
-             `datalib-dag <config> --sync <id>/ingest --by <you>` syncs the source and \
+             `datalib-pipeline sync <data_root> <id>/ingest --by <you>` syncs the source and \
              everything that reads it.{sign_in}",
             probe_command(t)
         ),
@@ -337,7 +337,7 @@ fn overview(commands: &[String]) -> String {
     out.push_str(&wrap(
         "Datalib mirrors a person's data (chats, email, messages, contacts, …) into one \
          directory, the data root, and indexes it for search. Its config.toml lists the \
-         sources, and datalib-dag syncs them. To set a source up:",
+         sources, and datalib-pipeline syncs them. To set a source up:",
         0,
         0,
     ));
@@ -581,7 +581,7 @@ fn function_page(f: Function) -> String {
         "{f}\n\n{}\n{}  {sync}\n",
         wrap(f.describe(), 0, 0),
         wrap(
-            "To run one, ask datalib-dag, which runs every step that reads it after it \
+            "To run one, ask datalib-pipeline, which runs every step that reads it after it \
              and records what it published; running datalib-step by hand records \
              nothing, so the steps that read it never learn it moved:",
             0,
@@ -592,8 +592,9 @@ fn function_page(f: Function) -> String {
     match (f, reset) {
         (Function::Ingest, _) => out.push_str(&wrap(
             &format!(
-                "A synced ingest step always runs. `--reset {id}` empties what it \
-                 downloaded, so its next sync fetches everything again."
+                "A synced ingest step always runs. `datalib-pipeline reset <data_root> \
+                 {id}` empties what it downloaded, so its next sync fetches everything \
+                 again."
             ),
             0,
             0,
@@ -601,7 +602,7 @@ fn function_page(f: Function) -> String {
         (_, Some(reset)) => {
             out.push_str(&wrap(
                 "It runs only if what it reads moved since its last run. To rebuild it \
-                 anyway, reset it in the same command:",
+                 anyway, reset it first, then sync it as above:",
                 0,
                 0,
             ));
@@ -632,12 +633,12 @@ fn example_step_id(f: Function) -> String {
 }
 
 // The sync, and for a step that can be rebuilt from what it reads, the
-// reset that forces it.
+// reset that makes its next sync rebuild it.
 fn run_commands(f: Function) -> (String, Option<String>) {
     let id = example_step_id(f);
-    let sync = format!("datalib-dag ~/datalib/config.toml --sync {id} --by claude");
+    let sync = format!("datalib-pipeline sync ~/datalib {id} --by claude");
     let reset = (f.resets() && f != Function::Ingest)
-        .then(|| format!("datalib-dag ~/datalib/config.toml --reset {id} --sync {id} --by claude"));
+        .then(|| format!("datalib-pipeline reset ~/datalib {id}"));
     (sync, reset)
 }
 
@@ -1052,7 +1053,7 @@ mod tests {
                 what: e.what,
                 command: e.command,
             })
-            .partition(|e| e.command.starts_with("datalib-dag "));
+            .partition(|e| e.command.starts_with("datalib-pipeline "));
         assert!(!dag.is_empty() && !step.is_empty());
         datalib_cli_help::assert_examples_parse(datalib_dag::cli::Cli::command(), &dag);
         datalib_cli_help::assert_examples_parse(crate::Cli::command(), &step);

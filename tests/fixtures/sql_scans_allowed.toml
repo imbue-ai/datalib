@@ -10,19 +10,14 @@
 # marked "Not reviewed" were here when the check began.
 
 [[scan]]
-statement = "DELETE FROM contact_categories WHERE addressbook_id = ?"
-files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
-
-[[scan]]
-statement = "DELETE FROM contact_group_members WHERE addressbook_id = ?"
-files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
-
-[[scan]]
 statement = "DELETE FROM grid_rows WHERE markdown_uuid IS NULL AND NOT EXISTS (SELECT 1 FROM data_nodes n WHERE n.uuid = grid_rows.uuid) RETURNING uuid"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason FROM runs WHERE ? IS NULL OR run_id = ? ORDER BY started_at_utc DESC LIMIT 1"
+files = ["*/runs/runs.sqlite"]
+why = "The table stays small: retention keeps at most `max_runs` runs (100 by default) and none older than `max_age_days` (datalib_runs::Retention)."
 
 [[scan]]
 statement = "DELETE FROM log WHERE run_id NOT IN (SELECT run_id FROM runs)"
@@ -57,7 +52,7 @@ why = "Not reviewed: on main when this check began."
 [[scan]]
 statement = "DELETE FROM problems WHERE stage = ?"
 files = ["*/render_markdown/indexed_markdown.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+why = "Once per render pass, clearing one stage's rows. A render store's problems are one row per record its render could not fully do, a few beside the documents the pass reads."
 
 [[scan]]
 statement = "DELETE FROM processes WHERE run_id IS NULL AND started_at_utc < ? AND process_id NOT IN (SELECT process_id FROM log)"
@@ -97,12 +92,12 @@ why = "Not reviewed: on main when this check began."
 [[scan]]
 statement = "DELETE FROM threads WHERE account_id = ? AND id NOT IN (SELECT thread_id FROM emails)"
 files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+why = "Once per account after a walk that listed all of its mail: a sweep for threads left with no email, which has to read every thread of the account."
 
 [[scan]]
 statement = "DELETE FROM threads_bookkeeping WHERE id IN (SELECT id FROM threads WHERE account_id = ? AND id NOT IN (SELECT thread_id FROM emails))"
 files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+why = "Once per account after a walk that listed all of its mail: the sidecars of the sweep beside it, which reads every thread of the account."
 
 [[scan]]
 statement = "INSERT INTO main.\"chat\" (\"_id\", \"jid_row_id\", \"hidden\", \"subject\", \"created_timestamp\", \"display_message_row_id\", \"last_message_row_id\", \"last_read_message_row_id\", \"last_read_receipt_sent_message_row_id\", \"last_important_message_row_id\", \"archived\", \"sort_timestamp\", \"mod_tag\", \"gen\", \"spam_detection\", \"unseen_earliest_message_received_time\", \"unseen_message_count\", \"unseen_missed_calls_count\", \"unseen_row_count\", \"plaintext_disabled\", \"vcard_ui_dismissed\", \"change_number_notified_message_row_id\", \"show_group_description\", \"ephemeral_expiration\", \"ephemeral_setting_timestamp\", \"ephemeral_displayed_exemptions\", \"ephemeral_disappearing_messages_initiator\", \"unseen_important_message_count\", \"group_type\", \"last_message_reaction_row_id\", \"last_seen_message_reaction_row_id\", \"unseen_message_reaction_count\", \"unseen_comment_message_count\", \"growth_lock_level\", \"growth_lock_expiration_ts\", \"last_read_message_sort_id\", \"display_message_sort_id\", \"last_message_sort_id\", \"last_read_receipt_sent_message_sort_id\", \"has_new_community_admin_dialog_been_acknowledged\", \"history_sync_progress\", \"chat_lock\", \"chat_origin\", \"participation_status\", \"account_jid_row_id\", \"chat_encryption_state\", \"group_member_count\", \"limited_sharing\", \"limited_sharing_setting_timestamp\", \"is_contact\", \"ephemeral_after_read_duration\", \"business_chat_state\") SELECT \"_id\", \"jid_row_id\", \"hidden\", \"subject\", \"created_timestamp\", \"display_message_row_id\", \"last_message_row_id\", \"last_read_message_row_id\", \"last_read_receipt_sent_message_row_id\", \"last_important_message_row_id\", \"archived\", \"sort_timestamp\", \"mod_tag\", \"gen\", \"spam_detection\", \"unseen_earliest_message_received_time\", \"unseen_message_count\", \"unseen_missed_calls_count\", \"unseen_row_count\", \"plaintext_disabled\", \"vcard_ui_dismissed\", \"change_number_notified_message_row_id\", \"show_group_description\", \"ephemeral_expiration\", \"ephemeral_setting_timestamp\", \"ephemeral_displayed_exemptions\", \"ephemeral_disappearing_messages_initiator\", \"unseen_important_message_count\", \"group_type\", \"last_message_reaction_row_id\", \"last_seen_message_reaction_row_id\", \"unseen_message_reaction_count\", \"unseen_comment_message_count\", \"growth_lock_level\", \"growth_lock_expiration_ts\", \"last_read_message_sort_id\", \"display_message_sort_id\", \"last_message_sort_id\", \"last_read_receipt_sent_message_sort_id\", \"has_new_community_admin_dialog_been_acknowledged\", \"history_sync_progress\", \"chat_lock\", \"chat_origin\", \"participation_status\", \"account_jid_row_id\", \"chat_encryption_state\", \"group_member_count\", \"limited_sharing\", \"limited_sharing_setting_timestamp\", \"is_contact\", \"ephemeral_after_read_duration\", \"business_chat_state\" FROM \"datalib_mirror_src\".\"chat\""
@@ -237,12 +232,12 @@ why = "Reads every row by design: the statement has no WHERE."
 [[scan]]
 statement = "SELECT DISTINCT renderer_version FROM markdowns WHERE renderer_version IS NOT NULL AND kind <> ? AND markdown_uuid NOT IN ( SELECT scope_key FROM problems WHERE scope_kind = ? AND stage = ? AND reason IN (?…))"
 files = ["*/render_markdown/indexed_markdown.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+why = "Twice per render pass: which versions every document carries, so it reads every row of markdowns, which holds no text. The problems it leaves out are read once, as a set."
 
 [[scan]]
 statement = "SELECT DISTINCT scope_key FROM problems WHERE stage = ? AND scope_kind = ? ORDER BY scope_key"
 files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+why = "Once per render pass: every record the download could not fetch. The raw store's problems are one row per such record, few beside the records themselves."
 
 [[scan]]
 statement = "SELECT DISTINCT thread_id FROM emails WHERE thread_id IS NOT NULL ORDER BY thread_id LIMIT ?1"
@@ -262,7 +257,7 @@ why = "Not reviewed: on main when this check began."
 [[scan]]
 statement = "SELECT EXISTS(SELECT 1 FROM steps, json_each(steps.requests) WHERE json_each.value = ?1) OR EXISTS(SELECT 1 FROM requests WHERE id = ?1 AND closed_at_utc IS NOT NULL)"
 files = ["*/supervisor.sqlite"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+why = "steps holds one row per configured step, and a sync request asks this for at most three seconds while it waits to be taken on."
 
 [[scan]]
 statement = "SELECT _id, chat_row_id, key_id, from_me, sender_jid_row_id, timestamp, message_type, text_data FROM message ORDER BY chat_row_id, sort_id, timestamp, key_id"
@@ -380,11 +375,6 @@ files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM chat_messages WHERE group_id = ?"
-files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
-
-[[scan]]
 statement = "SELECT id FROM chats"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
@@ -405,11 +395,6 @@ files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM maps_saved_lists WHERE file = ?"
-files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
-
-[[scan]]
 statement = "SELECT id FROM maps_saved_places"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
@@ -423,16 +408,6 @@ why = "Reads every row by design: the statement has no WHERE."
 statement = "SELECT id FROM messenger_threads"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
-
-[[scan]]
-statement = "SELECT id FROM my_maps_placemarks WHERE file = ?"
-files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
-
-[[scan]]
-statement = "SELECT id FROM play_books_annotations WHERE file = ?"
-files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
 
 [[scan]]
 statement = "SELECT id FROM read_marks"
@@ -472,7 +447,7 @@ why = "Reads every row by design: the statement has no WHERE."
 [[scan]]
 statement = "SELECT id FROM voice_messages WHERE folder = ?"
 files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+why = "Once per Voice folder (calls, spam) after a full read of them: the prune keeps or deletes each message of the folder, so it reads them all. folder has two values; an index would not narrow it."
 
 [[scan]]
 statement = "SELECT id FROM your_facebook_activity_comments_and_reactions_comments"
@@ -857,7 +832,7 @@ why = "Not reviewed: on main when this check began."
 [[scan]]
 statement = "SELECT id, title FROM tree WHERE kind = ?"
 files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+why = "Once per run, before the page bodies are fetched: every database the workspace's tree places. The tree is one row per page or database."
 
 [[scan]]
 statement = "SELECT id, updated_at FROM listed_change_requests ORDER BY id"
@@ -916,11 +891,6 @@ why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
 statement = "SELECT markdown_uuid FROM search_documents WHERE source_id NOT IN (SELECT value FROM json_each(?))"
-files = ["*/unified_grid_and_search_index/db.sqlite"]
-why = "Not reviewed: on main when this check began."
-
-[[scan]]
-statement = "SELECT markdown_uuid, content_hash FROM search_documents WHERE ?1 IS NULL OR source_id = ?1"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Not reviewed: on main when this check began."
 
@@ -1018,11 +988,6 @@ why = "Reads every row by design: the statement has no WHERE."
 statement = "SELECT u.id FROM users u JOIN users_bookkeeping b ON b.id = u.id WHERE u.payload IS NOT NULL AND b.last_error IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Not reviewed: on main when this check began."
-
-[[scan]]
-statement = "SELECT uuid FROM grid_rows WHERE upstream_entity_kind = ? AND upstream_id = ? LIMIT 1"
-files = ["*/render_markdown/indexed_markdown.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
 
 [[scan]]
 statement = "SELECT what, version FROM store_changes"

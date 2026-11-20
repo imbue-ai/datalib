@@ -31,7 +31,7 @@ exposed through SQL. Our binaries link doltlite in; the
 is the tool for looking at one of these files by hand.
 
 **Where to get it.** A release install has it as
-**`datalib-doltlite`**, next to `datalib-dag` (in `~/.local/bin` for the
+**`datalib-doltlite`**, next to `datalib-pipeline` (in `~/.local/bin` for the
 install script). The docker image has it on `PATH` as `doltlite`. From
 a checkout, `bazelisk build //third-party/doltlite:doltlite` builds the
 one pinned to the tree; prefer it over any other `doltlite` you have,
@@ -124,7 +124,7 @@ The engine is also a library, `libdoltlite`, with SQLite's C API, so
 calls it:
 
 ```sh
-uv add imbue-datalib-reader==<version>   # or pip install; the version `datalib-dag --version` prints
+uv add imbue-datalib-reader==<version>   # or pip install; the version `datalib-pipeline --version` prints
 ```
 
 [Reading the raw stores](../user/raw_stores.md) shows it in use; its
@@ -879,8 +879,8 @@ Creating and dropping a table in one open still appends chunks, though
 - **gc writes a compacted copy before it drops the original**, so it
   needs about the store's size again in free disk (upstream
   `doc/doltlite/dolt_gc.md`; not measured here).
-- `sqlite_mirror` and `file_inventory` run gc, and so does `datalib-dag
-  --free-disk-space` on every step's doltlite store
+- `sqlite_mirror` and `file_inventory` run gc, and so does `datalib-pipeline
+  free-disk-space` on every step's doltlite store
   (`doltlite_raw::collect_garbage`). With `--drop-old-versions-on-derived-data` it folds
   the render stores' history into one commit first
   (`doltlite_raw::fold_history`).
@@ -1116,7 +1116,7 @@ What each pin was taken for, newest first:
 | 0.51.13 | the amalgamation compiles BLAKE3's SIMD kernels itself (dolthub/doltlite#4956), so ours are gone. No fact moved. |
 | 0.51.12 | a plain SQLite file in WAL mode is checkpointed by itself (dolthub/doltlite#4402), and a writer waiting on one gets in between another process's transactions; under 0.51.3 the grid index's `-wal` reached 4 GB and a second writer could not open the file. Seven facts moved (each named in its section). |
 | 0.51.3 | upstream fixes to concurrent writes, merges and recovery; a `<store>@<commit>` open that finds the store busy waits under the busy timeout. None of our tables has a `DESC` key, so 0.51.0's change to how one is encoded touched no store of ours. Five facts moved. |
-| 0.50.16 | upstream fixes to concurrent writes and to recovery after an interrupted `VACUUM` or `dolt_gc()`; a plain SQLite file honours `journal_mode` (dolthub/doltlite#3740). Three facts moved. It does not reuse chunks 0.50.14 or earlier wrote: refilling such a table with the same rows appends about a copy of it once, which `datalib-dag --free-disk-space` takes back. (0.50.17 was passed over: its read lock on a `<store>@<commit>` open gives up after about 100 ms, and our readers open that way.) |
+| 0.50.16 | upstream fixes to concurrent writes and to recovery after an interrupted `VACUUM` or `dolt_gc()`; a plain SQLite file honours `journal_mode` (dolthub/doltlite#3740). Three facts moved. It does not reuse chunks 0.50.14 or earlier wrote: refilling such a table with the same rows appends about a copy of it once, which `datalib-pipeline free-disk-space` takes back. (0.50.17 was passed over: its read lock on a `<store>@<commit>` open gives up after about 100 ms, and our readers open that way.) |
 | 0.50.14 | a detached open runs `IN` and `DISTINCT` (dolthub/doltlite#3392), so readers open `<store>@<commit>` directly |
 | 0.50.13 | a revision opened by path works on any file name (dolthub/doltlite#3231); an unindexed filter plans as scan + sort |
 | 0.50.12 | per-table modules registered on first use; `dolt_at_` and `dolt_history_` seek a text primary key; a ref-moving reader no longer refuses the writer's seals |
