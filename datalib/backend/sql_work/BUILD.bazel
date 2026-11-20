@@ -9,6 +9,7 @@ rust_library(
         "src/judge.rs",
         "src/lib.rs",
         "src/params.rs",
+        "src/recording.rs",
     ],
     crate_name = "datalib_sql_work",
     edition = "2021",
@@ -54,6 +55,20 @@ rust_test(
         ":datalib_sql_work",
         "//datalib/backend/sqlite_open:datalib_sqlite_open",
         "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "sql_work_recording_test",
+    size = "small",
+    srcs = ["tests/recording.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_sql_work",
+        "//datalib/backend/sqlite_open:datalib_sqlite_open",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",

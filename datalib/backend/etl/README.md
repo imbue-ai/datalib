@@ -758,6 +758,13 @@ So:
   table, and `the_read_mark_rungs_never_search_a_table_per_email`
   refuses a table searched under a `CORRELATED` subquery. Keep the
   statements in a constant the code runs and the test reads.
+- **Then test the work.** A plan test checks the statements someone
+  thought to check. `grid_index::work_tests` records every statement of
+  a pass that re-reads one small source, alone and beside a large one,
+  and fails on any whose work grew
+  ([`testing.md`](/docs/dev/testing.md) §"A statement's work does not
+  grow with the rest of the store"). It caught a reader that read every
+  document of each unchanged source on every pass.
 
 ## Blob CAS and per-provider edge tables
 

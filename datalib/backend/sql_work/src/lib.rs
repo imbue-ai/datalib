@@ -5,11 +5,13 @@
 //! plan look bad or a bad plan look good (docs/dev/logging.md).
 //!
 //! [`install`] once, before the first connection opens, and every
-//! connection this process opens afterwards is counted.
+//! connection this process opens afterwards is counted. A test can
+//! [`record_under`] a folder to read each statement's work back.
 
 mod census;
 pub mod judge;
 pub mod params;
+mod recording;
 
 // Links the SQLite (doltlite) the C calls below resolve against.
 use sqlx as _;
@@ -20,6 +22,7 @@ use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
 use std::sync::Once;
 
 pub use judge::Work;
+pub use recording::{record_under, Ran, Recording};
 
 /// The target of every line this writes, which the runner sums per attempt.
 pub const TARGET: &str = "datalib::sql_work";
@@ -149,7 +152,8 @@ unsafe fn finished(stmt: *mut c_void, nanos: i64) {
         nanos: nanos.max(0) as u64,
     };
     let census = census::dir().filter(|_| work.fullscan_steps > 0);
-    if !(work.is_heavy() || census.is_some()) || WRITING.with(Cell::get) {
+    let recording = recording::any();
+    if !(work.is_heavy() || census.is_some() || recording) || WRITING.with(Cell::get) {
         return;
     }
     let sql = text(unsafe { sqlite3_sql(stmt) });
@@ -165,6 +169,9 @@ unsafe fn finished(stmt: *mut c_void, nanos: i64) {
         work.rows = work
             .rows
             .max(unsafe { sqlite3_changes64(db) }.max(0) as u64);
+    }
+    if recording {
+        recording::note(&sql, &file, work);
     }
     if !work.is_heavy() {
         return;

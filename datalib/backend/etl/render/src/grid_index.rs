@@ -1734,10 +1734,14 @@ async fn load_source(
     }))
 }
 
+/// Every document the index holds, read once a pass: the work grows with
+/// the whole index, not with what changed.
+const INDEXED_DOCUMENTS: &str = "SELECT source_id, markdown_uuid FROM markdowns";
+
 async fn load_markdown_uuids_by_source(
     pool: &SqlitePool,
 ) -> Result<HashMap<String, HashSet<String>>> {
-    let rows = sqlx::query("SELECT source_id, markdown_uuid FROM markdowns")
+    let rows = sqlx::query(INDEXED_DOCUMENTS)
         .fetch_all(pool)
         .await
         .context("load_markdown_uuids_by_source")?;
@@ -3055,13 +3059,13 @@ mod source_cursor_tests {
     use datalib_schema::grid_rows::GridRow;
     use datalib_schema::providers::Provider;
 
-    async fn index_pool(root: &Path) -> SqlitePool {
+    pub(super) async fn index_pool(root: &Path) -> SqlitePool {
         crate::grid_index::open_index(&datalib_core::layout::grid_index_db(root))
             .await
             .unwrap()
     }
 
-    fn doc(source: &str, uuid: &str, text: &str) -> RenderedMarkdown {
+    pub(super) fn doc(source: &str, uuid: &str, text: &str) -> RenderedMarkdown {
         let row = GridRow::builder()
             .uuid(uuid)
             .provider(Provider::Test)
@@ -3122,7 +3126,7 @@ mod source_cursor_tests {
         datalib_etl::layout::render_markdown_root(root, source)
     }
 
-    fn render(root: &Path, source: &str, docs: &[RenderedMarkdown]) {
+    pub(super) fn render(root: &Path, source: &str, docs: &[RenderedMarkdown]) {
         let store = IndexedMarkdownStore::open(&rendered_root(root, source)).unwrap();
         for d in docs {
             store.put_document(d).unwrap();
@@ -3131,7 +3135,7 @@ mod source_cursor_tests {
         store.close();
     }
 
-    fn unrender(root: &Path, source: &str, uuid: &str) {
+    pub(super) fn unrender(root: &Path, source: &str, uuid: &str) {
         let store = IndexedMarkdownStore::open(&rendered_root(root, source)).unwrap();
         store.remove_documents(&[uuid.to_string()]).unwrap();
         store.commit("test unrender").unwrap();
@@ -4361,6 +4365,167 @@ mod source_cursor_tests {
                 "md-b".to_string(),
                 Some(r#"[["mention","slack:U1"]]"#.to_string())
             )
+        );
+    }
+}
+
+#[cfg(test)]
+mod work_tests {
+    //! A pass that re-reads one small source does the same work whatever
+    //! else the index holds. Every index bug we have shipped broke this: a
+    //! lookup that read every document in the index once per source
+    //! (#1926), or once per document. Work is counted in SQLite's VM steps
+    //! (`datalib_sql_work`), not seconds, so a loaded machine cannot fail
+    //! this nor a fast one pass it. The large source is not read, so the
+    //! steps a large source costs cannot hide in a plan that looks fine:
+    //! #1926's statement scanned no table.
+
+    use std::collections::BTreeMap;
+    use std::path::Path;
+
+    use datalib_etl::stop::StopFlag;
+    use datalib_schema::data_nodes::{DataNodeRow, Lineage};
+    use tempfile::tempdir;
+
+    use super::source_cursor_tests::{doc, index_pool, render, unrender};
+    use super::{build_grid_index_for, RenderedMarkdown, INDEXED_DOCUMENTS};
+
+    const SMALL: usize = 40;
+    const LARGE: usize = 2_000;
+
+    /// How much more a statement may do beside the large source. An
+    /// index lookup's steps do not grow with the table at all; a statement
+    /// that reads the large source does some fifty times more.
+    const FACTOR: u64 = 2;
+    /// Steps any statement may add whatever it did alone.
+    const SLACK: u64 = 50;
+
+    /// Statements that read the whole index once a pass by design, not
+    /// once per source or per document.
+    const ONCE_A_PASS: &[&str] = &[INDEXED_DOCUMENTS];
+
+    /// A document filed under its source's workspace and a channel, which
+    /// need node rows of their own, and is itself a chat, which has its
+    /// row.
+    fn carrying(source: &str, uuid: &str, text: &str) -> RenderedMarkdown {
+        let mut d = doc(source, uuid, text);
+        let workspace = DataNodeRow::new(uuid, format!("{source}-ws"), source, "Workspace")
+            .named(Some(format!("{source} workspace")))
+            .place();
+        let at = Lineage::top().below(&workspace);
+        let channel = DataNodeRow::new(uuid, format!("{source}-chan"), source, "Channel")
+            .named(Some("bridge".to_string()))
+            .place()
+            .under(&at);
+        let at = at.below(&channel);
+        let chat = DataNodeRow::new(uuid, uuid, source, "Chat").read_together();
+        d.data_nodes = vec![workspace, channel, chat.under(&at)];
+        d
+    }
+
+    fn documents(source: &str, n: usize) -> Vec<RenderedMarkdown> {
+        (0..n)
+            .map(|i| carrying(source, &format!("{source}-{i:05}"), "body"))
+            .collect()
+    }
+
+    /// One statement's runs on one kind of store in one pass.
+    #[derive(Debug, Default, Clone, Copy)]
+    struct Runs {
+        count: u64,
+        most_steps: u64,
+    }
+
+    /// Where a statement ran, with the source's own folder named alike for
+    /// every source: a render store's read of an unchanged large source is
+    /// held to what the small source's read costs.
+    fn store_kind(root: &Path, file: &str) -> String {
+        let file = Path::new(file);
+        let under = file.strip_prefix(root).unwrap_or(file);
+        let mut parts = under.components();
+        match parts.next().and_then(|p| p.as_os_str().to_str()) {
+            Some("small" | "large") => format!("<source>/{}", parts.as_path().display()),
+            _ => under.display().to_string(),
+        }
+    }
+
+    /// The statements of a pass that re-reads the small source after one
+    /// of its documents changed, one went and one came: few enough that
+    /// neither index drops its search indexes for the load. With `large`,
+    /// a large source is indexed beside it first and does not change.
+    async fn small_sources_pass(root: &Path, large: bool) -> BTreeMap<(String, String), Runs> {
+        let recording = datalib_sql_work::record_under(root);
+        let pool = index_pool(root).await;
+        let mut sources = vec!["small".to_string()];
+        render(root, "small", &documents("small", SMALL));
+        if large {
+            sources.push("large".to_string());
+            render(root, "large", &documents("large", LARGE));
+        }
+        build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+            .await
+            .unwrap();
+        render(
+            root,
+            "small",
+            &[
+                carrying("small", "small-00000", "changed"),
+                carrying("small", "small-new", "new"),
+            ],
+        );
+        unrender(root, "small", "small-00001");
+        recording.take();
+        build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+            .await
+            .unwrap();
+        let ran = recording.take();
+        pool.close().await;
+        let root = root.canonicalize().unwrap();
+        let mut runs: BTreeMap<_, Runs> = BTreeMap::new();
+        for r in ran {
+            if !datalib_sql_work::judge::reads_or_writes_rows(&r.sql) {
+                continue;
+            }
+            let of = runs.entry((r.sql, store_kind(&root, &r.file))).or_default();
+            of.count += 1;
+            of.most_steps = of.most_steps.max(r.work.vm_steps);
+        }
+        runs
+    }
+
+    /// Guards #1926: the index step spent 11-20 s on each source of a
+    /// 1.2M-row index, one document changed or none, reading a source's
+    /// nodes by every document row in the index.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_small_sources_pass_costs_the_same_beside_a_large_source() {
+        let (alone_dir, beside_dir) = (tempdir().unwrap(), tempdir().unwrap());
+        let alone = small_sources_pass(alone_dir.path(), false).await;
+        let beside = small_sources_pass(beside_dir.path(), true).await;
+        assert!(
+            alone
+                .keys()
+                .any(|(sql, _)| sql == super::node_rows::CARRIED_WITHOUT_A_ROW),
+            "the pass reads no source's nodes; this test checks nothing: {:#?}",
+            alone.keys()
+        );
+        let mut grew = Vec::new();
+        for ((sql, store), b) in &beside {
+            if ONCE_A_PASS.contains(&sql.as_str()) {
+                continue;
+            }
+            let a = alone.get(&(sql.clone(), store.clone())).copied();
+            let within = a.is_some_and(|a| {
+                b.most_steps <= FACTOR * a.most_steps + SLACK && b.count <= FACTOR * a.count
+            });
+            if !within {
+                let sql = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+                grew.push(format!("{store}: alone {a:?}, beside {b:?}: {sql}"));
+            }
+        }
+        assert!(
+            grew.is_empty(),
+            "these statements did more beside a large source:\n{}",
+            grew.join("\n")
         );
     }
 }

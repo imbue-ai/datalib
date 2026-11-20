@@ -742,6 +742,23 @@ a run is printed as a note, not a failure, and is worth removing when
 its statement is gone from the tree. The test sees only what the fixture sync runs: the server's
 routes and the applets' searches are not in it.
 
+## A statement's work does not grow with the rest of the store
+
+A scan census cannot see a statement that reads everything through an
+index that hardly narrows it, and a plan test only checks the statements
+someone thought to check. The grid index's
+`work_tests::a_small_sources_pass_costs_the_same_beside_a_large_source`
+checks the pass itself: it indexes a small source twice, alone and beside
+a large one, changes three of its documents, and records the next pass
+with `datalib_sql_work::record_under`, which hands back every statement
+run on a file under one folder with SQLite's counters. Each statement's
+costliest run, and how often it ran, must stay within twice what it was
+alone. It counts SQLite's VM steps, not time, so it fails the same way on
+every machine. A statement that reads the whole index once a pass by
+design is listed in the test's `ONCE_A_PASS`, with the constant the code
+runs. Write the same test for another store's per-record pass: a small
+input, a large one beside it, and a recording of the pass between.
+
 ## Auditing a real sync's logs
 
 Some problems pass every test. A sync can be correct and still slow. It

@@ -48,6 +48,7 @@ rust_test(
     crate = ":datalib_etl_render",
     edition = "2021",
     deps = [
+        "//datalib/backend/sql_work:datalib_sql_work",
         "@datalib_crates//:tempfile",
     ],
 )
