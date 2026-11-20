@@ -135,9 +135,11 @@ impl InferenceCache {
 
 /// Rewrites the cache in [`PAGE_SIZE`] pages, once: a new file and one
 /// an earlier build wrote are both in SQLite's default. The page size
-/// moves only by a `VACUUM` outside WAL mode, and leaving WAL waits for
-/// every reader to close; the opener is the cache's one writer. If a
-/// reader stays, this is left for the next open, and says so.
+/// moves only by a `VACUUM` outside WAL mode, and SQLite refuses to leave
+/// WAL while any other connection has the file open, an idle one
+/// included; the opener is the cache's one writer, but the search applet
+/// reads it for as long as it runs. If a reader holds it, this is left for
+/// the next open, and says so.
 async fn to_page_size(pool: &SqlitePool) -> Result<()> {
     let mut conn = pool.acquire().await?;
     let have: i64 = sqlx::query_scalar("PRAGMA page_size")
@@ -146,16 +148,23 @@ async fn to_page_size(pool: &SqlitePool) -> Result<()> {
     if have >= PAGE_SIZE {
         return Ok(());
     }
-    let started = std::time::Instant::now();
-    let mode: String = sqlx::query_scalar("PRAGMA journal_mode = DELETE")
-        .fetch_one(&mut *conn)
-        .await?;
-    if !mode.eq_ignore_ascii_case("delete") {
+    let put_off = || {
         tracing::warn!(
             page_size = have,
-            journal_mode = %mode,
             "a reader held the inference cache; its pages are rewritten at the next open"
         );
+    };
+    let started = std::time::Instant::now();
+    let left_wal = match sqlx::query_scalar::<_, String>("PRAGMA journal_mode = DELETE")
+        .fetch_one(&mut *conn)
+        .await
+    {
+        Ok(mode) => mode.eq_ignore_ascii_case("delete"),
+        Err(e) if is_busy(&e) => false,
+        Err(e) => return Err(e.into()),
+    };
+    if !left_wal {
+        put_off();
         return Ok(());
     }
     // `VACUUM` copies the file through a temporary database, which goes
@@ -175,7 +184,14 @@ async fn to_page_size(pool: &SqlitePool) -> Result<()> {
     for sql in ["PRAGMA temp_store = MEMORY", "PRAGMA journal_mode = WAL"] {
         sqlx::query(sql).execute(&mut *conn).await?;
     }
-    rewrite?;
+    match rewrite {
+        // A reader opened the file between leaving WAL and the `VACUUM`.
+        Err(e) if e.downcast_ref::<sqlx::Error>().is_some_and(is_busy) => {
+            put_off();
+            return Ok(());
+        }
+        rewrite => rewrite?,
+    }
     let now: i64 = sqlx::query_scalar("PRAGMA page_size")
         .fetch_one(&mut *conn)
         .await?;
@@ -189,6 +205,16 @@ async fn to_page_size(pool: &SqlitePool) -> Result<()> {
         "rewrote the inference cache in larger pages"
     );
     Ok(())
+}
+
+/// Whether SQLite answered `SQLITE_BUSY`, in any of its extended forms:
+/// another connection holds what the statement needed.
+fn is_busy(e: &sqlx::Error) -> bool {
+    const SQLITE_BUSY: i32 = 5;
+    e.as_database_error()
+        .and_then(|d| d.code())
+        .and_then(|code| code.parse::<i32>().ok())
+        .is_some_and(|code| code & 0xff == SQLITE_BUSY)
 }
 
 fn to_blob(vector: &[f32]) -> Vec<u8> {
@@ -335,14 +361,10 @@ mod tests {
             .unwrap()
     }
 
-    /// A cache an earlier build wrote in SQLite's default 4 KB pages, where
-    /// every 3 KB vector spilled onto a page of its own, is rewritten in
-    /// 16 KB pages when opened, keeping every vector, and stays in WAL.
-    #[tokio::test]
-    async fn a_cache_in_small_pages_is_rewritten_in_large_ones() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("cache.sqlite");
-        let cache = InferenceCache::open(&path).await.unwrap();
+    /// A cache at `path` holding one vector, in SQLite's default 4 KB pages
+    /// as an earlier build wrote it; the vector it holds under "a".
+    async fn cache_in_small_pages(path: &Path) -> Vec<f32> {
+        let cache = InferenceCache::open(path).await.unwrap();
         assert_eq!(pragma(&cache, "page_size").await, PAGE_SIZE.to_string());
         let vector: Vec<f32> = (0..768).map(|i| i as f32).collect();
         cache
@@ -363,12 +385,52 @@ mod tests {
             "set up as before"
         );
         cache.close().await;
+        vector
+    }
+
+    /// A cache an earlier build wrote in SQLite's default 4 KB pages, where
+    /// every 3 KB vector spilled onto a page of its own, is rewritten in
+    /// 16 KB pages when opened, keeping every vector, and stays in WAL.
+    #[tokio::test]
+    async fn a_cache_in_small_pages_is_rewritten_in_large_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.sqlite");
+        let vector = cache_in_small_pages(&path).await;
 
         let cache = InferenceCache::open(&path).await.unwrap();
         assert_eq!(pragma(&cache, "page_size").await, PAGE_SIZE.to_string());
         assert_eq!(pragma(&cache, "journal_mode").await, "wal");
         let got = cache.get("gemma", &[h("a")]).await.unwrap();
         assert_eq!(got, HashMap::from([(h("a"), vector)]));
+    }
+
+    /// The search applet holds a read-only connection on the cache for as
+    /// long as it runs. Leaving WAL with that reader open fails with
+    /// `database is locked` rather than answering `wal`, which failed the
+    /// grid index step and every source's `embed` while the applet was up.
+    /// The rewrite waits for an open that finds no reader instead.
+    #[tokio::test]
+    async fn a_reader_on_the_cache_puts_the_rewrite_off_rather_than_failing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.sqlite");
+        let vector = cache_in_small_pages(&path).await;
+        let reader = crate::read::connect(&path).await.unwrap();
+        let held: i64 = sqlx::query_scalar("SELECT count(*) FROM vectors")
+            .fetch_one(&reader)
+            .await
+            .unwrap();
+        assert_eq!(held, 1, "the reader reads the cache");
+
+        let cache = InferenceCache::open(&path).await.unwrap();
+        assert_eq!(pragma(&cache, "page_size").await, "4096");
+        assert_eq!(pragma(&cache, "journal_mode").await, "wal");
+        let got = cache.get("gemma", &[h("a")]).await.unwrap();
+        assert_eq!(got, HashMap::from([(h("a"), vector)]));
+        cache.close().await;
+        reader.close().await;
+
+        let cache = InferenceCache::open(&path).await.unwrap();
+        assert_eq!(pragma(&cache, "page_size").await, PAGE_SIZE.to_string());
     }
 
     /// The vectors' shape is the one every library's cache records: a
