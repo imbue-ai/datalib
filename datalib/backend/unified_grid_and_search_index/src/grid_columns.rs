@@ -81,10 +81,11 @@ impl View for GridColumn {
             // The Author cell is an identity: sorted and filtered by the
             // name it shows, as the Source cell is by its id.
             GridColumn::AuthorRef => same(G::Author),
-            // Sorted and filtered by the name it shows, as Author is.
-            GridColumn::ContactRef => same(G::Contact),
-            GridColumn::Email => same(G::Email),
-            GridColumn::Phone => same(G::Phone),
+            // A card's own columns: sorted, and filtered by no key, since
+            // `with:` finds a card by its name, address or number.
+            GridColumn::ContactRef => (SortBy::Column(G::Contact), None),
+            GridColumn::Email => (SortBy::Column(G::Email), None),
+            GridColumn::Phone => (SortBy::Column(G::Phone), None),
             GridColumn::Account => same(G::Account),
             GridColumn::OrgName => same(G::OrgName),
             GridColumn::ByteSize => same(G::ByteSize),
@@ -142,9 +143,6 @@ mod tests {
                 ("created_at", none, "created_at", false),
                 ("modified_at", none, "modified_at", false),
                 ("touched_at", none, "touched_at", false),
-                ("contact", none, "contact", false),
-                ("email", none, "email", false),
-                ("phone", none, "phone", false),
                 ("account", none, "account", true),
                 ("project", none, "project", true),
                 ("org_name", none, "org_name", false),

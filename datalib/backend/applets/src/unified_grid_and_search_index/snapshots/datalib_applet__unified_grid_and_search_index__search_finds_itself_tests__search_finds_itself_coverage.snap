@@ -14,9 +14,6 @@ change:
 channel:
   checked: facebook 3, garmin 3, linkedin 3, ship-air 2, tng_calendar 9, tng_contacts 9, tng_contacts-diff 5, yolink 4
   never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, github, gitlab, google-drive, google-takeout, notion, signal, slack, slack-diff, sms-backup-restore, tng_email, tng_pdfs, whatsapp
-contact:
-  checked: facebook 3, linkedin 3, tng_contacts 9, tng_contacts-diff 5
-  never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, garmin, github, gitlab, google-drive, google-takeout, notion, ship-air, signal, slack, slack-diff, sms-backup-restore, tng_calendar, tng_email, tng_pdfs, whatsapp, yolink
 created_at:
   checked: beeper 24, chatgpt-api 33, claude-api 78, claude-code 29, codex 40, datalib 264, facebook 70, garmin 4, github 10, gitlab 9, google-drive 8, google-takeout 53, linkedin 14, notion 9, ship-air 3, signal 15, slack 37, slack-diff 13, sms-backup-restore 14, tng_calendar 9, tng_contacts 5, tng_contacts-diff 3, tng_email 14, tng_pdfs 5, whatsapp 29, yolink 5
 datalib_document_id:
@@ -24,9 +21,6 @@ datalib_document_id:
 diff_changed_columns:
   checked: slack-diff 3, tng_contacts-diff 1
   never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-drive, google-takeout, linkedin, notion, ship-air, signal, slack, sms-backup-restore, tng_calendar, tng_contacts, tng_email, tng_pdfs, whatsapp, yolink
-email:
-  checked: linkedin 1, tng_contacts 8, tng_contacts-diff 4
-  never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-drive, google-takeout, notion, ship-air, signal, slack, slack-diff, sms-backup-restore, tng_calendar, tng_email, tng_pdfs, whatsapp, yolink
 id:
   checked: beeper 24, chatgpt-api 33, claude-api 82, claude-code 30, codex 41, datalib 264, facebook 71, garmin 16, github 11, gitlab 10, google-drive 16, google-takeout 74, linkedin 18, notion 9, ship-air 3, signal 15, slack 44, slack-diff 13, sms-backup-restore 14, tng_calendar 11, tng_contacts 12, tng_contacts-diff 5, tng_email 18, tng_pdfs 11, whatsapp 29, yolink 5
 item_count:
@@ -87,9 +81,6 @@ pasted: to
 pasted: upstream_id
   checked: claude-api 43, claude-code 13, codex 4, facebook 24, google-takeout 39, linkedin 3, notion 8, sms-backup-restore 10
   never: beeper, chatgpt-api, datalib, garmin, github, gitlab, google-drive, ship-air, signal, slack, slack-diff, tng_calendar, tng_contacts, tng_contacts-diff, tng_email, tng_pdfs, whatsapp, yolink
-phone:
-  checked: tng_contacts 7, tng_contacts-diff 3
-  never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, facebook, garmin, github, gitlab, google-drive, google-takeout, linkedin, notion, ship-air, signal, slack, slack-diff, sms-backup-restore, tng_calendar, tng_email, tng_pdfs, whatsapp, yolink
 project:
   checked: beeper 18, claude-api 16, claude-code 29, codex 40, facebook 42, github 10, gitlab 9, google-takeout 63, sms-backup-restore 14
   never: chatgpt-api, datalib, garmin, google-drive, linkedin, notion, ship-air, signal, slack, slack-diff, tng_calendar, tng_contacts, tng_contacts-diff, tng_email, tng_pdfs, whatsapp, yolink
