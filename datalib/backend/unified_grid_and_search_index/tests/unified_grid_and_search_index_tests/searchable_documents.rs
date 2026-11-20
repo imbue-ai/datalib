@@ -10,6 +10,8 @@ async fn fixture_index() -> (tempfile::TempDir, sqlx::SqlitePool) {
     let path = datalib_runtime::layout::grid_index_db(td.path());
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect_with(
             sqlx::sqlite::SqliteConnectOptions::new()
                 .filename(datalib_runtime::plain_sqlite::uri(&path))
