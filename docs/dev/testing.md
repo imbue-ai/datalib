@@ -742,20 +742,20 @@ sync runs whose plan walks a whole table or index against
 records each statement it runs and the file it ran on
 (`DATALIB_SQL_CENSUS`, `datalib_sql_work`). Once the sync is done,
 `tests/fixtures/sql_scans.py` reads each statement's plan from that
-file through the doltlite shell, and `:ingested_tng` lists those that
-scan in `ingested/sql_scans.jsonl`. The plan, not the rows a run
-walked, decides, because a scan of an empty table walks nothing and
-whether a table is empty depends on the order the steps ran in. The few
-statements whose plan cannot be read afterwards (a temporary table, a
-table since dropped) count as scans when they walked rows as they ran,
-and the list says `judged_by: ran`.
+file through the doltlite shell, and `:ingested_tng` lists every
+statement with whether it scans in `ingested/sql_scans.jsonl`. The
+plan, not the rows a run walked, decides, because a scan of an empty
+table walks nothing and whether a table is empty depends on the order
+the steps ran in. The few statements whose plan cannot be read
+afterwards (a temporary table, a table since dropped) count as scans
+when they walked rows as they ran, and the list says `judged_by: ran`.
 
-The allowlist only shrinks. An entry whose statement the run did not
-record scanning fails the test: its plan no longer scans, its text
-changed, or nothing runs it, so delete it. An entry left behind would
-wave through any later statement of the same text. The one exception is
-an entry marked `judged_by = "ran"`, whose statement may not walk rows
-in every run; the test prints a note for it instead.
+The test also fails on an allowlist entry nothing needs: one whose
+statement the sync no longer runs, or whose plan no longer scans. Left
+in, such an entry would wave through the scan if the statement grew
+it back. The one exception is a `judged_by: ran` statement that walked
+no rows this run, which is a note. Two entries for one statement fail
+too: only one reason can be the one that holds.
 
 A fixture's tables hold a few rows, so the scan costs nothing here; on a
 library it costs the whole table on every call. When the test fails on
