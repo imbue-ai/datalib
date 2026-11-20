@@ -34,14 +34,14 @@ link anywhere. Every anchor into a doc here must name a heading.
 
 ## Examples are checked
 
-- A ` ```toml ` block must load and plan as a config, the way `datalib-dag
-  --check` would, with a stand-in step for each input it names and does
+- A ` ```toml ` block must load and plan as a config, the way `datalib-pipeline
+  check` would, with a stand-in step for each input it names and does
   not declare and datalib-step's `[[locks]]` where it declares none
   (`datalib_step`'s `agent_docs_test.rs`). Part of a config
   (one params table, say) is marked ` ```toml fragment `, and is only
   parsed as TOML.
 - A command in a shell block (` ```sh `, ` ```bash `, or no language)
-  that runs `datalib-dag`, `datalib-step`, `datalib-applet`,
+  that runs `datalib-pipeline`, `datalib-step`, `datalib-applet`,
   `datalib-migrate-config` or `datalib-http` is put through that
   program's own parser by its crate's tests, wherever on the line it
   starts. `datalib-doltlite` is not: its argv is sqlite3's. A

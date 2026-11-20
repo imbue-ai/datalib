@@ -622,7 +622,7 @@ account where nothing moved reads no message file and commits nothing.
 
 `~/Library/Mail` is guarded the way `~/Library/Messages` is: without
 access, a plain `ls` gets `Operation not permitted`. A terminal running
-`datalib-dag` needs Full Disk Access. The wizard's folder picker is
+`datalib-pipeline` needs Full Disk Access. The wizard's folder picker is
 there to grant it from the app, as it does for `~/Library/Messages`;
 that it does so for `~/Library/Mail` has not been measured yet.
 

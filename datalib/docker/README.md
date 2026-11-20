@@ -79,7 +79,7 @@ credential store.
 ## Smoke-testing changes
 
 The image build itself runs the shipped pipeline over the demo
-fixtures, so a tarball whose `datalib-dag` / `datalib-step` cannot
+fixtures, so a tarball whose `datalib-pipeline` / `datalib-step` cannot
 ingest them fails the build. After a `--load`, run the walkthrough
 against the result — it serves the demo, builds the semantic index,
 ingests a mounted mbox, and reads the stores back:
@@ -121,6 +121,6 @@ layer and a new tarball re-runs it.
 The gnu release binaries link glibc dynamically and doltlite statically
 (sqlx's `sqlite` feature; see the sqlx comment in
 `datalib/backend/Cargo.toml`). If one picks up a new dynamic
-dependency, the Dockerfile's `datalib-dag --version` smoke and the demo
+dependency, the Dockerfile's `datalib-pipeline --version` smoke and the demo
 ingest fail the image build with `error while loading shared
 libraries: …`, before the image ever ships.

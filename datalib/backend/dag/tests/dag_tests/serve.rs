@@ -1,4 +1,4 @@
-//! `datalib-dag serve` holds the loop until it is told to stop: syncs
+//! `datalib-pipeline serve` holds the loop until it is told to stop: syncs
 //! asked for from other shells are served by it one after another, it
 //! says on stderr what no store holds, and SIGTERM lets the root go.
 
@@ -9,9 +9,9 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 fn dag_bin() -> String {
-    let p = Path::new(&std::env::var("DATALIB_DAG_BIN").expect("DATALIB_DAG_BIN is set"))
+    let p = Path::new(&std::env::var("DATALIB_PIPELINE_BIN").expect("DATALIB_PIPELINE_BIN is set"))
         .canonicalize()
-        .expect("DATALIB_DAG_BIN");
+        .expect("DATALIB_PIPELINE_BIN");
     p.to_string_lossy().into_owned()
 }
 
@@ -28,10 +28,11 @@ fn root_with_a_counting_source() -> tempfile::TempDir {
 
 fn sync(root: &Path) -> Output {
     Command::new(dag_bin())
-        .arg(root.join("config.toml"))
-        .args(["--sync", "a/src", "--by", "test"])
+        .arg("sync")
+        .arg(root)
+        .args(["a/src", "--by", "test"])
         .output()
-        .expect("run datalib-dag")
+        .expect("run datalib-pipeline")
 }
 
 fn runs(root: &Path) -> usize {
@@ -89,11 +90,11 @@ fn serve_runs_one_sync_after_another_until_sigterm() {
     let root = td.path();
     let mut serve = Command::new(dag_bin())
         .arg("serve")
-        .arg(root.join("config.toml"))
+        .arg(root)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn datalib-dag serve");
+        .expect("spawn datalib-pipeline serve");
     let mut events = Events::of(serve.stderr.take().expect("piped stderr"));
     events.wait_for("holding");
     events.wait_for("prepare_done");

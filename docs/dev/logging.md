@@ -73,7 +73,7 @@ and the commit it was built from — what a line's `filename` and
 
 | `process` | what | who records it | ends when |
 |---|---|---|---|
-| `dag` | a run of the runner; or a `datalib-dag serve`, for the lines it writes outside any run | itself | it records nothing; the run row closes, or the serve stops |
+| `dag` | a run of the runner; or a `datalib-pipeline serve`, for the lines it writes outside any run | itself | it records nothing; the run row closes, or the serve stops |
 | `step` | one attempt of one step — or one pass of a streaming consumer, which is spawned once per producer checkpoint; every pass is its own process, all under `attempt 1` | the runner, at spawn and at `wait(2)` | `exit_code` or `signal` |
 | `http` | a launch of the server, and what its applets said | itself | it cannot see its own end |
 | `applet` | one start of one applet, its config id in `applet`; it writes no lines, which stay the server's | the server, at spawn and when it stops or reaps it | `exit_code` or `signal` |

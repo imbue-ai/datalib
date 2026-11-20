@@ -51,11 +51,12 @@ const PREP: &str = "#!/bin/sh\necho \"prepared $*\" >> calls.log\nmkdir -p src/p
 /// The runner, copied alone into a directory of its own: the directory a
 /// step's `PATH` starts with when the config names no `binary_dir`.
 fn lone_runner(dir: &Path) -> PathBuf {
-    let src = std::path::absolute(std::env::var("DATALIB_DAG_BIN").expect("DATALIB_DAG_BIN"))
-        .expect("absolute DATALIB_DAG_BIN");
+    let src =
+        std::path::absolute(std::env::var("DATALIB_PIPELINE_BIN").expect("DATALIB_PIPELINE_BIN"))
+            .expect("absolute DATALIB_PIPELINE_BIN");
     let bin = dir.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
-    let dag = bin.join("datalib-dag");
+    let dag = bin.join("datalib-pipeline");
     std::fs::copy(&src, &dag).unwrap();
     executable(&dag);
     dag
@@ -66,17 +67,20 @@ fn executable(path: &Path) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+/// `datalib-pipeline <verb> <root> <rest>`.
 fn dag(bin: &Path, root: &Path, args: &[&str]) -> Output {
+    let (verb, rest) = args.split_first().expect("a verb");
     let out = Command::new(bin)
-        .arg(root.join("config.toml"))
-        .args(args)
+        .arg(verb)
+        .arg(root)
+        .args(rest)
         .env("PATH", PATH)
         .env_remove("RUST_LOG")
         .output()
-        .expect("run datalib-dag");
+        .expect("run datalib-pipeline");
     assert!(
         out.status.success(),
-        "datalib-dag {args:?}: {}",
+        "datalib-pipeline {args:?}: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     out
@@ -116,11 +120,11 @@ fn shell_steps_run_reset_and_start_again_with_no_datalib_step_anywhere() {
     std::fs::write(root.join("prep.sh"), PREP).unwrap();
     executable(&root.join("prep.sh"));
 
-    dag(&bin, &root, &["--check"]);
+    dag(&bin, &root, &["check"]);
 
     // A run: every step runs, the declared program is prepared first,
     // and the scripts get what the protocol promises.
-    dag(&bin, &root, &[]);
+    dag(&bin, &root, &["sync"]);
     let first = calls(&root);
     assert_eq!(
         first[0], "prepared --prepare",
@@ -138,7 +142,7 @@ fn shell_steps_run_reset_and_start_again_with_no_datalib_step_anywhere() {
     // A reset of a step whose program takes no verbs: never invoked,
     // its tree deleted.
     std::fs::write(root.join("src/fetch/planted"), "").unwrap();
-    dag(&bin, &root, &["--reset", "src/fetch"]);
+    dag(&bin, &root, &["reset", "src/fetch"]);
     assert!(!root.join("src/fetch").exists(), "the tree is deleted");
     let after_reset = calls(&root);
     assert_eq!(
@@ -148,7 +152,7 @@ fn shell_steps_run_reset_and_start_again_with_no_datalib_step_anywhere() {
     );
 
     // A start: the reset step runs again, and so does what reads it.
-    dag(&bin, &root, &[]);
+    dag(&bin, &root, &["sync"]);
     let all = calls(&root);
     assert_eq!(count(&all, "fetch 0:"), 2, "{all:?}");
     assert_eq!(count(&all, "render 0:src/fetch"), 2, "{all:?}");

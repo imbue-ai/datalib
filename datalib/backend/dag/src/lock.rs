@@ -91,7 +91,7 @@ mod tests {
 
     /// A runner that meets a brief holder — the server's probe, which
     /// takes the lock for an instant — must still start. Without the
-    /// grace it refused with "another datalib-dag is already running",
+    /// grace it refused with "another datalib-pipeline is already running",
     /// and the sync failed with no run recorded (onboarding-pdf.spec.ts
     /// on CI). The probe is held for 50ms here so the collision is
     /// certain rather than a race to hit a microsecond window.

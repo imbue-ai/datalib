@@ -1015,7 +1015,7 @@ removes.
    HEAD; nothing is swept except under the render units it built; the
    cursor is recorded at the end.
 
-2. **A reset of the raw store.** `datalib-dag --reset` empties the
+2. **A reset of the raw store.** `datalib-pipeline reset` empties the
    raw tables in a commit of their own and the next sync refills them;
    the render cursor stays, so the next diff runs from the old commit
    to the pin, where the tables are populated again, and an unchanged

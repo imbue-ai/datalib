@@ -117,7 +117,7 @@ build --workspace_status_command=tools/workspace_status.sh
 #
 # An action that consumes the workspace status re-keys on every
 # commit, and so does everything downstream of it. The one rustc that
-# does — `datalib-dag --version` reading STABLE_GIT_DESCRIBE
+# does — `datalib-pipeline --version` reading STABLE_GIT_DESCRIBE
 # (dag/BUILD.bazel, `stamp = -1`) — follows this flag, so a dev build
 # says "unknown" and no commit rebuilds the runner. The commit itself
 # reaches the binaries another way: `//datalib/backend:git_hash` is a

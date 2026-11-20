@@ -75,7 +75,7 @@ it into `~/.local/lib/datalib` and links the tools into
 `~/.local/bin`. The ones you will meet in this guide:
 
 - `datalib-http` — the app: a local web server with the UI built in.
-- `datalib-dag` and `datalib-step` — the sync pipeline, which the app
+- `datalib-pipeline` and `datalib-step` — the sync pipeline, which the app
   runs for you and which you can also run from the terminal.
 - `datalib-applet` — serves the search grid and your contacts inside
   the app, and searches from the terminal with no app running:
@@ -154,7 +154,7 @@ Verify the install, and fetch the Node runtime `latchkey` needs in the
 next step:
 
 ```sh
-datalib-dag --version
+datalib-pipeline --version
 datalib-step pull-runtime
 ```
 
@@ -499,7 +499,7 @@ for an empty folder, and the
 step). From a terminal, two commands do the same:
 
 ```bash
-datalib-dag init ~/datalib
+datalib-pipeline init ~/datalib
 datalib-step examples slack --append ~/datalib/config.toml
 ```
 
@@ -550,7 +550,7 @@ file, and keeps the old text as `config.toml.bak`. The same goes for a
 config whose steps are written as `group = …` and `function = …`: the
 app writes each step's `id` and whole `command` and the entries
 `datalib-step` needs, and every step runs once at the next sync, each
-fetching only what is new. `datalib-dag` makes no rewrites: it refuses
+fetching only what is new. `datalib-pipeline` makes no rewrites: it refuses
 those entries and names `datalib-migrate-config`, so start the app on
 such a root once, or run that, before syncing it from the terminal.
 [The retired shapes](../dev/config_model.md#the-retired-shapes) lists
@@ -574,7 +574,7 @@ datalib-http ./
 It binds to `http://127.0.0.1:8731` by default and opens that URL in
 your browser. On an empty folder the first-run screen offers to write a
 config; the **Data sources** card then lets you add sources, and **Sync
-everything** runs the pipeline (`datalib-dag` under the hood).
+everything** runs the pipeline (`datalib-pipeline` under the hood).
 
 The URL it opens carries a one-time `?token=…`, the way a Jupyter
 notebook server's does — the local API is authenticated, so that no web
@@ -586,15 +586,16 @@ still in your terminal, and the token is on disk at
 `<data_root>/system/api-token`. The server prints that line only to a
 terminal, so the token stays out of any log that keeps its output.
 
-Prefer the terminal? Run the pipeline directly on your config:
+Prefer the terminal? Run the pipeline directly on your data root:
 
 ```sh
-datalib-dag config.toml
+datalib-pipeline sync <data_root>
 ```
 
-(`datalib-step` must be findable: on `PATH`, next to `datalib-dag` —
+(`datalib-step` must be findable: on `PATH`, next to `datalib-pipeline` —
 which is how the installer lays them out — or via `--binary-dir`. Pass
-`--sync <group>/ingest` to sync just one source and what depends on it.)
+`<group>/ingest` after the root to sync just one source and what depends
+on it.)
 
 The first run is slow: it downloads everything. All of the data goes
 into the data root.
@@ -683,7 +684,7 @@ faster.
 > skipped — back that folder up separately if you have any.
 
 A per-step report prints when the run finishes, and a machine-readable
-`run_summary` event lands on `datalib-dag`'s stderr (NDJSON — tee
+`run_summary` event lands on `datalib-pipeline`'s stderr (NDJSON — tee
 stderr if you want to keep it). The exit code is non-zero if any step
 failed.
 
@@ -691,7 +692,7 @@ failed.
 
 If you synced from the app, you're already looking at the result —
 `datalib-http` is the single-binary backend with the web UI embedded.
-If you ran `datalib-dag` from the terminal instead, start it now from
+If you ran `datalib-pipeline` from the terminal instead, start it now from
 your data root:
 
 ```sh
@@ -727,7 +728,7 @@ own buttons. To show it inside another page (Imbue Studio does), set
 
 ## 6. Re-syncing
 
-Re-run the sync (**Sync everything** in the app, or `datalib-dag config.toml`)
+Re-run the sync (**Sync everything** in the app, or `datalib-pipeline sync <data_root>`)
 whenever you want to pull in what's new. Downloads are incremental and
 the semantic index is content-hashed, so a re-run over an unchanged
 corpus is a fast no-op.
@@ -763,7 +764,7 @@ the documents and the databases into open formats:
   `sqlite3` at one and it says `file is not a database`.
 
   So export it. `datalib-doltlite` was installed alongside
-  `datalib-dag` in step 1, and one pipe writes a plain SQLite database
+  `datalib-pipeline` in step 1, and one pipe writes a plain SQLite database
   that every SQLite tool — `sqlite3`, Datasette, pandas, DB Browser,
   your language's stdlib — opens directly:
 

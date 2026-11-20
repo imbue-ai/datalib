@@ -221,8 +221,8 @@ readable without a token — they're what tells an agent how to get one.
 
 ### Re-run ingestion
 
-Ingestion is a DAG of subprocess steps orchestrated by `datalib-dag`
-(`//datalib/backend/dag:datalib_dag_bin`), which reads the data root's
+Ingestion is a DAG of subprocess steps orchestrated by `datalib-pipeline`
+(`//datalib/backend/dag:datalib_pipeline_bin`), which reads the data root's
 `config.toml` (the `[[groups]]` + `[[steps]]` format) and runs each step
 as a subprocess. Datalib's own steps write
 `command = "datalib-step run <function> <type>"`
@@ -241,13 +241,13 @@ machine:
 
 ```sh
 bazelisk build //datalib/backend:bin
-bazel-bin/datalib/backend/bin/datalib-dag ~/datalib/config.toml
+bazel-bin/datalib/backend/bin/datalib-pipeline sync ~/datalib
 ```
 
-No `--binary-dir` is needed: `datalib-dag` puts its own directory at the
-front of every step's `PATH`, so `datalib-step` is found beside it. Add
-`--sync <step-id>[,<step-id>…]` to run those steps and what is
-downstream of them.
+No `--binary-dir` is needed: `datalib-pipeline` puts its own directory at the
+front of every step's `PATH`, so `datalib-step` is found beside it. Name
+step ids after the root to run those steps and what is downstream of
+them.
 
 ### One source's download, with no config
 
@@ -270,7 +270,7 @@ would put it, here `lightroom/ingest/entities.doltlite_db`, committed.
 What a hand run gives up, and how to stop one without losing what it
 fetched: [`step_protocol.md`](step_protocol.md) §"Running
 `datalib-step` by hand". Use a root no app is serving; on one the app
-serves, `datalib-dag <config> --sync <step>` is the way.
+serves, `datalib-pipeline sync <config> <step>` is the way.
 
 A sync also spawns `latchkey`, which the binaries run from a
 `runtime/` tree (Node plus latchkey's package tree, lockfile-pinned by

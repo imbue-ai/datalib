@@ -2,7 +2,7 @@
 
 The Rust tests check the lines `datalib-http` writes against the lines
 we expect. That leaves the claim the endpoint exists for untested: that a
-scraper accepts them. So this runs a step through the real `datalib-dag`,
+scraper accepts them. So this runs a step through the real `datalib-pipeline`,
 serves the root with the real `datalib-http`, and parses what `/metrics`
 answers with `prometheus_client` — the parser the Prometheus project
 maintains — checking that each series arrives typed and labelled as the
@@ -64,7 +64,9 @@ def wait_for_file(path: Path, proc: subprocess.Popen[bytes], log: Path) -> str:
 class MetricsExport(unittest.TestCase):
     def setUp(self) -> None:
         if len(sys.argv) < 3:
-            self.fail("usage: metrics_export_e2e_test.py <datalib-dag> <datalib-http>")
+            self.fail(
+                "usage: metrics_export_e2e_test.py <datalib-pipeline> <datalib-http>"
+            )
         dag, http = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
         self.root = Path(tempfile.mkdtemp())
         script = self.root / "step.sh"
@@ -72,7 +74,7 @@ class MetricsExport(unittest.TestCase):
         (self.root / "config.toml").write_text(CONFIG.format(script=script))
 
         run = subprocess.run(
-            [str(dag), str(self.root / "config.toml"), "--now", NOW],
+            [str(dag), "sync", str(self.root), "--now", NOW],
             capture_output=True,
             text=True,
             timeout=120,

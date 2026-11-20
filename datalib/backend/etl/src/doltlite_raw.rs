@@ -832,8 +832,8 @@ impl std::fmt::Display for SchemaBreak {
             f,
             "Either add a rung to the provider's migration ladder (etl/README.md §\"The \
              migration ladder\"), or — if upstream still has the data — empty this \
-             source and download it again: `datalib-dag --reset <source>/ingest --sync \
-             <source>/ingest <config>`."
+             source and download it again: `datalib-pipeline reset <data_root> \
+             <source>/ingest`, then `datalib-pipeline sync <data_root> <source>/ingest`."
         )
     }
 }
@@ -4675,7 +4675,7 @@ mod tests {
             "{}",
             brk.breaks[0].1
         );
-        assert!(brk.to_string().contains("--reset"));
+        assert!(brk.to_string().contains("datalib-pipeline reset"));
 
         // Untouched: the column and the row are still there, and the
         // shape the DDL that wrote it declares still opens it.

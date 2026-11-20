@@ -31,7 +31,7 @@ Two tests, one harness.
 ## 1. What step 1 built
 
 - `datalib-http --now <RFC 3339>` pins every sync's "now", as
-  `datalib-dag --now` does for one run. Ingest reads the wall clock
+  `datalib-pipeline --now` does for one run. Ingest reads the wall clock
   either way; it is render and the index that stamp `now`, and without
   the pin the fixture would change every day and re-run the qmd embed
   downstream of it.

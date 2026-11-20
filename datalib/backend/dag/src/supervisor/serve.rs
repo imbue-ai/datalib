@@ -1,5 +1,5 @@
 //! The loop held for the whole life of the process that runs it:
-//! `datalib-dag serve`, and the app's server until it starts that as a
+//! `datalib-pipeline serve`, and the app's server until it starts that as a
 //! child. It takes `runner-lock` (waiting while another process holds
 //! it), closes what a dead loop left, runs the prepare pass, then serves
 //! every request and wipe until told to stop. What a parent needs to
@@ -39,7 +39,7 @@ pub struct ServeOptions {
 }
 
 /// One thing the loop says to whoever started it, one NDJSON line each
-/// on `datalib-dag serve`'s stderr. Only what no store holds: everything
+/// on `datalib-pipeline serve`'s stderr. Only what no store holds: everything
 /// else a parent reads from `system/supervisor.sqlite` and the run store.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]

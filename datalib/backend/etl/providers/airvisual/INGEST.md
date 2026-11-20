@@ -175,7 +175,7 @@ synthesizes inodes; on a filesystem without them the cursor falls back
 to `(mtime, size, ctime)`, and the worst case after a remount is a re-hash of
 8.5 MB, never a re-ingest.
 
-A reset (`datalib-dag --reset <group>/ingest`) empties the store, the
+A reset (`datalib-pipeline reset <data_root> <group>/ingest`) empties the store, the
 cursor with it; the next run re-reads everything from the share.
 
 **Where the time goes is the share, not the parse.** Measured over two

@@ -78,7 +78,7 @@ Factored out and shared already:
 
 ### The scheduler already runs anything
 
-`datalib-dag` derives edges from output/input path overlap, skips steps
+`datalib-pipeline` derives edges from output/input path overlap, skips steps
 whose input versions didn't move, retries by failure class, and poisons
 only the subtree below a failure. A config of purely custom steps is
 valid today (`dag/src/config.rs` — `steps` defaults to empty, no step
@@ -259,7 +259,7 @@ pyo3 wheel is a dependency; a subprocess is not.
 
 ## 3. The three surfaces
 
-### Surface A — `datalib-dag` as a harness for any pipeline
+### Surface A — `datalib-pipeline` as a harness for any pipeline
 
 **Ships today; needs packaging, not capability. Not gated on the
 audit** — it schedules processes and knows nothing about how any of
@@ -277,7 +277,7 @@ That one table buys skip-when-unchanged (if the step prints a content
 version), retry by failure class, live progress, graceful cancellation,
 and multi-step composition. Four things to package it:
 
-1. A page — "datalib-dag as a pipeline harness" — opening with a config
+1. A page — "datalib-pipeline as a pipeline harness" — opening with a config
    containing no Datalib providers at all.
 2. A ~40-line stdlib `dag_step.py` a skill vendors rather than reading
    a spec for: read `--params-file`, parse `--inputs`, read

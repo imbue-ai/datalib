@@ -290,7 +290,7 @@ which is why it is three tests.
 
 The page under test keeps changing on its own. The Manage grid is drawn
 again after every remount, whenever the loop's record moves, and on a
-clock, and a real `datalib-dag` runs the syncs. A month of CI
+clock, and a real `datalib-pipeline` runs the syncs. A month of CI
 (September 2026) had about a hundred flaky e2e failures, and nearly all
 of them were one of two mistakes: the test looked at the page between
 two drawings, or it expected to catch a state the backend was free to
@@ -475,7 +475,7 @@ step=bazel-bin/datalib/backend/datalib_step/datalib_step
 echo '{"fixture_path": "'$PWD'/datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api"}' > /tmp/synth.json
 $step synthesize chatgpt --name chatgpt --params-file /tmp/synth.json --out /tmp/tapes
 DATALIB_HTTP_PLAYBACK=/tmp/tapes DATALIB_HTTP_PLAYBACK_DELAY_MS=1500 \
-  bazel-bin/datalib/backend/bin/datalib-dag <root>/config.toml
+  bazel-bin/datalib/backend/bin/datalib-pipeline sync <root>
 ```
 
 with `DATALIB_STEP_CHECKPOINT_CADENCE = "2"` in that config's `[env]`
@@ -547,7 +547,7 @@ accidental / noise, per cluster).
 
 Both start by upgrading `dag.toml` as `datalib-http` would
 (`datalib_migrate_config::upgrade_unattended`): the bake runs
-`datalib-dag`, which loads a config but never upgrades one, so a rename
+`datalib-pipeline`, which loads a config but never upgrades one, so a rename
 the app makes on sight would otherwise fail the bake. The bake writes the
 upgraded text back over `dag.toml`, so the rename shows in the data repo's
 diff; a rewrite that refuses fails it by name.
@@ -579,7 +579,7 @@ The test makes three pipeline runs, each asserting something different:
    It also asserts that no store's `problems` table changed: run 1's
    problems are still standing, and a problem recorded again unchanged
    keeps its row.
-3. **`--reset`, then sync** — empties the store and re-downloads it, then
+3. **`reset`, then sync** — empties the store and re-downloads it, then
    asserts the content tables come back byte-identical. This is what catches a
    per-fetch field leaking into a content payload (it belongs in the
    `volatile_payload` sidecar instead). It also asserts that the contacts

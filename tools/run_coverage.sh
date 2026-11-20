@@ -16,7 +16,7 @@
 #   tools/run_coverage.sh \
 #     //tests/fixtures:ingested_tng_test \
 #     -- \
-#     //datalib/backend/dag:datalib_dag_bin \
+#     //datalib/backend/dag:datalib_pipeline_bin \
 #     //datalib/backend/datalib_step:datalib_step \
 #     //datalib/backend/signal-backup:signal_make_fixture
 #
@@ -106,7 +106,7 @@ LCOV_OUT="${LCOV_OUT:-/tmp/datalib_coverage.lcov}"
 # uninstrumented, and every line after the signature reads 0.
 #
 # DATALIB_CHILD_ENV because datalib_env::inherit_only hands a step only
-# the variables it names, so a step datalib-dag or datalib-http spawns
+# the variables it names, so a step datalib-pipeline or datalib-http spawns
 # otherwise loses LLVM_PROFILE_FILE and writes its profile nowhere. Its
 # own name is on the list so that a step's children keep the setting.
 echo "==> bazelisk coverage (filter=$INSTRUMENT)" >&2

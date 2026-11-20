@@ -36,7 +36,7 @@ curl -H "Authorization: Bearer $TOKEN" "<origin>/applet/datalib_contacts/"
 ```
 
 An answer of 502 naming `no applet "datalib_contacts"` means this
-library's config has no entry for it. A root made by `datalib-dag init`
+library's config has no entry for it. A root made by `datalib-pipeline init`
 or the app has one; an older one may not. Turning it on is the person's
 call, in **Add data source** → Contacts app, or with the entry
 [the applets page](applets.md#what-ships) gives, which the app starts

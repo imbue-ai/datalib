@@ -89,7 +89,7 @@ check() { # triple, expected runtime triple
     [[ -d "$dir" ]] || { echo "ERROR: the tarball does not unpack to datalib-0.0.0-test-$triple" >&2; ls unpacked >&2; exit 1; }
 
     local f
-    for f in datalib-dag datalib-step datalib-http datalib-applet datalib-migrate-config datalib-doltlite \
+    for f in datalib-pipeline datalib-step datalib-http datalib-applet datalib-migrate-config datalib-doltlite \
              datalib-file-inventory latchkey-curl-router curl-impersonate latchkey; do
         [[ -f "$dir/$f" && -x "$dir/$f" && ! -L "$dir/$f" ]] || { echo "ERROR: $f is not a regular executable in the tarball" >&2; ls -la "$dir" >&2; exit 1; }
     done

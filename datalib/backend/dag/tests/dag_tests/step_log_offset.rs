@@ -32,12 +32,13 @@ async fn a_step_line_is_filed_under_the_runner_s_offset() {
     .unwrap();
     // The runner's own environment, as a launch gives it one: the step is
     // handed `TZ` through the runner's allow list, not by this test.
-    let out = Command::new(bin("DATALIB_DAG_BIN"))
-        .arg(root.join("config.toml"))
-        .args(["--sync", "probe/step"])
+    let out = Command::new(bin("DATALIB_PIPELINE_BIN"))
+        .arg("sync")
+        .arg(root)
+        .arg("probe/step")
         .env("TZ", ZONE)
         .output()
-        .expect("run datalib-dag");
+        .expect("run datalib-pipeline");
     assert!(out.status.success(), "{out:?}");
 
     let pool = sqlx::sqlite::SqlitePoolOptions::new()

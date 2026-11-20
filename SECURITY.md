@@ -6,7 +6,7 @@ You'll need a GitHub account, and only you and the maintainers can see the
 report. Please don't open a public issue, because Datalib holds people's email,
 messages and sign-ins.
 
-It helps to say which version you ran (`datalib-dag --version`), what you did,
+It helps to say which version you ran (`datalib-pipeline --version`), what you did,
 and what an attacker would gain. Please use made-up data, not anything from a
 real person's library.
 

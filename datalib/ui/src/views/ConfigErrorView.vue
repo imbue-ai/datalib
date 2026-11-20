@@ -151,7 +151,7 @@ function severityLabel(d: Diagnostic): string {
 
       <p class="cli">
         From a terminal, the same check is
-        <code>datalib-dag --check {{ config.path }}</code
+        <code>datalib-pipeline check {{ config.path }}</code
         >.
       </p>
 

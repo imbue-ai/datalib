@@ -396,7 +396,7 @@ test("a provider with render options writes them on the render step, from the on
   // Apple Mail's render step has an option, the mailboxes it renders.
   // Before the one-dialog wizard it came as a second dialog, and the
   // remount between the two once wrote the render step under the
-  // group's id instead of its own — a config `datalib-dag` refuses with
+  // group's id instead of its own — a config `datalib-pipeline` refuses with
   // "a step writes only the tree its id names". One dialog has no second
   // mount to get wrong; the assertion on the composed id stays because
   // that is the config bug it would catch.

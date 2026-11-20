@@ -999,7 +999,7 @@ async fn a_dropped_entry_keeps_its_row_and_says_why() {
 }
 
 /// A config warning drops nothing, so no entry's row showed it, and it
-/// reached only `datalib-dag --check`. The System row carries the count,
+/// reached only `datalib-pipeline check`. The System row carries the count,
 /// and every warning's words on hover, with nothing on any other row.
 /// An applet filed under no group sits under the Applets heading, after
 /// every group and before System — not at the top level, where it read

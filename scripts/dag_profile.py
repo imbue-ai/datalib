@@ -1,11 +1,11 @@
 #!/usr/bin/env -S uv run python
-"""Profile a `datalib-dag` NDJSON event stream: per-step durations + stalls.
+"""Profile a `datalib-pipeline` NDJSON event stream: per-step durations + stalls.
 
 The runner writes one JSON object per line to stderr, each stamped with a
 wall-clock `ts` (see `datalib/backend/dag/src/events.rs`). Capture it and
 feed it here:
 
-    datalib-dag pipeline.yaml 2> run.ndjson
+    datalib-pipeline sync <data_root> 2> run.ndjson
     scripts/dag_profile.py run.ndjson
 
 Two questions, both of which are painful to answer by reading the raw stream:

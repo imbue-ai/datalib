@@ -10,7 +10,7 @@ data root and asserts on what actually landed in the doltlite stores:
          must be IDENTICAL to run 1 (re-running must not duplicate or
          drop rows), signal's cursor must be untouched, and the
          `signal_snapshot_already_ingested` event must be emitted.
-  Run 3: `--reset` every raw store, then sync — the cursor row is wiped
+  Run 3: `reset` every raw store, then sync — the cursor row is wiped
          and signal re-ingests, so the event must NOT be emitted; the
          store must then converge back to exactly the same contents.
 
@@ -1230,7 +1230,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         line, and its id (the tree it writes) and the trees it reads from
         the environment. So a single step is drivable without the
         runner. Used to re-render and re-index one source without the
-        ingest step in front of it — `datalib-dag --sync` cannot express
+        ingest step in front of it — `datalib-pipeline sync` cannot express
         that, since it only accepts source steps (those with no inputs)
         and pulls in everything downstream of them.
         """

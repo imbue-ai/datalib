@@ -25,7 +25,7 @@ fi
 #                            unambiguous via --always)
 #   - any of the above + "-dirty" when the working tree has uncommitted
 #                                 changes
-# Consumed by datalib-dag's --version stamp. Falls back to
+# Consumed by datalib-pipeline's --version stamp. Falls back to
 # "unknown" outside a git checkout for parity with STABLE_GIT_HASH.
 # `--match` keeps this to datalib's own `v<semver>` tags: the repo also
 # carries `curl-impersonate-v*` tags (releases of the impersonating curl

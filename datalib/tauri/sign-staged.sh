@@ -19,7 +19,7 @@ runtime="$here/runtime"
 
 sign() { codesign --force --options runtime --timestamp --sign "$identity" "$@"; }
 
-sign "$binaries/datalib-http" "$binaries/datalib-dag" "$binaries/datalib-step" \
+sign "$binaries/datalib-http" "$binaries/datalib-pipeline" "$binaries/datalib-step" \
     "$binaries/datalib-applet" "$binaries/datalib-migrate-config" \
     "$binaries/latchkey-curl-router" "$binaries/curl-impersonate" \
     "$binaries/datalib-doltlite"

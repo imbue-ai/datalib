@@ -151,10 +151,10 @@ column per device and per tier, compared against now, is the cheapest
 honest signal.
 
 **Nothing in Datalib runs a sync on a clock.** A sync starts when the
-Manage screen's button is pressed or `datalib-dag` is run; the
+Manage screen's button is pressed or `datalib-pipeline` is run; the
 "scheduler" in `dag/` orders steps within one run. So "fetch every 15
-minutes" is, today, a `launchd`/`cron` entry invoking `datalib-dag
-<root>/config.toml` (or `POST /api/sync/jobs` against a running
+minutes" is, today, a `launchd`/`cron` entry invoking `datalib-pipeline
+sync <root>` (or `POST /api/sync/jobs` against a running
 `datalib-http`), and the app itself never keeps the promise. yolink
 has lived with the same gap. A periodic sync — a per-group interval
 the http worker honours while the app is open — is the feature this

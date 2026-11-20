@@ -60,10 +60,10 @@ rm -rf "$stage"
 mkdir -p "$stage"
 
 # `//datalib/backend:bin` is the shipped binaries under their public
-# names — `datalib-dag`, `datalib-doltlite`, the two curl shims — so
+# names — `datalib-pipeline`, `datalib-doltlite`, the two curl shims — so
 # the list lives there and nowhere else. `-L`: bazel-bin (and a runfiles
 # tree all the more) may hold them as links, and the tarball holds
-# files. `datalib-dag`/`datalib-step` keep those exact names:
+# files. `datalib-pipeline`/`datalib-step` keep those exact names:
 # datalib-http resolves them via sibling lookup (http/src/worker.rs
 # resolve_bin), datalib-step looks for `latchkey-curl-router` next to
 # itself (datalib/backend/etl/web/src/latchkey.rs) and the router for
@@ -75,7 +75,7 @@ cp -RL "$bin/datalib/backend/bin/." "$stage/"
 # install's `rm -rf` of the old tree could not empty it.
 chmod -R u+w "$stage"
 chmod +x "$stage"/*
-for required in datalib-dag datalib-step datalib-http datalib-doltlite latchkey-curl-router curl-impersonate; do
+for required in datalib-pipeline datalib-step datalib-http datalib-doltlite latchkey-curl-router curl-impersonate; do
     [[ -x "$stage/$required" ]] || fail "$required missing from //datalib/backend:bin"
 done
 # The engine as a library, for a program of someone else's to call. Static
