@@ -5,16 +5,16 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
-use sqlx::{Sqlite, Transaction};
+use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use datalib_etl::blob_cas::{BlobCas, CasInsert};
-use datalib_etl::bulk::{bulk_upsert_in_tx, BulkUpsertable};
-use datalib_etl::doltlite_raw as dr;
+use datalib_etl::bulk::{bulk_upsert_first_seen_in_tx, bulk_upsert_in_tx, BulkUpsertable};
+use datalib_etl::doltlite_raw::{self as dr, WirePayload};
 use datalib_time::IsoOffsetTimestamp;
 
 use super::schema_raw::{
-    full_ddl, CapturePartRow, CaptureRow, CommentRow, FileRow, RevisionExportRow, RevisionRow,
-    CAPTURES, COMMENTS, FILES, LADDER, REVISIONS,
+    full_ddl, CapturePartRow, CaptureRow, CommentRow, DriveRow, FileParentsRow, FileRow, FolderRow,
+    RevisionExportRow, RevisionRow, CAPTURES, COMMENTS, FILES, LADDER, REVISIONS,
 };
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -124,6 +124,51 @@ pub async fn store_captures(
     let rows: Vec<&Split<CaptureRow>> = captures.iter().map(|c| &c.row).collect();
     upsert_split(tx, CAPTURES, &rows, &now).await?;
     bulk_upsert_in_tx(tx, &edges, &now).await
+}
+
+/// The folders and shared drives one run listed, as Drive gave them,
+/// and the folders each listed file is in.
+#[derive(Debug, Default)]
+pub struct Places {
+    pub folders: Vec<Value>,
+    pub drives: Vec<Value>,
+    pub file_parents: Vec<Value>,
+}
+
+/// Upsert every listed folder, drive and file's parents in one
+/// transaction. Each run lists them all, so an unchanged one is a no-op
+/// write and its sidecar keeps the stamp of the run that first saw it.
+pub async fn store_places(pool: &SqlitePool, places: &Places) -> Result<()> {
+    let rows = |items: &[Value]| -> Result<Vec<WirePayload>> {
+        items
+            .iter()
+            .filter_map(|v| Some((v.get("id")?.as_str()?.to_string(), v)))
+            .map(|(id, v)| {
+                Ok(WirePayload {
+                    id,
+                    payload: serde_json::to_string(v)?,
+                })
+            })
+            .collect()
+    };
+    let folders: Vec<FolderRow> = rows(&places.folders)?
+        .into_iter()
+        .map(|p| FolderRow { id_and_payload: p })
+        .collect();
+    let drives: Vec<DriveRow> = rows(&places.drives)?
+        .into_iter()
+        .map(|p| DriveRow { id_and_payload: p })
+        .collect();
+    let file_parents: Vec<FileParentsRow> = rows(&places.file_parents)?
+        .into_iter()
+        .map(|p| FileParentsRow { id_and_payload: p })
+        .collect();
+    let now = IsoOffsetTimestamp::now_local();
+    let mut tx = pool.begin().await.context("begin storing folders")?;
+    bulk_upsert_first_seen_in_tx(&mut tx, &folders, &now).await?;
+    bulk_upsert_first_seen_in_tx(&mut tx, &drives, &now).await?;
+    bulk_upsert_first_seen_in_tx(&mut tx, &file_parents, &now).await?;
+    tx.commit().await.context("store folders and drives")
 }
 
 /// A stored revision, with the `exportLinks` Drive gave for it (JSON

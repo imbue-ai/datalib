@@ -617,7 +617,7 @@ user list, claude's orgs and project docs).
 | contacts, calendar (DAV) | `dav_resources`, at each href's etag | `dav_resources` sidecar | — |
 | calendar (Google) | the events page is the content | — | — |
 | calendar (Calendly) | the scheduled-events listing, at each event's `listing_hash` | `calendly_invitees` sidecar | — |
-| google_drive | the file listing, at each file's Drive `version`; each stored revision's export links | `files` sidecar, written with the whole capture; `revision_exports` sidecar, at no version | — |
+| google_drive | the file listing, at each file's Drive `version`; each stored revision's export links. The folder and shared-drive listings, and each listed file's `parents`, are the content (`folders`, `drives`, `file_parents`) | `files` sidecar, written with the whole capture; `revision_exports` sidecar, at no version | — |
 | chatgpt, claude | the conversation enumeration, at `update_time` / `updated_at` | `conversations` sidecar, its attachment edges, claude's `projects` and `project_docs_listings` | — |
 | yolink | — | — | each device's readings |
 

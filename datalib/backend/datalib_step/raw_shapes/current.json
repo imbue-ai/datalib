@@ -357,7 +357,7 @@
     ]
   },
   "google_drive": {
-    "schema_hash": "293f83500ab0f5c1de4e7f9d952859640d7a6e401e468a6eb35b68a87e095cbd",
+    "schema_hash": "0c0fa9acba700a5049483c19801af51fd96da59ba98b3a261b1730bfd43e37b0",
     "schema_version": 0,
     "shared_schema_version": 1,
     "sql": [
@@ -371,8 +371,14 @@
       "CREATE TABLE comments( id TEXT PRIMARY KEY, payload TEXT NULL, file_id TEXT NOT NULL)",
       "CREATE TABLE comments_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX comments_by_file ON comments(file_id)",
+      "CREATE TABLE drives( id TEXT PRIMARY KEY, payload TEXT NULL)",
+      "CREATE TABLE drives_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE TABLE file_parents( id TEXT PRIMARY KEY, payload TEXT NULL)",
+      "CREATE TABLE file_parents_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE files( id TEXT PRIMARY KEY, payload TEXT NULL)",
       "CREATE TABLE files_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE TABLE folders( id TEXT PRIMARY KEY, payload TEXT NULL)",
+      "CREATE TABLE folders_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE revision_exports( id TEXT PRIMARY KEY, revision_id TEXT NOT NULL, part TEXT NOT NULL, blake3 TEXT NULL, CHECK(blake3 IS NULL OR length(blake3) = 64))",
       "CREATE TABLE revision_exports_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",

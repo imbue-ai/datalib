@@ -26,8 +26,15 @@ pub const SLIDES: &str = "https://slides.googleapis.com/v1";
 /// A native Sheet runs to several MB, and an export can be 10.
 pub const TIMEOUT: Duration = Duration::from_secs(300);
 
+pub const FOLDER_MIME: &str = "application/vnd.google-apps.folder";
+
+/// What a folder's listing entry keeps: enough to name it and say what
+/// it is in.
+const FOLDER_FIELDS: &str = "id,name,parents,driveId";
+
 /// Drive's page sizes are capped per endpoint.
 const LIST_PAGE: u32 = 1000;
+const DRIVES_PAGE: u32 = 100;
 const REVISIONS_PAGE: u32 = 1000;
 const COMMENTS_PAGE: u32 = 100;
 
@@ -114,6 +121,41 @@ pub fn list_url(kinds: &[FileKind], owned_only: bool, page_token: Option<&str>) 
         percent_encode(&q),
         percent_encode("nextPageToken,incompleteSearch,files(*)"),
         percent_encode("modifiedTime desc"),
+    );
+    push_page_token(&mut url, page_token);
+    url
+}
+
+/// One page of every folder not in the trash, shared drives included,
+/// whoever owns it: a file the account owns can sit in a folder it does
+/// not.
+pub fn folders_url(page_token: Option<&str>) -> String {
+    let q = format!("mimeType='{FOLDER_MIME}' and trashed=false");
+    let mut url = format!(
+        "{DRIVE}/files?q={}&pageSize={LIST_PAGE}&fields={}\
+         &includeItemsFromAllDrives=true&supportsAllDrives=true",
+        percent_encode(&q),
+        percent_encode(&format!(
+            "nextPageToken,incompleteSearch,files({FOLDER_FIELDS})"
+        )),
+    );
+    push_page_token(&mut url, page_token);
+    url
+}
+
+/// My Drive's root folder, which no listing names.
+pub fn root_url() -> String {
+    format!(
+        "{DRIVE}/files/root?fields={}",
+        percent_encode(FOLDER_FIELDS)
+    )
+}
+
+/// One page of the shared drives the account belongs to.
+pub fn drives_url(page_token: Option<&str>) -> String {
+    let mut url = format!(
+        "{DRIVE}/drives?pageSize={DRIVES_PAGE}&fields={}",
+        percent_encode("nextPageToken,drives(id,name)"),
     );
     push_page_token(&mut url, page_token);
     url

@@ -9,4 +9,5 @@ pub mod ids;
 pub mod processor;
 pub mod render;
 pub mod store;
+pub mod tree;
 pub mod unsupported;

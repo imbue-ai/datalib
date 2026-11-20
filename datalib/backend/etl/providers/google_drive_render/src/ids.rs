@@ -11,6 +11,7 @@ pub const KIND_FILE: &str = "file";
 pub const KIND_COMMENT: &str = "comment";
 pub const KIND_REPLY: &str = "reply";
 pub const KIND_FOLDER: &str = "folder";
+pub const KIND_DRIVE: &str = "drive";
 
 const IDS: Minter = Minter::new(ID_NAMESPACE, RecordStampPrecision::Millis);
 
@@ -23,6 +24,12 @@ pub fn file(source_id: &str, file_id: &str) -> Identity {
 /// No stamp: a folder is a container, and its files carry the times.
 pub fn folder(source_id: &str, folder_id: &str) -> Identity {
     IDS.mint(source_id, KIND_FOLDER, folder_id.to_string(), None)
+}
+
+/// A shared drive, by its id. Its root folder has the same id, so the
+/// kind is what keeps the two apart.
+pub fn drive(source_id: &str, drive_id: &str) -> Identity {
+    IDS.mint(source_id, KIND_DRIVE, drive_id.to_string(), None)
 }
 
 /// `comment_key` is the raw store's, `{file}#{comment}`.
@@ -56,6 +63,7 @@ mod tests {
         for got in [
             file("src", "1Log"),
             folder("src", "0Logs"),
+            drive("src", "0Eng"),
             comment("src", "1Log#AAA", at),
             reply("src", "1Log#AAA#BBB", at),
         ] {

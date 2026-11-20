@@ -98,6 +98,7 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>) -> Result<String> {
                 native: native.as_ref(),
                 images: &images,
                 comments,
+                places: &listing.places,
             },
             &inputs,
         );

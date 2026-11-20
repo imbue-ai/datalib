@@ -106,13 +106,41 @@ comment (`?disco=<comment id>`). The document's id is minted from the
 file id alone, so a fetch problem keyed `files:<id>` lands on it.
 
 **A render unit is a file.** It reads its `files` row, its newest `captures`
-row, that capture's `capture_parts` and its `comments`. Every key in
-those tables starts with the file id, which is how the forward scan maps
-a changed row to the Doc to render again.
+row, that capture's `capture_parts`, its `comments` and its
+`file_parents`. Every key in those tables is the file id or starts with
+it, which is how the forward scan maps a changed row to the Doc to
+render again. It also reads each `folders` and `drives` row above it, a
+miss too, so a rename, a move or a folder that arrives later renders it
+again by the reverse lookup.
 
-**Where a row sits** (`grid_rows.md` §"`parent_uuid`…"). The Doc is read
-together, inside its folder: the first of the listing's `parents`,
-keyed by Drive's folder id. The download lists no folders, so the
-folder has no name and the folders above it are not known. Each comment
-thread is read together inside the Doc; the thread is its first
-comment's row, and its replies sit in it.
+**Where a row sits** (`grid_rows.md` §"`parent_uuid`…"; `src/tree.rs`).
+The Doc is read together, inside its folder, under the folders above
+that one, each a place of kind `Folder`, named. A file's folders are its
+`file_parents` row, from the newest listing, else its `files` row's
+`parents`, as of its capture. It sits in the first, in the order the
+download sorted them, and is filed (`filings`) under each of the others:
+opening any of its folders lists it, and the first is the one its row
+names as its parent and place.
+
+"First" means nothing to Drive. A file has no primary folder, and Drive
+returns `parents` in no fixed order, so the download sorts them by
+folder id to keep the choice the same from one sync to the next: the
+folder the Doc sits in is the one with the lowest id. It rarely
+matters, since Drive has put a new file in only one folder since
+September 2020 (a shortcut stands in for a second); a file in several
+was put there before.
+A folder's own chain follows its first parent up to the top:
+
+- in My Drive, to the root folder, named `My Drive`;
+- in a shared drive, to the drive, a place of kind `Shared drive`, by
+  its name;
+- a folder shared with the account whose parent it cannot see is at the
+  top itself; an id the store holds neither as a folder nor as a drive
+  is a folder with no name, at the top.
+
+A folder is carried by every Doc in or under it, and the grid index
+takes one carrier's word for its name and kind, so a place row says
+nothing that comes from the Doc carrying it (no account, no sort key).
+Folders sort before the Docs beside them. A file in no folder sits at
+the top of the source. Each comment thread is read together inside the
+Doc; the thread is its first comment's row, and its replies sit in it.
