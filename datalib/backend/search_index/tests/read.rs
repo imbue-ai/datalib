@@ -324,6 +324,8 @@ async fn a_reload_holds_what_a_full_read_holds() {
     .await;
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(f.cache_path()))
         .await
         .unwrap();
