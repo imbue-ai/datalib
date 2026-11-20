@@ -25,6 +25,11 @@ files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
+statement = "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason FROM runs WHERE ? IS NULL OR run_id = ? ORDER BY started_at_utc DESC LIMIT 1"
+files = ["*/runs/runs.sqlite"]
+why = "The table stays small: retention keeps at most `max_runs` runs (100 by default) and none older than `max_age_days` (datalib_runs::Retention)."
+
+[[scan]]
 statement = "DELETE FROM log WHERE run_id NOT IN (SELECT run_id FROM runs)"
 files = ["*/runs/runs.sqlite"]
 why = "Not reviewed: on main when this check began."
