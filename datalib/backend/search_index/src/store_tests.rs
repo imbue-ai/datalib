@@ -311,7 +311,10 @@ async fn the_search_index_cuts_the_files_wal_back() {
 async fn a_sources_documents_are_read_by_its_index() {
     let (_dir, index) = open().await;
     // Audited: a constant statement of this crate.
-    let explain = format!("EXPLAIN QUERY PLAN {}", crate::read::DOCUMENTS_OF_SOURCE);
+    let explain = format!(
+        "EXPLAIN QUERY PLAN {}",
+        crate::read::held_documents_sql(Some("mail"))
+    );
     let plan: Vec<String> = sqlx::query_as::<_, (i64, i64, i64, String)>(AssertSqlSafe(explain))
         .bind("mail")
         .fetch_all(index.pool())

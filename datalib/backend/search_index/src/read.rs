@@ -84,8 +84,18 @@ impl Held {
     }
 }
 
-pub(crate) const DOCUMENTS_OF_SOURCE: &str =
+const DOCUMENTS_OF_SOURCE: &str =
     "SELECT markdown_uuid, content_hash FROM search_documents WHERE source_id = ?";
+
+/// What [`Reader::coverage_of`] reads: one source's documents, or every
+/// one. Two statements, not `?1 IS NULL OR source_id = ?1`: that one
+/// cannot use the index, and the holdings report asks once per source.
+pub(crate) fn held_documents_sql(source_id: Option<&str>) -> &'static str {
+    match source_id {
+        Some(_) => DOCUMENTS_OF_SOURCE,
+        None => "SELECT markdown_uuid, content_hash FROM search_documents",
+    }
+}
 
 impl Reader {
     /// `None` when no step has written the index yet: no file, or a grid
@@ -219,15 +229,14 @@ impl Reader {
 
     /// [`Reader::coverage`] of one source's documents, or every one.
     pub async fn coverage_of(&self, model: &str, source_id: Option<&str>) -> Result<(u64, u64)> {
-        // Two statements, not `?1 IS NULL OR source_id = ?1`: that one
-        // cannot use the index, and the report asks it once per source.
-        let held: Vec<(String, String)> = match source_id {
-            Some(source_id) => sqlx::query_as(DOCUMENTS_OF_SOURCE).bind(source_id),
-            None => sqlx::query_as("SELECT markdown_uuid, content_hash FROM search_documents"),
+        let mut query = sqlx::query_as(held_documents_sql(source_id));
+        if let Some(source_id) = source_id {
+            query = query.bind(source_id);
         }
-        .fetch_all(&self.index)
-        .await
-        .context("read the documents")?;
+        let held: Vec<(String, String)> = query
+            .fetch_all(&self.index)
+            .await
+            .context("read the documents")?;
         let documents = held.len() as u64;
         let embedded = match source_id {
             None => self.embedded(model, held, None).await?,
