@@ -287,6 +287,9 @@ datalib/
                    facts, each a test in `embedding_facts`.
     store_meta/    `_datalib_meta`, the table every store carries naming
                    the build that wrote it and the shape it is in.
+    sql_work/      counts what every SQLite statement in a process does
+                   and logs the ones that walked many rows for few;
+                   every binary that opens a store installs it.
     sql_guard/     reads SQL a caller wrote, and nothing else: a
                    read-only open over SQLite's C API, the authorizer,
                    deadline and one-statement check, parameters by name

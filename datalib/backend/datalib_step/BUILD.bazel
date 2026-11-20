@@ -34,6 +34,7 @@ rust_binary(
         "//datalib/backend/id:datalib_id",
         "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/sql_work:datalib_sql_work",
         "//datalib/backend/etl/providers/claude:datalib_etl_claude",
         "//datalib/backend/etl/providers/claude_render:datalib_etl_claude_render",
         "//datalib/backend/etl/providers/claude_config:datalib_etl_claude_config",

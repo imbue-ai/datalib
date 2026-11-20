@@ -1,0 +1,1040 @@
+# Every statement the TNG fixture sync runs that walks a whole table or
+# index, other than reads of the catalog alone, and why that is allowed.
+# sql_scans_test.py checks the sync's list (ingested/sql_scans.jsonl) against
+# this file. A new scan fails it until the statement gets an index or an
+# entry here with a reason (docs/dev/testing.md).
+#
+# On a fixture a scan costs nothing; on a library it costs the whole table,
+# every time the statement runs. A reason says why that is fine: the
+# statement reads every row anyway, or the table stays small. The entries
+# marked "Not reviewed" were here when the check began.
+
+[[scan]]
+statement = "DELETE FROM contact_categories WHERE addressbook_id = ?"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "DELETE FROM contact_group_members WHERE addressbook_id = ?"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "DELETE FROM grid_rows WHERE markdown_uuid IS NULL AND NOT EXISTS (SELECT 1 FROM data_nodes n WHERE n.uuid = grid_rows.uuid) RETURNING uuid"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "DELETE FROM log WHERE run_id NOT IN (SELECT run_id FROM runs)"
+files = ["*/runs/runs.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "DELETE FROM metric_samples WHERE run_id NOT IN (SELECT run_id FROM runs)"
+files = ["*/runs/runs.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "DELETE FROM metrics WHERE run_id NOT IN (SELECT run_id FROM runs)"
+files = ["*/runs/runs.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "DELETE FROM pdf_documents WHERE blake3 NOT IN (SELECT blake3 FROM pdf_paths)"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "DELETE FROM pdf_documents_bookkeeping WHERE id NOT IN (SELECT blake3 FROM pdf_paths)"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "DELETE FROM pdf_paths_bookkeeping WHERE id NOT IN (SELECT id FROM pdf_paths)"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "DELETE FROM problems WHERE stage = ?"
+files = ["*/render_markdown/indexed_markdown.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "DELETE FROM processes WHERE run_id IS NULL AND started_at_utc < ? AND process_id NOT IN (SELECT process_id FROM log)"
+files = ["*/runs/runs.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "DELETE FROM processes WHERE run_id NOT IN (SELECT run_id FROM runs)"
+files = ["*/runs/runs.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "DELETE FROM runs WHERE run_id NOT IN (SELECT run_id FROM runs ORDER BY started_at_utc DESC LIMIT ?)"
+files = ["*/runs/runs.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "DELETE FROM runs WHERE started_at_utc < ? AND run_id != ?"
+files = ["*/runs/runs.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "DELETE FROM search_sources WHERE source_id NOT IN (SELECT value FROM json_each(?))"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "DELETE FROM step_runs WHERE run_id NOT IN (SELECT run_id FROM runs)"
+files = ["*/runs/runs.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "DELETE FROM temp.dropped WHERE EXISTS (SELECT 1 FROM terms t WHERE t.val_id = dropped.val_id)"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "DELETE FROM threads WHERE account_id = ? AND id NOT IN (SELECT thread_id FROM emails)"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "DELETE FROM threads_bookkeeping WHERE id IN (SELECT id FROM threads WHERE account_id = ? AND id NOT IN (SELECT thread_id FROM emails))"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "INSERT INTO main.\"chat\" (\"_id\", \"jid_row_id\", \"hidden\", \"subject\", \"created_timestamp\", \"display_message_row_id\", \"last_message_row_id\", \"last_read_message_row_id\", \"last_read_receipt_sent_message_row_id\", \"last_important_message_row_id\", \"archived\", \"sort_timestamp\", \"mod_tag\", \"gen\", \"spam_detection\", \"unseen_earliest_message_received_time\", \"unseen_message_count\", \"unseen_missed_calls_count\", \"unseen_row_count\", \"plaintext_disabled\", \"vcard_ui_dismissed\", \"change_number_notified_message_row_id\", \"show_group_description\", \"ephemeral_expiration\", \"ephemeral_setting_timestamp\", \"ephemeral_displayed_exemptions\", \"ephemeral_disappearing_messages_initiator\", \"unseen_important_message_count\", \"group_type\", \"last_message_reaction_row_id\", \"last_seen_message_reaction_row_id\", \"unseen_message_reaction_count\", \"unseen_comment_message_count\", \"growth_lock_level\", \"growth_lock_expiration_ts\", \"last_read_message_sort_id\", \"display_message_sort_id\", \"last_message_sort_id\", \"last_read_receipt_sent_message_sort_id\", \"has_new_community_admin_dialog_been_acknowledged\", \"history_sync_progress\", \"chat_lock\", \"chat_origin\", \"participation_status\", \"account_jid_row_id\", \"chat_encryption_state\", \"group_member_count\", \"limited_sharing\", \"limited_sharing_setting_timestamp\", \"is_contact\", \"ephemeral_after_read_duration\", \"business_chat_state\") SELECT \"_id\", \"jid_row_id\", \"hidden\", \"subject\", \"created_timestamp\", \"display_message_row_id\", \"last_message_row_id\", \"last_read_message_row_id\", \"last_read_receipt_sent_message_row_id\", \"last_important_message_row_id\", \"archived\", \"sort_timestamp\", \"mod_tag\", \"gen\", \"spam_detection\", \"unseen_earliest_message_received_time\", \"unseen_message_count\", \"unseen_missed_calls_count\", \"unseen_row_count\", \"plaintext_disabled\", \"vcard_ui_dismissed\", \"change_number_notified_message_row_id\", \"show_group_description\", \"ephemeral_expiration\", \"ephemeral_setting_timestamp\", \"ephemeral_displayed_exemptions\", \"ephemeral_disappearing_messages_initiator\", \"unseen_important_message_count\", \"group_type\", \"last_message_reaction_row_id\", \"last_seen_message_reaction_row_id\", \"unseen_message_reaction_count\", \"unseen_comment_message_count\", \"growth_lock_level\", \"growth_lock_expiration_ts\", \"last_read_message_sort_id\", \"display_message_sort_id\", \"last_message_sort_id\", \"last_read_receipt_sent_message_sort_id\", \"has_new_community_admin_dialog_been_acknowledged\", \"history_sync_progress\", \"chat_lock\", \"chat_origin\", \"participation_status\", \"account_jid_row_id\", \"chat_encryption_state\", \"group_member_count\", \"limited_sharing\", \"limited_sharing_setting_timestamp\", \"is_contact\", \"ephemeral_after_read_duration\", \"business_chat_state\" FROM \"datalib_mirror_src\".\"chat\""
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "INSERT INTO main.\"jid\" (\"_id\", \"user\", \"server\", \"agent\", \"device\", \"type\", \"raw_string\") SELECT \"_id\", \"user\", \"server\", \"agent\", \"device\", \"type\", \"raw_string\" FROM \"datalib_mirror_src\".\"jid\""
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "INSERT INTO main.\"jid_map\" (\"lid_row_id\", \"jid_row_id\", \"sort_id\") SELECT \"lid_row_id\", \"jid_row_id\", \"sort_id\" FROM \"datalib_mirror_src\".\"jid_map\""
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "INSERT INTO main.\"message\" (\"_id\", \"chat_row_id\", \"from_me\", \"key_id\", \"sender_jid_row_id\", \"status\", \"broadcast\", \"recipient_count\", \"participant_hash\", \"origination_flags\", \"origin\", \"timestamp\", \"received_timestamp\", \"receipt_server_timestamp\", \"message_type\", \"text_data\", \"starred\", \"lookup_tables\", \"message_add_on_flags\", \"view_mode\", \"sort_id\", \"translated_text\", \"view_replies_thread_id\", \"server_sts\") SELECT \"_id\", \"chat_row_id\", \"from_me\", \"key_id\", \"sender_jid_row_id\", \"status\", \"broadcast\", \"recipient_count\", \"participant_hash\", \"origination_flags\", \"origin\", \"timestamp\", \"received_timestamp\", \"receipt_server_timestamp\", \"message_type\", \"text_data\", \"starred\", \"lookup_tables\", \"message_add_on_flags\", \"view_mode\", \"sort_id\", \"translated_text\", \"view_replies_thread_id\", \"server_sts\" FROM \"datalib_mirror_src\".\"message\""
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "INSERT INTO main.\"message_add_on\" (\"_id\", \"chat_row_id\", \"from_me\", \"key_id\", \"sender_jid_row_id\", \"parent_message_row_id\", \"timestamp\", \"status\", \"message_add_on_type\", \"received_timestamp\", \"expiry_duration_in_secs\", \"server_timestamp\", \"expiry_timestamp\", \"expiry_type\") SELECT \"_id\", \"chat_row_id\", \"from_me\", \"key_id\", \"sender_jid_row_id\", \"parent_message_row_id\", \"timestamp\", \"status\", \"message_add_on_type\", \"received_timestamp\", \"expiry_duration_in_secs\", \"server_timestamp\", \"expiry_timestamp\", \"expiry_type\" FROM \"datalib_mirror_src\".\"message_add_on\""
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "INSERT INTO main.\"message_add_on_reaction\" (\"message_add_on_row_id\", \"reaction\", \"sender_timestamp\") SELECT \"message_add_on_row_id\", \"reaction\", \"sender_timestamp\" FROM \"datalib_mirror_src\".\"message_add_on_reaction\""
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "INSERT INTO main.\"message_media\" (\"message_row_id\", \"chat_row_id\", \"autotransfer_retry_enabled\", \"transferred\", \"face_x\", \"face_y\", \"has_streaming_sidecar\", \"page_count\", \"thumbnail_height_width_ratio\", \"first_scan_sidecar\", \"first_scan_length\", \"message_url\", \"media_upload_handle\", \"sticker_flags\", \"raw_transcription_text\", \"first_viewed_timestamp\", \"is_animated_sticker\", \"premium_message\", \"media_caption\", \"metadata_url\", \"motion_photo_presentation_offset_ms\", \"qr_url\", \"media_key_domain\", \"e2ee_media_key\", \"emoji_tags\", \"multicast_id\", \"media_job_uuid\", \"transcoded\", \"file_path\", \"file_size\", \"suspicious_content\", \"trim_from\", \"trim_to\", \"media_key\", \"media_key_timestamp\", \"width\", \"height\", \"gif_attribution\", \"direct_path\", \"mime_type\", \"file_length\", \"media_name\", \"file_hash\", \"media_duration\", \"enc_file_hash\", \"partial_media_hash\", \"partial_media_enc_hash\", \"original_file_hash\", \"mute_video\", \"doodle_id\", \"media_source_type\", \"accessibility_label\", \"media_transcode_quality\", \"is_offloaded\") SELECT \"message_row_id\", \"chat_row_id\", \"autotransfer_retry_enabled\", \"transferred\", \"face_x\", \"face_y\", \"has_streaming_sidecar\", \"page_count\", \"thumbnail_height_width_ratio\", \"first_scan_sidecar\", \"first_scan_length\", \"message_url\", \"media_upload_handle\", \"sticker_flags\", \"raw_transcription_text\", \"first_viewed_timestamp\", \"is_animated_sticker\", \"premium_message\", \"media_caption\", \"metadata_url\", \"motion_photo_presentation_offset_ms\", \"qr_url\", \"media_key_domain\", \"e2ee_media_key\", \"emoji_tags\", \"multicast_id\", \"media_job_uuid\", \"transcoded\", \"file_path\", \"file_size\", \"suspicious_content\", \"trim_from\", \"trim_to\", \"media_key\", \"media_key_timestamp\", \"width\", \"height\", \"gif_attribution\", \"direct_path\", \"mime_type\", \"file_length\", \"media_name\", \"file_hash\", \"media_duration\", \"enc_file_hash\", \"partial_media_hash\", \"partial_media_enc_hash\", \"original_file_hash\", \"mute_video\", \"doodle_id\", \"media_source_type\", \"accessibility_label\", \"media_transcode_quality\", \"is_offloaded\" FROM \"datalib_mirror_src\".\"message_media\""
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "INSERT INTO vals (value) SELECT DISTINCT value FROM temp.incoming WHERE true ON CONFLICT (value) DO NOTHING"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "INSERT OR IGNORE INTO terms (val_id, kind, row_id) SELECT v.val_id, i.kind, i.row_id FROM temp.incoming i JOIN vals v ON v.value = i.value"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "INSERT OR REPLACE INTO main.\"message\" (\"bridge_id\", \"id\", \"part_id\", \"mxid\", \"room_id\", \"room_receiver\", \"sender_id\", \"sender_mxid\", \"timestamp\", \"edit_count\", \"double_puppeted\", \"thread_root_id\", \"reply_to_id\", \"reply_to_part_id\", \"send_txn_id\", \"metadata\") SELECT \"bridge_id\", \"id\", \"part_id\", \"mxid\", \"room_id\", \"room_receiver\", \"sender_id\", \"sender_mxid\", \"timestamp\", \"edit_count\", \"double_puppeted\", \"thread_root_id\", \"reply_to_id\", \"reply_to_part_id\", \"send_txn_id\", \"metadata\" FROM \"datalib_mirror_src\".\"message\""
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "INSERT OR REPLACE INTO main.\"mx_reactions\" (\"roomID\", \"reactionID\", \"eventID\", \"senderID\", \"description\", \"path\", \"order\", \"timestamp\", \"isEdited\", \"isDeleted\", \"isSentByMe\", \"echoInfo\", \"sendStatus\", \"reaction\") SELECT \"roomID\", \"reactionID\", \"eventID\", \"senderID\", \"description\", \"path\", \"order\", \"timestamp\", \"isEdited\", \"isDeleted\", \"isSentByMe\", \"echoInfo\", \"sendStatus\", \"reaction\" FROM \"datalib_mirror_src\".\"mx_reactions\""
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "INSERT OR REPLACE INTO main.\"mx_room_messages\" (\"roomID\", \"eventID\", \"senderContactID\", \"timestamp\", \"isEdited\", \"lastEditionID\", \"isDetached\", \"lastEditionTimestamp\", \"lastEditionOrder\", \"isDeleted\", \"isEncrypted\", \"inReplyToID\", \"isReplyThreadFallback\", \"type\", \"hsOrder\", \"isSentByMe\", \"replyThreadID\", \"replyCount\", \"replyThreadRootID\", \"protocol\", \"shouldNotify\", \"shouldPreview\", \"countsAsUnread\", \"lastDeletionID\", \"editedType\", \"mentions\", \"message\", \"sendStatus\", \"text_content\", \"text_formattedContent\", \"text_format\", \"echo_echoID\", \"echo_state\", \"echo_canAutoRetry\", \"echo_isRetryScheduled\", \"echo_retryCount\", \"echo_errorCode\", \"echo_errorMessage\", \"echo_groupID\", \"echo_groupIndex\", \"seenByMeAt\", \"message_size\", \"recipientReadTimerStartedAt\", \"threadRootEventID\", \"countsAsUnreadInThread\") SELECT \"roomID\", \"eventID\", \"senderContactID\", \"timestamp\", \"isEdited\", \"lastEditionID\", \"isDetached\", \"lastEditionTimestamp\", \"lastEditionOrder\", \"isDeleted\", \"isEncrypted\", \"inReplyToID\", \"isReplyThreadFallback\", \"type\", \"hsOrder\", \"isSentByMe\", \"replyThreadID\", \"replyCount\", \"replyThreadRootID\", \"protocol\", \"shouldNotify\", \"shouldPreview\", \"countsAsUnread\", \"lastDeletionID\", \"editedType\", \"mentions\", \"message\", \"sendStatus\", \"text_content\", \"text_formattedContent\", \"text_format\", \"echo_echoID\", \"echo_state\", \"echo_canAutoRetry\", \"echo_isRetryScheduled\", \"echo_retryCount\", \"echo_errorCode\", \"echo_errorMessage\", \"echo_groupID\", \"echo_groupIndex\", \"seenByMeAt\", \"message_size\", \"recipientReadTimerStartedAt\", \"threadRootEventID\", \"countsAsUnreadInThread\" FROM \"datalib_mirror_src\".\"mx_room_messages\""
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "INSERT OR REPLACE INTO main.\"participant_identifiers\" (\"account_id\", \"participant_id\", \"identifier\", \"identifier_type\") SELECT \"account_id\", \"participant_id\", \"identifier\", \"identifier_type\" FROM \"datalib_mirror_src\".\"participant_identifiers\""
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "INSERT OR REPLACE INTO main.\"participants\" (\"account_id\", \"room_id\", \"id\", \"full_name\", \"nickname\", \"img_url\", \"is_verified\", \"cannot_message\", \"is_self\", \"is_network_bot\", \"added_by\", \"is_admin\", \"is_pending\", \"has_exited\") SELECT \"account_id\", \"room_id\", \"id\", \"full_name\", \"nickname\", \"img_url\", \"is_verified\", \"cannot_message\", \"is_self\", \"is_network_bot\", \"added_by\", \"is_admin\", \"is_pending\", \"has_exited\" FROM \"datalib_mirror_src\".\"participants\""
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "INSERT OR REPLACE INTO main.\"threads\" (\"threadID\", \"accountID\", \"thread\", \"timestamp\", \"is_label\", \"room_type\") SELECT \"threadID\", \"accountID\", \"thread\", \"timestamp\", \"is_label\", \"room_type\" FROM \"datalib_mirror_src\".\"threads\""
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT * FROM markdowns ORDER BY markdown_uuid"
+files = ["*/render_markdown/indexed_markdown.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT * FROM steps"
+files = ["*/supervisor.sqlite"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT COUNT(*) FROM (SELECT DISTINCT account_id, thread_id FROM emails WHERE account_id != '' AND thread_id != '')"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT COUNT(*) FROM garmin_activity_files WHERE blake3 IS NOT NULL"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT COUNT(*) FROM messages WHERE payload IS NOT NULL"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT COUNT(*) FROM yolink_readings_bookkeeping WHERE last_error IS NOT NULL"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT COUNT(*), COALESCE(SUM(item_count), 0) FROM markdowns WHERE ? IS NULL OR markdown_uuid <> ?"
+files = ["*/render_markdown/indexed_markdown.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT COUNT(DISTINCT thread_root_uuid) FROM messages WHERE payload IS NOT NULL"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT DISTINCT chat_id FROM chat_items"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT DISTINCT id FROM (SELECT j.value AS id FROM pages p, json_tree(p.payload) j WHERE p.payload IS NOT NULL AND j.key = 'id' AND j.type = 'text' AND (j.path IN ('$.created_by', '$.\"created_by\"', '$.last_edited_by', '$.\"last_edited_by\"') OR j.path LIKE '$.properties.%people[%]') UNION ALL SELECT json_extract(c.payload, '$.created_by.id') AS id FROM comments c WHERE c.payload IS NOT NULL) WHERE id IS NOT NULL AND id <> '' ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT DISTINCT input_table FROM render_inputs ORDER BY input_table"
+files = ["*/render_markdown/indexed_markdown.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT DISTINCT renderer_version FROM markdowns WHERE renderer_version IS NOT NULL AND kind <> ? AND markdown_uuid NOT IN ( SELECT scope_key FROM problems WHERE scope_kind = ? AND stage = ? AND reason IN (?…))"
+files = ["*/render_markdown/indexed_markdown.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "SELECT DISTINCT scope_key FROM problems WHERE stage = ? AND scope_kind = ? ORDER BY scope_key"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "SELECT DISTINCT thread_id FROM emails WHERE thread_id IS NOT NULL ORDER BY thread_id LIMIT ?1"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT DISTINCT thread_root_uuid FROM messages WHERE payload IS NOT NULL"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT DISTINCT thread_root_uuid FROM messages WHERE thread_root_uuid IS NOT NULL ORDER BY thread_root_uuid LIMIT ?1"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT EXISTS(SELECT 1 FROM steps, json_each(steps.requests) WHERE json_each.value = ?1) OR EXISTS(SELECT 1 FROM requests WHERE id = ?1 AND closed_at_utc IS NOT NULL)"
+files = ["*/supervisor.sqlite"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "SELECT _id, chat_row_id, key_id, from_me, sender_jid_row_id, timestamp, message_type, text_data FROM message ORDER BY chat_row_id, sort_id, timestamp, key_id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT _id, coalesce(raw_string, user || '@' || server) AS jid FROM jid"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT _id, jid_row_id, subject, last_read_message_row_id FROM chat ORDER BY _id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT a._id, a.chat_row_id, a.key_id, a.from_me, a.sender_jid_row_id, a.parent_message_row_id, a.timestamp, r.reaction FROM message_add_on a JOIN message_add_on_reaction r ON r.message_add_on_row_id = a._id WHERE a.parent_message_row_id IS NOT NULL"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT a.id || '#fit', a.listing_hash FROM garmin_activities a LEFT JOIN garmin_activity_files f ON f.id = a.id || '#fit' WHERE a.listing_hash IS NOT NULL AND f.blake3 IS NULL ORDER BY a.start_time_gmt DESC, a.id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT a.id, b.held_version FROM chatgpt_attachments a LEFT JOIN conversations_bookkeeping b ON b.id = a.conversation_id ORDER BY a.conversation_id, a.file_id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT a.id, coalesce(b.held_version, c.held_version) FROM claude_attachments a LEFT JOIN conversations_bookkeeping b ON b.id = a.conversation_uuid LEFT JOIN cowork_sessions_bookkeeping c ON c.id = a.conversation_uuid ORDER BY a.conversation_uuid, a.file_uuid"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT a.id, json(a.payload) AS listing, json(d.payload) AS detail, (SELECT f.blake3 FROM garmin_activity_files f WHERE f.activity_id = a.id AND f.blake3 IS NOT NULL ORDER BY f.id LIMIT 1) AS fit FROM garmin_activities a LEFT JOIN garmin_activity_details d ON d.id = a.id ORDER BY a.start_time_gmt, a.id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT accountID FROM threads t WHERE EXISTS (SELECT 1 FROM mx_room_messages m WHERE m.roomID = t.threadID)"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT account_id FROM emails WHERE account_id <> ?1 UNION SELECT account_id FROM threads WHERE account_id <> ?1 UNION SELECT account_id FROM mailboxes WHERE account_id <> ?1 UNION SELECT id FROM accounts WHERE id <> ?1"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT blake3, content_type, byte_len FROM cas_objects"
+files = ["*/ingest/blobs.sqlite"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT c.id AS id, c.addressbook_id AS addressbook_id, c.uid AS uid, c.href AS href, json_extract(c.payload, '$.vcard') AS vcard, COALESCE(a.display_name, a.href) AS addressbook_label FROM contacts c LEFT JOIN addressbooks a ON a.id = c.addressbook_id ORDER BY c.addressbook_id, c.id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT c.id FROM channels c, json_each(c.payload, '$.properties.tabs') t WHERE json_extract(t.value, '$.type') IN ('bookmarks', 'folder') UNION SELECT channel_id FROM bookmarks"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT c.id, json(c.payload) AS payload, b.fetched_at_utc FROM conversations c LEFT JOIN conversations_bookkeeping b ON b.id = c.id WHERE c.payload IS NOT NULL ORDER BY c.id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT d.blake3 AS blake3, d.title AS title, d.author AS author, d.page_count AS page_count, d.pdf_type AS pdf_type, d.doc_created_at AS doc_created_at, d.doc_modified_at AS doc_modified_at, MIN(p.id) AS rel_path, COUNT(p.id) AS copy_count, GROUP_CONCAT(p.id, char(30)) AS path_ids FROM pdf_documents d JOIN pdf_paths p ON p.blake3 = d.blake3 WHERE d.has_encoding_issues = 0 AND d.page_count > d.ocr_page_count GROUP BY d.blake3 ORDER BY d.blake3"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT d.id, d.kind, d.start_ms, d.family_device_id, (SELECT MAX(r.ts_ms) FROM yolink_readings r WHERE r.device_name = d.id) AS last_ts_ms FROM yolink_devices d ORDER BY d.id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT d.page_count, d.ocr_page_count, d.has_encoding_issues, MIN(p.id) AS rel_path FROM pdf_documents d JOIN pdf_paths p ON p.blake3 = d.blake3 GROUP BY d.blake3 ORDER BY rel_path"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT device_id, ts_ms, source_file, pm1_ugm3, pm25_ugm3, pm10_ugm3, aqi_us, aqi_cn, outdoor_aqi_us, outdoor_aqi_cn, co2_ppm, temperature_c, humidity_pct, voc_ppb FROM airvisual_samples ORDER BY device_id, ts_ms"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT device_name, metric, ts_ms, value FROM yolink_readings ORDER BY device_name, metric, ts_ms"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT fingerprint, snapshot_dir, ingested_at_utc FROM ingested_backups"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT h.handle, c.contact_json FROM source_contact_handles h JOIN source_contacts c ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT i.chat_id, COUNT(*) FROM chat_items i WHERE NOT EXISTS (SELECT 1 FROM chats c WHERE c.id = i.chat_id) GROUP BY i.chat_id ORDER BY i.chat_id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id FROM chat_items"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM chat_messages WHERE group_id = ?"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "SELECT id FROM chats"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM connections_friends_your_friends"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM gemini_activity"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM maps_reviews"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM maps_saved_lists WHERE file = ?"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "SELECT id FROM maps_saved_places"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM messenger_messages"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM messenger_threads"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM my_maps_placemarks WHERE file = ?"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "SELECT id FROM play_books_annotations WHERE file = ?"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "SELECT id FROM read_marks"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM recipients"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM saved_items"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM sms_calls"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM sms_messages"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM users WHERE payload IS NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id FROM voice_bills"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM voice_messages WHERE folder = ?"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "SELECT id FROM your_facebook_activity_comments_and_reactions_comments"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM your_facebook_activity_comments_and_reactions_likes_and_reactions"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM your_facebook_activity_comments_and_reactions_your_comment_edits"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM your_facebook_activity_groups_group_posts_and_comments"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM your_facebook_activity_groups_your_group_membership_activity"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM your_facebook_activity_posts_edits_you_made_to_posts"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM your_facebook_activity_posts_your_posts_check_ins_photos_and_videos"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM youtube_subscriptions"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM youtube_watch_history"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, calendar_date, timestamp_gmt, weight_g, source_type, json(payload) AS payload FROM garmin_weigh_ins WHERE weight_g IS NOT NULL AND timestamp_gmt IS NOT NULL ORDER BY timestamp_gmt, id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, calendar_id, uid, json_extract(payload, '$.ics') AS ics FROM ics_objects ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, capture_id, part, blake3 FROM capture_parts"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, display_name, time_zone FROM calendars ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, file_id, json(payload) AS payload FROM comments"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, file_id, version FROM captures"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, identifier, display_name, json(payload) AS payload FROM recipients"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, item_id FROM saved_items"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM chat_groups WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM chat_messages WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM comments WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM connections WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM connections_friends_your_friends WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM email_addresses WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM file_parents"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM files"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM folders"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM mailboxes WHERE payload IS NOT NULL"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM messages WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM messenger_messages WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM messenger_threads WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM skills WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM sms_calls WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM sms_messages WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM transcripts WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM voice_messages WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM your_facebook_activity_comments_and_reactions_comments WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM your_facebook_activity_comments_and_reactions_likes_and_reactions WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM your_facebook_activity_comments_and_reactions_your_comment_edits WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM your_facebook_activity_groups_group_posts_and_comments WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM your_facebook_activity_groups_your_group_membership_activity WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM your_facebook_activity_posts_edits_you_made_to_posts WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM your_facebook_activity_posts_your_posts_check_ins_photos_and_videos WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) FROM users WHERE payload IS NOT NULL"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload), NULL FROM youtube_subscriptions ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, json(payload), NULL, file FROM maps_saved_lists ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, json(payload), NULL, file FROM my_maps_placemarks ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, json(payload), when_ts FROM gemini_activity ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, json(payload), when_ts FROM maps_reviews ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, json(payload), when_ts FROM maps_saved_places ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, json(payload), when_ts FROM youtube_watch_history ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, json(payload), when_ts, file FROM play_books_annotations ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, kind, title, parent_type, parent_id, created_time FROM tree"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, kind, upstream_id, json(payload) AS payload FROM garmin_items ORDER BY kind, id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, last_edited_time FROM pages WHERE payload IS NOT NULL ORDER BY coalesce(parent_type IN ('data_source_id', 'database_id'), 0), last_edited_time DESC, id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, listing_hash FROM garmin_activities WHERE listing_hash IS NOT NULL ORDER BY start_time_gmt DESC, id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, markdown FROM page_markdown WHERE markdown IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, name FROM users WHERE name IS NOT NULL"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, name, is_dm, dm_user_ids FROM channels"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, name, is_dm, dm_user_ids, is_archived FROM channels WHERE payload IS NOT NULL AND (is_dm = 1 OR is_member = 1) AND (is_archived IS NULL OR is_archived = 0) ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, name, model, mac_address, app_version, system_version, timezone, last_ts_ms FROM airvisual_devices ORDER BY name, id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, name, real_name, display_name FROM users WHERE payload IS NOT NULL"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, org_uuid, org_name, json(payload) AS payload FROM conversations WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, org_uuid, org_name, json(payload) AS payload FROM projects WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, project_full_path, mr_iid, discussion_id, json(payload) AS payload FROM discussions WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, project_full_path, mr_iid, json(payload) AS payload FROM merge_requests WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, read_through, read FROM read_marks"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, recipient_id FROM chats ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, repo_full_name, pr_number, json(payload) AS payload FROM issue_comments WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, repo_full_name, pr_number, json(payload) AS payload FROM pr_review_comments WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, repo_full_name, pr_number, json(payload) AS payload FROM pr_reviews WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, repo_full_name, pr_number, json(payload) AS payload FROM pull_requests WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, room_id FROM participants"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, roots, opened_by, stop_requested_by, closed_at_utc, outcome, failed_step FROM requests ORDER BY closed_at_utc IS NOT NULL, opened_at_utc DESC, id DESC LIMIT ?"
+files = ["*/supervisor.sqlite"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, roots, opened_by, stop_requested_by, closed_at_utc, outcome, failed_step FROM requests WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id"
+files = ["*/supervisor.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, session_id, json(payload) AS payload FROM cowork_events WHERE payload IS NOT NULL ORDER BY session_id, sequence_num, id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, team_id, json(payload) AS payload FROM users WHERE payload IS NOT NULL"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, title FROM tree WHERE kind = ?"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "SELECT id, updated_at FROM listed_change_requests ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT jid, json_group_array(json(obj)) FROM (SELECT jid, json_object('_id', CASE WHEN typeof(\"_id\") = 'blob' THEN hex(\"_id\") ELSE \"_id\" END, 'jid', CASE WHEN typeof(\"jid\") = 'blob' THEN hex(\"jid\") ELSE \"jid\" END, 'is_whatsapp_user', CASE WHEN typeof(\"is_whatsapp_user\") = 'blob' THEN hex(\"is_whatsapp_user\") ELSE \"is_whatsapp_user\" END, 'status', CASE WHEN typeof(\"status\") = 'blob' THEN hex(\"status\") ELSE \"status\" END, 'status_timestamp', CASE WHEN typeof(\"status_timestamp\") = 'blob' THEN hex(\"status_timestamp\") ELSE \"status_timestamp\" END, 'number', CASE WHEN typeof(\"number\") = 'blob' THEN hex(\"number\") ELSE \"number\" END, 'raw_contact_id', CASE WHEN typeof(\"raw_contact_id\") = 'blob' THEN hex(\"raw_contact_id\") ELSE \"raw_contact_id\" END, 'display_name', CASE WHEN typeof(\"display_name\") = 'blob' THEN hex(\"display_name\") ELSE \"display_name\" END, 'phone_type', CASE WHEN typeof(\"phone_type\") = 'blob' THEN hex(\"phone_type\") ELSE \"phone_type\" END, 'phone_label', CASE WHEN typeof(\"phone_label\") = 'blob' THEN hex(\"phone_label\") ELSE \"phone_label\" END, 'photo_ts', CASE WHEN typeof(\"photo_ts\") = 'blob' THEN hex(\"photo_ts\") ELSE \"photo_ts\" END, 'thumb_ts', CASE WHEN typeof(\"thumb_ts\") = 'blob' THEN hex(\"thumb_ts\") ELSE \"thumb_ts\" END, 'photo_id_timestamp', CASE WHEN typeof(\"photo_id_timestamp\") = 'blob' THEN hex(\"photo_id_timestamp\") ELSE \"photo_id_timestamp\" END, 'given_name', CASE WHEN typeof(\"given_name\") = 'blob' THEN hex(\"given_name\") ELSE \"given_name\" END, 'family_name', CASE WHEN typeof(\"family_name\") = 'blob' THEN hex(\"family_name\") ELSE \"family_name\" END, 'wa_name', CASE WHEN typeof(\"wa_name\") = 'blob' THEN hex(\"wa_name\") ELSE \"wa_name\" END, 'sort_name', CASE WHEN typeof(\"sort_name\") = 'blob' THEN hex(\"sort_name\") ELSE \"sort_name\" END, 'nickname', CASE WHEN typeof(\"nickname\") = 'blob' THEN hex(\"nickname\") ELSE \"nickname\" END, 'company', CASE WHEN typeof(\"company\") = 'blob' THEN hex(\"company\") ELSE \"company\" END, 'title', CASE WHEN typeof(\"title\") = 'blob' THEN hex(\"title\") ELSE \"title\" END, 'status_autodownload_disabled', CASE WHEN typeof(\"status_autodownload_disabled\") = 'blob' THEN hex(\"status_autodownload_disabled\") ELSE \"status_autodownload_disabled\" END, 'keep_timestamp', CASE WHEN typeof(\"keep_timestamp\") = 'blob' THEN hex(\"keep_timestamp\") ELSE \"keep_timestamp\" END, 'is_spam_reported', CASE WHEN typeof(\"is_spam_reported\") = 'blob' THEN hex(\"is_spam_reported\") ELSE \"is_spam_reported\" END, 'is_sidelist_synced', CASE WHEN typeof(\"is_sidelist_synced\") = 'blob' THEN hex(\"is_sidelist_synced\") ELSE \"is_sidelist_synced\" END, 'is_business_synced', CASE WHEN typeof(\"is_business_synced\") = 'blob' THEN hex(\"is_business_synced\") ELSE \"is_business_synced\" END, 'disappearing_mode_duration', CASE WHEN typeof(\"disappearing_mode_duration\") = 'blob' THEN hex(\"disappearing_mode_duration\") ELSE \"disappearing_mode_duration\" END, 'disappearing_mode_timestamp', CASE WHEN typeof(\"disappearing_mode_timestamp\") = 'blob' THEN hex(\"disappearing_mode_timestamp\") ELSE \"disappearing_mode_timestamp\" END, 'disappearing_mode_support_disabled', CASE WHEN typeof(\"disappearing_mode_support_disabled\") = 'blob' THEN hex(\"disappearing_mode_support_disabled\") ELSE \"disappearing_mode_support_disabled\" END, 'history_sync_initial_phash', CASE WHEN typeof(\"history_sync_initial_phash\") = 'blob' THEN hex(\"history_sync_initial_phash\") ELSE \"history_sync_initial_phash\" END, 'is_starred', CASE WHEN typeof(\"is_starred\") = 'blob' THEN hex(\"is_starred\") ELSE \"is_starred\" END, 'is_wa_created_contact', CASE WHEN typeof(\"is_wa_created_contact\") = 'blob' THEN hex(\"is_wa_created_contact\") ELSE \"is_wa_created_contact\" END, 'sync_policy', CASE WHEN typeof(\"sync_policy\") = 'blob' THEN hex(\"sync_policy\") ELSE \"sync_policy\" END, 'status_emoji', CASE WHEN typeof(\"status_emoji\") = 'blob' THEN hex(\"status_emoji\") ELSE \"status_emoji\" END, 'is_contact_synced', CASE WHEN typeof(\"is_contact_synced\") = 'blob' THEN hex(\"is_contact_synced\") ELSE \"is_contact_synced\" END, 'is_reachable', CASE WHEN typeof(\"is_reachable\") = 'blob' THEN hex(\"is_reachable\") ELSE \"is_reachable\" END, 'external_user_state', CASE WHEN typeof(\"external_user_state\") = 'blob' THEN hex(\"external_user_state\") ELSE \"external_user_state\" END) AS obj FROM wa_contacts WHERE jid IS NOT NULL ORDER BY _id) GROUP BY jid ORDER BY jid"
+files = ["wa-db-YePfTe.db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT jid, rows FROM wa_db_contacts"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT json(payload) AS payload FROM pages WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT json(payload) AS payload, page_id FROM comments WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT json_extract(j.value, '$.id'), json_extract(j.value, '$.name'), json(j.value) FROM pages p, json_tree(p.payload, '$.properties') j WHERE p.payload IS NOT NULL AND j.type = 'object' AND json_extract(j.value, '$.object') = 'user' AND json_extract(j.value, '$.id') IS NOT NULL AND json_extract(j.value, '$.name') IS NOT NULL ORDER BY 1, 3"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT json_extract(payload, '$.created_by.id'), json_extract(payload, '$.display_name.resolved_name') FROM comments WHERE payload IS NOT NULL AND json_extract(payload, '$.created_by.id') IS NOT NULL AND json_extract(payload, '$.display_name.resolved_name') <> '' ORDER BY 1, 2"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT key, value, written_at_utc FROM _datalib_meta"
+files = ["*/ingest/entities.doltlite_db", "*/render_markdown/indexed_markdown.doltlite_db", "*/runs/runs.sqlite", "*/supervisor.sqlite", "*/time_series_index/time_series.doltlite_db", "*/unified_grid_and_search_index/db.sqlite"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT lid_row_id, jid_row_id FROM jid_map"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT m.message_row_id, m.file_path, m.mime_type, m.file_size, m.media_caption, m.media_name, f.blake3 FROM message_media m LEFT JOIN wa_media_files f ON f.relative_path = m.file_path"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT markdown_uuid FROM markdowns"
+files = ["*/render_markdown/indexed_markdown.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT markdown_uuid FROM search_documents WHERE source_id NOT IN (SELECT value FROM json_each(?))"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT markdown_uuid, content_hash FROM search_documents WHERE ?1 IS NULL OR source_id = ?1"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT metric, COUNT(*) AS days, SUM(CASE WHEN json(payload) <> 'null' THEN 1 ELSE 0 END) AS with_data FROM garmin_daily GROUP BY metric ORDER BY metric"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT name, rootpage, sql FROM \"main\".sqlite_master WHERE type IN ('table','index') AND sql IS NOT NULL AND rootpage>0"
+files = ["*/feedback.doltlite_db", "*/ingest/entities.doltlite_db", "*/remote_media.doltlite_db", "*/render_markdown/indexed_markdown.doltlite_db", "*/render_time_series/time_series.doltlite_db", "*/time_series_index/time_series.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT parent_id, MAX(parent_type IN ('data_source_id', 'database_id')) FROM tree WHERE parent_type IN ('page_id', 'block_id', 'data_source_id', 'database_id') AND parent_id IS NOT NULL GROUP BY parent_id ORDER BY parent_id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT parent_id, MIN(page_id) FROM comments WHERE parent_type = 'block_id' AND parent_id IS NOT NULL GROUP BY parent_id ORDER BY parent_id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT participant_id, identifier, identifier_type FROM participant_identifiers WHERE participant_id IN (SELECT id FROM participants WHERE room_id IN (SELECT value FROM json_each(?)))"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT path, version FROM sinks"
+files = ["*/supervisor.sqlite"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT rel_path, blake3 FROM beeper_media_files"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT rel_path, size_bytes FROM ingested_files ORDER BY rel_path"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT scope, last_seen_at_utc FROM sync_scope_state"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT severity, COUNT(*) FROM problems GROUP BY severity"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT severity, COUNT(*) FROM problems WHERE stage <> ? GROUP BY severity"
+files = ["*/render_markdown/indexed_markdown.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT source_id, markdown_uuid FROM markdowns"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT source_id, store, commit_hash FROM time_series_sources ORDER BY source_id"
+files = ["*/time_series_index/time_series.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT source_id, store_commit, store_tree FROM source_cursors"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT source_id, ts_key, time_series_id, about_uuid, about_name, name, human_name, unit, value_type, time_kind, point_count, first_t, last_t FROM time_series ORDER BY source_id, ts_key"
+files = ["*/render_time_series/time_series.doltlite_db", "*/time_series_index/time_series.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT subject, items FROM source_measurements m WHERE measured_at_utc = (SELECT MAX(measured_at_utc) FROM source_measurements WHERE subject = m.subject)"
+files = ["*/render_markdown/indexed_markdown.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT threadID, accountID, thread FROM threads"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT transcript_id, count(*) FROM records GROUP BY transcript_id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT u.id FROM users u JOIN users_bookkeeping b ON b.id = u.id WHERE u.payload IS NOT NULL AND b.last_error IS NOT NULL"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT uuid FROM grid_rows WHERE upstream_entity_kind = ? AND upstream_id = ? LIMIT 1"
+files = ["*/render_markdown/indexed_markdown.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "SELECT what, version FROM store_changes"
+files = ["*/runs/runs.sqlite"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "UPDATE sync_runs SET status = 'interrupted' WHERE status = 'running'"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "DELETE FROM disk_usage WHERE measured_at_utc < ? AND EXISTS ( SELECT 1 FROM disk_usage AS later WHERE later.path = disk_usage.path AND later.measured_at_utc > disk_usage.measured_at_utc AND later.measured_at_utc <= ?)"
+files = ["*/disk_stats.sqlite"]
+why = "The disk-usage retention sweep: it reads the old measurements once per sweep, and runs during the sync only when a sweep falls due."

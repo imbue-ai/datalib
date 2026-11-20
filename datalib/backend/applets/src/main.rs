@@ -152,6 +152,7 @@ fn main() {
         log_level: std::env::var("RUST_LOG").ok().or(quiet),
         ..Default::default()
     };
+    datalib_sql_work::install();
     let _obs = match datalib_obs::init(&obs, "datalib-applet") {
         Ok(guard) => Some(guard),
         Err(e) => {

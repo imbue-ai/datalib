@@ -156,6 +156,7 @@ genrule(
         "ingested/rendered_md.tar",
         "ingested/time_series.tar",
         "ingested/config_body.toml",
+        "ingested/sql_scans.jsonl",
     ],
     tools = [
         "check_ingested.py",
@@ -163,6 +164,7 @@ genrule(
         "make_beeper_texts.py",
         "quiet.sh",
         "run_sync_pipeline.py",
+        "sql_scans.py",
         "sync_drivers.py",
         "tar_rendered.py",
     ],
@@ -249,6 +251,7 @@ genrule(
         # The sources as render-only groups, for materialize_tng_root.sh
         # to splice into the root's config.toml.
         "cp $(RULEDIR)/sync_workspace/config_body.toml $(execpath ingested/config_body.toml)",
+        "python3 $(execpath sql_scans.py) $(RULEDIR)/sync_workspace/sql_census $(RULEDIR)/sync_workspace $(execpath ingested/sql_scans.jsonl)",
         # A sync can end without error and leave a source out of the
         # index; such a fixture must not build, or it is cached.
         " ".join([
@@ -320,6 +323,22 @@ _TNG_FIXTURE_ARGS = [
     # Google Drive: the JSON spec the synthesizer expands (arg 30).
     "datalib/backend/etl/providers/google_drive/tests/fixtures/google_drive_tng/tng.json",
 ]
+
+# Every statement the fixture sync runs that walks a whole table or index
+# is in sql_scans_allowed.toml with a reason (docs/dev/testing.md).
+py_test(
+    name = "sql_scans_test",
+    size = "small",
+    srcs = ["sql_scans_test.py"],
+    args = [
+        "$(rootpath ingested/sql_scans.jsonl)",
+        "$(rootpath sql_scans_allowed.toml)",
+    ],
+    data = [
+        "ingested/sql_scans.jsonl",
+        "sql_scans_allowed.toml",
+    ],
+)
 
 # The check `:ingested_tng` makes before it succeeds, against the fixture
 # it built and against copies of it with a source taken out.
