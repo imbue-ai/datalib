@@ -44,7 +44,7 @@ impl SourceRender for SmsRender {
         )
         .context("sms_backup_restore render")?;
 
-        ctx.finish(&outcome.buckets, outcome.new_head.as_deref())?;
+        ctx.finish(&outcome.render_units, outcome.new_head.as_deref())?;
         Ok(format!(
             "rendered={} skipped={}",
             outcome.rendered, outcome.skipped

@@ -11,7 +11,7 @@ use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
 use datalib_etl::doltlite_raw::Reader;
 use datalib_etl::read_marks::{self, ReadMark};
 use datalib_etl_render::inputs::{Inputs, RawRange};
-use datalib_etl_render::pages::{BucketPages, KeyColumn};
+use datalib_etl_render::pages::{KeyColumn, RenderUnitPages};
 use datalib_etl_render::processor::Unparsed;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
@@ -103,7 +103,7 @@ pub struct ScanResult {
     /// declared inputs, plus the ones the diff named. `None` → cold
     /// start, render every thread.
     pub render: Option<HashSet<(String, String)>>,
-    /// Bucket keys the driver found stale that no email still belongs
+    /// Render unit keys the driver found stale that no email still belongs
     /// to — declared with nothing so their documents go.
     pub gone: Vec<String>,
     /// The HEAD commit hash at scan time. `None` if `dolt_log()` was
@@ -151,7 +151,7 @@ pub struct EmailStore {
 /// One page of threads, with every email row and join they read and no
 /// `.eml` bytes yet.
 pub struct Page {
-    pub docs: Vec<EmailThreadBucket>,
+    pub docs: Vec<EmailThreadRenderUnit>,
     /// On a narrowed run, the stale threads this page looked at, which
     /// it declares empty before the ones it renders: a thread no email
     /// belongs to any more builds nothing. Empty on a full walk, whose
@@ -164,18 +164,18 @@ pub struct Page {
 
 impl EmailStore {
     /// The `thread_id`s to render, a page of `page` at a time.
-    pub fn pages(&self, page: usize) -> BucketPages {
+    pub fn pages(&self, page: usize) -> RenderUnitPages {
         match &self.selection {
-            Selection::Every => BucketPages::walk(THREAD_KEY, page),
-            Selection::Kept(kept) => BucketPages::listed(kept.keys().cloned(), page),
+            Selection::Every => RenderUnitPages::walk(THREAD_KEY, page),
+            Selection::Kept(kept) => RenderUnitPages::listed(kept.keys().cloned(), page),
             Selection::Stale { pairs, .. } => {
-                BucketPages::listed(pairs.iter().map(|(_, t)| t.clone()), page)
+                RenderUnitPages::listed(pairs.iter().map(|(_, t)| t.clone()), page)
             }
         }
     }
 
     /// The next page's threads, or `None` once every page is read.
-    pub fn next_page(&self, pages: &mut BucketPages) -> Result<Option<Page>> {
+    pub fn next_page(&self, pages: &mut RenderUnitPages) -> Result<Option<Page>> {
         block_on(async {
             let pool = self.reader.pool();
             let Some(thread_ids) = pages.next(pool).await? else {
@@ -221,7 +221,7 @@ impl EmailStore {
                     .into_iter()
                     .collect(),
             };
-            let docs = load_buckets(pool, &load_ids, wanted.as_deref(), &self.marks).await?;
+            let docs = load_render_units(pool, &load_ids, wanted.as_deref(), &self.marks).await?;
             Ok(Some(Page {
                 docs,
                 looked_at,
@@ -232,13 +232,15 @@ impl EmailStore {
 
     /// Copies of `batch` with their `.eml`s loaded and their attachment
     /// parts listed.
-    pub fn load_emls(&self, batch: &[&EmailThreadBucket]) -> Result<Vec<EmailThreadBucket>> {
+    pub fn load_emls(
+        &self,
+        batch: &[&EmailThreadRenderUnit],
+    ) -> Result<Vec<EmailThreadRenderUnit>> {
         block_on(async {
-            let mut docs: Vec<EmailThreadBucket> = batch.iter().map(|b| (*b).clone()).collect();
-            let refs = docs
-                .iter()
-                .enumerate()
-                .map(|(i, bucket)| (i, bucket.emails.iter().map(|em| em.blob_id.as_str())));
+            let mut docs: Vec<EmailThreadRenderUnit> = batch.iter().map(|b| (*b).clone()).collect();
+            let refs = docs.iter().enumerate().map(|(i, render_unit)| {
+                (i, render_unit.emails.iter().map(|em| em.blob_id.as_str()))
+            });
             let mut blobs = BlobBundle::load_many_with_bytes(
                 self.reader.pool(),
                 self.cas.as_ref(),
@@ -246,10 +248,10 @@ impl EmailStore {
                 refs,
             )
             .await?;
-            for (i, bucket) in docs.iter_mut().enumerate() {
+            for (i, render_unit) in docs.iter_mut().enumerate() {
                 if let Some(b) = blobs.remove(&i) {
-                    bucket.blobs = b;
-                    extract_attachments_from_emls(bucket);
+                    render_unit.blobs = b;
+                    extract_attachments_from_emls(render_unit);
                 }
             }
             Ok(docs)
@@ -270,11 +272,11 @@ fn block_on<F: Future>(f: F) -> F::Output {
     tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
 }
 
-/// One rendered-markdown bucket: every email in a single JMAP Thread
+/// One rendered-markdown render unit: every email in a single JMAP Thread
 /// plus its joins. Its [`BlobBundle`] (the `.eml`s) is empty until
 /// [`EmailStore::load_emls`] fills a copy.
 #[derive(Debug, Clone, Default)]
-pub struct EmailThreadBucket {
+pub struct EmailThreadRenderUnit {
     pub account_id: String,
     pub thread_id: String,
     pub emails: Vec<LoadedEmail>,
@@ -288,7 +290,7 @@ pub struct EmailThreadBucket {
     pub inputs: Inputs,
 }
 
-impl EmailThreadBucket {
+impl EmailThreadRenderUnit {
     /// How many bytes of `.eml` loading it costs.
     pub fn eml_bytes(&self) -> u64 {
         self.emails
@@ -363,19 +365,19 @@ async fn open_async(
     }))
 }
 
-/// Mail-parse each `.eml` already loaded into the bucket's
-/// `BlobBundle` and list its attachment-style parts in the bucket's
+/// Mail-parse each `.eml` already loaded into the render unit's
+/// `BlobBundle` and list its attachment-style parts in the render unit's
 /// joins. Each is named by the hash of its decoded bytes, which is how a
 /// page's address finds it inside the stored `.eml`
 /// (`datalib_blob_store::part_of` hashes them the same way).
-fn extract_attachments_from_emls(bucket: &mut EmailThreadBucket) {
-    for em in &bucket.emails {
-        let Some(eml_blob) = bucket.blobs.get(&em.blob_id) else {
+fn extract_attachments_from_emls(render_unit: &mut EmailThreadRenderUnit) {
+    for em in &render_unit.emails {
+        let Some(eml_blob) = render_unit.blobs.get(&em.blob_id) else {
             continue;
         };
         let atts = attachments_in(eml_blob.bytes.as_deref().unwrap_or_default());
         if !atts.is_empty() {
-            bucket.joins.attachments.insert(em.id.clone(), atts);
+            render_unit.joins.attachments.insert(em.id.clone(), atts);
         }
     }
 }
@@ -534,10 +536,10 @@ async fn select(
     }
 }
 
-/// Per-bucket dolt_diff scan. Delegates to the shared
-/// [`datalib_etl::doltlite_raw::scan_buckets`] helper, which is
+/// Per-render-unit dolt_diff scan. Delegates to the shared
+/// [`datalib_etl::doltlite_raw::scan_render_units`] helper, which is
 /// the same primitive every other provider uses (slack / chatgpt /
-/// claude / signal). Bucket key shape is `"<account_id>|<thread_id>"`
+/// claude / signal). Render unit key shape is `"<account_id>|<thread_id>"`
 /// so it fits the helper's `HashSet<String>` API; we split it back
 /// into a `(String, String)` pair locally for the load step. An
 /// account or mailbox change reaches a thread through the inputs it
@@ -551,14 +553,14 @@ async fn scan_diff(
     pin: &datalib_etl::pin::Pin,
     label_filter: bool,
 ) -> Result<ScanResult> {
-    let mut scan = datalib_etl::doltlite_raw::scan_buckets(
+    let mut scan = datalib_etl::doltlite_raw::scan_render_units(
         pool,
         range.cursor,
         pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
             fanout_query: label_filter.then_some(MAILBOX_TREE_MOVED),
-            bucket_query: "
-                SELECT DISTINCT account_id || '|' || thread_id AS bucket_key FROM (
+            render_unit_query: "
+                SELECT DISTINCT account_id || '|' || thread_id AS render_unit_key FROM (
                     SELECT to_account_id  AS account_id, to_thread_id  AS thread_id
                       FROM dolt_diff_emails
                      WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
@@ -591,7 +593,7 @@ async fn scan_diff(
     if let (Some(from), Some(render)) = (range.cursor, scan.render.as_mut()) {
         render.extend(threads_of_moved_marks(pool, from, pin.commit()).await?);
     }
-    // The driver names buckets by the thread uuid; the load wants the
+    // The driver names render units by the thread uuid; the load wants the
     // `(account, thread)` pair. Only a run that narrows maps them.
     let by_uuid: HashMap<String, String> = match (range.stale, &scan.render) {
         (Some(stale), Some(_)) => pairs_named(pool, source_id, stale).await?,
@@ -719,20 +721,20 @@ async fn load_payloads(
 /// The threads under `thread_ids`, with their emails and joins: every
 /// `(account, thread)` the rows hold, or on a narrowed run only the
 /// `wanted` ones — each of which comes back, emails or none.
-async fn load_buckets(
+async fn load_render_units(
     pool: &SqlitePool,
     thread_ids: &[String],
     wanted: Option<&[(String, String)]>,
     marks: &BTreeMap<String, ReadMark>,
-) -> Result<Vec<EmailThreadBucket>> {
-    let mut by_key: BTreeMap<(String, String), EmailThreadBucket> = BTreeMap::new();
-    let new_bucket = |account_id: &str, thread_id: &str| EmailThreadBucket {
+) -> Result<Vec<EmailThreadRenderUnit>> {
+    let mut by_key: BTreeMap<(String, String), EmailThreadRenderUnit> = BTreeMap::new();
+    let new_render_unit = |account_id: &str, thread_id: &str| EmailThreadRenderUnit {
         account_id: account_id.to_string(),
         thread_id: thread_id.to_string(),
         ..Default::default()
     };
     for (a, t) in wanted.into_iter().flatten() {
-        by_key.insert((a.clone(), t.clone()), new_bucket(a, t));
+        by_key.insert((a.clone(), t.clone()), new_render_unit(a, t));
     }
     if thread_ids.is_empty() {
         return Ok(by_key.into_values().collect());
@@ -749,7 +751,7 @@ async fn load_buckets(
     .fetch_all(pool)
     .await
     .context("phase 2 emails select")?;
-    let mut email_to_bucket: HashMap<String, (String, String)> =
+    let mut email_to_render_unit: HashMap<String, (String, String)> =
         HashMap::with_capacity(erows.len());
     for r in &erows {
         let id: String = r.try_get("id").unwrap_or_default();
@@ -759,24 +761,24 @@ async fn load_buckets(
             continue;
         }
         let key = (account_id.clone(), thread_id.clone());
-        let bucket = match by_key.get_mut(&key) {
-            Some(bucket) => bucket,
+        let render_unit = match by_key.get_mut(&key) {
+            Some(render_unit) => render_unit,
             None if wanted.is_none() => by_key
                 .entry(key.clone())
-                .or_insert_with(|| new_bucket(&account_id, &thread_id)),
+                .or_insert_with(|| new_render_unit(&account_id, &thread_id)),
             None => continue,
         };
-        email_to_bucket.insert(id.clone(), key);
+        email_to_render_unit.insert(id.clone(), key);
         let blob_id: String = r.try_get("blob_id").unwrap_or_default();
-        bucket.inputs.read("emails", &id);
-        bucket
+        render_unit.inputs.read("emails", &id);
+        render_unit
             .inputs
             .read("email_blobs", &EmlBlobRow::pk_recipe(&id, &blob_id));
-        bucket.inputs.read(read_marks::TABLE, &id);
+        render_unit.inputs.read(read_marks::TABLE, &id);
         if let Some(mark) = marks.get(&id) {
-            bucket.marks.insert(id.clone(), mark.clone());
+            render_unit.marks.insert(id.clone(), mark.clone());
         }
-        bucket.emails.push(LoadedEmail {
+        render_unit.emails.push(LoadedEmail {
             id,
             account_id,
             thread_id,
@@ -806,10 +808,10 @@ async fn load_buckets(
     }
     drop(erows);
 
-    if email_to_bucket.is_empty() {
+    if email_to_render_unit.is_empty() {
         return Ok(by_key.into_values().collect());
     }
-    let email_ids = serde_json::to_string(&email_to_bucket.keys().collect::<Vec<_>>())?;
+    let email_ids = serde_json::to_string(&email_to_render_unit.keys().collect::<Vec<_>>())?;
 
     let mailbox_rows = sqlx::query(
         "SELECT id, email_id, mailbox_id FROM email_mailboxes
@@ -822,14 +824,14 @@ async fn load_buckets(
     for r in mailbox_rows {
         let e: String = r.try_get("email_id").unwrap_or_default();
         let m: String = r.try_get("mailbox_id").unwrap_or_default();
-        let Some(bucket) = email_to_bucket.get(&e).and_then(|k| by_key.get_mut(k)) else {
+        let Some(render_unit) = email_to_render_unit.get(&e).and_then(|k| by_key.get_mut(k)) else {
             continue;
         };
-        bucket.inputs.read(
+        render_unit.inputs.read(
             "email_mailboxes",
             &r.try_get::<String, _>("id").unwrap_or_default(),
         );
-        bucket.joins.mailboxes.entry(e).or_default().push(m);
+        render_unit.joins.mailboxes.entry(e).or_default().push(m);
     }
 
     let keyword_rows = sqlx::query(
@@ -843,14 +845,14 @@ async fn load_buckets(
     for r in keyword_rows {
         let e: String = r.try_get("email_id").unwrap_or_default();
         let k: String = r.try_get("keyword").unwrap_or_default();
-        let Some(bucket) = email_to_bucket.get(&e).and_then(|k| by_key.get_mut(k)) else {
+        let Some(render_unit) = email_to_render_unit.get(&e).and_then(|k| by_key.get_mut(k)) else {
             continue;
         };
-        bucket.inputs.read(
+        render_unit.inputs.read(
             "email_keywords",
             &r.try_get::<String, _>("id").unwrap_or_default(),
         );
-        bucket.joins.keywords.entry(e).or_default().push(k);
+        render_unit.joins.keywords.entry(e).or_default().push(k);
     }
 
     // Attachments are extracted later by mail-parsing each loaded
@@ -931,7 +933,7 @@ mod tests {
         }
         let thread_ids: Vec<String> = (1..=n).map(|i| format!("t{i}")).collect();
 
-        let docs = load_buckets(&pool, &thread_ids, None, &BTreeMap::new())
+        let docs = load_render_units(&pool, &thread_ids, None, &BTreeMap::new())
             .await
             .unwrap();
 
@@ -1193,7 +1195,7 @@ mod tests {
             ("a1".to_string(), "t1".to_string()),
             ("a1".to_string(), "t2".to_string()),
         ];
-        let docs = load_buckets(
+        let docs = load_render_units(
             &pool,
             &["t1".into(), "t2".into()],
             Some(&wanted),

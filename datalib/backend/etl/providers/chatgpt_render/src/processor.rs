@@ -61,7 +61,7 @@ impl SourceRender for ChatgptRender {
             Some(self.render_version()),
         )?;
         let mut on_doc = |md| ctx.emit_doc(md);
-        let buckets = render_all(
+        let render_units = render_all(
             &parsed,
             ctx.name,
             ctx.progress,
@@ -73,13 +73,13 @@ impl SourceRender for ChatgptRender {
         // declared with nothing, so its page goes; the rendered ones
         // follow and replace that.
         for conv_id in parsed.scan.render.iter().flatten() {
-            ctx.declare_bucket(
+            ctx.declare_render_unit(
                 &crate::render::ids::conversation(ctx.name, conv_id).uuid,
                 &[],
             )?;
         }
         ctx.declare_empty(parsed.scan.gone.iter().map(String::as_str))?;
-        ctx.finish(&buckets, parsed.scan.new_head.as_deref())?;
+        ctx.finish(&render_units, parsed.scan.new_head.as_deref())?;
         Ok("rendered".into())
     }
 }

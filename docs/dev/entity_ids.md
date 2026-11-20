@@ -137,7 +137,7 @@ The source id belongs in the *rendered* id and nowhere else. A raw
 store under `<name>/ingest/` keys every row by what the download gave,
 and the render mints the entity id from that raw key;
 [`data_architecture_ingestion.md`](data_architecture_ingestion.md#object-identity-ship-of-theseus-on-uuids)
-has the rule. A render that needs its raw key back (a bucket the
+has the rule. A render that needs its raw key back (a render unit the
 driver named) keeps a map from id to key, as beeper's parse does.
 
 ### Rows Datalib itself mints
@@ -341,7 +341,7 @@ backup, and expect a re-key when you do:
    `ContactRenderProfile::contact_entity_kind` and
    `ContactDoc::upstream_account` (the external id is the contact's `key`).
 3. Thread `source_id` — the render's `ctx.name` — to wherever the ids
-   are minted; a bucket key the driver hands back is the raw key, so
+   are minted; a render unit key the driver hands back is the raw key, so
    a parse that narrows by it maps the id back (beeper, chatgpt,
    claude, email, slack all do).
 4. Bump the provider's `RENDER_VERSION`. A re-key moves each
@@ -367,7 +367,7 @@ old `grid_rows.uuid`s does not survive, and that is not recoverable.
 
 What *is* handled — neither needs a human to delete anything:
 
-- **The render store.** The version bump renders every bucket again,
+- **The render store.** The version bump renders every render unit again,
   and the full walk's sweep removes each document the new recipe no
   longer mints, with its rows. The store, its history and its
   cursor are kept.

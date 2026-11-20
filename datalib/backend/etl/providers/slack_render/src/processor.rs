@@ -75,7 +75,7 @@ impl SourceRender for SlackRender {
             let mut on_doc = |md| ctx.emit_doc(md);
             let summary = render_all(&parsed, ctx.name, ctx.progress, &mut on_doc)
                 .context("slack render_all")?;
-            ctx.declare_buckets(&summary.buckets)?;
+            ctx.declare_render_units(&summary.render_units)?;
             return Ok("rendered".into());
         };
         // A thread this run looked at that has no message left builds no
@@ -85,7 +85,7 @@ impl SourceRender for SlackRender {
         let mut unparsed = store.unparsed.clone();
         let mut on_page = |page: PageEnd| -> Result<()> {
             ctx.declare_empty(page.looked_at.iter().map(String::as_str))?;
-            ctx.declare_buckets(&page.buckets)?;
+            ctx.declare_render_units(&page.render_units)?;
             unparsed.extend(page.unparsed);
             Ok(())
         };

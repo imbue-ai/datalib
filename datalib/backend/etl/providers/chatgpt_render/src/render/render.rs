@@ -11,7 +11,7 @@ use datalib_etl_chat_common::branches::{reading_order, TreeNode};
 use datalib_etl_chat_common::normalize::{capitalize, iso_to_ms};
 use datalib_etl_chat_common::people::stand_in_account;
 use datalib_etl_chat_common::render::{
-    Buckets, ChatRenderer, RenderProfile, ENTITY_KIND_CONVERSATION,
+    ChatRenderer, RenderProfile, RenderUnits, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{
     own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
@@ -87,7 +87,7 @@ pub fn render_all(
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
     blob_bytes: u64,
-) -> Result<Buckets> {
+) -> Result<RenderUnits> {
     let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
     tracing::info!(
         source = source_id,
@@ -115,7 +115,7 @@ pub fn render_all(
     let mut renderer = ChatRenderer::new(
         &profile,
         source_id,
-        chats.iter().map(|c| c.buckets.len()).sum(),
+        chats.iter().map(|c| c.render_units.len()).sum(),
         progress,
         on_doc_complete,
     );
@@ -132,7 +132,7 @@ pub fn render_all(
             .try_for_each(|chat| renderer.render_chat(chat, &BlobBundle::default())),
     }
     .context("chatgpt chat-common render")?;
-    Ok(renderer.finish().buckets)
+    Ok(renderer.finish().render_units)
 }
 
 /// One [`NormalizedChat`] per conversation. Messages are ordered by the
@@ -283,7 +283,7 @@ fn build_chat(
         upstream_account: None,
         org_uuid: None,
         org_name: None,
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
             markdown_uuid: chat_uuid,
             source_ref: None,

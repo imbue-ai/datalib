@@ -113,7 +113,7 @@ pub fn render_posts(
         progress,
         on_doc_complete,
     )?;
-    outcome.buckets.extend(s.buckets);
+    outcome.render_units.extend(s.render_units);
     Ok(outcome)
 }
 
@@ -259,7 +259,7 @@ fn build_post_chats(
             upstream_account: None,
             org_uuid: None,
             org_name: None,
-            buckets: vec![NormalizedDoc {
+            render_units: vec![NormalizedDoc {
                 orphan_reactions: Vec::new(),
                 markdown_uuid: post.uuid,
                 source_ref: None,
@@ -520,7 +520,7 @@ mod tests {
             &[],
         );
         assert_eq!(chats.len(), 1, "share + comment on same URN merge");
-        let items = &chats[0].buckets[0].items;
+        let items = &chats[0].render_units[0].items;
         assert_eq!(items.len(), 2, "post + one comment");
         // Post opens the thread, oldest-first.
         assert!(items[0].text.as_deref().unwrap().contains("My post body"));
@@ -556,7 +556,7 @@ mod tests {
             Owner::default(),
             &[],
         );
-        let items = &chats[0].buckets[0].items;
+        let items = &chats[0].render_units[0].items;
         assert_eq!(
             items[0].text.as_deref(),
             Some(&*format!(
@@ -588,7 +588,7 @@ mod tests {
             owner,
             &[],
         );
-        for item in &chats[0].buckets[0].items {
+        for item in &chats[0].render_units[0].items {
             assert_eq!(item.author_handle.as_ref(), Some(&picard));
             assert_eq!(item.author_display, "Me");
         }
@@ -605,7 +605,7 @@ mod tests {
             &[],
         );
         assert_eq!(chats.len(), 1);
-        let items = &chats[0].buckets[0].items;
+        let items = &chats[0].render_units[0].items;
         assert_eq!(items.len(), 2, "placeholder + one comment");
         assert!(matches!(items[0].kind, ItemKind::System));
         assert!(items[0]

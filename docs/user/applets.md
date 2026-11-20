@@ -88,8 +88,8 @@ has the parameters.
 | `GET /search/groups?q=&by=` | how many rows each group of a column holds |
 | `GET /search/keys`, `GET /search/values?key=&typed=&q=` | every key the search takes, and the values one takes |
 | `GET /docs` | the documents |
-| `GET /chat/{markdown_uuid}` | one document: its markdown as `body`, or with `?pieces=true` as `pieces`, each message its own, and what the index knows of it |
-| `GET /children/{uuid}?at=&limit=` | a container's children in order, a page each way around an anchor (below) |
+| `GET /chat/{markdown_uuid}` | one document: its markdown as `body`, or with `?pieces=true` as `pieces`, each message its own, and what the index knows of it; with `&limit=N` too, a page of it, as [rendered documents](rendered_documents.md) says |
+| `GET /children/{parent}?at=&limit=&places=` | a container's children in order, a page each way around an anchor; `source:<id>` for a source's top, `places=true` for only the places (below) |
 | `POST /people` | `{"handles": […]}`: every source's record of each handle, best first |
 | `GET /problems?q=` | what a step could not fully do to a record; each row says whether a person muted it (`muted`), and `muted:no` leaves the muted ones out |
 | `GET /problems/groups`, `/problems/keys`, `/problems/values` | the same search over problems as the rows' above |
@@ -131,6 +131,15 @@ thread in its channel, a channel in its workspace, an email thread in
 its account and under each of its labels. `GET /children/{uuid}` lists
 what one holds, oldest first: the rows it holds, the containers it
 holds, and whatever is filed under it, each once.
+`GET /children/source:<id>` lists what a source holds at its top, the
+rows and containers that sit in no container: an email account, a
+Slack workspace, a ChatGPT conversation.
+
+- `places=true` lists only the **places**: the containers you browse
+  or filter by, such as an account, a label, a channel or a folder,
+  never a thread or a message. Each says in `places_below` whether
+  more places lie under it. That is a library's tree, a level at a
+  time.
 
 - `at=` is where to open: a child's uuid (that child, `limit` before it
   and `limit` after), a moment such as `2026-11-02T09:00:00Z` (`limit`

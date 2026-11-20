@@ -37,6 +37,9 @@ const driveFolders = Array.from({ length: 2000 }, (_, i) =>
   node(`drive/f${i}`, `Stardate log ${41000 + i}`, 'Folder', i % 50 === 0 ? [node(`drive/f${i}/a`, 'Attachments', 'Folder')] : null),
 );
 
+// A mark for a source, as a page hands one: a URL the row draws.
+const MARK = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="teal"/></svg>');
+
 const LIBRARY = [
   node('folder/work', 'Starfleet', 'Folder', [
     node('src/email', 'Email', 'Source', [
@@ -61,6 +64,9 @@ const LIBRARY = [
   node('folder/personal', 'Personal', 'Folder', [node('src/chatgpt', 'ChatGPT', 'Source', null, 'no places below')]),
 ];
 
+// Slack's row draws a mark; the others draw none.
+LIBRARY[0].kids.find((n) => n.id === 'src/slack').icon = MARK;
+
 const fetched = [];
 const dataSource = {
   async getChildren(n) {
@@ -77,9 +83,13 @@ function freshCard() {
 
 // The element, as a page would use it. Resolves once the top level (and
 // whatever `viewState` opens) has loaded.
+const opened = [];
+
 function mountElement(viewState) {
   fetched.length = 0;
+  opened.length = 0;
   const tree = document.createElement('vs-tree');
+  tree.addEventListener('open', (e) => opened.push(e.detail.node.id));
   if (viewState) tree.viewState = viewState;
   const ready = new Promise((r) => tree.addEventListener('ready', r, { once: true }));
   tree.dataSource = dataSource;
@@ -120,6 +130,7 @@ window.harness = {
   mountElement,
   mountUpstream,
   fetched,
+  opened,
   pageErrors,
   find: (id) => {
     const walk = (list) => {

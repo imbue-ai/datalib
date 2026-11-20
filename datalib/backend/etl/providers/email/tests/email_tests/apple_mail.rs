@@ -523,7 +523,7 @@ async fn images_mail_kept_aside_are_stored_and_drawn() {
     let (docs, _) = super::jmap_mbox::render_paged(
         &store,
         PageSize {
-            buckets: 10,
+            render_units: 10,
             bytes: 1 << 30,
         },
     );

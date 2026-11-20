@@ -9,6 +9,7 @@
 //! longer rebuilds the code that fetches from Slack.
 
 pub mod diff;
+pub mod document_window;
 pub mod front_matter;
 pub mod grid_index;
 pub mod html;

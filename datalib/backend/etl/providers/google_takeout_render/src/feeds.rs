@@ -242,7 +242,7 @@ pub fn feed_chat(
         upstream_account: None,
         org_uuid: None,
         org_name: None,
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
             markdown_uuid: feed.uuid,
             source_ref: None,

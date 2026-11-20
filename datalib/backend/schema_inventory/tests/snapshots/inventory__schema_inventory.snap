@@ -1447,6 +1447,19 @@ bookmarks_bookkeeping
     volatile_payload
     tz_offset
     held_version
+bots
+    id
+    payload
+    name
+bots_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
 channel_read_states
     id
     payload
@@ -1977,7 +1990,7 @@ markdowns
     item_count
     upstream_cursor
     renderer_version
-    bucket_key
+    render_unit_key
     content_hash
     front
     searchable
@@ -2009,7 +2022,7 @@ render_cursor
     rendered_at_utc
     tz_offset
 render_inputs
-    bucket_key
+    render_unit_key
     input_table
     input_id
 source_cursors

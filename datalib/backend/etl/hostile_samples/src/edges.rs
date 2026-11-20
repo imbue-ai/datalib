@@ -266,7 +266,7 @@ fn chat(provider: Provider, format: TextFormat, text: String) -> Result<(String,
         source_url: None,
         org_uuid: None,
         org_name: None,
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             markdown_uuid: "00000000-0000-8000-8000-0000000e00d1".into(),
             source_ref: None,
             items: vec![

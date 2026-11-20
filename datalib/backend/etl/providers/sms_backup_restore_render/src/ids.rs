@@ -14,7 +14,7 @@ pub const KIND_CALL: &str = "call";
 
 const IDS: Minter = Minter::new(ID_NAMESPACE, STAMP_PRECISION);
 
-/// `key` carries its `sms:` prefix, as the bucket does.
+/// `key` carries its `sms:` prefix, as the render unit does.
 pub fn conversation(source_id: &str, key: &str) -> Identity {
     IDS.mint(source_id, KIND_CONVERSATION, key.to_string(), None)
 }

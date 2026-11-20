@@ -70,7 +70,7 @@ The completed list can name a project the sync never sent: an archived
 one, whose row a full sync leaves out. Its tasks get a document of
 their own, titled `Project <id>`, saying the project was not sent. A
 project Todoist deleted (`is_deleted`) renders nothing, and its old
-document goes (`exclude_bucket`).
+document goes (`exclude_render_unit`).
 
 ## Grid rows
 
@@ -105,7 +105,7 @@ and tasks sort among their siblings by Todoist's own order
 
 ## Incrementality
 
-The bucket is the project, keyed by its id. Each bucket declares every
+The render unit is the project, keyed by its id. Each render unit declares every
 row it read: the project, its sections, tasks, comments, the
 collaborators it looked up (found or not) and the account. A changed
 row names a project through the store as it is now (`Store::project_of`):

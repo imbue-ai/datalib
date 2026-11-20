@@ -352,7 +352,7 @@ fn render_threads(
         &store,
         "src",
         datalib_etl_render::pages::PageSize {
-            buckets: 1,
+            render_units: 1,
             bytes: 1,
         },
         &datalib_etl::progress::Progress::noop(),

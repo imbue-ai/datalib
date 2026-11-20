@@ -1,5 +1,5 @@
 //! End-to-end render test: build a tiny in-memory `ParsedEmail`
-//! whose per-bucket `BlobBundle` carries real RFC 5322 `.eml` bytes
+//! whose per-render-unit `BlobBundle` carries real RFC 5322 `.eml` bytes
 //! for each email, render it through `render_all`, and assert the
 //! page and the grid_rows it emits. Doesn't need a real JMAP server or
 //! HTTP playback — exercises the renderer in isolation.
@@ -9,7 +9,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl::read_marks::ReadMark;
 use datalib_etl_email::ingest::db::{EmailJoins, LoadedAttachment, LoadedEmail};
 use datalib_etl_email_render::render::ids;
-use datalib_etl_email_render::render::parse::{EmailThreadBucket, Shared};
+use datalib_etl_email_render::render::parse::{EmailThreadRenderUnit, Shared};
 use datalib_etl_email_render::render::render::{render_all, OutlinkFormat};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::section::join;
@@ -41,7 +41,7 @@ fn insert_eml(bundle: &mut BlobBundle, ref_id: &str, body: &[u8]) {
 /// What a render is handed: the shared rows and one page of threads.
 struct ParsedEmail {
     shared: Shared,
-    docs: Vec<EmailThreadBucket>,
+    docs: Vec<EmailThreadRenderUnit>,
 }
 
 fn one_thread(
@@ -58,7 +58,7 @@ fn one_thread(
             )],
             mailboxes: vec![json!({"id": "M-inbox", "name": "Inbox", "role": "inbox"})],
         },
-        docs: vec![EmailThreadBucket {
+        docs: vec![EmailThreadRenderUnit {
             account_id: "A1".into(),
             thread_id: thread_id.into(),
             emails,

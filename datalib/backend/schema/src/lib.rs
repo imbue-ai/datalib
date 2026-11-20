@@ -152,7 +152,7 @@ mod tests {
     item_count BIGINT,
     upstream_cursor VARCHAR(64),
     renderer_version VARCHAR(32),
-    bucket_key VARCHAR(256),
+    render_unit_key VARCHAR(256),
     content_hash VARCHAR(64),
     front TEXT,
     searchable INTEGER NOT NULL,
@@ -182,7 +182,7 @@ mod tests {
             );
         }
         assert!(cols.contains(&"upstream_cursor"), "{cols:?}");
-        assert!(cols.contains(&"bucket_key"), "{cols:?}");
+        assert!(cols.contains(&"render_unit_key"), "{cols:?}");
     }
 
     #[test]

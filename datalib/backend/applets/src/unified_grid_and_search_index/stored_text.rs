@@ -1,5 +1,6 @@
-//! A document's markdown as its source's render store spells it, and what
-//! one item of it says, at the commit of that store the grid index read,
+//! A document's markdown as its source's render store spells it, or a page
+//! of it, and what one item of it says, at the commit of that store the
+//! grid index read,
 //! so the text matches the rows the grid shows: what the viewer and a
 //! search's quotes read. Read-only: opening a document never writes.
 
@@ -7,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
+use datalib_etl_render::indexed_markdown::{DocumentPage, IndexedMarkdownStore, PageAsk};
 use datalib_etl_render::section::{inside_box, SpelledSection};
 use datalib_unified_grid_and_search_index::repo::DocumentStore;
 
@@ -94,4 +95,28 @@ pub fn item_texts(
         }
     }
     Ok(out)
+}
+
+/// A page of `document` (`IndexedMarkdownStore::document_page`), from its
+/// store at the commit the grid index read. `None` when the index names no
+/// store for it, or that store does not hold it there.
+pub fn page(
+    root: &Path,
+    where_kept: &HashMap<String, DocumentStore>,
+    document: &str,
+    ask: PageAsk,
+    limit: usize,
+) -> Result<Option<DocumentPage>> {
+    let Some(kept) = where_kept.get(document) else {
+        return Ok(None);
+    };
+    let rendered = datalib_etl::layout::render_markdown_root(root, &kept.source_id);
+    let Some(store) = IndexedMarkdownStore::open_for_reading(&rendered, Some(&kept.commit))
+        .with_context(|| format!("open {}'s render store at {}", kept.source_id, kept.commit))?
+    else {
+        return Ok(None);
+    };
+    let read = store.document_page(document, ask, limit);
+    store.close();
+    read.with_context(|| format!("read a page of {document}"))
 }

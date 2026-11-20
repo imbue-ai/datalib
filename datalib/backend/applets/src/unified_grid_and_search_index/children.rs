@@ -1,13 +1,15 @@
-//! `GET /children/{uuid}`: a container's children in order, a page each
+//! `GET /children/{parent}`: a container's children in order, a page each
 //! way at a time around an anchor
-//! ([`datalib_unified_grid_and_search_index::children`]).
+//! ([`datalib_unified_grid_and_search_index::children`]). The parent is a
+//! uuid, or `source:<id>` for what a source holds at its top; `places=true`
+//! lists only the places, as a library's tree does.
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use base64::Engine as _;
 use datalib_unified_grid_and_search_index::children::{
-    Anchor, Ask, Child, ChildrenFailure, ChildrenPage, Key,
+    Anchor, Ask, Child, ChildrenFailure, ChildrenPage, Key, Scope,
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +22,10 @@ pub struct Params {
     after: Option<String>,
     before: Option<String>,
     limit: Option<usize>,
+    /// Only the places a person browses, each saying whether more lie
+    /// below it.
+    #[serde(default)]
+    places: bool,
 }
 
 const DEFAULT_LIMIT: usize = 50;
@@ -55,7 +61,12 @@ pub async fn handler(
     let refuse = |status, why: String| (status, Json(serde_json::json!({ "error": why })));
     let (ask, limit) =
         ask_of(&p, &super::now_utc()).map_err(|why| refuse(StatusCode::BAD_REQUEST, why))?;
-    match s.repo.children(&parent, &ask, limit).await {
+    let scope = if p.places {
+        Scope::places(&parent)
+    } else {
+        Scope::all(&parent)
+    };
+    match s.repo.children(&scope, &ask, limit).await {
         Ok(page) => Ok(Json(response(page))),
         Err(ChildrenFailure::Refused(why)) => Err(refuse(StatusCode::NOT_FOUND, why.to_string())),
         Err(ChildrenFailure::Repo(e)) => Err(refuse(
@@ -140,6 +151,7 @@ mod tests {
             after: after.map(String::from),
             before: before.map(String::from),
             limit: None,
+            places: false,
         };
         ask_of(&p, NOW).map(|(ask, _)| ask)
     }

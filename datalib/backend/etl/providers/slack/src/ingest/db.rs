@@ -23,9 +23,10 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 
 use super::schema_raw::{
     full_ddl, join_dm_user_ids, parse_dm_user_ids, saved_item_key, slack_message_key,
-    slack_thread_key, split_read_mark, BookmarkRow, ChannelReadStateRow, ChannelRow, InvolvingRow,
-    MessageRow, SavedItemRow, SlackAttachmentRow, UserRow, WorkspaceRow, CHANNEL_VOLATILE_PATHS,
-    LADDER, MESSAGE_VOLATILE_PATHS, READ_STATE_VOLATILE_PATHS, THREADS, USER_VOLATILE_PATHS,
+    slack_thread_key, split_read_mark, BookmarkRow, BotRow, ChannelReadStateRow, ChannelRow,
+    InvolvingRow, MessageRow, SavedItemRow, SlackAttachmentRow, UserRow, WorkspaceRow,
+    BOT_VOLATILE_PATHS, CHANNEL_VOLATILE_PATHS, LADDER, MESSAGE_VOLATILE_PATHS,
+    READ_STATE_VOLATILE_PATHS, THREADS, USER_VOLATILE_PATHS,
 };
 use datalib_etl::doltlite_raw::WirePayload;
 
@@ -240,6 +241,59 @@ impl RawDb {
                 );
             }
         }
+        Ok(())
+    }
+
+    // ── bots ────────────────────────────────────────────────────────
+
+    /// The bots stored messages name that no `bots.info` has answered
+    /// for, each listed with no version: a bot only has to have been
+    /// fetched.
+    pub async fn bots_owed(&self, conn: &mut SqliteConnection) -> Result<Vec<Listed>> {
+        let ids: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM bots WHERE payload IS NULL ORDER BY id")
+                .fetch_all(conn)
+                .await
+                .context("select the bots owed")?;
+        Ok(ids
+            .into_iter()
+            .map(|id| Listed::new(id, None::<String>))
+            .collect())
+    }
+
+    /// The bots `bots.info` answered for, in the transaction the lookup
+    /// loop holds them in.
+    pub async fn store_looked_up_bots(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        fetched: &[Fetched<Value>],
+    ) -> Result<()> {
+        let mut rows: Vec<BotRow> = Vec::new();
+        let mut volatile: Vec<(String, Value)> = Vec::new();
+        for f in fetched {
+            let Outcome::Got(bot) = &f.outcome else {
+                continue;
+            };
+            let (base, split) = dr::split_volatile(bot, BOT_VOLATILE_PATHS);
+            rows.push(BotRow {
+                id_and_payload: WirePayload {
+                    id: f.listed.key.clone(),
+                    payload: serde_json::to_string(&base).context("serialize bot")?,
+                },
+                name: bot.get("name").and_then(Value::as_str).map(String::from),
+            });
+            if let Some(v) = split {
+                volatile.push((f.listed.key.clone(), v));
+            }
+        }
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let now = datalib_time::IsoOffsetTimestamp::now_local();
+        bulk_upsert_in_tx(tx, &rows, &now).await?;
+        let volatile: Vec<(&str, &Value)> =
+            volatile.iter().map(|(id, v)| (id.as_str(), v)).collect();
+        dr::set_volatile_payloads_in_tx(tx, BotRow::TABLE, &volatile).await?;
         Ok(())
     }
 
@@ -1181,7 +1235,8 @@ async fn write_messages(tx: &mut Transaction<'_, Sqlite>, page: &[Prepared<'_>])
 
 /// A `users` row with no payload for each author of `page` not already
 /// there: someone who posted after the last `users.list`, owed a
-/// `users.info` ([`RawDb::users_owed`]).
+/// `users.info` ([`RawDb::users_owed`]). Likewise a `bots` row for each
+/// bot that posted, owed a `bots.info` ([`RawDb::bots_owed`]).
 async fn list_authors(tx: &mut Transaction<'_, Sqlite>, page: &[Prepared<'_>]) -> Result<()> {
     let authors: BTreeSet<&str> = page
         .iter()
@@ -1193,6 +1248,17 @@ async fn list_authors(tx: &mut Transaction<'_, Sqlite>, page: &[Prepared<'_>]) -
             .execute(&mut **tx)
             .await
             .with_context(|| format!("list the author {id}"))?;
+    }
+    let bots: BTreeSet<&str> = page
+        .iter()
+        .filter_map(|p| p.payload.get("bot_id")?.as_str())
+        .collect();
+    for id in bots {
+        sqlx::query("INSERT INTO bots (id) VALUES (?) ON CONFLICT(id) DO NOTHING")
+            .bind(id)
+            .execute(&mut **tx)
+            .await
+            .with_context(|| format!("list the bot {id}"))?;
     }
     Ok(())
 }

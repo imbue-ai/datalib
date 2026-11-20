@@ -124,6 +124,22 @@ export function searchSource(q: string): string {
   return `searchView(${JSON.stringify({ q })})`;
 }
 
+/// What a node card shows: a container's children, by uuid, or what a
+/// source holds at its top (`library.ts::sourceTop`). `name` titles it until the
+/// card reads one.
+export type NodeViewOpts = { node: string; name?: string | null; doc?: string | null };
+
+/// The source of a node card.
+export function nodeSource(opts: NodeViewOpts): string {
+  return `nodeView(${JSON.stringify(opts)})`;
+}
+
+/// The source of the Library card: the library as a tree, with the node
+/// picked in it beside.
+export function librarySource(): string {
+  return "libraryTreeView()";
+}
+
 /// The source of a document's card, at `section` when it is one of its
 /// messages.
 export function documentSource(page: string, section: string | null = null): string {

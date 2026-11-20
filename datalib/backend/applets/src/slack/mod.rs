@@ -480,7 +480,7 @@ mod tests {
                 markdown_uuid: md.to_string(),
                 source_id: "slack".into(),
                 upstream_cursor: None,
-                bucket_key: None,
+                render_unit_key: None,
                 render_version: 1,
                 rows,
                 sections: Vec::new(),

@@ -746,7 +746,7 @@ ids are in `runs`. What to look at, and where:
 |---|---|
 | how long each step really took | `supervisor.sqlite` `invocations`. `step_runs` gives a step that ran more than once the run's end as its finish. |
 | did a step redo everything, and why | `msg = 'rendering every document'`: `why`, and `changed`, which names the params that moved. `"the source's keywords are done"`, one line per source the index step re-keyed: a `put` far above what the sync changed means its documents' content churned. |
-| did an incremental pass stay small | render's `reverse lookup from the changed rows to the buckets`: `stale_buckets` far above `changed_rows` is a fan-out. Each download's `the download is done` summary, compared run to run. |
+| did an incremental pass stay small | render's `reverse lookup from the changed rows to the render units`: `stale_render_units` far above `changed_rows` is a fan-out. Each download's `the download is done` summary, compared run to run. |
 | who a step reached | `target = 'http.outbound'` at `info`: per host, at the first request, each minute and in all |
 | why a run started | `runs.kind` and `runs.reason`, and the run's first line |
 | where a render's time went | `msg LIKE 'where the render%'` (`load_ms`, `parse_ms`, `render_ms`, `write_ms`; each page at `debug`), and `msg LIKE 'the render took%'` for any source |

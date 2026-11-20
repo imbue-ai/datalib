@@ -82,7 +82,7 @@ impl SourceRender for GoogleTakeoutRender {
             ctx.raw_range(),
             ctx.page_size.bytes,
         )?;
-        ctx.finish(&outcome.buckets, outcome.new_head.as_deref())?;
+        ctx.finish(&outcome.render_units, outcome.new_head.as_deref())?;
         Ok("rendered".into())
     }
 }

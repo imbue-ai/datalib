@@ -121,6 +121,8 @@ item_count: 1
 
 [@Jean-Luc Picard](slack://user?team=T_NCC1701D&id=U_PICARD "@Jean-Luc Picard (slack:T_NCC1701D/U_PICARD)"), I must object to beaming down unarmed.
 
+> Phaser inventory: 6 type-2 phasers checked out
+
 - <span id="m-0b7698ff-1f58-82bf-b68d-d2041af90eb6" data-section-uuid="0b7698ff-1f58-82bf-b68d-d2041af90eb6">❤️ [U_TROI](slack://user?team=T_NCC1701D&id=U_TROI "U_TROI (slack:T_NCC1701D/U_TROI)")</span>
 
 </div>
@@ -158,6 +160,44 @@ Anyone up for poker tonight?
 I do not understand the appeal of this Earth game.
 
 - <span id="m-0b7698fc-0660-8c96-864b-e6aa68422a4e" data-section-uuid="0b7698fc-0660-8c96-864b-e6aa68422a4e">😂 [William T. Riker](slack://user?team=T_NCC1701D&id=U_RIKER "William T. Riker (slack:T_NCC1701D/U_RIKER)")</span>
+
+</div>
+
+
+=== 00000000-0000-8856-b2d7-ca58cf9370ca ===
+---
+title: "#engineering: Long-range sensor sweep 🛰️ *complete*"
+provider: slack
+source_label: "Slack"
+chat_uuid: 00000000-0000-8856-b2d7-ca58cf9370ca
+markdown_uuid: 00000000-0000-8856-b2d7-ca58cf9370ca
+display: "#engineering"
+account: "picard@enterprise.starfleet"
+external_id: "C_ENG#12604000450.000450"
+item_count: 1
+---
+
+<h1 class="page-title" data-page-title-uuid="00000000-0000-8856-b2d7-ca58cf9370ca">#engineering: Long-range sensor sweep 🛰️ *complete* <a class="source-link" href="https://enterprise-d.slack.com/archives/C_ENG/p12604000450000450" target="_blank" rel="noopener noreferrer">↗</a></h1>
+
+<div id="m-0b7698f8-35d0-8267-8a4a-9b4a415f22bd" data-section-uuid="0b7698f8-35d0-8267-8a4a-9b4a415f22bd" class="msg msg--slack">
+
+## <span class="msg-author">Sensor Array</span> <time class="msg-ts" datetime="2369-05-28T15:14:10Z" title="2369-05-28 15:14:10 UTC">Wed May 28th, 2369 at 15:14</time> <a class="source-link" href="https://enterprise-d.slack.com/archives/C_ENG/p12604000450000450" target="_blank" rel="noopener noreferrer">↗</a>
+
+**Long-range sensor sweep 🛰️ \*complete\***
+
+Sweep requested by [@Jean-Luc Picard](slack://user?team=T_NCC1701D&id=U_PICARD "@Jean-Luc Picard (slack:T_NCC1701D/U_PICARD)"). Contact at **bearing 271 mark 4**.
+
+- **Range**
+  4.2 light-years
+- Class: D'deridex \[cloaked\]
+
+Image: [Sweep 47988](https://sensors.enterprise.example/sweeps/47988.png)
+
+Video: [Sweep replay](https://holonet.example/v/47988) (Holonet)
+
+Image: Q's calling card
+
+Sensor array 3 · Stardate 47988.1
 
 </div>
 
@@ -214,6 +254,16 @@ item_count: 1
 
 New combadge prototypes — thoughts?
 
+> [Elizabeth Shelby](slack://user?team=T_STARBASE74&id=U_SHELBY "Elizabeth Shelby (slack:T_STARBASE74/U_SHELBY)") · [original message](https://starbase-74.slack.com/archives/C_TACTICAL/p12603990000000100)
+>
+> The Borg prototype combadges use _subspace_ relays. Spec attached.
+>
+> File: Borg combadge spec
+
+> Memory Alpha · **[Combadge](https://memory-alpha.example/wiki/Combadge)**
+
+> <https://starfleet.example/specs/combadge-2369>
+
 🖼 *[Delta shield prototype (not yet fetched)]*
 *(source: https://files.slack.com/files-pri/T_NCC1701D-F_DELTA_SHIELD/delta_shield.png)*
 
@@ -264,6 +314,11 @@ item_count: 1
 ## [Jean-Luc Picard](slack://user?team=T_NCC1701D&id=U_PICARD "Jean-Luc Picard (slack:T_NCC1701D/U_PICARD)") <time class="msg-ts" datetime="2369-05-28T15:21:41Z" title="2369-05-28 15:21:41 UTC">Wed May 28th, 2369 at 15:21</time> <a class="source-link" href="https://enterprise-d.slack.com/archives/D_RIKER/p12604000901000901" target="_blank" rel="noopener noreferrer">↗</a>
 
 Thank you, Number One. Make it so.
+
+> **Away team 47988**
+> [@William T. Riker](slack://user?team=T_NCC1701D&id=U_RIKER "@William T. Riker (slack:T_NCC1701D/U_RIKER)"), [@Worf](slack://user?team=T_NCC1701D&id=U_WORF "@Worf (slack:T_NCC1701D/U_WORF)"), [@Lt. Cmdr. Data](slack://user?team=T_NCC1701D&id=U_DATA "@Lt. Cmdr. Data (slack:T_NCC1701D/U_DATA)")
+>
+> Beam-down at 0900
 
 </div>
 

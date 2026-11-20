@@ -1,4 +1,4 @@
-//! Slack render stage: raw → typed buckets ready for render.
+//! Slack render stage: raw → typed render units ready for render.
 
 mod cards;
 pub mod emoji;
@@ -19,7 +19,7 @@ use datalib_handle::Handle;
 use serde_json::Value;
 
 pub use parse::{
-    open, parse_raw_json_dir, ParsedSlack, ScanResult, Shared, SlackStore, SlackThreadBucket,
+    open, parse_raw_json_dir, ParsedSlack, ScanResult, Shared, SlackStore, SlackThreadRenderUnit,
 };
 
 pub use datalib_etl_slack::ingest::schema_raw::{slack_message_key, slack_thread_key};
@@ -181,7 +181,7 @@ impl Message {
     pub fn key(&self) -> String {
         slack_message_key(&self.team_id, &self.channel_id, &self.ts)
     }
-    /// The raw store's key for this message's thread: the bucket key.
+    /// The raw store's key for this message's thread: the render unit key.
     pub fn thread_key(&self) -> String {
         slack_thread_key(&self.team_id, &self.channel_id, &self.effective_thread_ts)
     }

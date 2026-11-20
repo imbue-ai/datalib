@@ -26,6 +26,9 @@ pub struct Drawn {
     /// Whether the blocks are what Slack shows in place of `text`, which
     /// is then only the notification's summary of them.
     pub replaces_text: bool,
+    /// Where the blocks replace `text`, the first text they show, as
+    /// Slack wrote it: what a thread's title reads in its place.
+    pub headline: Option<String>,
     /// Each attachment's markdown, in order.
     pub attachments: String,
     /// One line per part nothing draws, such as `call block`.
@@ -59,6 +62,10 @@ pub fn draw(raw: &Value, labels: Labels<'_>) -> Drawn {
     // Slack shows the blocks and keeps `text` for the notification. Where
     // a block cannot be drawn, `text` is the only account of it left.
     let replaces_text = !blocks_md.is_empty() && !has_rich_text && not_shown.is_empty();
+    let headline = replaces_text
+        .then(|| blocks.iter().find_map(first_text))
+        .flatten()
+        .map(str::to_string);
     let attachments = list("attachments")
         .unwrap_or_default()
         .iter()
@@ -68,9 +75,23 @@ pub fn draw(raw: &Value, labels: Labels<'_>) -> Drawn {
     Drawn {
         blocks: blocks_md,
         replaces_text,
+        headline,
         attachments,
         not_shown,
     }
+}
+
+/// The first text a header or section block shows.
+fn first_text(b: &Value) -> Option<&str> {
+    if !matches!(block_type(b), Some("header" | "section")) {
+        return None;
+    }
+    b.get("text").and_then(|t| str_of(t, "text")).or_else(|| {
+        b.get("fields")
+            .and_then(Value::as_array)?
+            .iter()
+            .find_map(|f| str_of(f, "text"))
+    })
 }
 
 fn block_type(b: &Value) -> Option<&str> {
@@ -139,9 +160,11 @@ fn draw_block(b: &Value, labels: Labels<'_>) -> Result<Option<String>, String> {
                 .or_else(|| b.get("title").and_then(|t| str_of(t, "text")))
                 .or_else(|| str_of(b, "alt_text"))
                 .unwrap_or("image");
-            str_of(b, "image_url")
-                .and_then(safe_url)
-                .map(|url| format!("Image: {}", link(&plain(label), url)))
+            let shown = match str_of(b, "image_url").and_then(safe_url) {
+                Some(url) => link(&plain(label), url),
+                None => plain(label),
+            };
+            Some(format!("Image: {shown}"))
         }
         "video" => {
             let title = b
@@ -542,6 +565,11 @@ mod tests {
         );
         assert!(drawn.replaces_text);
         assert_eq!(drawn.body("Warp core report".into()), drawn.blocks);
+        assert_eq!(
+            drawn.headline.as_deref(),
+            Some("Warp core *report* :rocket:"),
+            "a thread's title reads what the blocks show, not the summary"
+        );
     }
 
     /// Rich text is the message's `text` again, so where a message has it
@@ -587,6 +615,7 @@ mod tests {
                  "title_url": "https://video.example/1", "provider_name": "Holonet"},
                 {"type": "video", "title": {"type": "plain_text", "text": "Q"},
                  "title_url": "javascript:alert(1)"},
+                {"type": "image", "image_url": "javascript:alert(1)", "alt_text": "Q again"},
             ]}),
             labels(),
         );
@@ -596,7 +625,9 @@ mod tests {
              \n\
              Video: [Holodeck](https://video.example/1) (Holonet)\n\
              \n\
-             Video: Q"
+             Video: Q\n\
+             \n\
+             Image: Q again"
         );
         assert!(drawn.not_shown.is_empty());
     }

@@ -8,7 +8,7 @@
 use anyhow::Result;
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{Buckets, ChatRenderer};
+use datalib_etl_chat_common::render::{ChatRenderer, RenderUnits};
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_chat_common::{render_batched_at, NormalizedChat};
 use datalib_etl_chat_common::{RenderProfile, RenderSummary as ChatSummary};
@@ -48,8 +48,8 @@ pub struct RenderSummary {
     pub docs_skipped: usize,
     pub messages_rendered: usize,
     /// Every chat rendered, by uuid — what the processor declares
-    /// through `RenderCtx::declare_bucket`.
-    pub buckets: Buckets,
+    /// through `RenderCtx::declare_render_unit`.
+    pub render_units: RenderUnits,
     pub unrendered: Vec<Unrendered>,
 }
 
@@ -94,7 +94,7 @@ pub fn render_all(
     );
 
     // The parse-side skip-load has already filtered out unchanged
-    // buckets; report them all up front so the progress bar accounts
+    // render units; report them all up front so the progress bar accounts
     // for them too.
     progress.set_length(Some((parsed.docs.len() + parsed.docs_skipped) as u64));
     progress.inc(parsed.docs_skipped as u64);
@@ -120,7 +120,7 @@ pub fn render_all(
     let ChatSummary {
         docs_rendered,
         items_rendered,
-        buckets,
+        render_units,
         ..
     } = renderer.finish();
 
@@ -129,7 +129,7 @@ pub fn render_all(
         docs_rendered,
         docs_skipped: parsed.docs_skipped,
         messages_rendered: items_rendered,
-        buckets,
+        render_units,
         unrendered,
     })
 }

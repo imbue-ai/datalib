@@ -64,7 +64,7 @@ impl SourceRender for ClaudeRender {
         let parsed = parse(raw_path, ctx.name, ctx.raw_range())
             .with_context(|| format!("claude parse {}", raw_path.display()))?;
         let mut on_doc = |md| ctx.emit_doc(md);
-        let buckets = render_all(
+        let render_units = render_all(
             &parsed,
             ctx.name,
             crate::render::render::RenderOptions {
@@ -80,21 +80,24 @@ impl SourceRender for ClaudeRender {
         for (id, why) in &parsed.failed {
             let uuid = crate::render::ids::conversation(ctx.name, id).uuid;
             ctx.report_document_failed(&uuid, why, Some(self.render_version()))?;
-            ctx.fail_bucket(&uuid, why)?;
+            ctx.fail_render_unit(&uuid, why)?;
         }
-        // A bucket this run looked at is a conversation or a project;
+        // A render unit this run looked at is a conversation or a project;
         // both uuids are declared with nothing, so whichever page it had
         // that this run did not produce goes. The rendered ones follow
         // and replace that.
-        for bucket in parsed.scan.render.iter().flatten() {
-            ctx.declare_bucket(
-                &crate::render::ids::conversation(ctx.name, bucket).uuid,
+        for render_unit in parsed.scan.render.iter().flatten() {
+            ctx.declare_render_unit(
+                &crate::render::ids::conversation(ctx.name, render_unit).uuid,
                 &[],
             )?;
-            ctx.declare_bucket(&crate::render::ids::project(ctx.name, bucket).uuid, &[])?;
+            ctx.declare_render_unit(
+                &crate::render::ids::project(ctx.name, render_unit).uuid,
+                &[],
+            )?;
         }
         ctx.declare_empty(parsed.scan.gone.iter().map(String::as_str))?;
-        ctx.finish(&buckets, parsed.scan.new_head.as_deref())?;
+        ctx.finish(&render_units, parsed.scan.new_head.as_deref())?;
         Ok("rendered".into())
     }
 }

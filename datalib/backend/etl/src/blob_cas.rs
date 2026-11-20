@@ -1,4 +1,4 @@
-//! Content-addressable blob store + per-bucket attachment bundle.
+//! Content-addressable blob store + per-render-unit attachment bundle.
 //!
 //! Bytes live once in `cas_objects`, keyed by blake3; each provider declares
 //! its own `(owning_id, ref_id, blake3)` edge table. Download fills a bundle,

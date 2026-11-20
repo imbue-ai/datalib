@@ -106,7 +106,7 @@ whole on every sync, and an unchanged row is no change;
   `title`, `started_at`, `updated_at`, `rel_path`.
 - `records` — one row per line, every type. `id` is
   `<thread id>#<line number>`; the payload is the line as written.
-  Promoted: `transcript_id` (the render's diff bucket) and `line_no`
+  Promoted: `transcript_id` (what the render's diff groups render units by) and `line_no`
   (its order). Everything else is `payload->>'$.type'` and
   `payload->>'$.payload.type'`.
 
