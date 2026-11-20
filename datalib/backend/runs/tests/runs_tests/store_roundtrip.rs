@@ -526,6 +526,27 @@ async fn retention_keeps_the_newest_runs_and_sweeps_their_rows() {
     pool.close().await;
 }
 
+/// Under a pinned clock every run is stamped alike. Retention still keeps
+/// exactly `max_runs`, the run being begun among them.
+#[tokio::test]
+async fn retention_keeps_the_run_being_begun_when_runs_share_a_stamp() {
+    let td = tempfile::tempdir().unwrap();
+    let keep_two = Retention {
+        max_runs: 2,
+        max_age_days: 3650,
+        ..Retention::default()
+    };
+    let stamp = "2026-01-01T00:00:00+00:00";
+    for id in ["run-c", "run-b", "run-a"] {
+        let w = RunWriter::start(td.path(), id, stamp, None, keep_two).unwrap();
+        w.log(line("a", "info", id));
+    }
+    assert_eq!(log_after(td.path(), "run-a", None, 0, 10).await.len(), 1);
+    let kept = runs(td.path(), None, 10).await;
+    assert_eq!(kept.len(), 2, "{kept:?}");
+    assert!(kept.iter().any(|r| r.run_id == "run-a"), "{kept:?}");
+}
+
 /// Retention by age: a run older than the window goes even when the
 /// count would have kept it.
 #[tokio::test]
@@ -707,9 +728,10 @@ async fn a_store_from_version_10_is_upgraded_in_place() {
     }
     let path = datalib_runs::runs_path(td.path());
     let pool = datalib_runs::open_or_create(&path).await.unwrap();
-    // Version 10's shape is this one without what 11, 12 and 13 added.
+    // Version 10's shape is this one without what 11 through 14 added.
     sqlx::raw_sql(
-        "DROP INDEX processes_by_run; \
+        "DROP INDEX runs_by_start; \
+         DROP INDEX processes_by_run; \
          ALTER TABLE processes DROP COLUMN peak_rss_bytes; \
          ALTER TABLE processes DROP COLUMN applet; \
          ALTER TABLE runs DROP COLUMN kind; \
@@ -754,13 +776,14 @@ async fn a_store_from_version_10_is_upgraded_in_place() {
     assert_eq!(set_aside, 0, "nothing was set aside");
     let pool = datalib_runs::open_or_create(&path).await.unwrap();
     let index: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'processes_by_run'",
+        "SELECT count(*) FROM sqlite_master WHERE type = 'index' \
+         AND name IN ('processes_by_run', 'runs_by_start')",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
     pool.close().await;
-    assert_eq!(index, 1, "the climb adds the index retention names");
+    assert_eq!(index, 2, "the climb adds the indexes retention names");
 }
 
 /// Guards the migration that read like a sync: a run says what it is for

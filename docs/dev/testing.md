@@ -766,6 +766,15 @@ the table stays small. A statement that reads only the catalog
 what the fixture sync runs: the server's routes and the applets'
 searches are not in it.
 
+The plan is read with no values bound, and that makes it wrong two
+ways. A `LIKE` or `GLOB` whose pattern is a parameter reads as a scan,
+though once a pattern is bound SQLite seeks its literal prefix: write
+the prefix as a range (`key >= ? AND key < ?`,
+`datalib_etl::key_range::prefix_end`) and the plan says what runs. And
+a walk that starts at one end of an index (`ORDER BY … LIMIT`, `max()`)
+carries SQLite's full-scan mark however few rows it reads before it
+stops; such a statement gets an entry saying so.
+
 ## A statement's work does not grow with the rest of the store
 
 A scan census cannot see a statement that reads everything through an

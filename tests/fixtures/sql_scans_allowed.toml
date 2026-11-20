@@ -11,9 +11,9 @@
 # marked "Not reviewed" were here when the check began.
 
 [[scan]]
-statement = "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason FROM runs WHERE ? IS NULL OR run_id = ? ORDER BY started_at_utc DESC LIMIT 1"
+statement = "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason FROM runs INDEXED BY runs_by_start ORDER BY started_at_utc DESC, run_id DESC LIMIT 1"
 files = ["*/runs/runs.sqlite"]
-why = "The table stays small: retention keeps at most `max_runs` runs (100 by default) and none older than `max_age_days` (datalib_runs::Retention); 76 rows on a large library. #1949 reads it by an index instead."
+why = "Reads one row: it walks `runs_by_start` from its newest end and stops at LIMIT 1. SQLite marks any walk that starts at one end of an index as a full scan, which is what this check reads."
 
 [[scan]]
 statement = "DELETE FROM pdf_documents WHERE blake3 NOT IN (SELECT blake3 FROM pdf_paths)"
@@ -36,14 +36,9 @@ files = ["*/render_markdown/indexed_markdown.doltlite_db"]
 why = "Once per render pass, clearing one stage's rows. A render store's problems are one row per record its render could not fully do, a few beside the documents the pass reads."
 
 [[scan]]
-statement = "DELETE FROM runs WHERE run_id NOT IN (SELECT run_id FROM runs ORDER BY started_at_utc DESC LIMIT ?) RETURNING run_id"
+statement = "DELETE FROM runs INDEXED BY runs_by_start WHERE run_id != ?1 AND (started_at_utc, run_id) < (SELECT started_at_utc, run_id FROM runs INDEXED BY runs_by_start WHERE run_id != ?1 ORDER BY started_at_utc DESC, run_id DESC LIMIT 1 OFFSET ?2) RETURNING run_id"
 files = ["*/runs/runs.sqlite"]
-why = "The table stays small: retention keeps at most `max_runs` runs (100 by default) and none older than `max_age_days`; this is retention itself, once per run. It returns the runs it removes, so the tables filed under them delete through their `run_id` index."
-
-[[scan]]
-statement = "DELETE FROM runs WHERE started_at_utc < ? AND run_id != ? RETURNING run_id"
-files = ["*/runs/runs.sqlite"]
-why = "The table stays small: retention keeps at most `max_runs` runs (100 by default) and none older than `max_age_days`; this is retention itself, once per run. It returns the runs it removes, so the tables filed under them delete through their `run_id` index."
+why = "Retention, once per run. It walks `runs_by_start` from its newest end to the `max_runs`-th run (100 by default), then deletes below that through the same index. SQLite marks any walk that starts at one end of an index as a full scan, which is what this check reads."
 
 [[scan]]
 statement = "DELETE FROM search_sources WHERE source_id NOT IN (SELECT value FROM json_each(?))"
@@ -994,11 +989,6 @@ why = "Not reviewed: on main when this check began."
 statement = "SELECT a.message_id, a.export_name, m.group_id FROM chat_attachments a JOIN chat_messages m ON m.id = a.message_id WHERE a.blake3 IS NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Not reviewed: on main when this check began."
-
-[[scan]]
-statement = "SELECT abs_path, kind, blake3, mtime_ns, size, ctime_ns, stamp_kind, inode, dev FROM fingerprints WHERE abs_path = ? OR abs_path GLOB ?"
-files = ["*/fingerprints.sqlite"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
 
 [[scan]]
 statement = "SELECT blake3 FROM cas_objects"
