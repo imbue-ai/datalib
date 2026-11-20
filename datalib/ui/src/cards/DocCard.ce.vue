@@ -47,7 +47,13 @@ import { pushToast } from "@/toasts";
 import { endWait, startWait, type Wait } from "@/telemetry";
 import DocTitleBar from "./DocTitleBar.ce.vue";
 import { sourceSource } from "./cardSources";
-import { documentCopyText, documentTitle, outlinkOf, type DocumentAction } from "./documentMenu";
+import {
+  documentCopyText,
+  documentLink,
+  documentTitle,
+  outlinkOf,
+  type DocumentAction,
+} from "./documentMenu";
 import { problemLabel, severityWord } from "./problems";
 import { ensureFrontend } from "./frontendRegistry";
 import { photoCardSource } from "./photos";
@@ -516,6 +522,8 @@ async function onDocAction(id: DocumentAction) {
     case "open-source":
       if (doc.source_ref) props.ctx.host.openCards(sourceSource({ group: doc.source_ref.id }));
       return;
+    case "copy-link":
+      return copy(documentLink(doc), "the link");
     case "copy-id":
       return copy(doc.markdown_uuid);
     case "copy-name":
@@ -872,6 +880,7 @@ watch(
           <ChatBody
             :pieces="chat.pieces"
             :markdown-uuid="chat.markdown_uuid"
+            :doc-title="chat.name"
             :selected-section-uuid="jumpTo ?? sectionUuid"
             :outgoing-edges="chat.outgoing_edges"
             :hover-anchor-uuid="hoverAnchor"

@@ -352,5 +352,5 @@ have you let in?".
   the same as the web packaging — the shell passes nothing besides
   `--no-open` and the `--url-stdout` handshake.
 - There is no `datalib:` link handler; the shell does not link
-  `tauri-plugin-deep-link`. So the `datalib:doc/…` name a 🆔 button
-  becomes in a copied selection opens nothing outside the app yet.
+  `tauri-plugin-deep-link`. So the `datalib:doc/…` link a 🔗 button
+  copies opens nothing outside the app yet.

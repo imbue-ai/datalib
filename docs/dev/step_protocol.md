@@ -843,7 +843,7 @@ config sets in `[env]`:
 | variable | meaning |
 | --- | --- |
 | `DATALIB_STEP_CHECKPOINT_CADENCE` | how many seconds to let pass before a run's first checkpoint; it doubles the wait after each one (the next comes once the run is twice as old as at the last), since every commit keeps the pages it touched; `0` means every consistent point and never grows |
-| `DATALIB_STEP_RENDER_PAGES` | `<buckets>,<blob_mb>`, either side empty for its default: how many buckets a render reads together and how many MB of their blobs it loads at once |
+| `DATALIB_STEP_RENDER_PAGES` | `<render_units>,<blob_mb>`, either side empty for its default: how many render units a render reads together and how many MB of their blobs it loads at once |
 | `DATALIB_STEP_MODAL_MAX_SANDBOXES` | the most Modal Sandboxes an `embed` step that sends its chunks to Modal runs at once (default 100) |
 
 Use it as the reference implementation.

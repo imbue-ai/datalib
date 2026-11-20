@@ -45,6 +45,7 @@ pub fn ingest_methods(source_type: SourceType) -> &'static [IngestMethod] {
         SourceType::Facebook => datalib_etl_facebook_config::FacebookConfig::METHODS,
         SourceType::Media => datalib_etl_media_config::MediaConfig::METHODS,
         SourceType::Notion => datalib_etl_notion_config::NotionConfig::METHODS,
+        SourceType::Markdown => datalib_etl_markdown_config::MarkdownConfig::METHODS,
         SourceType::Pdf => datalib_etl_pdf_config::PdfConfig::METHODS,
         SourceType::Perseus => datalib_etl_perseus_config::PerseusConfig::METHODS,
         SourceType::Signal => datalib_etl_signal_config::SignalConfig::METHODS,

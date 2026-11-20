@@ -2802,23 +2802,23 @@ pub async fn merge_volatile_payloads_in_tx(
 
 // ── dolt_diff incremental-render scan ───────────────────────────────
 
-/// Result of a [`scan_buckets`] scan.
+/// Result of a [`scan_render_units`] scan.
 ///
 /// Two sets, because "what to render" and "what the diff named" part ways
-/// when a fan-out table changed: then every bucket renders, but the ones
+/// when a fan-out table changed: then every render unit renders, but the ones
 /// the diff named are still the only ones that can have vanished, and a
 /// provider that stopped probing them left every document deleted in
 /// that range in the store for good.
 #[derive(Debug, Clone, Default)]
 pub struct DiffScan {
-    /// The buckets to load and render. `None` → every bucket: no cursor,
+    /// The render units to load and render. `None` → every render unit: no cursor,
     /// a cursor this store cannot resolve, the `fanout_query` found a
     /// change, or no doltlite extension.
     pub render: Option<std::collections::HashSet<String>>,
-    /// The buckets the diff named as added, modified or removed since
+    /// The render units the diff named as added, modified or removed since
     /// the cursor — the ones to probe for removal. `None` only when there
     /// is no range to diff over.
-    pub changed_buckets: Option<std::collections::HashSet<String>>,
+    pub changed_render_units: Option<std::collections::HashSet<String>>,
     /// HEAD at scan time, to stamp into the render cursor on success. `None`
     /// leaves the cursor unwritten so the next run cold-starts again.
     pub new_head: Option<String>,
@@ -2826,17 +2826,17 @@ pub struct DiffScan {
     pub scan_elapsed: Option<std::time::Duration>,
 }
 
-/// Spec for [`scan_buckets`].
+/// Spec for [`scan_render_units`].
 pub struct DiffScanSpec<'a> {
     /// SQL that returns a row when the range changed something every
-    /// bucket depends on, so every bucket renders; refs bound as in
-    /// `bucket_query`. Name the columns that matter rather than a whole
+    /// render unit depends on, so every render unit renders; refs bound as in
+    /// `render_unit_query`. Name the columns that matter rather than a whole
     /// table: a row that changed only in a key nothing reads would
     /// otherwise re-render the whole source.
     pub fanout_query: Option<&'a str>,
-    /// SQL projecting bucket keys for changed rows, with `last_render_hash`
+    /// SQL projecting render unit keys for changed rows, with `last_render_hash`
     /// bound at parameter index 1, the commit being scanned to at index 2,
-    /// and the bucket key in column 0.
+    /// and the render unit key in column 0.
     ///
     /// By convention a `UNION` across `dolt_diff_<table>` vtabs with
     /// `WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'`.
@@ -2848,16 +2848,16 @@ pub struct DiffScanSpec<'a> {
     /// name different commits and the caller ends up hunting for rows its pin
     /// does not have. Binding the hash makes the scan and the reads that
     /// follow it agree by construction.
-    pub bucket_query: &'a str,
+    pub render_unit_query: &'a str,
 }
 
 /// Look up HEAD, short-circuit if [`DiffScanSpec::fanout_query`] finds a
-/// change, then project the per-bucket changed set.
+/// change, then project the per-render-unit changed set.
 ///
 /// Any failure short of "no last hash" falls back to cold start:
 /// render-everything is always safe, partial-render against a stale diff is
 /// not.
-pub async fn scan_buckets(
+pub async fn scan_render_units(
     pool: &sqlx::SqlitePool,
     last_render_hash: Option<&str>,
     pin: &crate::pin::Pin,
@@ -2872,16 +2872,16 @@ pub async fn scan_buckets(
     let Some(from_ref) = last_render_hash else {
         return Ok(DiffScan {
             render: None,
-            changed_buckets: None,
+            changed_render_units: None,
             new_head,
             scan_elapsed: None,
         });
     };
 
     let started = std::time::Instant::now();
-    // Audited: `bucket_query` is a fixed projection from provider source;
+    // Audited: `render_unit_query` is a fixed projection from provider source;
     // both refs are bound, at parameter indexes 1 and 2.
-    let res = sqlx::query(sqlx::AssertSqlSafe(spec.bucket_query))
+    let res = sqlx::query(sqlx::AssertSqlSafe(spec.render_unit_query))
         .bind(from_ref)
         .bind(&to_ref)
         .fetch_all(pool)
@@ -2891,7 +2891,7 @@ pub async fn scan_buckets(
     // through `tracing` — which the tests that would have caught it do not
     // capture. That is the AGENTS.md hazard exactly: it *succeeded*,
     // re-rendering everything and reaching the right answer the slow way, so
-    // a bucket query broken by a rename survived a whole review.
+    // a render unit query broken by a rename survived a whole review.
     //
     // But the two causes are not the same thing, and only one is a bug.
     //
@@ -2906,7 +2906,7 @@ pub async fn scan_buckets(
         Ok(r) => r,
         Err(e) if crate::pin::missing_schema(&e).is_some() => {
             return Err(anyhow::Error::new(e).context(
-                "dolt_diff bucket scan names a table or column this store does \
+                "dolt_diff render-unit scan names a table or column this store does \
                  not have. That is a bug in the query, not a stale cursor: \
                  cold-starting past it would re-render everything on every run \
                  and never say why.",
@@ -2923,13 +2923,13 @@ pub async fn scan_buckets(
             );
             return Ok(DiffScan {
                 render: None,
-                changed_buckets: None,
+                changed_render_units: None,
                 new_head,
                 scan_elapsed: Some(elapsed),
             });
         }
     };
-    // After the bucket query, which has already cold-started on a cursor
+    // After the render unit query, which has already cold-started on a cursor
     // this store cannot resolve: an error here is a broken query.
     let fanout_changed = match spec.fanout_query {
         None => false,
@@ -2953,7 +2953,7 @@ pub async fn scan_buckets(
         } else {
             Some(set.clone())
         },
-        changed_buckets: Some(set),
+        changed_render_units: Some(set),
         new_head,
         scan_elapsed: Some(elapsed),
     })
@@ -5536,16 +5536,16 @@ mod tests {
     /// What the setting above defends against: a *different* connection to
     /// the same file does not inherit the active branch.
     /// A fan-out hit renders everything and *still* names what the diff
-    /// saw: a bucket deleted in the same range as a fan-out row is
+    /// saw: a render unit deleted in the same range as a fan-out row is
     /// probed for removal, not lost. Found by the render model test on
     /// its first seed — every diff-narrowed provider had the hole.
     #[tokio::test]
-    async fn a_fanout_hit_renders_everything_but_keeps_the_named_buckets() {
+    async fn a_fanout_hit_renders_everything_but_keeps_the_named_render_units() {
         let tmp = tempfile::tempdir().unwrap();
         let pool = open(
             &tmp.path().join("scan.doltlite_db"),
             &[
-                "CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, bucket TEXT)",
+                "CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, render_unit TEXT)",
                 "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT)",
             ],
         )
@@ -5578,35 +5578,36 @@ mod tests {
                 "SELECT 1 FROM dolt_diff_users \
                   WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged' LIMIT 1",
             ),
-            bucket_query: "SELECT DISTINCT coalesce(to_bucket, from_bucket) FROM dolt_diff_notes \
+            render_unit_query:
+                "SELECT DISTINCT coalesce(to_render_unit, from_render_unit) FROM dolt_diff_notes \
                            WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
         };
-        let scan = scan_buckets(&pool, Some(&first), &pin, &spec)
+        let scan = scan_render_units(&pool, Some(&first), &pin, &spec)
             .await
             .unwrap();
         assert!(scan.render.is_none(), "a user changed: every note renders");
         let named = scan
-            .changed_buckets
+            .changed_render_units
             .expect("the range is still there to probe");
         assert_eq!(
             named,
             ["b2".to_string()].into_iter().collect(),
-            "the deleted note's bucket is still named for the removal probe"
+            "the deleted note's render unit is still named for the removal probe"
         );
         pool.close().await;
     }
 
-    /// A bucket query naming a table that does not exist must fail, where a
+    /// A render unit query naming a table that does not exist must fail, where a
     /// cursor naming a commit that does not exist must cold-start. Both used
     /// to cold-start, which is how a query broken by a table rename rendered
     /// everything on every run and said so only through a `tracing` line no
     /// test captured.
     #[tokio::test]
-    async fn a_broken_bucket_query_fails_where_a_stale_cursor_cold_starts() {
+    async fn a_broken_render_unit_query_fails_where_a_stale_cursor_cold_starts() {
         let tmp = tempfile::tempdir().unwrap();
         let pool = open(
             &tmp.path().join("scan.doltlite_db"),
-            &["CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, bucket TEXT)"],
+            &["CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, render_unit TEXT)"],
         )
         .await
         .unwrap();
@@ -5622,23 +5623,23 @@ mod tests {
 
         let good = DiffScanSpec {
             fanout_query: None,
-            bucket_query: "SELECT DISTINCT to_bucket FROM dolt_diff_notes                            WHERE from_ref = ?1 AND to_ref = ?2 AND to_bucket IS NOT NULL",
+            render_unit_query: "SELECT DISTINCT to_render_unit FROM dolt_diff_notes                            WHERE from_ref = ?1 AND to_ref = ?2 AND to_render_unit IS NOT NULL",
         };
         // A cursor this store never had: a reset, a rebuild, a replaced store.
         let stale = "0000000000000000000000000000000000000000";
-        let scan = scan_buckets(&pool, Some(stale), &pin, &good)
+        let scan = scan_render_units(&pool, Some(stale), &pin, &good)
             .await
             .expect("a stale cursor cold-starts rather than failing");
         assert!(
-            scan.render.is_none() && scan.changed_buckets.is_none(),
+            scan.render.is_none() && scan.changed_render_units.is_none(),
             "cold start means `None`, i.e. render everything, and no range to probe"
         );
 
         let broken = DiffScanSpec {
             fanout_query: None,
-            bucket_query: "SELECT DISTINCT to_bucket FROM dolt_diff_notes_renamed_away                            WHERE from_ref = ?1 AND to_ref = ?2",
+            render_unit_query: "SELECT DISTINCT to_render_unit FROM dolt_diff_notes_renamed_away                            WHERE from_ref = ?1 AND to_ref = ?2",
         };
-        let err = scan_buckets(&pool, Some(&commit), &pin, &broken)
+        let err = scan_render_units(&pool, Some(&commit), &pin, &broken)
             .await
             .expect_err("a query naming a table that is not there must fail");
         assert!(

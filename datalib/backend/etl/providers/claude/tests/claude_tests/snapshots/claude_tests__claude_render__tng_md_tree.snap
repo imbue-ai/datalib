@@ -402,7 +402,6 @@ Bearings are given from the ship's current heading, not from galactic north.
 - Sector designations use the Federation catalogue number, never the local name.
 - An extrapolated position is written in parentheses.
 
-
 </div>
 
 
@@ -639,7 +638,6 @@ Write me a script that checks these coil readings.
 **[attachment: Pasted text]**
 > Coil 1: 98.2%
 > Coil 2: 97.1%
-
 
 </div>
 
@@ -942,7 +940,6 @@ Open on subspace band 3 unless the target is cloaked.
 - Klingon vessels: lead with rank, then ship name.
 - Romulan vessels: do not open first.
 
-
 </div>
 
 <div id="m-0b501c85-7ec0-8425-8204-a6321b1bfd7f" data-section-uuid="0b501c85-7ec0-8425-8204-a6321b1bfd7f" class="msg msg--claude">
@@ -951,6 +948,5 @@ Open on subspace band 3 unless the target is cloaked.
 
 Ops -> Tactical (Worf) -> First Officer (Riker) -> Captain (Picard).
 Medical emergencies route directly to Sickbay (Crusher).
-
 
 </div>

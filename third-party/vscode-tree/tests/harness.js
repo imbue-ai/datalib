@@ -37,6 +37,9 @@ const driveFolders = Array.from({ length: 2000 }, (_, i) =>
   node(`drive/f${i}`, `Stardate log ${41000 + i}`, 'Folder', i % 50 === 0 ? [node(`drive/f${i}/a`, 'Attachments', 'Folder')] : null),
 );
 
+// A mark for a source, as a page hands one: a URL the row draws.
+const MARK = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="teal"/></svg>');
+
 const LIBRARY = [
   node('folder/work', 'Starfleet', 'Folder', [
     node('src/email', 'Email', 'Source', [
@@ -61,6 +64,9 @@ const LIBRARY = [
   node('folder/personal', 'Personal', 'Folder', [node('src/chatgpt', 'ChatGPT', 'Source', null, 'no places below')]),
 ];
 
+// Slack's row draws a mark; the others draw none.
+LIBRARY[0].kids.find((n) => n.id === 'src/slack').icon = MARK;
+
 const fetched = [];
 const dataSource = {
   async getChildren(n) {
@@ -77,9 +83,27 @@ function freshCard() {
 
 // The element, as a page would use it. Resolves once the top level (and
 // whatever `viewState` opens) has loaded.
-function mountElement(viewState) {
+const opened = [];
+const menus = [];
+
+// `draw` is `{ css, label(node) }`: the page draws each row's label as a
+// `<b class="drawn">` holding `label(node)`, styled by `css`.
+function mountElement(viewState, draw) {
   fetched.length = 0;
+  opened.length = 0;
+  menus.length = 0;
   const tree = document.createElement('vs-tree');
+  tree.addEventListener('open', (e) => opened.push(e.detail.node.id));
+  tree.addEventListener('menu', (e) => menus.push({ id: e.detail.node.id, x: e.detail.x, y: e.detail.y }));
+  if (draw) {
+    tree.extraCss = draw.css;
+    const label = new Function('node', `return (${draw.label})(node)`);
+    tree.renderLabel = (node, el) => {
+      const b = el.appendChild(document.createElement('b'));
+      b.className = 'drawn';
+      b.textContent = label(node);
+    };
+  }
   if (viewState) tree.viewState = viewState;
   const ready = new Promise((r) => tree.addEventListener('ready', r, { once: true }));
   tree.dataSource = dataSource;
@@ -96,7 +120,7 @@ async function mountUpstream(options = {}, viewState) {
   const renderer = {
     templateId: 'node',
     renderTemplate: (container) => container.appendChild(document.createElement('span')),
-    renderElement: (n, _i, span) => (span.textContent = n.element.label),
+    renderElement: (n, _i, span) => (span.textContent = n.element.label + (window.suffix ?? '')),
     disposeTemplate() {},
   };
   const ROOT = { id: 'root' };
@@ -120,6 +144,8 @@ window.harness = {
   mountElement,
   mountUpstream,
   fetched,
+  opened,
+  menus,
   pageErrors,
   find: (id) => {
     const walk = (list) => {

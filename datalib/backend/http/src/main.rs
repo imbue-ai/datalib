@@ -91,6 +91,7 @@ fn rfc3339(s: &str) -> Result<String, String> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    datalib_sql_work::install();
     // Absolute before anything uses it: a step and an applet run with the
     // root as their working directory, and would resolve a relative one a
     // second time.

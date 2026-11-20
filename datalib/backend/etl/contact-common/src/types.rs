@@ -20,6 +20,11 @@ pub struct ContactDoc {
     /// one; `None` leaves the card at the top of its source. Its
     /// `markdown_uuid` and place in the tree are filled at render.
     pub address_book: Option<DataNodeRow>,
+    /// The groups the card is filed under, each a place in its address
+    /// book, described as every card naming it describes it
+    /// ([`crate::render::card_node`] for a group's own card). Empty where
+    /// upstream keeps none.
+    pub groups: Vec<DataNodeRow>,
     /// For a group, the handle each of `contact.members` is drawn by (in
     /// its order, `None` where the member has none), so its page lists
     /// them as chips. Empty for a person.

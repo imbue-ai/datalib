@@ -166,7 +166,7 @@ pub struct ScanResult {
     /// they are drawn from disjoint upstream id spaces, so a membership
     /// test can't confuse them.
     pub render: Option<HashSet<String>>,
-    /// Bucket keys the driver found stale whose row is gone from both
+    /// Render unit keys the driver found stale whose row is gone from both
     /// entity tables — declared with nothing so their pages go.
     pub gone: Vec<String>,
     pub new_head: Option<String>,
@@ -282,7 +282,7 @@ async fn parse_open(
     //
     // No commit means the store cannot be read, which is *not* the same as
     // the source holding nothing; reading the working set instead would be
-    // worse than either. An empty parse declares no bucket, so it deletes
+    // worse than either. An empty parse declares no render unit, so it deletes
     // nothing. See the plan's "The sink contract".
 
     // These three all read tables the download side also reads; the
@@ -333,10 +333,10 @@ async fn parse_open(
     parse_cowork(&mut parsed, cowork);
     parsed.docs_skipped = docs_skipped;
 
-    // Projects ride the same changed-bucket filter as conversations.
+    // Projects ride the same changed-render unit filter as conversations.
     // `project_name_by_uuid` is loaded unfiltered, though — an unchanged
     // conversation that *is* being re-rendered (because something else
-    // in its bucket moved) still has to resolve its project's name.
+    // in its render unit moved) still has to resolve its project's name.
     parsed.project_name_by_uuid = name_index(&all_projects);
     parsed.projects = match &scan.render {
         None => all_projects,
@@ -511,7 +511,7 @@ pub fn parse_cowork(parsed: &mut ParsedExport, sessions: Vec<LoadedCoworkSession
 /// Phase 1: union over `dolt_diff_conversations`,
 /// `dolt_diff_claude_attachments`, `dolt_diff_project_docs`,
 /// `dolt_diff_projects` and the two Cowork tables to project the
-/// changed bucket keys — conversation UUIDs from the first two, project
+/// changed render unit keys — conversation UUIDs from the first two, project
 /// UUIDs from the next two, Cowork task ids from the last two. A user or
 /// project rename reaches a conversation through the inputs it declared,
 /// so nothing fans out.
@@ -524,15 +524,15 @@ async fn scan_diff(
     cowork: &[LoadedCoworkSession],
     projects: &[ProjectRow],
 ) -> Result<ScanResult> {
-    let scan = datalib_etl::doltlite_raw::scan_buckets(
+    let scan = datalib_etl::doltlite_raw::scan_render_units(
         pool,
         range.cursor,
         pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
             fanout_query: None,
-            bucket_query: "
-                SELECT DISTINCT bucket_uuid FROM (
-                    SELECT coalesce(to_id, from_id) AS bucket_uuid
+            render_unit_query: "
+                SELECT DISTINCT render_unit_uuid FROM (
+                    SELECT coalesce(to_id, from_id) AS render_unit_uuid
                       FROM dolt_diff_conversations
                      WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                     UNION
@@ -556,12 +556,12 @@ async fn scan_diff(
                       FROM dolt_diff_cowork_events
                      WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                 )
-                WHERE bucket_uuid IS NOT NULL
+                WHERE render_unit_uuid IS NOT NULL
             ",
         },
     )
     .await?;
-    // The driver names buckets by the minted page uuid; the load wants
+    // The driver names render units by the minted page uuid; the load wants
     // the upstream uuid.
     let by_key: std::collections::HashMap<String, &str> = conversations
         .iter()

@@ -221,7 +221,7 @@ its own `path`. Each type declares its own:
 | lightroom | `catalog`, `backups` |
 | airvisual, facebook, google_takeout, linkedin | `export` |
 | signal, sms_backup_restore, whatsapp | `backup` |
-| file_inventory, media, pdf | `fswalk` |
+| file_inventory, markdown, media, pdf | `fswalk` |
 | beeper `texts` · apple_messages `messages` · apple_photos `library` · claude_code `sessions` · codex `sessions` · perseus `github` | |
 
 `datalib-step help <type>` prints one source's methods and fields.

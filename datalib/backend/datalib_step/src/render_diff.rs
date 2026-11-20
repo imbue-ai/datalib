@@ -1,5 +1,5 @@
 //! The diff group's render: the source's own render processors run
-//! twice — the buckets that moved between two raw commits, at the later
+//! twice — the render units that moved between two raw commits, at the later
 //! one and then at the earlier — into a collecting sink, the two sides
 //! subtracted (`datalib_etl_render::diff`), and the result written as
 //! one ordinary render tree. `docs/dev/plans/completed/diff_renderer.md`.
@@ -13,7 +13,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl_render::diff::{diff_document, Counts};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
-use datalib_etl_render::processor::{BucketEnd, Input, RenderCtx, RenderProcessor};
+use datalib_etl_render::processor::{Input, RenderCtx, RenderProcessor, RenderUnitEnd};
 use datalib_etl_render::section::Section;
 use datalib_schema::render_cursor::RenderCursorRow;
 
@@ -197,7 +197,7 @@ pub async fn run(
 #[derive(Default)]
 struct Side {
     docs: BTreeMap<String, Collected>,
-    buckets: BTreeMap<String, Vec<Input>>,
+    render_units: BTreeMap<String, Vec<Input>>,
     /// Set once the sink refused a document past the cap. The refusal
     /// is an error the processor sees too, but a processor is entitled
     /// to log a document's failure and carry on — so the side fails on
@@ -233,9 +233,9 @@ pub fn render_diff_source(
 
     tracing::info!(source = %name, from = %pair.from, to = %pair.to, "diff: starting");
     // One pass per side, each scanning from the other: the raw diff
-    // names the same rows either way, and a side renders the buckets of
+    // names the same rows either way, and a side renders the render units of
     // the rows that exist at its own pin. A row deleted between the two
-    // has no bucket at `to` — nothing there to load it into — and is
+    // has no render unit at `to` — nothing there to load it into — and is
     // named only by the pass at `from`; an added one only by the pass at
     // `to`. The stale set is empty rather than absent so the scan
     // decides alone: `None` would mean "render everything".
@@ -266,7 +266,7 @@ pub fn render_diff_source(
     .context("render the `from` side")?;
     tracing::info!(
         source = %name,
-        buckets = to_side.buckets.len(),
+        render_units = to_side.render_units.len(),
         to_docs = to_side.docs.len(),
         from_docs = from_side.docs.len(),
         "diff: both sides rendered"
@@ -309,7 +309,7 @@ pub fn render_diff_source(
                 markdown_uuid: uuid.to_string(),
                 source_id: name.clone(),
                 upstream_cursor: base.md.upstream_cursor.clone(),
-                bucket_key: base.md.bucket_key.clone(),
+                render_unit_key: base.md.render_unit_key.clone(),
                 render_version: base.md.render_version,
                 rows: diff.rows,
                 sections: diff.sections,
@@ -329,18 +329,18 @@ pub fn render_diff_source(
             docs += 1;
             progress.metric("documents_rendered_total", &[], docs as i64);
         }
-        // Every bucket either side rendered, with what the `to` side
+        // Every render unit either side rendered, with what the `to` side
         // read — the declaration a later run's reverse lookup would use,
         // and what the sweep below keys on.
-        for (bucket, inputs) in to_side.buckets.iter().chain(
+        for (render_unit, inputs) in to_side.render_units.iter().chain(
             from_side
-                .buckets
+                .render_units
                 .iter()
-                .filter(|(b, _)| !to_side.buckets.contains_key(*b)),
+                .filter(|(b, _)| !to_side.render_units.contains_key(*b)),
         ) {
             store
-                .put_inputs(bucket, inputs)
-                .with_context(|| format!("record inputs of bucket {bucket}"))?;
+                .put_inputs(render_unit, inputs)
+                .with_context(|| format!("record inputs of render unit {render_unit}"))?;
         }
         Ok(())
     })();
@@ -350,19 +350,19 @@ pub fn render_diff_source(
     }
     store.commit_batch()?;
 
-    // Every run is a full walk, so the per-bucket sweep has nothing to
+    // Every run is a full walk, so the per-render-unit sweep has nothing to
     // weigh: what a side declared goes the way it always has.
-    let buckets: BTreeMap<String, Ending> = to_side
-        .buckets
+    let render_units: BTreeMap<String, Ending> = to_side
+        .render_units
         .keys()
-        .chain(from_side.buckets.keys())
-        .map(|bucket| {
+        .chain(from_side.render_units.keys())
+        .map(|render_unit| {
             let ending = Ending {
                 fate: Fate::Swept,
                 inputs_unwritten: false,
                 render_version: None,
             };
-            (bucket.clone(), ending)
+            (render_unit.clone(), ending)
         })
         .collect();
     let stored_cursor = store.cursor()?;
@@ -375,7 +375,7 @@ pub fn render_diff_source(
             source_id: &name,
             sweep: true,
             keep: &emitted,
-            buckets: &buckets,
+            render_units: &render_units,
             storage: None,
             cursor: Some(&pair.to)
                 .filter(|to| {
@@ -468,17 +468,19 @@ fn collect(
             .insert(md.markdown_uuid.clone(), Collected { md, sections });
         Ok(())
     };
-    // A side that could not build a bucket has no document for it, and
+    // A side that could not build a render unit has no document for it, and
     // the diff shows it gone on that side.
-    let mut on_declare = |bucket: &str, end: BucketEnd<'_>| -> Result<()> {
+    let mut on_declare = |render_unit: &str, end: RenderUnitEnd<'_>| -> Result<()> {
         match end {
-            BucketEnd::Read(inputs) => {
-                side.buckets.insert(bucket.to_string(), inputs.to_vec());
+            RenderUnitEnd::Read(inputs) => {
+                side.render_units
+                    .insert(render_unit.to_string(), inputs.to_vec());
             }
-            BucketEnd::Excluded => {
-                side.buckets.insert(bucket.to_string(), Vec::new());
+            RenderUnitEnd::Excluded => {
+                side.render_units
+                    .insert(render_unit.to_string(), Vec::new());
             }
-            BucketEnd::Failed(_) => {}
+            RenderUnitEnd::Failed(_) => {}
         }
         Ok(())
     };
@@ -572,7 +574,7 @@ mod tests {
                         markdown_uuid: format!("d{i}"),
                         source_id: "s".into(),
                         upstream_cursor: None,
-                        bucket_key: None,
+                        render_unit_key: None,
                         render_version: 1,
                         rows: vec![],
                         sections: vec![Section::keyed(&format!("d{i}"), "x\n".into())],

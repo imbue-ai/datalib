@@ -68,7 +68,7 @@ when they are important.
 - **A source's name is the one the README's source grid uses.** It is
   the product a person recognizes, with the way in after it when that
   is not obvious: "Calendar (CalDAV)", "Google Voice (Takeout)",
-  "Signal backups", "Local PDFs". The entry's `label` and its
+  "Signal backups", "PDFs (Local)". The entry's `label` and its
   line in `datalib/backend/columns/src/source_catalog.rs` (the name on
   the Manage screen and in the grid) say it alike; `//:lint_repo`
   check 13 holds them to it.

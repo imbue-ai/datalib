@@ -14,7 +14,7 @@ use datalib_etl_chat_common::branches::{reading_order, TreeNode};
 use datalib_etl_chat_common::normalize::{capitalize, iso_to_ms, json_pretty_sorted};
 use datalib_etl_chat_common::people::stand_in_account;
 use datalib_etl_chat_common::render::{
-    render_all as cc_render_all, Buckets, ChatRenderer, RenderProfile, ENTITY_KIND_CONVERSATION,
+    render_all as cc_render_all, ChatRenderer, RenderProfile, RenderUnits, ENTITY_KIND_CONVERSATION,
 };
 use datalib_etl_chat_common::types::{
     own_stamp_ms, AuthorKind, ItemKind, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
@@ -84,6 +84,7 @@ fn profile() -> RenderProfile {
         chat_entity_kind: ENTITY_KIND_CONVERSATION,
         render_version: RENDER_VERSION,
         text_format: TextFormat::Markdown,
+        layout: datalib_etl_chat_common::Layout::Transcript,
     }
 }
 
@@ -109,6 +110,7 @@ fn project_profile() -> RenderProfile {
         chat_entity_kind: ids::KIND_PROJECT,
         render_version: RENDER_VERSION,
         text_format: TextFormat::Markdown,
+        layout: datalib_etl_chat_common::Layout::Transcript,
     }
 }
 
@@ -135,12 +137,12 @@ pub fn render_all(
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
     blob_bytes: u64,
-) -> Result<Buckets> {
+) -> Result<RenderUnits> {
     let elapsed_ms = parsed.scan.scan_elapsed.map(|d| d.as_millis() as u64);
     tracing::info!(
         source = source_id,
         scan_elapsed_ms = elapsed_ms,
-        buckets_to_render = parsed
+        render_units_to_render = parsed
             .scan
             .render
             .as_ref()
@@ -169,7 +171,7 @@ pub fn render_all(
     let mut renderer = ChatRenderer::new(
         &profile,
         source_id,
-        chats.iter().map(|c| c.buckets.len()).sum(),
+        chats.iter().map(|c| c.render_units.len()).sum(),
         progress,
         &mut *on_doc_complete,
     );
@@ -186,7 +188,7 @@ pub fn render_all(
             .try_for_each(|chat| renderer.render_chat(chat, &BlobBundle::default())),
     }
     .context("claude chat-common render")?;
-    let mut buckets = renderer.finish().buckets;
+    let mut render_units = renderer.finish().render_units;
 
     // Projects are a second pass with their own profile. Each document is
     // filed by its id, and a project's id is never a conversation's. No
@@ -207,10 +209,10 @@ pub fn render_all(
             on_doc_complete,
         )
         .context("claude project render")?;
-        buckets.extend(projects.buckets);
+        render_units.extend(projects.render_units);
     }
 
-    Ok(buckets)
+    Ok(render_units)
 }
 
 fn build_chat(
@@ -508,7 +510,7 @@ fn build_chat(
         upstream_account: None,
         org_uuid: conv.org_uuid.clone(),
         org_name: conv.org_name.clone(),
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
             markdown_uuid: chat_uuid,
             source_ref: None,
@@ -675,7 +677,7 @@ fn build_project_page(
         upstream_account: None,
         org_uuid: project.org_uuid.clone(),
         org_name: project.org_name.clone(),
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
             markdown_uuid: page_uuid,
             source_ref: None,

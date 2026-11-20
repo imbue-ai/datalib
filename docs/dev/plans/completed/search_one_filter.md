@@ -1,10 +1,12 @@
 # Search: one filter, two rankers
 
-**Status: steps 1 and 2 built (2026-11-19); step 3 proposed.** Answers
+**Status: built (2026-11-20), kept as the record of what was decided
+and why.** Steps 1 and 2 landed (#1892, #1912; word forms in #1904,
+#1906 and #1928); step 3 was measured and held off (below). Answers
 [#1887](https://github.com/imbue-ai/datalib/issues/1887). Four tests
 reproduce what step 1 fixes; they are listed under "What goes wrong
-today". [`docs/user/searching.md`](../../user/searching.md) says what
-a person is promised now.
+today". [`docs/user/searching.md`](../../../user/searching.md) says
+what a person is promised now; the code it names is the reference.
 
 Step 1 as built differs from its description below in three ways.
 
@@ -221,14 +223,23 @@ shape costs a rebuild, not a migration (AGENTS.md).
   measure it with `scripts/search_eval.py` before and after. Only the
   keyword tables are rebuilt; no chunk is embedded again.
 
-  **Measured, then reversed in part.** Without stems, 454 queries on a
-  real library with `semantic:off` went from 54% to 52% found in the
-  top 10, and lost 15 targets. With meaning on, 7 of those came back;
-  most of the other 8 were long descriptions of a passage in one long
-  page. So bare words (`+word` and `-word` too) match on a second
-  table, `search_stems` (`porter unicode61 remove_diacritics 2`), and a
-  quoted phrase on `search_fts`, words as written. The cost is the
-  second table.
+  **Tried both ways.** Without stems, 454 queries on a real library with
+  `semantic:off` went from 54% to 52% found in the top 10; with meaning
+  on, about half the lost targets came back, most of the rest being long
+  descriptions of a passage in one long page. #1906 then put stems back
+  for bare words, in a second table beside the one quoted phrases read,
+  and a day later they went again, for these reasons:
+  - Porter only strips regular English endings. "ran" does not find
+    "run", nor "went" "go", "mice" "mouse" or "children" "child"; nor
+    does any German or Italian form find another ("Häuser" and "Haus",
+    "parlato" and "parlare", "libri" and "libro").
+  - It merges words that differ: "universe" finds "university",
+    "organization" "organ", "news" "new".
+  - Meaning already finds all of these, irregular forms, synonyms and
+    other languages included.
+  - It cost a second keyword table (about 280 MB) and long searches: with
+    stems a search of eight words or more took a median 1.7 to 2.5 s on
+    the words alone, against 0.7 s without.
 - **A uuid stored one way.** #1886 matches a uuid however it is typed by
   asking each key for four spellings (dashed or not, lowercase or
   capitals, `IN (SELECT value FROM json_each(?))`), and the pasted-id
@@ -258,26 +269,52 @@ drop columns only some kinds use. The cost is the listing with no words:
 `rows.touched_at_utc` rather than walk a covering index. Measure that on
 a real library before deciding.
 
+**Measured (2026-11-20) on a copy of a real library's index (1.2M rows),
+and held off.** The seven keys as terms add 3.6M terms (66 MB) and need
+each row's time in `rows` again (about 30 MB); their seven indexes,
+which go, are 711 MB. Times in ms, first run / best of three:
+
+| | today | from the terms |
+|---|---|---|
+| `source:` alone, 585k rows, first page | 1 / 0 | 308 / 41 |
+| `source:` alone, 82k rows | 0 / 0 | 12 / 5 |
+| `source:` + `kind:` | 17 / 0 | 332 / 90 |
+| `-source:` | 14 / 0 | 287 / 260 |
+| count for `source:` | 33 / 23 | 11 / 9 |
+| group by source | 501 / 594 | 137 / 90 |
+| sort the grid by Source | 251 / 223 | 899 / 487 |
+
+Grouping, the suggested values and sorting by a column read the same
+indexes, so all four would have to move to the terms, not filtering
+alone; without its index, sorting by Source reads the whole table (8 to
+9 s). Two other layouts were tried: the row's time inside the term's
+key keeps paging as fast as today but costs 213 MB for these terms
+alone; walking today's newest-first index and keeping the rows a key's
+terms name is fast for a large key and slow for a small old one (115 ms
+for 201 rows). About 0.6 GB of a 5.4 GB file was not worth a slower
+listing and four moved paths.
+
+Two smaller findings from the same measurement:
+
+- **Indexes that leave out empty values** shrink the sparse columns'
+  indexes by about 310 MB (`channel` 88 MB to 2.7, `notion_page_uuid` 90
+  to 6.8, `diff_status` 88 to 0, `project` 99 to 39, `account` 99 to
+  65), with lookups as fast, provided the condition is `IS NOT NULL`
+  alone (a `!= ''` beside it keeps the planner from using them). Not
+  done: grouping and sorting by such a column then read the whole
+  table, 0.5 s becoming 11 to 14 s.
+- **`contact:`, `email:` and `phone:`** read a contact card's own
+  columns, which no index served: one search took 35 to 44 s. They were
+  removed (`with:` finds a card by its name, address or number), and
+  the grid's Contact, Email and Phone columns no longer filter.
+
 ## Decided (2026-11-19)
 
 - **Bare words are all required** of the words ranker, as in Google,
   Gmail, Slack, SQLite FTS5 and Postgres's `plainto_tsquery` (Lucene's
   default is any). They are not a filter: meaning still finds a document
   holding none of them. Unchanged from today.
-- **A bare word matches its other forms (porter stems), and a quoted
-  phrase is exact**: step 2. First built as no stemming at all, leaving
-  word forms to meaning; that lost recall with meaning off.
+- **Meaning, not stemming, covers word forms**, and a quoted phrase is
+  exact: step 2. Decided again on 2026-11-20, after trying stems back
+  (above).
 - **No prefix matching.** The search runs on Enter.
-
-## What changes in `searching.md`
-
-It promises three matchers ("By their fields", "By their words", "By
-their meaning") and says nothing of `"…"`, `+word` or `-word` in free
-text. It would gain the table above and lose "By their fields", keep
-"Free text made only of ids…", lose "Dates and words together"'s rule
-that words rank a chat by a message from another day (a filter now
-applies to the message), and say that `total` is the cut. Its line that
-"the free text in the search box does not reach photos" reads as wrong
-in the code (not tried): the names matcher looks free text up in every
-kind of term, captions and keywords included. Step 1 makes the line
-true, unless a photo's caption is given a piece in the keyword index.

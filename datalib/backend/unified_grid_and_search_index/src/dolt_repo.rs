@@ -11,7 +11,8 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use crate::children::{
-    self, Anchor, Ask, ChildrenFailure, ChildrenPage, Key, NodeFacts, RowFacts, Side, Split, Via,
+    self, Anchor, Ask, ChildrenFailure, ChildrenPage, Key, NodeFacts, Only, RowFacts, Scope, Side,
+    Split, Via,
 };
 use crate::db::{build_where, matching_sql, vals_holding, ChatMeta, KEPT_DOCUMENTS, KEPT_ROWS};
 use crate::group::{
@@ -604,9 +605,12 @@ fn older_than_the_tree(e: &sqlx::Error) -> bool {
 }
 
 impl At {
-    async fn child_key(&mut self, parent: &str, uuid: &str) -> Result<Option<String>, RepoError> {
-        match sqlx::query_scalar(children::CHILD_KEY_SQL)
-            .bind(parent)
+    async fn child_key(&mut self, scope: &Scope, uuid: &str) -> Result<Option<String>, RepoError> {
+        let parent = scope.parent.spelled();
+        // Audited: `child_key_sql` is built from literals alone; every
+        // value is bound.
+        match sqlx::query_scalar(sqlx::AssertSqlSafe(children::child_key_sql(scope)))
+            .bind(scope.parent.bound())
             .bind(uuid)
             .fetch_optional(&mut *self.tx)
             .await
@@ -621,7 +625,7 @@ impl At {
 
     async fn children_past(
         &mut self,
-        parent: &str,
+        scope: &Scope,
         via: Via,
         side: Side,
         split: &Split,
@@ -630,17 +634,19 @@ impl At {
             Side::Before => split.before,
             Side::After => split.after,
         };
+        let parent = scope.parent.spelled();
+        let Some(sql) = children::children_sql(scope, via, side, split.at_is_after) else {
+            return Ok(Vec::new());
+        };
         // Audited: `children_sql` is built from literals alone; every
         // value is bound.
-        let read: Result<Vec<(String, String)>, _> = sqlx::query_as(sqlx::AssertSqlSafe(
-            children::children_sql(via, side, split.at_is_after),
-        ))
-        .bind(parent)
-        .bind(&split.at.sort_key)
-        .bind(&split.at.uuid)
-        .bind((want + 1) as i64)
-        .fetch_all(&mut *self.tx)
-        .await;
+        let read: Result<Vec<(String, String)>, _> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .bind(scope.parent.bound())
+            .bind(&split.at.sort_key)
+            .bind(&split.at.uuid)
+            .bind((want + 1) as i64)
+            .fetch_all(&mut *self.tx)
+            .await;
         match read {
             Ok(rows) => Ok(rows
                 .into_iter()
@@ -680,6 +686,7 @@ impl At {
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
         );
         let rows: Vec<RowRead> = sqlx::query_as(children::ROW_FACTS_SQL)
             .bind(&wanted)
@@ -698,24 +705,49 @@ impl At {
             };
         let rows = rows
             .into_iter()
-            .map(|(uuid, kind, author, created_at, preview, markdown_uuid)| {
-                (
-                    uuid,
-                    RowFacts {
-                        kind,
-                        author,
-                        created_at,
-                        preview,
-                        markdown_uuid,
-                    },
-                )
-            })
+            .map(
+                |(uuid, kind, author, author_handle, created_at, preview, markdown_uuid)| {
+                    (
+                        uuid,
+                        RowFacts {
+                            kind,
+                            author,
+                            author_handle,
+                            created_at,
+                            preview,
+                            markdown_uuid,
+                        },
+                    )
+                },
+            )
             .collect();
         let nodes = nodes
             .into_iter()
             .map(|(uuid, kind, name)| (uuid, NodeFacts { kind, name }))
             .collect();
         Ok((rows, nodes))
+    }
+
+    /// Which of `keys` have places below them.
+    async fn places_below(
+        &mut self,
+        keys: &[Key],
+    ) -> Result<std::collections::HashSet<String>, RepoError> {
+        if keys.is_empty() {
+            return Ok(Default::default());
+        }
+        let uuids: Vec<&str> = keys.iter().map(|k| k.uuid.as_str()).collect();
+        let wanted = serde_json::to_string(&uuids)
+            .map_err(|e| RepoError::Internal(format!("encode places: {e}")))?;
+        match sqlx::query_scalar(children::PLACES_BELOW_SQL)
+            .bind(&wanted)
+            .fetch_all(&mut *self.tx)
+            .await
+        {
+            Ok(below) => Ok(below.into_iter().collect()),
+            Err(e) if older_than_the_tree(&e) => Ok(Default::default()),
+            Err(e) => Err(RepoError::Internal(format!("find places below: {e}"))),
+        }
     }
 
     /// Runs [`ordered_sql`]; a table the index does not have yet holds no
@@ -962,7 +994,7 @@ impl IndexRepo for DoltRepo {
 
     async fn children(
         &self,
-        parent: &str,
+        scope: &Scope,
         ask: &Ask,
         limit: usize,
     ) -> Result<ChildrenPage, ChildrenFailure> {
@@ -970,20 +1002,25 @@ impl IndexRepo for DoltRepo {
             return Ok(ChildrenPage::default());
         };
         let item_key = match ask {
-            Ask::Around(Anchor::Item(uuid)) => at.child_key(parent, uuid).await?,
+            Ask::Around(Anchor::Item(uuid)) => at.child_key(scope, uuid).await?,
             _ => None,
         };
-        let split = children::split(parent, ask, item_key, limit)?;
-        let mut before = Vec::with_capacity(Via::ALL.len());
-        let mut after = Vec::with_capacity(Via::ALL.len());
-        for via in Via::ALL {
-            before.push(at.children_past(parent, via, Side::Before, &split).await?);
-            after.push(at.children_past(parent, via, Side::After, &split).await?);
+        let split = children::split(&scope.parent.spelled(), ask, item_key, limit)?;
+        let vias = scope.vias();
+        let mut before = Vec::with_capacity(vias.len());
+        let mut after = Vec::with_capacity(vias.len());
+        for via in vias {
+            before.push(at.children_past(scope, via, Side::Before, &split).await?);
+            after.push(at.children_past(scope, via, Side::After, &split).await?);
         }
         let cut = children::window(&split, before, after);
         let (rows, nodes) = at.child_facts(&cut.keys).await?;
+        let below = match scope.only {
+            Only::Places => Some(at.places_below(&cut.keys).await?),
+            Only::All => None,
+        };
         Ok(ChildrenPage {
-            children: children::describe(cut.keys, &rows, &nodes),
+            children: children::describe(cut.keys, &rows, &nodes, below.as_ref()),
             before: cut.before,
             after: cut.after,
             at: Some(at.commit),

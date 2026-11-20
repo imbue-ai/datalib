@@ -352,7 +352,7 @@ fn render_threads(
         &store,
         "src",
         datalib_etl_render::pages::PageSize {
-            buckets: 1,
+            render_units: 1,
             bytes: 1,
         },
         &datalib_etl::progress::Progress::noop(),
@@ -374,7 +374,7 @@ fn render_threads(
 }
 
 fn unread_count(md: &str) -> usize {
-    md.matches("msg--slack unread").count()
+    md.matches("msg--slack msg--chat unread").count()
 }
 
 /// A top-level message past its conversation's mark, and a reply past

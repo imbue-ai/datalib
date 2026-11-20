@@ -316,10 +316,10 @@ command = "datalib-applet datalib_contacts"
 # environment variables.
 [env]
 # How much a render holds in memory at once. It reads the raw store a
-# page of `buckets` at a time (threads, conversations: whatever the
+# page of render units at a time (threads, conversations: whatever the
 # source renders as one unit), and loads at most `blob_mb` of their
 # attachments together. Smaller pages hold less and cost more queries;
-# changing them changes no document. The value is `<buckets>,<blob_mb>`;
+# changing them changes no document. The value is `<render_units>,<blob_mb>`;
 # leave it out, or either side empty, for the defaults, which are these. Email and Slack read both; every other
 # render with attachments reads `blob_mb`.
 DATALIB_STEP_RENDER_PAGES = "500,64"

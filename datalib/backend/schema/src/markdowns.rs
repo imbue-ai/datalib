@@ -72,12 +72,12 @@ pub struct MarkdownRow {
     /// templating changes) forces a global re-render on the next run.
     #[col(sql = "VARCHAR(32)")]
     pub renderer_version: Option<String>,
-    /// The bucket this document was rendered from — the unit the
+    /// The render unit this document was rendered from — the unit the
     /// provider loads, a conversation or a thread or a page — so a
-    /// bucket that re-renders to fewer documents can drop the extras.
-    /// NULL from a renderer that has not been ported to declare buckets.
+    /// render unit that re-renders to fewer documents can drop the extras.
+    /// NULL from a renderer that has not been ported to declare render units.
     #[col(sql = "VARCHAR(256)")]
-    pub bucket_key: Option<String>,
+    pub render_unit_key: Option<String>,
     /// blake3 of the document's text, its sections end to end, as hex: what
     /// the search index compares to learn whether it holds this rendering.
     /// NULL from a renderer that declares no sections.

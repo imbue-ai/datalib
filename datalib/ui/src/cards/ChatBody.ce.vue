@@ -42,7 +42,7 @@ import {
   type ChipEntry,
   type ChipHost,
 } from "./chipActions";
-import { decorateDates, rewriteDatesForCopy } from "./dates";
+import { decorateChatDays, decorateDates, rewriteDatesForCopy } from "./dates";
 import { timeView } from "@/config/timeView";
 import { decorateEntities, entities } from "./entities";
 import HandlePopover from "./HandlePopover.ce.vue";
@@ -53,7 +53,8 @@ import {
   finishFrameClick,
   isBrowserClick,
   linkFromClick,
-  rewriteIdButtonsForCopy,
+  linkOfButton,
+  rewriteLinkButtonsForCopy,
   type ClickedLink,
 } from "./chatLink";
 import { DOC_FRAME_SRCDOC, asElement, forwardAppKeys, mirrorDensity } from "./docFrame";
@@ -61,7 +62,7 @@ import { DOC_FRAME_SRCDOC, asElement, forwardAppKeys, mirrorDensity } from "./do
 // the preview page behaves like the app rather than imitating it.
 import {
   decorateLongMessages,
-  injectCopyUuidButtons,
+  injectCopyLinkButtons,
   openEnclosingDetails,
   scrollSectionToTop,
   sectionEl,
@@ -91,9 +92,11 @@ const props = defineProps<{
    * source and destination is visually obvious across columns.
    */
   hoverAnchorUuid?: string | null;
-  /** The markdown_uuid of the body we're rendering: what a copied 🆔
-   *  link names. */
+  /** The markdown_uuid of the body we're rendering: the page a 🔗
+   *  button's link names. */
   markdownUuid?: string | null;
+  /** The document's title, written into a 🔗 link for a person to read. */
+  docTitle?: string | null;
   /**
    * Which of the body's remote references may load, through the
    * server: the allow-list applied (`remoteMedia.ts`). Absent: none.
@@ -326,14 +329,14 @@ function onRemoteChipClick(ev: MouseEvent) {
 }
 
 async function onCopyClick(ev: MouseEvent) {
-  const btn = asElement(ev.target)?.closest<HTMLButtonElement>("button.copy-uuid");
+  const btn = asElement(ev.target)?.closest<HTMLButtonElement>("button.copy-link");
   if (!btn) return;
   ev.preventDefault();
   ev.stopPropagation();
-  const uuid = btn.dataset.uuid || "";
-  if (!uuid) return;
+  const markdownUuid = props.markdownUuid;
+  if (!btn.dataset.uuid || !markdownUuid) return;
   try {
-    await navigator.clipboard.writeText(uuid);
+    await navigator.clipboard.writeText(linkOfButton(btn, markdownUuid, props.docTitle ?? ""));
     const prev = btn.textContent;
     btn.textContent = "✓";
     btn.classList.add("copied");
@@ -510,12 +513,13 @@ function paint() {
   if (kind === "new") emit("painted");
   chartStops.push(mountTimeSeries(el));
   // The document card's title bar has the page's own ID button.
-  injectCopyUuidButtons(el, { pageTitle: false });
+  injectCopyLinkButtons(el, { pageTitle: false });
   decorateRemoteMedia(el);
   decorateLongMessages(el);
   void redrawHandles();
   void decorateEntities(el);
   decorateDates(el);
+  decorateChatDays(el);
   decorateEdgeSources();
   if (kind === "grew" && anchor) {
     // A page drawn above pushed what the reader was looking at down; put
@@ -586,10 +590,11 @@ function onFrameLoad() {
   on("scroll", askNearEnds);
   on("copy", (ev) => {
     const markdownUuid = props.markdownUuid;
+    const title = props.docTitle ?? "";
     copyWithHandles(ev, doc.body, (f) => {
       const dates = rewriteDatesForCopy(f);
-      const ids = markdownUuid ? rewriteIdButtonsForCopy(f, markdownUuid) : false;
-      return dates || ids;
+      const links = markdownUuid ? rewriteLinkButtonsForCopy(f, markdownUuid, title) : false;
+      return dates || links;
     });
   });
   on("contextmenu", (ev) => {
@@ -618,7 +623,9 @@ watch([() => props.pieces, () => props.remoteAccept], async () => {
 });
 // The clock's zone or format changed: the same dates, read anew.
 watch(timeView, () => {
-  if (body.value) decorateDates(body.value);
+  if (!body.value) return;
+  decorateDates(body.value);
+  decorateChatDays(body.value);
 });
 watch(
   () => props.selectedSectionUuid,

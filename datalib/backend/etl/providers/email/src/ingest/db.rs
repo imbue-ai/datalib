@@ -438,7 +438,7 @@ pub struct EmailJoins {
 }
 
 /// Bag passed to render's sync render path. Attachment bytes are
-/// loaded per bucket as a [`BlobBundle`] by `render::parse`, not
+/// loaded per render unit as a [`BlobBundle`] by `render::parse`, not
 /// here.
 #[derive(Clone, Default)]
 pub struct LoadedRaw {

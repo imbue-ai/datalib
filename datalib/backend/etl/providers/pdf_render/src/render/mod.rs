@@ -14,7 +14,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{close_open_blocks, escape_name_inline};
-use datalib_etl_render::inputs::{Bucket, Buckets, Input, RawRange};
+use datalib_etl_render::inputs::{Input, RawRange, RenderUnit, RenderUnits};
 use datalib_etl_render::section::{msg_class, Section};
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 
@@ -32,7 +32,7 @@ pub struct RenderSummary {
     /// stale rather than gone.
     pub failed_blake3s: std::collections::HashSet<String>,
     /// Each failure, for the processor to record as the document's
-    /// problem and its bucket's failure.
+    /// problem and its render unit's failure.
     pub failures: Vec<Failure>,
 }
 
@@ -103,22 +103,22 @@ pub fn inputs_of(t: &RenderTarget, scan_meta_id: Option<&str>) -> Vec<Input> {
     inputs
 }
 
-/// Every bucket a pass over `to_render` produces, for the processor to
+/// Every render unit a pass over `to_render` produces, for the processor to
 /// declare: the ones looked at, with nothing, then the ones converted,
 /// with what they read.
-pub fn buckets_of(
+pub fn render_units_of(
     looked_at: Option<&std::collections::HashSet<String>>,
     converted: &[RenderTarget],
     scan_meta_id: Option<&str>,
-) -> Buckets {
+) -> RenderUnits {
     looked_at
         .into_iter()
         .flatten()
-        .map(|blake3| Bucket {
+        .map(|blake3| RenderUnit {
             key: blake3.clone(),
             inputs: Vec::new(),
         })
-        .chain(converted.iter().map(|t| Bucket {
+        .chain(converted.iter().map(|t| RenderUnit {
             key: t.blake3.clone(),
             inputs: inputs_of(t, scan_meta_id),
         }))
@@ -311,8 +311,9 @@ fn render_one(
         created_at: t.doc_created_at.as_deref(),
         modified_at: t.doc_modified_at.as_deref(),
     };
-    let rows = grid_rows::rows_for_document(source_id, &meta, &page_rows);
-    let node = grid_rows::document_node(source_id, &meta);
+    let folders = grid_rows::folders(source_id, doc_uuid, &t.rel_path, &t.path_ids);
+    let rows = grid_rows::rows_for_document(source_id, &meta, &page_rows, &folders.at);
+    let node = grid_rows::document_node(source_id, &meta, &folders.at);
 
     RenderedMarkdown {
         searchable: true,
@@ -320,16 +321,16 @@ fn render_one(
         markdown_uuid: doc_uuid.to_string(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
-        // The bucket is the raw row, not the document: the id carries a
+        // The render unit is the raw row, not the document: the id carries a
         // stamp the diff cannot see.
-        bucket_key: Some(t.blake3.clone()),
+        render_unit_key: Some(t.blake3.clone()),
         render_version: RENDER_VERSION,
         rows,
         sections,
         edges: Vec::new(),
         contacts: Vec::new(),
-        data_nodes: vec![node],
-        filings: Vec::new(),
+        data_nodes: folders.nodes.into_iter().chain([node]).collect(),
+        filings: folders.filings,
         photos: Vec::new(),
         problems,
         front,
@@ -474,7 +475,7 @@ pub struct PdfScan {
 
 /// Ask the raw store which documents moved since the cursor.
 ///
-/// The bucket is the document's blake3, which is also its identity — for
+/// The render unit is the document's blake3, which is also its identity — for
 /// this provider "changed" and "different document" are the same
 /// statement. `pdf_paths` joins the union because a file appearing at a
 /// new path is how a document enters the corpus, even when its bytes
@@ -485,13 +486,13 @@ async fn scan_changed(db: &RawDb, range: RawRange<'_>) -> Result<PdfScan> {
         .pin()
         .expect("open_reader returns a pinned handle")
         .clone();
-    let scan = datalib_etl::doltlite_raw::scan_buckets(
+    let scan = datalib_etl::doltlite_raw::scan_render_units(
         db.pool(),
         range.cursor,
         &pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
             fanout_query: None,
-            bucket_query: "
+            render_unit_query: "
                 SELECT DISTINCT blake3 FROM (
                     SELECT coalesce(to_blake3, from_blake3) AS blake3
                       FROM dolt_diff_pdf_documents
@@ -506,7 +507,7 @@ async fn scan_changed(db: &RawDb, range: RawRange<'_>) -> Result<PdfScan> {
         },
     )
     .await?;
-    // The driver names stale buckets by blake3, as the diff does.
+    // The driver names stale render units by blake3, as the diff does.
     Ok(PdfScan {
         render: range.narrow(scan.render.as_ref()),
         new_head: scan.new_head,

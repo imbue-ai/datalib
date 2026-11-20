@@ -15,7 +15,7 @@ use datalib_etl_chat_common::types::{
 };
 use datalib_etl_chat_common::RenderTarget;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::inputs::{Bucket, Inputs, RawRange};
+use datalib_etl_render::inputs::{Inputs, RawRange, RenderUnit};
 use datalib_etl_render::pages::PageSize;
 use datalib_handle::Handle;
 use serde_json::Value;
@@ -65,20 +65,21 @@ fn profile() -> RenderProfile {
         chat_entity_kind: ids::KIND_SESSION,
         render_version: RENDER_VERSION,
         text_format: TextFormat::Markdown,
+        layout: datalib_etl_chat_common::Layout::Transcript,
     }
 }
 
 const PROJECT_KIND: &str = "Claude Code Project";
 
 /// Renders the transcripts this run has to, a page at a time;
-/// `on_buckets` hears each page's buckets before the next is read.
+/// `on_render_units` hears each page's render units before the next is read.
 #[allow(clippy::too_many_arguments)]
 pub fn render(
     raw_dir: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-    on_buckets: &mut dyn FnMut(&[Bucket]) -> Result<()>,
+    on_render_units: &mut dyn FnMut(&[RenderUnit]) -> Result<()>,
     range: RawRange<'_>,
     size: PageSize,
     max_tool_result_bytes: usize,
@@ -96,7 +97,7 @@ pub fn render(
             progress,
             on_doc_complete,
         },
-        on_buckets,
+        on_render_units,
     )
 }
 
@@ -297,7 +298,7 @@ fn build_chat(
         upstream_account: None,
         org_uuid: str_of(meta, "org_uuid").map(str::to_string),
         org_name: None,
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
             markdown_uuid: id.uuid,
             // A subagent's transcript is its own kind of document; the
@@ -677,7 +678,7 @@ mod tests {
         assert_eq!(c.display, "Deflector realignment");
         assert_eq!(c.project.as_deref(), Some("enterprise"));
         assert_eq!(c.external_id.as_deref(), Some("s1"));
-        let items = &c.buckets[0].items;
+        let items = &c.render_units[0].items;
         let labels: Vec<&str> = items
             .iter()
             .map(|i| i.kind_label.as_deref().unwrap())
@@ -740,7 +741,7 @@ mod tests {
             ),
         ];
         let chats = build_chats("cc", &transcripts, &records, &titles(&transcripts), 1024);
-        let texts: Vec<&str> = chats[0].buckets[0]
+        let texts: Vec<&str> = chats[0].render_units[0]
             .items
             .iter()
             .filter_map(|i| i.text.as_deref())
@@ -790,11 +791,11 @@ mod tests {
             agent.display,
             "Scan the emitter logs — subagent of Deflector realignment"
         );
-        assert_eq!(agent.buckets[0].items.len(), 1);
+        assert_eq!(agent.render_units[0].items.len(), 1);
         assert_ne!(agent.chat_uuid, chats[0].chat_uuid);
         let parent = chats.iter().find(|c| c.id == "s1").unwrap();
         assert_eq!(
-            parent.buckets[0].items.len(),
+            parent.render_units[0].items.len(),
             1,
             "the subagent's records stay out of the parent"
         );
@@ -818,7 +819,7 @@ mod tests {
             ),
         ];
         let chats = build_chats("cc", &transcripts, &records, &titles(&transcripts), 1024);
-        let labels: Vec<&str> = chats[0].buckets[0]
+        let labels: Vec<&str> = chats[0].render_units[0]
             .items
             .iter()
             .map(|i| i.kind_label.as_deref().unwrap())
@@ -838,9 +839,9 @@ mod tests {
             "2364-04-11T10:00:00.000Z",
             json!({"type": "user", "isMeta": true, "message": {"content": "Caveat: …"}}),
         )];
-        let it = &build_chats("cc", &transcripts, &records, &titles(&transcripts), 1024)[0].buckets
-            [0]
-        .items[0];
+        let it = &build_chats("cc", &transcripts, &records, &titles(&transcripts), 1024)[0]
+            .render_units[0]
+            .items[0];
         assert_eq!(it.kind_label.as_deref(), Some("Harness Message"));
         assert!(it.is_aside);
     }
@@ -886,7 +887,7 @@ mod tests {
             user("old", 5, json!({"message": {"content": "Engage"}})),
         ];
         let chats = build_chats("cc", &transcripts, &records, &titles(&transcripts), 1024);
-        let said: Vec<(&str, &str, &str)> = chats[0].buckets[0]
+        let said: Vec<(&str, &str, &str)> = chats[0].render_units[0]
             .items
             .iter()
             .map(|i| {

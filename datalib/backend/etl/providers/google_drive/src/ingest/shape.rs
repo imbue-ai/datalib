@@ -32,6 +32,17 @@ pub fn order_file_entry(entry: &Value) -> Value {
     out
 }
 
+/// What a listing entry says of where the file is: its `id` and its
+/// `parents`, sorted, left out for a file in no folder.
+pub fn file_parents(entry: &Value) -> Option<Value> {
+    let id = entry.get("id")?.clone();
+    let mut out = serde_json::json!({ "id": id });
+    if let Some(parents) = order_file_entry(entry).get("parents") {
+        out["parents"] = parents.clone();
+    }
+    Some(out)
+}
+
 /// Take every image link out of a native file, as `(JSON pointer, URL)`
 /// in the order they appear: a Doc's `contentUri`s, a deck's
 /// `contentUrl`s. Google signs each afresh on every read and it expires

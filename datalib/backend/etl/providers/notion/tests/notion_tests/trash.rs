@@ -56,7 +56,7 @@ fn document(store: &Path, id: &str) -> String {
     let parsed = parse_api_dir(store, RawRange::cold()).unwrap();
     let mut docs = Vec::new();
     let mut on_doc = |md: datalib_etl_render::grid_index::RenderedMarkdown| {
-        docs.push((md.bucket_key.clone(), join(&md.sections)));
+        docs.push((md.render_unit_key.clone(), join(&md.sections)));
         Ok(())
     };
     render_notion(
@@ -69,7 +69,7 @@ fn document(store: &Path, id: &str) -> String {
     )
     .unwrap();
     docs.into_iter()
-        .find(|(bucket, _)| bucket.as_deref() == Some(id))
+        .find(|(render_unit, _)| render_unit.as_deref() == Some(id))
         .map(|(_, markdown)| markdown)
         .unwrap()
 }
@@ -82,7 +82,7 @@ fn head(store: &Path) -> String {
         .unwrap()
 }
 
-/// The buckets a warm render from `from` is handed.
+/// The render units a warm render from `from` is handed.
 fn rendered_since(store: &Path, from: &str) -> HashSet<String> {
     let stale: HashSet<String> = HashSet::new();
     parse_api_dir(

@@ -39,6 +39,7 @@ pub fn sample_profile() -> RenderProfile {
         stamp_precision: RecordStampPrecision::Seconds,
         render_version: 1,
         text_format: TextFormat::Markdown,
+        layout: crate::render::Layout::Conversation,
     }
 }
 
@@ -128,7 +129,7 @@ fn chat(id: &str, display: &str, items: Vec<NormalizedChatItem>) -> NormalizedCh
         source_url: Some(format!("https://example.invalid/chat/{id}")),
         org_uuid: None,
         org_name: None,
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             markdown_uuid: id.to_string(),
             source_ref: None,
             items,
@@ -459,7 +460,7 @@ mod tests {
         let chats = sample_chats();
         let items: Vec<&NormalizedChatItem> = chats
             .iter()
-            .flat_map(|c| c.buckets.iter().flat_map(|b| b.items.iter()))
+            .flat_map(|c| c.render_units.iter().flat_map(|b| b.items.iter()))
             .collect();
 
         assert!(items.iter().any(|i| i.is_aside), "a tool step");
@@ -509,7 +510,7 @@ mod tests {
     #[test]
     fn the_tool_sample_has_a_run_and_a_singleton() {
         let chat = assistant_turn_with_tools();
-        let runs: Vec<usize> = chat.buckets[0]
+        let runs: Vec<usize> = chat.render_units[0]
             .items
             .chunk_by(|a, b| a.is_aside == b.is_aside)
             .filter(|c| c[0].is_aside)

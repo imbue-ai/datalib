@@ -10,7 +10,7 @@ use datalib_etl_calendar_common::{
     render_all as cc_render_all, CalendarRenderProfile, NormalizedEvent,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::inputs::{keys_reading, Bucket, Buckets, Input, RawRange};
+use datalib_etl_render::inputs::{keys_reading, Input, RawRange, RenderUnit, RenderUnits};
 use datalib_schema::providers::Provider;
 
 use super::parse::Parsed;
@@ -37,11 +37,11 @@ pub struct CalendarInfo {
     pub time_zone: Option<String>,
 }
 
-/// What a pass looked at: the buckets it built, each with its rows, and
+/// What a pass looked at: the render units it built, each with its rows, and
 /// the ones it was asked for that no event in the store mints any more.
 #[derive(Debug, Default)]
 pub struct Rendered {
-    pub buckets: Buckets,
+    pub render_units: RenderUnits,
     pub gone: Vec<String>,
 }
 
@@ -80,11 +80,11 @@ pub fn render_all(
     });
     let render = range.narrow(forward.as_ref());
     let gone = gone_keys(render.as_ref(), &events, parsed);
-    let mut buckets: Buckets = render
+    let mut render_units: RenderUnits = render
         .iter()
         .flatten()
         .filter(|key| gone.binary_search(key).is_err())
-        .map(|key| Bucket {
+        .map(|key| RenderUnit {
             key: key.clone(),
             inputs: Vec::new(),
         })
@@ -93,8 +93,8 @@ pub fn render_all(
         events.retain(|e| render.contains(&e.event_uuid));
     }
     let summary = cc_render_all(&profile, &events, source_id, progress, on_doc_complete)?;
-    buckets.extend(summary.buckets);
-    Ok(Rendered { buckets, gone })
+    render_units.extend(summary.render_units);
+    Ok(Rendered { render_units, gone })
 }
 
 /// The keys asked for that no event mints. Every event row is read on

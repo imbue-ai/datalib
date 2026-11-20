@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::CasEdgeRow;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::changed_chats;
-use datalib_etl_chat_common::render::{Buckets, ChatRenderer, RenderProfile};
+use datalib_etl_chat_common::render::{ChatRenderer, RenderProfile, RenderUnits};
 use datalib_etl_chat_common::types::{
     own_stamp_ms, AuthorKind, ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat,
     NormalizedChatItem, NormalizedDoc, Recipient, UpstreamRef,
@@ -74,6 +74,7 @@ fn profile() -> RenderProfile {
         chat_entity_kind: ids::KIND_SPACE,
         render_version: RENDER_VERSION,
         text_format: TextFormat::Markdown,
+        layout: datalib_etl_chat_common::Layout::Chat,
     }
 }
 
@@ -88,6 +89,7 @@ fn voice_profile() -> RenderProfile {
         chat_entity_kind: ids::KIND_VOICE_CONVERSATION,
         render_version: RENDER_VERSION,
         text_format: TextFormat::Markdown,
+        layout: datalib_etl_chat_common::Layout::Chat,
     }
 }
 
@@ -128,12 +130,12 @@ struct Loaded {
     scan: datalib_etl::doltlite_raw::DiffScan,
 }
 
-/// What one render pass did: the buckets to declare and the commit read.
+/// What one render pass did: the render units to declare and the commit read.
 #[derive(Debug, Default)]
 pub struct RenderOutcome {
     /// Every conversation this run looked at, named first with nothing
     /// and then, for the rendered ones, with what they read.
-    pub buckets: Buckets,
+    pub render_units: RenderUnits,
     pub new_head: Option<String>,
 }
 
@@ -190,7 +192,7 @@ fn render_open(
         chat_uuid_for(source_id, id)
     });
     let mut outcome = RenderOutcome {
-        buckets: changed.buckets,
+        render_units: changed.render_units,
         new_head: scan.new_head,
     };
     let (feed_chats, chats): (Vec<NormalizedChat>, Vec<NormalizedChat>) = changed
@@ -208,12 +210,12 @@ fn render_open(
         let mut renderer = ChatRenderer::new(
             profile,
             source_id,
-            chats.iter().map(|c| c.buckets.len()).sum(),
+            chats.iter().map(|c| c.render_units.len()).sum(),
             progress,
             &mut *on_doc_complete,
         );
         render_batched(&mut renderer, chats, &blobs, blob_bytes)?;
-        outcome.buckets.extend(renderer.finish().buckets);
+        outcome.render_units.extend(renderer.finish().render_units);
         Ok(())
     };
     render_as(&profile(), &chats)?;
@@ -347,17 +349,17 @@ async fn scan_diff(
     cursor: Option<&str>,
     pin: &datalib_etl::pin::Pin,
 ) -> Result<datalib_etl::doltlite_raw::DiffScan> {
-    datalib_etl::doltlite_raw::scan_buckets(
+    datalib_etl::doltlite_raw::scan_render_units(
         pool,
         cursor,
         pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
             fanout_query: None,
-            bucket_query: "
-                SELECT DISTINCT bucket FROM (
+            render_unit_query: "
+                SELECT DISTINCT render_unit FROM (
                     SELECT CASE WHEN instr(m.id, '/') > 0
                                 THEN substr(m.id, 1, instr(m.id, '/') - 1)
-                                ELSE m.id END AS bucket
+                                ELSE m.id END AS render_unit
                       FROM (SELECT coalesce(to_id, from_id) AS id
                               FROM dolt_diff_chat_messages
                              WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged') m
@@ -425,7 +427,7 @@ async fn scan_diff(
                       FROM dolt_diff_play_books_annotations
                      WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'
                 )
-                WHERE bucket IS NOT NULL AND bucket != '' AND bucket != 'voice:'
+                WHERE render_unit IS NOT NULL AND render_unit != '' AND render_unit != 'voice:'
             ",
         },
     )
@@ -509,7 +511,7 @@ fn build_voice_chats(source_id: &str, messages: &[(String, Value)]) -> Vec<Norma
             title: None,
             org_uuid: None,
             org_name: None,
-            buckets: vec![NormalizedDoc {
+            render_units: vec![NormalizedDoc {
                 orphan_reactions: Vec::new(),
                 markdown_uuid: conversation.uuid,
                 source_ref: None,
@@ -810,9 +812,9 @@ mod tests {
         assert_eq!(chats[0].id, "AAA");
         assert_eq!(chats[0].display, "Jean-Luc Picard, William Riker");
         // Sorted oldest-first.
-        assert_eq!(chats[0].buckets.len(), 1);
+        assert_eq!(chats[0].render_units.len(), 1);
         assert_eq!(
-            chats[0].buckets[0].items[0].text.as_deref(),
+            chats[0].render_units[0].items[0].text.as_deref(),
             Some("Set a course.")
         );
     }
@@ -830,8 +832,8 @@ mod tests {
         let [chat] = chats.as_slice() else {
             panic!("one chat: {chats:?}")
         };
-        let [doc] = chat.buckets.as_slice() else {
-            panic!("one document: {:?}", chat.buckets)
+        let [doc] = chat.render_units.as_slice() else {
+            panic!("one document: {:?}", chat.render_units)
         };
         assert_eq!(doc.markdown_uuid, chat.chat_uuid);
         assert!(doc.source_ref.is_none());
@@ -924,8 +926,8 @@ mod tests {
         assert_eq!(chats[0].display, "William Riker");
         assert_eq!(chats[0].id, "voice:+12025550102");
         // Two months, one document under the conversation's own uuid.
-        let [doc] = chats[0].buckets.as_slice() else {
-            panic!("one document: {:?}", chats[0].buckets)
+        let [doc] = chats[0].render_units.as_slice() else {
+            panic!("one document: {:?}", chats[0].render_units)
         };
         assert_eq!(doc.markdown_uuid, chats[0].chat_uuid);
         assert_eq!(doc.items.len(), 2);
@@ -1018,7 +1020,7 @@ mod tests {
             }),
         ];
         let chats = build_voice_chats("gt", &with_ids(&messages, "id"));
-        let items = &chats[0].buckets[0].items;
+        let items = &chats[0].render_units[0].items;
         assert_eq!(
             items[0].text.as_deref(),
             Some("&lt;script&gt;x&lt;/script&gt; &amp; co")
@@ -1037,7 +1039,7 @@ mod tests {
             "transcript":"Make it so.","duration":"PT13S","audio":"vm.mp3"
         })];
         let chats = build_voice_chats("gt", &with_ids(&messages, "id"));
-        let item = &chats[0].buckets[0].items[0];
+        let item = &chats[0].render_units[0].items[0];
         assert_eq!(item.kind, ItemKind::Attachment);
         assert_eq!(item.text.as_deref(), Some("**Voicemail:** Make it so."));
         assert_eq!(item.attachments.len(), 1);
@@ -1052,7 +1054,7 @@ mod tests {
             "when":"2364-03-06T09:50:34.000-08:00","party":{"tel":"+1999","name":"Spammer"}
         })];
         let chats = build_voice_chats("gt", &with_ids(&messages, "id"));
-        let item = &chats[0].buckets[0].items[0];
+        let item = &chats[0].render_units[0].items[0];
         assert_eq!(item.kind, ItemKind::System);
         assert_eq!(item.system_note.as_deref(), Some("Missed call — Spammer"));
     }
@@ -1065,7 +1067,7 @@ mod tests {
             "body":"pic","attachments":["+1202 - Text - x-1-1.jpg"]
         })];
         let chats = build_voice_chats("gt", &with_ids(&messages, "id"));
-        let item = &chats[0].buckets[0].items[0];
+        let item = &chats[0].render_units[0].items[0];
         assert_eq!(item.kind, ItemKind::Attachment);
         assert_eq!(item.attachments[0].mime_type.as_deref(), Some("image/jpeg"));
     }

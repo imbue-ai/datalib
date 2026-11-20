@@ -78,7 +78,7 @@ database per source, at
 `<data_root>/<name>/render_markdown/indexed_markdown.doltlite_db`, holding
 
   - `markdowns` — one row per rendered document: its `markdown_uuid`,
-    its `renderer_version`, the `bucket_key` it was rendered from, and
+    its `renderer_version`, the `render_unit_key` it was rendered from, and
     whether the search indexes it (`searchable`). Nothing on it
     is stamped per run — a re-render of an unchanged document writes
     an identical row. Its `front` is the document's front
@@ -101,9 +101,13 @@ database per source, at
     besides (`docs/dev/grid_rows.md` § "`parent_uuid`, …"). Like edges
     they belong to the document.
   - `sections` — what each piece of the document says, in order, kept
-    apart from how it is drawn. An item a renderer has split (chat-common
-    does) keeps its body alone, with no header or wrapper, who it was
-    addressed to (name and handle) and its labels; the store draws its header again from its row.
+    apart from how it is drawn. An item a renderer hands over as facts
+    (chat-common's, `etl/render/src/item.rs`) keeps its body alone and,
+    in columns of its own, everything its box shows: who wrote it and
+    when, who it was addressed to, its labels and tags, its own link, its
+    reactions and its replies count, and whether it continues its
+    author's run in a chat; whatever reads it draws the box from
+    them with `Item::draw`, as render did.
     Any other piece is kept whole and marked `framed`, so whatever reads
     it draws nothing around it; a piece that is layout alone (front
     matter, a `<details>` opener) the renderer marks as frame, and
@@ -118,9 +122,7 @@ database per source, at
     escapes. The grid index does not copy it
     ([`documents_to_blocks.md`](plans/documents_to_blocks.md)
     §"Store the body, format on read").
-  - `drawings` — how each piece is drawn where `sections` does not
-    hold it as drawn: a split item's whole drawing with its body cut out
-    and where to put it back (`body_at`), and each frame piece whole.
+  - `drawings` — each frame piece whole: the layout between items.
     With `sections` it spells the document byte for byte
     (`IndexedMarkdownStore::document`), which is the one copy of what a
     document looks like: the viewer and `datalib-step markdown` read it.
@@ -134,7 +136,7 @@ database per source, at
     document, and the index answers "who is this handle" from them
     (`unified_grid_and_search_index`'s `POST /people`).
   - `problems` — what render could not do getting there (§4).
-  - `render_inputs` and `render_cursor` — what each bucket was rendered
+  - `render_inputs` and `render_cursor` — what each render unit was rendered
     from, and how far into the raw store the last run got (§5).
   - `source_measurements` — the storage report's samples
     ([`grid_rows.md`](grid_rows.md)).
@@ -161,7 +163,7 @@ This part of the pipeline aspires to the same properties as download:
     render-side progress reporting is less developed.
   - **Incremental, by diff alone.** Render asks the raw store what
     changed since the commit its cursor names and renders only the
-    buckets that read those rows; the index asks the render store the
+    render units that read those rows; the index asks the render store the
     same question about its own commits. §5 is the whole mechanism.
   - **Resumable at every checkpoint**: render commits the store after
     every batch of documents, and each commit leaves a store a consumer
@@ -381,7 +383,7 @@ How the UI draws the pieces (`ui/src/cards/renderDocument.ts`):
 - **Only the box answers to a message's id.** What answers to an id is
   the outermost element naming it (`sectionEl` in `chatSections.js`),
   and every lookup by id goes through it: a selection, an edge, a
-  problem's jump, the 🆔 button, the feedback menu. A copy of another
+  problem's jump, the 🔗 button, the feedback menu. A copy of another
   message's wrapper inside a message sits in that message's box, so it
   is left as written and never found first. A keyed piece in no box
   answers by its own wrapper, where it draws one.
@@ -859,24 +861,28 @@ Two tables in the render store, both written by the driver
   (`sync_runs`, the sidecars: every download commits one) leaves it
   where it was, so the store's version stays put and nothing downstream
   runs; the next diff from it reads the same.
-- **`render_inputs`** — `(bucket_key, input_table, input_id)`, one row
-  per raw row a bucket's render **asked for, found or not**. A thread
+- **`render_inputs`** — `(render_unit_key, input_table, input_id)`, one row
+  per raw row a render unit's render **asked for, found or not**. A thread
   rendered while its author's `users` row had not been fetched yet
   records `(users, U123)` anyway, so the row's arrival names the
-  thread. Keyed on the bucket rather than the document because one
+  thread. Keyed on the render unit rather than the document because one
   conversation can render as several documents (a session and each of
   its sub-agents' transcripts), and the inputs belong to the
   conversation.
-  `markdowns.bucket_key` is the link back: the bucket each document
+  `markdowns.render_unit_key` is the link back: the render unit each document
   came from.
 
-A **bucket** is whatever a provider loads and renders as a unit — a
-conversation, a thread, a PR, a page; perseus renders its whole file
-tree as one. A provider declares each bucket it rendered, once, through
-`RenderCtx::declare_bucket(bucket_key, inputs)`
+A **render unit** is what a provider loads and renders together, and
+what the render decides to redo when a download row changes: a
+conversation, a thread, a PR, a page. Almost every render unit makes
+exactly one document, the thing a person reads together. The
+exceptions render a whole source as one unit — Garmin, AirVisual,
+YoLink, and Perseus with its whole file tree — and may write several
+documents from it. A provider declares each render unit it rendered, once, through
+`RenderCtx::declare_render_unit(render_unit_key, inputs)`
 (`etl/render/src/processor.rs`), and every document it emits carries
 that key. The declaring is done where the rows are read:
-`datalib_etl_render::inputs::Inputs` collects them as a bucket is
+`datalib_etl_render::inputs::Inputs` collects them as a render unit is
 built, and `Lookup` wraps a lookup table (users, channels, recipients)
 so a key cannot be read without being declared, a miss included. A
 processor that reads a table whole declares `Input::whole_table`
@@ -884,11 +890,11 @@ processor that reads a table whole declares `Input::whole_table`
 is one string, its columns in `pragma_table_info` order joined by `|`.
 
 A row a provider reads but does not declare will not re-render the
-bucket when that row changes, and nothing else will notice.
+render unit when that row changes, and nothing else will notice.
 `tests/fixtures/render_contract_test.py` is the check: for every raw
 table in the TNG fixture it edits one row, runs the incremental path,
 and asserts that the result equals a cold render and that exactly the
-buckets the store says read that row were rendered.
+render units the store says read that row were rendered.
 
 ### How a run decides what to render
 
@@ -903,25 +909,25 @@ With a cursor, a raw doltlite store and something declared, the driver
 runs the **reverse lookup** (`reverse_lookup`): it pins the raw store's
 HEAD, asks `dolt_diff` for every changed key in every table
 `render_inputs` mentions between the cursor and the pin, and reads back
-the buckets that declared any of those rows. A table that held rows at
+the render units that declared any of those rows. A table that held rows at
 the cursor and holds none at the pin — every table of a store `--reset`
 emptied — is answered without its diff, which would read every row that
-left: for each bucket that named rows of it, the bucket's keys are
+left: for each render unit that named rows of it, the render unit's keys are
 looked up at the cursor until one is found (a primary-key seek in
-`dolt_at_<table>`). That row left, so the bucket is stale and has lost
-a row; a bucket that read the table whole is stale too. A bucket that
+`dolt_at_<table>`). That row left, so the render unit is stale and has lost
+a row; a render unit that read the table whole is stale too. A render unit that
 only ever looked up keys the table did not have read nothing that
 changed, and telling it apart needs the diff, so then the table is
 diffed after all, as it is when a key cannot be sought exactly. The
 answer is the diff's either way. The provider is handed the
-pin and that stale set (`RenderCtx::raw_pin`, `RenderCtx::stale_buckets`,
+pin and that stale set (`RenderCtx::raw_pin`, `RenderCtx::stale_render_units`,
 together `RawRange`), reads at the pin and never at HEAD, so what it
 loads is what the set was computed against. A table the driver cannot
 diff — the file was replaced by hand, a schema change dropped the table
 — is logged and the scan is left to the provider.
 
 The provider adds its own **forward** scan, because a row that *arrived*
-was nobody's input yet: a `scan_buckets` bucket query over the added
+was nobody's input yet: a `scan_render_units` query over the added
 and modified rows of its primary tables, or `changed_rows` mapped
 through the rows it loads anyway where the key lives inside the payload.
 `RawRange::narrow` joins the two; `narrow_by` also hands back the stale
@@ -952,34 +958,34 @@ Deletion happens at the end of a run that got through every processor,
 in the same transaction as the storage report and the cursor
 (`seal_run`), and it has two halves:
 
-- **Per bucket, every run.** A processor ends each bucket it looked at
+- **Per render unit, every run.** A processor ends each render unit it looked at
   one of three ways (`RenderCtx`, `etl/render/src/processor.rs`), and
   the driver decides what that does to the documents the store holds
-  under its `bucket_key` (`fate` in `datalib_step/src/render.rs`):
+  under its `render_unit_key` (`fate` in `datalib_step/src/render.rs`):
 
-  | the processor said | the bucket's documents |
+  | the processor said | the render unit's documents |
   |---|---|
-  | `declare_bucket` with the rows it read | replaced by what it emitted; any other document under the key is removed (a bucket that re-rendered to fewer documents drops the extra ones) |
-  | `declare_bucket` with no rows, and emitted nothing | removed **only when its rows left it**: a row the bucket was last built from (its `render_inputs` as they stood before the run) left — the raw diff reports it `removed`, or its table, emptied since, held it at the cursor — or every one of those rows is now read by a bucket that is new this run (it had no `render_inputs` before) — the key the bucket is minted from changed (a renamed address book re-keys its cards), and its rows build that bucket instead. A bucket that already read those rows is no evidence: a calendar series reads every row of its changed occurrences, and a Claude project page's rows are all read by its conversations. Otherwise they stay as they were, each with a `no_document` warning, and the bucket keeps its old `render_inputs` |
-  | `exclude_bucket` — left out on purpose (email's label filter), or known gone (a calendar reads every event row each run, so a key no event mints is gone though its row is still there: a "this and following" edit moves an occurrence to a new UID) | removed, on the renderer's word |
-  | `fail_bucket(why)` — its build failed | kept, each with a `render_failed` error carrying `why`, even on a full walk |
+  | `declare_render_unit` with the rows it read | replaced by what it emitted; any other document under the key is removed (a render unit that re-rendered to fewer documents drops the extra ones) |
+  | `declare_render_unit` with no rows, and emitted nothing | removed **only when its rows left it**: a row the render unit was last built from (its `render_inputs` as they stood before the run) left — the raw diff reports it `removed`, or its table, emptied since, held it at the cursor — or every one of those rows is now read by a render unit that is new this run (it had no `render_inputs` before) — the key the render unit is minted from changed (a renamed address book re-keys its cards), and its rows build that render unit instead. A render unit that already read those rows is no evidence: a calendar series reads every row of its changed occurrences, and a Claude project page's rows are all read by its conversations. Otherwise they stay as they were, each with a `no_document` warning, and the render unit keeps its old `render_inputs` |
+  | `exclude_render_unit` — left out on purpose (email's label filter), or known gone (a calendar reads every event row each run, so a key no event mints is gone though its row is still there: a "this and following" edit moves an occurrence to a new UID) | removed, on the renderer's word |
+  | `fail_render_unit(why)` — its build failed | kept, each with a `render_failed` error carrying `why`, even on a full walk |
 
   The warning and the error are scoped to the document, so they show
-  on its banner, and they clear when the bucket next renders it or
+  on its banner, and they clear when the render unit next renders it or
   removes it. A whole-table input is never the evidence: one row of a
-  table leaving, or another bucket reading it, says nothing about a
-  bucket that read all of it. The diff runs from the stored cursor on
+  table leaving, or another render unit reading it, says nothing about a
+  render unit that read all of it. The diff runs from the stored cursor on
   every run, a full walk included, so a version bump keeps an
-  unexplained bucket's documents too. A run with no diff to read — no
+  unexplained render unit's documents too. A run with no diff to read — no
   cursor yet, or a range the store cannot resolve — has no evidence,
   so it removes nothing this way. And a
-  bucket the run never looked at says nothing about its documents, so
+  render unit the run never looked at says nothing about its documents, so
   a narrowed run cannot delete its own steady state.
 - **Whole store, on a full walk only.** A *full walk* is a run that
   rendered everything (version or params changed) **and** in which
   every processor reported the raw commit it read
   (`RenderCtx::consumed`). Then a document the walk did not produce —
-  a uuid minted by the old recipe — is gone, except the documents of a bucket the table above
+  a uuid minted by the old recipe — is gone, except the documents of a render unit the table above
   keeps. A first run with no cursor is not a full walk, and
   neither is one in which a processor read no store (none on disk,
   nothing committed): it said nothing about what should exist, and
@@ -988,7 +994,7 @@ in the same transaction as the storage report and the cursor
 A kept document still carries the render version that last built it.
 The version checks (`IndexedMarkdownStore::render_versions`) leave out
 a document with a render-stage `render_failed` or `no_document`
-problem, so one bucket that will not build neither fails the step nor
+problem, so one render unit that will not build neither fails the step nor
 makes every later run a full walk.
 
 A removed document goes from the store whole, its text with its rows,
@@ -998,7 +1004,7 @@ this — it learns of a removal from the render store's own diff.
 
 Across a version bump or a params change the store is **kept**: its
 history, the commit `unified_grid_and_search_index` last consumed, and the cursor. "Render
-every bucket again" and "forget where I was" are different requests,
+every render unit again" and "forget where I was" are different requests,
 and only the first is ever wanted — a re-keyed document then reaches the
 index as a deletion plus an addition rather than as an old row nobody
 removes.
@@ -1006,7 +1012,7 @@ removes.
 ### Edge cases
 
 1. **First run, no cursor.** The provider reads its whole store at
-   HEAD; nothing is swept except under the buckets it built; the
+   HEAD; nothing is swept except under the render units it built; the
    cursor is recorded at the end.
 
 2. **A reset of the raw store.** `datalib-pipeline reset` empties the
@@ -1027,14 +1033,14 @@ removes.
    nothing is swept. Have the test commit after download. Two
    neighbours look similar and are not: a cursor the store cannot
    resolve (someone replaced the file by hand) is a `warn` every run
-   and a render of everything, and a bucket query naming a table or
+   and a render of everything, and a `render_unit_query` naming a table or
    column the store does not have is an **error**, not a cold start —
    cold-starting past it would re-render everything on every run and
    never say why.
 
 4. **Removed rows.** The diff names them, the reverse lookup names the
-   buckets that read them, and each renders to fewer documents or to
-   none and is declared so. The per-bucket sweep removes the rest —
+   render units that read them, and each renders to fewer documents or to
+   none and is declared so. The per-render-unit sweep removes the rest —
    nothing sits waiting for a collector.
 
 5. **Multi-commit ranges.** Five ingest runs between two renders are
@@ -1054,29 +1060,29 @@ removes.
 A render's memory should follow how much it reads at once, not how big
 the source is. A render that loads every row first, parses every
 payload and then renders needs several GB for a large mailbox or
-workspace. One that loads a single bucket per query pays the fixed
+workspace. One that loads a single render unit per query pays the fixed
 cost of a query for each one (a lookup from the tree's root, a round
 trip), and that cost dominates a source with 200k threads. Between
-the two is a **page**: a run of a few hundred buckets read and
+the two is a **page**: a run of a few hundred render units read and
 rendered together, then dropped before the next.
 
 `datalib_etl_render::pages` holds the two pieces a render pages with:
 
-- **`BucketPages`** hands out bucket keys a page at a time. On a full
+- **`RenderUnitPages`** hands out render unit keys a page at a time. On a full
   walk it reads the primary table's key column in order, starting
   after the last key it handed out (keyset pagination): one ordered
   range scan per page, nothing kept between pages but that key, and
   the pool's one connection free between them. On a narrowed run it
   hands out the stale set, sorted, in pages of the same size. A key's
   rows never straddle two pages.
-- **`batches`** cuts a page's blob loads by bytes, so one bucket with
+- **`batches`** cuts a page's blob loads by bytes, so one render unit with
   large attachments cannot pull a whole page's worth into memory.
 
 The provider loads what hangs off a page's keys (rows, then join rows)
 with one bound JSON array each (`etl/README.md` §"Binding a set of
-values"), renders it, and declares the page's buckets before reading
-the next, so nothing about a bucket outlives its page. Only the small
-tables every bucket looks up (users, channels, accounts, mailboxes)
+values"), renders it, and declares the page's render units before reading
+the next, so nothing about a render unit outlives its page. Only the small
+tables every render unit looks up (users, channels, accounts, mailboxes)
 are read whole, up front. Email and Slack render this way, and so do
 Claude Code and Codex (`datalib_etl_agent_sessions_render::render_paged`),
 which size a page by how many records it holds, counted from the index
@@ -1103,12 +1109,12 @@ hold bytes, its `.eml`s, which it renders from; everyone else's name the
 blob store that holds them.
 
 **The size is the person's to choose.** A config's `[env]` table sets
-`DATALIB_STEP_RENDER_PAGES = "<buckets>,<blob_mb>"`: `buckets` per page
+`DATALIB_STEP_RENDER_PAGES = "<render_units>,<blob_mb>"`: `render_units` per page
 and `blob_mb` per blob batch, either side left empty for its default.
 The runner hands `[env]` to every step, and a processor reads the
 value as `RenderCtx::page_size`. Changing it changes no
 document, so it is not a render param and re-renders nothing. The
-defaults, 500 buckets and 64 MB, sit where a page's queries already
+defaults, 500 render units and 64 MB, sit where a page's queries already
 cost little next to rendering it.
 
 What a page bounds is the reading side. On a synthetic Slack store of
@@ -1126,7 +1132,7 @@ If you can render a collection of things, consider rendering the
 difference between two versions of it. A **diff group** does that with
 no second renderer: the source's render processors run at two raw
 commits into a collecting sink — each pass the incremental render the
-sync step already does, so the cost tracks the buckets that moved, not
+sync step already does, so the cost tracks the render units that moved, not
 the store — and the two sides are subtracted per document
 (`datalib_etl_render::diff`): rows keyed by `uuid` become `added`,
 `removed`, `modified` (naming the columns that moved) or `unchanged`;

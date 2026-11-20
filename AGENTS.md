@@ -245,7 +245,7 @@ datalib/
                    and their writers — a source's `render_time_series`
                    and the `time_series_index` — and the applet's reads.
     etl/providers/ <p>/ (ingest) + <p>_render/ (render) + <p>_config/
-                   (config schema) per provider. Fourteen of the
+                   (config schema) per provider. Fifteen of the
                    file-backed ones scan a local tree through
                    etl/files/src/file_changes_scan.rs (claude_code and codex by way
                    of etl/agent_sessions/; file_inventory has its own walker
@@ -287,6 +287,9 @@ datalib/
                    facts, each a test in `embedding_facts`.
     store_meta/    `_datalib_meta`, the table every store carries naming
                    the build that wrote it and the shape it is in.
+    sql_work/      counts what every SQLite statement in a process does
+                   and logs the ones that walked many rows for few;
+                   every binary that opens a store installs it.
     sql_guard/     reads SQL a caller wrote, and nothing else: a
                    read-only open over SQLite's C API, the authorizer,
                    deadline and one-statement check, parameters by name

@@ -64,6 +64,7 @@ pub fn profile(chat_id: &str) -> RenderProfile {
         render_version: crate::render::RENDER_VERSION,
         // Each feed builds its markdown itself, escaping what it quotes.
         text_format: TextFormat::Markdown,
+        layout: datalib_etl_chat_common::Layout::Conversation,
     }
 }
 
@@ -242,7 +243,7 @@ pub fn feed_chat(
         upstream_account: None,
         org_uuid: None,
         org_name: None,
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
             markdown_uuid: feed.uuid,
             source_ref: None,

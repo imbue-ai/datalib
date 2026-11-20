@@ -222,6 +222,7 @@ fn chat(provider: Provider, format: TextFormat, text: String) -> Result<(String,
         stamp_precision: RecordStampPrecision::Seconds,
         render_version: 1,
         text_format: format,
+        layout: datalib_etl_chat_common::Layout::Conversation,
     };
     let item = |uuid: &str, author: &str, text: String| NormalizedChatItem {
         reply_to: None,
@@ -266,7 +267,7 @@ fn chat(provider: Provider, format: TextFormat, text: String) -> Result<(String,
         source_url: None,
         org_uuid: None,
         org_name: None,
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             markdown_uuid: "00000000-0000-8000-8000-0000000e00d1".into(),
             source_ref: None,
             items: vec![

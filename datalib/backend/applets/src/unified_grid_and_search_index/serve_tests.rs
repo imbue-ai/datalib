@@ -373,6 +373,188 @@ fn children_page_through_a_channel() {
     );
     let (status, body) = get(port, &format!("/children/{bridge}?after=40"), Some(SECRET));
     assert_eq!(status, 400, "{body}");
+
+    // A thread's messages name their authors by handle, which a person
+    // chip is drawn from.
+    let first = threads[0]["uuid"].as_str().unwrap();
+    let (status, body) = get(port, &format!("/children/{first}"), Some(SECRET));
+    assert_eq!(status, 200, "{body}");
+    let messages = body["children"].as_array().unwrap();
+    assert!(!messages.is_empty(), "{body}");
+    for m in messages {
+        let handle = m["author_handle"].as_str().unwrap_or_default();
+        assert!(handle.starts_with("slack:"), "{m}");
+    }
+    child.kill().ok();
+}
+
+/// A library's tree over the TNG fixture, a level at a time: the email
+/// source's top is its account, a place with places below it, and the
+/// account's places are its labels, with no thread or message among them.
+#[test]
+fn children_list_a_sources_places() {
+    let root = tempfile::tempdir().unwrap();
+    datalib_search_fixture::copy_grid_index(root.path());
+    let mut child = applet()
+        .env(super::DATA_ROOT_ENV, root.path())
+        .current_dir(root.path())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("start the applet");
+    let port = announced_port(&mut child);
+
+    let (status, body) = get(port, "/children/source:tng_email?places=true", Some(SECRET));
+    assert_eq!(status, 200, "{body}");
+    let top = body["children"].as_array().unwrap();
+    assert_eq!(top.len(), 1, "{body}");
+    assert_eq!(top[0]["kind"], "Email Account", "{body}");
+    assert_eq!(top[0]["places_below"], true, "{body}");
+    let account = top[0]["uuid"].as_str().unwrap();
+
+    let (status, body) = get(
+        port,
+        &format!("/children/{account}?places=true&limit=1000"),
+        Some(SECRET),
+    );
+    assert_eq!(status, 200, "{body}");
+    let places = body["children"].as_array().unwrap();
+    assert!(!places.is_empty(), "{body}");
+    for p in places {
+        assert_eq!(p["kind"], "Email Label", "{p}");
+        assert_eq!(p["container"], true, "{p}");
+        assert_eq!(p["places_below"], false, "{p}");
+    }
+
+    let (status, body) = get(port, &format!("/children/{account}"), Some(SECRET));
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        body["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["kind"] == "Email Thread"),
+        "without places=true the account lists its threads too: {body}"
+    );
+    assert!(body["children"][0].get("places_below").is_none(), "{body}");
+    child.kill().ok();
+}
+
+/// The TNG Drive opens onto its folders: My Drive, the shared drive and
+/// a folder shared with the account at the top, each folder inside the
+/// one above it, and each Doc in its folder, or filed under its second
+/// one. Before, a Doc sat in a nameless folder of one level.
+#[test]
+fn a_drive_opens_onto_its_folders() {
+    let root = tempfile::tempdir().unwrap();
+    datalib_search_fixture::copy_grid_index(root.path());
+    let mut child = applet()
+        .env(super::DATA_ROOT_ENV, root.path())
+        .env(super::SEARCH_NOW_ENV, "2400-01-01T00:00:00Z")
+        .current_dir(root.path())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("start the applet");
+    let port = announced_port(&mut child);
+    let sql = |sql: &str| {
+        let (status, body) = post(
+            port,
+            "/sql",
+            &serde_json::json!({
+                "store": "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite",
+                "sql": sql,
+            })
+            .to_string(),
+        );
+        assert_eq!(status, 200, "{body}");
+        body["rows"].as_array().unwrap().clone()
+    };
+    let tops: Vec<(String, String)> = sql("SELECT DISTINCT kind, name FROM data_nodes \
+         WHERE source_id = 'google-drive' AND is_place AND parent_uuid IS NULL ORDER BY name")
+    .iter()
+    .map(|r| (r[0].as_str().unwrap().into(), r[1].as_str().unwrap().into()))
+    .collect();
+    assert_eq!(
+        tops,
+        [
+            ("Shared drive", "Enterprise-D Engineering"),
+            ("Folder", "Geordi's notes"),
+            ("Folder", "My Drive"),
+        ]
+        .map(|(k, n)| (k.to_string(), n.to_string()))
+    );
+    let place = |kind: &str, name: &str| {
+        sql(&format!(
+            "SELECT DISTINCT uuid FROM data_nodes WHERE source_id = 'google-drive' \
+             AND kind = '{kind}' AND name = '{}'",
+            name.replace('\'', "''")
+        ))[0][0]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let doc = |title: &str| {
+        sql(&format!(
+            "SELECT uuid FROM grid_rows WHERE kind = 'Google Doc' AND conversation_name = '{}'",
+            title.replace('\'', "''")
+        ))[0][0]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    // Each child as (kind, its name for a folder or its uuid for a Doc).
+    let children = |uuid: &str| {
+        let (status, body) = get(port, &format!("/children/{uuid}"), Some(SECRET));
+        assert_eq!(status, 200, "{body}");
+        let mut out: Vec<(String, String)> = body["children"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| {
+                let kind = c["kind"].as_str().unwrap().to_string();
+                let said = match kind.as_str() {
+                    "Google Doc" => c["uuid"].as_str(),
+                    _ => c["name"].as_str(),
+                };
+                (kind, said.unwrap_or_default().to_string())
+            })
+            .collect();
+        out.sort();
+        out
+    };
+    let folder = |name: &str| ("Folder".to_string(), name.to_string());
+    let a_doc = |title: &str| ("Google Doc".to_string(), doc(title));
+
+    let my_drive = place("Folder", "My Drive");
+    assert_eq!(
+        children(&my_drive),
+        vec![folder("Captain's logs"), folder("Ready room")]
+    );
+    assert_eq!(
+        children(&place("Folder", "Captain's logs")),
+        vec![folder("Stardate 41000s")]
+    );
+    let log = a_doc("Captain's log, stardate 41153.7");
+    assert_eq!(
+        children(&place("Folder", "Stardate 41000s")),
+        vec![log.clone()]
+    );
+    assert_eq!(children(&place("Folder", "Ready room")), vec![log]);
+    assert_eq!(
+        children(&place("Shared drive", "Enterprise-D Engineering")),
+        vec![folder("Engineering")]
+    );
+    assert_eq!(
+        children(&place("Folder", "Engineering")),
+        vec![folder("Warp core")]
+    );
+    assert_eq!(
+        children(&place("Folder", "Warp core")),
+        vec![a_doc("Warp core maintenance schedule")]
+    );
+    assert_eq!(
+        children(&place("Folder", "Geordi's notes")),
+        vec![a_doc("Engineering notes")]
+    );
     child.kill().ok();
 }
 

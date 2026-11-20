@@ -70,6 +70,9 @@ const EXTRA: Record<string, BrowseColumn[]> = {
   gitlab: ["project", "author_ref"],
 
   notion: ["account", "author_ref"],
+  // A note has no author, account, channel or project: its title, its
+  // text and when it was last edited say what it is.
+  markdown: [],
   perseus: ["author_ref"],
   yolink: ["channel"],
   // `channel` is a device row's device and an activity's type.

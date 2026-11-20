@@ -60,7 +60,7 @@ Reach for the simplest existing provider that's shaped like yours,
   3. **`slack`** — The most elaborate provider: multiple
      entity tables (channels, users, messages, replies, files), JSONL
      event streams in synth, workspace-wide redaction in live-golden,
-     thread-level render buckets. Copy from here only if you
+     thread-level render units. Copy from here only if you
      genuinely need its shape; otherwise it'll drag in complexity you
      don't want.
 

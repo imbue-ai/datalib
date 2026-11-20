@@ -69,6 +69,7 @@ fn profile() -> RenderProfile {
         chat_entity_kind: ids::KIND_CONVERSATION,
         render_version: RENDER_VERSION,
         text_format: TextFormat::Plain,
+        layout: datalib_etl_chat_common::Layout::Chat,
     }
 }
 
@@ -153,7 +154,7 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
 
 /// Which conversations moved since `last_render_hash`.
 ///
-/// The bucket is `"sms:{conversation_key}"` — the same string
+/// The render unit is `"sms:{conversation_key}"` — the same string
 /// [`chat_id`] builds, so the changed set compares directly against
 /// `NormalizedChat::id`.
 ///
@@ -165,16 +166,16 @@ async fn scan_diff(
     last_render_hash: Option<&str>,
     pin: &datalib_etl::pin::Pin,
 ) -> Result<datalib_etl::doltlite_raw::DiffScan> {
-    datalib_etl::doltlite_raw::scan_buckets(
+    datalib_etl::doltlite_raw::scan_render_units(
         pool,
         last_render_hash,
         pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
             fanout_query: None,
-            bucket_query: "
-                SELECT DISTINCT bucket FROM (
+            render_unit_query: "
+                SELECT DISTINCT render_unit FROM (
                     SELECT 'sms:' || coalesce(to_conversation_key, from_conversation_key)
-                             AS bucket
+                             AS render_unit
                       FROM dolt_diff_sms_messages
                      WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
                     UNION
@@ -182,7 +183,7 @@ async fn scan_diff(
                       FROM dolt_diff_sms_calls
                      WHERE from_ref = ?1 AND to_ref = 'HEAD' AND diff_type != 'unchanged'
                 )
-                WHERE bucket IS NOT NULL AND bucket != 'sms:'
+                WHERE render_unit IS NOT NULL AND render_unit != 'sms:'
             ",
         },
     )
@@ -310,7 +311,7 @@ fn build_chats(
             title: None,
             org_uuid: None,
             org_name: None,
-            buckets: vec![whole],
+            render_units: vec![whole],
         });
     }
     chats
@@ -599,12 +600,16 @@ mod tests {
             json!({"id":"nd2","kind":"sms","conversation_key":"+1410","conversation_display":"+1410","date":"not-a-number","is_me":true,"body":"Unclear","attachments":[]}),
         ];
         let chats = build_chats("sms", &with_ids(&messages), &[], &BTreeMap::new());
-        let items: Vec<_> = chats[0].buckets.iter().flat_map(|b| &b.items).collect();
+        let items: Vec<_> = chats[0]
+            .render_units
+            .iter()
+            .flat_map(|b| &b.items)
+            .collect();
         assert_eq!(items.len(), 2, "undated rows are kept, not dropped");
         for i in &items {
             assert_eq!(i.date_ms, None, "{} fabricated a timestamp", i.message_uuid);
         }
-        assert_eq!(chats[0].buckets.len(), 1);
+        assert_eq!(chats[0].render_units.len(), 1);
     }
 
     /// A conversation was one document per month, each minted from the
@@ -618,8 +623,12 @@ mod tests {
         ];
         let chats = build_chats("sms", &with_ids(&messages), &[], &BTreeMap::new());
         assert_eq!(chats.len(), 1);
-        assert_eq!(chats[0].buckets.len(), 1, "one document, not one a month");
-        let doc = &chats[0].buckets[0];
+        assert_eq!(
+            chats[0].render_units.len(),
+            1,
+            "one document, not one a month"
+        );
+        let doc = &chats[0].render_units[0];
         assert_eq!(doc.markdown_uuid, chats[0].chat_uuid);
         assert!(doc.source_ref.is_none(), "the chat's own backpointer");
         let natives: Vec<_> = doc
@@ -655,7 +664,7 @@ mod tests {
         .collect();
         let chats = build_chats("sms", &with_ids(&messages), &[], &marks);
         let unread: Vec<&str> = chats[0]
-            .buckets
+            .render_units
             .iter()
             .flat_map(|b| &b.items)
             .filter(|i| i.unread)
@@ -683,7 +692,7 @@ mod tests {
         let handle_of = |id: &str| {
             chats
                 .iter()
-                .flat_map(|c| &c.buckets)
+                .flat_map(|c| &c.render_units)
                 .flat_map(|b| &b.items)
                 .find(|i| i.source_ref.as_ref().unwrap().native_id == id)
                 .unwrap()
@@ -714,7 +723,7 @@ mod tests {
         let handle_of = |id: &str| {
             chats
                 .iter()
-                .flat_map(|c| &c.buckets)
+                .flat_map(|c| &c.render_units)
                 .flat_map(|b| &b.items)
                 .find(|i| i.source_ref.as_ref().unwrap().native_id == id)
                 .unwrap()
@@ -786,7 +795,7 @@ mod tests {
         let author = |id: &str| {
             let item = chats
                 .iter()
-                .flat_map(|c| &c.buckets)
+                .flat_map(|c| &c.render_units)
                 .flat_map(|b| &b.items)
                 .find(|i| i.source_ref.as_ref().unwrap().native_id == id)
                 .unwrap();
@@ -830,7 +839,7 @@ mod tests {
         let recipients_of = |id: &str| -> Vec<(String, Option<String>, bool)> {
             chats
                 .iter()
-                .flat_map(|c| &c.buckets)
+                .flat_map(|c| &c.render_units)
                 .flat_map(|b| &b.items)
                 .find(|i| i.source_ref.as_ref().unwrap().native_id == id)
                 .unwrap()
@@ -882,11 +891,11 @@ mod tests {
         assert_eq!(chats.len(), 1, "calls + texts on one number → one chat");
         assert_eq!(chats[0].display, "Jean-Luc Picard");
         // 2 texts + 1 call.
-        let n: usize = chats[0].buckets.iter().map(|b| b.items.len()).sum();
+        let n: usize = chats[0].render_units.iter().map(|b| b.items.len()).sum();
         assert_eq!(n, 3);
         // The sent text shows as "Me".
         let me = chats[0]
-            .buckets
+            .render_units
             .iter()
             .flat_map(|b| &b.items)
             .find(|i| i.source_ref.as_ref().unwrap().native_id == "m2")
@@ -907,7 +916,7 @@ mod tests {
             "attachments":["x1/image000001.gif"]
         })];
         let chats = build_chats("sms", &with_ids(&messages), &[], &BTreeMap::new());
-        let it = chats[0].buckets[0]
+        let it = chats[0].render_units[0]
             .items
             .iter()
             .find(|i| i.source_ref.as_ref().unwrap().native_id == "x1")
@@ -933,7 +942,7 @@ mod tests {
             "date":1778277000000i64,"call_type":"missed","duration":0
         })];
         let chats = build_chats("sms", &[], &with_ids(&calls), &BTreeMap::new());
-        let it = &chats[0].buckets[0].items[0];
+        let it = &chats[0].render_units[0].items[0];
         assert_eq!(it.kind, ItemKind::System);
         assert_eq!(it.system_note.as_deref(), Some("Missed call — Q"));
     }

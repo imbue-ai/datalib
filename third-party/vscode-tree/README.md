@@ -9,9 +9,11 @@ you type a label. Which nodes are open, what is selected and how far
 it is scrolled come back out as plain data keyed by node id, and go
 back in on the next mount.
 
-Nothing in datalib uses it yet. It is built from this directory alone,
-with its own lockfile and nothing from the rest of the tree, so that it
-can move to a repository of its own.
+The UI's Library card draws the library with it
+(`docs/dev/cards.md` § "Prebuilt views", `libraryTreeView()`). It is
+built from this directory alone, with its own lockfile and nothing from
+the rest of the tree, so that it can move to a repository of its own;
+the UI takes the built file (`datalib/ui/BUILD.bazel`, `vendor_vs_tree`).
 
 ## Where the code comes from
 
@@ -48,17 +50,36 @@ tree.viewState = saved;                 // optional, from an earlier `tree.viewS
 tree.dataSource = {
   // null asks for the top level
   async getChildren(node) {
-    return [{ id, label, kind, description, hasChildren }];
+    return [{ id, label, icon, kind, description, hasChildren }];
   },
 };
 tree.addEventListener('select', (e) => e.detail.nodes);
 tree.addEventListener('viewstatechange', () => save(tree.viewState));
 ```
 
-`viewState` is `{ expanded, focus, selection, scrollTop }`, the first
-three lists of node ids. The element sizes itself to its box, so give
-it one. Its colours are VS Code's light theme; `--vs-tree-fg`,
-`--vs-tree-bg`, `--vs-tree-hover` and `--vs-tree-focus` change them.
+`icon` is an image URL drawn before the label, at 16 pixels; `kind`
+and `description` are drawn after it, quieter. `viewState` is
+`{ expanded, focus, selection, scrollTop }`, the first
+three lists of node ids. `select` fires as the selection moves;
+`open`, with the node, on a double-click or Enter; and `menu`, with the
+node and where to draw a menu (`x`, `y`), on a right-click or the
+keyboard's menu key, the browser's own menu held back. `open` and `menu`
+carry the browser's `event` too (none for Enter), so a page can tell
+which part of a row was clicked. The element sizes itself to its box,
+so give it one.
+
+A page draws a row's label itself by setting `renderLabel`, a function
+`(node, el)` that fills `el`; the element empties `el` first. CSS for
+what it draws goes in `extraCss`, since a page's styles do not reach
+into the element's shadow root, and `redraw()` draws every row again
+once what `renderLabel` reads has changed.
+
+Its colours default to VS Code's light theme, and each is a CSS
+variable a page can set on the element: `--vs-tree-fg`, `--vs-tree-bg`,
+`--vs-tree-hover`, `--vs-tree-focus` (the focus outline),
+`--vs-tree-focus-bg`, `--vs-tree-selected-bg`, `--vs-tree-selected-fg`,
+`--vs-tree-inactive-selected-bg`, `--vs-tree-guide`,
+`--vs-tree-guide-faint`, and `--vs-tree-font`.
 
 ## Build and test
 
@@ -111,6 +132,10 @@ test, then whatever in `src/vs-tree.js` leaned on it.
   writes for itself goes inside its own element, not the document's
   `<head>`, so it works inside a shadow root. Its static CSS still has
   to be put there (`build.mjs`).
+- `rerender_without_a_node_redraws_nothing` — `rerender()` with no
+  node only measures rows of changing height again; it draws no row's
+  content again. `rerender(node)` does. The element's `redraw()` calls
+  it for each loaded node.
 - `page_down_throws_upstream` — PageDown's handler starts an async step
   that clears the focus, does not wait for it, then reveals the cleared
   focus: an uncaught `TypeError` once the focus is on a page's last
@@ -131,6 +156,17 @@ test, then whatever in `src/vs-tree.js` leaned on it.
 - `a_restore_reopens_under_a_closed_parent` — a node that was open
   under a closed parent is still in `viewState` after a remount, and
   opening the parent brings it back open.
+- `a_double_click_or_enter_opens_a_node` — either fires `open` with
+  the node.
+- `a_node_draws_its_icon` — a node with an `icon` draws it before its
+  label; one without draws none.
+- `colours_follow_the_pages_variables` — a selected row takes
+  `--vs-tree-selected-bg` from the page.
+- `a_page_draws_a_rows_label` — with `renderLabel` set, a row's label
+  is what the page drew, styled by `extraCss`; `redraw()` draws every
+  row again.
+- `a_right_click_names_its_node` — a right-click fires `menu` with the
+  node, at the pointer.
 - `view_state_round_trips` — the open nodes, the selection and the
   scroll position read from one mount come back on the next, which asks
   once for the top level and once for each open node.

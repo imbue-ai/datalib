@@ -501,7 +501,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     for ddl in index_ddl()
         .chain(remade_indexes())
         .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
-        .chain([AUTHORS_INDEX])
+        .chain([AUTHORS_INDEX, node_rows::BY_SOURCE_INDEX])
     {
         sqlx::query(ddl)
             .execute(pool)
@@ -921,10 +921,10 @@ pub struct RenderedMarkdown {
     /// decide whether a markdown moved. Slack stamps each thread's
     /// `MAX(fetched_at_utc)`. None when the provider has nothing cheap.
     pub upstream_cursor: Option<String>,
-    /// The bucket this document was rendered from — the same key the
-    /// provider declares through `RenderCtx::declare_bucket`. `None`
-    /// from a renderer that does not declare buckets yet.
-    pub bucket_key: Option<String>,
+    /// The render unit this document was rendered from — the same key the
+    /// provider declares through `RenderCtx::declare_render_unit`. `None`
+    /// from a renderer that does not declare render units yet.
+    pub render_unit_key: Option<String>,
     pub render_version: u32,
     /// Empty means there is no document: the store drops it, keeping only
     /// its `problems`.
@@ -1858,7 +1858,7 @@ async fn apply_markdown(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result
     // A document is its rows: the grid reaches it through them and
     // nothing else does. One that ends with none — every row rejected
     // by validation — is absent, and its `markdowns` row goes with the
-    // rest, or a stale `bucket_key` and title would outlive the render
+    // rest, or a stale `render_unit_key` and title would outlive the render
     // that replaced them. The problems recording why stay.
     if md.rows.is_empty() {
         let gone = delete_document_rows(conn, std::slice::from_ref(&md.markdown_uuid)).await?;
@@ -2019,7 +2019,7 @@ async fn upsert_markdown(
     sqlx::query(
         "INSERT INTO markdowns \
          (markdown_uuid, source_id, provider, kind, title, created_at, modified_at, \
-          item_count, upstream_cursor, renderer_version, bucket_key, content_hash, front, \
+          item_count, upstream_cursor, renderer_version, render_unit_key, content_hash, front, \
           searchable) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
@@ -2033,7 +2033,7 @@ async fn upsert_markdown(
     .bind(canonical.item_count)
     .bind(md.upstream_cursor.as_deref())
     .bind(&version_str)
-    .bind(&md.bucket_key)
+    .bind(&md.render_unit_key)
     .bind(content_hash)
     .bind((!md.front.is_empty()).then(|| md.front.to_json()))
     .bind(md.searchable)
@@ -2378,6 +2378,33 @@ mod open_index_tests {
         pool.close().await;
     }
 
+    /// A source's nodes are read by the source, not by walking every
+    /// document row in the index: a pass spent 11–20 s on each source of
+    /// a 1.2M-row index, one or two changed documents or not.
+    #[tokio::test]
+    async fn a_sources_nodes_are_read_by_the_source() {
+        let td = tempfile::tempdir().unwrap();
+        let pool = open_index(&td.path().join("db.sqlite"))
+            .await
+            .expect("open_index");
+        // Audited: a constant statement of this crate.
+        let explain = format!("EXPLAIN QUERY PLAN {}", node_rows::CARRIED_WITHOUT_A_ROW);
+        let plan: Vec<String> = sqlx::query(sqlx::AssertSqlSafe(explain))
+            .bind("src")
+            .fetch_all(&pool)
+            .await
+            .expect("explain")
+            .iter()
+            .map(|r| r.get::<String, _>("detail"))
+            .collect();
+        assert!(
+            plan.iter()
+                .any(|d| d.starts_with("SEARCH n USING INDEX data_nodes_by_source (source_id=?)")),
+            "{plan:?}"
+        );
+        pool.close().await;
+    }
+
     /// One pass loads a whole source in one transaction, and a checkpoint
     /// alone leaves the `-wal` that large; the limit cuts it back. A
     /// re-index left a live grid index's `-wal` at 4 GB.
@@ -2609,7 +2636,7 @@ mod write_lock_tests {
             markdown_uuid: uuid.clone(),
             source_id: "test".into(),
             upstream_cursor: None,
-            bucket_key: None,
+            render_unit_key: None,
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
@@ -2786,9 +2813,9 @@ mod write_lock_tests {
 
     /// A document re-rendered with every row rejected keeps no
     /// `markdowns` row: before this, the old render's title, timestamps
-    /// and `bucket_key` outlived the rows they described. Found by the
+    /// and `render_unit_key` outlived the rows they described. Found by the
     /// contract harness on a gitlab merge request re-keyed under another
-    /// bucket whose rows all failed `created_at`.
+    /// render unit whose rows all failed `created_at`.
     #[tokio::test]
     async fn a_document_re_rendered_with_no_rows_loses_its_markdowns_row() {
         let dir = tempdir().unwrap();
@@ -2797,24 +2824,24 @@ mod write_lock_tests {
         let lock = WriteLock::new(pool.clone());
 
         let mut md = mk_md(0, 0);
-        md.bucket_key = Some("mr!17".into());
+        md.render_unit_key = Some("mr!17".into());
         apply_one(&lock, &md).await.unwrap();
 
         let mut moved = mk_md(0, 0);
-        moved.bucket_key = Some("mr!17~new".into());
+        moved.render_unit_key = Some("mr!17~new".into());
         moved.rows.clear();
         let inserted = apply_one(&lock, &moved).await.unwrap();
         assert_eq!(inserted, 0);
 
-        let buckets: Vec<Option<String>> =
-            sqlx::query_scalar("SELECT bucket_key FROM markdowns WHERE markdown_uuid = ?")
+        let render_units: Vec<Option<String>> =
+            sqlx::query_scalar("SELECT render_unit_key FROM markdowns WHERE markdown_uuid = ?")
                 .bind(&md.markdown_uuid)
                 .fetch_all(&pool)
                 .await
                 .unwrap();
         assert!(
-            buckets.is_empty(),
-            "no markdowns row, old bucket or new: {buckets:?}"
+            render_units.is_empty(),
+            "no markdowns row, old render unit or new: {render_units:?}"
         );
         let grid_n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM grid_rows")
             .fetch_one(&pool)
@@ -3056,7 +3083,7 @@ mod source_cursor_tests {
             source_id: source.to_string(),
             // Fingerprint follows the text, the way a renderer's does.
             upstream_cursor: None,
-            bucket_key: None,
+            render_unit_key: None,
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),
@@ -3111,12 +3138,12 @@ mod source_cursor_tests {
         store.close();
     }
 
-    /// A document under a bucket other than itself: the shape the
+    /// A document under a render unit other than itself: the shape the
     /// deletion path has to handle.
-    fn doc_in_bucket(source: &str, uuid: &str, bucket: &str) -> RenderedMarkdown {
+    fn doc_in_render_unit(source: &str, uuid: &str, render_unit: &str) -> RenderedMarkdown {
         let mut md = doc(source, uuid, "body");
-        md.rows[0].conversation_uuid = bucket.to_string();
-        md.bucket_key = Some(bucket.to_string());
+        md.rows[0].conversation_uuid = render_unit.to_string();
+        md.render_unit_key = Some(render_unit.to_string());
         md
     }
 
@@ -3214,30 +3241,30 @@ mod source_cursor_tests {
         assert_eq!(index_row_count(&pool).await, 2, "read whole again");
     }
 
-    /// One bucket, several rendered documents, all of them gone when the
-    /// bucket is.
+    /// One render unit, several rendered documents, all of them gone when the
+    /// render unit is.
     ///
     /// The fan-out is the reason the store answers "which documents are
-    /// under this bucket" rather than the renderer naming the document it
+    /// under this render unit" rather than the renderer naming the document it
     /// wants dropped: slack, signal and beeper split one conversation
     /// across periods, and once the conversation is gone from the raw
     /// store nothing but this store still knows how many periods it had.
     #[tokio::test(flavor = "multi_thread")]
-    async fn removing_a_bucket_takes_every_period_it_rendered_into() {
+    async fn removing_a_render_unit_takes_every_period_it_rendered_into() {
         let td = tempdir().unwrap();
         let root = td.path();
         let pool = index_pool(root).await;
         let conv = "conv-1";
-        let jan = doc_in_bucket("src", "md-jan", conv);
-        let feb = doc_in_bucket("src", "md-feb", conv);
-        let other = doc_in_bucket("src", "md-other", "conv-2");
+        let jan = doc_in_render_unit("src", "md-jan", conv);
+        let feb = doc_in_render_unit("src", "md-feb", conv);
+        let other = doc_in_render_unit("src", "md-other", "conv-2");
         render(root, "src", &[jan, feb, other]);
         build_grid_index(&pool, root, |_| {}, None).await.unwrap();
         assert_eq!(index_row_count(&pool).await, 3);
 
         let store = IndexedMarkdownStore::open(&rendered_root(root, "src")).unwrap();
         let mut gone: Vec<String> = store
-            .documents_for_buckets(&[conv])
+            .documents_for_render_units(&[conv])
             .unwrap()
             .into_iter()
             .map(|(_, uuid)| uuid)
@@ -3246,7 +3273,7 @@ mod source_cursor_tests {
         assert_eq!(
             gone,
             vec!["md-feb".to_string(), "md-jan".to_string()],
-            "both of the bucket's periods, and only those"
+            "both of the render unit's periods, and only those"
         );
         store.remove_documents(&gone).unwrap();
         store.commit("test: conversation gone upstream").unwrap();

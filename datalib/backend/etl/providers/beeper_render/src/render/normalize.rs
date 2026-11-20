@@ -1,4 +1,4 @@
-//! Beeper's parsed buckets, in the shape `chat-common` renders.
+//! Beeper's parsed render units, in the shape `chat-common` renders.
 //!
 //! Beeper bridges many upstreams, so its chats are grouped by network:
 //! one `RenderProfile` per network, because the `grid_rows` taxonomy is
@@ -19,7 +19,7 @@ use datalib_etl_render::inputs::Inputs;
 use datalib_schema::providers::Provider;
 
 use super::ids;
-use super::parse::{Blob, DocBucket, Event, ParsedBeeper, Person, Room};
+use super::parse::{Blob, DocRenderUnit, Event, ParsedBeeper, Person, Room};
 use super::RENDER_VERSION;
 
 /// Each avatar the blob store holds as an image, by blake3.
@@ -32,7 +32,7 @@ pub struct NetworkChats {
     pub chats: Vec<NormalizedChat>,
 }
 
-/// A bucket whose document this run could not build, and why: a
+/// A render unit whose document this run could not build, and why: a
 /// `problems` row on that document rather than a skip nobody sees.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unrendered {
@@ -51,7 +51,7 @@ pub fn to_networks(
 
     for doc in &parsed.docs {
         // The parser fills the room map from the same store, so this
-        // should not happen; the bucket is dropped rather than the pass.
+        // should not happen; the render unit is dropped rather than the pass.
         let Some(room) = parsed.rooms.get(&doc.room_uuid) else {
             unrendered.push(Unrendered {
                 markdown_uuid: ids::room(source_id, &doc.room_uuid).uuid,
@@ -86,7 +86,7 @@ pub fn to_networks(
 }
 
 /// The bundle key for a room's document — matches `NormalizedChat::id`.
-pub fn bundle_key(doc: &DocBucket) -> String {
+pub fn bundle_key(doc: &DocRenderUnit) -> String {
     doc.room_uuid.clone()
 }
 
@@ -109,6 +109,7 @@ pub fn profile_for(network: &str) -> RenderProfile {
         stamp_precision: ids::STAMP_PRECISION,
         render_version: RENDER_VERSION,
         text_format: TextFormat::Markdown,
+        layout: datalib_etl_chat_common::Layout::Chat,
     }
 }
 
@@ -117,7 +118,7 @@ fn to_chat(
     room: &Room,
     people: &[Person],
     avatars: &Avatars,
-    doc: &DocBucket,
+    doc: &DocRenderUnit,
     inputs: &Inputs,
 ) -> NormalizedChat {
     let uuid_of: HashMap<&str, String> = doc
@@ -201,7 +202,7 @@ fn to_chat(
         source_url: room.source_url.clone(),
         org_uuid: None,
         org_name: None,
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             markdown_uuid: ids::room(source_id, &room.native_room_id).uuid,
             source_ref: None,
             items,
@@ -215,7 +216,7 @@ fn to_chat(
 fn to_item(
     source_id: &str,
     room: &Room,
-    doc: &DocBucket,
+    doc: &DocRenderUnit,
     m: &Event,
     uuid_of: &HashMap<&str, String>,
 ) -> NormalizedChatItem {
@@ -411,12 +412,12 @@ pub fn network_label(network: &str) -> &str {
 mod tests {
     use super::*;
 
-    /// A bucket whose room the parse did not read was skipped with a
+    /// A render unit whose room the parse did not read was skipped with a
     /// log line; its document now carries why it was not rendered. A
-    /// bucket beside it whose room is there renders.
+    /// render unit beside it whose room is there renders.
     #[test]
-    fn a_bucket_with_no_room_is_unrendered() {
-        let bucket = |room_uuid: &str| DocBucket {
+    fn a_render_unit_with_no_room_is_unrendered() {
+        let render_unit = |room_uuid: &str| DocRenderUnit {
             room_uuid: room_uuid.into(),
             messages: Vec::new(),
             reactions_by_target: BTreeMap::new(),
@@ -435,8 +436,8 @@ mod tests {
         let parsed = ParsedBeeper {
             rooms: [(bridge.room_uuid.clone(), bridge)].into(),
             docs: vec![
-                bucket("!bridge:beeper.local"),
-                bucket("!enterprise:beeper.local"),
+                render_unit("!bridge:beeper.local"),
+                render_unit("!enterprise:beeper.local"),
             ],
             ..ParsedBeeper::default()
         };

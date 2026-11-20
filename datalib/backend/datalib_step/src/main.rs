@@ -527,6 +527,7 @@ async fn main() {
         obs.log_level.get_or_insert_with(|| "warn".to_string());
     }
     let _obs_guard = datalib_obs::init(&obs, "datalib-step").ok();
+    datalib_sql_work::install();
     // Before the first `latchkey` spawn, wherever it comes
     // from: a release tarball without `runtime/` beside its binaries
     // fetches the one its manifest names, once per machine.

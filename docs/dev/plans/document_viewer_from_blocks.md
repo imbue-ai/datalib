@@ -2,8 +2,9 @@
 
 *Proposal (2026-11-19). Steps 1 to 4 landed (#1889, #1891, #1902,
 #1909), with search quoting a hit from its one message (#1896); step 6
-is built on the branch after them, ahead of step 5. Steps 5 and 7 are
-not built. It picks up where
+landed ahead of step 5 (#1916), and step 5 landed for chat-common's
+messages (#1925, §"What was built"). Step 7's chat layout is built on
+the branch after them; its other layouts are not. It picks up where
 [`documents_to_blocks.md`](documents_to_blocks.md) step 5 stopped
 ("paging through what is read together comes after"), and chooses a
 layout by kind through the registry
@@ -236,6 +237,41 @@ stored drawing, then take it out of the drawing.
   document it crossed (chat-common README §"Unread messages"); once
   unread is a column, that render rewrites rows, not drawings.
 
+#### What was built
+
+All of it at once, for chat-common, the one renderer whose items had a
+drawing: it hands each message over as an `Item`
+(`etl/render/src/item.rs`), its body and every fact its box shows, and
+`Item::draw` draws the box's inside both when render writes the document
+and when the store spells it. So the two cannot differ, and `drawings`
+keeps only layout: front matter, titles, fold openers, a thread's
+"no messages" line. Its `body_at` and the cut went. Where it differs
+from the table above:
+
+- **Who and when are kept on the item, not read from its grid row.**
+  The row's `source_url` falls back to an attachment's link (Apple
+  Messages names the file, WhatsApp its path) where the header's `↗` is
+  the message's own, and the other renderers show an author their own
+  way (`@login`). So `sections` gains `author`, `author_handle`, `at`,
+  `tags` and `link`.
+- **Unread stays in the box's class**, a column of `sections` since
+  step 2. With the box no longer in `drawings`, a read mark that moves
+  rewrites rows only, which was the point.
+- **A reaction is listed on its message** (`sections.reactions`), and
+  a system event is the form `event` beside `message` (`sections.form`).
+- **`close_open_blocks` stays.** Reactions and the replies line are
+  still drawn after a body in the same piece, so a body still closes
+  what it leaves open.
+- **GitHub, GitLab, Notion, Drive and Todoist keep their messages
+  whole**, as text search reads, and so have no drawing to take
+  facts out of. Handing them over as items would change the text their
+  comments are searched and embedded by, so it waits for a reason of
+  its own (step 7's layouts, say).
+
+A message's markdown changed only in blank lines, which draw the same:
+a body is kept without the blank lines around it, and an email's To/Cc
+line has one blank line under it rather than two.
+
 ### Step 6: a window that grows both ways
 
 Done before step 5, which has nothing a person would notice and is
@@ -310,14 +346,31 @@ Header actions that mail and chat clients show on hover (🆔, ↗), and
 labels as chips beside the header rather than a `🏷` line in the body,
 belong here too.
 
+#### What was built: the chat layout
+
+chat-common's `RenderProfile` names a provider's layout (`Layout`:
+`Conversation`, `Chat`, `Transcript`), so no provider is named in a
+shared engine and no registry was needed yet. A chat's messages are
+items of the form `chat`: their boxes carry `msg--chat`, which the
+viewer's CSS draws as rows; a message continuing its author's run
+carries `msg--cont` and is drawn with no header (the `continues`
+column); reactions are pills drawn by `Item::draw`. One thing moved to
+the viewer that the plan put on the server: **the day divider**. Where a
+day ends depends on the zone the status bar's clock picks, which only
+the viewer knows, so `decorateChatDays` draws it from each message's
+`<time>`, as `decorateDates` draws the times. The conversation and page
+layouts and the header actions are not built.
+
 ## 4. Open questions
 
-- **Should read emails start collapsed?** Every mail client does it,
-  but it changes what a person sees first in a thread.
+- **Should read emails start collapsed?** Answered: no, every email
+  stays open.
 - **How close is "a few minutes"** for one header over a run of one
-  person's chat messages?
+  person's chat messages? Answered: five minutes after the message
+  before it.
 - **Reactions**: an item of their own or an attribute of the message
-  (`documents_to_blocks.md` §"Open questions")? A pill needs only to
-  know which message a reaction is on.
+  (`documents_to_blocks.md` §"Open questions")? Built as an attribute:
+  the message keeps its reactions (`sections.reactions`, step 5), and
+  each reaction keeps its own grid row and anchor.
 - **Can a person choose a layout**, say read a Slack thread as a
   conversation? Not proposed; the registry would make it one setting.

@@ -1,3 +1,4 @@
+load("@bazel_lib//lib:copy_file.bzl", "copy_file")
 load("@bazel_lib//lib:copy_to_bin.bzl", "copy_to_bin")
 load("@aspect_rules_js//js:defs.bzl", "js_run_binary")
 load("@bazel_skylib//rules:build_test.bzl", "build_test")
@@ -70,10 +71,27 @@ copy_to_bin(
     ],
 )
 
+# `<vs-tree>` (//third-party/vscode-tree) for the Library card, beside the
+# sources where vite.config.ts resolves the `vs-tree` import, with the
+# licenses the notices plugin reads (tools/thirdPartyNotices.ts).
+copy_file(
+    name = "vendor_vs_tree",
+    src = "//third-party/vscode-tree:dist/vs-tree.js",
+    out = "vendor/vs-tree.js",
+)
+
+copy_file(
+    name = "vendor_vs_tree_license",
+    src = "//third-party/vscode-tree:dist/vs-tree.LICENSE.txt",
+    out = "vendor/vs-tree.LICENSE.txt",
+)
+
 js_run_binary(
     name = "dist",
     srcs = [
         ":node_modules",
+        ":vendor_vs_tree",
+        ":vendor_vs_tree_license",
         ":vite_inputs",
     ],
     out_dirs = ["dist"],
@@ -527,6 +545,7 @@ vitest_bin.vitest_test(
     data = [
         ":hostile_samples",
         ":node_modules",
+        ":vendor_vs_tree",
         ":vitest_inputs",
         "//datalib/backend/applets:card_components",
     ],

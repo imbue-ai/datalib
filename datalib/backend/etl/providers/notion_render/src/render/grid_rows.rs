@@ -308,13 +308,13 @@ pub struct DocumentRows {
 }
 
 pub struct PageDocument {
-    /// Notion's page id: the bucket key.
+    /// Notion's page id: the render unit key.
     pub page_uuid: String,
     /// The id datalib minted for it: the document's `markdown_uuid`.
     pub markdown_uuid: String,
     pub page_title: String,
     /// Every raw row this document read; render adds its own reads and
-    /// declares the bucket with the total.
+    /// declares the render unit with the total.
     pub inputs: Inputs,
     pub rows: Vec<GridRow>,
     /// The page and the pages and databases above it.
@@ -325,7 +325,7 @@ pub struct PageDocument {
 }
 
 pub struct ThreadDocument {
-    /// Notion's discussion id: the bucket key.
+    /// Notion's discussion id: the render unit key.
     pub discussion_uuid: String,
     /// The id datalib minted for it: the document's `markdown_uuid`.
     pub markdown_uuid: String,

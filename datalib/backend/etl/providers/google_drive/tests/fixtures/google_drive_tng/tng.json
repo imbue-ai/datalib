@@ -32,7 +32,11 @@
      "canReadRevisions": true
     },
     "webViewLink": "https://docs.google.com/document/d/1PicardLog41153/edit",
-    "trashed": false
+    "trashed": false,
+    "parents": [
+     "1FolderLogs41000",
+     "1FolderReadyRoom"
+    ]
    },
    "native": {
     "documentId": "1PicardLog41153",
@@ -686,7 +690,10 @@
      "canReadRevisions": false
     },
     "webViewLink": "https://docs.google.com/document/d/1LaForgeEngRoster/edit",
-    "trashed": false
+    "trashed": false,
+    "parents": [
+     "1FolderGeordiShared"
+    ]
    },
    "native": {
     "documentId": "1LaForgeEngRoster",
@@ -766,6 +773,124 @@
      }
     ]
    }
+  },
+  {
+   "entry": {
+    "kind": "drive#file",
+    "id": "1WarpCoreMaintenance",
+    "name": "Warp core maintenance schedule",
+    "mimeType": "application/vnd.google-apps.document",
+    "version": "3",
+    "createdTime": "2369-04-10T08:00:00.000Z",
+    "modifiedTime": "2369-04-11T08:00:00.000Z",
+    "driveId": "0AEngineeringDrive",
+    "parents": [
+     "1FolderWarpCore"
+    ],
+    "lastModifyingUser": {
+     "kind": "drive#user",
+     "displayName": "Geordi La Forge",
+     "me": false,
+     "permissionId": "laforge",
+     "emailAddress": "laforge@enterprise.starfleet"
+    },
+    "capabilities": {
+     "canEdit": true,
+     "canComment": true,
+     "canReadRevisions": false
+    },
+    "webViewLink": "https://docs.google.com/document/d/1WarpCoreMaintenance/edit",
+    "trashed": false
+   },
+   "native": {
+    "documentId": "1WarpCoreMaintenance",
+    "title": "Warp core maintenance schedule",
+    "revisionId": "ALm37-warp-1",
+    "suggestionsViewMode": "SUGGESTIONS_INLINE",
+    "tabs": [
+     {
+      "tabProperties": {
+       "tabId": "t.0",
+       "title": "Tab 1",
+       "index": 0
+      },
+      "documentTab": {
+       "body": {
+        "content": [
+         {
+          "paragraph": {
+           "elements": [
+            {
+             "textRun": {
+              "content": "Antimatter injectors: inspect every third shift.\n",
+              "textStyle": {}
+             }
+            }
+           ],
+           "paragraphStyle": {
+            "namedStyleType": "NORMAL_TEXT"
+           }
+          }
+         }
+        ]
+       }
+      }
+     }
+    ]
+   }
+  }
+ ],
+ "root": {
+  "id": "0AEnterpriseMyDrive",
+  "name": "My Drive"
+ },
+ "folders": [
+  {
+   "id": "1FolderCaptainsLogs",
+   "name": "Captain's logs",
+   "parents": [
+    "0AEnterpriseMyDrive"
+   ]
+  },
+  {
+   "id": "1FolderLogs41000",
+   "name": "Stardate 41000s",
+   "parents": [
+    "1FolderCaptainsLogs"
+   ]
+  },
+  {
+   "id": "1FolderReadyRoom",
+   "name": "Ready room",
+   "parents": [
+    "0AEnterpriseMyDrive"
+   ]
+  },
+  {
+   "id": "1FolderGeordiShared",
+   "name": "Geordi's notes"
+  },
+  {
+   "id": "1FolderEngineering",
+   "name": "Engineering",
+   "parents": [
+    "0AEngineeringDrive"
+   ],
+   "driveId": "0AEngineeringDrive"
+  },
+  {
+   "id": "1FolderWarpCore",
+   "name": "Warp core",
+   "parents": [
+    "1FolderEngineering"
+   ],
+   "driveId": "0AEngineeringDrive"
+  }
+ ],
+ "drives": [
+  {
+   "id": "0AEngineeringDrive",
+   "name": "Enterprise-D Engineering"
   }
  ]
 }

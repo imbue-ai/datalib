@@ -43,6 +43,7 @@ const PARENT_GONE_GRACE: std::time::Duration = datalib_dag::step::STOP_GRACE;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
+    datalib_sql_work::install();
     // First, so a spawner that asked for the watch and forgot the pipe
     // is refused before the runner lock is taken. A loop whose spawner is
     // gone has nobody left to report to, and holds a lock the next one

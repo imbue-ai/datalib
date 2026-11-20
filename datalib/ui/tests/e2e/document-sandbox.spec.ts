@@ -21,7 +21,8 @@ import { readFileSync } from "node:fs";
 
 declare const process: { env: Record<string, string | undefined> };
 
-async function openADocument(page: Page): Promise<void> {
+/// Opens an email and answers its document's uuid.
+async function openADocument(page: Page): Promise<string> {
   const resp = await page.request.get("/applet/unified_grid_and_search_index/search?q=&limit=2000");
   expect(resp.ok()).toBeTruthy();
   const { rows } = (await resp.json()) as {
@@ -34,8 +35,9 @@ async function openADocument(page: Page): Promise<void> {
   // The copy button is the app's decoration, so the body is painted and
   // the app's code has been in the frame.
   await expect(
-    page.frameLocator("iframe.doc-frame").locator("button.copy-uuid").first(),
+    page.frameLocator("iframe.doc-frame").locator("button.copy-link").first(),
   ).toBeAttached({ timeout: 10_000 });
+  return pick!.markdown_uuid!;
 }
 
 test("a document's frame runs no inline script", async ({ page }) => {
@@ -112,13 +114,27 @@ test("a document cannot cover the app's own controls", async ({ page }) => {
 });
 
 test("the app's own controls still work inside the frame", async ({ page }) => {
-  await openADocument(page);
+  // What the app writes to the clipboard, kept to read: a headless
+  // browser's own clipboard may refuse the write.
+  await page.addInitScript(() => {
+    const w = window as unknown as { copied: string[] };
+    w.copied = [];
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText: async (t: string) => void w.copied.push(t) },
+    });
+  });
+  const doc = await openADocument(page);
   const body = page.frameLocator("iframe.doc-frame").locator("body.chat-body");
-  // A listener of the app's, on the frame's document, answers the click:
-  // the button reports the copy, or that the clipboard refused it.
-  const copy = body.locator("button.copy-uuid").first();
+  // A listener of the app's, on the frame's document, answers the click,
+  // and a message's 🔗 copies a link to that message, the email's subject
+  // written before the document's id.
+  const copy = body.locator("[data-section-uuid] button.copy-link").first();
+  const message = await copy.getAttribute("data-uuid");
   await copy.click();
-  await expect(copy).toHaveClass(/copied|copy-failed/);
+  await expect(copy).toHaveClass(/copied/);
+  const copied = await page.evaluate(() => (window as unknown as { copied: string[] }).copied);
+  expect(copied).toHaveLength(1);
+  expect(copied[0]).toMatch(new RegExp(`^datalib:doc/[A-Za-z0-9-]+-${doc}#${message}$`));
 });
 
 // A link need not be an `<a>`: an image map's `<area>` and SVG's `<a>` are links
@@ -322,7 +338,7 @@ async function framedAnywhere(context: BrowserContext): Promise<boolean> {
 /** Writes the email into the open document's frame, past the renderer and the sanitizer. */
 async function writeIntoFrame(page: Page, html: string): Promise<void> {
   await expect(
-    page.frameLocator("iframe.doc-frame").locator("button.copy-uuid").first(),
+    page.frameLocator("iframe.doc-frame").locator("button.copy-link").first(),
   ).toBeAttached({ timeout: 10_000 });
   await page.locator("iframe.doc-frame").evaluate((el: HTMLIFrameElement, raw: string) => {
     const host = el.contentDocument!.createElement("div");
@@ -400,7 +416,7 @@ test.describe("Quark's prize email", () => {
     const w = watch(context);
     await page.goto(`/chat/${await quarksUuid(page)}`);
     await expect(
-      page.frameLocator("iframe.doc-frame").locator("button.copy-uuid").first(),
+      page.frameLocator("iframe.doc-frame").locator("button.copy-link").first(),
     ).toBeAttached({ timeout: 10_000 });
     // The renderer has neutralised three tricks before the app sees them.
     expect(await whatIsInFrame(page)).toEqual({

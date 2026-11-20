@@ -2,7 +2,7 @@
   {
     "name": "a page",
     "link": "datalib:doc/00000000-0000-8000-a000-000000000001",
-    "doc": {"page": "00000000-0000-8000-a000-000000000001", "section": null}
+    "doc": { "page": "00000000-0000-8000-a000-000000000001", "section": null }
   },
   {
     "name": "a message on a page",
@@ -12,24 +12,28 @@
       "section": "0190a5e1-0000-7000-8000-00000000000c"
     }
   },
-  {"name": "another scheme", "link": "mailto:riker@enterprise.org", "doc": null},
-  {"name": "the old copied-id form", "link": "datalib://chat/abc-123?msg=def-456", "doc": null},
-  {"name": "a kind this build does not know", "link": "datalib:ship/enterprise", "doc": null},
-  {"name": "no page", "link": "datalib:doc/", "doc": null},
-  {"name": "a page with a slash", "link": "datalib:doc/a/b", "doc": null},
+  { "name": "another scheme", "link": "mailto:riker@enterprise.org", "doc": null },
+  { "name": "the old copied-id form", "link": "datalib://chat/abc-123?msg=def-456", "doc": null },
+  { "name": "a kind this build does not know", "link": "datalib:ship/enterprise", "doc": null },
+  { "name": "no page", "link": "datalib:doc/", "doc": null },
+  { "name": "a page with a slash", "link": "datalib:doc/a/b", "doc": null },
   {
     "name": "a photo",
     "link": "datalib:photo/00000000-0000-8000-a000-000000000002",
     "doc": null,
     "photo": "00000000-0000-8000-a000-000000000002"
   },
-  {"name": "no photo", "link": "datalib:photo/", "doc": null},
-  {"name": "a photo with a slash", "link": "datalib:photo/a/b", "doc": null},
-  {"name": "a photo that climbs out of its route", "link": "datalib:photo/..", "doc": null},
-  {"name": "a photo whose id is not a uuid", "link": "datalib:photo/abc", "doc": null},
-  {"name": "a photo id with a query", "link": "datalib:photo/00000000-0000-8000-a000-000000000002?x=1", "doc": null},
-  {"name": "a page that climbs", "link": "datalib:doc/..", "doc": null},
-  {"name": "a page whose id is not a uuid", "link": "datalib:doc/abc-123", "doc": null},
+  { "name": "no photo", "link": "datalib:photo/", "doc": null },
+  { "name": "a photo with a slash", "link": "datalib:photo/a/b", "doc": null },
+  { "name": "a photo that climbs out of its route", "link": "datalib:photo/..", "doc": null },
+  { "name": "a photo whose id is not a uuid", "link": "datalib:photo/abc", "doc": null },
+  {
+    "name": "a photo id with a query",
+    "link": "datalib:photo/00000000-0000-8000-a000-000000000002?x=1",
+    "doc": null
+  },
+  { "name": "a page that climbs", "link": "datalib:doc/..", "doc": null },
+  { "name": "a page whose id is not a uuid", "link": "datalib:doc/abc-123", "doc": null },
   {
     "name": "a section that is not a uuid",
     "link": "datalib:doc/00000000-0000-8000-a000-000000000001#../x",
@@ -38,6 +42,58 @@
   {
     "name": "a page in capitals",
     "link": "datalib:doc/0190A5E1-0000-7000-8000-00000000000C",
-    "doc": {"page": "0190A5E1-0000-7000-8000-00000000000C", "section": null}
-  }
+    "doc": { "page": "0190A5E1-0000-7000-8000-00000000000C", "section": null }
+  },
+  {
+    "name": "a message on a page, the page's title before its id",
+    "link": "datalib:doc/Ten-Forward-00000000-0000-8000-a000-000000000001#0190a5e1-0000-7000-8000-00000000000c",
+    "title": "Ten Forward",
+    "doc": {
+      "page": "00000000-0000-8000-a000-000000000001",
+      "section": "0190a5e1-0000-7000-8000-00000000000c"
+    }
+  },
+  {
+    "name": "a title written as words and dashes, accents dropped",
+    "link": "datalib:doc/Re-Cafe-Picard-s-Tea-Earl-Grey-hot-00000000-0000-8000-a000-000000000001",
+    "title": "Re: Café — Picard’s “Tea, Earl Grey, hot” ☕",
+    "doc": { "page": "00000000-0000-8000-a000-000000000001", "section": null }
+  },
+  {
+    "name": "a title of uuid-like words",
+    "link": "datalib:doc/abc-123-00000000-0000-8000-a000-000000000001",
+    "title": "abc 123",
+    "doc": { "page": "00000000-0000-8000-a000-000000000001", "section": null }
+  },
+  {
+    "name": "a title in another script leaves the id alone",
+    "link": "datalib:doc/00000000-0000-8000-a000-000000000001",
+    "title": "ブリッジ",
+    "doc": { "page": "00000000-0000-8000-a000-000000000001", "section": null }
+  },
+  {
+    "name": "words run into the id",
+    "link": "datalib:doc/Ten00000000-0000-8000-a000-000000000001",
+    "doc": null
+  },
+  {
+    "name": "words with a slash",
+    "link": "datalib:doc/a/b-00000000-0000-8000-a000-000000000001",
+    "doc": null
+  },
+  {
+    "name": "words with a query",
+    "link": "datalib:doc/a?b-00000000-0000-8000-a000-000000000001",
+    "doc": null
+  },
+  {
+    "name": "a node",
+    "link": "datalib:node/00000000-0000-8000-a000-000000000003",
+    "doc": null,
+    "node": "00000000-0000-8000-a000-000000000003"
+  },
+  { "name": "no node", "link": "datalib:node/", "doc": null },
+  { "name": "a node with a slash", "link": "datalib:node/a/b", "doc": null },
+  { "name": "a node that climbs out", "link": "datalib:node/..", "doc": null },
+  { "name": "a node named for its source", "link": "datalib:node/source:slack", "doc": null }
 ]

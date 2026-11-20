@@ -1214,7 +1214,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     type: "email",
     variantKey: "apple_mail",
-    label: "Apple Mail",
+    label: "Apple Mail (Local)",
     blurb: "Copy the accounts of the Mail app on this Mac, from its own files.",
     keywords: ["apple", "mail", "email", "mac", "emlx", "inbox", "icloud"],
     kind: "local",
@@ -1992,7 +1992,7 @@ export const CATALOG: CatalogEntry[] = [
     // is the standard store: every Claude Code on this machine keeps its
     // transcripts under ~/.claude/projects.
     method: "sessions",
-    label: "Claude Code",
+    label: "Claude Code (Local)",
     blurb:
       "Copy your Claude Code sessions — terminal, desktop and IDE — from their store on this machine.",
     keywords: ["claude", "code", "anthropic", "agent", "sessions", "transcripts", "coding"],
@@ -2028,7 +2028,7 @@ export const CATALOG: CatalogEntry[] = [
     // With nothing filled in the form still writes `sessions = {}`, which
     // is the standard home: Codex keeps its rollouts under ~/.codex.
     method: "sessions",
-    label: "Codex",
+    label: "Codex (Local)",
     blurb: "Copy your Codex CLI sessions from their store on this machine.",
     keywords: ["codex", "openai", "agent", "sessions", "rollouts", "transcripts", "coding"],
     kind: "local",
@@ -2351,7 +2351,7 @@ export const CATALOG: CatalogEntry[] = [
   },
   {
     type: "beeper",
-    label: "Beeper",
+    label: "Beeper (Local)",
     blurb:
       "Copy the chats Beeper keeps on this Mac, from every network it connects. Poorly " +
       "supported — expect rough edges.",
@@ -2410,7 +2410,7 @@ export const CATALOG: CatalogEntry[] = [
 
   {
     type: "pdf",
-    label: "Local PDFs",
+    label: "PDFs (Local)",
     blurb: "Convert a directory tree of PDFs into searchable markdown.",
     keywords: ["pdf", "documents", "papers", "files"],
     kind: "local",
@@ -2448,8 +2448,47 @@ export const CATALOG: CatalogEntry[] = [
     ],
   },
   {
+    type: "markdown",
+    label: "Markdown (Local)",
+    blurb: "Make a folder of markdown notes searchable, such as an Obsidian vault.",
+    keywords: ["markdown", "notes", "obsidian", "vault", "md", "zettelkasten", "files"],
+    kind: "local",
+    icon: "markdown",
+    defaultName: "notes",
+    nameHint: "My Obsidian vault",
+    wizard: true,
+    sections: [{ heading: "Notes folder", fields: ["fswalk.path"] }],
+    fields: [
+      {
+        kind: "path",
+        picks: "dir",
+        pickTitle: "Choose the folder of notes to index",
+        required: true,
+        target: "fswalk.path",
+        label: "Notes folder",
+        help:
+          "Every .md file in this folder and the folders inside it. Folders whose names " +
+          "start with a dot, such as .obsidian and .trash, are skipped.",
+      },
+      {
+        kind: "string_list",
+        target: "ignore",
+        label: "Ignore patterns",
+        help:
+          "Gitignore-shaped patterns, comma-separated (templates/**, **/archive/**), on top " +
+          "of any .gitignore in the tree.",
+      },
+      {
+        kind: "bytes",
+        target: "max_bytes",
+        label: "Skip files larger than",
+        help: "Empty is the 16 MiB default.",
+      },
+    ],
+  },
+  {
     type: "file_inventory",
-    label: "File inventory",
+    label: "File inventory (Local)",
     blurb: "Keep a record of a directory tree — paths, sizes, content hashes.",
     keywords: ["files", "filesystem", "index", "inventory", "directory", "disk"],
     kind: "local",
@@ -2488,7 +2527,7 @@ export const CATALOG: CatalogEntry[] = [
   },
   {
     type: "media",
-    label: "Local media",
+    label: "Media (Local)",
     blurb: "Index a media tree — tags, EXIF, playlists, and a metadata-free content hash.",
     keywords: ["music", "photos", "video", "mp3", "jpeg", "raw", "dng", "playlists", "media"],
     kind: "local",
@@ -2538,7 +2577,7 @@ export const CATALOG: CatalogEntry[] = [
   {
     type: "airvisual",
     method: "export",
-    label: "IQAir AirVisual",
+    label: "IQAir AirVisual (Local)",
     blurb: "IQAir AirVisual Pros' own history, read off each unit's network share.",
     keywords: ["airvisual", "iqair", "air quality", "co2", "pm2.5", "sensor", "samba"],
     kind: "local",
@@ -2552,7 +2591,7 @@ export const CATALOG: CatalogEntry[] = [
   },
   {
     type: "lightroom",
-    label: "Lightroom",
+    label: "Lightroom (Local)",
     blurb: "Copy a Lightroom Classic catalog, with full history.",
     keywords: ["lightroom", "photos", "adobe", "catalog", "sqlite", "images", "backup", "zip"],
     kind: "local",
@@ -2625,7 +2664,7 @@ export const CATALOG: CatalogEntry[] = [
   },
   {
     type: "apple_messages",
-    label: "Apple Messages",
+    label: "Apple Messages (Local)",
     blurb: "Copy the Messages app's own database, with full history.",
     keywords: ["apple", "messages", "imessage", "sms", "texts", "chat.db", "iphone"],
     kind: "local",
@@ -2689,7 +2728,7 @@ export const CATALOG: CatalogEntry[] = [
   },
   {
     type: "apple_photos",
-    label: "Apple Photos",
+    label: "Apple Photos (Local)",
     blurb: "Copy an Apple Photos library's database, with full history.",
     keywords: ["apple", "photos", "photoslibrary", "iphone", "icloud", "sqlite", "images"],
     kind: "local",

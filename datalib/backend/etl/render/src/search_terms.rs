@@ -404,7 +404,7 @@ mod tests {
             markdown_uuid: uuid.to_string(),
             source_id: "enterprise".into(),
             upstream_cursor: None,
-            bucket_key: None,
+            render_unit_key: None,
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),

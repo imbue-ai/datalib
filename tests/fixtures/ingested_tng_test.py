@@ -1505,16 +1505,27 @@ class IngestedTngPipelineTest(unittest.TestCase):
         )
         # A 1:1 chat leaves an incoming reaction's sender empty, as it does
         # a message's: the chat's person reacted. The account's own
-        # reaction is the account's one chip, `me:self`.
+        # reaction is the account's one chip, `me:self`. A chat draws each
+        # emoji as a pill, its reactors inside it.
         riker_chat = self._markdown("whatsapp", "private word about Commander Data")
-        self.assertIn(
-            '🖖 [William Riker](tel:+17015550101 "William Riker (+17015550101)")',
+
+        def pill(emoji: str, chip: str) -> str:
+            return (
+                re.escape(f'{emoji} 1<span class="msg-reactors"> ')
+                + r'<span id="m-[^"]+" data-section-uuid="[^"]+">'
+                + re.escape(f"{chip}</span></span></span>")
+            )
+
+        self.assertRegex(
             riker_chat,
+            pill(
+                "🖖", '[William Riker](tel:+17015550101 "William Riker (+17015550101)")'
+            ),
             "a 1:1 reaction is the chat's person, as a chip",
         )
-        self.assertIn(
-            '👍 [Me](datalib:handle/me/self "Me")</span>',
+        self.assertRegex(
             riker_chat,
+            pill("👍", '[Me](datalib:handle/me/self "Me")'),
             "the account's own reaction is the Me chip",
         )
         # A Slack reactor with no profile and no message: in the document
@@ -1863,12 +1874,14 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "a word edit inside a chat message",
         )
         # The reactor is a chip link (docs/dev/chips.md), so the
-        # added reaction carries Picard's Slack handle.
+        # added reaction carries Picard's Slack handle; a chat draws it as
+        # a pill, whose count and reactor are each added.
+        self.assertIn("<ins>🛡️ 1</ins>", worf, "the reaction added")
         self.assertIn(
-            "<ins>🛡️ [Jean-Luc Picard](slack://user?team=T_NCC1701D&id=U_PICARD "
+            "<ins>[Jean-Luc Picard](slack://user?team=T_NCC1701D&id=U_PICARD "
             '"Jean-Luc Picard (slack:T_NCC1701D/U_PICARD)")</ins>',
             worf,
-            "the reaction added",
+            "the reactor added",
         )
 
         # PDFs specifically: 4 renderable documents, 5 pages between
@@ -1876,9 +1889,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # and the corrupt file is skipped). The mixed hull survey is one
         # of the four and contributes one page, not two — its image-only
         # second page becomes a note in the markdown rather than a row.
+        # The two folders are engineering/ and archive/, where the copy of
+        # the log is filed; holodeck/ holds nothing rendered, so no folder.
         self.assertEqual(
             self._pdf_shape(),
-            {"PDF Document": 4, "PDF Page": 5},
+            {"Folder": 2, "PDF Document": 4, "PDF Page": 5},
             "pdf grid_rows shape",
         )
         # Cross-provider: every row is filed under its document's source,
@@ -2418,7 +2433,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
 
         # Delete it the way an upstream loss reaches us: the row goes, and
         # the store commits, so the render step's `dolt_diff` names the
-        # bucket as changed and finds nothing behind it.
+        # render unit as changed and finds nothing behind it.
         self._query(
             self._claude_entities_db,
             f"DELETE FROM conversations WHERE id = '{victim}'; "

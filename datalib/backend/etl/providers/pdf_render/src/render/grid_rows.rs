@@ -3,7 +3,8 @@
 use std::path::Path;
 
 use datalib_id::{composite_key, IdNamespace, Identity};
-use datalib_schema::data_nodes::DataNodeRow;
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
+use datalib_schema::filings::FilingRow;
 use datalib_schema::grid_rows::{content_hash, preview, GridRow};
 use datalib_schema::providers::Provider;
 use datalib_time::record_stamp_ms;
@@ -12,6 +13,7 @@ pub const PROVIDER: Provider = Provider::Pdf;
 pub const SOURCE_LABEL: &str = "PDF";
 pub const KIND_DOCUMENT: &str = "PDF Document";
 pub const KIND_PAGE: &str = "PDF Page";
+pub const KIND_FOLDER: &str = "Folder";
 
 /// `grid_rows.upstream_entity_kind` values — the `entity_kind` component
 /// of the `datalib_id` recipe, in the provider's own vocabulary.
@@ -20,6 +22,7 @@ pub const KIND_PAGE: &str = "PDF Page";
 /// because `uuid` is derived from them.
 pub const ENTITY_KIND_DOCUMENT: &str = "document";
 pub const ENTITY_KIND_PAGE: &str = "page";
+pub const ENTITY_KIND_FOLDER: &str = "folder";
 
 pub const ID_NAMESPACE: IdNamespace = IdNamespace::Pdf;
 
@@ -47,6 +50,64 @@ fn identity(
 
 pub fn document(source_id: &str, blake3: &str, when: Option<&str>) -> Identity {
     identity(source_id, ENTITY_KIND_DOCUMENT, blake3.to_string(), when)
+}
+
+/// A folder under the source's root, by its root-relative path
+/// (`Missions/Borg`): the folders are what the paths say, so the path is
+/// the key, and a folder renamed on disk is a new one.
+pub fn folder(source_id: &str, path: &str) -> Identity {
+    identity(source_id, ENTITY_KIND_FOLDER, path.to_string(), None)
+}
+
+/// Where a PDF sits among the folders under the source's root, and the
+/// folders on the way. A document is its bytes, so the same PDF can be at
+/// several paths: it sits in the folder of its first path (`rel_path`,
+/// the least), and is filed under the folder of every other, so each
+/// folder lists what is in it. A PDF at the root sits at the top.
+pub struct Folders {
+    /// Where the document sits.
+    pub at: Lineage,
+    /// Each folder on the way to any of its paths, once, top first.
+    pub nodes: Vec<DataNodeRow>,
+    pub filings: Vec<FilingRow>,
+}
+
+pub fn folders(source_id: &str, md: &str, rel_path: &str, paths: &[String]) -> Folders {
+    let mut nodes: Vec<DataNodeRow> = Vec::new();
+    let mut chain = |path: &str| {
+        let mut at = Lineage::top();
+        let parts: Vec<&str> = path.split('/').filter(|p| !p.is_empty()).collect();
+        let Some((_file, dirs)) = parts.split_last() else {
+            return at;
+        };
+        for depth in 1..=dirs.len() {
+            let prefix = dirs[..depth].join("/");
+            let id = folder(source_id, &prefix);
+            let node = DataNodeRow::new(md, id.uuid, source_id, KIND_FOLDER)
+                .named(Some(dirs[depth - 1].to_string()))
+                .upstream(id.entity_kind, id.natural_key, None)
+                .place()
+                .under(&at);
+            at = at.below(&node);
+            if !nodes.iter().any(|n| n.uuid == node.uuid) {
+                nodes.push(node);
+            }
+        }
+        at
+    };
+    let at = chain(rel_path);
+    let mut filings: Vec<FilingRow> = Vec::new();
+    for path in paths.iter().filter(|p| p.as_str() != rel_path) {
+        let Some(under) = chain(path).parent_uuid else {
+            continue;
+        };
+        let new = Some(&under) != at.parent_uuid.as_ref()
+            && !filings.iter().any(|f| f.under_uuid == under);
+        if new {
+            filings.push(FilingRow::new(md, md, &under));
+        }
+    }
+    Folders { at, nodes, filings }
 }
 
 pub fn page(source_id: &str, blake3: &str, number: u32, when: Option<&str>) -> Identity {
@@ -122,23 +183,25 @@ pub fn display_author(author: Option<&str>) -> Option<String> {
     Some(a.to_string())
 }
 
-/// The document as a container, read together, at the top of its source:
-/// it is its bytes, wherever on disk they are, so no folder holds it.
-pub fn document_node(source_id: &str, meta: &DocumentMeta<'_>) -> DataNodeRow {
+/// The document as a container, read together, in the folder `at`
+/// ([`folders`]).
+pub fn document_node(source_id: &str, meta: &DocumentMeta<'_>, at: &Lineage) -> DataNodeRow {
     let when = document_stamp(meta.created_at, meta.modified_at);
     let doc = document(source_id, meta.blake3, when);
     DataNodeRow::new(&doc.uuid, &doc.uuid, source_id, KIND_DOCUMENT)
         .named(Some(display_title(meta.title, meta.rel_path)))
         .upstream(doc.entity_kind, doc.natural_key, None)
         .read_together()
+        .under(at)
 }
 
 /// Build the row set for one document: the document row followed by one
-/// row per page, in page order.
+/// row per page, in page order. The document sits in the folder `at`.
 pub fn rows_for_document(
     source_id: &str,
     meta: &DocumentMeta<'_>,
     pages: &[(u32, String)],
+    at: &Lineage,
 ) -> Vec<GridRow> {
     let when = document_stamp(meta.created_at, meta.modified_at);
     let doc = document(source_id, meta.blake3, when);
@@ -180,13 +243,13 @@ pub fn rows_for_document(
         channel: None,
         conversation_name: Some(title.clone()),
         conversation_uuid: doc_uuid.clone(),
-        parent_uuid: None,
+        parent_uuid: at.parent_uuid.clone(),
         sort_key: when
             .and_then(datalib_time::split_record_stamp)
             .map(|(utc, _)| utc)
             .unwrap_or_default(),
-        read_uuid: None,
-        place_uuid: None,
+        read_uuid: at.read_uuid.clone(),
+        place_uuid: at.place_uuid.clone(),
         message_index: None,
         entire_chat: format!("/chat/{doc_uuid}"),
         preview: preview(&doc_body),
@@ -245,7 +308,7 @@ pub fn rows_for_document(
             parent_uuid: Some(doc_uuid.clone()),
             sort_key: format!("{number:010}"),
             read_uuid: Some(doc_uuid.clone()),
-            place_uuid: None,
+            place_uuid: at.place_uuid.clone(),
             message_index: Some(i64::from(*number)),
             entire_chat: format!("/chat/{doc_uuid}"),
             preview: preview(text),
@@ -342,7 +405,12 @@ mod tests {
     #[test]
     fn document_row_comes_first_then_pages_in_order() {
         let pages = vec![(1, "one".to_string()), (2, "two".to_string())];
-        let rows = rows_for_document("pdf", &meta(Some("Paper"), "a/b.pdf"), &pages);
+        let rows = rows_for_document(
+            "pdf",
+            &meta(Some("Paper"), "a/b.pdf"),
+            &pages,
+            &Lineage::top(),
+        );
         assert_eq!(rows.len(), 3);
         assert_eq!(rows[0].kind, KIND_DOCUMENT);
         assert_eq!(rows[1].kind, KIND_PAGE);
@@ -353,7 +421,7 @@ mod tests {
     #[test]
     fn every_page_row_shares_the_document_conversation_uuid() {
         let pages = vec![(1, "one".into()), (2, "two".into())];
-        let rows = rows_for_document("pdf", &meta(None, "a/b.pdf"), &pages);
+        let rows = rows_for_document("pdf", &meta(None, "a/b.pdf"), &pages, &Lineage::top());
         let doc = rows[0].uuid.clone();
         assert!(rows.iter().all(|r| r.conversation_uuid == doc));
     }
@@ -364,8 +432,8 @@ mod tests {
     fn a_page_sits_in_its_document_in_page_order() {
         let pages = vec![(2, "two".into()), (10, "ten".into())];
         let m = meta(Some("T"), "a.pdf");
-        let rows = rows_for_document("pdf", &m, &pages);
-        let node = document_node("pdf", &m);
+        let rows = rows_for_document("pdf", &m, &pages, &Lineage::top());
+        let node = document_node("pdf", &m, &Lineage::top());
         assert_eq!(node.uuid, rows[0].uuid);
         assert!(node.read_together && !node.is_place);
         assert_eq!(node.parent_uuid, None);
@@ -391,7 +459,12 @@ mod tests {
         // Every other provider puts an absolute URL here and the UI
         // calls window.open on it; a relative path navigates the app to
         // nowhere.
-        let rows = rows_for_document("pdf", &meta(Some("T"), "a/b.pdf"), &[(1, "x".into())]);
+        let rows = rows_for_document(
+            "pdf",
+            &meta(Some("T"), "a/b.pdf"),
+            &[(1, "x".into())],
+            &Lineage::top(),
+        );
         assert_eq!(
             rows[0].source_url.as_deref(),
             Some("file:///corpus/a/b.pdf")
@@ -475,7 +548,12 @@ mod tests {
 
     #[test]
     fn author_lands_on_both_document_and_page_rows() {
-        let rows = rows_for_document("pdf", &meta(Some("T"), "a/b.pdf"), &[(1, "x".into())]);
+        let rows = rows_for_document(
+            "pdf",
+            &meta(Some("T"), "a/b.pdf"),
+            &[(1, "x".into())],
+            &Lineage::top(),
+        );
         assert!(rows
             .iter()
             .all(|r| r.author.as_deref() == Some("Jean-Luc Picard")));
@@ -488,7 +566,7 @@ mod tests {
         // and most PDFs never set /Author at all.
         let mut m = meta(None, "a/b.pdf");
         m.author = None;
-        let rows = rows_for_document("pdf", &m, &[(1, "x".into())]);
+        let rows = rows_for_document("pdf", &m, &[(1, "x".into())], &Lineage::top());
         assert!(rows.iter().all(|r| r.author.is_none()));
     }
 
@@ -497,7 +575,7 @@ mod tests {
         let mut m = meta(None, "a/b.pdf");
         m.created_at = None;
         m.modified_at = None;
-        let rows = rows_for_document("pdf", &m, &[(1, "x".into())]);
+        let rows = rows_for_document("pdf", &m, &[(1, "x".into())], &Lineage::top());
         assert!(rows.iter().all(|r| r.created_at.is_none()));
     }
 
@@ -506,7 +584,7 @@ mod tests {
         let mut m = meta(None, "a/b.pdf");
         m.created_at = None;
         m.modified_at = Some("2020-02-02T02:02:02+00:00");
-        let rows = rows_for_document("pdf", &m, &[(1, "x".into())]);
+        let rows = rows_for_document("pdf", &m, &[(1, "x".into())], &Lineage::top());
         assert_eq!(
             rows[0].created_at.as_deref(),
             Some("2020-02-02T02:02:02+00:00")
@@ -517,7 +595,7 @@ mod tests {
     fn duplicate_copies_are_surfaced_in_the_document_row_text() {
         let mut m = meta(Some("Paper"), "a/b.pdf");
         m.copy_count = 3;
-        let rows = rows_for_document("pdf", &m, &[]);
+        let rows = rows_for_document("pdf", &m, &[], &Lineage::top());
         assert_eq!(rows[0].preview, "Paper (3 copies)");
     }
 
@@ -525,7 +603,73 @@ mod tests {
     fn document_row_does_not_duplicate_page_text() {
         // Otherwise every query matches the doc row as well as the page.
         let pages = vec![(1, "distinctive body text".to_string())];
-        let rows = rows_for_document("pdf", &meta(Some("T"), "a/b.pdf"), &pages);
+        let rows = rows_for_document("pdf", &meta(Some("T"), "a/b.pdf"), &pages, &Lineage::top());
         assert!(!rows[0].preview.contains("distinctive body text"));
+    }
+
+    /// A PDF sits in the folder of its first path, each folder on the way
+    /// a place under the one above it and named for its own part of the
+    /// path; a copy elsewhere is filed under that folder too, and a copy
+    /// at the root files nothing.
+    #[test]
+    fn a_pdf_sits_in_its_first_folder_and_is_filed_under_the_others() {
+        let paths = vec![
+            "Missions/Borg/wolf359.pdf".to_string(),
+            "Reports/wolf359.pdf".to_string(),
+            "wolf359.pdf".to_string(),
+        ];
+        let f = folders("pdf", "doc", "Missions/Borg/wolf359.pdf", &paths);
+        let named: Vec<(String, Option<String>, Option<String>)> = f
+            .nodes
+            .iter()
+            .map(|n| (n.uuid.clone(), n.name.clone(), n.parent_uuid.clone()))
+            .collect();
+        let id = |p: &str| folder("pdf", p).uuid;
+        assert_eq!(
+            named,
+            vec![
+                (id("Missions"), Some("Missions".into()), None),
+                (
+                    id("Missions/Borg"),
+                    Some("Borg".into()),
+                    Some(id("Missions"))
+                ),
+                (id("Reports"), Some("Reports".into()), None),
+            ]
+        );
+        assert!(f.nodes.iter().all(|n| n.is_place && n.kind == KIND_FOLDER));
+        assert_eq!(f.at.parent_uuid, Some(id("Missions/Borg")));
+        assert_eq!(f.at.place_uuid, Some(id("Missions/Borg")));
+        let filed: Vec<(&str, &str)> = f
+            .filings
+            .iter()
+            .map(|x| (x.node_uuid.as_str(), x.under_uuid.as_str()))
+            .collect();
+        assert_eq!(filed, vec![("doc", id("Reports").as_str())]);
+    }
+
+    /// A PDF at the root sits at the top, and the document and its pages
+    /// carry where it sits.
+    #[test]
+    fn a_pdf_at_the_root_sits_at_the_top_and_its_rows_carry_its_folder() {
+        let top = folders("pdf", "doc", "warp.pdf", &["warp.pdf".to_string()]);
+        assert_eq!(top.at, Lineage::top());
+        assert!(top.nodes.is_empty() && top.filings.is_empty());
+
+        let m = meta(Some("T"), "Missions/warp.pdf");
+        let f = folders(
+            "pdf",
+            "doc",
+            "Missions/warp.pdf",
+            &["Missions/warp.pdf".to_string()],
+        );
+        let rows = rows_for_document("pdf", &m, &[(1, "x".into())], &f.at);
+        let node = document_node("pdf", &m, &f.at);
+        let missions = folder("pdf", "Missions").uuid;
+        assert_eq!(node.parent_uuid.as_deref(), Some(missions.as_str()));
+        assert_eq!(rows[0].parent_uuid.as_deref(), Some(missions.as_str()));
+        assert!(rows
+            .iter()
+            .all(|r| r.place_uuid.as_deref() == Some(missions.as_str())));
     }
 }

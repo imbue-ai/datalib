@@ -18,6 +18,7 @@ export type DocumentAction =
   | "reveal"
   | "copy-path"
   | "open-source"
+  | "copy-link"
   | "copy-id"
   | "copy-name"
   | "copy-both"
@@ -42,6 +43,11 @@ export type Host = {
 
 export function documentTitle(doc: DocumentAbout): string {
   return doc.name?.trim() || "Untitled document";
+}
+
+/** `datalib:doc/<Title>-<uuid>`, what the title bar's 🔗 copies. */
+export function documentLink(doc: DocumentAbout): string {
+  return writeDoc({ page: doc.markdown_uuid, section: null }, doc.name ?? "");
 }
 
 /** `Title (datalib:doc/<uuid>)`, as a group chip copies itself. */

@@ -12,7 +12,7 @@ use datalib_etl_notion::ingest::db::TreeRow;
 use datalib_etl_notion::ingest::schema_raw::TreeKind;
 use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::html::escape_name_inline;
-use datalib_etl_render::inputs::{Bucket, Input};
+use datalib_etl_render::inputs::{Input, RenderUnit};
 use datalib_etl_render::title::Title;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::ProblemRow;
@@ -21,8 +21,8 @@ use datalib_schema::providers::Provider;
 use super::ids;
 use super::render::{notion_url, parent_of, RENDER_VERSION};
 
-/// The bucket key. Every other Notion bucket is a Notion UUID.
-pub const BUCKET: &str = "table_of_contents";
+/// The render unit key. Every other Notion render unit is a Notion UUID.
+pub const RENDER_UNIT: &str = "table_of_contents";
 pub const TITLE: &str = "Notion TOC: Table-of-Contents (Datalib generated)";
 
 /// The name a `tree` row goes by in a path or in the contents, or `None`
@@ -225,7 +225,7 @@ pub(super) fn document(
         .upstream_id(Some(id.natural_key))
         .upstream_entity_kind(Some(id.entity_kind.to_string()))
         .markdown_uuid(Some(id.uuid.clone()))
-        .build_or_record(stanza, BUCKET, RENDER_VERSION, &mut problems)
+        .build_or_record(stanza, RENDER_UNIT, RENDER_VERSION, &mut problems)
         .into_iter()
         .collect();
     Some(TocDocument {
@@ -241,9 +241,9 @@ pub(super) fn document(
 /// trash changes only `pages`. Reading `pages` whole runs this again
 /// after every page edit, which costs one pass over `tree` and writes the
 /// same bytes, so nothing downstream sees a change.
-pub(super) fn bucket() -> Bucket {
-    Bucket {
-        key: BUCKET.to_string(),
+pub(super) fn render_unit() -> RenderUnit {
+    RenderUnit {
+        key: RENDER_UNIT.to_string(),
         inputs: vec![Input::whole_table("tree"), Input::whole_table("pages")],
     }
 }

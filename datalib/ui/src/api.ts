@@ -425,6 +425,57 @@ export function fetchDocs(signal?: AbortSignal): Promise<DocEntry[]> {
   return getJson<DocEntry[]>(`${UNIFIED_GRID_AND_SEARCH_INDEX}/docs`, signal);
 }
 
+// --- A container's children ------------------------------------------------
+// `GET /children/{parent}` (applets/src/unified_grid_and_search_index/children.rs;
+// docs/user/applets.md § "A container's children"). Hand-kept in step with it.
+
+/// One child, as `/children` lists it.
+export type Child = {
+  uuid: string;
+  sort_key: string;
+  /// It holds children of its own.
+  container: boolean;
+  kind: string;
+  name: string | null;
+  author: string | null;
+  /// The author as a handle (`email:…`), which their chip names.
+  author_handle: string | null;
+  created_at: string | null;
+  preview: string | null;
+  /// The document its row is in; null for a container with no row.
+  markdown_uuid: string | null;
+  link: string | null;
+  /// Listing places: whether places lie below it.
+  places_below?: boolean;
+};
+
+export type ChildrenPage = {
+  children: Child[];
+  /// Cursors past each end of the page, null at the end of the list.
+  before: string | null;
+  after: string | null;
+  at: string | null;
+};
+
+/// A page of `parent`'s children: its uuid, or `source:<id>` for what a
+/// source holds at its top (`cards/library.ts::sourceTop`). `at` opens
+/// around a child, a moment or `now`; `after` and `before` page on from a
+/// cursor; `places` lists only the places.
+export function fetchChildren(
+  parent: string,
+  opts: { at?: string; after?: string; before?: string; limit?: number; places?: boolean },
+  signal?: AbortSignal,
+): Promise<ChildrenPage> {
+  const q = new URLSearchParams();
+  if (opts.at) q.set("at", opts.at);
+  if (opts.after) q.set("after", opts.after);
+  if (opts.before) q.set("before", opts.before);
+  if (opts.limit) q.set("limit", String(opts.limit));
+  if (opts.places) q.set("places", "true");
+  const path = `${UNIFIED_GRID_AND_SEARCH_INDEX}/children/${encodeURIComponent(parent)}`;
+  return getJson<ChildrenPage>(`${path}?${q}`, signal);
+}
+
 // --- The embedding map ------------------------------------------------------
 // `unified_grid_and_search_index/embedding_map`, joined to the grid by the applet
 // (applets/src/unified_grid_and_search_index/map.rs). Hand-kept in step with it.

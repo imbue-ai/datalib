@@ -96,6 +96,9 @@ pub fn source_docs(t: SourceType) -> SourceDocs {
         T::Notion => {
             docs::<datalib_etl_notion_config::NotionConfig>(datalib_etl_notion_config::EXAMPLES)
         }
+        T::Markdown => docs::<datalib_etl_markdown_config::MarkdownConfig>(
+            datalib_etl_markdown_config::EXAMPLES,
+        ),
         T::Pdf => docs::<datalib_etl_pdf_config::PdfConfig>(datalib_etl_pdf_config::EXAMPLES),
         T::Perseus => {
             docs::<datalib_etl_perseus_config::PerseusConfig>(datalib_etl_perseus_config::EXAMPLES)

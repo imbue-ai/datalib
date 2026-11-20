@@ -14,6 +14,7 @@ import {
   fittingDateCell,
   millisDateCell,
   shortDateTexts,
+  decorateChatDays,
   decorateDates,
   parseStamp,
   rangeEndText,
@@ -340,5 +341,54 @@ describe("a log's date", () => {
     expect(millisDateCell(at, NOW, VIENNA).querySelector(".chip-ltr")?.textContent).toBe(
       "2026-09-22 14:07:47.190",
     );
+  });
+});
+
+describe("a chat's day dividers", () => {
+  const chat = (stamps: string[]) => {
+    const root = document.createElement("div");
+    root.innerHTML = stamps
+      .map(
+        (t, i) =>
+          `<div class="msg msg--chat" data-section-uuid="m${i}">` +
+          `<h2><time class="msg-ts" datetime="${t}">${t}</time></h2></div>`,
+      )
+      .join("");
+    return root;
+  };
+  const dividers = (root: HTMLElement) =>
+    Array.from(root.children).map((el) =>
+      el.classList.contains("day-divider")
+        ? `— ${el.textContent} —`
+        : el.getAttribute("data-section-uuid"),
+    );
+
+  /** Where one day ends is the reader's clock's: 23:30 UTC is already the
+   *  next day in Vienna, so the divider moves with the view. */
+  it("divides a chat where the day changes in the view's zone", () => {
+    const root = chat(["2369-05-28T20:00:00Z", "2369-05-28T23:30:00Z", "2369-05-29T08:00:00Z"]);
+    decorateChatDays(root, inZone("UTC"));
+    expect(dividers(root)).toEqual([
+      "— Wednesday, May 28, 2369 —",
+      "m0",
+      "m1",
+      "— Thursday, May 29, 2369 —",
+      "m2",
+    ]);
+    decorateChatDays(root, VIENNA);
+    expect(dividers(root)).toEqual([
+      "— Wednesday, May 28, 2369 —",
+      "m0",
+      "— Thursday, May 29, 2369 —",
+      "m1",
+      "m2",
+    ]);
+  });
+
+  it("leaves a document that is no chat alone", () => {
+    const root = chat(["2369-05-28T20:00:00Z"]);
+    root.firstElementChild!.classList.remove("msg--chat");
+    decorateChatDays(root, inZone("UTC"));
+    expect(root.querySelector(".day-divider")).toBeNull();
   });
 });

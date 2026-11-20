@@ -42,6 +42,21 @@ its own, and the kinds drain side by side.
    drives included, 1,000 a page (`api::list_url`). With `file_ids` set,
    one `files.get` per named file instead; a missing one is a config
    problem (`file_ids:<id>`).
+   Then where the files sit, which is what the render puts each Doc
+   under (`list_places`):
+   - every folder not trashed, whoever owns it and whatever the config
+     names, 1,000 a page, with only `id, name, parents, driveId`
+     (`api::folders_url`);
+   - My Drive's root, which no listing names (`files/root`);
+   - the shared drives, by `drives.list`. A shared drive's root folder
+     has the drive's id, so that is the parent its top folders name.
+
+   All three, and each listed file's `parents`, are upserted in one
+   transaction every run (`db::store_places`). The listing is the
+   content, so nothing is owed: an unchanged folder is a no-op write, a
+   rename or a move lands on the next run, and a listing that fails
+   partway keeps what came, with a `listing:folders` or `listing:drives`
+   problem.
 2. **Owe.** A file is owed when `files_bookkeeping.held_version` is not
    the `version` the listing names (`owed::owed`). Drive's `version`
    goes up on every change to the file.
@@ -123,8 +138,9 @@ its own, and the kinds drain side by side.
 
 Each run leaves a row in `sync_runs`: its config, its summary (`listed`, `owed`, `captured`, …) and what it changed in each table.
 
-**A second run** with nothing edited costs the listing alone: one request
-per 1,000 files. Measured on 2026-10-21, on 4 real files (a Doc, a
+**A second run** with nothing edited costs the listings alone: one
+request per 1,000 files, one per 1,000 folders, one for My Drive's root
+and one per 100 shared drives. Measured on 2026-10-21, on 4 real files (a Doc, a
 Sheet, a deck and a Doc shared with the account): the first run made 4
 captures with 4 exports and 17 images in 58 s, and the second run owed
 nothing.
@@ -150,6 +166,9 @@ Drive's:
 | `captures` | `{file}#{version}` | one row per version captured: the listing's `modifiedTime`, the native JSON's own `revisionId` (Docs and Slides), and the newest Drive revision listed |
 | `capture_parts` | `{capture}#{part}` | a CAS edge per part: `native.json.gz`, `export.<ext>`, `image:<JSON pointer>` |
 | `revision_exports` | `{file}#{revision}#export.<ext>` | a CAS edge per old revision's export, NULL `blake3` for one Drive no longer has |
+| `folders` | folder id | `{id, name, parents, driveId}` as listed, `parents` sorted; My Drive's root among them |
+| `drives` | drive id | `{id, name}`, each shared drive the account belongs to |
+| `file_parents` | file id | `{id, parents}` from the newest listing, `parents` sorted, since Drive gives them in no fixed order (which one a Doc sits in: [`TRANSLATE.md`](../google_drive_render/TRANSLATE.md) §"Where a row sits"). `files` holds the entry as of the newest capture, and a move is not worth a capture |
 
 Every table has its `_bookkeeping` sidecar. `files_bookkeeping.held_version`
 is the one held version in the store.
@@ -157,6 +176,7 @@ is the one held version in the store.
 **What is never deleted.**
 - **Files.** A file that leaves the listing (trashed, unshared, deleted)
   keeps everything it had.
+- **Folders and drives.** One that leaves the listing keeps its row.
 - **Revisions and comments** are upserted on each capture, so one Google
   later merges away or drops stays.
 - **Captures** are append-only.
@@ -186,7 +206,8 @@ The exports are big because Google embeds the document's fonts in each.
 - **No delta listing.** Drive's `changes` API is not used; the whole
   listing is read every run.
 - **Only native files.** Other Drive files (PDFs, images, uploaded
-  Office files) are not listed.
+  Office files) are not listed. Folders are, but only for their names
+  and where they sit.
 - **Only Docs render.** Sheets and Slides stay in the raw store.
 - **A capture can be newer than its version.** It is keyed by the
   `version` the listing named. If the file was edited while it was being

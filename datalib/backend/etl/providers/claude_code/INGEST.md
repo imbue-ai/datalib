@@ -64,7 +64,7 @@ nothing — the same call `airvisual` and `file_inventory` made):
   links, and a count of every line type.
 - **`records`** — one row per content record, keyed by the `uuid`
   Claude Code gave it, with one promoted column, `transcript_id`: the
-  writer composes it and the render's diff buckets on it. The payload
+  writer composes it and the render's diff groups its render units by it. The payload
   is the line as written, and everything else a reader wants —
   `sessionId`, `type`, `timestamp`, `parentUuid`, `isSidechain` — is
   read off it (`payload->>'$.type'`). Nothing in the tree queries

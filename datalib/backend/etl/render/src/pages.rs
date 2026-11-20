@@ -1,4 +1,4 @@
-//! Reading a raw store a page of buckets at a time, so what a render
+//! Reading a raw store a page of render units at a time, so what a render
 //! holds in memory follows the page and not the size of the source:
 //! `docs/dev/data_architecture_parse_and_render.md` §"Memory: a page at
 //! a time".
@@ -9,31 +9,31 @@ use std::ops::Range;
 use anyhow::{Context, Result};
 use sqlx::SqlitePool;
 
-/// How much a render holds at once: `buckets` per page of rows, and
+/// How much a render holds at once: `render units` per page of rows, and
 /// `bytes` of blobs per batch inside a page. A config's `[render_pages]`
 /// overrides either.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PageSize {
-    pub buckets: usize,
+    pub render_units: usize,
     pub bytes: u64,
 }
 
 impl PageSize {
     pub const DEFAULT: PageSize = PageSize {
-        buckets: 500,
+        render_units: 500,
         bytes: 64 * 1024 * 1024,
     };
 }
 
-/// The raw table and text column whose values are a render's bucket keys.
+/// The raw table and text column whose values are a render's render unit keys.
 #[derive(Debug, Clone, Copy)]
 pub struct KeyColumn {
     pub table: &'static str,
     pub column: &'static str,
 }
 
-/// The bucket keys a run renders, a page at a time.
-pub struct BucketPages {
+/// The render unit keys a run renders, a page at a time.
+pub struct RenderUnitPages {
     keys: Keys,
     page: usize,
 }
@@ -49,10 +49,10 @@ enum Keys {
     Listed(std::vec::IntoIter<String>),
 }
 
-impl BucketPages {
+impl RenderUnitPages {
     /// Every distinct non-null key in `key`, in order.
     pub fn walk(key: KeyColumn, page: usize) -> Self {
-        BucketPages {
+        RenderUnitPages {
             keys: Keys::Walk {
                 key,
                 after: None,
@@ -63,14 +63,14 @@ impl BucketPages {
     }
 
     /// `keys`, sorted and each once — a key no row holds any more comes
-    /// back too, so the provider can say its bucket built nothing.
+    /// back too, so the provider can say its render unit built nothing.
     pub fn listed(keys: impl IntoIterator<Item = String>, page: usize) -> Self {
         let sorted: Vec<String> = keys
             .into_iter()
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        BucketPages {
+        RenderUnitPages {
             keys: Keys::Listed(sorted.into_iter()),
             page: page.max(1),
         }
@@ -188,7 +188,7 @@ mod tests {
         pool
     }
 
-    async fn drain(mut pages: BucketPages, pool: &SqlitePool) -> Vec<Vec<String>> {
+    async fn drain(mut pages: RenderUnitPages, pool: &SqlitePool) -> Vec<Vec<String>> {
         let mut out = Vec::new();
         while let Some(page) = pages.next(pool).await.unwrap() {
             out.push(page);
@@ -216,22 +216,24 @@ mod tests {
             column: "k",
         };
         assert_eq!(
-            drain(BucketPages::walk(key, 2), &pool).await,
+            drain(RenderUnitPages::walk(key, 2), &pool).await,
             vec![vec!["a", "b"], vec!["c", "d"], vec!["e"]]
         );
         // A table that ends on a full page still ends.
         assert_eq!(
-            drain(BucketPages::walk(key, 5), &pool).await,
+            drain(RenderUnitPages::walk(key, 5), &pool).await,
             vec![vec!["a", "b", "c", "d", "e"]]
         );
         let empty = pool_with_keys(&[]).await;
-        assert!(drain(BucketPages::walk(key, 2), &empty).await.is_empty());
+        assert!(drain(RenderUnitPages::walk(key, 2), &empty)
+            .await
+            .is_empty());
     }
 
     #[tokio::test]
     async fn a_list_is_handed_out_sorted_and_once() {
         let pool = pool_with_keys(&[]).await;
-        let listed = BucketPages::listed(["z", "x", "y", "x"].map(String::from), 2);
+        let listed = RenderUnitPages::listed(["z", "x", "y", "x"].map(String::from), 2);
         assert_eq!(drain(listed, &pool).await, vec![vec!["x", "y"], vec!["z"]]);
     }
 }

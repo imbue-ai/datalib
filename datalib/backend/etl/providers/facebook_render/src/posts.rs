@@ -94,7 +94,7 @@ pub fn build_posts(rows: &PostRows<'_>, owner: &Owner) -> Vec<NormalizedChat> {
         let mut chat = timeline_post(GROUP_POSTS_TABLE, id, v, owner);
         let group = group_of(v, &groups);
         if group.is_none() {
-            if let Some(item) = chat.buckets[0].items.last_mut() {
+            if let Some(item) = chat.render_units[0].items.last_mut() {
                 item.problems.push(noted(
                     "title",
                     "a group post whose group the membership file does not name",
@@ -164,7 +164,7 @@ pub fn build_posts(rows: &PostRows<'_>, owner: &Owner) -> Vec<NormalizedChat> {
             Some(i) => {
                 let earlier: Vec<&Version> = history.earlier(&texts[i].0).collect();
                 let items = version_items(&earlier, ids::KIND_POST_VERSION, POST_VERSION, owner);
-                let post = &mut chats[i].buckets[0].items;
+                let post = &mut chats[i].render_units[0].items;
                 if let Some(item) = post.last_mut() {
                     item.problems.extend(history.unshown_problems(&texts[i].0));
                 }
@@ -273,7 +273,7 @@ fn edited_post_not_in_export(
     let mut chat = one_item_chat(&shown.row_id, inputs, display, None, item, owner);
     let earlier: Vec<&Version> = earlier.iter().collect();
     let items = version_items(&earlier, ids::KIND_POST_VERSION, POST_VERSION, owner);
-    chat.buckets[0].items.splice(0..0, items);
+    chat.render_units[0].items.splice(0..0, items);
     chat
 }
 
@@ -517,7 +517,7 @@ fn one_item_chat(
         upstream_account: None,
         org_uuid: None,
         org_name: None,
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
             markdown_uuid: post.uuid,
             source_ref: None,
@@ -562,7 +562,7 @@ mod tests {
             &owner(),
         );
         assert_eq!(chats.len(), 1);
-        let item = &chats[0].buckets[0].items[0];
+        let item = &chats[0].render_units[0].items[0];
         assert_eq!(item.kind, ItemKind::Text);
         assert_eq!(
             item.text.as_deref(),
@@ -587,7 +587,7 @@ mod tests {
         };
         let chats = build_posts(&rows, &owner());
         assert_eq!(
-            chats[0].buckets[0].items[0]
+            chats[0].render_units[0].items[0]
                 .author_handle
                 .as_ref()
                 .map(|h| h.as_str()),
@@ -596,9 +596,9 @@ mod tests {
         let nobody = Owner::from_profile("fb", &[]);
         assert_eq!(nobody.name, "Me");
         let chats = build_posts(&rows, &nobody);
-        assert_eq!(chats[0].buckets[0].items[0].author_handle, None);
+        assert_eq!(chats[0].render_units[0].items[0].author_handle, None);
         assert_eq!(
-            chats[0].buckets[0].items[0].author_kind,
+            chats[0].render_units[0].items[0].author_kind,
             AuthorKind::Account
         );
     }
@@ -623,7 +623,7 @@ mod tests {
             &owner(),
         );
         assert_eq!(
-            chats[0].buckets[0].items[0].text.as_deref(),
+            chats[0].render_units[0].items[0].text.as_deref(),
             Some(
                 "&lt;script&gt;x&lt;/script&gt; &amp; co\n\n\
                  📍 [&lt;script&gt;x&lt;/script&gt; &amp; co](https://www.facebook.com/pages/x/1)"
@@ -650,7 +650,7 @@ mod tests {
             },
             &owner(),
         );
-        let item = &chats[0].buckets[0].items[0];
+        let item = &chats[0].render_units[0].items[0];
         assert_eq!(item.kind, ItemKind::Attachment);
         assert_eq!(item.attachments.len(), 2);
         assert_eq!(
@@ -683,7 +683,7 @@ mod tests {
             },
             &owner(),
         );
-        let text = chats[0].buckets[0].items[0].text.as_deref().unwrap();
+        let text = chats[0].render_units[0].items[0].text.as_deref().unwrap();
         assert_eq!(
             text,
             "**Took command**\n\nA new ship. Data\n\n📍 Farpoint Station\n\n— with Data"
@@ -741,7 +741,7 @@ mod tests {
             &owner(),
         );
         assert_eq!(chats.len(), 1, "no post of its own for either edit");
-        let items = &chats[0].buckets[0].items;
+        let items = &chats[0].render_units[0].items;
         assert_eq!(items.len(), 1, "no other version of the same words");
         assert!(items[0].problems.is_empty(), "{:?}", items[0].problems);
     }
@@ -764,7 +764,7 @@ mod tests {
             },
             &owner(),
         );
-        let item = &chats[0].buckets[0].items[0];
+        let item = &chats[0].render_units[0].items[0];
         assert_eq!(item.kind, ItemKind::Attachment);
         assert_eq!(
             item.text.as_deref(),

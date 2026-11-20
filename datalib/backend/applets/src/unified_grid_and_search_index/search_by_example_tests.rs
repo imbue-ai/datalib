@@ -90,7 +90,7 @@ fn chat(
         source_url: None,
         org_uuid: None,
         org_name: None,
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             markdown_uuid: uuid.into(),
             source_ref: None,
             items: vec![item],
@@ -112,6 +112,7 @@ fn chat_profile(provider: Provider, label: &str, thread: &str, message: &str) ->
         stamp_precision: RecordStampPrecision::Seconds,
         render_version: 1,
         text_format: TextFormat::Plain,
+        layout: datalib_etl_chat_common::Layout::Conversation,
     }
 }
 
@@ -229,6 +230,7 @@ fn card(uuid: &str, kind: ContactKind, name: &str, addresses: &[&str]) -> Contac
         doc_uuid: uuid.into(),
         group_label: "Address Book".into(),
         address_book: None,
+        groups: Vec::new(),
         member_handles: Vec::new(),
         upstream_account: None,
         inputs: Vec::new(),
@@ -624,9 +626,6 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
             "account:picard@enterprise.org",
             vec!["riker-email", "riker-thread"],
         ),
-        (r#"contact:"Jean-Luc Picard""#, vec!["picard-card"]),
-        ("contact:*", vec!["picard-card", "senior-staff-card"]),
-        ("email:picard@enterprise.org", vec!["picard-card"]),
         // A document, and every row in it.
         (
             "datalib_document_id:riker-thread",
@@ -673,7 +672,6 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         r#"label:"Miss""#,
         // Column keys: the whole value, case and all.
         "kind:email",
-        "contact:Picard",
         "datalib_document_id:riker",
         // `id:` is the source's id, whole: not part of it, not datalib's.
         "id:ncc1701",
@@ -682,11 +680,6 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         // Only a uuid is read in another spelling; any other id is exact.
         "id:m-ncc1701-0042",
         "id:Mncc17010042",
-        // The email column holds a card's first address only.
-        "email:jean-luc@chateau-picard.example",
-        // `email:` is that column, not a person's address: Riker has no
-        // card. His address is found with from: or with:.
-        "email:riker@enterprise.org",
         // A chat's conversation is not its channel.
         "channel:#bridge",
         // Troi's one role on the email is Cc.
@@ -698,14 +691,23 @@ async fn how_rows_are_filed_and_which_searches_find_them() {
         assert_eq!(found(&s, q, None).await, Vec::<String>::new(), "{q}");
     }
 
-    // `convo:` was `datalib_document_id:`'s old name, and is gone: refused by name.
-    let r = search(&s, "convo:riker-thread", None, 50, None).await;
-    assert!(r.rows.is_empty(), "{:?}", uuids(&r));
-    assert!(
-        r.refused.iter().any(|why| why.contains("`convo:`")),
-        "{:?}",
-        r.refused
-    );
+    // `convo:` was `datalib_document_id:`'s old name, and is gone; so are
+    // `contact:`, `email:` and `phone:`, which read a card's own columns
+    // (`with:` finds a card): each refused by name.
+    for (q, key) in [
+        ("convo:riker-thread", "`convo:`"),
+        ("contact:Picard", "`contact:`"),
+        ("email:picard@enterprise.org", "`email:`"),
+        ("phone:+12025550101", "`phone:`"),
+    ] {
+        let r = search(&s, q, None, 50, None).await;
+        assert!(r.rows.is_empty(), "{q}: {:?}", uuids(&r));
+        assert!(
+            r.refused.iter().any(|why| why.contains(key)),
+            "{q}: {:?}",
+            r.refused
+        );
+    }
 }
 
 /// A result opens through its link: a message links to its page at itself,

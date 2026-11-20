@@ -56,6 +56,11 @@ export default defineConfig(({ command }) => ({
   resolve: {
     alias: {
       "@": path.resolve(CONFIG_DIR, "src"),
+      // `<vs-tree>`, which Bazel builds (//third-party/vscode-tree) and
+      // copies beside this package as `vendor/vs-tree.js` for a build or a
+      // test; `datalib/dev.sh` names it in DATALIB_VS_TREE for the dev
+      // server, which runs from the checkout.
+      "vs-tree": process.env.DATALIB_VS_TREE ?? path.resolve(CONFIG_DIR, "vendor/vs-tree.js"),
     },
     // Under aspect_rules_js, npm deps land at virtual paths like
     // `node_modules/.aspect_rules_js/<pkg>@<ver>/node_modules/<pkg>`

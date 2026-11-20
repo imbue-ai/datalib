@@ -101,6 +101,7 @@ fn profile() -> RenderProfile {
         chat_entity_kind: ENTITY_KIND_CONVERSATION,
         render_version: RENDER_VERSION,
         text_format: TextFormat::Plain,
+        layout: datalib_etl_chat_common::Layout::Chat,
     }
 }
 
@@ -193,14 +194,14 @@ pub fn render(
         progress,
         on_doc_complete,
     )?;
-    changed.buckets.extend(summary.buckets);
+    changed.render_units.extend(summary.render_units);
     Ok(Rendered {
         outcome: RenderOutcome {
             rendered: summary.docs_rendered,
             skipped: changed.skipped,
             new_head,
             scan_elapsed: None,
-            buckets: changed.buckets,
+            render_units: changed.render_units,
         },
         dropped,
     })
@@ -587,7 +588,7 @@ impl ChatBuild {
             source_url: None,
             org_uuid: None,
             org_name: None,
-            buckets: vec![whole],
+            render_units: vec![whole],
         }
     }
 }

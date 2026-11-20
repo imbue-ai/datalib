@@ -22,7 +22,7 @@ use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stag
 
 use crate::grid_index::RenderedMarkdown;
 pub use crate::indexed_markdown::Input;
-use crate::inputs::{Bucket, RawRange};
+use crate::inputs::{RawRange, RenderUnit};
 use crate::pages::PageSize;
 
 /// One source's render wave, as a unit the step driver can run.
@@ -41,7 +41,7 @@ pub trait RenderProcessor: Send + Sync {
 
     /// The knobs that shape this processor's output — a period, a label
     /// filter. The driver stores them beside the cursor and, when they
-    /// differ from the stored ones, renders every bucket again rather
+    /// differ from the stored ones, renders every render unit again rather
     /// than only the changed ones. A processor with no knobs returns the
     /// empty object, which never differs from itself. Every key of a
     /// render config but `common` is such a knob, and
@@ -152,13 +152,13 @@ impl<R: SourceRender> RenderProcessor for SourceRenderProcessor<R> {
 /// like every other processor's.
 pub type DocCallback<'a> = dyn FnMut(RenderedMarkdown) -> Result<()> + Send + 'a;
 
-/// How a run ended one bucket it looked at.
+/// How a run ended one render unit it looked at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BucketEnd<'a> {
+pub enum RenderUnitEnd<'a> {
     /// Built, from these raw rows — every one it asked for, found or
-    /// not, so a later change to any of them names the bucket again.
-    /// What the store holds under the bucket that the run did not emit
-    /// is gone. A bucket declared with no rows that emitted nothing is
+    /// not, so a later change to any of them names the render unit again.
+    /// What the store holds under the render unit that the run did not emit
+    /// is gone. A render unit declared with no rows that emitted nothing is
     /// gone only when the diff says the rows it was last built from
     /// left; otherwise its documents stay, with a warning.
     Read(&'a [Input]),
@@ -170,8 +170,8 @@ pub enum BucketEnd<'a> {
     Failed(&'a str),
 }
 
-/// Where a processor says how each bucket it looked at ended.
-pub type DeclareCallback<'a> = dyn FnMut(&str, BucketEnd<'_>) -> Result<()> + Send + 'a;
+/// Where a processor says how each render unit it looked at ended.
+pub type DeclareCallback<'a> = dyn FnMut(&str, RenderUnitEnd<'_>) -> Result<()> + Send + 'a;
 
 /// A processor reports what it could not do with raw entities — a
 /// payload that would not deserialize has no document to hang a
@@ -234,7 +234,7 @@ impl Unparsed {
 
 /// The problem a document carries when a run could not produce it
 /// again: [`RenderCtx::report_document_failed`]'s row, and the one the
-/// driver writes on each document of a failed bucket. One recipe, so the
+/// driver writes on each document of a failed render unit. One recipe, so the
 /// two are one row when both are written.
 pub fn document_failed(
     source_id: &str,
@@ -283,19 +283,19 @@ pub struct RenderCtx<'a> {
     pub progress: &'a Progress,
     /// The raw-store commit the previous render consumed: the `from_ref`
     /// for this run's `dolt_diff` scan. `None` means render everything —
-    /// there is no earlier render, or the driver wants every bucket again
+    /// there is no earlier render, or the driver wants every render unit again
     /// (renderer version or params changed).
     pub raw_cursor: Option<&'a str>,
     /// The raw-store commit the driver pinned for this run, when it did.
     /// A provider pins the same one (`Pin::at`) rather than sampling HEAD,
-    /// so what it loads is what `stale_buckets` was computed against.
+    /// so what it loads is what `stale_render_units` was computed against.
     pub raw_pin: Option<&'a str>,
-    /// Buckets whose declared inputs changed since `raw_cursor`, from the
+    /// Render units whose declared inputs changed since `raw_cursor`, from the
     /// driver's reverse lookup in `render_inputs`: render these, plus
     /// whatever the provider's own forward scan adds. `None` when the
     /// driver could not say — no cursor, or nothing declared yet — and
     /// the provider's scan is on its own.
-    pub stale_buckets: Option<&'a HashSet<String>>,
+    pub stale_render_units: Option<&'a HashSet<String>>,
     /// How much of the raw store to read at once.
     pub page_size: PageSize,
     emit: DocSink<'a>,
@@ -313,7 +313,7 @@ impl<'a> RenderCtx<'a> {
         progress: &'a Progress,
         raw_cursor: Option<&'a str>,
         raw_pin: Option<&'a str>,
-        stale_buckets: Option<&'a HashSet<String>>,
+        stale_render_units: Option<&'a HashSet<String>>,
         on_doc: &'a mut DocCallback<'a>,
         on_declare: &'a mut DeclareCallback<'a>,
         on_problems: &'a mut ProblemsCallback<'a>,
@@ -325,7 +325,7 @@ impl<'a> RenderCtx<'a> {
             progress,
             raw_cursor,
             raw_pin,
-            stale_buckets,
+            stale_render_units,
             page_size: PageSize::DEFAULT,
             emit: DocSink {
                 cb: Mutex::new(on_doc),
@@ -349,58 +349,58 @@ impl<'a> RenderCtx<'a> {
         RawRange {
             cursor: self.raw_cursor,
             pin: self.raw_pin,
-            stale: self.stale_buckets,
+            stale: self.stale_render_units,
         }
     }
 
-    /// This run rendered `bucket_key`, and `inputs` is every raw row it
+    /// This run rendered `render_unit_key`, and `inputs` is every raw row it
     /// asked for — found or not: a thread rendered while its author's
     /// `users` row had not arrived records `(users, U123)` anyway, so the
-    /// row's arrival names the thread. See [`BucketEnd::Read`] for what
+    /// row's arrival names the thread. See [`RenderUnitEnd::Read`] for what
     /// happens to the documents the store holds under it.
     ///
-    /// Only for a bucket the run looked at; a bucket it skipped says
+    /// Only for a render unit the run looked at; a render unit it skipped says
     /// nothing about its documents. Every emitted document carries its
-    /// `bucket_key` — that is how the driver knows which are the
-    /// bucket's.
-    pub fn declare_bucket(&self, bucket_key: &str, inputs: &[Input]) -> Result<()> {
-        self.end_bucket(bucket_key, BucketEnd::Read(inputs))
+    /// `render_unit_key` — that is how the driver knows which are the
+    /// render unit's.
+    pub fn declare_render_unit(&self, render_unit_key: &str, inputs: &[Input]) -> Result<()> {
+        self.end_render_unit(render_unit_key, RenderUnitEnd::Read(inputs))
     }
 
-    /// The renderer leaves `bucket_key` out on purpose, so its
-    /// documents go: see [`BucketEnd::Excluded`].
-    pub fn exclude_bucket(&self, bucket_key: &str) -> Result<()> {
-        self.end_bucket(bucket_key, BucketEnd::Excluded)
+    /// The renderer leaves `render_unit_key` out on purpose, so its
+    /// documents go: see [`RenderUnitEnd::Excluded`].
+    pub fn exclude_render_unit(&self, render_unit_key: &str) -> Result<()> {
+        self.end_render_unit(render_unit_key, RenderUnitEnd::Excluded)
     }
 
-    /// `bucket_key`'s build failed, for reason `why`: its documents
-    /// stay — see [`BucketEnd::Failed`]. A bucket that holds no document
+    /// `render_unit_key`'s build failed, for reason `why`: its documents
+    /// stay — see [`RenderUnitEnd::Failed`]. A render unit that holds no document
     /// yet has nothing to keep, and nothing carries `why`; report the
     /// raw rows it could not read as well.
-    pub fn fail_bucket(&self, bucket_key: &str, why: &str) -> Result<()> {
-        self.end_bucket(bucket_key, BucketEnd::Failed(why))
+    pub fn fail_render_unit(&self, render_unit_key: &str, why: &str) -> Result<()> {
+        self.end_render_unit(render_unit_key, RenderUnitEnd::Failed(why))
     }
 
-    fn end_bucket(&self, bucket_key: &str, end: BucketEnd<'_>) -> Result<()> {
+    fn end_render_unit(&self, render_unit_key: &str, end: RenderUnitEnd<'_>) -> Result<()> {
         let mut cb = self.declare.cb.lock().unwrap();
-        (cb)(bucket_key, end)
+        (cb)(render_unit_key, end)
     }
 
-    /// Every bucket a render pass produced, each with the rows it read.
-    pub fn declare_buckets(&self, buckets: &[Bucket]) -> Result<()> {
-        for bucket in buckets {
-            self.declare_bucket(&bucket.key, &bucket.inputs)?;
+    /// Every render unit a render pass produced, each with the rows it read.
+    pub fn declare_render_units(&self, render_units: &[RenderUnit]) -> Result<()> {
+        for render_unit in render_units {
+            self.declare_render_unit(&render_unit.key, &render_unit.inputs)?;
         }
         Ok(())
     }
 
-    /// Buckets this run looked at and produced nothing for: each is
+    /// Render units this run looked at and produced nothing for: each is
     /// declared with no inputs, so its documents go if the diff says its
     /// rows left. A pass that renders some of them declares those
     /// again, after, and they stay.
     pub fn declare_empty<'k>(&self, keys: impl IntoIterator<Item = &'k str>) -> Result<()> {
         for key in keys {
-            self.declare_bucket(key, &[])?;
+            self.declare_render_unit(key, &[])?;
         }
         Ok(())
     }
@@ -473,8 +473,8 @@ impl<'a> RenderCtx<'a> {
     /// The end of most runs: declare what the pass rendered, then the
     /// commit it read, when it read one — a store with no commit yet
     /// leaves the cursor where it was.
-    pub fn finish(&self, buckets: &[Bucket], head: Option<&str>) -> Result<()> {
-        self.declare_buckets(buckets)?;
+    pub fn finish(&self, render_units: &[RenderUnit], head: Option<&str>) -> Result<()> {
+        self.declare_render_units(render_units)?;
         if let Some(head) = head {
             self.consumed(head);
         }

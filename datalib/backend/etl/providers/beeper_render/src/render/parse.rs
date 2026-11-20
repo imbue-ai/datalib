@@ -115,7 +115,7 @@ pub struct Blob {
 
 /// One room's events, its one rendered document.
 #[derive(Debug, Clone)]
-pub struct DocBucket {
+pub struct DocRenderUnit {
     pub room_uuid: String,
     /// Messages in chronological order.
     pub messages: Vec<Event>,
@@ -130,7 +130,7 @@ pub struct ScanResult {
     /// stale through their declared inputs, plus the ones the diff
     /// named. `None` → every room.
     pub render: Option<HashSet<String>>,
-    /// Bucket keys the driver found stale whose room row is gone —
+    /// Render unit keys the driver found stale whose room row is gone —
     /// declared with nothing so their documents go.
     pub gone: Vec<String>,
     /// The commit this parse read. `None` when nothing was committed.
@@ -143,7 +143,7 @@ pub struct ParsedBeeper {
     /// The people of each loaded room, by room uuid.
     pub people: HashMap<String, Vec<Person>>,
     /// Ordered by `room_uuid`.
-    pub docs: Vec<DocBucket>,
+    pub docs: Vec<DocRenderUnit>,
     /// The raw rows each loaded room reads, by room uuid.
     pub inputs: HashMap<String, Inputs>,
     pub scan: ScanResult,
@@ -152,7 +152,7 @@ pub struct ParsedBeeper {
     pub unlisted_chats: BTreeMap<String, usize>,
 }
 
-/// Open the raw store beside `input` and produce one [`DocBucket`] per
+/// Open the raw store beside `input` and produce one [`DocRenderUnit`] per
 /// room, for the rooms of `networks` (every room when `None`).
 pub fn parse(
     input: &Path,
@@ -279,12 +279,12 @@ async fn load(
                 .filter(|room| rooms.contains_key(room))
                 .collect::<HashSet<String>>()
         });
-    let room_by_bucket: HashMap<String, &str> = rooms
+    let room_by_render_unit: HashMap<String, &str> = rooms
         .keys()
         .map(|room| (super::ids::room(source_id, room).uuid, room.as_str()))
         .collect();
     let narrowed = range.narrow_by(forward.as_ref(), |key| {
-        room_by_bucket.get(key).map(|r| r.to_string())
+        room_by_render_unit.get(key).map(|r| r.to_string())
     });
     let scan = ScanResult {
         render: narrowed.render,
@@ -428,7 +428,7 @@ async fn load(
 
     Ok(ParsedBeeper {
         unlisted_chats,
-        docs: bucket(events.into_iter().map(|(room, _, e)| (room, e))),
+        docs: render_unit(events.into_iter().map(|(room, _, e)| (room, e))),
         people,
         rooms,
         inputs,
@@ -532,10 +532,10 @@ fn slack_user(mxid: &str) -> Option<Handle> {
 }
 
 /// File each event under its room, a reaction keyed by its target.
-fn bucket(events: impl Iterator<Item = (String, Event)>) -> Vec<DocBucket> {
-    let mut docs: BTreeMap<String, DocBucket> = BTreeMap::new();
+fn render_unit(events: impl Iterator<Item = (String, Event)>) -> Vec<DocRenderUnit> {
+    let mut docs: BTreeMap<String, DocRenderUnit> = BTreeMap::new();
     for (room, e) in events {
-        let doc = docs.entry(room.clone()).or_insert_with(|| DocBucket {
+        let doc = docs.entry(room.clone()).or_insert_with(|| DocRenderUnit {
             room_uuid: room,
             messages: Vec::new(),
             reactions_by_target: BTreeMap::new(),

@@ -296,6 +296,12 @@ pub fn plan(
             datalib_etl_media_config::MediaRenderConfig,
             datalib_etl_media
         ),
+        SourceType::Markdown => arm!(
+            datalib_etl_markdown_config::MarkdownConfig,
+            datalib_etl_markdown_config::MarkdownRenderConfig,
+            datalib_etl_markdown,
+            datalib_etl_markdown_render
+        ),
         SourceType::Pdf => arm!(
             datalib_etl_pdf_config::PdfConfig,
             datalib_etl_pdf_config::PdfRenderConfig,
@@ -415,6 +421,7 @@ pub async fn migrate(step_type: &str, raw_dir: &Path) -> Result<()> {
         SourceType::Airvisual => datalib_etl_airvisual::processor::migrate(raw_dir).await,
         SourceType::BabyConnect => datalib_etl_baby_connect::processor::migrate(raw_dir).await,
         SourceType::Media => datalib_etl_media::processor::migrate(raw_dir).await,
+        SourceType::Markdown => datalib_etl_markdown::processor::migrate(raw_dir).await,
         SourceType::Pdf => datalib_etl_pdf::processor::migrate(raw_dir).await,
         SourceType::Perseus => datalib_etl_perseus::processor::migrate(raw_dir).await,
         SourceType::Garmin => datalib_etl_garmin::processor::migrate(raw_dir).await,

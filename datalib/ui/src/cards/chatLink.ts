@@ -1,7 +1,7 @@
 // Links clicked in a rendered markdown body: which link, and whether it
 // is one of the internal `/chat/<uuid>` links renderers emit. The
-// document card decides where each goes. Also the link a copied 🆔
-// button becomes.
+// document card decides where each goes. Also the link a 🔗 button
+// copies.
 
 import { writeDoc } from "@/uri";
 
@@ -90,20 +90,26 @@ export function chatSectionFromHref(href: string): string | null {
   return CHAT_HREF_RE.exec(href)?.[2] ?? null;
 }
 
-/** A copied 🆔 button (`chatSections.js`) becomes the 🆔 and the uuid
- *  it names, so a plain-text paste keeps the id, as a `datalib:doc` name
- *  for the document, or the section within it. */
-export function rewriteIdButtonsForCopy(
+/** The link a 🔗 button (`chatSections.js`) copies: the document, or
+ *  the message in it the button names, with the document's title. */
+export function linkOfButton(btn: HTMLElement, markdownUuid: string, title = ""): string {
+  const uuid = btn.dataset.uuid ?? "";
+  return writeDoc({ page: markdownUuid, section: uuid === markdownUuid ? null : uuid }, title);
+}
+
+/** A 🔗 button inside a copied selection becomes the link it copies,
+ *  written out as the 🔗 and the uuid it names, so a plain-text paste
+ *  keeps the id and search still finds it. */
+export function rewriteLinkButtonsForCopy(
   fragment: DocumentFragment | Element,
   markdownUuid: string,
+  title = "",
 ): boolean {
-  const buttons = Array.from(fragment.querySelectorAll<HTMLElement>("button.copy-uuid[data-uuid]"));
+  const buttons = Array.from(fragment.querySelectorAll<HTMLElement>("button.copy-link[data-uuid]"));
   for (const btn of buttons) {
     const a = btn.ownerDocument.createElement("a");
-    const uuid = btn.dataset.uuid ?? "";
-    const section = uuid === markdownUuid ? null : uuid;
-    a.href = writeDoc({ page: markdownUuid, section });
-    a.textContent = `${btn.textContent} ${uuid}`;
+    a.href = linkOfButton(btn, markdownUuid, title);
+    a.textContent = `🔗 ${btn.dataset.uuid ?? ""}`;
     btn.replaceWith(a);
   }
   return buttons.length > 0;

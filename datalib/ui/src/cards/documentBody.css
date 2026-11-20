@@ -425,6 +425,81 @@
   width: auto;
   height: auto;
 }
+/* A chat (chat-common's `Layout::Chat`): its messages are rows, not
+   cards, with one header over a run of one person's messages and a
+   divider for each day (`decorateChatDays` in dates.ts). The left border
+   stays, for unread and selection. */
+.chat-body > .msg.msg--chat {
+  border: none;
+  border-left: 3px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  margin: 0;
+  padding: 0.35rem 0.75rem 0.1rem;
+}
+.chat-body > .msg.msg--chat.unread {
+  border-left-color: #e01e5a;
+}
+.chat-body > .msg.msg--chat.selected {
+  background: var(--datalib-hover, #f0f0f0);
+  border-left-color: var(--datalib-accent);
+}
+.chat-body > .msg.msg--chat.first-unread::before {
+  margin-top: -0.35rem;
+}
+.chat-body > .msg.msg--cont {
+  padding-top: 0;
+}
+.chat-body .msg--chat > p {
+  margin: 0.1rem 0;
+}
+/* A run's later message has no header; its time and its link show on
+   hover, at the right, where the copy button is. */
+.chat-body .msg--chat > p:has(> .msg-cont:first-child) {
+  float: right;
+  margin: 0 0 0 0.5rem;
+  visibility: hidden;
+}
+.chat-body .msg--chat:hover > p:has(> .msg-cont:first-child),
+.chat-body .msg--chat.selected > p:has(> .msg-cont:first-child) {
+  visibility: visible;
+}
+.chat-body .day-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.9rem 0 0.3rem;
+  color: var(--datalib-muted, #94a3b8);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.chat-body .day-divider::before,
+.chat-body .day-divider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--datalib-border, #d8d8d8);
+}
+/* A chat's reactions: one pill per emoji with how many reacted, naming
+   them on hover, or when one of them is the selected row. */
+.chat-body .msg-reaction {
+  display: inline-block;
+  padding: 0 0.5rem;
+  margin: 0 0.2rem 0.2rem 0;
+  border: 1px solid var(--datalib-border, #d8d8d8);
+  border-radius: 999px;
+  background: var(--datalib-card-bg, #fafafa);
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+.chat-body .msg-reactors {
+  display: none;
+  color: var(--datalib-muted, #94a3b8);
+}
+.chat-body .msg-reaction:hover .msg-reactors,
+.chat-body .msg-reaction:has(.selected) .msg-reactors {
+  display: inline;
+}
+
 /* The chat-common message header.
    It is a real `## ` heading in the file; on screen it should read as
    Slack's one-line "Name  time", not as a document section, hence the
@@ -563,14 +638,14 @@
   font-size: 0.8em;
   opacity: 0.7;
 }
-/* A section with no header line has its 🆔 at its top, set to the right
+/* A section with no header line has its 🔗 at its top, set to the right
    rather than on a line of its own. */
-.chat-body [data-section-uuid] > button.copy-uuid:first-child {
+.chat-body [data-section-uuid] > button.copy-link:first-child {
   float: right;
   margin-left: 0.5em;
 }
-.chat-body button.copy-uuid {
-  /* The 🆔 glyph is a saturated purple that outshouts the message it
+.chat-body button.copy-link {
+  /* The 🔗 glyph is a coloured emoji that outshouts the message it
      sits next to; grey it out so it reads as a control rather than as
      content. The `copied` / `copy-failed` states below re-colour on
      purpose, so they drop the filter. */
@@ -594,15 +669,15 @@
 /* Opacity only. A hover border would draw a box a different shape from
    the glyph inside it, which reads as the control changing rather than
    as it lighting up. */
-.chat-body button.copy-uuid:hover {
+.chat-body button.copy-link:hover {
   opacity: 1;
 }
-.chat-body button.copy-uuid.copied {
+.chat-body button.copy-link.copied {
   color: #16a34a;
   opacity: 1;
   filter: none;
 }
-.chat-body button.copy-uuid.copy-failed {
+.chat-body button.copy-link.copy-failed {
   color: #dc2626;
   opacity: 1;
   filter: none;

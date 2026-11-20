@@ -97,7 +97,7 @@ fn album(row_id: &str, v: &Value, owner: &Owner) -> NormalizedChat {
         upstream_account: None,
         org_uuid: None,
         org_name: None,
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
             markdown_uuid: album.uuid,
             source_ref: None,
@@ -135,7 +135,7 @@ mod tests {
         let chats = build_albums(&[("a1".to_string(), album)], &owner);
         assert_eq!(chats.len(), 1);
         assert_eq!(chats[0].display, "Ten Forward Nights");
-        let items = &chats[0].buckets[0].items;
+        let items = &chats[0].render_units[0].items;
         assert_eq!(items.len(), 3);
         assert_eq!(items[0].kind, ItemKind::Text);
         assert_eq!(

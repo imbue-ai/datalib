@@ -74,7 +74,7 @@ so it is the same on every render.
 
 ## Incrementality
 
-Every document is in one bucket, keyed by the overview's uuid, which
+Every document is in one render unit, keyed by the overview's uuid, which
 declares the eight `garmin_*` tables the render reads as whole-table
 inputs (`src/render/parse.rs::inputs`). When none of their rows moved
 since the last render, the run is skipped for the cost of one

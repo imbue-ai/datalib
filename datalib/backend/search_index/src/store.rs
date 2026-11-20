@@ -18,7 +18,7 @@ use sqlx::SqliteConnection;
 
 use crate::IndexDoc;
 
-const DDL: [&str; 7] = [
+const DDL: [&str; 6] = [
     // `conversation`: its pieces are messages, each its own utterance, so a
     // word search needs one to hold every word; otherwise it is a page,
     // whose pieces are parts of one thing and may hold the words between
@@ -42,16 +42,11 @@ const DDL: [&str; 7] = [
     )",
     // One row per section, rowid = section_id. Contentless: the postings
     // and no copy of the text (fts_facts_test). Each word as written, case
-    // and accents folded, so a quoted phrase is exact.
+    // and accents folded, so a quoted phrase is exact: another form of a
+    // word is meaning's to find, not a stemmer's.
     "CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
         title, body,
         content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2'
-    )",
-    // The same rows, each word cut to its stem, so a bare word finds its
-    // other forms ("plots" finds "plot").
-    "CREATE VIRTUAL TABLE IF NOT EXISTS search_stems USING fts5(
-        title, body,
-        content='', contentless_delete=1, tokenize='porter unicode61 remove_diacritics 2'
     )",
     // Raised by every write, so a reader holding what it read can tell
     // whether the index moved without stat-ing a file the grid also writes.
@@ -307,17 +302,12 @@ async fn put_one(conn: &mut SqliteConnection, doc: &IndexDoc) -> Result<bool> {
         .fetch_one(&mut *conn)
         .await?;
         let title = if seq == 0 { doc.title.as_str() } else { "" };
-        for sql in [
-            "INSERT INTO search_fts (rowid, title, body) VALUES (?, ?, ?)",
-            "INSERT INTO search_stems (rowid, title, body) VALUES (?, ?, ?)",
-        ] {
-            sqlx::query(sql)
-                .bind(section_id)
-                .bind(title)
-                .bind(&section.text)
-                .execute(&mut *conn)
-                .await?;
-        }
+        sqlx::query("INSERT INTO search_fts (rowid, title, body) VALUES (?, ?, ?)")
+            .bind(section_id)
+            .bind(title)
+            .bind(&section.text)
+            .execute(&mut *conn)
+            .await?;
         at = end;
     }
     Ok(true)
@@ -336,8 +326,6 @@ async fn clear(conn: &mut SqliteConnection, doc_ids: &[i64]) -> Result<()> {
     let ids = serde_json::to_string(doc_ids)?;
     for sql in [
         "DELETE FROM search_fts WHERE rowid IN \
-         (SELECT section_id FROM search_sections WHERE doc_id IN (SELECT value FROM json_each(?)))",
-        "DELETE FROM search_stems WHERE rowid IN \
          (SELECT section_id FROM search_sections WHERE doc_id IN (SELECT value FROM json_each(?)))",
         "DELETE FROM search_sections WHERE doc_id IN (SELECT value FROM json_each(?))",
     ] {

@@ -606,10 +606,15 @@ besides components:
   listener of the app's takes does nothing: no link follows itself,
   whatever shape it has (`chatLink.ts` `finishFrameClick`). Above it, a
   title bar that does not scroll (`cards/DocTitleBar.ce.vue`): the
-  source's mark, the title, the source's own page (↗), the ID, and a ⋯
-  menu — the same one on a right-click of the bar — whose entries are
-  `cards/documentMenu.ts`. The page title inside the body keeps its
-  text but not its own ID button or ↗, which the bar has.
+  source's mark, the title, the source's own page (↗), a 🔗 that copies
+  a link to the document, and a ⋯ menu — the same one on a right-click
+  of the bar — whose entries are `cards/documentMenu.ts`; Copy ID, for
+  the bare uuid, is there. Each message's header has its own 🔗, which
+  copies a link to the message. A link is
+  `datalib:doc/<Title>-<uuid>#<message>`: the title's words are for a
+  person to read, and a reader of the link skips them (`uri.ts`). The
+  page title inside the body keeps its text but not its own 🔗 or ↗,
+  which the bar has.
 - `documentPickerView()` — parameter-less gallery stand-in for
   `documentView`: lists every rendered document (`/applet/unified_grid_and_search_index/docs`) and
   replaces itself with `documentView("<uuid>")` on pick.
@@ -767,6 +772,53 @@ besides components:
   Manage screen opens it with Browse, and the card gallery lists it. Its
   chart (`TimeSeriesChart.vue`) also draws the charts inside documents
   (`docs/dev/time_series.md` §"Charts in documents").
+- `libraryTreeView()` — "Library" (`cards/LibraryCard.ce.vue`, its
+  rules in `cards/library.ts`): the library as a tree, the way an
+  editor's file panel shows a project. The tree is `<vs-tree>`, VS Code's
+  own tree as a custom element (`third-party/vscode-tree/README.md`),
+  which Bazel copies beside the UI's sources as `vendor/vs-tree.js` and
+  Vite loads as its own chunk when the card first draws; its colours are
+  the app's, through its `--vs-tree-*` variables. The top level is the
+  configured sources (`GET /api/manage/rows`; a comparison's `diff`
+  group is none), and each place below them, an account, a label, a
+  workspace, a channel, a folder, a page, a chat, is a level of
+  `GET /children/{parent}?places=true` read when it is opened
+  (`docs/user/applets.md` § "A container's children"); a thread or a
+  message is no place, so it is not in the tree. A source that holds no
+  places has no arrow: one place asked of each source as the tree opens
+  says which. Every row is a chip (`docs/dev/chips.md`): a source its
+  group's, any other node its node's, drawn into the tree's own shadow
+  root through its `renderLabel` and `extraCss`. Picking a node shows it
+  beside the tree as a `nodeView`, drawn in a shadow root of its own as
+  the Search card draws its preview, so it lands there whatever layout
+  holds the card; a double-click on its chip opens the chip's card and a
+  right-click its menu, as everywhere. What each way of picking does is
+  one table, `TREE_PICKS`. A node that node card opens replaces it
+  there; anything else it opens is a card of its own, and ↗ opens the
+  node shown as one. What is open in the tree and the node shown are the
+  card's state.
+- `nodeView({ node, name, doc })` — one node of that tree
+  (`cards/NodeCard.ce.vue`): what `GET /children/{node}` lists of it,
+  newest at the bottom, with Earlier and Later to read on past either
+  end. `node` is a container's uuid, or `source:<id>` for what a source
+  holds at its top, and `doc` the document the node is, when it is one
+  (a Notion page, a contact group's card); the card refuses any other
+  shape of either, since `node` goes into a request's path and `doc`
+  names a document to read (`nodeCardProps`). A row is titled by its
+  name, else its author, else its first line, and a name that only
+  repeats the node's (a channel's threads are each named for the
+  channel) gives way; its kind shows only where the list mixes kinds.
+  The title is a chip where it names something (`rowTitle`): a
+  container its node's, a message its author's, a page its document's;
+  and each row's date is a date chip. A click on a row reads its
+  document beside the list through `documentPreview`, as the Search card
+  does; a level of containers alone (an account's labels) is a list
+  without one. A node that is a document shows it there until a row is
+  picked, and alone where it holds nothing else. A double-click on a
+  chip, or a right-click, is the chip's; elsewhere on a row a
+  double-click or Enter opens the child: a container as another
+  `nodeView`, a row's document as `documentView`. Keeps the picked
+  child as its state.
 - `configView()` — `config.toml` itself, edited directly, saved through
   the backend's loader. Reloads on the root's `config_changed` frame
   and, a beat sooner, on the `config.written` bus topic a card publishes

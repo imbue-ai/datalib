@@ -231,4 +231,10 @@ export type ViewLibs = {
   // drawn on one chart, one axis per unit. Browse on the time-series
   // applet's row opens it. See cards/TimeSeriesCard.ce.vue.
   timeSeriesView: () => CardRender;
+  // The library as a tree, its sources and their places; the node
+  // opened in it shown beside. See cards/LibraryCard.ce.vue.
+  libraryTreeView: () => CardRender;
+  // One node of that tree: what it holds, beside a preview. See
+  // cards/NodeCard.ce.vue.
+  nodeView: (opts?: { node?: string; name?: string | null }) => CardRender;
 };
