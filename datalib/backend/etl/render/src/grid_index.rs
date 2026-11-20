@@ -27,7 +27,7 @@ use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::doltlite_raw::StoreKind;
 use datalib_etl::stop::StopFlag;
 use datalib_photo_schema::NormalizedPhoto;
-use datalib_schema::data_nodes::{DataNodeRow, CHILDREN_INDEXES, DDL as DATA_NODES_DDL};
+use datalib_schema::data_nodes::{self, DataNodeRow, CHILDREN_INDEXES, DDL as DATA_NODES_DDL};
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::filings::{FilingRow, DDL as FILINGS_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL, INDEXES as GRID_ROWS_INDEXES};
@@ -441,7 +441,7 @@ async fn record_unreadable_store(
 pub fn schema_hash() -> String {
     datalib_store_meta::schema_hash(
         index_ddl()
-            .chain(remade_indexes())
+            .chain(read_indexes())
             .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
             // What the terms and the node rows derive, which no DDL shows.
             .chain([TERMS_SHAPE, node_rows::NODE_ROWS_SHAPE]),
@@ -499,7 +499,7 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
 /// grid reads wants to pay for the search indexes on every write.
 pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     for ddl in index_ddl()
-        .chain(remade_indexes())
+        .chain(read_indexes())
         .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
         .chain([AUTHORS_INDEX, node_rows::BY_SOURCE_INDEX])
     {
@@ -511,16 +511,22 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-/// The indexes only reads use: the search bar's, and those that list a
-/// container's children.
-fn remade_indexes() -> impl Iterator<Item = &'static str> {
+/// The search bar's indexes, and those that list a container's children.
+fn read_indexes() -> impl Iterator<Item = &'static str> {
     GRID_ROWS_INDEXES
         .iter()
         .map(|(_table, ddl)| *ddl)
         .chain(CHILDREN_INDEXES.iter().copied())
 }
 
-/// The read indexes are left out of a build into an empty index
+/// The read indexes a load's own writes do not look anything up by. The
+/// sweep in `node_rows::bring_in_line` runs before a build's indexes are
+/// made again, and reads `data_nodes` by uuid once per node row.
+fn remade_indexes() -> impl Iterator<Item = &'static str> {
+    read_indexes().filter(|ddl| *ddl != data_nodes::BY_UUID_INDEX)
+}
+
+/// The remade indexes are left out of a build into an empty index
 /// and made once at its end, and remade around a source's rewrite of a
 /// large share of the index. Kept up row by row, each changed row costs
 /// a page in every one of them, more pages than SQLite's cache holds;
@@ -2406,6 +2412,29 @@ mod open_index_tests {
                 .any(|d| d.starts_with("SEARCH n USING INDEX data_nodes_by_source (source_id=?)")),
             "{plan:?}"
         );
+        pool.close().await;
+    }
+
+    /// A build drops the read indexes until its end, and a source's node
+    /// rows are brought in line before then. Without `data_nodes_by_uuid`
+    /// the orphan sweep read every node for each node row, quadratic in a
+    /// first build (369k steps on the live bake's 6k-row grid).
+    #[tokio::test]
+    async fn the_node_row_writes_keep_their_indexes_through_a_build() {
+        let td = tempfile::tempdir().unwrap();
+        let pool = open_index(&td.path().join("db.sqlite"))
+            .await
+            .expect("open_index");
+        let mut conn = pool.acquire().await.unwrap();
+        drop_search_indexes(&mut conn)
+            .await
+            .expect("drop the read indexes");
+        drop(conn);
+        assert_searched_by_index(
+            &pool,
+            &[node_rows::ORPHANED, node_rows::CARRIED_WITHOUT_A_ROW],
+        )
+        .await;
         pool.close().await;
     }
 
