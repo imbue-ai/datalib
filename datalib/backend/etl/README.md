@@ -31,6 +31,12 @@ surrogate autoincrement integers, no ROWID-as-PK tricks.
 - Cross-table references (`blocks.parent_id`, `messages.conversation_id`)
   only mean something if they point at upstream ids.
 
+A table read mostly by its parent may lead its key with the parent's
+id, `(parent_id, id)`, with a unique index on `id` alone: `id` stays the
+upstream id and `ON CONFLICT(id)` still lands on it, and one parent's
+rows sit together in the file (`cluster_by`,
+[`macros/README.md`](macros/README.md#wirepayloadrow)).
+
 Ordering within a parent is a separate concern from identity: carry an
 explicit integer column for it. Never borrow the PK, and never
 `ORDER BY rowid`: on a table keyed by text, doltlite's rowid is a hash

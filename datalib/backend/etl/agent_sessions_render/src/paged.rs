@@ -362,8 +362,8 @@ fn pages(weights: &[u64], size: PageSize) -> Vec<Range<usize>> {
     out
 }
 
-/// How many records each transcript has, from the `records_transcript`
-/// index: no record is read.
+/// How many records each transcript has, from an index that leads with
+/// `transcript_id` (the key, or `records_transcript`): no record is read.
 async fn record_counts(pool: &SqlitePool) -> Result<HashMap<String, u64>> {
     let rows: Vec<(String, i64)> =
         sqlx::query_as("SELECT transcript_id, count(*) FROM records GROUP BY transcript_id")

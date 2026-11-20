@@ -15,6 +15,7 @@ use datalib_etl_chat_common::types::{
 };
 use datalib_etl_chat_common::RenderTarget;
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::indexed_markdown::join_key;
 use datalib_etl_render::inputs::{Inputs, RawRange, RenderUnit};
 use datalib_etl_render::pages::PageSize;
 use datalib_handle::Handle;
@@ -124,15 +125,7 @@ impl SessionRender for ClaudeCode<'_> {
         clock: &ReadClock,
     ) -> Result<Vec<(String, Value)>> {
         let rows: Vec<(String, String)> = clock
-            .load(
-                sqlx::query_as(
-                    "SELECT id, json(payload) FROM records \
-                     WHERE transcript_id IN (SELECT value FROM json_each(?1)) \
-                     AND payload IS NOT NULL",
-                )
-                .bind(ids)
-                .fetch_all(pool),
-            )
+            .load(sqlx::query_as(LOAD_RECORDS_SQL).bind(ids).fetch_all(pool))
             .await
             .context("select a page of records")?;
         clock.parse(|| {
@@ -158,6 +151,12 @@ impl SessionRender for ClaudeCode<'_> {
         )
     }
 }
+
+/// A page of transcripts' records. `transcript_id` leads the table's key,
+/// so each transcript's records are one range of the store.
+const LOAD_RECORDS_SQL: &str = "SELECT id, json(payload) FROM records \
+     WHERE transcript_id IN (SELECT value FROM json_each(?1)) \
+     AND payload IS NOT NULL";
 
 /// The document id for a raw transcript id, with no row in hand.
 fn chat_uuid_of(source_id: &str, tid: &str) -> String {
@@ -233,7 +232,8 @@ fn build_chat(
     let mut items: Vec<NormalizedChatItem> = Vec::new();
     let mut last_ms: Option<i64> = str_of(meta, "started_at").and_then(iso_to_ms);
     for (row_id, v) in rows {
-        inputs.read("records", row_id);
+        // A record's key is `(transcript_id, id)`, the way the diff names it.
+        inputs.read("records", &join_key(&[tid.to_string(), row_id.to_string()]));
         let Some(uuid) = str_of(v, "uuid") else {
             continue;
         };
@@ -620,7 +620,7 @@ mod tests {
     use datalib_etl_agent_sessions_render::titles;
     use serde_json::json;
 
-    fn meta(tid: &str, title: &str, agent: Option<&str>) -> (String, Value) {
+    pub(super) fn meta(tid: &str, title: &str, agent: Option<&str>) -> (String, Value) {
         let session = tid.split('#').next().unwrap();
         (
             tid.to_string(),
@@ -632,7 +632,7 @@ mod tests {
         )
     }
 
-    fn rec(uuid: &str, ts: &str, body: Value) -> (String, Value) {
+    pub(super) fn rec(uuid: &str, ts: &str, body: Value) -> (String, Value) {
         let mut v = body;
         v["uuid"] = json!(uuid);
         v["timestamp"] = json!(ts);
@@ -941,6 +941,117 @@ mod tests {
         for c in &chats {
             assert_eq!(c.chat_uuid, chat_uuid_of("cc", &c.id), "{}", c.id);
         }
+    }
+}
+
+#[cfg(test)]
+mod store_tests {
+    use super::*;
+    use sqlx::Row;
+
+    /// A page's records are read as one range of the key per transcript:
+    /// keyed by the record's uuid alone, each was a random read, and a full
+    /// render of a 4.5 GB store spent half its time loading them.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_pages_records_are_read_as_a_range_of_the_key() {
+        let d = tempfile::tempdir().unwrap();
+        let path = db_path_for(d.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let db = datalib_etl_claude_code::ingest::RawDb::open(&path)
+            .await
+            .unwrap();
+        // Audited: a constant statement of this crate.
+        let explain = format!("EXPLAIN QUERY PLAN {LOAD_RECORDS_SQL}");
+        let plan: Vec<String> = sqlx::query(sqlx::AssertSqlSafe(explain))
+            .bind("[]")
+            .fetch_all(db.pool())
+            .await
+            .unwrap()
+            .iter()
+            .map(|r| r.get::<String, _>("detail"))
+            .collect();
+        assert!(
+            plan.iter().any(|d| d.starts_with("SEARCH records USING")
+                && d.contains("sqlite_autoindex_records_1 (transcript_id=?)")),
+            "{plan:?}"
+        );
+        datalib_etl::store_handle::RawStoreHandle::close_all(&db).await;
+    }
+
+    /// A render names each record it read by the key the store's diff
+    /// names it by, `transcript_id|id`; under any other spelling a record
+    /// that changed is found in no render unit's inputs.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_render_names_its_records_the_way_the_diff_does() {
+        use datalib_etl::bulk::bulk_upsert_entity_in_tx;
+        use datalib_etl::doltlite_raw::{self as dr, WirePayload};
+        use datalib_etl_agent_sessions_render::titles;
+        use datalib_etl_claude_code::ingest::schema_raw::RecordRow;
+        use serde_json::json;
+
+        let d = tempfile::tempdir().unwrap();
+        let path = db_path_for(d.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let db = datalib_etl_claude_code::ingest::RawDb::open(&path)
+            .await
+            .unwrap();
+        let pool = db.pool();
+        sqlx::query(
+            "INSERT INTO transcripts (id, payload, session_id, rel_path) \
+             VALUES ('s1', NULL, 's1', 's1.jsonl')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        let from = dr::commit_run(pool, "a transcript").await.unwrap().unwrap();
+        let transcripts = vec![super::tests::meta("s1", "Away team", None)];
+        let records = vec![
+            super::tests::rec(
+                "u1",
+                "2364-04-11T10:00:00.000Z",
+                json!({"type": "user", "message": {"content": "Assemble the away team"}}),
+            ),
+            super::tests::rec(
+                "a1",
+                "2364-04-11T10:00:05.000Z",
+                json!({"type": "assistant", "message": {"model": "claude-opus-5", "content": [
+                    {"type": "text", "text": "Transporter room three."}
+                ]}}),
+            ),
+        ];
+        let rows: Vec<RecordRow> = records
+            .iter()
+            .map(|(id, v)| RecordRow {
+                id_and_payload: WirePayload {
+                    id: id.clone(),
+                    payload: v.to_string(),
+                },
+                transcript_id: "s1".into(),
+            })
+            .collect();
+        let mut tx = pool.begin().await.unwrap();
+        bulk_upsert_entity_in_tx(&mut tx, &rows).await.unwrap();
+        tx.commit().await.unwrap();
+        let to = dr::commit_run(pool, "two records").await.unwrap().unwrap();
+        let mut changed: Vec<String> = dr::changed_keys(pool, "records", &from, &to)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|k| k.key)
+            .collect();
+        changed.sort();
+
+        let chats = build_chats("cc", &transcripts, &records, &titles(&transcripts), 1024);
+        let mut read: Vec<String> = chats[0]
+            .inputs
+            .iter()
+            .filter(|i| i.table == "records")
+            .map(|i| i.id.clone())
+            .collect();
+        read.sort();
+        assert_eq!(changed.len(), 2, "{changed:?}");
+        assert_eq!(read, changed);
+        datalib_etl::store_handle::RawStoreHandle::close_all(&db).await;
     }
 }
 

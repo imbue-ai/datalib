@@ -345,7 +345,7 @@ pub struct Input {
     /// A table of the raw store, bare name.
     pub table: String,
     /// Its primary key as text; a composite key's columns in
-    /// `pragma_table_info` order, joined by `|` — see [`join_key`].
+    /// the key's order, joined by `|` — see [`join_key`].
     pub id: String,
 }
 
