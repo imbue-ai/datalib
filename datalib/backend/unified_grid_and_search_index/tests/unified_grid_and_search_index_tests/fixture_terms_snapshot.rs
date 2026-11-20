@@ -24,17 +24,23 @@ struct TermRow {
     value: Option<String>,
 }
 
+struct FiledRow {
+    uuid: String,
+    kind: String,
+    terms: Vec<(SearchTermKind, String)>,
+}
+
 /// The rows of one source, each with its terms, in the order the query
 /// read them.
 #[derive(Default)]
 struct Source {
-    rows: Vec<(String, String, Vec<(SearchTermKind, String)>)>,
+    rows: Vec<FiledRow>,
 }
 
 impl Source {
     fn render(&self) -> String {
         let mut out = String::new();
-        for (uuid, kind, terms) in &self.rows {
+        for FiledRow { uuid, kind, terms } in &self.rows {
             writeln!(out, "{uuid}  {kind}").unwrap();
             for (term_kind, value) in terms {
                 // The row's own id is the line above.
@@ -77,17 +83,18 @@ async fn snapshot_search_terms_per_source() {
     let mut sources: BTreeMap<String, Source> = BTreeMap::new();
     for r in read {
         let source = sources.entry(r.source_id).or_default();
-        let new_row = source
-            .rows
-            .last()
-            .is_none_or(|(uuid, _, _)| *uuid != r.uuid);
+        let new_row = source.rows.last().is_none_or(|row| row.uuid != r.uuid);
         if new_row {
-            source.rows.push((r.uuid.clone(), r.kind.clone(), Vec::new()));
+            source.rows.push(FiledRow {
+                uuid: r.uuid.clone(),
+                kind: r.kind.clone(),
+                terms: Vec::new(),
+            });
         }
         if let (Some(code), Some(value)) = (r.term_kind, r.value) {
             let kind = SearchTermKind::from_code(code)
                 .unwrap_or_else(|| panic!("a term kind this build does not know: {code}"));
-            source.rows.last_mut().unwrap().2.push((kind, value));
+            source.rows.last_mut().unwrap().terms.push((kind, value));
         }
     }
     assert!(!sources.is_empty(), "the fixture holds rows");
@@ -100,12 +107,11 @@ async fn snapshot_search_terms_per_source() {
             .fetch_all(&pool)
             .await
             .expect("read the names");
-    let accounts: Vec<(String, String)> = sqlx::query_as(
-        "SELECT source_id, handle FROM account_handles ORDER BY source_id, handle",
-    )
-    .fetch_all(&pool)
-    .await
-    .expect("read the account handles");
+    let accounts: Vec<(String, String)> =
+        sqlx::query_as("SELECT source_id, handle FROM account_handles ORDER BY source_id, handle")
+            .fetch_all(&pool)
+            .await
+            .expect("read the account handles");
     let mut people = String::from("# each handle and the names it was seen under\n");
     for (handle, name) in names {
         writeln!(people, "{handle}\t{name}").unwrap();
