@@ -72,10 +72,14 @@ rust_test(
     size = "medium",
     crate = ":datalib_applet",
     data = glob(["src/unified_grid_and_search_index/snapshots/*.snap"], allow_empty = True) +
-           SEARCH_FIXTURE_DATA + [":datalib_applet"],
+           SEARCH_FIXTURE_DATA + [
+        ":datalib_applet",
+        "//tests/fixtures:ingested_lightroom/index.sqlite",
+    ],
     edition = "2021",
     env = SEARCH_FIXTURE_ENV | {
         "APPLET_BIN": "$(rootpath :datalib_applet)",
+        "LIGHTROOM_INDEX_RLOC": "$(rlocationpath //tests/fixtures:ingested_lightroom/index.sqlite)",
         "INSTA_WORKSPACE_ROOT": ".",
         # Nothing here fetches the embedding model: a root that holds none,
         # in a test or in an applet binary a test starts, fails rather than
@@ -119,6 +123,7 @@ rust_test(
     edition = "2021",
     env = {
         "APPLET_BIN": "$(rootpath :datalib_applet)",
+        "LIGHTROOM_INDEX_RLOC": "$(rlocationpath //tests/fixtures:ingested_lightroom/index.sqlite)",
         "LIGHTROOM_CATALOG_03": "$(rootpath @lightroom_catalog_03_previews//:lrcat)",
     },
     tags = [

@@ -101,9 +101,13 @@ struct Row {
     markdown_uuid: Option<String>,
 }
 
-/// Every grid row, and each document's text: what the search index draws
-/// of it from its render store, the same call the keyword pass makes.
-async fn read_rows(root: &std::path::Path) -> (HashMap<String, Row>, HashMap<String, String>) {
+/// Every grid row, and, `with_texts`, each document's text: what the
+/// search index draws of it from its render store, the same call the
+/// keyword pass makes.
+async fn read_rows(
+    root: &std::path::Path,
+    with_texts: bool,
+) -> (HashMap<String, Row>, HashMap<String, String>) {
     let mut grid = open_read_only(&datalib_runtime::layout::grid_index_db(root)).await;
     #[derive(sqlx::FromRow)]
     struct Read {
@@ -141,6 +145,9 @@ async fn read_rows(root: &std::path::Path) -> (HashMap<String, Row>, HashMap<Str
                 markdown_uuid: r.markdown_uuid,
             },
         );
+    }
+    if !with_texts {
+        return (rows, HashMap::new());
     }
     let root = root.to_path_buf();
     let texts = tokio::task::spawn_blocking(move || drawn_texts(&root, &searched))
@@ -329,7 +336,7 @@ struct Findings {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn every_row_is_found_by_what_it_holds() {
     let root = fixture_root();
-    let (rows, texts) = read_rows(root.path()).await;
+    let (rows, texts) = read_rows(root.path(), true).await;
     let sources: BTreeSet<String> = rows.values().map(|r| r.source_id.clone()).collect();
     let f = Arc::new(Fixture {
         root: root.path().to_path_buf(),
@@ -359,6 +366,117 @@ async fn every_row_is_found_by_what_it_holds() {
         failures.join("\n")
     );
     insta::assert_snapshot!("search_finds_itself_coverage", coverage.render(&sources));
+}
+
+/// The same check over Lightroom, synced on its own
+/// (`//tests/fixtures:ingested_lightroom`): every photo key (`rating:`,
+/// `keyword:`, `pictured:`, `collection:`, `place:`, `caption:`, `with:`)
+/// finds exactly the photos holding the value, each caption typed as a
+/// phrase finds its photo, and a photo's own H3 cell finds it by `place:`
+/// and `near:`. Its root holds the grid index alone: there are no vectors
+/// to search by meaning.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_lightroom_row_is_found_by_what_it_holds() {
+    let root = tempfile::tempdir().unwrap();
+    datalib_search_fixture::materialize_index_root("LIGHTROOM_INDEX_RLOC", root.path());
+    let (rows, texts) = read_rows(root.path(), false).await;
+    let sources: BTreeSet<String> = rows.values().map(|r| r.source_id.clone()).collect();
+    let f = Arc::new(Fixture {
+        root: root.path().to_path_buf(),
+        rows,
+        texts,
+    });
+    let parts = [
+        tokio::spawn(by_each_key(f.clone())),
+        tokio::spawn(by_each_terms_key(f.clone())),
+        tokio::spawn(by_each_id_pasted(f.clone())),
+        tokio::spawn(by_its_caption_on_the_words(f.clone())),
+        tokio::spawn(by_its_own_cell(f.clone())),
+    ];
+    let mut failures: Vec<String> = Vec::new();
+    let mut coverage = Coverage::default();
+    for part in futures::future::join_all(parts).await {
+        let found = part.expect("a part of the check panicked");
+        failures.extend(found.failures);
+        coverage.extend(found.coverage);
+    }
+    assert!(
+        failures.is_empty(),
+        "{} searches did not find what they hold:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+    insta::assert_snapshot!(
+        "search_finds_itself_coverage_lightroom",
+        coverage.render(&sources)
+    );
+}
+
+/// Each caption, typed as a quoted phrase, finds its photo on the words.
+async fn by_its_caption_on_the_words(f: Arc<Fixture>) -> Findings {
+    let s = index_over(&f.root).await;
+    let mut found = Findings::default();
+    for ((kind, caption), holding) in terms_of(&f.root).await {
+        if kind != SearchTermKind::Caption.as_str() {
+            continue;
+        }
+        let q = format!("{caption:?}");
+        let got: HashSet<String> = every_uuid(&s, &q, Some(Part::Words))
+            .await
+            .into_iter()
+            .map(|r| r.uuid)
+            .collect();
+        let missing: BTreeSet<&str> = holding
+            .iter()
+            .filter(|u| !got.contains(*u))
+            .map(String::as_str)
+            .collect();
+        if !missing.is_empty() {
+            found
+                .failures
+                .push(format!("the words's `{q}` missed [{}]", listed(&missing)));
+        }
+        for uuid in &holding {
+            found
+                .coverage
+                .checked("words: its caption", &f.source_of(uuid));
+        }
+    }
+    found
+}
+
+/// A row with a location is found by its own cell, the finest H3 cell
+/// holding it, through `place:` and `near:`.
+async fn by_its_own_cell(f: Arc<Fixture>) -> Findings {
+    let s = index_over(&f.root).await;
+    let mut found = Findings::default();
+    for (cell, holding) in values_of(&f.root, "h3").await {
+        let cell: u64 = cell.parse().expect("an H3 cell is stored as its index");
+        for key in ["place", "near"] {
+            let q = format!("{key}:{cell:x}");
+            let got: HashSet<String> = every_uuid(&s, &q, None)
+                .await
+                .into_iter()
+                .map(|r| r.uuid)
+                .collect();
+            let missing: BTreeSet<&str> = holding
+                .iter()
+                .filter(|u| !got.contains(*u))
+                .map(String::as_str)
+                .collect();
+            if !missing.is_empty() {
+                found
+                    .failures
+                    .push(format!("`{q}` missed [{}]", listed(&missing)));
+            }
+            for uuid in &holding {
+                found
+                    .coverage
+                    .checked(&format!("{key}: its own cell"), &f.source_of(uuid));
+            }
+        }
+    }
+    found
 }
 
 /// A key compares its column exactly, so it finds exactly the rows

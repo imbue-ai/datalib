@@ -1,0 +1,71 @@
+---
+source: datalib/backend/applets/src/unified_grid_and_search_index/search_finds_itself_tests.rs
+expression: coverage.render(&sources)
+---
+byte_size:
+  checked: datalib 2
+  never: tng_lightroom
+channel:
+  checked: tng_lightroom 4
+  never: datalib
+created_at:
+  checked: datalib 30, tng_lightroom 4
+datalib_document_id:
+  checked: datalib 30, tng_lightroom 23
+id:
+  checked: datalib 30, tng_lightroom 15
+item_count:
+  checked: datalib 29, tng_lightroom 4
+kind:
+  checked: datalib 30, tng_lightroom 23
+modified_at:
+  checked: datalib 30, tng_lightroom 4
+near: its own cell
+  checked: tng_lightroom 1
+  never: datalib
+pasted: id
+  checked: datalib 30, tng_lightroom 23
+pasted: its document
+  checked: datalib 30, tng_lightroom 4
+place: its own cell
+  checked: tng_lightroom 1
+  never: datalib
+source:
+  checked: datalib 30, tng_lightroom 23
+subject:
+  checked: datalib 30, tng_lightroom 22
+terms: caption:
+  checked: tng_lightroom 2
+  never: datalib
+terms: collection:
+  checked: tng_lightroom 10
+  never: datalib
+terms: from:
+  checked: tng_lightroom 1
+  never: datalib
+terms: keyword:
+  checked: tng_lightroom 7
+  never: datalib
+terms: label:
+  checked: tng_lightroom 18
+  never: datalib
+terms: near:
+  checked: tng_lightroom 3
+  never: datalib
+terms: pictured:
+  checked: tng_lightroom 5
+  never: datalib
+terms: place:
+  checked: tng_lightroom 3
+  never: datalib
+terms: rating:
+  checked: tng_lightroom 3
+  never: datalib
+terms: with:
+  checked: tng_lightroom 6
+  never: datalib
+touched_at:
+  checked: datalib 30, tng_lightroom 4
+words: its caption
+  checked: tng_lightroom 2
+  never: datalib

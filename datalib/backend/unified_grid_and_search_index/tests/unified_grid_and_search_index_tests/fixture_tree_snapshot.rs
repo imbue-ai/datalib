@@ -49,6 +49,8 @@ impl Tree {
     async fn read(path: &Path) -> Tree {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
             .connect_with(SqliteConnectOptions::new().filename(path).read_only(true))
             .await
             .unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
