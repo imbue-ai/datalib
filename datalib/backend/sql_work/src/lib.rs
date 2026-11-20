@@ -33,8 +33,9 @@ pub const TARGET: &str = "datalib::sql_work";
 pub const VALUES_ENV: &str = datalib_env::DATALIB_SQL_VALUES;
 
 /// Names a folder to record, in one file per process, every statement that
-/// walked a whole table or index however small: the fixture sync's census,
-/// which `tests/fixtures/sql_scans_allowed.toml` is checked against.
+/// read or wrote rows and whether it walked a whole table or index: the
+/// fixture sync's census, which `tests/fixtures/sql_scans_allowed.toml` is
+/// checked against.
 pub const CENSUS_ENV: &str = datalib_env::DATALIB_SQL_CENSUS;
 
 /// The longest statement text a line carries.
@@ -151,7 +152,7 @@ unsafe fn finished(stmt: *mut c_void, nanos: i64) {
         rows: returned,
         nanos: nanos.max(0) as u64,
     };
-    let census = census::dir().filter(|_| work.fullscan_steps > 0);
+    let census = census::dir();
     let recording = recording::any();
     if !(work.is_heavy() || census.is_some() || recording) || WRITING.with(Cell::get) {
         return;
@@ -163,7 +164,7 @@ unsafe fn finished(stmt: *mut c_void, nanos: i64) {
     let db = unsafe { sqlite3_db_handle(stmt) };
     let file = text(unsafe { sqlite3_db_filename(db, c"main".as_ptr()) });
     if let Some(dir) = census {
-        census::note(dir, &sql, &file);
+        census::note(dir, &sql, &file, work.fullscan_steps > 0);
     }
     if unsafe { sqlite3_stmt_readonly(stmt) } == 0 {
         work.rows = work

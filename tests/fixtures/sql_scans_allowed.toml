@@ -1,5 +1,5 @@
-# Every statement the TNG fixture sync runs that walks a whole table or
-# index, other than reads of the catalog alone, and why that is allowed.
+# Every statement the TNG fixture sync runs whose plan walks a whole table
+# or index, other than reads of the catalog alone, and why that is allowed.
 # sql_scans_test.py checks the sync's list (ingested/sql_scans.jsonl) against
 # this file. A new scan fails it until the statement gets an index or an
 # entry here with a reason (docs/dev/testing.md).
@@ -8,11 +8,6 @@
 # every time the statement runs. A reason says why that is fine: the
 # statement reads every row anyway, or the table stays small. The entries
 # marked "Not reviewed" were here when the check began.
-
-[[scan]]
-statement = "DELETE FROM grid_rows WHERE markdown_uuid IS NULL AND NOT EXISTS (SELECT 1 FROM data_nodes n WHERE n.uuid = grid_rows.uuid) RETURNING uuid"
-files = ["*/unified_grid_and_search_index/db.sqlite"]
-why = "Not reviewed: on main when this check began."
 
 [[scan]]
 statement = "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason FROM runs WHERE ? IS NULL OR run_id = ? ORDER BY started_at_utc DESC LIMIT 1"
@@ -810,11 +805,6 @@ files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, roots, opened_by, stop_requested_by, closed_at_utc, outcome, failed_step FROM requests ORDER BY closed_at_utc IS NOT NULL, opened_at_utc DESC, id DESC LIMIT ?"
-files = ["*/supervisor.sqlite"]
-why = "Reads every row by design: the statement has no WHERE."
-
-[[scan]]
 statement = "SELECT id, roots, opened_by, stop_requested_by, closed_at_utc, outcome, failed_step FROM requests WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id"
 files = ["*/supervisor.sqlite"]
 why = "Not reviewed: on main when this check began."
@@ -1008,3 +998,463 @@ why = "The disk-usage retention sweep: it reads the old measurements once per sw
 statement = "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason FROM runs WHERE ? IS NULL OR run_id = ? ORDER BY started_at_utc DESC LIMIT 1"
 files = ["*/runs/runs.sqlite"]
 why = "The run store keeps one row per run it has not yet let go (76 on a large library), so a scan stays small; recorded only when a run row exists when it runs."
+
+[[scan]]
+statement = "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ? AND stage = ?"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "DELETE FROM problems WHERE scope_kind = ? AND stage = ? AND scope_key IN (SELECT value FROM json_each(?))"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "DELETE FROM problems WHERE scope_kind = ? AND stage = ? AND scope_key LIKE 'garmin_daily:%' AND substr(scope_key, instr(scope_key, '#') + 1) NOT BETWEEN ? AND ?"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "DELETE FROM problems WHERE source_id = ?"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "SELECT * FROM problems"
+files = ["*/render_time_series/time_series.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT * FROM problems WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "SELECT * FROM problems WHERE scope_kind = ? AND scope_key = ?"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "SELECT * FROM problems WHERE scope_kind = ? AND scope_key = ? AND stage = ?"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "SELECT * FROM problems WHERE scope_kind = ? AND scope_key IN (?…)"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "SELECT * FROM problems WHERE source_id = ''"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT * FROM render_cursor LIMIT 1"
+files = ["*/render_markdown/indexed_markdown.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT 1 FROM users LIMIT 1"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT COUNT(*) FROM cowork_sessions WHERE org_uuid = ?"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "SELECT DISTINCT blob_id, blake3 FROM email_blobs WHERE blake3 IS NOT NULL"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT MAX(seq) FROM log"
+files = ["*/runs/runs.sqlite"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT a.message_id, a.export_name, m.group_id FROM chat_attachments a JOIN chat_messages m ON m.id = a.message_id WHERE a.blake3 IS NULL"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT abs_path, kind, blake3, mtime_ns, size, ctime_ns, stamp_kind, inode, dev FROM fingerprints WHERE abs_path = ? OR abs_path GLOB ?"
+files = ["*/fingerprints.sqlite"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "SELECT blake3 FROM cas_objects"
+files = ["*/ingest/blobs.sqlite"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT blake3 FROM pdf_documents"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT blake3, content_type, substr(bytes, 1, ?) FROM cas_objects"
+files = ["*/ingest/blobs.sqlite"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT coalesce(max(val_id), 0) FROM vals"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT e.id, e.calendar_id, json(e.payload) AS payload, json(b.volatile_payload) AS volatile FROM google_events e LEFT JOIN google_events_bookkeeping b ON b.id = e.id ORDER BY e.id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT e.id, e.calendar_id, json(e.payload) AS payload, json(i.payload) AS invitees FROM calendly_events e LEFT JOIN calendly_invitees i ON i.id = e.id ORDER BY e.id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT file_id AS ref_id, blake3 FROM slack_attachments WHERE blake3 IS NOT NULL"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id FROM account"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM ads_information_story_views_in_past_7_days"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM bots WHERE payload IS NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id FROM chat_item_attachments"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM comments"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM connections"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM conversations"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM cowork_sessions WHERE org_uuid = ?"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "SELECT id FROM email_addresses"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM garmin_activity_files WHERE blake3 IN (SELECT blake3 FROM garmin_activity_files WHERE blake3 IS NOT NULL GROUP BY blake3 HAVING COUNT(DISTINCT activity_id) > 1) ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id FROM garmin_devices WHERE 1 = 1"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id FROM logged_information_search_your_search_history"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM maps_photos"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM media_blobs"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM messages"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM notion_attachments ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM personal_information_profile_information_profile_information"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM shares"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM skills"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM users ORDER BY id LIMIT 1"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM voice_greetings"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM your_facebook_activity_groups_your_comments_in_groups"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM your_facebook_activity_posts_album"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM your_facebook_activity_posts_posts_on_other_pages_and_profiles"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id FROM your_facebook_activity_posts_your_videos"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, abs_root FROM pdf_scan_meta ORDER BY id LIMIT 1"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, blake3 FROM pdf_paths"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM accounts WHERE payload IS NOT NULL"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM chat_users WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM drives"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM me ORDER BY id LIMIT 1"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM personal_information_profile_information_profile_information WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM self_identity WHERE payload IS NOT NULL ORDER BY id LIMIT 1"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM shares WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM workspaces ORDER BY id LIMIT 1"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM your_facebook_activity_groups_your_comments_in_groups WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM your_facebook_activity_posts_album WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload) AS payload FROM your_facebook_activity_posts_posts_on_other_pages_and_profiles WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, json(payload), when_ts FROM maps_photos ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, kind, targets, opened_by, closed_at_utc, error FROM wipes WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id"
+files = ["*/supervisor.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, last_edited_time FROM pages WHERE in_trash = 1 AND payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, method, server_url, principal_href, login FROM accounts ORDER BY id LIMIT 1"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, name FROM bots WHERE name IS NOT NULL AND name != ''"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, org_uuid, org_name, json(payload) AS payload FROM cowork_sessions WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, owner_id FROM media_blobs"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, page_id, ref_id, blake3 FROM notion_attachments ORDER BY page_id, ref_id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, plain_text FROM comment_anchors WHERE plain_text IS NOT NULL AND plain_text <> ''"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT id, product_display_name, json(payload) AS payload FROM garmin_devices ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT id, ref_id, blake3 FROM chat_item_attachments WHERE blake3 IS NOT NULL"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT json(payload) AS payload FROM users WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT k, v FROM 'main'.'search_fts_config'"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "FTS5's own read of its small configuration table."
+
+[[scan]]
+statement = "SELECT k, v FROM 'main'.'vals_fts_config'"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "FTS5's own read of its small configuration table."
+
+[[scan]]
+statement = "SELECT k, v FROM 'main'.'vals_tri_config'"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "FTS5's own read of its small configuration table."
+
+[[scan]]
+statement = "SELECT lid_row_id, display_name FROM lid_display_name"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT measured_at_utc, tz_offset, available_bytes, total_bytes FROM disk_free ORDER BY measured_at_utc DESC LIMIT ?"
+files = ["*/disk_stats.sqlite"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT path, measured_at_utc, tz_offset, bytes FROM disk_usage ORDER BY measured_at_utc DESC LIMIT ?"
+files = ["*/disk_stats.sqlite"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT rel_path FROM beeper_media_files"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT run_id, started_at_utc, finished_at_utc, tz_offset FROM runs ORDER BY rowid DESC LIMIT 1"
+files = ["*/supervisor.sqlite"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT scope, last_seen_at_utc FROM sync_scope_state WHERE scope LIKE ? || '%'"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "SELECT severity, COUNT(*) FROM problems WHERE scope_kind = ? AND scope_key = ? GROUP BY severity"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
+
+[[scan]]
+statement = "SELECT step, turned_off_by FROM turned_off"
+files = ["*/supervisor.sqlite"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT uri AS ref_id, blake3 FROM media_blobs WHERE blake3 IS NOT NULL"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "UPDATE OR IGNORE sinks SET path = ? || substr(path, ?) WHERE substr(path, 1, ?) = ?"
+files = ["*/supervisor.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "UPDATE OR IGNORE steps SET step = ? || substr(step, ?) WHERE substr(step, 1, ?) = ?"
+files = ["*/supervisor.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "UPDATE OR IGNORE turned_off SET step = ? || substr(step, ?) WHERE substr(step, 1, ?) = ?"
+files = ["*/supervisor.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "UPDATE invocations SET finished_at_utc = ?, outcome = ?, error = ? WHERE outcome IS NULL"
+files = ["*/supervisor.sqlite"]
+why = "Not reviewed: on main when this check began."
+
+[[scan]]
+statement = "UPDATE steps SET reads = replace(reads, ?…) WHERE instr(reads, ?) > 0"
+files = ["*/supervisor.sqlite"]
+why = "Not reviewed: on main when this check began."
