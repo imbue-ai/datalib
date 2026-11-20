@@ -1,8 +1,9 @@
 //! The search-bar grammar every grid here shares.
 //!
 //! A query is whitespace-separated tokens. `key:value` is a term, and a
-//! leading `-` negates it; a link (`https://…`) is not a term. A double-quoted span may hold spaces, colons
-//! and quotes (`\"` and `\\` escape inside it). Anything else is free
+//! leading `-` negates it; a link (`https://…`, `datalib:doc/…`) is not a
+//! term. A double-quoted span may hold spaces, colons and quotes (`\"`
+//! and `\\` escape inside it). Anything else is free
 //! text, kept exactly as typed — quotes and leading `-` included — so a
 //! consumer that forwards it to a search engine can keep its meaning.
 //!
@@ -42,7 +43,7 @@ pub fn parse(s: &str) -> Vec<Token> {
             };
             match split_term(body) {
                 Some((key, value, quoted))
-                    if !key.is_empty() && !value.is_empty() && !value.starts_with("//") =>
+                    if !key.is_empty() && !value.is_empty() && !is_link(key, &value) =>
                 {
                     Token::Term(Term {
                         key: key.to_string(),
@@ -105,6 +106,11 @@ pub fn free_text(token: &str) -> (String, bool) {
         _ => (false, token),
     };
     (unquote(body), negate)
+}
+
+/// `scheme://…`, or a name in Datalib's own scheme, which has no `//`.
+fn is_link(key: &str, value: &str) -> bool {
+    value.starts_with("//") || key == "datalib"
 }
 
 fn split_term(tok: &str) -> Option<(&str, String, bool)> {
@@ -276,6 +282,18 @@ mod tests {
                     quoted: false,
                 }),
             ]
+        );
+    }
+
+    /// A `datalib:doc/…` link a 🔗 copied was read as a key named
+    /// `datalib`, so pasting it found nothing.
+    #[test]
+    fn a_datalib_link_is_free_text() {
+        let link = "datalib:doc/Ten-Forward-00000000-0000-8000-a000-000000000001";
+        assert_eq!(parse(link), vec![Token::Free(link.into())]);
+        assert_eq!(
+            parse(&format!("-{link}")),
+            vec![Token::Free(format!("-{link}"))]
         );
     }
 

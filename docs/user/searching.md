@@ -101,8 +101,10 @@ An id, an address or a number typed as free text (`picard@enterprise.org`,
 `+12025550101`, a row's uuid) is a filter: every row that names it, in any
 role, newest first. A source's own id for a record counts too, where it is
 a uuid, dashed or not, and so does a link that ends in one: paste a Notion
-page's link to find the page. A source id that is not a uuid, such as a
-Gmail id, is not read this way; search for it with `id:` (below).
+page's link to find the page, or a link a 🔗 in the document viewer
+copied (`datalib:doc/…`) to find that document or message. A source id
+that is not a uuid, such as a Gmail id, is not read this way; search for
+it with `id:` (below).
 
 ### The text a search reads
 

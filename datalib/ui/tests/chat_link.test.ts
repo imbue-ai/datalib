@@ -4,7 +4,8 @@ import {
   chatUuidFromHref,
   finishFrameClick,
   linkFromClick,
-  rewriteIdButtonsForCopy,
+  linkOfButton,
+  rewriteLinkButtonsForCopy,
 } from "../src/cards/chatLink";
 import { copyWithHandles } from "../src/cards/contacts";
 
@@ -168,33 +169,50 @@ describe("chatUuidFromHref", () => {
   });
 });
 
-describe("rewriteIdButtonsForCopy", () => {
-  /** A selection copied across a 🆔 keeps the 🆔 and its uuid, as a
-   *  `datalib://` link to its section, or to the document for the page
+describe("linkOfButton", () => {
+  /** A message's 🔗 copies a link to the message within its document;
+   *  the page title's, to the document. */
+  it("names the message in its document, or the document", () => {
+    const btn = (uuid: string) => {
+      const b = document.createElement("button");
+      b.dataset.uuid = uuid;
+      return b;
+    };
+    expect(linkOfButton(btn("sec-2"), "doc-1")).toBe("datalib:doc/doc-1#sec-2");
+    expect(linkOfButton(btn("doc-1"), "doc-1")).toBe("datalib:doc/doc-1");
+    expect(linkOfButton(btn("sec-2"), "doc-1", "Ten Forward")).toBe(
+      "datalib:doc/Ten-Forward-doc-1#sec-2",
+    );
+  });
+});
+
+describe("rewriteLinkButtonsForCopy", () => {
+  /** A selection copied across a 🔗 keeps the 🔗 and its uuid, as a
+   *  `datalib:doc/` link to its section, or to the document for the page
    *  title's. */
-  it("turns each copied 🆔 button into a link to what it names", () => {
+  it("turns each copied 🔗 button into the link it copies", () => {
     const root = document.createElement("div");
     root.innerHTML =
-      `<h1 data-page-title-uuid="doc-1">Title <button type="button" class="copy-uuid" data-uuid="doc-1">🆔</button></h1>` +
-      `<div data-section-uuid="sec-2"><button type="button" class="copy-uuid" data-uuid="sec-2">🆔</button> hello</div>`;
-    expect(rewriteIdButtonsForCopy(root, "doc-1")).toBe(true);
+      `<h1 data-page-title-uuid="doc-1">Title <button type="button" class="copy-link" data-uuid="doc-1">🔗</button></h1>` +
+      `<div data-section-uuid="sec-2"><button type="button" class="copy-link" data-uuid="sec-2">✓</button> hello</div>`;
+    expect(rewriteLinkButtonsForCopy(root, "doc-1")).toBe(true);
     expect(root.querySelector("button")).toBeNull();
     const links = Array.from(root.querySelectorAll("a"), (a) => [
       a.getAttribute("href"),
       a.textContent,
     ]);
     expect(links).toEqual([
-      ["datalib:doc/doc-1", "🆔 doc-1"],
-      ["datalib:doc/doc-1#sec-2", "🆔 sec-2"],
+      ["datalib:doc/doc-1", "🔗 doc-1"],
+      ["datalib:doc/doc-1#sec-2", "🔗 sec-2"],
     ]);
-    expect(rewriteIdButtonsForCopy(root, "doc-1")).toBe(false);
+    expect(rewriteLinkButtonsForCopy(root, "doc-1")).toBe(false);
   });
 
   /** The copy hook carries the rewrite to the clipboard's HTML, for a
    *  selection with no contact chip in it as much as one with. */
-  it("puts the 🆔 link in a copied selection's html", () => {
+  it("puts the 🔗 link in a copied selection's html", () => {
     const root = document.createElement("div");
-    root.innerHTML = `<p data-section-uuid="sec-2">hello <button type="button" class="copy-uuid" data-uuid="sec-2">🆔</button> there</p>`;
+    root.innerHTML = `<p data-section-uuid="sec-2">hello <button type="button" class="copy-link" data-uuid="sec-2">🔗</button> there</p>`;
     document.body.append(root);
     const range = document.createRange();
     range.selectNodeContents(root);
@@ -207,11 +225,11 @@ describe("rewriteIdButtonsForCopy", () => {
       clipboardData: { setData: (type: string, value: string) => (data[type] = value) },
       preventDefault: () => (prevented = true),
     } as unknown as ClipboardEvent;
-    copyWithHandles(ev, root, (f) => rewriteIdButtonsForCopy(f, "doc-1"));
+    copyWithHandles(ev, root, (f) => rewriteLinkButtonsForCopy(f, "doc-1"));
     root.remove();
 
     expect(prevented).toBe(true);
-    expect(data["text/html"]).toContain('<a href="datalib:doc/doc-1#sec-2">🆔 sec-2</a>');
+    expect(data["text/html"]).toContain('<a href="datalib:doc/doc-1#sec-2">🔗 sec-2</a>');
     expect(data["text/html"]).not.toContain("<button");
   });
 });
