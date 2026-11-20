@@ -1876,9 +1876,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # and the corrupt file is skipped). The mixed hull survey is one
         # of the four and contributes one page, not two — its image-only
         # second page becomes a note in the markdown rather than a row.
+        # The two folders are engineering/ and archive/, where the copy of
+        # the log is filed; holodeck/ holds nothing rendered, so no folder.
         self.assertEqual(
             self._pdf_shape(),
-            {"PDF Document": 4, "PDF Page": 5},
+            {"Folder": 2, "PDF Document": 4, "PDF Page": 5},
             "pdf grid_rows shape",
         )
         # Cross-provider: every row is filed under its document's source,

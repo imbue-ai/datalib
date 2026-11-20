@@ -13,7 +13,9 @@ use std::path::Path;
 ///     v8 layout). Every uuid moved; the render unit key is now the blake3.
 /// v10: each page is a section of its own, its markdown as pdf-inspector
 ///      wrote it, and its first paragraph is read as markdown.
-pub const RENDER_VERSION: u32 = 10;
+/// v11: a document sits in the folder of its first path, and is filed
+///      under the folder of each other (grid_rows.rs, `folders`).
+pub const RENDER_VERSION: u32 = 11;
 
 /// One page of converted text.
 pub struct Page {

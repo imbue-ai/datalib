@@ -229,6 +229,7 @@ fn card(uuid: &str, kind: ContactKind, name: &str, addresses: &[&str]) -> Contac
         doc_uuid: uuid.into(),
         group_label: "Address Book".into(),
         address_book: None,
+        groups: Vec::new(),
         member_handles: Vec::new(),
         upstream_account: None,
         inputs: Vec::new(),

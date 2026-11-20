@@ -1,6 +1,7 @@
 //! Where a page and a comment thread sit: the pages and databases above
-//! a page, each a container. A page is read together and a subpage on
-//! its own; a database is a place. A column or a toggle is walked
+//! a page, each a container. A page is read together, a subpage on its
+//! own, and is a place, as it is in Notion's sidebar, so the pages under
+//! pages are a tree to browse; a database is a place. A column or a toggle is walked
 //! through, as the path above a page walks it. The raw store keeps no
 //! record of the workspace, so the top of what it knows is the top here.
 
@@ -54,6 +55,7 @@ pub(super) fn page(
     .named(Some(page.title.to_string()))
     .upstream(ids::KIND_PAGE, page.id, None)
     .read_together()
+    .place()
     .under(&at);
     let inside = at.below(&own);
     data_nodes.push(own);
@@ -115,7 +117,8 @@ fn container(md: &str, stanza: &str, id: &str, row: &TreeRow) -> Option<DataNode
             )
             .named(name)
             .upstream(ids::KIND_PAGE, id, None)
-            .read_together(),
+            .read_together()
+            .place(),
         ),
         TreeKind::Database => Some(
             DataNodeRow::new(
@@ -147,9 +150,9 @@ mod tests {
         }
     }
 
-    /// A page under a database under a page, with a column between: the
-    /// database is the place, each page is read on its own, the column
-    /// is not there, and a thread sits inside its page.
+    /// A page under a database under a page, with a column between: each
+    /// page is read on its own and is a place, so is the database, the
+    /// column is not there, and a thread sits inside its page.
     #[test]
     fn a_page_sits_under_its_pages_and_databases_and_a_thread_inside_it() {
         let tree: HashMap<String, TreeRow> = [
@@ -193,9 +196,9 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
-                ("Notion page", Some("Bridge"), true, false),
+                ("Notion page", Some("Bridge"), true, true),
                 ("Notion database", Some("Logs"), false, true),
-                ("Notion page", Some("Stardate 41153"), true, false),
+                ("Notion page", Some("Stardate 41153"), true, true),
             ]
         );
         let [top, db, own] = &at.data_nodes[..] else {
@@ -212,7 +215,7 @@ mod tests {
 
         let disc = thread("md", "notion", "d1", &at);
         assert_eq!(disc.parent_uuid.as_deref(), Some(own.uuid.as_str()));
-        assert_eq!(disc.place_uuid.as_deref(), Some(db.uuid.as_str()));
+        assert_eq!(disc.place_uuid.as_deref(), Some(own.uuid.as_str()));
         assert!(disc.read_together);
     }
 }

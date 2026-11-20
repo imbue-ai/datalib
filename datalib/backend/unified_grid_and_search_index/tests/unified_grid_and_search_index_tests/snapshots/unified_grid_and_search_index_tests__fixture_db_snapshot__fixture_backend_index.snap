@@ -179,7 +179,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "contacts",
       "render_unit_key": "00000000-0000-8140-88d9-42badf1b195b",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "drone.4.of.12@unimatrix01.borg"
@@ -203,7 +203,7 @@ expression: snapshot
       "modified_at": "2371-01-02T00:00:00+00:00",
       "provider": "contacts",
       "render_unit_key": "00000000-0000-8195-8ee2-d14cb601f004",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts-diff",
       "title": "Worf"
@@ -227,7 +227,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "contacts",
       "render_unit_key": "00000000-0000-819d-aad9-cb628fc3bec0",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts-diff",
       "title": "Kalita"
@@ -275,7 +275,7 @@ expression: snapshot
       "modified_at": "2371-01-09T00:00:00+00:00",
       "provider": "contacts",
       "render_unit_key": "00000000-0000-81e2-8596-1ee8f9640d13",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Jean-Luc Picard"
@@ -335,7 +335,7 @@ expression: snapshot
       "modified_at": "2371-01-09T00:00:00+00:00",
       "provider": "contacts",
       "render_unit_key": "00000000-0000-825c-a3c4-1fb84e9bfce6",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts-diff",
       "title": "Jean-Luc Picard"
@@ -371,7 +371,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "contacts",
       "render_unit_key": "00000000-0000-829a-bb9d-4c1b203d3251",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Senior Staff"
@@ -407,7 +407,7 @@ expression: snapshot
       "modified_at": "2369-04-15T01:05:00.000Z",
       "provider": "notion",
       "render_unit_key": "d0000001-1701-4d00-8000-000000000001",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "notion",
       "title": "Bridge Operations Handbook"
@@ -455,7 +455,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "contacts",
       "render_unit_key": "00000000-0000-8429-b938-7d1e51384182",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts-diff",
       "title": "Ro Laren"
@@ -611,7 +611,7 @@ expression: snapshot
       "modified_at": "2371-01-02T00:00:00+00:00",
       "provider": "contacts",
       "render_unit_key": "00000000-0000-85d8-ac4b-9c4472cee5ea",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Worf"
@@ -647,7 +647,7 @@ expression: snapshot
       "modified_at": "2369-04-15T00:01:00.000Z",
       "provider": "notion",
       "render_unit_key": "table_of_contents",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": false,
       "source_id": "notion",
       "title": "Notion TOC: Table-of-Contents (Datalib generated)"
@@ -731,7 +731,7 @@ expression: snapshot
       "modified_at": "2370-02-11T00:00:00+00:00",
       "provider": "contacts",
       "render_unit_key": "00000000-0000-86be-a0a0-341fa48bbc80",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts-diff",
       "title": "Data"
@@ -767,7 +767,7 @@ expression: snapshot
       "modified_at": "2369-04-15T01:10:00.000Z",
       "provider": "notion",
       "render_unit_key": "d0000001-1701-4d00-8000-000000000002",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "notion",
       "title": "Bridge Operations Handbook"
@@ -1187,7 +1187,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "pdf",
       "render_unit_key": "c146e5d51cfec1548b1d6d39f72d4ad957b0da442d2ca1bdf6d14a7094c506a2",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "searchable": true,
       "source_id": "tng_pdfs",
       "title": "Hull Integrity Survey"
@@ -1343,7 +1343,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "contacts",
       "render_unit_key": "00000000-0000-8acb-9e72-ef58e1a96813",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Seven of Nine"
@@ -1355,7 +1355,7 @@ expression: snapshot
       "modified_at": "2370-08-22T00:00:00+00:00",
       "provider": "contacts",
       "render_unit_key": "00000000-0000-8b00-b38c-a2a290dad572",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "William T. Riker"
@@ -1595,7 +1595,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "contacts",
       "render_unit_key": "00000000-0000-8c51-a4b4-dde335468f6c",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Hugh"
@@ -1679,7 +1679,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "pdf",
       "render_unit_key": "c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "searchable": true,
       "source_id": "tng_pdfs",
       "title": "warp_core_manual.pdf"
@@ -1775,7 +1775,7 @@ expression: snapshot
       "modified_at": "2370-09-04T00:00:00+00:00",
       "provider": "contacts",
       "render_unit_key": "00000000-0000-8d78-9232-e6b0deeebfb7",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Geordi La Forge"
@@ -1991,7 +1991,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "contacts",
       "render_unit_key": "00000000-0000-8f5b-ab9b-f6b9fbf217b5",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Locutus of Borg"
@@ -2027,7 +2027,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "pdf",
       "render_unit_key": "1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "searchable": true,
       "source_id": "tng_pdfs",
       "title": "Captain's Log"
@@ -2039,7 +2039,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "pdf",
       "render_unit_key": "ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545",
-      "renderer_version": "rust-v1.10",
+      "renderer_version": "rust-v1.11",
       "searchable": true,
       "source_id": "tng_pdfs",
       "title": "Captain's Log"
@@ -2075,7 +2075,7 @@ expression: snapshot
       "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
       "render_unit_key": "b1d6e000-1701-4d00-8000-000000000003",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "notion",
       "title": "Incident Log: Stardate 47988.1"
@@ -2087,7 +2087,7 @@ expression: snapshot
       "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
       "render_unit_key": "b1d6e000-1701-4d00-8000-000000000001",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "notion",
       "title": "Bridge Operations Handbook"
@@ -2099,7 +2099,7 @@ expression: snapshot
       "modified_at": "2369-04-15T00:02:00.000Z",
       "provider": "notion",
       "render_unit_key": "b1d6e000-1701-4d00-8000-000000000002",
-      "renderer_version": "rust-v1.16",
+      "renderer_version": "rust-v1.17",
       "searchable": true,
       "source_id": "notion",
       "title": "Shift Roster"
@@ -5396,6 +5396,36 @@ expression: snapshot
     },
     {
       "account": null,
+      "author": null,
+      "byte_size": null,
+      "channel": null,
+      "content_hash": "af1349b9f5f9a1a6",
+      "conversation_name": "archive",
+      "conversation_uuid": "00000000-0000-88f8-b1ff-c893230dad95",
+      "created_at": null,
+      "entire_chat": "",
+      "git_sha": null,
+      "item_count": null,
+      "kind": "Folder",
+      "markdown_uuid": null,
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 0,
+      "project": null,
+      "provider": "pdf",
+      "source_id": "tng_pdfs",
+      "source_label": "PDF",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "folder",
+      "upstream_id": "archive",
+      "uuid": "00000000-0000-88f8-b1ff-c893230dad95"
+    },
+    {
+      "account": null,
       "author": "Me",
       "byte_size": 18,
       "channel": null,
@@ -8093,6 +8123,36 @@ expression: snapshot
       "upstream_entity_kind": "post",
       "upstream_id": "6cc4d668-e9e0-5b20-a9f1-7185991ee598",
       "uuid": "00000000-0000-8f4d-b0a7-cfeb302ede83"
+    },
+    {
+      "account": null,
+      "author": null,
+      "byte_size": null,
+      "channel": null,
+      "content_hash": "af1349b9f5f9a1a6",
+      "conversation_name": "engineering",
+      "conversation_uuid": "00000000-0000-8f52-b89b-de803b47abaf",
+      "created_at": null,
+      "entire_chat": "",
+      "git_sha": null,
+      "item_count": null,
+      "kind": "Folder",
+      "markdown_uuid": null,
+      "message_index": null,
+      "notion_block_uuid": null,
+      "notion_page_uuid": null,
+      "org_name": null,
+      "org_uuid": null,
+      "preview_len": 0,
+      "project": null,
+      "provider": "pdf",
+      "source_id": "tng_pdfs",
+      "source_label": "PDF",
+      "source_url": null,
+      "upstream_account": null,
+      "upstream_entity_kind": "folder",
+      "upstream_id": "engineering",
+      "uuid": "00000000-0000-8f52-b89b-de803b47abaf"
     },
     {
       "account": null,
@@ -20297,7 +20357,7 @@ expression: snapshot
   ],
   "summary": {
     "documents_count": 179,
-    "grid_rows_count": 604,
+    "grid_rows_count": 606,
     "storage_rows_count": 261
   }
 }

@@ -9,8 +9,8 @@ use datalib_schema::filings::DDL as FILINGS_DDL;
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_DDL};
 use datalib_schema::providers::Provider;
 use datalib_unified_grid_and_search_index::children::{
-    children_sql, Anchor, Ask, Child, ChildrenError, ChildrenFailure, ChildrenPage, Key, Side, Via,
-    CHILD_KEY_SQL, NODE_FACTS_SQL,
+    child_key_sql, children_sql, Anchor, Ask, Child, ChildrenError, ChildrenFailure, ChildrenPage,
+    Key, Scope, Side, Via, NODE_FACTS_SQL, PLACES_BELOW_SQL,
 };
 use datalib_unified_grid_and_search_index::dolt_repo::DoltRepo;
 use datalib_unified_grid_and_search_index::repo::IndexRepo;
@@ -127,9 +127,13 @@ async fn seeded() -> (DoltRepo, sqlx::SqlitePool) {
 }
 
 async fn page(repo: &DoltRepo, parent: &str, ask: Ask, limit: usize) -> ChildrenPage {
-    match repo.children(parent, &ask, limit).await {
+    scoped(repo, &Scope::all(parent), ask, limit).await
+}
+
+async fn scoped(repo: &DoltRepo, scope: &Scope, ask: Ask, limit: usize) -> ChildrenPage {
+    match repo.children(scope, &ask, limit).await {
         Ok(page) => page,
-        Err(e) => panic!("children of {parent}: {e:?}"),
+        Err(e) => panic!("children of {scope:?}: {e:?}"),
     }
 }
 
@@ -268,12 +272,109 @@ async fn a_late_message_lands_where_it_belongs() {
 #[tokio::test]
 async fn an_anchor_elsewhere_in_the_tree_is_refused() {
     let (repo, _w) = seeded().await;
-    match repo.children("bridge", &item("m3"), 5).await {
+    match repo.children(&Scope::all("bridge"), &item("m3"), 5).await {
         Err(ChildrenFailure::Refused(ChildrenError::NotAChild { parent, child })) => {
             assert_eq!((parent.as_str(), child.as_str()), ("bridge", "m3"));
         }
         other => panic!("expected m3 refused as not a child of bridge, got {other:?}"),
     }
+}
+
+/// `seeded()` with the workspace, both channels and the label marked as
+/// places, the label also filed under the workspace, and a thread filed
+/// there that is not a place.
+async fn seeded_places() -> (DoltRepo, sqlx::SqlitePool) {
+    let (repo, w) = seeded().await;
+    sqlx::query("UPDATE data_nodes SET is_place = 1 WHERE uuid IN ('ws', 'bridge', 'ops', 'lbl')")
+        .execute(&w)
+        .await
+        .expect("mark the places");
+    file(&w, "t2", "lbl", "ws").await;
+    file(&w, "t2", "t2", "ws").await;
+    commit(&w, "places").await;
+    (repo, w)
+}
+
+/// What a source holds that names no parent is its top: the workspace,
+/// once though every document carries it. A label whose account no
+/// document carries is under that account, not at the top.
+#[tokio::test]
+async fn a_sources_top_is_what_names_no_parent() {
+    let (repo, _w) = seeded().await;
+    let p = scoped(
+        &repo,
+        &Scope::all("source:slack"),
+        Ask::Around(Anchor::Start),
+        10,
+    )
+    .await;
+    assert_eq!(uuids(&p), ["ws"]);
+    assert!(p.children[0].container);
+    assert_eq!(
+        p.children[0].places_below, None,
+        "only a listing of places says"
+    );
+    let p = scoped(
+        &repo,
+        &Scope::all("source:email"),
+        Ask::Around(Anchor::Start),
+        10,
+    )
+    .await;
+    assert_eq!(
+        uuids(&p),
+        Vec::<&str>::new(),
+        "another source's top holds none of slack's"
+    );
+}
+
+/// Listing places leaves out rows and the containers that are not places,
+/// takes in places filed under the parent, and says which have places
+/// below them.
+#[tokio::test]
+async fn a_listing_of_places_holds_only_places() {
+    let (repo, _w) = seeded_places().await;
+    let p = scoped(&repo, &Scope::places("ws"), Ask::Around(Anchor::Start), 10).await;
+    assert_eq!(
+        uuids(&p),
+        ["bridge", "lbl", "ops"],
+        "t2 is filed there but no place"
+    );
+    assert!(
+        p.children.iter().all(|c| c.places_below == Some(false)),
+        "{:?}",
+        p.children
+    );
+
+    let p = scoped(
+        &repo,
+        &Scope::places("source:slack"),
+        Ask::Around(Anchor::Start),
+        10,
+    )
+    .await;
+    assert_eq!(uuids(&p), ["ws"]);
+    assert_eq!(p.children[0].places_below, Some(true));
+
+    let p = scoped(
+        &repo,
+        &Scope::places("bridge"),
+        Ask::Around(Anchor::Start),
+        10,
+    )
+    .await;
+    assert_eq!(
+        uuids(&p),
+        Vec::<&str>::new(),
+        "threads and messages are not places"
+    );
+
+    let p = scoped(&repo, &Scope::places("ws"), item("lbl"), 1).await;
+    assert_eq!(
+        uuids(&p),
+        ["bridge", "lbl", "ops"],
+        "a filed place anchors a window"
+    );
 }
 
 async fn plan(w: &sqlx::SqlitePool, sql: &str, binds: usize) -> Vec<String> {
@@ -291,7 +392,8 @@ async fn plan(w: &sqlx::SqlitePool, sql: &str, binds: usize) -> Vec<String> {
 }
 
 /// A page of rows or containers is one range of its `(parent, sort_key,
-/// uuid)` index read in order, either way, with no sort; what is filed is
+/// uuid)` index read in order, either way, with no sort, for a container
+/// and for a source's top, all of them or only the places; what is filed is
 /// found by its label's index and sorted after (its key is on another
 /// table). And every index made for children is one some read plans with.
 #[tokio::test]
@@ -299,26 +401,44 @@ async fn every_children_read_is_served_by_its_index() {
     let (_repo, w) = seeded().await;
     let mut used = std::collections::BTreeSet::new();
     let mut unserved = Vec::new();
-    for via in Via::ALL {
-        for side in [Side::Before, Side::After] {
-            for at_is_after in [true, false] {
-                let sql = children_sql(via, side, at_is_after);
-                let plan = plan(&w, &sql, 4).await;
-                let wanted = match via {
-                    Via::Row => "SEARCH grid_rows USING COVERING INDEX grid_rows_by_parent ",
-                    Via::Node => "SEARCH n USING COVERING INDEX data_nodes_by_parent ",
-                    Via::Filed => "SEARCH f USING COVERING INDEX filings_by_under ",
-                };
-                let searched = plan.iter().any(|d| d.starts_with(wanted));
-                let sorts = plan.iter().any(|d| d.contains("TEMP B-TREE"));
-                if !searched || (sorts && via != Via::Filed) {
-                    unserved.push(format!("{via:?} {side:?} {at_is_after}: {plan:?}"));
+    let scopes = [
+        Scope::all("ws"),
+        Scope::all("source:slack"),
+        Scope::places("ws"),
+        Scope::places("source:slack"),
+    ];
+    for scope in &scopes {
+        for via in scope.vias() {
+            for side in [Side::Before, Side::After] {
+                for at_is_after in [true, false] {
+                    let sql = children_sql(scope, via, side, at_is_after).expect("a read");
+                    let plan = plan(&w, &sql, 4).await;
+                    // The narrower reads check a column the index does not
+                    // hold, so they read the table beside it, in the
+                    // index's order still.
+                    let wanted = match (via, scope == &Scope::all("ws")) {
+                        (Via::Row, true) => {
+                            "SEARCH grid_rows USING COVERING INDEX grid_rows_by_parent "
+                        }
+                        (Via::Node, true) => "SEARCH n USING COVERING INDEX data_nodes_by_parent ",
+                        (Via::Row, false) => "SEARCH grid_rows USING INDEX grid_rows_by_parent ",
+                        (Via::Node, false) => "SEARCH n USING INDEX data_nodes_by_parent ",
+                        (Via::Filed, _) => "SEARCH f USING COVERING INDEX filings_by_under ",
+                    };
+                    let searched = plan.iter().any(|d| d.starts_with(wanted));
+                    let sorts = plan.iter().any(|d| d.contains("TEMP B-TREE"));
+                    if !searched || (sorts && via != Via::Filed) {
+                        unserved.push(format!(
+                            "{scope:?} {via:?} {side:?} {at_is_after}: {plan:?}"
+                        ));
+                    }
+                    used.extend(index_names(&plan));
                 }
-                used.extend(index_names(&plan));
             }
         }
+        used.extend(index_names(&plan(&w, &child_key_sql(scope), 2).await));
     }
-    for (sql, binds) in [(CHILD_KEY_SQL, 2), (NODE_FACTS_SQL, 1)] {
+    for (sql, binds) in [(NODE_FACTS_SQL, 1), (PLACES_BELOW_SQL, 1)] {
         used.extend(index_names(&plan(&w, sql, binds).await));
     }
     assert!(unserved.is_empty(), "{}", unserved.join("\n"));

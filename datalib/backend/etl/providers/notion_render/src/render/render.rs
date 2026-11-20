@@ -51,7 +51,9 @@ use datalib_etl_render::pages::batches;
 ///      layout around it.
 /// v16: a comment opens with the one message header every renderer
 ///      writes.
-pub const RENDER_VERSION: u32 = 16;
+/// v17: a page is a place as well as read together, so the pages under
+///      pages are a tree a person browses, as Notion's sidebar is.
+pub const RENDER_VERSION: u32 = 17;
 pub fn notion_url(page_id: &str) -> String {
     format!("https://www.notion.so/{}", page_id.replace('-', ""))
 }

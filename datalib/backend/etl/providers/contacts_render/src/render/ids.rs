@@ -9,6 +9,7 @@ pub const ID_NAMESPACE: IdNamespace = IdNamespace::Contacts;
 
 pub const KIND_CONTACT: &str = "contact";
 pub const KIND_ADDRESSBOOK: &str = "addressbook";
+pub const KIND_CATEGORY: &str = "category";
 
 const IDS: Minter = Minter::unstamped(ID_NAMESPACE);
 
@@ -31,6 +32,17 @@ pub fn addressbook(source_id: &str, addressbook_id: &str) -> Identity {
         source_id,
         KIND_ADDRESSBOOK,
         addressbook_id.to_string(),
+        None,
+    )
+}
+
+/// A vCard `CATEGORIES` name, which groups cards with no card of its own
+/// (Google's labels), within its address book. A rename is a new one.
+pub fn category(source_id: &str, addressbook_label: &str, name: &str) -> Identity {
+    IDS.mint(
+        source_id,
+        KIND_CATEGORY,
+        composite_key(&[addressbook_label, name]),
         None,
     )
 }
