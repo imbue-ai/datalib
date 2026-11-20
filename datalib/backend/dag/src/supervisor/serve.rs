@@ -109,6 +109,7 @@ pub async fn run(opts: &ServeOptions, emit: Emit, mut stop: watch::Receiver<bool
         Err(e) => tracing::error!("supervisor: could not take over from the last loop: {e:#}"),
     }
     prepare(opts, &emit).await;
+    open_the_reruns(&store, root).await;
     emit(ServeEvent::PrepareDone);
     tracing::info!("supervisor: running the loop on {}", root.display());
     let mut periods = Periods {
@@ -179,7 +180,7 @@ async fn take_the_lock(
 /// takes `--prepare` to make what it stored usable, one at a time, before
 /// the loop takes any request: no render then reads a raw store in an old
 /// shape. What a step cannot bring up to date in place it answers
-/// `needs_rerun`, which the app offers to run; what a newer build wrote
+/// `needs_rerun`, which the loop then runs ([`open_the_reruns`]); what a newer build wrote
 /// it refuses, and the runner turns it off. A request opened meanwhile
 /// waits for the loop. A step that fails is reported and the rest go on.
 async fn prepare(opts: &ServeOptions, emit: &Emit) {
@@ -246,6 +247,45 @@ async fn prepare(opts: &ServeOptions, emit: &Emit) {
             state,
             error,
         });
+    }
+}
+
+/// Who opens the request that runs what the prepare pass could not bring
+/// up to date in place.
+pub const UPGRADE_REQUESTER: &str = "upgrade";
+
+/// Run what the prepare pass marked `needs_rerun`, without waiting to be
+/// asked: nothing reads a store in another shape, so what those steps
+/// wrote is not shown until they run, and none of them downloads. One
+/// request, unless one this requester opened is still open.
+async fn open_the_reruns(store: &Store, root: &Path) {
+    let Ok(checked) = load_config(root) else {
+        return;
+    };
+    let opened = async {
+        let record = store.load_record().await?;
+        let roots = crate::supervisor::round::rerun_offer(&checked.graph, &record);
+        if roots.is_empty() {
+            return anyhow::Ok(None);
+        }
+        let open = store.open_requests().await?;
+        if open.iter().any(|r| r.opened_by == UPGRADE_REQUESTER) {
+            return anyhow::Ok(None);
+        }
+        store
+            .open_request(&roots, UPGRADE_REQUESTER)
+            .await
+            .map(|id| Some((id, roots)))
+    }
+    .await;
+    match opened {
+        Ok(Some((id, roots))) => tracing::info!(
+            request = %id,
+            steps = %roots.join(", "),
+            "supervisor: running the steps the prepare pass could not bring up to date"
+        ),
+        Ok(None) => {}
+        Err(e) => tracing::error!("supervisor: could not open the upgrade's re-runs: {e:#}"),
     }
 }
 

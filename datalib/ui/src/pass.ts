@@ -153,6 +153,49 @@ function rerunView(upgrade: Upgrade): PassView | null {
   };
 }
 
+/// Whether the library waits on the upgrade: while the launch's pass runs,
+/// and while any step it found in a shape this version does not read has
+/// not run again. Nothing reads such a store meanwhile.
+export function upgrading(upgrade: Upgrade): boolean {
+  return upgrade.migrating || upgrade.rerender.length > 0;
+}
+
+/// What the upgrade screen says while [`upgrading`]: each source and how
+/// it stands, first in the pass, then in its re-run.
+export function upgradingView(upgrade: Upgrade): PassView {
+  if (upgrade.migrating) {
+    const all = sourceRows(upgrade.steps);
+    return {
+      tone: "updating",
+      label: `Updating data · ${finished(all)} of ${all.length}`,
+      heading: "Updating your library for this version",
+      blurb:
+        "Each source is bringing what it stored up to date. Nothing is downloaded. " +
+        "The library opens when every source is done.",
+      rows: all.map((r) => ({ ...r, said: UPGRADE_SAID[r.state] })),
+      running: true,
+    };
+  }
+  const behind = rerenderSources(upgrade);
+  return {
+    tone: "updating",
+    label: `Re-running ${sources(behind.length)}`,
+    heading: "Updating your library for this version",
+    blurb:
+      "This version keeps these sources' data in a new shape and reads only that shape, " +
+      "so each is being re-run from what is already downloaded. Nothing is downloaded. " +
+      "The library opens when they are done.",
+    rows: behind.map((s) => ({
+      ...s,
+      state: "running",
+      error: null,
+      freed: null,
+      said: "Re-running…",
+    })),
+    running: true,
+  };
+}
+
 const FREE_SAID: Record<PassState, string> = {
   waiting: "Waiting",
   running: "Freeing…",

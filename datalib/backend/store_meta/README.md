@@ -8,9 +8,9 @@ it reads a row.
 **A store is read in this build's shape, or it is refused.** Nothing
 reads around a table, a column or an index an older build left out.
 Before anything reads, the launch's prepare pass brings each store to
-this build's shape, or marks its step as needing a rerun, and the app
-offers to run it. AGENTS.md §"No fallbacks, no workarounds: one way to
-do it" is the rule this serves.
+this build's shape, or marks its step as needing a rerun, which the
+loop then runs while the app shows an upgrade screen. AGENTS.md §"No
+fallbacks, no workarounds: one way to do it" is the rule this serves.
 
 ## What a store records
 

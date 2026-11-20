@@ -662,8 +662,8 @@ step decides, and answers in its outcome line:
   so what reads the output is stale.
 * **needs a rerun** — what it wrote is in a shape it cannot reach in
   place: add `"needs_rerun": true` to the outcome. The runner holds the
-  step due until it next succeeds, and the app offers to run it; a sync
-  that does not reach it leaves it alone.
+  step due until it next succeeds, and opens one request for every such
+  step once the launch's prepare pass is over.
 * **refused** — what it wrote is in a shape this program cannot use,
   such as a newer build's: exit non-zero with `"failure":"incompatible"`
   and say why on stderr. The runner turns the step off, as turned off
