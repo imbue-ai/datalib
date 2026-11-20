@@ -646,6 +646,17 @@ seconds apart, the gap a person leaves. On a server just started, the
 query `run` warms up with is the first search after a launch, and the
 report keeps its time apart.
 
+A run also keeps what the search applet logged about its statements
+while each query was asked: a statement that did much work for the rows
+it answered, and one that took over a second (`docs/dev/logging.md`).
+Each goes under the query being asked when it was written, in the
+result's `statements` (statement, file, parameter shapes, steps or
+seconds); the report lists the queries whose statements did the most
+work. A query that ranks well but is slow points to a plan this way. The
+applet `run` starts hands them over through its log; with `--http` they
+are read from the root's run store afterwards. Lines written outside any
+query, chiefly the warm-up's, are kept apart.
+
 `first-pages` asks a different question: how long a person waits for the first
 page of a search that sorts many rows with no index to help, by size, author or
 title, say. It asks each of the eval set's `orderings` from a freshly started

@@ -5,7 +5,8 @@ An eval set names target rows and, for each, queries a person might type to
 find it. `run` asks every query of the search applet once per setting (`on`,
 the search as it opens; `off`, with `semantic:off`; or a cutoff such as `0.3`,
 to weigh one against another), records where the target ranked and how long
-each answer took, and prints the scores; `compare` says which queries moved
+each answer took, and the applet's lines about heavy or slow statements
+under the query that ran them, and prints the scores; `compare` says which queries moved
 between two runs; `show` prints what a query found, for judging the rest of
 the list by eye. `--modes app` instead sends each query the way the app does,
 every request at once, and times what a person waits for: run it on its own,
@@ -42,10 +43,12 @@ import os
 import platform
 import re
 import secrets
+import sqlite3
 import statistics
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -74,13 +77,20 @@ class Applet:
         env["DATALIB_DAG_DATA_ROOT"] = str(root)
         env["DATALIB_APPLET_SECRET_FILE"] = self.secret_file
         env.setdefault("RUST_LOG", "warn")
+        env["DATALIB_LOG_FORMAT"] = "json"
         self.proc = subprocess.Popen(
             [binary, "unified_grid_and_search_index", "-p", "0"],
             env=env,
             stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
         )
-        assert self.proc.stdout is not None
+        assert self.proc.stdout is not None and self.proc.stderr is not None
+        self.logged: list[dict[str, Any]] = []
+        self.reader = threading.Thread(
+            target=read_log, args=(self.proc.stderr, self.logged), daemon=True
+        )
+        self.reader.start()
         for line in self.proc.stdout:
             if line.startswith("DATALIB_APPLET_PORT="):
                 self.port = int(line.split("=", 1)[1])
@@ -96,9 +106,13 @@ class Applet:
         with urllib.request.urlopen(req, timeout=300) as r:
             return json.load(r)
 
+    def statements(self, start: float, end: float) -> list[dict[str, Any]]:
+        return [s for s in self.logged if start <= s["at"] <= end]
+
     def close(self) -> None:
         self.proc.terminate()
         self.proc.wait(timeout=30)
+        self.reader.join(timeout=30)
         os.unlink(self.secret_file)
 
 
@@ -107,6 +121,7 @@ class Gateway:
 
     def __init__(self, base: str, root: Path):
         self.base = base.rstrip("/")
+        self.root = root
         self.token = (root / "system/api-token").read_text().strip()
 
     def get(self, path: str) -> Any:
@@ -117,8 +132,122 @@ class Gateway:
         with urllib.request.urlopen(req, timeout=300) as r:
             return json.load(r)
 
+    def statements(self, start: float, end: float) -> list[dict[str, Any]]:
+        """What the server filed of its applets' lines about statements,
+        from its run store; read after the run, since the server writes it."""
+        runs = self.root / "system/runs/runs.sqlite"
+        if not runs.exists():
+            return []
+        db = sqlite3.connect(f"file:{runs}?mode=ro", uri=True)
+        try:
+            rows = db.execute(
+                "SELECT ts_utc, fields FROM log WHERE level = 'warn' AND "
+                "ts_utc >= ? AND ts_utc <= ? AND fields LIKE '%applet_target%'",
+                (utc_text(start), utc_text(end)),
+            ).fetchall()
+        finally:
+            db.close()
+        found = (statement_from_run_store(ts, fields) for ts, fields in rows)
+        return [s for s in found if s]
+
     def close(self) -> None:
         pass
+
+
+# What an applet logs about a statement, by its target: one that did much
+# work for the rows it answered (`datalib_sql_work`), or one that took over a
+# second (sqlx). docs/dev/logging.md has both lines.
+STATEMENT_TARGETS = {"datalib::sql_work": "heavy", "sqlx::query": "slow"}
+STATEMENT_FIELDS = (
+    "file",
+    "params",
+    "vm_steps",
+    "fullscan_steps",
+    "rows",
+    "rows_returned",
+    "elapsed_secs",
+)
+
+
+def statement_of(
+    target: str | None, fields: dict[str, Any], at: float
+) -> dict[str, Any] | None:
+    kind = STATEMENT_TARGETS.get(target or "")
+    if not kind:
+        return None
+    text = (
+        fields.get("statement") or fields.get("db.statement") or fields.get("summary")
+    )
+    return {
+        "at": at,
+        "kind": kind,
+        "statement": " ".join(str(text or "").split()),
+        **{k: fields[k] for k in STATEMENT_FIELDS if k in fields},
+    }
+
+
+def attribute(
+    logged: list[dict[str, Any]], windows: list[tuple[float, float]]
+) -> tuple[list[list[dict[str, Any]]], list[dict[str, Any]]]:
+    """Each statement line under the query that was being asked when it was
+    written, one query at a time; the rest (the warm-up's, a search between
+    queries) apart."""
+    by_query: list[list[dict[str, Any]]] = [[] for _ in windows]
+    outside = []
+    for s in logged:
+        i = next((i for i, (a, b) in enumerate(windows) if a <= s["at"] <= b), None)
+        if i is None:
+            outside.append(s)
+        else:
+            by_query[i].append(s)
+    return by_query, outside
+
+
+def stamp_seconds(stamp: str) -> float:
+    return datetime.datetime.fromisoformat(stamp).timestamp()
+
+
+def utc_text(seconds: float) -> str:
+    """The run store's spelling of an instant, which sorts as text."""
+    at = datetime.datetime.fromtimestamp(seconds, datetime.UTC)
+    return at.isoformat(timespec="microseconds")
+
+
+def statement_from_log_line(line: str) -> dict[str, Any] | None:
+    """One line of the applet's own JSON log, if it is about a statement."""
+    try:
+        e = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(e, dict) or str(e.get("level", "")).upper() != "WARN":
+        return None
+    return statement_of(
+        e.get("target"), e.get("fields") or {}, stamp_seconds(e["timestamp"])
+    )
+
+
+def statement_from_run_store(ts_utc: str, fields: str) -> dict[str, Any] | None:
+    """One row of the server's log, where it files an applet's line with the
+    applet's own target and fields beside its own."""
+    outer = json.loads(fields or "{}")
+    inner = json.loads(outer.get("applet_fields") or "{}")
+    return statement_of(outer.get("applet_target"), inner, stamp_seconds(ts_utc))
+
+
+def read_log(stream: Any, logged: list[dict[str, Any]]) -> None:
+    """Keeps the applet's lines about statements; passes the rest on."""
+    for line in stream:
+        found = statement_from_log_line(line)
+        if found:
+            logged.append(found)
+            continue
+        try:
+            e = json.loads(line)
+            fields = e.get("fields") or {}
+            line = f"applet {e.get('level')} {e.get('target')}: {fields.get('message', '')}\n"
+        except (json.JSONDecodeError, AttributeError):
+            pass
+        sys.stderr.write(line)
 
 
 def connect(
@@ -366,6 +495,8 @@ def run(args: argparse.Namespace) -> None:
     server = connect(args, root, evals.get("tz"))
     pages = Pages(server.get)
     results: list[dict[str, Any]] = []
+    windows: list[tuple[float, float]] = []
+    started = time.time()
     try:
         # The first answer of each kind pays for loading what it reads
         # (the applet itself, behind a gateway; the embedding model; the
@@ -391,6 +522,7 @@ def run(args: argparse.Namespace) -> None:
                 q = scoped(query["q"], t) if args.scope == "source" else query["q"]
                 q = left_out(q, t, args.leave_out_source)
                 by_mode = {}
+                asked_at = time.time()
                 for m in modes:
                     a = (
                         ask_as_app(server.get, q)
@@ -412,6 +544,7 @@ def run(args: argparse.Namespace) -> None:
                         "modes": by_mode,
                     }
                 )
+                windows.append((asked_at, time.time()))
                 line = "  ".join(
                     f"{m}={fmt_rank(by_mode[m].get('rank'))} ({by_mode[m]['ms']}ms)"
                     for m in by_mode
@@ -419,6 +552,10 @@ def run(args: argparse.Namespace) -> None:
                 print(f"{t['id']} {query['q'][:60]:<60} {line}", file=sys.stderr)
     finally:
         server.close()
+    logged = server.statements(started, time.time())
+    by_query, outside = attribute(logged, windows)
+    for r, found in zip(results, by_query, strict=True):
+        r["statements"] = found
     record = {
         "root": str(root),
         "evals": str(args.evals),
@@ -431,6 +568,7 @@ def run(args: argparse.Namespace) -> None:
         "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "provenance": {**made, "load": [*made["load"], round(os.getloadavg()[0], 1)]},
         "results": results,
+        "statements_outside_queries": outside,
     }
     Path(args.out).write_text(json.dumps(record, indent=1, ensure_ascii=False) + "\n")
     print(report(record))
@@ -659,6 +797,56 @@ def corpus_line(held: dict[str, int]) -> str:
     return f"corpus: {sum(held.values())} rows in {len(held)} sources"
 
 
+def statement_work(s: dict[str, Any]) -> str:
+    if s["kind"] == "heavy":
+        return f"{s.get('vm_steps', 0) / 1e6:.1f}M steps for {s.get('rows', 0)} rows"
+    return f"{s.get('elapsed_secs', 0):.1f} s"
+
+
+def statements_table(results: list[dict[str, Any]], top: int = 20) -> list[str]:
+    """The queries whose statements did the most work for what they found
+    (`heavy`), then those with a statement over a second (`slow`): a plan to
+    look at, beside a read that was merely slow."""
+    asked = [r for r in results if r.get("statements")]
+    if not asked:
+        return []
+
+    def weight(r: dict[str, Any]) -> tuple[float, float]:
+        found = r["statements"]
+        steps = sum(s.get("vm_steps", 0) for s in found if s["kind"] == "heavy")
+        secs = sum(s.get("elapsed_secs", 0) for s in found if s["kind"] == "slow")
+        return steps, secs
+
+    lines = [
+        "",
+        (
+            f"statements logged while a query was asked ({len(asked)} queries; "
+            f"the {min(top, len(asked))} with the most work):"
+        ),
+        "",
+        "| target | query | heavy | slow | the heaviest | its file | its statement |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for r in sorted(asked, key=weight, reverse=True)[:top]:
+        found = r["statements"]
+        worst = max(
+            found,
+            key=lambda s: (
+                s["kind"] == "heavy",
+                s.get("vm_steps", 0),
+                s.get("elapsed_secs", 0),
+            ),
+        )
+        n_heavy = sum(s["kind"] == "heavy" for s in found)
+        cell = lambda t: t.replace("|", "\\|")
+        lines.append(
+            f"| {r['id']} | {cell(r['q'][:40])} | {n_heavy} | {len(found) - n_heavy} | "
+            f"{statement_work(worst)} | {Path(worst.get('file') or '').name} | "
+            f"{cell(worst['statement'][:100])} |"
+        )
+    return lines
+
+
 def report(record: dict[str, Any]) -> str:
     results = record["results"]
     cutoffs = sorted({m for r in results for m in r["modes"]} - {*MODES, APP, "ui"})
@@ -691,6 +879,7 @@ def report(record: dict[str, Any]) -> str:
                 f"{s['p90_ms']:.0f} | {s['max_ms']:.0f} | {s['over_budget']} |"
             )
     lines += requests_table(results)
+    lines += statements_table(results)
     if record.get("first_ms"):
         lines += ["", f"the first answer, cold, in ms: {record['first_ms']}"]
     lines += [
