@@ -36,7 +36,10 @@ pub fn write_fixture(out_root: &Path, req: &HttpRequest, resp: &HttpResponse) ->
     fs::create_dir_all(&dir).with_context(|| format!("create fixture dir {}", dir.display()))?;
     let path = dir.join(fixture_key(req));
     let bytes = serde_json::to_vec_pretty(resp).context("serialize HttpResponse")?;
-    fs::write(&path, bytes).with_context(|| format!("write fixture {}", path.display()))?;
+    // In one rename: a test that rewrites a fixture while a request is
+    // replaying it must not let that request read a half-written file.
+    datalib_runtime::atomic::write(&path, &bytes)
+        .with_context(|| format!("write fixture {}", path.display()))?;
     Ok(())
 }
 
