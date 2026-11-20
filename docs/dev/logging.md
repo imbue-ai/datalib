@@ -174,6 +174,23 @@ went to, in `top_statement`. Under five seconds in all, that line is
 `debug` too. The server and its applets, which never end, keep sqlx's
 own `warn`.
 
+**A heavy statement is summed the same way.** Every binary counts what
+each SQLite statement did (`datalib_sql_work`): the steps SQLite's engine
+ran, about three for each row it walks, and the rows the statement
+answered with. One that ran 100,000 steps or more, and 100 or more for
+each row it answered, writes a `warn` line under the target
+`datalib::sql_work`: the `statement`, the `file` it ran on, its
+`params` by shape (`text(12)`, `json[9577]`, `int`) and SQLite's
+counters, `fullscan_steps` among them. Work, unlike time, does not
+change with a cold disk, a lock or a busy machine, so such a line is a
+plan to look at: a missing index, or one that does not narrow the
+search. The runner keeps each at `debug` and writes one line as the
+attempt ends, naming the statement that did most of the work and its
+file; under ten million steps in all, that line is `debug` too. A bound
+value can be anything, a secret included, so the line names its shape;
+`DATALIB_SQL_VALUES=1` writes the values in place, for a session on
+one's own library.
+
 **A migration says so from its start.** A step asked to migrate first
 says `migrate: updating the raw store for this build; nothing is
 downloaded`, as a line and as its status. Each rung then says, before

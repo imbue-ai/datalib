@@ -16,6 +16,7 @@ use datalib_runs::{
 };
 
 use crate::events::{Event, EventSink, LogLevel};
+use crate::heavy_statements::{is_heavy_statement, HeavyStatements};
 use crate::run_state::RunState;
 use crate::slow_statements::{is_slow_statement, SlowStatements};
 use crate::step::StepId;
@@ -47,6 +48,8 @@ struct Acc {
     counters: HashMap<(String, String), (i64, bool)>,
     /// What sqlx warned of, not yet summed up in a line.
     slow: SlowStatements,
+    /// What `datalib_sql_work` warned of, likewise.
+    heavy: HeavyStatements,
 }
 
 /// The attempt's process row with its peak raised to `bytes`, to write
@@ -286,20 +289,34 @@ impl RunStoreSink {
             .unwrap_or_default()
     }
 
-    /// What the attempt's slow statements came to, once, under the attempt
-    /// and the process that ran them.
+    /// What the attempt's slow and heavy statements came to, once each,
+    /// under the attempt and the process that ran them.
     fn say_slow_statements(&self, step: &StepId) {
-        let (summary, process_id) = {
+        let (summaries, process_id) = {
             let mut steps = self.steps.lock().expect("run store sink mutex");
             let Some(acc) = steps.get_mut(step) else {
                 return;
             };
             let process_id = acc.process.as_ref().map(|p| p.process_id.clone());
-            (std::mem::take(&mut acc.slow).summary(), process_id)
+            let summaries = [
+                std::mem::take(&mut acc.slow).summary(),
+                std::mem::take(&mut acc.heavy).summary(),
+            ];
+            (summaries, process_id)
         };
-        let Some((level, msg, fields)) = summary else {
-            return;
-        };
+        for (level, msg, fields) in summaries.into_iter().flatten() {
+            self.say_about_attempt(step, process_id.clone(), level, msg, fields);
+        }
+    }
+
+    fn say_about_attempt(
+        &self,
+        step: &StepId,
+        process_id: Option<String>,
+        level: LogLevel,
+        msg: String,
+        fields: serde_json::Value,
+    ) {
         let (ts_utc, tz_offset) = now();
         self.writer.log(LogRow {
             step: Some(step.clone()),
@@ -606,6 +623,15 @@ impl EventSink for RunStoreSink {
                         .slow
                         .note(fields.as_ref());
                     LogLevel::Debug
+                } else if is_heavy_statement(*level, target.as_deref()) {
+                    self.steps
+                        .lock()
+                        .expect("run store sink mutex")
+                        .entry(step.clone())
+                        .or_default()
+                        .heavy
+                        .note(fields.as_ref());
+                    LogLevel::Debug
                 } else {
                     *level
                 };
@@ -763,6 +789,57 @@ mod tests {
         assert_eq!(lines[2].attempt, 1);
         assert_eq!(lines[2].process.as_deref(), Some("step"));
         assert_eq!(snap.errors.get("slack/render_markdown"), None);
+    }
+
+    /// A heavy statement's line stays, at `debug`, and the attempt's end
+    /// names the statement that did the work and the file it read.
+    #[tokio::test]
+    async fn heavy_statements_are_kept_quiet_and_summed_at_the_attempts_end() {
+        let heavy = |vm_steps: u64| Event::Log {
+            step: "unified_grid_and_search_index/unified_grid_and_search_index".into(),
+            level: LogLevel::Warn,
+            msg: format!("heavy statement: {vm_steps} steps for 0 rows"),
+            ts: None,
+            stream: Some(Stream::Stderr),
+            target: Some(datalib_sql_work::TARGET.into()),
+            thread: None,
+            fields: serde_json::json!({
+                "statement": "SELECT n.uuid FROM data_nodes n WHERE n.source_id = ?",
+                "file": "/root/unified_grid_and_search_index/db.sqlite",
+                "params": "text(12)",
+                "vm_steps": vm_steps,
+                "rows": 0,
+            })
+            .as_object()
+            .cloned(),
+        };
+        let step = "unified_grid_and_search_index/unified_grid_and_search_index";
+        let (td, snap) = run(&[
+            Event::StepStart {
+                step: step.into(),
+                attempt: 1,
+            },
+            heavy(30_000_000),
+            heavy(25_000_000),
+            Event::StepFinish {
+                step: step.into(),
+                status: RunState::Succeeded,
+                error: None,
+                exit_code: Some(0),
+                signal: None,
+            },
+        ])
+        .await;
+        let lines = log_after(td.path(), "run-1", None, 0, 10).await;
+        let levels: Vec<&str> = lines.iter().map(|l| l.level.as_str()).collect();
+        assert_eq!(levels, ["debug", "debug", "info"], "{lines:#?}");
+        assert_eq!(
+            lines[2].msg,
+            "2 heavy statements did 55.0M steps for 0 rows, every one on db.sqlite: \
+             SELECT n.uuid FROM data_nodes n WHERE n.source_id = ?"
+        );
+        assert_eq!(lines[2].attempt, 1);
+        assert_eq!(snap.errors.get(step), None);
     }
 
     /// The runner is a process the run points at, and every line the

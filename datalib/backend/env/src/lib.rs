@@ -67,6 +67,11 @@ pub const DATALIB_PROTECTED_LIBRARY: &str = "DATALIB_PROTECTED_LIBRARY";
 /// custom step or applet that reads one of its own, or a test harness.
 pub const DATALIB_CHILD_ENV: &str = "DATALIB_CHILD_ENV";
 
+/// Set to anything but empty to log a heavy statement with its parameters'
+/// values in place (`datalib_sql_work`), for debugging one's own library.
+/// Handed to every child, so one switch reaches every step and applet.
+pub const DATALIB_SQL_VALUES: &str = "DATALIB_SQL_VALUES";
+
 /// How many threads the embedder computes on where its caller leaves that
 /// to llama.cpp, which otherwise takes four on any machine. Tests set it
 /// (`.bazelrc`), since several of them share CI's cores.
@@ -131,6 +136,7 @@ const EVERY_CHILD: &[&str] = &[
     "NPX_BIN",
     "DATALIB_GIT_HASH",
     "DATALIB_POOL_ACQUIRE_SECS",
+    DATALIB_SQL_VALUES,
     "DATALIB_MODELS_NO_FETCH",
     "DATALIB_QMD_MODELS_NO_FETCH",
     "DATALIB_NO_FETCH",
