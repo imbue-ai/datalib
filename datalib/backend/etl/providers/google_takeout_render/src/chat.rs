@@ -243,7 +243,11 @@ pub fn build(
         // What `user_info.json` leaves unread goes on the first
         // conversation, once.
         if let Some(found) = user_findings.take() {
-            if let Some(first) = chat.buckets.first_mut().and_then(|b| b.items.first_mut()) {
+            if let Some(first) = chat
+                .render_units
+                .first_mut()
+                .and_then(|b| b.items.first_mut())
+            {
                 first.problems.extend(found);
             }
         }
@@ -383,7 +387,7 @@ fn conversation(source_id: &str, space: &str, s: &Space, account: &Account) -> N
         title: name.map(str::to_string),
         org_uuid: None,
         org_name: None,
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
             markdown_uuid: chat_id.uuid,
             source_ref: None,
@@ -1022,7 +1026,7 @@ mod tests {
     fn items(chats: &[NormalizedChat]) -> Vec<&NormalizedChatItem> {
         chats
             .iter()
-            .flat_map(|c| &c.buckets)
+            .flat_map(|c| &c.render_units)
             .flat_map(|b| &b.items)
             .collect()
     }

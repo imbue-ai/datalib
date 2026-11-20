@@ -43,7 +43,7 @@ use datalib_etl_web::http::LatchkeySettings;
 use datalib_etl_web::owed::{self, BatchError, Fetcher, Listed, Loop, Outcome};
 
 pub use db::{db_path_for, RawDb};
-use db::{Body, Capture, HeldImages, Part, RevisionExport, Split};
+use db::{Body, Capture, HeldImages, Part, Places, RevisionExport, Split};
 use schema_raw::*;
 
 /// One file's images fetched at once. A deck can hold a hundred, at about
@@ -63,6 +63,9 @@ pub struct FetchOptions {
 #[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct FetchSummary {
     pub listed: usize,
+    /// Folders listed, My Drive's root among them.
+    pub folders: usize,
+    pub drives: usize,
     pub owed: usize,
     pub captured: usize,
     pub failed: usize,
@@ -86,10 +89,12 @@ pub struct FetchSummary {
 impl FetchSummary {
     pub fn line(&self) -> String {
         format!(
-            "listed={} owed={} captured={} failed={} left={} exports={} \
+            "listed={} folders={} drives={} owed={} captured={} failed={} left={} exports={} \
              exports_declined={} images={} images_held={} \
              revision_listings_disagreed={} revision_exports={} revision_exports_gone={}",
             self.listed,
+            self.folders,
+            self.drives,
             self.owed,
             self.captured,
             self.failed,
@@ -129,6 +134,12 @@ async fn walk_files(
     opts.progress.set_message("google_drive: listing files");
     let entries = list(opts, found).await?;
     summary.listed = entries.len();
+
+    opts.progress.set_message("google_drive: listing folders");
+    let places = list_places(opts, &entries, found).await?;
+    summary.folders = places.folders.len();
+    summary.drives = places.drives.len();
+    db::store_places(opts.db.pool(), &places).await?;
 
     let mut by_kind: HashMap<FileKind, Vec<Value>> = HashMap::new();
     for entry in entries {
@@ -454,6 +465,65 @@ async fn list(opts: &FetchOptions, found: &RunProblems) -> Result<Vec<Value>> {
         }
         let (files, next) = api::page_items(&v, "files").context("list files")?;
         out.extend(files);
+        match next {
+            Some(token) => page = Some(token),
+            None => break,
+        }
+    }
+    Ok(out)
+}
+
+/// Every folder and shared drive the account can see, as Drive lists
+/// them, and the folders each listed file is in. The listing is the
+/// content, so nothing is owed; a listing cut short is a problem, and the
+/// next run lists them all again.
+async fn list_places(opts: &FetchOptions, files: &[Value], found: &RunProblems) -> Result<Places> {
+    let (lk, stop) = (&opts.latchkey, &opts.control.stop);
+    let mut folders = listing(api::folders_url, "files", "folders", opts, found).await?;
+    if !stop.requested() {
+        match api::get_json(&api::root_url(), lk).await {
+            Ok(root) => folders.push(root),
+            Err(e) if api::is_service(&e) => return Err(e),
+            Err(e) => found.listing("folders", format!("My Drive's root: {e:#}")),
+        }
+    }
+    let drives = listing(api::drives_url, "drives", "drives", opts, found).await?;
+    Ok(Places {
+        folders: folders.iter().map(shape::order_file_entry).collect(),
+        drives,
+        file_parents: files.iter().filter_map(shape::file_parents).collect(),
+    })
+}
+
+/// Every page of a listing whose answer is the content. One that fails
+/// partway keeps what came, with a problem under `scope`.
+async fn listing(
+    url: impl Fn(Option<&str>) -> String,
+    key: &str,
+    scope: &str,
+    opts: &FetchOptions,
+    found: &RunProblems,
+) -> Result<Vec<Value>> {
+    let mut out = Vec::new();
+    let mut page: Option<String> = None;
+    while !opts.control.stop.requested() {
+        let v = match api::get_json(&url(page.as_deref()), &opts.latchkey).await {
+            Ok(v) => v,
+            Err(e) if api::is_service(&e) => return Err(e),
+            Err(e) => {
+                found.listing(scope, format!("{e:#}"));
+                break;
+            }
+        };
+        if v.get("incompleteSearch").and_then(Value::as_bool) == Some(true) {
+            found.listing(
+                scope,
+                "Drive said this listing is incomplete; a file in a folder it left out \
+                 sits higher up the tree",
+            );
+        }
+        let (items, next) = api::page_items(&v, key).with_context(|| format!("list {scope}"))?;
+        out.extend(items);
         match next {
             Some(token) => page = Some(token),
             None => break,

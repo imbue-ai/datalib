@@ -211,7 +211,7 @@ pub fn build(
         markdown_uuid: id.uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
-        bucket_key: Some(kid.to_string()),
+        render_unit_key: Some(kid.to_string()),
         render_version: RENDER_VERSION,
         rows,
         sections,
@@ -450,7 +450,7 @@ mod tests {
         };
         assert!(node.is_place && node.read_together, "{node:?}");
         assert_eq!(node.uuid, doc.markdown_uuid);
-        assert_eq!(doc.bucket_key.as_deref(), Some("11"));
+        assert_eq!(doc.render_unit_key.as_deref(), Some("11"));
         assert!(doc
             .rows
             .iter()

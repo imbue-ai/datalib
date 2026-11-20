@@ -9,7 +9,7 @@
 
 use anyhow::{Context, Result};
 use datalib_schema::search_terms::{
-    decode_supplied, search_terms_of, SearchTerm, SearchTermSource,
+    decode_supplied, search_terms_of, stored_value, SearchTerm, SearchTermSource,
 };
 use sqlx::SqliteConnection;
 
@@ -28,15 +28,18 @@ pub(crate) async fn write_rows(conn: &mut SqliteConnection, uuids: &[String]) ->
 
 async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usize> {
     let rows = rows_by_uuid(conn, uuids).await?;
-    // The batch is staged first, so the dictionary tables fill by
-    // joins rather than a lookup per term. `dropped` holds the values
-    // the removed rows used: the only ones that can have lost their
-    // last term.
+    // The batch is staged first, so the dictionary tables fill by joins
+    // rather than a lookup per term. `cleared` is every row id the batch
+    // rewrites: each uuid's old one, and the one `grid_rows` gives it now,
+    // which a removed row may have held. `dropped` holds the values the
+    // cleared rows used: the only ones that can have lost their last term.
     for sql in [
-        "CREATE TEMP TABLE IF NOT EXISTS incoming (uuid TEXT NOT NULL, \
-             touched_at_utc TEXT, kind INTEGER NOT NULL, value TEXT NOT NULL)",
+        "CREATE TEMP TABLE IF NOT EXISTS incoming (row_id INTEGER NOT NULL, \
+             kind INTEGER NOT NULL, value TEXT NOT NULL)",
+        "CREATE TEMP TABLE IF NOT EXISTS cleared (row_id INTEGER PRIMARY KEY)",
         "CREATE TEMP TABLE IF NOT EXISTS dropped (val_id INTEGER PRIMARY KEY)",
         "DELETE FROM temp.incoming",
+        "DELETE FROM temp.cleared",
         "DELETE FROM temp.dropped",
     ] {
         sqlx::query(sql).execute(&mut *conn).await?;
@@ -45,14 +48,11 @@ async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usi
         let p = placeholders(chunk.len(), 1);
         for sql in [
             format!(
-                "INSERT OR IGNORE INTO temp.dropped SELECT t.val_id FROM terms t \
-                     JOIN rows r ON r.row_id = t.row_id WHERE r.uuid IN ({p})"
+                "INSERT OR IGNORE INTO temp.cleared SELECT row_id FROM rows WHERE uuid IN ({p})"
             ),
             format!(
-                "DELETE FROM terms WHERE row_id IN \
-                     (SELECT row_id FROM rows WHERE uuid IN ({p}))"
+                "INSERT OR IGNORE INTO temp.cleared SELECT rowid FROM grid_rows WHERE uuid IN ({p})"
             ),
-            format!("DELETE FROM rows WHERE uuid IN ({p})"),
         ] {
             // Audited: a placeholder per value, every value bound.
             let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
@@ -62,18 +62,39 @@ async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usi
             q.execute(&mut *conn).await?;
         }
     }
+    for sql in [
+        "INSERT OR IGNORE INTO temp.dropped SELECT t.val_id FROM terms t \
+             WHERE t.row_id IN (SELECT row_id FROM temp.cleared)",
+        "DELETE FROM terms WHERE row_id IN (SELECT row_id FROM temp.cleared)",
+        "DELETE FROM rows WHERE row_id IN (SELECT row_id FROM temp.cleared)",
+    ] {
+        sqlx::query(sql).execute(&mut *conn).await?;
+    }
+    for chunk in uuids.chunks(CHUNK) {
+        // Audited: a placeholder per value, every value bound.
+        let sql = format!(
+            "INSERT INTO rows (row_id, uuid, doc_row_id, is_document) \
+             SELECT g.rowid, g.uuid, d.rowid, g.is_document FROM grid_rows g \
+             LEFT JOIN grid_rows d ON d.uuid = g.markdown_uuid WHERE g.uuid IN ({})",
+            placeholders(chunk.len(), 1)
+        );
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        for uuid in chunk {
+            q = q.bind(uuid);
+        }
+        q.execute(&mut *conn).await?;
+    }
     let terms = every_term(&rows)?;
     for chunk in terms.chunks(CHUNK) {
-        // Audited: four placeholders per term, every value bound.
+        // Audited: three placeholders per term, every value bound.
         let sql = format!(
-            "INSERT INTO temp.incoming (uuid, touched_at_utc, kind, value) VALUES {}",
-            placeholders(chunk.len(), 4)
+            "INSERT INTO temp.incoming (row_id, kind, value) VALUES {}",
+            placeholders(chunk.len(), 3)
         );
         let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
         for (row, term) in chunk {
             q = q
-                .bind(&row.uuid)
-                .bind(&row.touched_at_utc)
+                .bind(row.row_id)
                 .bind(i64::from(term.kind.code()))
                 .bind(&term.value);
         }
@@ -84,15 +105,13 @@ async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usi
     let floor: i64 = sqlx::query_scalar("SELECT coalesce(max(val_id), 0) FROM vals")
         .fetch_one(&mut *conn)
         .await?;
-    for sql in [
-        "INSERT INTO rows (uuid, touched_at_utc) \
-             SELECT uuid, max(touched_at_utc) FROM temp.incoming GROUP BY uuid",
-        // `WHERE true`: an upsert's SELECT needs a WHERE to parse.
+    // `WHERE true`: an upsert's SELECT needs a WHERE to parse.
+    sqlx::query(
         "INSERT INTO vals (value) SELECT DISTINCT value FROM temp.incoming WHERE true \
-             ON CONFLICT (value) DO NOTHING",
-    ] {
-        sqlx::query(sql).execute(&mut *conn).await?;
-    }
+         ON CONFLICT (value) DO NOTHING",
+    )
+    .execute(&mut *conn)
+    .await?;
     for sql in [
         "INSERT INTO vals_fts (rowid, value) SELECT val_id, value FROM vals WHERE val_id > ?",
         "INSERT INTO vals_tri (rowid, value) SELECT val_id, value FROM vals WHERE val_id > ?",
@@ -101,8 +120,8 @@ async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usi
     }
     for sql in [
         "INSERT OR IGNORE INTO terms (val_id, kind, row_id) \
-             SELECT v.val_id, i.kind, r.row_id FROM temp.incoming i \
-             JOIN vals v ON v.value = i.value JOIN rows r ON r.uuid = i.uuid",
+             SELECT v.val_id, i.kind, i.row_id FROM temp.incoming i \
+             JOIN vals v ON v.value = i.value",
         // Seeks `terms`' key: `val_id IN (SELECT …)` reads every term.
         "DELETE FROM temp.dropped WHERE EXISTS \
              (SELECT 1 FROM terms t WHERE t.val_id = dropped.val_id)",
@@ -266,6 +285,9 @@ fn every_term(rows: &[SearchTermSource]) -> Result<Vec<(&SearchTermSource, Searc
                 .with_context(|| format!("grid row {}", row.uuid))?,
             None => Vec::new(),
         };
+        let supplied = supplied
+            .into_iter()
+            .map(|t| SearchTerm::new(t.kind, stored_value(t.kind, &t.value)));
         out.extend(
             search_terms_of(row)
                 .into_iter()
@@ -276,7 +298,7 @@ fn every_term(rows: &[SearchTermSource]) -> Result<Vec<(&SearchTermSource, Searc
     Ok(out)
 }
 
-/// Values per statement, under SQLite's bound-parameter limit at four a
+/// Values per statement, under SQLite's bound-parameter limit at three a
 /// term.
 const CHUNK: usize = 500;
 
@@ -382,7 +404,7 @@ mod tests {
             markdown_uuid: uuid.to_string(),
             source_id: "enterprise".into(),
             upstream_cursor: None,
-            bucket_key: None,
+            render_unit_key: None,
             render_version: 1,
             rows: vec![row],
             sections: Vec::new(),

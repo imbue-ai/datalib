@@ -147,7 +147,7 @@ document.getElementById("linked").addEventListener("click", (ev) => {
   }
 });
 for (const body of document.querySelectorAll(".chat-body")) {
-  injectCopyUuidButtons(body);
+  injectCopyLinkButtons(body);
   decorateLongMessages(body);
 }
 document.addEventListener("click", (ev) => {

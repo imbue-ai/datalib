@@ -756,7 +756,7 @@ pub struct LoadedProject {
 }
 
 /// One knowledge document, with its owning project surfaced out of the
-/// payload so render can bucket docs without re-parsing every one.
+/// payload so render can group docs into render units without re-parsing every one.
 #[derive(Debug, Clone)]
 pub struct LoadedProjectDoc {
     pub id: String,

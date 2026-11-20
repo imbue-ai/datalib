@@ -723,6 +723,25 @@ English ones' stray word matches push the target down. The set is small and
 was picked where English already worked, so read it as "crossing languages
 costs little", not as a hit rate.
 
+## A statement that walks a whole table needs a reason
+
+`//tests/fixtures:sql_scans_test` checks every statement the TNG fixture
+sync runs that walks a whole table or index (SQLite's full-scan count
+above zero) against `tests/fixtures/sql_scans_allowed.toml`. Every
+process of the sync records them (`DATALIB_SQL_CENSUS`,
+`datalib_sql_work`), and `:ingested_tng` lists them in
+`ingested/sql_scans.jsonl`. A fixture's tables hold a few rows, so the
+scan costs nothing here; on a library it costs the whole table on every
+call. When the test fails on a new statement, give the statement an
+index, or paste the stanza it prints into the allowlist with a reason:
+it reads every row anyway, or the table stays small. A statement that
+reads only the catalog (`sqlite_master`, `pragma_*`) is allowed by rule.
+A scan of an empty table counts nothing, so a statement can show in one
+run and not the next, by the order the steps ran; an entry missing from
+a run is printed as a note, not a failure, and is worth removing when
+its statement is gone from the tree. The test sees only what the fixture sync runs: the server's
+routes and the applets' searches are not in it.
+
 ## Auditing a real sync's logs
 
 Some problems pass every test. A sync can be correct and still slow. It
@@ -746,7 +765,7 @@ ids are in `runs`. What to look at, and where:
 |---|---|
 | how long each step really took | `supervisor.sqlite` `invocations`. `step_runs` gives a step that ran more than once the run's end as its finish. |
 | did a step redo everything, and why | `msg = 'rendering every document'`: `why`, and `changed`, which names the params that moved. `"the source's keywords are done"`, one line per source the index step re-keyed: a `put` far above what the sync changed means its documents' content churned. |
-| did an incremental pass stay small | render's `reverse lookup from the changed rows to the buckets`: `stale_buckets` far above `changed_rows` is a fan-out. Each download's `the download is done` summary, compared run to run. |
+| did an incremental pass stay small | render's `reverse lookup from the changed rows to the render units`: `stale_render_units` far above `changed_rows` is a fan-out. Each download's `the download is done` summary, compared run to run. |
 | who a step reached | `target = 'http.outbound'` at `info`: per host, at the first request, each minute and in all |
 | why a run started | `runs.kind` and `runs.reason`, and the run's first line |
 | where a render's time went | `msg LIKE 'where the render%'` (`load_ms`, `parse_ms`, `render_ms`, `write_ms`; each page at `debug`), and `msg LIKE 'the render took%'` for any source |
@@ -755,6 +774,7 @@ ids are in `runs`. What to look at, and where:
 | would the ETA have been right | `event = 'eta_shown'` (debug): what a running step's Manage row showed, once a minute. `metric_samples` for `queued` and `done_total` say why: a flat `queued` while `done_total` climbs never converges, and a jump in `done_total` is free work inflating the pace. |
 | is a migration repeating | `msg = 'migrated'` per store, across runs |
 | what is slow to read | `msg LIKE '%slow statement%took %'`, one line per attempt (`top_statement`, `total_ms`), and `msg LIKE 'slow statement%'` at `debug` for each (`db.statement`, `elapsed`); `GET /api/manage/rows` request times; the size of each `-wal` beside its file |
+| which statements walk many rows for few | `msg LIKE '%heavy statement%did%'`, one line per attempt (`top_statement`, `top_file`, `top_params`), and `target = 'datalib::sql_work'` for each (`statement`, `file`, `params`, `vm_steps`, `rows`, `fullscan_steps`). Steps count work, not time, so a cold disk does not move them. |
 | what was left behind | files under each `render_markdown/` against its documents; a directory under the root that no `[[groups]]` names |
 
 ## macOS permissions in the desktop app (by hand)

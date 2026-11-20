@@ -1,8 +1,11 @@
 // <vs-tree>: VS Code's AsyncDataTree, built from VS Code's own source, as a
 // custom element with its own shadow root. The page hands it a data
-// source of plain nodes, `{ id, label, kind?, description?, hasChildren }`;
+// source of plain nodes, `{ id, label, icon?, kind?, description?, hasChildren }`;
 // the element keeps VS Code's renderer and delegate plumbing to itself and
-// says what is open by id, so a page can save and restore it.
+// says what is open by id, so a page can save and restore it. It fires
+// `select` as the selection moves, `open` on a double-click or Enter and
+// `menu` on a right-click. A page may draw a row's label itself
+// (`renderLabel`) and bring its own styles in (`extraCss`).
 // What it relies on upstream is in README.md §"Facts", each a test.
 
 import { AsyncDataTree } from 'vscode/src/vs/base/browser/ui/tree/asyncDataTree.js';
@@ -14,25 +17,31 @@ export { AsyncDataTree, unthemedListStyles };
 
 const ROW_HEIGHT = 22;
 
-// VS Code's light theme for a tree; the defaults upstream are its dark one.
-const LIGHT = {
+// VS Code's light theme for a tree, each colour a CSS variable a page can
+// set; the defaults upstream are its dark one. Upstream writes each value
+// into its CSS as it is, so a `var()` works wherever a colour does.
+const THEMED = {
   ...unthemedListStyles,
-  listFocusBackground: '#e8f0fe',
-  listActiveSelectionBackground: '#0060c0',
-  listFocusAndSelectionBackground: '#0060c0',
-  listFocusAndSelectionOutline: '#0090f1',
-  listFocusOutline: '#0090f1',
-  listInactiveSelectionBackground: '#e4e6f1',
+  listFocusBackground: 'var(--vs-tree-focus-bg, #e8f0fe)',
+  listFocusForeground: 'var(--vs-tree-fg, #1f2328)',
+  listActiveSelectionBackground: 'var(--vs-tree-selected-bg, #0060c0)',
+  listActiveSelectionForeground: 'var(--vs-tree-selected-fg, #ffffff)',
+  listActiveSelectionIconForeground: 'var(--vs-tree-selected-fg, #ffffff)',
+  listFocusAndSelectionBackground: 'var(--vs-tree-selected-bg, #0060c0)',
+  listFocusAndSelectionForeground: 'var(--vs-tree-selected-fg, #ffffff)',
+  listFocusAndSelectionOutline: 'var(--vs-tree-focus, #0090f1)',
+  listFocusOutline: 'var(--vs-tree-focus, #0090f1)',
+  listInactiveSelectionBackground: 'var(--vs-tree-inactive-selected-bg, #e4e6f1)',
   listInactiveSelectionIconForeground: undefined,
-  listHoverBackground: '#f0f0f0',
-  listDropOverBackground: '#d6ebff',
-  treeIndentGuidesStroke: '#a9a9a9',
-  treeInactiveIndentGuidesStroke: '#a9a9a966',
+  listHoverBackground: 'var(--vs-tree-hover, #f0f0f0)',
+  listDropOverBackground: 'var(--vs-tree-focus-bg, #d6ebff)',
+  treeIndentGuidesStroke: 'var(--vs-tree-guide, #a9a9a9)',
+  treeInactiveIndentGuidesStroke: 'var(--vs-tree-guide-faint, #a9a9a966)',
 };
 
 const OWN_CSS = `
 :host { display: block; position: relative; contain: strict;
-  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font: var(--vs-tree-font, 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif);
   color: var(--vs-tree-fg, #1f2328); background: var(--vs-tree-bg, #fff);
   --vscode-focusBorder: var(--vs-tree-focus, #0090f1);
   --vscode-sideBar-background: var(--vs-tree-bg, #fff);
@@ -52,6 +61,8 @@ const OWN_CSS = `
   border-radius: 50%; transform: none; animation: vs-tree-spin .8s linear infinite; }
 @keyframes vs-tree-spin { to { transform: rotate(360deg); } }
 .row { display: flex; gap: 6px; align-items: baseline; white-space: nowrap; overflow: hidden; }
+.icon { flex: 0 0 auto; width: 16px; height: 16px; align-self: center; object-fit: contain; }
+.icon[hidden] { display: none; }
 .label { overflow: hidden; text-overflow: ellipsis; }
 .kind { opacity: .55; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
 .desc { opacity: .6; font-size: 12px; }
@@ -61,19 +72,28 @@ const ROOT = Object.freeze({ id: '\u0000root', label: '' });
 
 class Renderer {
   templateId = 'node';
+  constructor(drawLabel) {
+    this.drawLabel = drawLabel;
+  }
   renderTemplate(container) {
     const row = container.appendChild(document.createElement('div'));
     row.className = 'row';
+    const icon = row.appendChild(document.createElement('img'));
+    icon.className = 'icon';
+    icon.alt = '';
     const part = (cls) => {
       const el = row.appendChild(document.createElement('span'));
       el.className = cls;
       return el;
     };
-    return { label: part('label'), kind: part('kind'), desc: part('desc') };
+    return { icon, label: part('label'), kind: part('kind'), desc: part('desc') };
   }
   renderElement(treeNode, _index, template) {
     const node = treeNode.element;
-    template.label.textContent = node.label;
+    if (node.icon) template.icon.src = node.icon;
+    else template.icon.removeAttribute('src');
+    template.icon.hidden = !node.icon;
+    if (!this.drawLabel(node, template.label)) template.label.textContent = node.label;
     template.kind.textContent = node.kind ?? '';
     template.desc.textContent = node.description ?? '';
   }
@@ -92,12 +112,16 @@ export class VsTree extends HTMLElement {
   // so these are reopened when their parent opens, and kept in `viewState`
   // until then.
   #pending = new Set();
+  #extra;
+  // `(node, el) => void`: fills a row's label element in place of its text.
+  renderLabel = null;
 
   constructor() {
     super();
     const root = this.attachShadow({ mode: 'open' });
     const style = root.appendChild(document.createElement('style'));
     style.textContent = upstreamCss.join('\n') + OWN_CSS;
+    this.#extra = root.appendChild(document.createElement('style'));
     this.#frame = root.appendChild(document.createElement('div'));
     this.#frame.className = 'frame';
     this.#frame.addEventListener('keydown', (e) => this.#onKeyDown(e), { capture: true });
@@ -118,6 +142,30 @@ export class VsTree extends HTMLElement {
   set viewState(state) {
     this.#restoring = state;
     if (this.#tree) this.#build();
+  }
+
+  // CSS for what `renderLabel` draws: a page's styles do not reach into
+  // the element's shadow root.
+  set extraCss(css) {
+    this.#extra.textContent = css;
+  }
+  get extraCss() {
+    return this.#extra.textContent;
+  }
+
+  // Draws every loaded row again, as after what `renderLabel` reads has
+  // changed. Upstream's `rerender()` with no node draws none of them again
+  // (README.md §"Facts", `rerender_without_a_node_redraws_nothing`).
+  redraw() {
+    const tree = this.#tree;
+    if (!tree) return;
+    const walk = (node) => {
+      for (const child of node.children) {
+        tree.rerender(child.element);
+        if (!child.collapsed) walk(child);
+      }
+    };
+    walk(tree.getNode(ROOT));
   }
 
   async refresh(node) {
@@ -142,7 +190,7 @@ export class VsTree extends HTMLElement {
       'vs-tree',
       this.#frame,
       { getHeight: () => ROW_HEIGHT, getTemplateId: () => 'node' },
-      [new Renderer()],
+      [new Renderer((node, el) => this.#drawLabel(node, el))],
       {
         hasChildren: (n) => n === ROOT || !!n.hasChildren,
         getChildren: (n) => source.getChildren(n === ROOT ? null : n),
@@ -162,7 +210,7 @@ export class VsTree extends HTMLElement {
         indent: 10,
       },
     );
-    tree.style(LIGHT);
+    tree.style(THEMED);
     this.#tree = tree;
 
     const state = this.#restoring;
@@ -173,6 +221,17 @@ export class VsTree extends HTMLElement {
       this.#emit('viewstatechange');
     });
     tree.onDidChangeSelection((e) => this.#emit('select', { nodes: e.elements }));
+    tree.onMouseDblClick((e) => e.element && this.#emit('open', { node: e.element, event: e.browserEvent }));
+    tree.onContextMenu((e) => {
+      if (!e.element) return;
+      e.browserEvent.preventDefault();
+      // A mouse's anchor is its event, at `posx`/`posy` in the page; the
+      // keyboard's (Shift+F10, the menu key) is the focused row.
+      const box = e.anchor instanceof HTMLElement ? e.anchor.getBoundingClientRect() : null;
+      const x = box ? box.left : e.anchor.posx - window.scrollX;
+      const y = box ? box.bottom : e.anchor.posy - window.scrollY;
+      this.#emit('menu', { node: e.element, x, y, event: e.browserEvent });
+    });
     tree.onDidScroll(() => this.#emit('viewstatechange'));
 
     tree.layout(this.clientHeight, this.clientWidth);
@@ -180,6 +239,13 @@ export class VsTree extends HTMLElement {
       this.#reopenUnder(tree, ROOT);
       this.#emit('ready');
     });
+  }
+
+  #drawLabel(node, el) {
+    if (!this.renderLabel) return false;
+    el.replaceChildren();
+    this.renderLabel(node, el);
+    return true;
   }
 
   // Once `parent`'s children are loaded and drawn, reopens those the restored
@@ -199,8 +265,13 @@ export class VsTree extends HTMLElement {
   // step it starts, then reveals the focus that step has just cleared
   // (README.md §"Facts", `page_down_throws_upstream`). This waits for it.
   #onKeyDown(e) {
-    if (e.key !== 'PageDown' && e.key !== 'PageUp') return;
     if (!this.#tree) return;
+    if (e.key === 'Enter') {
+      const [node] = this.#tree.getFocus();
+      if (node) this.#emit('open', { node });
+      return;
+    }
+    if (e.key !== 'PageDown' && e.key !== 'PageUp') return;
     e.preventDefault();
     e.stopPropagation();
     this.#page(e);

@@ -288,8 +288,8 @@ const historyOverrides: Record<string, Partial<Column<HistoryRow>>> = {
   },
 };
 
-/// The 🆔 button the chat views put beside every uuid, for a commit
-/// hash: the full 40 characters, where the cell shows ten.
+/// A commit hash's copy button, drawn like a document's 🔗: it copies
+/// the full 40 characters, where the cell shows ten.
 function copyIdButton(id: string, label: string): HTMLButtonElement {
   const btn = document.createElement("button");
   btn.type = "button";

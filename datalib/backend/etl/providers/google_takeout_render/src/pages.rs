@@ -421,7 +421,7 @@ mod tests {
             panic!("one list")
         };
         assert_eq!(chat.display, "Shore leave");
-        let items = &chat.buckets[0].items;
+        let items = &chat.render_units[0].items;
         assert_eq!(items[0].kind, ItemKind::Text, "searched with the rest");
         assert_eq!(items[0].text.as_deref(), Some("Where the crew unwinds"));
         assert_eq!(
@@ -462,7 +462,7 @@ mod tests {
             ),
         ];
         let chats = my_maps("gt", &rows);
-        let items = &chats[0].buckets[0].items;
+        let items = &chats[0].render_units[0].items;
         assert_eq!(chats[0].display, "Away missions");
         assert_eq!(items[0].labels, ["Shore leave"]);
         assert_eq!(items[0].kind_label.as_deref(), Some("My Maps Pin"));
@@ -505,7 +505,7 @@ mod tests {
             ),
         ];
         let chats = play_books("gt", &rows);
-        let items = &chats[0].buckets[0].items;
+        let items = &chats[0].render_units[0].items;
         assert_eq!(chats[0].display, "The Art of Diplomacy");
         assert_eq!(items[0].system_note.as_deref(), Some("By Jean-Luc Picard"));
         assert_eq!(items[1].kind_label.as_deref(), Some("Play Books Note"));

@@ -19,9 +19,7 @@ captain-text
     author_handle  me:self
   terms
     id         captain-text                             derived
-    container  text-thread                              derived
     from       me:self                                  derived
-    title      Number One                               derived
     author     Me                                       derived
 
 dm-message
@@ -31,9 +29,7 @@ dm-message
     author_handle  slack:T1701/U0000003
   terms
     id         dm-message                               derived
-    container  dm-thread                                derived
     from       slack:T1701/U0000003                     derived
-    title      @Data                                    derived
     author     Worf                                     derived
 
 dm-thread
@@ -65,8 +61,6 @@ q-reaction
     author         Q
   terms
     id         q-reaction                               derived
-    container  bridge-thread                            derived
-    title      #bridge                                  derived
     author     Q                                        derived
 
 riker-email
@@ -77,9 +71,7 @@ riker-email
     author_handle  email:riker@enterprise.org
   terms
     id         riker-email                              derived
-    container  riker-thread                             derived
     from       email:riker@enterprise.org               derived
-    title      Away team roster                         derived
     name       picard@enterprise.org                    derived
     to         email:picard@enterprise.org              supplied
     cc         email:troi@enterprise.org                supplied
@@ -127,8 +119,6 @@ worf-slack
     author_handle  slack:T1701/U0000003
   terms
     id         worf-slack                               derived
-    container  bridge-thread                            derived
     from       slack:T1701/U0000003                     derived
-    title      #bridge                                  derived
     mention    slack:T1701/U0000002                     supplied
     author     Worf                                     derived

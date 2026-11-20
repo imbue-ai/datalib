@@ -385,7 +385,7 @@ pub fn build(
         markdown_uuid: facts.id.uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
-        bucket_key: Some(project_id.to_string()),
+        render_unit_key: Some(project_id.to_string()),
         render_version: RENDER_VERSION,
         rows,
         sections: md_sections,

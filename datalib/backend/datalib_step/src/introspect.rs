@@ -462,7 +462,7 @@ pub fn plan(source_id: &str, subjects: Vec<Subject>, now: &str) -> Result<Option
             markdown_uuid,
             source_id: source_id.to_string(),
             upstream_cursor: None,
-            bucket_key: None,
+            render_unit_key: None,
             render_version: RENDER_VERSION,
             rows,
             sections: vec![Section::unkeyed(body)],

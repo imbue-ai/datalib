@@ -150,7 +150,7 @@ async fn every_seal_holds_each_merge_request_whole() {
 
 /// One render pass after another, each from where the last stopped, as
 /// the runner starts them on each seal. Returns each document it wrote,
-/// in order, as `(bucket key, the markdown)`.
+/// in order, as `(render unit key, the markdown)`.
 fn render_each_seal(
     raw: &Path,
     cursor: &mut Option<String>,
@@ -167,7 +167,7 @@ fn render_each_seal(
         let parsed = parse_api_dir(raw, "gitlab", range).unwrap();
         render_gitlab(&parsed, "gitlab", &Progress::noop(), &mut |doc| {
             written.push((
-                doc.bucket_key.clone().unwrap_or_default(),
+                doc.render_unit_key.clone().unwrap_or_default(),
                 join(&doc.sections),
             ));
             Ok(())

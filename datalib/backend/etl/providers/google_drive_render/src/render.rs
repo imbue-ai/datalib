@@ -12,6 +12,7 @@ use datalib_etl_render::section::Section;
 use datalib_etl_render::title::Title;
 use datalib_handle::Handle;
 use datalib_schema::data_nodes::{DataNodeRow, Lineage};
+use datalib_schema::filings::FilingRow;
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 use datalib_schema::providers::Provider;
@@ -21,6 +22,7 @@ use crate::comments::{self, Thread};
 use crate::doc::{self, Block, BlockKind};
 use crate::ids;
 use crate::store::Capture;
+use crate::tree::{self, Places};
 use crate::unsupported;
 
 /// v1: Docs only, with their comment threads.
@@ -31,7 +33,9 @@ use crate::unsupported;
 /// v5: a comment's time, which Drive stamps in its own UTC, says it
 ///     names no one's clock (`Z`).
 /// v6: the files that are not Docs are a note, not a warning.
-pub const RENDER_VERSION: u32 = 6;
+/// v7: a Doc sits under its folders, named, top first from My Drive or a
+///     shared drive, and is filed under every other folder that holds it.
+pub const RENDER_VERSION: u32 = 7;
 
 const SOURCE_LABEL: &str = "Google Drive";
 const KIND_DOC: &str = "Google Doc";
@@ -47,6 +51,9 @@ pub struct DocInput<'a> {
     pub native: Result<&'a Value, &'a Problem>,
     pub images: &'a BlobBundle,
     pub comments: &'a [(String, Value)],
+    /// Every folder and shared drive the store holds, and the folders
+    /// each file is in as of the newest listing.
+    pub places: &'a Places,
 }
 
 /// One Doc's document, as it goes in the store. `inputs` gets every raw
@@ -59,6 +66,7 @@ pub fn render_doc(source_id: &str, input: &DocInput<'_>, inputs: &Inputs) -> Ren
         native,
         images,
         comments: comment_rows,
+        places,
     } = *input;
     inputs.read("files", file_id);
     inputs.read("captures", &capture.id);
@@ -106,7 +114,7 @@ pub fn render_doc(source_id: &str, input: &DocInput<'_>, inputs: &Inputs) -> Ren
         .filter(|t| !t.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
-    let tree = file.tree();
+    let tree = file.tree(places, inputs);
     rows.extend(file.row(&text, &tree.file, &mut problems));
     let mut data_nodes = tree.data_nodes;
     for t in &threads {
@@ -149,7 +157,7 @@ pub fn render_doc(source_id: &str, input: &DocInput<'_>, inputs: &Inputs) -> Ren
         markdown_uuid: file.id.uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
-        bucket_key: Some(file_id.to_string()),
+        render_unit_key: Some(file_id.to_string()),
         render_version: RENDER_VERSION,
         rows,
         front,
@@ -157,7 +165,7 @@ pub fn render_doc(source_id: &str, input: &DocInput<'_>, inputs: &Inputs) -> Ren
         edges: Vec::new(),
         contacts: comments::authors(source_id, &threads, file.me.as_ref()),
         data_nodes,
-        filings: Vec::new(),
+        filings: tree.filings,
         photos: Vec::new(),
         problems,
     }
@@ -217,6 +225,7 @@ fn interleave(blocks: &[Block], threads: &[Thread], placed: &[Option<usize>]) ->
 /// The containers one Doc carries, and where its rows sit.
 struct FileTree {
     data_nodes: Vec<DataNodeRow>,
+    filings: Vec<FilingRow>,
     /// Where the file's own row sits.
     file: Lineage,
     /// Inside the file: where a thread's first comment sits.
@@ -233,10 +242,9 @@ struct FileFacts {
     created: Option<String>,
     modified: Option<String>,
     owner: Option<(String, Option<Handle>)>,
-    /// The folder the file is in. Drive names it by id alone in the
-    /// listing, and the download lists no folders, so its name and the
-    /// folders above it are not known.
-    folder: Option<String>,
+    /// The folders the file was in when it was captured, by id, as the
+    /// download sorted them.
+    parents: Vec<String>,
     /// The account, where this file names it: an owner, the last editor
     /// or whoever shared it, marked `me`.
     me: Option<Handle>,
@@ -277,33 +285,16 @@ impl FileFacts {
             created: s(entry, "createdTime"),
             modified: s(entry, "modifiedTime"),
             owner,
-            folder: entry
-                .get("parents")
-                .and_then(|p| p.get(0))
-                .and_then(Value::as_str)
-                .map(str::to_string),
+            parents: tree::parents(entry),
             me,
         }
     }
 
-    /// The file, read together, in its folder where the listing names
-    /// one.
-    fn tree(&self) -> FileTree {
+    /// The file, read together, under its folders.
+    fn tree(&self, places: &Places, inputs: &Inputs) -> FileTree {
         let md = &self.id.uuid;
-        let mut data_nodes = Vec::with_capacity(2);
-        let mut at = Lineage::top();
-        if let Some(folder) = &self.folder {
-            let node = DataNodeRow::new(
-                md,
-                ids::folder(&self.source_id, folder).uuid,
-                &self.source_id,
-                "Google Drive folder",
-            )
-            .upstream(ids::KIND_FOLDER, folder.clone(), self.account())
-            .place();
-            at = at.below(&node);
-            data_nodes.push(node);
-        }
+        let parents = places.parents_of(&self.file_id, &self.parents, inputs);
+        let (mut data_nodes, filings, at) = places.tree(&self.source_id, md, &parents, inputs);
         let file = DataNodeRow::new(md, md, &self.source_id, KIND_DOC)
             .named(Some(self.title.clone()))
             .upstream(
@@ -317,6 +308,7 @@ impl FileFacts {
         data_nodes.push(file);
         FileTree {
             data_nodes,
+            filings,
             file: at,
             inside,
         }

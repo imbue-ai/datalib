@@ -34,11 +34,11 @@ impl SourceRender for NotionRender {
         use crate::render::{parse_api_dir, render::render_from_store, toc};
         let parsed = parse_api_dir(raw_path, ctx.raw_range())
             .with_context(|| format!("notion parse {}", raw_path.display()))?;
-        // Every bucket this run renders — page or thread — is declared
+        // Every render unit this run renders — page or thread — is declared
         // first with nothing, so one whose rows are gone loses its
         // documents; the render below re-declares the ones it produced.
         for key in parsed.render.iter().flatten() {
-            ctx.declare_bucket(key, &[])?;
+            ctx.declare_render_unit(key, &[])?;
         }
         let mut on_doc = |md| ctx.emit_doc(md);
         let s = render_from_store(
@@ -51,10 +51,12 @@ impl SourceRender for NotionRender {
         .context("render_notion")?;
         // It reads whole tables, and a whole-table input is never evidence
         // that its rows left, so the driver would keep an old list.
-        if parsed.renders(toc::BUCKET) && !s.buckets.iter().any(|b| b.key == toc::BUCKET) {
-            ctx.exclude_bucket(toc::BUCKET)?;
+        if parsed.renders(toc::RENDER_UNIT)
+            && !s.render_units.iter().any(|b| b.key == toc::RENDER_UNIT)
+        {
+            ctx.exclude_render_unit(toc::RENDER_UNIT)?;
         }
-        ctx.finish(&s.buckets, parsed.head.as_deref())?;
+        ctx.finish(&s.render_units, parsed.head.as_deref())?;
         Ok(format!("rendered {} document(s)", s.rendered))
     }
 }

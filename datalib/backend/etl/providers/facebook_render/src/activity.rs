@@ -363,7 +363,7 @@ fn feed_chat(
         upstream_account: None,
         org_uuid: None,
         org_name: None,
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
             markdown_uuid: feed.uuid,
             source_ref: None,
@@ -417,8 +417,8 @@ mod tests {
         ];
         let chats = build_comments(&rows, &[], &[], &owner());
         assert_eq!(chats.len(), 1);
-        let [doc] = chats[0].buckets.as_slice() else {
-            panic!("one document: {:?}", chats[0].buckets)
+        let [doc] = chats[0].render_units.as_slice() else {
+            panic!("one document: {:?}", chats[0].render_units)
         };
         assert_eq!(doc.markdown_uuid, chats[0].chat_uuid);
         let first = &doc.items[0];
@@ -464,7 +464,11 @@ mod tests {
         ];
         let chats = build_reactions(&rows, &owner());
         assert_eq!(chats.len(), 1);
-        let items: Vec<_> = chats[0].buckets.iter().flat_map(|b| &b.items).collect();
+        let items: Vec<_> = chats[0]
+            .render_units
+            .iter()
+            .flat_map(|b| &b.items)
+            .collect();
         assert_eq!(items.len(), 2, "two events, not three rows");
         assert_eq!(
             items[0].text.as_deref(),

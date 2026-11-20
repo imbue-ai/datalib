@@ -254,7 +254,7 @@ pub fn write_page(
         // Not the raw HEAD: it moves on every ingest, and a row whose
         // content did not change may carry nothing per-run.
         upstream_cursor: None,
-        bucket_key: Some(m_uuid.to_string()),
+        render_unit_key: Some(m_uuid.to_string()),
         render_version,
         rows,
         sections,

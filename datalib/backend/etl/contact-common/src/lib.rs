@@ -7,6 +7,7 @@ pub mod samples;
 pub mod types;
 
 pub use render::{
-    chip_handle, field_rows, render_all, render_into, ContactRenderProfile, FieldRow, RenderSummary,
+    card_node, chip_handle, field_rows, render_all, render_into, ContactRenderProfile, FieldRow,
+    RenderSummary,
 };
 pub use types::ContactDoc;

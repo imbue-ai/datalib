@@ -97,9 +97,9 @@ impl SourceRender for EmailRender {
         let mut on_page = |page: PageEnd| -> Result<()> {
             ctx.declare_empty(page.looked_at.iter().map(String::as_str))?;
             for thread in &page.rendered.excluded {
-                ctx.exclude_bucket(thread)?;
+                ctx.exclude_render_unit(thread)?;
             }
-            ctx.declare_buckets(&page.rendered.buckets)
+            ctx.declare_render_units(&page.rendered.render_units)
         };
         let rendered = render_store(
             &store,
@@ -135,7 +135,7 @@ mod tests {
     use datalib_etl_email::ingest::db::RawDb;
     use datalib_etl_render::grid_index::RenderedMarkdown;
     use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
-    use datalib_etl_render::processor::BucketEnd;
+    use datalib_etl_render::processor::RenderUnitEnd;
     use datalib_schema::problems::ProblemRow;
 
     /// What one render reports under each scope, against a store that
@@ -149,7 +149,7 @@ mod tests {
         let progress = Progress::noop();
         let mut reported = Vec::new();
         let mut on_doc = |_| Ok(());
-        let mut on_declare = |_: &str, _: BucketEnd<'_>| Ok(());
+        let mut on_declare = |_: &str, _: RenderUnitEnd<'_>| Ok(());
         let mut on_problems = |scope: &ReadScope, rows: &[ProblemRow]| {
             reported.push((scope.clone(), rows.to_vec()));
             Ok(())
@@ -246,7 +246,7 @@ mod tests {
         // test reads back what the store holds.
         let store = IndexedMarkdownStore::open(out.path()).unwrap();
         let mut on_doc = |md: RenderedMarkdown| store.put_document(&md);
-        let mut on_declare = |_: &str, _: BucketEnd<'_>| Ok(());
+        let mut on_declare = |_: &str, _: RenderUnitEnd<'_>| Ok(());
         let mut on_problems = |_: &ReadScope, _: &[ProblemRow]| Ok(());
         let ctx = RenderCtx::new(
             "mail",

@@ -5,6 +5,13 @@ and get back a rendered document plus the `grid_rows` that go with it
 (`claude_code` and `codex` through `agent_sessions_render`). This file covers
 the parts of that markdown you have to know about before changing it.
 
+Each message is handed over as an `Item` (`etl/render/src/item.rs`): its
+body and every fact its box shows, which the render store keeps in
+`sections`. Whatever reads the document draws the message again from
+those facts with `Item::draw`, the function render drew it with, so the
+header, the recipients, labels, reactions and replies lines below are
+drawn in that one place and stored nowhere as markup.
+
 ## The message header
 
 Every message starts with a line like:

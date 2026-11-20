@@ -164,8 +164,8 @@ mod tests {
             panic!("one feed: {chats:?}")
         };
         // Two years, one document.
-        let [doc] = chat.buckets.as_slice() else {
-            panic!("one document: {:?}", chat.buckets)
+        let [doc] = chat.render_units.as_slice() else {
+            panic!("one document: {:?}", chat.render_units)
         };
         assert_eq!(doc.markdown_uuid, chat.chat_uuid);
         let [prompt, response, _, drawn] = doc.items.as_slice() else {
@@ -210,7 +210,7 @@ mod tests {
             json!({"promptText": "<script>x</script> [link](javascript:x)", "responseHtml": ""}),
         )];
         let chats = build("gt", &rows);
-        let items = &chats[0].buckets[0].items;
+        let items = &chats[0].render_units[0].items;
         assert_eq!(items.len(), 1, "no response, no response item");
         let text = items[0].text.as_deref().unwrap();
         assert!(!text.contains("<script>"), "{text}");

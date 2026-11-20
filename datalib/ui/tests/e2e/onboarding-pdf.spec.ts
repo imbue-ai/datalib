@@ -218,7 +218,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // The group's Name is its chip, which says its type.
     await expect(nameCell(page, "group:pdfs").locator("a.chip")).toHaveAttribute(
       "aria-label",
-      /, Local PDFs source/,
+      /, PDFs \(Local\) source/,
     );
     expect(await statusOf(page, "group:pdfs")).toBe("Never run");
     expect(await bytesOf(page, "group:pdfs")).toBeNull();

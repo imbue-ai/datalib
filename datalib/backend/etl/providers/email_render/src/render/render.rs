@@ -5,14 +5,14 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use super::ids;
-use super::parse::{EmailStore, EmailThreadBucket, Shared};
+use super::parse::{EmailStore, EmailThreadRenderUnit, Shared};
 use anyhow::{Context, Result};
 use datalib_contact_schema::NormalizedContact;
 use datalib_etl::blob_cas::{blake3_hex, BlobBundle, Described};
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::normalize::iso_to_ms;
 use datalib_etl_chat_common::people;
-use datalib_etl_chat_common::render::{Buckets, ChatRenderer, RenderProfile};
+use datalib_etl_chat_common::render::{ChatRenderer, RenderProfile, RenderUnits};
 use datalib_etl_chat_common::types::{
     own_stamp_ms, AuthorKind, ItemKind, NormalizedChat, NormalizedChatItem, NormalizedDoc,
     Recipient, RecipientRole, UpstreamRef,
@@ -182,8 +182,8 @@ pub fn render_params(outlink: Option<OutlinkFormat>, only_labels: &[String]) -> 
 
 /// What [`render_all`] did with the threads it was handed.
 pub struct Rendered {
-    pub buckets: Buckets,
-    /// The threads the label filter keeps out, by bucket key: left out
+    pub render_units: RenderUnits,
+    /// The threads the label filter keeps out, by render unit key: left out
     /// on purpose, so their documents go.
     pub excluded: Vec<String>,
 }
@@ -191,7 +191,7 @@ pub struct Rendered {
 /// How one page of a store's render ended, for the processor to declare
 /// before the next page is read.
 pub struct PageEnd {
-    /// The stale threads this page looked at, by bucket key: declared
+    /// The stale threads this page looked at, by render unit key: declared
     /// with nothing first, so one that builds no chat goes once the diff
     /// says its emails left.
     pub looked_at: Vec<String>,
@@ -318,7 +318,7 @@ pub fn render_store(
         on_page(PageEnd {
             looked_at: Vec::new(),
             rendered: Rendered {
-                buckets: Vec::new(),
+                render_units: Vec::new(),
                 excluded: uuids(&store.left_out),
             },
         })?;
@@ -332,7 +332,7 @@ pub fn render_store(
         progress,
         on_doc_complete,
     );
-    let mut pages = store.pages(size.buckets);
+    let mut pages = store.pages(size.render_units);
     while let Some(page) = store.next_page(&mut pages)? {
         render_page(
             &lookups,
@@ -349,7 +349,7 @@ pub fn render_store(
         on_page(PageEnd {
             looked_at,
             rendered: Rendered {
-                buckets: renderer.take_buckets(),
+                render_units: renderer.take_render_units(),
                 excluded,
             },
         })?;
@@ -360,7 +360,7 @@ pub fn render_store(
 /// Renders `docs` as one page, their `.eml`s already in their bundles.
 pub fn render_all(
     shared: &Shared,
-    docs: &[EmailThreadBucket],
+    docs: &[EmailThreadRenderUnit],
     source_id: &str,
     outlink: Option<OutlinkFormat>,
     progress: &Progress,
@@ -380,7 +380,7 @@ pub fn render_all(
         &mut renderer,
     )?;
     Ok(Rendered {
-        buckets: renderer.finish().buckets,
+        render_units: renderer.finish().render_units,
         excluded: Vec::new(),
     })
 }
@@ -390,30 +390,30 @@ pub fn render_all(
 /// parsing and hashing them is most of the work.
 fn render_page(
     lookups: &Lookups,
-    docs: &[EmailThreadBucket],
+    docs: &[EmailThreadRenderUnit],
     emls: Option<&EmailStore>,
     eml_bytes: u64,
     source_id: &str,
     outlink: Option<OutlinkFormat>,
     renderer: &mut ChatRenderer<'_>,
 ) -> Result<()> {
-    let threads: Vec<&EmailThreadBucket> = docs
+    let threads: Vec<&EmailThreadRenderUnit> = docs
         .iter()
-        .filter(|bucket| !bucket.emails.is_empty())
+        .filter(|render_unit| !render_unit.emails.is_empty())
         .collect();
     let weights: Vec<u64> = threads.iter().map(|b| b.eml_bytes()).collect();
     for range in batches(&weights, eml_bytes) {
         let batch = &threads[range];
         let loaded;
-        let batch: Vec<&EmailThreadBucket> = match emls {
+        let batch: Vec<&EmailThreadRenderUnit> = match emls {
             Some(emls) => {
                 loaded = emls.load_emls(batch)?;
                 loaded.iter().collect()
             }
             None => batch.to_vec(),
         };
-        for bucket in batch {
-            let (chat, bundle) = build_chat(source_id, bucket, lookups, outlink);
+        for render_unit in batch {
+            let (chat, bundle) = build_chat(source_id, render_unit, lookups, outlink);
             renderer
                 .render_chat(&chat, &bundle)
                 .context("email chat-common render")?;
@@ -440,18 +440,22 @@ fn account_contact(source_id: &str, label: Option<&String>) -> Option<Normalized
 
 fn build_chat(
     source_id: &str,
-    bucket: &EmailThreadBucket,
+    render_unit: &EmailThreadRenderUnit,
     lookups: &Lookups,
     outlink: Option<OutlinkFormat>,
 ) -> (NormalizedChat, BlobBundle) {
-    let account_id = &bucket.account_id;
-    let thread_id = ids::thread(source_id, account_id, &bucket.thread_id);
+    let account_id = &render_unit.account_id;
+    let thread_id = ids::thread(source_id, account_id, &render_unit.thread_id);
     let tuid = thread_id.uuid.clone();
     // The account row and each mailbox row are looked up per thread,
     // and declared as they are.
-    let mailbox_name = bucket.inputs.lookup("mailboxes", &lookups.mailbox_name);
-    let account_label = bucket.inputs.lookup("accounts", &lookups.account_label);
-    let subject = bucket
+    let mailbox_name = render_unit
+        .inputs
+        .lookup("mailboxes", &lookups.mailbox_name);
+    let account_label = render_unit
+        .inputs
+        .lookup("accounts", &lookups.account_label);
+    let subject = render_unit
         .emails
         .first()
         .and_then(|e| e.subject.clone())
@@ -460,10 +464,10 @@ fn build_chat(
 
     // The parts each page links, inside the `.eml` that holds them.
     let mut render_bundle = BlobBundle::new();
-    let mut items: Vec<NormalizedChatItem> = Vec::with_capacity(bucket.emails.len());
+    let mut items: Vec<NormalizedChatItem> = Vec::with_capacity(render_unit.emails.len());
 
-    for em in &bucket.emails {
-        let eml = bucket.blobs.get(&em.blob_id);
+    for em in &render_unit.emails {
+        let eml = render_unit.blobs.get(&em.blob_id);
         let parsed_eml = eml
             .map(|b| ParsedEml::from_eml_bytes(b.bytes.as_deref().unwrap_or_default()))
             .unwrap_or_default();
@@ -474,7 +478,7 @@ fn build_chat(
         // iCalendar payload both ways on every invite (an inline
         // `text/calendar; method=REQUEST` part plus an `invite.ics`
         // attachment part).
-        let atts: &[LoadedAttachment] = bucket
+        let atts: &[LoadedAttachment] = render_unit
             .joins
             .attachments
             .get(&em.id)
@@ -556,8 +560,8 @@ fn build_chat(
 
         // Its flags and the mailboxes it is filed under: drawn above the
         // body, and kept out of the row's Contents.
-        let mailboxes = mailboxes_for_email(em, bucket, mailbox_name);
-        let labels: Vec<String> = flag_labels(bucket.joins.keywords.get(&em.id))
+        let mailboxes = mailboxes_for_email(em, render_unit, mailbox_name);
+        let labels: Vec<String> = flag_labels(render_unit.joins.keywords.get(&em.id))
             .into_iter()
             .chain(mailboxes.iter().cloned())
             .collect();
@@ -624,7 +628,7 @@ fn build_chat(
             &em.id,
             false,
             Marks {
-                own: bucket.marks.get(&em.id),
+                own: render_unit.marks.get(&em.id),
                 conversation: None,
             },
             |_, _| None,
@@ -666,7 +670,7 @@ fn build_chat(
         });
     }
 
-    let replies = reply_targets(&bucket.emails, &items);
+    let replies = reply_targets(&render_unit.emails, &items);
     for (item, to) in items.iter_mut().zip(replies) {
         item.reply_to = to;
     }
@@ -677,10 +681,12 @@ fn build_chat(
     );
     let filed_under = label_paths(
         source_id,
-        bucket,
+        render_unit,
         &account,
         &lookups.mailboxes.by_name,
-        bucket.inputs.lookup("mailboxes", &lookups.mailboxes.by_id),
+        render_unit
+            .inputs
+            .lookup("mailboxes", &lookups.mailboxes.by_id),
     );
 
     // The thread's title `↗` points at the root (first) email's outlink.
@@ -710,7 +716,7 @@ fn build_chat(
         upstream_account: Some(account_id.clone()),
         org_uuid: None,
         org_name: None,
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
             markdown_uuid: tuid,
             source_ref: None,
@@ -718,7 +724,7 @@ fn build_chat(
         }],
     };
     // After the account lookup above, so it is declared too.
-    chat.inputs = bucket.inputs.declared();
+    chat.inputs = render_unit.inputs.declared();
     (chat, render_bundle)
 }
 
@@ -767,12 +773,12 @@ fn account_node(source_id: &str, account_id: &str, label: Option<String>) -> Dat
 /// file nothing.
 fn label_paths(
     source_id: &str,
-    bucket: &EmailThreadBucket,
+    render_unit: &EmailThreadRenderUnit,
     account: &DataNodeRow,
     by_name: &HashMap<String, Vec<String>>,
     mailboxes: Lookup<'_, HashMap<String, MailboxNode>>,
 ) -> Vec<Vec<DataNodeRow>> {
-    let held: BTreeSet<&str> = bucket
+    let held: BTreeSet<&str> = render_unit
         .joins
         .mailboxes
         .values()
@@ -784,7 +790,7 @@ fn label_paths(
             let mut path = vec![account.clone()];
             path.extend(label_path(
                 source_id,
-                &bucket.account_id,
+                &render_unit.account_id,
                 mailbox_id,
                 by_name,
                 mailboxes,
@@ -906,10 +912,10 @@ fn flag_labels(keywords: Option<&Vec<String>>) -> Vec<String> {
 
 fn mailboxes_for_email(
     em: &LoadedEmail,
-    bucket: &EmailThreadBucket,
+    render_unit: &EmailThreadRenderUnit,
     mailbox_name: Lookup<'_, HashMap<String, String>>,
 ) -> Vec<String> {
-    bucket
+    render_unit
         .joins
         .mailboxes
         .get(&em.id)
@@ -1782,14 +1788,14 @@ mod tree_tests {
         emails: Vec<LoadedEmail>,
         filed: &[(&str, &[&str])],
     ) -> RenderedMarkdown {
-        let mut bucket = EmailThreadBucket {
+        let mut render_unit = EmailThreadRenderUnit {
             account_id: ACCT.into(),
             thread_id: "T1".into(),
             emails,
             ..Default::default()
         };
         for (email, in_mailboxes) in filed {
-            bucket.joins.mailboxes.insert(
+            render_unit.joins.mailboxes.insert(
                 email.to_string(),
                 in_mailboxes.iter().map(|m| m.to_string()).collect(),
             );
@@ -1801,7 +1807,7 @@ mod tree_tests {
         let mut docs = Vec::new();
         render_all(
             &shared,
-            &[bucket],
+            &[render_unit],
             "mail",
             None,
             &Progress::noop(),

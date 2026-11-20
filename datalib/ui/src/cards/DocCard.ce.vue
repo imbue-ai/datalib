@@ -26,6 +26,7 @@ import { oneAtATime, subscribeLive } from "@/live";
 import ChatBody from "./ChatBody.ce.vue";
 import { absoluteRemote, type RemoteRef } from "./remoteMedia";
 import { bodyOf, renderDocument } from "./renderDocument";
+import { PAGE, holds, withPage } from "./pieceWindow";
 import FeedbackModal from "@/components/FeedbackModal.vue";
 import {
   buildContext,
@@ -46,14 +47,20 @@ import { pushToast } from "@/toasts";
 import { endWait, startWait, type Wait } from "@/telemetry";
 import DocTitleBar from "./DocTitleBar.ce.vue";
 import { sourceSource } from "./cardSources";
-import { documentCopyText, documentTitle, outlinkOf, type DocumentAction } from "./documentMenu";
+import {
+  documentCopyText,
+  documentLink,
+  documentTitle,
+  outlinkOf,
+  type DocumentAction,
+} from "./documentMenu";
 import { problemLabel, severityWord } from "./problems";
 import { ensureFrontend } from "./frontendRegistry";
 import { photoCardSource } from "./photos";
 import { parsePhoto } from "@/uri";
 import { TOPIC_EDGE_HOVER, type CardCtx, type EdgeHoverPayload } from "./types";
 
-const { allowRemote, checkRemote, fetchChat, forgetRemoteAllow } = useApi();
+const { allowRemote, checkRemote, fetchChat, fetchChatBody, forgetRemoteAllow } = useApi();
 
 const props = defineProps<{
   ctx: CardCtx;
@@ -235,11 +242,13 @@ function remoteUrlsOf(doc: ChatResponse): string[] {
     .filter((u) => !seen.has(u) && (seen.add(u), true));
 }
 
-/// A new function per answer, which is what makes the body re-render
-/// under it.
+/// Bumped when a decision changes what may load, which makes the body
+/// draw anew under the new answer. A page loaded later adds its own answers
+/// to `remoteCovered` without a bump, so what is drawn stays as it is.
+const remoteDecided = ref(0);
 const remoteAccept = computed(() => {
-  const covered = remoteCovered.value;
-  return (url: string) => covered.has(url);
+  void remoteDecided.value;
+  return (url: string) => remoteCovered.value.has(url);
 });
 
 /// One entry per distinct URL.
@@ -308,6 +317,7 @@ async function remoteWrite(what: () => Promise<unknown>) {
   try {
     await what();
     remoteCovered.value = await checkRemote(contextOf(doc), remoteUrlsOf(doc));
+    remoteDecided.value += 1;
   } catch (e) {
     remoteError.value = (e as Error).message;
   } finally {
@@ -512,6 +522,8 @@ async function onDocAction(id: DocumentAction) {
     case "open-source":
       if (doc.source_ref) props.ctx.host.openCards(sourceSource({ group: doc.source_ref.id }));
       return;
+    case "copy-link":
+      return copy(documentLink(doc), "the link");
     case "copy-id":
       return copy(doc.markdown_uuid);
     case "copy-name":
@@ -519,7 +531,7 @@ async function onDocAction(id: DocumentAction) {
     case "copy-both":
       return copy(documentCopyText(doc));
     case "copy-markdown":
-      return copy(bodyOf(doc), "the Markdown");
+      return copy(await fetchChatBody(doc.markdown_uuid), "the Markdown");
     case "feedback":
       return feedbackOn({ kind: "conversation", anchor: cardEl.value, conv: doc.markdown_uuid });
   }
@@ -540,6 +552,23 @@ function shown(outcome: "shown" | "failed", more = {}) {
     ...more,
   });
   wait = null;
+}
+
+/// The page of `uuid` that holds item `at`, else its first page. An item
+/// the document draws inside another's piece (a reaction) has no page of
+/// its own, so the document comes whole for it.
+async function windowOf(uuid: string, at: string | null): Promise<ChatResponse> {
+  const doc = await fetchChat(uuid, at ? { limit: PAGE, at } : { limit: PAGE });
+  const partial = doc.before != null || doc.after != null;
+  return at && partial && !holds(doc.pieces, at) ? fetchChat(uuid) : doc;
+}
+
+/// Show `doc` in place of what is shown, under the server's answer about
+/// its remote media.
+async function showWindow(doc: ChatResponse) {
+  remoteCovered.value = await checkRemote(contextOf(doc), remoteUrlsOf(doc));
+  remoteDecided.value += 1;
+  chat.value = doc;
 }
 
 watch(
@@ -564,7 +593,7 @@ watch(
       // render is already under it: a placeholder that then vanished
       // would read as a flicker, and a held image that then loaded as
       // a leak.
-      const doc = await fetchChat(uuid);
+      const doc = await windowOf(uuid, props.sectionUuid);
       // A photo has no page: it becomes the card of the applet that
       // serves it (a list draws that card in its preview itself).
       const photo = doc.image ? parsePhoto(doc.image) : null;
@@ -576,8 +605,7 @@ watch(
           return;
         }
       }
-      remoteCovered.value = await checkRemote(contextOf(doc), remoteUrlsOf(doc));
-      chat.value = doc;
+      await showWindow(doc);
     } catch (e) {
       error.value = (e as Error).message;
       shown("failed");
@@ -588,22 +616,82 @@ watch(
   { immediate: true },
 );
 
+// A message the window does not hold (another row of the same document,
+// a problem's jump) loads the page around it.
+watch(
+  () => jumpTo.value ?? props.sectionUuid,
+  async (at) => {
+    const uuid = props.markdownUuid;
+    const doc = chat.value;
+    if (!uuid || !doc || !at || loading.value || holds(doc.pieces, at)) return;
+    try {
+      const page = await windowOf(uuid, at);
+      if (uuid === props.markdownUuid) await showWindow(page);
+    } catch (e) {
+      if (uuid === props.markdownUuid) error.value = (e as Error).message;
+    }
+  },
+);
+
+// The page above or below what is shown, when the reader nears that end.
+// A page read at another version of the document would not line up with
+// what is shown, so the window is read again instead.
+let paging = false;
+async function onNeedMore(where: "above" | "below") {
+  const uuid = props.markdownUuid;
+  const doc = chat.value;
+  const cursor = where === "above" ? doc?.before : doc?.after;
+  if (!uuid || !doc || cursor == null || paging || loading.value) return;
+  paging = true;
+  try {
+    const page = await fetchChat(
+      uuid,
+      where === "above" ? { limit: PAGE, before: cursor } : { limit: PAGE, after: cursor },
+    );
+    if (uuid !== props.markdownUuid || chat.value !== doc) return;
+    if (page.version !== doc.version) {
+      await showWindow(await windowOf(uuid, jumpTo.value ?? props.sectionUuid));
+      return;
+    }
+    const covered = await checkRemote(contextOf(page), remoteUrlsOf(page));
+    if (uuid !== props.markdownUuid || chat.value !== doc) return;
+    remoteCovered.value = new Map([...remoteCovered.value, ...covered]);
+    chat.value = withPage(doc, page, where);
+  } catch (e) {
+    if (uuid === props.markdownUuid) error.value = (e as Error).message;
+  } finally {
+    paging = false;
+  }
+}
+
 // The body and the problems banner are both read from the index, so an
-// open card asks again when the index commits. It redraws only when the
-// answer differs: every source's commit moves the index, and a redraw
-// for nothing would throw away the reader's place.
+// open card asks again when the index commits, for the window it shows.
+// It redraws only when the answer differs: every source's commit moves the
+// index, and a redraw for nothing would throw away the reader's place; a
+// banner that changed over the same pieces keeps them as they are drawn.
 const cardEl = ref<HTMLElement | null>(null);
 const refresh = oneAtATime(async () => {
   const uuid = props.markdownUuid;
-  if (!uuid || !chat.value || loading.value) return;
+  const was = chat.value;
+  if (!uuid || !was || loading.value) return;
   try {
-    const doc = await fetchChat(uuid);
-    if (uuid !== props.markdownUuid) return;
+    const limit = Math.min(Math.max(PAGE, was.pieces.length), 1000);
+    const partial = was.before != null || was.after != null;
+    const doc = await fetchChat(
+      uuid,
+      partial ? { limit, ...(was.before != null ? { after: was.before } : {}) } : undefined,
+    );
+    if (uuid !== props.markdownUuid || chat.value !== was) return;
     error.value = null;
-    if (JSON.stringify(doc) === JSON.stringify(chat.value)) return;
+    if (JSON.stringify(doc) === JSON.stringify(was)) return;
+    if (JSON.stringify(doc.pieces) === JSON.stringify(was.pieces)) {
+      chat.value = { ...doc, pieces: was.pieces };
+      return;
+    }
     const covered = await checkRemote(contextOf(doc), remoteUrlsOf(doc));
-    if (uuid !== props.markdownUuid) return;
+    if (uuid !== props.markdownUuid || chat.value !== was) return;
     remoteCovered.value = covered;
+    remoteDecided.value += 1;
     chat.value = doc;
   } catch (e) {
     if (uuid === props.markdownUuid) error.value = (e as Error).message;
@@ -792,12 +880,14 @@ watch(
           <ChatBody
             :pieces="chat.pieces"
             :markdown-uuid="chat.markdown_uuid"
+            :doc-title="chat.name"
             :selected-section-uuid="jumpTo ?? sectionUuid"
             :outgoing-edges="chat.outgoing_edges"
             :hover-anchor-uuid="hoverAnchor"
             @open-edge="onOpenEdge"
             @hover-edge="onHoverEdge"
             @painted="shown('shown', { bytes: bodyOf(chat).length })"
+            @need-more="onNeedMore"
             :remote-accept="remoteAccept"
             :remote-context="remoteContext"
             :source-id="chat.source_ref?.id ?? null"

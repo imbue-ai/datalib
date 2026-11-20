@@ -47,12 +47,14 @@ import { timeView } from "@/config/timeView";
 import { decorateEntities, entities } from "./entities";
 import HandlePopover from "./HandlePopover.ce.vue";
 import { renderDocument } from "./renderDocument";
+import { NEAR_END_PX, growth } from "./pieceWindow";
 import { mountTimeSeries } from "./timeSeriesEmbed";
 import {
   finishFrameClick,
   isBrowserClick,
   linkFromClick,
-  rewriteIdButtonsForCopy,
+  linkOfButton,
+  rewriteLinkButtonsForCopy,
   type ClickedLink,
 } from "./chatLink";
 import { DOC_FRAME_SRCDOC, asElement, forwardAppKeys, mirrorDensity } from "./docFrame";
@@ -60,7 +62,7 @@ import { DOC_FRAME_SRCDOC, asElement, forwardAppKeys, mirrorDensity } from "./do
 // the preview page behaves like the app rather than imitating it.
 import {
   decorateLongMessages,
-  injectCopyUuidButtons,
+  injectCopyLinkButtons,
   openEnclosingDetails,
   scrollSectionToTop,
   sectionEl,
@@ -90,9 +92,11 @@ const props = defineProps<{
    * source and destination is visually obvious across columns.
    */
   hoverAnchorUuid?: string | null;
-  /** The markdown_uuid of the body we're rendering: what a copied 🆔
-   *  link names. */
+  /** The markdown_uuid of the body we're rendering: the page a 🔗
+   *  button's link names. */
   markdownUuid?: string | null;
+  /** The document's title, written into a 🔗 link for a person to read. */
+  docTitle?: string | null;
   /**
    * Which of the body's remote references may load, through the
    * server: the allow-list applied (`remoteMedia.ts`). Absent: none.
@@ -110,6 +114,9 @@ const emit = defineEmits<{
   (e: "open-edge", edge: EdgeOut): void;
   /** A body was written into the frame: the first, or a changed one. */
   (e: "painted"): void;
+  /** The reader is near the top or the bottom of what is drawn: the
+   *  page there, if the document has one, is wanted (`pieceWindow.ts`). */
+  (e: "need-more", where: "above" | "below"): void;
   /** Every remote reference the body carries, after each render;
    *  those held back are shown as placeholders here. */
   (e: "remote-media", refs: RemoteRef[]): void;
@@ -135,21 +142,22 @@ const emit = defineEmits<{
   (e: "open-card", source: string): void;
 }>();
 
-const sanitized = computed(() =>
-  renderDocument(props.pieces, {
-    accept: props.remoteAccept,
-    context: props.remoteContext,
-  }),
-);
-const html = computed(() => sanitized.value.html);
-watch(sanitized, (s) => emit("remote-media", s.remote), { immediate: true });
 const frameEl = ref<HTMLIFrameElement | null>(null);
 const frameBody = ref<HTMLElement | null>(null);
-/// The element the body is in: the frame's `<body>`, or the in-place div.
+/// The element the body is in: the frame's `<body>`.
 const body = frameBody;
-/// What the frame's body holds now.
-let painted: string | null = null;
+/// What the frame's body holds now: the nodes drawn, under which answer
+/// about remote media, and the remote references they carry.
+let drawnNodes: readonly BodyNode[] = [];
+let drawnAccept: RemoteAccept | undefined;
+let drawnRemote: RemoteRef[] = [];
 let frameStops: (() => void)[] = [];
+
+type RemoteAccept = ((url: string) => boolean) | undefined;
+
+function render(nodes: readonly BodyNode[]) {
+  return renderDocument(nodes, { accept: props.remoteAccept, context: props.remoteContext });
+}
 
 // A re-render that only let an image through must not scroll the
 // reader back to the selected section; only a new body earns that.
@@ -321,14 +329,14 @@ function onRemoteChipClick(ev: MouseEvent) {
 }
 
 async function onCopyClick(ev: MouseEvent) {
-  const btn = asElement(ev.target)?.closest<HTMLButtonElement>("button.copy-uuid");
+  const btn = asElement(ev.target)?.closest<HTMLButtonElement>("button.copy-link");
   if (!btn) return;
   ev.preventDefault();
   ev.stopPropagation();
-  const uuid = btn.dataset.uuid || "";
-  if (!uuid) return;
+  const markdownUuid = props.markdownUuid;
+  if (!btn.dataset.uuid || !markdownUuid) return;
   try {
-    await navigator.clipboard.writeText(uuid);
+    await navigator.clipboard.writeText(linkOfButton(btn, markdownUuid, props.docTitle ?? ""));
     const prev = btn.textContent;
     btn.textContent = "✓";
     btn.classList.add("copied");
@@ -450,25 +458,75 @@ function unmountCharts() {
   chartStops = [];
 }
 
+/// The first element on screen and where it sits, so drawing a page above
+/// it can leave it where it was.
+function topOnScreen(el: HTMLElement): { node: Element; top: number } | null {
+  for (const child of Array.from(el.children)) {
+    const r = child.getBoundingClientRect();
+    if (r.bottom > 0) return { node: child, top: r.top };
+  }
+  return null;
+}
+
+/// Draw `props.pieces`: beside what is drawn when the window only grew at
+/// an end, so an open fold or an expanded message stays as it is and the
+/// reader does not move; anew otherwise.
+function draw(el: HTMLElement): "new" | "grew" | "same" {
+  const g =
+    drawnAccept === props.remoteAccept
+      ? growth(drawnNodes, props.pieces)
+      : { kind: "new" as const };
+  if (g.kind === "new") {
+    unmountCharts();
+    const s = render(props.pieces);
+    el.innerHTML = s.html;
+    drawnRemote = s.remote;
+  } else if (g.kind === "grew") {
+    const above = render(g.above);
+    const below = render(g.below);
+    el.insertAdjacentHTML("beforeend", below.html);
+    el.insertAdjacentHTML("afterbegin", above.html);
+    drawnRemote = [...above.remote, ...drawnRemote, ...below.remote];
+  }
+  drawnNodes = props.pieces;
+  drawnAccept = props.remoteAccept;
+  if (g.kind !== "same") emit("remote-media", drawnRemote);
+  return g.kind;
+}
+
+/// Ask for the page above or below when the reader is near that end of
+/// what is drawn, or what is drawn does not fill the frame.
+function askNearEnds() {
+  const scroller = body.value?.ownerDocument.scrollingElement;
+  if (!scroller) return;
+  if (scroller.scrollTop < NEAR_END_PX) emit("need-more", "above");
+  if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < NEAR_END_PX) {
+    emit("need-more", "below");
+  }
+}
+
 function paint() {
   const el = body.value;
   if (!el) return;
-  if (painted !== html.value) {
-    unmountCharts();
-    el.innerHTML = html.value;
-    painted = html.value;
-    emit("painted");
-  }
+  const anchor = topOnScreen(el);
+  const kind = draw(el);
+  if (kind === "new") emit("painted");
   chartStops.push(mountTimeSeries(el));
   // The document card's title bar has the page's own ID button.
-  injectCopyUuidButtons(el, { pageTitle: false });
+  injectCopyLinkButtons(el, { pageTitle: false });
   decorateRemoteMedia(el);
   decorateLongMessages(el);
   void redrawHandles();
   void decorateEntities(el);
   decorateDates(el);
   decorateEdgeSources();
-  if (bodyChanged) {
+  if (kind === "grew" && anchor) {
+    // A page drawn above pushed what the reader was looking at down; put
+    // it back where it was, decorations and all.
+    const scroller = el.ownerDocument.scrollingElement;
+    if (scroller) scroller.scrollTop += anchor.node.getBoundingClientRect().top - anchor.top;
+  }
+  if (bodyChanged && kind === "new") {
     // The desktop app's WebKit could leave a body scrolled before it was
     // first drawn unpainted until the wheel moved it; scroll once it is.
     const win = el.ownerDocument.defaultView;
@@ -478,6 +536,7 @@ function paint() {
   }
   bodyChanged = false;
   applyHoverDst();
+  askNearEnds();
 }
 
 function onFrameLinkClick(ev: MouseEvent) {
@@ -493,7 +552,7 @@ function releaseFrame() {
   for (const stop of frameStops) stop();
   frameStops = [];
   frameBody.value = null;
-  painted = null;
+  drawnNodes = [];
 }
 
 /// Also on every reload: a frame moved in the DOM loads its document again.
@@ -527,12 +586,14 @@ function onFrameLoad() {
   on("dragstart", onChipDragStart);
   on("mouseover", onBodyMouseOver);
   on("mouseout", onBodyMouseOut);
+  on("scroll", askNearEnds);
   on("copy", (ev) => {
     const markdownUuid = props.markdownUuid;
+    const title = props.docTitle ?? "";
     copyWithHandles(ev, doc.body, (f) => {
       const dates = rewriteDatesForCopy(f);
-      const ids = markdownUuid ? rewriteIdButtonsForCopy(f, markdownUuid) : false;
-      return dates || ids;
+      const links = markdownUuid ? rewriteLinkButtonsForCopy(f, markdownUuid, title) : false;
+      return dates || links;
     });
   });
   on("contextmenu", (ev) => {
@@ -555,7 +616,7 @@ watch(
   },
 );
 
-watch(html, async () => {
+watch([() => props.pieces, () => props.remoteAccept], async () => {
   await nextTick();
   paint();
 });

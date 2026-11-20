@@ -105,8 +105,8 @@ mod tests {
             when: Some("2364-06-04T11:48:37-07:00".to_string()),
         }];
         let chats = build_history("gt", &rows);
-        let item = &chats[0].buckets[0].items[0];
-        assert_eq!(chats[0].buckets[0].markdown_uuid, chats[0].chat_uuid);
+        let item = &chats[0].render_units[0].items[0];
+        assert_eq!(chats[0].render_units[0].markdown_uuid, chats[0].chat_uuid);
         assert_eq!(
             item.text.as_deref(),
             Some(
@@ -124,7 +124,7 @@ mod tests {
             when: None,
         };
         let chats = build_subscriptions("gt", &[sub("b", "Riker"), sub("a", "Data")]);
-        let [doc] = chats[0].buckets.as_slice() else {
+        let [doc] = chats[0].render_units.as_slice() else {
             panic!("one document")
         };
         assert_eq!(doc.markdown_uuid, chats[0].chat_uuid);

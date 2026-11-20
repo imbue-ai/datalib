@@ -511,6 +511,32 @@ async fn by_each_id_pasted(f: Arc<Fixture>) -> Findings {
                 .checked(&format!("pasted: {kind}"), &f.source_of(uuid));
         }
     }
+    // A row inside a document answers to the document's id through the
+    // document's own row, which alone holds it: read from the column, so
+    // what is expected does not come from how the terms are laid out.
+    for (document, holding) in values_of(&f.root, "markdown_uuid").await {
+        let got: HashSet<String> = every_uuid(&s, &document, None)
+            .await
+            .into_iter()
+            .map(|r| r.uuid)
+            .collect();
+        let missing: BTreeSet<&str> = holding
+            .iter()
+            .filter(|u| !got.contains(*u))
+            .map(String::as_str)
+            .collect();
+        if !missing.is_empty() {
+            found.failures.push(format!(
+                "`{document}` pasted (its document) missed [{}]",
+                listed(&missing)
+            ));
+        }
+        for uuid in &holding {
+            found
+                .coverage
+                .checked("pasted: its document", &f.source_of(uuid));
+        }
+    }
     found
 }
 

@@ -1,9 +1,9 @@
 //! What a render reads from the raw store, and how a run says so.
 //!
 //! [`RawRange`] is the driver's view of the raw store for one run — the
-//! commit to diff from, the commit to read at, and the buckets it already
+//! commit to diff from, the commit to read at, and the render units it already
 //! knows are stale — handed to a provider's parse. [`Inputs`] collects the
-//! rows one bucket asked for while it is built, and [`Lookup`] is a map
+//! rows one render unit asked for while it is built, and [`Lookup`] is a map
 //! that records every key asked of it, found or not, so a lookup table
 //! (users, channels, recipients) cannot be read without being declared.
 
@@ -25,7 +25,7 @@ pub struct RawRange<'a> {
     /// never HEAD, so the rows loaded are the rows `stale` was computed
     /// against.
     pub pin: Option<&'a str>,
-    /// Buckets whose declared inputs moved since `cursor`, from the
+    /// Render units whose declared inputs moved since `cursor`, from the
     /// driver's reverse lookup. `None` when the driver could not say.
     pub stale: Option<&'a HashSet<String>>,
 }
@@ -44,7 +44,7 @@ impl<'a> RawRange<'a> {
         }
     }
 
-    /// Whether one bucket has to render: the driver found it stale, or
+    /// Whether one render unit has to render: the driver found it stale, or
     /// could not say. For a provider whose store is one document.
     pub fn is_stale(&self, key: &str) -> bool {
         self.stale.is_none_or(|stale| stale.contains(key))
@@ -52,13 +52,13 @@ impl<'a> RawRange<'a> {
 
     /// What to render: the driver's stale set joined with the provider's
     /// forward scan, or everything when either side could not narrow.
-    /// For a provider whose bucket key is the raw id.
+    /// For a provider whose render unit key is the raw id.
     pub fn narrow(&self, forward: Option<&HashSet<String>>) -> Option<HashSet<String>> {
         self.narrow_by(forward, |key| Some(key.to_string())).render
     }
 
-    /// The same, for a provider whose bucket key is minted from the raw
-    /// id: `to_raw` maps a stale bucket key back to the row to load, and
+    /// The same, for a provider whose render unit key is minted from the raw
+    /// id: `to_raw` maps a stale render unit key back to the row to load, and
     /// a key it cannot map — the row is gone — comes back in `gone`, for
     /// the processor to declare with nothing so its documents go.
     pub fn narrow_by(
@@ -92,25 +92,25 @@ impl<'a> RawRange<'a> {
 pub struct Narrowed {
     /// Raw ids to load and render; `None` renders everything.
     pub render: Option<HashSet<String>>,
-    /// Bucket keys the driver found stale whose raw row no longer exists.
+    /// Render unit keys the driver found stale whose raw row no longer exists.
     pub gone: Vec<String>,
 }
 
-/// One bucket a run rendered: its key and the rows it read — what a
-/// processor declares through `RenderCtx::declare_bucket`.
+/// One render unit a run rendered: its key and the rows it read — what a
+/// processor declares through `RenderCtx::declare_render_unit`.
 #[derive(Debug, Clone)]
-pub struct Bucket {
+pub struct RenderUnit {
     pub key: String,
     pub inputs: Vec<Input>,
 }
 
-/// Every bucket a render pass produced.
-pub type Buckets = Vec<Bucket>;
+/// Every render unit a render pass produced.
+pub type RenderUnits = Vec<RenderUnit>;
 
 /// The rows the diff names as changed since the cursor, per table, for
-/// the tables that exist — the forward half of a provider whose bucket
+/// the tables that exist — the forward half of a provider whose render unit
 /// keys are minted from rows it has to load anyway: map each changed id
-/// through the loaded rows to its bucket. `None` when there is no cursor
+/// through the loaded rows to its render unit. `None` when there is no cursor
 /// to diff from, or the store cannot resolve it: everything renders.
 pub async fn changed_rows(
     pool: &SqlitePool,
@@ -166,7 +166,7 @@ pub fn keys_reading<'a>(
         .collect()
 }
 
-/// The rows one bucket asked for, in the order the store diffs them.
+/// The rows one render unit asked for, in the order the store diffs them.
 /// Interior-mutable so a lookup through a shared `&` still records.
 #[derive(Debug, Default)]
 pub struct Inputs {
@@ -236,7 +236,7 @@ impl<V> Rows for HashMap<String, V> {
 
 /// A read-only view of one raw table's rows that declares every key it
 /// is asked for — a miss too, since the row's arrival is a change the
-/// bucket must see.
+/// render unit must see.
 pub struct Lookup<'a, M> {
     table: &'static str,
     map: &'a M,

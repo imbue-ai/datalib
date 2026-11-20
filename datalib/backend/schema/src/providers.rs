@@ -50,7 +50,7 @@ pub enum Provider {
     /// Not an upstream provider: datalib describing a source's own
     /// mirror. The per-source storage report is tagged this way rather
     /// than with the source's provider, so a measurement never lands in
-    /// the same bucket as the data it measures.
+    /// the same render unit as the data it measures.
     /// See `datalib_step::introspect`.
     Datalib,
     /// All three download modes — JMAP, Gmail API, mbox — write this
@@ -69,6 +69,8 @@ pub enum Provider {
     /// Adobe Lightroom Classic: a catalog's photos and videos.
     Lightroom,
     Linkedin,
+    /// A folder of markdown notes: an Obsidian vault, a notes folder.
+    Markdown,
     Notion,
     Pdf,
     Perseus,
@@ -120,6 +122,7 @@ impl Provider {
             Provider::GoogleTakeout => "Google Takeout",
             Provider::Lightroom => "Lightroom",
             Provider::Linkedin => "LinkedIn",
+            Provider::Markdown => "Markdown",
             Provider::Notion => "Notion",
             Provider::Pdf => "PDF",
             Provider::Perseus => "Perseus",

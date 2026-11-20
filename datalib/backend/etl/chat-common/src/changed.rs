@@ -1,5 +1,5 @@
 //! The incremental half of a chat-shaped render: which of a source's
-//! chats this run renders, which buckets it names empty first, and the
+//! chats this run renders, which render units it names empty first, and the
 //! outcome the processor declares.
 
 use std::collections::{HashMap, HashSet};
@@ -7,20 +7,20 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::inputs::{Bucket, Buckets, RawRange};
+use datalib_etl_render::inputs::{RawRange, RenderUnit, RenderUnits};
 
 use crate::types::NormalizedChat;
 
-/// The chats one pass renders, and the buckets it names before it
+/// The chats one pass renders, and the render units it names before it
 /// renders any.
 #[derive(Debug, Default)]
 pub struct ChangedChats {
-    /// Every chat the run looked at, and every stale bucket whose rows
+    /// Every chat the run looked at, and every stale render unit whose rows
     /// are gone, with no inputs: a chat with nothing left builds no
     /// documents, and chat-common never sees it, so this is what makes
-    /// its old ones go. The rendered chats' buckets follow and replace
+    /// its old ones go. The rendered chats' render units follow and replace
     /// these.
-    pub buckets: Buckets,
+    pub render_units: RenderUnits,
     pub chats: Vec<NormalizedChat>,
     /// Chats built but left alone: nothing they read changed.
     pub skipped: usize,
@@ -28,7 +28,7 @@ pub struct ChangedChats {
 
 /// Cut `all` down to the chats this run renders: those the provider's
 /// diff names in `changed`, by chat id, and those the driver found stale
-/// by chat uuid. `uuid_of` mints the bucket key for a chat id no chat
+/// by chat uuid. `uuid_of` mints the render unit key for a chat id no chat
 /// was built for — one whose rows are all gone.
 pub fn changed_chats(
     all: Vec<NormalizedChat>,
@@ -45,7 +45,7 @@ pub fn changed_chats(
         .iter()
         .map(|c| (c.id.as_str(), c.chat_uuid.as_str()))
         .collect();
-    let buckets = narrowed
+    let render_units = narrowed
         .render
         .iter()
         .flatten()
@@ -54,14 +54,14 @@ pub fn changed_chats(
             None => uuid_of(id),
         })
         .chain(narrowed.gone.iter().cloned())
-        .map(|key| Bucket {
+        .map(|key| RenderUnit {
             key,
             inputs: Vec::new(),
         })
         .collect();
     let Some(render) = narrowed.render else {
         return ChangedChats {
-            buckets,
+            render_units,
             chats: all,
             skipped: 0,
         };
@@ -69,21 +69,21 @@ pub fn changed_chats(
     let before = all.len();
     let chats: Vec<NormalizedChat> = all.into_iter().filter(|c| render.contains(&c.id)).collect();
     ChangedChats {
-        buckets,
+        render_units,
         skipped: before - chats.len(),
         chats,
     }
 }
 
 /// What one render pass of a chat-shaped source did, and what its
-/// processor acts on: the buckets to declare and the commit to stamp.
+/// processor acts on: the render units to declare and the commit to stamp.
 #[derive(Debug, Clone, Default)]
 pub struct RenderOutcome {
     pub rendered: usize,
     pub skipped: usize,
     pub new_head: Option<String>,
     pub scan_elapsed: Option<std::time::Duration>,
-    pub buckets: Buckets,
+    pub render_units: RenderUnits,
 }
 
 /// Which source a pass renders and what it tells the step as it goes.

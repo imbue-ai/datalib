@@ -89,6 +89,9 @@ pub enum SourceType {
     /// tables of Linear's objects are the mirror.
     Linear,
     Linkedin,
+    /// A folder of markdown files on this machine: an Obsidian vault, a
+    /// folder of notes. Named for the files, as `pdf` is.
+    Markdown,
     Media,
     Notion,
     Pdf,

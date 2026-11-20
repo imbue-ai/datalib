@@ -1,0 +1,20 @@
+# Every markdown file under a folder on this machine — an Obsidian vault,
+# a folder of notes. No account and no credentials: `fswalk.path` is the
+# folder to scan.
+[[groups]]
+id = "markdown"
+name = "Notes"
+type = "markdown"
+
+[[steps]]
+id = "markdown/ingest"
+command = "datalib-step run ingest markdown"
+
+[steps.params.fswalk]
+path = "~/Documents/Notes"
+
+[[steps]]
+id = "markdown/render_markdown"
+command = "datalib-step run render_markdown markdown"
+inputs = ["markdown/ingest"]
+reads = "pinned"

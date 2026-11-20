@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_linkedin_config::LinkedinRenderConfig;
-use datalib_etl_render::inputs::{Buckets, Input, RawRange};
+use datalib_etl_render::inputs::{Input, RawRange, RenderUnits};
 use datalib_etl_render::not_read::{self, tables_not_read, tables_not_read_row};
 use datalib_etl_render::processor::{
     plan_source_render, ReadScope, RenderCtx, RenderProcessor, SourceRender,
@@ -41,12 +41,12 @@ pub struct Source<'a> {
     pub range: RawRange<'a>,
 }
 
-/// What one feed's render pass did: every bucket it looked at, named
+/// What one feed's render pass did: every render unit it looked at, named
 /// first with nothing and then, for the rendered ones, with what they
 /// read; and the commit it read.
 #[derive(Debug, Default)]
 pub struct FeedOutcome {
-    pub buckets: Buckets,
+    pub render_units: RenderUnits,
     pub new_head: Option<String>,
 }
 
@@ -104,18 +104,18 @@ impl SourceRender for LinkedinRender {
         .into_iter()
         .collect();
         ctx.report_entity_problems(&ReadScope::Whole(vec![not_read::SCOPE]), &not_read)?;
-        // Each feed names the buckets it looked at, with nothing, and then
+        // Each feed names the render units it looked at, with nothing, and then
         // the ones it rendered, with what they read — in that order, so a
-        // bucket that no feed rendered ends declared with nothing and its
+        // render unit that no feed rendered ends declared with nothing and its
         // documents go. The feeds' keys never collide.
-        for bucket in messages
-            .buckets
+        for render_unit in messages
+            .render_units
             .iter()
-            .chain(&connections.buckets)
-            .chain(&posts.buckets)
-            .chain(&skills.buckets)
+            .chain(&connections.render_units)
+            .chain(&posts.render_units)
+            .chain(&skills.render_units)
         {
-            ctx.declare_bucket(&bucket.key, &bucket.inputs)?;
+            ctx.declare_render_unit(&render_unit.key, &render_unit.inputs)?;
         }
         if let Some(head) = [&messages, &connections, &posts, &skills]
             .iter()

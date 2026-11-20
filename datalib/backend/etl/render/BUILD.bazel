@@ -29,6 +29,7 @@ rust_library(
         "//datalib/backend/search_index:datalib_search_index",
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
+        "//datalib/backend/uuid_text:datalib_uuid_text",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
         "@datalib_crates//:futures",

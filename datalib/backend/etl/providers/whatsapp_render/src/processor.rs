@@ -66,7 +66,7 @@ impl SourceRender for WhatsappRender {
             &dropped,
         )?;
         let mut on_doc = |md| ctx.emit_doc(md);
-        let (consumed, buckets) = render_all(
+        let (consumed, render_units) = render_all(
             &parsed.chats,
             &parsed.commit,
             raw_path,
@@ -77,7 +77,7 @@ impl SourceRender for WhatsappRender {
             &mut on_doc,
         )
         .context("whatsapp render_all")?;
-        ctx.finish(&buckets, consumed.as_deref())?;
+        ctx.finish(&render_units, consumed.as_deref())?;
         Ok("rendered".into())
     }
 }

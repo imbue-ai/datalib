@@ -563,14 +563,14 @@
   font-size: 0.8em;
   opacity: 0.7;
 }
-/* A section with no header line has its 🆔 at its top, set to the right
+/* A section with no header line has its 🔗 at its top, set to the right
    rather than on a line of its own. */
-.chat-body [data-section-uuid] > button.copy-uuid:first-child {
+.chat-body [data-section-uuid] > button.copy-link:first-child {
   float: right;
   margin-left: 0.5em;
 }
-.chat-body button.copy-uuid {
-  /* The 🆔 glyph is a saturated purple that outshouts the message it
+.chat-body button.copy-link {
+  /* The 🔗 glyph is a coloured emoji that outshouts the message it
      sits next to; grey it out so it reads as a control rather than as
      content. The `copied` / `copy-failed` states below re-colour on
      purpose, so they drop the filter. */
@@ -594,15 +594,15 @@
 /* Opacity only. A hover border would draw a box a different shape from
    the glyph inside it, which reads as the control changing rather than
    as it lighting up. */
-.chat-body button.copy-uuid:hover {
+.chat-body button.copy-link:hover {
   opacity: 1;
 }
-.chat-body button.copy-uuid.copied {
+.chat-body button.copy-link.copied {
   color: #16a34a;
   opacity: 1;
   filter: none;
 }
-.chat-body button.copy-uuid.copy-failed {
+.chat-body button.copy-link.copy-failed {
   color: #dc2626;
   opacity: 1;
   filter: none;

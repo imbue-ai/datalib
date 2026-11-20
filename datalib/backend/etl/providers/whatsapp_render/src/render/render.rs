@@ -10,7 +10,7 @@ use datalib_etl::doltlite_raw;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::TextFormat;
 use datalib_etl_chat_common::{
-    render::{Bucket, Buckets, ChatRenderer, RenderProfile},
+    render::{ChatRenderer, RenderProfile, RenderUnit, RenderUnits},
     render_batched_at, BlobsAt, NormalizedChat,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -69,9 +69,9 @@ pub fn render_all(
     range: RawRange<'_>,
     blob_bytes: u64,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-) -> Result<(Option<String>, Buckets)> {
+) -> Result<(Option<String>, RenderUnits)> {
     // Incremental gate: with a cursor, ask doltlite which chats changed
-    // between that hash and the pinned commit, join the buckets the
+    // between that hash and the pinned commit, join the render units the
     // driver found stale through their declared inputs, and skip the
     // rest. Cold start (no cursor) renders every chat.
     let db_path = doltlite_raw::db_path_for(raw_dir);
@@ -95,7 +95,7 @@ pub fn render_all(
         cold_start = scan.changed.is_none(),
         "[render] whatsapp dolt_diff scan"
     );
-    // The driver names stale buckets by chat uuid; the chats are by JID.
+    // The driver names stale render units by chat uuid; the chats are by JID.
     let by_uuid: HashMap<String, &str> = chats
         .iter()
         .map(|c| (c.chat_uuid.clone(), c.id.as_str()))
@@ -113,7 +113,7 @@ pub fn render_all(
     // Every named JID, live or gone: every backup is a full snapshot
     // (the mirror drops and refills), so a chat the diff named that
     // HEAD no longer carries is one the phone deleted, and declaring
-    // it with nothing is what removes its documents. A stale bucket
+    // it with nothing is what removes its documents. A stale render unit
     // whose chat is gone is already a key.
     let mut named: Vec<String> = narrowed
         .render
@@ -128,7 +128,7 @@ pub fn render_all(
     let mut renderer = ChatRenderer::new(
         &profile,
         source_id,
-        to_render.iter().map(|c| c.buckets.len()).sum(),
+        to_render.iter().map(|c| c.render_units.len()).sum(),
         progress,
         on_doc_complete,
     );
@@ -147,15 +147,15 @@ pub fn render_all(
     // Named chats first, with no documents: one the diff named whose
     // messages all went builds no chat, and chat-common never sees it.
     // The rendered ones follow and replace that.
-    let mut buckets: Buckets = named
+    let mut render_units: RenderUnits = named
         .into_iter()
-        .map(|key| Bucket {
+        .map(|key| RenderUnit {
             key,
             inputs: Vec::new(),
         })
         .collect();
-    buckets.extend(summary.buckets);
-    Ok((scan.head, buckets))
+    render_units.extend(summary.render_units);
+    Ok((scan.head, render_units))
 }
 
 /// SQL projection resolving an attachment's `ref_id` — the file's
@@ -238,7 +238,7 @@ async fn changed_chats(pool: &sqlx::SqlitePool, from: &Pin, to: &Pin) -> Result<
         chat_rowids.extend(diff_column::<i64>(pool, table, "chat_row_id", from, to).await?);
     }
     // A chat's JID is its identity: a `jid` row that changed renames the
-    // bucket, so the chats on it are named on both sides — the old JID
+    // render unit, so the chats on it are named on both sides — the old JID
     // reads as gone, the new one as live.
     let jid_rowids = diff_column::<i64>(pool, "jid", "_id", from, to).await?;
     for pin in [to, from] {
@@ -434,7 +434,7 @@ mod tests {
     ///   3. render again with no DB changes → expect zero rendered (the
     ///      dolt_diff filter sees an empty changed set)
     ///   4. modify a message in chat A, commit
-    ///   5. render → expect only chat A's bucket(s) re-rendered
+    ///   5. render → expect only chat A's render unit(s) re-rendered
     ///   6. delete chat B outright, commit
     ///   7. render → nothing re-rendered, chat B reported gone
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -692,7 +692,7 @@ mod tests {
             .iter()
             .all(|d| d.problem.reason == Reason::NoIdentity));
         assert_eq!(parsed.chats.len(), 1, "only the chat with a jid renders");
-        let items: Vec<_> = parsed.chats[0].buckets[0].items.iter().collect();
+        let items: Vec<_> = parsed.chats[0].render_units[0].items.iter().collect();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].problems.len(), 1, "{:?}", items[0].problems);
         assert_eq!(items[0].problems[0].reason, Reason::FetchFailed);
@@ -800,7 +800,7 @@ mod tests {
                     emitted.push(md.markdown_uuid);
                     Ok(())
                 };
-            let (consumed, buckets) = render_all(
+            let (consumed, render_units) = render_all(
                 &parsed.chats,
                 &parsed.commit,
                 &raw_dir,
@@ -813,12 +813,12 @@ mod tests {
             .expect("render_all");
             // A chat declared with nothing and never rendered is one the
             // run found gone, reported here as the JID it was named by.
-            let rendered: HashSet<&str> = buckets
+            let rendered: HashSet<&str> = render_units
                 .iter()
                 .filter(|b| !b.inputs.is_empty())
                 .map(|b| b.key.as_str())
                 .collect();
-            let mut gone: Vec<String> = buckets
+            let mut gone: Vec<String> = render_units
                 .iter()
                 .filter(|b| b.inputs.is_empty() && !rendered.contains(b.key.as_str()))
                 .map(|b| b.key.clone())
