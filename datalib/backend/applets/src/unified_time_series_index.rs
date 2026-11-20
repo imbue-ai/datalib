@@ -20,7 +20,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use datalib_etl::doltlite_raw::{self, Reader, StoreKind};
+use datalib_etl::doltlite_raw::{Reader, StoreKind};
 use datalib_etl_time_series::read::{self, Answer};
 use datalib_etl_time_series::store;
 use datalib_time_series_schema::{TimeSeriesRow, TimeSeriesSourceRow, Unit};
@@ -344,7 +344,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{header, Request};
-    use datalib_etl::doltlite_raw::StoreKind;
+    use datalib_etl::doltlite_raw::{self, StoreKind};
     use datalib_etl_time_series::index;
     use datalib_time_series_schema::{Points, TimeKind, TimeSeries, ValueType};
     use tower::ServiceExt;
