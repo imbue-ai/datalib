@@ -123,6 +123,7 @@ test("a place's chip opens its own card, and a message is its author's chip", as
 
   // A thread's messages, shown beside the tree: each titled by its author.
   await treeRow(page, "#bridge").click();
+  await expect(page.locator(".lib-pane-title")).toHaveText("#bridge");
   await nodeRows(page)
     .first()
     .dblclick({ position: { x: 4, y: 4 } });

@@ -124,7 +124,12 @@ function openFromPane(...sources: string[]): string[] {
   return props.ctx.host.openCards(...sources);
 }
 
+// A pick in the tree waiting for the selection to settle. Whatever the pane
+// shows meanwhile, from the pane itself, cancels it.
+let selecting: ReturnType<typeof setTimeout> | undefined;
+
 function show(opts: NodeViewOpts | null) {
+  clearTimeout(selecting);
   teardown?.();
   teardown = null;
   shown.value = opts;
@@ -266,7 +271,6 @@ onMounted(async () => {
     label.append(c ?? node.label);
   };
   // Arrowing through the tree shows each place it stops on, once it stops.
-  let selecting: ReturnType<typeof setTimeout> | undefined;
   el.addEventListener("select", (e) => {
     const [node] = (e as CustomEvent<{ nodes: TreeNode[] }>).detail.nodes;
     clearTimeout(selecting);
