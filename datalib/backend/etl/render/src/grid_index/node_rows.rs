@@ -63,7 +63,7 @@ pub(super) const CARRIED_WITHOUT_A_ROW: &str = "\
 /// Node rows no document carries any more, in every source at once: there
 /// are few of them, and a node filed under datalib is not under its
 /// source's id.
-const ORPHANED: &str = "\
+pub(super) const ORPHANED: &str = "\
     DELETE FROM grid_rows \
     WHERE markdown_uuid IS NULL \
       AND NOT EXISTS (SELECT 1 FROM data_nodes n WHERE n.uuid = grid_rows.uuid) \

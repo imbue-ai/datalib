@@ -15,9 +15,14 @@ use serde::{Deserialize, Serialize};
 pub const CHILDREN_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS grid_rows_by_parent ON grid_rows (parent_uuid, sort_key, uuid)",
     "CREATE INDEX IF NOT EXISTS data_nodes_by_parent ON data_nodes (parent_uuid, sort_key, uuid)",
-    "CREATE INDEX IF NOT EXISTS data_nodes_by_uuid ON data_nodes (uuid)",
+    BY_UUID_INDEX,
     "CREATE INDEX IF NOT EXISTS filings_by_under ON filings (under_uuid, node_uuid)",
 ];
+
+/// A container by its uuid: a page's containers are read by it, and the
+/// grid index's sweep of node rows no document carries looks each up by it.
+pub const BY_UUID_INDEX: &str =
+    "CREATE INDEX IF NOT EXISTS data_nodes_by_uuid ON data_nodes (uuid)";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, PortableTable, sqlx::FromRow)]
 #[portable_table(table = "data_nodes", primary_key = "markdown_uuid, uuid")]
