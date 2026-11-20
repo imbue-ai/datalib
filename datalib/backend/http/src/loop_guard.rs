@@ -2,11 +2,13 @@
 //! own effect — its log line, a walk it asked for — comes back as a
 //! `root` frame, and the page refetches on the frame. Each hop is
 //! counted, not prevented. The count rides the frame out (`chain`), comes
-//! back on the refetch (`X-Datalib-Cause`) and is stored on the
-//! request's log line, where the watcher reads it again. A chain that
-//! reaches [`LOOP_AT`] is a loop, and the server says so in its log.
+//! back on the refetch (`X-Datalib-Cause`), and is noted in [`Echoes`]
+//! as the request's line is logged, where the watch takes it for the
+//! frame that line causes. A chain that reaches [`LOOP_AT`] is a loop,
+//! and the server says so in its log.
 
-use datalib_runs::LogRow;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
 /// The request header a page sends on a fetch it made while handling a
 /// `root` frame: the frame's `chain`, or 0 when the frame had none.
@@ -15,9 +17,6 @@ pub const CAUSE_HEADER: &str = "x-datalib-cause";
 /// The tracing target of the warning; `target:http.loop` in the log
 /// panel's search bar.
 pub const TARGET: &str = "http.loop";
-
-/// The field on a request line that stores its chain.
-pub const CHAIN_FIELD: &str = "chain";
 
 /// One refetch caused by its own echo is waste; five in a row is a
 /// page that will not stop by itself.
@@ -51,26 +50,29 @@ pub fn warns_at(chain: u32) -> bool {
     }
 }
 
-/// The chain a frame continues when the server's own lines are what
-/// moved: one past the longest chain among its request lines. `None`
-/// when no request line is among them, so nothing a page did caused it.
-/// Other server lines ride along without breaking the chain; the
-/// warning itself is one of them.
-pub fn burst_chain(lines: &[LogRow]) -> Option<u32> {
-    lines
-        .iter()
-        .filter(|l| l.target.as_deref() == Some(crate::request_log::TARGET))
-        .map(chain_of)
-        .max()
-        .map(|c| c.saturating_add(1))
-}
+/// The chain the server's next log frame continues: one past the
+/// longest chain among the request lines logged since the watch last
+/// took it, or nothing when no request was logged, so no page caused the
+/// frame. Kept in memory, because the server logged those lines itself;
+/// reading them back from the run store is a read the store's own change
+/// sets off again.
+#[derive(Clone, Default)]
+pub struct Echoes(Arc<AtomicU32>);
 
-fn chain_of(line: &LogRow) -> u32 {
-    line.fields
-        .as_deref()
-        .and_then(|f| serde_json::from_str::<serde_json::Value>(f).ok())
-        .and_then(|v| v.get(CHAIN_FIELD)?.as_u64())
-        .map_or(0, |c| u32::try_from(c).unwrap_or(u32::MAX))
+impl Echoes {
+    /// A request's line was logged, `chain` hops from a fetch nothing caused.
+    pub fn logged(&self, chain: u32) {
+        // 0 is "nothing logged", so what is kept is the next chain.
+        self.0.fetch_max(chain.saturating_add(1), Ordering::Relaxed);
+    }
+
+    /// The chain the frame for what was logged continues, forgetting it.
+    pub fn take(&self) -> Option<u32> {
+        match self.0.swap(0, Ordering::Relaxed) {
+            0 => None,
+            next => Some(next),
+        }
+    }
 }
 
 /// Run a request's handler knowing its chain, so a frame the handler
@@ -89,14 +91,6 @@ pub fn from_this_request() -> Option<u32> {
 mod tests {
     use super::*;
 
-    fn line(target: &str, fields: Option<&str>) -> LogRow {
-        LogRow {
-            target: Some(target.into()),
-            fields: fields.map(str::to_string),
-            ..Default::default()
-        }
-    }
-
     #[test]
     fn a_request_with_no_cause_starts_a_chain_at_zero() {
         assert_eq!(request_chain(None), 0);
@@ -105,22 +99,18 @@ mod tests {
     }
 
     #[test]
-    fn a_burst_of_request_lines_continues_the_longest_chain() {
-        let lines = [
-            line(crate::request_log::TARGET, Some(r#"{"path":"/a"}"#)),
-            line(
-                crate::request_log::TARGET,
-                Some(r#"{"path":"/b","chain":4}"#),
-            ),
-            line("ui.navigate", None),
-        ];
-        assert_eq!(burst_chain(&lines), Some(5));
-    }
-
-    #[test]
-    fn a_burst_with_no_request_line_continues_nothing() {
-        assert_eq!(burst_chain(&[]), None);
-        assert_eq!(burst_chain(&[line("datalib_http::supervisor", None)]), None);
+    fn the_requests_logged_continue_the_longest_chain_once() {
+        let echoes = Echoes::default();
+        assert_eq!(echoes.take(), None, "nothing was logged");
+        echoes.logged(0);
+        echoes.logged(4);
+        echoes.logged(2);
+        assert_eq!(echoes.take(), Some(5));
+        assert_eq!(echoes.take(), None, "taken once");
+        echoes.logged(0);
+        assert_eq!(echoes.take(), Some(1), "a fetch nothing caused is one hop");
+        echoes.logged(u32::MAX);
+        assert_eq!(echoes.take(), Some(u32::MAX));
     }
 
     #[test]

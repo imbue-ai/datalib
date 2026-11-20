@@ -80,12 +80,14 @@ pub async fn build_state(
             tracing::error!("{n}");
         }
         let (root_tx, _) = tokio::sync::broadcast::channel(64);
-        crate::watch::spawn((*root).clone(), root_tx.clone());
+        let echoes = crate::loop_guard::Echoes::default();
+        crate::watch::spawn((*root).clone(), root_tx.clone(), echoes.clone());
         return Ok(AppState {
             root: root.clone(),
             app: Arc::new(NewerRootRepo(newer_root.clone())),
             sync: supervisor::SyncControl::new(root.clone()),
             root_tx,
+            echoes,
             // No entries: nothing starts, and the unified_grid_and_search_index applet
             // never opens the index this build must not read as its own.
             applets: Arc::new(crate::applets::AppletRegistry::build(
@@ -116,7 +118,8 @@ pub async fn build_state(
     // `crate::watch`. Started before the loop so a sync that begins
     // during startup is already being reported on.
     let (root_tx, _) = tokio::sync::broadcast::channel(64);
-    let nudge = crate::watch::spawn((*root).clone(), root_tx.clone());
+    let echoes = crate::loop_guard::Echoes::default();
+    let nudge = crate::watch::spawn((*root).clone(), root_tx.clone(), echoes.clone());
     {
         let (runs_store, nudge) = (datalib_runs::runs_path(&root), nudge.clone());
         datalib_runs::after_every_write(move |store| {
@@ -194,6 +197,7 @@ pub async fn build_state(
         app,
         sync,
         root_tx,
+        echoes,
         applets,
         api_token,
         frame_ancestors,

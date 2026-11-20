@@ -300,8 +300,6 @@ struct Seen {
     time_series_head: Option<String>,
     /// Each curated store's `main` as of the last burst.
     curated_heads: BTreeMap<PathBuf, String>,
-    /// The last log line read for its chain.
-    log_seq: i64,
 }
 
 impl Seen {
@@ -311,27 +309,8 @@ impl Seen {
             index_head: index_head(root).await.unwrap_or(None),
             time_series_head: time_series_head(root).await.unwrap_or(None),
             curated_heads: curated_heads(root).await,
-            log_seq: datalib_runs::last_log_seq(root).await,
         }
     }
-}
-
-/// More server lines than this in one burst is not a page echoing
-/// itself, and not worth reading to find out.
-const CHAIN_READ_LIMIT: i64 = 500;
-
-/// The chain the server's own new lines continue, and the cursor moved
-/// past them.
-async fn server_log_chain(root: &Path, seen: &mut Seen) -> Option<u32> {
-    let lines = datalib_runs::process_log_after(root, seen.log_seq, CHAIN_READ_LIMIT).await;
-    if lines.len() as i64 >= CHAIN_READ_LIMIT {
-        seen.log_seq = datalib_runs::last_log_seq(root).await;
-        return None;
-    }
-    if let Some(last) = lines.last() {
-        seen.log_seq = last.seq;
-    }
-    crate::loop_guard::burst_chain(&lines)
 }
 
 /// A burst's frames. What moved outside the server's own log goes out
@@ -526,7 +505,12 @@ fn curated_moved(now: BTreeMap<PathBuf, String>, seen: &mut BTreeMap<PathBuf, St
 }
 
 /// The frames one debounced burst of file moves becomes.
-async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet<RootFrame> {
+async fn expand(
+    root: &Path,
+    moved: &HashSet<Moved>,
+    seen: &mut Seen,
+    echoes: &crate::loop_guard::Echoes,
+) -> HashSet<RootFrame> {
     let mut out = HashSet::new();
     let mut server_log = HashSet::new();
     let table = |t: Table| RootEvent::TableChanged { table: t };
@@ -593,7 +577,7 @@ async fn expand(root: &Path, moved: &HashSet<Moved>, seen: &mut Seen) -> HashSet
     let chain = if server_log.is_empty() {
         None
     } else {
-        server_log_chain(root, seen).await
+        echoes.take()
     };
     frames(out, server_log, chain)
 }
@@ -611,12 +595,12 @@ impl Ready {
     }
 }
 
-pub fn spawn(root: PathBuf, tx: RootTx) -> Nudge {
-    start(root, tx, Timing::default(), Ears::Os).2
+pub fn spawn(root: PathBuf, tx: RootTx, echoes: crate::loop_guard::Echoes) -> Nudge {
+    start(root, tx, Timing::default(), Ears::Os, echoes).2
 }
 
 pub fn spawn_with(root: PathBuf, tx: RootTx, timing: Timing) -> Ready {
-    start(root, tx, timing, Ears::Os).0
+    start(root, tx, timing, Ears::Os, Default::default()).0
 }
 
 /// Tells the watch that something may have published a commit the
@@ -649,8 +633,13 @@ impl Nudge {
 /// frame) is then tested without depending on when, or whether, the OS
 /// delivers it; fseventsd has held events back for over a minute on a
 /// busy disk.
-pub fn spawn_fed(root: PathBuf, tx: RootTx, timing: Timing) -> (Ready, Feed) {
-    let (ready, feed, _) = start(root, tx, timing, Ears::Fed);
+pub fn spawn_fed(
+    root: PathBuf,
+    tx: RootTx,
+    timing: Timing,
+    echoes: crate::loop_guard::Echoes,
+) -> (Ready, Feed) {
+    let (ready, feed, _) = start(root, tx, timing, Ears::Fed, echoes);
     (ready, feed.expect("a fed watch has a feed"))
 }
 
@@ -702,7 +691,13 @@ fn hear(moved: Moved, listeners: &Path, raw_tx: &tokio::sync::mpsc::UnboundedSen
 
 type MakeWatcher = Box<dyn Fn() -> notify::Result<notify::RecommendedWatcher> + Send>;
 
-fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Option<Feed>, Nudge) {
+fn start(
+    root: PathBuf,
+    tx: RootTx,
+    timing: Timing,
+    ears: Ears,
+    echoes: crate::loop_guard::Echoes,
+) -> (Ready, Option<Feed>, Nudge) {
     let (ready_tx, ready) = tokio::sync::oneshot::channel();
     let heartbeat_tx = tx.clone();
     tokio::spawn(async move {
@@ -891,7 +886,7 @@ fn start(root: PathBuf, tx: RootTx, timing: Timing, ears: Ears) -> (Ready, Optio
                 }
             }
             let now = Instant::now();
-            let fresh = expand(&root, &pending, &mut seen).await;
+            let fresh = expand(&root, &pending, &mut seen, &echoes).await;
             let mut sent: Vec<RootFrame> = fresh
                 .into_iter()
                 .filter_map(|f| throttle.offer(f, now))
@@ -1357,7 +1352,7 @@ mod tests {
     /// OS's own delivery is `tests/http_tests/watch_os.rs`'s business.
     async fn watching(root: &Path) -> (broadcast::Receiver<RootFrame>, Feed) {
         let (tx, rx) = broadcast::channel(1024);
-        let (ready, feed) = spawn_fed(root.to_path_buf(), tx, at_once());
+        let (ready, feed) = spawn_fed(root.to_path_buf(), tx, at_once(), Default::default());
         within("readiness", ready.wait()).await;
         (rx, feed)
     }
