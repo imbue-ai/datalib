@@ -392,7 +392,7 @@
     ]
   },
   "google_takeout": {
-    "schema_hash": "a2070d3b402b952bf831743c55cc4202fa1d0a85eb76239bc0132e557f41b5e4",
+    "schema_hash": "df79c1a1b55a3f14872b4ebabb8a12e74b7eaedfeeed51b886419b35faea8560",
     "schema_version": 4,
     "shared_schema_version": 1,
     "sql": [
@@ -404,6 +404,7 @@
       "CREATE TABLE chat_groups_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE chat_messages( id TEXT PRIMARY KEY, payload TEXT NULL, group_id TEXT NOT NULL, sender_email TEXT NULL, when_ts TEXT NULL)",
       "CREATE TABLE chat_messages_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE INDEX chat_messages_by_group ON chat_messages(group_id)",
       "CREATE TABLE chat_users( id TEXT PRIMARY KEY, payload TEXT NULL)",
       "CREATE TABLE chat_users_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE gemini_activity( id TEXT PRIMARY KEY, payload TEXT NULL, when_ts TEXT NULL)",
@@ -419,12 +420,15 @@
       "CREATE TABLE maps_reviews_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE maps_saved_lists( id TEXT PRIMARY KEY, payload TEXT NULL, file TEXT NOT NULL)",
       "CREATE TABLE maps_saved_lists_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE INDEX maps_saved_lists_by_file ON maps_saved_lists(file)",
       "CREATE TABLE maps_saved_places( id TEXT PRIMARY KEY, payload TEXT NULL, when_ts TEXT NULL)",
       "CREATE TABLE maps_saved_places_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE my_maps_placemarks( id TEXT PRIMARY KEY, payload TEXT NULL, file TEXT NOT NULL)",
       "CREATE TABLE my_maps_placemarks_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE INDEX my_maps_placemarks_by_file ON my_maps_placemarks(file)",
       "CREATE TABLE play_books_annotations( id TEXT PRIMARY KEY, payload TEXT NULL, file TEXT NOT NULL, when_ts TEXT NULL)",
       "CREATE TABLE play_books_annotations_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE INDEX play_books_annotations_by_file ON play_books_annotations(file)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
