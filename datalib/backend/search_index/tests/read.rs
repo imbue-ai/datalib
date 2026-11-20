@@ -1,6 +1,7 @@
 //! The reader against an index and cache the writers filled.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use datalib_search_index::{
     chunk::{chunk_hash, four_bytes_a_token},
@@ -38,8 +39,46 @@ fn thread() -> IndexDoc {
 }
 
 struct Fixture {
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
     reader: Reader,
+}
+
+impl Fixture {
+    fn index_path(&self) -> std::path::PathBuf {
+        self.dir.path().join("index.sqlite")
+    }
+
+    fn cache_path(&self) -> std::path::PathBuf {
+        self.dir.path().join("cache.sqlite")
+    }
+
+    /// Indexes `docs`, cuts them as their `embed` would, and caches
+    /// `vectors`, as a sync does after the reader has read.
+    async fn sync(&self, docs: &[IndexDoc], vectors: &[(String, Vec<f32>)]) {
+        let index = Index::open(&self.index_path()).await.unwrap();
+        index.put(docs).await.unwrap();
+        index.close().await;
+        let cache = InferenceCache::open(&self.cache_path()).await.unwrap();
+        cache.file_chunks(&cut(docs)).await.unwrap();
+        cache
+            .put(&datalib_search_index::model_key(), vectors)
+            .await
+            .unwrap();
+        cache.close().await;
+    }
+}
+
+fn cut(docs: &[IndexDoc]) -> Vec<ChunkedDoc> {
+    docs.iter()
+        .map(|d| ChunkedDoc::from_prompted(d, &d.prompted(&four_bytes_a_token).unwrap()))
+        .collect()
+}
+
+/// The hash of `doc`'s one chunk.
+fn only_chunk(doc: &IndexDoc) -> String {
+    let prompted = doc.prompted(&four_bytes_a_token).unwrap();
+    assert_eq!(prompted.len(), 1, "{} is one chunk", doc.markdown_uuid);
+    prompted[0].hash.clone()
 }
 
 /// `docs` in the keyword index, each cut into chunks as its `embed` cuts
@@ -62,11 +101,7 @@ async fn fixture_cut(
     index.put(docs).await.unwrap();
     index.close().await;
     let cache = InferenceCache::open(&cache_path).await.unwrap();
-    let filed: Vec<ChunkedDoc> = cut
-        .iter()
-        .map(|d| ChunkedDoc::from_prompted(d, &d.prompted(&four_bytes_a_token).unwrap()))
-        .collect();
-    cache.file_chunks(&filed).await.unwrap();
+    cache.file_chunks(&self::cut(cut)).await.unwrap();
     cache
         .put(&datalib_search_index::model_key(), vectors)
         .await
@@ -76,7 +111,14 @@ async fn fixture_cut(
         .await
         .unwrap()
         .unwrap();
-    Fixture { _dir: dir, reader }
+    Fixture { dir, reader }
+}
+
+/// `v` as search holds it: in half precision.
+fn half(v: &[f32]) -> Vec<u16> {
+    v.iter()
+        .map(|x| datalib_search_index::half::from_f32(*x))
+        .collect()
 }
 
 /// Every word, each whole, in one message.
@@ -202,14 +244,247 @@ async fn held_vectors_are_the_cached_chunks_with_their_messages() {
         .await
         .unwrap();
     assert_eq!(held.dim, 2);
-    assert_eq!(held.docs.len(), 1);
-    let d = &held.docs[0];
+    let embedded: Vec<_> = held.embedded().collect();
+    assert_eq!(embedded.len(), 1);
+    let d = embedded[0];
     assert_eq!(d.markdown_uuid, "thread");
-    assert_eq!(held.vector(0), [0.6, 0.8]);
-    let covered: Vec<&str> = held.covered(d, d.chunks.start).collect();
+    assert_eq!(d.vector(0), half(&[0.6, 0.8]));
+    let covered: Vec<&str> = d.covered(0).collect();
     assert_eq!(covered, ["m1", "m2"]);
     let other_model = f.reader.held("another-model").await.unwrap();
     assert!(other_model.docs.is_empty());
+    f.reader.close().await;
+}
+
+/// Reading again after a sync reads only the documents that changed: one
+/// whose rendering has not moved is the one held, though its vector in the
+/// cache now says otherwise, where a full read takes the cache's.
+#[tokio::test]
+async fn a_reload_reads_only_the_documents_that_changed() {
+    let t = thread();
+    let chat = doc("chat", "chat", &[(Some("c1"), "tea, Earl Grey\n")]);
+    let (thread_hash, chat_hash) = (only_chunk(&t), only_chunk(&chat));
+    let model = datalib_search_index::model_key();
+    let f = fixture(
+        std::slice::from_ref(&t),
+        &[(thread_hash.clone(), vec![3.0, 4.0])],
+    )
+    .await;
+    let before = f.reader.held(&model).await.unwrap();
+    f.sync(
+        &[chat],
+        &[(thread_hash, vec![4.0, 3.0]), (chat_hash, vec![0.0, 2.0])],
+    )
+    .await;
+    let after = f.reader.held_after(&model, Some(&before)).await.unwrap();
+    assert!(Arc::ptr_eq(&before.docs["thread"], &after.docs["thread"]));
+    assert_eq!(
+        after.docs["thread"].vector(0),
+        half(&[0.6, 0.8]),
+        "not read"
+    );
+    assert_eq!(
+        after.docs["chat"].vector(0),
+        half(&[0.0, 1.0]),
+        "read: it is new"
+    );
+    let full = f.reader.held(&model).await.unwrap();
+    assert_eq!(
+        full.docs["thread"].vector(0),
+        half(&[0.8, 0.6]),
+        "a full read reads it"
+    );
+    f.reader.close().await;
+}
+
+/// A conversation that grows by a message is drawn again, and only its new
+/// chunk's vector is read: the first chunk's is the one held before, though
+/// the cache now says otherwise.
+#[tokio::test]
+async fn a_grown_conversation_reads_only_its_new_chunk() {
+    let model = datalib_search_index::model_key();
+    let mut chat = doc("chat", "chat", &[]);
+    chat.sections = vec![message("m1", "warp core")];
+    let mut grown = chat.clone();
+    grown.content_hash = "a later rendering".into();
+    grown.sections.push(message("m2", "coolant leak"));
+    let first = chat.prompted(&four_bytes_a_token).unwrap()[0].hash.clone();
+    let both = grown.prompted(&four_bytes_a_token).unwrap();
+    assert_eq!(both.len(), 2, "a message starts a chunk of its own");
+    assert_eq!(both[0].hash, first, "the first chunk did not move");
+    let f = fixture(
+        std::slice::from_ref(&chat),
+        &[(first.clone(), vec![3.0, 4.0])],
+    )
+    .await;
+    let before = f.reader.held(&model).await.unwrap();
+    f.sync(
+        &[grown],
+        &[
+            (first, vec![4.0, 3.0]),
+            (both[1].hash.clone(), vec![0.0, 2.0]),
+        ],
+    )
+    .await;
+    let after = f.reader.held_after(&model, Some(&before)).await.unwrap();
+    let d = &after.docs["chat"];
+    assert_eq!(d.chunks.len(), 2);
+    assert_eq!(
+        d.vector(0),
+        half(&[0.6, 0.8]),
+        "kept from the earlier version"
+    );
+    assert_eq!(d.vector(1), half(&[0.0, 1.0]), "read: it is new");
+    f.reader.close().await;
+}
+
+/// What a reload holds is what reading everything again holds: a document
+/// gone, one drawn again into a new chunk, one added, one not embedded
+/// yet, and one whose chunk was waiting for a vector that has now come.
+#[tokio::test]
+async fn a_reload_holds_what_a_full_read_holds() {
+    let model = datalib_search_index::model_key();
+    let thread = thread();
+    let gone = doc("mail", "gone", &[(Some("g1"), "a shuttle departs\n")]);
+    let chat = doc("chat", "chat", &[(Some("c1"), "tea, Earl Grey\n")]);
+    let waiting = doc("chat", "waiting", &[(Some("w1"), "red alert\n")]);
+    let first = [&thread, &gone, &chat].map(|d| (only_chunk(d), vec![1.0, 2.0]));
+    let f = fixture(
+        &[thread.clone(), gone, chat.clone(), waiting.clone()],
+        &first,
+    )
+    .await;
+    let before = f.reader.held(&model).await.unwrap();
+    let embedded = |held: &datalib_search_index::Held| -> Vec<String> {
+        held.embedded().map(|d| d.markdown_uuid.clone()).collect()
+    };
+    assert_eq!(embedded(&before), ["chat", "gone", "thread"]);
+
+    let index = Index::open(&f.index_path()).await.unwrap();
+    index.remove(&["gone".to_string()]).await.unwrap();
+    index.close().await;
+    let cache = InferenceCache::open(&f.cache_path()).await.unwrap();
+    cache.forget_chunked(&["gone".to_string()]).await.unwrap();
+    assert_eq!(cache.sweep(&model).await.unwrap(), 1);
+    cache.close().await;
+    let mut redrawn = chat.clone();
+    redrawn.content_hash = "a later rendering".into();
+    redrawn.sections[0].text = "tea, Earl Grey, hot\n".into();
+    let fresh = doc("mail", "fresh", &[(Some("f1"), "engage\n")]);
+    let owed = doc("mail", "owed", &[(Some("o1"), "not yet embedded\n")]);
+    f.sync(
+        &[redrawn.clone(), fresh.clone(), owed],
+        &[
+            (only_chunk(&redrawn), vec![0.0, 3.0]),
+            (only_chunk(&fresh), vec![5.0, 0.0]),
+            (only_chunk(&waiting), vec![0.0, 1.0]),
+        ],
+    )
+    .await;
+
+    let after = f.reader.held_after(&model, Some(&before)).await.unwrap();
+    let full = f.reader.held(&model).await.unwrap();
+    assert_eq!(embedded(&full), ["chat", "fresh", "thread", "waiting"]);
+    assert_eq!(after, full);
+    assert!(Arc::ptr_eq(&before.docs["thread"], &after.docs["thread"]));
+    f.reader.close().await;
+}
+
+/// A full read takes the cache's vectors a page at a time: one past the
+/// first page is held too.
+#[tokio::test]
+async fn a_full_read_reads_past_the_first_page() {
+    let n = usize::try_from(datalib_search_index::read::SCAN_PAGE).unwrap() + 5;
+    let docs: Vec<IndexDoc> = (0..n)
+        .map(|i| {
+            doc(
+                "mail",
+                &format!("d{i}"),
+                &[(Some("m"), &format!("note {i}\n"))],
+            )
+        })
+        .collect();
+    let vectors: Vec<(String, Vec<f32>)> = docs
+        .iter()
+        .map(|d| (only_chunk(d), vec![1.0, 0.0]))
+        .collect();
+    let f = fixture(&docs, &vectors).await;
+    let held = f
+        .reader
+        .held(&datalib_search_index::model_key())
+        .await
+        .unwrap();
+    assert_eq!(held.chunks(), n);
+    f.reader.close().await;
+}
+
+/// The full read walks the primary key in order, and nothing else: no
+/// sort, and no detour through the keys' index to the rows.
+#[tokio::test]
+async fn a_full_read_walks_the_vectors_in_key_order() {
+    let f = fixture(&[thread()], &[]).await;
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(f.cache_path()))
+        .await
+        .unwrap();
+    let explain = format!(
+        "EXPLAIN QUERY PLAN {}",
+        datalib_search_index::read::SCAN_SQL
+    );
+    // A constant statement of the crate under test.
+    let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(sqlx::AssertSqlSafe(explain))
+        .bind("m")
+        .bind("")
+        .bind(1)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    let plan: Vec<String> = plan.into_iter().map(|(.., d)| d).collect();
+    assert_eq!(
+        plan,
+        ["SEARCH vectors USING PRIMARY KEY (model=? AND hash>?)"],
+        "{plan:?}"
+    );
+    f.reader.close().await;
+}
+
+/// A reload that builds a few documents reads their vectors by key, and
+/// holds what a full read, one pass over the table, holds.
+#[tokio::test]
+async fn a_few_documents_read_by_key_hold_what_a_full_read_holds() {
+    let model = datalib_search_index::model_key();
+    let docs: Vec<IndexDoc> = (0..6)
+        .map(|i| {
+            doc(
+                "mail",
+                &format!("d{i}"),
+                &[(Some("m"), &format!("note {i}\n"))],
+            )
+        })
+        .collect();
+    let vectors: Vec<(String, Vec<f32>)> = docs
+        .iter()
+        .enumerate()
+        .map(|(i, d)| (only_chunk(d), vec![i as f32, 1.0]))
+        .collect();
+    let f = fixture(&docs, &vectors).await;
+    let before = f.reader.held(&model).await.unwrap();
+    let mut redrawn = docs[2].clone();
+    redrawn.content_hash = "a later rendering".into();
+    redrawn.sections[0].text = "a later note\n".into();
+    f.sync(
+        std::slice::from_ref(&redrawn),
+        &[(only_chunk(&redrawn), vec![3.0, -4.0])],
+    )
+    .await;
+    let after = f.reader.held_after(&model, Some(&before)).await.unwrap();
+    let full = f.reader.held(&model).await.unwrap();
+    assert_eq!(after.docs["d2"].vector(0), half(&[0.6, -0.8]));
+    assert_eq!(after, full);
     f.reader.close().await;
 }
 

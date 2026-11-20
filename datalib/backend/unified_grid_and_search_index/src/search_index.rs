@@ -14,7 +14,7 @@ use datalib_search_index::{Held, HeldDoc, KeptRows, MessageHit, Reader};
 use crate::hits::index_state::IndexStamp;
 use crate::hits::lex;
 use crate::hits::mapping::Place;
-use crate::hits::vectors::{dot_and_norm, Freshness, Kept};
+use crate::hits::vectors::{dot_and_norm, Kept};
 use crate::hits::SearchHit;
 
 /// A ranked document and its hit.
@@ -85,24 +85,6 @@ fn append_below(hits: &mut Vec<DocumentHit>, found: Vec<MessageHit>) {
     );
 }
 
-/// The vectors as they are now, or `None` when `held` was read at the same
-/// generation and cache.
-async fn read_unless_held(
-    reader: &Reader,
-    root: &Path,
-    held: Option<&(ReadAt, Arc<Held>)>,
-) -> Result<Option<(ReadAt, Arc<Held>)>> {
-    let now = (
-        reader.generation().await?,
-        IndexStamp::of(&layout::inference_cache_db(root)),
-    );
-    if held.is_some_and(|(at, _)| *at == now) {
-        return Ok(None);
-    }
-    let vectors = reader.held(&datalib_search_index::model_key()).await?;
-    Ok(Some((now, Arc::new(vectors))))
-}
-
 fn hit(score: f64, place: Place) -> SearchHit {
     SearchHit {
         score,
@@ -111,22 +93,19 @@ fn hit(score: f64, place: Place) -> SearchHit {
     }
 }
 
-/// Every embedded chunk, read once and kept across searches: read again
-/// when the index's generation or the cache has moved, unless a search
-/// asks for what is held while a sync writes them.
+/// Every embedded chunk, read once and kept across searches. Before a
+/// search uses it, it is read again if the index's file or the cache has
+/// moved since; that reads only the documents that changed ([`Held`]).
 #[derive(Default)]
 pub struct HeldVectors {
-    held: tokio::sync::Mutex<Option<(ReadAt, Arc<Held>)>>,
+    held: tokio::sync::Mutex<Option<(Stamps, Arc<Held>)>>,
 }
-
-/// What held vectors were read at: the index's generation, and the
-/// cache's file. The grid index's own writes move neither.
-type ReadAt = (i64, IndexStamp);
 
 type Stamps = (IndexStamp, IndexStamp);
 
-/// When the file the index is in and the cache last changed on disk: what
-/// says a sync is writing them. The grid index's own writes count too.
+/// When the file the index is in and the cache last changed on disk. The
+/// grid index's own writes move the first too, and cost a read that finds
+/// nothing changed.
 pub fn stamps(root: &Path) -> Stamps {
     (
         IndexStamp::of(&layout::grid_index_db(root)),
@@ -141,36 +120,38 @@ impl HeldVectors {
             .lock()
             .await
             .as_ref()
-            .map_or(0, |(_, h)| h.chunks.len())
+            .map_or(0, |(_, h)| h.chunks())
     }
 
-    async fn current(&self, root: &Path, fresh: Freshness) -> Result<Option<Arc<Held>>> {
+    /// What is held, read again first if the files moved since. `None`
+    /// when no step has written the index.
+    pub async fn current(&self, root: &Path) -> Result<Option<Arc<Held>>> {
         let mut held = self.held.lock().await;
-        if let Some((_, vectors)) = held.as_ref().filter(|_| fresh == Freshness::AsHeld) {
+        let now = stamps(root);
+        if let Some((_, vectors)) = held.as_ref().filter(|(at, _)| *at == now) {
             return Ok(Some(vectors.clone()));
         }
         let Some(reader) = open(root).await? else {
             *held = None;
             return Ok(None);
         };
-        let read = read_unless_held(&reader, root, held.as_ref()).await;
+        let before = held.as_ref().map(|(_, vectors)| vectors.as_ref());
+        let read = reader
+            .held_after(&datalib_search_index::model_key(), before)
+            .await;
         reader.close().await;
-        if let Some(read) = read? {
-            *held = Some(read);
-        }
-        Ok(held.as_ref().map(|(_, vectors)| vectors.clone()))
+        let vectors = Arc::new(read?);
+        *held = Some((now, vectors.clone()));
+        Ok(Some(vectors))
     }
+
     /// The documents with at least one chunk embedded. `None` when no step
     /// has written the index.
-    pub async fn documents(
-        &self,
-        root: &Path,
-        fresh: Freshness,
-    ) -> Result<Option<HashSet<String>>> {
+    pub async fn documents(&self, root: &Path) -> Result<Option<HashSet<String>>> {
         Ok(self
-            .current(root, fresh)
+            .current(root)
             .await?
-            .map(|held| held.docs.iter().map(|d| d.markdown_uuid.clone()).collect()))
+            .map(|held| held.embedded().map(|d| d.markdown_uuid.clone()).collect()))
     }
 
     /// The `limit` documents nearest `query` by cosine, each at its nearest
@@ -183,12 +164,11 @@ impl HeldVectors {
         sources: Option<&[String]>,
         among: Option<&HashMap<String, Kept>>,
         limit: usize,
-        fresh: Freshness,
     ) -> Result<Option<Vec<DocumentHit>>> {
-        let Some(held) = self.current(root, fresh).await? else {
+        let Some(held) = self.current(root).await? else {
             return Ok(None);
         };
-        if held.chunks.is_empty() {
+        if held.chunks() == 0 {
             return Ok(Some(Vec::new()));
         }
         if query.len() != held.dim {
@@ -206,8 +186,7 @@ impl HeldVectors {
         let sources: Option<HashSet<&str>> =
             sources.map(|s| s.iter().map(String::as_str).collect());
         let mut ranked: Vec<(&HeldDoc, f32, usize)> = held
-            .docs
-            .iter()
+            .embedded()
             .filter(|d| {
                 sources
                     .as_ref()
@@ -221,11 +200,14 @@ impl HeldVectors {
                         Kept::Sections(s) => Some(s),
                     },
                 };
-                let best = d
-                    .chunks
-                    .clone()
-                    .filter(|&c| kept.is_none_or(|k| held.covered(d, c).any(|u| k.contains(u))))
-                    .map(|c| (dot_and_norm(held.vector(c), query).0 / norm, c))
+                let best = (0..d.chunks.len())
+                    .filter(|&c| kept.is_none_or(|k| d.covered(c).any(|u| k.contains(u))))
+                    .map(|c| {
+                        (
+                            datalib_search_index::half::dot(d.vector(c), query) / norm,
+                            c,
+                        )
+                    })
                     .max_by(|a, b| a.0.total_cmp(&b.0))?;
                 Some((d, best.0, best.1))
             })
@@ -240,7 +222,7 @@ impl HeldVectors {
                 .into_iter()
                 .map(|(doc, score, c)| {
                     let place = Place::Item {
-                        uuid: held.covered(doc, c).next().map(str::to_string),
+                        uuid: doc.covered(c).next().map(str::to_string),
                     };
                     (doc.markdown_uuid.clone(), hit(f64::from(score), place))
                 })

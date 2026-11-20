@@ -6,7 +6,7 @@
 //! `embedder` lock, and the `unified_grid_and_search_index` step's sweep,
 //! which never runs beside one.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -340,6 +340,26 @@ async fn carry_into(index: &SqlitePool, cache: &InferenceCache) -> Result<usize>
 /// What a reader finds filed in the cache: `markdown_uuid → (content
 /// hash, its chunks in order)`, of `uuids` (every document when `None`).
 /// Nothing before an `embed` of this build has written the tables.
+/// `markdown_uuid → content_hash` of every document cut into chunks: the
+/// rendering each was cut from.
+pub(crate) async fn read_cut(cache: &SqlitePool) -> Result<HashMap<String, String>> {
+    let tables: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'search_chunked'",
+    )
+    .fetch_optional(cache)
+    .await
+    .context("look for the filed chunks")?;
+    if tables.is_none() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT markdown_uuid, content_hash FROM search_chunked")
+            .fetch_all(cache)
+            .await
+            .context("read the cut documents")?;
+    Ok(rows.into_iter().collect())
+}
+
 pub(crate) async fn read_filed(
     cache: &SqlitePool,
     uuids: Option<&[String]>,
@@ -363,10 +383,17 @@ pub(crate) async fn read_filed(
         Option<i64>,
         Option<String>,
     );
-    let sql = "SELECT d.markdown_uuid, d.content_hash, \
+    let all = "SELECT d.markdown_uuid, d.content_hash, \
                       c.start_byte, c.end_byte, c.first_section, c.last_section, c.hash \
                  FROM search_chunked d LEFT JOIN search_chunks c ON c.doc_id = d.doc_id \
-                WHERE (NOT ?1 OR d.markdown_uuid IN (SELECT value FROM json_each(?2))) \
+                ORDER BY d.doc_id, c.seq";
+    // From the asked uuids into the unique index: `NOT ? OR … IN (…)`
+    // reads every cut document whatever is asked.
+    let asked = "SELECT d.markdown_uuid, d.content_hash, \
+                      c.start_byte, c.end_byte, c.first_section, c.last_section, c.hash \
+                 FROM json_each(?) j \
+                 JOIN search_chunked d ON d.markdown_uuid = j.value \
+                 LEFT JOIN search_chunks c ON c.doc_id = d.doc_id \
                 ORDER BY d.doc_id, c.seq";
     let mut add = |rows: Vec<Row>| -> Result<()> {
         for (uuid, content_hash, start, end, first, last, hash) in rows {
@@ -380,16 +407,13 @@ pub(crate) async fn read_filed(
         Ok(())
     };
     match uuids {
-        None => add(sqlx::query_as(sql)
-            .bind(false)
-            .bind("[]")
+        None => add(sqlx::query_as(all)
             .fetch_all(cache)
             .await
             .context("read the filed chunks")?)?,
         Some(uuids) => {
             for batch in uuids.chunks(BATCH) {
-                add(sqlx::query_as(sql)
-                    .bind(true)
+                add(sqlx::query_as(asked)
                     .bind(serde_json::to_string(batch)?)
                     .fetch_all(cache)
                     .await
