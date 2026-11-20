@@ -126,7 +126,7 @@ them:
 | state | meaning |
 |---|---|
 | `running` | an invocation is live — or it ran a pass and what it reads has not settled (below) |
-| `waiting` | wanted and due, and held back; `state_detail` says by what |
+| `waiting` | wanted and due, and held back; `waiting_for` says by what kind of thing, `state_detail` by which |
 | `fresh` | wanted, and up to date |
 | `off` | someone turned it off; `turned_off_by` says who |
 | `blocked` | wanted, but a producer it reads has never published and is not going to run |
@@ -172,9 +172,13 @@ starts** in a tick, visited in topological order, iff:
 9. **the data root's disk has room**: it is not under the config's
    `[disk_space]` floor (below, "When the disk runs low").
 
-A step that waits says why, in its row's `state_detail`: `waiting for
-a`, `waiting for c, which reads what this writes`, `waiting for lock
-gpu, held by trainer`, `waiting for disk space: 3.2 GB free on the data
+A step that waits says why twice in its row. `waiting_for` is the
+kind, one word a program can test (`WaitKind` in `supervisor/tick.rs`):
+`upstream`, `reader`, `lock`, `disk_space`, or `config` for a step a
+request names that the config the loop runs does not have yet.
+`state_detail` is the sentence a person reads: `waiting for a`,
+`waiting for c, which reads what this writes`, `waiting for lock gpu,
+held by trainer`, `waiting for disk space: 3.2 GB free on the data
 root's disk; steps pause under 10.0 GB and run again from 15.0 GB`. Each step writes only the tree its id names, so
 no two steps ever wait on each other as writers of one sink.
 
@@ -813,7 +817,7 @@ header says rollback-journal:
 
 | table | one row per | what it holds |
 |---|---|---|
-| `steps` | step | its state now (`state`, `state_detail`, `turned_off_by`, and `requests`, the open requests it still has work in: a JSON array, NULL once it has none, which is when its Manage row offers Sync again), what it read at its last success (`reads`), under which definition (`fingerprint`), and what happened the last time a run reached it (`last_*`) |
+| `steps` | step | its state now (`state`, `waiting_for`, `state_detail`, `turned_off_by`, and `requests`, the open requests it still has work in: a JSON array, NULL once it has none, which is when its Manage row offers Sync again), what it read at its last success (`reads`), under which definition (`fingerprint`), and what happened the last time a run reached it (`last_*`) |
 | `sinks` | tree a step writes | the version it last published |
 | `runs` | busy period of the loop | when it started and finished |
 | `run_steps` | step the newest run has reached | what it is doing in that run |

@@ -18,7 +18,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from sync_drivers import DISK_HOLD_PREFIX, CliDriver, HttpDriver
+from sync_drivers import CliDriver, HttpDriver
 
 NOW = "2369-04-15T00:00:00+00:00"
 # Long enough for a loaded runner to start a server and tick once; a
@@ -73,8 +73,9 @@ class DiskHold(unittest.TestCase):
         with self.assertRaises(SystemExit) as caught:
             driver.sync(["fake/raw"], deadline_secs=DEADLINE_SECS)
         message = str(caught.exception)
-        self.assertIn(DISK_HOLD_PREFIX, message)
-        self.assertIn("[disk_space]", message)
+        self.assertIn("for want of disk space", message)
+        self.assertIn("fake/raw: ", message)
+        self.assertIn(str(self.root), message)
         self.assertLess(time.monotonic() - started, DEADLINE_SECS / 2, message)
 
     def test_cli_fails_when_the_floor_holds_its_steps(self) -> None:

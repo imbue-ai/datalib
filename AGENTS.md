@@ -814,6 +814,7 @@ upstream (block types, MIME types), free-form display text
 | what the run store names | `LiveState` | `runs/src/lib.rs` |
 | a log line's severity and pipe | `LogLevel`, `Stream` | `app_schema/src/runs/log.rs` |
 | what the loop made of a step (`steps.state`) | `StateKind` | `dag/src/supervisor/tick.rs` |
+| what a waiting step waits for (`steps.waiting_for`) | `WaitKind` | `dag/src/supervisor/tick.rs` |
 | how a sync request ended | `RequestOutcome` | `dag/src/supervisor/store.rs` |
 | where a step stands for one sync request | `RequestStepPhase` | `http/src/request_progress.rs` |
 | a browser-login attempt, and what it is doing | `ConnectState`, `ConnectPhase` | `http/src/connect.rs` |

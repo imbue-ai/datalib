@@ -26,7 +26,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 # A whole fixture sync is a minute or two on a warm laptop; this is for
 # a loaded CI runner. One deadline per `sync()`, however many requests it
@@ -35,26 +35,34 @@ SYNC_DEADLINE_SECS = 30 * 60
 STARTUP_DEADLINE_SECS = 60
 POLL_SECS = 0.2
 
-# How the loop words a step it holds for the `[disk_space]` floor
-# (`record_states` in `datalib/backend/dag/src/supervisor/round.rs`).
-# `sync_drivers_test.py` fails if the wording moves away from this.
-DISK_HOLD_PREFIX = "waiting for disk space"
+# The `WaitKind` of a step the loop holds for the config's `[disk_space]`
+# floor (`datalib/backend/dag/src/supervisor/tick.rs`).
+DISK_SPACE = "disk_space"
 
 
-def held_for_disk(steps: Iterable[tuple[str, str | None, str | None]]) -> str | None:
-    """The loop's own words for a step it holds for disk space, given
-    `(step, state, state_detail)` rows, or None when it holds none."""
-    for step, state, detail in steps:
-        if state == "waiting" and (detail or "").startswith(DISK_HOLD_PREFIX):
-            return f"{step}: {detail}"
-    return None
+class StepNow(NamedTuple):
+    """One step as the loop's record has it now."""
+
+    step: str
+    state: str | None
+    waiting_for: str | None
+    detail: str | None
+
+    def describe(self) -> str:
+        return f"{self.step}: {self.state}" + (
+            f" ({self.detail})" if self.detail else ""
+        )
 
 
-def disk_hold_error(held: str, root: Path) -> SystemExit:
+def held_for_disk(steps: Iterable[StepNow]) -> StepNow | None:
+    return next((s for s in steps if s.waiting_for == DISK_SPACE), None)
+
+
+def disk_hold_error(held: StepNow, root: Path) -> SystemExit:
     return SystemExit(
         "the sync cannot finish: the loop holds its steps for want of disk space\n"
         f"  data root: {root}\n"
-        f"  {held}\n"
+        f"  {held.step}: {held.detail}\n"
         "Free space on that disk, or lower the config's [disk_space] floor "
         "(`pause_below_bytes`)."
     )
@@ -121,7 +129,7 @@ class CliDriver:
     def close(self) -> None:
         pass
 
-    def _recorded_steps(self) -> list[tuple[str, str | None, str | None]]:
+    def _recorded_steps(self) -> list[StepNow]:
         """Every step's state in the loop's record; none before the loop
         has made the record, or while a write holds it."""
         store = self.workspace / "system" / "supervisor.sqlite"
@@ -130,13 +138,19 @@ class CliDriver:
         try:
             con = sqlite3.connect(f"file:{store}?mode=ro", uri=True, timeout=1)
             try:
-                return con.execute(
-                    "SELECT step, state, state_detail FROM steps ORDER BY step"
+                rows = con.execute(
+                    "SELECT step, state, waiting_for, state_detail FROM steps "
+                    "ORDER BY step"
                 ).fetchall()
             finally:
                 con.close()
-        except sqlite3.OperationalError:
-            return []
+        except sqlite3.OperationalError as e:
+            # The store is made, then its tables; a write holds it briefly.
+            # Anything else (a missing column) would turn the check off.
+            if "locked" in str(e) or "no such table" in str(e):
+                return []
+            raise
+        return [StepNow(*row) for row in rows]
 
 
 class HttpDriver:
@@ -258,13 +272,16 @@ class HttpDriver:
                 raise SystemExit(f"GET /api/requests/{request_id} → {status}: {row}")
             if row["state"] != "open":
                 return row
-            steps = [(s["id"], s["state"], s["state_detail"]) for s in row["steps"]]
+            steps = [
+                StepNow(s["id"], s["state"], s["waiting_for"], s["state_detail"])
+                for s in row["steps"]
+            ]
             if held := held_for_disk(steps):
                 raise disk_hold_error(held, self.workspace)
             if time.monotonic() > deadline:
                 unfinished = [
-                    (s["id"], s["state"], s["state_detail"])
-                    for s in row["steps"]
+                    st
+                    for st, s in zip(steps, row["steps"], strict=True)
                     if s["phase"] != "done"
                 ]
                 raise SystemExit(
@@ -345,11 +362,11 @@ class HttpDriver:
             time.sleep(0.05)
 
 
-def _unfinished(steps: Iterable[tuple[str, str | None, str | None]]) -> str:
+def _unfinished(steps: Iterable[StepNow]) -> str:
     lines = [
-        f"  {step}: {state}" + (f" ({detail})" if detail else "")
-        for step, state, detail in steps
-        if state not in ("idle", "fresh", "stale", "off")
+        f"  {s.describe()}"
+        for s in steps
+        if s.state not in ("idle", "fresh", "stale", "off")
     ]
     return "\n".join(lines) or "  (none: every step reads finished)"
 

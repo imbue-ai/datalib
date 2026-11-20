@@ -187,6 +187,45 @@ pub enum Wait {
     DiskSpace,
 }
 
+/// What a `waiting` step waits for, as the record stores it
+/// (`steps.waiting_for`) beside the sentence that names the step or lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, IntoStaticStr, VariantArray)]
+#[strum(serialize_all = "snake_case")]
+pub enum WaitKind {
+    /// A step it reads: running, about to run, or not yet settled.
+    Upstream,
+    /// A step that reads what it writes, unpinned, is running.
+    Reader,
+    Lock,
+    /// The data root's disk is under the config's `[disk_space]` floor.
+    DiskSpace,
+    /// A request names it, and the config the loop runs does not have it
+    /// yet: the sync in progress takes the new one on when it ends.
+    Config,
+}
+
+impl WaitKind {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// `None` for a spelling this build does not know.
+    pub fn parse(s: &str) -> Option<Self> {
+        s.parse().ok()
+    }
+}
+
+impl From<Wait> for WaitKind {
+    fn from(w: Wait) -> Self {
+        match w {
+            Wait::Upstream(_) => WaitKind::Upstream,
+            Wait::Reader(_) => WaitKind::Reader,
+            Wait::Lock(_) => WaitKind::Lock,
+            Wait::DiskSpace => WaitKind::DiskSpace,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     Done,
