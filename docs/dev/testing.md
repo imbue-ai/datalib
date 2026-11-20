@@ -748,8 +748,14 @@ walked, decides, because a scan of an empty table walks nothing and
 whether a table is empty depends on the order the steps ran in. The few
 statements whose plan cannot be read afterwards (a temporary table, a
 table since dropped) count as scans when they walked rows as they ran,
-and the list says `judged_by: ran`; an allowlisted one missing from a
-run is a note, not a failure.
+and the list says `judged_by: ran`.
+
+The allowlist only shrinks. An entry whose statement the run did not
+record scanning fails the test: its plan no longer scans, its text
+changed, or nothing runs it, so delete it. An entry left behind would
+wave through any later statement of the same text. The one exception is
+an entry marked `judged_by = "ran"`, whose statement may not walk rows
+in every run; the test prints a note for it instead.
 
 A fixture's tables hold a few rows, so the scan costs nothing here; on a
 library it costs the whole table on every call. When the test fails on

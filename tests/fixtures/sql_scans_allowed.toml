@@ -2,7 +2,8 @@
 # or index, other than reads of the catalog alone, and why that is allowed.
 # sql_scans_test.py checks the sync's list (ingested/sql_scans.jsonl) against
 # this file. A new scan fails it until the statement gets an index or an
-# entry here with a reason (docs/dev/testing.md).
+# entry here with a reason, and an entry whose statement no longer scans
+# fails it until the entry is deleted (docs/dev/testing.md).
 #
 # On a fixture a scan costs nothing; on a library it costs the whole table,
 # every time the statement runs. A reason says why that is fine: the
