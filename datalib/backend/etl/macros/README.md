@@ -52,6 +52,13 @@ pub struct ChatItemRow {
 `ChatItemRow::ddl()` then returns the same SQL a hand-written
 `wire_payload_table_ddl("chat_items", &[…])` call would have produced.
 
+`cluster_by = "chat_id"` beside `table` keys the table
+`(chat_id, id)` instead of `id`, so one chat's rows sit together in the
+file, and `index_ddls()` then returns a unique index on `id`, which the
+upsert's `ON CONFLICT(id)` relies on. The column must be a promoted
+`String` field (`TEXT NOT NULL`); anything else is a compile error.
+Without `cluster_by`, `index_ddls()` is empty.
+
 ## `RawTable`
 
 The general form of `WirePayloadRow`: it also covers payload-less tables

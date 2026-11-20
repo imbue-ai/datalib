@@ -29,7 +29,7 @@ pub fn derive_wire_payload_row(input: TokenStream) -> TokenStream {
 
 fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
     let struct_name = input.ident.clone();
-    let table = parse_table_attr(&input.attrs, &struct_name)?;
+    let (table, cluster_by) = parse_table_attr(&input.attrs, &struct_name)?;
     let fields = collect_named_fields(&input)?;
     let (id_and_payload_ident, promoted) = split_id_and_payload(&fields, &struct_name)?;
 
@@ -39,6 +39,43 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
     // DDLs the macro is replacing. Shared with `RawTable` payload mode.
     let ddl_literals = promoted_decl_literals(&promoted);
     let table_lit = LitStr::new(&table, proc_macro2::Span::call_site());
+    let ddl_and_indexes = match &cluster_by {
+        None => quote! {
+            fn ddl() -> ::std::string::String {
+                ::datalib_etl::doltlite_raw::wire_payload_table_ddl(
+                    #table_lit,
+                    &[#(#ddl_literals),*],
+                )
+            }
+        },
+        Some(column) => {
+            let leads = promoted
+                .iter()
+                .find(|p| *p.name == column.value())
+                .ok_or_else(|| {
+                    syn::Error::new_spanned(column, "`cluster_by` must name a promoted column")
+                })?;
+            if !matches!(leads.kind, PromotedKind::TextNotNull) {
+                return Err(syn::Error::new_spanned(
+                    column,
+                    "`cluster_by` must name a `String` column: it leads the primary key",
+                ));
+            }
+            quote! {
+                fn ddl() -> ::std::string::String {
+                    ::datalib_etl::doltlite_raw::wire_payload_clustered_table_ddl(
+                        #table_lit,
+                        &[#(#ddl_literals),*],
+                        #column,
+                    )
+                }
+
+                fn index_ddls() -> ::std::vec::Vec<::std::string::String> {
+                    ::std::vec![::datalib_etl::doltlite_raw::wire_payload_id_index_ddl(#table_lit)]
+                }
+            }
+        }
+    };
 
     // BulkUpsertable typed columns: promoted columns only.
     // (`payload` goes in PAYLOAD_COLUMN; `id` is the PK and bound
@@ -54,12 +91,7 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
 
     Ok(quote! {
         impl ::datalib_etl::doltlite_raw::WirePayloadRow for #struct_name {
-            fn ddl() -> ::std::string::String {
-                ::datalib_etl::doltlite_raw::wire_payload_table_ddl(
-                    #table_lit,
-                    &[#(#ddl_literals),*],
-                )
-            }
+            #ddl_and_indexes
         }
 
         impl ::datalib_etl::bulk::BulkUpsertable for #struct_name {
@@ -92,24 +124,34 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
 
 // Attribute parsing
 
-fn parse_table_attr(attrs: &[Attribute], struct_name: &Ident) -> syn::Result<String> {
+fn parse_table_attr(
+    attrs: &[Attribute],
+    struct_name: &Ident,
+) -> syn::Result<(String, Option<LitStr>)> {
     for attr in attrs {
         if !attr.path().is_ident("wire_payload_row") {
             continue;
         }
         let mut table: Option<String> = None;
+        let mut cluster_by: Option<LitStr> = None;
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("table") {
                 let lit: LitStr = meta.value()?.parse()?;
                 table = Some(lit.value());
                 Ok(())
+            } else if meta.path.is_ident("cluster_by") {
+                cluster_by = Some(meta.value()?.parse()?);
+                Ok(())
             } else {
-                Err(meta.error("unknown #[wire_payload_row(...)] key; supported keys: `table`"))
+                Err(meta.error(
+                    "unknown #[wire_payload_row(...)] key; supported keys: `table`, `cluster_by`",
+                ))
             }
         })?;
-        return table.ok_or_else(|| {
+        let table = table.ok_or_else(|| {
             syn::Error::new_spanned(attr, "#[wire_payload_row(table = \"...\")] is required")
-        });
+        })?;
+        return Ok((table, cluster_by));
     }
     Err(syn::Error::new_spanned(
         struct_name,

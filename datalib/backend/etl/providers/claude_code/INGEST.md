@@ -62,9 +62,14 @@ nothing — the same call `airvisual` and `file_inventory` made):
   the first `prompt` when nobody named it), the first prompt, the
   versions and models seen, the cloud session id and org, the PR
   links, and a count of every line type.
-- **`records`** — one row per content record, keyed by the `uuid`
-  Claude Code gave it, with one promoted column, `transcript_id`: the
-  writer composes it and the render's diff groups its render units by it. The payload
+- **`records`** — one row per content record, keyed by
+  `(transcript_id, id)`: `id` is the `uuid` Claude Code gave it, unique
+  on its own (`records_by_id`), and `transcript_id` is the one promoted
+  column. The writer composes it, the render's diff groups its render
+  units by it, and leading the key with it puts a transcript's records
+  next to each other in the file, so a render reads them as one range.
+  A store written before this shape is re-keyed by the ladder's rung 1
+  at its next start. The payload
   is the line as written, and everything else a reader wants —
   `sessionId`, `type`, `timestamp`, `parentUuid`, `isSidechain` — is
   read off it (`payload->>'$.type'`). Nothing in the tree queries

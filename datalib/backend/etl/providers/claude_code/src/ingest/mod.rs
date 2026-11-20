@@ -23,7 +23,7 @@ use self::schema_raw::{full_ddl, RecordRow, TranscriptRow, CURSOR_SCOPE};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
-datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl());
+datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl(), schema_raw::LADDER);
 
 #[derive(Debug, Clone)]
 pub struct FetchOptions {

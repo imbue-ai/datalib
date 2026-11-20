@@ -61,6 +61,11 @@ pub struct WirePayload {
 /// is the canonical use.
 pub trait WirePayloadRow {
     fn ddl() -> String;
+
+    /// The table's own indexes, created after [`Self::ddl`].
+    fn index_ddls() -> Vec<String> {
+        Vec::new()
+    }
 }
 
 pub fn wire_payload_table_ddl(table: &str, promoted_columns: &[&str]) -> String {
@@ -75,6 +80,37 @@ pub fn wire_payload_table_ddl(table: &str, promoted_columns: &[&str]) -> String 
     payload        TEXT NULL{promoted_block}
 )"
     )
+}
+
+/// A wire-payload table whose rows sit in the order of `cluster_by`, the
+/// promoted column a reader reads them by (a transcript's records): the
+/// key is `(cluster_by, id)`, so one parent's rows are one range of the
+/// tree rather than one random page each (`etl/README.md` § "Raw stores:
+/// the primary key is the upstream id"). `id` stays unique on its own, by
+/// [`wire_payload_id_index_ddl`], so every write still upserts on it.
+pub fn wire_payload_clustered_table_ddl(
+    table: &str,
+    promoted_columns: &[&str],
+    cluster_by: &str,
+) -> String {
+    let promoted_block = if promoted_columns.is_empty() {
+        String::new()
+    } else {
+        format!(",\n    {}", promoted_columns.join(",\n    "))
+    };
+    format!(
+        "CREATE TABLE IF NOT EXISTS {table} (
+    id             TEXT NOT NULL,
+    payload        TEXT NULL{promoted_block},
+    PRIMARY KEY ({cluster_by}, id)
+)"
+    )
+}
+
+/// The unique index that keeps `id` the conflict target of a table keyed
+/// by [`wire_payload_clustered_table_ddl`].
+pub fn wire_payload_id_index_ddl(table: &str) -> String {
+    format!("CREATE UNIQUE INDEX IF NOT EXISTS {table}_by_id ON {table} (id)")
 }
 
 // Volatile-field split / overlay. See the README: some payloads carry
@@ -2959,7 +2995,7 @@ pub async fn scan_render_units(
     })
 }
 
-/// The primary-key columns of `table`, in `pragma_table_info` order.
+/// The primary-key columns of `table`, in the order the key names them.
 pub async fn primary_key_columns(pool: &SqlitePool, table: &str) -> Result<Vec<String>> {
     let rows = sqlx::query("SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk")
         .bind(table)
@@ -3015,7 +3051,7 @@ pub struct ChangedKey {
 /// The primary keys of every row of `table` that is not `unchanged`
 /// between `from_ref` and `to_ref`, with what happened to it, the key
 /// rendered as text the way `render_inputs.input_id` is: a composite
-/// key's columns in `pragma_table_info` order, joined by `|`. A removed
+/// key's columns in the key's order, joined by `|`. A removed
 /// row's key comes from its `from_` side, so a deletion names the row
 /// that left.
 pub async fn changed_keys(
