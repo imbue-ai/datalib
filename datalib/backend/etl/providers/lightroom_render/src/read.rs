@@ -764,6 +764,8 @@ mod folder_tests {
         // One connection: each connection to `:memory:` is a database of its own.
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
             .connect("sqlite::memory:")
             .await
             .unwrap();
