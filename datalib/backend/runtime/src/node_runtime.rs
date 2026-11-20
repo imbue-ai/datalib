@@ -47,7 +47,7 @@ pub const LATCHKEY_ENTRY_REL: &str = "node_modules/latchkey/dist/src/cli.js";
 /// `scripts/stage_runtime.sh` greps this constant to decide
 /// what to stage — keep the `LATCHKEY_VERSION` name and string-literal
 /// shape.
-pub const LATCHKEY_VERSION: &str = "3.24.0";
+pub const LATCHKEY_VERSION: &str = "3.25.0";
 
 /// The Modal SDK pin: the staged `runtime/modal/<version>/` tree the
 /// `embed` step's Modal driver imports. `scripts/stage_runtime.sh` greps
