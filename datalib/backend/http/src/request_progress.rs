@@ -8,7 +8,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use datalib_dag::supervisor::record::{Record, StepRecord};
 use datalib_dag::supervisor::store::RequestRow;
-use datalib_dag::supervisor::tick::StateKind;
+use datalib_dag::supervisor::tick::{StateKind, WaitKind};
 use serde::Serialize;
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
@@ -47,6 +47,9 @@ pub struct RequestStep {
     /// request it was for.
     pub state: Option<&'static str>,
     pub state_detail: Option<String>,
+    /// What a `waiting` step waits for (`WaitKind`): `upstream`, `reader`,
+    /// `lock`, `disk_space` or `config`; null in any other state.
+    pub waiting_for: Option<&'static str>,
     /// Its newest run. A step done without running for this request keeps
     /// an older one.
     pub last_run: Option<DagStepRun>,
@@ -129,6 +132,7 @@ pub async fn get(
                 phase: phase(&request, &record, rec),
                 state: rec.and_then(|r| r.state).map(StateKind::as_str),
                 state_detail: rec.and_then(|r| r.state_detail.clone()),
+                waiting_for: rec.and_then(|r| r.waiting_for).map(WaitKind::as_str),
                 last_run: rec.and_then(|r| r.last_run.as_ref()).map(DagStepRun::from),
                 progress: progress.remove(&step),
                 id: step,

@@ -185,6 +185,15 @@ PRESEEDED_RAW = {"yolink"}
 # so the materialized root has a Time series card to open.
 TIME_SERIES_TYPES = {"garmin", "yolink", "airvisual"}
 
+# The DAG config's free-space floor. The default, steps held under 10 GB
+# free, guards a person's library; this one is a few MB, and under the
+# default a machine with less than 10 GB free could not build it. Below
+# this floor the build fails naming it (`sync_drivers.held_for_disk`).
+# The materialized root keeps the default, as any root a person makes does.
+DISK_FLOOR = """[disk_space]
+pause_below_bytes = "200 MB"
+resume_at_bytes = "300 MB\""""
+
 
 @dataclass
 class Prepared:
@@ -607,7 +616,7 @@ params = {params}
         and the body of a materialized root's, where the diff step — like
         every render step there — declares no inputs."""
         names = list(sources)[:count]
-        blocks = [preamble] + steps[: len(names)]
+        blocks = [preamble, DISK_FLOOR] + steps[: len(names)]
         root_blocks = [preamble] + root_entries[: len(names)]
         # How `datalib-step` is told each group's type: a diff group's
         # steps also name the type of the source they compare.

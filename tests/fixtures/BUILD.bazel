@@ -571,6 +571,24 @@ py_test(
     deps = [requirement("prometheus-client")],
 )
 
+# Both sync drivers fail at once, naming the `[disk_space]` floor, when
+# the loop holds their steps for disk space, rather than polling a
+# request that will never close.
+py_test(
+    name = "sync_drivers_test",
+    size = "medium",
+    srcs = ["sync_drivers_test.py"],
+    args = [
+        "$(rootpath //datalib/backend/dag:datalib_pipeline_bin)",
+        "$(rootpath //datalib/backend/http:datalib_http_bin)",
+    ],
+    data = [
+        "sync_drivers.py",
+        "//datalib/backend/dag:datalib_pipeline_bin",
+        "//datalib/backend/http:datalib_http_bin",
+    ],
+)
+
 # The sync state machine under a storm (docs/dev/plans/http_driven_e2e.md
 # § 2): seeded clicks on the server's buttons and SIGKILLs of its steps,
 # then a full sync compared with a reset and a sync from nothing. One

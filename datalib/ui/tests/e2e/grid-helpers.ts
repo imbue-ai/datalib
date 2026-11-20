@@ -68,7 +68,8 @@ export type GridApi = {
   rowIndexOf: (uuid: string) => number | null;
   /// Load pages until the row is held; its index, or null.
   seek: (uuid: string) => Promise<number | null>;
-  /// A search, a page, or a group's page on its way.
+  /// A search, a page, or a group's page on its way; not a refresh of
+  /// the rows on screen.
   busy: () => boolean;
   uuidAt: (row: number) => string | null;
   rows: () => Record<string, unknown>[];

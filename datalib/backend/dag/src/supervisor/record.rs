@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use sqlx::Row;
 
 use super::store::Store;
-use super::tick::StateKind;
+use super::tick::{StateKind, WaitKind};
 use crate::step::{FailureKind, StepId};
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -86,6 +86,9 @@ pub struct StepRecord {
     pub state: Option<StateKind>,
     /// What it waits on or is blocked by, or who turned it off: a sentence.
     pub state_detail: Option<String>,
+    /// What kind of thing a `waiting` step waits for; `None` for a step in
+    /// any other state, or a word this build does not know.
+    pub waiting_for: Option<WaitKind>,
     pub turned_off_by: Option<String>,
     /// The open requests it has work left in, oldest first: what a Stop
     /// on its row stops. Stored as a JSON array, NULL when empty.
@@ -160,6 +163,7 @@ pub(super) const DDL: [&str; 5] = [
         tz_offset TEXT,
         state TEXT,
         state_detail TEXT,
+        waiting_for TEXT,
         turned_off_by TEXT,
         requests TEXT,
         needs_rerun INTEGER NOT NULL DEFAULT 0
@@ -189,13 +193,14 @@ pub(super) const DDL: [&str; 5] = [
 
 /// Columns added to a table after it first shipped: (table, column,
 /// declaration).
-pub(super) const ADDED_COLUMNS: [(&str, &str, &str); 6] = [
+pub(super) const ADDED_COLUMNS: [(&str, &str, &str); 7] = [
     ("steps", "state", "TEXT"),
     ("steps", "state_detail", "TEXT"),
     ("steps", "turned_off_by", "TEXT"),
     ("steps", "requests", "TEXT"),
     ("steps", "needs_rerun", "INTEGER NOT NULL DEFAULT 0"),
     ("steps", "last_failure_kind", "TEXT"),
+    ("steps", "waiting_for", "TEXT"),
 ];
 
 /// A process the loop started, as its row names it.
@@ -305,6 +310,10 @@ impl Store {
                     .as_deref()
                     .and_then(StateKind::parse),
                 state_detail: r.try_get("state_detail")?,
+                waiting_for: r
+                    .try_get::<Option<String>, _>("waiting_for")?
+                    .as_deref()
+                    .and_then(WaitKind::parse),
                 turned_off_by: r.try_get("turned_off_by")?,
                 requests: match r.try_get::<Option<String>, _>("requests")? {
                     Some(json) => serde_json::from_str(&json).context("a step's requests")?,
@@ -372,8 +381,9 @@ impl Store {
                         "INSERT OR REPLACE INTO steps (step, succeeded, fingerprint, reads, \
                          last_run_id, last_started_at_utc, last_finished_at_utc, last_status, \
                          last_attempts, last_error, last_failure_kind, last_success_at_utc, \
-                         tz_offset, state, state_detail, turned_off_by, requests, needs_rerun) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         tz_offset, state, state_detail, waiting_for, turned_off_by, requests, \
+                         needs_rerun) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     )
                     .bind(id)
                     .bind(st.succeeded)
@@ -390,6 +400,7 @@ impl Store {
                     .bind(offset)
                     .bind(st.state.map(StateKind::as_str))
                     .bind(&st.state_detail)
+                    .bind(st.waiting_for.map(WaitKind::as_str))
                     .bind(&st.turned_off_by)
                     .bind(if st.requests.is_empty() {
                         None
@@ -608,6 +619,7 @@ mod tests {
                     last_success_at: Some("2026-08-31T10:00:09+01:00".into()),
                     state: Some(StateKind::Waiting),
                     state_detail: Some("waiting for x/raw".into()),
+                    waiting_for: Some(WaitKind::Upstream),
                     turned_off_by: Some("claude".into()),
                     requests: vec!["req-1".into(), "req-2".into()],
                 },

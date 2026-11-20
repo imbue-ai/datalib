@@ -6,7 +6,11 @@ reads the same whichever door it goes through.
 The HTTP driver builds the root the way a person does in the app — the
 starter config from `POST /api/config/init`, then one `PUT /api/config`
 per source added — and syncs with `POST /api/requests`, waiting on
-`GET /api/requests` for each request it opened to close.
+`GET /api/requests/{id}` for each request it opened to close.
+
+Either driver stops the moment the loop holds a step for disk space: a
+held step starts again only once space is freed, and nothing in a build
+frees any, so waiting would only run out the deadline.
 """
 
 from __future__ import annotations
@@ -14,19 +18,54 @@ from __future__ import annotations
 import json
 import os
 import signal
+import sqlite3
 import subprocess
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 # A whole fixture sync is a minute or two on a warm laptop; this is for
-# a loaded CI runner, and a hang still fails with the request it was on.
+# a loaded CI runner. One deadline per `sync()`, however many requests it
+# opens; past it, the error names each step still unfinished.
 SYNC_DEADLINE_SECS = 30 * 60
 STARTUP_DEADLINE_SECS = 60
 POLL_SECS = 0.2
+
+# The `WaitKind` of a step the loop holds for the config's `[disk_space]`
+# floor (`datalib/backend/dag/src/supervisor/tick.rs`).
+DISK_SPACE = "disk_space"
+
+
+class StepNow(NamedTuple):
+    """One step as the loop's record has it now."""
+
+    step: str
+    state: str | None
+    waiting_for: str | None
+    detail: str | None
+
+    def describe(self) -> str:
+        return f"{self.step}: {self.state}" + (
+            f" ({self.detail})" if self.detail else ""
+        )
+
+
+def held_for_disk(steps: Iterable[StepNow]) -> StepNow | None:
+    return next((s for s in steps if s.waiting_for == DISK_SPACE), None)
+
+
+def disk_hold_error(held: StepNow, root: Path) -> SystemExit:
+    return SystemExit(
+        "the sync cannot finish: the loop holds its steps for want of disk space\n"
+        f"  data root: {root}\n"
+        f"  {held.step}: {held.detail}\n"
+        "Free space on that disk, or lower the config's [disk_space] floor "
+        "(`pause_below_bytes`)."
+    )
 
 
 class CliDriver:
@@ -47,17 +86,67 @@ class CliDriver:
             f"data_root = {json.dumps(str(self.workspace))}\n\n" + texts[-1]
         )
 
-    def _run(self, verb: str, steps: list[str]) -> None:
-        _run([self.dag_bin, verb, str(self.config), *steps, *self.flags], self.env)
+    def _argv(self, verb: str, steps: list[str]) -> list[str]:
+        return [self.dag_bin, verb, str(self.config), *steps, *self.flags]
 
-    def sync(self, roots: list[str] | None = None) -> None:
-        self._run("sync", roots or [])
+    def sync(
+        self, roots: list[str] | None = None, deadline_secs: float = SYNC_DEADLINE_SECS
+    ) -> None:
+        """Runs `datalib-pipeline sync` to its end, reading the loop's record
+        in `system/supervisor.sqlite` while it runs: a one-shot run keeps
+        waiting while the disk holds its steps, and says so only in its
+        log."""
+        argv = self._argv("sync", roots or [])
+        print("[sync_drivers] $", " ".join(argv), flush=True)
+        proc = subprocess.Popen(argv, env=self.env)
+        deadline = time.monotonic() + deadline_secs
+        try:
+            while (code := proc.poll()) is None:
+                steps = self._recorded_steps()
+                if held := held_for_disk(steps):
+                    raise disk_hold_error(held, self.workspace)
+                if time.monotonic() > deadline:
+                    raise SystemExit(
+                        f"datalib-pipeline still running after {deadline_secs:.0f}s; "
+                        "steps not finished, as its record has them:\n"
+                        + _unfinished(steps)
+                    )
+                time.sleep(POLL_SECS)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        if code != 0:
+            raise subprocess.CalledProcessError(code, argv)
 
     def reset(self, targets: list[str]) -> None:
-        self._run("reset", targets)
+        _run(self._argv("reset", targets), self.env)
 
     def close(self) -> None:
         pass
+
+    def _recorded_steps(self) -> list[StepNow]:
+        """Every step's state in the loop's record; none before the loop
+        has made the record, or while a write holds it."""
+        store = self.workspace / "system" / "supervisor.sqlite"
+        if not store.is_file():
+            return []
+        try:
+            con = sqlite3.connect(f"file:{store}?mode=ro", uri=True, timeout=1)
+            try:
+                rows = con.execute(
+                    "SELECT step, state, waiting_for, state_detail FROM steps "
+                    "ORDER BY step"
+                ).fetchall()
+            finally:
+                con.close()
+        except sqlite3.OperationalError as e:
+            # The store is made, then its tables; a write holds it briefly.
+            # Anything else (a missing column) would turn the check off.
+            if "locked" in str(e) or "no such table" in str(e):
+                return []
+            raise
+        return [StepNow(*row) for row in rows]
 
 
 class HttpDriver:
@@ -121,7 +210,9 @@ class HttpDriver:
                     f"PUT /api/config refused the config:\n{json.dumps(verdict['diagnostics'], indent=2)}\n---\n{text}"
                 )
 
-    def sync(self, roots: list[str] | None = None) -> None:
+    def sync(
+        self, roots: list[str] | None = None, deadline_secs: float = SYNC_DEADLINE_SECS
+    ) -> None:
         """One request per source the roots belong to; waits for each."""
         opened = self.call("POST", "/api/requests", {"roots": roots or []})
         for request in opened:
@@ -129,8 +220,11 @@ class HttpDriver:
                 f"[sync_drivers] request {request['id']} → {request['roots']}",
                 flush=True,
             )
+        deadline = time.monotonic() + deadline_secs
         for request in opened:
-            closed = self.wait_closed(request["id"])
+            closed = self.wait_closed(
+                request["id"], max(0.0, deadline - time.monotonic())
+            )
             if closed["state"] != "done":
                 raise SystemExit(
                     f"request {request['id']} ended {closed['state']}"
@@ -161,17 +255,35 @@ class HttpDriver:
     def wait_closed(
         self, request_id: str, deadline_secs: float = SYNC_DEADLINE_SECS
     ) -> dict:
+        """The request once closed. Fails sooner when the loop holds one of
+        its steps for disk space, and past the deadline names the steps
+        it was still waiting on."""
         deadline = time.monotonic() + deadline_secs
         while True:
             self._check_alive()
-            row = next((r for r in self.requests() if r["id"] == request_id), None)
-            if row is None:
+            status, row = self.request("GET", f"/api/requests/{request_id}")
+            if status == 404:
                 raise SystemExit(f"request {request_id} is not in GET /api/requests")
+            if status >= 400:
+                raise SystemExit(f"GET /api/requests/{request_id} → {status}: {row}")
             if row["state"] != "open":
                 return row
+            steps = [
+                StepNow(s["id"], s["state"], s["waiting_for"], s["state_detail"])
+                for s in row["steps"]
+            ]
+            if held := held_for_disk(steps):
+                raise disk_hold_error(held, self.workspace)
             if time.monotonic() > deadline:
+                unfinished = [
+                    st
+                    for st, s in zip(steps, row["steps"], strict=True)
+                    if s["phase"] != "done"
+                ]
                 raise SystemExit(
-                    f"request {request_id} still open after {deadline_secs}s; server log: {self.log_path}"
+                    f"request {request_id} still open after {deadline_secs:.0f}s; "
+                    f"steps it was still waiting on:\n{_unfinished(unfinished)}\n"
+                    f"server log: {self.log_path}"
                 )
             time.sleep(POLL_SECS)
 
@@ -244,6 +356,15 @@ class HttpDriver:
                 if time.monotonic() > deadline:
                     raise
             time.sleep(0.05)
+
+
+def _unfinished(steps: Iterable[StepNow]) -> str:
+    lines = [
+        f"  {s.describe()}"
+        for s in steps
+        if s.state not in ("idle", "fresh", "stale", "off")
+    ]
+    return "\n".join(lines) or "  (none: every step reads finished)"
 
 
 def _run(argv: list[str], env: dict) -> None:

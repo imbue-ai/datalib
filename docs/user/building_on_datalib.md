@@ -109,7 +109,12 @@ has work left: waiting its turn, or the loop has not taken the request
 on yet), `running`, or `done` (nothing left for it). Once a root is
 `done`, `last_run.status` says how its run ended: `succeeded`, `failed`
 or `stopped`. A step turned off is done without running, and its
-`state` says `off`. `progress` is what the step has reported in the
+`state` says `off`. A step whose `state` is `waiting` names what
+kind of thing holds it in `waiting_for` (`upstream`, `reader`, `lock`,
+`disk_space`, `config`) and which one in `state_detail`. `disk_space`
+means the data root's disk is under the config's `[disk_space]` floor:
+nothing starts until space is freed, so say so rather than wait.
+`progress` is what the step has reported in the
 loop's current run: the same numbers as `GET /api/runs/{run}/steps`
 (see "How fresh is the mirror?").
 
