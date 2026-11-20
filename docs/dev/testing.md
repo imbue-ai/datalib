@@ -415,6 +415,34 @@ third-party sites faked. It is `manual`, not part of the merge gate; run it with
 (`.github/workflows/latchkey-auth.yml`). What is real and what is faked:
 [`tests/e2e_auth/README.md`](/datalib/ui/tests/e2e_auth/README.md).
 
+## The downloaders against fake services
+
+`//datalib/backend/etl/fake_services:fake_services_tests` runs the real
+`slack`, `linear`, `email` (Gmail) and `calendar` (Google) downloads
+against the fake Slack, Linear and Google of
+[imbue-ai/fake-services](https://github.com/imbue-ai/fake-services),
+through the real latchkey. Where a playback test answers each request
+from a tape the test wrote, these tests seed a service with a small
+Starfleet workspace and let the fake answer as the real one would: Linear
+validates every query against Linear's own public schema, each service
+keeps the real one's rate limits and can misbehave on a schedule of
+faults, and an update between two syncs is what a later sync has to
+notice. They are where a downloader's reading of a service's contract
+is checked, and they are what found the reply-edit gap in the Slack
+download (`an_edited_reply_in_a_quiet_thread_is_not_re_read` holds the
+download to what INGEST.md documents, and should turn around when the
+gap is closed).
+
+The harness is `datalib_fake_services` (`datalib/backend/etl/fake_services/src/lib.rs`):
+`Fakes::start` stages the pinned launcher and its packages out of the
+runfiles, serves the seeds on loopback ports, stores each seed's token
+in a latchkey store of its own and points `LATCHKEY_CURL` at the fake's
+`curl_shim.sh`. latchkey reads all of that from the process environment,
+so the binary runs its tests one at a time (`--test-threads=1`) and a
+`Fakes` holds a process-wide lock while it lives. The fake-services
+commit and its npm packages are pinned in `MODULE.bazel` and
+`third-party/fake-services/` (its README says how to bump them).
+
 ## Watching a sync stream
 
 [`data-sources-streaming.spec.ts`](/datalib/ui/tests/e2e/data-sources-streaming.spec.ts)
