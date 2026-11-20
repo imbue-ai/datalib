@@ -37,12 +37,15 @@ pub fn addressbook(source_id: &str, addressbook_id: &str) -> Identity {
 }
 
 /// A vCard `CATEGORIES` name, which groups cards with no card of its own
-/// (Google's labels), within its address book. A rename is a new one.
-pub fn category(source_id: &str, addressbook_label: &str, name: &str) -> Identity {
+/// (Google's labels), within its address book: `addressbook` is the
+/// book's id, which a rename of the book keeps, or its label where the
+/// card names no book. A category's name is all it is, so renaming the
+/// category itself is a new one.
+pub fn category(source_id: &str, addressbook: &str, name: &str) -> Identity {
     IDS.mint(
         source_id,
         KIND_CATEGORY,
-        composite_key(&[addressbook_label, name]),
+        composite_key(&[addressbook, name]),
         None,
     )
 }
