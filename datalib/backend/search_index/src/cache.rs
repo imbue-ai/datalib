@@ -179,12 +179,14 @@ mod tests {
         assert!(cache.missing("gemma", &[h("a")]).await.unwrap().is_empty());
     }
 
-    async fn plan(cache: &InferenceCache, sql: &str, binds: [&str; 2]) -> Vec<String> {
+    async fn plan(cache: &InferenceCache, sql: &str, binds: &[&str]) -> Vec<String> {
         // `sql` is one of this crate's own constant statements.
         let explain = sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}"));
-        sqlx::query_as::<_, (i64, i64, i64, String)>(explain)
-            .bind(binds[0])
-            .bind(binds[1])
+        let mut query = sqlx::query_as::<_, (i64, i64, i64, String)>(explain);
+        for bind in binds {
+            query = query.bind(*bind);
+        }
+        query
             .fetch_all(&cache.pool)
             .await
             .unwrap()
@@ -203,13 +205,32 @@ mod tests {
             (HELD_SQL, ["gemma", "[]"]),
             (crate::chunked::OWED_SQL, ["mail", "gemma"]),
         ] {
-            let plan = plan(&cache, sql, binds).await;
+            let plan = plan(&cache, sql, &binds).await;
             assert!(
                 plan.iter()
                     .any(|d| d.contains("USING COVERING INDEX vectors_keys")),
                 "{plan:?}"
             );
         }
+    }
+
+    /// The sweep finds the vectors no chunk names by reading the keys'
+    /// index, and reads only those rows of the table: a sweep that read the
+    /// whole table took 150 s on a 2.7 GB cache.
+    #[tokio::test]
+    async fn the_sweep_reads_the_keys_not_the_vectors() {
+        let (_dir, cache) = open().await;
+        let plan = plan(&cache, crate::chunked::SWEEP_SQL, &["gemma"]).await;
+        assert!(
+            plan.iter()
+                .any(|d| d == "SCAN vectors USING COVERING INDEX vectors_keys"),
+            "{plan:?}"
+        );
+        assert!(
+            plan.iter()
+                .all(|d| !d.starts_with("SCAN vectors") || d.contains("vectors_keys")),
+            "the sweep reads the vectors table whole: {plan:?}"
+        );
     }
 
     /// A cache an earlier build wrote, with no keys' index, keeps every

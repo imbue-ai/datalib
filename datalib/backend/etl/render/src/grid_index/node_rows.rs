@@ -37,15 +37,23 @@ pub(super) struct CarriedNode {
     pub source_label: String,
 }
 
+/// What [`CARRIED_WITHOUT_A_ROW`] reads one source's nodes by, and names.
+/// Without it SQLite started from every document row in the index, so
+/// each source cost a read of the whole index on every pass. Out of
+/// `grid_index::schema_hash`, as `AUTHORS_INDEX` is: it changes no row,
+/// and adding it must not rebuild the index.
+pub(super) const BY_SOURCE_INDEX: &str =
+    "CREATE INDEX IF NOT EXISTS data_nodes_by_source ON data_nodes (source_id)";
+
 /// The nodes a source's documents carry that no document holds a row for,
 /// each as its newest carrier tells it: the carrier with the greatest
 /// `markdown_uuid`, whose stamp-led ids make that the latest. A node whose
 /// uuid is already a row of some document is skipped.
-const CARRIED_WITHOUT_A_ROW: &str = "\
+pub(super) const CARRIED_WITHOUT_A_ROW: &str = "\
     SELECT n.uuid, n.source_id, n.kind, n.name, n.parent_uuid, n.sort_key, \
            n.read_uuid, n.place_uuid, n.upstream_entity_kind, n.upstream_id, \
            n.upstream_account, d.provider, d.source_label, max(n.markdown_uuid) \
-    FROM data_nodes n \
+    FROM data_nodes n INDEXED BY data_nodes_by_source \
     JOIN grid_rows d ON d.markdown_uuid = n.markdown_uuid AND d.is_document = 1 \
     WHERE n.source_id = ? \
       AND NOT EXISTS (SELECT 1 FROM grid_rows g \

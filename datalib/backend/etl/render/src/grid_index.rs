@@ -501,7 +501,7 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     for ddl in index_ddl()
         .chain(remade_indexes())
         .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
-        .chain([AUTHORS_INDEX])
+        .chain([AUTHORS_INDEX, node_rows::BY_SOURCE_INDEX])
     {
         sqlx::query(ddl)
             .execute(pool)
@@ -2375,6 +2375,33 @@ mod open_index_tests {
         let mut statements = vec![DELETE_DOCUMENT_GRID_ROWS];
         statements.extend(DELETE_DOCUMENTS);
         assert_searched_by_index(&pool, &statements).await;
+        pool.close().await;
+    }
+
+    /// A source's nodes are read by the source, not by walking every
+    /// document row in the index: a pass spent 11–20 s on each source of
+    /// a 1.2M-row index, one or two changed documents or not.
+    #[tokio::test]
+    async fn a_sources_nodes_are_read_by_the_source() {
+        let td = tempfile::tempdir().unwrap();
+        let pool = open_index(&td.path().join("db.sqlite"))
+            .await
+            .expect("open_index");
+        // Audited: a constant statement of this crate.
+        let explain = format!("EXPLAIN QUERY PLAN {}", node_rows::CARRIED_WITHOUT_A_ROW);
+        let plan: Vec<String> = sqlx::query(sqlx::AssertSqlSafe(explain))
+            .bind("src")
+            .fetch_all(&pool)
+            .await
+            .expect("explain")
+            .iter()
+            .map(|r| r.get::<String, _>("detail"))
+            .collect();
+        assert!(
+            plan.iter()
+                .any(|d| d.starts_with("SEARCH n USING INDEX data_nodes_by_source (source_id=?)")),
+            "{plan:?}"
+        );
         pool.close().await;
     }
 
