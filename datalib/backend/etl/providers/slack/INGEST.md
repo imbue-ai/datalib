@@ -473,7 +473,7 @@ stall the write ahead of it. So a batch of files has its file objects
 read, through the writer's transaction, before its request goes out. A stop ends the walk at once; what
 is out, and an answer that arrived after the stop, is dropped unwritten
 and stays owed. Rate limits and retries stay per request, in the
-shared transport ([Rate limits](#rate-limits)).
+shared transport ([Rate limits and transient errors](#rate-limits-and-transient-errors)).
 
 Three is what was measured: on one workspace, pages of 999 three at a
 time read history 5.5 times as fast as pages of 200 one at a time, and
@@ -695,8 +695,11 @@ again, and what goes without it. `info` is not counted on the Manage
 row; the problems grid shows it. Once the marker is a week old the
 next run asks again: an answer forgets the marker and the row goes, a
 refusal stamps it anew. A failure that may pass (an HTTP 5xx, curl
-failing, Slack's `internal_error`) is not a refusal: it is the usual
-error row and the call is asked again next run. A reset of the
+failing, Slack's `internal_error` or `fatal_error`) is not a refusal.
+The ones the chokepoint retries ([Rate limits and transient
+errors](#rate-limits-and-transient-errors)) are asked again within
+the run first; whatever still fails is the usual error row, and the
+call is asked again next run. A reset of the
 download forgets the marker along with everything else.
 
 Without `client.counts` a run walks every conversation, as when the
@@ -817,15 +820,24 @@ one listing still waits for the page before it, since its cursor
 names where the next one starts. The walk after them keeps up to three
 requests out ([Three requests at once](#three-requests-at-once)).
 
-## Rate limits
+## Rate limits and transient errors
 
 Slack signals a rate limit either as `429 Retry-After` or, on older
 methods, as HTTP `200` with an `{"ok":false,"error":"ratelimited"}`
-body. Both are handled centrally by the shared `latchkey_curl`
-chokepoint — `api::slack_retryability` teaches it to recognize the
-200-body form, after which it honors `Retry-After` / backs off and
+body. A failure on its side comes the same two ways: a `502` to `504`,
+or a `200` whose `error` is `internal_error` ("likely due to a
+transient issue on our end", which Slack recommends retrying) or
+`service_unavailable`. All of these are retried by the shared
+`latchkey_curl` chokepoint: `api::slack_retryability` reads a `200`
+body's `error` against `TRANSIENT_CODES` so the chokepoint can see
+the `200` forms. It honors `Retry-After`, otherwise backs off, and
 enforces the source's `common.download_params` give-up policy. When it
 gives up, the call surfaces as `SlackError::Permanent`.
+
+Every other `ok:false` answer is handed back on the first try. That
+includes `fatal_error`, which Slack calls catastrophic rather than
+transient, and `request_timeout`, which despite its name means a POST
+body arrived truncated.
 
 ## Sample data
 

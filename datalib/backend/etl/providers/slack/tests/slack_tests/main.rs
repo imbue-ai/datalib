@@ -31,4 +31,5 @@ mod run_problems;
 mod slack_render;
 mod slack_translate;
 mod support;
+mod transient_retry;
 mod upgrade;

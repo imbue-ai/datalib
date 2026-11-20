@@ -17,7 +17,7 @@ const REPLY: &str = "1735689600.000150";
 const B: &str = "1735689600.000200";
 
 fn refused_by_slack() -> Value {
-    json!({"ok": false, "error": "internal_error"})
+    json!({"ok": false, "error": "fatal_error"})
 }
 
 /// The account-state listings, answered empty, so the only rows a test
