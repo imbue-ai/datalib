@@ -202,7 +202,12 @@ impl HeldVectors {
                 };
                 let best = (0..d.chunks.len())
                     .filter(|&c| kept.is_none_or(|k| d.covered(c).any(|u| k.contains(u))))
-                    .map(|c| (dot_and_norm(d.vector(c), query).0 / norm, c))
+                    .map(|c| {
+                        (
+                            datalib_search_index::half::dot(d.vector(c), query) / norm,
+                            c,
+                        )
+                    })
                     .max_by(|a, b| a.0.total_cmp(&b.0))?;
                 Some((d, best.0, best.1))
             })

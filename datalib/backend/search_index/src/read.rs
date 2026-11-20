@@ -41,8 +41,9 @@ pub struct HeldDoc {
     pub sections: Vec<Option<String>>,
     /// Its chunks that have a vector.
     pub chunks: Vec<HeldChunk>,
-    /// One unit vector per chunk, laid end to end.
-    pub vectors: Vec<f32>,
+    /// One unit vector per chunk, laid end to end, in half precision
+    /// ([`crate::half`]): half the memory of the f32 the cache stores.
+    pub vectors: Vec<u16>,
     content_hash: String,
     /// Each chunk's hash, by its place in `chunks`.
     hashes: Vec<String>,
@@ -59,7 +60,7 @@ pub struct HeldChunk {
 }
 
 impl HeldDoc {
-    pub fn vector(&self, chunk: usize) -> &[f32] {
+    pub fn vector(&self, chunk: usize) -> &[u16] {
         let dim = self.vectors.len() / self.chunks.len();
         &self.vectors[chunk * dim..(chunk + 1) * dim]
     }
@@ -100,7 +101,7 @@ impl Held {
             let mut sum = vec![0f32; self.dim];
             for chunk in 0..doc.chunks.len() {
                 for (s, x) in sum.iter_mut().zip(doc.vector(chunk)) {
-                    *s += x;
+                    *s += crate::half::to_f32(*x);
                 }
             }
             if unit(&mut sum) {
@@ -344,13 +345,24 @@ impl Reader {
         };
         // Nothing embedded yet is the usual state until a sync turns
         // embedding on.
-        let any: Option<i64> = sqlx::query_scalar("SELECT 1 FROM vectors WHERE model = ? LIMIT 1")
-            .bind(model)
-            .fetch_optional(cache)
-            .await
-            .context("look for a cached vector")?;
-        if any.is_none() {
+        let width: Option<i64> =
+            sqlx::query_scalar("SELECT length(vector) FROM vectors WHERE model = ? LIMIT 1")
+                .bind(model)
+                .fetch_optional(cache)
+                .await
+                .context("look for a cached vector")?;
+        let Some(width) = width else {
             return Ok(Held::default());
+        };
+        let dim = usize::try_from(width / 4)?;
+        if width <= 0 || width % 4 != 0 {
+            bail!("a cached vector of {width} bytes, not whole f32s");
+        }
+        if before.is_some_and(|b| b.dim != 0 && b.dim != dim) {
+            bail!(
+                "cached vectors of {dim} dimensions, and {} held",
+                before.map_or(0, |b| b.dim)
+            );
         }
         let docs: Vec<DocRow> = sqlx::query_as(
             "SELECT doc_id, markdown_uuid, source_id, content_hash FROM search_documents",
@@ -365,15 +377,17 @@ impl Reader {
             (d.source_id == *source_id && d.content_hash == *content_hash).then_some(d)
         };
         let mut held = Held {
-            dim: before.map_or(0, |b| b.dim),
+            dim,
             docs: BTreeMap::new(),
         };
         let mut build: Vec<(DocRow, Option<&Arc<HeldDoc>>)> = Vec::new();
         let mut waiting: Vec<(DocRow, &Arc<HeldDoc>)> = Vec::new();
+        let mut listed = 0;
         for row in docs {
             if cut.get(&row.1) != Some(&row.3) {
                 continue;
             }
+            listed += 1;
             match unmoved(&row) {
                 Some(d) if d.missing.is_empty() => {
                     held.docs.insert(row.1, d.clone());
@@ -399,26 +413,14 @@ impl Reader {
             }
         }
         let built = build.len();
-        for batch in build.chunks(BUILD_BATCH) {
-            for doc in self.build(cache, model, batch).await? {
-                if !doc.chunks.is_empty() {
-                    let dim = doc.vectors.len() / doc.chunks.len();
-                    if held.dim == 0 {
-                        held.dim = dim;
-                    } else if held.dim != dim {
-                        bail!(
-                            "cached vectors of {} and {} dimensions under one model",
-                            held.dim,
-                            dim
-                        );
-                    }
-                }
-                held.docs.insert(doc.markdown_uuid.clone(), Arc::new(doc));
-            }
+        let whole = built * 2 >= listed;
+        for doc in self.build(cache, model, dim, &build, whole).await? {
+            held.docs.insert(doc.markdown_uuid.clone(), Arc::new(doc));
         }
         tracing::info!(
             kept,
             built,
+            whole,
             elapsed_ms = started.elapsed().as_millis() as u64,
             "read the held vectors"
         );
@@ -427,107 +429,250 @@ impl Reader {
 
     /// `docs` as [`HeldDoc`]s: their sections from the index, their chunks
     /// from the cache, and each chunk's vector from the document's earlier
-    /// version where it held one, else from the cache.
+    /// version where it held one, else from the cache. For most of the
+    /// library (`whole`) the cache's vectors are read in one pass in key
+    /// order, which reads the file in order; for a few, by key.
     async fn build(
         &self,
         cache: &SqlitePool,
         model: &str,
+        dim: usize,
         docs: &[(DocRow, Option<&Arc<HeldDoc>>)],
+        whole: bool,
     ) -> Result<Vec<HeldDoc>> {
-        let mut earlier: HashMap<&str, &[f32]> = HashMap::new();
+        let mut earlier: HashMap<&str, &[u16]> = HashMap::new();
         for d in docs.iter().filter_map(|(_, d)| *d) {
             for (chunk, hash) in d.hashes.iter().enumerate() {
                 earlier.insert(hash.as_str(), d.vector(chunk));
             }
         }
-        let docs: Vec<&DocRow> = docs.iter().map(|(row, _)| row).collect();
-        let ids: Vec<i64> = docs.iter().map(|(id, ..)| *id).collect();
-        let sections: Vec<(i64, Option<String>)> = sqlx::query_as(
-            "SELECT doc_id, uuid FROM search_sections \
-              WHERE doc_id IN (SELECT value FROM json_each(?)) ORDER BY doc_id, seq",
-        )
-        .bind(serde_json::to_string(&ids)?)
-        .fetch_all(&self.index)
-        .await
-        .context("read the indexed sections")?;
-        let mut sections_of: HashMap<i64, Vec<Option<String>>> = HashMap::new();
-        for (doc, uuid) in sections {
-            sections_of.entry(doc).or_default().push(uuid);
-        }
-        let uuids: Vec<String> = docs.iter().map(|(_, uuid, ..)| uuid.clone()).collect();
-        let mut filed = crate::chunked::read_filed(cache, Some(&uuids)).await?;
-        let mut hashes: Vec<&str> = filed
-            .values()
-            .flat_map(|(_, chunks)| chunks.iter().map(|c| c.hash.as_str()))
-            .collect();
-        hashes.retain(|h| !earlier.contains_key(h));
-        hashes.sort_unstable();
-        hashes.dedup();
-        let vectors = cached(cache, model, &hashes).await?;
-        let mut out = Vec::with_capacity(docs.len());
-        for (doc_id, markdown_uuid, source_id, content_hash) in docs {
+        let rows: Vec<&DocRow> = docs.iter().map(|(row, _)| row).collect();
+        let mut sections_of = self.sections_of(&rows, whole).await?;
+        let mut filed = if whole {
+            crate::chunked::read_filed(cache, None).await?
+        } else {
+            let uuids: Vec<String> = rows.iter().map(|(_, uuid, ..)| uuid.clone()).collect();
+            crate::chunked::read_filed(cache, Some(&uuids)).await?
+        };
+        let mut building: Vec<Building> = Vec::with_capacity(rows.len());
+        let mut filed_of: Vec<Vec<crate::FiledChunk>> = Vec::with_capacity(rows.len());
+        for (doc_id, markdown_uuid, source_id, content_hash) in rows {
             let Some((_, chunks)) = filed.remove(markdown_uuid) else {
                 continue;
             };
-            let mut doc = HeldDoc {
-                markdown_uuid: markdown_uuid.clone(),
-                source_id: source_id.clone(),
-                sections: sections_of.remove(doc_id).unwrap_or_default(),
-                chunks: Vec::new(),
-                vectors: Vec::new(),
-                content_hash: content_hash.clone(),
-                hashes: Vec::new(),
-                missing: Vec::new(),
-            };
-            for crate::FiledChunk { chunk, hash } in chunks {
-                let width = doc.chunks.first().map(|_| doc.vector(0).len());
-                let at = doc.vectors.len();
-                if let Some(v) = earlier.get(hash.as_str()) {
-                    doc.vectors.extend_from_slice(v);
-                } else {
-                    let Some(blob) = vectors.get(&hash) else {
-                        doc.missing.push(hash);
-                        continue;
-                    };
-                    let (words, rest) = blob.as_chunks::<4>();
-                    if !rest.is_empty() || words.is_empty() {
-                        bail!("a cached vector of {} bytes, not whole f32s", blob.len());
-                    }
-                    doc.vectors
-                        .extend(words.iter().map(|w| f32::from_le_bytes(*w)));
-                    if !unit(&mut doc.vectors[at..]) {
-                        doc.vectors.truncate(at);
-                        continue;
-                    }
+            let mut found = vec![Found::Not; chunks.len()];
+            let mut vectors = vec![0u16; chunks.len() * dim];
+            for (i, c) in chunks.iter().enumerate() {
+                if let Some(v) = earlier.get(c.hash.as_str()).filter(|v| v.len() == dim) {
+                    vectors[i * dim..(i + 1) * dim].copy_from_slice(v);
+                    found[i] = Found::Unit;
                 }
-                if width.is_some_and(|w| w != doc.vectors.len() - at) {
-                    bail!("cached vectors of two widths in one document");
-                }
-                doc.hashes.push(hash);
-                doc.chunks.push(HeldChunk {
-                    start: i64::try_from(chunk.start)?,
-                    end: i64::try_from(chunk.end)?,
-                    first_section: i64::try_from(chunk.first_section)?,
-                    last_section: i64::try_from(chunk.last_section)?,
-                });
             }
-            out.push(doc);
+            building.push(Building {
+                doc: HeldDoc {
+                    markdown_uuid: markdown_uuid.clone(),
+                    source_id: source_id.clone(),
+                    sections: sections_of.remove(doc_id).unwrap_or_default(),
+                    chunks: Vec::new(),
+                    vectors,
+                    content_hash: content_hash.clone(),
+                    hashes: Vec::new(),
+                    missing: Vec::new(),
+                },
+                found,
+            });
+            filed_of.push(chunks);
+        }
+        drop(filed);
+        let mut wanted: Vec<(&str, u32, u32)> = Vec::new();
+        for (d, (b, chunks)) in building.iter().zip(&filed_of).enumerate() {
+            for (c, chunk) in chunks.iter().enumerate() {
+                if b.found[c] == Found::Not {
+                    wanted.push((chunk.hash.as_str(), u32::try_from(d)?, u32::try_from(c)?));
+                }
+            }
+        }
+        wanted.sort_unstable();
+        let mut places: Vec<(usize, usize, Found)> = Vec::new();
+        let mut halves: Vec<u16> = Vec::new();
+        let mut take = |hash: &str, blob: &[u8]| -> Result<()> {
+            let from = wanted.partition_point(|(h, ..)| *h < hash);
+            let to = from + wanted[from..].partition_point(|(h, ..)| *h == hash);
+            if from == to {
+                return Ok(());
+            }
+            if blob.len() != dim * 4 {
+                bail!(
+                    "cached vectors of {} and {} bytes under one model",
+                    dim * 4,
+                    blob.len()
+                );
+            }
+            let mut v: Vec<f32> = blob
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|w| f32::from_le_bytes(*w))
+                .collect();
+            let found = if unit(&mut v) {
+                Found::Unit
+            } else {
+                Found::Zero
+            };
+            halves.clear();
+            halves.extend(v.iter().map(|x| crate::half::from_f32(*x)));
+            for (_, d, c) in &wanted[from..to] {
+                places.push((*d as usize, *c as usize, found));
+            }
+            for (d, c, found) in places.drain(..) {
+                let b = &mut building[d];
+                b.found[c] = found;
+                b.doc.vectors[c * dim..(c + 1) * dim].copy_from_slice(&halves);
+            }
+            Ok(())
+        };
+        if whole {
+            scan_vectors(cache, model, &mut take).await?;
+        } else {
+            let mut hashes: Vec<&str> = wanted.iter().map(|(h, ..)| *h).collect();
+            hashes.dedup();
+            vectors_by_key(cache, model, &hashes, &mut take).await?;
+        }
+        building
+            .into_iter()
+            .zip(filed_of)
+            .map(|(b, filed)| b.finish(filed, dim))
+            .collect()
+    }
+
+    /// Each of `docs`' sections' message uuids, by `seq`: for most of the
+    /// index (`whole`) read in one pass, for a few by key.
+    async fn sections_of(
+        &self,
+        docs: &[&DocRow],
+        whole: bool,
+    ) -> Result<HashMap<i64, Vec<Option<String>>>> {
+        let ids: HashSet<i64> = docs.iter().map(|(id, ..)| *id).collect();
+        let mut out: HashMap<i64, Vec<Option<String>>> = HashMap::new();
+        let mut add = |rows: Vec<(i64, Option<String>)>| {
+            for (doc, uuid) in rows.into_iter().filter(|(doc, _)| ids.contains(doc)) {
+                out.entry(doc).or_default().push(uuid);
+            }
+        };
+        if whole {
+            add(
+                sqlx::query_as("SELECT doc_id, uuid FROM search_sections ORDER BY doc_id, seq")
+                    .fetch_all(&self.index)
+                    .await
+                    .context("read the indexed sections")?,
+            );
+        } else {
+            let ids: Vec<i64> = ids.iter().copied().collect();
+            for batch in ids.chunks(BATCH) {
+                add(sqlx::query_as(
+                    "SELECT doc_id, uuid FROM search_sections \
+                      WHERE doc_id IN (SELECT value FROM json_each(?)) ORDER BY doc_id, seq",
+                )
+                .bind(serde_json::to_string(batch)?)
+                .fetch_all(&self.index)
+                .await
+                .context("read the indexed sections")?);
+            }
         }
         Ok(out)
     }
 }
 
-/// How many documents one [`Reader::build`] reads: what bounds the
-/// cache's rows held at once while the whole library is read.
-const BUILD_BATCH: usize = 2_000;
+/// Whether a chunk's vector was found, and whether it points anywhere: a
+/// vector of zeros is near no query and is held by no chunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Found {
+    Not,
+    Unit,
+    Zero,
+}
 
-/// `hash → vector` for each of `hashes` the cache holds under `model`.
-async fn cached(
+/// A document being built: a slot per filed chunk, filled as its vector
+/// is found.
+struct Building {
+    doc: HeldDoc,
+    found: Vec<Found>,
+}
+
+impl Building {
+    /// The document with the chunks whose vector was found and points
+    /// somewhere, in order; the others' hashes are what it waits for.
+    fn finish(self, filed: Vec<crate::FiledChunk>, dim: usize) -> Result<HeldDoc> {
+        let Building { mut doc, found } = self;
+        let mut kept = 0;
+        for (i, (crate::FiledChunk { chunk, hash }, found)) in
+            filed.into_iter().zip(found).enumerate()
+        {
+            match found {
+                Found::Not => doc.missing.push(hash),
+                Found::Zero => {}
+                Found::Unit => {
+                    doc.vectors.copy_within(i * dim..(i + 1) * dim, kept * dim);
+                    kept += 1;
+                    doc.hashes.push(hash);
+                    doc.chunks.push(HeldChunk {
+                        start: i64::try_from(chunk.start)?,
+                        end: i64::try_from(chunk.end)?,
+                        first_section: i64::try_from(chunk.first_section)?,
+                        last_section: i64::try_from(chunk.last_section)?,
+                    });
+                }
+            }
+        }
+        doc.vectors.truncate(kept * dim);
+        doc.vectors.shrink_to_fit();
+        Ok(doc)
+    }
+}
+
+/// How many rows one page of [`scan_vectors`] reads.
+pub const SCAN_PAGE: i64 = 4_096;
+
+/// One page of a model's vectors after a hash, in key order: a range of
+/// the primary key, read leaf by leaf.
+pub const SCAN_SQL: &str = "SELECT hash, vector FROM vectors WHERE model = ? AND hash > ? \
+                             ORDER BY hash LIMIT ?";
+
+/// Every vector the cache holds under `model`, handed to `take` in key
+/// order a page at a time: one pass over the table's leaves, in the order
+/// they lie in the file.
+async fn scan_vectors(
+    cache: &SqlitePool,
+    model: &str,
+    take: &mut impl FnMut(&str, &[u8]) -> Result<()>,
+) -> Result<()> {
+    let mut after = String::new();
+    loop {
+        let rows: Vec<(String, Vec<u8>)> = sqlx::query_as(SCAN_SQL)
+            .bind(model)
+            .bind(&after)
+            .bind(SCAN_PAGE)
+            .fetch_all(cache)
+            .await
+            .context("read the cached vectors")?;
+        let Some((last, _)) = rows.last() else {
+            return Ok(());
+        };
+        after = last.clone();
+        for (hash, blob) in &rows {
+            take(hash, blob)?;
+        }
+    }
+}
+
+/// The vectors of `hashes` the cache holds under `model`, handed to
+/// `take`.
+async fn vectors_by_key(
     cache: &SqlitePool,
     model: &str,
     hashes: &[&str],
-) -> Result<HashMap<String, Vec<u8>>> {
-    let mut out = HashMap::with_capacity(hashes.len());
+    take: &mut impl FnMut(&str, &[u8]) -> Result<()>,
+) -> Result<()> {
     for batch in hashes.chunks(BATCH) {
         let rows: Vec<(String, Vec<u8>)> = sqlx::query_as(
             "SELECT hash, vector FROM vectors WHERE model = ? \
@@ -538,9 +683,11 @@ async fn cached(
         .fetch_all(cache)
         .await
         .context("read the cached vectors")?;
-        out.extend(rows);
+        for (hash, blob) in &rows {
+            take(hash, blob)?;
+        }
     }
-    Ok(out)
+    Ok(())
 }
 
 /// `(doc_id, markdown_uuid, source_id, content_hash)`.
@@ -792,7 +939,7 @@ mod tests {
             source_id: "s".into(),
             sections: Vec::new(),
             chunks: vec![chunk; vectors.len() / 2],
-            vectors: vectors.to_vec(),
+            vectors: vectors.iter().map(|x| crate::half::from_f32(*x)).collect(),
             content_hash: String::new(),
             hashes: Vec::new(),
             missing: Vec::new(),

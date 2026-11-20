@@ -114,6 +114,13 @@ async fn fixture_cut(
     Fixture { dir, reader }
 }
 
+/// `v` as search holds it: in half precision.
+fn half(v: &[f32]) -> Vec<u16> {
+    v.iter()
+        .map(|x| datalib_search_index::half::from_f32(*x))
+        .collect()
+}
+
 /// Every word, each whole, in one message.
 fn all_of(words: &[&str]) -> String {
     let terms: Vec<String> = words.iter().map(|w| format!("\"{w}\"")).collect();
@@ -241,7 +248,7 @@ async fn held_vectors_are_the_cached_chunks_with_their_messages() {
     assert_eq!(embedded.len(), 1);
     let d = embedded[0];
     assert_eq!(d.markdown_uuid, "thread");
-    assert_eq!(d.vector(0), [0.6, 0.8]);
+    assert_eq!(d.vector(0), half(&[0.6, 0.8]));
     let covered: Vec<&str> = d.covered(0).collect();
     assert_eq!(covered, ["m1", "m2"]);
     let other_model = f.reader.held("another-model").await.unwrap();
@@ -271,12 +278,20 @@ async fn a_reload_reads_only_the_documents_that_changed() {
     .await;
     let after = f.reader.held_after(&model, Some(&before)).await.unwrap();
     assert!(Arc::ptr_eq(&before.docs["thread"], &after.docs["thread"]));
-    assert_eq!(after.docs["thread"].vector(0), [0.6, 0.8], "not read");
-    assert_eq!(after.docs["chat"].vector(0), [0.0, 1.0], "read: it is new");
+    assert_eq!(
+        after.docs["thread"].vector(0),
+        half(&[0.6, 0.8]),
+        "not read"
+    );
+    assert_eq!(
+        after.docs["chat"].vector(0),
+        half(&[0.0, 1.0]),
+        "read: it is new"
+    );
     let full = f.reader.held(&model).await.unwrap();
     assert_eq!(
         full.docs["thread"].vector(0),
-        [0.8, 0.6],
+        half(&[0.8, 0.6]),
         "a full read reads it"
     );
     f.reader.close().await;
@@ -314,8 +329,12 @@ async fn a_grown_conversation_reads_only_its_new_chunk() {
     let after = f.reader.held_after(&model, Some(&before)).await.unwrap();
     let d = &after.docs["chat"];
     assert_eq!(d.chunks.len(), 2);
-    assert_eq!(d.vector(0), [0.6, 0.8], "kept from the earlier version");
-    assert_eq!(d.vector(1), [0.0, 1.0], "read: it is new");
+    assert_eq!(
+        d.vector(0),
+        half(&[0.6, 0.8]),
+        "kept from the earlier version"
+    );
+    assert_eq!(d.vector(1), half(&[0.0, 1.0]), "read: it is new");
     f.reader.close().await;
 }
 
@@ -368,6 +387,104 @@ async fn a_reload_holds_what_a_full_read_holds() {
     assert_eq!(embedded(&full), ["chat", "fresh", "thread", "waiting"]);
     assert_eq!(after, full);
     assert!(Arc::ptr_eq(&before.docs["thread"], &after.docs["thread"]));
+    f.reader.close().await;
+}
+
+/// A full read takes the cache's vectors a page at a time: one past the
+/// first page is held too.
+#[tokio::test]
+async fn a_full_read_reads_past_the_first_page() {
+    let n = usize::try_from(datalib_search_index::read::SCAN_PAGE).unwrap() + 5;
+    let docs: Vec<IndexDoc> = (0..n)
+        .map(|i| {
+            doc(
+                "mail",
+                &format!("d{i}"),
+                &[(Some("m"), &format!("note {i}\n"))],
+            )
+        })
+        .collect();
+    let vectors: Vec<(String, Vec<f32>)> = docs
+        .iter()
+        .map(|d| (only_chunk(d), vec![1.0, 0.0]))
+        .collect();
+    let f = fixture(&docs, &vectors).await;
+    let held = f
+        .reader
+        .held(&datalib_search_index::model_key())
+        .await
+        .unwrap();
+    assert_eq!(held.chunks(), n);
+    f.reader.close().await;
+}
+
+/// The full read walks the primary key in order, and nothing else: no
+/// sort, and no detour through the keys' index to the rows.
+#[tokio::test]
+async fn a_full_read_walks_the_vectors_in_key_order() {
+    let f = fixture(&[thread()], &[]).await;
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(f.cache_path()))
+        .await
+        .unwrap();
+    let explain = format!(
+        "EXPLAIN QUERY PLAN {}",
+        datalib_search_index::read::SCAN_SQL
+    );
+    // A constant statement of the crate under test.
+    let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(sqlx::AssertSqlSafe(explain))
+        .bind("m")
+        .bind("")
+        .bind(1)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    let plan: Vec<String> = plan.into_iter().map(|(.., d)| d).collect();
+    assert_eq!(
+        plan,
+        ["SEARCH vectors USING PRIMARY KEY (model=? AND hash>?)"],
+        "{plan:?}"
+    );
+    f.reader.close().await;
+}
+
+/// A reload that builds a few documents reads their vectors by key, and
+/// holds what a full read, one pass over the table, holds.
+#[tokio::test]
+async fn a_few_documents_read_by_key_hold_what_a_full_read_holds() {
+    let model = datalib_search_index::model_key();
+    let docs: Vec<IndexDoc> = (0..6)
+        .map(|i| {
+            doc(
+                "mail",
+                &format!("d{i}"),
+                &[(Some("m"), &format!("note {i}\n"))],
+            )
+        })
+        .collect();
+    let vectors: Vec<(String, Vec<f32>)> = docs
+        .iter()
+        .enumerate()
+        .map(|(i, d)| (only_chunk(d), vec![i as f32, 1.0]))
+        .collect();
+    let f = fixture(&docs, &vectors).await;
+    let before = f.reader.held(&model).await.unwrap();
+    let mut redrawn = docs[2].clone();
+    redrawn.content_hash = "a later rendering".into();
+    redrawn.sections[0].text = "a later note\n".into();
+    f.sync(
+        std::slice::from_ref(&redrawn),
+        &[(only_chunk(&redrawn), vec![3.0, -4.0])],
+    )
+    .await;
+    let after = f.reader.held_after(&model, Some(&before)).await.unwrap();
+    let full = f.reader.held(&model).await.unwrap();
+    assert_eq!(after.docs["d2"].vector(0), half(&[0.6, -0.8]));
+    assert_eq!(after, full);
     f.reader.close().await;
 }
 

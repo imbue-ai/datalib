@@ -12,6 +12,7 @@ pub mod cache;
 pub mod chunk;
 mod chunked;
 mod file;
+pub mod half;
 pub mod holdings;
 pub mod owed;
 pub mod prompt;
