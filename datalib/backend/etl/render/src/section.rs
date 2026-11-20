@@ -2,10 +2,12 @@
 //! [`Section`] a renderer hands over so a document can be read section by
 //! section without parsing its markdown.
 
-use datalib_schema::drawings::{self, DrawingRow};
+use datalib_schema::drawings::DrawingRow;
 use datalib_schema::folds::FoldRow;
 use datalib_schema::providers::Provider;
-use datalib_schema::sections::{addressed_json, labels_json, Addressee, SectionRow};
+use datalib_schema::sections::SectionRow;
+
+use crate::item::Item;
 
 /// One section of a rendered document, in document order. `uuid` is the
 /// section's `data-section-uuid` — a message, a contact — so a row of the
@@ -41,21 +43,16 @@ pub enum Fold {
 }
 
 /// What of a section the render store keeps in `sections`, for whatever
-/// draws it again: the viewer, an export, the search index. What it does
-/// not keep there as drawn, `drawings` keeps ([`drawn`]).
+/// draws it again: the viewer, an export, the search index. Layout, which
+/// it does not keep there, `drawings` keeps ([`drawn`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kept {
     /// The piece whole, as drawn, marked framed: from a renderer that has
-    /// not split an item's body off its header, or a piece of no item's
-    /// that still says something (a PDF's text).
+    /// not handed its items over as facts, or a piece of no item's that
+    /// still says something (a PDF's text).
     Whole,
-    /// An item's body, without the header and wrapper `md` draws around
-    /// it, and who the item was addressed to where it says so itself.
-    Body {
-        text: String,
-        addressed: Vec<Addressee>,
-        labels: Vec<String>,
-    },
+    /// An item, as the facts its piece is drawn from.
+    Item(Box<Item>),
     /// No section: layout alone (front matter, a `<details>` opener),
     /// kept whole as its drawing.
     Frame,
@@ -84,30 +81,13 @@ impl Section {
         }
     }
 
-    /// An item's section that also says which part of it is the body.
-    pub fn item(uuid: &str, md: String, text: String, addressed: Vec<Addressee>) -> Self {
-        Self::keyed(uuid, md).with_body(text, addressed)
-    }
-
-    /// The section kept as an item's body, `text`, rather than whole.
-    pub fn with_body(self, text: String, addressed: Vec<Addressee>) -> Self {
+    /// An item in its box, drawn from its facts as whatever reads it back
+    /// draws it ([`Item::draw`]), and kept as those facts.
+    pub fn item(uuid: &str, class: String, item: Item) -> Self {
         Self {
-            kept: Kept::Body {
-                text,
-                addressed,
-                labels: Vec::new(),
-            },
-            ..self
+            kept: Kept::Item(Box::new(item.clone())),
+            ..Self::boxed(uuid, class, &item.draw())
         }
-    }
-
-    /// The item's labels, where it is filed upstream; nothing for a piece
-    /// that is no item's body.
-    pub fn labelled(mut self, with: Vec<String>) -> Self {
-        if let Kept::Body { labels, .. } = &mut self.kept {
-            *labels = with;
-        }
-        self
     }
 
     pub fn unkeyed(md: String) -> Self {
@@ -173,54 +153,37 @@ pub fn stored(markdown_uuid: &str, sections: &[Section]) -> Vec<SectionRow> {
         .iter()
         .enumerate()
         .filter_map(|(seq, s)| {
-            let (text, framed, addressed, labels) = match &s.kept {
+            let row = match &s.kept {
                 Kept::Frame => return None,
-                Kept::Whole => (s.md.clone(), true, None, None),
-                Kept::Body {
-                    text,
-                    addressed,
-                    labels,
-                } => (
-                    text.clone(),
-                    false,
-                    addressed_json(addressed),
-                    labels_json(labels),
-                ),
+                Kept::Whole => SectionRow {
+                    markdown_uuid: markdown_uuid.to_string(),
+                    seq: seq as i64,
+                    uuid: s.uuid.clone(),
+                    text: s.md.clone(),
+                    framed: true,
+                    ..SectionRow::default()
+                },
+                Kept::Item(item) => item.row(markdown_uuid, seq as i64, s.uuid.clone()),
             };
             Some(SectionRow {
-                markdown_uuid: markdown_uuid.to_string(),
-                seq: seq as i64,
-                uuid: s.uuid.clone(),
-                text,
-                framed,
-                addressed,
-                labels,
                 class: s.class.clone(),
+                ..row
             })
         })
         .collect()
 }
 
-/// How the store keeps what `sections` does not hold as drawn: each
-/// message's drawing with its body cut out, and each piece of layout
+/// How the store keeps what `sections` does not: each piece of layout,
 /// whole. With [`stored`] it spells the document back ([`spell`]).
 pub fn drawn(markdown_uuid: &str, sections: &[Section]) -> Vec<DrawingRow> {
     sections
         .iter()
         .enumerate()
-        .filter_map(|(seq, s)| {
-            let body = match &s.kept {
-                Kept::Whole => return None,
-                Kept::Body { text, .. } => Some(text.as_str()),
-                Kept::Frame => None,
-            };
-            let (md, body_at) = drawings::cut(&s.md, body)?;
-            Some(DrawingRow {
-                markdown_uuid: markdown_uuid.to_string(),
-                seq: seq as i64,
-                md,
-                body_at,
-            })
+        .filter(|(_, s)| s.kept == Kept::Frame)
+        .map(|(seq, s)| DrawingRow {
+            markdown_uuid: markdown_uuid.to_string(),
+            seq: seq as i64,
+            md: s.md.clone(),
         })
         .collect()
 }
@@ -272,13 +235,13 @@ impl SpelledSection {
 }
 
 /// A document spelled back from what the store keeps of it, section by
-/// section in order. `None` when the rows cannot spell it: a drawing whose
-/// cut falls inside a character.
+/// section in order: an item drawn from its facts, a whole piece as its
+/// text, layout as its drawing.
 pub fn spell(
     sections: &[SectionRow],
     drawn: &[DrawingRow],
     folds: &[FoldRow],
-) -> Option<Vec<SpelledSection>> {
+) -> Vec<SpelledSection> {
     let fold_at: std::collections::HashMap<i64, Fold> = folds
         .iter()
         .map(|f| {
@@ -292,35 +255,53 @@ pub fn spell(
             (f.seq, fold)
         })
         .collect();
-    let mut by_seq: std::collections::BTreeMap<i64, (Option<&SectionRow>, Option<&DrawingRow>)> =
+    let mut by_seq: std::collections::BTreeMap<i64, SpelledSection> =
         std::collections::BTreeMap::new();
-    for s in sections {
-        by_seq.entry(s.seq).or_default().0 = Some(s);
-    }
     for d in drawn {
-        by_seq.entry(d.seq).or_default().1 = Some(d);
+        by_seq.insert(
+            d.seq,
+            SpelledSection {
+                uuid: None,
+                md: d.md.clone(),
+                class: None,
+                fold: None,
+            },
+        );
+    }
+    for s in sections {
+        by_seq.insert(
+            s.seq,
+            SpelledSection {
+                uuid: s.uuid.clone(),
+                md: spell_section(s),
+                class: s.class.clone(),
+                fold: None,
+            },
+        );
     }
     by_seq
         .into_iter()
-        .map(|(seq, piece)| {
-            let fold = fold_at.get(&seq).cloned();
-            match piece {
-                (Some(s), None) => Some(SpelledSection {
-                    uuid: s.uuid.clone(),
-                    md: s.text.clone(),
-                    class: s.class.clone(),
-                    fold,
-                }),
-                (s, Some(d)) => Some(SpelledSection {
-                    uuid: s.and_then(|s| s.uuid.clone()),
-                    md: d.spell(s.map(|s| s.text.as_str()))?,
-                    class: s.and_then(|s| s.class.clone()),
-                    fold,
-                }),
-                (None, None) => unreachable!("every entry has a row"),
-            }
+        .map(|(seq, piece)| SpelledSection {
+            fold: fold_at.get(&seq).cloned(),
+            ..piece
         })
         .collect()
+}
+
+/// A section as the store keeps it, drawn: an item from its facts in its
+/// box, anything else as its text.
+fn spell_section(s: &SectionRow) -> String {
+    let Some(item) = Item::of_row(s) else {
+        if let Some(form) = &s.form {
+            tracing::warn!(%form, seq = s.seq, "an item in a form this build does not know; drawn as its body");
+        }
+        return s.text.clone();
+    };
+    let inside = item.draw();
+    match (&s.uuid, &s.class) {
+        (Some(uuid), Some(class)) => draw_box(uuid, class, &inside),
+        _ => inside,
+    }
 }
 
 /// A document's body as the viewer is sent it: each message in its box as
@@ -578,38 +559,35 @@ mod tests {
     use super::*;
 
     /// What the store keeps of a document spells it back byte for byte:
-    /// layout from its drawing, a message from its drawing with the body
-    /// put back, a whole piece from its text.
+    /// layout from its drawing, an item drawn from its facts, a whole piece
+    /// from its text. Nothing of an item is drawn into `drawings`.
     #[test]
     fn the_stored_pieces_spell_the_document() {
+        use datalib_schema::sections::ItemForm;
+        let riker = Item {
+            author: Some("Riker".into()),
+            labels: vec!["Bridge".into()],
+            ..Item::new(ItemForm::Message, "Engage.".into())
+        };
         let sections = vec![
             Section::frame("---\ntitle: Bridge\n---\n\n# Bridge\n\n".into()),
-            Section::item(
-                "m1",
-                "<div id=\"m-m1\">\n\n**Riker** — 09:00\n\nEngage.\n\n</div>\n\n".into(),
-                "Engage.".into(),
-                Vec::new(),
-            ),
+            Section::item("m1", "msg".into(), riker),
             Section::item(
                 "m2",
-                "<div id=\"m-m2\">\n\nSaid.\n\n\n*[attached]*\n</div>\n\n".into(),
-                "Said.\n\n*[attached]*".into(),
-                Vec::new(),
+                "msg unread".into(),
+                Item::new(ItemForm::Event, "Worf joined".into()),
             ),
             Section::keyed("p", "A page's own words.\n".into()),
         ];
         let rows = stored("doc", &sections);
         let drawings = drawn("doc", &sections);
-        assert_eq!(drawings.len(), 3, "the layout and both messages");
         assert_eq!(
-            drawings[1].body_at,
-            sections[1].md.find("Engage.").map(|i| i as i64)
+            drawings.iter().map(|d| d.seq).collect::<Vec<_>>(),
+            [0],
+            "the layout alone"
         );
-        assert_eq!(
-            drawings[2].body_at, None,
-            "a body not drawn verbatim is kept whole"
-        );
-        let spelled = spell(&rows, &drawings, &[]).unwrap();
+        assert_eq!(rows[0].text, "Engage.");
+        let spelled = spell(&rows, &drawings, &[]);
         let joined: String = spelled.iter().map(|p| p.md.as_str()).collect();
         assert_eq!(joined, join(&sections));
         let uuids: Vec<Option<&str>> = spelled.iter().map(|p| p.uuid.as_deref()).collect();
@@ -628,54 +606,44 @@ mod tests {
         assert_eq!(sections[1].uuid.as_deref(), Some("a"));
     }
 
-    /// A piece is kept by its place among all of them: an item's body
-    /// unframed with its addressees, a piece not split off whole and
-    /// framed, and layout not at all.
+    /// A piece is kept by its place among all of them: an item as its
+    /// facts, a piece not handed over as one whole and framed, and layout
+    /// not at all.
     #[test]
-    fn the_store_keeps_bodies_and_whole_pieces_but_not_layout() {
-        use datalib_schema::sections::AddressRole;
-        let to = vec![Addressee {
-            role: AddressRole::To,
-            name: "Picard".into(),
-            handle: None,
-        }];
+    fn the_store_keeps_items_and_whole_pieces_but_not_layout() {
+        use datalib_schema::sections::{AddressRole, Addressee, ItemForm};
+        let item = Item {
+            addressed: vec![Addressee {
+                role: AddressRole::To,
+                name: "Picard".into(),
+                handle: None,
+            }],
+            labels: vec!["Bridge".into()],
+            ..Item::new(ItemForm::Message, "hi".into())
+        };
         let sections = vec![
             Section::frame("# Title\n".into()),
-            Section::item(
-                "a",
-                "<div>Riker: hi</div>\n".into(),
-                "hi".into(),
-                to.clone(),
-            )
-            .labelled(vec!["Bridge".into()]),
-            Section::keyed("b", "<div>Data: yes</div>\n".into()).labelled(vec!["ignored".into()]),
+            Section::item("a", "msg".into(), item.clone()),
+            Section::keyed("b", "<div>Data: yes</div>\n".into()),
             Section::unkeyed("Page 2 text\n".into()),
         ];
-        let row = |seq: i64, uuid: Option<&str>, text: &str, framed: bool, addressed, labels| {
-            SectionRow {
-                markdown_uuid: "doc".into(),
-                seq,
-                uuid: uuid.map(String::from),
-                text: text.into(),
-                framed,
-                addressed,
-                labels,
-                class: None,
-            }
+        let whole = |seq: i64, uuid: Option<&str>, text: &str| SectionRow {
+            markdown_uuid: "doc".into(),
+            seq,
+            uuid: uuid.map(String::from),
+            text: text.into(),
+            framed: true,
+            ..SectionRow::default()
         };
         assert_eq!(
             stored("doc", &sections),
             vec![
-                row(
-                    1,
-                    Some("a"),
-                    "hi",
-                    false,
-                    addressed_json(&to),
-                    labels_json(&["Bridge".into()])
-                ),
-                row(2, Some("b"), "<div>Data: yes</div>\n", true, None, None),
-                row(3, None, "Page 2 text\n", true, None, None),
+                SectionRow {
+                    class: Some("msg".into()),
+                    ..item.row("doc", 1, Some("a".into()))
+                },
+                whole(2, Some("b"), "<div>Data: yes</div>\n"),
+                whole(3, None, "Page 2 text\n"),
             ]
         );
     }
@@ -733,9 +701,10 @@ mod tests {
     /// The store keeps a box's class with its section, and spells it back.
     #[test]
     fn the_store_keeps_the_box() {
+        use datalib_schema::sections::ItemForm;
         let sections = vec![
             Section::frame("# Title\n".into()),
-            Section::boxed("a", "msg".into(), "hi\n").with_body("hi".into(), Vec::new()),
+            Section::item("a", "msg".into(), Item::new(ItemForm::Message, "hi".into())),
             Section::boxed("b", "msg".into(), "yes\n"),
         ];
         let rows = stored("doc", &sections);
@@ -743,7 +712,7 @@ mod tests {
             rows.iter().map(|r| r.class.as_deref()).collect::<Vec<_>>(),
             [Some("msg"), Some("msg")]
         );
-        let spelled = spell(&rows, &drawn("doc", &sections), &[]).unwrap();
+        let spelled = spell(&rows, &drawn("doc", &sections), &[]);
         assert_eq!(
             spelled
                 .iter()
@@ -764,7 +733,6 @@ mod tests {
             &drawn("doc", sections),
             &folds("doc", sections),
         )
-        .unwrap()
     }
 
     /// Folds come back as nodes around the pieces they hold, nested as

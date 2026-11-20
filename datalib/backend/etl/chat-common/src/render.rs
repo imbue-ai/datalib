@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::edges::{EdgeKind, EdgeRow};
 use datalib_schema::filings::FilingRow;
-use datalib_schema::sections::{AddressRole, Addressee};
+use datalib_schema::sections::{AddressRole, Addressee, ItemForm, Reaction};
 
 /// Default `upstream_entity_kind` for a chat/thread-level row — the
 /// value most providers put in [`RenderProfile::chat_entity_kind`].
@@ -83,7 +83,8 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::message::{chip_link, timestamp_html, MessageHeader};
+use datalib_etl_render::item::{self, Item};
+use datalib_etl_render::message::{chip_link, timestamp_html};
 use datalib_etl_render::section::{msg_class, Section};
 use datalib_etl_render::title::Title;
 use datalib_schema::grid_rows::GridRow;
@@ -92,7 +93,7 @@ use datalib_schema::providers::Provider;
 use datalib_schema::search_terms::{SearchTerm, SearchTermKind};
 
 use crate::types::{
-    AuthorKind, ItemKind, NamedPerson, NormalizedChat, NormalizedChatItem, NormalizedDoc, Replies,
+    AuthorKind, ItemKind, NamedPerson, NormalizedChat, NormalizedChatItem, NormalizedDoc,
 };
 use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::html::{
@@ -613,120 +614,92 @@ fn render_aside_run(
 }
 
 fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread: bool) -> Section {
-    let mut s = String::with_capacity(512);
     let classes: &[&str] = match (item.unread, first_unread) {
         (true, true) => &["unread", "first-unread"],
         (true, false) => &["unread"],
         (false, _) => &[],
     };
     let class = msg_class(profile.provider, classes);
+    let at = record_stamp_from_unix_millis_at(
+        item.date_ms,
+        item.date_offset_secs,
+        profile.stamp_precision,
+    );
 
-    match item.kind {
-        ItemKind::System => {
-            // Italic small text — keeps system events visible without
-            // dominating the transcript. Hidden from grid_row text
-            // content too (see build_grid_rows).
-            let summary = item
-                .system_note
-                .as_deref()
-                .or(item.text.as_deref())
-                .unwrap_or("(system event)");
-            let summary = escape_md_inline(summary);
-            s.push_str(&format!(
-                "*<small>{ts} — system: {summary}</small>*\n\n",
-                ts = timestamp_html(item.date_ms, item.date_offset_secs),
-            ));
-            return Section::boxed(&item.message_uuid, class, &s).with_body(summary, Vec::new());
-        }
-        ItemKind::Text | ItemKind::Attachment => {
-            s.push_str(
-                &MessageHeader {
-                    author: &item.author_display,
-                    handle: item.author_handle.as_ref(),
-                    date_ms: item.date_ms,
-                    offset_secs: item.date_offset_secs,
-                    source_url: item.source_url.as_deref(),
-                    ..Default::default()
-                }
-                .render(),
-            );
-            s.push('\n');
-            if let Some(line) = recipients_line(&item.recipients) {
-                s.push('\n');
-                s.push_str(&line);
-                s.push_str("\n\n");
-            }
-        }
+    if item.kind == ItemKind::System {
+        // Kept visible as one small line, without dominating the
+        // transcript; left out of the grid row's text (build_grid_rows).
+        let summary = item
+            .system_note
+            .as_deref()
+            .or(item.text.as_deref())
+            .unwrap_or("(system event)");
+        let event = Item {
+            at,
+            ..Item::new(ItemForm::Event, escape_md_inline(summary))
+        };
+        return Section::item(&item.message_uuid, class, event);
     }
 
-    let body = |text: &str| match profile.text_format {
-        TextFormat::Plain => escape_md_block(text),
-        TextFormat::Markdown => close_open_blocks(text),
+    let said = match profile.text_format {
+        TextFormat::Plain => escape_md_block(item.text.as_deref().unwrap_or("")),
+        TextFormat::Markdown => close_open_blocks(item.text.as_deref().unwrap_or("")),
     };
-    let labelled = |text: String| {
-        if item.labels.is_empty() {
-            text
-        } else {
-            let labels: Vec<String> = item.labels.iter().map(|l| escape_md_inline(l)).collect();
-            format!("🏷 {}\n\n{text}", labels.join(" · "))
-        }
-    };
-    // What the item says: its text, then its attachments. The labels
-    // line above it is where it is filed, not what it says.
-    let said = body(item.text.as_deref().unwrap_or(""));
-    let text = labelled(said.clone());
-    if !text.is_empty() {
-        s.push('\n');
-        s.push_str(&text);
-        s.push('\n');
-    }
     let mut attached = String::new();
     if item.kind == ItemKind::Attachment {
         if item.attachments.is_empty() {
-            attached.push_str("\n*[attachment metadata missing]*\n");
+            attached.push_str("*[attachment metadata missing]*\n");
         }
         for att in &item.attachments {
             render_attachment(&mut attached, att);
         }
     }
-    s.push_str(&attached);
-    let item_body = [said.trim(), attached.trim()]
+    let body = [without_blank_edges(&said), attached.trim()]
         .into_iter()
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n");
 
-    if !item.reactions.is_empty() {
-        s.push('\n');
-        let mut sorted = item.reactions.clone();
-        sorted.sort_by(|a, b| {
-            a.emoji
-                .cmp(&b.emoji)
-                .then(a.reactor_display.cmp(&b.reactor_display))
-        });
-        for r in &sorted {
-            // Each reaction gets a `data-section-uuid="<reaction_uuid>"`
-            // span so its grid_row's row-click highlights this bullet,
-            // matching the per-message anchor convention.
-            s.push_str(&format!(
-                "- <span id=\"m-{uuid}\" data-section-uuid=\"{uuid}\">{emoji} {who}</span>\n",
-                uuid = r.reaction_uuid,
-                emoji = escape_md_inline(&r.emoji),
-                who = reactor(r),
-            ));
-        }
-    }
+    let mut reactions: Vec<&crate::types::NormalizedReaction> = item.reactions.iter().collect();
+    reactions.sort_by(|a, b| {
+        a.emoji
+            .cmp(&b.emoji)
+            .then(a.reactor_display.cmp(&b.reactor_display))
+    });
+    let message = Item {
+        addressed: addressed(&item.recipients),
+        labels: item.labels.clone(),
+        author: non_empty(&item.author_display),
+        author_handle: item.author_handle.as_ref().map(|h| h.as_str().to_string()),
+        at,
+        link: item.source_url.clone(),
+        reactions: reactions
+            .into_iter()
+            .map(|r| Reaction {
+                uuid: r.reaction_uuid.clone(),
+                emoji: r.emoji.clone(),
+                name: r.reactor_display.clone(),
+                handle: r.reactor_handle.as_ref().map(|h| h.as_str().to_string()),
+            })
+            .collect(),
+        replies: item.replies.map(|r| item::Replies {
+            upstream: r.upstream,
+            held: r.held,
+        }),
+        ..Item::new(ItemForm::Message, body)
+    };
+    Section::item(&item.message_uuid, class, message)
+}
 
-    if let Some(line) = item.replies.and_then(replies_line) {
-        s.push('\n');
-        s.push_str(&line);
-        s.push('\n');
+/// `s` without the blank lines before and after it, keeping the indent
+/// of its first line, which markdown reads (four spaces are code).
+fn without_blank_edges(s: &str) -> &str {
+    let s = s.trim_end();
+    let indent = s.len() - s.trim_start().len();
+    match s[..indent].rfind('\n') {
+        Some(nl) => &s[nl + 1..],
+        None => s,
     }
-
-    s.push('\n');
-    Section::boxed(&item.message_uuid, class, &s)
-        .with_body(item_body, addressed(&item.recipients))
-        .labelled(item.labels.clone())
 }
 
 /// Who an item says it was addressed to, by name, for the search's
@@ -746,58 +719,6 @@ fn addressed(recipients: &[crate::types::Recipient]) -> Vec<Addressee> {
             handle: r.handle.as_ref().map(|h| h.as_str().to_string()),
         })
         .collect()
-}
-
-fn replies_line(replies: Replies) -> Option<String> {
-    let noun = match replies.upstream {
-        0 => return None,
-        1 => "reply",
-        _ => "replies",
-    };
-    let missing = match replies.missing() {
-        0 => String::new(),
-        n => format!(" · {n} not mirrored yet"),
-    };
-    Some(format!(
-        "<span class=\"msg-replies\">{} {noun}{missing}</span>",
-        replies.upstream
-    ))
-}
-
-/// Who an item was addressed to, one paragraph straight under its
-/// header: `To [Will Riker](mailto:…), …; Cc …`, each recipient with a
-/// handle a chip link and each without a plain span. It is a paragraph
-/// with inline HTML, not an HTML block, because markdown is not parsed
-/// inside a block and the links have to be.
-fn recipients_line(recipients: &[crate::types::Recipient]) -> Option<String> {
-    use crate::types::RecipientRole;
-    let mut groups: Vec<String> = Vec::new();
-    for role in [RecipientRole::To, RecipientRole::Cc, RecipientRole::Bcc] {
-        let names: Vec<String> = recipients
-            .iter()
-            .filter(|r| r.role == role && r.drawn)
-            .map(|r| match &r.handle {
-                Some(h) => chip_link(&r.display, h),
-                None => format!(
-                    "<span class=\"msg-recipient\">{}</span>",
-                    escape_md_inline(&r.display)
-                ),
-            })
-            .collect();
-        if !names.is_empty() {
-            groups.push(format!(
-                "<span class=\"msg-recipients-role\">{}</span> {}",
-                role.label(),
-                names.join(", ")
-            ));
-        }
-    }
-    (!groups.is_empty()).then(|| {
-        format!(
-            "<span class=\"msg-recipients\">{}</span>",
-            groups.join("; ")
-        )
-    })
 }
 
 fn render_attachment(s: &mut String, att: &crate::types::NormalizedAttachment) {
@@ -1790,14 +1711,10 @@ mod tests {
             .iter()
             .find(|s| s.uuid.as_deref() == Some("33333333-3333-3333-3333-333333333333"))
             .unwrap();
-        let Kept::Body {
-            text: body,
-            addressed,
-            labels,
-        } = &item.kept
-        else {
-            panic!("chat-common splits the body off: {:?}", item.kept)
+        let Kept::Item(kept) = &item.kept else {
+            panic!("chat-common hands its items over as facts: {:?}", item.kept)
         };
+        let (body, addressed, labels) = (&kept.body, &kept.addressed, &kept.labels);
         assert_eq!(
             addressed,
             &vec![Addressee {
@@ -2521,7 +2438,7 @@ mod tests {
     /// are, and how many the mirror does not hold yet.
     #[test]
     fn a_thread_says_how_many_replies_it_has_and_how_many_are_not_mirrored() {
-        let line_of = |replies: Option<Replies>| {
+        let line_of = |replies: Option<crate::types::Replies>| {
             let mut chat = mk_chat();
             chat.render_units[0].items[0].replies = replies;
             let md = join(&render_markdown(
@@ -2534,7 +2451,7 @@ mod tests {
                 .find(|l| l.contains("msg-replies"))
                 .map(str::to_string)
         };
-        let replies = |upstream, held| Some(Replies { upstream, held });
+        let replies = |upstream, held| Some(crate::types::Replies { upstream, held });
         assert_eq!(
             line_of(replies(12, 3)).as_deref(),
             Some("<span class=\"msg-replies\">12 replies · 9 not mirrored yet</span>")
@@ -3117,11 +3034,11 @@ mod tests {
             handle: datalib_handle::Handle::email(addr),
             drawn: true,
         };
-        let line = recipients_line(&[
+        let line = item::recipients_line(&addressed(&[
             r(RecipientRole::Cc, "<Q>", "q@continuum.org"),
             r(RecipientRole::To, "Will Riker", "riker@enterprise.org"),
             r(RecipientRole::To, "Deanna Troi", "not an address"),
-        ])
+        ]))
         .unwrap();
         assert_eq!(
             line,
@@ -3131,7 +3048,7 @@ mod tests {
              <span class=\"msg-recipients-role\">Cc</span> \
              [&lt;Q&gt;](mailto:q@continuum.org \"<Q> <q@continuum.org>\")</span>"
         );
-        assert_eq!(recipients_line(&[]), None);
+        assert_eq!(item::recipients_line(&[]), None);
     }
 
     /// A text's recipient is the thread's other side: it reaches the
@@ -3146,7 +3063,7 @@ mod tests {
             handle: datalib_handle::Handle::tel("+12025550103"),
             drawn: false,
         };
-        assert_eq!(recipients_line(std::slice::from_ref(&troi)), None);
+        assert_eq!(addressed(std::slice::from_ref(&troi)), Vec::new());
 
         let mut chat = mk_chat();
         chat.render_units[0].items[0].recipients = vec![troi];
@@ -3200,12 +3117,12 @@ mod tests {
     #[test]
     fn a_recipient_with_a_blank_line_in_the_name_stays_in_the_line() {
         use crate::types::{Recipient, RecipientRole};
-        let line = recipients_line(&[Recipient {
+        let line = item::recipients_line(&addressed(&[Recipient {
             role: RecipientRole::To,
             display: "Worf\n\n[x](https://e.test)".to_string(),
             handle: None,
             drawn: true,
-        }])
+        }]))
         .unwrap();
         assert!(!line.contains('\n'), "{line}");
     }

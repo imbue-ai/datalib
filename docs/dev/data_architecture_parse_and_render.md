@@ -101,9 +101,12 @@ database per source, at
     besides (`docs/dev/grid_rows.md` § "`parent_uuid`, …"). Like edges
     they belong to the document.
   - `sections` — what each piece of the document says, in order, kept
-    apart from how it is drawn. An item a renderer has split (chat-common
-    does) keeps its body alone, with no header or wrapper, who it was
-    addressed to (name and handle) and its labels; the store draws its header again from its row.
+    apart from how it is drawn. An item a renderer hands over as facts
+    (chat-common's, `etl/render/src/item.rs`) keeps its body alone and,
+    in columns of its own, everything its box shows: who wrote it and
+    when, who it was addressed to, its labels and tags, its own link, its
+    reactions and its replies count; whatever reads it draws the box from
+    them with `Item::draw`, as render did.
     Any other piece is kept whole and marked `framed`, so whatever reads
     it draws nothing around it; a piece that is layout alone (front
     matter, a `<details>` opener) the renderer marks as frame, and
@@ -118,9 +121,7 @@ database per source, at
     escapes. The grid index does not copy it
     ([`documents_to_blocks.md`](plans/documents_to_blocks.md)
     §"Store the body, format on read").
-  - `drawings` — how each piece is drawn where `sections` does not
-    hold it as drawn: a split item's whole drawing with its body cut out
-    and where to put it back (`body_at`), and each frame piece whole.
+  - `drawings` — each frame piece whole: the layout between items.
     With `sections` it spells the document byte for byte
     (`IndexedMarkdownStore::document`), which is the one copy of what a
     document looks like: the viewer and `datalib-step markdown` read it.

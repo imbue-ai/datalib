@@ -1,8 +1,9 @@
 # The document viewer, drawn from blocks
 
 *Proposal (2026-11-19). Steps 1 to 4 landed (#1889, #1891, #1902,
-#1909), with search quoting a hit from its one message (#1896); step 6
-is built on the branch after them, ahead of step 5. Steps 5 and 7 are
+#1909), with search quoting a hit from its one message (#1896), and
+step 6 landed ahead of step 5 (#1916). Step 5 is built on the branch
+after them, for chat-common's messages (§"What was built"). Step 7 is
 not built. It picks up where
 [`documents_to_blocks.md`](documents_to_blocks.md) step 5 stopped
 ("paging through what is read together comes after"), and chooses a
@@ -235,6 +236,41 @@ stored drawing, then take it out of the drawing.
 - **Notices:** nothing. A read mark that moves today re-renders every
   document it crossed (chat-common README §"Unread messages"); once
   unread is a column, that render rewrites rows, not drawings.
+
+#### What was built
+
+All of it at once, for chat-common, the one renderer whose items had a
+drawing: it hands each message over as an `Item`
+(`etl/render/src/item.rs`), its body and every fact its box shows, and
+`Item::draw` draws the box's inside both when render writes the document
+and when the store spells it. So the two cannot differ, and `drawings`
+keeps only layout: front matter, titles, fold openers, a thread's
+"no messages" line. Its `body_at` and the cut went. Where it differs
+from the table above:
+
+- **Who and when are kept on the item, not read from its grid row.**
+  The row's `source_url` falls back to an attachment's link (Apple
+  Messages names the file, WhatsApp its path) where the header's `↗` is
+  the message's own, and the other renderers show an author their own
+  way (`@login`). So `sections` gains `author`, `author_handle`, `at`,
+  `tags` and `link`.
+- **Unread stays in the box's class**, a column of `sections` since
+  step 2. With the box no longer in `drawings`, a read mark that moves
+  rewrites rows only, which was the point.
+- **A reaction is listed on its message** (`sections.reactions`), and
+  a system event is the form `event` beside `message` (`sections.form`).
+- **`close_open_blocks` stays.** Reactions and the replies line are
+  still drawn after a body in the same piece, so a body still closes
+  what it leaves open.
+- **GitHub, GitLab, Notion, Drive and Todoist keep their messages
+  whole**, as text search reads, and so have no drawing to take
+  facts out of. Handing them over as items would change the text their
+  comments are searched and embedded by, so it waits for a reason of
+  its own (step 7's layouts, say).
+
+A message's markdown changed only in blank lines, which draw the same:
+a body is kept without the blank lines around it, and an email's To/Cc
+line has one blank line under it rather than two.
 
 ### Step 6: a window that grows both ways
 

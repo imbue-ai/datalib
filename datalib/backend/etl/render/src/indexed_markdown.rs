@@ -54,6 +54,9 @@ const DOCUMENT_DRAWN: &str = "DELETE FROM drawings WHERE markdown_uuid = ?";
 const REMOVED_FOLDS: &str =
     "DELETE FROM folds WHERE markdown_uuid IN (SELECT value FROM json_each(?))";
 const DOCUMENT_FOLDS: &str = "DELETE FROM folds WHERE markdown_uuid = ?";
+/// Every column of `sections`, in the order a `SectionRow` is read.
+const SECTION_COLUMNS: &str = "markdown_uuid, seq, uuid, text, framed, form, author, \
+     author_handle, at, tags, link, reactions, replies, replies_held, addressed, labels, class";
 
 /// A kept section as [`IndexedMarkdownStore::kept_sections`] reads it.
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
@@ -132,11 +135,10 @@ async fn put_sections(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<(
         return Ok(());
     }
     for row in crate::section::drawn(&md.markdown_uuid, &md.sections) {
-        sqlx::query("INSERT INTO drawings (markdown_uuid, seq, md, body_at) VALUES (?, ?, ?, ?)")
+        sqlx::query("INSERT INTO drawings (markdown_uuid, seq, md) VALUES (?, ?, ?)")
             .bind(&row.markdown_uuid)
             .bind(row.seq)
             .bind(&row.md)
-            .bind(row.body_at)
             .execute(&mut **conn)
             .await
             .with_context(|| format!("document {}: store drawing {}", md.markdown_uuid, row.seq))?;
@@ -152,16 +154,25 @@ async fn put_sections(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<(
             .with_context(|| format!("document {}: store fold {}", md.markdown_uuid, row.seq))?;
     }
     for row in crate::section::stored(&md.markdown_uuid, &md.sections) {
-        sqlx::query(
-            "INSERT INTO sections \
-             (markdown_uuid, seq, uuid, text, framed, addressed, labels, class) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
+        // Every value bound; the column list is a constant.
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "INSERT INTO sections ({SECTION_COLUMNS}) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )))
         .bind(&row.markdown_uuid)
         .bind(row.seq)
         .bind(&row.uuid)
         .bind(&row.text)
         .bind(row.framed)
+        .bind(&row.form)
+        .bind(&row.author)
+        .bind(&row.author_handle)
+        .bind(&row.at)
+        .bind(&row.tags)
+        .bind(&row.link)
+        .bind(&row.reactions)
+        .bind(row.replies)
+        .bind(row.replies_held)
         .bind(&row.addressed)
         .bind(&row.labels)
         .bind(&row.class)
@@ -212,10 +223,11 @@ async fn pieces_between(
     first: i64,
     last: i64,
 ) -> Result<Pieces> {
-    let sections = sqlx::query_as(
-        "SELECT markdown_uuid, seq, uuid, text, framed, addressed, labels, class \
-         FROM sections WHERE markdown_uuid = ? AND seq BETWEEN ? AND ? ORDER BY seq",
-    )
+    // The column list is a constant; every value is bound.
+    let sections = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "SELECT {SECTION_COLUMNS} \
+         FROM sections WHERE markdown_uuid = ? AND seq BETWEEN ? AND ? ORDER BY seq"
+    )))
     .bind(markdown_uuid)
     .bind(first)
     .bind(last)
@@ -223,7 +235,7 @@ async fn pieces_between(
     .await
     .context("read a document's sections")?;
     let drawn = sqlx::query_as(
-        "SELECT markdown_uuid, seq, md, body_at FROM drawings \
+        "SELECT markdown_uuid, seq, md FROM drawings \
          WHERE markdown_uuid = ? AND seq BETWEEN ? AND ? ORDER BY seq",
     )
     .bind(markdown_uuid)
@@ -1057,8 +1069,7 @@ impl IndexedMarkdownStore {
 
     /// A document spelled back from what the store keeps of it, section by
     /// section in order: joined, exactly the document render drew. `None`
-    /// for a document the store does not hold, or one whose rows cannot
-    /// spell it.
+    /// for a document the store does not hold.
     pub fn document(
         &self,
         markdown_uuid: &str,
@@ -1069,7 +1080,7 @@ impl IndexedMarkdownStore {
             if sections.is_empty() && drawn.is_empty() {
                 return Ok(None);
             }
-            Ok(crate::section::spell(&sections, &drawn, &folds))
+            Ok(Some(crate::section::spell(&sections, &drawn, &folds)))
         })
     }
 
@@ -1128,14 +1139,12 @@ impl IndexedMarkdownStore {
             };
             let (sections, drawn, folds) =
                 pieces_between(&self.pool, markdown_uuid, w.first, w.last).await?;
-            Ok(
-                crate::section::spell(&sections, &drawn, &folds).map(|sections| DocumentPage {
-                    sections,
-                    before: w.before,
-                    after: w.after,
-                    from_top: w.first == 0,
-                }),
-            )
+            Ok(Some(DocumentPage {
+                sections: crate::section::spell(&sections, &drawn, &folds),
+                before: w.before,
+                after: w.after,
+                from_top: w.first == 0,
+            }))
         })
     }
 
@@ -2194,9 +2203,8 @@ mod tests {
         let item = |uuid: &str, said: &str| {
             Section::item(
                 uuid,
-                format!("<div>{said}</div>\n"),
-                said.into(),
-                Vec::new(),
+                "msg".into(),
+                crate::item::Item::new(datalib_schema::sections::ItemForm::Message, said.into()),
             )
         };
         st.put_document(&with(
@@ -2249,7 +2257,14 @@ mod tests {
             let d = RenderedMarkdown {
                 sections: vec![
                     Section::unkeyed("Page text\n".into()),
-                    Section::item(id, format!("<div>{id}</div>\n"), "hi".into(), Vec::new()),
+                    Section::item(
+                        id,
+                        "msg".into(),
+                        crate::item::Item::new(
+                            datalib_schema::sections::ItemForm::Message,
+                            "hi".into(),
+                        ),
+                    ),
                 ],
                 ..doc(id, "fp")
             };

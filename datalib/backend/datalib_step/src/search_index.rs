@@ -1523,9 +1523,14 @@ mod tests {
             Section::frame("---\n---\n\n# Ten Forward\n\n".into()),
             Section::item(
                 "m1",
-                "<div data-section-uuid=\"m1\">\n\n## Riker\n\nTea, Earl Grey\n\n</div>\n".into(),
-                "Tea, Earl Grey".into(),
-                Vec::new(),
+                "msg".into(),
+                datalib_etl_render::item::Item {
+                    author: Some("Riker".into()),
+                    ..datalib_etl_render::item::Item::new(
+                        datalib_schema::sections::ItemForm::Message,
+                        "Tea, Earl Grey".into(),
+                    )
+                },
             ),
             Section::unkeyed("Page 2: the replicator manual\n".into()),
         ];
