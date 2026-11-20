@@ -43,7 +43,4 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_slack_render",
     edition = "2021",
-    deps = [
-        "@datalib_crates//:tempfile",
-    ],
 )

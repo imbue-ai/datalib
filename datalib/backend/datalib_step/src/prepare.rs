@@ -193,7 +193,7 @@ async fn prepare_raw_store(
 /// build's version and commit into `_datalib_meta` on every open, after
 /// its migrations, so a store that names both is in this build's shape.
 /// A build that cannot name its commit cannot tell, and compares shapes.
-fn opened_by_this_build(stored: &Meta) -> bool {
+pub(crate) fn opened_by_this_build(stored: &Meta) -> bool {
     let commit = datalib_runtime::build_id::git_hash();
     commit.is_some()
         && stored.git_hash == commit
@@ -782,6 +782,31 @@ mod tests {
             .await
             .unwrap();
         pool.close().await;
+    }
+
+    /// A render reads a raw store only in this build's shape: one this
+    /// build opened passes on that alone, one another build wrote in the
+    /// same shape passes on the comparison, and one in another shape is
+    /// refused, naming the download step that brings it up to date.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_render_refuses_a_raw_store_in_another_shape() {
+        let root = tempfile::tempdir().unwrap();
+        let tree = root.path().join("mail/ingest");
+        crate::dispatch::migrate("email", &tree).await.unwrap();
+        let db = entities_db(&tree);
+        crate::render::require_raw_shape(&db, "email")
+            .await
+            .unwrap();
+        set_meta(&db, "git_hash", "another-commit").await;
+        crate::render::require_raw_shape(&db, "email")
+            .await
+            .unwrap();
+        set_meta(&db, "schema_hash", "an older shape").await;
+        let e = crate::render::require_raw_shape(&db, "email")
+            .await
+            .unwrap_err();
+        let refused = datalib_store_meta::other_shape(&e).expect("refused for its shape");
+        assert_eq!(refused.step().as_deref(), Some("mail/ingest"));
     }
 
     /// The runner asks at every start, so a raw store this release already

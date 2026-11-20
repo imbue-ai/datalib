@@ -926,10 +926,13 @@ impl std::error::Error for SchemaBreak {}
 /// than a reader onto its working set; the caller decides what that means
 /// (a consumer does nothing that pass).
 ///
-/// A schema this store has not got yet is the owner's to add on its next run,
-/// and a read naming a table or column that commit lacks fails at prepare time
-/// saying so. Probe with [`column_exists`] and fall back where that is a real
-/// possibility; slack's `load_channels` is the worked example.
+/// A store a reader is handed is in this build's shape: the launch's prepare
+/// pass migrates every raw store, and a render refuses one it could not
+/// (`datalib_store_meta::require`). A read naming a table or column that
+/// commit lacks is a damaged store and fails, saying so; nothing probes
+/// and falls back. A mirrored store, whose tables are the upstream app's
+/// and vary with its version, is the one place to ask [`table_exists`] or
+/// [`column_exists`].
 pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<Reader>> {
     let pin = match commit {
         Some(commit) => crate::pin::Pin::at(commit)?,
@@ -1278,10 +1281,9 @@ impl ColumnInfo {
     }
 }
 
-/// Whether `table` has `column`, for **read-only** consumers that never get
-/// [`open`]'s schema reconcile — the render side opens read-only, so naming a
-/// column an older store lacks would fail at prepare time and sink the step.
-/// A missing table reads as "no such column" rather than an error.
+/// Whether `table` has `column`, for a reader of a mirrored store, whose
+/// columns are the upstream app's and vary with its version. A missing
+/// table reads as "no such column" rather than an error.
 pub async fn column_exists(pool: &SqlitePool, table: &str, column: &str) -> Result<bool> {
     Ok(table_columns(pool, table)
         .await?
@@ -2175,8 +2177,7 @@ async fn read_at_path(
 }
 
 /// The raw store's whole-store problem counts by severity, read-only,
-/// for the step's report. Empty for a store that is not there yet or
-/// predates the table.
+/// for the step's report. Empty for a store that is not there yet.
 pub async fn problem_counts_at_path(
     db_path: &Path,
 ) -> Result<HashMap<datalib_problems::Severity, i64>> {
@@ -2194,11 +2195,7 @@ pub async fn problem_counts_at_path(
         .fetch_all(&pool)
         .await;
     pool.close().await;
-    let rows = match rows {
-        Ok(rows) => rows,
-        Err(e) if crate::pin::is_missing_table(&e, "problems") => return Ok(HashMap::new()),
-        Err(e) => return Err(e).context("count the raw store's problems"),
-    };
+    let rows = rows.context("count the store's problems")?;
     let mut out = HashMap::new();
     for r in rows {
         let word: String = r.try_get(0)?;

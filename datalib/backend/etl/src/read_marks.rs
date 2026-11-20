@@ -97,12 +97,8 @@ pub async fn forget(tx: &mut Transaction<'_, Sqlite>, ids: &[String]) -> Result<
     Ok(())
 }
 
-/// Every mark the store holds, by id. A store from before the table
-/// holds none.
+/// Every mark the store holds, by id.
 pub async fn load(pool: &SqlitePool) -> Result<BTreeMap<String, ReadMark>> {
-    if !crate::doltlite_raw::table_exists(pool, TABLE).await? {
-        return Ok(BTreeMap::new());
-    }
     let rows: Vec<(String, Option<String>, Option<i64>)> =
         sqlx::query_as("SELECT id, read_through, read FROM read_marks")
             .fetch_all(pool)
