@@ -123,7 +123,6 @@ rust_test(
     edition = "2021",
     env = {
         "APPLET_BIN": "$(rootpath :datalib_applet)",
-        "LIGHTROOM_INDEX_RLOC": "$(rlocationpath //tests/fixtures:ingested_lightroom/index.sqlite)",
         "LIGHTROOM_CATALOG_03": "$(rootpath @lightroom_catalog_03_previews//:lrcat)",
     },
     tags = [
