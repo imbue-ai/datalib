@@ -363,6 +363,8 @@ mod tests {
         use sqlx::Row;
         let pool = sqlx::sqlite::SqlitePoolOptions::new()
             .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
             .connect("sqlite::memory:")
             .await
             .unwrap();
