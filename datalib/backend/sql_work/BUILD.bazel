@@ -5,6 +5,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 rust_library(
     name = "datalib_sql_work",
     srcs = [
+        "src/census.rs",
         "src/judge.rs",
         "src/lib.rs",
         "src/params.rs",
@@ -41,5 +42,20 @@ rust_test(
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
         "@datalib_crates//:tracing-subscriber",
+    ],
+)
+
+rust_test(
+    name = "sql_work_census_test",
+    size = "small",
+    srcs = ["tests/census.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_sql_work",
+        "//datalib/backend/sqlite_open:datalib_sqlite_open",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
     ],
 )

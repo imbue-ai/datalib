@@ -7,6 +7,7 @@
 //! [`install`] once, before the first connection opens, and every
 //! connection this process opens afterwards is counted.
 
+mod census;
 pub mod judge;
 pub mod params;
 
@@ -27,6 +28,11 @@ pub const TARGET: &str = "datalib::sql_work";
 /// in place, for a debugging session on one's own library. Values can be a
 /// person's words, addresses or ids, so the default is their shapes.
 pub const VALUES_ENV: &str = datalib_env::DATALIB_SQL_VALUES;
+
+/// Names a folder to record, in one file per process, every statement that
+/// walked a whole table or index however small: the fixture sync's census,
+/// which `tests/fixtures/sql_scans_allowed.toml` is checked against.
+pub const CENSUS_ENV: &str = datalib_env::DATALIB_SQL_CENSUS;
 
 /// The longest statement text a line carries.
 const SQL_CHARS: usize = 4_000;
@@ -125,8 +131,8 @@ unsafe extern "C" fn on_trace(
     0
 }
 
-/// One run of `stmt` has ended: read and reset its counters, and log it if
-/// it was heavy.
+/// One run of `stmt` has ended: read and reset its counters, log it if it
+/// was heavy, and record it in the census if one was asked for.
 unsafe fn finished(stmt: *mut c_void, nanos: i64) {
     // Safety, for every call below: `stmt` is the statement SQLite has
     // just finished running, alive until this callback returns.
@@ -142,7 +148,8 @@ unsafe fn finished(stmt: *mut c_void, nanos: i64) {
         rows: returned,
         nanos: nanos.max(0) as u64,
     };
-    if !work.is_heavy() || WRITING.with(Cell::get) {
+    let census = census::dir().filter(|_| work.fullscan_steps > 0);
+    if !(work.is_heavy() || census.is_some()) || WRITING.with(Cell::get) {
         return;
     }
     let sql = text(unsafe { sqlite3_sql(stmt) });
@@ -150,15 +157,18 @@ unsafe fn finished(stmt: *mut c_void, nanos: i64) {
         return;
     }
     let db = unsafe { sqlite3_db_handle(stmt) };
+    let file = text(unsafe { sqlite3_db_filename(db, c"main".as_ptr()) });
+    if let Some(dir) = census {
+        census::note(dir, &sql, &file);
+    }
     if unsafe { sqlite3_stmt_readonly(stmt) } == 0 {
         work.rows = work
             .rows
             .max(unsafe { sqlite3_changes64(db) }.max(0) as u64);
-        if !work.is_heavy() {
-            return;
-        }
     }
-    let file = text(unsafe { sqlite3_db_filename(db, c"main".as_ptr()) });
+    if !work.is_heavy() {
+        return;
+    }
     let expanded = unsafe { sqlite3_expanded_sql(stmt) };
     let expanded_text = text(expanded);
     unsafe { sqlite3_free(expanded as *mut c_void) };

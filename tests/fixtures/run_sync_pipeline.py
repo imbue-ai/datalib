@@ -273,10 +273,15 @@ def prepare(argv: list[str]) -> Prepared:
     # The host's fingerprint cache is keyed by absolute path, and every
     # path here is a sandbox that is gone by the next run: in the real
     # cache each would stay as a dead row. The root holds its own.
+    # Every statement that walks a whole table or index, from every process
+    # of the sync, for sql_scans.py and the allowlist check.
+    census = workspace / "sql_census"
+    shutil.rmtree(census, ignore_errors=True)
     own_cache_env = {
         **os.environ,
         "DATALIB_CACHE_DIR": str(workspace / "fingerprint_cache"),
         "DATALIB_MODELS_NO_FETCH": "1",
+        "DATALIB_SQL_CENSUS": str(census),
     }
     _stage_embed_model(workspace)
 
