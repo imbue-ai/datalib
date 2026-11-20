@@ -314,8 +314,15 @@ fn lookup_indexes() -> impl Iterator<Item = &'static str> {
             "CREATE INDEX IF NOT EXISTS problems_by_scope ON problems (scope_kind, scope_key)",
             // The render asks it at every checkpoint (`documents_for_render_units`).
             "CREATE INDEX IF NOT EXISTS markdowns_by_render_unit ON markdowns (render_unit_key)",
+            // Every render pass asks it once per download problem.
+            "CREATE INDEX IF NOT EXISTS grid_rows_by_upstream_key \
+             ON grid_rows (upstream_entity_kind, upstream_id)",
         ])
 }
+
+const GRID_ROW_BY_UPSTREAM: &str = "SELECT uuid FROM grid_rows \
+     INDEXED BY grid_rows_by_upstream_key \
+     WHERE upstream_entity_kind = ? AND upstream_id = ? LIMIT 1";
 
 const DOCUMENTS_FOR_RENDER_UNITS: &str = "SELECT render_unit_key, markdown_uuid \
      FROM markdowns INDEXED BY markdowns_by_render_unit \
@@ -907,15 +914,12 @@ impl IndexedMarkdownStore {
             let mut guard = self.write_lock.acquire().await?;
             let mut out = HashMap::new();
             for (kind, id) in keys {
-                let uuid: Option<String> = sqlx::query_scalar(
-                    "SELECT uuid FROM grid_rows \
-                     WHERE upstream_entity_kind = ? AND upstream_id = ? LIMIT 1",
-                )
-                .bind(kind)
-                .bind(id)
-                .fetch_optional(&mut **guard.conn())
-                .await
-                .context("look up a grid row by its upstream key")?;
+                let uuid: Option<String> = sqlx::query_scalar(GRID_ROW_BY_UPSTREAM)
+                    .bind(kind)
+                    .bind(id)
+                    .fetch_optional(&mut **guard.conn())
+                    .await
+                    .context("look up a grid row by its upstream key")?;
                 if let Some(uuid) = uuid {
                     out.insert((kind.to_string(), id.clone()), uuid);
                 }
@@ -1885,6 +1889,35 @@ mod tests {
             &st.pool,
             &statements,
         ));
+        st.close();
+    }
+
+    /// A render pass looks up the grid row of each of the download's
+    /// problems by its upstream key. With no index on the key, each lookup
+    /// walked every grid row of the source.
+    #[test]
+    fn the_upstream_key_lookup_searches_its_index() {
+        let td = tempfile::tempdir().unwrap();
+        let st = store(td.path());
+        // Audited: a constant statement of this module.
+        let explain = format!("EXPLAIN QUERY PLAN {GRID_ROW_BY_UPSTREAM}");
+        let plan: Vec<String> = blocking(
+            sqlx::query(sqlx::AssertSqlSafe(explain))
+                .bind("message")
+                .bind("x")
+                .fetch_all(&st.pool),
+        )
+        .unwrap()
+        .iter()
+        .map(|r| r.get::<String, _>("detail"))
+        .collect();
+        assert!(
+            plan.iter().any(|d| d.starts_with("SEARCH grid_rows USING ")
+                && d.ends_with(
+                    "INDEX grid_rows_by_upstream_key (upstream_entity_kind=? AND upstream_id=?)"
+                )),
+            "{plan:?}"
+        );
         st.close();
     }
 

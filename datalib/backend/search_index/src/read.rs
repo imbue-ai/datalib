@@ -84,6 +84,9 @@ impl Held {
     }
 }
 
+pub(crate) const DOCUMENTS_OF_SOURCE: &str =
+    "SELECT markdown_uuid, content_hash FROM search_documents WHERE source_id = ?";
+
 impl Reader {
     /// `None` when no step has written the index yet: no file, or a grid
     /// index's file without the index's tables. A missing cache reads as
@@ -159,13 +162,11 @@ impl Reader {
     /// `markdown_uuid → content_hash` for every document of `source_id`
     /// the keyword index holds: what its `embed` cuts into chunks.
     pub async fn documents_of(&self, source_id: &str) -> Result<BTreeMap<String, String>> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT markdown_uuid, content_hash FROM search_documents WHERE source_id = ?",
-        )
-        .bind(source_id)
-        .fetch_all(&self.index)
-        .await
-        .context("read the indexed documents")?;
+        let rows: Vec<(String, String)> = sqlx::query_as(DOCUMENTS_OF_SOURCE)
+            .bind(source_id)
+            .fetch_all(&self.index)
+            .await
+            .context("read the indexed documents")?;
         Ok(rows.into_iter().collect())
     }
 
@@ -218,11 +219,12 @@ impl Reader {
 
     /// [`Reader::coverage`] of one source's documents, or every one.
     pub async fn coverage_of(&self, model: &str, source_id: Option<&str>) -> Result<(u64, u64)> {
-        let held: Vec<(String, String)> = sqlx::query_as(
-            "SELECT markdown_uuid, content_hash FROM search_documents \
-              WHERE ?1 IS NULL OR source_id = ?1",
-        )
-        .bind(source_id)
+        // Two statements, not `?1 IS NULL OR source_id = ?1`: that one
+        // cannot use the index, and the report asks it once per source.
+        let held: Vec<(String, String)> = match source_id {
+            Some(source_id) => sqlx::query_as(DOCUMENTS_OF_SOURCE).bind(source_id),
+            None => sqlx::query_as("SELECT markdown_uuid, content_hash FROM search_documents"),
+        }
         .fetch_all(&self.index)
         .await
         .context("read the documents")?;
