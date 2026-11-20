@@ -113,6 +113,7 @@ fn profile() -> RenderProfile {
         chat_entity_kind: ids::KIND_THREAD,
         render_version: RENDER_VERSION,
         text_format: TextFormat::Markdown,
+        layout: datalib_etl_chat_common::Layout::Chat,
     }
 }
 

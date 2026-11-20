@@ -76,6 +76,7 @@ fn profile() -> RenderProfile {
         chat_entity_kind: ENTITY_KIND_CONVERSATION,
         render_version: RENDER_VERSION,
         text_format: TextFormat::Markdown,
+        layout: datalib_etl_chat_common::Layout::Transcript,
     }
 }
 

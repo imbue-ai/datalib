@@ -65,6 +65,10 @@ pub struct SectionRow {
     /// How many of those replies the mirror holds.
     #[col(sql = "INTEGER")]
     pub replies_held: Option<i64>,
+    /// A chat message that continues a run of its author's messages, so
+    /// it is drawn under the header of the first of them.
+    #[col(sql = "INTEGER")]
+    pub continues: bool,
     /// Who the item was addressed to where it says so itself, as an
     /// email's To and Cc do: a JSON list of [`Addressee`]. Null for none.
     #[col(sql = "TEXT")]
@@ -99,6 +103,9 @@ pub enum ItemForm {
     /// A header naming who and when, then who it was addressed to, its
     /// labels, its body, its reactions and its replies.
     Message,
+    /// A message in a chat: as a message, but its reactions are one pill
+    /// per emoji, and one that continues its author's run has no header.
+    Chat,
     /// One small line: when, and the body, which says what happened (a
     /// member joined, a chat was renamed).
     Event,

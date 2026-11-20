@@ -56,7 +56,8 @@ const REMOVED_FOLDS: &str =
 const DOCUMENT_FOLDS: &str = "DELETE FROM folds WHERE markdown_uuid = ?";
 /// Every column of `sections`, in the order a `SectionRow` is read.
 const SECTION_COLUMNS: &str = "markdown_uuid, seq, uuid, text, framed, form, author, \
-     author_handle, at, tags, link, reactions, replies, replies_held, addressed, labels, class";
+     author_handle, at, tags, link, reactions, replies, replies_held, continues, addressed, \
+     labels, class";
 
 /// A kept section as [`IndexedMarkdownStore::kept_sections`] reads it.
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
@@ -157,7 +158,7 @@ async fn put_sections(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<(
         // Every value bound; the column list is a constant.
         sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO sections ({SECTION_COLUMNS}) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )))
         .bind(&row.markdown_uuid)
         .bind(row.seq)
@@ -173,6 +174,7 @@ async fn put_sections(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<(
         .bind(&row.reactions)
         .bind(row.replies)
         .bind(row.replies_held)
+        .bind(row.continues)
         .bind(&row.addressed)
         .bind(&row.labels)
         .bind(&row.class)

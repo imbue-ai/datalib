@@ -195,6 +195,27 @@ too; it is not in the item's grid text, which is what was said.
 Slack is the one provider that sets it
 (`slack_render/TRANSLATE.md`).
 
+## A chat's layout
+
+`RenderProfile::layout` says how a provider's documents are read. A
+messaging app's chats (Signal, WhatsApp, Messages, SMS, Beeper, Slack,
+Messenger, Google Chat and Voice, LinkedIn's messages) are `Chat`; an
+email thread or a post with its comments is `Conversation`, and an
+assistant's transcript `Transcript`, both drawn as they always were.
+
+In a `Chat`, every message's box also carries `msg--chat`, which the UI
+draws as a row rather than a card, and its reactions are one pill per
+emoji with a count, the reactors inside the pill, each anchored by its
+reaction's uuid (`Item::draw`). A message from the same person as the
+message just before it, at most five minutes later, continues that
+run: its box carries `msg--cont` and it has no `##` header, only its
+time and `↗`, which the UI shows on hover. The same person means the
+same handle; with no handle, the same name, and never two stand-ins
+(`AuthorKind::Unknown`), which may be two people. A system event, a
+fold or the first unread message starts a new run. A divider for each
+day is the UI's (`decorateChatDays` in `ui/src/cards/dates.ts`), since
+where a day ends depends on the reader's clock.
+
 ## Long messages are the frontend's problem, not this crate's
 
 A hundred-line message is one the reader has to scroll past, and none of
@@ -227,7 +248,7 @@ Three constraints, each easy to undo by accident:
 
 Most of a provider's shape reaches the renderer through
 `RenderProfile` — its `grid_rows` taxonomy, its `source_label`, its
-`created_at` precision. Two knobs exist for one source each, and are
+`created_at` precision, its layout (§"A chat's layout"). Two knobs exist for one source each, and are
 worth knowing about before you invent a third:
 
 - **`RenderProfile` is per *call*, not per source.** Beeper bridges

@@ -105,7 +105,8 @@ database per source, at
     (chat-common's, `etl/render/src/item.rs`) keeps its body alone and,
     in columns of its own, everything its box shows: who wrote it and
     when, who it was addressed to, its labels and tags, its own link, its
-    reactions and its replies count; whatever reads it draws the box from
+    reactions and its replies count, and whether it continues its
+    author's run in a chat; whatever reads it draws the box from
     them with `Item::draw`, as render did.
     Any other piece is kept whole and marked `framed`, so whatever reads
     it draws nothing around it; a piece that is layout alone (front

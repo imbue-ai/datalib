@@ -222,6 +222,7 @@ fn chat(provider: Provider, format: TextFormat, text: String) -> Result<(String,
         stamp_precision: RecordStampPrecision::Seconds,
         render_version: 1,
         text_format: format,
+        layout: datalib_etl_chat_common::Layout::Conversation,
     };
     let item = |uuid: &str, author: &str, text: String| NormalizedChatItem {
         reply_to: None,

@@ -188,8 +188,17 @@ async fn each_room_renders_one_document() -> Result<()> {
         "{slack}"
     );
     let march = md_of(&docs, "Signal", DATA_ROOM);
-    assert!(march.contains("❤️ [Mr. Data](tel:+15551234001"), "{march}");
-    assert!(march.contains("🤔 [Mr. Data](tel:+15551234001"), "{march}");
+    for emoji in ["❤️", "🤔"] {
+        let pill = format!("<span class=\"msg-reaction\">{emoji} 1<span class=\"msg-reactors\"> ");
+        let reactors = march
+            .split_once(&pill)
+            .and_then(|(_, rest)| rest.split_once("</span></span>"))
+            .map(|(reactors, _)| reactors);
+        assert!(
+            reactors.is_some_and(|r| r.contains("\">[Mr. Data](tel:+15551234001")),
+            "{emoji}: {march}"
+        );
+    }
     assert!(march.contains("![iconian-schematic.png]"), "{march}");
     assert!(
         march.contains("external_id: \"!tng-data:ba_TNG.local-signal.localhost\""),
