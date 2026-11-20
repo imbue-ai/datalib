@@ -1,10 +1,10 @@
 # The document viewer, drawn from blocks
 
 *Proposal (2026-11-19). Steps 1 to 4 landed (#1889, #1891, #1902,
-#1909), with search quoting a hit from its one message (#1896), and
-step 6 landed ahead of step 5 (#1916). Step 5 is built on the branch
-after them, for chat-common's messages (§"What was built"). Step 7 is
-not built. It picks up where
+#1909), with search quoting a hit from its one message (#1896); step 6
+landed ahead of step 5 (#1916), and step 5 landed for chat-common's
+messages (#1925, §"What was built"). Step 7's chat layout is built on
+the branch after them; its other layouts are not. It picks up where
 [`documents_to_blocks.md`](documents_to_blocks.md) step 5 stopped
 ("paging through what is read together comes after"), and chooses a
 layout by kind through the registry
@@ -346,14 +346,31 @@ Header actions that mail and chat clients show on hover (🆔, ↗), and
 labels as chips beside the header rather than a `🏷` line in the body,
 belong here too.
 
+#### What was built: the chat layout
+
+chat-common's `RenderProfile` names a provider's layout (`Layout`:
+`Conversation`, `Chat`, `Transcript`), so no provider is named in a
+shared engine and no registry was needed yet. A chat's messages are
+items of the form `chat`: their boxes carry `msg--chat`, which the
+viewer's CSS draws as rows; a message continuing its author's run
+carries `msg--cont` and is drawn with no header (the `continues`
+column); reactions are pills drawn by `Item::draw`. One thing moved to
+the viewer that the plan put on the server: **the day divider**. Where a
+day ends depends on the zone the status bar's clock picks, which only
+the viewer knows, so `decorateChatDays` draws it from each message's
+`<time>`, as `decorateDates` draws the times. The conversation and page
+layouts and the header actions are not built.
+
 ## 4. Open questions
 
-- **Should read emails start collapsed?** Every mail client does it,
-  but it changes what a person sees first in a thread.
+- **Should read emails start collapsed?** Answered: no, every email
+  stays open.
 - **How close is "a few minutes"** for one header over a run of one
-  person's chat messages?
+  person's chat messages? Answered: five minutes after the message
+  before it.
 - **Reactions**: an item of their own or an attribute of the message
-  (`documents_to_blocks.md` §"Open questions")? A pill needs only to
-  know which message a reaction is on.
+  (`documents_to_blocks.md` §"Open questions")? Built as an attribute:
+  the message keeps its reactions (`sections.reactions`, step 5), and
+  each reaction keeps its own grid row and anchor.
 - **Can a person choose a layout**, say read a Slack thread as a
   conversation? Not proposed; the registry would make it one setting.

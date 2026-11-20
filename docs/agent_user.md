@@ -233,7 +233,8 @@ same root.** A sync is a *request*: a row in
 `<data_root>/system/supervisor.sqlite` naming the steps to sync (its
 *roots*; everything downstream of them comes too) and who asked. One
 process runs the loop that serves requests — the app while it is open,
-otherwise the first `datalib-dag` to need one — and every other
+or a `datalib-dag serve <config>`, which holds the loop until it is
+stopped; otherwise the first `datalib-dag` to need one — and every other
 `datalib-dag` hands its request to that loop, says `following request
 <id>`, and waits for it. Your source runs beside theirs, not after. It
 exits with *your* request's outcome: 0 done, 2 failed, 130 stopped, and
@@ -284,10 +285,12 @@ Manage screen's Status column reads directly:
 
 ```sh
 sqlite3 <data_root>/system/supervisor.sqlite \
-  'select step, state, state_detail, turned_off_by, requests from steps'
+  'select step, state, waiting_for, state_detail, turned_off_by, requests from steps'
 ```
 
-`state` is `running`, `waiting` (on what: `state_detail`), `off`,
+`state` is `running`, `waiting` (for what kind of thing: `waiting_for`,
+one of `upstream`, `reader`, `lock`, `disk_space`, `config`; for which:
+`state_detail`), `off`,
 `blocked`, `failed`, or at rest (`idle`, `stale`, `fresh`); `requests` is
 the open requests it is being run for, a JSON list of their ids. Each request and each step turned
 off records who did it, so the screen shows "turned off by claude" or
@@ -674,7 +677,7 @@ document.
   403s despite a fresh cookie usually mean a flagged IP/UA; wait or
   change networks.
 - **"Why did/didn't this step run?"**: `system/supervisor.sqlite` is
-  plain SQLite. `select step, state, state_detail from steps` says what
+  plain SQLite. `select step, state, waiting_for, state_detail from steps` says what
   each step is doing and what it waits on; `select step, reads,
   last_status, last_failure_kind, last_error from steps` gives each
   step's input versions at its last success and how it last ended (a

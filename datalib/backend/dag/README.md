@@ -126,7 +126,7 @@ them:
 | state | meaning |
 |---|---|
 | `running` | an invocation is live — or it ran a pass and what it reads has not settled (below) |
-| `waiting` | wanted and due, and held back; `state_detail` says by what |
+| `waiting` | wanted and due, and held back; `waiting_for` says by what kind of thing, `state_detail` by which |
 | `fresh` | wanted, and up to date |
 | `off` | someone turned it off; `turned_off_by` says who |
 | `blocked` | wanted, but a producer it reads has never published and is not going to run |
@@ -172,9 +172,13 @@ starts** in a tick, visited in topological order, iff:
 9. **the data root's disk has room**: it is not under the config's
    `[disk_space]` floor (below, "When the disk runs low").
 
-A step that waits says why, in its row's `state_detail`: `waiting for
-a`, `waiting for c, which reads what this writes`, `waiting for lock
-gpu, held by trainer`, `waiting for disk space: 3.2 GB free on the data
+A step that waits says why twice in its row. `waiting_for` is the
+kind, one word a program can test (`WaitKind` in `supervisor/tick.rs`):
+`upstream`, `reader`, `lock`, `disk_space`, or `config` for a step a
+request names that the config the loop runs does not have yet.
+`state_detail` is the sentence a person reads: `waiting for a`,
+`waiting for c, which reads what this writes`, `waiting for lock gpu,
+held by trainer`, `waiting for disk space: 3.2 GB free on the data
 root's disk; steps pause under 10.0 GB and run again from 15.0 GB`. Each step writes only the tree its id names, so
 no two steps ever wait on each other as writers of one sink.
 
@@ -290,8 +294,9 @@ A new build of a program can change the shape of what its steps wrote:
 for `datalib-step`, a raw store's tables, a render store's, the grid
 index's. The runner knows none of those shapes, nor when a program
 changed; each step answers for its own. **Each time the loop starts**,
-the process that holds `runner-lock` (the http server when it takes the
-lock, `datalib-dag` when it runs on its own) asks every step whose
+the process that holds `runner-lock` (the http server or a
+`datalib-dag serve` when it takes the lock, a `datalib-dag` sync when it
+runs on its own) asks every step whose
 program's `[[programs]]` entry lists the `prepare` verb, producers
 first, before the loop takes any request: `Runner::prepare` invokes
 each once with `--prepare` appended
@@ -570,9 +575,9 @@ naming no step) looks exactly like one it did.
   only writer of its record, and the steps it spawns write raw stores
   whose doltlite working set is shared across every connection on the
   branch, in any process ([`doltlite.md`](../../../docs/dev/doltlite.md#branches-head-and-the-working-set)); two loops on one root would interleave both. While `datalib-http` is up it holds this lock
-  for its life and runs the loop in-process whenever a request is open
-  (`http/src/supervisor.rs`), so every `datalib-dag` sync is a client of
-  it. A `datalib-dag` is never refused for the lock: a sync is a request
+  for its life and runs the loop in-process
+  (`supervisor/serve.rs`, which `datalib-dag serve` runs too), so every
+  `datalib-dag` sync is a client of it. A `datalib-dag` is never refused for the lock: a sync is a request
   row in `system/supervisor.sqlite`, so it writes its row and follows it
   while whoever holds the lock runs it, trying the lock again whenever
   anything is announced, its release included, in case that loop ends
@@ -726,14 +731,28 @@ that bug. The other, while a round is open, is a look at the disk every
 five seconds for the `[disk_space]` floor: nothing announces a disk
 filling or being freed.
 
-A `datalib-dag` running the loop with no server up has nobody watching
-the config, so it takes an edit on at its next busy period, not mid-sync.
+A `datalib-dag` running the loop with no server up, a sync or a
+`serve`, has nobody watching the config, so it takes an edit on at its
+next busy period, not mid-sync.
 
 The loop's idle side lives once, in `supervisor::host::run_idle`: a busy
 period whenever a request or a wipe is open, requests asked to stop
 before any period took them closed as `stopped`, the record settled when
 the switches or the config move, then a wait for an announcement or the
-host's stop. The server's host and the tests both run it.
+host's stop. `supervisor::serve::run` runs it after taking the lock and
+the prepare pass; the server and `datalib-dag serve` both call that, and
+the harness runs `run_idle` itself. A `datalib-dag` sync has no idle
+side: it serves until nothing is open, then exits.
+
+`datalib-dag serve` says on stderr, one NDJSON line each
+(`supervisor::serve::ServeEvent`), what its parent needs and no store
+holds: that it holds the lock (`holding`), the prepare pass
+(`prepare_plan`, `prepare_step`, `prepare_done`), each busy period
+(`sync_started`, `sync_over`), and every write it makes to the run
+store (`run_store_written`), which a filesystem watch would report late.
+Its own log lines go to the run store, as a `dag` process outside any
+run. SIGINT or SIGTERM stops it the way the app's shutdown stops the
+loop: its steps are interrupted and their requests stay open.
 
 ## Resets and purges
 
@@ -813,7 +832,7 @@ header says rollback-journal:
 
 | table | one row per | what it holds |
 |---|---|---|
-| `steps` | step | its state now (`state`, `state_detail`, `turned_off_by`, and `requests`, the open requests it still has work in: a JSON array, NULL once it has none, which is when its Manage row offers Sync again), what it read at its last success (`reads`), under which definition (`fingerprint`), and what happened the last time a run reached it (`last_*`) |
+| `steps` | step | its state now (`state`, `waiting_for`, `state_detail`, `turned_off_by`, and `requests`, the open requests it still has work in: a JSON array, NULL once it has none, which is when its Manage row offers Sync again), what it read at its last success (`reads`), under which definition (`fingerprint`), and what happened the last time a run reached it (`last_*`) |
 | `sinks` | tree a step writes | the version it last published |
 | `runs` | busy period of the loop | when it started and finished |
 | `run_steps` | step the newest run has reached | what it is doing in that run |

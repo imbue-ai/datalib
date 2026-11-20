@@ -374,7 +374,7 @@ fn render_threads(
 }
 
 fn unread_count(md: &str) -> usize {
-    md.matches("msg--slack unread").count()
+    md.matches("msg--slack msg--chat unread").count()
 }
 
 /// A top-level message past its conversation's mark, and a reply past

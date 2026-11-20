@@ -1,11 +1,10 @@
 //! The server's side of the supervisor loop (`dag/README.md`
-//! §"Two locks, two files"): it holds `runner-lock` for as long as it is up, runs the loop
-//! whenever a request or a reset or purge is open, and between busy
-//! periods settles a step turned off or on into the record. Each time it
-//! takes the loop it asks every step whose program takes `--prepare` to
-//! prepare before the first request (`dag/README.md` §"Upgrading a root").
+//! §"Two locks, two files"): it runs the loop `datalib-dag serve` runs
+//! (`datalib_dag::supervisor::serve`) for as long as it is up, keeps what
+//! the loop says that no store holds — the prepare pass, whether a sync
+//! is running — and is how the handlers write to the loop's mailbox.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -13,12 +12,10 @@ use std::time::Duration;
 
 use datalib_dag::config::{ConfigCheck, DagConfig};
 use datalib_dag::supervisor::announce::Listener;
-use datalib_dag::supervisor::host;
-use datalib_dag::supervisor::pass::{PassRow, PassState};
-use datalib_dag::supervisor::reload::ConfigFile;
-use datalib_dag::supervisor::store::{RequestOutcome, Store, WipeKind};
+use datalib_dag::supervisor::pass::PassRow;
+use datalib_dag::supervisor::serve::{self, ServeEvent, ServeOptions};
+use datalib_dag::supervisor::store::{Store, WipeKind};
 use datalib_dag::supervisor::wipe::tree_group;
-use datalib_dag::{EventSink, Runner};
 use tokio::sync::{watch, OnceCell};
 
 /// Whether a reset or purge is done, or still waits for its steps to stop.
@@ -239,359 +236,91 @@ pub struct HostConfig {
     pub announce: Option<crate::watch::RootTx>,
 }
 
+/// Run the loop in this process (`datalib_dag::supervisor::serve`) until
+/// [`SyncControl::shutdown`], keeping what it says for the handlers.
 pub async fn run(cfg: HostConfig) {
     let control = cfg.control.clone();
-    host(&cfg).await;
+    let opts = ServeOptions {
+        root: (*control.root).clone(),
+        binary_dir: cfg.binary_dir.clone(),
+        now: cfg.now.clone(),
+        parallelism: None,
+        extra_env: backup_secrets(),
+    };
+    let heard = control.clone();
+    let announce = cfg.announce.clone();
+    let emit: serve::Emit = Arc::new(move |event| heard.hear(event, announce.as_ref()));
+    serve::run(&opts, emit, control.stop.subscribe()).await;
     let _ = control.exited.send(true);
 }
 
-async fn host(cfg: &HostConfig) {
-    let root = cfg.control.root.clone();
-    let mut stop = cfg.control.stop.subscribe();
-    let store = match Store::open(&root).await {
-        Ok(store) => store,
-        Err(e) => {
-            tracing::error!(
-                "supervisor: cannot open the request store, so nothing will sync: {e:#}"
-            );
-            return;
-        }
-    };
-    let mut listener = Listener::new(&store, "the server's loop");
-    let Some(_lock) = take_the_lock(cfg, &mut listener, &mut stop).await else {
-        store.close().await;
-        return;
-    };
-    cfg.control.runs_the_loop.store(true, Ordering::SeqCst);
-    match host::take_over(&store, &root).await {
-        Ok(taken) => {
-            if let Some(run) = &taken.closed_run {
-                tracing::warn!(
-                    run,
-                    invocations = taken.closed_invocations,
-                    "supervisor: closed a run a dead loop left open"
-                );
+impl SyncControl {
+    /// Keep what the loop said, and tell the page what it changed.
+    fn hear(&self, event: ServeEvent, announce: Option<&crate::watch::RootTx>) {
+        let tell = |event: crate::watch::RootEvent| {
+            if let Some(tx) = announce {
+                let _ = tx.send(event.into());
             }
-        }
-        Err(e) => tracing::error!("supervisor: could not take over from the last loop: {e:#}"),
-    }
-    prepare_on_launch(cfg).await;
-    cfg.control
-        .upgrade
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .settled = true;
-    if let Some(tx) = &cfg.announce {
-        let _ = tx.send(crate::watch::RootEvent::PassChanged.into());
-    }
-    tracing::info!("supervisor: running the loop on {}", root.display());
-    host::run_idle(&store, &mut listener, &mut ServerPeriods { cfg }, &mut stop).await;
-    store.close().await;
-}
-
-struct ServerPeriods<'a> {
-    cfg: &'a HostConfig,
-}
-
-impl host::Periods for ServerPeriods<'_> {
-    async fn busy_period(&mut self, store: &Store) {
-        serve_period(self.cfg, store).await;
-    }
-
-    async fn settle(&mut self, store: &Store) -> Option<BTreeMap<String, String>> {
-        settle(&self.cfg.control.root, store).await
-    }
-}
-
-/// Each time this process takes the loop, ask every step whose program
-/// takes `--prepare` to make what it stored usable, one at a time, before
-/// the loop takes any request: no render then reads a raw store in an old
-/// shape. What a step cannot bring up to date in place it answers
-/// `needs_rerun`, which the page offers to run; what a newer build wrote
-/// it refuses, and the runner turns it off. A request opened meanwhile
-/// waits for the loop. A step that fails is reported and the rest go on.
-async fn prepare_on_launch(cfg: &HostConfig) {
-    let root = cfg.control.root.clone();
-    let Ok(checked) = load_config(&root) else {
-        return;
-    };
-    let asked = datalib_dag::supervisor::upgrade::steps_to_ask(&checked.graph);
-    if asked.is_empty() {
-        return;
-    }
-    tracing::info!(
-        steps = asked.len(),
-        "supervisor: asking each step to prepare"
-    );
-    let set = |f: &dyn Fn(&mut Upgrade)| {
-        f(&mut cfg
-            .control
-            .upgrade
-            .lock()
-            .unwrap_or_else(|e| e.into_inner()));
-        if let Some(tx) = &cfg.announce {
-            let _ = tx.send(crate::watch::RootEvent::PassChanged.into());
-        }
-    };
-    set(&|u| {
-        *u = Upgrade {
-            migrating: true,
-            settled: false,
-            steps: asked.iter().map(|step| PassRow::waiting(step)).collect(),
-        }
-    });
-    // Every row's Sync is disabled while the pass runs and enabled after:
-    // a change to the rows as much as to `upgrade`.
-    let rows_changed = || {
-        if let Some(tx) = &cfg.announce {
-            let _ = tx.send(
-                crate::watch::RootEvent::TableChanged {
-                    table: crate::watch::Table::ManageRows,
-                }
-                .into(),
-            );
-        }
-    };
-    rows_changed();
-    cfg.control.busy.store(true, Ordering::SeqCst);
-    let run_id = datalib_dag::scheduler::new_run_id();
-    let now = now(cfg);
-    let runner = steps_env(cfg, &checked.cfg, &root, &now, &run_id).map(|env| {
-        let started = host::prepare_start();
-        let sink: Arc<dyn EventSink> =
-            match host::start_record(&root, &checked.cfg, &run_id, &now, started) {
-                Some(record) => Arc::new(record),
-                None => Arc::new(datalib_dag::events::NoopSink),
-            };
-        Runner::new(root.as_path()).sink(sink).child_env(env.vars)
-    });
-    if let Ok(runner) = &runner {
-        runner.plan(&checked.graph, &asked);
-    }
-    for (i, step) in asked.iter().enumerate() {
-        set(&|u| u.steps[i].state = PassState::Running);
-        let answer = match &runner {
-            Ok(runner) => match runner
-                .prepare(&checked.graph, std::slice::from_ref(step))
-                .await
-            {
-                Ok(done) => done
-                    .into_iter()
-                    .next()
-                    .map(|m| m.answer.map_err(|e| prepare_error(&e)))
-                    .unwrap_or(Ok(false)),
-                Err(e) => Err(format!("{e:#}")),
-            },
-            Err(e) => Err(format!("{e:#}")),
         };
-        match &answer {
-            Ok(false) => {}
-            Ok(true) => tracing::info!(step, "supervisor: needs to run again before it is current"),
-            Err(why) => tracing::error!(step, "supervisor: could not prepare: {why}"),
-        }
-        set(&|u| {
-            (u.steps[i].state, u.steps[i].error) = match &answer {
-                Ok(_) => (PassState::Done, None),
-                Err(why) => (PassState::Failed, Some(why.clone())),
-            };
-        });
-    }
-    cfg.control.busy.store(false, Ordering::SeqCst);
-    set(&|u| u.migrating = false);
-    rows_changed();
-}
-
-/// The environment every step this server runs gets: the runner's, plus
-/// the backup secrets `datalib-step`'s WhatsApp and Signal sources read
-/// when the config names no variable of its own, when this server was
-/// started with them.
-fn steps_env(
-    cfg: &HostConfig,
-    dag: &datalib_dag::config::DagConfig,
-    root: &std::path::Path,
-    now: &str,
-    run_id: &str,
-) -> anyhow::Result<host::StepEnv> {
-    let mut env = host::step_env(
-        dag,
-        cfg.binary_dir.as_deref(),
-        &extra_path(root),
-        now,
-        run_id,
-    )?;
-    for key in datalib_env::BACKUP_SECRET_KEYS {
-        if let Ok(value) = std::env::var(key) {
-            env.vars.entry(key.to_string()).or_insert(value);
-        }
-    }
-    Ok(env)
-}
-
-fn prepare_error(e: &datalib_dag::scheduler::PrepareError) -> String {
-    match e {
-        datalib_dag::scheduler::PrepareError::Refused(why) => {
-            format!("refused, and is turned off until it no longer refuses: {why}")
-        }
-        datalib_dag::scheduler::PrepareError::Failed(why) => why.clone(),
-    }
-}
-
-/// The lock, once whoever holds it lets go. Until then a `datalib-dag`
-/// runs the loop, and serves the UI's requests too.
-async fn take_the_lock(
-    cfg: &HostConfig,
-    listener: &mut Listener,
-    stop: &mut watch::Receiver<bool>,
-) -> Option<datalib_dag::lock::RunnerLock> {
-    let mut announced = false;
-    loop {
-        match datalib_dag::lock::try_acquire_runner(&cfg.control.root) {
-            Ok(lock) => return Some(lock),
-            Err(e) if e.is_held() => {
-                if !announced {
-                    announced = true;
-                    tracing::warn!(
-                        "supervisor: another process runs the loop on this root{}; \
-                         taking over when it is done",
-                        e.holder().map(|h| format!(" ({h})")).unwrap_or_default()
-                    );
+        // Every row's Sync is disabled while the pass runs and enabled
+        // after: a change to the rows as much as to `upgrade`.
+        let rows_changed = || {
+            tell(crate::watch::RootEvent::TableChanged {
+                table: crate::watch::Table::ManageRows,
+            })
+        };
+        let upgrade = || self.upgrade.lock().unwrap_or_else(|e| e.into_inner());
+        match event {
+            ServeEvent::Holding => self.runs_the_loop.store(true, Ordering::SeqCst),
+            ServeEvent::PreparePlan { steps } => {
+                *upgrade() = Upgrade {
+                    migrating: true,
+                    settled: false,
+                    steps: steps.iter().map(|step| PassRow::waiting(step)).collect(),
+                };
+                tell(crate::watch::RootEvent::PassChanged);
+                rows_changed();
+                self.busy.store(true, Ordering::SeqCst);
+            }
+            ServeEvent::PrepareStep { step, state, error } => {
+                if let Some(row) = upgrade().steps.iter_mut().find(|r| r.step == step) {
+                    row.state = state;
+                    row.error = error;
                 }
+                tell(crate::watch::RootEvent::PassChanged);
             }
-            Err(e) => {
-                tracing::error!(
-                    "supervisor: cannot take the runner lock, so nothing will sync: {e}"
-                );
-                return None;
+            ServeEvent::PrepareDone => {
+                let was_migrating = std::mem::replace(&mut upgrade().migrating, false);
+                if was_migrating {
+                    self.busy.store(false, Ordering::SeqCst);
+                    rows_changed();
+                }
+                upgrade().settled = true;
+                tell(crate::watch::RootEvent::PassChanged);
             }
-        }
-        tokio::select! {
-            _ = listener.next() => {}
-            _ = stop.changed() => return None,
+            ServeEvent::SyncStarted { .. } => self.busy.store(true, Ordering::SeqCst),
+            ServeEvent::SyncOver { .. } => self.busy.store(false, Ordering::SeqCst),
+            // This process's own run-store hook already says so
+            // (`boot.rs`), for every writer in it.
+            ServeEvent::RunStoreWritten => {}
         }
     }
+}
+
+/// The backup secrets `datalib-step`'s WhatsApp and Signal sources read
+/// when the config names no variable of its own, when this server was
+/// started with them. A step is handed only an allowlist of the runner's
+/// environment (`datalib_env::Child::Step`), which leaves these out.
+fn backup_secrets() -> std::collections::BTreeMap<String, String> {
+    datalib_env::BACKUP_SECRET_KEYS
+        .iter()
+        .filter_map(|key| Some((key.to_string(), std::env::var(key).ok()?)))
+        .collect()
 }
 
 /// The config as the loop would run it, or why it cannot.
 pub fn load_config(root: &Path) -> Result<ConfigCheck, String> {
-    let path = datalib_dag::config::root_config_path(root);
-    if !path.is_file() {
-        return Err(format!(
-            "no config at {} — create one from the Setup tab before syncing",
-            path.display()
-        ));
-    }
-    let (checked, _) = datalib_dag::config::load_graded(&path).map_err(|e| format!("{e:#}"))?;
-    if checked.is_fatal() {
-        return Err(format!(
-            "{} is not a config: nothing in it could be read\n{}",
-            path.display(),
-            checked.render(&path)
-        ));
-    }
-    Ok(checked)
-}
-
-/// Where the loop's steps find the library's own programs, whether or not
-/// the directory exists yet: an agent may make it between runs, and a
-/// missing entry costs nothing.
-fn extra_path(root: &Path) -> Vec<PathBuf> {
-    vec![root.join(datalib_runtime::layout::BIN_DIR_REL)]
-}
-
-/// One tick with nothing open, so a step turned off or on while the loop
-/// is idle reaches the record, and so do the steps a dead loop left
-/// running.
-async fn settle(root: &Path, store: &Store) -> Option<BTreeMap<String, String>> {
-    let checked = match load_config(root) {
-        Ok(checked) => checked,
-        Err(why) => {
-            tracing::warn!("supervisor: cannot settle the record: {why}");
-            return None;
-        }
-    };
-    match Runner::new(root).settle(&checked.graph, store).await {
-        Ok(turned_off) => Some(turned_off),
-        Err(e) => {
-            tracing::error!("supervisor: could not settle the record: {e:#}");
-            None
-        }
-    }
-}
-
-fn now(cfg: &HostConfig) -> String {
-    cfg.now
-        .clone()
-        .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs())
-}
-
-/// One busy period: a run opened, and the loop served until no request
-/// it can place is open. The loop re-reads the config as it goes; the
-/// step environment is the one built here.
-async fn serve_period(cfg: &HostConfig, store: &Store) {
-    let root = cfg.control.root.clone();
-    let checked = match load_config(&root) {
-        Ok(checked) => checked,
-        Err(why) => return fail_open_requests(store, &why).await,
-    };
-    let run_id = datalib_dag::scheduler::new_run_id();
-    let now = now(cfg);
-    let env = match steps_env(cfg, &checked.cfg, &root, &now, &run_id) {
-        Ok(env) => env,
-        Err(e) => return fail_open_requests(store, &format!("{e:#}")).await,
-    };
-    let open = store.open_requests().await.unwrap_or_default();
-    let wiping = store.open_wipes().await.unwrap_or_default();
-    let started = host::period_start(&open, &wiping);
-    let sink: Arc<dyn EventSink> = match host::start_record(
-        &root,
-        &checked.cfg,
-        &run_id,
-        &now,
-        started,
-    ) {
-        Some(record) => Arc::new(record),
-        None => {
-            tracing::warn!(run = %run_id, "supervisor: run store unavailable; nothing recorded this run");
-            Arc::new(datalib_dag::events::NoopSink)
-        }
-    };
-    let runner = Runner::new(root.as_path())
-        .sink(sink)
-        .child_env(env.vars)
-        .stop_on(cfg.control.stop.subscribe())
-        .reload_from(Arc::new(ConfigFile::new(
-            datalib_dag::config::root_config_path(&root),
-        )));
-
-    cfg.control.busy.store(true, Ordering::SeqCst);
-    tracing::info!(run = %run_id, "supervisor: a sync started");
-    let served = runner.serve(&checked.graph, store).await;
-    // The run store's record closes when its sink goes, which is the
-    // runner's; before the flag drops, so no one reads "over" before it is.
-    drop(runner);
-    if let Err(e) = served {
-        tracing::error!(run = %run_id, "supervisor: the loop failed: {e:#}");
-        // Its requests would otherwise start the next busy period at once,
-        // and fail the same way.
-        fail_open_requests(store, &format!("the sync failed: {e:#}")).await;
-        if let Err(e) = host::take_over(store, &root).await {
-            tracing::error!("supervisor: could not close the failed run: {e:#}");
-        }
-    }
-    cfg.control.busy.store(false, Ordering::SeqCst);
-    tracing::info!(run = %run_id, "supervisor: the sync is over");
-}
-
-/// Close every open request: the loop cannot run them, for `why`.
-async fn fail_open_requests(store: &Store, why: &str) {
-    tracing::warn!("supervisor: cannot sync: {why}");
-    for request in store.open_requests().await.unwrap_or_default() {
-        let outcome = match request.stop_requested_by {
-            Some(_) => RequestOutcome::Stopped,
-            None => RequestOutcome::Failed,
-        };
-        let _ = store.close_request(&request.id, outcome, None).await;
-    }
+    serve::load_config(root)
 }
 
 /// Why the trees of `groups` may not be deleted, or `None`. Each must be
@@ -663,6 +392,49 @@ mod tests {
         control.busy.store(true, Ordering::SeqCst);
         let err = control.reset(&["a/ingest".into()], "ui").await.unwrap_err();
         assert!(err.contains("another process"), "{err}");
+    }
+
+    /// The prepare pass reaches `/api/config` as the loop says it: every
+    /// step waiting, then each as it runs and ends, Sync paused until the
+    /// pass is over, and `settled` only then.
+    #[test]
+    fn the_prepare_pass_is_reported_as_the_loop_says_it() {
+        use datalib_dag::supervisor::pass::PassState;
+        let td = tempfile::tempdir().unwrap();
+        let control = SyncControl::new(Arc::new(td.path().to_path_buf()));
+        control.hear(ServeEvent::Holding, None);
+        assert!(control.runs_the_loop.load(Ordering::SeqCst));
+        control.hear(
+            ServeEvent::PreparePlan {
+                steps: vec!["a/ingest".into(), "a/render".into()],
+            },
+            None,
+        );
+        let u = control.upgrade();
+        assert!(u.migrating && !u.settled && control.running());
+        assert_eq!(u.steps.len(), 2);
+        assert!(u.steps.iter().all(|r| r.state == PassState::Waiting));
+        control.hear(
+            ServeEvent::PrepareStep {
+                step: "a/render".into(),
+                state: PassState::Failed,
+                error: Some("why".into()),
+            },
+            None,
+        );
+        let u = control.upgrade();
+        assert_eq!(u.steps[0].state, PassState::Waiting);
+        assert_eq!(u.steps[1].state, PassState::Failed);
+        assert_eq!(u.steps[1].error.as_deref(), Some("why"));
+        control.hear(ServeEvent::PrepareDone, None);
+        let u = control.upgrade();
+        assert!(!u.migrating && u.settled && !control.running());
+        assert_eq!(u.steps[1].state, PassState::Failed, "kept for the pill");
+
+        control.hear(ServeEvent::SyncStarted { run_id: "r".into() }, None);
+        assert!(control.running());
+        control.hear(ServeEvent::SyncOver { run_id: "r".into() }, None);
+        assert!(!control.running());
     }
 
     /// A root whose config has one group, `keep`, with one step.

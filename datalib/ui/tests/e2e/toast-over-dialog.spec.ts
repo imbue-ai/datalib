@@ -24,19 +24,23 @@ async function overlaps(a: Locator, b: Locator): Promise<boolean> {
 }
 
 test("an error toast over the wizard does not eat clicks on its buttons", async ({ page }) => {
-  // A request that fails with a toast: the grid card's accounts lookup.
+  // A request that fails with a toast: the storage bar's first look at
+  // free space. Only the first, so one toast is all there is to dismiss.
   // (A failed search is shown in the grid card itself, not toasted.)
-  await page.route("**/api/accounts", (route) =>
-    route.fulfill({
-      status: 502,
-      contentType: "application/json",
-      body: JSON.stringify({ error: "accounts are unavailable" }),
-    }),
+  await page.route(
+    "**/api/pipeline/disk",
+    (route) =>
+      route.fulfill({
+        status: 502,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "free space is unavailable" }),
+      }),
+    { times: 1 },
   );
   await page.goto("/sourcesView():1.6/searchView()");
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
-  const toast = page.locator(".datalib-toast--error", { hasText: "/api/accounts" });
-  await expect(toast).toContainText("→ 502: accounts are unavailable");
+  const toast = page.locator(".datalib-toast--error", { hasText: "/api/pipeline/disk" });
+  await expect(toast).toContainText("→ 502: free space is unavailable");
 
   await page.getByRole("button", { name: "Add source" }).click();
   await page.locator(".wiz-filter").fill("whatsapp");
@@ -64,7 +68,7 @@ test("an error toast over the wizard does not eat clicks on its buttons", async 
   // selection the pass-through gives up.
   const readClipboard = await stubClipboard(page);
   await toast.getByRole("button", { name: "Copy" }).click({ timeout: 5_000 });
-  await expect.poll(readClipboard).toContain("/api/accounts");
+  await expect.poll(readClipboard).toContain("/api/pipeline/disk");
   await expect(toast.getByRole("button", { name: "Copied" })).toBeVisible();
   await toast.getByRole("button", { name: "Dismiss" }).click({ timeout: 5_000 });
   await expect(toast).toHaveCount(0);

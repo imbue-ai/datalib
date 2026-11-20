@@ -112,6 +112,7 @@ fn chat_profile(provider: Provider, label: &str, thread: &str, message: &str) ->
         stamp_precision: RecordStampPrecision::Seconds,
         render_version: 1,
         text_format: TextFormat::Plain,
+        layout: datalib_etl_chat_common::Layout::Conversation,
     }
 }
 

@@ -67,6 +67,7 @@ pub fn profile() -> RenderProfile {
         chat_entity_kind: super::ids::KIND_CHAT,
         render_version: RENDER_VERSION,
         text_format: TextFormat::Plain,
+        layout: datalib_etl_chat_common::Layout::Chat,
     }
 }
 

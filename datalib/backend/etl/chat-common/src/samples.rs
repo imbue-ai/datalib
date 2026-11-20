@@ -39,6 +39,7 @@ pub fn sample_profile() -> RenderProfile {
         stamp_precision: RecordStampPrecision::Seconds,
         render_version: 1,
         text_format: TextFormat::Markdown,
+        layout: crate::render::Layout::Conversation,
     }
 }
 

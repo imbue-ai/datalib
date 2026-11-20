@@ -262,7 +262,9 @@ async fn marking_a_message_unread_and_read_again_rerenders_its_chat() -> Result<
     assert_eq!(docs.len(), 1, "only the bridge crew's chat moved");
     let bridge = pages(&docs, BRIDGE);
     assert_eq!(
-        bridge.matches("msg--apple_messages unread").count(),
+        bridge
+            .matches("msg--apple_messages msg--chat unread")
+            .count(),
         1,
         "{bridge}"
     );

@@ -6,6 +6,7 @@ mod no_datalib_step;
 mod parent_gone;
 mod relative_root;
 mod run_report;
+mod serve;
 mod shared_root;
 mod step_log_offset;
 mod verbs;

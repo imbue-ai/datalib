@@ -89,6 +89,14 @@ the way the web client drives it ([`sync_drivers.py`](sync_drivers.py)).
 `:ingested_tng_test` runs the same driver through `datalib-dag`, so
 both are covered over the same corpus.
 
+**Free space.** The config the driver writes holds every step under
+200 MB free (its `[disk_space]` table, `DISK_FLOOR`), not the 10 GB a
+person's root defaults to, so the build runs on a nearly full disk.
+Under that floor the loop would wait for space a build never frees, so
+either driver fails at once with the loop's own words for the hold
+(`:sync_drivers_test`). A sync that is still unfinished after 30 minutes
+fails too, naming each step it was waiting on.
+
 ## The fixtures
 
 `P` is `datalib/backend/etl/providers`. Every fixture in the first
@@ -216,6 +224,7 @@ can agree by luck.
 | `//datalib/backend/datalib_step:step_tests` | `index_text`, the text search draws from each fixture document, as one snapshot per source |
 | each provider's own tests | its parse and render snapshots, over its own fixture |
 | `//datalib/ui:e2e_test` | the Playwright suite, against a root from `materialize_tng_root` |
+| `:sync_drivers_test` | both sync drivers fail at once, naming the floor, when the loop holds their steps for disk space |
 | `:tng_fuzz_test` (manual) | random clicks and killed steps, then a full sync compared with a sync from nothing |
 
 Snapshots are updated through `.update` targets, such as

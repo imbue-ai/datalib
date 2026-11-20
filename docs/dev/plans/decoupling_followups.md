@@ -104,7 +104,8 @@ old names have to be kept for a while.
 
 `WHATSAPP_BACKUP_DECRYPTION_KEY` and `SIGNAL_BACKUP_PASSPHRASE`, when the
 server was started with them, go to every step it runs
-(`steps_env`, `datalib/backend/http/src/supervisor.rs`), because the
+(`backup_secrets`, `datalib/backend/http/src/supervisor.rs`, handed to
+the loop as `ServeOptions::extra_env`), because the
 wizard may write a WhatsApp or Signal source without naming the
 variable in its params and `datalib-step` then falls back to these
 names. The config upgrade names them in an existing config's params,
@@ -117,29 +118,48 @@ nothing by name.
 ### 6. The server runs the loop in its own process
 
 **Now.** `datalib-http` does not start `datalib-dag`. It links the
-runner's crate (`datalib/backend/http/BUILD.bazel:118`) and runs the
-same loop in-process: it takes the runner lock, closes what a dead loop
-left, runs the launch's migrate pass and calls `Runner::serve`
-(`datalib/backend/http/src/supervisor.rs:225`, `:289`, `:494`). The
-CLI does the same in its own code, not identically.
+runner's crate (`datalib/backend/http/BUILD.bazel:122`) and calls
+`datalib_dag::supervisor::serve::run` in-process
+(`run`, `datalib/backend/http/src/supervisor.rs`): the same loop
+`datalib-dag serve` runs. That takes the runner lock, closes what a dead
+loop left, runs the prepare pass, then serves every request and wipe
+until stopped. What the server needs and no store holds, the loop says
+as `ServeEvent`s, which the server turns into its `Upgrade` (the
+prepare pass `/api/config` reports) and its `busy` flag.
 
-**Wanted.** `datalib-http` starts `datalib-dag` as a child process and
-talks to it only through what another client could use:
+**Wanted.** `datalib-http` starts `datalib-dag serve` as a child
+process. It may keep linking the crate as a client library (config
+parsing, writing request rows, reading the record); what goes is the
+loop running in its process. It talks to the child only through:
 - the request rows in `system/supervisor.sqlite`;
 - the record in the same file;
 - the announcements in `system/supervisor-listeners/`;
 - the run store `system/runs/runs.sqlite`;
-- `config.toml`.
+- `config.toml`;
+- the child's stderr, one `ServeEvent` per line: whether it holds the
+  lock, the prepare pass's progress, each busy period, and each write
+  it makes to the run store. That last one replaces the in-process
+  hook (`datalib_runs::after_every_write`, wired in
+  `datalib/backend/http/src/boot.rs:122`), which no longer fires once
+  the writes are another process's.
 
-**What has no cross-process form yet.**
-- The migrate pass's progress, which the UI shows per step
-  (`MigrateState`, `datalib/backend/http/src/supervisor.rs:57`). With
-  the redesign this becomes the `prepare` verb's progress.
-- Whether the loop is busy, and whether this process runs it
-  (`runs_the_loop`, `datalib/backend/http/src/supervisor.rs:69`).
-- Stopping the loop when the server shuts down. A child process gets
-  SIGTERM.
-- Who restarts the loop if it dies.
+**What is left to decide or build.**
+- The server finds the binary the way it finds `datalib-step`
+  (`datalib/backend/http/src/binaries.rs`), sends SIGTERM on shutdown
+  and kills the child after its grace, and restarts a child that died,
+  logging each restart at ERROR.
+- The two backup secrets reach the steps through `ServeOptions::extra_env`
+  in-process. A child is handed only an allowlist of the server's
+  environment, so they need a way across: `DATALIB_CHILD_ENV`, or item
+  5a done first.
+- The reset, purge and free-space handlers refuse when another process
+  runs the loop (`SyncControl::wipe`). With the loop always in another
+  process that check goes: any loop carries out a wipe row.
+- The tests that build a `SyncControl` directly
+  (`datalib/backend/http/tests/http_tests/support.rs:30`) and need a
+  loop take the `datalib-dag` binary as a `data` dep.
+- The log card reads "the server's lines"; the child's own lines are a
+  `dag` process's, so check the card still shows the loop's.
 
 ### 7. Datalib's constants live in the runner's crate
 
@@ -196,10 +216,12 @@ refuses the string `datalib-step` in `datalib/backend/dag/src` and in
 ## 10. The runner's runtime model
 
 The runner began as a batch runner and became a supervisor by being
-wrapped rather than rewritten. This is a review of how it runs, written
-2026-11-17, and the design it would have if it were written today. The
-section "How it works now" describes the tree on that date. Item 6
-above (the server running the loop in-process) is part of it.
+wrapped rather than rewritten. This is a review of how it runs, and the
+design it would have if it were written today. It was written
+2026-11-17 and checked against the tree on 2026-11-19, after the step
+protocol landed (#1894); the section "How it works now" describes the
+tree on that date. Item 6 above (the server running the loop
+in-process) is part of it.
 
 ### Why
 
@@ -226,43 +248,59 @@ proposes the design we would pick if we started from the requirements.
 7. Survive a crash: a dead loop's leftovers are closed by the next.
 8. Show what is happening and what happened: each step's state, logs,
    metrics, history.
-9. On a new build, ask each step to migrate its store before anything
-   else runs.
+9. Each time the loop starts, before a step runs, ask each step whose
+   program declares the `prepare` verb to make what it stored usable
+   by this build (`docs/dev/step_protocol.md` § Prepare).
 
 ### How it works now
 
 Paths are relative to the repo root.
 
-- **A pure core.** `tick()` (`datalib/backend/dag/src/supervisor/tick.rs:196`)
+- **A pure core.** `tick()` (`datalib/backend/dag/src/supervisor/tick.rs:200`)
   takes the graph's shape, the open requests and switches, and the
   facts, and returns every step's state plus the starts, stops and
   request closures to make. This is already the design we would want.
 - **A busy loop.** `Runner::serve`
-  (`datalib/backend/dag/src/supervisor/round.rs:212-800`, one function
+  (`datalib/backend/dag/src/supervisor/round.rs:213-805`, one function
   of about 600 lines) runs from the moment a request is taken on until
   none is left. That stretch is a **run**: it gets a run id, a pinned
   `DATALIB_DAG_NOW`, a fixed step environment, a row in the run store,
   and an end-of-run `RunReport`.
 - **An idle loop.** Between runs, `host::run_idle`
-  (`datalib/backend/dag/src/supervisor/host.rs:42`) waits for a request
+  (`datalib/backend/dag/src/supervisor/host.rs:41`) waits for a request
   or a wipe and starts a busy period. If a switch or the config moves
   while idle, it calls `Runner::settle`
-  (`datalib/backend/dag/src/supervisor/round.rs:1072`), which runs one
-  tick with nothing open so the record shows the change.
-- **Two hosts.** The server (`datalib/backend/http/src/supervisor.rs:225-555`)
-  and the CLI (`datalib/backend/dag/src/bin/datalib_dag.rs:44-450`)
-  each take the lock, close what a dead loop left
-  (`host::take_over`), run the migrate pass, build the step
-  environment, open the run store and call `serve`. They do these
-  things in their own code, and not identically.
-- **Two ways to do maintenance.** In the app, reset, purge and compact
-  are rows in the `wipes` table that the loop carries out
-  (`carry_out_wipes`, `round.rs:928`). From the CLI, `--reset` and
-  `--free-disk-space` take the lock themselves and call
-  `Runner::reset` and `Runner::shrink` directly
-  (`datalib/backend/dag/src/scheduler.rs:147`, `:228`), outside any
-  loop. The migrate pass is a third path: each host calls
-  `Runner::migrate` before its first loop.
+  (`datalib/backend/dag/src/supervisor/round.rs:1094`), which runs one
+  tick with nothing open so the record shows the change. Only the
+  server and the tests run `run_idle`; the CLI calls `serve` once and
+  exits.
+- **Two hosts.** `supervisor::serve::run`
+  (`datalib/backend/dag/src/supervisor/serve.rs`), which the server
+  calls in-process and `datalib-dag serve` runs, and the CLI's sync
+  command (`datalib/backend/dag/src/bin/datalib_dag.rs`). Each takes
+  the lock, closes what a dead loop left (`host::take_over`,
+  `host.rs:277`), runs the prepare pass, builds the step environment
+  (`host::step_env`, `host.rs:116`), opens the run store and calls
+  `serve`. They do these things in their own code, and not identically.
+- **Three ways to do maintenance.**
+  - In the app, reset, purge, compact and collect are rows in the
+    `wipes` table that the loop carries out (`carry_out_wipes`,
+    `round.rs:933`).
+  - From the CLI, `--reset` and `--free-disk-space` take the lock
+    themselves and call `Runner::reset` and `Runner::shrink` directly
+    (`datalib/backend/dag/src/scheduler.rs:150`, `:274`), outside any
+    loop.
+  - The prepare pass: each host calls `Runner::prepare`
+    (`scheduler.rs:234`) before its first loop, at every start. A step
+    that refuses is turned off with the marker `REFUSED_PREPARE`
+    (`scheduler.rs:399`), and a later start that does not refuse turns
+    it back on. `serve::run` asks one step at a time and says each
+    answer as a `ServeEvent`, which the server keeps in memory
+    (`Upgrade`, `datalib/backend/http/src/supervisor.rs:37`); the CLI's
+    sync runs it in one call and prints a line per step that needs
+    attention. Either
+    way the pass gets its own run in the run store, of kind
+    `RunKind::Migrate` (`host::prepare_start`, `host.rs:254`).
 
 ### Relics of the batch design
 
@@ -272,20 +310,20 @@ Paths are relative to the repo root.
    keyed on that accidental unit:
    - the run store's rows and logs;
    - `last_run` and `current_run.states` in the record
-     (`datalib/backend/dag/src/supervisor/record.rs:20-35`);
+     (`datalib/backend/dag/src/supervisor/record.rs:18-55`);
    - `DATALIB_DAG_NOW`, which is pinned at the start of the run. So a
      request that joins a run hours after it began gets an old "now".
    - the step environment, which is fixed for the run. So a config
-     edit to `log_level` or `checkpoint_cadence` does not reach steps
-     until the run ends (`datalib/backend/dag/README.md:215`).
+     edit to `log_level` or `[env]` does not reach steps until the run
+     ends (`datalib/backend/dag/README.md:239-241`).
 2. **Busy and idle are two loops.** Because the busy loop exits, the
    idle side needs its own way to update the record (`settle`), its
    own config-change handling, and a `Periods` trait for the hosts to
-   plug into (`host.rs:24`). At the end of every run, `serve` also
-   runs an extra "at rest" tick (`round.rs:745-759`) to leave the
+   plug into (`host.rs:23`). At the end of every run, `serve` also
+   runs an extra "at rest" tick (`round.rs:750-765`) to leave the
    record right for the idle period.
 3. **A report at the end of a batch.** `RunReport`, `StepReport` and
-   the `RunSummary` event (`round.rs:766-799`) exist so the CLI can
+   the `RunSummary` event (`round.rs:767-804`) exist so the CLI can
    print one line per step when the run finishes. In a loop that never
    has to finish, this report is about the busy period, not about
    anything the person asked for.
@@ -293,40 +331,46 @@ Paths are relative to the repo root.
    invoked again for each seal, so the loop separates a *pass* (one
    process) from the step *finishing* (once its producers settle). It
    holds each ended pass in `Slot::ended` until upstream is quiet
-   (`round.rs:478-535`), emits `PassEnd` and `StepFinish` separately,
+   (`round.rs:484-555`), emits `PassEnd` and `StepFinish` separately,
    and counts `failed_passes` so a failure that a later pass hid is
    still reported. All of this exists to make the result look like a
    single batch step.
 5. **State kept by graph index, then remapped.** Loop state is kept in
    vectors indexed by position in the graph. A config swap has to
    rebuild every vector with `carry`, `remap_consumed`,
-   `Slot::remapped` and `QueueLedger::remap` (`round.rs:300-405`), and
+   `Slot::remapped` and `QueueLedger::remap` (`round.rs:305-405`), and
    `LastWanted::Blocked` stores a step id just so it survives the swap
-   (`round.rs:97-108`). The README still says "the node set is fixed
-   before a run starts" (`datalib/backend/dag/README.md:7`), which has
-   not been true since config reload.
+   (`round.rs:102-134`).
 6. **Too many words for a step's state.** There are seven
    vocabularies, each from a different stage of the design:
    - `RunState` (`datalib/backend/dag/src/run_state.rs:28`);
-   - `StepStatus` (`datalib/backend/dag/src/scheduler.rs:379`);
-   - `StepState` / `StateKind` (`tick.rs:145`);
-   - `LastWanted` (`round.rs:101`);
-   - `LiveState` (`datalib/backend/runs/src/lib.rs:60`);
+   - `StepStatus` (`datalib/backend/dag/src/scheduler.rs:453`);
+   - `StepState` / `StateKind` (`tick.rs:149`);
+   - `LastWanted` (`round.rs:102`);
+   - `LiveState` (`datalib/backend/runs/src/lib.rs:61`);
    - `RequestStepPhase` (`datalib/backend/http/src/request_progress.rs:24`);
-   - `MigrateState` (`datalib/backend/http/src/supervisor.rs`).
+   - `PassState` (`datalib/backend/dag/src/supervisor/pass.rs:26`),
+     a step's place in the prepare pass or a compaction, plus the
+     server's `Upgrade::migrating` flag beside it.
 
    Only two questions need answers: what state is a step in now (the
    tick's output), and how did a process end (an invocation's
-   outcome).
+   outcome). The word "migrate" also outlived the verb: the prepare
+   pass's run is still `RunKind::Migrate`.
 7. **Operations outside the loop.** The CLI's reset and shrink, and
-   both hosts' migrate pass, call into the runner outside the loop and
-   need the root to themselves. So `--reset` is refused while the app
-   is up, and maintenance runs through two paths with their own tests.
+   both hosts' prepare pass, call into the runner outside the loop and
+   need the root to themselves. So `--reset` and `--free-disk-space`
+   are refused while the app is up (`acquire_or_explain`,
+   `datalib/backend/dag/src/bin/datalib_dag.rs:542`), and maintenance
+   runs through two paths with their own tests. The prepare pass's
+   progress is in the server's memory rather than the store, so item 6
+   cannot carry it to a child process as it stands.
 8. **A builder for a batch runner.** `Runner::new(..).sink(..).child_env(..).stop_on(..).reload_from(..)`
-   (`datalib/backend/dag/src/scheduler.rs:87-138`) is configured once
-   per run and thrown away. `StepRun::InProcess` and
-   `RetryPolicy` are part of the same API; `InProcess` is now used
-   only by tests.
+   (`datalib/backend/dag/src/scheduler.rs:90-140`) is configured once
+   per run and thrown away. `StepRun::InProcess`
+   (`datalib/backend/dag/src/step.rs:224`) and `RetryPolicy`
+   (`scheduler.rs:27`) are part of the same API; `InProcess` is now
+   used only by tests.
 
 ### The design from scratch
 
@@ -341,10 +385,11 @@ pieces already exist; the change is mainly what gets removed.
 
 | kind | tables | written by |
 |---|---|---|
-| **wanted** | `requests`, `turned_off`, `jobs` (reset, purge, compact, collect, migrate) | anyone |
-| **observed** | `steps` (reads, fingerprint, last success, needs-rerun), `sinks` (versions), `invocations` | the loop only |
+| **wanted** | `requests`, `turned_off`, `jobs` (reset, purge, compact, collect, prepare) | anyone |
+| **observed** | `steps` (reads, fingerprint, last success, needs-rerun), `sinks` (versions), `invocations`, `job_steps` | the loop only |
 
-`jobs` replaces `wipes` and also holds the migrate pass. The config
+`jobs` replaces `wipes` and also holds the prepare pass; `job_steps`
+replaces `wipe_steps` and the server's in-memory `Upgrade`. The config
 file is wanted state too: the loop reads it on `config changed`.
 
 #### The loop
@@ -392,14 +437,14 @@ config as it is then. `DATALIB_DAG_NOW` is open question 1.
 
 - `datalib_dag::supervisor::run(root, stop)` does everything a host
   does now: take the lock, take over from a dead loop, queue the
-  migrate job for a new build, and loop. The server calls it, and so
-  does `datalib-dag serve`.
+  prepare job, and loop. The server calls it, and so does
+  `datalib-dag serve`.
 - Every other CLI verb is a client. `datalib-dag sync`, `reset` and
   `free-disk-space` write a row and follow it to the end. When no
   loop is running, the CLI starts one inside its own process and stops
   it once nothing is open. So `--reset` no longer needs the root to
   itself.
-- The migrate pass is a job that the tick runs before any request
+- The prepare pass is a job that the loop queues each time it starts
   (open question 3).
 
 #### Streaming without passes
@@ -415,10 +460,11 @@ remains in the history as a failed invocation.
 
 #### Retries
 
-Retries move from inside an invocation into the tick. A failed
-invocation counts as an attempt, and backoff becomes a reason to wait
-(`Wait::Backoff(until)`). One consequence: a step waiting out a
-backoff no longer holds its lock or shows as Running.
+Retries move from inside an invocation (`invoke_with_retry`,
+`scheduler.rs:850`) into the tick. A failed invocation counts as an
+attempt, and backoff becomes a reason to wait (`Wait::Backoff(until)`).
+One consequence: a step waiting out a backoff no longer holds its lock
+or shows as Running.
 
 ### What stays
 
@@ -426,6 +472,8 @@ backoff no longer holds its lock or shows as Running.
   §"What the loop runs, and what makes a step stale", unchanged.
 - Versions, fingerprints, sinks and the P1 and P2 rules for sinks.
 - Locks, the disk floor, announcements over FIFOs, `runner-lock`.
+- The step protocol as `docs/dev/step_protocol.md` states it: declared
+  verbs, `--prepare` at every start and its four answers.
 - The puppet harness (`//datalib/backend/dag:supervisor_harness_test`).
   It already drives the loop as a person would through the store,
   which makes it the right test to change the loop under.
@@ -439,22 +487,23 @@ Each step ships alone, and the harness stays green throughout.
    now. This removes `settle`, `Periods` and the at-rest tick.
 2. **Key by step id.** This removes the remap code.
 3. **Everything goes through the mailbox.** Turn `wipes` into `jobs`
-   and add migrate. Make the CLI's reset and shrink write jobs. Put
-   both hosts on `supervisor::run`.
+   and add prepare, with its progress in `job_steps` instead of the
+   server's memory. Make the CLI's reset and shrink write jobs. Put
+   both hosts on `supervisor::run`. This is what item 6 needs.
 4. **Invocations and requests replace runs** in the run store, the
    record, the server's routes and the UI. This is the largest step.
    The run store is history, not data a person built, so the old rows
    can stay readable without being migrated; that needs deciding.
 5. **One state vocabulary per question.** Drop `RunReport`,
-   `StepStatus`, `LastWanted`, `PassEnd`/`StepFinish` and
-   `failed_passes`.
+   `StepStatus`, `LastWanted`, `PassEnd`/`StepFinish`,
+   `failed_passes` and `RunKind::Migrate`.
 6. **Retries in the tick.**
 
-This interacts with [`dag_and_step_decoupling.md`](dag_and_step_decoupling.md):
-there, the verbs become something a program declares
-(`[[programs]].verbs`) and `migrate` becomes `prepare`, sent at every
-start; here they become jobs. The two fit together: the loop runs a
-prepare job by invoking each step whose program declares the verb.
+The step protocol (#1894) already made verbs something a program
+declares (`[[programs]].verbs`) and sends `--prepare` at every start.
+Here those verbs become jobs: the loop runs a prepare job by invoking
+each step whose program declares the verb, as `Runner::prepare` does
+now outside the loop.
 
 ### Open questions
 
@@ -467,10 +516,14 @@ prepare job by invoking each step whose program declares the verb.
    group by run. Grouping by request matches what a person did; grouping
    by invocation matches what a process did. Before we choose, we need
    to know which one people look at.
-3. **Does migrate block every request, or only the steps it has not
-   reached?** Now it blocks everything, and the app disables every
-   Sync. As a job, it could hold only the steps it has yet to ask, the
-   way a wipe holds only its targets.
+3. **Does the prepare pass block every request, or only the steps it
+   has not reached?** Now it blocks everything: the server disables
+   every Sync (`ManageResponse::sync_paused`,
+   `datalib/backend/http/src/manage/mod.rs:266`) and a request opened
+   another way waits for the pass. Since #1894 the pass runs at every
+   start, not only after an upgrade, so that wait is paid at every
+   launch. As a job, it could hold only the steps it has yet to ask and
+   what reads them, the way a wipe holds only its targets.
 4. **Retries and locks.** With retries in the tick, a step backing off
    releases its locks. That is better for a shared rate limit, but it
    lets another step take the slot in between. Check whether any
@@ -487,6 +540,9 @@ prepare job by invoking each step whose program declares the verb.
    its own cursor. Open: a consumer waiting between seals is a live
    process, so it holds its locks and memory. Either streaming
    consumers take no budget slot, or the protocol gains a way to say
-   "idle, release my slot". Also, `keyword_index` reads files, so it
-   would start only after the whole download ends, and search fills in
-   only at the end of a long first sync.
+   "idle, release my slot". Also, each source's `embed` reads the grid
+   index's files (`reads = "files"`, `configs/dag_example.toml:132`),
+   and no writer of those may run beside it. With the index kept alive
+   for a whole sync, `embed` would start only once the index exits, so
+   search by meaning would fill in only at the end of a long first
+   sync.

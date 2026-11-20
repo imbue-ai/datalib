@@ -62,6 +62,7 @@ pub fn profile(
         chat_entity_kind,
         render_version: RENDER_VERSION,
         text_format,
+        layout: datalib_etl_chat_common::Layout::Conversation,
     }
 }
 

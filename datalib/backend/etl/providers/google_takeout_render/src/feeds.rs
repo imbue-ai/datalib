@@ -64,6 +64,7 @@ pub fn profile(chat_id: &str) -> RenderProfile {
         render_version: crate::render::RENDER_VERSION,
         // Each feed builds its markdown itself, escaping what it quotes.
         text_format: TextFormat::Markdown,
+        layout: datalib_etl_chat_common::Layout::Conversation,
     }
 }
 

@@ -424,7 +424,9 @@ render writes for a time whose source names no clock.
 Picking any other zone reads every stamp in that zone, whatever its
 offset (`parseStamp` in `dates.ts`, `parseInstant` in `timeView.ts`). Anything that formats a stamp goes through `timeView.ts`, and
 anything that draws one into the page itself (a grid, a document, the
-search field) draws it again when the view changes.
+search field) draws it again when the view changes. So does a chat's
+divider for each day (`decorateChatDays`), which falls where the day
+changes in the view's zone.
 
 - **text**: the instant in the view's zone, `Wed, Apr 15, 2026, 12:05`;
   a day, `Wed, Apr 15, 2026`, the same day wherever it is read. The

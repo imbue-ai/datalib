@@ -318,6 +318,40 @@ export function decorateDates(root: ParentNode, now = Date.now(), view = timeVie
   }
 }
 
+/** The day a stamp falls on in the view's zone, as a key that changes
+ *  when the day does and as the text a day divider shows. */
+export function dayOf(s: Stamp, view = timeView.value): { key: string; text: string } {
+  const { year, month, day } = s.kind === "day" ? s : wallClock(s, view.zone);
+  return {
+    key: `${year}-${p2(month)}-${p2(day)}`,
+    text: formatDay(year, month, day, view, "long"),
+  };
+}
+
+/** A divider before each chat message (`msg--chat`) whose day, in the
+ *  view's zone, is not the day of the chat message before it: where a day
+ *  ends depends on the reader's clock, which only the viewer knows. Drawn
+ *  anew on every call. */
+export function decorateChatDays(root: ParentNode, view = timeView.value): void {
+  for (const old of Array.from(root.querySelectorAll(".day-divider"))) old.remove();
+  let last: string | null = null;
+  for (const msg of Array.from(root.querySelectorAll<HTMLElement>(".msg--chat"))) {
+    const time = msg.querySelector<HTMLElement>("time.msg-ts[datetime]");
+    const s = time ? parseStamp(time.getAttribute("datetime") ?? "") : null;
+    if (!s) continue;
+    const day = dayOf(s, view);
+    if (day.key === last) continue;
+    last = day.key;
+    const divider = msg.ownerDocument.createElement("div");
+    divider.className = "day-divider";
+    divider.setAttribute("role", "separator");
+    const text = msg.ownerDocument.createElement("span");
+    text.textContent = day.text;
+    divider.append(text);
+    msg.before(divider);
+  }
+}
+
 /** The end of a span's clock-only text, where `el` is that end. */
 function spanEndText(el: HTMLElement, end: Stamp, view: TimeView): string | null {
   const span = el.parentElement;

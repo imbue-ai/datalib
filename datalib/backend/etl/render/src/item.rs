@@ -13,7 +13,9 @@ use datalib_schema::sections::{
 };
 
 use crate::html::escape_md_inline;
-use crate::message::{chip_link, message_stamp_text_html, timestamp_html, MessageHeader};
+use crate::message::{
+    chip_link, message_stamp_text_html, source_link, timestamp_html, MessageHeader,
+};
 
 /// What an item's piece says and shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +40,9 @@ pub struct Item {
     /// In the order they are drawn.
     pub reactions: Vec<Reaction>,
     pub replies: Option<Replies>,
+    /// A chat message that continues its author's run: drawn with no
+    /// header, under the first message's.
+    pub continues: bool,
 }
 
 /// How many replies a thread has upstream, and how many of them the
@@ -63,6 +68,7 @@ impl Item {
             link: None,
             reactions: Vec::new(),
             replies: None,
+            continues: false,
         }
     }
 
@@ -75,18 +81,39 @@ impl Item {
                 ts = self.stamp(),
                 body = self.body,
             ),
-            ItemForm::Message => {
+            ItemForm::Message | ItemForm::Chat => {
+                let chat = self.form == ItemForm::Chat;
                 let blocks = [
-                    Some(self.header()),
+                    Some(if chat && self.continues {
+                        self.continued()
+                    } else {
+                        self.header()
+                    }),
                     recipients_line(&self.addressed),
                     labels_line(&self.labels),
                     Some(self.body.clone()).filter(|b| !b.is_empty()),
-                    reactions_list(&self.reactions),
+                    if chat {
+                        reaction_pills(&self.reactions)
+                    } else {
+                        reactions_list(&self.reactions)
+                    },
                     self.replies.and_then(replies_line),
                 ];
                 blocks.into_iter().flatten().map(|b| b + "\n\n").collect()
             }
         }
+    }
+
+    /// What a message that continues a run shows in place of its header:
+    /// its time and its link, small, and no `##`, so the viewer finds no
+    /// header in it.
+    fn continued(&self) -> String {
+        let link = self
+            .link
+            .as_deref()
+            .map(|url| format!(" {}", source_link(url)))
+            .unwrap_or_default();
+        format!("<span class=\"msg-cont\">{}{link}</span>", self.stamp())
     }
 
     fn header(&self) -> String {
@@ -130,6 +157,7 @@ impl Item {
             replies_held: self.replies.map(|r| count(r.held)),
             addressed: addressed_json(&self.addressed),
             labels: labels_json(&self.labels),
+            continues: self.continues,
             class: None,
         }
     }
@@ -163,6 +191,7 @@ impl Item {
                 upstream: count(Some(upstream)),
                 held: count(row.replies_held),
             }),
+            continues: row.continues,
         })
     }
 }
@@ -220,18 +249,58 @@ fn reactions_list(reactions: &[Reaction]) -> Option<String> {
     let bullets: Vec<String> = reactions
         .iter()
         .map(|r| {
-            let who = match r.handle.as_deref().and_then(Handle::parse) {
-                Some(h) => chip_link(&r.name, &h),
-                None => escape_md_inline(&r.name),
-            };
             format!(
                 "- <span id=\"m-{uuid}\" data-section-uuid=\"{uuid}\">{emoji} {who}</span>",
                 uuid = r.uuid,
                 emoji = escape_md_inline(&r.emoji),
+                who = reactor(r),
             )
         })
         .collect();
     (!bullets.is_empty()).then(|| bullets.join("\n"))
+}
+
+/// One pill per emoji, saying how many reacted with it, in the order the
+/// reactions are drawn. Each reactor is in the pill, anchored by the
+/// reaction's own uuid so its grid row's click lands on it; the viewer
+/// shows them on hover.
+fn reaction_pills(reactions: &[Reaction]) -> Option<String> {
+    let mut emojis: Vec<(&str, Vec<&Reaction>)> = Vec::new();
+    for r in reactions {
+        match emojis.iter_mut().find(|(e, _)| *e == r.emoji) {
+            Some((_, rs)) => rs.push(r),
+            None => emojis.push((&r.emoji, vec![r])),
+        }
+    }
+    let pills: Vec<String> = emojis
+        .into_iter()
+        .map(|(emoji, rs)| {
+            let who: Vec<String> = rs
+                .iter()
+                .map(|r| {
+                    format!(
+                        "<span id=\"m-{uuid}\" data-section-uuid=\"{uuid}\">{}</span>",
+                        reactor(r),
+                        uuid = r.uuid,
+                    )
+                })
+                .collect();
+            format!(
+                "<span class=\"msg-reaction\">{emoji} {n}<span class=\"msg-reactors\"> {who}</span></span>",
+                emoji = escape_md_inline(emoji),
+                n = rs.len(),
+                who = who.join(", "),
+            )
+        })
+        .collect();
+    (!pills.is_empty()).then(|| pills.join(" "))
+}
+
+fn reactor(r: &Reaction) -> String {
+    match r.handle.as_deref().and_then(Handle::parse) {
+        Some(h) => chip_link(&r.name, &h),
+        None => escape_md_inline(&r.name),
+    }
 }
 
 fn replies_line(replies: Replies) -> Option<String> {
@@ -317,6 +386,50 @@ mod tests {
             "<span class=\"msg-replies\">3 replies · 2 not mirrored yet</span>"
         );
         assert_eq!(blocks[6], "");
+    }
+
+    /// In a chat, a run's later message has no header but its time and
+    /// link, and reactions are one pill per emoji naming who reacted.
+    #[test]
+    fn a_chat_message_continues_a_run_and_counts_its_reactions() {
+        let spock = |uuid: &str, emoji: &str, name: &str| Reaction {
+            uuid: uuid.into(),
+            emoji: emoji.into(),
+            name: name.into(),
+            handle: None,
+        };
+        let item = Item {
+            form: ItemForm::Chat,
+            continues: true,
+            reactions: vec![
+                spock("r1", "👍", "Picard"),
+                spock("r2", "👍", "Riker"),
+                spock("r3", "🖖", "Spock"),
+            ],
+            ..riker()
+        };
+        let drawn = item.draw();
+        let blocks: Vec<&str> = drawn.split("\n\n").collect();
+        assert!(!drawn.contains("## "), "{drawn}");
+        assert!(
+            blocks[0].starts_with("<span class=\"msg-cont\"><time class=\"msg-ts\""),
+            "{drawn}"
+        );
+        assert!(blocks[0].ends_with("noreferrer\">↗</a></span>"), "{drawn}");
+        assert_eq!(
+            blocks[4],
+            "<span class=\"msg-reaction\">👍 2<span class=\"msg-reactors\"> \
+             <span id=\"m-r1\" data-section-uuid=\"r1\">Picard</span>, \
+             <span id=\"m-r2\" data-section-uuid=\"r2\">Riker</span></span></span> \
+             <span class=\"msg-reaction\">🖖 1<span class=\"msg-reactors\"> \
+             <span id=\"m-r3\" data-section-uuid=\"r3\">Spock</span></span></span>"
+        );
+        let first = Item {
+            continues: false,
+            ..item.clone()
+        };
+        assert!(first.draw().starts_with("## [Will Riker]"));
+        assert_eq!(Item::of_row(&item.row("doc", 0, None)), Some(item));
     }
 
     /// A message with nothing but a header is its header; one with no

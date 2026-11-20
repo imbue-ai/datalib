@@ -109,6 +109,7 @@ pub fn profile_for(network: &str) -> RenderProfile {
         stamp_precision: ids::STAMP_PRECISION,
         render_version: RENDER_VERSION,
         text_format: TextFormat::Markdown,
+        layout: datalib_etl_chat_common::Layout::Chat,
     }
 }
 

@@ -72,7 +72,6 @@ import {
 } from "./chipActions";
 import {
   SEARCH,
-  type AccountsMap,
   type ColumnSpec,
   type DocIndexState,
   type RowsResponse,
@@ -158,7 +157,7 @@ import { pushToast } from "@/toasts";
 import type { CardCtx } from "./types";
 import { TEXT_ONLY_GRID } from "@/grid/textOnly";
 
-const { fetchAccounts, fetchGroups, fetchIndexState, fetchRows, muteProblems } = useApi();
+const { fetchGroups, fetchIndexState, fetchRows, muteProblems } = useApi();
 
 /// A row of whichever table the card pages: a search row's fields where
 /// it is one, and nothing is assumed of any of them.
@@ -323,7 +322,6 @@ const unfinished = ref<string | null>(null);
 const searchError = ref<string | null>(null);
 // Free text asked of a root no sync has built a search index for yet.
 const searchIndexMissing = ref(false);
-const accounts = ref<AccountsMap>({});
 
 // --- search index state (the Indexed / Embedded columns) ------------
 // Answers for the documents behind the rows on screen, gathered as the
@@ -839,15 +837,16 @@ function buildFilterCtx(colId: string, data: Row): FilterCtx | null {
   const raw = row[spec.search.field];
   if (raw == null || raw === "") return null;
   const value = String(raw);
-  // A uuid rides with the name a person reads, as `slug-uuid`: an
-  // account's from the accounts map, a conversation's from its own cell.
+  // A uuid rides with the name a person reads, as `slug-uuid`: a
+  // conversation's from its own cell.
   const shown = row[colId];
   const label =
-    colId === "author_ref" || colId === "account"
-      ? (accounts.value[value]?.label ?? "")
-      : spec.search.field !== colId && typeof shown === "string"
-        ? shown
-        : "";
+    colId !== "author_ref" &&
+    colId !== "account" &&
+    spec.search.field !== colId &&
+    typeof shown === "string"
+      ? shown
+      : "";
   return {
     key: spec.search.key,
     header: spec.header,
@@ -855,11 +854,6 @@ function buildFilterCtx(colId: string, data: Row): FilterCtx | null {
     // A handle is matched whole bare; a name only quoted.
     whole: spec.search.partial === true && handleKind(value) === null,
   };
-}
-
-function accountLabel(uuid: string): string {
-  if (!uuid) return "";
-  return accounts.value[uuid]?.label ?? uuid;
 }
 
 let inflight: AbortController | null = null;
@@ -963,7 +957,9 @@ async function runSearch(q: string, refresh = false) {
     : seekingSelection
       ? sel.value
       : null;
-  loading.value = true;
+  // A refresh of the rows on screen keeps them live: they are still the
+  // answer, and a click on one still lands while the new answer is out.
+  if (!again) loading.value = true;
   error.value = null;
   searchError.value = null;
   searchIndexMissing.value = false;
@@ -1115,7 +1111,7 @@ async function runGrouped(q: string, refresh: boolean) {
   const was = grouped;
   const again =
     refresh && was !== null && was.q === q && was.sort === sort && was.by.join() === by.join();
-  loading.value = true;
+  if (!again) loading.value = true;
   error.value = null;
   searchError.value = null;
   searchIndexMissing.value = false;
@@ -1482,14 +1478,7 @@ function applyPatch(patch: RowPatch<Row>, order: Row[]) {
   });
 }
 
-onMounted(async () => {
-  try {
-    accounts.value = await fetchAccounts();
-  } catch {
-    /* accounts mapping is best-effort */
-  }
-  runSearch(query.value);
-});
+onMounted(() => runSearch(query.value));
 
 const hint = computed(() => props.placeholder ?? "search…");
 
@@ -1535,29 +1524,22 @@ function openInNewTab(row: Row) {
   window.open(href, "_blank", "noopener");
 }
 
-/// A cell's text with the account name where the value is an account's
-/// uuid.
-const accountFormatter: Formatter<Row> = (_r, _c, value) => {
-  const v = typeof value === "string" ? value : "";
-  const label = accountLabel(v);
-  return { text: label, toolTip: v && label !== v ? v : "" };
-};
+/// A cell's text, never its markup.
+const textFormatter: Formatter<Row> = (_r, _c, value) => ({
+  text: typeof value === "string" ? value : "",
+});
 
 /// The Author cell: a chip where the author has a handle, drawn from
-/// what `people` has answered so far; otherwise the name as shown, with
-/// an account's uuid read as the account's name.
+/// what `people` has answered so far; otherwise the name as shown.
 const authorFormatter: Formatter<Row> = (_r, _c, _v, _col, row) => {
   const ref = row.author_ref;
   const handle = ref ? handleFromUri(ref.id) : null;
   if (handle && ref) return chipCell(handle, ref.label, people.lookup(handle), canLinkHandles());
-  const v = row.author ?? "";
-  const label = accountLabel(v);
-  return { text: label, toolTip: v && label !== v ? v : "" };
+  return { text: row.author ?? "" };
 };
 
 /// What this card adds to the applet's declared columns: the widths and
-/// hovers a type cannot know, the account-name formatting on the
-/// author/account cells (the accounts map is the browser's), and the
+/// hovers a type cannot know, the chips in the author cells, and the
 /// two-line clamp on the text.
 const columnOverrides: Record<string, Partial<Column<Row>>> = {
   source_ref: { width: 150 },
@@ -1585,15 +1567,15 @@ const columnOverrides: Record<string, Partial<Column<Row>>> = {
     width: 130,
     formatter: authorFormatter,
     grouping: {
-      getter: (row: Row) => accountLabel(row.author ?? ""),
+      getter: (row: Row) => row.author ?? "",
       formatter: groupTitle("Author"),
       collapsed: false,
     },
   },
   account: {
-    formatter: accountFormatter,
+    formatter: textFormatter,
     grouping: {
-      getter: (row: Row) => accountLabel(row.account ?? ""),
+      getter: (row: Row) => row.account ?? "",
       formatter: groupTitle("Account"),
       collapsed: false,
     },
@@ -2227,7 +2209,8 @@ function createGrid() {
     rowIndexOf: (uuid: string) => bundle.dataView.getRowById(uuid) ?? null,
     // Load pages until the row is held, as scrolling to it would.
     seek,
-    // A search, a page, or a group's page on its way.
+    // A search, a page, or a group's page on its way; not a refresh of
+    // the rows on screen, which stay usable while it is.
     busy: () =>
       loading.value ||
       loadingMore !== null ||

@@ -1523,6 +1523,10 @@ fn record_states(
         let entry = state.steps.entry(id(i).to_string()).or_default();
         entry.state = Some(st.into());
         entry.state_detail = detail;
+        entry.waiting_for = match st {
+            Row::Waiting(w) => Some(w.into()),
+            _ => None,
+        };
         entry.turned_off_by = turned_off_by;
         entry.requests = serving(i);
     }
@@ -1597,6 +1601,7 @@ fn record_deferred(graph: &Graph, state: &mut Record, deferred: &BTreeMap<String
             .collect();
         let waiting = !requests.is_empty();
         st.state = waiting.then_some(super::tick::StateKind::Waiting);
+        st.waiting_for = waiting.then_some(super::tick::WaitKind::Config);
         st.state_detail = waiting.then(|| {
             "waiting for the sync in progress to take on a config that has this step".to_string()
         });
@@ -1787,7 +1792,7 @@ mod tests {
     use crate::step::{StepRun, StepSpec};
     use crate::supervisor::record::StepRecord;
     use crate::supervisor::reload::GraphSource;
-    use crate::supervisor::tick::StateKind;
+    use crate::supervisor::tick::{StateKind, WaitKind};
     use crate::EventSink;
 
     /// A purge's last stop before `remove_dir_all`. A Mac's disk ignores
@@ -2140,6 +2145,7 @@ mod tests {
         })
         .await;
         assert_eq!(c.requests, [later.as_str()]);
+        assert_eq!(c.waiting_for, Some(WaitKind::Config));
         assert_eq!(t.runs(2), 0, "c waits for the step the config dropped");
 
         t.go.store(true, Ordering::SeqCst);
@@ -2179,6 +2185,7 @@ mod tests {
             st.state == Some(StateKind::Waiting)
         })
         .await;
+        assert_eq!(a.waiting_for, Some(WaitKind::DiskSpace), "{a:?}");
         assert!(
             a.state_detail
                 .as_deref()
@@ -2197,6 +2204,11 @@ mod tests {
         running.await.unwrap().unwrap();
         assert_eq!(outcome(&other, &id).await, Some(Some(RequestOutcome::Done)));
         assert_eq!(t.runs(0), 2, "stopped once, then run to the end");
+        let a = crate::supervisor::record::recorded(t.root.path()).await;
+        assert_eq!(
+            a.steps["a/raw"].waiting_for, None,
+            "a step no longer waiting says it waits for nothing"
+        );
     }
 
     /// A floor no disk can meet from the start: the step never starts,
@@ -2215,10 +2227,11 @@ mod tests {
         let other = Store::open(t.root.path()).await.unwrap();
         let id = other.open_request(&["a/raw".into()], "ui").await.unwrap();
         let running = t.serve(graph.clone(), config.clone());
-        until_recorded(t.root.path(), "a/raw", "waiting for disk", |st| {
+        let a = until_recorded(t.root.path(), "a/raw", "waiting for disk", |st| {
             st.state == Some(StateKind::Waiting)
         })
         .await;
+        assert_eq!(a.waiting_for, Some(WaitKind::DiskSpace), "{a:?}");
         assert!(
             t.events.logged("a/raw", "waiting for disk space: "),
             "the step's log says why"
