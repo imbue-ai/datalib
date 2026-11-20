@@ -440,6 +440,8 @@ impl Fakes {
     }
 }
 
+// A test harness has no progress display for a line on stderr to corrupt.
+#[allow(clippy::disallowed_macros)]
 impl Drop for Fakes {
     fn drop(&mut self) {
         // A failing test's diagnosis usually starts with what the fakes
