@@ -45,6 +45,13 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
             }
             let shape = datalib_etl_render::grid_index::schema_hash();
             ask_for_a_rerun_if(env, emitter, &store, &shape).await?;
+            if datalib_etl_render::grid_index::lacks_an_index(&store).await? {
+                tracing::info!(
+                    step = %env.step,
+                    "prepare: the grid index lacks an index this build reads by; it needs a rerun"
+                );
+                emitter.needs_rerun();
+            }
             if search_index_is_stale(env, data_root).await? {
                 tracing::info!(
                     step = %env.step,
@@ -894,7 +901,9 @@ mod tests {
         assert!(ask().await, "an older build's shape");
     }
 
-    /// The same for the grid index, whose store sits at its own fixed path.
+    /// The same for the grid index, whose store sits at its own fixed path;
+    /// and an index made before one this build reads by asks for the run
+    /// that adds it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_grid_index_in_another_shape_asks_for_a_rerun() {
         let root = tempfile::tempdir().unwrap();
@@ -910,24 +919,23 @@ mod tests {
         assert!(!ask().await, "no index yet");
 
         let db = datalib_core::layout::grid_index_db(root.path());
-        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
-        let pool = plain_pool(&db).await;
-        datalib_store_meta::write(
-            &pool,
-            StoreKind::GridIndex,
-            &datalib_etl_render::grid_index::schema_hash(),
-            Versions::default(),
-        )
-        .await
-        .unwrap();
-        sqlx::query("SELECT dolt_commit('-Am', 'an index')")
-            .execute(&pool)
-            .await
-            .unwrap();
-        pool.close().await;
+        let edit = |sql: &'static str| {
+            let db = db.clone();
+            async move {
+                let pool = datalib_etl_render::grid_index::open_index(&db)
+                    .await
+                    .unwrap();
+                sqlx::query(sql).execute(&pool).await.unwrap();
+                pool.close().await;
+            }
+        };
+        edit("SELECT 1").await;
         assert!(!ask().await, "this build's shape");
 
-        written_by_an_older_build(&db).await;
+        edit("DROP INDEX markdowns_searchable").await;
+        assert!(ask().await, "made before an index this build reads by");
+
+        edit("UPDATE _datalib_meta SET value = 'an older shape' WHERE key = 'schema_hash'").await;
         assert!(ask().await, "an older build's shape");
     }
 
