@@ -1,0 +1,18 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_tree_snapshot.rs
+expression: text
+---
+Address book "Borg"  00000000-0000-8011-8429-37952155b9dc [place]
+  Contact "drone.4.of.12@unimatrix01.borg"  00000000-0000-8140-88d9-42badf1b195b [read]
+  Contact "Seven of Nine"  00000000-0000-8acb-9e72-ef58e1a96813 [read]
+  Contact "Hugh"  00000000-0000-8c51-a4b4-dde335468f6c [read]
+  Contact "Locutus of Borg"  00000000-0000-8f5b-ab9b-f6b9fbf217b5 [read]
+Address book "Engineering"  00000000-0000-831c-bea4-edecb1e09549 [place]
+  Contact "Geordi La Forge"  00000000-0000-8d78-9232-e6b0deeebfb7 [read]
+Address book "Bridge"  00000000-0000-8ef3-9b71-8e5cad3e9dff [place]
+  Contact "Jean-Luc Picard"  00000000-0000-81e2-8596-1ee8f9640d13 [read]
+    also under 00000000-0000-829a-bb9d-4c1b203d3251 (Contact group)
+  Contact "William T. Riker"  00000000-0000-8b00-b38c-a2a290dad572 [read]
+    also under 00000000-0000-829a-bb9d-4c1b203d3251 (Contact group)
+  Contact group "Senior Staff"  00000000-0000-829a-bb9d-4c1b203d3251 [read] [place]
+  Contact "Worf"  00000000-0000-85d8-ac4b-9c4472cee5ea [read]

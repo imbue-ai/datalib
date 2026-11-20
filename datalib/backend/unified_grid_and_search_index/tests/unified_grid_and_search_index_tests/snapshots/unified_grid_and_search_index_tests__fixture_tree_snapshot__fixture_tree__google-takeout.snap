@@ -1,0 +1,78 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_tree_snapshot.rs
+expression: text
+---
+Google Voice Conversation "Jean-Luc Picard"  00000000-0000-811b-999e-be378270a4c8 [read] [place]
+  Google Voice Message  0b50188d-4280-875d-b6ae-81fe30608308
+  Google Voice Message  0b50188e-a210-834f-a043-6506959b931b
+  Google Voice Message  0b501890-01a0-8621-aed0-ae4ef59b0e09
+  Google Voice Message  0b501dea-8d00-8ed9-8a44-2b8899d19c0e
+Google Voice Conversation "+12025550190"  00000000-0000-819a-843b-b8b8c4ffdc90 [read] [place]
+  Google Voice Message  0b5028a5-2200-8788-8ea2-a11c5b54142e
+YouTube History "YouTube history"  00000000-0000-825b-8782-6b584a2e75c1 [read] [place]
+  YouTube Watch  019e93f7-4788-85a6-87ec-fe8e18d21afb
+  YouTube Watch  019e9b16-7200-8451-902b-b529e61352c5
+  YouTube Watch  019e9da9-a000-8828-a961-c92f128abecf
+Play Books Book "The Art of Diplomacy"  00000000-0000-842f-b9a6-cc14dbeb0fbc [read] [place]
+  Note  00000000-0000-8905-844e-7082704a238c
+  Play Books Note  0b4f1c5b-2fe0-8b30-92c2-f1cd8ee5597d
+  Play Books Highlight  0b4f9496-4d00-86aa-8e70-e05f1b060f1d
+  Play Books Bookmark  0b4fe7e5-82a0-81c7-af25-afec47d51229
+Google Maps Activity "Google Maps"  00000000-0000-84b4-80af-50ab120b27f4 [read] [place]
+  Google Maps Saved Place  019b8805-3000-86e6-9960-620c35b8c1b8
+  Google Maps Saved Place  019c5b29-ec00-8402-b0a9-1e1af476e5b1
+  Google Maps Saved Place  019ca869-5000-8c1e-8c4a-e9f5104df6a9
+  Google Maps Review  019d7bfb-e900-8689-b06f-03ee09f0819c
+  Google Maps Review  019de88f-5200-8106-81bc-0461c67fa1d5
+  Google Maps Review  019e8ef6-cec0-89e5-9c9f-538486290dbd
+  Google Maps Photo  019e941d-2ac0-8086-8756-df018957d9d2
+Google Voice Conversation "Lieutenant Commander Geordi La Forge, Chief Engineer"  00000000-0000-858d-8592-42d8db3d75d5 [read] [place]
+  Google Voice Message  0b502d42-29c0-8a93-9415-026aee9ec1bd
+Google Chat "Jean-Luc Picard, William Riker"  00000000-0000-8841-8b6d-116feade3563 [read] [place]
+  Google Chat Reaction  00000000-0000-84e9-99d2-2044bf06e053
+  Google Chat Message  0194f4c9-3698-8368-9caa-de73830de593
+  Google Chat Message Version  0194f4c9-3698-843e-8c00-2bb666b7355c
+  Google Chat Message  0195683a-d140-87f9-bdf6-234da6d6880c
+Google Maps List "Away team favourites"  00000000-0000-885c-86c6-d4a3cb9a45c2 [read] [place]
+  Google Maps Saved Item  00000000-0000-8527-9614-6e93f69d454f
+  Google Maps Saved Item  00000000-0000-8b15-b2ef-f4042d79f39c
+  Description  00000000-0000-8f2d-8a6d-e1c18031f808
+Play Books Book "Tales of the Picard Maneuver"  00000000-0000-886c-849f-4206f438cee1 [read] [place]
+  Note  00000000-0000-85a3-9aca-5f6858ef1c97
+  Play Books Listening Position  0b4f788c-9100-8e44-b7d7-f3f6cbaad258
+Gemini Activity "Gemini"  00000000-0000-88ab-b54c-6183150810df [read] [place]
+  Gemini Response  019c5d7b-bf88-8170-aa67-ff5dba6a09b2
+  Gemini Prompt  019c5d7b-bf88-8ade-b4de-09eb0cc9b339
+  Gemini Response  019cb47b-37a0-8062-8af5-e9ae30432d33
+  Gemini Prompt  019cb47b-37a0-8569-a994-f8d76ad88c90
+  Gemini Prompt  019d5ea4-0220-8071-872a-454306cb7e22
+  Gemini Response  019d5ea4-0220-84d4-9b5a-34be1729073e
+My Maps Map "Away missions"  00000000-0000-8911-b4f4-e7022a921136 [read] [place]
+  My Maps Shape  00000000-0000-80b4-8a03-0f6e3ccf8698
+  Description  00000000-0000-843f-84f8-5ceabd35f3d3
+  My Maps Pin  00000000-0000-8789-b1a0-7bd4d0a1b1a2
+  My Maps Line  00000000-0000-89e5-9f67-a49777419264
+  My Maps Pin  00000000-0000-8c06-afb1-6e879c3bf3e8
+Google Voice Conversation "Group Conversation"  00000000-0000-89f3-bd53-77e4883722ea [read] [place]
+  Google Voice Message  0b50324d-0e80-8f77-b992-697e37f1313b
+  Google Voice Message  0b50324e-e340-8ff5-ad85-73a0a4b3a34d
+Google Voice Conversation "Wesley Crusher"  00000000-0000-8a29-a97a-3aa759a898ef [read] [place]
+  Google Voice Message  0b502347-d780-87b9-9615-14926b2ecdf0
+Google Voice Conversation "+12025550147"  00000000-0000-8a5c-92c1-f761ed74e325 [read] [place]
+  Google Voice Message  0b502cef-c400-8eae-b531-4c683f6e6977
+Google Maps List "Shore leave"  00000000-0000-8c4c-ac1c-6428fa2456b3 [read] [place]
+  Google Maps Saved Item  00000000-0000-8558-8d0e-597e27582a57
+  Google Maps Saved Item  00000000-0000-8589-a64c-07977753e9d7
+  Google Maps Saved Item  00000000-0000-8991-b7f0-ebe11cfa469d
+YouTube Subscriptions "YouTube subscriptions"  00000000-0000-8cce-a52f-e56db2f9fc70 [read] [place]
+  YouTube Subscription  00000000-0000-88ec-afae-edb151ee18be
+  YouTube Subscription  00000000-0000-8aff-972c-999e6dfd57d8
+  YouTube Subscription  00000000-0000-8f99-9bba-5bb414fb6eb3
+Google Chat "Ten Forward regulars"  00000000-0000-8e5f-8eb1-967f63ffb4eb [read] [place]
+  Google Chat Message  019573e8-ee00-8ccc-bca0-7b369a4046d2
+  Google Chat Message  019573ed-81e0-850e-823e-0bd667fb26ce
+  Google Chat Message Version  019573ed-81e0-85f8-aa56-75303382a980
+  Google Chat Message  01957946-3880-80c5-9801-8f9e41ad216c
+  Google Chat Message  01957dfe-b780-8745-b772-ee23e83e0948
+Google Voice Conversation "Lieutenant Worf, Son of Mogh, Chief of Security"  00000000-0000-8ee7-a23a-b6a9b64eb3fb [read] [place]
+  Google Voice Message  0b503713-4920-867c-9ccd-20aa374a86f4

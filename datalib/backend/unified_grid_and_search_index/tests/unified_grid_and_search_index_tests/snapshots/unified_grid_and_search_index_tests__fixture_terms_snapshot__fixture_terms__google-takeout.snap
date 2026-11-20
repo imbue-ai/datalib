@@ -1,0 +1,283 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_terms_snapshot.rs
+expression: source.render()
+---
+00000000-0000-811b-999e-be378270a4c8  Google Voice Conversation
+  title: Jean-Luc Picard
+  participant: tel:+12025550101
+  subject: tel:+12025550101
+0b50188d-4280-875d-b6ae-81fe30608308  Google Voice Message
+  from: tel:+12025550101
+  to: me:self
+  author: Jean-Luc Picard
+  upstream_id: 6978700b-ab8e-59c5-9c0c-033cfffb1f34
+0b50188e-a210-834f-a043-6506959b931b  Google Voice Message
+  from: me:self
+  author: Me
+  upstream_id: 1865ae6d-4a3c-5064-9445-59322960fa1b
+0b501890-01a0-8621-aed0-ae4ef59b0e09  Google Voice Message
+  from: tel:+12025550101
+  to: me:self
+  author: Jean-Luc Picard
+  upstream_id: 277c030b-72f5-5f8b-9d26-834e392aef4b
+0b501dea-8d00-8ed9-8a44-2b8899d19c0e  Google Voice Message
+  from: tel:+12025550101
+  to: me:self
+  author: Jean-Luc Picard
+  upstream_id: a9854a2f-942f-5740-83a4-d1182f116290
+00000000-0000-819a-843b-b8b8c4ffdc90  Google Voice Conversation
+  title: +12025550190
+  participant: tel:+12025550190
+  subject: tel:+12025550190
+0b5028a5-2200-8788-8ea2-a11c5b54142e  Google Voice Message
+  from: tel:+12025550190
+  to: me:self
+  author: Ferengi Commerce Authority
+  upstream_id: dbb16075-01d6-59e7-a273-4c9228028549
+00000000-0000-825b-8782-6b584a2e75c1  YouTube History
+  title: YouTube history
+  author: Me
+019e93f7-4788-85a6-87ec-fe8e18d21afb  YouTube Watch
+  from: me:self
+  author: Me
+  upstream_id: 9f1496a9-58d4-5718-8762-d3f1cbdc4fe0
+019e9b16-7200-8451-902b-b529e61352c5  YouTube Watch
+  from: me:self
+  author: Me
+  upstream_id: a65b5cfd-911c-51ec-8dcd-87c45cc8a2b7
+019e9da9-a000-8828-a961-c92f128abecf  YouTube Watch
+  from: me:self
+  author: Me
+  upstream_id: 6151578d-5375-56bb-ad36-218693bf6747
+00000000-0000-842f-b9a6-cc14dbeb0fbc  Play Books Book
+  title: The Art of Diplomacy
+  author: Me
+00000000-0000-8905-844e-7082704a238c  Note
+  author: Me
+0b4f1c5b-2fe0-8b30-92c2-f1cd8ee5597d  Play Books Note
+  from: me:self
+  author: Me
+  upstream_id: 51168358-4989-5683-bc50-eff6cb9c3b8c
+0b4f9496-4d00-86aa-8e70-e05f1b060f1d  Play Books Highlight
+  from: me:self
+  author: Me
+  upstream_id: 894e6f25-b696-5890-9e58-d56c1f6660ba
+0b4fe7e5-82a0-81c7-af25-afec47d51229  Play Books Bookmark
+  from: me:self
+  author: Me
+  upstream_id: 8646d607-fae9-5dad-aac6-69006b1467ca
+00000000-0000-84b4-80af-50ab120b27f4  Google Maps Activity
+  title: Google Maps
+  author: Me
+019b8805-3000-86e6-9960-620c35b8c1b8  Google Maps Saved Place
+  from: me:self
+  author: Me
+  upstream_id: f5507805-d439-500d-a5ba-3b8f620f294c
+019c5b29-ec00-8402-b0a9-1e1af476e5b1  Google Maps Saved Place
+  from: me:self
+  author: Me
+  upstream_id: 51034cf7-33c6-51fe-9c45-9c0106f1d4d1
+019ca869-5000-8c1e-8c4a-e9f5104df6a9  Google Maps Saved Place
+  from: me:self
+  author: Me
+  upstream_id: 094836b7-d04c-578b-b901-175d54feca38
+019d7bfb-e900-8689-b06f-03ee09f0819c  Google Maps Review
+  from: me:self
+  author: Me
+  upstream_id: b92ef672-05ef-56d4-a848-848ed17f9e72
+019de88f-5200-8106-81bc-0461c67fa1d5  Google Maps Review
+  from: me:self
+  author: Me
+  upstream_id: 8966bb64-3f48-5579-af63-74d8b2801abc
+019e8ef6-cec0-89e5-9c9f-538486290dbd  Google Maps Review
+  from: me:self
+  author: Me
+  upstream_id: b5f59249-a271-5744-8e83-440d7a2a3922
+019e941d-2ac0-8086-8756-df018957d9d2  Google Maps Photo
+  from: me:self
+  author: Me
+00000000-0000-858d-8592-42d8db3d75d5  Google Voice Conversation
+  title: Lieutenant Commander Geordi La Forge, Chief Engineer
+  subject: tel:+12025550153
+0b502d42-29c0-8a93-9415-026aee9ec1bd  Google Voice Message
+  from: tel:+12025550153
+  author: Lieutenant Commander Geordi La Forge, Chief Engineer
+  upstream_id: 0d18490f-618d-5ec5-89ac-829bc22f3ea4
+00000000-0000-8841-8b6d-116feade3563  Google Chat
+  title: Jean-Luc Picard, William Riker
+  participant: email:picard@enterprise.starfleet
+  participant: email:riker@enterprise.starfleet
+  subject: email:picard@enterprise.starfleet
+  subject: email:riker@enterprise.starfleet
+00000000-0000-84e9-99d2-2044bf06e053  Google Chat Reaction
+  from: email:riker@enterprise.starfleet
+  author: William Riker
+0194f4c9-3698-843e-8c00-2bb666b7355c  Google Chat Message Version
+  from: email:picard@enterprise.starfleet
+  author: Jean-Luc Picard
+0194f4c9-3698-8368-9caa-de73830de593  Google Chat Message
+  from: email:picard@enterprise.starfleet
+  label: Starred
+  author: Jean-Luc Picard
+0195683a-d140-87f9-bdf6-234da6d6880c  Google Chat Message
+  from: email:riker@enterprise.starfleet
+  author: William Riker
+00000000-0000-885c-86c6-d4a3cb9a45c2  Google Maps List
+  title: Away team favourites
+  author: Me
+00000000-0000-8f2d-8a6d-e1c18031f808  Description
+  from: me:self
+  author: Me
+00000000-0000-8527-9614-6e93f69d454f  Google Maps Saved Item
+  from: me:self
+  author: Me
+  upstream_id: 547e266e-8044-526c-b3fa-6495f8da2b18
+00000000-0000-8b15-b2ef-f4042d79f39c  Google Maps Saved Item
+  from: me:self
+  author: Me
+  upstream_id: a1679868-1302-5971-b7e9-a8d16322696b
+00000000-0000-886c-849f-4206f438cee1  Play Books Book
+  title: Tales of the Picard Maneuver
+  author: Me
+00000000-0000-85a3-9aca-5f6858ef1c97  Note
+  author: Me
+0b4f788c-9100-8e44-b7d7-f3f6cbaad258  Play Books Listening Position
+  from: me:self
+  author: Me
+  upstream_id: e2328948-1952-51b2-8394-5bd1789c0fd5
+00000000-0000-88ab-b54c-6183150810df  Gemini Activity
+  title: Gemini
+  author: Me
+  participant: Gemini
+019c5d7b-bf88-8ade-b4de-09eb0cc9b339  Gemini Prompt
+  from: me:self
+  author: Me
+  upstream_id: 328da0c0-3188-5df7-a791-a9750c55b16b
+019c5d7b-bf88-8170-aa67-ff5dba6a09b2  Gemini Response
+  author: Gemini
+  upstream_id: 328da0c0-3188-5df7-a791-a9750c55b16b
+019cb47b-37a0-8569-a994-f8d76ad88c90  Gemini Prompt
+  from: me:self
+  author: Me
+  upstream_id: 35fa3597-6b99-5646-9b6a-1be8501470d4
+019cb47b-37a0-8062-8af5-e9ae30432d33  Gemini Response
+  author: Gemini
+  upstream_id: 35fa3597-6b99-5646-9b6a-1be8501470d4
+019d5ea4-0220-8071-872a-454306cb7e22  Gemini Prompt
+  from: me:self
+  author: Me
+  upstream_id: 8a3eeecd-f338-5947-90c7-5d11f3827ab8
+019d5ea4-0220-84d4-9b5a-34be1729073e  Gemini Response
+  author: Gemini
+  upstream_id: 8a3eeecd-f338-5947-90c7-5d11f3827ab8
+00000000-0000-8911-b4f4-e7022a921136  My Maps Map
+  title: Away missions
+  author: Me
+00000000-0000-843f-84f8-5ceabd35f3d3  Description
+  from: me:self
+  author: Me
+00000000-0000-8c06-afb1-6e879c3bf3e8  My Maps Pin
+  from: me:self
+  label: Shore leave
+  author: Me
+  upstream_id: ca7d8422-4045-53ec-8d20-70d59728209b
+00000000-0000-8789-b1a0-7bd4d0a1b1a2  My Maps Pin
+  from: me:self
+  label: Shore leave
+  author: Me
+  upstream_id: 3ca3bf97-428b-56d3-a04b-57c8448ca1f8
+00000000-0000-89e5-9f67-a49777419264  My Maps Line
+  from: me:self
+  label: Patrol routes
+  author: Me
+  upstream_id: 54346ab4-3e3f-5877-adea-c86ce872fffd
+00000000-0000-80b4-8a03-0f6e3ccf8698  My Maps Shape
+  from: me:self
+  label: Patrol routes
+  author: Me
+  upstream_id: 75cfdca6-5aa6-5cad-8d8b-c47569150936
+00000000-0000-89f3-bd53-77e4883722ea  Google Voice Conversation
+  title: Group Conversation
+  participant: tel:+12025550101
+  participant: tel:+12025550142
+0b50324d-0e80-8f77-b992-697e37f1313b  Google Voice Message
+  from: tel:+12025550142
+  to: me:self
+  author: Wesley Crusher
+  upstream_id: 63e8b914-0d91-5b88-b713-b818c3a79abc
+0b50324e-e340-8ff5-ad85-73a0a4b3a34d  Google Voice Message
+  from: tel:+12025550101
+  to: me:self
+  author: Jean-Luc Picard
+  upstream_id: 9d7c3803-17f2-5f73-a950-5bddcae75208
+00000000-0000-8a29-a97a-3aa759a898ef  Google Voice Conversation
+  title: Wesley Crusher
+  subject: tel:+12025550142
+0b502347-d780-87b9-9615-14926b2ecdf0  Google Voice Message
+  from: tel:+12025550142
+  author: Wesley Crusher
+  upstream_id: df5ebe79-01f9-5664-b703-44dcd4dbccb9
+00000000-0000-8a5c-92c1-f761ed74e325  Google Voice Conversation
+  title: +12025550147
+  subject: tel:+12025550147
+0b502cef-c400-8eae-b531-4c683f6e6977  Google Voice Message
+  from: tel:+12025550147
+  author: +12025550147
+  upstream_id: 3212ee27-e813-587e-bb81-80a38e301f76
+00000000-0000-8c4c-ac1c-6428fa2456b3  Google Maps List
+  title: Shore leave
+  author: Me
+00000000-0000-8589-a64c-07977753e9d7  Google Maps Saved Item
+  from: me:self
+  author: Me
+  upstream_id: 7fa2ade8-9f1b-5f86-93fe-9d04580cd8bf
+00000000-0000-8558-8d0e-597e27582a57  Google Maps Saved Item
+  from: me:self
+  author: Me
+  upstream_id: 8eaa4973-cb2d-5049-a9a4-39ae3ccdf702
+00000000-0000-8991-b7f0-ebe11cfa469d  Google Maps Saved Item
+  from: me:self
+  author: Me
+  upstream_id: 84b79828-a5d1-519b-914f-e142e562f557
+00000000-0000-8cce-a52f-e56db2f9fc70  YouTube Subscriptions
+  title: YouTube subscriptions
+  author: Me
+00000000-0000-88ec-afae-edb151ee18be  YouTube Subscription
+  from: me:self
+  author: Me
+00000000-0000-8f99-9bba-5bb414fb6eb3  YouTube Subscription
+  from: me:self
+  author: Me
+00000000-0000-8aff-972c-999e6dfd57d8  YouTube Subscription
+  from: me:self
+  author: Me
+00000000-0000-8e5f-8eb1-967f63ffb4eb  Google Chat
+  title: Ten Forward regulars
+  participant: email:data@enterprise.starfleet
+  participant: email:guinan@tenforward.example
+  participant: email:riker@enterprise.starfleet
+019573e8-ee00-8ccc-bca0-7b369a4046d2  Google Chat Message
+  from: email:guinan@tenforward.example
+  author: Guinan
+019573ed-81e0-85f8-aa56-75303382a980  Google Chat Message Version
+  from: email:data@enterprise.starfleet
+  author: Data
+019573ed-81e0-850e-823e-0bd667fb26ce  Google Chat Message
+  from: email:data@enterprise.starfleet
+  label: Starred
+  author: Data
+01957946-3880-80c5-9801-8f9e41ad216c  Google Chat Message
+  from: email:riker@enterprise.starfleet
+  author: William Riker
+01957dfe-b780-8745-b772-ee23e83e0948  Google Chat Message
+  from: email:guinan@tenforward.example
+  author: Guinan
+00000000-0000-8ee7-a23a-b6a9b64eb3fb  Google Voice Conversation
+  title: Lieutenant Worf, Son of Mogh, Chief of Security
+  participant: tel:+12025550160
+  subject: tel:+12025550160
+0b503713-4920-867c-9ccd-20aa374a86f4  Google Voice Message
+  from: tel:+12025550160
+  to: me:self
+  author: Lieutenant Worf, Son of Mogh, Chief of Security
+  upstream_id: 0cdf8f65-7c17-5c3b-9e6c-fe492d3d0b2b

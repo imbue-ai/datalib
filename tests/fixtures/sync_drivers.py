@@ -35,6 +35,20 @@ SYNC_DEADLINE_SECS = 30 * 60
 STARTUP_DEADLINE_SECS = 60
 POLL_SECS = 0.2
 
+# The program and the locks a datalib config declares, above every group:
+# the runner gives `datalib-step` no verbs and no locks of its own.
+PROGRAM_AND_LOCKS = """[[programs]]
+command = "datalib-step"
+verbs = ["reset", "prepare", "compact", "collect"]
+
+[[locks]]
+name = "index"
+slots = 2
+
+[[locks]]
+name = "embedder"
+slots = 1"""
+
 # The `WaitKind` of a step the loop holds for the config's `[disk_space]`
 # floor (`datalib/backend/dag/src/supervisor/tick.rs`).
 DISK_SPACE = "disk_space"

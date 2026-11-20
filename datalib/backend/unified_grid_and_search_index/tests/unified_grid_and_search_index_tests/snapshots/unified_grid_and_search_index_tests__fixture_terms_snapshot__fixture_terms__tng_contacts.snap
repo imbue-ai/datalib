@@ -1,0 +1,61 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_terms_snapshot.rs
+expression: source.render()
+---
+00000000-0000-8011-8429-37952155b9dc  Address book
+  title: Borg
+00000000-0000-831c-bea4-edecb1e09549  Address book
+  title: Engineering
+00000000-0000-8ef3-9b71-8e5cad3e9dff  Address book
+  title: Bridge
+00000000-0000-8140-88d9-42badf1b195b  Contact
+  title: drone.4.of.12@unimatrix01.borg
+  name: Borg
+  about: drone.4.of.12@unimatrix01.borg
+  about: email:drone.4.of.12@unimatrix01.borg
+00000000-0000-81e2-8596-1ee8f9640d13  Contact
+  title: Jean-Luc Picard
+  name: Bridge
+  about: Jean-Luc Picard
+  about: email:jlpicard@enterprise.starfleet
+  about: email:picard@enterprise.starfleet
+  about: tel:+12025550101
+00000000-0000-829a-bb9d-4c1b203d3251  Contact group
+  title: Senior Staff
+  name: Bridge
+  about: Senior Staff
+00000000-0000-85d8-ac4b-9c4472cee5ea  Contact
+  title: Worf
+  name: Bridge
+  about: Worf
+  about: email:worf@enterprise.starfleet
+  about: tel:+12025550102
+00000000-0000-8acb-9e72-ef58e1a96813  Contact
+  title: Seven of Nine
+  name: Borg
+  about: Seven of Nine
+  about: email:annika.hansen@raven.fed
+  about: email:seven.of.nine@unimatrix01.borg
+00000000-0000-8b00-b38c-a2a290dad572  Contact
+  title: William T. Riker
+  name: Bridge
+  about: William T. Riker
+  about: email:riker@enterprise.starfleet
+  about: email:will.riker@alaska.earth
+  about: email:wriker@enterprise.starfleet
+00000000-0000-8c51-a4b4-dde335468f6c  Contact
+  title: Hugh
+  name: Borg
+  about: Hugh
+  about: email:third.of.five@unimatrix01.borg
+00000000-0000-8d78-9232-e6b0deeebfb7  Contact
+  title: Geordi La Forge
+  name: Engineering
+  about: Geordi La Forge
+  about: email:glaforge@enterprise.starfleet
+  about: email:laforge@enterprise.starfleet
+00000000-0000-8f5b-ab9b-f6b9fbf217b5  Contact
+  title: Locutus of Borg
+  name: Borg
+  about: Locutus of Borg
+  about: email:locutus@unicomplex.borg

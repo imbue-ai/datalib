@@ -1,0 +1,31 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_terms_snapshot.rs
+expression: source.render()
+---
+00000000-0000-8195-8ee2-d14cb601f004  Contact
+  title: Worf
+  name: Bridge
+  about: Worf
+  about: email:worf@enterprise.starfleet
+  about: tel:+12025550102
+00000000-0000-819d-aad9-cb628fc3bec0  Contact
+  title: Kalita
+  name: Maquis
+  about: Kalita
+00000000-0000-825c-a3c4-1fb84e9bfce6  Contact
+  title: Jean-Luc Picard
+  name: Bridge
+  about: Jean-Luc Picard
+  about: email:jlpicard@enterprise.starfleet
+  about: email:picard@enterprise.starfleet
+  about: tel:+12025550101
+00000000-0000-8429-b938-7d1e51384182  Contact
+  title: Ro Laren
+  name: Maquis
+  about: Ro Laren
+  about: email:ro.laren@maquis.badlands
+00000000-0000-86be-a0a0-341fa48bbc80  Contact
+  title: Data
+  name: Bridge
+  about: Data
+  about: email:data@enterprise.starfleet

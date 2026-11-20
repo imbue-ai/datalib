@@ -1,0 +1,86 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_tree_snapshot.rs
+expression: text
+---
+Chat "Warp Field Recalibration"  00000000-0000-81ce-8161-7a771ae8bff5 [read] [place]
+  User Input  0b75c9a3-4680-86b2-82cb-16793b644d6b
+  Tool Call  0b75c9a3-5a08-8774-a4f0-88f06b979c64
+  Tool Call  0b75c9a3-65c0-8cf3-8faa-bfdbd1d74e36
+  LLM Response  0b75c9a3-94a0-8946-8b50-e001e23974c8
+  User Input  0b75c9a4-30e0-8afe-869a-f421df2f8c6a
+  LLM Response  0b75c9a4-57f0-800d-b41c-fc03ecd89b29
+  User Input  0b75c9a5-1b40-816e-a33e-acede3e6771e
+  Tool Call  0b75c9a5-2ec8-8ed5-b054-634468b6a72e
+  Tool Call  0b75c9a5-32b0-8aa0-b61b-87712fc773aa
+  Tool Call  0b75c9a5-4250-857b-8b81-5e02408abcf8
+  Tool Call  0b75c9a5-55d8-8e34-9155-6466ff633f50
+  Tool Call  0b75c9a5-6960-81e1-92fe-e8dfd3f8beb6
+  Tool Call  0b75c9a5-7ce8-82c7-8676-f3a6b8cb7c22
+  LLM Response  0b75c9a5-9070-8f81-b330-d956c36e5e05
+Chat "Borg Encryption Signature Lookup"  00000000-0000-88a2-ab0d-6718dcb64052 [read] [place]
+  User Input  0b75bf56-8e80-86b3-b6bc-65f8d47ee5e9
+  Tool Call  0b75bf56-b590-8fe9-9121-9379373a2571
+  Tool Call  0b75bf57-03b0-8f45-8a72-c3995a07d538
+  Tool Call  0b75bf57-ee10-80b6-b3a5-35a42c423133
+  LLM Response  0b75bf57-ee10-829d-91c5-06f2e0045cbd
+  Tool Call  0b75bf57-ee10-8410-b150-cd2fa6faefec
+Chat "Tricorder Image Diagnostic"  00000000-0000-89b3-8bed-0eecc97d45ce [read] [place]
+  User Input  0b75ba14-bb40-8501-9598-88138f280023
+  LLM Response  0b75ba15-6b08-8383-8951-f09944757e19
+Project "Stellar Cartography"  00000000-0000-8a01-8633-71325d50b8d7 [read] [place]
+  Project Instructions  00000000-0000-83b6-9f47-1ae3beeb6135
+  Project Description  00000000-0000-85bc-9aba-534fad04c8f7
+  Project Knowledge  00000000-0000-89e2-993c-540ec98e3d72
+Chat "Senior staff roster"  00000000-0000-8a0f-a11b-e4b95853f4f0 [read] [place]
+  User Input  0b75b509-d680-81c1-8e57-f89e96f6a340
+  Tool Call  0b75b509-f5c0-802b-ad27-019d4217da5c
+  Tool Call  0b75b509-f5c0-815c-bf79-bdf91c7aaa6a
+  Tool Call  0b75b509-f5c0-8212-9eea-2d2d96cb08e8
+  Tool Call  0b75b509-f5c0-8b80-9b7a-41d24a772552
+  LLM Response  0b75b509-f5c0-8c72-9d36-0da912ada9d9
+  LLM Response  0b75b509-f5c0-8cde-bd22-eecab3b39ec6
+  User Input  0b75b50c-95a0-8d65-bcae-42fb088f87b6
+  Tool Call  0b75b50c-bcb0-813e-947e-7463155f5a2b
+  Tool Call  0b75b50c-bcb0-860c-8a1c-1ac59b44471a
+  LLM Response  0b75b50c-bcb0-8a31-ba67-66bd98ccee9e
+Chat "Holodeck Malfunction Report"  00000000-0000-8c06-8231-9340b6e3de70 [read] [place]
+  User Input  0b7611f3-3d00-860c-b617-7d38a26b9806
+  LLM Thinking  0b7611f3-6410-8b4c-9b53-1c87201ee777
+  Tool Call  0b7611f3-6be0-887a-8afa-fc9700525277
+  Tool Call  0b7611f3-6be0-8dc9-8751-ccd0ff9215d0
+  LLM Response  0b7611f3-b230-8ba0-99c9-60c1cf5b8ffc
+  User Input  0b7611f5-11c0-8451-b127-935f1ccdc7ad
+  LLM Thinking  0b7611f5-38d0-8624-badd-c85c173d5f15
+  Tool Call  0b7611f5-40a0-8dc4-a877-1ee3c3eda29b
+  Tool Call  0b7611f5-40a0-8ef7-9071-4dbaf906d82c
+  LLM Response  0b7611f5-ae00-8355-8ddb-2d04ce2d70f7
+  User Input  0b7611f5-fc20-8df6-8736-9fce3ac9cabe
+  LLM Thinking  0b7611f6-0fa8-8cce-b7fe-d08773ffaf91
+  Tool Call  0b7611f6-2330-8b27-a61c-00a9a6232014
+  Tool Call  0b7611f6-2718-8443-adf7-614edb6cac84
+  Tool Call  0b7611f6-4a40-8d68-9e0f-122a251c5f63
+  Tool Call  0b7611f6-7150-87ee-b757-7f2f8e24789e
+  Tool Call  0b7611f6-9860-83ca-8b5c-3db8eaea2189
+  Tool Call  0b7611f6-9c48-8851-8b3e-320ef00c7ad0
+  LLM Response  0b7611f6-bf70-8e69-b5e0-27e3fb4f723e
+  User Input  0b7611f7-d0e0-85e0-869e-c55cb9e6bc24
+  LLM Thinking  0b7611f7-e468-84c2-8dde-873bf5deca1f
+  Tool Call  0b7611f7-f7f0-8979-9d66-05aeb2b9f860
+  Tool Call  0b7611f7-fbd8-862d-87a0-46a8d0c8b3cc
+  LLM Response  0b7611f8-4610-8780-a026-e85c5efa46c4
+  LLM Response  0b7611f8-bb40-8d20-91aa-089d84a4355c
+Project "Bridge Operations"  00000000-0000-8c45-a404-118e0e422b6b [read] [place]
+  Project Instructions  0b5016d5-ce80-8168-b935-ee36c832aec7
+  Project Description  0b5016d5-ce80-81dc-9685-d9bd0bb507f9
+  Project Knowledge  0b5016da-6260-80b0-8a11-3cac310cd7b1
+  Project Knowledge  0b501c85-7ec0-88eb-a10d-e04320252785
+  Chat "Klingon Diplomatic Greeting Drafting"  00000000-0000-8184-b70f-0aace9f02d6c [read]
+    User Input  0b75b540-c500-86b8-b4d6-30f1d383d742
+    LLM Thinking  0b75b541-3a30-885a-9dfd-2041e3c3f6f6
+    Tool Call  0b75b541-4200-8e23-b3d9-d60b770534e3
+    LLM Response  0b75b541-af60-818f-9082-d636105c4a9c
+    Tool Call  0b75b541-af60-85fe-a766-abc7e2f3cee4
+    User Input  0b75b542-99c0-8310-bcb9-5ca68ee391c2
+Chat "Poisoned: a message with an unreadable stamp"  00000000-0000-8fda-8a1d-506771450366 [read] [place]
+  LLM Response  0b75c4b3-d900-82bf-a477-9591b8f289e5
+  User Input  0b75c4b3-d900-8b7b-8e0c-d46db3ce97ce

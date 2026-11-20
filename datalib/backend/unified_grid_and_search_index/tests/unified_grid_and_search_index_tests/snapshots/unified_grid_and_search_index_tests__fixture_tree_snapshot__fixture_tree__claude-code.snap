@@ -1,0 +1,34 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_tree_snapshot.rs
+expression: text
+---
+Claude Code Project "enterprise"  00000000-0000-8786-8f6c-275d45dd8d49 [place]
+  Claude Code Session "Deflector dish drift"  00000000-0000-8b27-94b8-759d35b8fe6b [read]
+    User Input  0b50ea31-afb0-897e-bd11-b4be3d00e9db
+    LLM Thinking  0b50ea31-cb08-8694-a56f-d0d003b9d829
+    Tool Call  0b50ea31-cb08-8b2c-b393-74b7dcd791e3
+    Tool Result  0b50ea31-e660-8b02-8cc9-4ed6ea66520a
+    LLM Response  0b50ea32-01b8-87b2-b2d9-c27377dd8ce9
+    Tool Call  0b50ea32-01b8-8e22-9dcc-09459c5635ff
+    Claude Code Session "Scan the emitter logs since stardate 41153.7 for phase drift events. — subagent of Deflector dish drift"  00000000-0000-83df-8efb-7b99abfef902 [read]
+      Agent Prompt  0b50ea32-0988-8257-ac0d-e1b50fe1120b
+      Tool Call  0b50ea32-24e0-82b0-8ce0-a56e2be502e1
+      Tool Result  0b50ea32-4038-88b3-97c0-3246946156aa
+      LLM Response  0b50ea32-5b90-8d22-8faa-d1dd2a15d28e
+    Tool Result  0b50ea32-1d10-8445-9440-c00fd64931e0
+    LLM Response  0b50ea32-3868-8651-a003-23f6dddb9bb7
+    Tool Call  0b50ea32-3868-8a7b-9e61-0a2840bbc8e8
+    Tool Result  0b50ea32-6f18-8c66-a3b5-f03f9d71010f
+    Tool Call  0b50ea32-8a70-85ac-8428-937cff06d343
+    Tool Result  0b50ea32-a5c8-86be-9d57-37859ab64d0e
+    LLM Response  0b50ea32-c120-891a-b106-afccecbe5977
+    User Input  0b50ea32-f7d0-8776-a506-004be95b4111
+    Tool Call  0b50ea33-1328-8eee-8faf-b7bff8c9fe74
+    Tool Result  0b50ea33-2e80-8032-a98c-a16fb1f197bf
+    LLM Response  0b50ea33-49d8-8c94-b3ca-63a882341c16
+  Claude Code Session "Why does the replicator return cold Earl Grey? Screenshot attached."  00000000-0000-8a77-bcf1-64f2ad0583fa [read]
+    Harness Message  0b50eb28-c598-8781-b43c-456d6ca61946
+    User Input  0b50eb28-e0f0-8b41-90a7-91d651bad773
+    Tool Call  0b50eb28-fc48-89c0-becc-25b418307f35
+    Tool Result  0b50eb29-17a0-824d-ad1c-f67a2544df7e
+    LLM Response  0b50eb29-32f8-82ce-8fce-d10ba90226cf

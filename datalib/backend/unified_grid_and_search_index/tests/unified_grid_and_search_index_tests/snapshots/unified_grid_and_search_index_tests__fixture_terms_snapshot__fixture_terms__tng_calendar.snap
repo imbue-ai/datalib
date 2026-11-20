@@ -1,0 +1,45 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_terms_snapshot.rs
+expression: source.render()
+---
+00000000-0000-816c-a310-21acba28c500  Calendar
+  title: Engineering
+00000000-0000-8e27-90d0-0cd7d7bffcfe  Calendar
+  title: Bridge
+00000000-0000-80a6-93ad-832002566f74  Recurring Event
+  from: email:laforge@enterprise.test
+  title: Warp core maintenance
+  name: Engineering
+  author: Geordi La Forge
+00000000-0000-81a3-9b5c-946dc4b441a8  Changed Occurrence
+  from: email:brand@starfleet.test
+  title: Starfleet Academy guest lecture: first contact protocols
+  name: Bridge
+  author: Admiral Brand
+00000000-0000-8470-8240-1b4ee2c9889a  Event
+  title: Shore leave on Risa
+  name: Bridge
+00000000-0000-8488-9b56-8b957035e673  Recurring Event
+  from: email:picard@enterprise.test
+  title: Senior staff briefing
+  name: Bridge
+  author: Jean-Luc Picard
+00000000-0000-872d-a4f4-3355175938a9  Recurring Event
+  title: Officers' poker night
+  name: Bridge
+00000000-0000-87f7-ac79-138f8424fdb5  Changed Occurrence
+  from: email:picard@enterprise.test
+  title: Senior staff briefing — Borg incursion
+  name: Bridge
+  author: Jean-Luc Picard
+00000000-0000-8899-a213-737545dc9ea2  Event
+  title: Dilithium shipment arrives
+  name: Engineering
+00000000-0000-891b-9146-098a54f0815e  Event
+  from: email:troi@enterprise.test
+  title: Reception for the Klingon delegation
+  name: Bridge
+  author: Deanna Troi
+00000000-0000-8eca-8033-c38531904ecf  Recurring Event
+  title: Data's activation day
+  name: Engineering

@@ -71,3 +71,9 @@ pub fn copy_grid_index(dst: &Path) {
         &datalib_runtime::layout::grid_index_db(dst),
     );
 }
+
+/// A root holding only the grid index a source synced on its own wrote
+/// (`tests/fixtures/tng_source.bzl`), named by `var`'s `$(rlocationpath …)`.
+pub fn materialize_index_root(var: &str, dst: &Path) {
+    copy_writable(var, &datalib_runtime::layout::grid_index_db(dst));
+}

@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
-fn fixture_db_path() -> PathBuf {
+pub(crate) fn fixture_db_path() -> PathBuf {
     if let Ok(r) = runfiles::Runfiles::create() {
         if let Some(candidate) = r.rlocation("_main/tests/fixtures/ingested/backend_index.sqlite") {
             if candidate.exists() {

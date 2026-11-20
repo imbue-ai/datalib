@@ -1,0 +1,14 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_tree_snapshot.rs
+expression: text
+---
+GitLab project "enterprise-d/holodeck"  00000000-0000-8946-b151-0dc5c01fe4fc [place]
+  GitLab MR "Add Earl Grey, hot to replicator menu"  0b75b9f9-4400-887d-bae6-937c2e6ee3a6 [read]
+    GitLab Inline Note  0b75ba67-2100-8cc2-a0d4-510cce260212
+    GitLab Discussion Note  0b75ba6b-b4e0-8d87-b39b-6e62030598db
+    GitLab Discussion Note  0b75ba82-9840-81d6-88bc-01156ea95dd6
+  GitLab MR "Holodeck safety interlock regression test"  0b75bad4-fe00-8155-aa7c-9db9f663482a [read]
+    GitLab Inline Note  0b75bb42-db00-8df2-988c-d4c436597bec
+    GitLab Discussion Note  0b75bb4c-02c0-816b-93e3-fa09181a699d
+    GitLab Discussion Note  0b75bb55-2a80-8a4c-abf0-af3670ee359e
+    GitLab Discussion Note  0b75bb5e-5240-8a34-b5b2-12c9558a6379

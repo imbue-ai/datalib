@@ -1,0 +1,18 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_terms_snapshot.rs
+expression: source.render()
+---
+00000000-0000-8bfa-9046-e6e84f594bf2  Sensor Timeseries
+  title: YoLink sensors — yolink
+00000000-0000-8b59-84d5-1f5a9303f5f8  Sensor Device
+  name: deck_12_water_main
+  author: deck_12_water_main
+00000000-0000-81b2-aa2e-04f4bb40e79c  Sensor Device
+  name: sickbay_plasma_fridge
+  author: sickbay_plasma_fridge
+00000000-0000-8532-b55e-4c829ebad978  Sensor Device
+  name: stasis_unit_alpha
+  author: stasis_unit_alpha
+00000000-0000-872a-a430-a3e02e00742e  Sensor Device
+  name: ten_forward_cooler
+  author: ten_forward_cooler

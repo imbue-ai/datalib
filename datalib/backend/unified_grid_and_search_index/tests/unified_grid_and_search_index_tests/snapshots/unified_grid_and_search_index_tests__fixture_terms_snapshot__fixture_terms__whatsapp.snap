@@ -1,0 +1,112 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_terms_snapshot.rs
+expression: source.render()
+---
+00000000-0000-84f0-8faa-a404dacb63b6  WhatsApp Chat
+  title: WhatsApp user …0108
+  participant: whatsapp:100000000000108
+  subject: whatsapp:100000000000108
+0b50e81a-ce00-8ae8-9ea3-15b7547cac96  WhatsApp Message
+  from: whatsapp:100000000000108
+  to: me:self
+  author: WhatsApp user …0108
+00000000-0000-8891-ab80-dd17e867538b  WhatsApp Chat
+  title: Bridge Crew
+  participant: tel:+17015550101
+  participant: tel:+17015550102
+  participant: tel:+17015550103
+  participant: tel:+17015550104
+  participant: tel:+17015550105
+0b50e813-7b00-8a32-be7f-8f586d628d6f  WhatsApp Reaction
+  from: tel:+17015550101
+  author: William Riker
+0b50e813-a210-8617-a983-e795a58de3e0  WhatsApp Reaction
+  from: tel:+17015550102
+  author: Data
+0b50e813-c920-8af9-96b0-6a359372900f  WhatsApp Reaction
+  from: tel:+17015550103
+  author: Geordi La Forge
+0b50e813-f030-864d-8fec-9c62c9aeb6fb  WhatsApp Reaction
+  from: tel:+17015550105
+  author: +17015550105
+0b50e80c-2800-80ba-ad92-7dade4f4d7f3  WhatsApp Message
+  from: me:self
+  author: Me
+0b50e80d-1260-8d9f-acd4-f839b7f89b1b  WhatsApp Message
+  from: tel:+17015550101
+  to: me:self
+  author: William Riker
+0b50e80d-fcc0-8005-909f-857e006cd9de  WhatsApp Message
+  from: tel:+17015550102
+  to: me:self
+  author: Data
+0b50e80e-e720-89bf-8465-174dc07feb8c  WhatsApp Message
+  from: tel:+17015550103
+  to: me:self
+  author: Geordi La Forge
+0b50e80f-d180-8d67-a0c8-59eadba4b4c3  WhatsApp Message
+  from: tel:+17015550104
+  to: me:self
+  author: Worf
+0b50e810-bbe0-817e-84fc-3b5903d9a10d  WhatsApp Message
+  from: me:self
+  author: Me
+0b50e811-a640-8b94-a752-fe955e6453e0  WhatsApp Message
+  from: tel:+17015550102
+  to: me:self
+  author: Data
+0b50e812-90a0-8688-bbc1-5a80e14d22f9  WhatsApp Message
+  from: me:self
+  author: Me
+0b50e815-4fc0-80f2-af4f-05e409dee22b  WhatsApp Message
+  from: tel:+17015550103
+  to: me:self
+  author: Geordi La Forge
+0b50e816-3a20-8ba5-98f2-de7649752c7b  WhatsApp Message
+  from: tel:+17015550104
+  to: me:self
+  author: Worf
+0b50e818-0ee0-86db-9aed-bf1f41862b26  WhatsApp Message
+  from: tel:+17015550102
+  to: me:self
+  author: Data
+00000000-0000-8a99-9206-1d7e42e1b482  WhatsApp Chat
+  title: Data
+  participant: tel:+17015550102
+  subject: tel:+17015550102
+0b50e818-f940-8338-a476-1e9f46231681  WhatsApp Message
+  from: tel:+17015550102
+  to: me:self
+  author: Data
+0b50e819-e3a0-8671-a627-5f3eb75b189a  WhatsApp Message
+  from: me:self
+  author: Me
+00000000-0000-8b1c-9241-3a10a9e8b6d0  WhatsApp Chat
+  title: Worf
+  participant: tel:+17015550104
+  subject: tel:+17015550104
+0b50e81b-b860-83fd-88c2-2f8ca4d6ba7d  WhatsApp Message
+  from: tel:+17015550104
+  to: me:self
+  author: Worf
+00000000-0000-8d08-85b0-d2533cc3a460  WhatsApp Chat
+  title: William Riker
+  participant: tel:+17015550101
+  subject: tel:+17015550101
+0b50e814-8c70-8f37-9055-53f77edad01c  WhatsApp Reaction
+  from: tel:+17015550101
+  author: William Riker
+0b50e814-b380-89ee-80d5-a8690f7c2273  WhatsApp Reaction
+  from: me:self
+  author: Me
+0b50e813-7b00-8228-997a-4b68f85a4eb0  WhatsApp Message
+  from: tel:+17015550101
+  to: me:self
+  author: William Riker
+0b50e814-6560-8132-8c89-474f38b638c6  WhatsApp Message
+  from: me:self
+  author: Me
+0b50e817-2480-8dbf-8855-78fecef33dc9  WhatsApp Message
+  from: tel:+17015550101
+  to: me:self
+  author: William Riker

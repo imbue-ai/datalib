@@ -1,0 +1,20 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_tree_snapshot.rs
+expression: text
+---
+Garmin Daily Log "Daily log — Jean-Luc Picard"  00000000-0000-80b6-a0f6-2a808ceb34db [read]
+  Garmin Day  00000000-0000-8272-b240-6bc269fe64ce
+  Garmin Day  00000000-0000-89c1-a2d8-721a560e2b1e
+Garmin Records "Records and badges — Jean-Luc Picard"  00000000-0000-81f8-a7be-7bc669836792 [read]
+  Garmin Record  00000000-0000-8252-8e49-2a5eea9170ce
+  Garmin Workout  00000000-0000-8459-bfbf-509cece0e740
+  Garmin Badge  00000000-0000-8787-a9bf-fa3ecd707a65
+  Garmin Gear  00000000-0000-8b30-a5d1-49daa3109a69
+Garmin Metrics "Steps and activity — Jean-Luc Picard"  00000000-0000-8268-9462-873bc68da239 [read]
+Garmin Metrics "Heart rate and HRV — Jean-Luc Picard"  00000000-0000-8622-be12-22e5f6631ff8 [read]
+Garmin Metrics "Stress and Body Battery — Jean-Luc Picard"  00000000-0000-8baa-bdd0-2e59fe76cde5 [read]
+Garmin Weight "Garmin — Jean-Luc Picard"  00000000-0000-8d0c-bb0a-d0b7f450753a [read]
+  Garmin Device  00000000-0000-8909-ae68-923b6b55ace2
+Garmin Metrics "Sleep — Jean-Luc Picard"  00000000-0000-8f72-b9b8-d48cd967b0a8 [read]
+Garmin Activity "Holodeck run: Dixon Hill"  0b75af5a-2640-8ac4-895d-bc5b29c8a0e7 [read]
+Garmin Activity "Cycling: Deck 12 to Engineering"  0b75b6c5-de60-825f-9377-d4c871ea50f0 [read]
