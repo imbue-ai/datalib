@@ -297,12 +297,10 @@ impl StepFile {
             .connect_with(opts)
             .await
             .with_context(|| format!("open {}", path.display()))?;
-        for (_, ddl) in datalib_problems::DDL {
-            if let Err(e) = sqlx::query(*ddl).execute(&pool).await {
-                pool.close().await;
-                return Err(e)
-                    .with_context(|| format!("create the problems table in {}", path.display()));
-            }
+        if let Err(e) = set_up(&pool).await {
+            pool.close().await;
+            return Err(e)
+                .with_context(|| format!("set up the problems table in {}", path.display()));
         }
         Ok(StepFile {
             pool,
@@ -315,6 +313,18 @@ impl StepFile {
         record(&self.pool, rows, &self.now, &mut self.found).await
     }
 
+    /// The shape a step's own `problems.sqlite` is in.
+    pub fn shape() -> datalib_store_meta::Shape {
+        datalib_store_meta::Shape {
+            tables: datalib_store_meta::schema_hash(datalib_problems::DDL.iter().map(|(_, d)| *d)),
+            indexes: None,
+            versions: datalib_store_meta::Versions {
+                schema: 0,
+                shared: datalib_problems::SHAPE_VERSION,
+            },
+        }
+    }
+
     /// End the run: clear what it covered and did not find again, and
     /// close the file. Returns how many rows went.
     pub async fn finish(self, covered: &[Covered], ended: Ended) -> Result<usize> {
@@ -322,6 +332,24 @@ impl StepFile {
         self.pool.close().await;
         result
     }
+}
+
+/// The table in this build's shape, its rows dropped when the file holds
+/// another: they are what an earlier run found, and the run opening it
+/// finds them again.
+async fn set_up(pool: &SqlitePool) -> Result<()> {
+    let want = StepFile::shape();
+    let have = datalib_store_meta::read(pool).await?.map(|m| m.shape());
+    if have.as_ref() != Some(&want) {
+        sqlx::query("DROP TABLE IF EXISTS problems")
+            .execute(pool)
+            .await?;
+    }
+    for (_, ddl) in datalib_problems::DDL {
+        sqlx::query(*ddl).execute(pool).await?;
+    }
+    datalib_store_meta::write(pool, datalib_store_meta::StoreKind::StepProblems, &want).await?;
+    Ok(())
 }
 
 /// Every row of the file at `path`, read-only; none when there is no file.
@@ -337,16 +365,17 @@ pub async fn read(path: &Path) -> Result<Vec<ProblemRow>> {
 }
 
 /// What one store holds that a reader of problems wants: its `problems`,
-/// and its `entity_items` (render's map from a raw record a download's
-/// problem names to the grid row it belongs to), each empty where the
-/// store has no such table.
+/// and, in a render store, its `entity_items` (render's map from a raw
+/// record a download's problem names to the grid row it belongs to). Its
+/// `_datalib_meta` says which it holds; a file that records no kind
+/// holding problems gives none.
 #[derive(Debug, Clone, Default)]
 struct Held {
     rows: Vec<ProblemRow>,
     items: Vec<(String, String)>,
-    /// Its `problems` table lacks a column this build reads: an older
-    /// build wrote it, and its step's next run writes it in this shape.
-    older_shape: bool,
+    /// Its `problems` is in another shape than this build reads: its step
+    /// writes it in this shape when it runs again.
+    other_shape: bool,
 }
 
 async fn read_with(path: &Path, opts: SqliteConnectOptions) -> Result<Held> {
@@ -358,32 +387,24 @@ async fn read_with(path: &Path, opts: SqliteConnectOptions) -> Result<Held> {
         .await
         .with_context(|| format!("open {}", path.display()))?;
     let held = async {
-        let tables: Vec<String> = sqlx::query_scalar(
-            "SELECT name FROM sqlite_master WHERE type = 'table' \
-             AND name IN ('problems', 'entity_items')",
-        )
-        .fetch_all(&pool)
-        .await?;
-        let has = |name: &str| tables.iter().any(|t| t == name);
         let mut held = Held::default();
-        let older = async {
-            let have: Vec<String> =
-                sqlx::query_scalar("SELECT name FROM pragma_table_info('problems')")
-                    .fetch_all(&pool)
-                    .await?;
-            anyhow::Ok(older_shape(&have))
+        let Some(meta) = datalib_store_meta::read(&pool).await? else {
+            return anyhow::Ok(held);
         };
-        if has("problems") && older.await? {
-            held.older_shape = true;
-        } else if has("problems") {
-            held.rows = sqlx::query("SELECT * FROM problems ORDER BY scope_key, problem_uuid")
-                .fetch_all(&pool)
-                .await?
-                .iter()
-                .map(ProblemRow::from_row)
-                .collect::<Result<_>>()?;
+        let Some(kind) = meta.store_kind.filter(|k| k.holds_problems()) else {
+            return anyhow::Ok(held);
+        };
+        if meta.shared_schema_version != datalib_problems::SHAPE_VERSION {
+            held.other_shape = true;
+            return anyhow::Ok(held);
         }
-        if has("entity_items") {
+        held.rows = sqlx::query("SELECT * FROM problems ORDER BY scope_key, problem_uuid")
+            .fetch_all(&pool)
+            .await?
+            .iter()
+            .map(ProblemRow::from_row)
+            .collect::<Result<_>>()?;
+        if kind == datalib_store_meta::StoreKind::Render {
             held.items = sqlx::query_as(
                 "SELECT entity_key, item_uuid FROM entity_items ORDER BY entity_key",
             )
@@ -396,13 +417,6 @@ async fn read_with(path: &Path, opts: SqliteConnectOptions) -> Result<Held> {
     .with_context(|| format!("read the problems in {}", path.display()));
     pool.close().await;
     held
-}
-
-/// Whether a `problems` table with these columns predates this build:
-/// it lacks one that `ProblemRow` reads.
-fn older_shape(have: &[String]) -> bool {
-    let (_, want) = datalib_problems::COLUMNS[0];
-    want.iter().any(|c| !have.iter().any(|h| h == c))
 }
 
 /// What a file looked like when it was read: its modification time and
@@ -457,10 +471,10 @@ pub struct OfStep {
     /// download's problem names to the grid row it belongs to.
     pub items: Vec<(String, String)>,
     pub unread: Vec<String>,
-    /// Stores an older build wrote, whose problems this build does not
-    /// read until the step runs again and rewrites them. Not a failure:
-    /// a step turned off after an upgrade keeps one for good.
-    pub older_shape: Vec<PathBuf>,
+    /// Stores in another shape than this build reads, whose problems are
+    /// read once the step runs again and rewrites them. Not a failure: a
+    /// step turned off after an upgrade keeps one for good.
+    pub other_shape: Vec<PathBuf>,
 }
 
 /// What a step's problems are: the `problems` table of every store
@@ -472,7 +486,7 @@ pub async fn of_step(data_root: &Path, step_id: &str) -> OfStep {
         rows: Vec::new(),
         items: Vec::new(),
         unread: Vec::new(),
-        older_shape: Vec::new(),
+        other_shape: Vec::new(),
     };
     let dir = data_root.join(step_id);
     let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -490,8 +504,8 @@ pub async fn of_step(data_root: &Path, step_id: &str) -> OfStep {
         };
         match read {
             Ok(held) => {
-                if held.older_shape {
-                    out.older_shape.push(file.clone());
+                if held.other_shape {
+                    out.other_shape.push(file.clone());
                 }
                 out.rows.extend(held.rows);
                 out.items.extend(held.items);
@@ -525,7 +539,7 @@ pub async fn of_steps(data_root: &Path) -> Vec<OfStep> {
         if !read.rows.is_empty()
             || !read.items.is_empty()
             || !read.unread.is_empty()
-            || !read.older_shape.is_empty()
+            || !read.other_shape.is_empty()
         {
             out.push(read);
         }
@@ -535,7 +549,7 @@ pub async fn of_steps(data_root: &Path) -> Vec<OfStep> {
 }
 
 /// One thing [`say_unread`] says about a step: why a store could not be
-/// read, or which store is in an older shape.
+/// read, or which store is in another shape.
 type Said = (String, String, bool);
 
 /// What a reader of every step's problems logs of what it could not read:
@@ -553,7 +567,8 @@ pub fn say_unread(steps: &[OfStep]) {
             tracing::info!(
                 step = %step,
                 store = %what,
-                "an older build wrote this step's problems; they are read once the step runs again"
+                "this step's problems are in another shape than this build reads; they are \
+                 read once the step runs again"
             );
         } else {
             tracing::error!(step = %step, error = %what, "could not read a step's problems");
@@ -571,7 +586,7 @@ fn unread_of(steps: &[OfStep]) -> std::collections::BTreeSet<Said> {
                 .iter()
                 .map(|w| (s.step_id.clone(), w.clone(), false));
             let older = s
-                .older_shape
+                .other_shape
                 .iter()
                 .map(|p| (s.step_id.clone(), p.display().to_string(), true));
             why.chain(older)

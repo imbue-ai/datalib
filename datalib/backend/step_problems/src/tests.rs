@@ -268,24 +268,33 @@ async fn replace_keeps_the_stamps_of_the_unchanged_and_joins_two_reasons() {
     file.finish(&[], Ended::Succeeded).await.unwrap();
 }
 
-/// A store an older build wrote, its `problems` table short of a column
-/// this build reads, is reported as in an older shape rather than as a
-/// failure to read: a turned-off render kept one for good, and the
-/// Manage screen logged it as an error on every refresh.
+async fn plain(path: &std::path::Path) -> sqlx::SqlitePool {
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_with(datalib_sqlite_open::file(path))
+        .await
+        .unwrap()
+}
+
+/// A store whose `_datalib_meta` names another `problems` shape is
+/// reported as in another shape, by what it records and without asking
+/// the table, rather than read around or as a failure: a turned-off
+/// render kept one for good, and the Manage screen logged it as an error
+/// on every refresh.
 #[tokio::test]
-async fn a_problems_table_an_older_build_wrote_is_an_older_shape_not_a_failure() {
+async fn a_problems_table_in_another_shape_is_reported_by_its_recorded_shape() {
     let dir = tempfile::tempdir().unwrap();
     let mut file = StepFile::open(dir.path(), STEP, at(1)).await.unwrap();
     file.record(vec![row("messages:1")]).await.unwrap();
     file.finish(&[], Ended::Succeeded).await.unwrap();
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .idle_timeout(None)
-        .max_lifetime(None)
-        .connect_with(datalib_sqlite_open::file(&file_of(dir.path(), STEP)))
+    let pool = plain(&file_of(dir.path(), STEP)).await;
+    sqlx::query("ALTER TABLE problems DROP COLUMN upstream_entity_kind")
+        .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("ALTER TABLE problems DROP COLUMN upstream_entity_kind")
+    sqlx::query("UPDATE _datalib_meta SET value = '0' WHERE key = 'shared_schema_version'")
         .execute(&pool)
         .await
         .unwrap();
@@ -294,9 +303,40 @@ async fn a_problems_table_an_older_build_wrote_is_an_older_shape_not_a_failure()
     let read = of_step(dir.path(), STEP).await;
     assert!(read.unread.is_empty(), "{:?}", read.unread);
     assert!(read.rows.is_empty());
-    assert_eq!(read.older_shape, [file_of(dir.path(), STEP)]);
+    assert_eq!(read.other_shape, [file_of(dir.path(), STEP)]);
     let steps = of_steps(dir.path()).await;
     assert_eq!(steps.len(), 1, "the step is listed for what it holds");
+
+    let file = StepFile::open(dir.path(), STEP, at(2)).await.unwrap();
+    file.finish(&[], Ended::Succeeded).await.unwrap();
+    let read = of_step(dir.path(), STEP).await;
+    assert!(
+        read.other_shape.is_empty(),
+        "its next run writes this shape"
+    );
+    assert!(read.unread.is_empty(), "{:?}", read.unread);
+}
+
+/// A file that records no kind of store holding problems — a blob store
+/// beside a raw store — gives none, without a question to its tables.
+#[tokio::test]
+async fn a_file_that_records_no_problems_gives_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(STEP).join("blobs.sqlite");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(datalib_sqlite_open::file(&path).create_if_missing(true))
+        .await
+        .unwrap();
+    sqlx::query("CREATE TABLE blobs (hash TEXT)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    let read = of_step(dir.path(), STEP).await;
+    assert!(read.unread.is_empty(), "{:?}", read.unread);
+    assert!(read.rows.is_empty() && read.other_shape.is_empty());
 }
 
 /// Each thing a reader could not read is said the first pass it appears

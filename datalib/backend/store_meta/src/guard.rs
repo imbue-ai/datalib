@@ -252,8 +252,7 @@ mod tests {
                 crate::write(
                     &pool,
                     crate::StoreKind::Raw,
-                    "h",
-                    crate::Versions::default(),
+                    &crate::Shape::of_tables("h".into()),
                 )
                 .await
                 .unwrap();

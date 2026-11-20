@@ -106,8 +106,7 @@ async fn set_up(pool: &SqlitePool, ddl: &[&'static str], owns: Owns) -> Result<(
     }
     tx.commit().await?;
     if let Owns::File(kind) = owns {
-        datalib_store_meta::write(pool, kind, &want, datalib_store_meta::Versions::default())
-            .await?;
+        datalib_store_meta::write(pool, kind, &datalib_store_meta::Shape::of_tables(want)).await?;
     }
     Ok(())
 }

@@ -54,10 +54,11 @@ pub async fn open(db_path: &Path, kind: StoreKind) -> Result<SqlitePool> {
     Ok(pool)
 }
 
-/// The shape `open` records in `_datalib_meta`: what a launch's migrate
-/// pass compares to decide whether the store must be rebuilt.
-pub fn schema_hash(kind: StoreKind) -> String {
-    doltlite_raw::recorded_shape(ddl(kind))
+/// The shape `open` records in `_datalib_meta`: what a launch's prepare
+/// pass compares to decide whether the store must be rebuilt, and what
+/// every reader requires before it reads a row.
+pub fn shape(kind: StoreKind) -> datalib_store_meta::Shape {
+    doltlite_raw::derived_shape(&ddl(kind), &datalib_time_series_schema::indexes())
 }
 
 const ROW_COLUMNS: &str = "source_id, ts_key, time_series_id, about_uuid, about_name, name, \

@@ -20,6 +20,19 @@ pub enum RepoError {
     ReadOnly,
     #[error("internal: {0}")]
     Internal(String),
+    /// The store is not in the shape this build reads; it says what to run.
+    #[error(transparent)]
+    OtherShape(Box<datalib_store_meta::OtherShape>),
+}
+
+impl RepoError {
+    /// `e` as the refusal it carries, or as an internal error.
+    pub fn from_anyhow(e: anyhow::Error) -> Self {
+        match datalib_store_meta::other_shape(&e) {
+            Some(refused) => RepoError::OtherShape(Box::new(refused.clone())),
+            None => RepoError::Internal(format!("{e:#}")),
+        }
+    }
 }
 
 /// Writes and reads of the application stores.

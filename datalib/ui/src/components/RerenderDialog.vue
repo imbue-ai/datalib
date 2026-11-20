@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // Asked once a launch's migrate pass is over: the steps listed answered
 // that what they wrote is in a shape this build cannot reach in place, and
-// re-running them reads what is already downloaded. A step that could not
+// nothing reads it until they run again; re-running them reads what is
+// already downloaded. Dismissed, the toolbar's pill keeps the offer. A step that could not
 // be migrated is the toolbar's upgrade pill's to report, not this.
 import { computed, onMounted, ref } from "vue";
 import type { Upgrade } from "@/api";
@@ -44,9 +45,9 @@ function onKeydown(e: KeyboardEvent) {
       </header>
       <div class="rerender-body dialog-body">
         <p>
-          This version of Datalib lays out rendered documents differently. Until they are rendered
-          again, these sources show what the older version wrote, and a sync re-renders only the
-          source it syncs:
+          This version of Datalib keeps these sources' data in a new shape, and reads only that
+          shape. Until they are re-run, their documents and search results are not shown, and a
+          sync re-runs only the source it syncs:
         </p>
         <ul class="sources">
           <li v-for="s in sources" :key="s.group">

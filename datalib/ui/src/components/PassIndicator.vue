@@ -18,7 +18,10 @@ import "@/cards/chip.css";
 adoptStyles(EntityChip, ChipMenu);
 
 const props = defineProps<{ view: PassView | null; testid: string }>();
-const emit = defineEmits<{ (e: "dismiss"): void }>();
+const emit = defineEmits<{
+  (e: "dismiss"): void;
+  (e: "act", steps: string[]): void;
+}>();
 
 const open = ref(false);
 const el = ref<HTMLElement | null>(null);
@@ -31,6 +34,11 @@ function openSources() {
 function dismiss() {
   open.value = false;
   emit("dismiss");
+}
+
+function act(steps: string[]) {
+  open.value = false;
+  emit("act", steps);
 }
 
 // `pointerdown` in the capture phase, because the top bar is a
@@ -90,6 +98,9 @@ onBeforeUnmount(() => (open.value = false));
         </li>
       </ul>
       <div v-if="!view.running" class="pass-actions">
+        <button v-if="view.action" class="btn primary" @click="act(view.action.steps)">
+          {{ view.action.label }}
+        </button>
         <button class="pass-link" @click="openSources">Open Sources</button>
         <button class="pass-link" @click="dismiss">Dismiss</button>
       </div>

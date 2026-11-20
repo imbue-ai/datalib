@@ -213,9 +213,8 @@ pub trait IndexRepo: Send + Sync {
     /// returned [`EdgeRowOut`] pairs the raw edge with whatever
     /// destination metadata the UI needs to render an "outgoing
     /// destinations" list (today: the destination markdown's title).
-    /// Returns an empty Vec when the doc has no outgoing edges, when
-    /// the edges table is missing (old data root), or — by default —
-    /// when the impl doesn't support edges at all.
+    /// Returns an empty Vec when the doc has no outgoing edges, or — by
+    /// default — when the impl doesn't support edges at all.
     async fn outgoing_edges(&self, _markdown_uuid: &str) -> Result<Vec<EdgeRowOut>, RepoError> {
         Ok(Vec::new())
     }

@@ -235,10 +235,13 @@ impl Store {
         datalib_store_meta::write(
             &store.pool,
             datalib_store_meta::StoreKind::Supervisor,
-            &datalib_store_meta::schema_hash(ddl()),
-            datalib_store_meta::Versions {
-                schema: SCHEMA_VERSION,
-                shared: 0,
+            &datalib_store_meta::Shape {
+                tables: datalib_store_meta::schema_hash(ddl()),
+                indexes: None,
+                versions: datalib_store_meta::Versions {
+                    schema: SCHEMA_VERSION,
+                    shared: 0,
+                },
             },
         )
         .await?;

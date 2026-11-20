@@ -306,8 +306,9 @@ pub(crate) fn store_tables() -> impl Iterator<Item = (&'static str, &'static str
         .copied()
 }
 
-/// Indexes that change no row, so they stay out of [`schema_hash`]:
-/// adding one must not re-render every source. `open` creates them.
+/// Indexes that change no row, so they stay out of [`schema_hash`] and
+/// are recorded apart ([`shape`]): adding one must not re-render every
+/// source. `open` creates them.
 fn lookup_indexes() -> impl Iterator<Item = &'static str> {
     crate::grid_index::DOCUMENT_LOOKUP_INDEXES
         .iter()
@@ -336,7 +337,14 @@ const DOCUMENTS_FOR_RENDER_UNITS: &str = "SELECT render_unit_key, markdown_uuid 
 /// one. Nobody has to remember a bump, and a column added to `grid_rows`
 /// is not `NULL` on every row rendered before it.
 pub fn schema_hash() -> String {
-    datalib_etl::doltlite_raw::recorded_shape(store_ddl())
+    shape().tables
+}
+
+/// This store's whole shape, its lookup indexes included: what its owner
+/// records and what [`IndexedMarkdownStore::open_for_reading`] requires.
+pub fn shape() -> datalib_store_meta::Shape {
+    let indexes: Vec<&str> = lookup_indexes().collect();
+    datalib_etl::doltlite_raw::derived_shape(&store_ddl(), &indexes)
 }
 
 /// One raw row a render unit's render asked for, found or not.
@@ -466,6 +474,10 @@ impl IndexedMarkdownStore {
     /// reading the working set.
     ///
     /// No `now`, no write lock: nothing reached through this handle may write.
+    ///
+    /// A store at a commit whose `_datalib_meta` records another shape
+    /// than [`shape`] is refused as `datalib_store_meta::OtherShape`,
+    /// before a row is read: its render step brings it up to date.
     pub fn open_for_reading(rendered_root: &Path, commit: Option<&str>) -> Result<Option<Self>> {
         let path = path_for(rendered_root);
         let Some(reader) = blocking(datalib_etl::doltlite_raw::open_reader(&path, commit))
@@ -473,6 +485,14 @@ impl IndexedMarkdownStore {
         else {
             return Ok(None);
         };
+        if let Err(e) = blocking(datalib_store_meta::read_requiring(
+            reader.pool(),
+            &path,
+            &shape(),
+        )) {
+            blocking(reader.close());
+            return Err(e);
+        }
         let pool = reader.pool().clone();
         Ok(Some(Self {
             write_lock: WriteLock::new(pool.clone()),
@@ -486,14 +506,6 @@ impl IndexedMarkdownStore {
     /// The commit this reader reads at. `None` on the owner's handle.
     pub fn pin(&self) -> Option<&datalib_etl::pin::Pin> {
         self.pin.as_ref()
-    }
-
-    /// Whether the store was written in the shape this build reads
-    /// ([`schema_hash`]), as its `_datalib_meta` says. A store with no
-    /// `_datalib_meta` predates every shape this build knows.
-    pub fn in_this_shape(&self) -> Result<bool> {
-        let meta = blocking(datalib_store_meta::read(&self.pool)).context("read _datalib_meta")?;
-        Ok(meta.is_some_and(|m| m.schema_hash == schema_hash()))
     }
 
     /// Use the run-pinned "now" (`--now` / `$DATALIB_DAG_NOW`) for the

@@ -364,17 +364,6 @@ pub(crate) async fn clear_source_problems(
     Ok(gone > 0)
 }
 
-/// A render store that lacks a table or column this build reads, though
-/// its `_datalib_meta` names this shape: treated as one in another shape.
-/// The render step rebuilds it the next time it runs.
-fn written_in_another_shape(e: &anyhow::Error) -> bool {
-    e.chain().any(|c| {
-        c.downcast_ref::<sqlx::Error>()
-            .and_then(datalib_etl::pin::missing_schema)
-            .is_some()
-    })
-}
-
 /// What a source whose render store could not be read is filed under.
 /// The next pass that reads the store replaces the source's problems
 /// wholesale, which is what clears it.
@@ -438,14 +427,48 @@ async fn record_unreadable_store(
     Ok(())
 }
 
-pub fn schema_hash() -> String {
-    datalib_store_meta::schema_hash(
-        index_ddl()
-            .chain(read_indexes())
-            .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
-            // What the terms and the node rows derive, which no DDL shows.
-            .chain([TERMS_SHAPE, node_rows::NODE_ROWS_SHAPE]),
-    )
+/// The grid index's shape: what its writer records and every reader
+/// requires before it reads a row. Its indexes are kept apart from its
+/// tables, so adding one costs creating it rather than a rebuild.
+pub fn shape() -> datalib_store_meta::Shape {
+    datalib_store_meta::Shape {
+        indexes: Some(datalib_store_meta::schema_hash(indexes())),
+        ..shape_without_indexes()
+    }
+}
+
+/// [`shape`] while a build into an empty index has its search indexes
+/// dropped: the tables are there, the indexes are not, and a reader that
+/// requires [`shape`] waits for them.
+fn shape_without_indexes() -> datalib_store_meta::Shape {
+    datalib_store_meta::Shape {
+        tables: datalib_store_meta::schema_hash(
+            index_ddl()
+                // What the terms and the node rows derive, which no DDL shows.
+                .chain([TERMS_SHAPE, node_rows::NODE_ROWS_SHAPE]),
+        ),
+        indexes: None,
+        versions: datalib_store_meta::Versions {
+            schema: 0,
+            // Its `problems` is built in this shape, so it starts at the
+            // shared ladder's top.
+            shared: datalib_store_meta::ladder::top(datalib_etl::doltlite_raw::SHARED_LADDER),
+        },
+    }
+}
+
+/// Every index of the grid index's own tables.
+fn indexes() -> impl Iterator<Item = &'static str> {
+    read_indexes()
+        .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
+        .chain([AUTHORS_INDEX, node_rows::BY_SOURCE_INDEX])
+}
+
+async fn record_shape(pool: &SqlitePool, shape: &datalib_store_meta::Shape) -> Result<()> {
+    datalib_store_meta::write(pool, StoreKind::GridIndex, shape)
+        .await
+        .context("write _datalib_meta for the grid index")?;
+    Ok(())
 }
 
 /// What replacing one document looks its old rows up by, in every store
@@ -463,9 +486,8 @@ pub(crate) const DOCUMENT_LOOKUP_INDEXES: &[&str] = &[
 
 /// What [`crate::search_terms::write_people`] reads the grid's authors
 /// from, so a pass reads two short columns rather than every row's text
-/// (#1803). Only the index's: never dropped for a remake, since the query
-/// names it, and out of [`schema_hash`], since it changes no row and
-/// adding it must not rebuild the index.
+/// (#1803). Only the index's, and never dropped for a remake, since the
+/// query names it.
 pub(crate) const AUTHORS_INDEX: &str =
     "CREATE INDEX IF NOT EXISTS grid_rows_by_author ON grid_rows (author_handle, author)";
 
@@ -498,11 +520,7 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
 /// here: every render store has a `grid_rows` too, and only the index the
 /// grid reads wants to pay for the search indexes on every write.
 pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
-    for ddl in index_ddl()
-        .chain(read_indexes())
-        .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
-        .chain([AUTHORS_INDEX, node_rows::BY_SOURCE_INDEX])
-    {
+    for ddl in index_ddl().chain(indexes()) {
         sqlx::query(ddl)
             .execute(pool)
             .await
@@ -664,6 +682,35 @@ fn index_name(ddl: &str) -> Option<&str> {
         .next()
 }
 
+/// The grid index read-only, once its first pass has made it and only in
+/// this build's [`shape`]: the one way to open it for reading outside the
+/// search applet's repo, which checks the same shape inside each read.
+/// `None` before the first pass; a store in another shape is refused,
+/// saying what to run.
+pub async fn open_for_reading(db_path: &Path) -> Result<Option<SqlitePool>> {
+    if !db_path.exists() {
+        return Ok(None);
+    }
+    let pool = datalib_etl::pin::open_reader(db_path)
+        .await
+        .with_context(|| format!("open the grid index {}", db_path.display()))?;
+    let checked = async {
+        if datalib_etl::pin::generation(&pool).await?.is_none() {
+            return anyhow::Ok(false);
+        }
+        datalib_store_meta::read_requiring(&pool, db_path, &shape()).await?;
+        anyhow::Ok(true)
+    }
+    .await;
+    match checked {
+        Ok(true) => Ok(Some(pool)),
+        other => {
+            pool.close().await;
+            other.map(|_| None)
+        }
+    }
+}
+
 /// The `unified_grid_and_search_index` step's handle on the index: the one way to open it
 /// for writing. One connection, never recycled, as every pool here
 /// (`etl/README.md` § "Connection pools"). A reader that looks before the
@@ -702,7 +749,7 @@ async fn empty_if_another_shape(pool: &SqlitePool) -> Result<()> {
     let have = datalib_store_meta::schema_hash_in(&mut tx)
         .await
         .context("read the grid index's shape")?;
-    if have.is_some_and(|h| h != schema_hash()) {
+    if have.is_some_and(|h| h != shape().tables) {
         tracing::info!("the grid index was written in another shape; building it again");
         drop_own_tables(&mut tx).await?;
     }
@@ -781,15 +828,7 @@ async fn connect(db_path: &Path) -> Result<SqlitePool> {
 
 async fn set_up(pool: &SqlitePool) -> Result<()> {
     init_schema(pool).await?;
-    // Its `problems` is built in this shape, so it starts at the shared
-    // ladder's top.
-    let versions = datalib_store_meta::Versions {
-        schema: 0,
-        shared: datalib_store_meta::ladder::top(datalib_etl::doltlite_raw::SHARED_LADDER),
-    };
-    datalib_store_meta::write(pool, StoreKind::GridIndex, &schema_hash(), versions)
-        .await
-        .context("write _datalib_meta for the grid index")?;
+    record_shape(pool, &shape()).await?;
     sqlx::query(
         "INSERT INTO store_generation (id, file_id, generation) \
          VALUES (1, lower(hex(randomblob(8))), 0) ON CONFLICT (id) DO NOTHING",
@@ -1075,6 +1114,7 @@ pub async fn build_grid_index_for(
     // `init_schema` makes them.
     let building = indexed.is_empty();
     if building {
+        record_shape(pool, &shape_without_indexes()).await?;
         drop_search_indexes(&mut *pool.acquire().await?).await?;
     }
     let held: usize = indexed.values().map(HashSet::len).sum();
@@ -1181,6 +1221,7 @@ pub async fn build_grid_index_for(
     if building && !stop.requested() {
         let started = Instant::now();
         create_search_indexes(&mut *pool.acquire().await?).await?;
+        record_shape(pool, &shape()).await?;
         tracing::info!(
             took_ms = started.elapsed().as_millis() as u64,
             "built the search indexes over the new index"
@@ -1332,32 +1373,27 @@ fn read_source(
     // would discard the renderer's in-flight rows and schema-commit into
     // it — writing to a file we do not own. Pinned at open: the diff below
     // and the rows behind it name one commit.
-    let Some(store) =
-        crate::indexed_markdown::IndexedMarkdownStore::open_for_reading(rendered_root, None)
-            .with_context(|| format!("open render store for {stanza}"))?
-    else {
-        tracing::warn!(
-            source = %stanza,
-            "this render store names no commit, so there is nothing \
-             committed to index; skipping it this pass"
-        );
-        return Ok(None);
+    let opened =
+        crate::indexed_markdown::IndexedMarkdownStore::open_for_reading(rendered_root, None);
+    let store = match opened {
+        Ok(Some(store)) => store,
+        Ok(None) => {
+            tracing::warn!(
+                source = %stanza,
+                "this render store names no commit, so there is nothing \
+                 committed to index; skipping it this pass"
+            );
+            return Ok(None);
+        }
+        Err(e) if datalib_store_meta::other_shape(&e).is_some() => {
+            tracing::debug!(source = %stanza, error = %format!("{e:#}"), "left as the index had it");
+            return Ok(Some(SourceRead::Unreadable));
+        }
+        Err(e) => return Err(e.context(format!("open render store for {stanza}"))),
     };
     let read = read_open_store(&store, stanza, cursor, indexed, pass);
     store.close();
-    match read {
-        Err(e) if written_in_another_shape(&e) => {
-            tracing::warn!(
-                source = %stanza,
-                error = %format!("{e:#}"),
-                "this render store lacks a table or column this build reads; \
-                 indexing the other sources and leaving this one as it was \
-                 until it re-renders"
-            );
-            Ok(Some(SourceRead::Unreadable))
-        }
-        read => read.map(Some),
-    }
+    read.map(Some)
 }
 
 fn read_open_store(
@@ -1367,16 +1403,6 @@ fn read_open_store(
     indexed: Option<&HashSet<String>>,
     pass: &mut PassCounts,
 ) -> Result<SourceRead> {
-    if !store
-        .in_this_shape()
-        .with_context(|| format!("read the shape of {stanza}'s render store"))?
-    {
-        tracing::debug!(
-            source = %stanza,
-            "this render store is in a shape this build does not read"
-        );
-        return Ok(SourceRead::Unreadable);
-    }
     let pin = store.pin().expect("a reader is pinned at open").clone();
     let from = match cursor {
         Some(c) => store
@@ -3324,12 +3350,21 @@ mod source_cursor_tests {
 
     /// Put a source's store back in the shape a build before
     /// `grid_rows.preview` wrote: the column is `text` there.
+    /// What an older build leaves: a column under another name, and the
+    /// shape it records saying so.
     async fn into_older_shape(root: &Path, source: &str) {
         alter_store(
             root,
             source,
             "ALTER TABLE grid_rows RENAME COLUMN preview TO text",
             "an older build's shape",
+        )
+        .await;
+        alter_store(
+            root,
+            source,
+            "UPDATE _datalib_meta SET value = 'an-older-shape' WHERE key = 'schema_hash'",
+            "the shape it records",
         )
         .await;
     }
@@ -3632,11 +3667,12 @@ mod source_cursor_tests {
         assert_eq!(node_rows().await, []);
     }
 
-    /// A store from a build before #962 lacked `source_contacts`, failed
-    /// the diff, and kept every other source out of the grid. The next
-    /// table added to the render DDL is the same store again, so this
-    /// drops each table in turn: whichever it is, the pass indexes the
-    /// other source and keeps this one's rows as they were.
+    /// A store that records this build's shape and lacks a table is
+    /// damaged, not older: a read of the table fails loudly, naming it,
+    /// and costs only its own source. A store from a build before #962 lacked
+    /// `source_contacts` and kept every other source out of the grid, so
+    /// this drops each table in turn: whichever it is, the pass indexes
+    /// the other source and keeps this one's rows as they were.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_store_missing_any_one_table_costs_only_its_own_source() {
         for (table, _) in crate::indexed_markdown::store_tables() {
@@ -3662,8 +3698,12 @@ mod source_cursor_tests {
             let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
                 .await
                 .unwrap_or_else(|e| panic!("without {table}: {e:#}"));
+            // A table the pass does not read is not missed here; one it
+            // does fails, saying which.
             assert!(
-                s.sources_failed.is_empty(),
+                s.sources_failed
+                    .iter()
+                    .all(|(source, why)| source == "damaged" && why.contains("no such table")),
                 "without {table}: {:?}",
                 s.sources_failed
             );

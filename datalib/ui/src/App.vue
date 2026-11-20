@@ -90,7 +90,8 @@ async function onRerender(yes: boolean) {
   if (yes && config.value) await openRequest(config.value.upgrade.rerender, "upgrade");
 }
 
-// The toolbar's pills. A failed upgrade comes back on the next page load;
+// The toolbar's pills. A failed upgrade, or steps the launch found in a
+// shape this version does not read, come back on the next page load;
 // a finished "Free up disk space" stays dismissed, by its id, in this
 // browser, or it would greet every reload until the server restarts.
 const upgradeDismissed = ref(false);
@@ -156,6 +157,7 @@ onUnmounted(() => stop?.());
             :view="upgradePill"
             testid="upgrade-pill"
             @dismiss="upgradeDismissed = true"
+            @act="(steps) => openRequest(steps, 'upgrade')"
           />
           <PassIndicator
             :view="freeSpacePill"

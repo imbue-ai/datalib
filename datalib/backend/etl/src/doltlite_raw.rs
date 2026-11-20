@@ -305,6 +305,10 @@ pub const SHARED_LADDER: &[Migration] = &[Migration {
     },
 }];
 
+// What a reader of a store's problems requires: the ladder's top, which is
+// its length, since its rungs are dense from 1.
+const _: () = assert!(SHARED_LADDER.len() as u32 == datalib_problems::SHAPE_VERSION);
+
 /// Shared tables no build declares any more. A store that still has one
 /// drops it on open, after its ladder (a rung may read it one last time),
 /// so it leaves no orphan beside the source's tables; its rows stay in
@@ -786,6 +790,33 @@ pub fn recorded_shape<'a>(ddl: impl IntoIterator<Item = &'a str>) -> String {
     datalib_store_meta::schema_hash(std::iter::once(datalib_store_meta::DDL).chain(ddl))
 }
 
+/// The whole shape [`open_derived_indexed`] gives a store opened with
+/// `ddl` and `lookup_indexes`: what a reader of that store requires
+/// (`datalib_store_meta::require`).
+pub fn derived_shape(ddl: &[&str], lookup_indexes: &[&str]) -> datalib_store_meta::Shape {
+    shape_opened_with(ddl, lookup_indexes, false, &[])
+}
+
+/// The shape [`open_inner`] records for its arguments, and the one place
+/// it is computed.
+fn shape_opened_with(
+    extra_ddl: &[&str],
+    lookup_indexes: &[&str],
+    include_shared: bool,
+    ladder: &[Migration],
+) -> datalib_store_meta::Shape {
+    let shared: &[&str] = if include_shared { SHARED_DDL } else { &[] };
+    datalib_store_meta::Shape {
+        tables: recorded_shape(extra_ddl.iter().chain(shared).copied()),
+        indexes: (!lookup_indexes.is_empty())
+            .then(|| datalib_store_meta::schema_hash(lookup_indexes.iter().copied())),
+        versions: datalib_store_meta::Versions {
+            schema: datalib_store_meta::ladder::top(ladder),
+            shared: datalib_store_meta::ladder::top(SHARED_LADDER),
+        },
+    }
+}
+
 /// A raw store, for the process that owns it, with no migrations.
 /// [`OnSchemaBreak::Refuse`].
 pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
@@ -1022,16 +1053,11 @@ async fn open_inner(
     let shared: &[&str] = if include_shared { SHARED_DDL } else { &[] };
     let bare = extra_ddl.is_empty() && shared.is_empty();
     let has_tables = !user_tables(&pool).await?.is_empty();
-    let mut tops = datalib_store_meta::Versions::default();
     // The shared ladder first: the framework's tables are below the
     // owner's, and an owner's rung may read them.
     for (which, rungs_of) in [(Ladder::Shared, SHARED_LADDER), (Ladder::Own, ladder)] {
         let stored = datalib_store_meta::ladder::stored_version(&pool, which).await?;
         let top = datalib_store_meta::ladder::top(rungs_of);
-        match which {
-            Ladder::Shared => tops.shared = top,
-            Ladder::Own => tops.schema = top,
-        }
         if bare {
             continue;
         }
@@ -1155,14 +1181,10 @@ async fn open_inner(
     if bare {
         return Ok(pool);
     }
-    let meta_moved = datalib_store_meta::write(
-        &pool,
-        kind,
-        &recorded_shape(extra_ddl.iter().chain(shared).copied()),
-        tops,
-    )
-    .await
-    .with_context(|| format!("write _datalib_meta for {}", db_path.display()))?;
+    let shape = shape_opened_with(extra_ddl, lookup_indexes, include_shared, ladder);
+    let meta_moved = datalib_store_meta::write(&pool, kind, &shape)
+        .await
+        .with_context(|| format!("write _datalib_meta for {}", db_path.display()))?;
     // Commit the schema before handing back the pool, so readers and the
     // run's deltas start from a commit that has every table. The message
     // names the build when the meta rows moved — a new

@@ -28,7 +28,7 @@ use crate::repo::{
 use crate::search::SearchRow;
 use crate::sort::{default_order, order_by, Sort};
 use datalib_core::repo::RepoError;
-use datalib_pin::{is_missing_table, missing_schema, open_reader, Missing};
+use datalib_pin::open_reader;
 use datalib_query::table::{Column, SearchTable};
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRowColumn;
@@ -86,7 +86,6 @@ async fn rows_in(at: &mut At, uuids: &[String]) -> Result<Vec<SearchRow>, RepoEr
         }
         let rows = match query.fetch_all(&mut *at.tx).await {
             Ok(rows) => rows,
-            Err(e) if is_missing_table(&e, "grid_rows") => return Ok(Vec::new()),
             Err(e) => return Err(RepoError::Internal(e.to_string())),
         };
         for r in rows {
@@ -149,11 +148,6 @@ async fn add_subject_people<'r>(
     .await
     {
         Ok(found) => found,
-        Err(e) if is_missing_table(&e, "source_contact_handles") => return Ok(()),
-        // An index an older build wrote, until `unified_grid_and_search_index` rebuilds it.
-        Err(e) if matches!(missing_schema(&e), Some(Missing::Column(c)) if c.ends_with("supplied_terms")) => {
-            return Ok(())
-        }
         Err(e) => return Err(RepoError::Internal(format!("read subject people: {e}"))),
     };
     let mut people: std::collections::HashMap<String, Vec<crate::search::SubjectPerson>> =
@@ -206,7 +200,6 @@ async fn add_contact_handles<'r>(
     .await
     {
         Ok(handles) => handles,
-        Err(e) if is_missing_table(&e, "source_contact_handles") => return Ok(()),
         Err(e) => return Err(RepoError::Internal(format!("read contact handles: {e}"))),
     };
     for (doc, handle) in handles {
@@ -410,9 +403,6 @@ impl DoltRepo {
         }
         match query.fetch_all(&mut *at.tx).await {
             Ok(rows) => Ok(rows),
-            Err(e) if is_missing_table(&e, "grid_rows") || is_missing_table(&e, "rows") => {
-                Ok(Vec::new())
-            }
             Err(e) => Err(RepoError::Internal(e.to_string())),
         }
     }
@@ -433,14 +423,6 @@ impl DoltRepo {
         })
     }
 
-    /// The index at the generation it is at now, or `None` while the
-    /// `unified_grid_and_search_index` step has yet to create it — the same answer every read
-    /// gives for a missing table.
-    ///
-    /// A transaction on a read-only connection to the WAL file reads one
-    /// state of it for every statement, and the writer changes it one
-    /// whole source per transaction, so a request never sees a
-    /// half-written batch.
     /// [`pinned`](Self::pinned), with `problems` every step's problems:
     /// each read where its step keeps it (`datalib_step_problems::of_steps`),
     /// gathered into a table of this read's own, since no store holds them
@@ -489,6 +471,13 @@ impl DoltRepo {
         Ok(Some(at))
     }
 
+    /// The index at the generation it is at now, or `None` while the
+    /// `unified_grid_and_search_index` step has yet to create it.
+    ///
+    /// A transaction on a read-only connection to the WAL file reads one
+    /// state of it for every statement, and the writer changes it one
+    /// whole source per transaction, so a request never sees a
+    /// half-written batch.
     async fn pinned(&self) -> Result<Option<At>, RepoError> {
         let internal = |what: &str, e: sqlx::Error| RepoError::Internal(format!("{what}: {e}"));
         use std::os::unix::fs::MetadataExt;
@@ -522,6 +511,13 @@ impl DoltRepo {
         let Some(commit) = commit else {
             return Ok(None);
         };
+        // Every table and index this build reads is there, or the read is
+        // refused here, naming what to run: nothing below reads around a
+        // table an older build left out.
+        let want = datalib_etl_render::grid_index::shape();
+        datalib_store_meta::read_requiring_in(&mut tx, &self.db_path, &want)
+            .await
+            .map_err(RepoError::from_anyhow)?;
         Ok(Some(At {
             tx,
             commit,
@@ -594,16 +590,6 @@ fn grouping<R>(
     }
 }
 
-/// A read of the tree's tables from an index an older build wrote, which
-/// has none of them, until `unified_grid_and_search_index` rebuilds it: no children.
-fn older_than_the_tree(e: &sqlx::Error) -> bool {
-    match missing_schema(e) {
-        Some(Missing::Table(t)) => ["grid_rows", "data_nodes", "filings"].contains(&t.as_str()),
-        Some(Missing::Column(c)) => c.ends_with("parent_uuid") || c.ends_with("sort_key"),
-        None => false,
-    }
-}
-
 impl At {
     async fn child_key(&mut self, scope: &Scope, uuid: &str) -> Result<Option<String>, RepoError> {
         let parent = scope.parent.spelled();
@@ -616,7 +602,6 @@ impl At {
             .await
         {
             Ok(key) => Ok(key),
-            Err(e) if older_than_the_tree(&e) => Ok(None),
             Err(e) => Err(RepoError::Internal(format!(
                 "find {uuid} among {parent}'s children: {e}"
             ))),
@@ -655,7 +640,6 @@ impl At {
                     via,
                 })
                 .collect()),
-            Err(e) if older_than_the_tree(&e) => Ok(Vec::new()),
             Err(e) => Err(RepoError::Internal(format!(
                 "list {parent}'s children: {e}"
             ))),
@@ -700,7 +684,6 @@ impl At {
                 .await
             {
                 Ok(nodes) => nodes,
-                Err(e) if older_than_the_tree(&e) => Vec::new(),
                 Err(e) => return Err(internal(e)),
             };
         let rows = rows
@@ -745,13 +728,11 @@ impl At {
             .await
         {
             Ok(below) => Ok(below.into_iter().collect()),
-            Err(e) if older_than_the_tree(&e) => Ok(Default::default()),
             Err(e) => Err(RepoError::Internal(format!("find places below: {e}"))),
         }
     }
 
-    /// Runs [`ordered_sql`]; a table the index does not have yet holds no
-    /// rows.
+    /// Runs [`ordered_sql`].
     async fn ordered_keys<C: Column>(
         &mut self,
         table: &str,
@@ -778,7 +759,6 @@ impl At {
         }
         match query.fetch_all(&mut *self.tx).await {
             Ok(keys) => Ok(keys),
-            Err(e) if is_missing_table(&e, <C::Table as SearchTable>::TABLE) => Ok(Vec::new()),
             Err(e) => Err(RepoError::Internal(e.to_string())),
         }
     }
@@ -800,7 +780,6 @@ impl At {
         }
         let rows = match query.fetch_all(&mut *self.tx).await {
             Ok(rows) => rows,
-            Err(e) if is_missing_table(&e, <C::Table as SearchTable>::TABLE) => Vec::new(),
             Err(e) => return Err(RepoError::Internal(e.to_string())),
         };
         let n = by.len();
@@ -840,7 +819,6 @@ impl At {
             .await
         {
             Ok(rows) => rows,
-            Err(e) if is_missing_table(&e, <C::Table as SearchTable>::TABLE) => Vec::new(),
             Err(e) => return Err(RepoError::Internal(e.to_string())),
         };
         Ok(rows
@@ -920,7 +898,6 @@ impl At {
             .await
         {
             Ok(rows) => Ok(rows.into_iter().collect()),
-            Err(e) if is_missing_table(&e, "markdowns") => Ok(std::collections::HashMap::new()),
             Err(e) => Err(RepoError::Internal(format!("read document titles: {e}"))),
         }
     }
@@ -947,7 +924,6 @@ impl At {
             }
             match query.fetch_all(&mut *self.tx).await {
                 Ok(rows) => out.extend(rows),
-                Err(e) if is_missing_table(&e, "grid_rows") => return Ok(out),
                 Err(e) => return Err(RepoError::Internal(e.to_string())),
             }
         }
@@ -955,8 +931,7 @@ impl At {
     }
 
     /// `SELECT * FROM problems` in this read, with the caller's clause,
-    /// as typed rows. An index built before the table existed reads as
-    /// empty; a row this build cannot parse is an error.
+    /// as typed rows; a row this build cannot parse is an error.
     async fn problem_rows(
         &mut self,
         where_sql: &str,
@@ -976,7 +951,6 @@ impl At {
         }
         let rows = match query.bind(limit as i64).fetch_all(&mut *self.tx).await {
             Ok(rows) => rows,
-            Err(e) if is_missing_table(&e, "problems") => return Ok(Vec::new()),
             Err(e) => return Err(RepoError::Internal(e.to_string())),
         };
         rows.iter()
@@ -1038,7 +1012,6 @@ impl IndexRepo for DoltRepo {
             .await
         {
             Ok(sources) => Ok(sources),
-            Err(e) if is_missing_table(&e, "grid_rows") => Ok(Vec::new()),
             Err(e) => Err(RepoError::Internal(e.to_string())),
         }
     }
@@ -1089,7 +1062,6 @@ impl IndexRepo for DoltRepo {
         }
         match query.fetch_one(&mut *at.tx).await {
             Ok(n) => Ok(usize::try_from(n).unwrap_or(0)),
-            Err(e) if is_missing_table(&e, "grid_rows") => Ok(0),
             Err(e) => Err(RepoError::Internal(e.to_string())),
         }
     }
@@ -1127,7 +1099,6 @@ impl IndexRepo for DoltRepo {
         }
         let kept = match query.fetch_all(&mut *at.tx).await {
             Ok(found) => found,
-            Err(e) if is_missing_table(&e, "grid_rows") => Vec::new(),
             Err(e) => return Err(RepoError::Internal(e.to_string())),
         };
         let uuids = match order {
@@ -1281,7 +1252,6 @@ impl IndexRepo for DoltRepo {
             .await
         {
             Ok(row) => row,
-            Err(e) if is_missing_table(&e, "grid_rows") => return Ok(None),
             Err(e) => return Err(RepoError::Internal(e.to_string())),
         };
         let Some(r) = row else { return Ok(None) };
@@ -1389,7 +1359,6 @@ impl IndexRepo for DoltRepo {
             .await
         {
             Ok(rows) => rows,
-            Err(e) if is_missing_table(&e, "markdowns") => return Ok(Vec::new()),
             Err(e) => return Err(RepoError::Internal(e.to_string())),
         };
         Ok(rows
@@ -1420,7 +1389,6 @@ impl IndexRepo for DoltRepo {
         .await
         {
             Ok(rows) => rows,
-            Err(e) if is_missing_table(&e, "grid_rows") => return Ok(Vec::new()),
             Err(e) => return Err(RepoError::Internal(e.to_string())),
         };
         Ok(rows
@@ -1501,9 +1469,6 @@ impl IndexRepo for DoltRepo {
         }
         match query.fetch_all(&mut *at.tx).await {
             Ok(rows) => Ok(rows),
-            Err(e) if is_missing_table(&e, "grid_rows") || is_missing_table(&e, "markdowns") => {
-                Ok(Vec::new())
-            }
             Err(e) => Err(RepoError::Internal(e.to_string())),
         }
     }
@@ -1536,7 +1501,6 @@ impl IndexRepo for DoltRepo {
         }
         match query.bind(wanted).fetch_all(&mut *at.tx).await {
             Ok(rows) => Ok(rows.into_iter().map(|(d,)| d).collect()),
-            Err(e) if is_missing_table(&e, "grid_rows") => Ok(Default::default()),
             Err(e) => Err(RepoError::Internal(e.to_string())),
         }
     }
@@ -1564,7 +1528,6 @@ impl IndexRepo for DoltRepo {
         .await
         {
             Ok(rows) => rows,
-            Err(e) if is_missing_table(&e, "grid_rows") => return Ok(Vec::new()),
             Err(e) => return Err(RepoError::Internal(e.to_string())),
         };
         Ok(rows
@@ -1613,9 +1576,6 @@ impl IndexRepo for DoltRepo {
         // LEFT JOIN so that an edge with a dangling FK (destination no
         // longer in `markdowns`) still surfaces — the UI can show the
         // raw uuid and the user at least learns the link exists.
-        // The edges table may not exist on older data roots; treat any
-        // SQL error as "no edges" so the chat endpoint doesn't blow up
-        // mid-render.
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
@@ -1637,7 +1597,7 @@ impl IndexRepo for DoltRepo {
             .await
         {
             Ok(rs) => rs,
-            Err(_) => return Ok(Vec::new()),
+            Err(e) => return Err(RepoError::Internal(format!("read outgoing edges: {e}"))),
         };
         let mut out: Vec<EdgeRowOut> = Vec::with_capacity(rows.len());
         for r in rows {
@@ -1692,13 +1652,6 @@ impl IndexRepo for DoltRepo {
             .await
         {
             Ok(rows) => rows,
-            // A root whose index has never run has no tables yet: nothing
-            // rendered, not a failure.
-            Err(e)
-                if is_missing_table(&e, "markdowns") || is_missing_table(&e, "source_cursors") =>
-            {
-                return Ok(out)
-            }
             Err(e) => {
                 return Err(RepoError::Internal(format!(
                     "read where documents are kept: {e}"

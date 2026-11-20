@@ -161,11 +161,15 @@ impl AppStore {
         ] {
             let hash = datalib_store_meta::schema_hash(ddl.iter().map(|(_t, d)| *d));
             let top = datalib_store_meta::ladder::top(ladder);
-            let versions = datalib_store_meta::Versions {
-                schema: top,
-                shared: 0,
+            let shape = datalib_store_meta::Shape {
+                tables: hash,
+                indexes: None,
+                versions: datalib_store_meta::Versions {
+                    schema: top,
+                    shared: 0,
+                },
             };
-            let changed = datalib_store_meta::write(pool, kind, &hash, versions)
+            let changed = datalib_store_meta::write(pool, kind, &shape)
                 .await
                 .map_err(internal)?;
             let committed = matches!(kind, StoreKind::Feedback | StoreKind::RemoteMedia);
