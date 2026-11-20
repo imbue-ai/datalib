@@ -980,7 +980,7 @@ why = "Once per organization per run (`prune_org_cowork`): `cowork_sessions` hol
 [[scan]]
 statement = "SELECT DISTINCT blob_id, blake3 FROM email_blobs WHERE blake3 IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
-why = "Once per run, by design: every attachment's hash, to tell the blob store what is still referenced."
+why = "Once per run, by design: the download loads every hash it holds at its start, so asking whether it already has a file's bytes is a lookup in memory, not a statement per file."
 
 [[scan]]
 statement = "SELECT a.message_id, a.export_name, m.group_id FROM chat_attachments a JOIN chat_messages m ON m.id = a.message_id WHERE a.blake3 IS NULL"
@@ -1020,7 +1020,7 @@ why = "Reads every row by design: the statement has no WHERE."
 [[scan]]
 statement = "SELECT file_id AS ref_id, blake3 FROM slack_attachments WHERE blake3 IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
-why = "Once per run, by design: every attachment's hash, to tell the blob store what is still referenced."
+why = "Once per run, by design: the download loads every hash it holds at its start, so asking whether it already has a file's bytes is a lookup in memory, not a statement per file."
 
 [[scan]]
 statement = "SELECT id FROM account"
@@ -1265,7 +1265,7 @@ why = "Reads every row by design: the statement has no WHERE."
 [[scan]]
 statement = "SELECT id, ref_id, blake3 FROM chat_item_attachments WHERE blake3 IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
-why = "Once per run, by design: every attachment's hash, to tell the blob store what is still referenced."
+why = "Once per run, by design: the download loads every hash it holds at its start, so asking whether it already has a file's bytes is a lookup in memory, not a statement per file."
 
 [[scan]]
 statement = "SELECT json(payload) AS payload FROM users WHERE payload IS NOT NULL ORDER BY id"
@@ -1330,7 +1330,7 @@ why = "Reads every row by design: the statement has no WHERE."
 [[scan]]
 statement = "SELECT uri AS ref_id, blake3 FROM media_blobs WHERE blake3 IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
-why = "Once per run, by design: every media file's hash, to tell the blob store what is still referenced."
+why = "Once per run, by design: the download loads every hash it holds at its start, so asking whether it already has a file's bytes is a lookup in memory, not a statement per file."
 
 [[scan]]
 statement = "UPDATE OR IGNORE sinks SET path = ? || substr(path, ?) WHERE substr(path, 1, ?) = ?"
