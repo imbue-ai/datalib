@@ -198,6 +198,33 @@ pub struct GeminiAttachmentRow {
 
 // ── DDL composition ────────────────────────────────────────────────
 
+/// What a read prunes by: a re-read file's rows (`per_file`), a re-read
+/// group's messages (`google_chat`). Without them each file or group
+/// read walks its whole table.
+pub const SCOPE_INDEXES: &[(&str, &str, &str)] = &[
+    (
+        "chat_messages",
+        "group_id",
+        "CREATE INDEX IF NOT EXISTS chat_messages_by_group ON chat_messages(group_id)",
+    ),
+    (
+        "maps_saved_lists",
+        "file",
+        "CREATE INDEX IF NOT EXISTS maps_saved_lists_by_file ON maps_saved_lists(file)",
+    ),
+    (
+        "my_maps_placemarks",
+        "file",
+        "CREATE INDEX IF NOT EXISTS my_maps_placemarks_by_file ON my_maps_placemarks(file)",
+    ),
+    (
+        "play_books_annotations",
+        "file",
+        "CREATE INDEX IF NOT EXISTS play_books_annotations_by_file \
+         ON play_books_annotations(file)",
+    ),
+];
+
 pub fn full_ddl() -> Vec<String> {
     use datalib_etl::blob_cas::CasEdgeRow as _;
     let mut out: Vec<String> = vec![
@@ -217,6 +244,7 @@ pub fn full_ddl() -> Vec<String> {
         // `google_takeout/<feed>` scopes inside it.
         datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string(),
     ];
+    out.extend(SCOPE_INDEXES.iter().map(|(_, _, ddl)| ddl.to_string()));
     out.extend(ChatAttachmentRow::all_ddl());
     out.extend(GeminiAttachmentRow::all_ddl());
     // Google Voice feed's own tables (entity + CAS edge DDL); the
@@ -325,6 +353,54 @@ mod tests {
             ns_id("maps_review:abc:2026-06-04"),
             ns_id("maps_review:abc:2026-06-05"),
         );
+    }
+
+    /// Every file read again prunes its table by `file`, and every chat
+    /// group's messages by `group_id`: a lookup per file or group, which
+    /// walked the whole table before these indexes.
+    #[tokio::test]
+    async fn a_read_prunes_its_file_or_group_by_index() {
+        use sqlx::Row;
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for sql in full_ddl() {
+            sqlx::query(sqlx::AssertSqlSafe(sql))
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        for (table, column, ddl) in SCOPE_INDEXES {
+            let index = ddl
+                .split_whitespace()
+                .nth(5)
+                .expect("CREATE INDEX IF NOT EXISTS <name>");
+            let sql = datalib_etl::prune::scope_ids_sql(table, &[column]);
+            // Audited: a table and column of this module's constants.
+            let plan: Vec<String> =
+                sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
+                    .bind("x")
+                    .fetch_all(&pool)
+                    .await
+                    .unwrap()
+                    .iter()
+                    .map(|r| r.get::<String, _>("detail"))
+                    .collect();
+            let (start, end) = (
+                format!("SEARCH {table} USING "),
+                format!("INDEX {index} ({column}=?)"),
+            );
+            assert!(
+                plan.iter()
+                    .any(|d| d.starts_with(&start) && d.ends_with(&end)),
+                "{sql}: {plan:?}"
+            );
+        }
+        pool.close().await;
     }
 
     #[test]

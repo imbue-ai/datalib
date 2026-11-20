@@ -3,14 +3,15 @@
 //! place under the keywords or collection sets above it, under the
 //! catalog's Keywords or Collections. Those three are places of their own,
 //! as Lightroom's Library panel lists them. Keywords and collections are
-//! keyed by the catalog's `id_local`, which a rename keeps; a folder by its
-//! path, which is what the catalog names it by.
+//! keyed by the catalog's `id_local`, and a folder by its `id_global`,
+//! which a rename or a move inside Lightroom keeps; a folder level the
+//! catalog has no row for, by its path.
 
 use datalib_id::{IdNamespace, Identity};
 use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::filings::FilingRow;
 
-use crate::read::ImageRow;
+use crate::read::{folder_levels, ImageRow};
 
 pub const KIND_CATALOG: &str = "catalog";
 
@@ -34,9 +35,38 @@ pub fn section_uuid(source_id: &str, section: Section) -> String {
     mint(source_id, KIND_SECTION, section.key().to_string())
 }
 
-/// A folder, by its root folder's path and its path from that root.
+/// A folder the catalog has no row for, by its root folder's path and its
+/// path from that root: a rename there is a new node.
 pub fn folder_uuid(source_id: &str, root: &str, from_root: &str) -> String {
     mint(source_id, KIND_FOLDER, format!("{root}\u{0}{from_root}"))
+}
+
+pub const ROOT_FOLDER_TABLE: &str = "AgLibraryRootFolder";
+pub const FOLDER_TABLE: &str = "AgLibraryFolder";
+
+/// A root folder or a folder, by its table and its `id_global`.
+pub fn folder_id_uuid(source_id: &str, table: &'static str, id_global: &str) -> String {
+    mint(source_id, table, id_global.to_string())
+}
+
+/// A folder's node: by its catalog id where the catalog has one, which it
+/// names as its upstream record; else by its path, naming none.
+fn folder_node(
+    md: &str,
+    source_id: &str,
+    name: &str,
+    id: Option<(&'static str, &str)>,
+    path: (&str, &str),
+) -> DataNodeRow {
+    let node = |uuid: String| {
+        DataNodeRow::new(md, uuid, source_id, KIND_FOLDER_ROW)
+            .named(Some(name.to_string()))
+            .place()
+    };
+    match id {
+        Some((table, id)) => node(folder_id_uuid(source_id, table, id)).upstream(table, id, None),
+        None => node(folder_uuid(source_id, path.0, path.1)),
+    }
 }
 
 const KIND_SECTION: &str = "section";
@@ -129,36 +159,17 @@ pub fn of(source_id: &str, image: &ImageRow, catalog_name: Option<&str>) -> Tree
         let folders = section(Section::Folders);
         let mut at = in_catalog.below(&folders);
         push(&mut data_nodes, folders);
-        let root_node = DataNodeRow::new(
-            md,
-            folder_uuid(source_id, root, ""),
-            source_id,
-            KIND_FOLDER_ROW,
-        )
-        .named(Some(root_name(root).to_string()))
-        .place()
-        .under(&at);
+        let root_id = image.root_id.as_deref().map(|id| (ROOT_FOLDER_TABLE, id));
+        let root_node = folder_node(md, source_id, root_name(root), root_id, (root, "")).under(&at);
         at = at.below(&root_node);
         push(&mut data_nodes, root_node);
-        let mut from_root = String::new();
-        for part in image
-            .folder
-            .as_deref()
-            .unwrap_or("")
-            .split('/')
-            .filter(|p| !p.is_empty())
-        {
-            from_root.push_str(part);
-            from_root.push('/');
-            let node = DataNodeRow::new(
-                md,
-                folder_uuid(source_id, root, &from_root),
-                source_id,
-                KIND_FOLDER_ROW,
-            )
-            .named(Some(part.to_string()))
-            .place()
-            .under(&at);
+        for (i, (part, from_root)) in folder_levels(image.folder.as_deref()).enumerate() {
+            let id = image
+                .folder_ids
+                .get(i)
+                .and_then(|id| id.as_deref())
+                .map(|id| (FOLDER_TABLE, id));
+            let node = folder_node(md, source_id, part, id, (root, &from_root)).under(&at);
             at = at.below(&node);
             push(&mut data_nodes, node);
         }
@@ -323,6 +334,83 @@ mod tests {
         assert_eq!(a.photo.parent_uuid.as_deref(), Some(risa.as_str()));
         assert_eq!(a.photo.place_uuid.as_deref(), Some(risa.as_str()));
         assert_eq!(b.photo, a.photo, "two photos in one folder share it");
+    }
+
+    /// A folder renamed or moved inside Lightroom keeps its catalog id, and
+    /// so its node; a level the catalog has no row for is keyed by its path.
+    #[test]
+    fn a_folder_is_keyed_by_its_catalog_id_and_keeps_it_through_a_rename() {
+        let image = |root: &str, folder: &str, ids: Vec<Option<&str>>| ImageRow {
+            id_global: "IMG-1".into(),
+            root_absolute: Some(root.into()),
+            root_id: Some("ROOT-1".into()),
+            folder: Some(folder.into()),
+            folder_ids: ids.into_iter().map(|i| i.map(str::to_string)).collect(),
+            ..ImageRow::default()
+        };
+        let folders = |t: &Tree| -> Vec<(String, Option<String>, Option<String>)> {
+            t.data_nodes
+                .iter()
+                .filter(|n| n.kind == KIND_FOLDER_ROW)
+                .map(|n| (n.uuid.clone(), n.name.clone(), n.upstream_id.clone()))
+                .collect()
+        };
+        let before = of(
+            "lr",
+            &image(
+                "/Users/picard/Pictures/",
+                "2369/Risa/",
+                vec![Some("F-2369"), Some("F-RISA")],
+            ),
+            None,
+        );
+        let after = of(
+            "lr",
+            &image(
+                "/Volumes/Archive/Pictures/",
+                "2369/Risa shore leave/",
+                vec![Some("F-2369"), Some("F-RISA")],
+            ),
+            None,
+        );
+        let uuids = |t: &Tree| folders(t).into_iter().map(|f| f.0).collect::<Vec<_>>();
+        assert_eq!(
+            uuids(&before),
+            uuids(&after),
+            "a rename and a move keep every node"
+        );
+        assert_eq!(
+            folders(&after)
+                .into_iter()
+                .map(|f| (f.1.unwrap(), f.2))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Pictures".to_string(), Some("ROOT-1".to_string())),
+                ("2369".to_string(), Some("F-2369".to_string())),
+                ("Risa shore leave".to_string(), Some("F-RISA".to_string())),
+            ],
+            "named as it is now, by the record it is"
+        );
+        assert_eq!(
+            uuids(&before)[2],
+            folder_id_uuid("lr", FOLDER_TABLE, "F-RISA")
+        );
+
+        let unlisted = of(
+            "lr",
+            &image(
+                "/Users/picard/Pictures/",
+                "2369/Risa/",
+                vec![Some("F-2369"), None],
+            ),
+            None,
+        );
+        let last = folders(&unlisted).pop().unwrap();
+        assert_eq!(
+            last.0,
+            folder_uuid("lr", "/Users/picard/Pictures/", "2369/Risa/")
+        );
+        assert_eq!(last.2, None, "a path-keyed folder names no upstream record");
     }
 
     #[test]

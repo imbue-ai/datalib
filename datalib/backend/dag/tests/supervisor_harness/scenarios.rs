@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use datalib_dag::supervisor::store::RequestOutcome;
-use datalib_dag::supervisor::tick::StateKind;
+use datalib_dag::supervisor::tick::{StateKind, WaitKind};
 use datalib_dag::Event;
 
 use crate::harness::{reads, source, Clocks, Harness, Seen, State, Step};
@@ -312,8 +312,10 @@ async fn a_step_between_passes_is_recorded_waiting_for_its_producer() {
     h.ended("c", 1).await;
     h.until("c to wait for a's next seal", |s| {
         let c = s.record.steps.get("c")?;
-        (c.state == Some(StateKind::Waiting) && c.state_detail.as_deref() == Some("waiting for a"))
-            .then_some(())
+        (c.state == Some(StateKind::Waiting)
+            && c.waiting_for == Some(WaitKind::Upstream)
+            && c.state_detail.as_deref() == Some("waiting for a"))
+        .then_some(())
     })
     .await;
     h.run("a", "ok s2").await;

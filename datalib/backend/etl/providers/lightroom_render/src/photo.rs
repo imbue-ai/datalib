@@ -24,7 +24,9 @@ use crate::xmp::{self, XmpFields};
 /// with members, the quick collection and publish collections included.
 /// v6: a photo sits in its folder, and keywords, collections and folders
 /// each hang under a place of their own in the catalog (tree.rs).
-pub const RENDER_VERSION: u32 = 6;
+/// v7: a folder is keyed by its catalog id, which a rename or a move
+///     inside Lightroom keeps, not by its path.
+pub const RENDER_VERSION: u32 = 7;
 
 /// How a nested collection's path is shown.
 pub const PATH_SEPARATOR: &str = " › ";
