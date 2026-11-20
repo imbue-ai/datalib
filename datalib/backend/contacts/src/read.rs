@@ -24,9 +24,22 @@ impl ContactsReader {
         if !path.is_file() {
             return Ok(None);
         }
-        Ok(doltlite_raw::open_reader(&path, None)
-            .await?
-            .map(|reader| Self { reader }))
+        let Some(reader) = doltlite_raw::open_reader(&path, None).await? else {
+            return Ok(None);
+        };
+        // The applet that writes it brings it to this build's shape when
+        // it opens it; until then it is refused, not read around.
+        let want = doltlite_raw::curated_shape(crate::schema::DDL, crate::LADDER);
+        if let Err(e) = datalib_store_meta::require_run(
+            &path,
+            None,
+            datalib_store_meta::read(reader.pool()).await?.as_ref(),
+            &want,
+        ) {
+            reader.close().await;
+            return Err(e);
+        }
+        Ok(Some(Self { reader }))
     }
 
     pub async fn close(self) {
@@ -79,18 +92,9 @@ impl ContactsReader {
     }
 
     /// Every handle the contacts marked as me reach, as [`Self::handles`]
-    /// reads each. None from a store the applet has not opened since the
-    /// mark existed, which has no `me` table yet.
+    /// reads each.
     pub async fn me_handles(&self) -> Result<BTreeSet<String>> {
         let pool = self.reader.pool();
-        let has_table: Option<i64> =
-            sqlx::query_scalar("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'me'")
-                .fetch_optional(pool)
-                .await
-                .context("read whether the store marks anyone as me")?;
-        if has_table.is_none() {
-            return Ok(BTreeSet::new());
-        }
         let marked: Vec<String> = sqlx::query_scalar("SELECT contact_id FROM me")
             .fetch_all(pool)
             .await
@@ -234,7 +238,7 @@ mod tests {
     }
 
     /// `me` reaches every handle of each contact marked as me, a merged
-    /// one's included; a store written before the mark existed has none.
+    /// one's included; a store an older build wrote is refused.
     #[tokio::test]
     async fn me_is_every_handle_of_the_contacts_marked_as_me() {
         let tmp = tempfile::tempdir().unwrap();
@@ -264,18 +268,22 @@ mod tests {
         assert_eq!(r.me_handles().await.unwrap(), want);
         r.close().await;
 
+        // A store an older build wrote is refused until the applet opens
+        // it, not read as marking no one.
         let store = Store::open(&store_path(tmp.path())).await.unwrap();
-        sqlx::query("DROP TABLE me")
+        sqlx::query("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
             .execute(&store.pool)
             .await
             .unwrap();
-        doltlite_raw::commit_run(&store.pool, "a store from before the mark")
+        doltlite_raw::commit_run(&store.pool, "an older build's store")
             .await
             .unwrap();
         store.close().await;
-        let r = ContactsReader::open(tmp.path()).await.unwrap().unwrap();
-        assert!(r.me_handles().await.unwrap().is_empty());
-        r.close().await;
+        let e = ContactsReader::open(tmp.path())
+            .await
+            .err()
+            .expect("refused");
+        assert!(datalib_store_meta::other_shape(&e).is_some(), "{e:#}");
     }
 
     #[tokio::test]

@@ -348,9 +348,7 @@ pub async fn own_problem_counts(
 }
 
 /// Drop every row the index holds for `source_id`: its own row about a
-/// render store it could not read, now read, and the copies an older
-/// build made of the source's problems, which a reader now finds in the
-/// steps' own stores. Whether anything went.
+/// render store it could not read, now read. Whether anything went.
 pub(crate) async fn clear_source_problems(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     source_id: &str,
@@ -384,7 +382,7 @@ fn unreadable_store_problem(
     )
 }
 
-const OLDER_SHAPE: &str = "its render store is in an older shape; sync this source to re-render it";
+const OTHER_SHAPE: &str = "its render store is in another shape; sync this source to re-render it";
 
 async fn record_unreadable_store(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
@@ -749,7 +747,9 @@ async fn empty_if_another_shape(pool: &SqlitePool) -> Result<()> {
     let have = datalib_store_meta::schema_hash_in(&mut tx)
         .await
         .context("read the grid index's shape")?;
-    if have.is_some_and(|h| h != shape().tables) {
+    // A file that records no shape is in none: an index from before
+    // `_datalib_meta`, or a new file with nothing to drop.
+    if have.as_deref() != Some(shape().tables.as_str()) {
         tracing::info!("the grid index was written in another shape; building it again");
         drop_own_tables(&mut tx).await?;
     }
@@ -1515,7 +1515,7 @@ async fn apply_source(
     let res = async {
         let (docs, removed, head) = match read {
             SourceRead::Unreadable => {
-                let row = unreadable_store_problem(stanza, OLDER_SHAPE, Severity::Warning);
+                let row = unreadable_store_problem(stanza, OTHER_SHAPE, Severity::Warning);
                 let mut guard = write_lock.acquire().await?;
                 record_unreadable_store(guard.conn(), row, now).await?;
                 summary.sources_unreadable.push(stanza.to_string());
@@ -2386,7 +2386,7 @@ mod open_index_tests {
     #[test]
     fn an_unreadable_store_is_news_once() {
         use datalib_schema::problems::Severity;
-        let row = || unreadable_store_problem("s", OLDER_SHAPE, Severity::Warning);
+        let row = || unreadable_store_problem("s", OTHER_SHAPE, Severity::Warning);
         let first = row().stamped(None, "2026-11-04T10:00:00Z", None);
         assert!(first.is_news(None));
         let again = row().stamped(Some(&first), "2026-11-04T10:05:00Z", None);
@@ -3070,6 +3070,46 @@ mod shape_tests {
 
         let pool = open_index(&db).await.unwrap();
         assert_eq!(documents(&pool).await, 1);
+    }
+
+    /// An index whose tables are this build's and whose indexes are not is
+    /// kept and given them, not rebuilt: adding an index costs making it.
+    /// One that records no shape at all is in none, and made new.
+    #[tokio::test]
+    async fn only_moved_indexes_are_made_and_no_recorded_shape_is_made_new() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("db.sqlite");
+        let pool = holding_one_document(&db).await;
+        sqlx::query("DROP INDEX grid_rows_by_author")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE _datalib_meta SET value = 'fewer' WHERE key = 'index_hash'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        crate::grid_index::close_index(pool).await.unwrap();
+
+        let pool = open_index(&db).await.unwrap();
+        assert_eq!(documents(&pool).await, 1, "kept");
+        let meta = datalib_store_meta::read(&pool).await.unwrap().unwrap();
+        assert_eq!(meta.shape(), crate::grid_index::shape());
+        let made: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM sqlite_master WHERE name = 'grid_rows_by_author'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(made, 1);
+
+        sqlx::query("DROP TABLE _datalib_meta")
+            .execute(&pool)
+            .await
+            .unwrap();
+        crate::grid_index::close_index(pool).await.unwrap();
+        let pool = open_index(&db).await.unwrap();
+        assert_eq!(documents(&pool).await, 0, "made new");
+        crate::grid_index::close_index(pool).await.unwrap();
     }
 }
 

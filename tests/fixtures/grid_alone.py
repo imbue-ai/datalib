@@ -26,6 +26,12 @@ def main() -> int:
         for name in tables:
             # A virtual table takes its shadow tables with it.
             conn.execute(f'DROP TABLE IF EXISTS "{name}"')
+        # And the shape the search index recorded, so the file says it holds
+        # none (`datalib_store_meta::part_key`), as a root no keyword pass
+        # has run on does.
+        conn.execute("DELETE FROM _datalib_meta WHERE key = 'search_index_schema_hash'")
+        # Out of the DELETE's transaction, or the journal mode does not move.
+        conn.commit()
         conn.execute("PRAGMA journal_mode=DELETE")
     return 0
 

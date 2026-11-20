@@ -24,7 +24,7 @@ pub mod ladder;
 pub mod shape;
 pub use guard::{inspect_root, refuse_if_newer, NewerBuild};
 pub use ladder::{Ladder, Migration};
-pub use shape::{other_shape, require, OtherShape, Shape};
+pub use shape::{other_shape, require, require_part, require_run, OtherShape, Shape};
 
 pub const TABLE: &str = "_datalib_meta";
 
@@ -372,6 +372,23 @@ pub async fn write_part_schema_hash(
     .await
     .with_context(|| format!("write _datalib_meta.{}", part_key(part)))?;
     Ok(())
+}
+
+/// The tables' hash a part of a file records, read without writing:
+/// `None` when the file records none for it.
+pub async fn read_part(pool: &SqlitePool, part: StoreKind) -> Result<Option<String>> {
+    let mut conn = pool
+        .acquire()
+        .await
+        .context("acquire to read _datalib_meta")?;
+    if !table_exists(&mut conn).await? {
+        return Ok(None);
+    }
+    sqlx::query_scalar("SELECT value FROM _datalib_meta WHERE key = ?")
+        .bind(part_key(part))
+        .fetch_optional(&mut *conn)
+        .await
+        .with_context(|| format!("read _datalib_meta.{}", part_key(part)))
 }
 
 /// The `_datalib_meta` key a part's shape is kept under, for a reader

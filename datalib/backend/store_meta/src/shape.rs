@@ -59,6 +59,8 @@ pub struct OtherShape {
     pub want: Shape,
     /// The `datalib_version` that wrote it, when it says.
     pub written_by: Option<String>,
+    /// The step to run to bring it to this build's shape, when one does.
+    pub step: Option<String>,
 }
 
 fn short(hash: &str) -> &str {
@@ -91,13 +93,6 @@ fn step_of(store: &Path) -> Option<String> {
     ))
 }
 
-impl OtherShape {
-    /// The step to run to bring the store to this build's shape.
-    pub fn step(&self) -> Option<String> {
-        step_of(&self.store)
-    }
-}
-
 impl std::fmt::Display for OtherShape {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let have = match &self.have {
@@ -116,14 +111,17 @@ impl std::fmt::Display for OtherShape {
             self.store.display(),
             describe(&self.want),
         )?;
-        match self.step() {
+        match &self.step {
             Some(step) => write!(
                 f,
                 "Run `{step}` to do that from what is already downloaded: accept the \
                  app's offer to re-run it, sync it from the Manage screen, or run \
                  `datalib-pipeline sync <data_root> {step}`."
             ),
-            None => write!(f, "Run the step that writes it."),
+            None => write!(
+                f,
+                "The program that writes it does that the next time it opens it."
+            ),
         }
     }
 }
@@ -132,8 +130,20 @@ impl std::error::Error for OtherShape {}
 
 /// The check. `meta` is what `store` records, `None` when it records
 /// nothing; `want` is the shape this build writes it in. Refuses with an
-/// [`OtherShape`], which [`other_shape`] finds again.
+/// [`OtherShape`], which [`other_shape`] finds again, naming the step its
+/// folder is: `<group>/<function>`.
 pub fn require(store: &Path, meta: Option<&Meta>, want: &Shape) -> anyhow::Result<()> {
+    require_run(store, step_of(store).as_deref(), meta, want)
+}
+
+/// [`require`] for a store whose folder is not the step that writes it:
+/// `step` names the one to run.
+pub fn require_run(
+    store: &Path,
+    step: Option<&str>,
+    meta: Option<&Meta>,
+    want: &Shape,
+) -> anyhow::Result<()> {
     let have = meta.map(Meta::shape);
     if have.as_ref() == Some(want) {
         return Ok(());
@@ -143,6 +153,27 @@ pub fn require(store: &Path, meta: Option<&Meta>, want: &Shape) -> anyhow::Resul
         have,
         want: want.clone(),
         written_by: meta.map(|m| m.datalib_version.clone()),
+        step: step.map(str::to_string),
+    }))
+}
+
+/// [`require`] for a part of a file, which records only its tables' hash
+/// under its own key (`crate::part_key`): `have` is that hash.
+pub fn require_part(
+    store: &Path,
+    step: Option<&str>,
+    have: Option<&str>,
+    want: &str,
+) -> anyhow::Result<()> {
+    if have == Some(want) {
+        return Ok(());
+    }
+    Err(anyhow::Error::new(OtherShape {
+        store: store.to_path_buf(),
+        have: have.map(|h| Shape::of_tables(h.to_string())),
+        want: Shape::of_tables(want.to_string()),
+        written_by: None,
+        step: step.map(str::to_string),
     }))
 }
 
@@ -204,7 +235,7 @@ mod tests {
         let said = bare.to_string();
         assert!(said.contains("/r/s.doltlite_db"), "{said}");
         assert!(said.contains("no recorded shape"), "{said}");
-        assert_eq!(bare.step(), None);
+        assert_eq!(bare.step, None);
         let named = require(
             Path::new("/root/slack/render_markdown/s.doltlite_db"),
             None,
@@ -212,7 +243,7 @@ mod tests {
         )
         .unwrap_err();
         let named = other_shape(&named).unwrap();
-        assert_eq!(named.step().as_deref(), Some("slack/render_markdown"));
+        assert_eq!(named.step.as_deref(), Some("slack/render_markdown"));
         let said = named.to_string();
         assert!(
             said.contains("datalib-pipeline sync <data_root> slack/render_markdown"),

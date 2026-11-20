@@ -327,10 +327,16 @@ of four ways:
    person turned off keeps its switch.
 
 A step that fails to answer costs that step only, and the rest are
-asked. For `datalib-step`'s own steps: the grid index reads a render
-store in another shape as the index had it, with a warning; a rebuild of
-the index has nothing to keep, so a source whose render step stays
-turned off then has no rows until it re-renders. Its documents stay in
+asked. For `datalib-step`'s own steps, a store is read only in this
+build's shape (`datalib/backend/store_meta/README.md`). A store whose
+indexes alone moved is brought up to date in place: prepare opens it as
+its owner, which makes them. Until a store in another shape is rebuilt,
+nothing reads it, and the refusal names the step to run. The grid index
+leaves such a source's rows as it had them, with a warning; while the
+grid index itself is in another shape, the grid and documents answer
+with that refusal. A rebuild of the index has nothing to keep, so a
+source whose render step stays turned off then has no rows until it
+re-renders. Its documents stay in
 the search index with their vectors, and a search reads only the
 sources the grid holds, so it leaves search too and costs a search
 nothing. In the app, the pass writes only what each step brings up to
@@ -338,7 +344,9 @@ date in place, so the app stays usable while it runs: a pill where the
 sync indicator sits says how each step is going, and every Sync on the
 Sources card is disabled (`ManageResponse::sync_paused`); a request
 opened another way waits for the pass. After it, the pill stays red for
-a step the pass could not prepare until it is dismissed. The pass is
+a step the pass could not prepare until it is dismissed, and amber, with
+a button that runs them, while any step the pass marked `needs_rerun`
+has not run since. The pass is
 held in the server's memory (`/api/config`'s `upgrade`) and announced as
 `pass_changed` on `/api/sync/stream`; freeing disk space is drawn by the
 same pill (§"Resets and purges").

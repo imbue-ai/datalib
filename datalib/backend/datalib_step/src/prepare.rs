@@ -108,8 +108,11 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
 async fn search_index_is_stale(env: &StepEnv, data_root: &Path) -> Result<bool> {
     let index = datalib_core::layout::grid_index_db(data_root);
     let cache = datalib_core::layout::inference_cache_db(data_root);
-    let Some(reader) = datalib_search_index::Reader::open(&index, &cache).await? else {
-        return Ok(false);
+    let reader = match datalib_search_index::Reader::open(&index, &cache).await {
+        Ok(Some(reader)) => reader,
+        Ok(None) => return Ok(false),
+        Err(e) if datalib_store_meta::other_shape(&e).is_some() => return Ok(true),
+        Err(e) => return Err(e),
     };
     let stale = stale_in(&reader, env).await;
     reader.close().await;
@@ -117,9 +120,6 @@ async fn search_index_is_stale(env: &StepEnv, data_root: &Path) -> Result<bool> 
 }
 
 async fn stale_in(reader: &datalib_search_index::Reader, env: &StepEnv) -> Result<bool> {
-    if !reader.in_this_shape().await? {
-        return Ok(true);
-    }
     for source in crate::index_steps::groups_from_inputs(&env.inputs) {
         if reader.drawn_by_another_version(&source).await? {
             return Ok(true);
@@ -806,7 +806,7 @@ mod tests {
             .await
             .unwrap_err();
         let refused = datalib_store_meta::other_shape(&e).expect("refused for its shape");
-        assert_eq!(refused.step().as_deref(), Some("mail/ingest"));
+        assert_eq!(refused.step.as_deref(), Some("mail/ingest"));
     }
 
     /// The runner asks at every start, so a raw store this release already

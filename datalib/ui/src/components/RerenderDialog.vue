@@ -46,8 +46,8 @@ function onKeydown(e: KeyboardEvent) {
       <div class="rerender-body dialog-body">
         <p>
           This version of Datalib keeps these sources' data in a new shape, and reads only that
-          shape. Until they are re-run, their documents and search results are not shown, and a
-          sync re-runs only the source it syncs:
+          shape. Until they are re-run, their documents and search results are not shown, and a sync
+          re-runs only the source it syncs:
         </p>
         <ul class="sources">
           <li v-for="s in sources" :key="s.group">

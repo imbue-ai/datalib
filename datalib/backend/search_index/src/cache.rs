@@ -26,8 +26,8 @@ const DDL: [&str; 1] = ["CREATE TABLE IF NOT EXISTS vectors (
 /// that is a disk read each. SQLite picks this index for a lookup by `IN`,
 /// but the primary key for a correlated `NOT EXISTS`, so a query that only
 /// asks names it (`INDEXED BY`) rather than leave it to the planner.
-/// Kept out of [`DDL`]: the file's shape is a hash of it, and a cache in
-/// another shape is emptied.
+/// Recorded apart from [`DDL`], as the file's `index_hash`: a cache whose
+/// tables move is emptied, and one whose indexes move only gets them.
 const KEYS: &str = "CREATE INDEX IF NOT EXISTS vectors_keys ON vectors (model, hash)";
 
 /// Of a model's vectors, the hashes held among a bound JSON array of them.
@@ -45,29 +45,41 @@ const BATCH: usize = 10_000;
 /// the vectors in key order reads the file in order.
 pub const PAGE_SIZE: i64 = 16_384;
 
+/// The cache's own tables and index, then the chunks filed beside them.
+fn parts() -> [crate::file::Part<'static>; 2] {
+    [
+        crate::file::Part {
+            ddl: &DDL,
+            indexes: &[KEYS],
+            owns: crate::file::Owns::File(StoreKind::InferenceCache),
+        },
+        crate::file::Part {
+            ddl: &crate::chunked::DDL,
+            indexes: &[],
+            owns: crate::file::Owns::Part(StoreKind::SearchChunks),
+        },
+    ]
+}
+
+/// What a reader of the cache requires: the file's shape, and the filed
+/// chunks' part of it.
+pub(crate) fn shapes() -> (datalib_store_meta::Shape, String) {
+    let [file, chunks] = parts();
+    (
+        crate::file::shape_of(&file),
+        crate::file::shape_of(&chunks).tables,
+    )
+}
+
 pub struct InferenceCache {
     pub(crate) pool: SqlitePool,
 }
 
 impl InferenceCache {
     pub async fn open(path: &Path) -> Result<InferenceCache> {
-        let pool = crate::file::open(
-            path,
-            &[
-                (&DDL, crate::file::Owns::File(StoreKind::InferenceCache)),
-                (
-                    &crate::chunked::DDL,
-                    crate::file::Owns::Part(StoreKind::SearchChunks),
-                ),
-            ],
-            std::time::Duration::from_secs(60),
-        )
-        .await
-        .with_context(|| format!("open the inference cache at {}", path.display()))?;
-        if let Err(e) = sqlx::query(KEYS).execute(&pool).await {
-            pool.close().await;
-            return Err(e).with_context(|| format!("index the keys of {}", path.display()));
-        }
+        let pool = crate::file::open(path, &parts(), std::time::Duration::from_secs(60))
+            .await
+            .with_context(|| format!("open the inference cache at {}", path.display()))?;
         if let Err(e) = to_page_size(&pool).await {
             pool.close().await;
             return Err(e).with_context(|| format!("rewrite {} in larger pages", path.display()));

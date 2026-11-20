@@ -84,10 +84,10 @@ async fn rows_in(at: &mut At, uuids: &[String]) -> Result<Vec<SearchRow>, RepoEr
         for u in chunk {
             query = query.bind(u);
         }
-        let rows = match query.fetch_all(&mut *at.tx).await {
-            Ok(rows) => rows,
-            Err(e) => return Err(RepoError::Internal(e.to_string())),
-        };
+        let rows = query
+            .fetch_all(&mut *at.tx)
+            .await
+            .map_err(|e| RepoError::Internal(e.to_string()))?;
         for r in rows {
             let row = search_row_from(&r);
             by_uuid.insert(row.uuid.clone(), row);
@@ -401,10 +401,10 @@ impl DoltRepo {
         for p in &params {
             query = query.bind(p);
         }
-        match query.fetch_all(&mut *at.tx).await {
-            Ok(rows) => Ok(rows),
-            Err(e) => Err(RepoError::Internal(e.to_string())),
-        }
+        query
+            .fetch_all(&mut *at.tx)
+            .await
+            .map_err(|e| RepoError::Internal(e.to_string()))
     }
 
     /// The directory is created here, the file never is. The server's
@@ -757,10 +757,10 @@ impl At {
         for p in &params {
             query = query.bind(p);
         }
-        match query.fetch_all(&mut *self.tx).await {
-            Ok(keys) => Ok(keys),
-            Err(e) => Err(RepoError::Internal(e.to_string())),
-        }
+        query
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(|e| RepoError::Internal(e.to_string()))
     }
 
     /// The groups of the rows `where_sql` keeps in `table`, at most
@@ -778,10 +778,10 @@ impl At {
         for p in params {
             query = query.bind(p);
         }
-        let rows = match query.fetch_all(&mut *self.tx).await {
-            Ok(rows) => rows,
-            Err(e) => return Err(RepoError::Internal(e.to_string())),
-        };
+        let rows = query
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(|e| RepoError::Internal(e.to_string()))?;
         let n = by.len();
         let truncated = rows.len() > MAX_GROUPS;
         let groups = rows[..rows.len().min(MAX_GROUPS)]
@@ -949,10 +949,11 @@ impl At {
         for p in params {
             query = query.bind(p.clone());
         }
-        let rows = match query.bind(limit as i64).fetch_all(&mut *self.tx).await {
-            Ok(rows) => rows,
-            Err(e) => return Err(RepoError::Internal(e.to_string())),
-        };
+        let rows = query
+            .bind(limit as i64)
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(|e| RepoError::Internal(e.to_string()))?;
         rows.iter()
             .map(ProblemRow::from_row)
             .collect::<anyhow::Result<Vec<_>>>()
@@ -1097,10 +1098,10 @@ impl IndexRepo for DoltRepo {
         for p in params.iter().chain([&wanted]) {
             query = query.bind(p);
         }
-        let kept = match query.fetch_all(&mut *at.tx).await {
-            Ok(found) => found,
-            Err(e) => return Err(RepoError::Internal(e.to_string())),
-        };
+        let kept = query
+            .fetch_all(&mut *at.tx)
+            .await
+            .map_err(|e| RepoError::Internal(e.to_string()))?;
         let uuids = match order {
             Some(_) => kept,
             None => {
@@ -1467,10 +1468,10 @@ impl IndexRepo for DoltRepo {
         for p in &params {
             query = query.bind(p);
         }
-        match query.fetch_all(&mut *at.tx).await {
-            Ok(rows) => Ok(rows),
-            Err(e) => Err(RepoError::Internal(e.to_string())),
-        }
+        query
+            .fetch_all(&mut *at.tx)
+            .await
+            .map_err(|e| RepoError::Internal(e.to_string()))
     }
 
     async fn documents_kept(

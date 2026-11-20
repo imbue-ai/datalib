@@ -797,6 +797,12 @@ pub fn derived_shape(ddl: &[&str], lookup_indexes: &[&str]) -> datalib_store_met
     shape_opened_with(ddl, lookup_indexes, false, &[])
 }
 
+/// The whole shape [`open_curated`] gives a store opened with `ddl` and
+/// `ladder`: what a reader of that store requires.
+pub fn curated_shape(ddl: &[&str], ladder: &[Migration]) -> datalib_store_meta::Shape {
+    shape_opened_with(ddl, &[], false, ladder)
+}
+
 /// The shape [`open_inner`] records for its arguments, and the one place
 /// it is computed.
 fn shape_opened_with(

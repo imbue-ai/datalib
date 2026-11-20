@@ -94,7 +94,11 @@ impl Index {
     pub async fn open(path: &Path) -> Result<Index> {
         let pool = crate::file::open(
             path,
-            &[(&DDL, crate::file::Owns::Part(StoreKind::SearchIndex))],
+            &[crate::file::Part {
+                ddl: &DDL,
+                indexes: &[],
+                owns: crate::file::Owns::Part(StoreKind::SearchIndex),
+            }],
             WAIT_FOR_THE_GRID,
         )
         .await

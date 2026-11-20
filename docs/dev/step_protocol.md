@@ -682,8 +682,10 @@ name reads as a download; it then opens its raw store with the
 provider's migration ladder and closes it: every rung, the additive DDL
 and an old blob store's conversion run, and each is sealed to `main`. A
 render step and the grid index answer `needs_rerun` when their store's
-`_datalib_meta.schema_hash` differs; a derived store is rebuilt, never
-migrated. The grid index also answers `needs_rerun` when the search
+tables or ladders differ from this build's (`_datalib_meta`); a derived
+store is rebuilt, never migrated. When only its indexes differ
+(`index_hash`), the step opens the store as its owner, which makes
+them, and answers nothing. The grid index also answers `needs_rerun` when the search
 index's keyword tables are in another shape or a source's documents
 were drawn by another version, which its keyword pass reads again;
 `embed` and `embedding_map` have nothing to answer. Any of them refuses

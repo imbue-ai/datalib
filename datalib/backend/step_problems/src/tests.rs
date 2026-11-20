@@ -317,6 +317,27 @@ async fn a_problems_table_in_another_shape_is_reported_by_its_recorded_shape() {
     assert!(read.unread.is_empty(), "{:?}", read.unread);
 }
 
+/// A step's own file from before it recorded its shape is in another
+/// shape, said so rather than read as holding nothing.
+#[tokio::test]
+async fn a_steps_own_file_that_records_no_shape_is_in_another_shape() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = file_of(dir.path(), STEP);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(datalib_sqlite_open::file(&path).create_if_missing(true))
+        .await
+        .unwrap();
+    sqlx::query(datalib_problems::DDL[0].1)
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    let read = of_step(dir.path(), STEP).await;
+    assert_eq!(read.other_shape, [path]);
+}
+
 /// A file that records no kind of store holding problems — a blob store
 /// beside a raw store — gives none, without a question to its tables.
 #[tokio::test]

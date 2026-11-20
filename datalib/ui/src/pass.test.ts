@@ -11,7 +11,10 @@ describe("upgradeView", () => {
    *  shown nothing of until it runs again; the pill keeps offering the
    *  run after the launch dialog is dismissed. */
   it("offers to re-run the steps the launch found in another shape", () => {
-    const steps = ["slack/render_markdown", "unified_grid_and_search_index/unified_grid_and_search_index"];
+    const steps = [
+      "slack/render_markdown",
+      "unified_grid_and_search_index/unified_grid_and_search_index",
+    ];
     const view = upgradeView(upgrade({ rerender: steps }), false);
     expect(view?.action).toEqual({ label: "Re-run now", steps });
     expect(view?.rows.map((r) => r.group)).toEqual(["slack", "unified_grid_and_search_index"]);

@@ -32,20 +32,25 @@ impl Owns {
     }
 }
 
+/// One owner's tables in a file: their DDL, the indexes made after them
+/// (recorded apart, as the file's `index_hash`, so adding one costs making
+/// it rather than emptying the tables), and which tables are its own.
+pub(crate) struct Part<'a> {
+    pub ddl: &'a [&'static str],
+    pub indexes: &'a [&'static str],
+    pub owns: Owns,
+}
+
 /// Opens `path` with each of `parts` in this build's shape, in order: a
 /// file's own tables before a part of it, so emptying the file leaves
 /// the part to make its tables again.
-pub(crate) async fn open(
-    path: &Path,
-    parts: &[(&[&'static str], Owns)],
-    wait: Duration,
-) -> Result<SqlitePool> {
+pub(crate) async fn open(path: &Path, parts: &[Part<'_>], wait: Duration) -> Result<SqlitePool> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     }
     let pool = connect(path, wait).await?;
-    for (ddl, owns) in parts {
-        if let Err(e) = set_up(&pool, ddl, *owns).await {
+    for part in parts {
+        if let Err(e) = set_up(&pool, part).await {
             pool.close().await;
             return Err(e);
         }
@@ -80,17 +85,30 @@ async fn connect(path: &Path, wait: Duration) -> Result<SqlitePool> {
         .with_context(|| format!("open {}", path.display()))
 }
 
+/// The shape `part` records in its file.
+pub(crate) fn shape_of(part: &Part<'_>) -> datalib_store_meta::Shape {
+    datalib_store_meta::Shape {
+        tables: datalib_store_meta::schema_hash(part.ddl.iter().copied()),
+        indexes: (!part.indexes.is_empty())
+            .then(|| datalib_store_meta::schema_hash(part.indexes.iter().copied())),
+        versions: datalib_store_meta::Versions::default(),
+    }
+}
+
 /// Brings our tables to this build's shape under the write lock, so two
 /// steps opening an old file together empty it once, and neither empties
-/// what the other has started writing: the second finds the new shape.
-async fn set_up(pool: &SqlitePool, ddl: &[&'static str], owns: Owns) -> Result<()> {
-    let want = datalib_store_meta::schema_hash(ddl.iter().copied());
+/// what the other has started writing: the second finds the new shape. A
+/// file that records no shape for them is in none, and emptied too.
+async fn set_up(pool: &SqlitePool, part: &Part<'_>) -> Result<()> {
+    let (ddl, owns) = (part.ddl, part.owns);
+    let shape = shape_of(part);
+    let want = shape.tables.clone();
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let have = match owns {
         Owns::File(_) => datalib_store_meta::schema_hash_in(&mut tx).await?,
         Owns::Part(part) => datalib_store_meta::part_schema_hash_in(&mut tx, part).await?,
     };
-    if have.as_ref().is_some_and(|h| *h != want) {
+    if have.as_deref() != Some(want.as_str()) {
         let (Owns::File(kind) | Owns::Part(kind)) = owns;
         tracing::info!(
             store = kind.as_str(),
@@ -98,7 +116,7 @@ async fn set_up(pool: &SqlitePool, ddl: &[&'static str], owns: Owns) -> Result<(
         );
         drop_tables(&mut tx, owns).await?;
     }
-    for stmt in ddl {
+    for stmt in ddl.iter().chain(part.indexes) {
         sqlx::query(*stmt).execute(&mut *tx).await?;
     }
     if let Owns::Part(part) = owns {
@@ -106,7 +124,7 @@ async fn set_up(pool: &SqlitePool, ddl: &[&'static str], owns: Owns) -> Result<(
     }
     tx.commit().await?;
     if let Owns::File(kind) = owns {
-        datalib_store_meta::write(pool, kind, &datalib_store_meta::Shape::of_tables(want)).await?;
+        datalib_store_meta::write(pool, kind, &shape).await?;
     }
     Ok(())
 }

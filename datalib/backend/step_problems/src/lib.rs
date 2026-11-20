@@ -389,6 +389,10 @@ async fn read_with(path: &Path, opts: SqliteConnectOptions) -> Result<Held> {
     let held = async {
         let mut held = Held::default();
         let Some(meta) = datalib_store_meta::read(&pool).await? else {
+            // A step's own file always records its shape, so one that
+            // records none is an older build's; any other such file holds
+            // no problems.
+            held.other_shape = path.file_name().is_some_and(|n| n == FILE_NAME);
             return anyhow::Ok(held);
         };
         let Some(kind) = meta.store_kind.filter(|k| k.holds_problems()) else {
