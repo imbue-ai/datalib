@@ -998,6 +998,8 @@ mod tests {
     async fn connect_writable(path: &Path) -> SqlitePool {
         SqlitePoolOptions::new()
             .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
             .connect_with(SqliteConnectOptions::new().filename(path))
             .await
             .unwrap()

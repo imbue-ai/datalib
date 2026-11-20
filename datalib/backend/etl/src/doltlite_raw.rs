@@ -6020,7 +6020,8 @@ mod tests {
             .fetch_one(reader.pool())
             .await
             .unwrap();
-        assert_eq!(pinned, 7, "every meta row is at HEAD");
+        // Seven, and `index_hash` for the shared lookup indexes.
+        assert_eq!(pinned, 8, "every meta row is at HEAD");
         reader.close().await;
 
         // The shape moves: the hash moves with it, and the commit says so.

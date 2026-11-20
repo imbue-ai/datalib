@@ -326,6 +326,8 @@ async fn a_steps_own_file_that_records_no_shape_is_in_another_shape() {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect_with(datalib_sqlite_open::file(&path).create_if_missing(true))
         .await
         .unwrap();
@@ -347,6 +349,8 @@ async fn a_file_that_records_no_problems_gives_none() {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect_with(datalib_sqlite_open::file(&path).create_if_missing(true))
         .await
         .unwrap();
