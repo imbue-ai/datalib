@@ -267,7 +267,7 @@ async fn a_transient_failure_is_not_remembered() {
     for call in [&COUNTS, &SAVED] {
         for failure in [
             Answer::Http(500, "upstream connect error"),
-            Answer::Slack("internal_error"),
+            Answer::Slack("fatal_error"),
         ] {
             let d = tempfile::tempdir().unwrap();
             let out = d.path().join("out_raw");

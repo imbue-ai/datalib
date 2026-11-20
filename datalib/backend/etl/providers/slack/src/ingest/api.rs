@@ -43,20 +43,40 @@ const SIGNED_OUT_CODES: &[&str] = &[
     "token_expired",
 ];
 
-/// Slack-specific retry classifier. Slack signals a rate limit either as a
-/// plain HTTP 429 (newer Web API tiers — covered by the default classifier)
-/// or, on older methods, as **HTTP 200** with
-/// `{"ok":false,"error":"ratelimited"}` in the body. The status-code
-/// chokepoint can't see the latter, so detect it here and surface it as
-/// retryable; the shared loop then honors any `Retry-After` header and the
-/// orchestrator's give-up bounds.
+/// Slack's `error` codes for a call that may succeed if sent again.
+/// `ratelimited` is Slack's older form of a 429. `internal_error` is
+/// "likely due to a transient issue on our end", and Slack recommends
+/// retrying it; `service_unavailable` is "temporarily unavailable".
+/// `fatal_error` and `request_timeout` (a POST body that arrived
+/// truncated) are not here: Slack calls neither transient.
+const TRANSIENT_CODES: &[&str] = &["ratelimited", "internal_error", "service_unavailable"];
+
+/// The shared retry loop sees only the status, and Slack answers these
+/// errors with HTTP 200 and `{"ok":false,"error":...}`, so a 200 is read
+/// for its `error` here.
 fn slack_retryability(resp: &HttpResponse) -> Retryability {
-    if resp.status == 200 && resp.body_str().contains("\"error\":\"ratelimited\"") {
+    if resp.status == 200 && names_transient_error(&resp.body) {
         return Retryability::Retry {
             retry_after: parse_retry_after(resp.header("retry-after")),
         };
     }
     default_retryability(resp)
+}
+
+fn names_transient_error(body: &[u8]) -> bool {
+    #[derive(serde::Deserialize)]
+    struct Status {
+        #[serde(default)]
+        ok: bool,
+        error: Option<String>,
+    }
+    match serde_json::from_slice::<Status>(body) {
+        Ok(Status {
+            ok: false,
+            error: Some(error),
+        }) => TRANSIENT_CODES.contains(&error.as_str()),
+        _ => false,
+    }
 }
 
 /// Successful Slack API call plus wall-clock duration of the underlying
@@ -100,10 +120,10 @@ async fn call_slack_once(
     let req = HttpRequest::get(HttpService::Slack, &url)
         .latchkey(latchkey.clone())
         .timeout(LATCHKEY_TIMEOUT);
-    // Rate-limit (429 + the HTTP-200 `ratelimited` body) and transient
-    // retry is handled centrally in the shared chokepoint via
-    // `slack_retryability`; a terminal error here (incl. `GaveUp` after the
-    // guard tripped) is mapped straight to `Permanent`.
+    // A 429, a 502 to 504 and a 200 naming one of `TRANSIENT_CODES` are
+    // retried by the shared chokepoint via `slack_retryability`; a terminal
+    // error here (incl. `GaveUp` after the guard tripped) is mapped
+    // straight to `Permanent`.
     let resp = latchkey_curl_classified(&req, slack_retryability)
         .await
         .map_err(|e: HttpError| match e {
@@ -132,9 +152,9 @@ async fn call_slack_once(
     })?;
     let ok = data.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
     if !ok {
-        // `ratelimited` is retried by the chokepoint, so reaching here with
-        // `ok:false` means a genuine API error (or the guard gave up — which
-        // surfaces as `GaveUp` → `Permanent` above, never as a parsed body).
+        // `TRANSIENT_CODES` are retried by the chokepoint until it gives up,
+        // which surfaces as `GaveUp` → `Permanent` above, so reaching here
+        // with `ok:false` means an error that asking again will not fix.
         let err = data
             .get("error")
             .and_then(|v| v.as_str())
@@ -191,4 +211,77 @@ pub(crate) fn served(file_obj: &Value) -> Option<(&str, &str)> {
 
 pub fn served_file_id(file_obj: &Value) -> Option<&str> {
     served(file_obj).map(|(id, _)| id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn answer(status: u16, body: &str, retry_after: Option<&str>) -> HttpResponse {
+        HttpResponse {
+            status,
+            headers: retry_after
+                .map(|v| ("retry-after".to_string(), v.to_string()))
+                .into_iter()
+                .collect(),
+            body: body.as_bytes().to_vec(),
+            duration_ms: 0,
+        }
+    }
+
+    const NO_WAIT: Retryability = Retryability::Retry { retry_after: None };
+
+    /// `internal_error` was taken as a permanent failure, so a thread
+    /// Slack failed once was missing until the next sync.
+    #[test]
+    fn a_transient_slack_error_is_retried() {
+        for body in [
+            r#"{"ok":false,"error":"internal_error"}"#,
+            r#"{"ok": false, "error": "internal_error"}"#,
+            r#"{"ok":false,"error":"service_unavailable"}"#,
+            r#"{"ok":false,"error":"ratelimited"}"#,
+        ] {
+            assert_eq!(
+                slack_retryability(&answer(200, body, None)),
+                NO_WAIT,
+                "{body}"
+            );
+        }
+        assert_eq!(
+            slack_retryability(&answer(
+                200,
+                r#"{"ok": false, "error": "ratelimited"}"#,
+                Some("7")
+            )),
+            Retryability::Retry {
+                retry_after: Some(Duration::from_secs(7))
+            }
+        );
+    }
+
+    #[test]
+    fn any_other_answer_is_handed_back() {
+        for body in [
+            r#"{"ok":true,"messages":[]}"#,
+            r#"{"ok":true,"error":"internal_error"}"#,
+            r#"{"ok":false,"error":"fatal_error"}"#,
+            r#"{"ok":false,"error":"request_timeout"}"#,
+            r#"{"ok":false,"error":"thread_not_found"}"#,
+            r#"{"ok":false,"error":"invalid_auth"}"#,
+            r#"{"ok":false}"#,
+            r#"{"ok":true,"messages":[{"text":"\"error\":\"internal_error\""}]}"#,
+            "not json",
+        ] {
+            assert_eq!(
+                slack_retryability(&answer(200, body, None)),
+                Retryability::Accept,
+                "{body}"
+            );
+        }
+        assert_eq!(slack_retryability(&answer(503, "", None)), NO_WAIT);
+        assert_eq!(
+            slack_retryability(&answer(500, "", None)),
+            Retryability::Accept
+        );
+    }
 }

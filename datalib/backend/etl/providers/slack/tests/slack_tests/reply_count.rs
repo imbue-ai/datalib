@@ -120,7 +120,7 @@ async fn a_root_says_its_replies_are_not_mirrored_until_they_are() {
         &api1,
         History::cold("C1"),
         json!([msg(B, "second"), root()]),
-        json!({"ok": false, "error": "internal_error"}),
+        json!({"ok": false, "error": "fatal_error"}),
     );
     let first = sync(&out, &api1, &d.path().join("playback1")).await;
 

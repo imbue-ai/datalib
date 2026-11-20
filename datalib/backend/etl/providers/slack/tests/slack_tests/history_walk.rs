@@ -35,7 +35,7 @@ async fn a_walk_that_fails_after_its_first_page_is_finished_from_under_it() {
         &first.api,
         "conversations.history",
         second_page,
-        json!({"ok": false, "error": "internal_error"}),
+        json!({"ok": false, "error": "fatal_error"}),
     )
     .unwrap();
     first.serve();
