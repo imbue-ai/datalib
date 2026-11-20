@@ -5,7 +5,8 @@
 //! held in memory, about a gigabyte on that library, whether or not anyone
 //! searches. While a sync is writing the index a search answers from what
 //! is held (`INDEX_SETTLE`); once the index has sat still, this reads the
-//! vectors again (`HeldVectors` in `unified_grid_and_search_index::search_index`).
+//! vectors it does not hold yet and lets go of those no chunk names any
+//! more (`HeldVectors` in `unified_grid_and_search_index::search_index`).
 
 use std::time::Duration;
 

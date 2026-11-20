@@ -20,12 +20,15 @@ pub struct Reader {
 
 /// Every chunk a model embedded, ready to score: one vector per chunk, unit
 /// length, laid end to end.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct Held {
     pub dim: usize,
     pub docs: Vec<HeldDoc>,
     pub chunks: Vec<HeldChunk>,
     pub vectors: Vec<f32>,
+    /// Each chunk's prompt hash, by its place in `chunks`: what a later
+    /// read keeps rather than reading its vector again.
+    hashes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -303,6 +306,15 @@ impl Reader {
     /// Every chunk `model` has a vector for, with its document. A chunk the
     /// cache has no vector for yet is left out: it has not been embedded.
     pub async fn held(&self, model: &str) -> Result<Held> {
+        self.held_after(model, None).await
+    }
+
+    /// [`Reader::held`], reading from the cache only the vectors `before`,
+    /// read earlier under `model`, does not hold. A vector is a pure
+    /// function of its hash, so one held is the one the cache would give;
+    /// asking whether the cache still has it reads only the keys' index,
+    /// where reading it again reads a 3 KB row.
+    pub async fn held_after(&self, model: &str, before: Option<&Held>) -> Result<Held> {
         // Nothing embedded yet is the usual state until a sync turns
         // embedding on, and reading every section to find that out took
         // seconds.
@@ -335,20 +347,64 @@ impl Reader {
             Some(cache) => crate::chunked::read_filed(cache, None).await?,
             None => BTreeMap::new(),
         };
-        let vectors = match &self.cache {
-            Some(cache) => {
-                let mut hashes: Vec<&str> = filed
-                    .values()
-                    .flat_map(|(_, chunks)| chunks.iter().map(|c| c.hash.as_str()))
-                    .collect();
-                hashes.sort_unstable();
-                hashes.dedup();
-                cached(cache, model, &hashes).await?
-            }
+        let started = std::time::Instant::now();
+        let mut named: Vec<&str> = filed
+            .values()
+            .flat_map(|(_, chunks)| chunks.iter().map(|c| c.hash.as_str()))
+            .collect();
+        named.sort_unstable();
+        named.dedup();
+        let before = before.map(Held::by_hash).unwrap_or_default();
+        let (was_held, unheld): (Vec<&str>, Vec<&str>) =
+            named.iter().partition(|h| before.contains_key(*h));
+        let still = self.vectors_held(model, &was_held).await?;
+        let to_read: Vec<&str> = unheld
+            .into_iter()
+            .chain(was_held.iter().copied().filter(|h| !still.contains(*h)))
+            .collect();
+        let asked = to_read.len();
+        let read = match &self.cache {
+            Some(cache) => cached(cache, model, &to_read).await?,
             None => HashMap::new(),
         };
-        assemble(docs, sections, filed, &vectors)
+        let kept: HashMap<&str, &[f32]> = before
+            .into_iter()
+            .filter(|(h, _)| still.contains(*h))
+            .collect();
+        let found = |hash: &str| match read.get(hash) {
+            Some(blob) => Some(Found::Read(blob)),
+            None => kept.get(hash).map(|v| Found::Kept(v)),
+        };
+        let held = assemble(docs, sections, filed, found)?;
+        tracing::info!(
+            kept = kept.len(),
+            read = read.len(),
+            asked,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "read the held vectors"
+        );
+        Ok(held)
     }
+}
+
+impl Held {
+    /// Each held hash's vector, at its first chunk.
+    fn by_hash(&self) -> HashMap<&str, &[f32]> {
+        let mut out = HashMap::with_capacity(self.hashes.len());
+        for (chunk, hash) in self.hashes.iter().enumerate() {
+            out.entry(hash.as_str())
+                .or_insert_with(|| self.vector(chunk));
+        }
+        out
+    }
+}
+
+/// A chunk's vector: as the cache stores it, or as an earlier read held
+/// it, already unit length.
+#[derive(Clone, Copy)]
+enum Found<'a> {
+    Read(&'a [u8]),
+    Kept(&'a [f32]),
 }
 
 /// `hash → vector` for each of `hashes` the cache holds under `model`.
@@ -377,11 +433,11 @@ type DocRow = (i64, String, String, String);
 type SectionRow = (i64, i64, Option<String>);
 type Filed = BTreeMap<String, (String, Vec<crate::FiledChunk>)>;
 
-fn assemble(
+fn assemble<'a>(
     docs: Vec<DocRow>,
     sections: Vec<SectionRow>,
     mut filed: Filed,
-    vectors: &HashMap<String, Vec<u8>>,
+    vector_of: impl Fn(&str) -> Option<Found<'a>>,
 ) -> Result<Held> {
     let mut held = Held::default();
     let mut sections_of: HashMap<i64, Vec<Option<String>>> = HashMap::new();
@@ -395,29 +451,45 @@ fn assemble(
         };
         let from = held.chunks.len();
         for crate::FiledChunk { chunk, hash } in chunks {
-            let Some(blob) = vectors.get(&hash) else {
+            let Some(found) = vector_of(&hash) else {
                 continue;
             };
-            let (words, rest) = blob.as_chunks::<4>();
-            if !rest.is_empty() || words.is_empty() {
-                bail!("a cached vector of {} bytes, not whole f32s", blob.len());
+            let dim = match found {
+                Found::Read(blob) => {
+                    let (words, rest) = blob.as_chunks::<4>();
+                    if !rest.is_empty() {
+                        bail!("a cached vector of {} bytes, not whole f32s", blob.len());
+                    }
+                    words.len()
+                }
+                Found::Kept(v) => v.len(),
+            };
+            if dim == 0 {
+                bail!("a cached vector of no dimensions");
             }
             if held.dim == 0 {
-                held.dim = words.len();
-            } else if held.dim != words.len() {
+                held.dim = dim;
+            } else if held.dim != dim {
                 bail!(
                     "cached vectors of {} and {} dimensions under one model",
                     held.dim,
-                    words.len()
+                    dim
                 );
             }
             let at = held.vectors.len();
-            held.vectors
-                .extend(words.iter().map(|w| f32::from_le_bytes(*w)));
-            if !unit(&mut held.vectors[at..]) {
-                held.vectors.truncate(at);
-                continue;
+            match found {
+                Found::Read(blob) => {
+                    let (words, _) = blob.as_chunks::<4>();
+                    held.vectors
+                        .extend(words.iter().map(|w| f32::from_le_bytes(*w)));
+                    if !unit(&mut held.vectors[at..]) {
+                        held.vectors.truncate(at);
+                        continue;
+                    }
+                }
+                Found::Kept(v) => held.vectors.extend_from_slice(v),
             }
+            held.hashes.push(hash);
             held.chunks.push(HeldChunk {
                 start: i64::try_from(chunk.start)?,
                 end: i64::try_from(chunk.end)?,
@@ -699,6 +771,7 @@ mod tests {
             docs: vec![doc("a", 0..2), doc("b", 2..3), doc("c", 3..5)],
             chunks: vec![chunk(); 5],
             vectors: vec![1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, -1.0, 0.0],
+            hashes: Vec::new(),
         };
         let (ids, vectors) = held.document_vectors();
         assert_eq!(ids, ["a", "b"]);

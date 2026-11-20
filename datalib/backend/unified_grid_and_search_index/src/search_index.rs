@@ -99,7 +99,10 @@ async fn read_unless_held(
     if held.is_some_and(|(at, _)| *at == now) {
         return Ok(None);
     }
-    let vectors = reader.held(&datalib_search_index::model_key()).await?;
+    let before = held.map(|(_, vectors)| vectors.as_ref());
+    let vectors = reader
+        .held_after(&datalib_search_index::model_key(), before)
+        .await?;
     Ok(Some((now, Arc::new(vectors))))
 }
 
@@ -113,7 +116,8 @@ fn hit(score: f64, place: Place) -> SearchHit {
 
 /// Every embedded chunk, read once and kept across searches: read again
 /// when the index's generation or the cache has moved, unless a search
-/// asks for what is held while a sync writes them.
+/// asks for what is held while a sync writes them. Reading again reads
+/// from the cache only the vectors not already held.
 #[derive(Default)]
 pub struct HeldVectors {
     held: tokio::sync::Mutex<Option<(ReadAt, Arc<Held>)>>,

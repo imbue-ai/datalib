@@ -38,8 +38,46 @@ fn thread() -> IndexDoc {
 }
 
 struct Fixture {
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
     reader: Reader,
+}
+
+impl Fixture {
+    fn index_path(&self) -> std::path::PathBuf {
+        self.dir.path().join("index.sqlite")
+    }
+
+    fn cache_path(&self) -> std::path::PathBuf {
+        self.dir.path().join("cache.sqlite")
+    }
+
+    /// Indexes `docs`, cuts them as their `embed` would, and caches
+    /// `vectors`, as a sync does after the reader has read.
+    async fn sync(&self, docs: &[IndexDoc], vectors: &[(String, Vec<f32>)]) {
+        let index = Index::open(&self.index_path()).await.unwrap();
+        index.put(docs).await.unwrap();
+        index.close().await;
+        let cache = InferenceCache::open(&self.cache_path()).await.unwrap();
+        cache.file_chunks(&cut(docs)).await.unwrap();
+        cache
+            .put(&datalib_search_index::model_key(), vectors)
+            .await
+            .unwrap();
+        cache.close().await;
+    }
+}
+
+fn cut(docs: &[IndexDoc]) -> Vec<ChunkedDoc> {
+    docs.iter()
+        .map(|d| ChunkedDoc::from_prompted(d, &d.prompted(&four_bytes_a_token).unwrap()))
+        .collect()
+}
+
+/// The hash of `doc`'s one chunk.
+fn only_chunk(doc: &IndexDoc) -> String {
+    let prompted = doc.prompted(&four_bytes_a_token).unwrap();
+    assert_eq!(prompted.len(), 1, "{} is one chunk", doc.markdown_uuid);
+    prompted[0].hash.clone()
 }
 
 /// `docs` in the keyword index, each cut into chunks as its `embed` cuts
@@ -62,11 +100,7 @@ async fn fixture_cut(
     index.put(docs).await.unwrap();
     index.close().await;
     let cache = InferenceCache::open(&cache_path).await.unwrap();
-    let filed: Vec<ChunkedDoc> = cut
-        .iter()
-        .map(|d| ChunkedDoc::from_prompted(d, &d.prompted(&four_bytes_a_token).unwrap()))
-        .collect();
-    cache.file_chunks(&filed).await.unwrap();
+    cache.file_chunks(&self::cut(cut)).await.unwrap();
     cache
         .put(&datalib_search_index::model_key(), vectors)
         .await
@@ -76,7 +110,7 @@ async fn fixture_cut(
         .await
         .unwrap()
         .unwrap();
-    Fixture { _dir: dir, reader }
+    Fixture { dir, reader }
 }
 
 /// Every word, each whole, in one message.
@@ -210,6 +244,101 @@ async fn held_vectors_are_the_cached_chunks_with_their_messages() {
     assert_eq!(covered, ["m1", "m2"]);
     let other_model = f.reader.held("another-model").await.unwrap();
     assert!(other_model.docs.is_empty());
+    f.reader.close().await;
+}
+
+/// Reading again after a sync reads from the cache only the vectors not
+/// already held: a held chunk's vector, though the cache now says
+/// otherwise, is the one held, where a full read takes the cache's.
+#[tokio::test]
+async fn a_reload_reads_only_the_vectors_it_does_not_hold() {
+    let t = thread();
+    let chat = doc("chat", "chat", &[(Some("c1"), "tea, Earl Grey\n")]);
+    let (thread_hash, chat_hash) = (only_chunk(&t), only_chunk(&chat));
+    let model = datalib_search_index::model_key();
+    let f = fixture(
+        std::slice::from_ref(&t),
+        &[(thread_hash.clone(), vec![3.0, 4.0])],
+    )
+    .await;
+    let before = f.reader.held(&model).await.unwrap();
+    f.sync(
+        &[chat],
+        &[(thread_hash, vec![4.0, 3.0]), (chat_hash, vec![0.0, 2.0])],
+    )
+    .await;
+    let after = f.reader.held_after(&model, Some(&before)).await.unwrap();
+    let vector_of = |held: &datalib_search_index::Held, uuid: &str| {
+        let d = held.docs.iter().find(|d| d.markdown_uuid == uuid).unwrap();
+        held.vector(d.chunks.start).to_vec()
+    };
+    assert_eq!(vector_of(&after, "thread"), [0.6, 0.8], "kept, not read");
+    assert_eq!(
+        vector_of(&after, "chat"),
+        [0.0, 1.0],
+        "read: it was not held"
+    );
+    let full = f.reader.held(&model).await.unwrap();
+    assert_eq!(
+        vector_of(&full, "thread"),
+        [0.8, 0.6],
+        "a full read reads it"
+    );
+    f.reader.close().await;
+}
+
+/// What a reload holds is what reading everything again holds: a document
+/// gone, one drawn again into a new chunk, one added, one not embedded
+/// yet, and a held chunk whose vector the cache no longer has.
+#[tokio::test]
+async fn a_reload_holds_what_a_full_read_holds() {
+    let model = datalib_search_index::model_key();
+    let thread = thread();
+    let gone = doc("mail", "gone", &[(Some("g1"), "a shuttle departs\n")]);
+    let chat = doc("chat", "chat", &[(Some("c1"), "tea, Earl Grey\n")]);
+    let kept = doc("chat", "kept", &[(Some("k1"), "red alert\n")]);
+    let first = [&thread, &gone, &chat, &kept].map(|d| (only_chunk(d), vec![1.0, 2.0]));
+    let f = fixture(&[thread.clone(), gone, chat.clone(), kept.clone()], &first).await;
+    let before = f.reader.held(&model).await.unwrap();
+    assert_eq!(before.docs.len(), 4);
+
+    let index = Index::open(&f.index_path()).await.unwrap();
+    index.remove(&["gone".to_string()]).await.unwrap();
+    index.close().await;
+    let cache = InferenceCache::open(&f.cache_path()).await.unwrap();
+    cache.forget_chunked(&["gone".to_string()]).await.unwrap();
+    assert_eq!(cache.sweep(&model).await.unwrap(), 1);
+    cache.close().await;
+    let mut redrawn = chat.clone();
+    redrawn.content_hash = "a later rendering".into();
+    redrawn.sections[0].text = "tea, Earl Grey, hot\n".into();
+    let fresh = doc("mail", "fresh", &[(Some("f1"), "engage\n")]);
+    let owed = doc("mail", "owed", &[(Some("o1"), "not yet embedded\n")]);
+    f.sync(
+        &[redrawn.clone(), fresh.clone(), owed],
+        &[
+            (only_chunk(&redrawn), vec![0.0, 3.0]),
+            (only_chunk(&fresh), vec![5.0, 0.0]),
+        ],
+    )
+    .await;
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(f.cache_path()))
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM vectors WHERE hash = ?")
+        .bind(only_chunk(&thread))
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    let after = f.reader.held_after(&model, Some(&before)).await.unwrap();
+    let full = f.reader.held(&model).await.unwrap();
+    let ids: Vec<&str> = full.docs.iter().map(|d| d.markdown_uuid.as_str()).collect();
+    assert_eq!(ids, ["chat", "kept", "fresh"]);
+    assert_eq!(after, full);
     f.reader.close().await;
 }
 
