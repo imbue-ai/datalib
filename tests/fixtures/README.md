@@ -161,7 +161,7 @@ each one lists the cases its output exists to cover.
 of them syncs them all again. A source can instead be synced by itself
 with `tng_source` ([`tng_source.bzl`](tng_source.bzl), driven by
 [`sync_one_source.py`](sync_one_source.py)): its ingest, its render and
-a grid index over it alone, through `datalib-dag`, written to
+a grid index over it alone, through `datalib-pipeline`, written to
 `<name>/index.sqlite`. The build fails if the source leaves no row in
 it. Such a source is not in `:ingested_tng`, and the tests that check
 it name its index themselves. One source is synced this way:

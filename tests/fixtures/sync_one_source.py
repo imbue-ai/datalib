@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Syncs one TNG source on its own: its ingest, its render, and the grid
-index over it alone, through `datalib-dag`. The driver behind
+index over it alone, through `datalib-pipeline`. The driver behind
 `tng_source` (`tng_source.bzl`): a source synced this way is checked
 without waiting on, or adding to, the `:ingested_tng` fan-in.
 
 Usage:
-    sync_one_source.py --dag <datalib-dag> --step <datalib-step>
+    sync_one_source.py --pipeline <datalib-pipeline> --step <datalib-step>
         --now <iso stamp> --workspace <dir> --id <group id> --type <type>
         --ingest-params '<TOML inline table>' [--input <name>=<path> ...]
         --index-out <grid index file>
@@ -65,7 +65,7 @@ inputs = ["*/render_markdown"]
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--dag", type=Path, required=True)
+    p.add_argument("--pipeline", type=Path, required=True)
     p.add_argument("--step", type=Path, required=True)
     p.add_argument("--now", required=True)
     p.add_argument("--workspace", type=Path, required=True)
@@ -94,7 +94,7 @@ def main() -> int:
         "DATALIB_CACHE_DIR": str(workspace / "fingerprint_cache"),
         "DATALIB_MODELS_NO_FETCH": "1",
     }
-    driver = CliDriver(args.dag.resolve(), workspace, bindir, args.now, env)
+    driver = CliDriver(args.pipeline.resolve(), workspace, bindir, args.now, env)
     driver.build_config([config_text(args.id, args.type, params)])
     driver.sync()
 

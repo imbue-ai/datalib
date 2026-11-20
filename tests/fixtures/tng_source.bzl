@@ -11,7 +11,7 @@ def tng_source(name, source_id, type, ingest_params, inputs, **kwargs):
     native.genrule(
         name = name,
         srcs = inputs.values() + [
-            "//datalib/backend/dag:datalib_dag_bin",
+            "//datalib/backend/dag:datalib_pipeline_bin",
             "//datalib/backend/datalib_step:datalib_step",
         ],
         outs = [name + "/index.sqlite"],
@@ -23,7 +23,7 @@ def tng_source(name, source_id, type, ingest_params, inputs, **kwargs):
         cmd = " ".join([
             "$(execpath //tests/fixtures:quiet.sh) $(RULEDIR)/" + name + ".log",
             "python3 $(execpath //tests/fixtures:sync_one_source.py)",
-            "--dag $(execpath //datalib/backend/dag:datalib_dag_bin)",
+            "--pipeline $(execpath //datalib/backend/dag:datalib_pipeline_bin)",
             "--step $(execpath //datalib/backend/datalib_step:datalib_step)",
             "--now '2369-04-15T00:00:00+00:00'",
             "--workspace $(RULEDIR)/" + name + "_workspace",
