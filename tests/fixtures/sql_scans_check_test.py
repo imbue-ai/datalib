@@ -25,7 +25,7 @@ class Check(unittest.TestCase):
 
     def test_an_unlisted_scan_fails_with_a_stanza_to_paste(self):
         [error] = check([row(SCAN)], {"scan": []})
-        self.assertIn(f"statement = \"{SCAN}\"", error)
+        self.assertIn(f'statement = "{SCAN}"', error)
         self.assertNotIn("judged_by", error)
 
     def test_the_stanza_for_a_scan_judged_by_what_it_did_says_so(self):
@@ -40,7 +40,9 @@ class Check(unittest.TestCase):
         self.assertIn(GONE, error)
 
     def test_an_entry_judged_by_what_it_did_may_be_missing_from_a_run(self):
-        allowed = {"scan": [entry(SCAN), entry(GONE, judged_by="ran")]}
+        allowed: dict[str, object] = {
+            "scan": [entry(SCAN), entry(GONE, judged_by="ran")]
+        }
         self.assertEqual(check([row(SCAN)], allowed), [])
 
     def test_an_entry_with_no_reason_fails(self):

@@ -13,7 +13,7 @@
 [[scan]]
 statement = "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason FROM runs WHERE ? IS NULL OR run_id = ? ORDER BY started_at_utc DESC LIMIT 1"
 files = ["*/runs/runs.sqlite"]
-why = "The table stays small: retention keeps at most `max_runs` runs (100 by default) and none older than `max_age_days` (datalib_runs::Retention)."
+why = "The table stays small: retention keeps at most `max_runs` runs (100 by default) and none older than `max_age_days` (datalib_runs::Retention); 76 rows on a large library. #1949 reads it by an index instead."
 
 [[scan]]
 statement = "DELETE FROM log WHERE run_id NOT IN (SELECT run_id FROM runs)"
@@ -83,6 +83,7 @@ why = "Not reviewed: on main when this check began."
 [[scan]]
 statement = "DELETE FROM temp.dropped WHERE EXISTS (SELECT 1 FROM terms t WHERE t.val_id = dropped.val_id)"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
+judged_by = "ran"
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
@@ -98,76 +99,91 @@ why = "Once per account after a walk that listed all of its mail: the sidecars o
 [[scan]]
 statement = "INSERT INTO main.\"chat\" (\"_id\", \"jid_row_id\", \"hidden\", \"subject\", \"created_timestamp\", \"display_message_row_id\", \"last_message_row_id\", \"last_read_message_row_id\", \"last_read_receipt_sent_message_row_id\", \"last_important_message_row_id\", \"archived\", \"sort_timestamp\", \"mod_tag\", \"gen\", \"spam_detection\", \"unseen_earliest_message_received_time\", \"unseen_message_count\", \"unseen_missed_calls_count\", \"unseen_row_count\", \"plaintext_disabled\", \"vcard_ui_dismissed\", \"change_number_notified_message_row_id\", \"show_group_description\", \"ephemeral_expiration\", \"ephemeral_setting_timestamp\", \"ephemeral_displayed_exemptions\", \"ephemeral_disappearing_messages_initiator\", \"unseen_important_message_count\", \"group_type\", \"last_message_reaction_row_id\", \"last_seen_message_reaction_row_id\", \"unseen_message_reaction_count\", \"unseen_comment_message_count\", \"growth_lock_level\", \"growth_lock_expiration_ts\", \"last_read_message_sort_id\", \"display_message_sort_id\", \"last_message_sort_id\", \"last_read_receipt_sent_message_sort_id\", \"has_new_community_admin_dialog_been_acknowledged\", \"history_sync_progress\", \"chat_lock\", \"chat_origin\", \"participation_status\", \"account_jid_row_id\", \"chat_encryption_state\", \"group_member_count\", \"limited_sharing\", \"limited_sharing_setting_timestamp\", \"is_contact\", \"ephemeral_after_read_duration\", \"business_chat_state\") SELECT \"_id\", \"jid_row_id\", \"hidden\", \"subject\", \"created_timestamp\", \"display_message_row_id\", \"last_message_row_id\", \"last_read_message_row_id\", \"last_read_receipt_sent_message_row_id\", \"last_important_message_row_id\", \"archived\", \"sort_timestamp\", \"mod_tag\", \"gen\", \"spam_detection\", \"unseen_earliest_message_received_time\", \"unseen_message_count\", \"unseen_missed_calls_count\", \"unseen_row_count\", \"plaintext_disabled\", \"vcard_ui_dismissed\", \"change_number_notified_message_row_id\", \"show_group_description\", \"ephemeral_expiration\", \"ephemeral_setting_timestamp\", \"ephemeral_displayed_exemptions\", \"ephemeral_disappearing_messages_initiator\", \"unseen_important_message_count\", \"group_type\", \"last_message_reaction_row_id\", \"last_seen_message_reaction_row_id\", \"unseen_message_reaction_count\", \"unseen_comment_message_count\", \"growth_lock_level\", \"growth_lock_expiration_ts\", \"last_read_message_sort_id\", \"display_message_sort_id\", \"last_message_sort_id\", \"last_read_receipt_sent_message_sort_id\", \"has_new_community_admin_dialog_been_acknowledged\", \"history_sync_progress\", \"chat_lock\", \"chat_origin\", \"participation_status\", \"account_jid_row_id\", \"chat_encryption_state\", \"group_member_count\", \"limited_sharing\", \"limited_sharing_setting_timestamp\", \"is_contact\", \"ephemeral_after_read_duration\", \"business_chat_state\" FROM \"datalib_mirror_src\".\"chat\""
 files = ["*/ingest/entities.doltlite_db"]
+judged_by = "ran"
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
 statement = "INSERT INTO main.\"jid\" (\"_id\", \"user\", \"server\", \"agent\", \"device\", \"type\", \"raw_string\") SELECT \"_id\", \"user\", \"server\", \"agent\", \"device\", \"type\", \"raw_string\" FROM \"datalib_mirror_src\".\"jid\""
 files = ["*/ingest/entities.doltlite_db"]
+judged_by = "ran"
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
 statement = "INSERT INTO main.\"jid_map\" (\"lid_row_id\", \"jid_row_id\", \"sort_id\") SELECT \"lid_row_id\", \"jid_row_id\", \"sort_id\" FROM \"datalib_mirror_src\".\"jid_map\""
 files = ["*/ingest/entities.doltlite_db"]
+judged_by = "ran"
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
 statement = "INSERT INTO main.\"message\" (\"_id\", \"chat_row_id\", \"from_me\", \"key_id\", \"sender_jid_row_id\", \"status\", \"broadcast\", \"recipient_count\", \"participant_hash\", \"origination_flags\", \"origin\", \"timestamp\", \"received_timestamp\", \"receipt_server_timestamp\", \"message_type\", \"text_data\", \"starred\", \"lookup_tables\", \"message_add_on_flags\", \"view_mode\", \"sort_id\", \"translated_text\", \"view_replies_thread_id\", \"server_sts\") SELECT \"_id\", \"chat_row_id\", \"from_me\", \"key_id\", \"sender_jid_row_id\", \"status\", \"broadcast\", \"recipient_count\", \"participant_hash\", \"origination_flags\", \"origin\", \"timestamp\", \"received_timestamp\", \"receipt_server_timestamp\", \"message_type\", \"text_data\", \"starred\", \"lookup_tables\", \"message_add_on_flags\", \"view_mode\", \"sort_id\", \"translated_text\", \"view_replies_thread_id\", \"server_sts\" FROM \"datalib_mirror_src\".\"message\""
 files = ["*/ingest/entities.doltlite_db"]
+judged_by = "ran"
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
 statement = "INSERT INTO main.\"message_add_on\" (\"_id\", \"chat_row_id\", \"from_me\", \"key_id\", \"sender_jid_row_id\", \"parent_message_row_id\", \"timestamp\", \"status\", \"message_add_on_type\", \"received_timestamp\", \"expiry_duration_in_secs\", \"server_timestamp\", \"expiry_timestamp\", \"expiry_type\") SELECT \"_id\", \"chat_row_id\", \"from_me\", \"key_id\", \"sender_jid_row_id\", \"parent_message_row_id\", \"timestamp\", \"status\", \"message_add_on_type\", \"received_timestamp\", \"expiry_duration_in_secs\", \"server_timestamp\", \"expiry_timestamp\", \"expiry_type\" FROM \"datalib_mirror_src\".\"message_add_on\""
 files = ["*/ingest/entities.doltlite_db"]
+judged_by = "ran"
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
 statement = "INSERT INTO main.\"message_add_on_reaction\" (\"message_add_on_row_id\", \"reaction\", \"sender_timestamp\") SELECT \"message_add_on_row_id\", \"reaction\", \"sender_timestamp\" FROM \"datalib_mirror_src\".\"message_add_on_reaction\""
 files = ["*/ingest/entities.doltlite_db"]
+judged_by = "ran"
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
 statement = "INSERT INTO main.\"message_media\" (\"message_row_id\", \"chat_row_id\", \"autotransfer_retry_enabled\", \"transferred\", \"face_x\", \"face_y\", \"has_streaming_sidecar\", \"page_count\", \"thumbnail_height_width_ratio\", \"first_scan_sidecar\", \"first_scan_length\", \"message_url\", \"media_upload_handle\", \"sticker_flags\", \"raw_transcription_text\", \"first_viewed_timestamp\", \"is_animated_sticker\", \"premium_message\", \"media_caption\", \"metadata_url\", \"motion_photo_presentation_offset_ms\", \"qr_url\", \"media_key_domain\", \"e2ee_media_key\", \"emoji_tags\", \"multicast_id\", \"media_job_uuid\", \"transcoded\", \"file_path\", \"file_size\", \"suspicious_content\", \"trim_from\", \"trim_to\", \"media_key\", \"media_key_timestamp\", \"width\", \"height\", \"gif_attribution\", \"direct_path\", \"mime_type\", \"file_length\", \"media_name\", \"file_hash\", \"media_duration\", \"enc_file_hash\", \"partial_media_hash\", \"partial_media_enc_hash\", \"original_file_hash\", \"mute_video\", \"doodle_id\", \"media_source_type\", \"accessibility_label\", \"media_transcode_quality\", \"is_offloaded\") SELECT \"message_row_id\", \"chat_row_id\", \"autotransfer_retry_enabled\", \"transferred\", \"face_x\", \"face_y\", \"has_streaming_sidecar\", \"page_count\", \"thumbnail_height_width_ratio\", \"first_scan_sidecar\", \"first_scan_length\", \"message_url\", \"media_upload_handle\", \"sticker_flags\", \"raw_transcription_text\", \"first_viewed_timestamp\", \"is_animated_sticker\", \"premium_message\", \"media_caption\", \"metadata_url\", \"motion_photo_presentation_offset_ms\", \"qr_url\", \"media_key_domain\", \"e2ee_media_key\", \"emoji_tags\", \"multicast_id\", \"media_job_uuid\", \"transcoded\", \"file_path\", \"file_size\", \"suspicious_content\", \"trim_from\", \"trim_to\", \"media_key\", \"media_key_timestamp\", \"width\", \"height\", \"gif_attribution\", \"direct_path\", \"mime_type\", \"file_length\", \"media_name\", \"file_hash\", \"media_duration\", \"enc_file_hash\", \"partial_media_hash\", \"partial_media_enc_hash\", \"original_file_hash\", \"mute_video\", \"doodle_id\", \"media_source_type\", \"accessibility_label\", \"media_transcode_quality\", \"is_offloaded\" FROM \"datalib_mirror_src\".\"message_media\""
 files = ["*/ingest/entities.doltlite_db"]
+judged_by = "ran"
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
 statement = "INSERT INTO vals (value) SELECT DISTINCT value FROM temp.incoming WHERE true ON CONFLICT (value) DO NOTHING"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
+judged_by = "ran"
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
 statement = "INSERT OR IGNORE INTO terms (val_id, kind, row_id) SELECT v.val_id, i.kind, i.row_id FROM temp.incoming i JOIN vals v ON v.value = i.value"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
+judged_by = "ran"
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
 statement = "INSERT OR REPLACE INTO main.\"message\" (\"bridge_id\", \"id\", \"part_id\", \"mxid\", \"room_id\", \"room_receiver\", \"sender_id\", \"sender_mxid\", \"timestamp\", \"edit_count\", \"double_puppeted\", \"thread_root_id\", \"reply_to_id\", \"reply_to_part_id\", \"send_txn_id\", \"metadata\") SELECT \"bridge_id\", \"id\", \"part_id\", \"mxid\", \"room_id\", \"room_receiver\", \"sender_id\", \"sender_mxid\", \"timestamp\", \"edit_count\", \"double_puppeted\", \"thread_root_id\", \"reply_to_id\", \"reply_to_part_id\", \"send_txn_id\", \"metadata\" FROM \"datalib_mirror_src\".\"message\""
 files = ["*/ingest/entities.doltlite_db"]
+judged_by = "ran"
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
 statement = "INSERT OR REPLACE INTO main.\"mx_reactions\" (\"roomID\", \"reactionID\", \"eventID\", \"senderID\", \"description\", \"path\", \"order\", \"timestamp\", \"isEdited\", \"isDeleted\", \"isSentByMe\", \"echoInfo\", \"sendStatus\", \"reaction\") SELECT \"roomID\", \"reactionID\", \"eventID\", \"senderID\", \"description\", \"path\", \"order\", \"timestamp\", \"isEdited\", \"isDeleted\", \"isSentByMe\", \"echoInfo\", \"sendStatus\", \"reaction\" FROM \"datalib_mirror_src\".\"mx_reactions\""
 files = ["*/ingest/entities.doltlite_db"]
+judged_by = "ran"
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
 statement = "INSERT OR REPLACE INTO main.\"mx_room_messages\" (\"roomID\", \"eventID\", \"senderContactID\", \"timestamp\", \"isEdited\", \"lastEditionID\", \"isDetached\", \"lastEditionTimestamp\", \"lastEditionOrder\", \"isDeleted\", \"isEncrypted\", \"inReplyToID\", \"isReplyThreadFallback\", \"type\", \"hsOrder\", \"isSentByMe\", \"replyThreadID\", \"replyCount\", \"replyThreadRootID\", \"protocol\", \"shouldNotify\", \"shouldPreview\", \"countsAsUnread\", \"lastDeletionID\", \"editedType\", \"mentions\", \"message\", \"sendStatus\", \"text_content\", \"text_formattedContent\", \"text_format\", \"echo_echoID\", \"echo_state\", \"echo_canAutoRetry\", \"echo_isRetryScheduled\", \"echo_retryCount\", \"echo_errorCode\", \"echo_errorMessage\", \"echo_groupID\", \"echo_groupIndex\", \"seenByMeAt\", \"message_size\", \"recipientReadTimerStartedAt\", \"threadRootEventID\", \"countsAsUnreadInThread\") SELECT \"roomID\", \"eventID\", \"senderContactID\", \"timestamp\", \"isEdited\", \"lastEditionID\", \"isDetached\", \"lastEditionTimestamp\", \"lastEditionOrder\", \"isDeleted\", \"isEncrypted\", \"inReplyToID\", \"isReplyThreadFallback\", \"type\", \"hsOrder\", \"isSentByMe\", \"replyThreadID\", \"replyCount\", \"replyThreadRootID\", \"protocol\", \"shouldNotify\", \"shouldPreview\", \"countsAsUnread\", \"lastDeletionID\", \"editedType\", \"mentions\", \"message\", \"sendStatus\", \"text_content\", \"text_formattedContent\", \"text_format\", \"echo_echoID\", \"echo_state\", \"echo_canAutoRetry\", \"echo_isRetryScheduled\", \"echo_retryCount\", \"echo_errorCode\", \"echo_errorMessage\", \"echo_groupID\", \"echo_groupIndex\", \"seenByMeAt\", \"message_size\", \"recipientReadTimerStartedAt\", \"threadRootEventID\", \"countsAsUnreadInThread\" FROM \"datalib_mirror_src\".\"mx_room_messages\""
 files = ["*/ingest/entities.doltlite_db"]
+judged_by = "ran"
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
 statement = "INSERT OR REPLACE INTO main.\"participant_identifiers\" (\"account_id\", \"participant_id\", \"identifier\", \"identifier_type\") SELECT \"account_id\", \"participant_id\", \"identifier\", \"identifier_type\" FROM \"datalib_mirror_src\".\"participant_identifiers\""
 files = ["*/ingest/entities.doltlite_db"]
+judged_by = "ran"
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
 statement = "INSERT OR REPLACE INTO main.\"participants\" (\"account_id\", \"room_id\", \"id\", \"full_name\", \"nickname\", \"img_url\", \"is_verified\", \"cannot_message\", \"is_self\", \"is_network_bot\", \"added_by\", \"is_admin\", \"is_pending\", \"has_exited\") SELECT \"account_id\", \"room_id\", \"id\", \"full_name\", \"nickname\", \"img_url\", \"is_verified\", \"cannot_message\", \"is_self\", \"is_network_bot\", \"added_by\", \"is_admin\", \"is_pending\", \"has_exited\" FROM \"datalib_mirror_src\".\"participants\""
 files = ["*/ingest/entities.doltlite_db"]
+judged_by = "ran"
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
 statement = "INSERT OR REPLACE INTO main.\"threads\" (\"threadID\", \"accountID\", \"thread\", \"timestamp\", \"is_label\", \"room_type\") SELECT \"threadID\", \"accountID\", \"thread\", \"timestamp\", \"is_label\", \"room_type\" FROM \"datalib_mirror_src\".\"threads\""
 files = ["*/ingest/entities.doltlite_db"]
+judged_by = "ran"
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
@@ -811,11 +827,6 @@ files = ["*/supervisor.sqlite"]
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
-statement = "SELECT id, session_id, json(payload) AS payload FROM cowork_events WHERE payload IS NOT NULL ORDER BY session_id, sequence_num, id"
-files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed: on main when this check began."
-
-[[scan]]
 statement = "SELECT id, team_id, json(payload) AS payload FROM users WHERE payload IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Not reviewed: on main when this check began."
@@ -833,6 +844,7 @@ why = "Reads every row by design: the statement has no WHERE."
 [[scan]]
 statement = "SELECT jid, json_group_array(json(obj)) FROM (SELECT jid, json_object('_id', CASE WHEN typeof(\"_id\") = 'blob' THEN hex(\"_id\") ELSE \"_id\" END, 'jid', CASE WHEN typeof(\"jid\") = 'blob' THEN hex(\"jid\") ELSE \"jid\" END, 'is_whatsapp_user', CASE WHEN typeof(\"is_whatsapp_user\") = 'blob' THEN hex(\"is_whatsapp_user\") ELSE \"is_whatsapp_user\" END, 'status', CASE WHEN typeof(\"status\") = 'blob' THEN hex(\"status\") ELSE \"status\" END, 'status_timestamp', CASE WHEN typeof(\"status_timestamp\") = 'blob' THEN hex(\"status_timestamp\") ELSE \"status_timestamp\" END, 'number', CASE WHEN typeof(\"number\") = 'blob' THEN hex(\"number\") ELSE \"number\" END, 'raw_contact_id', CASE WHEN typeof(\"raw_contact_id\") = 'blob' THEN hex(\"raw_contact_id\") ELSE \"raw_contact_id\" END, 'display_name', CASE WHEN typeof(\"display_name\") = 'blob' THEN hex(\"display_name\") ELSE \"display_name\" END, 'phone_type', CASE WHEN typeof(\"phone_type\") = 'blob' THEN hex(\"phone_type\") ELSE \"phone_type\" END, 'phone_label', CASE WHEN typeof(\"phone_label\") = 'blob' THEN hex(\"phone_label\") ELSE \"phone_label\" END, 'photo_ts', CASE WHEN typeof(\"photo_ts\") = 'blob' THEN hex(\"photo_ts\") ELSE \"photo_ts\" END, 'thumb_ts', CASE WHEN typeof(\"thumb_ts\") = 'blob' THEN hex(\"thumb_ts\") ELSE \"thumb_ts\" END, 'photo_id_timestamp', CASE WHEN typeof(\"photo_id_timestamp\") = 'blob' THEN hex(\"photo_id_timestamp\") ELSE \"photo_id_timestamp\" END, 'given_name', CASE WHEN typeof(\"given_name\") = 'blob' THEN hex(\"given_name\") ELSE \"given_name\" END, 'family_name', CASE WHEN typeof(\"family_name\") = 'blob' THEN hex(\"family_name\") ELSE \"family_name\" END, 'wa_name', CASE WHEN typeof(\"wa_name\") = 'blob' THEN hex(\"wa_name\") ELSE \"wa_name\" END, 'sort_name', CASE WHEN typeof(\"sort_name\") = 'blob' THEN hex(\"sort_name\") ELSE \"sort_name\" END, 'nickname', CASE WHEN typeof(\"nickname\") = 'blob' THEN hex(\"nickname\") ELSE \"nickname\" END, 'company', CASE WHEN typeof(\"company\") = 'blob' THEN hex(\"company\") ELSE \"company\" END, 'title', CASE WHEN typeof(\"title\") = 'blob' THEN hex(\"title\") ELSE \"title\" END, 'status_autodownload_disabled', CASE WHEN typeof(\"status_autodownload_disabled\") = 'blob' THEN hex(\"status_autodownload_disabled\") ELSE \"status_autodownload_disabled\" END, 'keep_timestamp', CASE WHEN typeof(\"keep_timestamp\") = 'blob' THEN hex(\"keep_timestamp\") ELSE \"keep_timestamp\" END, 'is_spam_reported', CASE WHEN typeof(\"is_spam_reported\") = 'blob' THEN hex(\"is_spam_reported\") ELSE \"is_spam_reported\" END, 'is_sidelist_synced', CASE WHEN typeof(\"is_sidelist_synced\") = 'blob' THEN hex(\"is_sidelist_synced\") ELSE \"is_sidelist_synced\" END, 'is_business_synced', CASE WHEN typeof(\"is_business_synced\") = 'blob' THEN hex(\"is_business_synced\") ELSE \"is_business_synced\" END, 'disappearing_mode_duration', CASE WHEN typeof(\"disappearing_mode_duration\") = 'blob' THEN hex(\"disappearing_mode_duration\") ELSE \"disappearing_mode_duration\" END, 'disappearing_mode_timestamp', CASE WHEN typeof(\"disappearing_mode_timestamp\") = 'blob' THEN hex(\"disappearing_mode_timestamp\") ELSE \"disappearing_mode_timestamp\" END, 'disappearing_mode_support_disabled', CASE WHEN typeof(\"disappearing_mode_support_disabled\") = 'blob' THEN hex(\"disappearing_mode_support_disabled\") ELSE \"disappearing_mode_support_disabled\" END, 'history_sync_initial_phash', CASE WHEN typeof(\"history_sync_initial_phash\") = 'blob' THEN hex(\"history_sync_initial_phash\") ELSE \"history_sync_initial_phash\" END, 'is_starred', CASE WHEN typeof(\"is_starred\") = 'blob' THEN hex(\"is_starred\") ELSE \"is_starred\" END, 'is_wa_created_contact', CASE WHEN typeof(\"is_wa_created_contact\") = 'blob' THEN hex(\"is_wa_created_contact\") ELSE \"is_wa_created_contact\" END, 'sync_policy', CASE WHEN typeof(\"sync_policy\") = 'blob' THEN hex(\"sync_policy\") ELSE \"sync_policy\" END, 'status_emoji', CASE WHEN typeof(\"status_emoji\") = 'blob' THEN hex(\"status_emoji\") ELSE \"status_emoji\" END, 'is_contact_synced', CASE WHEN typeof(\"is_contact_synced\") = 'blob' THEN hex(\"is_contact_synced\") ELSE \"is_contact_synced\" END, 'is_reachable', CASE WHEN typeof(\"is_reachable\") = 'blob' THEN hex(\"is_reachable\") ELSE \"is_reachable\" END, 'external_user_state', CASE WHEN typeof(\"external_user_state\") = 'blob' THEN hex(\"external_user_state\") ELSE \"external_user_state\" END) AS obj FROM wa_contacts WHERE jid IS NOT NULL ORDER BY _id) GROUP BY jid ORDER BY jid"
 files = ["wa-db-YePfTe.db"]
+judged_by = "ran"
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
@@ -996,11 +1008,6 @@ files = ["*/disk_stats.sqlite"]
 why = "The disk-usage retention sweep: it reads the old measurements once per sweep, and runs during the sync only when a sweep falls due."
 
 [[scan]]
-statement = "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason FROM runs WHERE ? IS NULL OR run_id = ? ORDER BY started_at_utc DESC LIMIT 1"
-files = ["*/runs/runs.sqlite"]
-why = "The run store keeps one row per run it has not yet let go (76 on a large library), so a scan stays small; recorded only when a run row exists when it runs."
-
-[[scan]]
 statement = "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
@@ -1074,11 +1081,6 @@ why = "Not reviewed, and suspect: a lookup by a value no index answers, so each 
 statement = "SELECT DISTINCT blob_id, blake3 FROM email_blobs WHERE blake3 IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Not reviewed: on main when this check began."
-
-[[scan]]
-statement = "SELECT MAX(seq) FROM log"
-files = ["*/runs/runs.sqlite"]
-why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
 statement = "SELECT a.message_id, a.export_name, m.group_id FROM chat_attachments a JOIN chat_messages m ON m.id = a.message_id WHERE a.blake3 IS NULL"
