@@ -9,8 +9,8 @@ Each message is handed over as an `Item` (`etl/render/src/item.rs`): its
 body and every fact its box shows, which the render store keeps in
 `sections`. Whatever reads the document draws the message again from
 those facts with `Item::draw`, the function render drew it with, so the
-header, the recipients, labels, reactions and replies lines below are
-drawn in that one place and stored nowhere as markup.
+header, the recipients, reactions and replies lines below are drawn in
+that one place and stored nowhere as markup.
 
 ## The message header
 
@@ -55,6 +55,14 @@ written still finds the author. An author with no handle is a plain
 `<span class="msg-author">`. How a handle becomes a person is
 `docs/dev/contacts.md`; how a chip is drawn, and why one may appear
 anywhere in a body, is `docs/dev/chips.md`.
+
+**An item's labels go in its header**, after the time: where it is
+filed upstream (an email's labels and mailboxes), one
+`<span class="msg-label">` each inside a `<span class="msg-labels">`.
+The app draws each as a label chip (`docs/dev/chips.md` §"A label"). The
+`↗` stays last on the line; the app gathers it, with the controls it
+adds, into the header's actions, shown while the pointer is over the
+message (`addHeaderControl` in `ui/src/cards/chatSections.js`).
 
 An item with `recipients` (an email's To, Cc and Bcc) gets one more line
 straight under the header, a paragraph rather than an HTML block

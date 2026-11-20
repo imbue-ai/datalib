@@ -21,4 +21,5 @@ pub mod units;
 /// v7: every stamp on a page is a `<time>`.
 /// v8: a reading is at its real time, not the device's local clock read as
 ///     UTC.
-pub const RENDER_VERSION: u32 = 8;
+/// v9: a device's box is a part of the page (`PAGE_PART`), drawn flat.
+pub const RENDER_VERSION: u32 = 9;

@@ -12,7 +12,7 @@ use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{escape_md_inline, md_code_span};
 use datalib_etl_render::processor::RenderCtx;
-use datalib_etl_render::section::Section;
+use datalib_etl_render::section::{Section, PAGE_PART};
 use datalib_etl_render::title::Title;
 use datalib_id::{entity_id_str, IdNamespace};
 use datalib_schema::data_nodes::{DataNodeRow, Lineage};
@@ -438,7 +438,7 @@ fn render_device_sections(
         let series = by_device.get(dev.key.as_str()).map(Vec::as_slice);
         out.boxed(
             &uuid,
-            format!("msg msg--{}", profile.tag),
+            format!("msg msg--{} {PAGE_PART}", profile.tag),
             &device_section(profile, dev, series),
         );
     }

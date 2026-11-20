@@ -3,8 +3,9 @@
 *Proposal (2026-11-19). Steps 1 to 4 landed (#1889, #1891, #1902,
 #1909), with search quoting a hit from its one message (#1896); step 6
 landed ahead of step 5 (#1916), and step 5 landed for chat-common's
-messages (#1925, §"What was built"). Step 7's chat layout is built on
-the branch after them; its other layouts are not. It picks up where
+messages (#1925, §"What was built"). Step 7's chat layout is #1934;
+its other layouts, the header actions and label chips are built on the
+branch after it. It picks up where
 [`documents_to_blocks.md`](documents_to_blocks.md) step 5 stopped
 ("paging through what is read together comes after"), and chooses a
 layout by kind through the registry
@@ -358,8 +359,32 @@ column); reactions are pills drawn by `Item::draw`. One thing moved to
 the viewer that the plan put on the server: **the day divider**. Where a
 day ends depends on the zone the status bar's clock picks, which only
 the viewer knows, so `decorateChatDays` draws it from each message's
-`<time>`, as `decorateDates` draws the times. The conversation and page
-layouts and the header actions are not built.
+`<time>`, as `decorateDates` draws the times.
+
+#### What was built: the rest of step 7
+
+- **Conversation and Transcript** stay as they were but for the two
+  changes below: every email stays open (§4), and a transcript keeps
+  today's look.
+- **Header actions.** The viewer gathers a message's controls — the 🔗
+  that copies a link to it (it replaced 🆔), the ▲ ▼ of a long one, and
+  the `↗` the render wrote, last — into one `.msg-actions` at the
+  header's right, shown only while the pointer is over the message where
+  a pointer can hover (`addHeaderControl` in `chatSections.js`). A
+  section with no header has its 🔗 at its top, shown the same way.
+- **Labels as chips.** `Item::draw` writes an item's labels into its
+  header after the time, one `msg-label` each, instead of a `🏷` line in
+  the body; the viewer draws each as a label chip (`labelChip.ts`,
+  `docs/dev/chips.md` §"A label"), which searches `label:"…"`.
+- **Page.** Notion, Drive, the calendar and contacts were already one
+  block with no header box; a comment on a page is a message and stays
+  a card. What was left were the boxes a page is cut into — a PDF's
+  pages, a time-series page's devices (YoLink, AirVisual, Garmin) —
+  which were cards, clamped with "Show more". Their renderers now mark
+  them `msg--page` (`section::PAGE_PART`, a render version bump each),
+  and the viewer draws them flat and whole, a hairline between them.
+- No registry was needed: chat-common's `Layout` and the `msg--page`
+  hint say all the viewer needs.
 
 ## 4. Open questions
 

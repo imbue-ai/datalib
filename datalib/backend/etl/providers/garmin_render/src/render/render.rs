@@ -13,7 +13,7 @@ use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::escape_md_inline;
 use datalib_etl_render::message::stamp_text_html;
-use datalib_etl_render::section::{Pieces, Section};
+use datalib_etl_render::section::{Pieces, Section, PAGE_PART};
 use datalib_etl_render::title::Title;
 use datalib_etl_timeseries_render::text::{iso, short_ts, stamp};
 use datalib_id::{entity_id_str, IdNamespace};
@@ -218,7 +218,7 @@ fn whole((front, body): (Front, String)) -> (Front, Vec<Section>) {
 
 /// The class of a Garmin section's box.
 fn boxed_class() -> String {
-    "msg msg--garmin".to_string()
+    format!("msg msg--garmin {PAGE_PART}")
 }
 
 /// The raw store's HEAD moves on every ingest (the bookkeeping stamps

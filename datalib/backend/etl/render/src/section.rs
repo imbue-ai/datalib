@@ -511,6 +511,11 @@ pub fn section_attrs(uuid: &str) -> String {
 
 /// A message's box class: `msg`, `msg--{provider}` so per-provider CSS can
 /// apply without each renderer inventing its own scheme, then `more`.
+/// The class that marks a box as a part of a page (a PDF's page, a
+/// device on a time-series page) rather than a message: the viewer draws
+/// it flat and whole, with no card around it and no "Show more".
+pub const PAGE_PART: &str = "msg--page";
+
 pub fn msg_class(provider: Provider, more: &[&str]) -> String {
     let mut class = format!("msg msg--{provider}");
     for c in more {

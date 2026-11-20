@@ -95,7 +95,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "garmin",
       "render_unit_key": "00000000-0000-8d0c-bb0a-d0b7f450753a",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "searchable": true,
       "source_id": "garmin",
       "title": "Daily log — Jean-Luc Picard"
@@ -299,7 +299,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "garmin",
       "render_unit_key": "00000000-0000-8d0c-bb0a-d0b7f450753a",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "searchable": true,
       "source_id": "garmin",
       "title": "Records and badges — Jean-Luc Picard"
@@ -347,7 +347,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "garmin",
       "render_unit_key": "00000000-0000-8d0c-bb0a-d0b7f450753a",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "searchable": true,
       "source_id": "garmin",
       "title": "Steps and activity — Jean-Luc Picard"
@@ -695,7 +695,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "garmin",
       "render_unit_key": "00000000-0000-8d0c-bb0a-d0b7f450753a",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "searchable": true,
       "source_id": "garmin",
       "title": "Heart rate and HRV — Jean-Luc Picard"
@@ -1043,7 +1043,7 @@ expression: snapshot
       "modified_at": "2024-11-03T11:45:09+00:00",
       "provider": "airvisual",
       "render_unit_key": "00000000-0000-88da-b36e-289718ab00fd",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "searchable": true,
       "source_id": "ship-air",
       "title": "AirVisual monitors — ship-air"
@@ -1199,7 +1199,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "pdf",
       "render_unit_key": "c146e5d51cfec1548b1d6d39f72d4ad957b0da442d2ca1bdf6d14a7094c506a2",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "searchable": true,
       "source_id": "tng_pdfs",
       "title": "Hull Integrity Survey"
@@ -1463,7 +1463,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "garmin",
       "render_unit_key": "00000000-0000-8d0c-bb0a-d0b7f450753a",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "searchable": true,
       "source_id": "garmin",
       "title": "Stress and Body Battery — Jean-Luc Picard"
@@ -1523,7 +1523,7 @@ expression: snapshot
       "modified_at": "2369-04-14T23:55:00+00:00",
       "provider": "yolink",
       "render_unit_key": "00000000-0000-8bfa-9046-e6e84f594bf2",
-      "renderer_version": "rust-v1.9",
+      "renderer_version": "rust-v1.10",
       "searchable": true,
       "source_id": "yolink",
       "title": "YoLink sensors — yolink"
@@ -1691,7 +1691,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "pdf",
       "render_unit_key": "c0a8fee85e97d71d110b7051d050937d464d84e1450557168c88371e2588bdbf",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "searchable": true,
       "source_id": "tng_pdfs",
       "title": "warp_core_manual.pdf"
@@ -1739,7 +1739,7 @@ expression: snapshot
       "modified_at": "2369-04-14T06:45:00+00:00",
       "provider": "garmin",
       "render_unit_key": "00000000-0000-8d0c-bb0a-d0b7f450753a",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "searchable": true,
       "source_id": "garmin",
       "title": "Garmin — Jean-Luc Picard"
@@ -2015,7 +2015,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "garmin",
       "render_unit_key": "00000000-0000-8d0c-bb0a-d0b7f450753a",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "searchable": true,
       "source_id": "garmin",
       "title": "Sleep — Jean-Luc Picard"
@@ -2039,7 +2039,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "pdf",
       "render_unit_key": "1f2acb7a29ff7b723d8221daf6cd54ea03df3f07970c5873ac8b9d4ed62465e4",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "searchable": true,
       "source_id": "tng_pdfs",
       "title": "Captain's Log"
@@ -2051,7 +2051,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "pdf",
       "render_unit_key": "ccb1d8c4482e582cd804d83709b854538c7e6be89a3cb19d4859a277735de545",
-      "renderer_version": "rust-v1.11",
+      "renderer_version": "rust-v1.12",
       "searchable": true,
       "source_id": "tng_pdfs",
       "title": "Captain's Log"
@@ -2063,7 +2063,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "garmin",
       "render_unit_key": "00000000-0000-8d0c-bb0a-d0b7f450753a",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "searchable": true,
       "source_id": "garmin",
       "title": "Holodeck run: Dixon Hill"
@@ -2075,7 +2075,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "garmin",
       "render_unit_key": "00000000-0000-8d0c-bb0a-d0b7f450753a",
-      "renderer_version": "rust-v1.8",
+      "renderer_version": "rust-v1.9",
       "searchable": true,
       "source_id": "garmin",
       "title": "Cycling: Deck 12 to Engineering"

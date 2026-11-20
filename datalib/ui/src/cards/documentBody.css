@@ -282,7 +282,6 @@
   box-shadow: 0 4px 6px -4px rgba(0, 0, 0, 0.35);
 }
 .chat-body .msg-nav {
-  margin-left: auto;
   display: inline-flex;
   gap: 0.15rem;
 }
@@ -460,6 +459,10 @@
   margin: 0 0 0 0.5rem;
   visibility: hidden;
 }
+/* Its labels (a starred message) stay in sight. */
+.chat-body .msg--chat > p:has(> .msg-cont:first-child) .msg-labels {
+  visibility: visible;
+}
 .chat-body .msg--chat:hover > p:has(> .msg-cont:first-child),
 .chat-body .msg--chat.selected > p:has(> .msg-cont:first-child) {
   visibility: visible;
@@ -478,6 +481,74 @@
   content: "";
   flex: 1;
   border-top: 1px solid var(--datalib-border, #d8d8d8);
+}
+/* A message's actions — its copy-link button, its ↗, the jumps of a
+   long one — at the header's right, shown where a pointer can hover
+   only while it is over the message, as mail and chat clients do. A
+   copy just made stays in sight to say it worked. */
+.chat-body .msg-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+@media (hover: hover) {
+  .chat-body .msg h2 > .msg-actions {
+    visibility: hidden;
+  }
+  .chat-body .msg:hover > h2 > .msg-actions,
+  .chat-body .msg.selected > h2 > .msg-actions,
+  .chat-body .msg h2 > .msg-actions:focus-within,
+  .chat-body .msg h2 > .msg-actions:has(.copied, .copy-failed) {
+    visibility: visible;
+  }
+}
+/* A section with no header has its 🔗 floated at its top; it too shows
+   only while the pointer is over the section. */
+@media (hover: hover) {
+  .chat-body .msg > button.copy-link:first-child:not(.copied, .copy-failed) {
+    visibility: hidden;
+  }
+  .chat-body .msg:hover > button.copy-link:first-child,
+  .chat-body .msg.selected > button.copy-link:first-child,
+  .chat-body .msg > button.copy-link:first-child:focus-visible {
+    visibility: visible;
+  }
+}
+/* A part of a page — a PDF's page, a device on a time-series page — is
+   the page itself, not a message on it: no card, read whole (no "Show
+   more"), a hairline where one part ends and the next begins. */
+.chat-body > .msg.msg--page {
+  border: none;
+  border-left: 3px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+}
+.chat-body > .msg.msg--page + .msg.msg--page {
+  border-top: 1px solid var(--datalib-border, #d8d8d8);
+}
+.chat-body > .msg.msg--page.selected {
+  border-left-color: var(--datalib-accent);
+}
+/* Where a message is filed upstream: one chip per label after its time
+   (`decorateLabels`). */
+.chat-body .msg-labels {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+.chat-body .msg-label {
+  padding: 0 0.5em;
+  border-radius: 999px;
+  background: var(--datalib-chip-unlinked-bg, rgba(110, 110, 115, 0.16));
+  font-size: 0.75rem;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.chat-body .msg-label.chip {
+  cursor: pointer;
 }
 /* A chat's reactions: one pill per emoji with how many reacted, naming
    them on hover, or when one of them is the selected row. */

@@ -1,7 +1,7 @@
 # Chips: a link the app resolves, drawn as what it names
 
 A **chip** is how Datalib shows something inline: a person, a source
-group, a pipeline step, a document, a date. It has a name, a picture or
+group, a pipeline step, a document, a date, a label. It has a name, a picture or
 a mark, and behind it a stable identifier the app looks up to learn what
 that thing is *now*: the contact a person linked, the name the config
 gives a group today, whether a step is running. A chip is drawn the same
@@ -20,7 +20,7 @@ they are (handles, each source's record, the contacts app) is
 
 | word | means |
 |---|---|
-| **entity** | what a chip names: a person (by a handle), a group, a step, a document, a node, a date |
+| **entity** | what a chip names: a person (by a handle), a group, a step, a document, a node, a date, a label |
 | **chip link** | how a chip is written down: a markdown link with a title (below) |
 | **entity URI** | the href, which names the entity (see [The link](#the-link)) |
 | **resolver** | the one place in the page that asks the server what an entity is now, for one kind of entity |
@@ -491,6 +491,20 @@ what a chip stands for in a search bar — everything with a person or a
 contact, a group's documents, a date's day — and the document puts it on
 the drag as plain text, which the search field takes like anything
 typed. A step names no search and drags as a link.
+
+## A label
+
+**Where a message is filed upstream is a chip too**: an email's labels
+and mailboxes, which a render writes after the header's time as
+`<span class="msg-label">Away team</span>`
+(`datalib/backend/etl/chat-common/README.md` §"The message header").
+`decorateLabels` in `ui/src/cards/labelChip.ts` marks each one a chip.
+Like a date, its name is the whole of what it names, so there is no URI
+and no resolver.
+
+- **double-click**, and **drag** into a search bar: everything filed
+  under it, `label:"Away team"`.
+- **right-click**: copy its name; everything labelled with it.
 
 ## Clicks
 
