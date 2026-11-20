@@ -197,8 +197,8 @@ pub struct NormalizedChatItem {
     pub attachments: Vec<NormalizedAttachment>,
     pub reactions: Vec<NormalizedReaction>,
     /// Where the item is filed upstream — an email's mailboxes and
-    /// labels, a Google Chat message's star. Drawn as one `🏷 a · b` line
-    /// above the body; not part of the item's grid text, which is what it
+    /// labels, a Google Chat message's star. Drawn in the header after the
+    /// time, one label chip each; not part of the item's grid text, which is what it
     /// says.
     pub labels: Vec<String>,
     /// Free-form note rendered in italics under the body. Used today

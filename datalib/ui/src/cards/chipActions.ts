@@ -48,11 +48,15 @@ import {
 } from "./documentChip";
 import { CONTACT, type ChipRef } from "@/search/queryText";
 import { dateCopyText, dateMenu, dateWallText, dayQuery, parseStamp, sideQuery } from "./dates";
+import { labelMenu, labelQuery } from "./labelChip";
 
-/** What a chip names: what the search field can name, a date, which
- *  only a document draws, or a document, which a grid draws. */
+/** What a chip names: what the search field can name, a date or a
+ *  label, which only a document draws, or a document, which a grid draws. */
 export type AnyChipRef =
-  ChipRef | { kind: "date"; datetime: string } | { kind: "document"; uri: string };
+  | ChipRef
+  | { kind: "date"; datetime: string }
+  | { kind: "label"; name: string }
+  | { kind: "document"; uri: string };
 export type { ChipRef };
 
 /** A chip as it was drawn: what it names, and the name its producer
@@ -167,7 +171,7 @@ export function asMenuEntries(entries: ChipEntry[], run: (id: ChipEntryId) => vo
 }
 
 export const CHIP_SELECTOR =
-  "a.chip[data-handle], a.chip[data-entity], a.chip[data-contact], a.chip[data-doc], time.chip[datetime]";
+  "a.chip[data-handle], a.chip[data-entity], a.chip[data-contact], a.chip[data-doc], time.chip[datetime], span.chip[data-label]";
 
 /** The chip element `target` is in, of any kind; null off a chip. */
 export function chipElAt(target: EventTarget | null | undefined): HTMLElement | null {
@@ -184,6 +188,7 @@ export function chipOf(el: HTMLElement): Chip | null {
   if (el.dataset.doc) return { ref: { kind: "document", uri: el.dataset.doc }, shownAs };
   const datetime = el.tagName === "TIME" ? el.getAttribute("datetime") : null;
   if (datetime) return { ref: { kind: "date", datetime }, shownAs };
+  if (el.dataset.label) return { ref: { kind: "label", name: el.dataset.label }, shownAs };
   return null;
 }
 
@@ -200,6 +205,8 @@ export function chipName(chip: Chip): string {
       return contactLook(shownAs || "a contact", contactsById.get(ref.id)).text;
     case "document":
       return shownAs || ref.uri;
+    case "label":
+      return ref.name;
     case "date": {
       const s = parseStamp(ref.datetime);
       return s ? dateWallText(s) : ref.datetime;
@@ -236,6 +243,8 @@ export function chipMenuOf(chip: Chip, canLink: boolean): ChipEntry[] {
     }
     case "document":
       return documentMenu(ref.uri, chipName(chip));
+    case "label":
+      return labelMenu(ref.name);
     case "date": {
       const s = parseStamp(ref.datetime);
       return s ? dateMenu(ref.datetime, s) : [];
@@ -245,7 +254,7 @@ export function chipMenuOf(chip: Chip, canLink: boolean): ChipEntry[] {
 
 /** The search a chip stands for when it is dragged into a search bar:
  *  everything with a person or a contact, a group's documents, a date's
- *  day. Null for a step or a document, which no search key names. */
+ *  day, a label's messages. Null for a step or a document, which no search key names. */
 export function chipDragQuery(ref: AnyChipRef): string | null {
   switch (ref.kind) {
     case "entity":
@@ -256,6 +265,8 @@ export function chipDragQuery(ref: AnyChipRef): string | null {
       return contactQuery(ref.id);
     case "document":
       return null;
+    case "label":
+      return labelQuery(ref.name);
     case "date": {
       const s = parseStamp(ref.datetime);
       return s ? dayQuery(s) : null;
@@ -265,8 +276,8 @@ export function chipDragQuery(ref: AnyChipRef): string | null {
 
 /** What double-clicking a chip opens: a person's card, led by the
  *  source the chip was seen in; a group's sync dashboard; a step's log;
- *  a document's card. Null for a contact, which has no card of its own
- *  yet. */
+ *  a document's card; a date's or a label's search. Null for a contact,
+ *  which has no card of its own yet. */
 export function chipCardSource(ref: AnyChipRef, seenIn: string | null): string | null {
   switch (ref.kind) {
     case "entity":
@@ -277,6 +288,7 @@ export function chipCardSource(ref: AnyChipRef, seenIn: string | null): string |
       return null;
     case "document":
       return documentCardSource(ref.uri);
+    case "label":
     case "date": {
       const q = chipDragQuery(ref);
       return q ? searchSource(q) : null;
@@ -395,7 +407,7 @@ export async function runChipAction(id: ChipEntryId, chip: Chip, host: ChipHost)
         search(everythingWith(ref.handle, people.get(ref.handle)?.mine ?? null), "narrow");
       }
       if (ref.kind === "contact") search(contactQuery(ref.id), "narrow");
-      if (ref.kind === "date") {
+      if (ref.kind === "date" || ref.kind === "label") {
         const q = chipDragQuery(ref);
         if (q) search(q, "narrow");
       }

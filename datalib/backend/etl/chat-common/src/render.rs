@@ -1752,7 +1752,11 @@ mod tests {
             &chat.render_units[0],
             "Test",
         ));
-        assert!(md.contains("🏷 Starred\n\nSpot's portrait"), "{md}");
+        assert!(
+            md.contains("<span class=\"msg-label\">Starred</span>"),
+            "{md}"
+        );
+        assert!(md.contains("Spot's portrait"), "{md}");
         assert!(md.contains("spot.png"), "{md}");
     }
 
@@ -2321,7 +2325,7 @@ mod tests {
             "the body: {md}"
         );
         assert!(
-            md.contains("🏷 &lt;script&gt;x&lt;/script&gt; &amp; co\n"),
+            md.contains("<span class=\"msg-label\">&lt;script&gt;x&lt;/script&gt; &amp; co</span>"),
             "{md}"
         );
         assert!(

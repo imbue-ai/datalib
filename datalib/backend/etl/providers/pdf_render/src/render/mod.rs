@@ -15,7 +15,7 @@ use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::{close_open_blocks, escape_name_inline};
 use datalib_etl_render::inputs::{Input, RawRange, RenderUnit, RenderUnits};
-use datalib_etl_render::section::{msg_class, Section};
+use datalib_etl_render::section::{msg_class, Section, PAGE_PART};
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 
 pub use convert::RENDER_VERSION;
@@ -374,7 +374,7 @@ fn pages_markdown(
         let page = format!("{}\n", close_open_blocks(&p.text));
         sections.push(Section::boxed(
             &uuid,
-            msg_class(grid_rows::PROVIDER, &[]),
+            msg_class(grid_rows::PROVIDER, &[PAGE_PART]),
             &page,
         ));
         page_rows.push((p.number, p.text.clone()));

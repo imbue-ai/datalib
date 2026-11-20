@@ -81,6 +81,10 @@ pub struct MessageHeader<'a> {
     /// wrote them: a review's `APPROVED`, `reply`. Each a `msg-tag` after
     /// the author.
     pub tags: &'a [&'a str],
+    /// Where the message is filed upstream (an email's labels and
+    /// mailboxes). Each a `msg-label` after the time, which the viewer
+    /// draws as a chip.
+    pub labels: &'a [&'a str],
     /// Public URL for this individual message (a Slack permalink, a
     /// GitHub comment anchor). Rendered as a trailing `↗`.
     pub source_url: Option<&'a str>,
@@ -118,12 +122,25 @@ impl MessageHeader<'_> {
             Some(stamp) => s.push_str(&message_stamp_text_html(stamp)),
             None => s.push_str(&timestamp_html(self.date_ms, self.offset_secs)),
         }
+        if let Some(labels) = labels_html(self.labels) {
+            s.push(' ');
+            s.push_str(&labels);
+        }
         if let Some(url) = self.source_url {
             s.push(' ');
             s.push_str(&source_link(url));
         }
         s
     }
+}
+
+/// Where a message is filed, one `msg-label` each; `None` for nowhere.
+pub fn labels_html(labels: &[&str]) -> Option<String> {
+    let spans: Vec<String> = labels
+        .iter()
+        .map(|l| format!("<span class=\"msg-label\">{}</span>", escape_md_inline(l)))
+        .collect();
+    (!spans.is_empty()).then(|| format!("<span class=\"msg-labels\">{}</span>", spans.join(" ")))
 }
 
 /// The `↗` that opens a message, comment or page at its source.

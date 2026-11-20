@@ -564,7 +564,6 @@ code.hljs {
   box-shadow: 0 4px 6px -4px rgba(0, 0, 0, 0.35);
 }
 .chat-body .msg-nav {
-  margin-left: auto;
   display: inline-flex;
   gap: 0.15rem;
 }
@@ -742,6 +741,10 @@ code.hljs {
   margin: 0 0 0 0.5rem;
   visibility: hidden;
 }
+/* Its labels (a starred message) stay in sight. */
+.chat-body .msg--chat > p:has(> .msg-cont:first-child) .msg-labels {
+  visibility: visible;
+}
 .chat-body .msg--chat:hover > p:has(> .msg-cont:first-child),
 .chat-body .msg--chat.selected > p:has(> .msg-cont:first-child) {
   visibility: visible;
@@ -760,6 +763,74 @@ code.hljs {
   content: "";
   flex: 1;
   border-top: 1px solid var(--datalib-border, #d8d8d8);
+}
+/* A message's actions — its copy-link button, its ↗, the jumps of a
+   long one — at the header's right, shown where a pointer can hover
+   only while it is over the message, as mail and chat clients do. A
+   copy just made stays in sight to say it worked. */
+.chat-body .msg-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+@media (hover: hover) {
+  .chat-body .msg h2 > .msg-actions {
+    visibility: hidden;
+  }
+  .chat-body .msg:hover > h2 > .msg-actions,
+  .chat-body .msg.selected > h2 > .msg-actions,
+  .chat-body .msg h2 > .msg-actions:focus-within,
+  .chat-body .msg h2 > .msg-actions:has(.copied, .copy-failed) {
+    visibility: visible;
+  }
+}
+/* A section with no header has its 🔗 floated at its top; it too shows
+   only while the pointer is over the section. */
+@media (hover: hover) {
+  .chat-body .msg > button.copy-link:first-child:not(.copied, .copy-failed) {
+    visibility: hidden;
+  }
+  .chat-body .msg:hover > button.copy-link:first-child,
+  .chat-body .msg.selected > button.copy-link:first-child,
+  .chat-body .msg > button.copy-link:first-child:focus-visible {
+    visibility: visible;
+  }
+}
+/* A part of a page — a PDF's page, a device on a time-series page — is
+   the page itself, not a message on it: no card, read whole (no "Show
+   more"), a hairline where one part ends and the next begins. */
+.chat-body > .msg.msg--page {
+  border: none;
+  border-left: 3px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+}
+.chat-body > .msg.msg--page + .msg.msg--page {
+  border-top: 1px solid var(--datalib-border, #d8d8d8);
+}
+.chat-body > .msg.msg--page.selected {
+  border-left-color: var(--datalib-accent);
+}
+/* Where a message is filed upstream: one chip per label after its time
+   (`decorateLabels`). */
+.chat-body .msg-labels {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+.chat-body .msg-label {
+  padding: 0 0.5em;
+  border-radius: 999px;
+  background: var(--datalib-chip-unlinked-bg, rgba(110, 110, 115, 0.16));
+  font-size: 0.75rem;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.chat-body .msg-label.chip {
+  cursor: pointer;
 }
 /* A chat's reactions: one pill per emoji with how many reacted, naming
    them on hover, or when one of them is the selected row. */
@@ -1058,6 +1129,7 @@ code.hljs {
   margin: 0;
   padding: 0 1rem;
 }
+
 /* A chip: a link the app resolves, drawn as the person it names
    (docs/dev/chips.md). Shared by the document frame and the
    grid's cells, so both draw the same chip; each includes this file
@@ -4028,7 +4100,7 @@ And take Data with you.</p>
 <div class="preview-doc">
 <h3 class="preview-name">garmin/00000000-0000-80b6-a0f6-2a808ceb34db.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-80b6-a0f6-2a808ceb34db">Daily log — Jean-Luc Picard</h1>
-<div id="m-00000000-0000-89c1-a2d8-721a560e2b1e" data-section-uuid="00000000-0000-89c1-a2d8-721a560e2b1e" class="msg msg--garmin">
+<div id="m-00000000-0000-89c1-a2d8-721a560e2b1e" data-section-uuid="00000000-0000-89c1-a2d8-721a560e2b1e" class="msg msg--garmin msg--page">
 <h3><time datetime="2369-04-14">Mon Apr 14th, 2369</time></h3>
 <ul>
 <li><strong>Sleep:</strong> Sleep score 84 · Asleep 7 h 20 min · Deep 1 h 30 min · Light 4 h 10 min · REM 1 h 30 min · Awake 10 min</li>
@@ -4037,7 +4109,7 @@ And take Data with you.</p>
 <li><strong>Steps and activity:</strong> Steps 14,872 · Floors 22 · Total calories 2,980 kcal</li>
 </ul>
 </div>
-<div id="m-00000000-0000-8272-b240-6bc269fe64ce" data-section-uuid="00000000-0000-8272-b240-6bc269fe64ce" class="msg msg--garmin">
+<div id="m-00000000-0000-8272-b240-6bc269fe64ce" data-section-uuid="00000000-0000-8272-b240-6bc269fe64ce" class="msg msg--garmin msg--page">
 <h3><time datetime="2369-04-13">Sun Apr 13th, 2369</time></h3>
 <ul>
 <li><strong>Heart rate and HRV:</strong> Resting HR 49 bpm · Min HR 45 bpm · Max HR 162 bpm</li>
@@ -4051,19 +4123,19 @@ And take Data with you.</p>
 <h3 class="preview-name">garmin/00000000-0000-81f8-a7be-7bc669836792.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-81f8-a7be-7bc669836792">Records and badges — Jean-Luc Picard</h1>
 <h2>Personal records</h2>
-<div id="m-00000000-0000-8252-8e49-2a5eea9170ce" data-section-uuid="00000000-0000-8252-8e49-2a5eea9170ce" class="msg msg--garmin">
+<div id="m-00000000-0000-8252-8e49-2a5eea9170ce" data-section-uuid="00000000-0000-8252-8e49-2a5eea9170ce" class="msg msg--garmin msg--page">
 <p><strong>Fastest 5 km</strong> · 21:30 · Running · in Holodeck run: Dixon Hill</p>
 </div>
 <h2>Badges</h2>
-<div id="m-00000000-0000-8787-a9bf-fa3ecd707a65" data-section-uuid="00000000-0000-8787-a9bf-fa3ecd707a65" class="msg msg--garmin">
+<div id="m-00000000-0000-8787-a9bf-fa3ecd707a65" data-section-uuid="00000000-0000-8787-a9bf-fa3ecd707a65" class="msg msg--garmin msg--page">
 <p><strong>First Marathon</strong> · earned 2368-11-02</p>
 </div>
 <h2>Gear</h2>
-<div id="m-00000000-0000-8b30-a5d1-49daa3109a69" data-section-uuid="00000000-0000-8b30-a5d1-49daa3109a69" class="msg msg--garmin">
+<div id="m-00000000-0000-8b30-a5d1-49daa3109a69" data-section-uuid="00000000-0000-8b30-a5d1-49daa3109a69" class="msg msg--garmin msg--page">
 <p><strong>Starfleet issue trainers</strong> · Shoes · retire at 800 km</p>
 </div>
 <h2>Workouts</h2>
-<div id="m-00000000-0000-8459-bfbf-509cece0e740" data-section-uuid="00000000-0000-8459-bfbf-509cece0e740" class="msg msg--garmin">
+<div id="m-00000000-0000-8459-bfbf-509cece0e740" data-section-uuid="00000000-0000-8459-bfbf-509cece0e740" class="msg msg--garmin msg--page">
 <p><strong>Tempo intervals</strong> · Running · about 45:00</p>
 </div>
 </div>
@@ -4225,7 +4297,7 @@ And take Data with you.</p>
 </tbody>
 </table>
 <h2>Devices</h2>
-<div id="m-00000000-0000-8909-ae68-923b6b55ace2" data-section-uuid="00000000-0000-8909-ae68-923b6b55ace2" class="msg msg--garmin">
+<div id="m-00000000-0000-8909-ae68-923b6b55ace2" data-section-uuid="00000000-0000-8909-ae68-923b6b55ace2" class="msg msg--garmin msg--page">
 <h3>Forerunner 265</h3>
 <p><em>device 3654926501 · last synced 2369-04-15T05:12:44.0</em></p>
 </div>
@@ -5528,8 +5600,7 @@ Riker out.</p>
 </div>
 </details>
 <div id="m-0194f4c9-3698-8368-9caa-de73830de593" data-section-uuid="0194f4c9-3698-8368-9caa-de73830de593" class="msg msg--google_takeout msg--chat">
-<h2><a href="mailto:picard@enterprise.starfleet" title="Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;" class="chip" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard</a> <time class="msg-ts" datetime="2025-02-11T11:33:35+00:00" title="2025-02-11 11:33:35 UTC">Tue Feb 11th, 2025 at 11:33</time></h2>
-<p>🏷 Starred</p>
+<h2><a href="mailto:picard@enterprise.starfleet" title="Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;" class="chip" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard</a> <time class="msg-ts" datetime="2025-02-11T11:33:35+00:00" title="2025-02-11 11:33:35 UTC">Tue Feb 11th, 2025 at 11:33</time> <span class="msg-labels"><span class="msg-label">Starred</span></span></h2>
 <p>Number One, set a course for Risa.</p>
 <p>🔗 <a href="https://memory-alpha.example/wiki/Risa">Risa</a></p>
 <p><em>Edited <time datetime="2025-02-11T11:35:00+00:00" title="2025-02-11 11:35:00 UTC">Tue Feb 11th, 2025 at 11:35</time></em></p>
@@ -5627,8 +5698,7 @@ Riker out.</p>
 <p>Every planet the Enterprise-D sent an away team to.</p>
 </div>
 <div id="m-00000000-0000-8c06-afb1-6e879c3bf3e8" data-section-uuid="00000000-0000-8c06-afb1-6e879c3bf3e8" class="msg msg--google_takeout">
-<h2><a href="datalib:handle/me/self" title="Me" class="chip" data-handle="me:self">Me</a> <span class="msg-ts">(no timestamp)</span></h2>
-<p>🏷 Shore leave</p>
+<h2><a href="datalib:handle/me/self" title="Me" class="chip" data-handle="me:self">Me</a> <span class="msg-ts">(no timestamp)</span> <span class="msg-labels"><span class="msg-label">Shore leave</span></span></h2>
 <p><strong>Risa</strong></p>
 <p>Horga'hn optional.<br>
 Bring sunscreen.</p>
@@ -5636,21 +5706,18 @@ Bring sunscreen.</p>
 <p>🖼 <a href="https://memory-alpha.example/risa.jpg">https://memory-alpha.example/risa.jpg</a></p>
 </div>
 <div id="m-00000000-0000-8789-b1a0-7bd4d0a1b1a2" data-section-uuid="00000000-0000-8789-b1a0-7bd4d0a1b1a2" class="msg msg--google_takeout">
-<h2><a href="datalib:handle/me/self" title="Me" class="chip" data-handle="me:self">Me</a> <span class="msg-ts">(no timestamp)</span></h2>
-<p>🏷 Shore leave</p>
+<h2><a href="datalib:handle/me/self" title="Me" class="chip" data-handle="me:self">Me</a> <span class="msg-ts">(no timestamp)</span> <span class="msg-labels"><span class="msg-label">Shore leave</span></span></h2>
 <p><strong>Ten Forward</strong></p>
 <p>📍 <a href="https://www.google.com/maps/search/?api=1&amp;query=51.5,-0.1">51.5, -0.1</a></p>
 </div>
 <div id="m-00000000-0000-89e5-9f67-a49777419264" data-section-uuid="00000000-0000-89e5-9f67-a49777419264" class="msg msg--google_takeout">
-<h2><a href="datalib:handle/me/self" title="Me" class="chip" data-handle="me:self">Me</a> <span class="msg-ts">(no timestamp)</span></h2>
-<p>🏷 Patrol routes</p>
+<h2><a href="datalib:handle/me/self" title="Me" class="chip" data-handle="me:self">Me</a> <span class="msg-ts">(no timestamp)</span> <span class="msg-labels"><span class="msg-label">Patrol routes</span></span></h2>
 <p><strong>Neutral Zone sweep</strong></p>
 <p>Long-range sensors only.</p>
 <p>〰 3 points</p>
 </div>
 <div id="m-00000000-0000-80b4-8a03-0f6e3ccf8698" data-section-uuid="00000000-0000-80b4-8a03-0f6e3ccf8698" class="msg msg--google_takeout">
-<h2><a href="datalib:handle/me/self" title="Me" class="chip" data-handle="me:self">Me</a> <span class="msg-ts">(no timestamp)</span></h2>
-<p>🏷 Patrol routes</p>
+<h2><a href="datalib:handle/me/self" title="Me" class="chip" data-handle="me:self">Me</a> <span class="msg-ts">(no timestamp)</span> <span class="msg-labels"><span class="msg-label">Patrol routes</span></span></h2>
 <p><strong>Romulan border</strong></p>
 <p>〰 4 points</p>
 </div>
@@ -5738,8 +5805,7 @@ Ask for the green drink.</p>
 </div>
 </details>
 <div id="m-019573ed-81e0-850e-823e-0bd667fb26ce" data-section-uuid="019573ed-81e0-850e-823e-0bd667fb26ce" class="msg msg--google_takeout msg--chat">
-<h2><a href="mailto:data@enterprise.starfleet" title="Data &lt;data@enterprise.starfleet&gt;" class="chip" data-handle="email:data@enterprise.starfleet">Data</a> <time class="msg-ts" datetime="2025-03-07T20:05:00-08:00" title="2025-03-07 20:05:00 -08:00">Fri Mar 7th, 2025 at 20:05</time></h2>
-<p>🏷 Starred</p>
+<h2><a href="mailto:data@enterprise.starfleet" title="Data &lt;data@enterprise.starfleet&gt;" class="chip" data-handle="email:data@enterprise.starfleet">Data</a> <time class="msg-ts" datetime="2025-03-07T20:05:00-08:00" title="2025-03-07 20:05:00 -08:00">Fri Mar 7th, 2025 at 20:05</time> <span class="msg-labels"><span class="msg-label">Starred</span></span></h2>
 <p>↪ <em>In the thread Guinan started</em></p>
 <p>I would. I have attached my notes.</p>
 <p><em>Edited <time datetime="2025-03-07T20:06:30-08:00" title="2025-03-07 20:06:30 -08:00">Fri Mar 7th, 2025 at 20:06</time></em></p>
@@ -6405,7 +6471,7 @@ Ask for the green drink.</p>
 <p>2 series · 69 points · <time datetime="2024-08-30T23:00:00+00:00" title="2024-08-30 23:00:00 UTC">Fri Aug 30th, 2024 at 23:00</time> — <time datetime="2024-11-03T11:45:09+00:00" title="2024-11-03 11:45:09 UTC">Sun Nov 3rd, 2024 at 11:45</time></p>
 <div class="time-series-chart" data-time-series="00000000-0000-8d1e-a54d-622256434f83 00000000-0000-8ea0-a9fb-bd4b5ff9595f"></div>
 <h2>Devices</h2>
-<div id="m-00000000-0000-88c0-b6ee-3210db9c4ed5" data-section-uuid="00000000-0000-88c0-b6ee-3210db9c4ed5" class="msg msg--airvisual">
+<div id="m-00000000-0000-88c0-b6ee-3210db9c4ed5" data-section-uuid="00000000-0000-88c0-b6ee-3210db9c4ed5" class="msg msg--airvisual msg--page">
 <h3>Sickbay</h3>
 <p><em>serial <code>SICKBAY01</code> · model 30 · firmware 1.1937 / KBG66F85 · clock in America/Denver · last sample <time datetime="2024-09-01T11:25:00+00:00" title="2024-09-01 11:25:00 UTC">Sun Sep 1st, 2024 at 11:25</time></em></p>
 <table>
@@ -6547,7 +6613,7 @@ Ask for the green drink.</p>
 </tbody>
 </table>
 </div>
-<div id="m-00000000-0000-8e1d-8ce6-ca9fcdd15aaf" data-section-uuid="00000000-0000-8e1d-8ce6-ca9fcdd15aaf" class="msg msg--airvisual">
+<div id="m-00000000-0000-8e1d-8ce6-ca9fcdd15aaf" data-section-uuid="00000000-0000-8e1d-8ce6-ca9fcdd15aaf" class="msg msg--airvisual msg--page">
 <h3>Ten Forward</h3>
 <p><em>serial <code>TENFWD10X</code> · model 30 · firmware 1.1937 / KBG66F85 · clock in America/Los_Angeles · last sample <time datetime="2024-11-03T11:45:09+00:00" title="2024-11-03 11:45:09 UTC">Sun Nov 3rd, 2024 at 11:45</time></em></p>
 <table>
@@ -8553,9 +8619,8 @@ Worf has asked that no one serve gagh.</p>
 <h3 class="preview-name">tng_email/00000000-0000-80b3-8c56-6d41b85ab9c6.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-80b3-8c56-6d41b85ab9c6">Captain's Log — Stardate 80124.1 <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:log-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-019b98c1-db00-89bf-8e74-14d9155da327" data-section-uuid="019b98c1-db00-89bf-8e74-14d9155da327" class="msg msg--email">
-<h2><a href="mailto:picard@enterprise.starfleet" title="Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;" class="chip" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;</a> <time class="msg-ts" datetime="2026-01-07T14:00:00+00:00" title="2026-01-07 14:00:00 UTC">Wed Jan 7th, 2026 at 14:00</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:log-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><a href="mailto:picard@enterprise.starfleet" title="Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;" class="chip" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;</a> <time class="msg-ts" datetime="2026-01-07T14:00:00+00:00" title="2026-01-07 14:00:00 UTC">Wed Jan 7th, 2026 at 14:00</time> <span class="msg-labels"><span class="msg-label">Important</span> <span class="msg-label">Sent</span></span> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:log-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p><span class="msg-recipients"><span class="msg-recipients-role">To</span> <a href="mailto:command@starfleet.gov" title="Starfleet Command &lt;command@starfleet.gov&gt;" class="chip" data-handle="email:command@starfleet.gov">Starfleet Command</a>; <span class="msg-recipients-role">Bcc</span> <a href="mailto:troi@enterprise.starfleet" title="Deanna Troi &lt;troi@enterprise.starfleet&gt;" class="chip" data-handle="email:troi@enterprise.starfleet">Deanna Troi</a></span></p>
-<p>🏷 Important · Sent</p>
 <p>Captain's log, stardate 80124.1. The Enterprise has arrived at the
 Neutral Zone. Long-range scans have detected three Romulan warbirds
 holding position at the edge of sensor range. I have ordered yellow
@@ -8569,9 +8634,8 @@ alert and dispatched a coded message to Starfleet Command.</p>
 <h3 class="preview-name">tng_email/00000000-0000-85ec-8481-370bffc3afe9.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-85ec-8481-370bffc3afe9">You've won a holosuite upgrade! <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:holosuite-win-001%40quarks.example" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-019b9cd5-8e80-8562-98ed-abfb7e8a4cac" data-section-uuid="019b9cd5-8e80-8562-98ed-abfb7e8a4cac" class="msg msg--email">
-<h2><a href="mailto:prizes@quarks.example" title="Quark's Bar &lt;prizes@quarks.example&gt;" class="chip" data-handle="email:prizes@quarks.example">Quark's Bar &lt;prizes@quarks.example&gt;</a> <time class="msg-ts" datetime="2026-01-08T09:00:00+00:00" title="2026-01-08 09:00:00 UTC">Thu Jan 8th, 2026 at 09:00</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:holosuite-win-001%40quarks.example" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><a href="mailto:prizes@quarks.example" title="Quark's Bar &lt;prizes@quarks.example&gt;" class="chip" data-handle="email:prizes@quarks.example">Quark's Bar &lt;prizes@quarks.example&gt;</a> <time class="msg-ts" datetime="2026-01-08T09:00:00+00:00" title="2026-01-08 09:00:00 UTC">Thu Jan 8th, 2026 at 09:00</time> <span class="msg-labels"><span class="msg-label">Category Promotions</span> <span class="msg-label">Inbox</span></span> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:holosuite-win-001%40quarks.example" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p><span class="msg-recipients"><span class="msg-recipients-role">To</span> <a href="mailto:picard@enterprise.starfleet" title="Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;" class="chip" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard</a></span></p>
-<p>🏷 Category Promotions · Inbox</p>
 <p>Congratulations, Captain! Claim your prize before the Nagus does.</p>
 <p><a href="/searchView(window.__hostileRan=1)">Claim your holosuite upgrade</a></p>
 <p><a href="/api/config">Review your account</a></p>
@@ -8734,9 +8798,8 @@ alert and dispatched a coded message to Starfleet Command.</p>
 <h3 class="preview-name">tng_email/00000000-0000-89ac-8ef1-ba5e79d09b76.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-89ac-8ef1-ba5e79d09b76">Your bar tab <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:bar-tab-001%40quarks.example" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-019ba48f-1880-8caa-a85b-c2355321c4d0" data-section-uuid="019ba48f-1880-8caa-a85b-c2355321c4d0" class="msg msg--email">
-<h2><a href="mailto:prizes@quarks.example" title="Quark's Bar &lt;prizes@quarks.example&gt;" class="chip" data-handle="email:prizes@quarks.example">Quark's Bar &lt;prizes@quarks.example&gt;</a> <time class="msg-ts" datetime="2026-01-09T21:00:00+00:00" title="2026-01-09 21:00:00 UTC">Fri Jan 9th, 2026 at 21:00</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:bar-tab-001%40quarks.example" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><a href="mailto:prizes@quarks.example" title="Quark's Bar &lt;prizes@quarks.example&gt;" class="chip" data-handle="email:prizes@quarks.example">Quark's Bar &lt;prizes@quarks.example&gt;</a> <time class="msg-ts" datetime="2026-01-09T21:00:00+00:00" title="2026-01-09 21:00:00 UTC">Fri Jan 9th, 2026 at 21:00</time> <span class="msg-labels"><span class="msg-label">Inbox</span></span> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:bar-tab-001%40quarks.example" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p><span class="msg-recipients"><span class="msg-recipients-role">To</span> <a href="mailto:picard@enterprise.starfleet" title="Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;" class="chip" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard</a></span></p>
-<p>🏷 Inbox</p>
 <p>Captain, your tab is attached. Prompt payment is appreciated.</p>
 <p>— Quark, proprietor</p>
 <h3>Attachments</h3>
@@ -8750,9 +8813,8 @@ alert and dispatched a coded message to Starfleet Command.</p>
 <h3 class="preview-name">tng_email/00000000-0000-8a58-a8a4-0d3e51a39a59.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8a58-a8a4-0d3e51a39a59">Your shore leave awaits! <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:risa-promo-001%40risa.tourism" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-019b9251-e800-8ca5-8cdf-3cd10603d0f3" data-section-uuid="019b9251-e800-8ca5-8cdf-3cd10603d0f3" class="msg msg--email">
-<h2><a href="mailto:hello@risa.tourism" title="Risa Tourism Board &lt;hello@risa.tourism&gt;" class="chip" data-handle="email:hello@risa.tourism">Risa Tourism Board &lt;hello@risa.tourism&gt;</a> <time class="msg-ts" datetime="2026-01-06T08:00:00+00:00" title="2026-01-06 08:00:00 UTC">Tue Jan 6th, 2026 at 08:00</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:risa-promo-001%40risa.tourism" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><a href="mailto:hello@risa.tourism" title="Risa Tourism Board &lt;hello@risa.tourism&gt;" class="chip" data-handle="email:hello@risa.tourism">Risa Tourism Board &lt;hello@risa.tourism&gt;</a> <time class="msg-ts" datetime="2026-01-06T08:00:00+00:00" title="2026-01-06 08:00:00 UTC">Tue Jan 6th, 2026 at 08:00</time> <span class="msg-labels"><span class="msg-label">Category Promotions</span> <span class="msg-label">Inbox</span></span> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:risa-promo-001%40risa.tourism" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p><span class="msg-recipients"><span class="msg-recipients-role">To</span> <a href="mailto:picard@enterprise.starfleet" title="Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;" class="chip" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard</a></span></p>
-<p>🏷 Category Promotions · Inbox</p>
 <p>Temtibi Lagoon is waiting for you.</p>
 <h1>Greetings Captain Picard!</h1>
 <p><img src="https://risa.tourism/images/temtibi-lagoon.jpg" alt="Temtibi Lagoon at sunset"></p>
@@ -8768,9 +8830,8 @@ alert and dispatched a coded message to Starfleet Command.</p>
 <h3 class="preview-name">tng_email/00000000-0000-8ce7-94d1-18948b029452.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8ce7-94d1-18948b029452">Mission Briefing — Sector 001 <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:briefing-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-019b8d62-7a80-88c2-8062-f1b656c84835" data-section-uuid="019b8d62-7a80-88c2-8062-f1b656c84835" class="msg msg--email">
-<h2><a href="mailto:command@starfleet.gov" title="Starfleet Command &lt;command@starfleet.gov&gt;" class="chip" data-handle="email:command@starfleet.gov">Starfleet Command &lt;command@starfleet.gov&gt;</a> <time class="msg-ts" datetime="2026-01-05T09:00:00+00:00" title="2026-01-05 09:00:00 UTC">Mon Jan 5th, 2026 at 09:00</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:briefing-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><a href="mailto:command@starfleet.gov" title="Starfleet Command &lt;command@starfleet.gov&gt;" class="chip" data-handle="email:command@starfleet.gov">Starfleet Command &lt;command@starfleet.gov&gt;</a> <time class="msg-ts" datetime="2026-01-05T09:00:00+00:00" title="2026-01-05 09:00:00 UTC">Mon Jan 5th, 2026 at 09:00</time> <span class="msg-labels"><span class="msg-label">Starred</span> <span class="msg-label">Important</span> <span class="msg-label">Inbox</span></span> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:briefing-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p><span class="msg-recipients"><span class="msg-recipients-role">To</span> <a href="mailto:picard@enterprise.starfleet" title="Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;" class="chip" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard</a>; <span class="msg-recipients-role">Cc</span> <a href="mailto:riker@enterprise.starfleet" title="William Riker &lt;riker@enterprise.starfleet&gt;" class="chip" data-handle="email:riker@enterprise.starfleet">William Riker</a></span></p>
-<p>🏷 Starred · Important · Inbox</p>
 <p>Captain Picard,</p>
 <p>You are hereby ordered to proceed at maximum warp to the Romulan Neutral
 Zone. Investigate reports of unusual subspace activity near outpost 23.</p>
@@ -8778,9 +8839,8 @@ Zone. Investigate reports of unusual subspace activity near outpost 23.</p>
 <p>— Admiral Hayes</p>
 </div>
 <div id="m-019b8db4-e040-88dc-8f8b-9e73422dcff3" data-section-uuid="019b8db4-e040-88dc-8f8b-9e73422dcff3" class="msg msg--email">
-<h2><a href="mailto:picard@enterprise.starfleet" title="Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;" class="chip" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;</a> <time class="msg-ts" datetime="2026-01-05T10:30:00+00:00" title="2026-01-05 10:30:00 UTC">Mon Jan 5th, 2026 at 10:30</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:briefing-002%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><a href="mailto:picard@enterprise.starfleet" title="Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;" class="chip" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;</a> <time class="msg-ts" datetime="2026-01-05T10:30:00+00:00" title="2026-01-05 10:30:00 UTC">Mon Jan 5th, 2026 at 10:30</time> <span class="msg-labels"><span class="msg-label">Inbox</span> <span class="msg-label">Sent</span></span> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:briefing-002%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p><span class="msg-recipients"><span class="msg-recipients-role">To</span> <a href="mailto:riker@enterprise.starfleet" title="William Riker &lt;riker@enterprise.starfleet&gt;" class="chip" data-handle="email:riker@enterprise.starfleet">William Riker</a></span></p>
-<p>🏷 Inbox · Sent</p>
 <p>Number One,</p>
 <p>Set a course for the Neutral Zone, warp 9. Brief the senior staff at
 1400 hours. I want Mr. Data running long-range scans the moment we
@@ -8789,9 +8849,8 @@ cross into the buffer region.</p>
 <p>— Picard</p>
 </div>
 <div id="m-019b8dde-1320-86d3-965a-083aad10c428" data-section-uuid="019b8dde-1320-86d3-965a-083aad10c428" class="msg msg--email unread first-unread">
-<h2><a href="mailto:laforge@enterprise.starfleet" title="Geordi La Forge &lt;laforge@enterprise.starfleet&gt;" class="chip" data-handle="email:laforge@enterprise.starfleet">Geordi La Forge &lt;laforge@enterprise.starfleet&gt;</a> <time class="msg-ts" datetime="2026-01-05T11:15:00+00:00" title="2026-01-05 11:15:00 UTC">Mon Jan 5th, 2026 at 11:15</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:briefing-003%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><a href="mailto:laforge@enterprise.starfleet" title="Geordi La Forge &lt;laforge@enterprise.starfleet&gt;" class="chip" data-handle="email:laforge@enterprise.starfleet">Geordi La Forge &lt;laforge@enterprise.starfleet&gt;</a> <time class="msg-ts" datetime="2026-01-05T11:15:00+00:00" title="2026-01-05 11:15:00 UTC">Mon Jan 5th, 2026 at 11:15</time> <span class="msg-labels"><span class="msg-label">Inbox</span></span> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:briefing-003%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p><span class="msg-recipients"><span class="msg-recipients-role">To</span> <a href="mailto:picard@enterprise.starfleet" title="Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;" class="chip" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard</a>; <span class="msg-recipients-role">Cc</span> <a href="mailto:riker@enterprise.starfleet" title="William Riker &lt;riker@enterprise.starfleet&gt;" class="chip" data-handle="email:riker@enterprise.starfleet">William Riker</a></span></p>
-<p>🏷 Inbox</p>
 <p>Captain,</p>
 <p>Warp core diagnostics attached. We can sustain warp 9 for approximately
 twelve hours before we need to drop out for a coolant cycle. I would
@@ -8808,9 +8867,8 @@ recommend a brief stop at Starbase 173 if the mission allows.</p>
 <h3 class="preview-name">tng_email/00000000-0000-8e37-8bef-9f0edb66b8be.md</h3>
 <div class="chat-body markdown-body"><h1 class="page-title" data-page-title-uuid="00000000-0000-8e37-8bef-9f0edb66b8be">Bridge status display <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:bridge-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h1>
 <div id="m-019b97af-3280-8f16-979e-afe19c268630" data-section-uuid="019b97af-3280-8f16-979e-afe19c268630" class="msg msg--email">
-<h2><a href="mailto:lcars@enterprise.starfleet" title="LCARS Status &lt;lcars@enterprise.starfleet&gt;" class="chip" data-handle="email:lcars@enterprise.starfleet">LCARS Status &lt;lcars@enterprise.starfleet&gt;</a> <time class="msg-ts" datetime="2026-01-07T09:00:00+00:00" title="2026-01-07 09:00:00 UTC">Wed Jan 7th, 2026 at 09:00</time> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:bridge-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
+<h2><a href="mailto:lcars@enterprise.starfleet" title="LCARS Status &lt;lcars@enterprise.starfleet&gt;" class="chip" data-handle="email:lcars@enterprise.starfleet">LCARS Status &lt;lcars@enterprise.starfleet&gt;</a> <time class="msg-ts" datetime="2026-01-07T09:00:00+00:00" title="2026-01-07 09:00:00 UTC">Wed Jan 7th, 2026 at 09:00</time> <span class="msg-labels"><span class="msg-label">Inbox</span></span> <a class="source-link" href="https://mail.google.com/mail/u/0/#search/rfc822msgid:bridge-001%40enterprise.starfleet" target="_blank" rel="noopener noreferrer">↗</a></h2>
 <p><span class="msg-recipients"><span class="msg-recipients-role">To</span> <a href="mailto:picard@enterprise.starfleet" title="Jean-Luc Picard &lt;picard@enterprise.starfleet&gt;" class="chip" data-handle="email:picard@enterprise.starfleet">Jean-Luc Picard</a></span></p>
-<p>🏷 Inbox</p>
 <p>Bridge status display below:</p>
 <p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4IDgiPjxyZWN0IHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiM5NGEzYjgiLz48L3N2Zz4=" alt="LCARS"></p>
 <p>Ping <a href="mailto:laforge@enterprise.starfleet" title="@Geordi La Forge &lt;laforge@enterprise.starfleet&gt;" class="chip" data-handle="email:laforge@enterprise.starfleet">@Geordi La Forge</a> if the glyph fails.</p>
@@ -8884,7 +8942,7 @@ recommend a brief stop at Starbase 173 if the mission allows.</p>
 <div class="preview-doc">
 <h3 class="preview-name">tng_pdfs/00000000-0000-8a13-8568-fa91d9598906.md</h3>
 <div class="chat-body markdown-body"><h1>Hull Integrity Survey</h1>
-<div id="m-00000000-0000-8304-97dd-79bdf3daf5a9" data-section-uuid="00000000-0000-8304-97dd-79bdf3daf5a9" class="msg msg--pdf">
+<div id="m-00000000-0000-8304-97dd-79bdf3daf5a9" data-section-uuid="00000000-0000-8304-97dd-79bdf3daf5a9" class="msg msg--pdf msg--page">
 <p>Hull Integrity Survey, Stardate 41209.2 Ablative plating on decks nine through twelve shows microfracturing consistent with prolonged warp stress. The scanned schematic follows on the next page.</p>
 </div>
 <p><em>Page 2 — no extractable text (image-only or scanned; OCR is not available yet).</em></p>
@@ -8893,7 +8951,7 @@ recommend a brief stop at Starbase 173 if the mission allows.</p>
 <div class="preview-doc">
 <h3 class="preview-name">tng_pdfs/00000000-0000-8ccc-b967-791c3561a091.md</h3>
 <div class="chat-body markdown-body"><h1>warp_core_manual.pdf</h1>
-<div id="m-00000000-0000-8d04-9829-adab9230b668" data-section-uuid="00000000-0000-8d04-9829-adab9230b668" class="msg msg--pdf">
+<div id="m-00000000-0000-8d04-9829-adab9230b668" data-section-uuid="00000000-0000-8d04-9829-adab9230b668" class="msg msg--pdf msg--page">
 <p>Warp Core Maintenance, Galaxy Class Recalibrate the dilithium articulation frame every four hundred hours of continuous warp operation. Misalignment induces antimatter containment cascade.</p>
 </div>
 </div>
@@ -8901,7 +8959,7 @@ recommend a brief stop at Starbase 173 if the mission allows.</p>
 <div class="preview-doc">
 <h3 class="preview-name">tng_pdfs/0b50f5ba-0c60-856f-8ff1-ea60e22c037d.md</h3>
 <div class="chat-body markdown-body"><h1>Captain's Log</h1>
-<div id="m-0b50f5ba-0c60-8a87-b679-02b6594b484d" data-section-uuid="0b50f5ba-0c60-8a87-b679-02b6594b484d" class="msg msg--pdf">
+<div id="m-0b50f5ba-0c60-8a87-b679-02b6594b484d" data-section-uuid="0b50f5ba-0c60-8a87-b679-02b6594b484d" class="msg msg--pdf msg--page">
 <p>Captain’s Log, Stardate 41153.7 Our destination is planet Deneb IV, beyond which lies the great unexplored mass of the galaxy.</p>
 </div>
 </div>
@@ -8909,10 +8967,10 @@ recommend a brief stop at Starbase 173 if the mission allows.</p>
 <div class="preview-doc">
 <h3 class="preview-name">tng_pdfs/0b50f5ba-0c60-8e25-aebf-920f19049521.md</h3>
 <div class="chat-body markdown-body"><h1>Captain's Log</h1>
-<div id="m-0b50f5ba-0c60-8edf-85f3-e3cdf98e44f5" data-section-uuid="0b50f5ba-0c60-8edf-85f3-e3cdf98e44f5" class="msg msg--pdf">
+<div id="m-0b50f5ba-0c60-8edf-85f3-e3cdf98e44f5" data-section-uuid="0b50f5ba-0c60-8edf-85f3-e3cdf98e44f5" class="msg msg--pdf msg--page">
 <p>Captain’s Log, Stardate 41153.7 Our destination is planet Deneb IV, beyond which lies the great unexplored mass of the galaxy.</p>
 </div>
-<div id="m-0b50f5ba-0c60-828f-a3f2-f7e158ffca66" data-section-uuid="0b50f5ba-0c60-828f-a3f2-f7e158ffca66" class="msg msg--pdf">
+<div id="m-0b50f5ba-0c60-828f-a3f2-f7e158ffca66" data-section-uuid="0b50f5ba-0c60-828f-a3f2-f7e158ffca66" class="msg msg--pdf msg--page">
 <p>Captain’s Log, Stardate 41986.0 Addendum filed after review by Starfleet Command. The alien entity known as Q has confronted us.</p>
 </div>
 </div>
@@ -9248,7 +9306,7 @@ recommend a brief stop at Starbase 173 if the mission allows.</p>
 <div class="time-series-chart" data-time-series="00000000-0000-8ef0-836b-5ce3944be359"></div>
 <h2>Devices</h2>
 <p>Per-device read credentials (<code>family_device_id</code>, <code>device_udid</code>) are deliberately omitted: the pair grants access to that device's entire history.</p>
-<div id="m-00000000-0000-8b59-84d5-1f5a9303f5f8" data-section-uuid="00000000-0000-8b59-84d5-1f5a9303f5f8" class="msg msg--yolink">
+<div id="m-00000000-0000-8b59-84d5-1f5a9303f5f8" data-section-uuid="00000000-0000-8b59-84d5-1f5a9303f5f8" class="msg msg--yolink msg--page">
 <h3>deck_12_water_main</h3>
 <p><em>watermeter · configured from <time datetime="2369-04-14T00:00:00+00:00" title="2369-04-14 00:00:00 UTC">Mon Apr 14th, 2369 at 00:00</time> · last reading <time datetime="2369-04-14T23:55:00+00:00" title="2369-04-14 23:55:00 UTC">Mon Apr 14th, 2369 at 23:55</time></em></p>
 <table>
@@ -9294,7 +9352,7 @@ recommend a brief stop at Starbase 173 if the mission allows.</p>
 </tbody>
 </table>
 </div>
-<div id="m-00000000-0000-81b2-aa2e-04f4bb40e79c" data-section-uuid="00000000-0000-81b2-aa2e-04f4bb40e79c" class="msg msg--yolink">
+<div id="m-00000000-0000-81b2-aa2e-04f4bb40e79c" data-section-uuid="00000000-0000-81b2-aa2e-04f4bb40e79c" class="msg msg--yolink msg--page">
 <h3>sickbay_plasma_fridge</h3>
 <p><em>temperature_humidity · configured from <time datetime="2369-04-14T00:00:00+00:00" title="2369-04-14 00:00:00 UTC">Mon Apr 14th, 2369 at 00:00</time> · last reading <time datetime="2369-04-14T23:55:00+00:00" title="2369-04-14 23:55:00 UTC">Mon Apr 14th, 2369 at 23:55</time></em></p>
 <table>
@@ -9340,7 +9398,7 @@ recommend a brief stop at Starbase 173 if the mission allows.</p>
 </tbody>
 </table>
 </div>
-<div id="m-00000000-0000-8532-b55e-4c829ebad978" data-section-uuid="00000000-0000-8532-b55e-4c829ebad978" class="msg msg--yolink">
+<div id="m-00000000-0000-8532-b55e-4c829ebad978" data-section-uuid="00000000-0000-8532-b55e-4c829ebad978" class="msg msg--yolink msg--page">
 <h3>stasis_unit_alpha</h3>
 <p><em>temperature_humidity · configured from <time datetime="2369-04-14T00:00:00+00:00" title="2369-04-14 00:00:00 UTC">Mon Apr 14th, 2369 at 00:00</time> · last reading <time datetime="2369-04-14T23:55:00+00:00" title="2369-04-14 23:55:00 UTC">Mon Apr 14th, 2369 at 23:55</time></em></p>
 <table>
@@ -9386,7 +9444,7 @@ recommend a brief stop at Starbase 173 if the mission allows.</p>
 </tbody>
 </table>
 </div>
-<div id="m-00000000-0000-872a-a430-a3e02e00742e" data-section-uuid="00000000-0000-872a-a430-a3e02e00742e" class="msg msg--yolink">
+<div id="m-00000000-0000-872a-a430-a3e02e00742e" data-section-uuid="00000000-0000-872a-a430-a3e02e00742e" class="msg msg--yolink msg--page">
 <h3>ten_forward_cooler</h3>
 <p><em>temperature_humidity · configured from <time datetime="2369-04-14T00:00:00+00:00" title="2369-04-14 00:00:00 UTC">Mon Apr 14th, 2369 at 00:00</time> · last reading <time datetime="2369-04-14T23:55:00+00:00" title="2369-04-14 23:55:00 UTC">Mon Apr 14th, 2369 at 23:55</time></em></p>
 <table>
@@ -9964,11 +10022,7 @@ export function answers(root, el) {
  * @param {HTMLElement} el
  */
 export function openEnclosingDetails(el) {
-  for (
-    let d = el.closest("details");
-    d;
-    d = d.parentElement?.closest("details") ?? null
-  ) {
+  for (let d = el.closest("details"); d; d = d.parentElement?.closest("details") ?? null) {
     d.open = true;
   }
 }
@@ -9987,27 +10041,27 @@ export function metaHost(el) {
 }
 
 /**
- * Add a control to the end of a header's controls, but ahead of the
- * source-link arrow — `↗` reads as "and here is the thing itself", so
- * it belongs last however many controls accumulate before it. The
- * renderer emits it inline at the end of the header, which is why this
- * inserts rather than appends.
+ * Add a control to a header's actions: the controls a reader points at
+ * the message to see, kept together at the header's end
+ * (`span.msg-actions`). The source-link arrow the renderer wrote is moved
+ * in as the last of them — `↗` reads as "and here is the thing itself",
+ * so it stays last however many controls accumulate before it.
  * @param {HTMLElement} host
- * @param {string} separator
  * @param {HTMLElement} control
  */
-function addHeaderControl(host, separator, control) {
+function addHeaderControl(host, control) {
   const doc = host.ownerDocument;
-  const link = host.querySelector(":scope > .source-link");
-  if (!link) {
-    host.append(doc.createTextNode(separator), control);
-    return;
+  let actions = host.querySelector(":scope > .msg-actions");
+  if (!actions) {
+    actions = doc.createElement("span");
+    actions.className = "msg-actions";
+    const link = host.querySelector(":scope > .source-link");
+    if (link) actions.append(link);
+    host.append(actions);
   }
-  link.before(
-    doc.createTextNode(separator),
-    control,
-    doc.createTextNode(" "),
-  );
+  const link = actions.querySelector(":scope > .source-link");
+  if (link) link.before(control);
+  else actions.append(control);
 }
 
 /**
@@ -10031,20 +10085,13 @@ export function injectCopyLinkButtons(root, { pageTitle = true } = {}) {
     return btn;
   };
 
-  for (const el of root.querySelectorAll(
-    "div[data-section-uuid], section[data-section-uuid]",
-  )) {
-    if (
-      el.querySelector(
-        ":scope > h2 .copy-link, :scope > .copy-link",
-      )
-    )
-      continue;
+  for (const el of root.querySelectorAll("div[data-section-uuid], section[data-section-uuid]")) {
+    if (el.querySelector(":scope > h2 .copy-link, :scope > .copy-link")) continue;
     const uuid = el.getAttribute("data-section-uuid") ?? "";
     if (!uuid || !answers(root, el)) continue;
     const btn = button(uuid, "Copy link to this message");
     const host = metaHost(el);
-    if (host) addHeaderControl(host, " · ", btn);
+    if (host) addHeaderControl(host, btn);
     else el.prepend(btn);
   }
 
@@ -10053,10 +10100,10 @@ export function injectCopyLinkButtons(root, { pageTitle = true } = {}) {
     // The id sits on the heading itself, or on a block whose heading is
     // a markdown `#` (a contact page's head, whose heading is a chip).
     const host = el.matches("h1") ? el : (el.querySelector("h1") ?? el);
-    if (host.querySelector(":scope > button.copy-link")) continue;
+    if (host.querySelector(":scope > .msg-actions > button.copy-link")) continue;
     const uuid = el.getAttribute("data-page-title-uuid") ?? "";
     if (!uuid) continue;
-    addHeaderControl(host, " ", button(uuid, "Copy link to this page"));
+    addHeaderControl(host, button(uuid, "Copy link to this page"));
   }
 }
 
@@ -10138,7 +10185,8 @@ export function decorateLongMessages(root, opts = {}) {
     foldRecipients(line);
   }
 
-  for (const el of root.querySelectorAll(":scope > .msg[data-section-uuid]")) {
+  // A part of a page (`msg--page`) is read whole, as the page is.
+  for (const el of root.querySelectorAll(":scope > .msg[data-section-uuid]:not(.msg--page)")) {
     if (el.dataset.longChecked) continue;
     el.dataset.longChecked = "1";
     // Measured before any clamp class lands, so this is the content's
@@ -10182,7 +10230,7 @@ export function decorateLongMessages(root, opts = {}) {
         else el.closest(".chat-preview")?.scrollTo({ top: 1e9 });
       }),
     );
-    host.append(nav);
+    addHeaderControl(host, nav);
 
     // A pinned header unavoidably covers the line of text passing under
     // it — that is what `position: sticky` does, and GitHub's file
@@ -10201,7 +10249,11 @@ export function decorateLongMessages(root, opts = {}) {
     // implicit root would be the app's window, not the frame's.
     const io = new IntersectionObserver(
       ([entry]) => host.classList.toggle("is-stuck", entry.intersectionRatio < 1),
-      { root: p.isViewport ? el.ownerDocument : p.pane, threshold: [1], rootMargin: "-1px 0px 0px 0px" },
+      {
+        root: p.isViewport ? el.ownerDocument : p.pane,
+        threshold: [1],
+        rootMargin: "-1px 0px 0px 0px",
+      },
     );
     io.observe(host);
     root.__chatStickyObservers.push(io);

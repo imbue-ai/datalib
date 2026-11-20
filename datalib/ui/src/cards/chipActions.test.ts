@@ -5,6 +5,7 @@ import {
   CHIP_ACTIONS,
   entityChipMenu,
   chipCardSource,
+  chipDragQuery,
   chipElAt,
   chipMenuOf,
   chipOf,
@@ -16,7 +17,8 @@ import {
 } from "./chipActions";
 import { people, type NormalizedContact } from "./contacts";
 import { timeView } from "@/config/timeView";
-import { copyRichToClipboard } from "@/clipboard";
+import { copyRichToClipboard, copyToClipboard } from "@/clipboard";
+import { decorateLabels } from "./labelChip";
 
 vi.mock("@/clipboard", () => ({
   copyToClipboard: vi.fn(async () => true),
@@ -39,6 +41,8 @@ const LOG: Chip = {
   shownAs: "Captain's log",
 };
 
+const AWAY: Chip = { ref: { kind: "label", name: "Away team" }, shownAs: "" };
+
 function host(extra: Omit<Partial<ChipHost>, "openCard"> = {}) {
   return { ...extra, openCard: vi.fn<(source: string) => void>() };
 }
@@ -54,6 +58,7 @@ describe("chipMenuOf", () => {
       [RIKER, true],
       [CONTACT, false],
       [LOG, false],
+      [AWAY, false],
     ] as const) {
       const ids = chipMenuOf(chip, canLink).map((e) => e.id);
       const order = ids.map((id) => CHIP_ACTIONS.indexOf(id as ChipAction));
@@ -90,6 +95,29 @@ describe("chipOf", () => {
     a.dataset.shownAs = "Captain's log";
     expect(chipElAt(a)).toBe(a);
     expect(chipOf(a)).toEqual(LOG);
+  });
+});
+
+describe("a label chip", () => {
+  /** A label a render wrote beside a header is a chip the viewer reads
+   *  back by its name, which is all it names. */
+  it("is read from the span a render wrote", () => {
+    const h2 = document.createElement("h2");
+    h2.innerHTML = '<span class="msg-labels"><span class="msg-label">Away team</span></span>';
+    decorateLabels(h2);
+    const el = h2.querySelector<HTMLElement>(".msg-label")!;
+    expect(chipElAt(el)).toBe(el);
+    expect(chipOf(el)).toEqual(AWAY);
+  });
+
+  it("searches, drags and copies as its label", async () => {
+    const search = vi.fn();
+    await runChipAction("search", AWAY, host({ search }));
+    expect(search.mock.calls).toEqual([['label:"Away team"', "narrow"]]);
+    expect(chipDragQuery({ kind: "label", name: "Inbox" })).toBe("label:Inbox");
+    expect(chipCardSource(AWAY.ref, null)).toBe(searchSource('label:"Away team"'));
+    await runChipAction("copy-name", AWAY, host());
+    expect(vi.mocked(copyToClipboard)).toHaveBeenCalledWith("Away team");
   });
 });
 

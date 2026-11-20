@@ -359,6 +359,10 @@ document. A message is drawn in its **box**, `<div id="m-{uuid}"
 data-section-uuid="{uuid}" class="…">`, and every renderer draws it
 one way, `Section::boxed`, so the store keeps the box's class
 (`sections.class`) and knows the box from the uuid and the class alone.
+A box that is a part of a page rather than a message on it (a PDF's
+page, a device on a time-series page) also carries `msg--page`
+(`section::PAGE_PART`), and the UI draws it flat and whole: no card,
+no "Show more".
 A **fold**, a `<details>` around a run of pieces (a run of tool steps,
 another version, a Drive comment thread, Todoist's completed tasks), is
 drawn one way too, by `Section::fold_open` and `Section::fold_close`,

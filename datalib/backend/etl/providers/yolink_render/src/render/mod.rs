@@ -21,4 +21,5 @@ pub mod units;
 /// backpointer, and a device's `upstream_id` is its name rather than
 /// its kind. Every uuid moved.
 /// v9: every stamp on a page is a `<time>`.
-pub const RENDER_VERSION: u32 = 9;
+/// v10: a device's box is a part of the page (`PAGE_PART`), drawn flat.
+pub const RENDER_VERSION: u32 = 10;

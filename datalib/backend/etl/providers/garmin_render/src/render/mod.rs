@@ -21,4 +21,5 @@ pub mod render;
 /// v2: ids are minted through `datalib_id` under the configured source
 ///     and every row carries its backpointer. Every uuid moved.
 /// v8: every stamp on a page is a `<time>`.
-pub const RENDER_VERSION: u32 = 8;
+/// v9: each box is a part of the page (`PAGE_PART`), drawn flat.
+pub const RENDER_VERSION: u32 = 9;
