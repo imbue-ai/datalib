@@ -118,7 +118,8 @@ async fn clear_fetch_problems(
 ) -> Result<()> {
     let keys: Vec<String> = ids.iter().map(|id| format!("{table}:{id}")).collect();
     sqlx::query(
-        "DELETE FROM problems WHERE scope_kind = ? AND stage = ? \
+        "DELETE FROM problems INDEXED BY problems_by_scope \
+         WHERE scope_kind = ? AND stage = ? \
            AND scope_key IN (SELECT value FROM json_each(?))",
     )
     .bind(datalib_problems::ScopeKind::Entity.as_str())

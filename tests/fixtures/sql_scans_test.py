@@ -40,6 +40,8 @@ def check(recorded: list[dict[str, object]], allowed: dict[str, object]) -> list
         statement, why = str(entry["statement"]), str(entry.get("why", "")).strip()
         if not why:
             errors.append(f"an entry gives no reason: {statement}")
+        if statement in why_of:
+            errors.append(f"two entries name one statement: {statement}")
         why_of[statement] = why
     ran: dict[str, dict[str, object]] = {}
     for row in recorded:

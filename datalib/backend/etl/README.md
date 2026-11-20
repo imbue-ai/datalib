@@ -84,7 +84,9 @@ Every store a step owns holds a `problems` table (`datalib_problems`,
 in every raw store's `SHARED_DDL`): one row per thing the step could
 not fully do to one record, with a severity, a deterministic id and a
 sweep key. The owner sweeps it — per document in a render store, per
-entity in a raw store — and nothing copies it. A reader finds a step's
+entity in a raw store — and nothing copies it. Raw and render stores
+index it as `problems_by_scope` (`scope_kind, scope_key`), and a lookup
+for one record's rows names that index. A reader finds a step's
 problems in the stores directly in its folder, each read as its `main`
 commit has it, which is what the step last sealed
 (`datalib_step_problems::of_step`); a step with no store of its own
@@ -617,8 +619,9 @@ every `open` would cost bytes whether or not anything was ingested.
 `open` writes seven rows into `_datalib_meta` before the schema commit:
 `datalib_version`, `git_hash`, `doltlite_version`, `schema_hash`
 (`recorded_shape`: blake3 over `_datalib_meta`'s DDL and the DDL the
-store was opened with, leaving out the lookup indexes
-`open_derived_indexed` was handed, which change no row), `schema_version` (the
+store was opened with, leaving out the lookup indexes, which change no
+row: those `open_derived_indexed` was handed, and on a raw store
+`SHARED_LOOKUP_INDEXES`), `schema_version` (the
 migration ladder position, `0` until there is a ladder),
 `shared_schema_version` (the shared ladder's, above) and
 `store_kind`. Only a row whose value moved is rewritten, so an
@@ -748,7 +751,8 @@ So:
   is walked whole, without an error, so the plan test below still
   applies. A named index has to exist wherever the statement runs: make
   it on every open, outside the store's shape hash when it changes no
-  row (`grid_index::AUTHORS_INDEX`, `node_rows::BY_SOURCE_INDEX`).
+  row (`grid_index::AUTHORS_INDEX`, `node_rows::BY_SOURCE_INDEX`,
+  `datalib_problems::BY_SCOPE_INDEX`).
 - **Don't reach for `ANALYZE`.** Its statistics are a guess drawn from
   whatever rows a store held when it ran, so two libraries can plan one
   statement two ways, and a plan can change as the rows do. Which index

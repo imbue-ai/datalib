@@ -277,6 +277,10 @@ pub const PROBLEMS_DDL: &str = datalib_problems::DDL[0].1;
 
 pub const SHARED_DDL: &[&str] = &[SYNC_RUNS_DDL, SYNC_SCOPE_STATE_DDL, PROBLEMS_DDL];
 
+/// [`SHARED_DDL`]'s lookup indexes, created on every open of a raw store
+/// and left out of its recorded shape, as `lookup_indexes` are.
+pub const SHARED_LOOKUP_INDEXES: &[&str] = &[datalib_problems::BY_SCOPE_INDEX_DDL];
+
 /// The framework's ladder, for the tables stores share rather than own:
 /// `problems`, which every raw and render store holds. Every store this
 /// module opens climbs it, before its owner's ladder, and records where
@@ -1138,7 +1142,16 @@ async fn open_inner(
     }
     // Indexes last, so they see the reconciled columns — and so a
     // recreate costs no index.
-    for stmt in ddl().filter(|s| !is_create_table(s)).chain(lookup_indexes) {
+    let shared_indexes: &[&str] = if include_shared {
+        SHARED_LOOKUP_INDEXES
+    } else {
+        &[]
+    };
+    for stmt in ddl()
+        .filter(|s| !is_create_table(s))
+        .chain(lookup_indexes)
+        .chain(shared_indexes)
+    {
         sqlx::query(sqlx::AssertSqlSafe(*stmt))
             .execute(&pool)
             .await
@@ -2564,23 +2577,28 @@ async fn record_fetch_problem(
         Outcome, Problem, ProblemRow, Reason, Scope, ScopeKind, Severity, Stage,
     };
     let entity_id = format!("{table}:{id}");
-    let earlier =
-        sqlx::query("SELECT * FROM problems WHERE scope_kind = ? AND scope_key = ? AND stage = ?")
-            .bind(ScopeKind::Entity.as_str())
-            .bind(&entity_id)
-            .bind(Stage::Fetch.as_str())
-            .fetch_optional(&mut **tx)
-            .await
-            .with_context(|| format!("read the fetch problem of {entity_id}"))?
-            .map(|r| ProblemRow::from_row(&r))
-            .transpose()?;
-    sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ? AND stage = ?")
-        .bind(ScopeKind::Entity.as_str())
-        .bind(&entity_id)
-        .bind(Stage::Fetch.as_str())
-        .execute(&mut **tx)
-        .await
-        .with_context(|| format!("clear the fetch problem of {entity_id}"))?;
+    let earlier = sqlx::query(
+        "SELECT * FROM problems INDEXED BY problems_by_scope \
+         WHERE scope_kind = ? AND scope_key = ? AND stage = ?",
+    )
+    .bind(ScopeKind::Entity.as_str())
+    .bind(&entity_id)
+    .bind(Stage::Fetch.as_str())
+    .fetch_optional(&mut **tx)
+    .await
+    .with_context(|| format!("read the fetch problem of {entity_id}"))?
+    .map(|r| ProblemRow::from_row(&r))
+    .transpose()?;
+    sqlx::query(
+        "DELETE FROM problems INDEXED BY problems_by_scope \
+         WHERE scope_kind = ? AND scope_key = ? AND stage = ?",
+    )
+    .bind(ScopeKind::Entity.as_str())
+    .bind(&entity_id)
+    .bind(Stage::Fetch.as_str())
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("clear the fetch problem of {entity_id}"))?;
     let Some(not_fetched) = result else {
         return Ok(());
     };
@@ -5886,6 +5904,46 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(dirty, vec![], "and the schema is committed, as on any open");
+    }
+
+    /// Every per-record lookup on a raw store's `problems` names
+    /// `problems_by_scope`, so a store a build before it left must get it
+    /// at its next open, without moving its recorded shape: a new shape
+    /// would re-render every source.
+    #[tokio::test]
+    async fn a_raw_store_gets_the_problems_index_without_a_new_shape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("raw.doltlite_db");
+        let index_count = "SELECT count(*) FROM sqlite_master \
+                           WHERE type = 'index' AND name = 'problems_by_scope'";
+
+        let before = open(&path, &[WIDGETS_DDL]).await.unwrap();
+        sqlx::query("DROP INDEX problems_by_scope")
+            .execute(&before)
+            .await
+            .expect("the open created the index");
+        commit_run(&before, "a store from before the index")
+            .await
+            .unwrap();
+        let shape = datalib_store_meta::read(&before)
+            .await
+            .unwrap()
+            .unwrap()
+            .schema_hash;
+        before.close().await;
+
+        let after = open(&path, &[WIDGETS_DDL]).await.unwrap();
+        let n: i64 = sqlx::query_scalar(index_count)
+            .fetch_one(&after)
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "the next open creates the index");
+        let meta = datalib_store_meta::read(&after).await.unwrap().unwrap();
+        assert_eq!(
+            meta.schema_hash, shape,
+            "the index is not part of the shape"
+        );
+        after.close().await;
     }
 
     /// Every store an owner opens says which build wrote it, committed

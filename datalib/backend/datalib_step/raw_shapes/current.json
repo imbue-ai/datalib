@@ -10,6 +10,7 @@
       "CREATE TABLE airvisual_unplaced_samples( id TEXT PRIMARY KEY, payload TEXT NULL, device_id TEXT NOT NULL, source_file TEXT NOT NULL, line_no INTEGER NOT NULL, device_ts_s INTEGER NOT NULL)",
       "CREATE TABLE ingested_files( scope TEXT NOT NULL, rel_path TEXT NOT NULL, blake3 TEXT NOT NULL, size_bytes INTEGER NOT NULL, last_finished_at_utc TEXT NOT NULL, tz_offset TEXT NULL, PRIMARY KEY(scope, rel_path))",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
@@ -20,6 +21,7 @@
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
@@ -30,6 +32,7 @@
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
@@ -45,6 +48,7 @@
       "CREATE TABLE kids( id TEXT PRIMARY KEY, payload TEXT NULL)",
       "CREATE TABLE kids_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
       "CREATE TABLE users( id TEXT PRIMARY KEY, payload TEXT NULL)",
@@ -58,6 +62,7 @@
     "sql": [
       "CREATE TABLE beeper_media_files( rel_path TEXT PRIMARY KEY, blake3 TEXT NOT NULL, size_bytes INTEGER NOT NULL, CHECK(length(blake3) = 64))",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
@@ -89,6 +94,7 @@
       "CREATE INDEX ics_objects_by_href ON ics_objects(calendar_id, href)",
       "CREATE TABLE ingested_files( scope TEXT NOT NULL, rel_path TEXT NOT NULL, blake3 TEXT NOT NULL, size_bytes INTEGER NOT NULL, last_finished_at_utc TEXT NOT NULL, tz_offset TEXT NULL, PRIMARY KEY(scope, rel_path))",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
@@ -109,6 +115,7 @@
       "CREATE TABLE me( id TEXT PRIMARY KEY, payload TEXT NULL, email TEXT NULL, name TEXT NULL)",
       "CREATE TABLE me_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
@@ -134,6 +141,7 @@
       "CREATE TABLE orgs( id TEXT PRIMARY KEY, payload TEXT NULL, name TEXT NULL)",
       "CREATE TABLE orgs_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE project_docs( id TEXT PRIMARY KEY, payload TEXT NULL, project_uuid TEXT NULL, file_name TEXT NULL, created_at TEXT NULL)",
       "CREATE TABLE project_docs_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE project_docs_listings(id TEXT PRIMARY KEY)",
@@ -155,6 +163,7 @@
     "sql": [
       "CREATE TABLE ingested_files( scope TEXT NOT NULL, rel_path TEXT NOT NULL, blake3 TEXT NOT NULL, size_bytes INTEGER NOT NULL, last_finished_at_utc TEXT NOT NULL, tz_offset TEXT NULL, PRIMARY KEY(scope, rel_path))",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE records( id TEXT NOT NULL, payload TEXT NULL, transcript_id TEXT NOT NULL, PRIMARY KEY(transcript_id, id))",
       "CREATE UNIQUE INDEX records_by_id ON records(id)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
@@ -169,6 +178,7 @@
     "sql": [
       "CREATE TABLE ingested_files( scope TEXT NOT NULL, rel_path TEXT NOT NULL, blake3 TEXT NOT NULL, size_bytes INTEGER NOT NULL, last_finished_at_utc TEXT NOT NULL, tz_offset TEXT NULL, PRIMARY KEY(scope, rel_path))",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE records( id TEXT PRIMARY KEY, payload TEXT NULL, transcript_id TEXT NOT NULL, line_no INTEGER NOT NULL)",
       "CREATE INDEX records_transcript ON records(transcript_id)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
@@ -202,6 +212,7 @@
       "CREATE TABLE dav_unconfirmed( collection TEXT NOT NULL, href TEXT NOT NULL, PRIMARY KEY(collection, href))",
       "CREATE TABLE ingested_files( scope TEXT NOT NULL, rel_path TEXT NOT NULL, blake3 TEXT NOT NULL, size_bytes INTEGER NOT NULL, last_finished_at_utc TEXT NOT NULL, tz_offset TEXT NULL, PRIMARY KEY(scope, rel_path))",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
@@ -235,6 +246,7 @@
       "CREATE TABLE mailboxes_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX mailboxes_by_account ON mailboxes(account_id)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE read_marks( id TEXT PRIMARY KEY, read_through TEXT NULL, read INTEGER NULL, muted INTEGER NULL)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
@@ -255,6 +267,7 @@
       "CREATE INDEX media_blobs_by_owner_id ON media_blobs(owner_id)",
       "CREATE INDEX media_blobs_by_uri ON media_blobs(uri, blake3)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
@@ -267,6 +280,7 @@
       "CREATE TABLE dirs( id TEXT PRIMARY KEY, size INTEGER NOT NULL, entries INTEGER NOT NULL, blake3 BLOB NOT NULL, identity_uuid TEXT NULL)",
       "CREATE TABLE files( id TEXT PRIMARY KEY, kind TEXT NOT NULL, size INTEGER NOT NULL, blake3 BLOB NOT NULL, symlink_target TEXT NULL)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE scan_meta( id TEXT PRIMARY KEY, abs_path TEXT NOT NULL, os TEXT NOT NULL, case_sensitive INTEGER NOT NULL, inode_stable INTEGER NOT NULL, options_fingerprint TEXT NOT NULL, scanner_version TEXT NOT NULL)",
       "CREATE TABLE scan_meta_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
@@ -306,6 +320,7 @@
       "CREATE INDEX garmin_wellness_files_by_calendar_date ON garmin_wellness_files(calendar_date)",
       "CREATE INDEX garmin_wellness_files_by_file_kind ON garmin_wellness_files(file_kind, blake3)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
@@ -327,6 +342,7 @@
       "CREATE TABLE pr_reviews_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX pr_reviews_by_pr ON pr_reviews(repo_full_name, pr_number)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE pull_requests( id TEXT PRIMARY KEY, payload TEXT NULL, repo_full_name TEXT NOT NULL, pr_number INTEGER NOT NULL, state TEXT NULL, html_url TEXT NULL, head_sha TEXT NULL, base_sha TEXT NULL, head_ref TEXT NULL, base_ref TEXT NULL, updated_at TEXT NULL, merged_at TEXT NULL)",
       "CREATE TABLE pull_requests_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX pull_requests_by_repo ON pull_requests(repo_full_name, pr_number)",
@@ -350,6 +366,7 @@
       "CREATE TABLE merge_requests_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX merge_requests_by_proj ON merge_requests(project_full_path, mr_iid)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE self_identity( id TEXT PRIMARY KEY, payload TEXT NULL, username TEXT NULL, web_url TEXT NULL)",
       "CREATE TABLE self_identity_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
@@ -380,6 +397,7 @@
       "CREATE TABLE folders( id TEXT PRIMARY KEY, payload TEXT NULL)",
       "CREATE TABLE folders_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE revision_exports( id TEXT PRIMARY KEY, revision_id TEXT NOT NULL, part TEXT NOT NULL, blake3 TEXT NULL, CHECK(blake3 IS NULL OR length(blake3) = 64))",
       "CREATE TABLE revision_exports_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX revision_exports_by_part ON revision_exports(part, blake3)",
@@ -430,6 +448,7 @@
       "CREATE TABLE play_books_annotations_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX play_books_annotations_by_file ON play_books_annotations(file)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
       "CREATE TABLE voice_attachments( id TEXT PRIMARY KEY, message_id TEXT NOT NULL, ref_name TEXT NOT NULL, blake3 TEXT NULL, CHECK(blake3 IS NULL OR length(blake3) = 64))",
@@ -454,6 +473,7 @@
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
@@ -481,6 +501,7 @@
       "CREATE TABLE issues( id TEXT PRIMARY KEY, payload TEXT NULL)",
       "CREATE TABLE issues_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE project_milestones( id TEXT PRIMARY KEY, payload TEXT NULL)",
       "CREATE TABLE project_milestones_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE project_statuses( id TEXT PRIMARY KEY, payload TEXT NULL)",
@@ -505,6 +526,7 @@
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
@@ -520,6 +542,7 @@
       "CREATE TABLE markdown_scan_meta( id TEXT PRIMARY KEY, abs_root TEXT NOT NULL)",
       "CREATE TABLE markdown_scan_meta_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
@@ -549,6 +572,7 @@
       "CREATE TABLE media_scan_meta_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE media_visual( blake3 TEXT PRIMARY KEY, width INTEGER NULL, height INTEGER NULL, orientation INTEGER NULL, captured_at TEXT NULL, camera_make TEXT NULL, camera_model TEXT NULL, lens_model TEXT NULL, iso INTEGER NULL, exposure_time TEXT NULL, f_number REAL NULL, focal_length_mm REAL NULL, gps_lat REAL NULL, gps_lon REAL NULL, gps_altitude_m REAL NULL, title TEXT NULL, caption TEXT NULL, frame_rate REAL NULL, video_codec TEXT NULL, audio_codec TEXT NULL)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
@@ -579,6 +603,7 @@
       "CREATE INDEX pages_last_edited ON pages(last_edited_time)",
       "CREATE INDEX pages_parent ON pages(parent_id)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
       "CREATE TABLE tree( id TEXT PRIMARY KEY, kind TEXT NOT NULL, title TEXT NULL, parent_type TEXT NULL, parent_id TEXT NULL, created_time TEXT NULL)",
@@ -603,6 +628,7 @@
       "CREATE TABLE pdf_scan_meta( id TEXT PRIMARY KEY, abs_root TEXT NOT NULL)",
       "CREATE TABLE pdf_scan_meta_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
@@ -626,6 +652,7 @@
       "CREATE INDEX chats_by_recipient ON chats(recipient_id)",
       "CREATE TABLE ingested_backups( fingerprint TEXT PRIMARY KEY, blake3 TEXT NOT NULL, snapshot_dir TEXT NULL, total_byte_size INTEGER NULL, ingested_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE read_marks( id TEXT PRIMARY KEY, read_through TEXT NULL, read INTEGER NULL, muted INTEGER NULL)",
       "CREATE TABLE recipients( id TEXT PRIMARY KEY, payload TEXT NULL, identifier TEXT NULL, display_name TEXT NULL)",
       "CREATE TABLE recipients_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
@@ -656,6 +683,7 @@
       "CREATE INDEX messages_by_channel_ts ON messages(channel_id, ts)",
       "CREATE INDEX messages_by_thread ON messages(thread_root_uuid)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE read_marks( id TEXT PRIMARY KEY, read_through TEXT NULL, read INTEGER NULL, muted INTEGER NULL)",
       "CREATE TABLE saved_items( id TEXT PRIMARY KEY, payload TEXT NULL, item_type TEXT NOT NULL, item_id TEXT NOT NULL, ts TEXT NULL)",
       "CREATE TABLE saved_items_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
@@ -681,6 +709,7 @@
     "sql": [
       "CREATE TABLE ingested_files( scope TEXT NOT NULL, rel_path TEXT NOT NULL, blake3 TEXT NOT NULL, size_bytes INTEGER NOT NULL, last_finished_at_utc TEXT NOT NULL, tz_offset TEXT NULL, PRIMARY KEY(scope, rel_path))",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE read_marks( id TEXT PRIMARY KEY, read_through TEXT NULL, read INTEGER NULL, muted INTEGER NULL)",
       "CREATE TABLE sms_attachments( id TEXT PRIMARY KEY, message_id TEXT NOT NULL, ref_name TEXT NOT NULL, blake3 TEXT NULL, CHECK(blake3 IS NULL OR length(blake3) = 64))",
       "CREATE TABLE sms_attachments_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
@@ -711,6 +740,7 @@
       "CREATE TABLE notes( id TEXT PRIMARY KEY, payload TEXT NULL)",
       "CREATE TABLE notes_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE project_notes( id TEXT PRIMARY KEY, payload TEXT NULL)",
       "CREATE TABLE project_notes_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE projects( id TEXT PRIMARY KEY, payload TEXT NULL)",
@@ -730,6 +760,7 @@
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
       "CREATE TABLE wa_db_contacts( jid TEXT PRIMARY KEY, rows TEXT NOT NULL)",
@@ -743,6 +774,7 @@
     "sql": [
       "CREATE TABLE coverage(scope TEXT NOT NULL, lo TEXT NOT NULL, hi TEXT NOT NULL, PRIMARY KEY(scope, lo))",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
       "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
       "CREATE TABLE yolink_devices( id TEXT PRIMARY KEY, family_device_id TEXT NOT NULL, kind TEXT NOT NULL, start_ms INTEGER NOT NULL)",

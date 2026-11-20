@@ -165,20 +165,26 @@ async fn replace_file_problem(
     use datalib_etl::bulk::BulkUpsertable as _;
     use datalib_problems::{ProblemRow, Scope, ScopeKind, Stage};
     let key = file_problem_key(scope, rel);
-    let earlier = sqlx::query("SELECT * FROM problems WHERE scope_kind = ? AND scope_key = ?")
-        .bind(ScopeKind::Entity.as_str())
-        .bind(&key)
-        .fetch_optional(&mut **tx)
-        .await
-        .with_context(|| format!("read the problem of {key}"))?
-        .map(|r| ProblemRow::from_row(&r))
-        .transpose()?;
-    sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?")
-        .bind(ScopeKind::Entity.as_str())
-        .bind(&key)
-        .execute(&mut **tx)
-        .await
-        .with_context(|| format!("clear the problem of {key}"))?;
+    let earlier = sqlx::query(
+        "SELECT * FROM problems INDEXED BY problems_by_scope \
+         WHERE scope_kind = ? AND scope_key = ?",
+    )
+    .bind(ScopeKind::Entity.as_str())
+    .bind(&key)
+    .fetch_optional(&mut **tx)
+    .await
+    .with_context(|| format!("read the problem of {key}"))?
+    .map(|r| ProblemRow::from_row(&r))
+    .transpose()?;
+    sqlx::query(
+        "DELETE FROM problems INDEXED BY problems_by_scope \
+         WHERE scope_kind = ? AND scope_key = ?",
+    )
+    .bind(ScopeKind::Entity.as_str())
+    .bind(&key)
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("clear the problem of {key}"))?;
     let Some((outcome, problem)) = problem else {
         return Ok(());
     };
@@ -384,10 +390,13 @@ mod tests {
             .await
             .unwrap();
         ensure_schema(&pool).await.unwrap();
-        sqlx::query(datalib_etl::doltlite_raw::PROBLEMS_DDL)
-            .execute(&pool)
-            .await
-            .unwrap();
+        for ddl in std::iter::once(datalib_etl::doltlite_raw::PROBLEMS_DDL).chain(
+            datalib_etl::doltlite_raw::SHARED_LOOKUP_INDEXES
+                .iter()
+                .copied(),
+        ) {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
         let cache = FingerprintCache::open(&dir.path().join("fp.sqlite"))
             .await
             .unwrap();

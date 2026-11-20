@@ -226,9 +226,11 @@ async fn indexes_and_triggers_are_not_mirrored() -> Result<()> {
     // `sqlite_autoindex_*` rows are excluded because they are the storage
     // engine's, not the source catalog's: doltlite reports an implicit
     // index for every non-INTEGER primary key, as stock SQLite does.
+    // `problems_by_scope` is every raw store's own, on its `problems`.
     const NAMED_INDEXES_AND_TRIGGERS: &str = "SELECT COUNT(*) FROM sqlite_master \
            WHERE type IN ('index', 'trigger') \
-             AND name NOT GLOB 'sqlite_autoindex_*'";
+             AND name NOT GLOB 'sqlite_autoindex_*' \
+             AND name <> 'problems_by_scope'";
 
     // Prove the assertion below is not vacuous: the source really does
     // carry named indexes and a trigger for the mirror to drop.

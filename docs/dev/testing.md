@@ -754,7 +754,8 @@ The test also fails on an allowlist entry nothing needs: one whose
 statement the sync no longer runs, or whose plan no longer scans. Left
 in, such an entry would wave through the scan if the statement grew
 it back. The one exception is a `judged_by: ran` statement that walked
-no rows this run, which is a note.
+no rows this run, which is a note. Two entries for one statement fail
+too: only one reason can be the one that holds.
 
 A fixture's tables hold a few rows, so the scan costs nothing here; on a
 library it costs the whole table on every call. When the test fails on

@@ -353,6 +353,18 @@ py_test(
     ],
 )
 
+# The allowlist check refuses an unlisted scan and an entry that no longer scans.
+py_test(
+    name = "sql_scans_check_test",
+    size = "small",
+    srcs = [
+        "sql_scans_check_test.py",
+        "sql_scans_test.py",
+    ],
+    imports = ["."],
+    main = "sql_scans_check_test.py",
+)
+
 # sql_scans.py reads a statement's plan, not the rows it walked.
 py_test(
     name = "sql_scans_plan_test",
