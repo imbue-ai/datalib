@@ -23,14 +23,14 @@ pub const USER: &str = "id createdAt updatedAt archivedAt name displayName email
 pub const WORKFLOW_STATE: &str =
     "id createdAt updatedAt archivedAt name type color description position team { id }";
 
-pub const ISSUE_LABEL: &str = "id createdAt updatedAt archivedAt retiredAt name description \
+pub const ISSUE_LABEL: &str = "id createdAt updatedAt archivedAt name description \
     color isGroup lastAppliedAt team { id } parent { id } creator { id }";
 
 pub const PROJECT_STATUS: &str = "id createdAt updatedAt archivedAt name type color \
-    description position indefinite team { id }";
+    description position indefinite";
 
 pub const CYCLE: &str = "id createdAt updatedAt archivedAt number name description startsAt \
-    endsAt completedAt autoArchivedAt team { id } progress progressHistory currentProgress \
+    endsAt completedAt autoArchivedAt team { id } progress \
     issueCountHistory completedIssueCountHistory scopeHistory completedScopeHistory \
     inProgressScopeHistory";
 
@@ -39,16 +39,16 @@ pub const PROJECT: &str = "id createdAt updatedAt archivedAt name description co
     targetDate targetDateResolution startedAt completedAt canceledAt autoArchivedAt trashed \
     labelIds sortOrder prioritySortOrder status { id } creator { id } lead { id } \
     convertedFromIssue { id } teams(first: 50) { nodes { id } } \
-    members(first: 100) { nodes { id } } progress scope currentProgress progressHistory \
+    members(first: 100) { nodes { id } } progress scope \
     issueCountHistory completedIssueCountHistory scopeHistory completedScopeHistory \
     inProgressScopeHistory lastUpdate { id } resourceCount";
 
 pub const PROJECT_MILESTONE: &str = "id createdAt updatedAt archivedAt name description \
-    targetDate status sortOrder project { id } progress progressHistory currentProgress";
+    targetDate status sortOrder project { id } progress";
 
 pub const INITIATIVE: &str = "id createdAt updatedAt archivedAt name description content \
     slugId icon color url status priority targetDate targetDateResolution startedAt completedAt \
-    canceledAt health healthUpdatedAt trashed labelIds sortOrder prioritySortOrder owner { id } \
+    health healthUpdatedAt trashed labelIds sortOrder prioritySortOrder owner { id } \
     creator { id } parentInitiative { id } lastUpdate { id } projects(first: 100) { nodes { id } }";
 
 pub const ISSUE_HISTORY: &str = "id createdAt updatedAt archivedAt actorId updatedDescription \
@@ -56,7 +56,7 @@ pub const ISSUE_HISTORY: &str = "id createdAt updatedAt archivedAt actorId updat
     fromParentId toParentId fromStateId toStateId fromCycleId toCycleId toConvertedProjectId \
     fromProjectId toProjectId fromEstimate toEstimate archived trashed attachmentId \
     addedLabelIds removedLabelIds addedToReleaseIds removedFromReleaseIds autoClosed \
-    autoArchived fromDueDate toDueDate customerNeedId changes \
+    autoArchived fromDueDate toDueDate customerNeedId \
     relationChanges { identifier type } fromProjectMilestone { id } toProjectMilestone { id } \
     fromDelegate { id } toDelegate { id } fromSlaStartedAt toSlaStartedAt fromSlaBreachesAt \
     toSlaBreachesAt fromSlaBreached toSlaBreached fromSlaType toSlaType issue { id }";
@@ -89,16 +89,16 @@ pub fn issue_history() -> String {
 pub fn comment() -> String {
     format!(
         "id createdAt updatedAt archivedAt body editedAt resolvedAt quotedText reactionData \
-         url hideInLinear threadSummary issueId parentId projectUpdateId initiativeUpdateId \
+         url issueId parentId projectUpdateId initiativeUpdateId \
          projectId initiativeId documentContentId resolvingCommentId user {{ id }} \
          externalUser {{ id }} resolvingUser {{ id }} onBehalfOf {{ id }} {BOT}"
     )
 }
 
-pub const DOCUMENT: &str = "id createdAt updatedAt archivedAt title summary icon color slugId \
-    hiddenAt trashed sortOrder subDocumentSortOrder content documentContentId url creator { id } \
-    owner { id } updatedBy { id } project { id } initiative { id } team { id } issue { id } \
-    release { id } cycle { id } parentDocument { id } lastAppliedTemplate { id }";
+pub const DOCUMENT: &str = "id createdAt updatedAt archivedAt title icon color slugId \
+    hiddenAt trashed sortOrder content documentContentId url creator { id } \
+    owner { id } updatedBy { id } project { id } initiative { id } issue { id } \
+    release { id } lastAppliedTemplate { id }";
 
 pub const PROJECT_UPDATE: &str = "id createdAt updatedAt archivedAt body editedAt slugId \
     shortSummary health isDiffHidden isStale diffMarkdown reactionData commentCount url \
