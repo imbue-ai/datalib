@@ -317,8 +317,9 @@ fn lookup_indexes() -> impl Iterator<Item = &'static str> {
         ])
 }
 
-const DOCUMENTS_FOR_RENDER_UNITS: &str = "SELECT render_unit_key, markdown_uuid FROM markdowns \
-                                     WHERE render_unit_key IN (SELECT value FROM json_each(?))";
+const DOCUMENTS_FOR_RENDER_UNITS: &str = "SELECT render_unit_key, markdown_uuid \
+     FROM markdowns INDEXED BY markdowns_by_render_unit \
+     WHERE render_unit_key IN (SELECT value FROM json_each(?))";
 
 /// This store's shape: what its `_datalib_meta` records, what the render
 /// step folds into its params so a change to any render-store table

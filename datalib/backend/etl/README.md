@@ -710,6 +710,17 @@ under any plan. A real store is not:
   per email: over an hour, unfinished, on 276k emails. Written as a set,
   `e.id IN (SELECT email_id FROM email_keywords WHERE keyword = '$seen')`,
   the same statement takes a few seconds.
+- **A source's data nodes.** The grid index asks, once per source on
+  every pass, for that source's nodes that have no row. `data_nodes` had
+  no index on `source_id`, so the planner started from every document
+  row in the index (`grid_rows_by_is_document`, an index on a column
+  with two values) and filtered to the source last: 11–20 s per source
+  on a 1.2M-row index, whether one document had changed or none. The
+  plan held no `SCAN`, so a test that refuses one would have passed it.
+- **The vector sweep.** Deleting the vectors no chunk names read the
+  whole `vectors` table, every page of it holding a 3 KB vector: 150 s
+  cold on a 2.7 GB cache, though the narrow `vectors_keys` index beside
+  it answers the same question in a quarter of the time.
 
 So:
 
@@ -721,20 +732,28 @@ So:
 - **A lookup that has to run per row** goes by the primary key, or by an
   index whose columns cover every equality in the `WHERE`, so there is
   only one good choice to make.
-- **Pin the index with `INDEXED BY` when two indexes really could fit.**
-  SQLite then uses exactly that index, and it errors if the index has
-  been renamed or dropped instead of quietly picking another: it fails
-  loudly. On the store in #1679, the old statement with `INDEXED BY
-  email_keywords_by_email` took 6.6 s instead of hours. It does not
-  check that the index fits the `WHERE`: one that does not is walked
-  whole, without an error, so the plan test below still applies.
+- **Name the index with `INDEXED BY`** in every statement that runs
+  per row, per document or per source, or reads a wide table for a few
+  of its columns. SQLite then uses exactly that index, and it errors if
+  the index has been renamed or dropped instead of quietly picking
+  another: it fails loudly. On the store in #1679, the old statement
+  with `INDEXED BY email_keywords_by_email` took 6.6 s instead of hours.
+  It does not check that the index fits the `WHERE`: one that does not
+  is walked whole, without an error, so the plan test below still
+  applies. A named index has to exist wherever the statement runs: make
+  it on every open, outside the store's shape hash when it changes no
+  row (`grid_index::AUTHORS_INDEX`, `node_rows::BY_SOURCE_INDEX`).
 - **Don't reach for `ANALYZE`.** Its statistics are a guess drawn from
   whatever rows a store held when it ran, so two libraries can plan one
   statement two ways, and a plan can change as the rows do. Which index
   a statement needs is known when it is written; say so in the SQL.
 - **Test the plan, not the time.** Run `EXPLAIN QUERY PLAN` on the
-  statement over the table's real DDL and assert what it must not do.
-  Two templates in `providers/email/src/ingest/schema_raw.rs`:
+  statement over the table's real DDL and assert the index it must
+  start from, not only what it must not do: a plan with no `SCAN` can
+  still walk most of the table through an unselective index. Templates:
+  `grid_index::open_index_tests::a_sources_nodes_are_read_by_the_source`
+  and `search_index`'s `the_sweep_reads_the_keys_not_the_vectors` name
+  the index they expect; in `providers/email/src/ingest/schema_raw.rs`,
   `the_email_id_lookups_are_searched_by_index` refuses a `SCAN` of the
   table, and `the_read_mark_rungs_never_search_a_table_per_email`
   refuses a table searched under a `CORRELATED` subquery. Keep the
