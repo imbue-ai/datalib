@@ -1,13 +1,15 @@
 //! Golden of what every TNG row answers to beyond its columns: each row's
 //! search terms (`from:`, `to:`, `with:`, `label:`, `pictured:`, …), one
 //! snapshot per source, and the handles' names and the accounts' own
-//! handles, which `me` and a name read. `search_finds_itself_tests` shows
+//! handles, which `me` and a name read. Over `:ingested_tng`, and over
+//! each source synced on its own (`tests/fixtures/tng_source.bzl`). `search_finds_itself_tests` shows
 //! a search finds what these hold; this pins what they hold, so a row
 //! filed under the wrong person, or no longer under the right one, fails
 //! here by name.
 
 use std::collections::BTreeMap;
 use std::fmt::Write;
+use std::path::{Path, PathBuf};
 
 use datalib_schema::providers::Provider;
 use datalib_schema::search_terms::SearchTermKind;
@@ -56,10 +58,29 @@ impl Source {
 
 #[tokio::test]
 async fn snapshot_search_terms_per_source() {
-    let path = fixture_db_path();
+    snapshot_index(&fixture_db_path(), "fixture_terms_people").await;
+}
+
+#[tokio::test]
+async fn snapshot_search_terms_of_lightroom() {
+    snapshot_index(&lightroom_index_path(), "lightroom_terms_people").await;
+}
+
+/// The grid index `//tests/fixtures:ingested_lightroom` built.
+pub(crate) fn lightroom_index_path() -> PathBuf {
+    let rel = std::env::var("LIGHTROOM_INDEX_RLOC").expect("LIGHTROOM_INDEX_RLOC on the test rule");
+    runfiles::Runfiles::create()
+        .expect("runfiles")
+        .rlocation(&rel)
+        .unwrap_or_else(|| panic!("{rel} not in runfiles"))
+}
+
+/// One snapshot per source of `path`'s rows and their terms, and one,
+/// `people`, of its handles' names and its sources' own handles.
+async fn snapshot_index(path: &Path, people_snapshot: &str) {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
-        .connect_with(SqliteConnectOptions::new().filename(&path).read_only(true))
+        .connect_with(SqliteConnectOptions::new().filename(path).read_only(true))
         .await
         .unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
 
@@ -120,6 +141,6 @@ async fn snapshot_search_terms_per_source() {
     for (source_id, handle) in accounts {
         writeln!(people, "{source_id}\t{handle}").unwrap();
     }
-    insta::assert_snapshot!("fixture_terms_people", people);
+    insta::assert_snapshot!(people_snapshot, people);
     pool.close().await;
 }

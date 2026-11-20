@@ -3,6 +3,7 @@ load("@rules_rust//rust:defs.bzl", "rust_binary")
 load("@py_pip//:requirements.bzl", "requirement")
 load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load(":tng_source.bzl", "tng_source")
 
 # The `make_*.py` generators are exported so the SQLite-mirror
 # fixture genrules (`//datalib/backend/etl/sqlite_mirror:tng_catalog`,
@@ -323,6 +324,18 @@ _TNG_FIXTURE_ARGS = [
     # Google Drive: the JSON spec the synthesizer expands (arg 30).
     "datalib/backend/etl/providers/google_drive/tests/fixtures/google_drive_tng/tng.json",
 ]
+
+# Sources synced on their own rather than in `:ingested_tng`
+# (tng_source.bzl): each one's index is checked by the tests that name it,
+# and a change to one rebuilds that one alone.
+tng_source(
+    name = "ingested_lightroom",
+    ingest_params = "{ catalog = { path = @catalog@ } }",
+    inputs = {"catalog": "//datalib/backend/etl/sqlite_mirror:tng_catalog"},
+    source_id = "tng_lightroom",
+    type = "lightroom",
+    visibility = ["//visibility:public"],
+)
 
 # Every statement the fixture sync runs that walks a whole table or index
 # is in sql_scans_allowed.toml with a reason (docs/dev/testing.md).

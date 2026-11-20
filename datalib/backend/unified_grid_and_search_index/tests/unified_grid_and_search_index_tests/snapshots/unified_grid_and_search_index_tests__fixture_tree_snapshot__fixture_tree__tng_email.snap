@@ -1,0 +1,31 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_tree_snapshot.rs
+expression: text
+---
+Email Account "picard@enterprise.starfleet"  00000000-0000-8570-90c4-e54c531f3fff [place]
+  Email Label "Inbox"  00000000-0000-80b1-aa27-9cccf32b1396 [place]
+  Email Label "Category Promotions"  00000000-0000-81c5-9386-c1c23c0a66b8 [place]
+  Email Label "Sent"  00000000-0000-8d99-95e5-8ec054d6181e [place]
+  Email Thread "Mission Briefing — Sector 001"  00000000-0000-8ce7-94d1-18948b029452 [read]
+    also under 00000000-0000-80b1-aa27-9cccf32b1396 (Email Label)
+    also under 00000000-0000-8d99-95e5-8ec054d6181e (Email Label)
+    Email  019b8d62-7a80-88c2-8062-f1b656c84835
+    Email  019b8db4-e040-88dc-8f8b-9e73422dcff3
+    Email  019b8dde-1320-86d3-965a-083aad10c428
+  Email Thread "Your shore leave awaits!"  00000000-0000-8a58-a8a4-0d3e51a39a59 [read]
+    also under 00000000-0000-80b1-aa27-9cccf32b1396 (Email Label)
+    also under 00000000-0000-81c5-9386-c1c23c0a66b8 (Email Label)
+    Email  019b9251-e800-8ca5-8cdf-3cd10603d0f3
+  Email Thread "Bridge status display"  00000000-0000-8e37-8bef-9f0edb66b8be [read]
+    also under 00000000-0000-80b1-aa27-9cccf32b1396 (Email Label)
+    Email  019b97af-3280-8f16-979e-afe19c268630
+  Email Thread "Captain's Log — Stardate 80124.1"  00000000-0000-80b3-8c56-6d41b85ab9c6 [read]
+    also under 00000000-0000-8d99-95e5-8ec054d6181e (Email Label)
+    Email  019b98c1-db00-89bf-8e74-14d9155da327
+  Email Thread "You've won a holosuite upgrade!"  00000000-0000-85ec-8481-370bffc3afe9 [read]
+    also under 00000000-0000-80b1-aa27-9cccf32b1396 (Email Label)
+    also under 00000000-0000-81c5-9386-c1c23c0a66b8 (Email Label)
+    Email  019b9cd5-8e80-8562-98ed-abfb7e8a4cac
+  Email Thread "Your bar tab"  00000000-0000-89ac-8ef1-ba5e79d09b76 [read]
+    also under 00000000-0000-80b1-aa27-9cccf32b1396 (Email Label)
+    Email  019ba48f-1880-8caa-a85b-c2355321c4d0

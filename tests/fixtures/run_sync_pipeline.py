@@ -144,7 +144,7 @@ from pathlib import Path
 # script's own directory off `sys.path`.
 sys.path.insert(0, str(Path(__file__).parent))
 import make_beeper_texts
-from sync_drivers import CliDriver, HttpDriver, point_playback
+from sync_drivers import PROGRAM_AND_LOCKS, CliDriver, HttpDriver, point_playback
 
 # Public fixture AEP — the signal-tng fixture is generated and
 # decrypted with this passphrase. Documented in the signal-backup
@@ -505,19 +505,7 @@ def prepare(argv: list[str]) -> Prepared:
     def run(function: str, type_str: str = "") -> str:
         return f"datalib-step run {function} {type_str}".rstrip()
 
-    # The program and the locks a datalib config declares, above every
-    # group: the runner gives `datalib-step` no verbs and no locks of its own.
-    preamble = """[[programs]]
-command = "datalib-step"
-verbs = ["reset", "prepare", "compact", "collect"]
-
-[[locks]]
-name = "index"
-slots = 2
-
-[[locks]]
-name = "embedder"
-slots = 1"""
+    preamble = PROGRAM_AND_LOCKS
     steps: list[str] = []
     root_entries: list[str] = []
     ingest_ids: list[str] = []

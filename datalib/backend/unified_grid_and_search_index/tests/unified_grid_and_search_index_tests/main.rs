@@ -5,5 +5,6 @@ mod children;
 mod dolt_backend_integration;
 mod fixture_db_snapshot;
 mod fixture_terms_snapshot;
+mod fixture_tree_snapshot;
 mod fixture_vectors;
 mod search_index;

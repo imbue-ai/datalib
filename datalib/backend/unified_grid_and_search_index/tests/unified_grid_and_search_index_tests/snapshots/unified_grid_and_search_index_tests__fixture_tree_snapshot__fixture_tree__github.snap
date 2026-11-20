@@ -1,0 +1,15 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_tree_snapshot.rs
+expression: text
+---
+GitHub repository "enterprise-d/replicator-firmware"  00000000-0000-889d-ab8c-e960fbf429ce [place]
+  GitHub PR "Recalibrate replicator templates for Earl Grey, hot"  0b75b9f9-4400-87fe-99ef-2db45ad92cb6 [read]
+    GitHub PR Comment  0b75ba4b-a9c0-8e4f-98c7-cd7e6a61a4d3
+    GitHub Review  0b75ba67-2100-8e00-a40a-a94d0cda3e7d
+    GitHub Review Comment  0b75ba67-24e8-805b-9bd2-36cb40a41cb8
+    GitHub Review Comment  0b75ba6b-b4e0-8cd3-a7f1-9a10e37b4091
+  GitHub PR "Add holodeck safety interlock for live phaser fire"  0b75bad4-fe00-82b8-ab37-5a103480b51c [read]
+    GitHub PR Comment  0b75bb27-63c0-8116-b4ff-00bdd74fe630
+    GitHub Review  0b75bb42-db00-8e46-8fa7-79619e17107e
+    GitHub Review Comment  0b75bb42-dee8-86c3-b802-bc72e8807da8
+    GitHub Review Comment  0b75bb42-e2d0-8488-a5a6-2dc5b65a9b3e

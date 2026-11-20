@@ -1,0 +1,14 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_tree_snapshot.rs
+expression: text
+---
+under 00000000-0000-865f-8ebb-f32b5314f4f0 (not a row)
+Contact "Worf"  00000000-0000-8195-8ee2-d14cb601f004
+under 00000000-0000-865f-8ebb-f32b5314f4f0 (not a row)
+Contact "Jean-Luc Picard"  00000000-0000-825c-a3c4-1fb84e9bfce6
+under 00000000-0000-865f-8ebb-f32b5314f4f0 (not a row)
+Contact "Data"  00000000-0000-86be-a0a0-341fa48bbc80
+under 00000000-0000-8c7f-bd43-f865b549e521 (not a row)
+Contact "Kalita"  00000000-0000-819d-aad9-cb628fc3bec0
+under 00000000-0000-8c7f-bd43-f865b549e521 (not a row)
+Contact "Ro Laren"  00000000-0000-8429-b938-7d1e51384182
