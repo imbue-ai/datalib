@@ -24,7 +24,12 @@ const CATALOG: &[Entry] = &[
     e("slack", None, "Slack", Some("slack")),
     e("claude", Some("api"), "Claude", Some("claude")),
     e("claude", Some("export"), "Claude (export)", Some("claude")),
-    e("claude_code", None, "Claude Code", Some("claude_code")),
+    e(
+        "claude_code",
+        None,
+        "Claude Code (Local)",
+        Some("claude_code"),
+    ),
     e("chatgpt", Some("api"), "ChatGPT", Some("chatgpt")),
     e(
         "chatgpt",
@@ -32,7 +37,7 @@ const CATALOG: &[Entry] = &[
         "ChatGPT (export)",
         Some("chatgpt"),
     ),
-    e("codex", None, "Codex", Some("codex")),
+    e("codex", None, "Codex (Local)", Some("codex")),
     e("github", None, "GitHub", Some("github")),
     e("gitlab", None, "GitLab", Some("gitlab")),
     e("notion", None, "Notion", Some("notion")),
@@ -41,7 +46,7 @@ const CATALOG: &[Entry] = &[
     e(
         "email",
         Some("apple_mail"),
-        "Apple Mail",
+        "Apple Mail (Local)",
         Some("apple_mail"),
     ),
     e("email", None, "Email (mbox or JMAP)", Some("email")),
@@ -110,25 +115,35 @@ const CATALOG: &[Entry] = &[
         Some("sms"),
     ),
     e("baby_connect", None, "Baby Connect", Some("baby_connect")),
-    e("beeper", None, "Beeper", Some("beeper")),
-    e("markdown", None, "Markdown", Some("markdown")),
-    e("pdf", None, "Local PDFs", Some("pdf")),
+    e("beeper", None, "Beeper (Local)", Some("beeper")),
+    e("markdown", None, "Markdown (Local)", Some("markdown")),
+    e("pdf", None, "PDFs (Local)", Some("pdf")),
     e(
         "file_inventory",
         None,
-        "File inventory",
+        "File inventory (Local)",
         Some("file_inventory"),
     ),
-    e("media", None, "Local media", Some("media")),
-    e("airvisual", None, "IQAir AirVisual", Some("airvisual")),
-    e("lightroom", None, "Lightroom", Some("lightroom")),
+    e("media", None, "Media (Local)", Some("media")),
+    e(
+        "airvisual",
+        None,
+        "IQAir AirVisual (Local)",
+        Some("airvisual"),
+    ),
+    e("lightroom", None, "Lightroom (Local)", Some("lightroom")),
     e("linear", None, "Linear", Some("linear")),
     e("todoist", None, "Todoist", Some("todoist")),
-    e("apple_photos", None, "Apple Photos", Some("apple_photos")),
+    e(
+        "apple_photos",
+        None,
+        "Apple Photos (Local)",
+        Some("apple_photos"),
+    ),
     e(
         "apple_messages",
         None,
-        "Apple Messages",
+        "Apple Messages (Local)",
         Some("apple_messages"),
     ),
     e("perseus", None, "Perseus Digital Library", Some("perseus")),
@@ -193,7 +208,7 @@ mod tests {
         assert_eq!(source_type("email", &json!({"jmap": {}})).label, "Fastmail");
         assert_eq!(
             source_type("email", &json!({"apple_mail": {}})).label,
-            "Apple Mail"
+            "Apple Mail (Local)"
         );
         assert_eq!(
             source_type("email", &json!({"mbox": {}})).label,

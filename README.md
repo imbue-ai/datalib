@@ -127,9 +127,9 @@ The sources we rely on ourselves, and the ones we keep working first.
 
 <table>
   <tr>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#claude-code"><img src="datalib/ui/src/assets/claude_code.svg" width="40" height="40" alt=""><br><b>Claude Code</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#codex"><img src="datalib/ui/src/assets/codex.svg" width="40" height="40" alt=""><br><b>Codex</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#markdown"><img src="datalib/ui/src/assets/markdown.svg" width="40" height="40" alt=""><br><b>Markdown</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#claude-code-local"><img src="datalib/ui/src/assets/claude_code.svg" width="40" height="40" alt=""><br><b>Claude Code (Local)</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#codex-local"><img src="datalib/ui/src/assets/codex.svg" width="40" height="40" alt=""><br><b>Codex (Local)</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#markdown-local"><img src="datalib/ui/src/assets/markdown.svg" width="40" height="40" alt=""><br><b>Markdown (Local)</b></a></td>
   </tr>
 </table>
 
@@ -176,17 +176,17 @@ welcome.
 
 <table>
   <tr>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#apple-mail"><img src="datalib/ui/src/assets/apple_mail.svg" width="40" height="40" alt=""><br><b>Apple Mail</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#apple-messages"><img src="datalib/ui/src/assets/apple_messages.svg" width="40" height="40" alt=""><br><b>Apple Messages</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#apple-photos"><img src="datalib/ui/src/assets/apple_photos.svg" width="40" height="40" alt=""><br><b>Apple Photos</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#beeper"><img src="datalib/ui/src/assets/beeper.png" width="40" height="40" alt=""><br><b>Beeper</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#file-inventory"><img src="datalib/ui/src/assets/file_inventory.svg" width="40" height="40" alt=""><br><b>File inventory</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#iqair-airvisual"><img src="datalib/ui/src/assets/airvisual.svg" width="40" height="40" alt=""><br><b>IQAir AirVisual</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#apple-mail-local"><img src="datalib/ui/src/assets/apple_mail.svg" width="40" height="40" alt=""><br><b>Apple Mail (Local)</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#apple-messages-local"><img src="datalib/ui/src/assets/apple_messages.svg" width="40" height="40" alt=""><br><b>Apple Messages (Local)</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#apple-photos-local"><img src="datalib/ui/src/assets/apple_photos.svg" width="40" height="40" alt=""><br><b>Apple Photos (Local)</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#beeper-local"><img src="datalib/ui/src/assets/beeper.png" width="40" height="40" alt=""><br><b>Beeper (Local)</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#file-inventory-local"><img src="datalib/ui/src/assets/file_inventory.svg" width="40" height="40" alt=""><br><b>File inventory (Local)</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#iqair-airvisual-local"><img src="datalib/ui/src/assets/airvisual.svg" width="40" height="40" alt=""><br><b>IQAir AirVisual (Local)</b></a></td>
   </tr>
   <tr>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#lightroom"><img src="datalib/ui/src/assets/lightroom.svg" width="40" height="40" alt=""><br><b>Lightroom</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#local-media"><img src="datalib/ui/src/assets/media.svg" width="40" height="40" alt=""><br><b>Local media</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#local-pdfs"><img src="datalib/ui/src/assets/pdf.svg" width="40" height="40" alt=""><br><b>Local PDFs</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#lightroom-local"><img src="datalib/ui/src/assets/lightroom.svg" width="40" height="40" alt=""><br><b>Lightroom (Local)</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#media-local"><img src="datalib/ui/src/assets/media.svg" width="40" height="40" alt=""><br><b>Media (Local)</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#pdfs-local"><img src="datalib/ui/src/assets/pdf.svg" width="40" height="40" alt=""><br><b>PDFs (Local)</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#perseus-digital-library"><img src="datalib/ui/src/assets/perseus.svg" width="40" height="40" alt=""><br><b>Perseus Digital Library</b></a></td>
   </tr>
 </table>
