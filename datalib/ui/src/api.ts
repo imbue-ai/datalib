@@ -438,6 +438,8 @@ export type Child = {
   kind: string;
   name: string | null;
   author: string | null;
+  /// The author as a handle (`email:…`), which their chip names.
+  author_handle: string | null;
   created_at: string | null;
   preview: string | null;
   /// The document its row is in; null for a container with no row.

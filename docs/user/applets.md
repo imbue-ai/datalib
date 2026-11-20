@@ -154,7 +154,8 @@ Slack workspace, a ChatGPT conversation.
   `at` is the commit the page was read at.
 - Each child has its `uuid`, its `sort_key`, whether it is a
   `container` with children of its own, its `kind` and `name`, and,
-  where it has a row, its `author`, `created_at`, `preview`, the
+  where it has a row, its `author` and the `author_handle` that names
+  them (`email:…`, `slack:…`), its `created_at`, `preview`, the
   `markdown_uuid` of its document and the `link` that opens it.
 - `limit=` is 1 to 1000, 50 by default. A malformed request is a 400,
   and every error is `{"error": "…"}`.

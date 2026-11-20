@@ -1,7 +1,7 @@
 // datalib's names: a `datalib:<kind>/<id>` link saying what something is
 // (docs/dev/plans/datalib_uris.md). The Rust crate `datalib_uri` is the
-// same; both read and write `tests/uri-fixtures.json` alike. The `doc`
-// and `photo` kinds live here so far.
+// same; both read and write `tests/uri-fixtures.json` alike. The `doc`,
+// `photo` and `node` kinds live here so far.
 
 /** A rendered page, and a section of it: a message's uuid, its
  *  `data-section-uuid`. */
@@ -74,5 +74,19 @@ export function writePhoto(id: string): string {
 export function parsePhoto(link: string): string | null {
   if (!link.startsWith(PHOTO)) return null;
   const id = link.slice(PHOTO.length);
+  return UUID.test(id) ? id : null;
+}
+
+const NODE = "datalib:node/";
+
+/** A node of a source's tree, by its `data_nodes` uuid. */
+export function writeNode(id: string): string {
+  return NODE + id;
+}
+
+/** The node's uuid, or `null` for anything that is not a `node` name. */
+export function parseNode(link: string): string | null {
+  if (!link.startsWith(NODE)) return null;
+  const id = link.slice(NODE.length);
   return UUID.test(id) ? id : null;
 }

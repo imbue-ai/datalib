@@ -7,19 +7,44 @@
 // node that is itself a document (a Notion page) shows it there until a
 // row is picked, and alone when it holds nothing else. A double-click, or
 // Enter, opens the child: a container's own children, a row's document.
-// The rules are cards/library.ts.
-import { nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from "vue";
+// A row's title and date are chips, with a chip's double-click and
+// right-click (docs/dev/chips.md § Clicks). The rules are cards/library.ts.
+import {
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  useTemplateRef,
+  watch,
+  type Directive,
+} from "vue";
 import type { Child, ChildrenPage } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import type { CardCtx, Teardown } from "./types";
-import { formatRelative } from "@/config/timeFormat";
+import { timeView } from "@/config/timeView";
+import { writeDoc } from "@/uri";
 import { documentPreview } from "./libs/documentView";
+import ChipMenu from "./ChipMenu.ce.vue";
+import {
+  chipElAt,
+  chipMenuOf,
+  chipOf,
+  runChipAction,
+  type Chip,
+  type ChipEntry,
+  type ChipEntryId,
+} from "./chipActions";
+import { chipCell, people } from "./contacts";
+import { dateCell } from "./dates";
+import { documentCell } from "./documentChip";
+import { nodeCell } from "./nodeChip";
 import {
   childCardSource,
   childLabel,
   kindsDiffer,
   previewArgs,
   rowParts,
+  rowTitle,
   wantsPreview,
 } from "./library";
 
@@ -128,8 +153,80 @@ function onKey(e: KeyboardEvent) {
   }
 }
 
-function when(iso: string | null): string {
-  return iso ? formatRelative(iso, now) : "";
+// ---- chips ----
+
+// Drawn again when a person resolves or the time view moves.
+const chipsMoved = ref(0);
+const stopPeople = people.subscribe(() => chipsMoved.value++);
+watch(timeView, () => chipsMoved.value++, { deep: true });
+
+/// A row's title, as the chip it names where it names one.
+function titleOf(c: Child): Node {
+  void chipsMoved.value;
+  const t = rowTitle(c, props.name);
+  switch (t.kind) {
+    case "node":
+      return nodeCell(t.id, t.name, t.nodeKind, t.doc) ?? document.createTextNode(t.name);
+    case "person":
+      return chipCell(t.handle, t.shown, people.lookup(t.handle), false);
+    case "document":
+      return (
+        documentCell(writeDoc({ page: t.page, section: null }), t.title, null, null) ??
+        document.createTextNode(t.title)
+      );
+    case "text":
+      return document.createTextNode(t.text);
+  }
+}
+
+function whenOf(c: Child): Node {
+  void chipsMoved.value;
+  return c.created_at ? dateCell(c.created_at, now) : document.createTextNode("");
+}
+
+/// Puts the node its value makes into the element.
+const vDraw: Directive<HTMLElement, Node> = {
+  mounted: (el, b) => el.replaceChildren(b.value),
+  updated: (el, b) => el.replaceChildren(b.value),
+};
+
+const chipHost = { openCard: (source: string) => void props.ctx.host.openCards(source) };
+type MenuAt = { chip: Chip; entries: ChipEntry[]; x: number; y: number };
+const menuAt = ref<MenuAt | null>(null);
+
+/// The chip a press landed on, else its row's title chip.
+function chipAt(ev: Event): HTMLElement | null {
+  const on = chipElAt(ev.target);
+  if (on) return on;
+  const row = (ev.target as Element | null)?.closest?.(".nc-row");
+  const title = row?.querySelector(".nc-title")?.firstElementChild;
+  return title ? chipElAt(title) : null;
+}
+
+function onRowClick(ev: MouseEvent, c: Child) {
+  if (chipElAt(ev.target)) ev.preventDefault();
+  pick(c);
+}
+
+function onRowDblClick(ev: MouseEvent, c: Child) {
+  const el = chipElAt(ev.target);
+  const chip = el ? chipOf(el) : null;
+  if (chip) void runChipAction("open", chip, chipHost);
+  else open(c);
+}
+
+function onRowMenu(ev: MouseEvent) {
+  const el = chipAt(ev);
+  const chip = el ? chipOf(el) : null;
+  if (!chip) return;
+  ev.preventDefault();
+  menuAt.value = { chip, entries: chipMenuOf(chip, false), x: ev.clientX, y: ev.clientY };
+}
+
+async function onMenuPick(id: string) {
+  const menu = menuAt.value;
+  menuAt.value = null;
+  if (menu) await runChipAction(id as ChipEntryId, menu.chip, chipHost);
 }
 
 // The picked row's document, drawn in a shadow root of its own.
@@ -172,7 +269,10 @@ onMounted(() => {
   );
   void load();
 });
-onBeforeUnmount(() => teardown?.());
+onBeforeUnmount(() => {
+  teardown?.();
+  stopPeople();
+});
 </script>
 
 <template>
@@ -188,22 +288,26 @@ onBeforeUnmount(() => teardown?.());
         <ul
           ref="listEl"
           class="nc-list"
+          role="listbox"
           aria-label="Children"
           data-testid="node-children"
           @keydown="onKey"
         >
           <li v-for="c in children" :key="c.uuid">
-            <button
+            <div
               class="nc-row"
+              role="option"
+              :aria-selected="picked?.uuid === c.uuid"
               :class="{ 'is-picked': picked?.uuid === c.uuid, 'is-container': c.container }"
               :data-uuid="c.uuid"
               :tabindex="(picked ?? children[children.length - 1])?.uuid === c.uuid ? 0 : -1"
-              @click="pick(c)"
-              @dblclick="open(c)"
+              @click="onRowClick($event, c)"
+              @dblclick="onRowDblClick($event, c)"
+              @contextmenu="onRowMenu"
             >
               <span class="nc-line">
-                <strong class="nc-title">{{ rowParts(c, name).title }}</strong>
-                <span class="nc-when">{{ when(c.created_at) }}</span>
+                <strong v-draw="titleOf(c)" class="nc-title" />
+                <span v-draw="whenOf(c)" class="nc-when" />
               </span>
               <span v-if="kindsDiffer(children)" class="nc-meta">
                 <span class="nc-kind">{{ c.kind }}</span>
@@ -211,7 +315,7 @@ onBeforeUnmount(() => teardown?.());
               <span v-if="rowParts(c, name).snippet" class="nc-snippet">{{
                 rowParts(c, name).snippet
               }}</span>
-            </button>
+            </div>
           </li>
           <li v-if="!loading && children.length === 0" class="nc-note">Nothing here.</li>
           <li v-if="loading" class="nc-note">Reading…</li>
@@ -226,6 +330,14 @@ onBeforeUnmount(() => teardown?.());
         <div ref="previewEl" class="nc-preview-body" />
       </div>
     </div>
+    <ChipMenu
+      v-if="menuAt"
+      :entries="menuAt.entries"
+      :x="menuAt.x"
+      :y="menuAt.y"
+      @pick="onMenuPick"
+      @close="menuAt = null"
+    />
   </div>
 </template>
 
@@ -290,6 +402,7 @@ onBeforeUnmount(() => teardown?.());
   align-items: baseline;
 }
 .nc-title {
+  display: flex;
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -356,5 +469,12 @@ onBeforeUnmount(() => teardown?.());
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
+}
+.nc-title > .chip {
+  max-width: 100%;
+}
+.nc-row:focus-visible {
+  outline: 2px solid var(--datalib-accent);
+  outline-offset: -2px;
 }
 </style>

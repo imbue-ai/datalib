@@ -1,21 +1,43 @@
 <script setup lang="ts">
 // `libraryTreeView()`: the library as VS Code's tree (`<vs-tree>`,
 // third-party/vscode-tree) — its sources, then their places, a level at a
-// time — and, beside it, the node opened there as a node card
-// (`nodeView`, cards/NodeCard.ce.vue), drawn in a shadow root of its own
-// the way the Search card draws its preview. A node the node card opens
-// in turn replaces it here; a document opens as a card. What is open in
-// the tree, and the node shown, are the card's state. The rules are
-// cards/library.ts.
-import { onBeforeUnmount, onMounted, ref, useTemplateRef } from "vue";
+// time, each drawn as its chip — and, beside it, the node picked there as
+// a node card (`nodeView`, cards/NodeCard.ce.vue), drawn in a shadow root
+// of its own the way the Search card draws its preview. A node the node
+// card opens in turn replaces it here; a document opens as a card. A
+// chip's double-click and right-click are a chip's everywhere
+// (docs/dev/chips.md § Clicks). What is open in the tree, and the node
+// shown, are the card's state. The rules are cards/library.ts.
+import { onBeforeUnmount, onMounted, ref, useTemplateRef, watchEffect } from "vue";
 import type { VsTree, VsTreeNode, VsTreeViewState } from "vs-tree";
 import { useApi } from "@/cards/cardApi";
 import type { CardCtx, Teardown } from "./types";
 import { parseCardSource } from "./cardCall";
 import { nodeSource, type NodeViewOpts } from "./cardSources";
 import { nodeView } from "./libs/nodeView";
-import { iconUrl } from "@/config/icons";
-import { nodeOpts, placeNodes, sourceNodes, type TreeNode } from "./library";
+import ChipMenu from "./ChipMenu.ce.vue";
+import chipCss from "./chip.css?inline";
+import {
+  CHIP_SELECTOR,
+  chipElAt,
+  chipMenuOf,
+  chipOf,
+  runChipAction,
+  type Chip,
+  type ChipEntry,
+  type ChipEntryId,
+} from "./chipActions";
+import { entities, entityCell } from "./entities";
+import { nodeCell } from "./nodeChip";
+import {
+  TREE_PICKS,
+  nodeOpts,
+  placeNodes,
+  sourceNodes,
+  treeChip,
+  type TreeChip,
+  type TreeNode,
+} from "./library";
 
 const props = defineProps<{ ctx: CardCtx }>();
 const api = useApi();
@@ -70,7 +92,7 @@ const dataSource = {
     if (node !== null) return placesUnder(node.id);
     const rows = (await api.fetchManageRows()).rows;
     const held = await sourcesWithPlaces(sourceNodes(rows).map((n) => n.id));
-    return sourceNodes(rows, (id) => held.has(id), iconUrl);
+    return sourceNodes(rows, (id) => held.has(id));
   },
 };
 
@@ -135,14 +157,97 @@ function openShownAsCard() {
   if (shown.value) props.ctx.host.openCards(nodeSource(shown.value));
 }
 
+// ---- chips ----
+
+/// A node's chip, drawn from what is known now: a source's from what
+/// `entities` says of its group, a place's from its own row.
+function chipEl(c: TreeChip | null): HTMLElement | null {
+  if (!c) return null;
+  if (c.kind === "group") return entityCell(c.uri, c.shown, entities.lookup(c.uri), c.mark);
+  return nodeCell(c.id, c.name, c.nodeKind, c.doc);
+}
+
+const chipHost = { openCard: (source: string) => void props.ctx.host.openCards(source) };
+
+type MenuAt = { chip: Chip; entries: ChipEntry[]; x: number; y: number };
+const menuAt = ref<MenuAt | null>(null);
+
+function openMenu(el: HTMLElement | null, x: number, y: number) {
+  const chip = el ? chipOf(el) : null;
+  if (chip) menuAt.value = { chip, entries: chipMenuOf(chip, false), x, y };
+}
+
+async function onMenuPick(id: string) {
+  const menu = menuAt.value;
+  menuAt.value = null;
+  if (menu) await runChipAction(id as ChipEntryId, menu.chip, chipHost);
+}
+
+/// The chip a press landed on, else the chip of the row it landed in.
+function chipAt(ev: Event | undefined): HTMLElement | null {
+  const path = ev?.composedPath() ?? [];
+  const on = chipElAt(path[0]);
+  if (on) return on;
+  const row = path.find((t) => t instanceof HTMLElement && t.classList.contains("monaco-list-row"));
+  return (row as HTMLElement | undefined)?.querySelector<HTMLElement>(CHIP_SELECTOR) ?? null;
+}
+
+/// What picking a node does, as `TREE_PICKS` says.
+function pick(how: keyof typeof TREE_PICKS, node: TreeNode, chip: HTMLElement | null) {
+  const c = chip ? chipOf(chip) : null;
+  if (TREE_PICKS[how] === "card" && c) void runChipAction("open", c, chipHost);
+  else show(nodeOpts(node));
+}
+
+// The shown node's chip, in the pane's bar.
+const titleEl = useTemplateRef<HTMLElement>("titleEl");
+const entitiesMoved = ref(0);
+const stopEntities = entities.subscribe(() => {
+  entitiesMoved.value++;
+  tree?.redraw();
+});
+watchEffect(() => {
+  void entitiesMoved.value;
+  const el = titleEl.value;
+  const opts = shown.value;
+  if (!el || !opts) return;
+  const node: TreeNode = {
+    id: opts.node,
+    label: paneTitle.value || opts.name || "",
+    hasChildren: false,
+    ...(opts.doc ? { doc: opts.doc } : {}),
+  };
+  const c = chipEl(treeChip(node));
+  el.replaceChildren(c ?? node.label);
+});
+
+function onTitleDblClick(ev: MouseEvent) {
+  const el = chipElAt(ev.target);
+  const c = el ? chipOf(el) : null;
+  if (c) void runChipAction("open", c, chipHost);
+}
+
+function onTitleMenu(ev: MouseEvent) {
+  const el = chipElAt(ev.target);
+  if (!el) return;
+  ev.preventDefault();
+  openMenu(el, ev.clientX, ev.clientY);
+}
+
+/// A chip is a link only to be copied: a click on one selects its row.
+function holdLink(ev: Event) {
+  if (chipElAt(ev.composedPath()[0])) ev.preventDefault();
+}
+
 onMounted(async () => {
   props.ctx.setTitle("Library");
   props.ctx.setHelp(
     "<p>Your library as a tree: each source, then the places in it — accounts, " +
       "labels, workspaces, channels, folders, chats — a level at a time.</p>" +
-      "<p>Double-click a place, or press Enter on it, to show what it holds " +
-      "beside the tree. There, a click reads a message beside the list and a " +
-      "double-click opens it. ↗ opens what is shown as a card of its own.</p>" +
+      "<p>Pick a place to show what it holds beside the tree. There, a click " +
+      "reads a message beside the list. A double-click on a name opens its " +
+      "card, and a right-click shows what else you can do with it. ↗ opens " +
+      "what is shown as a card of its own.</p>" +
       "<p>The tree keeps what you opened, and what you showed, when you come back.</p>",
   );
   try {
@@ -155,16 +260,43 @@ onMounted(async () => {
   el.setAttribute("aria-label", "Library");
   if (state.tree) el.viewState = state.tree;
   el.addEventListener("viewstatechange", save);
-  el.addEventListener("open", (e) => {
-    show(nodeOpts((e as CustomEvent<{ node: TreeNode }>).detail.node));
+  el.extraCss = chipCss + TREE_CHIP_CSS;
+  el.renderLabel = (node, label) => {
+    const c = chipEl(treeChip(node as TreeNode));
+    label.append(c ?? node.label);
+  };
+  // Arrowing through the tree shows each place it stops on, once it stops.
+  let selecting: ReturnType<typeof setTimeout> | undefined;
+  el.addEventListener("select", (e) => {
+    const [node] = (e as CustomEvent<{ nodes: TreeNode[] }>).detail.nodes;
+    clearTimeout(selecting);
+    if (!node || node.id === shown.value?.node) return;
+    selecting = setTimeout(() => pick("select", node, null), 120);
   });
+  el.addEventListener("open", (e) => {
+    const { node, event } = (e as CustomEvent<{ node: TreeNode; event?: MouseEvent }>).detail;
+    if (!event) return pick("enter", node, null);
+    const onChip = chipElAt(event.composedPath()[0]);
+    pick(onChip ? "doubleClickOnChip" : "doubleClickElsewhere", node, onChip ?? chipAt(event));
+  });
+  el.addEventListener("menu", (e) => {
+    const { x, y, event } = (e as CustomEvent<{ x: number; y: number; event?: Event }>).detail;
+    openMenu(chipAt(event), x, y);
+  });
+  el.addEventListener("click", holdLink);
   el.dataSource = dataSource;
   treeHost.value?.appendChild(el);
   tree = el;
   if (state.node) show(state.node);
 });
 
-onBeforeUnmount(() => teardown?.());
+onBeforeUnmount(() => {
+  teardown?.();
+  stopEntities();
+});
+
+// A chip in a row is never wider than the row's label leaves it.
+const TREE_CHIP_CSS = `.label { display: flex; min-width: 0; } .label > .chip { max-width: 100%; }`;
 </script>
 
 <template>
@@ -175,14 +307,28 @@ onBeforeUnmount(() => teardown?.());
     </div>
     <section class="lib-pane" :class="{ 'is-empty': !shown }">
       <header v-if="shown" class="lib-pane-bar">
-        <strong class="lib-pane-title">{{ paneTitle }}</strong>
+        <strong
+          ref="titleEl"
+          class="lib-pane-title"
+          @click="holdLink"
+          @dblclick="onTitleDblClick"
+          @contextmenu="onTitleMenu"
+        />
         <button class="lib-pane-open" title="Open as a card of its own" @click="openShownAsCard">
           ↗
         </button>
       </header>
-      <p v-else class="lib-note">Double-click a place in the tree to see what it holds.</p>
+      <p v-else class="lib-note">Pick a place in the tree to see what it holds.</p>
       <div ref="paneEl" class="lib-pane-body" data-testid="library-node" />
     </section>
+    <ChipMenu
+      v-if="menuAt"
+      :entries="menuAt.entries"
+      :x="menuAt.x"
+      :y="menuAt.y"
+      @pick="onMenuPick"
+      @close="menuAt = null"
+    />
   </div>
 </template>
 

@@ -373,6 +373,18 @@ fn children_page_through_a_channel() {
     );
     let (status, body) = get(port, &format!("/children/{bridge}?after=40"), Some(SECRET));
     assert_eq!(status, 400, "{body}");
+
+    // A thread's messages name their authors by handle, which a person
+    // chip is drawn from.
+    let first = threads[0]["uuid"].as_str().unwrap();
+    let (status, body) = get(port, &format!("/children/{first}"), Some(SECRET));
+    assert_eq!(status, 200, "{body}");
+    let messages = body["children"].as_array().unwrap();
+    assert!(!messages.is_empty(), "{body}");
+    for m in messages {
+        let handle = m["author_handle"].as_str().unwrap_or_default();
+        assert!(handle.starts_with("slack:"), "{m}");
+    }
     child.kill().ok();
 }
 
