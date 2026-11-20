@@ -369,6 +369,10 @@ const UPGRADES: &[(i32, &[&str])] = &[
             "ALTER TABLE runs ADD COLUMN reason TEXT",
         ],
     ),
+    (
+        12,
+        &["CREATE INDEX IF NOT EXISTS log_by_run_seq ON log (run_id, seq)"],
+    ),
 ];
 
 /// `true` when the file carries this build's schema, climbing the
@@ -1040,17 +1044,26 @@ pub async fn process_log_after(data_root: &Path, after_seq: i64, limit: i64) -> 
         return Vec::new();
     };
     // Audited: the column list is this module's own constant.
-    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT {LOG_LINE_COLUMNS} FROM log l LEFT JOIN processes p USING (process_id) \
-         WHERE l.run_id IS NULL AND l.seq > ? ORDER BY l.seq LIMIT ?"
-    )))
-    .bind(after_seq)
-    .bind(limit)
-    .fetch_all(&pool)
-    .await
-    .unwrap_or_default();
+    let rows = sqlx::query(sqlx::AssertSqlSafe(server_lines_after_sql()))
+        .bind(after_seq)
+        .bind(limit)
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_default();
     pool.close().await;
     rows.iter().map(|r| log_line_from(r).row).collect()
+}
+
+// The server's watcher runs this whenever the store changes, and its
+// `datalib_sql_work` warning is itself a change: a plan that reads every
+// line is a statement that logs itself forever. `INDEXED BY` refuses
+// rather than fall back to that plan.
+fn server_lines_after_sql() -> String {
+    format!(
+        "SELECT {LOG_LINE_COLUMNS} FROM log l INDEXED BY log_by_run_seq \
+         LEFT JOIN processes p USING (process_id) \
+         WHERE l.run_id IS NULL AND l.seq > ? ORDER BY l.seq LIMIT ?"
+    )
 }
 
 /// The newest line's `seq`, or 0 for an empty or absent store.
@@ -1852,6 +1865,11 @@ async fn bump(
     Ok(())
 }
 
+const PRUNE_SERVER_LINES_PAST_CAP: &str =
+    "DELETE FROM log INDEXED BY log_by_run_seq WHERE run_id IS NULL AND seq < \
+     (SELECT seq FROM log INDEXED BY log_by_run_seq WHERE run_id IS NULL \
+      ORDER BY seq DESC LIMIT 1 OFFSET ?)";
+
 /// Retention for what belongs to no run: the lines have their own,
 /// shorter age and a row cap — a server at `debug` between syncs must
 /// not grow the file for a month — and a process goes once it is past
@@ -1862,13 +1880,10 @@ async fn prune_unowned(pool: &SqlitePool, retention: Retention) -> Result<(), sq
         .bind(&cutoff)
         .execute(pool)
         .await?;
-    sqlx::query(
-        "DELETE FROM log WHERE run_id IS NULL AND seq < \
-         (SELECT seq FROM log WHERE run_id IS NULL ORDER BY seq DESC LIMIT 1 OFFSET ?)",
-    )
-    .bind(retention.process_log_lines.max(1) as i64 - 1)
-    .execute(pool)
-    .await?;
+    sqlx::query(PRUNE_SERVER_LINES_PAST_CAP)
+        .bind(retention.process_log_lines.max(1) as i64 - 1)
+        .execute(pool)
+        .await?;
     sqlx::query(
         "DELETE FROM processes WHERE run_id IS NULL AND started_at_utc < ? \
          AND process_id NOT IN (SELECT process_id FROM log)",
@@ -2186,6 +2201,43 @@ async fn insert_sample(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn plan(pool: &SqlitePool, sql: &str, binds: &[i64]) -> String {
+        // Audited: the statements are this module's own constants.
+        let explain = format!("EXPLAIN QUERY PLAN {sql}");
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(explain));
+        for b in binds {
+            q = q.bind(b);
+        }
+        let rows = q.fetch_all(pool).await.unwrap();
+        rows.iter()
+            .map(|r| r.get::<String, _>(3))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Guards the server's tail of its own lines, which its watcher runs on
+    /// every change to the store: under `log_by_run_step` it read and sorted
+    /// every server line (500k steps for at most 67 rows on a real root), and
+    /// the warning that cost wrote was itself a change, 140 a minute with
+    /// nothing else running. Both it and the line cap walk only the range.
+    #[tokio::test]
+    async fn the_servers_lines_are_read_by_range_not_sorted() {
+        let td = tempfile::tempdir().unwrap();
+        let pool = open_or_recreate(&td.path().join("runs.sqlite"))
+            .await
+            .unwrap();
+        for (sql, binds) in [
+            (server_lines_after_sql(), &[0_i64, 100][..]),
+            (PRUNE_SERVER_LINES_PAST_CAP.to_string(), &[199_999][..]),
+        ] {
+            let plan = plan(&pool, &sql, binds).await;
+            assert!(plan.contains("log_by_run_seq (run_id=? AND seq"), "{plan}");
+            assert!(!plan.contains("TEMP B-TREE"), "{plan}");
+            assert!(!plan.contains("SCAN"), "{plan}");
+        }
+        pool.close().await;
+    }
 
     /// The run store's `-wal` stays within its size limit with no
     /// checkpoint of ours: the engine checkpoints as it goes. Under

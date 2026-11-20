@@ -689,9 +689,10 @@ async fn a_store_from_version_10_is_upgraded_in_place() {
     }
     let path = datalib_runs::runs_path(td.path());
     let pool = datalib_runs::open_or_create(&path).await.unwrap();
-    // Version 10's shape is this one without what 11 and 12 added.
+    // Version 10's shape is this one without what 11, 12 and 13 added.
     sqlx::raw_sql(
-        "ALTER TABLE processes DROP COLUMN peak_rss_bytes; \
+        "DROP INDEX log_by_run_seq; \
+         ALTER TABLE processes DROP COLUMN peak_rss_bytes; \
          ALTER TABLE processes DROP COLUMN applet; \
          ALTER TABLE runs DROP COLUMN kind; \
          ALTER TABLE runs DROP COLUMN reason; \
@@ -747,7 +748,8 @@ async fn a_run_says_why_it_started_and_an_older_one_says_nothing() {
     let path = datalib_runs::runs_path(td.path());
     let pool = datalib_runs::open_or_create(&path).await.unwrap();
     sqlx::raw_sql(
-        "ALTER TABLE runs DROP COLUMN kind; \
+        "DROP INDEX log_by_run_seq; \
+         ALTER TABLE runs DROP COLUMN kind; \
          ALTER TABLE runs DROP COLUMN reason; \
          PRAGMA user_version = 11",
     )
@@ -779,6 +781,49 @@ async fn a_run_says_why_it_started_and_an_older_one_says_nothing() {
     );
     assert_eq!(runs[1].kind, None);
     assert_eq!(runs[1].reason, None);
+}
+
+/// Guards the server's tail of its own lines on a store from before
+/// `log_by_run_seq`: the statement names that index, so without the
+/// rung that adds it the tail fails and the watcher reads nothing.
+#[tokio::test]
+async fn a_store_from_version_12_tails_the_servers_lines() {
+    let td = tempfile::tempdir().unwrap();
+    // Wide enough that the calendar never ages `T0` out at the reopen.
+    let keep = Retention {
+        process_log_days: 36_500,
+        ..Retention::default()
+    };
+    let write = |msg: &str| LogRow {
+        ts_utc: T0.into(),
+        level: "info".into(),
+        msg: msg.into(),
+        ..Default::default()
+    };
+    {
+        let server = ProcessLogWriter::start(td.path(), Process::Http, None, keep).unwrap();
+        server.log(write("from before"));
+        server.flush().await;
+    }
+    let path = datalib_runs::runs_path(td.path());
+    let pool = datalib_runs::open_or_create(&path).await.unwrap();
+    sqlx::raw_sql("DROP INDEX log_by_run_seq; PRAGMA user_version = 12")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    let server = ProcessLogWriter::start(td.path(), Process::Http, None, keep)
+        .expect("the upgraded store opens");
+    server.log(write("after"));
+    server.flush().await;
+
+    let msgs: Vec<String> = process_log_after(td.path(), 0, 100)
+        .await
+        .into_iter()
+        .map(|l| l.msg)
+        .collect();
+    assert_eq!(msgs, ["from before", "after"]);
 }
 
 /// A process another one reports is written again as its peak rises and

@@ -107,13 +107,16 @@ impl Default for Retention {
 /// Bumped whenever the tables change shape. A store at an older version
 /// climbs the rungs in `store.rs`'s `UPGRADES` in place; one at a version
 /// with no rung, newer ones included, is emptied and remade.
-pub const SCHEMA_VERSION: i32 = 12;
+pub const SCHEMA_VERSION: i32 = 13;
 
 /// The indexes, beside the tables' own DDL. `log.seq` is the rowid, so
-/// a reader tailing "everything after N" needs no timestamp arithmetic;
-/// the index is for narrowing that to one run and step.
+/// a reader tailing "everything after N" needs no timestamp arithmetic.
 pub const INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS log_by_run_step ON log (run_id, step, seq)",
+    // The server's own lines (`run_id IS NULL`) in order. With `step`
+    // between `run_id` and `seq`, the index above makes a tail of them
+    // read and sort every one; the statements that need this one name it.
+    "CREATE INDEX IF NOT EXISTS log_by_run_seq ON log (run_id, seq)",
     // For retention's "no line names this process".
     "CREATE INDEX IF NOT EXISTS log_by_process ON log (process_id)",
 ];
