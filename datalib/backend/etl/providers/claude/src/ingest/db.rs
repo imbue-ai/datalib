@@ -519,7 +519,7 @@ impl RawDb {
                     id: super::cowork::event_key(&s.id, e),
                     payload: serde_json::to_string(e).context("serialize cowork event")?,
                 },
-                session_id: Some(s.id.clone()),
+                session_id: s.id.clone(),
                 sequence_num: super::cowork::sequence_of(e),
             });
         }
@@ -639,7 +639,8 @@ pub struct LoadedCoworkSession {
     pub events: Vec<Value>,
 }
 
-/// Every stored Cowork task with its log, two queries in all.
+/// Every stored Cowork task, without its log: [`load_cowork_events_into`]
+/// reads the log of the ones a render wants.
 pub async fn load_cowork_sessions_from(pool: &SqlitePool) -> Result<Vec<LoadedCoworkSession>> {
     let rows = sqlx::query(
         "SELECT id, org_uuid, org_name, json(payload) AS payload FROM cowork_sessions \
@@ -648,45 +649,54 @@ pub async fn load_cowork_sessions_from(pool: &SqlitePool) -> Result<Vec<LoadedCo
     .fetch_all(pool)
     .await
     .context("load cowork sessions")?;
-    let mut by_id: HashMap<String, LoadedCoworkSession> = HashMap::new();
-    let mut order = Vec::with_capacity(rows.len());
+    let mut sessions = Vec::with_capacity(rows.len());
     for r in &rows {
         let Some(session) = row_payload(r, COWORK_SESSIONS)? else {
             continue;
         };
-        let id: String = r.try_get("id")?;
-        order.push(id.clone());
-        by_id.insert(
-            id.clone(),
-            LoadedCoworkSession {
-                id,
-                org_uuid: r.try_get("org_uuid")?,
-                org_name: r.try_get("org_name")?,
-                session,
-                events: Vec::new(),
-            },
-        );
+        sessions.push(LoadedCoworkSession {
+            id: r.try_get("id")?,
+            org_uuid: r.try_get("org_uuid")?,
+            org_name: r.try_get("org_name")?,
+            session,
+            events: Vec::new(),
+        });
     }
-    let events = sqlx::query(
-        "SELECT id, session_id, json(payload) AS payload FROM cowork_events \
-          WHERE payload IS NOT NULL ORDER BY session_id, sequence_num, id",
-    )
-    .fetch_all(pool)
-    .await
-    .context("load cowork events")?;
+    Ok(sessions)
+}
+
+/// The logs of `sessions`, in order. `session_id` leads the table's key,
+/// so each session's events are one range of the store.
+pub const LOAD_COWORK_EVENTS_SQL: &str =
+    "SELECT id, session_id, json(payload) AS payload FROM cowork_events \
+      WHERE session_id IN (SELECT value FROM json_each(?1)) AND payload IS NOT NULL \
+      ORDER BY session_id, sequence_num, id";
+
+pub async fn load_cowork_events_into(
+    pool: &SqlitePool,
+    sessions: &mut [LoadedCoworkSession],
+) -> Result<()> {
+    let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
+    let events = sqlx::query(LOAD_COWORK_EVENTS_SQL)
+        .bind(serde_json::to_string(&ids)?)
+        .fetch_all(pool)
+        .await
+        .context("load cowork events")?;
+    let at: HashMap<String, usize> = sessions
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.id.clone(), i))
+        .collect();
     for r in &events {
-        let session_id: Option<String> = r.try_get("session_id")?;
-        let Some(s) = session_id.and_then(|id| by_id.get_mut(&id)) else {
+        let session_id: String = r.try_get("session_id")?;
+        let Some(&i) = at.get(&session_id) else {
             continue;
         };
         if let Some(e) = row_payload(r, COWORK_EVENTS)? {
-            s.events.push(e);
+            sessions[i].events.push(e);
         }
     }
-    Ok(order
-        .into_iter()
-        .filter_map(|id| by_id.remove(&id))
-        .collect())
+    Ok(())
 }
 
 /// The marker's stamp is the run's pinned now, kept as UTC with the
