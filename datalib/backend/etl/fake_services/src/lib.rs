@@ -67,6 +67,9 @@ fn latchkey_services(service: &str) -> &'static [(&'static str, &'static str)] {
 /// no keychain is asked.
 const ENCRYPTION_KEY: &str = "a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s=";
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
+/// How far ahead of the fake's clock an update's newest instant may be
+/// before posting it is a mistake rather than a short wait.
+const UPDATE_WAIT_LIMIT: Duration = Duration::from_secs(30);
 
 /// How the launcher is told to deviate from the seeds, for a test.
 #[derive(Debug, Default, Clone)]
@@ -81,6 +84,14 @@ pub struct Launch {
 }
 
 static PROCESS_ENV: Mutex<()> = Mutex::new(());
+
+/// `seed` with the real service's rate limits kept, for a test of them. A
+/// test seed otherwise states `"rate_limits": "none"`, since every refusal
+/// costs a wait.
+pub fn with_real_rate_limits(mut seed: Value) -> Value {
+    seed["rate_limits"] = Value::String("real".to_string());
+    seed
+}
 
 fn runfile(var: &str) -> PathBuf {
     let rel = std::env::var(var).unwrap_or_else(|_| panic!("{var} unset: is it on the test rule?"));
@@ -327,7 +338,9 @@ impl Fakes {
 
     /// Adds an update to a served fake, following the step named by
     /// `after` (which its relative timestamps count from); the launcher's
-    /// answer, or the refusal's text.
+    /// answer, or the refusal's text. An update whose newest instant is
+    /// still ahead of the fake's clock is refused with how long to wait,
+    /// and is posted again once that has passed.
     pub fn add_records(&self, service: &str, update: &Value, after: Option<&str>) -> Result<Value> {
         let url = match after {
             Some(step) => format!(
@@ -337,20 +350,28 @@ impl Fakes {
             None => self.control_url(&format!("records/{service}")),
         };
         let body = serde_json::to_string(update)?;
-        let text = curl(&[
-            "-X",
-            "POST",
-            "-H",
-            "Content-Type: application/json",
-            "--data-binary",
-            &body,
-            &url,
-        ])?;
-        let answer: Value = serde_json::from_str(&text).context("the launcher's answer")?;
-        if answer["ok"] != Value::Bool(true) {
-            bail!("the {service} fake refused the update: {text}");
+        let deadline = Instant::now() + UPDATE_WAIT_LIMIT;
+        loop {
+            let text = curl(&[
+                "-X",
+                "POST",
+                "-H",
+                "Content-Type: application/json",
+                "--data-binary",
+                &body,
+                &url,
+            ])?;
+            let answer: Value = serde_json::from_str(&text).context("the launcher's answer")?;
+            if answer["ok"] == Value::Bool(true) {
+                return Ok(answer);
+            }
+            match answer["retry_after_seconds"].as_u64() {
+                Some(seconds) if Instant::now() + Duration::from_secs(seconds) <= deadline => {
+                    std::thread::sleep(Duration::from_secs(seconds));
+                }
+                _ => bail!("the {service} fake refused the update: {text}"),
+            }
         }
-        Ok(answer)
     }
 
     /// Marks the phase every request from now on is logged in.
@@ -421,6 +442,19 @@ impl Fakes {
 
 impl Drop for Fakes {
     fn drop(&mut self) {
+        // A failing test's diagnosis usually starts with what the fakes
+        // refused or did not support, so a panic prints those lines.
+        if std::thread::panicking() {
+            for line in self.access_log() {
+                if line["status"] != 200
+                    || !line["unsupported"].is_null()
+                    || !line["fault"].is_null()
+                {
+                    eprintln!("fake answered {line}");
+                }
+            }
+            eprintln!("fake health {}", self.health());
+        }
         let _ = self.launcher.kill();
         let _ = self.launcher.wait();
         for var in [

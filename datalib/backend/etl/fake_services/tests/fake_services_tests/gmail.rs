@@ -6,7 +6,7 @@ use std::path::Path;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_email::ingest::gmail_api::{self, FetchOptions, FetchSummary, Section};
 use datalib_etl_email::ingest::{db_path_for, RawDb};
-use datalib_fake_services::{Fakes, Launch, GOOGLE};
+use datalib_fake_services::{with_real_rate_limits, Fakes, Launch, GOOGLE};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::{json, Value};
 
@@ -19,6 +19,7 @@ fn seed() -> Value {
     json!({
         "anchor": "2026-03-21T00:00:00Z",
         "time_shift": "none",
+        "rate_limits": "none",
         "tokens": [{"token": TOKEN, "user": PICARD}],
         "users": [
             {"email": PICARD, "name": "Jean-Luc Picard"},
@@ -77,7 +78,7 @@ async fn unread(root: &Path) -> BTreeSet<String> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_first_sync_mirrors_the_mailbox_with_its_labels_threads_and_read_marks() {
-    let fakes = Fakes::start(&BTreeMap::from([(GOOGLE, seed())])).expect("the fakes serve");
+    let _fakes = Fakes::start(&BTreeMap::from([(GOOGLE, seed())])).expect("the fakes serve");
     let root = tempfile::tempdir().unwrap();
 
     let summary = fetch_into(root.path(), |o| o)
@@ -111,7 +112,6 @@ async fn a_first_sync_mirrors_the_mailbox_with_its_labels_threads_and_read_marks
             .any(|(_, name)| name.as_deref() == Some("Command")),
         "{mailboxes:?}"
     );
-    assert_eq!(fakes.health()["rate_limited"], json!({}));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -143,8 +143,12 @@ async fn a_second_sync_reads_the_history_for_a_new_message_and_a_read_mark() {
         .await
         .expect("the second download runs");
 
+    // Two rows written: the arrival, whose body is the one blob fetched,
+    // and the follow-up, whose labels moved.
     let shown = serde_json::to_string(&second).unwrap();
-    assert_eq!(second.emails_upserted, 1, "{shown}");
+    assert_eq!(second.emails_upserted, 2, "{shown}");
+    assert_eq!(second.blobs_stored, 1, "{shown}");
+    assert_eq!(second.relabeled_one_by_one, 1, "{shown}");
     assert!(
         subjects(root.path())
             .await
@@ -208,12 +212,19 @@ async fn a_window_lists_only_the_mail_after_its_start() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_sync_past_gmails_per_user_quota_waits_and_completes() {
+    // A full `messages.get` costs 60 units, so a bucket of 150 a second
+    // takes two and refuses the third with a Retry-After; a bucket a single
+    // request overruns would be refused for good, as Gmail refuses a
+    // request past its per-request maximum.
     let launch = Launch {
-        rate_limit_by_bucket: BTreeMap::from([("google:gmail_per_user".to_string(), 30)]),
+        rate_limit_by_bucket: BTreeMap::from([("google:gmail_per_user".to_string(), 150)]),
         rate_limit_window_seconds: Some(1),
     };
-    let fakes =
-        Fakes::start_with(&BTreeMap::from([(GOOGLE, seed())]), &launch).expect("the fakes serve");
+    let fakes = Fakes::start_with(
+        &BTreeMap::from([(GOOGLE, with_real_rate_limits(seed()))]),
+        &launch,
+    )
+    .expect("the fakes serve");
     let root = tempfile::tempdir().unwrap();
 
     let summary = fetch_into(root.path(), |o| o)

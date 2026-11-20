@@ -7,7 +7,7 @@ use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_linear::ingest::{self, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_linear::probe::probe;
 use datalib_etl_linear_config::{LinearConfig, LinearSync};
-use datalib_fake_services::{Fakes, Launch, LINEAR};
+use datalib_fake_services::{with_real_rate_limits, Fakes, Launch, LINEAR};
 use datalib_probe::{ProbeAsk, ProbeList};
 use serde_json::{json, Value};
 
@@ -18,6 +18,7 @@ fn seed() -> Value {
     json!({
         "anchor": "2026-03-21T00:00:00Z",
         "time_shift": "none",
+        "rate_limits": "none",
         "tokens": [{"token": TOKEN, "user": PICARD}],
         "organization": {"name": "Starfleet", "url_key": "starfleet"},
         "teams": [
@@ -193,11 +194,11 @@ async fn an_edit_and_a_new_issue_are_what_a_later_sync_writes() {
             LINEAR,
             &json!({
                 "issues": [
-                    {"identifier": "ENG-2", "team": "ENG", "title": "Reroute power to the aft shields", "state": "Done", "updated_at": "first+00:05:00"},
-                    {"identifier": "ENG-3", "team": "ENG", "title": "Replace the dilithium matrix", "state": "Todo", "creator": PICARD, "created_at": "first+00:06:00"},
+                    {"identifier": "ENG-2", "team": "ENG", "title": "Reroute power to the aft shields", "state": "Done", "updated_at": "first+00:00:01"},
+                    {"identifier": "ENG-3", "team": "ENG", "title": "Replace the dilithium matrix", "state": "Todo", "creator": PICARD, "created_at": "first+00:00:02"},
                 ],
                 "comments": [
-                    {"issue": "ENG-3", "user": PICARD, "body": "Before the next mission.", "created_at": "first+00:07:00"},
+                    {"issue": "ENG-3", "user": PICARD, "body": "Before the next mission.", "created_at": "first+00:00:03"},
                 ]
             }),
             Some("first"),
@@ -225,31 +226,38 @@ async fn an_edit_and_a_new_issue_are_what_a_later_sync_writes() {
     db.close().await;
 }
 
+/// Linear's hourly request bucket drains at its rate and refuses a caller
+/// past it with a 429 and a Retry-After; shrunk to three requests a
+/// second here, so a sync of a dozen requests meets the refusal and has
+/// only a second to wait out.
 #[tokio::test]
-async fn linears_hourly_limit_ends_the_run_rather_than_hammering_it() {
+async fn a_sync_past_linears_request_limit_waits_and_completes() {
     let launch = Launch {
         rate_limit_by_bucket: BTreeMap::from([("linear:requests".to_string(), 3)]),
-        ..Launch::default()
+        rate_limit_window_seconds: Some(1),
     };
-    let fakes =
-        Fakes::start_with(&BTreeMap::from([(LINEAR, seed())]), &launch).expect("the fakes serve");
+    let fakes = Fakes::start_with(
+        &BTreeMap::from([(LINEAR, with_real_rate_limits(seed()))]),
+        &launch,
+    )
+    .expect("the fakes serve");
     let dir = tempfile::tempdir().unwrap();
     let db = RawDb::open(&ingest::db_path_for(dir.path())).await.unwrap();
 
-    let err = run(&db, LinearSync::default())
+    let summary = run(&db, LinearSync::default())
         .await
-        .expect_err("the run ends");
+        .expect("the download runs");
 
-    let shown = format!("{err:#}");
-    assert!(shown.to_lowercase().contains("rate limit"), "{shown}");
-    // Refused once and told the hour's budget is spent, the download asks
-    // nothing more.
     assert_eq!(
-        fakes.health()["rate_limited"]["linear:requests"],
-        json!(1),
+        ids(&db, "issues").await.len(),
+        3,
         "{}",
-        fakes.health()
+        serde_json::to_string(&summary).unwrap()
     );
+    let refused = fakes.health()["rate_limited"]["linear:requests"]
+        .as_u64()
+        .unwrap_or(0);
+    assert!(refused >= 1, "{}", fakes.health());
     db.close().await;
 }
 

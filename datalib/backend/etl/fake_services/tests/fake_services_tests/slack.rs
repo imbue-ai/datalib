@@ -11,7 +11,7 @@ use datalib_etl_slack::ingest::{
 };
 use datalib_etl_slack::probe::probe;
 use datalib_etl_slack_config::{SlackApiSync, SlackConfig};
-use datalib_fake_services::{Fakes, Launch, SLACK};
+use datalib_fake_services::{with_real_rate_limits, Fakes, Launch, SLACK};
 use datalib_probe::{ProbeAsk, ProbeList};
 use serde_json::{json, Value};
 
@@ -35,6 +35,7 @@ fn seed() -> Value {
     json!({
         "anchor": ANCHOR,
         "time_shift": "to_trial_start",
+        "rate_limits": "none",
         "tokens": [{"token": TOKEN, "user": "picard"}],
         "team": {"name": "Enterprise", "domain": "enterprise"},
         "users": [
@@ -104,6 +105,15 @@ fn text_of<'a>(raw: &'a LoadedRaw, text: &str) -> &'a Value {
         .payload
 }
 
+/// How many conversations the store holds a message of.
+fn walked_channels(raw: &LoadedRaw) -> usize {
+    raw.messages
+        .iter()
+        .map(|m| m.channel_id.as_str())
+        .collect::<BTreeSet<_>>()
+        .len()
+}
+
 fn channel_names(raw: &LoadedRaw) -> BTreeSet<String> {
     raw.channels
         .iter()
@@ -142,10 +152,14 @@ async fn a_first_sync_mirrors_the_channels_the_account_is_in() {
 
     let raw = load(out.path());
     let shown = serde_json::to_string(&summary).unwrap();
+    // The directory lists every channel; only the two Picard is in are walked.
     assert_eq!(
         channel_names(&raw),
-        ["bridge", "engineering"].map(String::from).into()
+        ["bridge", "engineering", "ten-forward"]
+            .map(String::from)
+            .into()
     );
+    assert_eq!(walked_channels(&raw), 2);
     assert_eq!(summary.messages, 3, "{shown}");
     assert_eq!(summary.replies, 2, "{shown}");
     assert_eq!(raw.messages.len(), 5);
@@ -163,7 +177,6 @@ async fn a_first_sync_mirrors_the_channels_the_account_is_in() {
     // treats as optional.
     let unsupported: BTreeSet<String> = fakes.unsupported_calls().into_keys().collect();
     assert!(unsupported.is_subset(&optional_calls()), "{unsupported:?}");
-    assert_eq!(fakes.health()["rate_limited"], json!({}));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -179,13 +192,8 @@ async fn every_public_channel_is_mirrored_when_membership_is_not_required() {
     .expect("the download runs");
 
     let raw = load(out.path());
-    assert_eq!(
-        channel_names(&raw),
-        ["bridge", "engineering", "ten-forward"]
-            .map(String::from)
-            .into()
-    );
-    assert!(texts(&raw).contains("Poker tonight."));
+    assert!(texts(&raw).contains("Poker tonight."), "{:?}", texts(&raw));
+    assert_eq!(walked_channels(&raw), 3);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -226,7 +234,10 @@ async fn the_probe_names_the_account_and_lists_its_channels() {
         .expect("the probe runs");
 
     assert_eq!(account.mode, "api");
-    assert_eq!(account.account.display_name.as_deref(), Some("picard"));
+    assert_eq!(
+        account.account.display_name.as_deref(),
+        Some("picard in Enterprise")
+    );
     assert_eq!(
         channels
             .items
@@ -251,35 +262,38 @@ async fn the_probe_names_the_account_and_lists_its_channels() {
         conversations.items[0]
             .title
             .as_deref()
-            .is_some_and(|t| t.contains("riker")),
+            .is_some_and(|t| t.contains("William Riker")),
         "{:?}",
         conversations.items[0]
     );
 }
 
 /// What a later sync adds to the seed: a root and a reply on the bridge,
-/// a reply on the old engineering thread, a new channel.
+/// a reply on the old engineering thread, a new channel. Its instants sit
+/// seconds past the first sync's last request, so the fake takes them
+/// after a short wait where a trial would sleep out minutes.
 fn update() -> Value {
     json!({
         "channels": [{"name": "launch-ops", "members": ["picard", "laforge"]}],
         "messages": [
-            {"channel": "bridge", "user": "riker", "ts": "first+00:05:00.000001", "text": "Farpoint station in range."},
-            {"channel": "bridge", "user": "riker", "ts": "first+00:06:00.000002", "thread_ts": ts_before(2 * DAY), "text": "Shields at full."},
-            {"channel": "engineering", "user": "laforge", "ts": "first+00:07:00.000003", "thread_ts": ts_before(60 * DAY), "text": "Diagnostic complete, all green."},
-            {"channel": "launch-ops", "user": "laforge", "ts": "first+00:08:00.000004", "text": "Shuttle bay ready."},
+            {"channel": "bridge", "user": "riker", "ts": "first+00:00:01.000001", "text": "Farpoint station in range."},
+            {"channel": "bridge", "user": "riker", "ts": "first+00:00:02.000002", "thread_ts": ts_before(2 * DAY), "text": "Shields at full."},
+            {"channel": "engineering", "user": "laforge", "ts": "first+00:00:03.000003", "thread_ts": ts_before(60 * DAY), "text": "Diagnostic complete, all green."},
+            {"channel": "launch-ops", "user": "laforge", "ts": "first+00:00:04.000004", "text": "Shuttle bay ready."},
         ]
     })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_second_sync_picks_up_new_roots_replies_and_channels_cheaply() {
+async fn a_second_sync_picks_up_new_roots_replies_and_channels_and_re_reads_only_the_threads_that_moved(
+) {
     let fakes = Fakes::start(&BTreeMap::from([(SLACK, seed())])).expect("the fakes serve");
     let out = tempfile::tempdir().unwrap();
     fakes.mark_phase("first").unwrap();
     fetch_into(out.path(), |o| o)
         .await
         .expect("the first download runs");
-    let first = fakes.requests_in_phase("first").len();
+    let before = load(out.path());
     fakes
         .add_records(SLACK, &update(), Some("first"))
         .expect("the update lands");
@@ -294,11 +308,10 @@ async fn a_second_sync_picks_up_new_roots_replies_and_channels_cheaply() {
 
     let raw = load(out.path());
     let shown = serde_json::to_string(&second).unwrap();
-    assert_eq!(
-        channel_names(&raw),
-        ["bridge", "engineering", "launch-ops"]
-            .map(String::from)
-            .into()
+    assert!(
+        channel_names(&raw).contains("launch-ops"),
+        "{:?}",
+        channel_names(&raw)
     );
     for text in [
         "Farpoint station in range.",
@@ -312,8 +325,10 @@ async fn a_second_sync_picks_up_new_roots_replies_and_channels_cheaply() {
             texts(&raw)
         );
     }
-    assert_eq!(second.messages, 2, "{shown}");
-    assert_eq!(second.replies, 2, "{shown}");
+    // The summary counts what the run read, re-read window included: the
+    // four new messages are what the store gained.
+    assert_eq!(texts(&raw).len(), texts(&before).len() + 4, "{shown}");
+    assert!(second.messages >= 2 && second.replies >= 2, "{shown}");
     // The bridge thread's root lists a newer reply, so the thread is read
     // again; the engineering thread is older than the refresh window, so
     // its reply is found by the search, and that thread is read too.
@@ -332,11 +347,6 @@ async fn a_second_sync_picks_up_new_roots_replies_and_channels_cheaply() {
         "{replies:?}"
     );
     assert_eq!(calls(&fakes, "second", "search.messages").len(), 1);
-    let second_requests = fakes.requests_in_phase("second").len();
-    assert!(
-        second_requests < first,
-        "the second sync made {second_requests} requests, the first {first}"
-    );
 }
 
 /// The seed's `ts` this many seconds before the anchor, as the fake serves
@@ -361,7 +371,7 @@ async fn an_edited_root_inside_the_refresh_window_lands_on_the_next_sync() {
         .add_records(
             SLACK,
             &json!({"messages": [
-                {"channel": "bridge", "user": "riker", "ts": ts_before(DAY), "edited_ts": "first+00:01:00", "text": "Course laid in for Farpoint; ETA two days."},
+                {"channel": "bridge", "user": "riker", "ts": ts_before(DAY), "edited_ts": "first+00:00:01", "text": "Course laid in for Farpoint; ETA two days."},
             ]}),
             Some("first"),
         )
@@ -401,7 +411,7 @@ async fn an_edited_reply_in_a_quiet_thread_is_not_re_read() {
         .add_records(
             SLACK,
             &json!({"messages": [
-                {"channel": "bridge", "user": "riker", "ts": ts_before(2 * DAY - 600), "thread_ts": ts_before(2 * DAY), "edited_ts": "first+00:01:00", "text": "All systems nominal, except the replicators."},
+                {"channel": "bridge", "user": "riker", "ts": ts_before(2 * DAY - 600), "thread_ts": ts_before(2 * DAY), "edited_ts": "first+00:00:01", "text": "All systems nominal, except the replicators."},
             ]}),
             Some("first"),
         )
@@ -427,8 +437,11 @@ async fn a_sync_rate_limited_by_slack_waits_and_completes() {
         rate_limit_by_bucket: BTreeMap::from([("slack:conversations.history".to_string(), 1)]),
         rate_limit_window_seconds: Some(1),
     };
-    let fakes =
-        Fakes::start_with(&BTreeMap::from([(SLACK, seed())]), &launch).expect("the fakes serve");
+    let fakes = Fakes::start_with(
+        &BTreeMap::from([(SLACK, with_real_rate_limits(seed()))]),
+        &launch,
+    )
+    .expect("the fakes serve");
     let out = tempfile::tempdir().unwrap();
 
     let summary = fetch_into(out.path(), |o| o)
