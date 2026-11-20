@@ -1640,18 +1640,21 @@ impl IndexedMarkdownStore {
     ) -> Result<Vec<RenderedMarkdown>> {
         let _ = pin; // the reader was opened at it, in `open_for_reading`
         blocking(async {
-            let mds: Vec<datalib_schema::markdowns::MarkdownRow> =
-                sqlx::query_as("SELECT * FROM markdowns ORDER BY markdown_uuid")
-                    .fetch_all(&self.pool)
-                    .await
-                    .context("read markdowns")?;
-            let mds: Vec<_> = match only {
-                Some(keep) => mds
-                    .into_iter()
-                    .filter(|m| keep.contains(&m.markdown_uuid))
-                    .collect(),
-                None => mds,
-            };
+            // Only the documents asked for: an unchanged source asks for
+            // none, and must not cost a read of all of them.
+            let mds: Vec<datalib_schema::markdowns::MarkdownRow> = match only {
+                Some(keep) if keep.is_empty() => return Ok(Vec::new()),
+                Some(keep) => sqlx::query_as(
+                    "SELECT * FROM markdowns \
+                      WHERE markdown_uuid IN (SELECT value FROM json_each(?1)) \
+                      ORDER BY markdown_uuid",
+                )
+                .bind(serde_json::to_string(keep)?),
+                None => sqlx::query_as("SELECT * FROM markdowns ORDER BY markdown_uuid"),
+            }
+            .fetch_all(&self.pool)
+            .await
+            .context("read markdowns")?;
             if mds.is_empty() {
                 return Ok(Vec::new());
             }
