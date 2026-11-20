@@ -31,9 +31,14 @@ was added to do them: no cache, no timer, no flag.
 | finding | before | now |
 |---|---|---|
 | 1 | a refresh after an index commit blurred the grid and dropped clicks | a refresh leaves the rows usable; only a search a person asked for shows the spinner |
-| 8, rate-limited retry | the runner re-ran a rate-limited step in full 1 s, then 2 s, after its own retries ran out | it fails at once, like `incomplete`, and the next run resumes (`step_protocol.md` §"Failure classification") |
-| 8, the data root measured every 5 s | the server measured every directory under the data root every 5 s for as long as anything ran, the embed and map steps included | it measures when a run starts and when it ends; sizes and their sparklines move at those two points, not during the run |
 | not listed above | the search grid's first search waited for `/api/accounts`, which reads `accounts.json`, a file nothing writes | the route, the map and its formatters are gone |
+
+Two more were made on this branch and then taken out, so they are still
+open: the 5 s measurement of the data root (its cost was never measured,
+and removing it stopped sizes moving during a sync; see "Dropped or
+narrowed on re-reading"), and the retry of a rate-limited step (it
+matters only after a step's own retries ran out, and taking it away
+changes what `step_protocol.md` promises a custom step).
 
 Finding 9's filtered search was fixed on `main` instead, by #1892: the
 names-and-ids ranking that filtered after its cut is gone, and every part
@@ -260,7 +265,7 @@ and returns nothing until all three are done.
 |---|---|---|
 | A Sync click while other sources' embeds or the map still run returns the old open request; nothing starts and nothing says why | `http/src/lib.rs:1823-1835` | match only requests whose roots have not started yet |
 | Free disk space, reset and purge run inside the loop's body: rows stay "Running", Stop is not heard, and `POST /api/requests` gives up after 3 s | `supervisor/round.rs:423-447, 933-1017` | run the wipe as a task beside the steps (medium) |
-| The whole data root is measured every 5 s for the whole busy period, embeds and map included | `http/src/usage.rs:37, 549-554` | measure only the running steps' trees, and space it out over a long run |
+| The whole data root is measured every 5 s for the whole busy period, embeds and map included. How long one measurement takes was not measured, and it may be cheap (see "Dropped or narrowed") | `http/src/usage.rs:37, 549-554` | time a walk on a large root before changing it |
 | Returning to the browser tab resyncs everything, which includes a full walk of the data root; opening the Sources card waits for one | `live.ts:253-266`; `sourcesCardModel.ts:1141` | draw cached sizes first and walk only if the last walk is old (`SourceCard.ce.vue:368` already does this) |
 | The search grid is the only live subscriber with no `resync`, so after sleep or a server restart it shows old rows until the next commit | `GridCard.ce.vue:1506-1513` | `resync: refreshRows` |
 | Reloads on `dag` frames have no guard and no sequence check, so they pile up behind slow answers and an older one can overwrite a newer | `SyncProgressChrome.vue:90`, `HistoryCard.ce.vue:335`, `libs/sourceDagView.ts:283`, `TableCard.ce.vue:57` | `newestAnswer(…, {spacing})` |
@@ -269,7 +274,7 @@ and returns nothing until all three are done.
 | Holding an arrow key in List + preview rebuilds the preview from nothing on each press, with no debounce or abort | `SearchList.ce.vue:231-252` | debounce about 120 ms, keep the old preview until the new one is ready, pass a signal |
 | Autocomplete asks on every keystroke with no abort, and each ask queues on the one connection (2) | `search/field.ts:450` | pass the signal, debounce, cache top values per generation |
 | Download checkpoints double their interval: in a six-hour backfill new rows reach the grid at about 2 h and 4 h | `etl/src/checkpointer.rs` | cap the interval, for example at 5 minutes |
-| A rate-limited step is re-invoked in full after 1 s, then 2 s | `dag/src/scheduler.rs:26-55` | back off by minutes, or honour a Retry-After the step reports |
+| A rate-limited step is re-invoked in full after 1 s, then 2 s, though `datalib-step` reports a rate limit only once its HTTP layer, which honours `Retry-After`, has given up | `dag/src/scheduler.rs:26-55` | stop retrying it, or back off by minutes; either changes what `step_protocol.md` promises a custom step |
 | "Now" is pinned once per busy period, so a source synced three hours into it uses a three-hour-old now for its windows | `http/src/supervisor.rs:532-547` | pin it per request |
 | Four download slots, given out in config order | `supervisor/locks.rs:65-92` | order by when the request opened |
 | The desktop app shows disabled buttons, then a blank page, while the server boots | `tauri/launcher-dist/index.html:505`, `http/src/main.rs:187-201` | an "Opening…" state, and an early loading page |
@@ -342,6 +347,12 @@ The probe scripts were kept outside the tree.
   `ChatBody.ce.vue:139` renders it again) was read in the code and not
   timed.
 
+- **"Each measurement of the data root is minutes of disk reads."**
+  Nothing measured it. A walk reads each file's size and never its
+  contents (`disk::measure_subtrees`), and a data root holds a modest
+  number of large store files, so it is more likely milliseconds to a
+  second. Time one on a large root before calling it a cost.
+
 ## Not checked
 
 - Anything at real scale: no sync ran, and the large-library figures
@@ -349,3 +360,5 @@ The probe scripts were kept outside the tree.
 - Slack's file fetches one at a time (10-29 audit, finding 1) and other
   provider-side download speed.
 - The CLI's terminal progress bars.
+- How long one measurement of a large data root takes. `usage.rs`
+  logs it as `walk_ms` at debug level.
