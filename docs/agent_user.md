@@ -233,7 +233,8 @@ same root.** A sync is a *request*: a row in
 `<data_root>/system/supervisor.sqlite` naming the steps to sync (its
 *roots*; everything downstream of them comes too) and who asked. One
 process runs the loop that serves requests — the app while it is open,
-otherwise the first `datalib-dag` to need one — and every other
+or a `datalib-dag serve <config>`, which holds the loop until it is
+stopped; otherwise the first `datalib-dag` to need one — and every other
 `datalib-dag` hands its request to that loop, says `following request
 <id>`, and waits for it. Your source runs beside theirs, not after. It
 exits with *your* request's outcome: 0 done, 2 failed, 130 stopped, and

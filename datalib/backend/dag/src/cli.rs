@@ -64,6 +64,10 @@ pub const EXAMPLES: &[Example] = &[
         command: "datalib-dag ~/datalib/config.toml --free-disk-space --drop-old-versions-on-derived-data",
     },
     Example {
+        what: "hold the loop on a root until stopped, serving every sync asked for, the way the app does",
+        command: "datalib-dag serve ~/datalib/config.toml",
+    },
+    Example {
         what: "list the open syncs (with their request ids), the steps turned off, the steps running and what each step still owes",
         command: "datalib-dag status ~/datalib/config.toml",
     },
@@ -162,6 +166,30 @@ pub enum Verb {
         /// The data root, the directory that will hold config.toml and
         /// everything synced into it.
         data_root: PathBuf,
+    },
+    /// Run the loop on the root until stopped: wait for runner-lock if
+    /// another process holds it, ask each step whose program takes
+    /// --prepare to prepare, then serve every sync, stop, reset and purge
+    /// written to the store, idle or not. SIGINT or SIGTERM stops it: its
+    /// steps are interrupted and their requests stay open for the next
+    /// loop; a second signal exits at once. stderr is an NDJSON stream of
+    /// what the loop has to say that no store holds (holding, prepare_plan,
+    /// prepare_step, prepare_done, sync_started, sync_over,
+    /// run_store_written); its log lines go to the run store.
+    Serve {
+        /// The config file, `<data_root>/config.toml`.
+        config: PathBuf,
+        /// Put this directory first on every step's PATH. Default: the
+        /// config's `binary_dir`, else the directory this binary is in.
+        #[arg(long, value_name = "DIR")]
+        binary_dir: Option<PathBuf>,
+        /// Run at most this many steps at once.
+        #[arg(long, value_name = "N")]
+        parallelism: Option<NonZeroUsize>,
+        /// Run every sync as if it were this instant (RFC 3339, with an
+        /// offset). For building fixtures, never for a person's root.
+        #[arg(long, value_name = "RFC3339")]
+        now: Option<String>,
     },
     /// Print the open sync requests, the steps turned off, the steps
     /// running now, and what each step at rest still owed when its last

@@ -91,6 +91,15 @@ async fn main() -> Result<()> {
         now,
         run_id,
     } = cli;
+    if let Some(Verb::Serve {
+        config,
+        binary_dir,
+        parallelism,
+        now,
+    }) = verb
+    {
+        return serve(&config, binary_dir, parallelism, now, &stop_tx, stop_rx).await;
+    }
     if let Some(verb) = verb {
         return run_verb(verb).await;
     }
@@ -567,9 +576,118 @@ fn exit_code(outcome: Option<RequestOutcome>, dropped_entries: usize) -> i32 {
     }
 }
 
+/// `datalib-dag serve`: the loop until a signal stops it. Its events go
+/// to stderr as NDJSON, its own log lines to the run store as a `dag`
+/// process outside any run.
+async fn serve(
+    config_path: &Path,
+    binary_dir: Option<std::path::PathBuf>,
+    parallelism: Option<std::num::NonZeroUsize>,
+    now: Option<String>,
+    stop_tx: &Arc<tokio::sync::watch::Sender<bool>>,
+    stop_rx: tokio::sync::watch::Receiver<bool>,
+) -> Result<()> {
+    let (checked, data_root) = load_config(config_path)?;
+    if checked.is_fatal() {
+        bail!(
+            "{} is not a config: nothing in it could be read",
+            config_path.display()
+        );
+    }
+    std::fs::create_dir_all(&data_root)
+        .with_context(|| format!("create data_root {}", data_root.display()))?;
+
+    let commit = datalib_runs::git_hash_and_origin();
+    let retention = checked
+        .cfg
+        .run_history
+        .map(|h| h.retention())
+        .unwrap_or_default();
+    let log = datalib_runs::ProcessLogWriter::start(
+        &data_root,
+        datalib_runs::Process::Dag,
+        commit.as_ref().map(|(hash, _)| hash.clone()),
+        retention,
+    )
+    .map(Arc::new);
+    // stderr is the event stream, which a fmt layer would interleave
+    // prose into; the lines go to the store alone.
+    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| checked.cfg.log_filter());
+    let _ = tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(&filter))
+        .with(
+            log.as_ref()
+                .map(|w| datalib_runs::StoreLayer::new(Arc::downgrade(w))),
+        )
+        .try_init();
+    datalib_runs::log_build_commit(commit.as_ref());
+
+    let events = Arc::new(std::sync::Mutex::new(std::io::stderr()));
+    let emit: datalib_dag::supervisor::serve::Emit = Arc::new(move |event| {
+        let mut w = events.lock().unwrap_or_else(|e| e.into_inner());
+        // Best-effort, as every event stream here: a parent that stopped
+        // reading costs it the news, not the loop.
+        if serde_json::to_writer(&mut *w, &event).is_ok() {
+            let _ = std::io::Write::write_all(&mut *w, b"\n");
+            let _ = std::io::Write::flush(&mut *w);
+        }
+    });
+    {
+        let (emit, runs) = (emit.clone(), datalib_runs::runs_path(&data_root));
+        datalib_runs::after_every_write(move |store| {
+            if store == runs {
+                emit(datalib_dag::supervisor::serve::ServeEvent::RunStoreWritten);
+            }
+        });
+    }
+
+    // The first SIGINT or SIGTERM stops the loop as the app's shutdown
+    // does: steps interrupted, requests left open. A second exits at once.
+    let stop = stop_tx.clone();
+    tokio::spawn(async move {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+        let mut sighup = signal(SignalKind::hangup()).expect("install SIGHUP handler");
+        let mut signals = 0u32;
+        loop {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = sigterm.recv() => {}
+                _ = sighup.recv() => {
+                    // No terminal is left to send a second signal.
+                    let _ = stop.send(true);
+                    tokio::time::sleep(PARENT_GONE_GRACE).await;
+                    subprocess::kill_children();
+                    std::process::exit(130);
+                }
+            }
+            signals += 1;
+            if signals >= 2 {
+                subprocess::kill_children();
+                std::process::exit(130);
+            }
+            let _ = stop.send(true);
+        }
+    });
+
+    let opts = datalib_dag::supervisor::serve::ServeOptions {
+        root: data_root,
+        binary_dir,
+        now,
+        parallelism: parallelism.map(|n| n.get()),
+        extra_env: Default::default(),
+    };
+    datalib_dag::supervisor::serve::run(&opts, emit, stop_rx).await;
+    if let Some(log) = log {
+        log.flush().await;
+    }
+    Ok(())
+}
+
 async fn run_verb(verb: Verb) -> Result<()> {
     let config_path = match &verb {
         Verb::Init { data_root } => return init(data_root),
+        Verb::Serve { .. } => unreachable!("serve returned in main"),
         Verb::Status { config, .. }
         | Verb::Stop { config, .. }
         | Verb::TurnOff { config, .. }
@@ -616,6 +734,7 @@ async fn run_verb(verb: Verb) -> Result<()> {
             }
         }
         Verb::Init { .. } => unreachable!("init returned above"),
+        Verb::Serve { .. } => unreachable!("serve returned in main"),
         Verb::TurnOn { step, .. } => match store.turned_off().await?.get(step) {
             None => vec![format!("{step} was not off")],
             Some(who) => {
