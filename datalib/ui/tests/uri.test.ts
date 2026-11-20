@@ -1,11 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { parseDoc, parsePhoto, titleSlug, writeDoc, writePhoto, type DocName } from "../src/uri";
+import {
+  parseDoc,
+  parseNode,
+  parsePhoto,
+  titleSlug,
+  writeDoc,
+  writeNode,
+  writePhoto,
+  type DocName,
+} from "../src/uri";
 import fixtures from "./uri-fixtures.json";
 
 /// The cases the Rust `datalib_uri` crate reads and writes too.
 /// A `title` is what the link was written with; Rust reads such a link
 /// and writes none.
-type Fixture = { name: string; link: string; doc: DocName | null; title?: string; photo?: string };
+type Fixture = {
+  name: string;
+  link: string;
+  doc: DocName | null;
+  title?: string;
+  photo?: string;
+  node?: string;
+};
 
 describe("datalib names", () => {
   for (const f of fixtures as Fixture[]) {
@@ -14,6 +30,9 @@ describe("datalib names", () => {
     });
     it(`reads ${f.name} as a photo or not`, () => {
       expect(parsePhoto(f.link)).toEqual(f.photo ?? null);
+    });
+    it(`reads ${f.name} as a node or not`, () => {
+      expect(parseNode(f.link)).toEqual(f.node ?? null);
     });
     if (f.doc) {
       const doc = f.doc;
@@ -25,6 +44,12 @@ describe("datalib names", () => {
       const photo = f.photo;
       it(`writes ${f.name}`, () => {
         expect(writePhoto(photo)).toBe(f.link);
+      });
+    }
+    if (f.node) {
+      const node = f.node;
+      it(`writes ${f.name}`, () => {
+        expect(writeNode(node)).toBe(f.link);
       });
     }
   }

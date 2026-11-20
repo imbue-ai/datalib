@@ -20,7 +20,7 @@ they are (handles, each source's record, the contacts app) is
 
 | word | means |
 |---|---|
-| **entity** | what a chip names: a person (by a handle), a group, a step, a document, a date |
+| **entity** | what a chip names: a person (by a handle), a group, a step, a document, a node, a date |
 | **chip link** | how a chip is written down: a markdown link with a title (below) |
 | **entity URI** | the href, which names the entity (see [The link](#the-link)) |
 | **resolver** | the one place in the page that asks the server what an entity is now, for one kind of entity |
@@ -54,7 +54,9 @@ contacts is `datalib:contact/<id>` (`datalib_contacts::contact_uri`,
 read by `contactFromUri` in `chipLinks.js`); a group is
 `datalib:group/<id>` and a step `datalib:step/<step id>`
 (`datalib_columns::Entity::uri`); a document is `datalib:doc/<uuid>`
-(`datalib_uri::Name::doc`, `ui/src/uri.ts::writeDoc`).
+(`datalib_uri::Name::doc`, `ui/src/uri.ts::writeDoc`), and a node of a
+source's tree `datalib:node/<uuid>` (`datalib_uri::Name::node`,
+`ui/src/uri.ts::writeNode`).
 
 Two functions in `datalib_etl_render::message` write every chip link
 the backend writes, so the escaping lives in one place:
@@ -320,6 +322,16 @@ A card that uses it lists it, `ChipMenu` and `chip.css` in its
 puts their styles in the document (`documentStyles.ts::adoptStyles`)
 and imports `chip.css`.
 
+**The Library card** (`LibraryCard.ce.vue`, `NodeCard.ce.vue`) draws its
+own: its tree's rows, inside `<vs-tree>`'s shadow root through the
+tree's `renderLabel` and `extraCss`, a source as its group's chip and
+every other node as its node's; its pane's title as the shown node's;
+and in the pane each row's title, a thread its node's, a message its
+author's, a page its document's, and each row's date. The tree's
+`menu` event and a row's `contextmenu` show `ChipMenu`, and a
+double-click on a chip opens its card. `ChipMenu` hears Escape on its
+way down, since the tree takes the key for itself.
+
 ## In the search field
 
 The search field (`ui/src/search/`) draws the value of a term whose key
@@ -364,6 +376,29 @@ from the cell alone, and a new search shows the new title.
   document itself, which a chip does not hold.
 - **drag**: it drags as a link, with no search
   (`chipDragQuery`).
+
+## A node
+
+**Every node of a source's tree is a chip by its name**, named by its
+`datalib:node/<uuid>` (`ui/src/cards/nodeChip.ts`): a channel, a label,
+a folder, a page, a thread, any `data_nodes` row
+([`grid_rows.md`](grid_rows.md) § "where a row sits"). Like a
+document's, it has **no resolver**: whoever draws it read the node's
+name and kind from the index, and those change only when its source
+renders again. A node that is also a document (a Notion page, a
+contact group's card) carries the document's uuid beside it, as
+`data-node-doc`.
+
+- **look**: the name; its kind and its URI on hover.
+- **double-click**: its node card (`nodeView`), its children listed and,
+  for a node that is a document, the document beside them. In the
+  Library card's pane it shows there instead.
+- **right-click**: Open “<name>”; Copy ID (the uuid), the name, or Copy
+  name and link, a link as a document chip's is.
+
+The Library card draws one for every place in its tree and every thread
+in its pane (§"In a card's own template"). Nothing else does yet, and
+no render writes a `datalib:node/` link.
 
 ## A date
 
@@ -520,12 +555,15 @@ A new kind of *handle* is a person and goes through
 
 ## Where it is tested
 
-- The URIs: `handle_unittests` (every handle kind's round trip),
+- The URIs: `uri_unittests` and `tests/uri.test.ts` over the same
+  `uri-fixtures.json` (documents, photos and nodes),
+  `handle_unittests` (every handle kind's round trip),
   `columns_unittests` (groups and steps), `tests/chip_links.test.ts`
   (the TypeScript mirror over the same cases, and the plugin's marking).
 - The resolver: `resolver.test.ts` (one request per pass, kept answers,
   forget and stale answers, revalidating, failures).
-- The rules: `contacts.test.ts`, `entities.test.ts`, `documentChip.test.ts`, `dates.test.ts`, and
+- The rules: `contacts.test.ts`, `entities.test.ts`, `documentChip.test.ts`,
+  `nodeChip.test.ts`, `dates.test.ts`, and
   `chipActions.test.ts` (one menu order for every kind, and where each
   entry lands).
 - The endpoint: `http_tests::entities_answer_a_chip_for_a_group_and_a_step`.
@@ -538,13 +576,15 @@ A new kind of *handle* is a person and goes through
   report), `contacts.spec.ts` (two handles linked to one contact,
   followed by an open grid), and `data-sources-sync.spec.ts` (a run
   log's chips, and a group chip following a failed sync without a
-  reload).
+  reload), and `library.spec.ts` (the Library card's chips).
 
 ## Not built
 
 A system event as a chip ("Worf joined the channel"), which needs each
-provider to carry the handle on its system events; a chip for a
-channel; a document chip in a rendered page (a `datalib:doc/` link in
+provider to carry the handle on its system events; a search for
+everything in a node (a node chip's "Everything in", which no key names
+yet, and which must follow the whole chain of nodes above a row); a node
+chip anywhere but the Library card; a document chip in a rendered page (a `datalib:doc/` link in
 markdown is not marked as one yet, and would need a resolver for its
 title) or in the search field; a search when a document chip is
 dragged (`datalib_document_id:` could name it); and the title bar's

@@ -686,6 +686,7 @@ impl At {
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
         );
         let rows: Vec<RowRead> = sqlx::query_as(children::ROW_FACTS_SQL)
             .bind(&wanted)
@@ -704,18 +705,21 @@ impl At {
             };
         let rows = rows
             .into_iter()
-            .map(|(uuid, kind, author, created_at, preview, markdown_uuid)| {
-                (
-                    uuid,
-                    RowFacts {
-                        kind,
-                        author,
-                        created_at,
-                        preview,
-                        markdown_uuid,
-                    },
-                )
-            })
+            .map(
+                |(uuid, kind, author, author_handle, created_at, preview, markdown_uuid)| {
+                    (
+                        uuid,
+                        RowFacts {
+                            kind,
+                            author,
+                            author_handle,
+                            created_at,
+                            preview,
+                            markdown_uuid,
+                        },
+                    )
+                },
+            )
             .collect();
         let nodes = nodes
             .into_iter()

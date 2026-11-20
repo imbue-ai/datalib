@@ -32,8 +32,10 @@ onMounted(() => {
 function onKey(ev: KeyboardEvent) {
   if (ev.key === "Escape") emit("close");
 }
-onMounted(() => window.addEventListener("keydown", onKey));
-onUnmounted(() => window.removeEventListener("keydown", onKey));
+// On the way down, before whatever the press lands in: VS Code's tree
+// (`<vs-tree>`) takes Escape for itself and stops it there.
+onMounted(() => window.addEventListener("keydown", onKey, true));
+onUnmounted(() => window.removeEventListener("keydown", onKey, true));
 </script>
 
 <template>

@@ -174,6 +174,24 @@ describe('upstream', () => {
     await page.close();
   });
 
+  test('rerender_without_a_node_redraws_nothing', async () => {
+    const { page } = await openHarness();
+    await page.evaluate(() => window.harness.mountUpstream());
+    await page.evaluate(() => {
+      window.suffix = ' ✓';
+      window.upstream.rerender();
+    });
+    // Nothing to wait for: the call is synchronous, and draws nothing.
+    assert.equal(await row(page, 'Starfleet').textContent(), 'Starfleet');
+    await page.evaluate(() => window.upstream.rerender(window.harness.find('folder/work')));
+    await waitFor(page, 'Starfleet drawn again', () =>
+      [...document.querySelector('fake-card').shadowRoot.querySelectorAll('.monaco-list-row')].some(
+        (r) => r.textContent === 'Starfleet ✓',
+      ),
+    );
+    await page.close();
+  });
+
   test('page_down_throws_upstream', async () => {
     const { page } = await openHarness();
     await page.evaluate(() => window.harness.mountUpstream());
@@ -318,6 +336,45 @@ describe('vs-tree', () => {
     const selected = page.locator('vs-tree .monaco-list-row.selected').first();
     await selected.waitFor({ timeout: 5000 });
     assert.equal(await selected.evaluate((el) => getComputedStyle(el).backgroundColor), 'rgb(1, 2, 3)');
+    await page.close();
+  });
+
+  test('a_page_draws_a_rows_label', async () => {
+    const { page } = await openHarness();
+    await page.evaluate(() => {
+      window.suffix = '';
+      return window.harness.mountElement(undefined, {
+        css: '.drawn { color: rgb(4, 5, 6); }',
+        label: '(n) => n.label.toUpperCase() + window.suffix',
+      });
+    });
+    const drawn = row(page, 'Starfleet').locator('b.drawn');
+    await drawn.waitFor({ timeout: 5000 });
+    assert.equal(await drawn.textContent(), 'STARFLEET');
+    // The page's CSS reaches into the element's shadow root.
+    assert.equal(await drawn.evaluate((el) => getComputedStyle(el).color), 'rgb(4, 5, 6)');
+    // `redraw` draws every row again from what the page now says.
+    await page.evaluate(() => {
+      window.suffix = ' ✓';
+      window.tree.redraw();
+    });
+    await waitFor(page, 'the label drawn again', () =>
+      [...window.tree.shadowRoot.querySelectorAll('b.drawn')].some((b) => b.textContent === 'STARFLEET ✓'),
+    );
+    await page.close();
+  });
+
+  test('a_right_click_names_its_node', async () => {
+    const { page } = await openHarness();
+    await page.evaluate(() => window.harness.mountElement());
+    await openRow(page, 'Starfleet', 'Slack');
+    const slack = row(page, 'Slack');
+    const box = await slack.boundingBox();
+    await slack.click({ button: 'right', position: { x: 20, y: 5 } });
+    await waitFor(page, 'a menu for Slack', () => window.harness.menus.some((m) => m.id === 'src/slack'));
+    const [menu] = await page.evaluate(() => window.harness.menus);
+    // At the pointer, in the page's coordinates.
+    assert.ok(Math.abs(menu.x - (box.x + 20)) <= 1 && Math.abs(menu.y - (box.y + 5)) <= 1, JSON.stringify(menu));
     await page.close();
   });
 

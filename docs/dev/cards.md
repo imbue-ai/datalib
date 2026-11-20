@@ -781,29 +781,41 @@ besides components:
   the app's, through its `--vs-tree-*` variables. The top level is the
   configured sources (`GET /api/manage/rows`; a comparison's `diff`
   group is none), and each place below them, an account, a label, a
-  workspace, a channel, a folder, a chat, is a level of
+  workspace, a channel, a folder, a page, a chat, is a level of
   `GET /children/{parent}?places=true` read when it is opened
   (`docs/user/applets.md` § "A container's children"); a thread or a
   message is no place, so it is not in the tree. A source that holds no
-  places (a folder of pages, a set of PDFs) has no arrow: one place
-  asked of each source as the tree opens says which. A double-click or Enter
-  on a node shows it beside the tree as a `nodeView`, drawn in a shadow
-  root of its own as the Search card draws its preview, so it lands
-  there whatever layout holds the card. A node that node card opens
-  replaces it there; anything else it opens is a card of its own, and ↗
-  opens the node shown as one. What is open in the tree and the node
-  shown are the card's state.
-- `nodeView({ node, name })` — one node of that tree
+  places has no arrow: one place asked of each source as the tree opens
+  says which. Every row is a chip (`docs/dev/chips.md`): a source its
+  group's, any other node its node's, drawn into the tree's own shadow
+  root through its `renderLabel` and `extraCss`. Picking a node shows it
+  beside the tree as a `nodeView`, drawn in a shadow root of its own as
+  the Search card draws its preview, so it lands there whatever layout
+  holds the card; a double-click on its chip opens the chip's card and a
+  right-click its menu, as everywhere. What each way of picking does is
+  one table, `TREE_PICKS`. A node that node card opens replaces it
+  there; anything else it opens is a card of its own, and ↗ opens the
+  node shown as one. What is open in the tree and the node shown are the
+  card's state.
+- `nodeView({ node, name, doc })` — one node of that tree
   (`cards/NodeCard.ce.vue`): what `GET /children/{node}` lists of it,
   newest at the bottom, with Earlier and Later to read on past either
   end. `node` is a container's uuid, or `source:<id>` for what a source
-  holds at its top, and the card refuses anything else, since the value
-  goes into a request's path (`isNodeId`). A row is titled by its name,
-  else its author, else its first line, and a name that only repeats the
-  node's (a channel's threads are each named for the channel) gives way;
-  its kind shows only where the list mixes kinds. A click on a row reads its document beside the list
-  through `documentPreview`, as the Search card does; a level of
-  containers alone (an account's labels) is a list without one. A
+  holds at its top, and `doc` the document the node is, when it is one
+  (a Notion page, a contact group's card); the card refuses any other
+  shape of either, since `node` goes into a request's path and `doc`
+  names a document to read (`nodeCardProps`). A row is titled by its
+  name, else its author, else its first line, and a name that only
+  repeats the node's (a channel's threads are each named for the
+  channel) gives way; its kind shows only where the list mixes kinds.
+  The title is a chip where it names something (`rowTitle`): a
+  container its node's, a message its author's, a page its document's;
+  and each row's date is a date chip. A click on a row reads its
+  document beside the list through `documentPreview`, as the Search card
+  does; a level of containers alone (an account's labels) is a list
+  without one. A node that is a document shows it there until a row is
+  picked, and alone where it holds nothing else. A double-click on a
+  chip, or a right-click, is the chip's; elsewhere on a row a
   double-click or Enter opens the child: a container as another
   `nodeView`, a row's document as `documentView`. Keeps the picked
   child as its state.

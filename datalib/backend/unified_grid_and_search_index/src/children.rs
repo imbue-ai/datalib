@@ -301,6 +301,7 @@ fn dedupe(rows: &mut Vec<Found>) {
 pub struct RowFacts {
     pub kind: String,
     pub author: Option<String>,
+    pub author_handle: Option<String>,
     pub created_at: Option<String>,
     pub preview: Option<String>,
     pub markdown_uuid: Option<String>,
@@ -324,6 +325,8 @@ pub struct Child {
     pub kind: String,
     pub name: Option<String>,
     pub author: Option<String>,
+    /// The author as a handle (`email:…`), which a person chip names.
+    pub author_handle: Option<String>,
     pub created_at: Option<String>,
     pub preview: Option<String>,
     /// The document its row is in; `None` for a container with no row.
@@ -350,6 +353,7 @@ pub fn describe(
                 kind: node.map_or(row.kind, |n| n.kind.clone()),
                 name: node.and_then(|n| n.name.clone()),
                 author: row.author,
+                author_handle: row.author_handle,
                 created_at: row.created_at,
                 preview: row.preview,
                 markdown_uuid: row.markdown_uuid,
@@ -471,7 +475,8 @@ pub const PLACES_BELOW_SQL: &str = "SELECT DISTINCT parent_uuid FROM data_nodes 
        AND EXISTS (SELECT 1 FROM data_nodes n WHERE n.uuid = f.node_uuid AND n.is_place = 1)";
 
 /// What a page's rows say of them, for the uuids in the JSON array `?1`.
-pub const ROW_FACTS_SQL: &str = "SELECT uuid, kind, author, created_at, preview, markdown_uuid \
+pub const ROW_FACTS_SQL: &str =
+    "SELECT uuid, kind, author, author_handle, created_at, preview, markdown_uuid \
      FROM grid_rows WHERE uuid IN (SELECT value FROM json_each(?1))";
 
 /// What a page's containers say of them, for the uuids in the JSON array
@@ -687,6 +692,7 @@ mod tests {
                 RowFacts {
                     kind: "Message".into(),
                     author: Some("Data".into()),
+                    author_handle: Some("slack:T1/U_DATA".into()),
                     ..Default::default()
                 },
             ),
@@ -713,6 +719,7 @@ mod tests {
         );
         assert!(out[0].container && out[0].kind == "Slack thread");
         assert_eq!(out[0].author.as_deref(), Some("Data"));
+        assert_eq!(out[0].author_handle.as_deref(), Some("slack:T1/U_DATA"));
         assert!(!out[1].container && out[1].kind == "Message");
     }
 }

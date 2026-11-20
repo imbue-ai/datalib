@@ -3,7 +3,9 @@
 // source of plain nodes, `{ id, label, icon?, kind?, description?, hasChildren }`;
 // the element keeps VS Code's renderer and delegate plumbing to itself and
 // says what is open by id, so a page can save and restore it. It fires
-// `select` as the selection moves and `open` on a double-click or Enter.
+// `select` as the selection moves, `open` on a double-click or Enter and
+// `menu` on a right-click. A page may draw a row's label itself
+// (`renderLabel`) and bring its own styles in (`extraCss`).
 // What it relies on upstream is in README.md §"Facts", each a test.
 
 import { AsyncDataTree } from 'vscode/src/vs/base/browser/ui/tree/asyncDataTree.js';
@@ -70,6 +72,9 @@ const ROOT = Object.freeze({ id: '\u0000root', label: '' });
 
 class Renderer {
   templateId = 'node';
+  constructor(drawLabel) {
+    this.drawLabel = drawLabel;
+  }
   renderTemplate(container) {
     const row = container.appendChild(document.createElement('div'));
     row.className = 'row';
@@ -88,7 +93,7 @@ class Renderer {
     if (node.icon) template.icon.src = node.icon;
     else template.icon.removeAttribute('src');
     template.icon.hidden = !node.icon;
-    template.label.textContent = node.label;
+    if (!this.drawLabel(node, template.label)) template.label.textContent = node.label;
     template.kind.textContent = node.kind ?? '';
     template.desc.textContent = node.description ?? '';
   }
@@ -107,12 +112,16 @@ export class VsTree extends HTMLElement {
   // so these are reopened when their parent opens, and kept in `viewState`
   // until then.
   #pending = new Set();
+  #extra;
+  // `(node, el) => void`: fills a row's label element in place of its text.
+  renderLabel = null;
 
   constructor() {
     super();
     const root = this.attachShadow({ mode: 'open' });
     const style = root.appendChild(document.createElement('style'));
     style.textContent = upstreamCss.join('\n') + OWN_CSS;
+    this.#extra = root.appendChild(document.createElement('style'));
     this.#frame = root.appendChild(document.createElement('div'));
     this.#frame.className = 'frame';
     this.#frame.addEventListener('keydown', (e) => this.#onKeyDown(e), { capture: true });
@@ -133,6 +142,30 @@ export class VsTree extends HTMLElement {
   set viewState(state) {
     this.#restoring = state;
     if (this.#tree) this.#build();
+  }
+
+  // CSS for what `renderLabel` draws: a page's styles do not reach into
+  // the element's shadow root.
+  set extraCss(css) {
+    this.#extra.textContent = css;
+  }
+  get extraCss() {
+    return this.#extra.textContent;
+  }
+
+  // Draws every loaded row again, as after what `renderLabel` reads has
+  // changed. Upstream's `rerender()` with no node draws none of them again
+  // (README.md §"Facts", `rerender_without_a_node_redraws_nothing`).
+  redraw() {
+    const tree = this.#tree;
+    if (!tree) return;
+    const walk = (node) => {
+      for (const child of node.children) {
+        tree.rerender(child.element);
+        if (!child.collapsed) walk(child);
+      }
+    };
+    walk(tree.getNode(ROOT));
   }
 
   async refresh(node) {
@@ -157,7 +190,7 @@ export class VsTree extends HTMLElement {
       'vs-tree',
       this.#frame,
       { getHeight: () => ROW_HEIGHT, getTemplateId: () => 'node' },
-      [new Renderer()],
+      [new Renderer((node, el) => this.#drawLabel(node, el))],
       {
         hasChildren: (n) => n === ROOT || !!n.hasChildren,
         getChildren: (n) => source.getChildren(n === ROOT ? null : n),
@@ -188,7 +221,17 @@ export class VsTree extends HTMLElement {
       this.#emit('viewstatechange');
     });
     tree.onDidChangeSelection((e) => this.#emit('select', { nodes: e.elements }));
-    tree.onMouseDblClick((e) => e.element && this.#emit('open', { node: e.element }));
+    tree.onMouseDblClick((e) => e.element && this.#emit('open', { node: e.element, event: e.browserEvent }));
+    tree.onContextMenu((e) => {
+      if (!e.element) return;
+      e.browserEvent.preventDefault();
+      // A mouse's anchor is its event, at `posx`/`posy` in the page; the
+      // keyboard's (Shift+F10, the menu key) is the focused row.
+      const box = e.anchor instanceof HTMLElement ? e.anchor.getBoundingClientRect() : null;
+      const x = box ? box.left : e.anchor.posx - window.scrollX;
+      const y = box ? box.bottom : e.anchor.posy - window.scrollY;
+      this.#emit('menu', { node: e.element, x, y, event: e.browserEvent });
+    });
     tree.onDidScroll(() => this.#emit('viewstatechange'));
 
     tree.layout(this.clientHeight, this.clientWidth);
@@ -196,6 +239,13 @@ export class VsTree extends HTMLElement {
       this.#reopenUnder(tree, ROOT);
       this.#emit('ready');
     });
+  }
+
+  #drawLabel(node, el) {
+    if (!this.renderLabel) return false;
+    el.replaceChildren();
+    this.renderLabel(node, el);
+    return true;
   }
 
   // Once `parent`'s children are loaded and drawn, reopens those the restored
