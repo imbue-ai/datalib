@@ -307,7 +307,7 @@ fn chat_common() -> Result<Vec<Document>> {
         source_url: None,
         org_uuid: None,
         org_name: None,
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             markdown_uuid: "00000000-0000-8000-8000-0000000000d1".into(),
             source_ref: None,
             items: vec![said, system, files],
@@ -481,6 +481,7 @@ fn contacts() -> Result<Vec<Document>> {
         doc_uuid: "00000000-0000-8000-8000-0000000000f1".into(),
         group_label: f.hostile("contact group"),
         address_book: None,
+        groups: Vec::new(),
         member_handles: Vec::new(),
         upstream_account: None,
         inputs: Vec::new(),

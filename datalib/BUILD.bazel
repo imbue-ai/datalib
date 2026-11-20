@@ -14,6 +14,9 @@ sh_binary(
         # `:bin` is that whole set under their public dash-separated names
         # in one directory; serve_dev.sh exports it as $DATALIB_BINARY_DIR.
         "//datalib/backend:bin",
+        # The Library card's tree, which Vite's dev server takes from
+        # here (DATALIB_VS_TREE; datalib/ui/vite.config.ts).
+        "//third-party/vscode-tree:dist/vs-tree.js",
     ] + DEV_RUNTIME_DATA,
     env = DEV_RUNTIME_ENV,
     deps = ["@bazel_tools//tools/bash/runfiles"],

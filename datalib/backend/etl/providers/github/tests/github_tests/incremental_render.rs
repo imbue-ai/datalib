@@ -1,5 +1,5 @@
 //! Render incrementality for github: a second run over an unchanged
-//! store renders nothing, and a PR that left the store is a bucket to
+//! store renders nothing, and a PR that left the store is a render unit to
 //! render with no rows, so the driver drops its document.
 
 use std::collections::{HashMap, HashSet};
@@ -103,7 +103,7 @@ fn warm<'a>(cursor: Option<&'a str>, none: &'a HashSet<String>) -> RawRange<'a> 
 }
 
 /// One render pass from `cursor`. Returns the documents emitted, the
-/// buckets the pass rendered, and the commit it consumed — what the
+/// render units the pass rendered, and the commit it consumed — what the
 /// render step would record as the next cursor.
 fn render_once(
     raw: &Path,
@@ -140,9 +140,10 @@ async fn a_second_render_over_an_unchanged_store_renders_nothing() {
         render.is_none(),
         "a cold start has no cursor to narrow from"
     );
-    assert!(first
-        .iter()
-        .all(|d| d.bucket_key.as_deref().is_some_and(|k| k.starts_with(REPO))));
+    assert!(first.iter().all(|d| d
+        .render_unit_key
+        .as_deref()
+        .is_some_and(|k| k.starts_with(REPO))));
 
     let (second, render, _) = render_once(&db_path_for(&out_db), cursor.as_deref());
 
@@ -155,14 +156,14 @@ async fn a_second_render_over_an_unchanged_store_renders_nothing() {
     assert_eq!(
         render,
         Some(HashSet::new()),
-        "and no bucket is declared, so the driver sweeps nothing"
+        "and no render unit is declared, so the driver sweeps nothing"
     );
 }
 
-/// A PR gone from the store is still a bucket to render — with no row,
+/// A PR gone from the store is still a render unit to render — with no row,
 /// so it is declared empty and the driver drops its document.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_pr_that_left_the_store_is_a_bucket_with_no_rows() {
+async fn a_pr_that_left_the_store_is_a_render_unit_with_no_rows() {
     let d = tempdir().unwrap();
     let out_db = d.path().join("raw");
 
@@ -194,7 +195,7 @@ async fn a_pr_that_left_the_store_is_a_bucket_with_no_rows() {
     assert_eq!(
         render,
         Some([format!("{REPO}#2")].into_iter().collect()),
-        "the diff named the bucket",
+        "the diff named the render unit",
     );
     assert!(docs.is_empty(), "and the store no longer has its row");
 }

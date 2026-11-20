@@ -96,7 +96,7 @@ impl<'a> ChatBlobs<'a> {
 
 fn refs_of(chat: &NormalizedChat) -> Vec<String> {
     let mut refs: Vec<String> = chat
-        .buckets
+        .render_units
         .iter()
         .flat_map(|doc| &doc.items)
         .flat_map(|item| &item.attachments)
@@ -184,7 +184,7 @@ pub fn render_changed_batched(
     target: RenderTarget<'_>,
 ) -> Result<RenderOutcome> {
     let mut changed = changed_chats(all, range, scan.render.as_ref(), uuid_of);
-    let docs_total = changed.chats.iter().map(|c| c.buckets.len()).sum();
+    let docs_total = changed.chats.iter().map(|c| c.render_units.len()).sum();
     let mut renderer = ChatRenderer::new(
         profile,
         target.source_id,
@@ -194,12 +194,12 @@ pub fn render_changed_batched(
     );
     render_batched(&mut renderer, &changed.chats, blobs, blob_bytes)?;
     let summary = renderer.finish();
-    changed.buckets.extend(summary.buckets);
+    changed.render_units.extend(summary.render_units);
     Ok(RenderOutcome {
         rendered: summary.docs_rendered,
         skipped: changed.skipped,
         new_head: scan.new_head,
         scan_elapsed: scan.scan_elapsed,
-        buckets: changed.buckets,
+        render_units: changed.render_units,
     })
 }

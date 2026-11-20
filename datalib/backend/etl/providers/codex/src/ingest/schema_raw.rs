@@ -47,7 +47,7 @@ pub struct TranscriptRow {
 /// `payload->>'$.type'` and the item's as `payload->>'$.payload.type'`.
 ///
 /// `transcript_id` and `line_no` are the promoted columns: the render's
-/// diff buckets on the first and orders on the second.
+/// diff groups its render units by the first and orders on the second.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "records")]
 pub struct RecordRow {

@@ -54,12 +54,12 @@ pub trait IndexRepo: Send + Sync {
     /// Every source holding a row.
     async fn source_ids(&self) -> Result<Vec<String>, RepoError>;
 
-    /// A page of `parent`'s children in `(sort_key, uuid)` order, as `ask`
+    /// A page of `scope`'s children in `(sort_key, uuid)` order, as `ask`
     /// asks for it, `limit` a side ([`crate::children`]). Empty for a root
     /// with no index yet.
     async fn children(
         &self,
-        parent: &str,
+        scope: &crate::children::Scope,
         ask: &crate::children::Ask,
         limit: usize,
     ) -> Result<crate::children::ChildrenPage, crate::children::ChildrenFailure>;

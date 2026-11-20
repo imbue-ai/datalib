@@ -500,8 +500,8 @@ so instead of quoting something that no longer exists.
 
 ## Incremental render, and what it costs
 
-A page is one bucket and a comment thread another, each keyed by its
-Notion id. When a bucket renders it declares every raw row it read
+A page is one render unit and a comment thread another, each keyed by its
+Notion id. When a render unit renders it declares every raw row it read
 (`render_inputs` in the render store): a page its `pages` row, its
 `page_markdown` row, every `notion_attachments` row — bytes fetched or
 not — its author's `users` row, found or not, and every `tree` row on
@@ -509,10 +509,10 @@ its path, found or not; a thread its
 `comments`, its page (for the title) and its `comment_anchors` block;
 the table of contents all of `tree` and `pages`.
 The render step diffs those tables from the commit it last completed
-against and hands render the buckets whose rows moved; render's own
+against and hands render the render units whose rows moved; render's own
 scan adds what a new row names through the rows still there (a new
 comment its thread, a new attachment its page, an edited page its
-threads). A bucket whose rows are gone is declared with nothing, and
+threads). A render unit whose rows are gone is declared with nothing, and
 its documents go. The resume cursor is the `render_cursor` row in the
 render store, written in the same transaction as the last document of
 the run.

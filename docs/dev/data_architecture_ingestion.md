@@ -216,7 +216,7 @@ Any subsequent sync should pick up as close as possible to where the last one le
 Two layers do the work:
 
 - **Provider-side dedup**: every UPSERT uses the upstream identifier as PK with `ON CONFLICT(id) DO UPDATE`; unchanged rows are no-op writes, and the run's closing commit finds nothing to commit.
-- **Render-side dedup**: render diffs the raw store from the commit its `render_cursor` row names and renders only the buckets that moved; every document it renders is written, and an unchanged one writes an identical row, which doltlite's content-addressed tables store as no change. The `unified_grid_and_search_index` step reaches a document at all only when that store's `dolt_diff` surfaced it (see `source_cursors`).
+- **Render-side dedup**: render diffs the raw store from the commit its `render_cursor` row names and renders only the render units that moved; every document it renders is written, and an unchanged one writes an identical row, which doltlite's content-addressed tables store as no change. The `unified_grid_and_search_index` step reaches a document at all only when that store's `dolt_diff` surfaced it (see `source_cursors`).
 
 Different upstreams expose different surfaces for "what changed since X": a delta token, an enumeration, a search over a range. Each becomes a listing, and what is owed is the same query over it (see [What is left to fetch](#what-is-left-to-fetch-listed-minus-held)).
 
@@ -550,8 +550,8 @@ The tape variants are the right tool **only for tables whose rows came off a wir
 
 The `ON CONFLICT` clause is **the same shape on every table**; only the column list varies (see [Events vs bookkeeping](#events-vs-bookkeeping-where-each-column-lives) for which extras belong on the entity table vs the sidecar vs as VIRTUAL+index over payload), and the derive supplies it from the row type.
 
-## dolt_diff supersedes per-bucket fingerprints
-Render decides what changed with **`dolt_diff_<table>` from the raw-store commit its render cursor names**, not with fingerprints of its own: doltlite's prolly-tree diff answers "what changed since last render?" directly, and rewriting an identical row to a content-addressed table is no change, so nothing downstream ever sees it. The mechanism — the cursor, the reverse lookup through `render_inputs`, a provider's forward `scan_buckets` — is [parse and render §5](data_architecture_parse_and_render.md#5-incrementality-and-deletion).
+## dolt_diff supersedes per-render-unit fingerprints
+Render decides what changed with **`dolt_diff_<table>` from the raw-store commit its render cursor names**, not with fingerprints of its own: doltlite's prolly-tree diff answers "what changed since last render?" directly, and rewriting an identical row to a content-addressed table is no change, so nothing downstream ever sees it. The mechanism — the cursor, the reverse lookup through `render_inputs`, a provider's forward `scan_render_units` — is [parse and render §5](data_architecture_parse_and_render.md#5-incrementality-and-deletion).
 
 **Rule for new stages.** Any new derivation added to the pipeline follows the same recipe: read its input pinned at a commit, record that commit beside its output in the same transaction, and on the next run diff the input from there. The grid index does the same over every render store (`source_cursors`). The compare-and-skip loop is what makes the system feel responsive on a laptop with months of accumulated data.
 

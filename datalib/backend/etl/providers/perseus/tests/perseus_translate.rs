@@ -72,13 +72,13 @@ fn renders_all_books_chapters_and_editions() {
     assert_eq!(summary.markdowns_total, 10);
     assert_eq!(summary.markdowns_rendered, 10);
     assert_eq!(emitted.len(), 10);
-    // One bucket for the whole tree, so the driver's sweep of what a
+    // One render unit for the whole tree, so the driver's sweep of what a
     // run did not emit reaches every document; and the files it names
-    // are what the bucket declares as its inputs.
-    let bucket = render::bucket_key("perseus");
+    // are what the render unit declares as its inputs.
+    let render_unit = render::render_unit_key("perseus");
     assert!(emitted
         .iter()
-        .all(|d| d.bucket_key.as_deref() == Some(bucket.as_str())));
+        .all(|d| d.render_unit_key.as_deref() == Some(render_unit.as_str())));
     assert_eq!(
         parsed.files,
         [

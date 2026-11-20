@@ -22,7 +22,9 @@ use crate::xmp::{self, XmpFields};
 /// Bump when what a photo's row or terms say changes.
 /// v5: keyword, pictured, rating and collection terms; every collection
 /// with members, the quick collection and publish collections included.
-pub const RENDER_VERSION: u32 = 5;
+/// v6: a photo sits in its folder, and keywords, collections and folders
+/// each hang under a place of their own in the catalog (tree.rs).
+pub const RENDER_VERSION: u32 = 6;
 
 /// How a nested collection's path is shown.
 pub const PATH_SEPARATOR: &str = " › ";

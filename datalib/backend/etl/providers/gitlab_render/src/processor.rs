@@ -38,12 +38,12 @@ impl SourceRender for GitlabRender {
         // one whose row is gone loses its document; the render below
         // re-declares the ones it produced.
         for key in parsed.render.iter().flatten() {
-            ctx.declare_bucket(key, &[])?;
+            ctx.declare_render_unit(key, &[])?;
         }
         let mut on_doc = |md| ctx.emit_doc(md);
         let s =
             render_gitlab(&parsed, ctx.name, ctx.progress, &mut on_doc).context("render_gitlab")?;
-        ctx.finish(&s.buckets, parsed.head.as_deref())?;
+        ctx.finish(&s.render_units, parsed.head.as_deref())?;
         Ok(format!("rendered={}", s.rendered))
     }
 }

@@ -149,7 +149,7 @@ pub fn render_doc(source_id: &str, input: &DocInput<'_>, inputs: &Inputs) -> Ren
         markdown_uuid: file.id.uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
-        bucket_key: Some(file_id.to_string()),
+        render_unit_key: Some(file_id.to_string()),
         render_version: RENDER_VERSION,
         rows,
         front,

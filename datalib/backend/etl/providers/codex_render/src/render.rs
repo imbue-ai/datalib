@@ -18,7 +18,7 @@ use datalib_etl_chat_common::types::{
 };
 use datalib_etl_chat_common::RenderTarget;
 use datalib_etl_render::grid_index::RenderedMarkdown;
-use datalib_etl_render::inputs::{Bucket, Inputs, RawRange};
+use datalib_etl_render::inputs::{Inputs, RawRange, RenderUnit};
 use datalib_etl_render::pages::PageSize;
 use datalib_handle::Handle;
 use serde_json::Value;
@@ -66,15 +66,15 @@ fn profile() -> RenderProfile {
 
 const PROJECT_KIND: &str = "Codex Project";
 
-/// Renders the threads this run has to, a page at a time; `on_buckets`
-/// hears each page's buckets before the next is read.
+/// Renders the threads this run has to, a page at a time; `on_render_units`
+/// hears each page's render units before the next is read.
 #[allow(clippy::too_many_arguments)]
 pub fn render(
     raw_dir: &Path,
     source_id: &str,
     progress: &Progress,
     on_doc_complete: &mut dyn FnMut(RenderedMarkdown) -> Result<()>,
-    on_buckets: &mut dyn FnMut(&[Bucket]) -> Result<()>,
+    on_render_units: &mut dyn FnMut(&[RenderUnit]) -> Result<()>,
     range: RawRange<'_>,
     size: PageSize,
     max_tool_result_bytes: usize,
@@ -92,7 +92,7 @@ pub fn render(
             progress,
             on_doc_complete,
         },
-        on_buckets,
+        on_render_units,
     )
 }
 
@@ -307,7 +307,7 @@ fn build_chat(
         upstream_account: None,
         org_uuid: None,
         org_name: None,
-        buckets: vec![NormalizedDoc {
+        render_units: vec![NormalizedDoc {
             orphan_reactions: Vec::new(),
             markdown_uuid: id.uuid,
             // One document per thread, keyed on the thread's own id and
@@ -672,7 +672,7 @@ mod tests {
         assert_eq!(c.display, "Realign the deflector dish");
         assert_eq!(c.project.as_deref(), Some("enterprise"));
         assert_eq!(c.external_id.as_deref(), Some("t1"));
-        let items = &c.buckets[0].items;
+        let items = &c.render_units[0].items;
         let labels: Vec<&str> = items
             .iter()
             .map(|i| i.kind_label.as_deref().unwrap())
@@ -755,7 +755,7 @@ mod tests {
         ];
         let items = build_chats("codex", &transcripts, &records, &titles(&transcripts), 1024)
             .remove(0)
-            .buckets
+            .render_units
             .remove(0)
             .items;
         assert_eq!(items[0].kind_label.as_deref(), Some("User Input"));
@@ -780,9 +780,9 @@ mod tests {
             agent.display,
             "Data — sub-agent of Realign the deflector dish"
         );
-        assert_eq!(agent.buckets[0].items.len(), 1);
+        assert_eq!(agent.render_units[0].items.len(), 1);
         assert_ne!(agent.chat_uuid, chats[0].chat_uuid);
-        assert_eq!(chats[0].buckets[0].items.len(), 1);
+        assert_eq!(chats[0].render_units[0].items.len(), 1);
     }
 
     /// A tool's name comes from whoever wrote the tool; in a summary it
@@ -799,7 +799,7 @@ mod tests {
         )];
         let items = build_chats("codex", &transcripts, &records, &titles(&transcripts), 1024)
             .remove(0)
-            .buckets
+            .render_units
             .remove(0)
             .items;
         let text = items[0].text.as_deref().unwrap();
@@ -847,7 +847,7 @@ mod tests {
         ];
         let items = build_chats("codex", &transcripts, &records, &titles(&transcripts), 1024)
             .remove(0)
-            .buckets
+            .render_units
             .remove(0)
             .items;
         assert_eq!(items.len(), 3, "redacted reasoning adds no item");

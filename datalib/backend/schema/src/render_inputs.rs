@@ -1,7 +1,7 @@
-// What each rendered bucket was rendered from: one row per raw row a
-// bucket's render asked for, found or not. The reverse of a provider's
-// bucket query — a changed raw row names the buckets that read it — and
-// the deletion record: a bucket whose inputs are gone re-renders to
+// What each rendered render unit was rendered from: one row per raw row a
+// render unit's render asked for, found or not. The reverse of a provider's
+// render unit query — a changed raw row names the render units that read it — and
+// the deletion record: a render unit whose inputs are gone re-renders to
 // nothing, and its documents go with it. See
 // docs/dev/data_architecture_parse_and_render.md.
 
@@ -11,14 +11,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PortableTable, sqlx::FromRow)]
 #[portable_table(
     table = "render_inputs",
-    primary_key = "bucket_key, input_table, input_id"
+    primary_key = "render_unit_key, input_table, input_id"
 )]
 pub struct RenderInputRow {
     /// The unit the provider loads and renders — a conversation, a
     /// thread, a PR, a page. Opaque to the driver; the same string the
-    /// provider is handed back as a stale bucket.
+    /// provider is handed back as a stale render unit.
     #[col(sql = "VARCHAR(256)")]
-    pub bucket_key: String,
+    pub render_unit_key: String,
     /// A table of the raw store, bare name.
     #[col(sql = "VARCHAR(64)")]
     pub input_table: String,

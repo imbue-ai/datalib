@@ -1,14 +1,20 @@
 <script setup lang="ts">
 // The bar across the top of a document: its source's mark and its
 // title, which stay put while the document scrolls beneath, then where
-// it came from, its ID, and a ⋯ menu of everything else
+// it came from, a link to it, and a ⋯ menu of everything else
 // (`documentMenu.ts`). It draws; the card does what is picked.
 import { computed, onBeforeUnmount, ref, watchEffect } from "vue";
 import type { ChatResponse } from "@/api";
 import { iconUrl } from "@/config/icons";
 import ChipMenu from "./ChipMenu.ce.vue";
 import { people as resolver, peopleTitle } from "./contacts";
-import { documentMenu, documentTitle, outlinkOf, type DocumentAction } from "./documentMenu";
+import {
+  documentLink,
+  documentMenu,
+  documentTitle,
+  outlinkOf,
+  type DocumentAction,
+} from "./documentMenu";
 
 const props = defineProps<{
   doc: ChatResponse;
@@ -25,6 +31,7 @@ const title = computed(() => documentTitle(props.doc));
 const tile = computed(() => iconUrl(props.doc.source_ref?.icon));
 const link = computed(() => outlinkOf(props.doc, host.value));
 const entries = computed(() => documentMenu(props.doc, host.value));
+const docLink = computed(() => documentLink(props.doc));
 
 const titleEl = ref<HTMLElement | null>(null);
 const answered = ref(0);
@@ -110,11 +117,14 @@ function pick(id: string) {
     <button
       type="button"
       class="doc-bar-btn"
-      aria-label="Copy ID"
-      :title="`Copy ID (${doc.markdown_uuid})`"
-      @click="emit('act', 'copy-id')"
+      aria-label="Copy link"
+      :title="`Copy link (${docLink})`"
+      @click="emit('act', 'copy-link')"
     >
-      <span class="doc-bar-id">ID</span>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" />
+        <path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" />
+      </svg>
     </button>
     <button
       type="button"
@@ -210,13 +220,5 @@ function pick(id: string) {
   height: 15px;
   fill: currentColor;
   stroke: none;
-}
-.doc-bar-id {
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 1;
-  padding: 2px 3px;
-  border: 1.5px solid currentColor;
-  border-radius: 3px;
 }
 </style>

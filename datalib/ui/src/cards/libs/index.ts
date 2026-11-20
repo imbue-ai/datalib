@@ -27,6 +27,8 @@ import {
 import { personView } from "./personView";
 import { contactsView } from "./contactsView";
 import { timeSeriesView } from "./timeSeriesView";
+import { libraryTreeView } from "./libraryTreeView";
+import { nodeView } from "./nodeView";
 
 // The names in scope when card source is evaluated (cardSource.ts).
 export const viewLibs: ViewLibs = {
@@ -57,4 +59,6 @@ export const viewLibs: ViewLibs = {
   personView,
   contactsView,
   timeSeriesView,
+  libraryTreeView,
+  nodeView,
 };

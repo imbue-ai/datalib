@@ -1,6 +1,6 @@
 //! Read raw Notion payloads from the doltlite database written by
-//! [`datalib_etl_notion::ingest`], narrowed to the buckets this run
-//! renders: a page is one bucket, a comment thread another.
+//! [`datalib_etl_notion::ingest`], narrowed to the render units this run
+//! renders: a page is one render unit, a comment thread another.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -57,14 +57,14 @@ pub struct ParsedNotion {
     pub db_path: Option<PathBuf>,
     /// The commit everything was read at.
     pub head: Option<String>,
-    /// The buckets to render — page ids and discussion ids; `None`
+    /// The render units to render — page ids and discussion ids; `None`
     /// renders everything.
     pub render: Option<HashSet<String>>,
 }
 
 impl ParsedNotion {
-    pub fn renders(&self, bucket: &str) -> bool {
-        self.render.as_ref().is_none_or(|r| r.contains(bucket))
+    pub fn renders(&self, render_unit: &str) -> bool {
+        self.render.as_ref().is_none_or(|r| r.contains(render_unit))
     }
 }
 
@@ -106,9 +106,10 @@ async fn load(db: &RawDb, range: RawRange<'_>) -> Result<ParsedNotion> {
         .map(String::from)
         .collect();
 
-    let forward = changed.map(|changed| forward_buckets(&changed, &pages, &comments, &attachments));
+    let forward =
+        changed.map(|changed| forward_render_units(&changed, &pages, &comments, &attachments));
     let render = range.narrow(forward.as_ref());
-    let renders = |bucket: &str| render.as_ref().is_none_or(|r| r.contains(bucket));
+    let renders = |render_unit: &str| render.as_ref().is_none_or(|r| r.contains(render_unit));
 
     let comments: Vec<Value> = comments
         .into_iter()
@@ -158,12 +159,12 @@ async fn load(db: &RawDb, range: RawRange<'_>) -> Result<ParsedNotion> {
     })
 }
 
-/// The buckets the changed rows name, through the rows still there: a
-/// row that went names nothing here, and the bucket that read it is
+/// The render units the changed rows name, through the rows still there: a
+/// row that went names nothing here, and the render unit that read it is
 /// the driver's to find. A page names its threads too, which read its
 /// title. A `tree` row names the table of contents, which has read
 /// nothing yet if the store held no page when it last rendered.
-fn forward_buckets(
+fn forward_render_units(
     changed: &HashMap<String, HashSet<String>>,
     pages: &[Value],
     comments: &[(Value, Option<String>)],
@@ -212,7 +213,7 @@ fn forward_buckets(
         }
     }
     if of("tree").is_some_and(|ids| !ids.is_empty()) {
-        out.insert(super::toc::BUCKET.to_string());
+        out.insert(super::toc::RENDER_UNIT.to_string());
     }
     out
 }

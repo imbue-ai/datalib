@@ -101,10 +101,10 @@ impl SourceRender for SignalRender {
         // nothing, its documents go. The rendered ones follow and
         // replace that.
         for chat_id in parsed.scan.render.iter().flatten() {
-            ctx.declare_bucket(&crate::render::ids::chat(ctx.name, chat_id).uuid, &[])?;
+            ctx.declare_render_unit(&crate::render::ids::chat(ctx.name, chat_id).uuid, &[])?;
         }
         ctx.declare_empty(parsed.scan.gone.iter().map(String::as_str))?;
-        ctx.finish(&summary.buckets, parsed.scan.new_head.as_deref())?;
+        ctx.finish(&summary.render_units, parsed.scan.new_head.as_deref())?;
         Ok("rendered".into())
     }
 }

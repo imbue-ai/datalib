@@ -44,9 +44,9 @@ pub struct RenderSummary {
     pub rows_emitted: usize,
 }
 
-/// The whole tree renders as one unit every run, so it is one bucket:
+/// The whole tree renders as one unit every run, so it is one render unit:
 /// what the store holds under it that a run did not emit is gone.
-pub fn bucket_key(source_id: &str) -> String {
+pub fn render_unit_key(source_id: &str) -> String {
     source_id.to_string()
 }
 
@@ -137,7 +137,7 @@ fn render_book(
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
-        bucket_key: Some(bucket_key(source_id)),
+        render_unit_key: Some(render_unit_key(source_id)),
         render_version: RENDER_VERSION,
         rows,
         front,
@@ -214,7 +214,7 @@ fn render_chapter(
         markdown_uuid: m_uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
-        bucket_key: Some(bucket_key(source_id)),
+        render_unit_key: Some(render_unit_key(source_id)),
         render_version: RENDER_VERSION,
         rows,
         front,

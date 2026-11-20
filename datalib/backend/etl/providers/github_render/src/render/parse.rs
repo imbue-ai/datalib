@@ -82,7 +82,7 @@ async fn read_everything(
     Ok((raw, Some(pin.commit().to_string()), changed))
 }
 
-/// The bucket key a PR's rows share: `pull_requests.id`, and the same
+/// The render unit key a PR's rows share: `pull_requests.id`, and the same
 /// string composed from any child row's `(repo_full_name, pr_number)`.
 /// The repository a PR is in, by the id GitHub gives it on the PR's
 /// base, which a rename keeps; by its name where the payload has no id.

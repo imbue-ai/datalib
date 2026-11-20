@@ -1,5 +1,5 @@
 //! The forward scan that narrows notion's render: which page and
-//! thread buckets a change names, through the rows still there.
+//! thread render units a change names, through the rows still there.
 
 use datalib_etl_notion::ingest::db::{CommentUpsert, PageMarkdownUpsert, PageUpsert, RawDb};
 use datalib_etl_notion_render::render::parse_api_dir;
@@ -86,7 +86,7 @@ fn warm<'a>(cursor: &'a str, stale: &'a HashSet<String>) -> RawRange<'a> {
 }
 
 /// The whole point: a second render with nothing changed upstream is
-/// handed no buckets at all.
+/// handed no render units at all.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unchanged_store_yields_no_pages_to_render() {
     let d = tempdir().unwrap();
@@ -202,11 +202,11 @@ async fn a_changed_page_names_its_threads() {
     assert_eq!(parsed.render, Some(set(&[A, "d1"])));
 }
 
-/// Deletion. A page the diff names whose row is gone is a bucket to
+/// Deletion. A page the diff names whose row is gone is a render unit to
 /// render with nothing in it: the processor declares it empty and the
 /// driver drops its documents.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_deleted_page_is_a_bucket_with_no_rows() {
+async fn a_deleted_page_is_a_render_unit_with_no_rows() {
     let d = tempdir().unwrap();
     let f = d.path().join("notion.doltlite_db");
     let head = seed(&f).await;
@@ -360,7 +360,7 @@ async fn a_tree_change_names_the_table_of_contents_and_an_edit_does_not() {
     let edited = commit(&db, "A edited").await;
     db.close().await;
 
-    let toc = datalib_etl_notion_render::render::toc::BUCKET;
+    let toc = datalib_etl_notion_render::render::toc::RENDER_UNIT;
     let just_the_edit = parse_api_dir(&f, warm(&seeded, &none)).unwrap();
     assert_eq!(just_the_edit.render, Some(set(&[A])));
 

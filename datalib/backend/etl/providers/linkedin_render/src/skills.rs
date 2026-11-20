@@ -7,7 +7,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl_render::front_matter::Front;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::html::escape_name_inline;
-use datalib_etl_render::inputs::{changed_rows, Bucket, Input, Inputs};
+use datalib_etl_render::inputs::{changed_rows, Input, Inputs, RenderUnit};
 use datalib_etl_render::section::{msg_class, Section};
 use datalib_etl_render::title::Title;
 use datalib_schema::data_nodes::{DataNodeRow, Lineage};
@@ -70,7 +70,7 @@ pub fn render_skills(
         .collect();
     let mut outcome = narrow_docs(&mut docs, doc_key, changed, source.range, new_head);
     for SkillsDoc { doc, inputs } in docs {
-        outcome.buckets.push(Bucket {
+        outcome.render_units.push(RenderUnit {
             key: doc.markdown_uuid.clone(),
             inputs,
         });
@@ -189,7 +189,7 @@ pub fn build(
             markdown_uuid: doc_id.uuid.clone(),
             source_id: source_id.to_string(),
             upstream_cursor: None,
-            bucket_key: Some(doc_id.uuid.clone()),
+            render_unit_key: Some(doc_id.uuid.clone()),
             render_version: RENDER_VERSION,
             rows: rows_out,
             sections,

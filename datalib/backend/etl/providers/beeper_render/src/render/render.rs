@@ -2,7 +2,7 @@
 //!
 //! Everything about *how* a Beeper message looks now lives in
 //! `datalib_etl_chat_common`. What is left here is the stage plumbing —
-//! loading each bucket's attachment bytes out of the blob CAS a batch at
+//! loading each render unit's attachment bytes out of the blob CAS a batch at
 //! a time, and
 //! running one pass per bridged network, because the `grid_rows`
 //! taxonomy and the `source_label` are per-network.
@@ -15,14 +15,14 @@ use anyhow::{Context, Result};
 use datalib_contact_schema::is_drawable_photo;
 use datalib_etl::blob_cas::{self, BlobBundle};
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{Buckets, ChatRenderer};
+use datalib_etl_chat_common::render::{ChatRenderer, RenderUnits};
 use datalib_etl_chat_common::NormalizedChat;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::pages::batches;
 use datalib_etl_render::photo;
 
 use super::normalize::{bundle_key, to_networks, Avatars, Unrendered};
-use super::parse::{DocBucket, ParsedBeeper};
+use super::parse::{DocRenderUnit, ParsedBeeper};
 
 /// Bump when Beeper's own contribution to the rendered output changes.
 /// The shared layout has its own number — see
@@ -51,8 +51,8 @@ pub struct RenderSummary {
     pub docs_rendered: usize,
     pub blobs_materialized: usize,
     /// Every room rendered, with what it read — what the processor
-    /// declares through `RenderCtx::declare_bucket`.
-    pub buckets: Buckets,
+    /// declares through `RenderCtx::declare_render_unit`.
+    pub render_units: RenderUnits,
     pub unrendered: Vec<Unrendered>,
 }
 
@@ -98,7 +98,7 @@ fn render_open(
         Some(cas) => block_on(load_avatars(parsed, cas))?,
         None => Avatars::new(),
     };
-    let docs: HashMap<String, &DocBucket> =
+    let docs: HashMap<String, &DocRenderUnit> =
         parsed.docs.iter().map(|d| (bundle_key(d), d)).collect();
     let mut summary = RenderSummary {
         docs_total: parsed.docs.len(),
@@ -134,13 +134,13 @@ fn render_open(
         }
         let s = renderer.finish();
         summary.docs_rendered += s.docs_rendered;
-        summary.buckets.extend(s.buckets);
+        summary.render_units.extend(s.render_units);
     }
     Ok(summary)
 }
 
-/// The bytes a bucket's attachments take, as the parse found them.
-fn blob_bytes_of(doc: &DocBucket) -> u64 {
+/// The bytes a render unit's attachments take, as the parse found them.
+fn blob_bytes_of(doc: &DocRenderUnit) -> u64 {
     doc.messages
         .iter()
         .flat_map(|m| &m.blobs)
@@ -149,7 +149,7 @@ fn blob_bytes_of(doc: &DocBucket) -> u64 {
         .sum()
 }
 
-/// Each bucket's attachment bytes, keyed the way `chat-common` looks
+/// Each render unit's attachment bytes, keyed the way `chat-common` looks
 /// them up.
 ///
 /// Beeper's parse resolves a blob's `blake3` but not its bytes, so this
@@ -157,7 +157,7 @@ fn blob_bytes_of(doc: &DocBucket) -> u64 {
 /// `ref_id`: it is what the normalized attachment carries, and what the
 /// bundle is keyed on.
 async fn load_bundles<'d>(
-    docs: impl Iterator<Item = &'d DocBucket>,
+    docs: impl Iterator<Item = &'d DocRenderUnit>,
     cas: &blob_cas::BlobCas,
 ) -> Result<HashMap<String, BlobBundle>> {
     let mut out: HashMap<String, BlobBundle> = HashMap::new();

@@ -442,7 +442,7 @@ fn ingests_the_export_and_renders_every_feed() -> Result<()> {
         // Every document declares the rows it read, so a change to any of
         // them renders it again; every one includes the profile row.
         for d in &docs {
-            assert!(d.bucket_key.is_some(), "{} has a bucket", d.markdown_uuid);
+            assert!(d.render_unit_key.is_some(), "{} has a render unit", d.markdown_uuid);
         }
         Ok::<(), anyhow::Error>(())
     })?;

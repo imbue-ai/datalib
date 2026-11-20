@@ -319,13 +319,13 @@ async fn a_render_reads_a_page_at_a_time_and_only_what_changed() {
                 titles.extend(md.rows.iter().find_map(|r| r.conversation_name.clone()));
                 Ok(())
             },
-            &mut |buckets| {
-                pages.push(buckets.len());
+            &mut |render_units| {
+                pages.push(render_units.len());
                 Ok(())
             },
             range,
             PageSize {
-                buckets: 1,
+                render_units: 1,
                 bytes: PageSize::DEFAULT.bytes,
             },
             16 * 1024,

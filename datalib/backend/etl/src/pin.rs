@@ -21,7 +21,7 @@ pub use datalib_pin::{generation, is_missing_table, missing_schema, Missing, Pin
 /// The commit this store is at now, or `None` when there is nothing
 /// readable to pin: no commit, or none that holds a table.
 ///
-/// For a consumer driven by [`crate::doltlite_raw::scan_buckets`], prefer the
+/// For a consumer driven by [`crate::doltlite_raw::scan_render_units`], prefer the
 /// `new_head` that scan already returned: the diff and the reads that follow
 /// it must name one commit, and sampling HEAD a second time can pick up a
 /// commit the diff did not see. This is for the consumers that do no diff at

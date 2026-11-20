@@ -1,7 +1,7 @@
 //! Turn a Garmin raw store into its documents: the overview with the
 //! weight plot, a page per family of daily metrics, the daily log, one
 //! page per activity, and the account's records and badges. Every one
-//! is in the bucket keyed by the overview's uuid, since each run reads
+//! is in the render unit keyed by the overview's uuid, since each run reads
 //! the store whole and emits them all.
 
 use std::collections::HashMap;
@@ -126,10 +126,10 @@ pub struct RenderSummary {
     pub items: usize,
 }
 
-/// Where documents go, and the one bucket they all go in.
+/// Where documents go, and the one render unit they all go in.
 struct Out<'a> {
     source_id: &'a str,
-    bucket: String,
+    render_unit: String,
     on_doc: &'a mut dyn FnMut(RenderedMarkdown) -> Result<()>,
 }
 
@@ -151,7 +151,7 @@ impl Out<'_> {
             // Not the raw HEAD: it moves on every ingest, and a row whose
             // content did not change may carry nothing per-run.
             upstream_cursor: None,
-            bucket_key: Some(self.bucket.clone()),
+            render_unit_key: Some(self.render_unit.clone()),
             render_version: RENDER_VERSION,
             rows,
             sections,
@@ -251,7 +251,7 @@ pub fn render_all(
     let m_uuid = document_uuid(source_id);
     let mut out = Out {
         source_id,
-        bucket: m_uuid.clone(),
+        render_unit: m_uuid.clone(),
         on_doc: on_doc_complete,
     };
     let doc = render_markdown(parsed, source_id, &m_uuid);

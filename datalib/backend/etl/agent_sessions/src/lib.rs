@@ -21,7 +21,8 @@ use datalib_etl_files::fingerprint_cache::FingerprintCache;
 
 /// The two tables every agent-session raw store keeps: `transcripts`,
 /// one row per session file, and `records`, one per line it keeps from
-/// that file, which a render's diff buckets on `records.transcript_id`.
+/// that file, which a render's diff groups into render units by
+/// `records.transcript_id`.
 pub const DATA_TABLES: &[&str] = &["transcripts", "records"];
 
 /// An agent-session raw store's DDL, given its two tables' own.
