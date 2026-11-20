@@ -1,0 +1,41 @@
+# Every markdown file under a folder on this machine, with every option
+# set, and searchable. No account and no credentials. Folders whose names
+# start with a dot (.obsidian, .trash, .git) are never opened.
+[[groups]]
+id = "markdown"
+name = "Notes"
+type = "markdown"
+
+[[steps]]
+id = "markdown/ingest"
+command = "datalib-step run ingest markdown"
+
+[steps.params]
+ignore = ["templates/**", "**/archive/**"]  # gitignore-style patterns to skip, on top of any
+                                            # .gitignore in the tree; default none
+max_bytes = "16 MiB"  # skip a larger file, with a warning naming it; the default
+
+# A JSONL copy of every row written, under ingest/events/, for debugging.
+# Nothing reads it and it grows every run.
+[steps.params.common.event_tape]
+enabled = false
+
+[steps.params.fswalk]
+path = "~/Documents/Notes"  # the folder to scan, and everything under it
+
+# Render needs no params: it reads the notes and the scan root back out of
+# the raw store.
+[[steps]]
+id = "markdown/render_markdown"
+command = "datalib-step run render_markdown markdown"
+inputs = ["markdown/ingest"]
+reads = "pinned"
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+id = "markdown/embed"
+command = "datalib-step run embed markdown"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]

@@ -69,6 +69,8 @@ pub enum Provider {
     /// Adobe Lightroom Classic: a catalog's photos and videos.
     Lightroom,
     Linkedin,
+    /// A folder of markdown notes: an Obsidian vault, a notes folder.
+    Markdown,
     Notion,
     Pdf,
     Perseus,
@@ -120,6 +122,7 @@ impl Provider {
             Provider::GoogleTakeout => "Google Takeout",
             Provider::Lightroom => "Lightroom",
             Provider::Linkedin => "LinkedIn",
+            Provider::Markdown => "Markdown",
             Provider::Notion => "Notion",
             Provider::Pdf => "PDF",
             Provider::Perseus => "Perseus",

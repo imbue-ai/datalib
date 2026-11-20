@@ -245,7 +245,7 @@ datalib/
                    and their writers — a source's `render_time_series`
                    and the `time_series_index` — and the applet's reads.
     etl/providers/ <p>/ (ingest) + <p>_render/ (render) + <p>_config/
-                   (config schema) per provider. Fourteen of the
+                   (config schema) per provider. Fifteen of the
                    file-backed ones scan a local tree through
                    etl/files/src/file_changes_scan.rs (claude_code and codex by way
                    of etl/agent_sessions/; file_inventory has its own walker
