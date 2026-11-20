@@ -422,7 +422,7 @@ function spawnFirstRunBackends(): Pending[] {
     spawnBackend("empty", EMPTY_ROOT, FINDS_STEPS),
     // The one server that finds the dash-named binaries on its PATH
     // rather than through `DATALIB_BINARY_DIR`. The scaffold config
-    // names `datalib-dag`, its steps and the `unified_grid_and_search_index`
+    // names `datalib-pipeline`, its steps and the `unified_grid_and_search_index`
     // applet bare, so PATH is how all three are found — the arrangement
     // of an install whose binaries are on PATH but not beside the server,
     // which no other backend here exercises.

@@ -46,17 +46,22 @@ import {
   documentId,
   documentMenu,
 } from "./documentChip";
+import { nodeCardSource, nodeMenu } from "./nodeChip";
+import { parseNode } from "@/uri";
 import { CONTACT, type ChipRef } from "@/search/queryText";
 import { dateCopyText, dateMenu, dateWallText, dayQuery, parseStamp, sideQuery } from "./dates";
 import { labelMenu, labelQuery } from "./labelChip";
 
 /** What a chip names: what the search field can name, a date or a
- *  label, which only a document draws, or a document, which a grid draws. */
+ *  label, which only a document draws, a document, which a grid draws, or
+ *  a node of a source's tree, with the name and the document its card
+ *  opens on. */
 export type AnyChipRef =
   | ChipRef
   | { kind: "date"; datetime: string }
   | { kind: "label"; name: string }
-  | { kind: "document"; uri: string };
+  | { kind: "document"; uri: string }
+  | { kind: "node"; uri: string; doc: string | null };
 export type { ChipRef };
 
 /** A chip as it was drawn: what it names, and the name its producer
@@ -171,7 +176,7 @@ export function asMenuEntries(entries: ChipEntry[], run: (id: ChipEntryId) => vo
 }
 
 export const CHIP_SELECTOR =
-  "a.chip[data-handle], a.chip[data-entity], a.chip[data-contact], a.chip[data-doc], time.chip[datetime], span.chip[data-label]";
+  "a.chip[data-handle], a.chip[data-entity], a.chip[data-contact], a.chip[data-doc], a.chip[data-node], time.chip[datetime], span.chip[data-label]";
 
 /** The chip element `target` is in, of any kind; null off a chip. */
 export function chipElAt(target: EventTarget | null | undefined): HTMLElement | null {
@@ -186,6 +191,12 @@ export function chipOf(el: HTMLElement): Chip | null {
   if (el.dataset.handle) return { ref: { kind: "person", handle: el.dataset.handle }, shownAs };
   if (el.dataset.contact) return { ref: { kind: "contact", id: el.dataset.contact }, shownAs };
   if (el.dataset.doc) return { ref: { kind: "document", uri: el.dataset.doc }, shownAs };
+  if (el.dataset.node) {
+    return {
+      ref: { kind: "node", uri: el.dataset.node, doc: el.dataset.nodeDoc ?? null },
+      shownAs,
+    };
+  }
   const datetime = el.tagName === "TIME" ? el.getAttribute("datetime") : null;
   if (datetime) return { ref: { kind: "date", datetime }, shownAs };
   if (el.dataset.label) return { ref: { kind: "label", name: el.dataset.label }, shownAs };
@@ -204,6 +215,7 @@ export function chipName(chip: Chip): string {
     case "contact":
       return contactLook(shownAs || "a contact", contactsById.get(ref.id)).text;
     case "document":
+    case "node":
       return shownAs || ref.uri;
     case "label":
       return ref.name;
@@ -245,6 +257,8 @@ export function chipMenuOf(chip: Chip, canLink: boolean): ChipEntry[] {
       return documentMenu(ref.uri, chipName(chip));
     case "label":
       return labelMenu(ref.name);
+    case "node":
+      return nodeMenu(ref.uri, chipName(chip));
     case "date": {
       const s = parseStamp(ref.datetime);
       return s ? dateMenu(ref.datetime, s) : [];
@@ -264,6 +278,7 @@ export function chipDragQuery(ref: AnyChipRef): string | null {
     case "contact":
       return contactQuery(ref.id);
     case "document":
+    case "node":
       return null;
     case "label":
       return labelQuery(ref.name);
@@ -278,7 +293,11 @@ export function chipDragQuery(ref: AnyChipRef): string | null {
  *  source the chip was seen in; a group's sync dashboard; a step's log;
  *  a document's card; a date's or a label's search. Null for a contact,
  *  which has no card of its own yet. */
-export function chipCardSource(ref: AnyChipRef, seenIn: string | null): string | null {
+export function chipCardSource(
+  ref: AnyChipRef,
+  seenIn: string | null,
+  shownAs = "",
+): string | null {
   switch (ref.kind) {
     case "entity":
       return entityCardSource(ref.uri);
@@ -288,6 +307,8 @@ export function chipCardSource(ref: AnyChipRef, seenIn: string | null): string |
       return null;
     case "document":
       return documentCardSource(ref.uri);
+    case "node":
+      return nodeCardSource(ref.uri, shownAs, ref.doc);
     case "label":
     case "date": {
       const q = chipDragQuery(ref);
@@ -370,7 +391,7 @@ export async function runChipAction(id: ChipEntryId, chip: Chip, host: ChipHost)
     host.search ? host.search(q, how) : host.openCard(searchSource(q));
   switch (id) {
     case "open": {
-      const source = chipCardSource(ref, host.seenIn ?? null);
+      const source = chipCardSource(ref, host.seenIn ?? null, name);
       if (source) host.openCard(source);
       return;
     }
@@ -388,6 +409,7 @@ export async function runChipAction(id: ChipEntryId, chip: Chip, host: ChipHost)
       if (ref.kind === "person") await copy(handleValue(ref.handle));
       if (ref.kind === "entity") await copy(entityFromUri(ref.uri)?.id ?? ref.uri);
       if (ref.kind === "document") await copy(documentId(ref.uri) ?? ref.uri);
+      if (ref.kind === "node") await copy(parseNode(ref.uri) ?? ref.uri);
       if (ref.kind === "date") await copy(ref.datetime.trim());
       return;
     case "copy-name": {
@@ -398,7 +420,7 @@ export async function runChipAction(id: ChipEntryId, chip: Chip, host: ChipHost)
     case "copy-both":
       if (ref.kind === "person") await copy(copyText(ref.handle, name));
       if (ref.kind === "entity") await copy(entityCopyText(ref.uri, name));
-      if (ref.kind === "document") {
+      if (ref.kind === "document" || ref.kind === "node") {
         await copyLink(documentCopyText(ref.uri, name), documentCopyHtml(ref.uri, name));
       }
       return;

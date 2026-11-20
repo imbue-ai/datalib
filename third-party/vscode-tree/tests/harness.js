@@ -84,12 +84,26 @@ function freshCard() {
 // The element, as a page would use it. Resolves once the top level (and
 // whatever `viewState` opens) has loaded.
 const opened = [];
+const menus = [];
 
-function mountElement(viewState) {
+// `draw` is `{ css, label(node) }`: the page draws each row's label as a
+// `<b class="drawn">` holding `label(node)`, styled by `css`.
+function mountElement(viewState, draw) {
   fetched.length = 0;
   opened.length = 0;
+  menus.length = 0;
   const tree = document.createElement('vs-tree');
   tree.addEventListener('open', (e) => opened.push(e.detail.node.id));
+  tree.addEventListener('menu', (e) => menus.push({ id: e.detail.node.id, x: e.detail.x, y: e.detail.y }));
+  if (draw) {
+    tree.extraCss = draw.css;
+    const label = new Function('node', `return (${draw.label})(node)`);
+    tree.renderLabel = (node, el) => {
+      const b = el.appendChild(document.createElement('b'));
+      b.className = 'drawn';
+      b.textContent = label(node);
+    };
+  }
   if (viewState) tree.viewState = viewState;
   const ready = new Promise((r) => tree.addEventListener('ready', r, { once: true }));
   tree.dataSource = dataSource;
@@ -106,7 +120,7 @@ async function mountUpstream(options = {}, viewState) {
   const renderer = {
     templateId: 'node',
     renderTemplate: (container) => container.appendChild(document.createElement('span')),
-    renderElement: (n, _i, span) => (span.textContent = n.element.label),
+    renderElement: (n, _i, span) => (span.textContent = n.element.label + (window.suffix ?? '')),
     disposeTemplate() {},
   };
   const ROOT = { id: 'root' };
@@ -131,6 +145,7 @@ window.harness = {
   mountUpstream,
   fetched,
   opened,
+  menus,
   pageErrors,
   find: (id) => {
     const walk = (list) => {

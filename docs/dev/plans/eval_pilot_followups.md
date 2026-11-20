@@ -13,7 +13,7 @@ was merged and each decision taken, at `479b6562d`.
 3. **"Fetch this first"**: a one-run priority input to the frontier
    (named channels or threads), or leave it to stop and a scoped
    restart.
-8. **`datalib-dag wait [request]`**: a verb that blocks until a request
+8. **`datalib-pipeline wait [request]`**: a verb that blocks until a request
    closes and exits with its outcome, beside `GET /api/requests/{id}`
    (#1524).
 13. **Saying who is calling**: Slack requests carry Chrome's

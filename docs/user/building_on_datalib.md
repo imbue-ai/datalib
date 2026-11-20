@@ -27,7 +27,7 @@ asks for one. So an app that wants fresh data asks, from cron, from
 launchd, or from its own loop:
 
 ```sh
-datalib-dag <data_root>/config.toml --sync gmail/ingest --sync slack/ingest --by today
+datalib-pipeline sync <data_root> gmail/ingest slack/ingest --by today
 ```
 
 A sync is a **request**: a row in `<data_root>/system/supervisor.sqlite`
@@ -47,7 +47,7 @@ already running does not start a second copy beside it: the step runs
 once more after the current run ends, which picks up whatever arrived
 meanwhile. Over HTTP, a request for the same steps as one already open
 comes back as that one instead of a new one; the command line always
-opens a new one. `datalib-dag status
+opens a new one. `datalib-pipeline status
 <data_root>/config.toml` lists the open requests, if you would rather
 not add one.
 
@@ -66,15 +66,15 @@ is in.
 
 ## Waiting, not waiting, and stopping
 
-`datalib-dag --sync` waits until its request is done and exits with
+`datalib-pipeline sync` waits until its request is done and exits with
 its outcome: 0 done, 2 failed, 130 stopped. One process runs the
 **loop** that serves every request on a data root: the app while it is
-open, otherwise the first `datalib-dag` that needed one. Any other
-`datalib-dag` hands its request to that loop, prints `following
+open, otherwise the first `datalib-pipeline` that needed one. Any other
+`datalib-pipeline` hands its request to that loop, prints `following
 request <id>`, and waits for it.
 
 **If your app cannot wait** as long as a first sync takes (hours, for a
-large mailbox), start `datalib-dag` detached, in its own process
+large mailbox), start `datalib-pipeline` detached, in its own process
 group with its output going to files, wait as long as you are willing
 to, and then read what the mirror holds. That is the right pattern
 today. Each download seals what it has fetched as it goes, so the
@@ -109,7 +109,12 @@ has work left: waiting its turn, or the loop has not taken the request
 on yet), `running`, or `done` (nothing left for it). Once a root is
 `done`, `last_run.status` says how its run ended: `succeeded`, `failed`
 or `stopped`. A step turned off is done without running, and its
-`state` says `off`. `progress` is what the step has reported in the
+`state` says `off`. A step whose `state` is `waiting` names what
+kind of thing holds it in `waiting_for` (`upstream`, `reader`, `lock`,
+`disk_space`, `config`) and which one in `state_detail`. `disk_space`
+means the data root's disk is under the config's `[disk_space]` floor:
+nothing starts until space is freed, so say so rather than wait.
+`progress` is what the step has reported in the
 loop's current run: the same numbers as `GET /api/runs/{run}/steps`
 (see "How fresh is the mirror?").
 
@@ -156,8 +161,8 @@ compared, not the finish, because a download already running when you
 asked runs once more after it ends. `POST /api/requests` answers with
 a list of requests, one per group it names, each with its `id`.
 
-**To stop your sync**, send your `datalib-dag` one SIGINT or SIGTERM,
-or run `datalib-dag stop <data_root>/config.toml <request-id>`. That
+**To stop your sync**, send your `datalib-pipeline` one SIGINT or SIGTERM,
+or run `datalib-pipeline stop <data_root>/config.toml <request-id>`. That
 stops your request and nothing else: its steps stop at their next
 consistent point and keep what they had sealed, and the next sync
 carries on from there. If that process was running the loop, it goes
@@ -171,13 +176,13 @@ steps at once). What happens then:
   is torn.
 - Every open request, yours included, stays open in
   `supervisor.sqlite`. The next process to take the loop, the next
-  `datalib-dag` or the app starting, closes the dead run and serves
+  `datalib-pipeline` or the app starting, closes the dead run and serves
   them.
-- **A `datalib-dag` that was already following a request when the loop
+- **A `datalib-pipeline` that was already following a request when the loop
   was killed does not take the loop over.** It tries for the loop only
   when another process announces something on the data root, and a
   killed process announces nothing; measured, it was still waiting a
-  minute later. Starting another `datalib-dag --sync` wakes it: one
+  minute later. Starting another `datalib-pipeline sync` wakes it: one
   of the two takes the loop and serves every open request. This is a
   gap, not a design.
 - A follower killed hard leaves its request open. The loop runs it to
@@ -232,7 +237,7 @@ holds the same series over time, for a rate or an ETA of your own. A
 that producer this step has not read yet. Other ways to watch the same
 numbers:
 
-- The `datalib-dag` that runs the loop prints `progress_length` and
+- The `datalib-pipeline` that runs the loop prints `progress_length` and
   `progress_inc` events on stderr. One that follows another's loop
   prints only its request's outcome.
 - With the app up, `GET /api/runs/{run}/steps` gives each step's state
@@ -359,7 +364,7 @@ the source still owes" for step 5, where it has one.
    fetched is readable:
 
    ```sh
-   datalib-dag <data_root>/config.toml --sync gmail/ingest --by myapp
+   datalib-pipeline sync <data_root> gmail/ingest --by myapp
    ```
 
    Your app can start now. From this run on, the source follows the
@@ -380,7 +385,7 @@ the source still owes" for step 5, where it has one.
      -d '{"roots": ["gmail/ingest"], "by": "myapp"}' <origin>/api/requests
    ```
 
-   With no app up, `datalib-dag --sync` waits for its request, so run it
+   With no app up, `datalib-pipeline sync` waits for its request, so run it
    as a background job. Keep your regular syncs going meanwhile: asking
    again while the backfill runs starts no second copy ("Nothing syncs on
    its own").
@@ -442,7 +447,7 @@ three ways:
    [the applets](applets.md#reading-any-store-with-sql).
 2. **A connection in your own process**, the fastest: a query on an open
    connection takes about 0.01 ms. From Python, under any interpreter,
-   `uv add imbue-datalib-reader==<version>`, the version `datalib-dag --version`
+   `uv add imbue-datalib-reader==<version>`, the version `datalib-pipeline --version`
    prints ([Reading a store from Python](../dev/doltlite.md#reading-a-store-from-python)).
    It calls `libdoltlite`, which a release installs under `lib/`, built
    from the same source as the binaries. The library has SQLite's C API,
@@ -534,7 +539,7 @@ first:
 - **Stop when told.** On SIGINT, finish or abandon the current unit of
   work, write nothing half-done, and exit; you have fifteen seconds.
 
-Run it alone with `datalib-dag <data_root>/config.toml --sync today/owed`;
+Run it alone with `datalib-pipeline sync <data_root> today/owed`;
 a step run by hand outside the loop records nothing, and what reads it
 never learns it moved.
 
@@ -672,26 +677,26 @@ picked up at once: a step that is running finishes under the
 definition it started with, and its next start uses the new one. So to
 shrink a first sync that is taking too long (a narrower `since`, fewer
 channels), edit the config, then stop the request
-(`datalib-dag stop`, or `POST /api/requests/<id>/stop`) and sync again:
+(`datalib-pipeline stop`, or `POST /api/requests/<id>/stop`) and sync again:
 what the stopped run sealed is kept.
 
-**With no app up**, the loop is a `datalib-dag`, and it reads the
-config only when it goes from idle to busy. A `datalib-dag --sync`
+**With no app up**, the loop is a `datalib-pipeline`, and it reads the
+config only when it goes from idle to busy. A `datalib-pipeline sync`
 started after your edit hands its request to that loop, which runs it
 with the **old** params and does not say so (a known bug, Datalib issue
 1363). Until that is fixed, after editing, let the open requests finish (or stop
-them) before syncing again. A `datalib-dag --sync` waits for its own
+them) before syncing again. A `datalib-pipeline sync` waits for its own
 request and exits when it closes (0 done, 2 failed, 130 stopped), so
 wait for the one you started to exit: run it in the foreground, or
-`wait` on it. For a request someone else opened, poll `datalib-dag
+`wait` on it. For a request someone else opened, poll `datalib-pipeline
 status`, which prints a line starting `request ` for each open request
 and `running ` for each step in progress:
 
 ```sh
-while datalib-dag status <data_root>/config.toml | grep -Eq '^(request|running) '; do sleep 10; done
+while datalib-pipeline status <data_root>/config.toml | grep -Eq '^(request|running) '; do sleep 10; done
 ```
 
-`datalib-dag --check <data_root>/config.toml` checks an edit without
+`datalib-pipeline check <data_root>/config.toml` checks an edit without
 running anything.
 
 **Starting a source over is a reset, not a setting.** When a mail
@@ -699,8 +704,8 @@ service stops honouring the download's change token (Gmail's
 `historyId` has aged out, or a JMAP server answers
 `cannotCalculateChanges`), the next run lists the account again by
 itself. To start over on purpose, reset the source's ingest step: the
-app's Reset, `POST /api/reset`, or `datalib-dag --reset <source>/ingest
---sync <source>/ingest` with no app up. That empties the store and
+app's Reset, `POST /api/reset`, or `datalib-pipeline reset <data_root> <source>/ingest`
+with no app up, then a sync of it. That empties the store and the sync
 downloads everything again.
 
 ## Your app's own writes

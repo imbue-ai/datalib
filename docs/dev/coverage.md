@@ -11,7 +11,7 @@ it is shaped the way it is.
 tools/run_coverage.sh \
   //tests/fixtures:ingested_tng_test \
   -- \
-  //datalib/backend/dag:datalib_dag_bin \
+  //datalib/backend/dag:datalib_pipeline_bin \
   //datalib/backend/datalib_step:datalib_step \
   //datalib/backend/signal-backup:signal_make_fixture
 ```
@@ -80,7 +80,7 @@ reached **677 first-party source files**, including:
     `contacts`, `perseus`, `email`, `yolink`)
   - shared infra (`doltlite_raw`, `blob_cas`, `load`, `latchkey`,
     `obs`, `signal-backup` crypto + writer)
-  - the `datalib-dag` orchestrator and `datalib-step` step binary
+  - the `datalib-pipeline` orchestrator and `datalib-step` step binary
     themselves
 
 That last point is the trick: `datalib_dag` and `datalib_step` are
@@ -129,7 +129,7 @@ profraws lived in the sandbox and were gone by then.
 1. **`-Cinstrument-coverage` reaches the binaries that run.** The
    `data` deps from the test to `datalib_dag` / `datalib_step` carry
    rules_rust's coverage transition through, so the binaries at
-   `bazel-bin/datalib/backend/dag/datalib_dag_bin` and
+   `bazel-bin/datalib/backend/dag/datalib_pipeline_bin` and
    `bazel-bin/datalib/backend/datalib_step/datalib_step` after a
    `bazelisk coverage` invocation are the instrumented ones. No custom
    transition, no `rustc_flags = select(...)`, no second binary target.
@@ -174,7 +174,7 @@ profraws lived in the sandbox and were gone by then.
    to see library code a `rust_test` exercises in-process, list the
    test itself after `--` as well.
 
-6. **A step keeps its profile path.** `datalib-dag` and `datalib-http`
+6. **A step keeps its profile path.** `datalib-pipeline` and `datalib-http`
    hand a step only the environment variables on an allowlist
    (`datalib_env::inherit_only`), and `LLVM_PROFILE_FILE` is not on it.
    Without help a step writes no profile, and the report still looks

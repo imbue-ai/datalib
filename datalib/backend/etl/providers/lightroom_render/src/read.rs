@@ -79,6 +79,14 @@ pub struct ImageRow {
     pub base_name: String,
     pub extension: Option<String>,
     pub folder: Option<String>,
+    /// The `AgLibraryFolder` id of each level of `folder`, top first, which
+    /// a rename or a move inside Lightroom keeps; `None` for a level the
+    /// catalog has no row for.
+    pub folder_ids: Vec<Option<String>>,
+    /// The root folder's `AgLibraryRootFolder` id.
+    pub root_id: Option<String>,
+    /// The root folder's `id_local`, which a level is looked up under.
+    pub root_local: Option<i64>,
     pub root_absolute: Option<String>,
     pub root_relative: Option<String>,
     pub caption: Option<String>,
@@ -113,6 +121,7 @@ pub async fn load(pool: &SqlitePool) -> Result<Catalog> {
         .is_some_and(|sql| sql.contains("\"xmp\""));
 
     let mut images = load_images(pool).await?;
+    load_folder_ids(pool, &mut images).await?;
     if has("AgLibraryIPTC") {
         load_iptc(pool, &mut images).await?;
     }
@@ -197,6 +206,8 @@ async fn load_images(pool: &SqlitePool) -> Result<BTreeMap<i64, ImageRow>> {
                 CAST(f.id_global AS TEXT) AS file_uuid, CAST(f.baseName AS TEXT) AS base_name, \
                 CAST(f.extension AS TEXT) AS extension, \
                 CAST(fo.pathFromRoot AS TEXT) AS folder, \
+                CAST(rf.id_global AS TEXT) AS root_id, \
+                CAST(fo.rootFolder AS INTEGER) AS root_local, \
                 CAST(rf.absolutePath AS TEXT) AS root_absolute, \
                 CAST(rf.relativePathFromCatalog AS TEXT) AS root_relative \
            FROM Adobe_images i \
@@ -227,6 +238,8 @@ async fn load_images(pool: &SqlitePool) -> Result<BTreeMap<i64, ImageRow>> {
                 base_name: r.get("base_name"),
                 extension: non_empty(r.get("extension")),
                 folder: non_empty(r.get("folder")),
+                root_id: non_empty(r.get("root_id")),
+                root_local: r.get("root_local"),
                 root_absolute: non_empty(r.get("root_absolute")),
                 root_relative: non_empty(r.get("root_relative")),
                 ..ImageRow::default()
@@ -234,6 +247,56 @@ async fn load_images(pool: &SqlitePool) -> Result<BTreeMap<i64, ImageRow>> {
             (id_local, image)
         })
         .collect())
+}
+
+/// Each level of each photo's folder, by its `AgLibraryFolder` row: the
+/// catalog keeps one per folder it knows, keyed by its root and its path
+/// under it (`2369/`, `2369/Risa/`).
+async fn load_folder_ids(pool: &SqlitePool, images: &mut BTreeMap<i64, ImageRow>) -> Result<()> {
+    let rows = sqlx::query(
+        "SELECT CAST(rootFolder AS INTEGER) AS root, CAST(pathFromRoot AS TEXT) AS path, \
+                CAST(id_global AS TEXT) AS id \
+           FROM AgLibraryFolder",
+    )
+    .fetch_all(pool)
+    .await
+    .context("read AgLibraryFolder")?;
+    let ids: HashMap<(i64, String), String> = rows
+        .into_iter()
+        .filter_map(|r| {
+            let root: Option<i64> = r.get("root");
+            let path: Option<String> = r.get("path");
+            let id: Option<String> = r.get("id");
+            Some((
+                (root?, path.unwrap_or_default()),
+                id.filter(|i| !i.is_empty())?,
+            ))
+        })
+        .collect();
+    for image in images.values_mut() {
+        let Some(root) = image.root_local else {
+            continue;
+        };
+        image.folder_ids = folder_levels(image.folder.as_deref())
+            .map(|(_, path)| ids.get(&(root, path)).cloned())
+            .collect();
+    }
+    Ok(())
+}
+
+/// Each level of a folder path under its root, top first: its name, and
+/// its path from the root as Lightroom writes it, with a trailing `/`.
+pub fn folder_levels(folder: Option<&str>) -> impl Iterator<Item = (&str, String)> {
+    let mut path = String::new();
+    folder
+        .unwrap_or("")
+        .split('/')
+        .filter(|p| !p.is_empty())
+        .map(move |part| {
+            path.push_str(part);
+            path.push('/');
+            (part, path.clone())
+        })
 }
 
 async fn load_iptc(pool: &SqlitePool, images: &mut BTreeMap<i64, ImageRow>) -> Result<()> {
@@ -686,5 +749,51 @@ mod tests {
                 vec!["Shore leave".to_string(), "Risa".to_string()],
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod folder_tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    /// Each level of a photo's folder is found by its root and its path
+    /// from it, and a level with no row is none.
+    #[tokio::test]
+    async fn each_level_of_a_folder_is_found_by_its_root_and_path() {
+        // One connection: each connection to `:memory:` is a database of its own.
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE AgLibraryFolder (id_local INTEGER, id_global TEXT, \
+             pathFromRoot TEXT, rootFolder INTEGER)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO AgLibraryFolder VALUES \
+             (1, 'F-ROOT', '', 10), (2, 'F-2369', '2369/', 10), \
+             (3, 'F-RISA', '2369/Risa/', 10), (4, 'F-ELSEWHERE', '2369/', 11)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let image = |folder: &str| ImageRow {
+            root_local: Some(10),
+            folder: Some(folder.into()),
+            ..ImageRow::default()
+        };
+        let mut images = BTreeMap::from([(1, image("2369/Risa/")), (2, image("2369/Vulcan/"))]);
+        load_folder_ids(&pool, &mut images).await.unwrap();
+        let id = |s: &str| Some(s.to_string());
+        assert_eq!(images[&1].folder_ids, vec![id("F-2369"), id("F-RISA")]);
+        assert_eq!(images[&2].folder_ids, vec![id("F-2369"), None]);
+        pool.close().await;
     }
 }

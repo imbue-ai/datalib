@@ -42,7 +42,7 @@ test("a group's commit history opens from the context menu as a card", async ({ 
   await expect(store).toContainText("indexed_markdown.doltlite_db");
   const commit = rows.filter({ hasText: "document(s)" }).first();
   await expect(commit.locator(".hc-copy-id")).toHaveAttribute("title", /\(([0-9a-f]{40})\)$/);
-  // The fixture is built by `datalib-dag`, so its commits carry the run
+  // The fixture is built by `datalib-pipeline`, so its commits carry the run
   // that made them.
   await expect(commit.locator(".hc-run")).toBeVisible();
 

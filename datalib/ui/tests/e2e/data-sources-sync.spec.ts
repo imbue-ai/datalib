@@ -155,7 +155,7 @@ test.afterEach(async ({ page }) => {
 });
 
 test.describe("a real sync, driven from the grid", () => {
-  // Each test writes the config, runs a real `datalib-dag`, and waits
+  // Each test writes the config, runs a real `datalib-pipeline`, and waits
   // for it to settle. Playwright's 30 s default is not enough headroom
   // for that on a cold action cache.
   test.setTimeout(120_000);

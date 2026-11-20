@@ -72,7 +72,7 @@ a quoted "in reply to" line naming the upstream id it points at, and is
 a reply edge to that message when the store holds it. A `HIDDEN` event
 gets a one-line system note, so a room made only of those still renders.
 A retired `period` param on the render step is dropped before the
-params are read, and `datalib-dag --check` warns at its line.
+params are read, and `datalib-pipeline check` warns at its line.
 
 Each document declares the `threads`, `participants`,
 `mx_room_messages` and `mx_reactions` rows it read, so a room whose

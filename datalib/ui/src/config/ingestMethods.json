@@ -179,6 +179,12 @@
       "reach": "local"
     }
   ],
+  "markdown": [
+    {
+      "path": "fswalk",
+      "reach": "local"
+    }
+  ],
   "media": [
     {
       "path": "fswalk",

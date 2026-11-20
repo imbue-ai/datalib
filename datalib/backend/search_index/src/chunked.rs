@@ -220,17 +220,24 @@ impl InferenceCache {
             }
             return Ok(0);
         }
-        let gone = sqlx::query(
-            "DELETE FROM vectors WHERE model <> ? OR hash NOT IN (SELECT hash FROM search_chunks)",
-        )
-        .bind(model)
-        .execute(&self.pool)
-        .await
-        .context("sweep the vectors no chunk names")?
-        .rows_affected();
+        let gone = sqlx::query(SWEEP_SQL)
+            .bind(model)
+            .execute(&self.pool)
+            .await
+            .context("sweep the vectors no chunk names")?
+            .rows_affected();
         Ok(gone)
     }
 }
+
+/// The vectors no filed chunk names, found by reading the keys' index
+/// (`cache::KEYS`) rather than the table, whose every page holds a 3 KB
+/// vector: a whole read of a 2.7 GB cache took 150 s cold. Only the rows
+/// found are then read, by their key.
+pub(crate) const SWEEP_SQL: &str = "\
+    DELETE FROM vectors WHERE (model, hash) IN ( \
+        SELECT model, hash FROM vectors INDEXED BY vectors_keys \
+         WHERE model <> ?1 OR hash NOT IN (SELECT hash FROM search_chunks))";
 
 pub(crate) fn filed(
     start: i64,

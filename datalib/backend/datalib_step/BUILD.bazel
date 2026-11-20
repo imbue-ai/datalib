@@ -2,7 +2,7 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 load("//tools:insta.bzl", "insta_update")
 
 # `datalib-step` — the step program datalib ships, which the runner
-# (//datalib/backend/dag:datalib_dag_bin) starts as `datalib-step run
+# (//datalib/backend/dag:datalib_pipeline_bin) starts as `datalib-step run
 # <function> [<type>]`, the step's `command`. Honors the step protocol
 # (NDJSON events on stdout, final outcome line).
 #
@@ -34,6 +34,7 @@ rust_binary(
         "//datalib/backend/id:datalib_id",
         "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/sql_work:datalib_sql_work",
         "//datalib/backend/etl/providers/claude:datalib_etl_claude",
         "//datalib/backend/etl/providers/claude_render:datalib_etl_claude_render",
         "//datalib/backend/etl/providers/claude_config:datalib_etl_claude_config",
@@ -97,6 +98,9 @@ rust_binary(
         "//datalib/backend/etl/providers/notion_config:datalib_etl_notion_config",
         "//datalib/backend/etl/providers/media:datalib_etl_media",
         "//datalib/backend/etl/providers/media_config:datalib_etl_media_config",
+        "//datalib/backend/etl/providers/markdown:datalib_etl_markdown",
+        "//datalib/backend/etl/providers/markdown_config:datalib_etl_markdown_config",
+        "//datalib/backend/etl/providers/markdown_render:datalib_etl_markdown_render",
         "//datalib/backend/etl/providers/pdf:datalib_etl_pdf",
         "//datalib/backend/etl/providers/pdf_render:datalib_etl_pdf_render",
         "//datalib/backend/etl/providers/pdf_config:datalib_etl_pdf_config",
@@ -238,7 +242,7 @@ rust_test(
     crate_root = "tests/step_tests/main.rs",
     data = glob(["tests/step_tests/snapshots/*.snap"], allow_empty = True) + [
         ":datalib_step",
-        "//datalib/backend/dag:datalib_dag_bin",
+        "//datalib/backend/dag:datalib_pipeline_bin",
         "//datalib/backend/etl/providers/calendar:split_fixture",
         "//datalib/backend/etl/providers/sms_backup_restore:tng_fixture",
         "//tests/fixtures:ingested/inference_cache.sqlite",
@@ -251,7 +255,7 @@ rust_test(
     edition = "2021",
     env = {
         "CALENDAR_SPLIT_FIXTURE_DIR": "datalib/backend/etl/providers/calendar/tests/fixtures/calendar_split_tng",
-        "DATALIB_DAG_BIN": "$(rootpath //datalib/backend/dag:datalib_dag_bin)",
+        "DATALIB_PIPELINE_BIN": "$(rootpath //datalib/backend/dag:datalib_pipeline_bin)",
         "DATALIB_STEP_BIN": "$(rootpath :datalib_step)",
         "DOLTLITE_BIN": "$(rootpath //third-party/doltlite:doltlite)",
         "EMBED_MODEL": "$(rootpath //third-party/embedding_models:embeddinggemma)",

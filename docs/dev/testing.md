@@ -290,7 +290,7 @@ which is why it is three tests.
 
 The page under test keeps changing on its own. The Manage grid is drawn
 again after every remount, whenever the loop's record moves, and on a
-clock, and a real `datalib-dag` runs the syncs. A month of CI
+clock, and a real `datalib-pipeline` runs the syncs. A month of CI
 (September 2026) had about a hundred flaky e2e failures, and nearly all
 of them were one of two mistakes: the test looked at the page between
 two drawings, or it expected to catch a state the backend was free to
@@ -475,7 +475,7 @@ step=bazel-bin/datalib/backend/datalib_step/datalib_step
 echo '{"fixture_path": "'$PWD'/datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api"}' > /tmp/synth.json
 $step synthesize chatgpt --name chatgpt --params-file /tmp/synth.json --out /tmp/tapes
 DATALIB_HTTP_PLAYBACK=/tmp/tapes DATALIB_HTTP_PLAYBACK_DELAY_MS=1500 \
-  bazel-bin/datalib/backend/bin/datalib-dag <root>/config.toml
+  bazel-bin/datalib/backend/bin/datalib-pipeline sync <root>
 ```
 
 with `DATALIB_STEP_CHECKPOINT_CADENCE = "2"` in that config's `[env]`
@@ -547,7 +547,7 @@ accidental / noise, per cluster).
 
 Both start by upgrading `dag.toml` as `datalib-http` would
 (`datalib_migrate_config::upgrade_unattended`): the bake runs
-`datalib-dag`, which loads a config but never upgrades one, so a rename
+`datalib-pipeline`, which loads a config but never upgrades one, so a rename
 the app makes on sight would otherwise fail the bake. The bake writes the
 upgraded text back over `dag.toml`, so the rename shows in the data repo's
 diff; a rewrite that refuses fails it by name.
@@ -579,7 +579,7 @@ The test makes three pipeline runs, each asserting something different:
    It also asserts that no store's `problems` table changed: run 1's
    problems are still standing, and a problem recorded again unchanged
    keeps its row.
-3. **`--reset`, then sync** — empties the store and re-downloads it, then
+3. **`reset`, then sync** — empties the store and re-downloads it, then
    asserts the content tables come back byte-identical. This is what catches a
    per-fetch field leaking into a content payload (it belongs in the
    `volatile_payload` sidecar instead). It also asserts that the contacts
@@ -723,6 +723,25 @@ English ones' stray word matches push the target down. The set is small and
 was picked where English already worked, so read it as "crossing languages
 costs little", not as a hit rate.
 
+## A statement that walks a whole table needs a reason
+
+`//tests/fixtures:sql_scans_test` checks every statement the TNG fixture
+sync runs that walks a whole table or index (SQLite's full-scan count
+above zero) against `tests/fixtures/sql_scans_allowed.toml`. Every
+process of the sync records them (`DATALIB_SQL_CENSUS`,
+`datalib_sql_work`), and `:ingested_tng` lists them in
+`ingested/sql_scans.jsonl`. A fixture's tables hold a few rows, so the
+scan costs nothing here; on a library it costs the whole table on every
+call. When the test fails on a new statement, give the statement an
+index, or paste the stanza it prints into the allowlist with a reason:
+it reads every row anyway, or the table stays small. A statement that
+reads only the catalog (`sqlite_master`, `pragma_*`) is allowed by rule.
+A scan of an empty table counts nothing, so a statement can show in one
+run and not the next, by the order the steps ran; an entry missing from
+a run is printed as a note, not a failure, and is worth removing when
+its statement is gone from the tree. The test sees only what the fixture sync runs: the server's
+routes and the applets' searches are not in it.
+
 ## Auditing a real sync's logs
 
 Some problems pass every test. A sync can be correct and still slow. It
@@ -755,6 +774,7 @@ ids are in `runs`. What to look at, and where:
 | would the ETA have been right | `event = 'eta_shown'` (debug): what a running step's Manage row showed, once a minute. `metric_samples` for `queued` and `done_total` say why: a flat `queued` while `done_total` climbs never converges, and a jump in `done_total` is free work inflating the pace. |
 | is a migration repeating | `msg = 'migrated'` per store, across runs |
 | what is slow to read | `msg LIKE '%slow statement%took %'`, one line per attempt (`top_statement`, `total_ms`), and `msg LIKE 'slow statement%'` at `debug` for each (`db.statement`, `elapsed`); `GET /api/manage/rows` request times; the size of each `-wal` beside its file |
+| which statements walk many rows for few | `msg LIKE '%heavy statement%did%'`, one line per attempt (`top_statement`, `top_file`, `top_params`), and `target = 'datalib::sql_work'` for each (`statement`, `file`, `params`, `vm_steps`, `rows`, `fullscan_steps`). Steps count work, not time, so a cold disk does not move them. |
 | what was left behind | files under each `render_markdown/` against its documents; a directory under the root that no `[[groups]]` names |
 
 ## macOS permissions in the desktop app (by hand)

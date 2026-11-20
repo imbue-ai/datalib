@@ -25,7 +25,7 @@
 set -euo pipefail
 
 if [[ -n "${DATALIB_BIN_DIR:-}" ]]; then
-    dag="${DATALIB_BIN_DIR}/datalib-dag"
+    dag="${DATALIB_BIN_DIR}/datalib-pipeline"
     shell="${DATALIB_BIN_DIR}/datalib-doltlite"
     vcf="${DATALIB_VCF_DIR:?set DATALIB_VCF_DIR alongside DATALIB_BIN_DIR}/Bridge.vcf"
 else
@@ -36,7 +36,7 @@ else
       || source "$0.runfiles/$f" 2>/dev/null \
       || source "$0.runfiles/_main/$f" 2>/dev/null \
       || { echo >&2 "ERROR: cannot find bazel runfiles bootstrap"; exit 1; }
-    dag="$(rlocation _main/datalib/backend/bin_unstamped/datalib-dag)"
+    dag="$(rlocation _main/datalib/backend/bin_unstamped/datalib-pipeline)"
     shell="$(rlocation _main/datalib/backend/bin_unstamped/datalib-doltlite)"
     vcf="$(rlocation _main/datalib/backend/etl/providers/contacts/tests/fixtures/carddav_tng/Bridge.vcf)"
 fi
@@ -109,7 +109,7 @@ tree() {  # <pid> — the pid and every process below it
 }
 
 dump_hang() {  # <dag pid>
-    echo "datalib-dag still running after ${deadline}s; what it had said:"
+    echo "datalib-pipeline still running after ${deadline}s; what it had said:"
     cat "$root/dag.stderr"
     local p t
     for p in $(tree "$1"); do
@@ -142,10 +142,10 @@ dump_hang() {  # <dag pid>
     fi
 }
 
-# datalib-step resolves as a sibling of datalib-dag, which is how :bin
+# datalib-step resolves as a sibling of datalib-pipeline, which is how :bin
 # lays them out and how the installer does.
 echo "running $dag"
-"$dag" "$root/config.toml" --now 2369-04-15T00:00:00+00:00 2>"$root/dag.stderr" &
+"$dag" sync "$root" --now 2369-04-15T00:00:00+00:00 2>"$root/dag.stderr" &
 dag_pid=$!
 give_up_at=$((SECONDS + deadline))
 while kill -0 "$dag_pid" 2>/dev/null; do
@@ -157,7 +157,7 @@ while kill -0 "$dag_pid" 2>/dev/null; do
     sleep 0.2
 done
 wait "$dag_pid" \
-    || { echo "datalib-dag failed:" >&2; cat "$root/dag.stderr" >&2; exit 1; }
+    || { echo "datalib-pipeline failed:" >&2; cat "$root/dag.stderr" >&2; exit 1; }
 
 commits() {  # <store> — prints the commit count, or fails loudly
     local out

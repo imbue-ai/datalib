@@ -1,4 +1,4 @@
-//! Two `datalib-dag` invocations on one data root: the second hands its
+//! Two `datalib-pipeline` invocations on one data root: the second hands its
 //! request to the loop the first is running, instead of failing on the
 //! lock, and each exits with its own request's outcome. This is how an
 //! agent's sync runs while the app's does (`dag/README.md`
@@ -10,9 +10,9 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 fn dag_bin() -> String {
-    let p = Path::new(&std::env::var("DATALIB_DAG_BIN").expect("DATALIB_DAG_BIN is set"))
+    let p = Path::new(&std::env::var("DATALIB_PIPELINE_BIN").expect("DATALIB_PIPELINE_BIN is set"))
         .canonicalize()
-        .expect("DATALIB_DAG_BIN");
+        .expect("DATALIB_PIPELINE_BIN");
     p.to_string_lossy().into_owned()
 }
 
@@ -34,12 +34,13 @@ fn root_with_two_sources() -> tempfile::TempDir {
 
 fn sync(root: &Path, source: &str) -> Child {
     Command::new(dag_bin())
-        .arg(root.join("config.toml"))
-        .args(["--sync", source])
+        .arg("sync")
+        .arg(root)
+        .arg(source)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn datalib-dag")
+        .expect("spawn datalib-pipeline")
 }
 
 fn wait_for(what: &str, ready: impl Fn() -> bool) {

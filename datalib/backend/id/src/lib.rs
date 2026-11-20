@@ -93,6 +93,8 @@ pub enum IdNamespace {
     /// A Lightroom catalog's images, by the `id_global` it mints for each.
     Lightroom,
     Linkedin,
+    /// A folder of markdown files, each note by its path under it.
+    Markdown,
     Notion,
     Pdf,
     Perseus,

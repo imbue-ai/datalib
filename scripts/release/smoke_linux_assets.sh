@@ -48,7 +48,7 @@ echo "ldd: $loaded ELF files"
 
 bin="$(echo "$work"/datalib/datalib-*)"
 [[ -d "$bin" ]] || { echo "smoke_linux_assets: error: no datalib-*/ directory in $1" >&2; exit 1; }
-for name in datalib-dag datalib-step datalib-http datalib-applet datalib-doltlite; do
+for name in datalib-pipeline datalib-step datalib-http datalib-applet datalib-doltlite; do
     "$bin/$name" --version || { echo "smoke_linux_assets: error: $name did not start" >&2; failed=1; }
 done
 "$work/runtime/node/bin/node" --version \

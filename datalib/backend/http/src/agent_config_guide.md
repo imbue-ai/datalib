@@ -157,7 +157,7 @@ one problem per attempt. `error` is only the first of them.
 To check text without saving it, `POST /api/config/check` with the same
 body; it returns the same shape and writes nothing.
 
-From a terminal, `datalib-dag --check <data_root>/config.toml` prints
+From a terminal, `datalib-pipeline check <data_root>/config.toml` prints
 the same diagnostics as `file:line:col: severity: message`, with the
 offending line and a `help:` line under each. Exit 0 when every entry
 loads, 1 if the file is not a config at all, 2 if some entries were

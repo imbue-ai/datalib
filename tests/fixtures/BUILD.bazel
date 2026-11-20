@@ -109,7 +109,7 @@ filegroup(
 # the server the way the web client drives it: `datalib-http` on the
 # workspace, the config built with the Setup tab's endpoints and every
 # sync a `POST /api/requests` (sync_drivers.py). `:ingested_tng_test`
-# runs the same script through `datalib-dag`, so both doors are covered
+# runs the same script through `datalib-pipeline`, so both doors are covered
 # over the same fixture. The pipeline runs
 # every source's download+render step pair over the checked-in
 # fixtures and the index fan-in stacks the resulting render stores into
@@ -129,7 +129,7 @@ genrule(
     name = "ingested_tng",
     srcs = [
         ":source_json",
-        "//datalib/backend/dag:datalib_dag_bin",
+        "//datalib/backend/dag:datalib_pipeline_bin",
         "//datalib/backend/datalib_step:datalib_step",
         "//datalib/backend/http:datalib_http_bin",
         # CLI that converts the signal TNG JSON spec into an encrypted
@@ -156,6 +156,7 @@ genrule(
         "ingested/rendered_md.tar",
         "ingested/time_series.tar",
         "ingested/config_body.toml",
+        "ingested/sql_scans.jsonl",
     ],
     tools = [
         "check_ingested.py",
@@ -163,6 +164,7 @@ genrule(
         "make_beeper_texts.py",
         "quiet.sh",
         "run_sync_pipeline.py",
+        "sql_scans.py",
         "sync_drivers.py",
         "tar_rendered.py",
     ],
@@ -172,7 +174,7 @@ genrule(
             # failure; see quiet.sh.
             "$(execpath quiet.sh) $(RULEDIR)/sync.log",
             "python3 $(execpath run_sync_pipeline.py)",
-            "$(execpath //datalib/backend/dag:datalib_dag_bin)",
+            "$(execpath //datalib/backend/dag:datalib_pipeline_bin)",
             "$(execpath //datalib/backend/datalib_step:datalib_step)",
             "$(execpath //datalib/backend/signal-backup:signal_make_fixture)",
             "$(execpath //datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture)",
@@ -249,6 +251,7 @@ genrule(
         # The sources as render-only groups, for materialize_tng_root.sh
         # to splice into the root's config.toml.
         "cp $(RULEDIR)/sync_workspace/config_body.toml $(execpath ingested/config_body.toml)",
+        "python3 $(execpath sql_scans.py) $(RULEDIR)/sync_workspace/sql_census $(RULEDIR)/sync_workspace $(execpath ingested/sql_scans.jsonl)",
         # A sync can end without error and leave a source out of the
         # index; such a fixture must not build, or it is cached.
         " ".join([
@@ -321,6 +324,22 @@ _TNG_FIXTURE_ARGS = [
     "datalib/backend/etl/providers/google_drive/tests/fixtures/google_drive_tng/tng.json",
 ]
 
+# Every statement the fixture sync runs that walks a whole table or index
+# is in sql_scans_allowed.toml with a reason (docs/dev/testing.md).
+py_test(
+    name = "sql_scans_test",
+    size = "small",
+    srcs = ["sql_scans_test.py"],
+    args = [
+        "$(rootpath ingested/sql_scans.jsonl)",
+        "$(rootpath sql_scans_allowed.toml)",
+    ],
+    data = [
+        "ingested/sql_scans.jsonl",
+        "sql_scans_allowed.toml",
+    ],
+)
+
 # The check `:ingested_tng` makes before it succeeds, against the fixture
 # it built and against copies of it with a source taken out.
 py_test(
@@ -360,7 +379,7 @@ _TNG_EMBED_MODEL_ENV = {
 #      rules_rust's coverage transition propagates through `data`,
 #      not just `deps`. See //docs/dev/coverage.md for the full workflow.
 #   3. The test runs the pipeline THREE times against one data root
-#      (fresh / steady-state / `--reset` then sync) to exercise
+#      (fresh / steady-state / `reset` then sync) to exercise
 #      signal's `ingested_backups` Blake3 resume cursor and the
 #      reset-clears-cursor path.
 py_test(
@@ -368,7 +387,7 @@ py_test(
     srcs = ["ingested_tng_test.py"],
     args = [
         "$(rootpath run_sync_pipeline.py)",
-        "$(rootpath //datalib/backend/dag:datalib_dag_bin)",
+        "$(rootpath //datalib/backend/dag:datalib_pipeline_bin)",
         "$(rootpath //datalib/backend/datalib_step:datalib_step)",
         "$(rootpath //datalib/backend/signal-backup:signal_make_fixture)",
         "$(rootpath //datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture)",
@@ -384,7 +403,7 @@ py_test(
         "run_sync_pipeline.py",
         "sync_drivers.py",
         ":source_json",
-        "//datalib/backend/dag:datalib_dag_bin",
+        "//datalib/backend/dag:datalib_pipeline_bin",
         "//datalib/backend/datalib_step:datalib_step",
         "//datalib/backend/signal-backup:signal_make_fixture",
         "//datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture",
@@ -406,7 +425,7 @@ py_test(
     srcs = ["render_contract_test.py"],
     args = [
         "$(rootpath run_sync_pipeline.py)",
-        "$(rootpath //datalib/backend/dag:datalib_dag_bin)",
+        "$(rootpath //datalib/backend/dag:datalib_pipeline_bin)",
         "$(rootpath //datalib/backend/datalib_step:datalib_step)",
         "$(rootpath //datalib/backend/signal-backup:signal_make_fixture)",
         "$(rootpath //datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture)",
@@ -422,7 +441,7 @@ py_test(
         "run_sync_pipeline.py",
         "sync_drivers.py",
         ":source_json",
-        "//datalib/backend/dag:datalib_dag_bin",
+        "//datalib/backend/dag:datalib_pipeline_bin",
         "//datalib/backend/datalib_step:datalib_step",
         "//datalib/backend/signal-backup:signal_make_fixture",
         "//datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture",
@@ -529,12 +548,12 @@ py_test(
     name = "runs_store_e2e_test",
     size = "small",
     srcs = ["runs_store_e2e_test.py"],
-    args = ["$(rootpath //datalib/backend/dag:datalib_dag_bin)"],
-    data = ["//datalib/backend/dag:datalib_dag_bin"],
+    args = ["$(rootpath //datalib/backend/dag:datalib_pipeline_bin)"],
+    data = ["//datalib/backend/dag:datalib_pipeline_bin"],
 )
 
 # `GET /metrics` read by Prometheus's own parser: a step run by the real
-# `datalib-dag`, the root served by the real `datalib-http`, the scrape
+# `datalib-pipeline`, the root served by the real `datalib-http`, the scrape
 # parsed by `prometheus_client`. The one Python dependency any test here
 # takes, and only because the parser is the claim.
 py_test(
@@ -542,14 +561,32 @@ py_test(
     size = "small",
     srcs = ["metrics_export_e2e_test.py"],
     args = [
-        "$(rootpath //datalib/backend/dag:datalib_dag_bin)",
+        "$(rootpath //datalib/backend/dag:datalib_pipeline_bin)",
         "$(rootpath //datalib/backend/http:datalib_http_bin)",
     ],
     data = [
-        "//datalib/backend/dag:datalib_dag_bin",
+        "//datalib/backend/dag:datalib_pipeline_bin",
         "//datalib/backend/http:datalib_http_bin",
     ],
     deps = [requirement("prometheus-client")],
+)
+
+# Both sync drivers fail at once, naming the `[disk_space]` floor, when
+# the loop holds their steps for disk space, rather than polling a
+# request that will never close.
+py_test(
+    name = "sync_drivers_test",
+    size = "medium",
+    srcs = ["sync_drivers_test.py"],
+    args = [
+        "$(rootpath //datalib/backend/dag:datalib_pipeline_bin)",
+        "$(rootpath //datalib/backend/http:datalib_http_bin)",
+    ],
+    data = [
+        "sync_drivers.py",
+        "//datalib/backend/dag:datalib_pipeline_bin",
+        "//datalib/backend/http:datalib_http_bin",
+    ],
 )
 
 # The sync state machine under a storm (docs/dev/plans/http_driven_e2e.md
@@ -565,7 +602,7 @@ py_test(
     srcs = ["tng_fuzz_test.py"],
     args = [
         "$(rootpath //third-party/doltlite:doltlite)",
-        "$(rootpath //datalib/backend/dag:datalib_dag_bin)",
+        "$(rootpath //datalib/backend/dag:datalib_pipeline_bin)",
         "$(rootpath //datalib/backend/datalib_step:datalib_step)",
         "$(rootpath //datalib/backend/signal-backup:signal_make_fixture)",
         "$(rootpath //datalib/backend/etl/providers/whatsapp:whatsapp_make_fixture)",
@@ -580,7 +617,7 @@ py_test(
         "run_sync_pipeline.py",
         "sync_drivers.py",
         ":source_json",
-        "//datalib/backend/dag:datalib_dag_bin",
+        "//datalib/backend/dag:datalib_pipeline_bin",
         "//datalib/backend/datalib_step:datalib_step",
         "//datalib/backend/http:datalib_http_bin",
         "//datalib/backend/signal-backup:signal_make_fixture",

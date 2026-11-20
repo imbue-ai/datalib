@@ -10,6 +10,8 @@ import {
   nodeCardProps,
   nodeOpts,
   rowParts,
+  rowTitle,
+  treeChip,
   placeNodes,
   previewArgs,
   sourceNodes,
@@ -32,6 +34,7 @@ function child(over: Partial<Child> & { uuid: string }): Child {
     kind: "Message",
     name: null,
     author: null,
+    author_handle: null,
     created_at: null,
     preview: null,
     markdown_uuid: null,
@@ -52,22 +55,20 @@ describe("sourceNodes", () => {
     ]);
   });
 
-  /** A source shows its mark instead of its type in capitals; a source
-   *  with no mark keeps the words. */
-  it("shows a source's mark, and its type only where it has none", () => {
+  /** A source is drawn as its group's chip, led by its row's mark until
+   *  the server says what the source is now. */
+  it("is drawn as its group's chip, with its row's mark", () => {
     const slack = {
-      ...group("slack", "Slack", "Slack"),
-      name: { id: "slack", label: "Slack", icon: "slack" },
+      ...group("slack", "Work Slack", "Slack"),
+      name: { id: "slack", label: "Work Slack", icon: "slack" },
     };
-    const nodes = sourceNodes(
-      [slack, group("notion", "Notion", "Notion")],
-      () => true,
-      (name) => (name === "slack" ? "/assets/slack.svg" : null),
-    );
-    expect(nodes.map((n) => [n.label, n.icon, n.kind])).toEqual([
-      ["Slack", "/assets/slack.svg", undefined],
-      ["Notion", undefined, "Notion"],
-    ]);
+    const [node] = sourceNodes([slack]);
+    expect(treeChip(node)).toEqual({
+      kind: "group",
+      uri: "datalib:group/slack",
+      shown: "Work Slack",
+      mark: "slack",
+    });
   });
 
   it("lists each typed group as a source's top, in order", () => {
@@ -79,9 +80,35 @@ describe("sourceNodes", () => {
       group("slack", "Enterprise Slack", "Slack"),
     ];
     expect(sourceNodes(rows)).toEqual([
-      { id: "source:tng_email", label: "Picard's mail", kind: "Email", hasChildren: true },
-      { id: "source:slack", label: "Enterprise Slack", kind: "Slack", hasChildren: true },
+      { id: "source:tng_email", label: "Picard's mail", hasChildren: true },
+      { id: "source:slack", label: "Enterprise Slack", hasChildren: true },
     ]);
+  });
+});
+
+describe("treeChip", () => {
+  /** Every node of the tree is a chip: a place by its own uuid, carrying
+   *  the document it is, and nothing that is neither a uuid nor a source. */
+  it("draws a place as its node's chip, and nothing for any other id", () => {
+    const id = "00000000-0000-8570-90c4-e54c531f3fff";
+    const [page] = placeNodes([
+      child({
+        uuid: id,
+        kind: "Notion page",
+        name: "Shift Roster",
+        container: true,
+        markdown_uuid: id,
+      }),
+    ]);
+    expect(treeChip(page)).toEqual({
+      kind: "node",
+      id,
+      name: "Shift Roster",
+      nodeKind: "Notion page",
+      doc: id,
+    });
+    expect(treeChip({ id: "..", label: "x", hasChildren: false })).toBeNull();
+    expect(treeChip({ id: "source:..", label: "x", hasChildren: false })).toBeNull();
   });
 });
 
@@ -175,6 +202,57 @@ describe("rowParts", () => {
   it("leaves out text that only repeats the title", () => {
     const page = child({ uuid: "p", name: "Handbook", preview: "Handbook" });
     expect(rowParts(page)).toEqual({ title: "Handbook", snippet: null });
+  });
+});
+
+describe("rowTitle", () => {
+  const ID = "00000000-0000-8570-90c4-e54c531f3fff";
+
+  /** A node card's rows are chips where they name something: a thread by
+   *  its node, a message by its author, a page by itself. */
+  it("titles a row by the chip it names", () => {
+    const thread = child({
+      uuid: ID,
+      container: true,
+      kind: "Slack Thread",
+      name: "#bridge",
+      preview: "Shields up.",
+      markdown_uuid: ID,
+    });
+    expect(rowTitle(thread, "#bridge")).toEqual({
+      kind: "node",
+      id: ID,
+      name: "Shields up.",
+      nodeKind: "Slack Thread",
+      doc: ID,
+    });
+    const message = child({
+      uuid: "m",
+      author: "Worf",
+      author_handle: "slack:T1/U_WORF",
+      preview: "Today",
+    });
+    expect(rowTitle(message)).toEqual({ kind: "person", handle: "slack:T1/U_WORF", shown: "Worf" });
+    const pdf = child({ uuid: ID, kind: "PDF Document", name: "Hull Survey", markdown_uuid: ID });
+    expect(rowTitle(pdf)).toEqual({ kind: "document", page: ID, title: "Hull Survey" });
+  });
+
+  /** A name that leads, or an author with no handle, stays words: a chip
+   *  for the author would title the row by someone the row is not named
+   *  for. */
+  it("keeps words where no chip names the title", () => {
+    const named = child({
+      uuid: "p",
+      name: "Handbook",
+      author: "Picard",
+      author_handle: "email:picard@x",
+    });
+    expect(rowTitle(named)).toEqual({ kind: "text", text: "Handbook" });
+    expect(rowTitle(child({ uuid: "m", author: "Worf" }))).toEqual({ kind: "text", text: "Worf" });
+    expect(rowTitle(child({ uuid: "..", container: true, name: "x" }))).toEqual({
+      kind: "text",
+      text: "x",
+    });
   });
 });
 

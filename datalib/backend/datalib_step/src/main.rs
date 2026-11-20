@@ -73,7 +73,7 @@ const LONG_ABOUT: &str = "\
 The step program Datalib ships: a step whose config entry says `command = \
 \"datalib-step run <function> <type>\"` runs it, and it performs that function \
 (ingest, render_markdown, unified_grid_and_search_index, …) for that type of source. To run one \
-step in a data root, `datalib-dag <config> --sync <group>/<function>` runs \
+step in a data root, `datalib-pipeline sync <data_root> <group>/<function>` runs \
 it, and every step that reads it after it, and records what it published. \
 `datalib-step help <function>` shows how for each. Run by hand, with the \
 variables `datalib-step help step-protocol` lists under \"Running \
@@ -188,7 +188,7 @@ struct Run {
     /// model, whose tokenizer cuts the chunks and whose weights embed them.
     #[arg(long)]
     models_dir: Option<PathBuf>,
-    /// Appended by `datalib-dag --reset`: empty what the step wrote and do
+    /// Appended by `datalib-pipeline reset`: empty what the step wrote and do
     /// nothing else (`step_protocol.md` § Verbs).
     #[arg(long, conflicts_with_all = ["prepare", "compact", "collect"])]
     reset: bool,
@@ -198,12 +198,13 @@ struct Run {
     /// (`step_protocol.md` § Verbs).
     #[arg(long, conflicts_with_all = ["compact", "collect"])]
     prepare: bool,
-    /// Appended by `datalib-dag --compact`: fold the history of a store
+    /// Appended by `datalib-pipeline free-disk-space
+    /// --drop-old-versions-on-derived-data`: fold the history of a store
     /// nothing reads the history of into one commit, collect any other,
     /// and give back the disk (`step_protocol.md` § Compact and collect).
     #[arg(long, conflicts_with = "collect")]
     compact: bool,
-    /// Appended by `datalib-dag --collect`: delete what no commit of the
+    /// Appended by `datalib-pipeline free-disk-space`: delete what no commit of the
     /// step's store reaches, keeping every commit.
     #[arg(long)]
     collect: bool,
@@ -526,6 +527,7 @@ async fn main() {
         obs.log_level.get_or_insert_with(|| "warn".to_string());
     }
     let _obs_guard = datalib_obs::init(&obs, "datalib-step").ok();
+    datalib_sql_work::install();
     // Before the first `latchkey` spawn, wherever it comes
     // from: a release tarball without `runtime/` beside its binaries
     // fetches the one its manifest names, once per machine.
@@ -684,7 +686,7 @@ async fn main() {
 
     // SIGINT (terminal Ctrl-C, or forwarded by the runner on cancel) or
     // SIGTERM (a process manager stopping a step run by hand, as
-    // `datalib-dag` and `datalib-http` take it too): raise the stop flag and let the step end at a boundary of its own
+    // `datalib-pipeline` and `datalib-http` take it too): raise the stop flag and let the step end at a boundary of its own
     // choosing — a fetch loop stops taking units, the seal path seals at
     // the next consistent point, `finish` commits — then report
     // `cancelled`. Nothing is committed *from here*: a commit made by a

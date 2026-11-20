@@ -96,7 +96,7 @@ the embeddings included. To sync from the command line, the same as
 
 <!-- doc-test: run demo-index -->
 ```sh
-docker exec datalib-demo datalib-dag /opt/datalib/demo/config.toml
+docker exec datalib-demo datalib-pipeline sync /opt/datalib/demo/config.toml
 ```
 
 Every store in the library is a database you can query, from inside
@@ -209,7 +209,7 @@ in, which inside the container is `/data`. Ingest, render and index:
 docker run --rm \
   -v "$DATA_ROOT:/data" \
   -v "$(dirname "$MBOX"):/import:ro" \
-  "$IMG" datalib-dag /data/config.toml
+  "$IMG" datalib-pipeline sync /data/config.toml
 ```
 
 The `embed` step embeds every message for semantic search, which on a
@@ -309,7 +309,7 @@ source's entry), then sync with the credential store mounted read-only:
 docker run --rm \
   -v "$LATCHKEY_DIR:/root/.latchkey:ro" \
   -v "$DATA_ROOT:/data" \
-  "$IMG" datalib-dag /data/config.toml
+  "$IMG" datalib-pipeline sync /data/config.toml
 ```
 
 Add the same `-v "$LATCHKEY_DIR:/root/.latchkey:ro"` to the

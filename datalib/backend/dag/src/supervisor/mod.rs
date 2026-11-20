@@ -11,6 +11,7 @@ pub mod pass;
 pub mod record;
 pub mod reload;
 pub mod round;
+pub mod serve;
 pub mod store;
 pub mod tick;
 pub mod upgrade;

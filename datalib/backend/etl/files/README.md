@@ -84,7 +84,7 @@ touched comes back `None`, read once and neither parsed nor stamped.
 rollback journal makes one write per file slow. `wanted`, in `changes_since`,
 says which files are this source's: a file it left out is not one it failed to
 read, and a file it named and did not read holds back every deletion, since a
-vanished file may have gone there. `agent_sessions`, `calendar`, `contacts`,
+vanished file may have gone there. `agent_sessions`, `calendar`, `contacts`, `markdown`,
 `airvisual`, `pdf`, `whatsapp`, email's Apple Mail copy and Takeout's
 feeds read this way.
 

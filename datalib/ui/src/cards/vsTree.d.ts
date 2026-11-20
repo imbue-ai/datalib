@@ -20,5 +20,11 @@ declare module "vs-tree" {
     dataSource: { getChildren(node: VsTreeNode | null): Promise<VsTreeNode[]> };
     viewState: VsTreeViewState | undefined;
     refresh(node?: VsTreeNode): Promise<void>;
+    /** Fills a row's label element in place of its text. */
+    renderLabel: ((node: VsTreeNode, el: HTMLElement) => void) | null;
+    /** CSS for what `renderLabel` draws, inside the element's shadow root. */
+    extraCss: string;
+    /** Draws every loaded row again. */
+    redraw(): void;
   }
 }

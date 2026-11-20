@@ -175,5 +175,5 @@ file: the snapshot's `VACUUM INTO` then fails, since SQLite has to open
 `chat.db-wal` and `chat.db-shm` to read a WAL database, and so does the
 file copy it falls back to, on the `-wal`. Full Disk Access (System Settings → Privacy &
 Security) is the durable fallback, and what a terminal needs to run
-`datalib-dag` against the config directly — Finder already has it, so
+`datalib-pipeline` against the config directly — Finder already has it, so
 dragging a copy out works when the terminal cannot.

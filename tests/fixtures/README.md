@@ -86,8 +86,16 @@ render step for each, and syncs it. A fixture gets in one of four ways:
 
 The genrule runs every sync through `datalib-http`, driven over its API
 the way the web client drives it ([`sync_drivers.py`](sync_drivers.py)).
-`:ingested_tng_test` runs the same driver through `datalib-dag`, so
+`:ingested_tng_test` runs the same driver through `datalib-pipeline`, so
 both are covered over the same corpus.
+
+**Free space.** The config the driver writes holds every step under
+200 MB free (its `[disk_space]` table, `DISK_FLOOR`), not the 10 GB a
+person's root defaults to, so the build runs on a nearly full disk.
+Under that floor the loop would wait for space a build never frees, so
+either driver fails at once with the loop's own words for the hold
+(`:sync_drivers_test`). A sync that is still unfinished after 30 minutes
+fails too, naming each step it was waiting on.
 
 ## The fixtures
 
@@ -159,6 +167,7 @@ each one lists the cases its output exists to cover.
 | `rendered_md.tar` | the markdown alone, for the UI's render preview |
 | `time_series.tar` | the time-series stores and their index |
 | `config_body.toml` | every source as a render-only group, for `materialize_tng_root` |
+| `sql_scans.jsonl` | every statement the sync ran that walked a whole table or index, for `sql_scans_test` |
 
 Three more genrules build the search index over it, in steps that Bazel
 can cache apart, because embedding is the slow one:
@@ -193,12 +202,13 @@ can agree by luck.
 | target | what it asserts |
 |---|---|
 | `:ingested_tng` itself | refuses to build if a source synced without error but left no rows in the index ([`check_ingested.py`](check_ingested.py)); `:check_ingested_test` proves that check fails |
-| `:ingested_tng_test` | row counts and per-source coverage, over three syncs of one root: fresh, unchanged, and after `--reset` |
+| `:ingested_tng_test` | row counts and per-source coverage, over three syncs of one root: fresh, unchanged, and after a `reset` |
 | `:render_contract_test` | for every table of every source's raw store: change it, render incrementally and from scratch, and get the same result |
 | `//datalib/backend/unified_grid_and_search_index:unified_grid_and_search_index_tests` | `fixture_db_snapshot`, an insta snapshot of the index's rows |
 | `//datalib/backend/datalib_step:step_tests` | `index_text`, the text search draws from each fixture document, as one snapshot per source |
 | each provider's own tests | its parse and render snapshots, over its own fixture |
 | `//datalib/ui:e2e_test` | the Playwright suite, against a root from `materialize_tng_root` |
+| `:sync_drivers_test` | both sync drivers fail at once, naming the floor, when the loop holds their steps for disk space |
 | `:tng_fuzz_test` (manual) | random clicks and killed steps, then a full sync compared with a sync from nothing |
 
 Snapshots are updated through `.update` targets, such as

@@ -364,7 +364,7 @@ The workflow's other checks are assertions over a built artifact, made
 on its own runner before anything is published:
 
 - **`scripts/release/check_binaries.sh <tag> <dir>`** refuses backend
-  binaries that were not built `-c opt` or whose `datalib-dag
+  binaries that were not built `-c opt` or whose `datalib-pipeline
   --version` is not the tag. Bazel's default mode leaves the Rust
   unoptimized and a sync about twice as slow, and the app shipped that
   way through v0.47.0, unstamped too. The `build` job runs it on the

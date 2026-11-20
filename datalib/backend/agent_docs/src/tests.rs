@@ -253,17 +253,17 @@ fn words(s: &str) -> Vec<String> {
 fn commands_are_found_wherever_the_shell_would_run_them() {
     let md = r#"
 ```sh
-datalib-dag <data_root>/config.toml --sync a/ingest   # one source
+datalib-pipeline sync <data_root> a/ingest   # one source
 RUST_LOG=debug datalib-step probe slack \
   --list channels
-docker run --rm -v "$D:/data" "$IMG" datalib-dag /data/config.toml
+docker run --rm -v "$D:/data" "$IMG" datalib-pipeline sync /data/config.toml
 datalib-doltlite -readonly db.sqlite .dump | sqlite3 out.sqlite
 id=$(datalib-step help agent) && echo "$id" > out.md
 ~/.local/bin/datalib-applet search ~/datalib 'warp core' 2>/dev/null
 cat > config.toml <<'EOF'
-command = "datalib-dag x"
+command = "datalib-pipeline x"
 EOF
-datalib-dag "a b
+datalib-pipeline "a b
 c" --check
 ```
 
@@ -274,9 +274,9 @@ command = "datalib-step"
     assert_eq!(
         argvs(md),
         vec![
-            words("datalib-dag <data_root>/config.toml --sync a/ingest"),
+            words("datalib-pipeline sync <data_root> a/ingest"),
             words("datalib-step probe slack --list channels"),
-            words("datalib-dag /data/config.toml"),
+            words("datalib-pipeline sync /data/config.toml"),
             words("datalib-doltlite -readonly db.sqlite .dump"),
             words("datalib-step help agent"),
             vec![
@@ -286,7 +286,7 @@ command = "datalib-step"
                 "warp core".to_string()
             ],
             vec![
-                "datalib-dag".to_string(),
+                "datalib-pipeline".to_string(),
                 "a b\nc".to_string(),
                 "--check".to_string()
             ],
@@ -298,7 +298,7 @@ command = "datalib-step"
 
 #[test]
 fn an_unclosed_quote_is_reported_rather_than_skipped() {
-    let found = commands("```sh\ndatalib-dag 'x --check\n```\n");
+    let found = commands("```sh\ndatalib-pipeline 'x --check\n```\n");
     assert_eq!(found.len(), 1);
     assert!(found[0].argv.is_none());
 }

@@ -4,6 +4,7 @@
 // cards/NodeCard.ce.vue).
 import type { Child, ManageRow } from "@/api";
 import { documentSource, nodeSource, type NodeViewOpts } from "./cardSources";
+import { uriFromEntity } from "./chipLinks";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /// A group id, as the config loader takes one: path segments of the
@@ -37,32 +38,70 @@ export type TreeNode = {
   /// The document the place is, when it is one: a Notion page, a contact
   /// group's card.
   doc?: string;
+  /// A source's mark, by its icon name: what its chip leads with until the
+  /// server says what the source is now.
+  mark?: string;
 };
 
 /// The library's top: each configured source, in the config's order, as a
 /// node whose children are the places it holds at its top, opening only
-/// where `holdsPlaces` says it holds some. A source shows its mark, the
-/// one its Manage row leads with (`markUrl` turns its name into an
-/// image's URL), and its type in words only where it has none. A group with no type
+/// where `holdsPlaces` says it holds some. A source is drawn as its
+/// group's chip, led by the mark its Manage row leads with. A group with no type
 /// is not a source (the index's own group), nor is a comparison of two of
 /// a source's commits (a `diff` group): neither holds places.
 export function sourceNodes(
   rows: ManageRow[],
   holdsPlaces: (id: string) => boolean = () => true,
-  markUrl: (name: string | null | undefined) => string | null = () => null,
 ): TreeNode[] {
   return rows
     .filter((r) => r.kind === "group" && r.type !== null && r.type.id !== "diff")
     .map((r) => {
-      const icon = markUrl(r.name.icon ?? r.type?.icon);
+      const mark = r.name.icon ?? r.type?.icon;
       return {
         id: sourceTop(r.id),
         label: r.name.label,
-        ...(icon ? { icon } : { kind: r.type?.label ?? "Source" }),
+        ...(mark ? { mark } : {}),
         hasChildren: holdsPlaces(sourceTop(r.id)),
       };
     });
 }
+
+/// The chip a node of the tree is drawn as: a source as its group's
+/// (docs/dev/chips.md § "A group or a step"), any other node as its own
+/// (§ "A node"). Null for an id of neither shape, which draws as text.
+export type TreeChip =
+  | { kind: "group"; uri: string; shown: string; mark: string | null }
+  | { kind: "node"; id: string; name: string; nodeKind: string; doc: string | null };
+
+export function treeChip(node: TreeNode): TreeChip | null {
+  if (!isNodeId(node.id)) return null;
+  if (node.id.startsWith("source:")) {
+    const group = node.id.slice("source:".length);
+    return {
+      kind: "group",
+      uri: uriFromEntity("group", group),
+      shown: node.label,
+      mark: node.mark ?? null,
+    };
+  }
+  return {
+    kind: "node",
+    id: node.id,
+    name: node.label,
+    nodeKind: node.kind ?? "",
+    doc: node.doc ?? null,
+  };
+}
+
+/// What each way of picking a node in the tree does: `pane` shows it
+/// beside the tree, `card` opens its chip's card, as a chip's double-click
+/// does everywhere. One table, so it can become a setting.
+export const TREE_PICKS = {
+  select: "pane",
+  enter: "pane",
+  doubleClickOnChip: "card",
+  doubleClickElsewhere: "pane",
+} as const satisfies Record<string, "pane" | "card">;
 
 /// A level of places, as `/children?places=true` listed it: in the
 /// source's own order, and by name where the source gives none (a
@@ -104,6 +143,29 @@ export function rowParts(
   const title = named || c.author?.trim() || first?.trim() || name || c.kind;
   const snippet = preview && first?.trim() === title ? rest.join("\n").trim() || null : preview;
   return { title, snippet };
+}
+
+/// What a row of a node card is titled by, as a chip where it names
+/// something: a container by its node, a message by its author, a
+/// document by itself; anything else by its words.
+export type RowTitle =
+  | { kind: "node"; id: string; name: string; nodeKind: string; doc: string | null }
+  | { kind: "person"; handle: string; shown: string }
+  | { kind: "document"; page: string; title: string }
+  | { kind: "text"; text: string };
+
+export function rowTitle(c: Child, listedIn: string | null = null): RowTitle {
+  const { title } = rowParts(c, listedIn);
+  if (c.container && UUID.test(c.uuid)) {
+    return { kind: "node", id: c.uuid, name: title, nodeKind: c.kind, doc: c.markdown_uuid };
+  }
+  if (c.author_handle && title === c.author?.trim()) {
+    return { kind: "person", handle: c.author_handle, shown: title };
+  }
+  if (c.markdown_uuid && c.markdown_uuid === c.uuid && UUID.test(c.uuid)) {
+    return { kind: "document", page: c.uuid, title };
+  }
+  return { kind: "text", text: title };
 }
 
 /// Whether a list's rows say their kind: only where it holds more than

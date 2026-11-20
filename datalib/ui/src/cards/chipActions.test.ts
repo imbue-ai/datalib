@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { documentSource, logSource, personSource, searchSource, sourceSource } from "./cardSources";
+import {
+  documentSource,
+  logSource,
+  nodeSource,
+  personSource,
+  searchSource,
+  sourceSource,
+} from "./cardSources";
 import type { ManageRow } from "@/api";
 import {
   CHIP_ACTIONS,
@@ -42,6 +49,15 @@ const LOG: Chip = {
 };
 
 const AWAY: Chip = { ref: { kind: "label", name: "Away team" }, shownAs: "" };
+const BRIDGE_ID = "0b75b842-ba60-88dd-b090-baf44d88db59";
+const BRIDGE: Chip = {
+  ref: { kind: "node", uri: `datalib:node/${BRIDGE_ID}`, doc: null },
+  shownAs: "#bridge",
+};
+const ROSTER: Chip = {
+  ref: { kind: "node", uri: `datalib:node/${BRIDGE_ID}`, doc: BRIDGE_ID },
+  shownAs: "Shift Roster",
+};
 
 function host(extra: Omit<Partial<ChipHost>, "openCard"> = {}) {
   return { ...extra, openCard: vi.fn<(source: string) => void>() };
@@ -59,6 +75,7 @@ describe("chipMenuOf", () => {
       [CONTACT, false],
       [LOG, false],
       [AWAY, false],
+      [BRIDGE, false],
     ] as const) {
       const ids = chipMenuOf(chip, canLink).map((e) => e.id);
       const order = ids.map((id) => CHIP_ACTIONS.indexOf(id as ChipAction));
@@ -95,6 +112,19 @@ describe("chipOf", () => {
     a.dataset.shownAs = "Captain's log";
     expect(chipElAt(a)).toBe(a);
     expect(chipOf(a)).toEqual(LOG);
+  });
+
+  /** A node chip carries the document it is, so its card opens on it. */
+  it("reads a node chip, and the document it is", () => {
+    const a = document.createElement("a");
+    a.className = "chip";
+    a.dataset.node = `datalib:node/${BRIDGE_ID}`;
+    a.dataset.shownAs = "#bridge";
+    expect(chipElAt(a)).toBe(a);
+    expect(chipOf(a)).toEqual(BRIDGE);
+    a.dataset.nodeDoc = BRIDGE_ID;
+    a.dataset.shownAs = "Shift Roster";
+    expect(chipOf(a)).toEqual(ROSTER);
   });
 });
 
@@ -138,6 +168,13 @@ describe("runChipAction", () => {
     const doc = host();
     await runChipAction("open", LOG, doc);
     expect(doc.openCard.mock.calls).toEqual([[documentSource(LOG_PAGE)]]);
+    const node = host();
+    await runChipAction("open", BRIDGE, node);
+    await runChipAction("open", ROSTER, node);
+    expect(node.openCard.mock.calls).toEqual([
+      [nodeSource({ node: BRIDGE_ID, name: "#bridge" })],
+      [nodeSource({ node: BRIDGE_ID, name: "Shift Roster", doc: BRIDGE_ID })],
+    ]);
   });
 
   /** A document chip's "Copy title and link" pastes as a link where

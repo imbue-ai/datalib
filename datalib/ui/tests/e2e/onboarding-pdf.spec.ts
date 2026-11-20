@@ -127,7 +127,7 @@ async function openExplore(page: Page) {
 test.use({ video: "on", trace: "on" });
 
 test.describe("onboarding: empty folder → indexed PDFs", () => {
-  // One real `datalib-dag` run per sync, on a cold data root. The first
+  // One real `datalib-pipeline` run per sync, on a cold data root. The first
   // one creates the doltlite stores, which is most of its cost.
   test.setTimeout(120_000);
 
@@ -218,7 +218,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // The group's Name is its chip, which says its type.
     await expect(nameCell(page, "group:pdfs").locator("a.chip")).toHaveAttribute(
       "aria-label",
-      /, Local PDFs source/,
+      /, PDFs \(Local\) source/,
     );
     expect(await statusOf(page, "group:pdfs")).toBe("Never run");
     expect(await bytesOf(page, "group:pdfs")).toBeNull();

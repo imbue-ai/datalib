@@ -35,7 +35,7 @@ managed. Either way, `datalib-step probe <type>` says whether the
 sign-in works; for a type reached more than one way, name the way with
 `--method` (`datalib-step probe calendar --method google`).
 
-## Apple Mail
+## Apple Mail (Local)
 
 `type = "email"` with an `apple_mail` table — every account of the Mail
 app on a Mac, read from Mail's own folder, `~/Library/Mail`. Copies
@@ -49,7 +49,7 @@ them.
 macOS protects Mail's folder. In the app, choose it with the picker in
 the "Apple Mail" form — that is what grants Datalib access (Cmd-Shift-G
 in the dialog reaches `~/Library/Mail`). A terminal running
-`datalib-dag` needs Full Disk Access instead (System Settings → Privacy
+`datalib-pipeline` needs Full Disk Access instead (System Settings → Privacy
 & Security).
 
 Each account is copied under its own id, made from the name of its folder
@@ -58,7 +58,7 @@ copied once for each. To copy just one account, set `apple_mail.account`
 to its folder's name. Mail keeps no Gmail ids, so a Gmail account copied
 through Mail and through [Gmail](#gmail) is two separate copies.
 
-## Apple Messages
+## Apple Messages (Local)
 
 `type = "apple_messages"` — reads the Messages app's own `chat.db` on a
 Mac, or a copy of it (`messages.path`). Mirrors iMessage and SMS chats
@@ -79,7 +79,7 @@ The whole database is mirrored table for table with its history, so a
 message deleted on the Mac is still in an earlier commit of the store.
 Every chat renders as one page, however long it runs.
 
-## Apple Photos
+## Apple Photos (Local)
 
 `type = "apple_photos"` — reads an Apple Photos `.photoslibrary`
 bundle (`library.path`). Mirrors the library's database — every asset,
@@ -95,7 +95,7 @@ permitted", grant Datalib Full Disk Access in System Settings → Privacy
 What gets mirrored is `database/Photos.sqlite`, about ninety tables of
 Photos' own schema, table for table, with only changed rows stored on
 each run. The originals sit beside it at
-`<library>/originals/<X>/<UUID>.<ext>`; a [local media](#local-media) source pointed
+`<library>/originals/<X>/<UUID>.<ext>`; a [local media](#media-local) source pointed
 at that folder gives you their EXIF and content hashes.
 
 ## Baby Connect
@@ -147,7 +147,7 @@ Not copied: the photos attached to an entry (the store lists them, the
 pictures are not downloaded). An entry deleted in the app after its day
 was read stays in the copy.
 
-## Beeper
+## Beeper (Local)
 
 `type = "beeper"` — mirrors the Beeper Texts desktop app's local data
 directory (`texts.path`): every chat the app holds, from Signal, Google
@@ -353,7 +353,7 @@ table pointing at the unpacked folder instead. The export is a complete
 snapshot, so a re-exported tree that no longer mentions a conversation
 drops it from the store.
 
-## Claude Code
+## Claude Code (Local)
 
 `type = "claude_code"` — reads the transcripts Claude Code keeps on
 this machine (`sessions`). Mirrors every session run in the terminal,
@@ -365,7 +365,7 @@ the standard store, `~/.claude/projects`. Give it a `path` for a copy
 of that folder from another machine. A session Claude Code later
 deletes stays in the mirror.
 
-## Codex
+## Codex (Local)
 
 `type = "codex"` — reads the rollouts Codex CLI keeps on this machine
 (`sessions`). Mirrors every thread run in the terminal or an IDE, one
@@ -405,7 +405,7 @@ connection** lists them to pick from.
 `type = "email"` — a Google Takeout `.mbox` on disk (`mbox`), **or** a
 JMAP server other than Fastmail through latchkey (`jmap`). Mirrors mail
 messages and their attachments. [Gmail](#gmail), [Fastmail](#fastmail)
-and [Apple Mail](#apple-mail) have sections of their own; this one is the
+and [Apple Mail](#apple-mail-local) have sections of their own; this one is the
 other two routes into the same source.
 
 
@@ -531,7 +531,7 @@ latchkey --account "you@fastmail.com contacts" auth set fastmail-dav -u "you@fas
 and name the same account in the source. The `fastmail` table needs
 nothing else; `addressbooks` narrows it to the address books you name.
 
-## File inventory
+## File inventory (Local)
 
 `type = "file_inventory"` — any directory tree on disk (`fswalk.path`).
 Keeps a record of every entry — path, kind, size, blake3 hash;
@@ -869,7 +869,7 @@ Request a Takeout with **Voice** ticked — see
 feed of. Set `google_voice = true` beside `export.path`; the spam
 folder stays out unless `google_voice_include_spam = true`.
 
-## IQAir AirVisual
+## IQAir AirVisual (Local)
 
 `type = "airvisual"` — reads each monitor's own history files
 (`export`). Mirrors particulates, AQI, CO₂, temperature, humidity and
@@ -895,7 +895,7 @@ identity is its serial and its name is what it calls itself, both read
 from the folder's `latest_config_measurements.json`; set `serial` for a
 copy without it, and `name` to override what the device says.
 
-## Lightroom
+## Lightroom (Local)
 
 `type = "lightroom"` — an Adobe Lightroom Classic catalog, the `.lrcat`
 file (`catalog.path`). Mirrors every table of the catalog as a
@@ -976,7 +976,21 @@ it or in its place.
 Connections come without photos: the export has none, and linkedin.com
 shows a profile only to someone signed in.
 
-## Local media
+## Markdown (Local)
+
+`type = "markdown"` — a folder on disk (`fswalk.path`), such as an
+Obsidian vault. Mirrors every `.md` and `.markdown` file under it, one
+document per note, so notes show up in the grid and in search.
+
+Nothing but a path. A note is its path under the folder: editing it
+updates its document, and renaming or moving it replaces the document
+with one at the new path. Search knows where a note is filed, the same
+way it does for a PDF. Folders whose names start with a dot
+(`.obsidian`, `.trash`, `.git`) are skipped. Each sync keeps the text
+it read, so the copy holds earlier versions of a note even after the
+file has changed or gone.
+
+## Media (Local)
 
 `type = "media"` — a directory tree of music, photos and video
 (`fswalk.path`). Mirrors every audio, image and video file with its
@@ -991,17 +1005,6 @@ retagging. Query the raw store directly with `datalib-doltlite`:
 `media_files` is one row per path, `media_items` one per content hash,
 `media_visual` the camera, GPS and capture time, `media_playlists` and
 `media_playlist_entries` the playlists.
-
-## Local PDFs
-
-`type = "pdf"` — a directory tree on disk (`fswalk.path`). Mirrors
-every PDF under it, converted to markdown and keyed on content hash, so
-PDFs show up in the grid and in search.
-
-Nothing but a path. Two copies of the same paper convert once and share
-one row; renaming or moving a PDF preserves its identity. No OCR yet: a
-scanned, image-only PDF is recorded (`needs_ocr = 1` in the source's
-`pdf_documents` table) and produces no text.
 
 ## Notion
 
@@ -1052,6 +1055,17 @@ To mirror only part of the workspace, list the pages in `api.roots`
 (page ids or paste-able URLs); every page linked under them comes
 along. A database embedded in one of those pages does not: its rows
 are mirrored only by the whole-workspace default.
+
+## PDFs (Local)
+
+`type = "pdf"` — a directory tree on disk (`fswalk.path`). Mirrors
+every PDF under it, converted to markdown and keyed on content hash, so
+PDFs show up in the grid and in search.
+
+Nothing but a path. Two copies of the same paper convert once and share
+one row; renaming or moving a PDF preserves its identity. No OCR yet: a
+scanned, image-only PDF is recorded (`needs_ocr = 1` in the source's
+`pdf_documents` table) and produces no text.
 
 ## Perseus Digital Library
 

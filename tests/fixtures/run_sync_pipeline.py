@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Driver for the `:ingested_tng` genrule.
 
-Generates the DAG config `datalib-dag` needs, runs the synth phase
+Generates the DAG config `datalib-pipeline` needs, runs the synth phase
 (per-source `datalib-step synthesize`) and then the pipeline
 (download → render → index) hermetically against playback fixtures,
 and leaves the staged outputs where `tar_rendered.py` can pick them up.
@@ -15,7 +15,7 @@ fixture trees live under different parent directories so a single
 `--synth-input-root` flag wouldn't have worked.
 
 Args (positional):
-    1:  path to `datalib-dag` binary (the DAG runner)
+    1:  path to `datalib-pipeline` binary (the DAG runner)
     2:  path to `datalib-step` binary (the step-type host)
     3:  path to `signal-make-fixture` binary (used to expand the signal
         TNG JSON spec into an encrypted snapshot dir on the fly)
@@ -105,7 +105,7 @@ Args (positional):
     31: datalib-http binary, optional. Given, every sync goes through a
                       server on the root, driven over its API the way
                       the web client drives it (`sync_drivers.py`);
-                      absent, through `datalib-dag`.
+                      absent, through `datalib-pipeline`.
 
 Args 21+ are appended rather than grouped with the other binaries
 (1-4) and fixture paths (7-20) deliberately: every index here is
@@ -184,6 +184,15 @@ PRESEEDED_RAW = {"yolink"}
 # `render_time_series` step, and the time-series index reads them all,
 # so the materialized root has a Time series card to open.
 TIME_SERIES_TYPES = {"garmin", "yolink", "airvisual"}
+
+# The DAG config's free-space floor. The default, steps held under 10 GB
+# free, guards a person's library; this one is a few MB, and under the
+# default a machine with less than 10 GB free could not build it. Below
+# this floor the build fails naming it (`sync_drivers.held_for_disk`).
+# The materialized root keeps the default, as any root a person makes does.
+DISK_FLOOR = """[disk_space]
+pause_below_bytes = "200 MB"
+resume_at_bytes = "300 MB\""""
 
 
 @dataclass
@@ -273,10 +282,15 @@ def prepare(argv: list[str]) -> Prepared:
     # The host's fingerprint cache is keyed by absolute path, and every
     # path here is a sandbox that is gone by the next run: in the real
     # cache each would stay as a dead row. The root holds its own.
+    # Every statement that walks a whole table or index, from every process
+    # of the sync, for sql_scans.py and the allowlist check.
+    census = workspace / "sql_census"
+    shutil.rmtree(census, ignore_errors=True)
     own_cache_env = {
         **os.environ,
         "DATALIB_CACHE_DIR": str(workspace / "fingerprint_cache"),
         "DATALIB_MODELS_NO_FETCH": "1",
+        "DATALIB_SQL_CENSUS": str(census),
     }
     _stage_embed_model(workspace)
 
@@ -602,7 +616,7 @@ params = {params}
         and the body of a materialized root's, where the diff step — like
         every render step there — declares no inputs."""
         names = list(sources)[:count]
-        blocks = [preamble] + steps[: len(names)]
+        blocks = [preamble, DISK_FLOOR] + steps[: len(names)]
         root_blocks = [preamble] + root_entries[: len(names)]
         # How `datalib-step` is told each group's type: a diff group's
         # steps also name the type of the source they compare.
@@ -691,7 +705,7 @@ inputs = [{grid_list}]"""
     # datalib_dag / datalib_step through `ingested_tng_test`'s *direct*
     # `data` deps on those two targets — see docs/dev/coverage.md, "Three
     # things had to be true" #1, which names the
-    # `bazel-bin/datalib/backend/{dag/datalib_dag_bin,datalib_step/
+    # `bazel-bin/datalib/backend/{dag/datalib_pipeline_bin,datalib_step/
     # datalib_step}` paths specifically. Routing through a
     # copy_to_directory would run copies at a different path, and if the
     # coverage transition failed to survive the copy the failure is
@@ -823,7 +837,7 @@ def _run_pipeline_twice_and_diff(
     second capture (a message added, one edited with a reaction, a thread
     grown by a reply). Then write a diff group per source with its two
     commits and sync the chains once more, so the render trees are there
-    for the index and the goldens. Every run is a `--sync` of named chains
+    for the index and the goldens. Every run is a sync of named chains
     — what "Compare…" on a source does — so nothing else in the workspace
     re-runs, and a test reading one full run's events sees exactly one.
 
@@ -861,7 +875,7 @@ def _run_pipeline_twice_and_diff(
     )
     for s, (a, b) in pairs.items():
         print(f"[run_sync_pipeline] {s} diff {a[:12]}..{b[:12]}", flush=True)
-    # `--sync` names source steps; each diff step is downstream of its
+    # A sync names source steps; each diff step is downstream of its
     # source's ingest and runs as part of that chain. The Slack ingest's
     # incremental requests now ask past everything v2 holds, and v2
     # answers each with an empty page, so the store does not move.

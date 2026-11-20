@@ -1,0 +1,61 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# Counts what every SQLite statement in a process does and logs the heavy
+# ones. Every binary that opens a store calls `install` at its start.
+rust_library(
+    name = "datalib_sql_work",
+    srcs = [
+        "src/census.rs",
+        "src/judge.rs",
+        "src/lib.rs",
+        "src/params.rs",
+    ],
+    crate_name = "datalib_sql_work",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/env:datalib_env",
+        "@datalib_crates//:serde_json",
+        # Links the SQLite (doltlite) the C calls here resolve against.
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "sql_work_unittests",
+    size = "small",
+    crate = ":datalib_sql_work",
+    edition = "2021",
+)
+
+rust_test(
+    name = "sql_work_hook_test",
+    size = "small",
+    srcs = ["tests/hook.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_sql_work",
+        "//datalib/backend/sqlite_open:datalib_sqlite_open",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:tracing-subscriber",
+    ],
+)
+
+rust_test(
+    name = "sql_work_census_test",
+    size = "small",
+    srcs = ["tests/census.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_sql_work",
+        "//datalib/backend/sqlite_open:datalib_sqlite_open",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

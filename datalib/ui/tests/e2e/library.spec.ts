@@ -2,12 +2,16 @@ import { test, expect, type Page } from "@playwright/test";
 
 // The Library card on the TNG root (cards/LibraryCard.ce.vue): the sources
 // as a tree, their places a level at a time from `/children?places=true`,
-// and the place opened there shown beside it as a node card, its list
-// read beside a preview. What is open survives a reload.
+// each drawn as its chip, and the place picked there shown beside it as a
+// node card, its list read beside a preview. What is open survives a
+// reload.
 
 const treeRow = (page: Page, text: string) =>
   page.locator("vs-tree .monaco-list-row", { hasText: text }).first();
-const nodeRows = (page: Page) => page.locator("[data-testid=node-children] .nc-row");
+// The Library card's own pane, not a node card opened from it.
+const nodeRows = (page: Page) =>
+  page.locator("[data-testid=library-node] [data-testid=node-children] .nc-row");
+const chipMenu = (page: Page) => page.locator(".chip-menu");
 
 async function openLibrary(page: Page) {
   await page.goto("/" + encodeURIComponent("libraryTreeView()"));
@@ -24,7 +28,7 @@ test("a channel opened in the tree is listed beside it, a thread read in place",
   // A thread is no place: the channel has nothing below it in the tree.
   await expect(treeRow(page, "Slack Thread")).toHaveCount(0);
 
-  await treeRow(page, "#bridge").dblclick();
+  await treeRow(page, "#bridge").click();
   await expect(page.locator(".lib-pane-title")).toHaveText("#bridge");
   // A channel's threads are each named for the channel; listed in it,
   // each reads as its first line.
@@ -49,7 +53,7 @@ test("a mailbox's labels are places, and a label lists the threads filed under i
   await treeRow(page, "tng_email").click();
   await treeRow(page, "Email Account").click();
   await expect(treeRow(page, "Inbox")).toBeVisible();
-  await treeRow(page, "Inbox").dblclick();
+  await treeRow(page, "Inbox").click();
   await expect(page.locator(".lib-pane-title")).toHaveText("Inbox");
   await expect(nodeRows(page).filter({ hasText: "Mission Briefing" })).toHaveCount(1);
 });
@@ -60,7 +64,7 @@ test("a Notion page is a place in the tree, and shows its own text beside it", a
   await treeRow(page, "Bridge Operations Handbook").click();
   // A page under a page is a place as Notion's sidebar has it.
   await expect(treeRow(page, "Shift Roster")).toBeVisible();
-  await treeRow(page, "Shift Roster").dblclick();
+  await treeRow(page, "Shift Roster").click();
   await expect(page.locator(".lib-pane-title")).toHaveText("Shift Roster");
   // It holds nothing below it, so its own text is all the pane shows.
   await expect(page.locator(".nc-preview-body .doc-bar-title")).toContainText("Shift Roster");
@@ -71,7 +75,7 @@ test("what was open in the tree and beside it comes back after a reload", async 
   await openLibrary(page);
   await treeRow(page, "slack").click();
   await treeRow(page, "Slack Workspace").click();
-  await treeRow(page, "#engineering").dblclick();
+  await treeRow(page, "#engineering").click();
   await expect(page.locator(".lib-pane-title")).toHaveText("#engineering");
   // The card saves its state a frame after the change, and the layout
   // keeps it (in this window's session storage, as the suite runs it).
@@ -85,4 +89,46 @@ test("what was open in the tree and beside it comes back after a reload", async 
   await expect(treeRow(page, "#engineering")).toBeVisible();
   await expect(page.locator(".lib-pane-title")).toHaveText("#engineering");
   await expect(nodeRows(page).first()).toBeVisible();
+});
+
+test("a source is its chip, with its Sources row's menu", async ({ page }) => {
+  await openLibrary(page);
+  const slack = treeRow(page, "slack").locator("a.chip[data-entity='datalib:group/slack']");
+  await expect(slack).toBeVisible();
+  // The row's entries come with what the server says of the source; until
+  // then the menu holds the chip's own.
+  await expect(async () => {
+    await page.keyboard.press("Escape");
+    await slack.click({ button: "right" });
+    await expect(chipMenu(page)).toContainText("Sync now", { timeout: 1000 });
+  }).toPass();
+  await page.keyboard.press("Escape");
+  await expect(chipMenu(page)).toHaveCount(0);
+});
+
+test("a place's chip opens its own card, and a message is its author's chip", async ({ page }) => {
+  await openLibrary(page);
+  await treeRow(page, "slack").click();
+  await treeRow(page, "Slack Workspace").click();
+  const engineering = treeRow(page, "#engineering").locator("a.chip[data-node]");
+  await engineering.click({ button: "right" });
+  await expect(chipMenu(page).locator(".chip-menu-item")).toContainText([
+    "Open “#engineering”",
+    "Copy ID",
+  ]);
+  await page.keyboard.press("Escape");
+  await engineering.dblclick();
+  await expect(page.locator('.ct-card[data-card-source^="nodeView("]')).toHaveCount(1);
+  await expect(page.locator(".ct-card-title").filter({ hasText: /^#engineering$/ })).toHaveCount(1);
+
+  // A thread's messages, shown beside the tree: each titled by its author.
+  await treeRow(page, "#bridge").click();
+  await expect(page.locator(".lib-pane-title")).toHaveText("#bridge");
+  await nodeRows(page)
+    .first()
+    .dblclick({ position: { x: 4, y: 4 } });
+  const author = nodeRows(page).locator("a.chip[data-handle^='slack:']").first();
+  await expect(author).toBeVisible();
+  await author.click({ button: "right" });
+  await expect(chipMenu(page)).toContainText("Everything with");
 });

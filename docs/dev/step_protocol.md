@@ -1,6 +1,6 @@
 # Writing a step command
 
-The sync engine (`datalib-dag`) runs a DAG of arbitrary commands. Any
+The sync engine (`datalib-pipeline`) runs a DAG of arbitrary commands. Any
 executable can be a step: the runner spawns it, hands it what its config
 entry declares, and watches its stdout and stderr. A plain shell script
 that exits 0 or non-0 is a valid step. Everything beyond that is an
@@ -77,7 +77,7 @@ it belongs to `params` until the next header.
 backslash escapes work; there is **no** variable expansion, globbing,
 or piping — wrap in `sh -c '…'` if you need real shell). The first
 word resolves via `PATH`, with the runner's `--binary-dir` (default:
-the directory `datalib-dag` itself lives in; also settable as
+the directory `datalib-pipeline` itself lives in; also settable as
 `binary_dir` in the config, above the first `[[steps]]`) first and the
 library's own `<data_root>/system/bin/` second, both ahead of the
 inherited `PATH`. The first is how a program shipped beside the runner
@@ -120,7 +120,7 @@ arrives in the environment.
 | variable | meaning |
 | --- | --- |
 | `DATALIB_DAG_STEP` | this step's id, and the one tree it writes (`weather/ingest`) |
-| `DATALIB_DAG_RUN_ID` | the run this invocation belongs to — a UUID the loop mints for each busy period (the stretch from idle to busy and back, serving every request that arrives meanwhile), or whatever the caller passed to `datalib-dag` as `--run-id`. Every row in `system/runs/runs.sqlite` carries it; stamp it into anything you write that should be joinable back to the run. The built-in steps end every doltlite commit message with ` run=<id>` (`doltlite_raw::stamp_run`), which is how the Manage screen's commit history gets from a commit to its log |
+| `DATALIB_DAG_RUN_ID` | the run this invocation belongs to — a UUID the loop mints for each busy period (the stretch from idle to busy and back, serving every request that arrives meanwhile), or whatever the caller passed to `datalib-pipeline` as `--run-id`. Every row in `system/runs/runs.sqlite` carries it; stamp it into anything you write that should be joinable back to the run. The built-in steps end every doltlite commit message with ` run=<id>` (`doltlite_raw::stamp_run`), which is how the Manage screen's commit history gets from a commit to its log |
 | `DATALIB_DAG_ATTEMPT` | which attempt this is, starting at `1`; a retry counts up |
 | `DATALIB_DAG_DATA_ROOT` | absolute path of the data root (== cwd) |
 | `DATALIB_DAG_PARAMS` | the entry's `params`, as JSON; unset when it has none |
@@ -269,7 +269,7 @@ ETA from the pace work comes off it (from `done_total` if you use the
 not send a last `queued` of zero: when you end, however you end, the
 runner sets it to zero. When you end short of done (stopped, or failed,
 `incomplete` included) it keeps what `queued` held as your **`owed`**,
-which the Manage row and `datalib-dag status` show; when you succeed you
+which the Manage row and `datalib-pipeline status` show; when you succeed you
 owe nothing. So a download that gives up with work left must end
 `incomplete`, not succeed. Every series you report is charted on the
 group's sync dashboard.
@@ -534,7 +534,7 @@ A step that reads a streaming producer runs once per seal, and a pass
 that fails runs again on the producer's next seal. The run reports the
 last pass, but a failed pass that was run again still shows: as an
 `error` line of its own (`pass 1 failed: …`), as a warning on the Manage
-row, and in `datalib-dag`'s report.
+row, and in `datalib-pipeline`'s report.
 
 Each line records which pipe it came from and is timestamped as the
 runner reads it; the two pipes are read concurrently, so the log is in
@@ -603,7 +603,7 @@ it:
 
 ## Reset
 
-`datalib-dag --reset <step-id>[,<step-id>…]` (or the app's
+`datalib-pipeline reset <data_root> <step-id>…` (or the app's
 Reset, `POST /api/reset`) empties what a step wrote so the next run
 does its work from the start. The runner invokes a step whose program
 takes the verb once with `--reset` appended, and deletes the tree of
@@ -611,7 +611,7 @@ any other; then it forgets the step ever succeeded and records the
 version the reset reports, or a new one if it reports none, so
 everything reading the tree runs again. Given the verb, empty your
 tree, keep whatever history you keep, commit if you commit, exit 0,
-and do nothing else; no sync follows unless `--sync` was also given.
+and do nothing else; no sync follows.
 `datalib-step` deletes every row of the tree's store in one
 commit, keeping the tables, plus a render tree's documents; the run log
 and the rest are still in the history. Keeping the tables is what lets
@@ -691,14 +691,14 @@ a store a newer build wrote.
 
 ## Compact and collect
 
-`datalib-dag --free-disk-space`, or the app's `POST /api/free_disk_space`
+`datalib-pipeline free-disk-space`, or the app's `POST /api/free_disk_space`
 (the status bar's "Free up disk space…"), asks every step that takes the
 verbs to give back the disk its store holds, once each: with
 `--compact` appended when old versions of derived data are to be
 dropped (`--drop-old-versions-on-derived-data`,
 `"drop_old_versions_on_derived_data": true`), else `--collect`. Nothing
 that reads a store may be reading it while it is rewritten: the command line needs the root to
-itself, as `--reset` does, and the app's loop holds the steps it asks
+itself, as `reset` does, and the app's loop holds the steps it asks
 and every step that reads them until it is done (`dag/README.md`
 §"Resets and purges"). The step decides what the verb means for what it
 wrote, runs nothing else, and reports its version as a run would; the
@@ -887,7 +887,7 @@ Four things a hand run has to get right that the runner does for it:
   (`already has a writer: datalib-step (pid N)`), so whichever comes
   second fails. When that is the loop's run, it is a `data` failure, not
   retried, and its request ends failed. Use a folder no loop serves, or
-  turn the step off in the loop (`datalib-dag turn-off`,
+  turn the step off in the loop (`datalib-pipeline turn-off`,
   `POST /api/steps/<id>/turn_off`) while you run it.
 - **Give an absolute `DATALIB_DAG_DATA_ROOT`.** The step runs with the
   data root as its working directory, so a relative one is resolved a

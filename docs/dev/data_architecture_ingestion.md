@@ -19,7 +19,7 @@ The **parse and render stage** — deserializing a stored payload, projecting it
 
 # General pipeline structure
 
-The pipeline has three stages, each running as a **subprocess step under the `datalib-dag` DAG runner** ([`datalib/backend/dag`](/datalib/backend/dag)) — one process per step, each step an invocation of the `datalib-step` binary ([`datalib/backend/datalib_step`](/datalib/backend/datalib_step)); see [`datalib/backend/dag/README.md`](/datalib/backend/dag/README.md) for the runner's rules and [`step_protocol.md`](step_protocol.md) for the step contract:
+The pipeline has three stages, each running as a **subprocess step under the `datalib-pipeline` DAG runner** ([`datalib/backend/dag`](/datalib/backend/dag)) — one process per step, each step an invocation of the `datalib-step` binary ([`datalib/backend/datalib_step`](/datalib/backend/datalib_step)); see [`datalib/backend/dag/README.md`](/datalib/backend/dag/README.md) for the runner's rules and [`step_protocol.md`](step_protocol.md) for the step contract:
 
 1. **Download** — pull from upstream, UPSERT into `<data_root>/<group>/ingest/entities.doltlite_db` (entities) and `<data_root>/<group>/ingest/blobs.sqlite` (a single `cas_objects` table keyed by blake3 hash).
 2. **Render** — derive that source's render store (`<group>/render_markdown/indexed_markdown.doltlite_db`), every document's markdown and rows, from the raw store, deterministically.
@@ -247,7 +247,7 @@ Corollary: **the raw store is the source of truth; downstream stages are rebakea
 ## Verifiable via a reset
 A long chain of incremental syncs can in principle silently drop data (an upstream that doesn't surface a deletion, a cursor that skipped a page on a 5xx, a bug in our delta logic). One check is to empty the store, refetch from scratch, and **let dolt's diff tell you what was missing**.
 
-Reset and sync are two operations, and no provider knows about the first: `datalib-dag --reset <source>/ingest` empties every table of the raw store and commits, so the rows (the run log included) stay in history; the runner forgets the step ever ran; the next sync finds empty tables with no cursor and walks from the start, exactly as a new source does. The CAS edge table goes with the rest, so every attachment is fetched over the wire again; the re-fetched bytes hash to the same blake3, `INSERT OR IGNORE` into `cas_objects` is a no-op, no disk grows. Nothing resets the CAS itself ([`etl/README.md` §"Blob CAS and per-provider edge tables"](/datalib/backend/etl/README.md#blob-cas-and-per-provider-edge-tables) says how to reclaim its space). `--reset` alone stops there; `--reset X --sync X` does both in one invocation. `datalib_etl::doltlite_raw::reset_store` is the whole of it.
+Reset and sync are two operations, and no provider knows about the first: `datalib-pipeline reset <data_root> <source>/ingest` empties every table of the raw store and commits, so the rows (the run log included) stay in history; the runner forgets the step ever ran; the next sync finds empty tables with no cursor and walks from the start, exactly as a new source does. The CAS edge table goes with the rest, so every attachment is fetched over the wire again; the re-fetched bytes hash to the same blake3, `INSERT OR IGNORE` into `cas_objects` is a no-op, no disk grows. Nothing resets the CAS itself ([`etl/README.md` §"Blob CAS and per-provider edge tables"](/datalib/backend/etl/README.md#blob-cas-and-per-provider-edge-tables) says how to reclaim its space). `reset` stops there; a sync after it does the rest. `datalib_etl::doltlite_raw::reset_store` is the whole of it.
 
 Nothing garbage-collects `cas_objects`: bytes are byte-stable and nothing in the tree deletes them. See [Removing a source](/docs/dev/data_architecture_ingestion_practices.md#removing-a-source) for the open design.
 
@@ -398,6 +398,7 @@ therefore what it can see:
 | `media` | the scan; a file evicted to the cloud, over `max_bytes` or that will not open is present (`Scan::present_unread`) | path rows of files the scan did not find; then the items no path names, with their audio and visual rows. Nothing after a walk that reported errors |
 | `file_inventory` | every run's walk | rows the walk did not write. An entry it found and could not read (a folder that will not list, a file that will not hash) keeps its rows and its subtree's |
 | `pdf` | the scan; a file over `max_bytes` is present | path rows of files the scan did not find, then documents no path names. Nothing after a walk that reported errors |
+| `markdown` | the scan; a file over `max_bytes` is present | the note of each path the scan did not find, and a moved note's old path once its new one is stored. Nothing after a walk that reported errors, or while a file that changed could not be read |
 | `facebook` | each table's chunk files, read whole | rows a table no longer holds, only when every chunk file it was last read from is there and read, with the deleted records' media edges and edges to a `uri` a record of that table stopped naming. A missing chunk (a partial unpack), a file that will not parse, or a walk error deletes nothing in that table, edges included; a table none of whose files is present was left out |
 | `claude` (`export`) | `users.json`, `conversations.json` and `projects/`, each read whole | rows a present file no longer lists. A missing `users.json` or `projects/` deletes nothing, nor does a file whose entries are there but none has a uuid (a `phase:<file>` problem) |
 | `signal` | each snapshot read, when every frame decodes | recipients, chats, messages and attachment edges it no longer holds, in that snapshot's commit. A frame that would not decode, a snapshot that will not open, a missing snapshot folder or an unset passphrase deletes nothing |
@@ -441,7 +442,7 @@ section) and "we noticed and the grid still shows it" (that one) look
 identical from the UI.
 
 Every provider that records deltas can also detect a deletion, and
-`media` / `file_inventory` / `pdf` detect by set difference while recording none;
+`media` / `file_inventory` / `pdf` / `markdown` detect by set difference while recording none;
 the one mismatch is that the structural detectors write no `sync_runs`
 row.
 

@@ -70,8 +70,8 @@ pub use embed::FrameAncestors;
 
 #[derive(Clone)]
 pub struct AppState {
-    /// Data root on disk — the `accounts.json` lookup and the config
-    /// path. The SQL store is reached through [`AppState::repo`].
+    /// Data root on disk, and so the config path. The SQL store is
+    /// reached through [`AppState::repo`].
     pub root: Arc<PathBuf>,
     /// The stores this process owns and writes: filed feedback, disk
     /// usage and remote media.
@@ -229,7 +229,6 @@ fn routes(state: AppState) -> Router {
     let gate = state.api_token.clone();
     Router::new()
         .route("/api/health", get(health))
-        .route("/api/accounts", get(accounts))
         .route("/api/feedback", post(submit_feedback))
         .route("/api/config", get(get_config).put(put_config))
         .route("/api/config/check", post(check_config))
@@ -380,19 +379,6 @@ async fn send_no_referrer(
         axum::http::HeaderValue::from_static("no-referrer"),
     );
     response
-}
-
-async fn accounts(State(s): State<AppState>) -> Json<serde_json::Value> {
-    // `<root>/accounts.json` maps account ids → display names. Nothing
-    // in this tree writes it, so this answers `{}` and the grid shows
-    // the raw value; a provider that wants a readable account resolves
-    // one into `grid_rows.account` at render time, as `claude` does.
-    let path = s.root.join("accounts.json");
-    let v: serde_json::Value = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    Json(v)
 }
 
 async fn health(State(s): State<AppState>) -> Json<Health> {
@@ -876,7 +862,7 @@ async fn agent_config_guide() -> (
 /// One entry in `GET /api/sync/sources`. Derived from the config file
 /// at the data root — the backend never persists this list to SQL. A
 /// source is any step with no declared inputs (a fringe step — the
-/// thing `--sync` can target), identified by its step id.
+/// thing a sync can name), identified by its step id.
 #[derive(Debug, Serialize)]
 pub struct SourceInfo {
     pub id: String,
@@ -890,7 +876,7 @@ fn load_dag_config(path: &std::path::Path) -> anyhow::Result<datalib_dag::config
 }
 
 /// The source step ids of a checked config: the steps with no declared
-/// `inputs`, which is exactly what `--sync` can target. Their real input is
+/// `inputs`, which is exactly what a sync can name. Their real input is
 /// outside the DAG — a remote service, a user-staged tree.
 fn source_ids(checked: &datalib_dag::config::ConfigCheck) -> Vec<String> {
     checked
@@ -2526,7 +2512,7 @@ mod tests {
         );
         // The `unified_grid_and_search_index` step has no source to read yet, so on a scaffolded
         // root it *is* the fringe. It is what
-        // `--sync` can target until the first source is added — and
+        // a sync can name until the first source is added — and
         // running it against nothing is a no-op, not an error.
         assert_eq!(
             source_ids(&checked),

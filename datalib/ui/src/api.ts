@@ -438,6 +438,8 @@ export type Child = {
   kind: string;
   name: string | null;
   author: string | null;
+  /// The author as a handle (`email:…`), which their chip names.
+  author_handle: string | null;
   created_at: string | null;
   preview: string | null;
   /// The document its row is in; null for a container with no row.
@@ -597,18 +599,6 @@ let lastHealth: Health | null = null;
 
 export function healthSnapshot(): Health | null {
   return lastHealth;
-}
-
-export type AccountInfo = {
-  provider?: string;
-  label?: string;
-  email?: string | null;
-};
-
-export type AccountsMap = Record<string, AccountInfo>;
-
-export function fetchAccounts(signal?: AbortSignal): Promise<AccountsMap> {
-  return getJson<AccountsMap>("/api/accounts", signal);
 }
 
 // `toast: false` is for a caller that shows the failure where it happened.

@@ -75,7 +75,7 @@ filegroup(
         "//datalib/backend/http:datalib_http_bin",
         # The loop as a command, for a root no server is running, and
         # the step host every loop spawns.
-        "//datalib/backend/dag:datalib_dag_bin",
+        "//datalib/backend/dag:datalib_pipeline_bin",
         "//datalib/backend/datalib_step:datalib_step",
         # The directory-tree scanner, standalone. The pipeline reaches
         # it through `datalib-step download file_inventory`, but it is also
@@ -115,7 +115,7 @@ filegroup(
 # name. This is the layout `scripts/install.sh` produces on a user's
 # machine, and the one three separate lookups assume:
 #
-#   * `datalib-dag` resolves a step's `command:` (`datalib-step download
+#   * `datalib-pipeline` resolves a step's `command:` (`datalib-step download
 #     slack_api`) against PATH, falling back to its own directory when no
 #     `--binary-dir` flag or config `binary_dir` is given
 #     (`resolve_binary_dir` in dag/src/config.rs).
@@ -124,12 +124,12 @@ filegroup(
 #   * the router curl finds the impersonator the same way.
 #
 # Bazel names each output after its target (`datalib_step`,
-# `datalib_dag_bin`), so without the rename every caller has to stage a
+# `datalib_pipeline_bin`), so without the rename every caller has to stage a
 # dash-named symlink dir by hand before it can run a pipeline. Depend on
 # this instead:
 #
 #   bazelisk build //datalib/backend:bin
-#   bazel-bin/datalib/backend/bin/datalib-dag <data_root>/config.toml
+#   bazel-bin/datalib/backend/bin/datalib-pipeline sync <data_root>
 #
 # The one list of shipped binaries under their public names: what
 # `bazelisk build //datalib/backend:bin` stages for a local run, and
@@ -144,7 +144,7 @@ filegroup(
 # hermetic tests take `:bin_unstamped`, the same layout without the file,
 # and stay cached across commits.
 _BIN_RENAMES = {
-    "dag/datalib_dag_bin": "datalib-dag",
+    "dag/datalib_pipeline_bin": "datalib-pipeline",
     # Reached under the second `root_paths` entry below, which is
     # what makes this key `doltlite/doltlite` and not
     # `third-party/doltlite/doltlite`.

@@ -68,7 +68,8 @@ export type GridApi = {
   rowIndexOf: (uuid: string) => number | null;
   /// Load pages until the row is held; its index, or null.
   seek: (uuid: string) => Promise<number | null>;
-  /// A search, a page, or a group's page on its way.
+  /// A search, a page, or a group's page on its way; not a refresh of
+  /// the rows on screen.
   busy: () => boolean;
   uuidAt: (row: number) => string | null;
   rows: () => Record<string, unknown>[];
@@ -580,7 +581,7 @@ export async function lastSuccessOf(page: Page, id: string): Promise<string | nu
 /// States a run will not move a step out of.
 export const TERMINAL = /^(Succeeded|Up to date|Failed|Blocked|Interrupted|Stopped)$/;
 
-/// How long a row may take to settle: a real `datalib-dag` run over the
+/// How long a row may take to settle: a real `datalib-pipeline` run over the
 /// fixture corpus on a cold action cache.
 export const ROW_SETTLE = 60_000;
 
@@ -705,7 +706,7 @@ async function settleRowOnly(
 }
 
 /// Wait until no sync is running — the server's loop is idle, or, before
-/// it has the lock, no `datalib-dag` holds it — then remount so the page
+/// it has the lock, no `datalib-pipeline` holds it — then remount so the page
 /// is not a beat behind it.
 export async function settleRunner(page: Page, timeout = ROW_SETTLE) {
   await expect

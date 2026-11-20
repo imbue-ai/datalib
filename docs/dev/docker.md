@@ -11,7 +11,7 @@ security model the walkthrough's bind-mount rules rest on.
 `ghcr.io/imbue-ai/datalib:<tag>` is Ubuntu 26.04 plus:
 
 - the release tarball, unpacked whole at `/opt/datalib`, with these
-  linked into `/usr/local/bin`: `datalib-dag`, `datalib-step`,
+  linked into `/usr/local/bin`: `datalib-pipeline`, `datalib-step`,
   `datalib-http` with the web UI embedded, `datalib-applet`,
   `datalib-migrate-config`, `datalib-doltlite` — also as plain
   `doltlite` — `latchkey-curl-router`, `curl-impersonate` and the
@@ -180,10 +180,10 @@ directory directly.
 
 ## Security model
 
-`datalib-dag` exists to mirror data out of services you are logged into,
+`datalib-pipeline` exists to mirror data out of services you are logged into,
 and the credentials that takes are live session cookies and API tokens
 that confer the full power of your account. Any process running as you
-that can spawn `datalib-dag` or read your latchkey store can act as you
+that can spawn `datalib-pipeline` or read your latchkey store can act as you
 on those services with no further prompt.
 
 The image is here so those binaries and those credentials never have
@@ -260,6 +260,6 @@ not supported: that user cannot write the image's home, where the file
 fingerprint cache lives.
 
 PID 1 is [tini](https://github.com/krallin/tini), so `docker stop`
-delivers SIGTERM cleanly to `datalib-dag`, which forwards it to its
+delivers SIGTERM cleanly to `datalib-pipeline`, which forwards it to its
 running steps, and to `datalib-http`, which stops its applets on the
 way out.

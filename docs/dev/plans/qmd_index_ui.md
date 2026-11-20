@@ -104,7 +104,7 @@ right-clicked row is part of it, else on that row" for the context menu.
 A "Re-index these documents" item is a few lines in the existing
 `getContextMenuItems`.
 
-**There is already a live progress channel.** `datalib-dag` emits NDJSON
+**There is already a live progress channel.** `datalib-pipeline` emits NDJSON
 on stderr; the worker's `TaskBoard` (`http/src/worker.rs:86`) folds
 `run_plan` / `step_start` / `progress_length` / `progress_inc` /
 `progress_message` / `step_finish` / `run_summary` into a per-task board
@@ -333,7 +333,7 @@ The cost is one schema change and one dispatch branch:
 - `sync_enqueue` (`http/src/lib.rs:1098`) currently rejects every kind
   but `"all"`. Add `"qmd_index"`, whose payload is
   `{"markdown_uuids": [...]}`.
-- `run_job` branches: `"all"` → `datalib-dag` as today; `"qmd_index"` →
+- `run_job` branches: `"all"` → `datalib-pipeline` as today; `"qmd_index"` →
   `datalib-qmd-indexer --only-docs <file>`. The NDJSON the worker parses
   is the same either way, so `TaskBoard`, the SSE event, and the UI need
   **zero** changes to render this run's progress.

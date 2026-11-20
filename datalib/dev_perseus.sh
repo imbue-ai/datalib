@@ -24,12 +24,12 @@ source "${RUNFILES_DIR:-/dev/null}/$f" 2>/dev/null \
 set -u
 
 BIN_DIR="$(rlocation _main/datalib/backend/bin)"
-DAG_BIN="$BIN_DIR/datalib-dag"
+DAG_BIN="$BIN_DIR/datalib-pipeline"
 SERVE_SH="$(rlocation _main/datalib/serve_dev.sh)"
 # `:tiny_fixture` ships the two TEI XMLs at this runfiles path.
 # rlocation gives us one file's path; the dir is its parent.
 GRC_XML="$(rlocation _main/datalib/backend/etl/providers/perseus/tests/fixtures/perseus_tiny/tlg0003.tlg001.perseus-grc2.xml)"
-[[ -x "$DAG_BIN" ]]              || { echo "ERROR: datalib-dag not found at $DAG_BIN" >&2; exit 1; }
+[[ -x "$DAG_BIN" ]]              || { echo "ERROR: datalib-pipeline not found at $DAG_BIN" >&2; exit 1; }
 [[ -x "$BIN_DIR/datalib-step" ]] || { echo "ERROR: datalib-step not found in $BIN_DIR" >&2; exit 1; }
 [[ -x "$SERVE_SH" ]]  || { echo "ERROR: serve_dev.sh not found at $SERVE_SH" >&2; exit 1; }
 [[ -f "$GRC_XML" ]]   || { echo "ERROR: perseus tiny fixture not found at $GRC_XML" >&2; exit 1; }
@@ -106,6 +106,6 @@ EOF
 echo "[dev_perseus] running render+index against $PERSEUS_FIXTURE_DIR" >&2
 # No --binary-dir: the runner falls back to its own directory to find
 # `datalib-step`, and //datalib/backend:bin puts them side by side.
-"$DAG_BIN" "$ROOT/config.toml" --now '2369-04-15T00:00:00+00:00'
+"$DAG_BIN" sync "$ROOT" --now '2369-04-15T00:00:00+00:00'
 
 exec "$SERVE_SH" "$ROOT"

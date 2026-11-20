@@ -25,7 +25,7 @@ the sandboxed way to try it, with a demo library already loaded.
 ## The mental model
 
 Everything lives under one **data root** directory. A sync is a DAG of
-steps run by `datalib-dag`: per source (a `[[groups]]` entry) a
+steps run by `datalib-pipeline`: per source (a `[[groups]]` entry) a
 `<group>/ingest` step (bring the raw data in) and a
 `<group>/render_markdown` step (raw → each document's markdown and
 rows, in a per-source store), `unified_grid_and_search_index` under the `unified_grid_and_search_index` group (the SQL
@@ -64,7 +64,7 @@ and fully derived, `system/` is the server's own state.
 
 The binaries a release ships:
 
-- `datalib-dag` — the sync runner.
+- `datalib-pipeline` — the sync runner.
 - `datalib-step` — the built-in step commands.
 - `datalib-http` — the API server and web UI.
 - `datalib-applet` — the applets: one server for each `[[applets]]`
@@ -98,7 +98,7 @@ Top-level keys (`data_root`, `binary_dir`) go above the first `[[…]]`
 header, and a step's `params` sub-tables come after its plain keys — a
 `[…]` header ends the table it appears in.
 
-- **From the CLI alone:** `datalib-dag init <data_root>` writes a
+- **From the CLI alone:** `datalib-pipeline init <data_root>` writes a
   `config.toml` with no steps and nothing else; `datalib-step examples
   <type> --append <data_root>/config.toml` adds a source (below), and
   the document index and its applets when the config has none yet.
@@ -142,12 +142,12 @@ header, and a step's `params` sub-tables come after its plain keys — a
 CLI:
 
 ```sh
-datalib-dag <data_root>/config.toml            # everything
-datalib-dag <data_root>/config.toml --sync slack/ingest      # one source
-datalib-dag --check <data_root>/config.toml   # validate, run nothing
+datalib-pipeline sync <data_root>                 # everything
+datalib-pipeline sync <data_root> slack/ingest    # one source
+datalib-pipeline check <data_root>                 # validate, run nothing
 ```
 
-`--check` prints *every* problem with the config rather than the first,
+Every verb takes the data root or its `config.toml`. `check` prints *every* problem with the config rather than the first,
 as `file:line:col: severity: message` with the offending line and a
 `help:` line under each — so fixing a config takes one round-trip, not
 one per typo. It checks what the runner reads, not a step's params:
@@ -173,43 +173,44 @@ search index gets one, with its applets, and a config without the
 those. A
 source reached more than one way names the method (`--method gmail`),
 and `--id` gives the group an id of its own, for a second account. It
-refuses an id the config already has, and a result `datalib-dag
---check` would refuse, writing nothing; the previous file is kept as
+refuses an id the config already has, and a result `datalib-pipeline
+check` would refuse, writing nothing; the previous file is kept as
 `config.toml.<UTC time>.bak`, one per append. Its page says how to do the same by hand.
 `datalib-step help <type> <method>` lists every option with its type,
 default and meaning. Both are read from the source's own config crate,
 and a test loads and plans every stanza.
 
 ```sh
-datalib-dag init ~/datalib
+datalib-pipeline init ~/datalib
 datalib-step examples slack --append ~/datalib/config.toml
 datalib-step examples email --append ~/datalib/config.toml --method gmail --id work-mail
 ```
 
-Useful flags: `--sync <step-id>` (repeatable; runs the named steps and
-everything downstream of them, and nothing else — pending work in other
-sources waits for a full run), `--parallelism N`, `--reset
-<step-id>` (see **Resetting** below; alone it does nothing else,
-with `--sync` it runs first), `--free-disk-space` (see **Giving back
-disk** below; refused while the app is up), `--binary-dir DIR` (put at the front of
-every step's `PATH`, so a bare `command` like `datalib-step` resolves
-there; defaults to the config's `binary_dir`, else the directory
-`datalib-dag` itself is in). A sync that fails with "has a shape this build's DDL
-cannot be reached from by adding columns" is a raw store an older build
-wrote in a shape this one cannot keep; nothing was changed, and if
-upstream still has the data, `--reset <source>/ingest --sync
-<source>/ingest` is the way through.
+`sync` takes step ids after the root (several, or separated by commas):
+it runs the named steps and everything downstream of them, and nothing
+else — pending work in other sources waits for a full run. Its flags:
+`--parallelism N`, and `--binary-dir DIR` (put at the front of every
+step's `PATH`, so a bare `command` like `datalib-step` resolves there;
+defaults to the config's `binary_dir`, else the directory
+`datalib-pipeline` itself is in). The other verbs that run steps are
+`reset <data_root> <step-id>…` (see **Resetting** below) and
+`free-disk-space` (see **Giving back disk** below); each is refused
+while the app is up. A sync that fails with "has a shape this build's
+DDL cannot be reached from by adding columns" is a raw store an older
+build wrote in a shape this one cannot keep; nothing was changed, and if
+upstream still has the data, `datalib-pipeline reset <data_root>
+<source>/ingest`, then a sync of it, is the way through.
 
-**To run one step, `--sync` it** — never run `datalib-step` for it by
+**To run one step, sync it** — never run `datalib-step` for it by
 hand. The runner is what sets the step's environment, takes the root's
 lock and records the version the step published, which is how the steps
 that read it learn it moved; a step run by hand records nothing. An
 ingest step always runs when synced; any other runs only if what it
 reads moved, so to rebuild a source's documents from what is already
-downloaded, reset its render step in the same command:
-`datalib-dag <config> --reset slack/render_markdown --sync
-slack/render_markdown`. `datalib-step help <function>` gives the
-command for each kind of step.
+downloaded, reset its render step first:
+`datalib-pipeline reset <data_root> slack/render_markdown`, then
+`datalib-pipeline sync <data_root> slack/render_markdown`.
+`datalib-step help <function>` gives the commands for each kind of step.
 
 **The stderr stream is NDJSON and made for you**: `run_plan` (every step's
 id and group, in topo order), then `step_start` / `progress_*` / `log` / `hint` /
@@ -228,13 +229,14 @@ whose inputs were never written at all is `blocked`. Ctrl-C is graceful:
 steps checkpoint-commit partial progress and the next run resumes.
 Syncs are incremental and idempotent — re-running is always safe.
 
-**You can sync while the app, or another `datalib-dag`, is syncing the
+**You can sync while the app, or another `datalib-pipeline`, is syncing the
 same root.** A sync is a *request*: a row in
 `<data_root>/system/supervisor.sqlite` naming the steps to sync (its
 *roots*; everything downstream of them comes too) and who asked. One
 process runs the loop that serves requests — the app while it is open,
-otherwise the first `datalib-dag` to need one — and every other
-`datalib-dag` hands its request to that loop, says `following request
+or a `datalib-pipeline serve <config>`, which holds the loop until it is
+stopped; otherwise the first `datalib-pipeline` to need one — and every other
+`datalib-pipeline` hands its request to that loop, says `following request
 <id>`, and waits for it. Your source runs beside theirs, not after. It
 exits with *your* request's outcome: 0 done, 2 failed, 130 stopped, and
 Ctrl-C stops your request only. Pass `--by <name>` so the request says
@@ -245,10 +247,10 @@ a shell with no server needed, or over HTTP while the app is up.
 
 | verb | CLI | HTTP |
 |---|---|---|
-| sync | `datalib-dag <config> --sync <step> --by claude` | `POST /api/requests {"roots": ["<step>"], "by": "claude"}` (no roots: every source; one request per source) |
-| stop a sync | `datalib-dag stop <config> <request-id> --by claude` | `POST /api/requests/<id>/stop {"by": "claude"}` |
-| turn a step off | `datalib-dag turn-off <config> <step> --by claude` | `POST /api/steps/<step>/turn_off {"by": "claude"}` (`/` in the id as `%2F`) |
-| turn it on | `datalib-dag turn-on <config> <step>` | `POST /api/steps/<step>/turn_on` |
+| sync | `datalib-pipeline sync <config> <step> --by claude` | `POST /api/requests {"roots": ["<step>"], "by": "claude"}` (no roots: every source; one request per source) |
+| stop a sync | `datalib-pipeline stop <config> <request-id> --by claude` | `POST /api/requests/<id>/stop {"by": "claude"}` |
+| turn a step off | `datalib-pipeline turn-off <config> <step> --by claude` | `POST /api/steps/<step>/turn_off {"by": "claude"}` (`/` in the id as `%2F`) |
+| turn it on | `datalib-pipeline turn-on <config> <step>` | `POST /api/steps/<step>/turn_on` |
 
 `<config>` is `<data_root>/config.toml`. A stop, a turn-off and a
 turn-on take effect within a second. Turning a step off (the switch on
@@ -269,7 +271,7 @@ that request (`pending`, `running`, `done`), its last run and its live
 progress: wait on a root's `done` to wait for a download without the
 render and indexes after it, reading it again on each `GET
 /api/sync/stream` frame naming `requests` rather than on a timer
-(`building_on_datalib.md` §"Waiting, not waiting, and stopping"). `datalib-dag status
+(`building_on_datalib.md` §"Waiting, not waiting, and stopping"). `datalib-pipeline status
 <config>` prints the open ones from the shell, with the steps turned off and the steps
 running now: one line each, starting `request `, `off ` or `running `.
 A line `owed <step>  <n>  as of run <id>` follows for each step at rest
@@ -278,16 +280,18 @@ it saw waiting and did not get to — a Slack sync that was stopped, say,
 with the conversations, threads and files it had not reached; the next
 sync starts on them. With none of these there is one line starting
 `idle:`. To wait for your own
-sync, don't poll: `datalib-dag <config> --sync <step>` returns when its
+sync, don't poll: `datalib-pipeline sync <config> <step>` returns when its
 request closes. What each step is doing is in the loop's record, which the
 Manage screen's Status column reads directly:
 
 ```sh
 sqlite3 <data_root>/system/supervisor.sqlite \
-  'select step, state, state_detail, turned_off_by, requests from steps'
+  'select step, state, waiting_for, state_detail, turned_off_by, requests from steps'
 ```
 
-`state` is `running`, `waiting` (on what: `state_detail`), `off`,
+`state` is `running`, `waiting` (for what kind of thing: `waiting_for`,
+one of `upstream`, `reader`, `lock`, `disk_space`, `config`; for which:
+`state_detail`), `off`,
 `blocked`, `failed`, or at rest (`idle`, `stale`, `fresh`); `requests` is
 the open requests it is being run for, a JSON list of their ids. Each request and each step turned
 off records who did it, so the screen shows "turned off by claude" or
@@ -306,8 +310,9 @@ carries the emptiness downstream is opened. It answers 204 once the
 store is empty, or 202 if the step had not stopped within ten seconds and
 is emptied once it has. The
 Manage screen's row menu offers the same. With no app up,
-`datalib-dag --reset slack/ingest` empties the store alone; add
-`--sync slack/ingest` to download it again at once.
+`datalib-pipeline reset <data_root> slack/ingest` empties the store and
+nothing else; `datalib-pipeline sync <data_root> slack/ingest` then
+downloads it again.
 
 **Giving back disk.** A doltlite store never edits in place, so every
 sync leaves chunks behind that no commit reaches; a store that refills
@@ -325,8 +330,8 @@ loses their history, which nothing but the History card reads. The grid
 index is plain SQLite and is not touched.
 
 ```sh
-datalib-dag ~/datalib/config.toml --free-disk-space                      # app not running
-datalib-dag ~/datalib/config.toml --free-disk-space --drop-old-versions-on-derived-data
+datalib-pipeline free-disk-space ~/datalib                      # app not running
+datalib-pipeline free-disk-space ~/datalib --drop-old-versions-on-derived-data
 ```
 
 It prints each step's tree before and after. With the app up, `POST
@@ -437,7 +442,7 @@ Pick the surface that fits the question:
     Parameters, paging, a doltlite store's commits and what it refuses:
     [the applets](user/applets.md#reading-any-store-with-sql).
 
-  - **From a shell:** **`datalib-doltlite`** ships beside `datalib-dag`
+  - **From a shell:** **`datalib-doltlite`** ships beside `datalib-pipeline`
     (plain `doltlite` in the docker image). Its argv is `sqlite3`'s.
     **Always pass `-readonly`**: a transaction a writable session holds
     open stalls the sync.
@@ -659,7 +664,7 @@ what exists and misbehaves (a one-line "this doc is wrong", a full
 bug), and what would make Datalib easier to wield for whatever you and
 the user are trying to do with it — a surface that fought you, a query
 you had to work around, a use case it doesn't serve yet. Paste the
-`datalib-dag --check` output or the failing step's `step_finish` event
+`datalib-pipeline check` output or the failing step's `step_finish` event
 where you have one; it saves a round-trip. If you cannot reach GitHub,
 write the report out for the user to file. **The tracker is public:
 keep the user's private data out of it.** Log lines and events can
@@ -674,7 +679,7 @@ document.
   403s despite a fresh cookie usually mean a flagged IP/UA; wait or
   change networks.
 - **"Why did/didn't this step run?"**: `system/supervisor.sqlite` is
-  plain SQLite. `select step, state, state_detail from steps` says what
+  plain SQLite. `select step, state, waiting_for, state_detail from steps` says what
   each step is doing and what it waits on; `select step, reads,
   last_status, last_failure_kind, last_error from steps` gives each
   step's input versions at its last success and how it last ended (a
@@ -688,7 +693,7 @@ document.
   close it. Uncommitted leftovers need no repair, since the next
   writer's open discards them
   ([`docs/dev/doltlite.md`](dev/doltlite.md#locks-and-writers)).
-- **A config the runner rejects**: `datalib-dag --check
+- **A config the runner rejects**: `datalib-pipeline check
   <data_root>/config.toml` lists every problem with a line number;
   `PUT /api/config` (or the Manage tab) returns the same list in
   `diagnostics`, `datalib-step` steps whose params a sync would refuse
@@ -698,12 +703,12 @@ document.
   went under the config's `[disk_space]` pause line (10 GB unless the
   config moves it), so the loop stopped what ran and starts nothing
   until the disk is back to the resume line (15 GB). A one-shot
-  `datalib-dag` that seems to hang after its `run_plan` line is this:
+  `datalib-pipeline` that seems to hang after its `run_plan` line is this:
   each held step logs `waiting for disk space: …` once. Free space, or
   lower the lines; the open syncs carry on by themselves.
 - **A step that silently stopped running**: check `diagnostics` on
-  `GET /api/config`, or `--check`. A config with one unusable entry
+  `GET /api/config`, or `datalib-pipeline check`. A config with one unusable entry
   still loads — that entry is dropped and everything else runs — so a
   source can leave the pipeline without anything failing. The Manage
   screen shows such a row as *Not loaded* or *Can't run*, with the
-  reason; `--check` prints it.
+  reason; `check` prints it.
