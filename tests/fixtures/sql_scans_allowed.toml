@@ -2,7 +2,8 @@
 # or index, other than reads of the catalog alone, and why that is allowed.
 # sql_scans_test.py checks the sync's list (ingested/sql_scans.jsonl) against
 # this file. A new scan fails it until the statement gets an index or an
-# entry here with a reason (docs/dev/testing.md).
+# entry here with a reason, and an entry whose statement no longer runs or
+# no longer scans fails it until the entry goes (docs/dev/testing.md).
 #
 # On a fixture a scan costs nothing; on a library it costs the whole table,
 # every time the statement runs. A reason says why that is fine: the
@@ -810,11 +811,6 @@ files = ["*/supervisor.sqlite"]
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
-statement = "SELECT id, session_id, json(payload) AS payload FROM cowork_events WHERE payload IS NOT NULL ORDER BY session_id, sequence_num, id"
-files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed: on main when this check began."
-
-[[scan]]
 statement = "SELECT id, team_id, json(payload) AS payload FROM users WHERE payload IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Not reviewed: on main when this check began."
@@ -1073,11 +1069,6 @@ why = "Not reviewed, and suspect: a lookup by a value no index answers, so each 
 statement = "SELECT DISTINCT blob_id, blake3 FROM email_blobs WHERE blake3 IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Not reviewed: on main when this check began."
-
-[[scan]]
-statement = "SELECT MAX(seq) FROM log"
-files = ["*/runs/runs.sqlite"]
-why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
 statement = "SELECT a.message_id, a.export_name, m.group_id FROM chat_attachments a JOIN chat_messages m ON m.id = a.message_id WHERE a.blake3 IS NULL"
