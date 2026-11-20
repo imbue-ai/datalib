@@ -215,6 +215,7 @@ fn chat_common() -> Result<Vec<Document>> {
         stamp_precision: RecordStampPrecision::Seconds,
         render_version: 1,
         text_format: TextFormat::Plain,
+        layout: datalib_etl_chat_common::Layout::Conversation,
     };
     let item = |uuid: &str, author: String, text: Option<String>| NormalizedChatItem {
         reply_to: None,

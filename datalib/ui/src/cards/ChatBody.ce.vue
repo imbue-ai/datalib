@@ -42,7 +42,7 @@ import {
   type ChipEntry,
   type ChipHost,
 } from "./chipActions";
-import { decorateDates, rewriteDatesForCopy } from "./dates";
+import { decorateChatDays, decorateDates, rewriteDatesForCopy } from "./dates";
 import { timeView } from "@/config/timeView";
 import { decorateEntities, entities } from "./entities";
 import HandlePopover from "./HandlePopover.ce.vue";
@@ -519,6 +519,7 @@ function paint() {
   void redrawHandles();
   void decorateEntities(el);
   decorateDates(el);
+  decorateChatDays(el);
   decorateEdgeSources();
   if (kind === "grew" && anchor) {
     // A page drawn above pushed what the reader was looking at down; put
@@ -622,7 +623,9 @@ watch([() => props.pieces, () => props.remoteAccept], async () => {
 });
 // The clock's zone or format changed: the same dates, read anew.
 watch(timeView, () => {
-  if (body.value) decorateDates(body.value);
+  if (!body.value) return;
+  decorateDates(body.value);
+  decorateChatDays(body.value);
 });
 watch(
   () => props.selectedSectionUuid,

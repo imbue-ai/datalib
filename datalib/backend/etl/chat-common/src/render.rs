@@ -59,7 +59,9 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// v25: titles, names, filenames and labels lose their bidi controls.
 /// v26: a chat is one document; the front matter has no `period`, and
 /// no title says which months it holds.
-pub const LAYOUT_VERSION: u32 = 26;
+/// v27: a chat is drawn in the chat layout: no box per message, one
+/// header over a run of one person's messages, reactions as pills.
+pub const LAYOUT_VERSION: u32 = 27;
 
 /// What every chat-common provider declares through
 /// `RenderProcessor::render_params`, merged with its own knobs: the
@@ -151,7 +153,27 @@ pub struct RenderProfile {
     pub render_version: u32,
     /// What every item's `text` is.
     pub text_format: TextFormat,
+    /// How its documents are laid out for reading.
+    pub layout: Layout,
 }
+
+/// How a provider's documents are laid out for reading
+/// (docs/dev/plans/document_viewer_from_blocks.md, step 7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Layout {
+    /// Each message in a box of its own, header and all: an email thread,
+    /// a post and its comments.
+    Conversation,
+    /// No box per message, one header over a run of one person's
+    /// messages, reactions as pills: a messaging app's chat.
+    Chat,
+    /// An assistant's transcript: drawn as a conversation is, for now.
+    Transcript,
+}
+
+/// How long after a person's message their next one still goes under the
+/// same header in a chat.
+const RUN_GAP_MS: i64 = 5 * 60 * 1000;
 
 #[derive(Debug, Default, Clone)]
 pub struct RenderSummary {
@@ -494,6 +516,8 @@ fn render_markdown(
     let first_unread = doc.items.iter().position(|it| it.unread);
     let mut sections = vec![Section::frame(s)];
     let mut open_branches: Vec<&str> = Vec::new();
+    // The message drawn just before, where nothing came between them.
+    let mut before: Option<&NormalizedChatItem> = None;
     let mut i = 0;
     while i < doc.items.len() {
         let item = &doc.items[i];
@@ -502,6 +526,9 @@ fn render_markdown(
             .zip(&item.branch)
             .take_while(|(open, b)| **open == b.as_str())
             .count();
+        if open_branches.len() != shared || open_branches.len() < item.branch.len() {
+            before = None;
+        }
         while open_branches.len() > shared {
             open_branches.pop();
             sections.push(Section::fold_close());
@@ -526,9 +553,19 @@ fn render_markdown(
                 &doc.items[i..run_end],
                 first_unread.and_then(|f| f.checked_sub(i)),
             );
+            before = None;
             i = run_end;
         } else {
-            sections.push(render_item(profile, &doc.items[i], first_unread == Some(i)));
+            let continues = profile.layout == Layout::Chat
+                && first_unread != Some(i)
+                && before.is_some_and(|b| continues_run(b, item));
+            sections.push(render_item(
+                profile,
+                item,
+                first_unread == Some(i),
+                continues,
+            ));
+            before = Some(item);
             i += 1;
         }
     }
@@ -608,18 +645,55 @@ fn render_aside_run(
         &format!("🛠 {n} tool step{plural}", n = items.len()),
     ));
     for (i, item) in items.iter().enumerate() {
-        sections.push(render_item(profile, item, first_unread == Some(i)));
+        sections.push(render_item(profile, item, first_unread == Some(i), false));
     }
     sections.push(Section::fold_close());
 }
 
-fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread: bool) -> Section {
-    let classes: &[&str] = match (item.unread, first_unread) {
-        (true, true) => &["unread", "first-unread"],
-        (true, false) => &["unread"],
-        (false, _) => &[],
+/// Whether `item`, drawn straight after `before`, goes under its header:
+/// two messages by the same person, the second within [`RUN_GAP_MS`]. With
+/// no handle, the same name says so only where it is a name: two stand-ins
+/// ("Unknown", one of several deleted accounts) may be two people.
+fn continues_run(before: &NormalizedChatItem, item: &NormalizedChatItem) -> bool {
+    let message = |i: &NormalizedChatItem| matches!(i.kind, ItemKind::Text | ItemKind::Attachment);
+    let same_author = match (&before.author_handle, &item.author_handle) {
+        (Some(a), Some(b)) => a == b,
+        (None, None) => {
+            item.author_kind != AuthorKind::Unknown
+                && before.author_kind == item.author_kind
+                && !item.author_display.is_empty()
+                && before.author_display == item.author_display
+        }
+        _ => false,
     };
-    let class = msg_class(profile.provider, classes);
+    let soon = match (before.date_ms, item.date_ms) {
+        (Some(a), Some(b)) => (0..=RUN_GAP_MS).contains(&(b - a)),
+        _ => false,
+    };
+    message(before) && message(item) && same_author && soon
+}
+
+fn render_item(
+    profile: &RenderProfile,
+    item: &NormalizedChatItem,
+    first_unread: bool,
+    continues: bool,
+) -> Section {
+    let chat = profile.layout == Layout::Chat;
+    let mut classes: Vec<&str> = Vec::new();
+    if chat {
+        classes.push("msg--chat");
+    }
+    if continues {
+        classes.push("msg--cont");
+    }
+    if item.unread {
+        classes.push("unread");
+    }
+    if item.unread && first_unread {
+        classes.push("first-unread");
+    }
+    let class = msg_class(profile.provider, &classes);
     let at = record_stamp_from_unix_millis_at(
         item.date_ms,
         item.date_offset_secs,
@@ -686,7 +760,15 @@ fn render_item(profile: &RenderProfile, item: &NormalizedChatItem, first_unread:
             upstream: r.upstream,
             held: r.held,
         }),
-        ..Item::new(ItemForm::Message, body)
+        continues,
+        ..Item::new(
+            if chat {
+                ItemForm::Chat
+            } else {
+                ItemForm::Message
+            },
+            body,
+        )
     };
     Section::item(&item.message_uuid, class, message)
 }
@@ -2068,6 +2150,7 @@ mod tests {
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
             text_format: TextFormat::Markdown,
+            layout: Layout::Conversation,
         };
         let chat = mk_chat();
         let md = join(&render_markdown(
@@ -2197,6 +2280,7 @@ mod tests {
         const MARKUP: &str = "<script>x</script> & co";
         let profile = RenderProfile {
             text_format: TextFormat::Plain,
+            layout: Layout::Conversation,
             ..test_profile()
         };
         let mut chat = mk_chat();
@@ -2433,6 +2517,79 @@ mod tests {
         assert_eq!(md.matches("first-unread").count(), 1, "{md}");
     }
 
+    /// In a chat, a person's messages within five minutes of each other
+    /// go under one header; another author, a longer gap, a system event
+    /// or the first unread message starts a new one. A conversation draws
+    /// every header.
+    #[test]
+    fn a_chat_draws_one_header_over_a_run_of_one_persons_messages() {
+        let mut chat = mk_chat();
+        let first = chat.render_units[0].items[0].clone();
+        let at = |uuid: &str, author: &str, minutes: i64| NormalizedChatItem {
+            message_uuid: uuid.into(),
+            author_display: author.into(),
+            date_ms: first.date_ms.map(|ms| ms + minutes * 60_000),
+            reactions: Vec::new(),
+            ..first.clone()
+        };
+        let event = NormalizedChatItem {
+            kind: ItemKind::System,
+            system_note: Some("Worf joined".into()),
+            ..at("event", "", 11)
+        };
+        let stand_in = |uuid: &str, minutes: i64| NormalizedChatItem {
+            author_kind: AuthorKind::Unknown,
+            ..at(uuid, "Unknown", minutes)
+        };
+        chat.render_units[0].items = vec![
+            at("a", "Picard", 0),
+            at("b", "Picard", 4),
+            at("c", "Picard", 10),
+            at("d", "Riker", 10),
+            event,
+            at("e", "Riker", 12),
+            NormalizedChatItem {
+                unread: true,
+                ..at("f", "Riker", 13)
+            },
+            stand_in("g", 14),
+            stand_in("h", 14),
+        ];
+        let class_of = |profile: &RenderProfile, uuid: &str| {
+            render_markdown(profile, &chat, &chat.render_units[0], "Test")
+                .into_iter()
+                .find(|s| s.uuid.as_deref() == Some(uuid))
+                .and_then(|s| s.class)
+                .unwrap()
+        };
+        let chat_profile = RenderProfile {
+            layout: Layout::Chat,
+            ..test_profile()
+        };
+        let continued: Vec<&str> = ["a", "b", "c", "d", "event", "e", "f", "g", "h"]
+            .into_iter()
+            .filter(|u| class_of(&chat_profile, u).contains("msg--cont"))
+            .collect();
+        assert_eq!(continued, ["b"], "c is six minutes after b");
+        assert_eq!(class_of(&chat_profile, "a"), "msg msg--test msg--chat");
+        assert_eq!(
+            class_of(&chat_profile, "f"),
+            "msg msg--test msg--chat unread first-unread"
+        );
+        let md = join(&render_markdown(
+            &chat_profile,
+            &chat,
+            &chat.render_units[0],
+            "Test",
+        ));
+        assert_eq!(
+            md.matches("## ").count(),
+            7,
+            "all but b and the event: {md}"
+        );
+        assert!(!class_of(&test_profile(), "b").contains("msg--cont"));
+    }
+
     /// A thread whose replies are still to be fetched read like a message
     /// nobody answered. Its first message now says how many replies there
     /// are, and how many the mirror does not hold yet.
@@ -2545,6 +2702,7 @@ mod tests {
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
             text_format: TextFormat::Markdown,
+            layout: Layout::Conversation,
         };
         let md = join(&render_markdown(
             &profile,
@@ -2705,6 +2863,7 @@ mod tests {
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
             text_format: TextFormat::Markdown,
+            layout: Layout::Conversation,
         };
         let mut chat = mk_chat();
         chat.source_url = Some("https://example.com/post/42".to_string());
@@ -2744,6 +2903,7 @@ mod tests {
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
             text_format: TextFormat::Markdown,
+            layout: Layout::Conversation,
         };
         let mut chat = mk_chat();
         let mut next = chat.render_units[0].items[0].clone();
@@ -2788,6 +2948,7 @@ mod tests {
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
             text_format: TextFormat::Markdown,
+            layout: Layout::Conversation,
         };
         let mut chat = mk_chat();
         chat.render_units[0].items[0].source_url = Some("https://slack.example/p123".to_string());
@@ -2828,6 +2989,7 @@ mod tests {
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
             text_format: TextFormat::Markdown,
+            layout: Layout::Conversation,
         };
         let mut chat = mk_chat();
         chat.render_units[0].items[0].kind_label = Some("LLM Response".to_string());
@@ -2849,6 +3011,7 @@ mod tests {
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
             text_format: TextFormat::Markdown,
+            layout: Layout::Conversation,
         }
     }
 
@@ -2987,6 +3150,7 @@ mod tests {
             stamp_precision: RecordStampPrecision::Seconds,
             render_version: 1,
             text_format: TextFormat::Markdown,
+            layout: Layout::Conversation,
         };
         let mut chat = mk_chat();
         chat.org_uuid = Some("org-123".to_string());

@@ -26,6 +26,7 @@ use crate::processor::Owner;
 pub fn messenger_profile() -> RenderProfile {
     RenderProfile {
         stamp_precision: ids::MESSENGER_STAMP_PRECISION,
+        layout: datalib_etl_chat_common::Layout::Chat,
         ..profile(
             "Facebook Conversation",
             "Facebook Message",
