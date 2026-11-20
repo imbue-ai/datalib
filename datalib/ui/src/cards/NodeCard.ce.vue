@@ -35,7 +35,7 @@ import {
   type ChipEntryId,
 } from "./chipActions";
 import { chipCell, people } from "./contacts";
-import { dateCell } from "./dates";
+import { fittingDateCell } from "./dates";
 import { documentCell } from "./documentChip";
 import { nodeCell } from "./nodeChip";
 import {
@@ -181,7 +181,7 @@ function titleOf(c: Child): Node {
 
 function whenOf(c: Child): Node {
   void chipsMoved.value;
-  return c.created_at ? dateCell(c.created_at, now) : document.createTextNode("");
+  return c.created_at ? fittingDateCell(c.created_at, now) : document.createTextNode("");
 }
 
 /// Puts the node its value makes into the element.
@@ -413,9 +413,19 @@ onBeforeUnmount(() => {
 .nc-row.is-container .nc-title {
   font-weight: 600;
 }
-.nc-when,
+/* Room for `2369-05-28 15:02`, shrinking with the row to room for the
+   day alone, which a narrower date chip shows (chip.css `.date-fit`). The
+   title takes the rest. */
+.nc-when {
+  flex: 0 1 20ch;
+  min-width: 12ch;
+  text-align: right;
+}
 .nc-meta {
   flex: 0 0 auto;
+}
+.nc-when,
+.nc-meta {
   color: var(--datalib-faint);
   font-size: var(--datalib-font-size-small);
 }
