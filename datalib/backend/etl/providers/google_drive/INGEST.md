@@ -168,7 +168,7 @@ Drive's:
 | `revision_exports` | `{file}#{revision}#export.<ext>` | a CAS edge per old revision's export, NULL `blake3` for one Drive no longer has |
 | `folders` | folder id | `{id, name, parents, driveId}` as listed, `parents` sorted; My Drive's root among them |
 | `drives` | drive id | `{id, name}`, each shared drive the account belongs to |
-| `file_parents` | file id | `{id, parents}` from the newest listing. `files` holds the entry as of the newest capture, and a move is not worth a capture |
+| `file_parents` | file id | `{id, parents}` from the newest listing, `parents` sorted, since Drive gives them in no fixed order (which one a Doc sits in: [`TRANSLATE.md`](../google_drive_render/TRANSLATE.md) §"Where a row sits"). `files` holds the entry as of the newest capture, and a move is not worth a capture |
 
 Every table has its `_bookkeeping` sidecar. `files_bookkeeping.held_version`
 is the one held version in the store.

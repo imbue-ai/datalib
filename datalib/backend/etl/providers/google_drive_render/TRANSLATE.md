@@ -118,7 +118,17 @@ The Doc is read together, inside its folder, under the folders above
 that one, each a place of kind `Folder`, named. A file's folders are its
 `file_parents` row, from the newest listing, else its `files` row's
 `parents`, as of its capture. It sits in the first, in the order the
-download sorted them, and is filed (`filings`) under each of the others.
+download sorted them, and is filed (`filings`) under each of the others:
+opening any of its folders lists it, and the first is the one its row
+names as its parent and place.
+
+"First" means nothing to Drive. A file has no primary folder, and Drive
+returns `parents` in no fixed order, so the download sorts them by
+folder id to keep the choice the same from one sync to the next: the
+folder the Doc sits in is the one with the lowest id. It rarely
+matters, since Drive has put a new file in only one folder since
+September 2020 (a shortcut stands in for a second); a file in several
+was put there before.
 A folder's own chain follows its first parent up to the top:
 
 - in My Drive, to the root folder, named `My Drive`;
