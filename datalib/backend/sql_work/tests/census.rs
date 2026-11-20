@@ -1,6 +1,7 @@
-//! The census on a real store: a scan of three rows is recorded, once
-//! however often it runs, and a lookup by index is not. One test in this
-//! binary, because the census folder is read from the environment once.
+//! The census on a real store: each statement is recorded once however often
+//! it runs, a scan of three rows as scanned and a lookup by index as not. One
+//! test in this binary, because the census folder is read from the
+//! environment once.
 
 use std::path::Path;
 
@@ -20,7 +21,7 @@ fn recorded(dir: &Path) -> Vec<serde_json::Value> {
 }
 
 #[tokio::test]
-async fn every_scan_is_recorded_once_and_a_lookup_by_index_is_not() {
+async fn each_statement_is_recorded_once_with_whether_it_scanned() {
     let census = tempfile::tempdir().unwrap();
     // Safety: the one test in this binary, before any thread reads it.
     unsafe { std::env::set_var(datalib_sql_work::CENSUS_ENV, census.path()) };
@@ -60,19 +61,15 @@ async fn every_scan_is_recorded_once_and_a_lookup_by_index_is_not() {
     pool.close().await;
 
     let rows = recorded(census.path());
-    let statements: Vec<&str> = rows
-        .iter()
-        .map(|r| r["statement"].as_str().unwrap())
-        .collect();
-    assert_eq!(
-        statements.iter().filter(|s| **s == scan).count(),
-        1,
-        "{rows:#?}"
-    );
-    assert!(!statements.contains(&lookup), "{rows:#?}");
-    let file = rows.iter().find(|r| r["statement"] == scan).unwrap()["file"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let of = |sql: &str| -> Vec<&serde_json::Value> {
+        rows.iter().filter(|r| r["statement"] == sql).collect()
+    };
+    let scans = of(scan);
+    assert_eq!(scans.len(), 1, "{rows:#?}");
+    assert_eq!(scans[0]["scanned"], true, "{rows:#?}");
+    let lookups = of(lookup);
+    assert_eq!(lookups.len(), 1, "{rows:#?}");
+    assert_eq!(lookups[0]["scanned"], false, "{rows:#?}");
+    let file = scans[0]["file"].as_str().unwrap();
     assert!(file.ends_with("store.doltlite_db"), "{file}");
 }

@@ -1,7 +1,9 @@
-//! Every statement that walked a whole table or index, once per statement
-//! and file, as a JSON line in `<dir>/<pid>.jsonl`. Only a test sets the
-//! folder; on a fixture's few rows a scan costs nothing, so every scan is
-//! recorded, and the list is what a later, larger store will pay for.
+//! Every statement that read or wrote rows, once per statement and file, as a
+//! JSON line in `<dir>/<pid>.jsonl`, with whether it walked a whole table or
+//! index as it ran. Only a test sets the folder. Whether a statement would
+//! scan is read from its plan afterwards (`tests/fixtures/sql_scans.py`): a
+//! scan of an empty table walks nothing, so what ran depends on the order
+//! steps ran in, and the plan does not.
 
 use std::collections::HashSet;
 use std::io::Write;
@@ -18,9 +20,9 @@ pub(crate) fn dir() -> Option<&'static Path> {
     .as_deref()
 }
 
-pub(crate) fn note(dir: &Path, sql: &str, file: &str) {
-    static NOTED: OnceLock<Mutex<HashSet<(String, String)>>> = OnceLock::new();
-    let key = (sql.to_string(), file.to_string());
+pub(crate) fn note(dir: &Path, sql: &str, file: &str, scanned: bool) {
+    static NOTED: OnceLock<Mutex<HashSet<(String, String, bool)>>> = OnceLock::new();
+    let key = (sql.to_string(), file.to_string(), scanned);
     let new = NOTED
         .get_or_init(Default::default)
         .lock()
@@ -29,7 +31,9 @@ pub(crate) fn note(dir: &Path, sql: &str, file: &str) {
     if !new {
         return;
     }
-    let line = serde_json::json!({ "statement": sql, "file": file }).to_string() + "\n";
+    let line = serde_json::json!({ "statement": sql, "file": file, "scanned": scanned })
+        .to_string()
+        + "\n";
     let path = dir.join(format!("{}.jsonl", std::process::id()));
     let wrote = std::fs::create_dir_all(dir).and_then(|()| {
         std::fs::OpenOptions::new()
@@ -42,7 +46,7 @@ pub(crate) fn note(dir: &Path, sql: &str, file: &str) {
         tracing::error!(
             target: super::TARGET,
             path = %path.display(),
-            "could not record a scan in the census: {e}"
+            "could not record a statement in the census: {e}"
         );
     }
 }

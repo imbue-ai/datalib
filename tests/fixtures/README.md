@@ -182,7 +182,7 @@ it name its index themselves. One source is synced this way:
 | `rendered_md.tar` | the markdown alone, for the UI's render preview |
 | `time_series.tar` | the time-series stores and their index |
 | `config_body.toml` | every source as a render-only group, for `materialize_tng_root` |
-| `sql_scans.jsonl` | every statement the sync ran that walked a whole table or index, for `sql_scans_test` |
+| `sql_scans.jsonl` | every statement the sync ran whose plan walks a whole table or index, for `sql_scans_test` |
 
 Three more genrules build the search index over it, in steps that Bazel
 can cache apart, because embedding is the slow one:

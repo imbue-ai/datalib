@@ -737,21 +737,28 @@ costs little", not as a hit rate.
 ## A statement that walks a whole table needs a reason
 
 `//tests/fixtures:sql_scans_test` checks every statement the TNG fixture
-sync runs that walks a whole table or index (SQLite's full-scan count
-above zero) against `tests/fixtures/sql_scans_allowed.toml`. Every
-process of the sync records them (`DATALIB_SQL_CENSUS`,
-`datalib_sql_work`), and `:ingested_tng` lists them in
-`ingested/sql_scans.jsonl`. A fixture's tables hold a few rows, so the
-scan costs nothing here; on a library it costs the whole table on every
-call. When the test fails on a new statement, give the statement an
-index, or paste the stanza it prints into the allowlist with a reason:
-it reads every row anyway, or the table stays small. A statement that
-reads only the catalog (`sqlite_master`, `pragma_*`) is allowed by rule.
-A scan of an empty table counts nothing, so a statement can show in one
-run and not the next, by the order the steps ran; an entry missing from
-a run is printed as a note, not a failure, and is worth removing when
-its statement is gone from the tree. The test sees only what the fixture sync runs: the server's
-routes and the applets' searches are not in it.
+sync runs whose plan walks a whole table or index against
+`tests/fixtures/sql_scans_allowed.toml`. Every process of the sync
+records each statement it runs and the file it ran on
+(`DATALIB_SQL_CENSUS`, `datalib_sql_work`). Once the sync is done,
+`tests/fixtures/sql_scans.py` reads each statement's plan from that
+file through the doltlite shell, and `:ingested_tng` lists those that
+scan in `ingested/sql_scans.jsonl`. The plan, not the rows a run
+walked, decides, because a scan of an empty table walks nothing and
+whether a table is empty depends on the order the steps ran in. The few
+statements whose plan cannot be read afterwards (a temporary table, a
+table since dropped) count as scans when they walked rows as they ran,
+and the list says `judged_by: ran`; an allowlisted one missing from a
+run is a note, not a failure.
+
+A fixture's tables hold a few rows, so the scan costs nothing here; on a
+library it costs the whole table on every call. When the test fails on
+a new statement, give the statement an index, or paste the stanza it
+prints into the allowlist with a reason: it reads every row anyway, or
+the table stays small. A statement that reads only the catalog
+(`sqlite_master`, `pragma_*`) is allowed by rule. The test sees only
+what the fixture sync runs: the server's routes and the applets'
+searches are not in it.
 
 ## A statement's work does not grow with the rest of the store
 
