@@ -225,8 +225,12 @@ Neither touches a task that is a chat.
 
 Two tables: `cowork_sessions` (the listing entry, `tags` sorted, with
 `org_uuid` / `org_name` / `title` / `last_event_at` promoted) and
-`cowork_events` (one row per event, keyed by its `event_id`, with
-`session_id` and `sequence_num` promoted). A task is held at its
+`cowork_events` (one row per event, its id the `event_id`, with
+`session_id` and `sequence_num` promoted). The events are keyed
+`(session_id, id)`, with `id` unique on its own, so one task's log is
+one range of the store and a render reads only the logs of the tasks it
+draws; a store written before that shape is re-keyed by the ladder's
+rung 2 at its next start. A task is held at its
 `last_event_at` and its title (`cowork::version_of`): the first moves
 only when the log grows, the second when it is renamed. Its
 `updated_at` is not used, because it moves whenever the task's

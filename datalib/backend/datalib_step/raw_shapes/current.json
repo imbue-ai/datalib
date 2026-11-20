@@ -114,8 +114,8 @@
     ]
   },
   "claude": {
-    "schema_hash": "967d2fd87a19871a9dd082e5e01dcb6bab0478502166bdf74de0dc96c9c0442e",
-    "schema_version": 1,
+    "schema_hash": "933e00cf13f098c91d1a87ac233492312d45423496bade949ad675d44b0f8c62",
+    "schema_version": 2,
     "shared_schema_version": 1,
     "sql": [
       "CREATE TABLE claude_attachments( id TEXT PRIMARY KEY, conversation_uuid TEXT NOT NULL, file_uuid TEXT NOT NULL, blake3 TEXT NULL, CHECK(blake3 IS NULL OR length(blake3) = 64))",
@@ -126,9 +126,9 @@
       "CREATE TABLE conversations_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX conversations_org ON conversations(org_uuid)",
       "CREATE INDEX conversations_updated ON conversations(updated_at)",
-      "CREATE TABLE cowork_events( id TEXT PRIMARY KEY, payload TEXT NULL, session_id TEXT NULL, sequence_num INTEGER NULL)",
+      "CREATE TABLE cowork_events( id TEXT NOT NULL, payload TEXT NULL, session_id TEXT NOT NULL, sequence_num INTEGER NULL, PRIMARY KEY(session_id, id))",
       "CREATE TABLE cowork_events_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
-      "CREATE INDEX cowork_events_session ON cowork_events(session_id)",
+      "CREATE UNIQUE INDEX cowork_events_by_id ON cowork_events(id)",
       "CREATE TABLE cowork_sessions( id TEXT PRIMARY KEY, payload TEXT NULL, org_uuid TEXT NULL, org_name TEXT NULL, title TEXT NULL, last_event_at TEXT NULL)",
       "CREATE TABLE cowork_sessions_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE orgs( id TEXT PRIMARY KEY, payload TEXT NULL, name TEXT NULL)",
