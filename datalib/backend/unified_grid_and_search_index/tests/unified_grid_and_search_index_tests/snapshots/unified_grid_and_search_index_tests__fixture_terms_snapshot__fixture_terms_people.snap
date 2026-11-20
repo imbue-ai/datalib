@@ -1,0 +1,149 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_terms_snapshot.rs
+expression: people
+---
+# each handle and the names it was seen under
+ai_model:claude-opus-4-7	claude-opus-4-7
+ai_model:claude-opus-5	claude-opus-5
+ai_model:claude-opus-5-5	claude-opus-5-5
+ai_model:claude-sonnet-5	claude-sonnet-5
+ai_model:gpt-5	gpt-5
+ai_model:gpt-5.2-codex	gpt-5.2-codex
+ai_model:gpt-5.3-codex	gpt-5.3-codex
+ai_model:gpt-5.6-terra	gpt-5.6-terra
+email:annika.hansen@raven.fed	Seven of Nine
+email:beverly.crusher@enterprise.starfleet.invalid	Beverly Crusher
+email:brand@starfleet.test	Admiral Brand
+email:command@starfleet.gov	Starfleet Command
+email:command@starfleet.gov	Starfleet Command <command@starfleet.gov>
+email:data@enterprise.starfleet	Data
+email:data@enterprise.starfleet.invalid	Data
+email:data@enterprise.starfleet.test	Me
+email:drone.4.of.12@unimatrix01.borg	drone.4.of.12@unimatrix01.borg
+email:geordi.laforge@enterprise.starfleet.invalid	Geordi La Forge
+email:glaforge@enterprise.starfleet	Geordi La Forge
+email:guinan@tenforward.example	Guinan
+email:hello@risa.tourism	Risa Tourism Board
+email:hello@risa.tourism	Risa Tourism Board <hello@risa.tourism>
+email:jean-luc.picard@enterprise.starfleet.invalid	Jean-Luc Picard
+email:jlpicard@enterprise.starfleet	Jean-Luc Picard
+email:jlpicard@enterprise.starfleet.test	Me
+email:jlpicard@starfleet.gov	Jean-Luc Picard
+email:laforge@enterprise.starfleet	Geordi La Forge
+email:laforge@enterprise.starfleet	Geordi La Forge <laforge@enterprise.starfleet>
+email:laforge@enterprise.test	Geordi La Forge
+email:lcars@enterprise.starfleet	LCARS Status
+email:lcars@enterprise.starfleet	LCARS Status <lcars@enterprise.starfleet>
+email:locutus@unicomplex.borg	Locutus of Borg
+email:picard@enterprise.starfleet	Captain Picard
+email:picard@enterprise.starfleet	Jean-Luc Picard
+email:picard@enterprise.starfleet	Jean-Luc Picard <picard@enterprise.starfleet>
+email:picard@enterprise.starfleet	picard
+email:picard@enterprise.test	Jean-Luc Picard
+email:prizes@quarks.example	Quark's Bar
+email:prizes@quarks.example	Quark's Bar <prizes@quarks.example>
+email:riker@enterprise.org	William T. Riker
+email:riker@enterprise.starfleet	William Riker
+email:riker@enterprise.starfleet	William T. Riker
+email:seven.of.nine@unimatrix01.borg	Seven of Nine
+email:third.of.five@unimatrix01.borg	Hugh
+email:troi@enterprise.starfleet	Deanna Troi
+email:troi@enterprise.test	Deanna Troi
+email:will.riker@alaska.earth	William T. Riker
+email:worf@enterprise.starfleet	Worf
+email:wriker@enterprise.starfleet	William T. Riker
+facebook:deleted/1000000002	Facebook user
+facebook:deleted/1000000003	Facebook user
+facebook:deleted/1000000005	Facebook user
+facebook:name/Beverly Crusher	Beverly Crusher
+facebook:name/Data	Data
+facebook:name/Deanna Troi	Deanna Troi
+facebook:name/Guinan	Guinan
+facebook:name/Jean-Luc Picard	Jean-Luc Picard
+facebook:name/Lwaxana Troi	Lwaxana Troi
+facebook:name/Wesley Crusher	Wesley Crusher
+facebook:name/William Riker	William Riker
+facebook:name/Worf	Worf
+github:data-soong	data-soong
+github:geordi-laforge	geordi-laforge
+github:jlpicard	jlpicard
+github:worf-rozhenko	worf-rozhenko
+github:wtriker	wtriker
+gitlab:gitlab.com/bcrusher	Beverly Crusher
+gitlab:gitlab.com/data-soong	Lt. Cmdr. Data
+gitlab:gitlab.com/geordi-laforge	Geordi La Forge
+gitlab:gitlab.com/jlpicard	Jean-Luc Picard
+gitlab:gitlab.com/worf-rozhenko	Worf
+gitlab:gitlab.com/wtriker	William T. Riker
+google:name/Data	Data
+google:name/Deanna Troi	Deanna Troi
+google:name/Geordi La Forge	Geordi La Forge
+linkedin:datasoong	Data Soong
+linkedin:jlpicard	Jean-Luc Picard
+linkedin:wriker	William Riker
+me:self	Me
+signal_aci:0195683a-d140-87f9-bdf6-234da6d6880c	Will Riker
+signal_aci:0195683a-d140-87f9-bdf6-234da6d6880f	Q
+signal_aci:0195683a-d140-87f9-bdf6-234da6d68811	Data Soong
+signal_aci:0195683a-d140-87f9-bdf6-234da6d68812	Geordi La Forge
+signal_aci:0195683a-d140-87f9-bdf6-234da6d68813	Worf Rozhenko
+signal_aci:0195683a-d140-87f9-bdf6-234da6d68814	Deanna Troi
+signal_aci:0195683a-d140-87f9-bdf6-234da6d68815	Beverly Crusher
+slack:T1701D/U0PICARD	Jean-Luc Picard
+slack:T1701D/U0WORF	Worf
+slack:T_NCC1701D/U_DATA	Data
+slack:T_NCC1701D/U_DATA	Lt. Cmdr. Data
+slack:T_NCC1701D/U_DATA	data
+slack:T_NCC1701D/U_PICARD	Captain Picard
+slack:T_NCC1701D/U_PICARD	Jean-Luc Picard
+slack:T_NCC1701D/U_PICARD	picard
+slack:T_NCC1701D/U_RIKER	Number One
+slack:T_NCC1701D/U_RIKER	William T. Riker
+slack:T_NCC1701D/U_RIKER	riker
+slack:T_NCC1701D/U_TROI	U_TROI
+slack:T_NCC1701D/U_WORF	Worf
+slack:T_NCC1701D/U_WORF	worf
+tel:+12025550100	Me
+tel:+12025550101	Jean-Luc Picard
+tel:+12025550102	Worf
+tel:+12025550103	Deanna Troi
+tel:+12025550104	Geordi La Forge
+tel:+12025550142	Wesley Crusher
+tel:+12025550147	+12025550147
+tel:+12025550153	Lieutenant Commander Geordi La Forge, Chief Engineer
+tel:+12025550160	Lieutenant Worf, Son of Mogh, Chief of Security
+tel:+12025550190	Ferengi Commerce Authority
+tel:+15551234001	Mr. Data
+tel:+15551234002	Dr. Beverly Crusher
+tel:+17015550101	Number One
+tel:+17015550101	Will Riker
+tel:+17015550101	Will Riker (Starfleet)
+tel:+17015550101	William Riker
+tel:+17015550102	Data
+tel:+17015550102	Data Soong
+tel:+17015550103	Geordi La Forge
+tel:+17015550104	Worf
+tel:+17015550104	Worf Rozhenko
+tel:+17015550105	+17015550105
+tel:+17015550105	Deanna Troi
+tel:+17015550106	Beverly Crusher
+whatsapp:100000000000108	WhatsApp user …0108
+
+# each source's own handles, what `me` finds
+beeper	slack:T1701D/U0PICARD
+chatgpt-api	email:data@enterprise.starfleet.test
+chatgpt-api	me:self
+claude-api	email:jlpicard@enterprise.starfleet.test
+claude-api	me:self
+facebook	email:picard@enterprise.starfleet
+facebook	facebook:name/Jean-Luc Picard
+github	github:jlpicard
+gitlab	gitlab:gitlab.com/jlpicard
+google-drive	email:picard@enterprise.starfleet
+google-takeout	email:picard@enterprise.starfleet
+linkedin	email:data@enterprise.starfleet.test
+slack	email:picard@enterprise.starfleet
+slack	slack:T_NCC1701D/U_PICARD
+sms-backup-restore	me:self
+sms-backup-restore	tel:+12025550100
+tng_email	email:picard@enterprise.starfleet

@@ -1,0 +1,91 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_terms_snapshot.rs
+expression: source.render()
+---
+00000000-0000-8786-8f6c-275d45dd8d49  Claude Code Project
+  title: enterprise
+00000000-0000-83df-8efb-7b99abfef902  Claude Code Session
+  title: Scan the emitter logs since stardate 41153.7 for phase drift events. — subagent of Deflector dish drift
+  participant: Claude Code
+  participant: ai_model:claude-opus-5
+0b50ea32-0988-8257-ac0d-e1b50fe1120b  Agent Prompt
+  author: Claude Code
+  upstream_id: e586ebd5-e367-51f8-aad8-805459f18ecb
+0b50ea32-24e0-82b0-8ce0-a56e2be502e1  Tool Call
+  author: claude-opus-5
+0b50ea32-4038-88b3-97c0-3246946156aa  Tool Result
+  author: Claude Code
+0b50ea32-5b90-8d22-8faa-d1dd2a15d28e  LLM Response
+  from: ai_model:claude-opus-5
+  author: claude-opus-5
+  upstream_id: c335b59d-42d5-5674-a297-4cf9ad22aedd
+00000000-0000-8a77-bcf1-64f2ad0583fa  Claude Code Session
+  title: Why does the replicator return cold Earl Grey? Screenshot attached.
+  participant: ai_model:claude-sonnet-5
+  upstream_id: 16e654a6-fc21-5e23-a5a4-def9b696c409
+0b50eb28-c598-8781-b43c-456d6ca61946  Harness Message
+  author: Claude Code
+  upstream_id: 5d298dc5-a028-55bd-89cf-113c944c292e
+0b50eb28-e0f0-8b41-90a7-91d651bad773  User Input
+  from: me:self
+  author: Me
+  upstream_id: 4641e147-95cd-56a9-9805-112fd39b2cf6
+0b50eb28-fc48-89c0-becc-25b418307f35  Tool Call
+  author: claude-opus-5
+0b50eb29-17a0-824d-ad1c-f67a2544df7e  Tool Result
+  author: Claude Code
+0b50eb29-32f8-82ce-8fce-d10ba90226cf  LLM Response
+  from: ai_model:claude-sonnet-5
+  author: claude-sonnet-5
+  upstream_id: 58d10040-b2df-5e0e-89b0-366b91100f4c
+00000000-0000-8b27-94b8-759d35b8fe6b  Claude Code Session
+  title: Deflector dish drift
+  participant: ai_model:claude-opus-5
+  upstream_id: 91ad7d3f-2915-5956-995d-cba3754abadc
+0b50ea31-afb0-897e-bd11-b4be3d00e9db  User Input
+  from: me:self
+  author: Me
+  upstream_id: 8331f9d5-58db-584f-b136-64060d05f0f7
+0b50ea31-cb08-8694-a56f-d0d003b9d829  LLM Thinking
+  from: ai_model:claude-opus-5
+  author: claude-opus-5
+0b50ea31-cb08-8b2c-b393-74b7dcd791e3  Tool Call
+  author: claude-opus-5
+0b50ea31-e660-8b02-8cc9-4ed6ea66520a  Tool Result
+  author: Claude Code
+0b50ea32-01b8-8e22-9dcc-09459c5635ff  Tool Call
+  author: claude-opus-5
+0b50ea32-01b8-87b2-b2d9-c27377dd8ce9  LLM Response
+  from: ai_model:claude-opus-5
+  author: claude-opus-5
+  upstream_id: d52e7ff3-826a-5c2b-8ead-8e0fc3dae50f
+0b50ea32-1d10-8445-9440-c00fd64931e0  Tool Result
+  author: Claude Code
+0b50ea32-3868-8a7b-9e61-0a2840bbc8e8  Tool Call
+  author: claude-opus-5
+0b50ea32-3868-8651-a003-23f6dddb9bb7  LLM Response
+  from: ai_model:claude-opus-5
+  author: claude-opus-5
+  upstream_id: 5bdaa12c-f702-5c80-ad8a-4031c7ca845c
+0b50ea32-6f18-8c66-a3b5-f03f9d71010f  Tool Result
+  author: Claude Code
+0b50ea32-8a70-85ac-8428-937cff06d343  Tool Call
+  author: claude-opus-5
+0b50ea32-a5c8-86be-9d57-37859ab64d0e  Tool Result
+  author: Claude Code
+0b50ea32-c120-891a-b106-afccecbe5977  LLM Response
+  from: ai_model:claude-opus-5
+  author: claude-opus-5
+  upstream_id: b668b214-dbe9-5835-bece-70113d396bc3
+0b50ea32-f7d0-8776-a506-004be95b4111  User Input
+  from: me:self
+  author: Me
+  upstream_id: ac651f69-f571-5c15-83b0-2f146ad05bab
+0b50ea33-1328-8eee-8faf-b7bff8c9fe74  Tool Call
+  author: claude-opus-5
+0b50ea33-2e80-8032-a98c-a16fb1f197bf  Tool Result
+  author: Claude Code
+0b50ea33-49d8-8c94-b3ca-63a882341c16  LLM Response
+  from: ai_model:claude-opus-5
+  author: claude-opus-5
+  upstream_id: 05d90c8b-0875-5854-8deb-494ce2bc2fb8

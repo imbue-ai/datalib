@@ -1,0 +1,28 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_terms_snapshot.rs
+expression: source.render()
+---
+00000000-0000-88f8-b1ff-c893230dad95  Folder
+  title: archive
+00000000-0000-8f52-b89b-de803b47abaf  Folder
+  title: engineering
+00000000-0000-8a13-8568-fa91d9598906  PDF Document
+  title: Hull Integrity Survey
+00000000-0000-8304-97dd-79bdf3daf5a9  PDF Page
+00000000-0000-8ccc-b967-791c3561a091  PDF Document
+  title: warp_core_manual.pdf
+  author: Geordi La Forge
+00000000-0000-8d04-9829-adab9230b668  PDF Page
+  author: Geordi La Forge
+0b50f5ba-0c60-856f-8ff1-ea60e22c037d  PDF Document
+  title: Captain's Log
+  author: Jean-Luc Picard
+0b50f5ba-0c60-8a87-b679-02b6594b484d  PDF Page
+  author: Jean-Luc Picard
+0b50f5ba-0c60-8e25-aebf-920f19049521  PDF Document
+  title: Captain's Log
+  author: Jean-Luc Picard
+0b50f5ba-0c60-8edf-85f3-e3cdf98e44f5  PDF Page
+  author: Jean-Luc Picard
+0b50f5ba-0c60-828f-a3f2-f7e158ffca66  PDF Page
+  author: Jean-Luc Picard

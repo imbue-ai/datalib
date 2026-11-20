@@ -1,0 +1,35 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_terms_snapshot.rs
+expression: source.render()
+---
+00000000-0000-8946-b151-0dc5c01fe4fc  GitLab project
+  title: enterprise-d/holodeck
+0b75b9f9-4400-887d-bae6-937c2e6ee3a6  GitLab MR
+  from: gitlab:gitlab.com/jlpicard
+  title: Add Earl Grey, hot to replicator menu
+  author: Jean-Luc Picard
+0b75ba6b-b4e0-8d87-b39b-6e62030598db  GitLab Discussion Note
+  from: gitlab:gitlab.com/jlpicard
+  author: Jean-Luc Picard
+0b75ba82-9840-81d6-88bc-01156ea95dd6  GitLab Discussion Note
+  from: gitlab:gitlab.com/worf-rozhenko
+  author: Worf
+0b75ba67-2100-8cc2-a0d4-510cce260212  GitLab Inline Note
+  from: gitlab:gitlab.com/wtriker
+  author: William T. Riker
+0b75bad4-fe00-8155-aa7c-9db9f663482a  GitLab MR
+  from: gitlab:gitlab.com/jlpicard
+  title: Holodeck safety interlock regression test
+  author: Jean-Luc Picard
+0b75bb4c-02c0-816b-93e3-fa09181a699d  GitLab Discussion Note
+  from: gitlab:gitlab.com/geordi-laforge
+  author: Geordi La Forge
+0b75bb55-2a80-8a4c-abf0-af3670ee359e  GitLab Discussion Note
+  from: gitlab:gitlab.com/jlpicard
+  author: Jean-Luc Picard
+0b75bb5e-5240-8a34-b5b2-12c9558a6379  GitLab Discussion Note
+  from: gitlab:gitlab.com/bcrusher
+  author: Beverly Crusher
+0b75bb42-db00-8df2-988c-d4c436597bec  GitLab Inline Note
+  from: gitlab:gitlab.com/data-soong
+  author: Lt. Cmdr. Data

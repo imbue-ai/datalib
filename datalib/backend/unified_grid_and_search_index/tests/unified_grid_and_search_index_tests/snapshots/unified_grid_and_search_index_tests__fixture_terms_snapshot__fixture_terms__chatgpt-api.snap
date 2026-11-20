@@ -1,0 +1,134 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_terms_snapshot.rs
+expression: source.render()
+---
+00000000-0000-8020-9a72-3216b3199332  Chat
+  title: Sonnet on a Cat Named Spot
+  name: data@enterprise.starfleet.test
+  participant: System
+  participant: ai_model:gpt-5
+0b80ee6f-7000-8780-8c9c-f86c1c65ce83  Tool Call
+  name: data@enterprise.starfleet.test
+  author: System
+0b80ee6f-7000-8264-8005-f040582f6f37  User Input
+  from: me:self
+  name: data@enterprise.starfleet.test
+  author: Me
+0b80ee71-44c0-8e9c-b418-d92e15aaa9aa  LLM Response
+  from: ai_model:gpt-5
+  name: data@enterprise.starfleet.test
+  author: gpt-5
+0b80ee74-03e0-855d-8e63-cf0701eedfcd  User Input
+  from: me:self
+  name: data@enterprise.starfleet.test
+  author: Me
+00000000-0000-89af-8390-876943e6455b  Chat
+  title: I have been reviewing the Daystrom Institute archives on subspace harmonic stabilization, and I'm increasingly convinced that our current dilithium recrystallization approach is a dead end for sustained warp 9+ travel. The original Cochrane equations assume a near-uniform subspace medium, but the Romulan border surveys from stardate 41153 onward show clear evidence of localized subspace shear that the standard recrystallization lattice cannot absorb without micro-fractures propagating along the c-axis. I've been sketching out an alternative: a layered dilithium/trilithium composite with an active feedback loop driven by the warp coil sensor array, similar in spirit to the adaptive optics work the Vulcan Science Academy published last year. The catch is that trilithium is wildly unstable above 1.8K, so we'd need a containment field two orders of magnitude tighter than anything currently flying. Before I take this to Geordi, I want a sanity check from someone who isn't on the engineering team. Does any of this have legs, or am I chasing a phantom?
+  name: data@enterprise.starfleet.test
+  participant: ai_model:gpt-5
+0b80f8bc-2800-8a69-bb7f-1e0df1cbf549  User Input
+  from: me:self
+  name: data@enterprise.starfleet.test
+  author: Me
+0b80f8c0-bbe0-8121-b680-bdce033b4ef4  LLM Response
+  from: ai_model:gpt-5
+  name: data@enterprise.starfleet.test
+  author: gpt-5
+00000000-0000-8bd2-8afb-b21d3b87dfa5  Chat
+  title: Holodeck Cave on Risa
+  name: data@enterprise.starfleet.test
+  participant: ai_model:gpt-5
+0b80fde2-8400-89c8-91fb-27cd8a9294bb  User Input
+  from: me:self
+  name: data@enterprise.starfleet.test
+  author: Me
+0b80fde3-6e60-82f1-9502-1cfc6c31e5c6  LLM Response
+  from: ai_model:gpt-5
+  name: data@enterprise.starfleet.test
+  author: gpt-5
+00000000-0000-8d7f-8279-1fc2e44e05fd  Chat
+  title: Polynomial Fit for Sensor Calibration
+  name: data@enterprise.starfleet.test
+  participant: ai_model:gpt-5
+0b80f395-cc00-8de8-a2b1-7bd8ae189254  User Input
+  from: me:self
+  name: data@enterprise.starfleet.test
+  author: Me
+0b80f398-d940-86be-b5c8-5aa0bf279ef4  LLM Response
+  from: ai_model:gpt-5
+  name: data@enterprise.starfleet.test
+  author: gpt-5
+0b80f39a-ae00-8625-8447-84de779cb353  LLM Response
+  from: ai_model:gpt-5
+  name: data@enterprise.starfleet.test
+  author: gpt-5
+00000000-0000-8db7-990a-e9ff89094860  Chat
+  title: Risa Survey Briefing
+  name: data@enterprise.starfleet.test
+  participant: Tool
+  participant: ai_model:gpt-5
+0b810308-e000-8024-a221-df86e41aba81  User Input
+  from: me:self
+  name: data@enterprise.starfleet.test
+  author: Me
+0b810308-f388-828f-a1a7-8bf149d358a3  LLM Thinking
+  from: ai_model:gpt-5
+  name: data@enterprise.starfleet.test
+  author: gpt-5
+0b810308-ff40-8953-90ae-1cff6a12ad27  LLM Thinking
+  from: ai_model:gpt-5
+  name: data@enterprise.starfleet.test
+  author: gpt-5
+0b810309-0328-8fc3-ac90-11211e48db9a  LLM Response
+  from: ai_model:gpt-5
+  name: data@enterprise.starfleet.test
+  author: gpt-5
+0b810309-ca60-89f5-9b91-14ef38c09bcd  User Input
+  from: me:self
+  name: data@enterprise.starfleet.test
+  author: Me
+0b810309-dde8-82d2-b56c-34ce9633dd84  LLM Response
+  from: ai_model:gpt-5
+  name: data@enterprise.starfleet.test
+  author: gpt-5
+0b810309-e1d0-83cb-b81d-91088fee6b5d  Tool Call
+  name: data@enterprise.starfleet.test
+  author: Tool
+0b810309-e5b8-84ea-be76-c57447df09d4  LLM Response
+  from: ai_model:gpt-5
+  name: data@enterprise.starfleet.test
+  author: gpt-5
+0b81030a-b4c0-8a1c-89fa-a5cbfbed339b  User Input
+  from: me:self
+  name: data@enterprise.starfleet.test
+  author: Me
+0b81030a-bc90-8a3d-b7b3-3f8b83016a2a  Tool Call
+  name: data@enterprise.starfleet.test
+  author: Tool
+0b81030a-c078-8615-ae99-32cf8970dfff  LLM Response
+  from: ai_model:gpt-5
+  name: data@enterprise.starfleet.test
+  author: gpt-5
+0b81030b-9f20-8da2-9a36-e142d74fb02a  User Input
+  from: me:self
+  name: data@enterprise.starfleet.test
+  author: Me
+0b81030b-c630-85bd-947f-8c9ccfe6c432  Tool Call
+  name: data@enterprise.starfleet.test
+  author: Tool
+0b81030b-ca18-8eed-9f10-eb73e8e7eb4e  LLM Response
+  from: ai_model:gpt-5
+  name: data@enterprise.starfleet.test
+  author: gpt-5
+0b81030b-ed40-82b4-8fd6-a46f47dd0218  LLM Response
+  from: ai_model:gpt-5
+  name: data@enterprise.starfleet.test
+  author: gpt-5
+0b81030d-73e0-813d-9589-149c79a61fd4  User Input
+  from: me:self
+  name: data@enterprise.starfleet.test
+  author: Me
+0b81030d-8768-8d62-aea5-4ff6fe200f12  LLM Response
+  from: ai_model:gpt-5
+  name: data@enterprise.starfleet.test
+  author: gpt-5

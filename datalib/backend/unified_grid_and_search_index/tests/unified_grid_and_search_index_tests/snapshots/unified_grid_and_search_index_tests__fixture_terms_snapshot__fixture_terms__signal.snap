@@ -1,0 +1,67 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_terms_snapshot.rs
+expression: source.render()
+---
+00000000-0000-8039-8a5b-241873b9eef9  Signal Chat
+  title: Will Riker
+  participant: tel:+17015550101
+  subject: tel:+17015550101
+0b50e80c-2800-8f70-85bd-9969e3108a8d  Signal Message
+  from: me:self
+  author: Me
+0b50e80d-1260-8ea5-8bd6-1cd8b82017b0  Signal Message
+  from: tel:+17015550101
+  to: me:self
+  author: Will Riker
+0b50e814-6560-8ce9-95d3-09adf89d904d  Signal Message
+  from: me:self
+  author: Me
+00000000-0000-8dcb-b58e-bf4dc9fb57a8  Signal Chat
+  title: Bridge Crew
+  participant: Guinan
+  participant: signal_aci:0195683a-d140-87f9-bdf6-234da6d6880f
+  participant: tel:+17015550101
+  participant: tel:+17015550102
+  participant: tel:+17015550103
+  participant: tel:+17015550104
+  participant: tel:+17015550105
+  participant: tel:+17015550106
+0b50e80d-fcc0-8650-ac5f-b407eafe4e47  Signal Message
+  from: tel:+17015550102
+  to: me:self
+  author: Data Soong
+0b50e80e-e720-8880-956a-7f3fa45b138d  Signal Message
+  from: tel:+17015550103
+  to: me:self
+  author: Geordi La Forge
+0b50e80f-d180-8e55-b1a3-0e53efb38bba  Signal Message
+  from: tel:+17015550104
+  to: me:self
+  author: Worf Rozhenko
+0b50e810-bbe0-82c5-b5c6-75cdb9268729  Signal Message
+  from: tel:+17015550105
+  to: me:self
+  author: Deanna Troi
+0b50e811-a640-812c-8e31-ca77b9eafd7e  Signal Message
+  from: tel:+17015550106
+  to: me:self
+  author: Beverly Crusher
+0b50e812-90a0-86e0-a0f9-9be12ee79f0e  Signal Message
+  from: me:self
+  author: Me
+0b50e813-7b00-827a-9190-3f7719040603  Signal Message
+  from: tel:+17015550102
+  to: me:self
+  author: Data Soong
+0b50e815-4fc0-8863-b2b2-e0ca7f36eb77  Signal Message
+  from: signal_aci:0195683a-d140-87f9-bdf6-234da6d6880f
+  to: me:self
+  author: Q
+0b50e816-3a20-8818-ae4c-7286a584c36d  Signal Message
+  to: me:self
+  mention: tel:+17015550101
+  author: Guinan
+0b50ed26-4f00-88fd-9c49-7189285819ff  Signal Message
+  from: tel:+17015550101
+  to: me:self
+  author: Will Riker
