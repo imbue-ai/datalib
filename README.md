@@ -129,7 +129,7 @@ The sources we rely on ourselves, and the ones we keep working first.
   <tr>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#claude-code"><img src="datalib/ui/src/assets/claude_code.svg" width="40" height="40" alt=""><br><b>Claude Code</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#codex"><img src="datalib/ui/src/assets/codex.svg" width="40" height="40" alt=""><br><b>Codex</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#markdown-local"><img src="datalib/ui/src/assets/markdown.svg" width="40" height="40" alt=""><br><b>Markdown (Local)</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#markdown"><img src="datalib/ui/src/assets/markdown.svg" width="40" height="40" alt=""><br><b>Markdown</b></a></td>
   </tr>
 </table>
 
