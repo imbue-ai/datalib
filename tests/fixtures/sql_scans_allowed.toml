@@ -1003,3 +1003,8 @@ why = "Not reviewed: on main when this check began."
 statement = "DELETE FROM disk_usage WHERE measured_at_utc < ? AND EXISTS ( SELECT 1 FROM disk_usage AS later WHERE later.path = disk_usage.path AND later.measured_at_utc > disk_usage.measured_at_utc AND later.measured_at_utc <= ?)"
 files = ["*/disk_stats.sqlite"]
 why = "The disk-usage retention sweep: it reads the old measurements once per sweep, and runs during the sync only when a sweep falls due."
+
+[[scan]]
+statement = "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason FROM runs WHERE ? IS NULL OR run_id = ? ORDER BY started_at_utc DESC LIMIT 1"
+files = ["*/runs/runs.sqlite"]
+why = "The run store keeps one row per run it has not yet let go (76 on a large library), so a scan stays small; recorded only when a run row exists when it runs."

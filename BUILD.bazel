@@ -119,7 +119,8 @@ py_test(
     main = "scripts/lint_repo_test.py",
 )
 
-# The order check `search_eval.py first-pages` trusts.
+# The checks `search_eval.py` trusts: the order `first-pages` checks, and
+# which query a statement the applet logged is filed under.
 py_test(
     name = "search_eval_test",
     size = "small",
