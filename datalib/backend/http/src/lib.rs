@@ -84,6 +84,10 @@ pub struct AppState {
     /// so a client can tell an idle stream from a dead one.
     /// `GET /api/sync/stream` pushes it over SSE.
     pub root_tx: watch::RootTx,
+    /// The chains of the requests logged since the watch last sent a
+    /// frame for the server's own log (`loop_guard`). The watch started
+    /// for this root holds the same one.
+    pub echoes: loop_guard::Echoes,
     /// The configured applets: their components, their gallery
     /// entries, the module store behind `/modules/`, and the
     /// supervisor behind `/applet/`. Empty when the config declares none,
@@ -227,6 +231,7 @@ pub fn router(state: AppState) -> Router {
 fn routes(state: AppState) -> Router {
     // Cloned out before `state` is moved into `with_state` below.
     let gate = state.api_token.clone();
+    let echoes = state.echoes.clone();
     Router::new()
         .route("/api/health", get(health))
         .route("/api/feedback", post(submit_feedback))
@@ -361,7 +366,10 @@ fn routes(state: AppState) -> Router {
             auth::require_token,
         ))
         // Outside the token gate, so a refused request is logged too.
-        .layer(axum::middleware::from_fn(request_log::record))
+        .layer(axum::middleware::from_fn_with_state(
+            echoes,
+            request_log::record,
+        ))
         .layer(axum::middleware::from_fn(send_no_referrer))
 }
 

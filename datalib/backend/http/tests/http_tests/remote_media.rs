@@ -482,6 +482,7 @@ async fn app() -> (PathBuf, axum::Router) {
         sync: datalib_http::supervisor::SyncControl::new(root.clone()),
         app: Arc::new(store),
         root_tx: tokio::sync::broadcast::channel(16).0,
+        echoes: Default::default(),
         usage: Default::default(),
         newer_root: Vec::new(),
         shutting_down: Default::default(),

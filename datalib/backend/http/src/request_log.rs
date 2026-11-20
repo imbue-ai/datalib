@@ -12,8 +12,8 @@
 //! say which card is noisy.
 //!
 //! A request a `root` frame caused carries that frame's chain; the line
-//! stores it, and a chain long enough to be a loop is warned about here
-//! (`loop_guard`).
+//! stores it, the watch is told it for the frame the line causes, and a
+//! chain long enough to be a loop is warned about here (`loop_guard`).
 //!
 //! These are requests the app's own pages make of this server, not ones
 //! that leave the machine (`http.outbound` is those). A page reading what
@@ -24,7 +24,7 @@
 use std::time::Instant;
 
 use axum::body::Body;
-use axum::extract::Request;
+use axum::extract::{Request, State};
 use axum::http::{header, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
@@ -76,7 +76,11 @@ fn worth(method: &Method, path: &str, status: StatusCode, live_refetch: bool) ->
     }
 }
 
-pub async fn record(req: Request<Body>, next: Next) -> Response {
+pub async fn record(
+    State(echoes): State<crate::loop_guard::Echoes>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
     let method = req.method().clone();
     let path = req.uri().path().to_string();
     let query = req.uri().query().and_then(crate::auth::query_without_token);
@@ -95,6 +99,7 @@ pub async fn record(req: Request<Body>, next: Next) -> Response {
     if !is_logged(&path, status) {
         return resp;
     }
+    echoes.logged(chain);
     let ms = started.elapsed().as_millis() as u64;
     let bytes = resp
         .headers()
