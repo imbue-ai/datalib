@@ -551,7 +551,10 @@ pub async fn lacks_an_index(db_path: &Path) -> Result<bool> {
             .fetch_all(&pool)
             .await;
     pool.close().await;
-    let made: HashSet<String> = made.context("list the grid index's indexes")?.into_iter().collect();
+    let made: HashSet<String> = made
+        .context("list the grid index's indexes")?
+        .into_iter()
+        .collect();
     Ok(all_indexes()
         .filter_map(index_name)
         .any(|name| !made.contains(name)))
@@ -2432,6 +2435,37 @@ mod open_index_tests {
         statements.extend(DELETE_DOCUMENTS);
         assert_searched_by_index(&pool, &statements).await;
         pool.close().await;
+    }
+
+    /// An index an older build made has none of the indexes added since,
+    /// which only a run of the step adds and which the search applet names:
+    /// a start must see that and ask for the run.
+    #[tokio::test]
+    async fn an_index_made_before_an_index_was_added_lacks_it() {
+        let td = tempfile::tempdir().unwrap();
+        let db = td.path().join("db.sqlite");
+        assert!(
+            !lacks_an_index(&db).await.unwrap(),
+            "no file, nothing to add"
+        );
+        let pool = open_index(&db).await.expect("open_index");
+        pool.close().await;
+        assert!(
+            !lacks_an_index(&db).await.unwrap(),
+            "a new index has them all"
+        );
+
+        let pool = open_index(&db).await.expect("open_index");
+        sqlx::query("DROP INDEX markdowns_searchable")
+            .execute(&pool)
+            .await
+            .expect("drop it, as an older build never made it");
+        pool.close().await;
+        assert!(lacks_an_index(&db).await.unwrap());
+
+        let pool = open_index(&db).await.expect("a run of the step");
+        pool.close().await;
+        assert!(!lacks_an_index(&db).await.unwrap(), "the run made it again");
     }
 
     /// A source's nodes are read by the source, not by walking every

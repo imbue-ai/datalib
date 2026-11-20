@@ -812,6 +812,13 @@ async fn page_rows(
     Ok((rows, next_offset))
 }
 
+/// What decides which documents [`without_vectors`] counts: the search's
+/// terms, never the words it ranks, so a search with none counts the whole
+/// library once per index rather than once per search.
+fn counted_by(parsed: &ParsedQuery) -> String {
+    format!("{:?}", parsed.terms)
+}
+
 /// How many of the documents this search could find search by meaning
 /// cannot reach; `None` where it was not asked to look, or no index has
 /// been built.
@@ -828,10 +835,8 @@ async fn without_vectors(
     let (index_stamp, cache_stamp) =
         datalib_unified_grid_and_search_index::search_index::stamps(&s.root);
     let stamp: Vec<IndexStamp> = vec![index_stamp, cache_stamp];
-    // The documents counted depend on the terms, never on the words
-    // ranked: a search with none counts the whole library, once per index.
     let key = (
-        format!("{:?}", parsed.terms),
+        counted_by(parsed),
         s.repo.head().await.map_err(index)?,
         stamp.clone(),
     );
@@ -1967,6 +1972,21 @@ async fn chat(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Guards the count every first page of a search by meaning waits for:
+    /// keyed on the whole query, it read the library again for every new
+    /// search's words, seconds each on a large library.
+    #[test]
+    fn the_count_of_documents_without_vectors_is_kept_per_terms() {
+        let key = |q: &str| counted_by(&parse_query(q));
+        assert_eq!(key("warp core breach"), key("dilithium crystals"));
+        assert_eq!(
+            key("warp core breach source:enterprise"),
+            key("dilithium source:enterprise")
+        );
+        assert_ne!(key("warp source:enterprise"), key("warp source:voyager"));
+        assert_ne!(key("warp"), key("warp source:enterprise"));
+    }
 
     /// A chat whose last message falls in a date window keeps its own row
     /// as well as that day's messages; meaning must rank it by those
