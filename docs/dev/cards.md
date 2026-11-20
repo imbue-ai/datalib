@@ -18,11 +18,11 @@ A card's source is **one call** of a view or component the app already
 has, with values:
 
 ```js
-searchView();
-documentView("e28ed67d-507b-5319-8732-00e249b6ebf6");
-documentView("e28ed67d-…", "11ec65e9-…"); // doc + section to highlight
-gridView({ q: "picard", columns: ["kind", "title"] });
-comp.user.tetris();
+searchView()
+documentView("e28ed67d-507b-5319-8732-00e249b6ebf6")
+documentView("e28ed67d-…", "11ec65e9-…")   // doc + section to highlight
+gridView({ q: "picard", columns: ["kind", "title"] })
+comp.user.tetris()
 ```
 
 That is the whole language (`datalib/ui/src/cards/cardCall.ts`):
@@ -231,13 +231,13 @@ label for anything else.
 
 ```ts
 type CardCtx = {
-  cardId: string; // a UUIDv7 minted when the card opens (cards/cardId.ts)
-  cardType: string; // what its source calls: `gridView`, `comp.user.tetris`
-  initialState: string; // persisted state from the host ("" when absent)
-  setTitle(title: string | null): void; // chrome-bar title (see above)
-  setHelp(html: string | null): void; // the chrome's "?" (see below)
-  bus: Bus; // ambient cross-card events
-  host: HostCommands; // structural + persistence commands
+  cardId: string;        // a UUIDv7 minted when the card opens (cards/cardId.ts)
+  cardType: string;      // what its source calls: `gridView`, `comp.user.tetris`
+  initialState: string;  // persisted state from the host ("" when absent)
+  setTitle(title: string | null): void;  // chrome-bar title (see above)
+  setHelp(html: string | null): void;    // the chrome's "?" (see below)
+  bus: Bus;              // ambient cross-card events
+  host: HostCommands;    // structural + persistence commands
 };
 ```
 
@@ -265,8 +265,8 @@ Each card gets its own instance, pre-bound to that card:
 
 ```ts
 type HostCommands = {
-  openCards(...sources: string[]): string[]; // returns the new cards' ids
-  hrefFor(...sources: string[]): string; // the URL openCards would land on
+  openCards(...sources: string[]): string[];  // returns the new cards' ids
+  hrefFor(...sources: string[]): string;      // the URL openCards would land on
   setSource(source: string): void;
   close(): void;
   setState(state: string): void;
@@ -314,7 +314,7 @@ user-driven changes so a pristine grid keeps clean state.
 ```ts
 type Bus = {
   publish(topic: string, payload: unknown, opts?: { from?: string }): void;
-  subscribe(topic: string, handler: BusHandler): Teardown; // returns unsubscribe
+  subscribe(topic: string, handler: BusHandler): Teardown;  // returns unsubscribe
 };
 ```
 
@@ -329,7 +329,7 @@ receiver. It carries no structural operations. The topics:
   transient highlight on the target span.
 - `config.written` (`TOPIC_CONFIG_WRITTEN`): a card just wrote
   `config.toml`; `configView` reloads.
-- `log.query`: a log line card's _keep_ / _exclude_ buttons send a
+- `log.query`: a log line card's *keep* / *exclude* buttons send a
   token to the log card's query bar.
 
 Payloads cross card boundaries as `unknown`; subscribers validate the
@@ -506,7 +506,6 @@ besides components:
   the search; their decisions are `cards/dashboard.ts`, their look
   `cards/dashboardCard.css`. A section card leaves the ground and the
   space below it to the Page it sits in.
-
 - `searchView(opts?: { q?, columns?, name?, view? })` — "Search", one
   card (`cards/GridCard.ce.vue`) with two views of one query, picked by
   two tabs at the end of the source chips' row, right above what they
@@ -716,7 +715,7 @@ besides components:
 - `logLineView(seq)` — one log line in full (`cards/LogLineCard.ce.vue`,
   over `/api/log/{seq}`): the message, the fields as a tree
   (`cards/JsonTree.ce.vue`), the source link at the process's commit,
-  the process itself. Its _keep_ / _exclude_ buttons narrow the log
+  the process itself. Its *keep* / *exclude* buttons narrow the log
   beside it through the bus (`log.query`, a token for the query bar).
 - `personView(handle, { seenIn })` — one person (`cards/PersonCard.ce.vue`,
   its rules in `cards/person.ts`): your contact, when the handle is
@@ -725,7 +724,7 @@ besides components:
   where the chip that opened it was — leads, marked "seen here". A
   person chip's double-click opens it (`personSource` in
   `cards/cardSources.ts`); it offers the search for everything with
-  them, and _Create contact_ for an unlinked handle where a contacts
+  them, and *Create contact* for an unlinked handle where a contacts
   app is configured.
 - `contactsView()` — every contact in the contacts app
   (`cards/ContactsCard.ce.vue`), read straight from it
@@ -883,7 +882,7 @@ two-dimensional map with its own spatial index, pan and zoom.
 ## Typed tables
 
 A table's producer declares its columns and the viewer draws each cell
-by the column's _type_ rather than by the field's name. The vocabulary
+by the column's *type* rather than by the field's name. The vocabulary
 is `datalib_columns` (`datalib/backend/columns/src/lib.rs`), mirrored
 by hand in `datalib/ui/src/api.ts` — change both halves together —
 and the one renderer for all of it is `cards/typedColumns.ts`: a pure
@@ -894,7 +893,7 @@ table and nothing more (`tableView`, the sources card); a card that
 drives a grid itself — its own selection, column state in the URL,
 adaptive visibility (`GridCard`) — takes its definitions and keeps its
 own grid. The split is deliberate: a component that owned the grid
-_and_ re-exposed its options for the second kind of host would be a
+*and* re-exposed its options for the second kind of host would be a
 wrapper around a wrapper, with every re-exposed option a place for the
 two to disagree.
 
@@ -954,21 +953,21 @@ again, and the only ones that should know the grid's DOM or options:
 Nothing persisted depends on the grid: the URL's `cols` is the card's
 own layout shape and decodes to nothing when it cannot be read.
 
-| type         | the cell's value                                                     | drawn as                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| ------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `text`       | a string                                                             | as is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `count`      | an integer                                                           | grouped digits                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `number`     | a float                                                              | a few decimals, right-aligned                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `bytes`      | an integer                                                           | a base-10 size, exact figure on hover                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `timestamp`  | an ISO stamp about _now_ (when something last ran)                   | "7 days ago", exact stamp on hover; sorts on the instant                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `datetime`   | an ISO stamp that is the record's (when a message was sent)          | a date chip in the clock's zone and format; sorts on the instant                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `quantity`   | `{value, unit, note, detail}`                                        | one figure by its unit (`count` grouped, `seconds` as "25 min"), or `note` in its place — a word, muted — when there is none; the reasoning on hover                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `timeseries` | `{value, unit, samples, detail, window_secs}`                        | the value and its change over the window, over a sparkline scaled to its own range; each value names its own window, so minutes of bytes and days of items share a table                                                                                                                                                                                                                                                                                                                                                                                           |
-| `identity`   | `{id, label, icon, detail, entity}`                                  | icon + label, id on hover; the icon is a _token_ (`slack`, `step:ingest`) the viewer maps to an asset. An id that is a person's handle as a URI (`mailto:…`), or an `entity` naming a group, a step (`datalib:group/slack`) or a document (`datalib:doc/<uuid>`), draws as a chip instead, see below                                                                                                                                                                                                                                                               |
-| `status`     | `{key, label, at, last_success_at, detail}`                          | a glyph for the key (a spinner while running), when it got there, the reason on hover                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `identities` | `[identity, …]`                                                      | each drawn as `identity` draws one, side by side: their labels cut in the middle so each gets an even share of the cell (a short one leaves its room to the long ones), and those that would fall below a few characters folded into a "+N" whose tooltip names them (`chipFit.ts`). One plain identity alone reads as `identity` does                                                                                                                                                                                                                             |
-| `chips`      | `[{kind, text, title}]`                                              | a row of chips                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `actions`    | `[{id, label, enabled, hint, disabled_reason, danger, on}]`          | buttons, or a switch when `on` is set; the card supplies the handler for each id, and an id with no handler draws nothing                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| type | the cell's value | drawn as |
+|---|---|---|
+| `text` | a string | as is |
+| `count` | an integer | grouped digits |
+| `number` | a float | a few decimals, right-aligned |
+| `bytes` | an integer | a base-10 size, exact figure on hover |
+| `timestamp` | an ISO stamp about *now* (when something last ran) | "7 days ago", exact stamp on hover; sorts on the instant |
+| `datetime` | an ISO stamp that is the record's (when a message was sent) | a date chip in the clock's zone and format; sorts on the instant |
+| `quantity` | `{value, unit, note, detail}` | one figure by its unit (`count` grouped, `seconds` as "25 min"), or `note` in its place — a word, muted — when there is none; the reasoning on hover |
+| `timeseries` | `{value, unit, samples, detail, window_secs}` | the value and its change over the window, over a sparkline scaled to its own range; each value names its own window, so minutes of bytes and days of items share a table |
+| `identity` | `{id, label, icon, detail, entity}` | icon + label, id on hover; the icon is a *token* (`slack`, `step:ingest`) the viewer maps to an asset. An id that is a person's handle as a URI (`mailto:…`), or an `entity` naming a group, a step (`datalib:group/slack`) or a document (`datalib:doc/<uuid>`), draws as a chip instead, see below |
+| `status` | `{key, label, at, last_success_at, detail}` | a glyph for the key (a spinner while running), when it got there, the reason on hover |
+| `identities` | `[identity, …]` | each drawn as `identity` draws one, side by side: their labels cut in the middle so each gets an even share of the cell (a short one leaves its room to the long ones), and those that would fall below a few characters folded into a "+N" whose tooltip names them (`chipFit.ts`). One plain identity alone reads as `identity` does |
+| `chips` | `[{kind, text, title}]` | a row of chips |
+| `actions` | `[{id, label, enabled, hint, disabled_reason, danger, on}]` | buttons, or a switch when `on` is set; the card supplies the handler for each id, and an id with no handler draws nothing |
 | `membership` | `{applies, proposed, title}`: `applies` is `true`, `false` or `null` | whether the row is in the set the column names, as one three-position switch — knob left for out, centred for not known, right for in — filled when settled, only outlined when `proposed` (an agent's answer no person has reviewed); `title` on hover. A press on a third of it hands the host (`TableGrid`'s `membership`) the row, the field and that answer; a press where the knob already is does nothing, unless the answer is only proposed, which it confirms. Without a host handler it only shows. Sorts in, proposed in, not known, proposed out, out |
 
 Beside its type a column can say how it is laid out: `width`, the
@@ -982,7 +981,7 @@ not its label.
 
 The producer resolves, the viewer presents: an `identity` arrives with
 its label already looked up, because only the producer can, and the
-viewer decides what the icon token looks like. An action is an _id_,
+viewer decides what the icon token looks like. An action is an *id*,
 never a URL — a URL arriving as data would be a capability.
 
 One layer is joined in the viewer, deliberately: what a chip names. An

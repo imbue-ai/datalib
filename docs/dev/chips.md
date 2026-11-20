@@ -3,7 +3,7 @@
 A **chip** is how Datalib shows something inline: a person, a source
 group, a pipeline step, a document, a date. It has a name, a picture or
 a mark, and behind it a stable identifier the app looks up to learn what
-that thing is _now_: the contact a person linked, the name the config
+that thing is *now*: the contact a person linked, the name the config
 gives a group today, whether a step is running. A chip is drawn the same
 in a rendered document, a grid cell and the run log, with the same
 tooltip, right-click menu, double-click and copied text.
@@ -12,19 +12,19 @@ What a document promises any viewer (the link a person is written as,
 the `<time>` a date is) is
 [showing a rendered document in your app](../user/rendered_documents.md);
 this page is how Datalib's own viewer keeps it, and where to start to add
-a kind of chip or a place that draws them. What makes a _person_ who
+a kind of chip or a place that draws them. What makes a *person* who
 they are (handles, each source's record, the contacts app) is
 [`contacts.md`](contacts.md).
 
 ## Words
 
-| word           | means                                                                                        |
-| -------------- | -------------------------------------------------------------------------------------------- |
-| **entity**     | what a chip names: a person (by a handle), a group, a step, a document, a node, a date       |
-| **chip link**  | how a chip is written down: a markdown link with a title (below)                             |
-| **entity URI** | the href, which names the entity (see [The link](#the-link))                                 |
-| **resolver**   | the one place in the page that asks the server what an entity is now, for one kind of entity |
-| **producer**   | whoever writes a chip down: a render writing markdown, or a server sending a grid row        |
+| word | means |
+|---|---|
+| **entity** | what a chip names: a person (by a handle), a group, a step, a document, a node, a date |
+| **chip link** | how a chip is written down: a markdown link with a title (below) |
+| **entity URI** | the href, which names the entity (see [The link](#the-link)) |
+| **resolver** | the one place in the page that asks the server what an entity is now, for one kind of entity |
+| **producer** | whoever writes a chip down: a render writing markdown, or a server sending a grid row |
 
 ## The link
 
@@ -36,9 +36,7 @@ carries only what the producer knew when it wrote it:
 
 ```markdown
 ## [Will Riker](mailto:riker@enterprise.org "Will Riker <riker@enterprise.org>") <time …>…</time>
-
 # [slack](datalib:group/slack "slack") — storage
-
 | Store | [ingest](datalib:step/slack/ingest "slack/ingest") | …
 ```
 
@@ -191,11 +189,11 @@ and grid in the page shares it:
 
 The two instances:
 
-|                 | `people` (`contacts.ts`)                                                                                                                                                                                                                                                                                                   | `entities` (`entities.ts`)                                                                                                                                 |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| keyed by        | handle (`email:…`)                                                                                                                                                                                                                                                                                                         | entity URI (`datalib:group/…`)                                                                                                                             |
-| asks            | the unified grid and search index's `POST /people` and the contacts app's `POST /resolve`                                                                                                                                                                                                                                  | datalib-http's `POST /api/entities` (`manage::post_entities`, from the rows the Manage table reads)                                                        |
-| answer          | each source's record of the person, and the contact a person made                                                                                                                                                                                                                                                          | label, icon token, detail, status, and its row of the Sources table (`row`), whose actions are its menu                                                    |
+| | `people` (`contacts.ts`) | `entities` (`entities.ts`) |
+|---|---|---|
+| keyed by | handle (`email:…`) | entity URI (`datalib:group/…`) |
+| asks | the unified grid and search index's `POST /people` and the contacts app's `POST /resolve` | datalib-http's `POST /api/entities` (`manage::post_entities`, from the rows the Manage table reads) |
+| answer | each source's record of the person, and the contact a person made | label, icon token, detail, status, and its row of the Sources table (`row`), whose actions are its menu |
 | goes stale when | a person edits a contact (create, link, unlink, no longer works): in this page the call forgets the handles it changed; from anywhere else — another window, an agent — the contacts app's commit reaches every page as a `curated` frame, on which `people` and `contactsById` revalidate (`movesPeople`), as on a resync | a sync moves a status, or the config changes: `entities` follows the live connection and revalidates on every frame `movesEntities` names, and on a resync |
 
 Why the viewer joins this itself rather than the producer sending
@@ -236,7 +234,7 @@ A grid draws a chip from an `identity` typed cell,
   titles a result and its preview by the same people
   (`contacts.ts::peopleTitle`): one person's chip, or for several one
   pill with their photos overlapping and each name a chip of its own.
-- **A group or a step**: the cell's `entity` is the URI, _beside_ a
+- **A group or a step**: the cell's `entity` is the URI, *beside* a
   bare `id`. The id stays bare because other code keys on it: the
   document view stores a source's "always load images" setting under
   the Source cell's id. The search and problems grids' Source column
@@ -331,7 +329,8 @@ every other node as its node's; its pane's title as the shown node's;
 and in the pane each row's title, a thread its node's, a message its
 author's, a page its document's, and each row's date. The tree's
 `menu` event and a row's `contextmenu` show `ChipMenu`, and a
-double-click on a chip opens its card.
+double-click on a chip opens its card. `ChipMenu` hears Escape on its
+way down, since the tree takes the key for itself.
 
 ## In the search field
 
@@ -441,7 +440,7 @@ search field) draws it again when the view changes.
   runs it, so the day is `after:<day> before:<next day>` only while the
   view is this computer's zone, and otherwise its two midnights with
   their offsets (`after:2026-04-16T00:00:00+02:00
-before:2026-04-17T00:00:00+02:00`).
+  before:2026-04-17T00:00:00+02:00`).
 - **double-click**: a search card for its day.
 
 **T0 draws every date from one instant.** "Use as T0" on an instant's
@@ -493,13 +492,13 @@ typed. A step names no search and drags as a link.
 
 ## Clicks
 
-|                  | a person                                                                                                                                                                      | a group                                                                                                                                                                                          | a step                                                   |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
-| **click**        | the link popover, where a contacts app is configured                                                                                                                          | nothing; the href is never followed                                                                                                                                                              | nothing; the href is never followed                      |
-| **double-click** | the person card (`personView`): your contact and each source's record of them, the source the chip was seen in first                                                          | the source's card (`sourceView`), on its documents                                                                                                                                               | its group's card on Sync, scrolled to the step's section |
-| **right-click**  | `chipMenu`: open the person card; compose mail to an email address; copy the identifier, the name or both; everything with them (`with:`); link to a contact or edit the link | `entityChipMenu`: open its dashboard; then its Sources row's entries — Browse, Sync now or Stop, Turn off or on, history, step log, reveal, copy path, Reset; then copy the id, the name or both | the same, for the step's row                             |
-| **hover**        | the tooltip: who, the identifier, what each source calls them, their other handles                                                                                            | the tooltip: name and id, its type, its status                                                                                                                                                   | the same                                                 |
-| **copy**         | `Will Riker <riker@enterprise.org>` as text, a working `mailto:` link as HTML                                                                                                 | `Work Slack (datalib:group/slack)`, and the link                                                                                                                                                 | the same                                                 |
+| | a person | a group | a step |
+|---|---|---|---|
+| **click** | the link popover, where a contacts app is configured | nothing; the href is never followed | nothing; the href is never followed |
+| **double-click** | the person card (`personView`): your contact and each source's record of them, the source the chip was seen in first | the source's card (`sourceView`), on its documents | its group's card on Sync, scrolled to the step's section |
+| **right-click** | `chipMenu`: open the person card; compose mail to an email address; copy the identifier, the name or both; everything with them (`with:`); link to a contact or edit the link | `entityChipMenu`: open its dashboard; then its Sources row's entries — Browse, Sync now or Stop, Turn off or on, history, step log, reveal, copy path, Reset; then copy the id, the name or both | the same, for the step's row |
+| **hover** | the tooltip: who, the identifier, what each source calls them, their other handles | the tooltip: name and id, its type, its status | the same |
+| **copy** | `Will Riker <riker@enterprise.org>` as text, a working `mailto:` link as HTML | `Work Slack (datalib:group/slack)`, and the link | the same |
 
 **A group or step chip's menu is its row of the Sources table.**
 `/api/entities` answers each with its `row`, and the menu is built as
@@ -551,7 +550,7 @@ A new kind — a channel, a document — is these steps, in this order:
    `entity_link`, or sends an identity cell with `entity`. Each surface
    that draws it decorates, subscribes and binds the menu ids.
 
-A new kind of _handle_ is a person and goes through
+A new kind of *handle* is a person and goes through
 [`contacts.md`](contacts.md) §"Changing the rules" instead.
 
 ## Where it is tested
