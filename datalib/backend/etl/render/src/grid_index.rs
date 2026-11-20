@@ -469,6 +469,18 @@ pub(crate) const DOCUMENT_LOOKUP_INDEXES: &[&str] = &[
 pub(crate) const AUTHORS_INDEX: &str =
     "CREATE INDEX IF NOT EXISTS grid_rows_by_author ON grid_rows (author_handle, author)";
 
+/// What the search applet lists a search's searchable documents from, for
+/// its count of those search by meaning cannot reach
+/// (`DoltRepo::documents_with_pages`, which names `markdowns_searchable`).
+/// Without them it read every grid row and its document's whole
+/// `markdowns` row, seconds on a large library, on every search. Out of
+/// [`schema_hash`], as `AUTHORS_INDEX` is; an index made before them gets
+/// them at the next start (`lacks_an_index`).
+pub(crate) const SEARCHABLE_DOCUMENTS_INDEXES: &[&str] = &[
+    "CREATE INDEX IF NOT EXISTS markdowns_searchable ON markdowns (searchable, markdown_uuid)",
+    "CREATE INDEX IF NOT EXISTS grid_rows_by_markdown_source ON grid_rows (markdown_uuid, source_id)",
+];
+
 /// Tables an older build made in every store that holds documents.
 /// `supplied_search_terms` kept each row's supplied terms apart from the
 /// row, owned by document; a row that moved left them behind (#1202).
@@ -498,17 +510,51 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
 /// here: every render store has a `grid_rows` too, and only the index the
 /// grid reads wants to pay for the search indexes on every write.
 pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
-    for ddl in index_ddl()
-        .chain(read_indexes())
-        .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
-        .chain([AUTHORS_INDEX, node_rows::BY_SOURCE_INDEX])
-    {
+    for ddl in index_ddl().chain(all_indexes()) {
         sqlx::query(ddl)
             .execute(pool)
             .await
             .with_context(|| format!("create: {ddl}"))?;
     }
     Ok(())
+}
+
+fn all_indexes() -> impl Iterator<Item = &'static str> {
+    read_indexes()
+        .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
+        .chain([AUTHORS_INDEX, node_rows::BY_SOURCE_INDEX])
+        .chain(SEARCHABLE_DOCUMENTS_INDEXES.iter().copied())
+}
+
+/// Whether the grid index at `db_path` lacks an index this build makes:
+/// one an older build did not, which only a run of the step adds. A reader
+/// may name any of them, so a start asks for that run (`datalib-step
+/// --prepare`). `false` for a file not built yet.
+pub async fn lacks_an_index(db_path: &Path) -> Result<bool> {
+    if !db_path.exists() {
+        return Ok(false);
+    }
+    let opts = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(datalib_core::plain_sqlite::uri(db_path))
+        .read_only(true)
+        .create_if_missing(false)
+        .busy_timeout(Duration::from_secs(5));
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_with(opts)
+        .await
+        .with_context(|| format!("open {} to list its indexes", db_path.display()))?;
+    let made: Result<Vec<String>, sqlx::Error> =
+        sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'index'")
+            .fetch_all(&pool)
+            .await;
+    pool.close().await;
+    let made: HashSet<String> = made.context("list the grid index's indexes")?.into_iter().collect();
+    Ok(all_indexes()
+        .filter_map(index_name)
+        .any(|name| !made.contains(name)))
 }
 
 /// The search bar's indexes, and those that list a container's children.

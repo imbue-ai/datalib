@@ -45,6 +45,13 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
             }
             let shape = datalib_etl_render::grid_index::schema_hash();
             ask_for_a_rerun_if(env, emitter, &store, &shape).await?;
+            if datalib_etl_render::grid_index::lacks_an_index(&store).await? {
+                tracing::info!(
+                    step = %env.step,
+                    "prepare: the grid index lacks an index this build reads by; it needs a rerun"
+                );
+                emitter.needs_rerun();
+            }
             if search_index_is_stale(env, data_root).await? {
                 tracing::info!(
                     step = %env.step,
