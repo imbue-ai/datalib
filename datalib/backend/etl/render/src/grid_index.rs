@@ -460,6 +460,7 @@ fn indexes() -> impl Iterator<Item = &'static str> {
     read_indexes()
         .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
         .chain([AUTHORS_INDEX, node_rows::BY_SOURCE_INDEX])
+        .chain(SEARCHABLE_DOCUMENTS_INDEXES.iter().copied())
 }
 
 async fn record_shape(pool: &SqlitePool, shape: &datalib_store_meta::Shape) -> Result<()> {
@@ -488,6 +489,16 @@ pub(crate) const DOCUMENT_LOOKUP_INDEXES: &[&str] = &[
 /// query names it.
 pub(crate) const AUTHORS_INDEX: &str =
     "CREATE INDEX IF NOT EXISTS grid_rows_by_author ON grid_rows (author_handle, author)";
+
+/// What the search applet lists a search's searchable documents from, for
+/// its count of those search by meaning cannot reach
+/// (`DoltRepo::documents_with_pages`, which names `markdowns_searchable`).
+/// Without them it read every grid row and its document's whole
+/// `markdowns` row, seconds on a large library, on every search.
+pub(crate) const SEARCHABLE_DOCUMENTS_INDEXES: &[&str] = &[
+    "CREATE INDEX IF NOT EXISTS markdowns_searchable ON markdowns (searchable, markdown_uuid)",
+    "CREATE INDEX IF NOT EXISTS grid_rows_by_markdown_source ON grid_rows (markdown_uuid, source_id)",
+];
 
 /// Tables an older build made in every store that holds documents.
 /// `supplied_search_terms` kept each row's supplied terms apart from the

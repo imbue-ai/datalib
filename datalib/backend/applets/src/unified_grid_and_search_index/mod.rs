@@ -520,7 +520,7 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
     // On the first page, for the line above the results: a later page and a
     // group's rows have nothing to add to it.
     let without_vectors = if read && offset == 0 && within.is_empty() {
-        match without_vectors(s, &q, &parsed).await {
+        match without_vectors(s, &parsed).await {
             Ok(counted) => counted,
             Err(e) => {
                 errors.push(format!("count the documents without vectors: {e}"));
@@ -817,7 +817,6 @@ async fn page_rows(
 /// been built.
 async fn without_vectors(
     s: &Index,
-    q: &str,
     parsed: &ParsedQuery,
 ) -> Result<Option<results::WithoutVectors>, SearchFailure> {
     if !embeds(parsed) {
@@ -829,15 +828,7 @@ async fn without_vectors(
     let (index_stamp, cache_stamp) =
         datalib_unified_grid_and_search_index::search_index::stamps(&s.root);
     let stamp: Vec<IndexStamp> = vec![index_stamp, cache_stamp];
-    let key = (
-        q.to_string(),
-        s.repo.head().await.map_err(index)?,
-        stamp.clone(),
-    );
     let mut coverage = s.coverage.lock().await;
-    if let Some((_, counted)) = coverage.last.as_ref().filter(|(k, _)| *k == key) {
-        return Ok(Some(counted.clone()));
-    }
     let with_vectors = match coverage
         .with_vectors
         .as_ref()
@@ -858,10 +849,12 @@ async fn without_vectors(
             read
         }
     };
+    drop(coverage);
     let candidates = s.repo.documents_with_pages(parsed).await.map_err(index)?;
-    let counted = results::WithoutVectors::among(&candidates, &with_vectors);
-    coverage.last = Some((key, counted.clone()));
-    Ok(Some(counted))
+    Ok(Some(results::WithoutVectors::among(
+        &candidates,
+        &with_vectors,
+    )))
 }
 
 /// the search's score, and the words the hit matched in place of the row's

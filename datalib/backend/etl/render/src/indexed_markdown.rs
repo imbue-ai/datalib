@@ -314,7 +314,7 @@ fn lookup_indexes() -> impl Iterator<Item = &'static str> {
         .iter()
         .copied()
         .chain([
-            "CREATE INDEX IF NOT EXISTS problems_by_scope ON problems (scope_kind, scope_key)",
+            datalib_schema::problems::BY_SCOPE_INDEX_DDL,
             // The render asks it at every checkpoint (`documents_for_render_units`).
             "CREATE INDEX IF NOT EXISTS markdowns_by_render_unit ON markdowns (render_unit_key)",
             // Every render pass asks it once per download problem.

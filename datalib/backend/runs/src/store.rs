@@ -12,7 +12,9 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
 use crate::redact::Redactor;
-use crate::{is_terminal, runs_path, LiveState, Retention, INDEXES, SCHEMA_VERSION};
+use crate::{
+    is_terminal, runs_path, LiveState, Retention, INDEXES, PROCESSES_BY_RUN, SCHEMA_VERSION,
+};
 use app_schema::runs::{
     LogRow, MetricRow, MetricSampleRow, Process, ProcessRow, RunRow, RunStart, StepRunRow,
     StorePart,
@@ -372,6 +374,7 @@ const UPGRADES: &[(i32, &[&str])] = &[
             "ALTER TABLE runs ADD COLUMN reason TEXT",
         ],
     ),
+    (12, &[PROCESSES_BY_RUN]),
 ];
 
 /// `true` when the file carries this build's schema, climbing the
@@ -1654,30 +1657,51 @@ async fn begin_run(
     .execute(&mut **tx)
     .await?;
     let cutoff = age_cutoff(retention, &run.started_at_utc);
-    sqlx::query("DELETE FROM runs WHERE started_at_utc < ? AND run_id != ?")
-        .bind(&cutoff)
-        .bind(&run.run_id)
-        .execute(&mut **tx)
-        .await?;
-    sqlx::query(
-        "DELETE FROM runs WHERE run_id NOT IN \
-         (SELECT run_id FROM runs ORDER BY started_at_utc DESC LIMIT ?)",
+    let mut gone: Vec<String> = sqlx::query_scalar(
+        "DELETE FROM runs WHERE started_at_utc < ? AND run_id != ? RETURNING run_id",
     )
-    .bind(retention.max_runs.max(1) as i64)
-    .execute(&mut **tx)
+    .bind(&cutoff)
+    .bind(&run.run_id)
+    .fetch_all(&mut **tx)
     .await?;
-    for table in ["processes", "step_runs", "log", "metrics", "metric_samples"] {
-        // Safe: the five names are the literals above, never input.
-        // `NOT IN` is false for a NULL `run_id`, so the server's
-        // processes and lines are kept here and aged out by
-        // `prune_unowned`.
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "DELETE FROM {table} WHERE run_id NOT IN (SELECT run_id FROM runs)"
-        )))
-        .execute(&mut **tx)
-        .await?;
+    gone.extend(
+        sqlx::query_scalar::<_, String>(
+            "DELETE FROM runs WHERE run_id NOT IN \
+             (SELECT run_id FROM runs ORDER BY started_at_utc DESC LIMIT ?) RETURNING run_id",
+        )
+        .bind(retention.max_runs.max(1) as i64)
+        .fetch_all(&mut **tx)
+        .await?,
+    );
+    if !gone.is_empty() {
+        delete_rows_of_runs(tx, &gone).await?;
     }
     bump(tx, StorePart::Runs).await
+}
+
+/// What every table filed under a run holds of `runs`, each read through
+/// the index or key its `run_id` leads, so retention costs the rows it
+/// removes rather than every line the store holds. A NULL `run_id`, the
+/// server's own, is never in `runs`; `prune_unowned` ages those.
+async fn delete_rows_of_runs(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    runs: &[String],
+) -> Result<(), sqlx::Error> {
+    const BY_RUN: &[&str] = &[
+        "DELETE FROM log INDEXED BY log_by_run_step \
+         WHERE run_id IN (SELECT value FROM json_each(?))",
+        "DELETE FROM processes INDEXED BY processes_by_run \
+         WHERE run_id IN (SELECT value FROM json_each(?))",
+        // These three are keyed by `(run_id, …)`: their key is the index.
+        "DELETE FROM step_runs WHERE run_id IN (SELECT value FROM json_each(?))",
+        "DELETE FROM metrics WHERE run_id IN (SELECT value FROM json_each(?))",
+        "DELETE FROM metric_samples WHERE run_id IN (SELECT value FROM json_each(?))",
+    ];
+    let runs = serde_json::to_string(runs).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
+    for sql in BY_RUN {
+        sqlx::query(*sql).bind(&runs).execute(&mut **tx).await?;
+    }
+    Ok(())
 }
 
 /// What [`close_abandoned_run`] found to close.

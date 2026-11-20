@@ -259,6 +259,25 @@ fn search_row_select() -> String {
     names.join(", ")
 }
 
+/// What `documents_with_pages` runs. The searchable documents are listed
+/// once, from the step's `markdowns_searchable`, never looked up per grid
+/// row: a correlated look-up read each row's whole `markdowns` row, seconds
+/// on a large library. `INDEXED BY` refuses rather than fall back to that.
+/// The grid side is left to the planner, since the search's filters decide
+/// which of its indexes fits.
+pub fn documents_with_pages_sql(
+    grid_rows: &str,
+    markdowns: &str,
+    where_sql: &str,
+    joiner: &str,
+) -> String {
+    format!(
+        "SELECT DISTINCT markdown_uuid, source_id FROM {grid_rows}{where_sql}{joiner} \
+         markdown_uuid IN (SELECT markdown_uuid FROM {markdowns} \
+                           INDEXED BY markdowns_searchable WHERE searchable = 1)"
+    )
+}
+
 /// What `ordered_uuids` runs, with its parameters.
 pub fn listing_sql(q: &ParsedQuery, sort: &[Sort], within: &[Within]) -> (String, Vec<String>) {
     ordered_sql("grid_rows", q, sort, within)
@@ -1458,13 +1477,9 @@ impl IndexRepo for DoltRepo {
         };
         // Audited: as `matching` — literal table names and `build_where`'s
         // static column names; every value is bound.
-        let mut query = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(format!(
-            "SELECT DISTINCT markdown_uuid, source_id FROM {g}{where_sql}{joiner} \
-             EXISTS (SELECT 1 FROM {m} WHERE {m}.markdown_uuid = {g}.markdown_uuid \
-                     AND {m}.searchable = 1)",
-            g = at.grid_rows,
-            m = at.markdowns,
-        )));
+        let mut query = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(
+            documents_with_pages_sql(at.grid_rows, at.markdowns, &where_sql, joiner),
+        ));
         for p in &params {
             query = query.bind(p);
         }

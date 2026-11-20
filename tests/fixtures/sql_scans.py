@@ -1,5 +1,5 @@
-"""The statements the fixture sync ran whose plan walks a whole table or
-index, one per line, from what `datalib_sql_work` recorded under
+"""Every statement the fixture sync ran, one per line, and whether its plan
+walks a whole table or index, from what `datalib_sql_work` recorded under
 `DATALIB_SQL_CENSUS`. `sql_scans_test.py` checks them against
 `sql_scans_allowed.toml`.
 
@@ -97,6 +97,30 @@ def judge(
     }
 
 
+def rows(
+    judged: dict[tuple[str, str], tuple[bool, str]], root: Path
+) -> list[dict[str, object]]:
+    """One row per statement as `normalized` spells it: whether it scans
+    on any file, and the files and judgements behind that answer (where it
+    scans, or where it ran when it scans nowhere)."""
+    by_statement: dict[str, list[tuple[str, bool, str]]] = {}
+    for (statement, file), (scans, how) in judged.items():
+        by_statement.setdefault(normalized(statement), []).append((file, scans, how))
+    out = []
+    for statement, runs in sorted(by_statement.items()):
+        scans = any(s for _, s, _ in runs)
+        behind = [(f, h) for f, s, h in runs if s == scans]
+        out.append(
+            {
+                "statement": statement,
+                "scans": scans,
+                "files": sorted({role(f, root) for f, _ in behind}),
+                "judged_by": sorted({h for _, h in behind}),
+            }
+        )
+    return out
+
+
 def main(doltlite: Path, census: Path, root: Path, out: Path) -> int:
     ran: dict[tuple[str, str], bool] = {}
     for f in sorted(census.glob("*.jsonl")):
@@ -115,20 +139,11 @@ def main(doltlite: Path, census: Path, root: Path, out: Path) -> int:
             continue
         for i, scans in plans_in(doltlite, store, statements).items():
             plans[(statements[i], file)] = scans
-    scanning: dict[str, tuple[set[str], set[str]]] = {}
-    for (statement, file), (scans, how) in judge(ran, plans).items():
-        if scans:
-            files, hows = scanning.setdefault(normalized(statement), (set(), set()))
-            files.add(role(file, root))
-            hows.add(how)
-    lines = [
-        json.dumps({"statement": s, "files": sorted(fs), "judged_by": sorted(hs)})
-        for s, (fs, hs) in sorted(scanning.items())
-    ]
-    out.write_text("".join(line + "\n" for line in lines))
+    table = rows(judge(ran, plans), root)
+    out.write_text("".join(json.dumps(row) + "\n" for row in table))
     print(
         f"{len(ran)} statements recorded, {len(plans)} judged by their plan, "
-        f"{len(lines)} scan",
+        f"{sum(1 for row in table if row['scans'])} scan",
         file=sys.stderr,
     )
     return 0

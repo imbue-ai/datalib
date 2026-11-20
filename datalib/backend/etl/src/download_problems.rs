@@ -585,7 +585,8 @@ pub(crate) async fn apply(
         // Audited: only `?` placeholders are built, one per key; every
         // key is bound.
         let sql = format!(
-            "SELECT * FROM problems WHERE scope_kind = ? AND scope_key IN ({})",
+            "SELECT * FROM problems INDEXED BY problems_by_scope \
+             WHERE scope_kind = ? AND scope_key IN ({})",
             vec!["?"; chunk.len()].join(",")
         );
         let mut q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(ScopeKind::Entity.as_str());
@@ -605,7 +606,8 @@ pub(crate) async fn apply(
     for chunk in gone.chunks(KEY_CHUNK) {
         // Audited: as above.
         let sql = format!(
-            "DELETE FROM problems WHERE scope_kind = ? AND scope_key IN ({})",
+            "DELETE FROM problems INDEXED BY problems_by_scope \
+             WHERE scope_kind = ? AND scope_key IN ({})",
             vec!["?"; chunk.len()].join(",")
         );
         let mut q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(ScopeKind::Entity.as_str());

@@ -506,6 +506,24 @@ async fn retention_keeps_the_newest_runs_and_sweeps_their_rows() {
     );
     let snap = snapshot(td.path()).await;
     assert_eq!(snap.run_id.as_deref(), Some("2026-01-04T00:00:00+00:00"));
+    let pool = datalib_runs::open_or_create(&datalib_runs::runs_path(td.path()))
+        .await
+        .unwrap();
+    for table in ["processes", "step_runs", "log", "metrics", "metric_samples"] {
+        // Safe: `table` is one of the five literals above.
+        let runs: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "SELECT DISTINCT run_id FROM {table} WHERE run_id IS NOT NULL ORDER BY run_id"
+        )))
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert!(!runs.is_empty(), "{table} holds the kept runs' rows");
+        assert!(
+            runs.iter().all(|r| r.as_str() >= "2026-01-03"),
+            "{table} still files rows under a pruned run: {runs:?}"
+        );
+    }
+    pool.close().await;
 }
 
 /// Retention by age: a run older than the window goes even when the
@@ -689,9 +707,10 @@ async fn a_store_from_version_10_is_upgraded_in_place() {
     }
     let path = datalib_runs::runs_path(td.path());
     let pool = datalib_runs::open_or_create(&path).await.unwrap();
-    // Version 10's shape is this one without what 11 and 12 added.
+    // Version 10's shape is this one without what 11, 12 and 13 added.
     sqlx::raw_sql(
-        "ALTER TABLE processes DROP COLUMN peak_rss_bytes; \
+        "DROP INDEX processes_by_run; \
+         ALTER TABLE processes DROP COLUMN peak_rss_bytes; \
          ALTER TABLE processes DROP COLUMN applet; \
          ALTER TABLE runs DROP COLUMN kind; \
          ALTER TABLE runs DROP COLUMN reason; \
@@ -733,6 +752,15 @@ async fn a_store_from_version_10_is_upgraded_in_place() {
         })
         .count();
     assert_eq!(set_aside, 0, "nothing was set aside");
+    let pool = datalib_runs::open_or_create(&path).await.unwrap();
+    let index: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'processes_by_run'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    pool.close().await;
+    assert_eq!(index, 1, "the climb adds the index retention names");
 }
 
 /// Guards the migration that read like a sync: a run says what it is for

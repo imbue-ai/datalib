@@ -84,10 +84,13 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        sqlx::query(datalib_etl::doltlite_raw::PROBLEMS_DDL)
-            .execute(&pool)
-            .await
-            .unwrap();
+        for ddl in std::iter::once(datalib_etl::doltlite_raw::PROBLEMS_DDL).chain(
+            datalib_etl::doltlite_raw::SHARED_LOOKUP_INDEXES
+                .iter()
+                .copied(),
+        ) {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
         pool
     }
 

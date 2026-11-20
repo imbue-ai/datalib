@@ -1096,6 +1096,14 @@ mod tests {
         assert!(!ask().await, "no index yet");
 
         let db = datalib_core::layout::grid_index_db(root.path());
+        let edit = |sql: &'static str| {
+            let db = db.clone();
+            async move {
+                let pool = plain_pool(&db).await;
+                sqlx::query(sql).execute(&pool).await.unwrap();
+                pool.close().await;
+            }
+        };
         let pool = datalib_etl_render::grid_index::open_index(&db)
             .await
             .unwrap();
@@ -1103,6 +1111,16 @@ mod tests {
             .await
             .unwrap();
         assert!(!ask().await, "this build's shape");
+
+        // Made before an index this build reads by: prepare makes it.
+        edit("DROP INDEX markdowns_searchable").await;
+        edit("UPDATE _datalib_meta SET value = 'fewer' WHERE key = 'index_hash'").await;
+        assert!(!ask().await, "an index alone is made in place");
+        let meta = datalib_store_meta::guard::read_at(&db).await.unwrap();
+        assert_eq!(
+            meta.map(|m| m.shape()),
+            Some(datalib_etl_render::grid_index::shape())
+        );
 
         written_by_an_older_build(&db).await;
         assert!(ask().await, "an older build's shape");
