@@ -1,6 +1,7 @@
 //! The reader against an index and cache the writers filled.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use datalib_search_index::{
     chunk::{chunk_hash, four_bytes_a_token},
@@ -236,22 +237,23 @@ async fn held_vectors_are_the_cached_chunks_with_their_messages() {
         .await
         .unwrap();
     assert_eq!(held.dim, 2);
-    assert_eq!(held.docs.len(), 1);
-    let d = &held.docs[0];
+    let embedded: Vec<_> = held.embedded().collect();
+    assert_eq!(embedded.len(), 1);
+    let d = embedded[0];
     assert_eq!(d.markdown_uuid, "thread");
-    assert_eq!(held.vector(0), [0.6, 0.8]);
-    let covered: Vec<&str> = held.covered(d, d.chunks.start).collect();
+    assert_eq!(d.vector(0), [0.6, 0.8]);
+    let covered: Vec<&str> = d.covered(0).collect();
     assert_eq!(covered, ["m1", "m2"]);
     let other_model = f.reader.held("another-model").await.unwrap();
     assert!(other_model.docs.is_empty());
     f.reader.close().await;
 }
 
-/// Reading again after a sync reads from the cache only the vectors not
-/// already held: a held chunk's vector, though the cache now says
-/// otherwise, is the one held, where a full read takes the cache's.
+/// Reading again after a sync reads only the documents that changed: one
+/// whose rendering has not moved is the one held, though its vector in the
+/// cache now says otherwise, where a full read takes the cache's.
 #[tokio::test]
-async fn a_reload_reads_only_the_vectors_it_does_not_hold() {
+async fn a_reload_reads_only_the_documents_that_changed() {
     let t = thread();
     let chat = doc("chat", "chat", &[(Some("c1"), "tea, Earl Grey\n")]);
     let (thread_hash, chat_hash) = (only_chunk(&t), only_chunk(&chat));
@@ -268,19 +270,12 @@ async fn a_reload_reads_only_the_vectors_it_does_not_hold() {
     )
     .await;
     let after = f.reader.held_after(&model, Some(&before)).await.unwrap();
-    let vector_of = |held: &datalib_search_index::Held, uuid: &str| {
-        let d = held.docs.iter().find(|d| d.markdown_uuid == uuid).unwrap();
-        held.vector(d.chunks.start).to_vec()
-    };
-    assert_eq!(vector_of(&after, "thread"), [0.6, 0.8], "kept, not read");
-    assert_eq!(
-        vector_of(&after, "chat"),
-        [0.0, 1.0],
-        "read: it was not held"
-    );
+    assert!(Arc::ptr_eq(&before.docs["thread"], &after.docs["thread"]));
+    assert_eq!(after.docs["thread"].vector(0), [0.6, 0.8], "not read");
+    assert_eq!(after.docs["chat"].vector(0), [0.0, 1.0], "read: it is new");
     let full = f.reader.held(&model).await.unwrap();
     assert_eq!(
-        vector_of(&full, "thread"),
+        full.docs["thread"].vector(0),
         [0.8, 0.6],
         "a full read reads it"
     );
@@ -289,18 +284,25 @@ async fn a_reload_reads_only_the_vectors_it_does_not_hold() {
 
 /// What a reload holds is what reading everything again holds: a document
 /// gone, one drawn again into a new chunk, one added, one not embedded
-/// yet, and a held chunk whose vector the cache no longer has.
+/// yet, and one whose chunk was waiting for a vector that has now come.
 #[tokio::test]
 async fn a_reload_holds_what_a_full_read_holds() {
     let model = datalib_search_index::model_key();
     let thread = thread();
     let gone = doc("mail", "gone", &[(Some("g1"), "a shuttle departs\n")]);
     let chat = doc("chat", "chat", &[(Some("c1"), "tea, Earl Grey\n")]);
-    let kept = doc("chat", "kept", &[(Some("k1"), "red alert\n")]);
-    let first = [&thread, &gone, &chat, &kept].map(|d| (only_chunk(d), vec![1.0, 2.0]));
-    let f = fixture(&[thread.clone(), gone, chat.clone(), kept.clone()], &first).await;
+    let waiting = doc("chat", "waiting", &[(Some("w1"), "red alert\n")]);
+    let first = [&thread, &gone, &chat].map(|d| (only_chunk(d), vec![1.0, 2.0]));
+    let f = fixture(
+        &[thread.clone(), gone, chat.clone(), waiting.clone()],
+        &first,
+    )
+    .await;
     let before = f.reader.held(&model).await.unwrap();
-    assert_eq!(before.docs.len(), 4);
+    let embedded = |held: &datalib_search_index::Held| -> Vec<String> {
+        held.embedded().map(|d| d.markdown_uuid.clone()).collect()
+    };
+    assert_eq!(embedded(&before), ["chat", "gone", "thread"]);
 
     let index = Index::open(&f.index_path()).await.unwrap();
     index.remove(&["gone".to_string()]).await.unwrap();
@@ -319,28 +321,16 @@ async fn a_reload_holds_what_a_full_read_holds() {
         &[
             (only_chunk(&redrawn), vec![0.0, 3.0]),
             (only_chunk(&fresh), vec![5.0, 0.0]),
+            (only_chunk(&waiting), vec![0.0, 1.0]),
         ],
     )
     .await;
-    let pool = sqlx::sqlite::SqlitePoolOptions::new()
-        .max_connections(1)
-        .idle_timeout(None)
-        .max_lifetime(None)
-        .connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(f.cache_path()))
-        .await
-        .unwrap();
-    sqlx::query("DELETE FROM vectors WHERE hash = ?")
-        .bind(only_chunk(&thread))
-        .execute(&pool)
-        .await
-        .unwrap();
-    pool.close().await;
 
     let after = f.reader.held_after(&model, Some(&before)).await.unwrap();
     let full = f.reader.held(&model).await.unwrap();
-    let ids: Vec<&str> = full.docs.iter().map(|d| d.markdown_uuid.as_str()).collect();
-    assert_eq!(ids, ["chat", "kept", "fresh"]);
+    assert_eq!(embedded(&full), ["chat", "fresh", "thread", "waiting"]);
     assert_eq!(after, full);
+    assert!(Arc::ptr_eq(&before.docs["thread"], &after.docs["thread"]));
     f.reader.close().await;
 }
 

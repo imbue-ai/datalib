@@ -1,12 +1,10 @@
 //! Loads what a search by meaning needs before anyone searches: the embedding
 //! model, every stored vector, and where the messages start in the documents
-//! a person's own filter reaches. On a large library that is a quarter of a
-//! minute the first search would otherwise wait, and the vectors go on being
-//! held in memory, about a gigabyte on that library, whether or not anyone
-//! searches. While a sync is writing the index a search answers from what
-//! is held (`INDEX_SETTLE`); once the index has sat still, this reads the
-//! vectors it does not hold yet and lets go of those no chunk names any
-//! more (`HeldVectors` in `unified_grid_and_search_index::search_index`).
+//! a person's own filter reaches. On a large library that is minutes the
+//! first search would otherwise wait. After that it keeps them current as a
+//! sync writes the index, so a search seldom finds the files moved since
+//! they were read; reading again reads only what changed (`HeldVectors` in
+//! `unified_grid_and_search_index::search_index`).
 
 use std::time::Duration;
 
@@ -24,43 +22,13 @@ pub(super) fn turned_off() -> bool {
     std::env::var_os(NO_WARM_ENV).is_some_and(|v| !v.is_empty())
 }
 
-/// How often the index is looked at, and how long it must then sit still:
-/// an embed step commits as it goes, and each load costs tens of seconds of
-/// disk and CPU that a running sync would rather have.
-const TICK: Duration = Duration::from_secs(60);
+/// How often the index is looked at.
+const TICK: Duration = Duration::from_secs(10);
 
 /// The first reads every vector. The second reads the documents `from:me`
 /// reaches, nearly every conversation, to learn where their messages start;
 /// the first search with a person's filter would otherwise pay for it.
 const WARMING_SEARCHES: [&str; 2] = ["warm up", "from:me warm up"];
-
-/// Whether to load, given what the index looks like at each tick: at launch,
-/// and after that when it differs from what was last loaded and has not moved
-/// since the tick before.
-struct Watch<S> {
-    last_seen: Option<S>,
-    loaded: Option<S>,
-}
-
-impl<S: PartialEq + Clone> Watch<S> {
-    fn new() -> Self {
-        Self {
-            last_seen: None,
-            loaded: None,
-        }
-    }
-
-    fn should_load(&mut self, now: &S) -> bool {
-        let launching = self.last_seen.is_none();
-        let settled = self.last_seen.as_ref() == Some(now);
-        self.last_seen = Some(now.clone());
-        if self.loaded.as_ref() == Some(now) || !(launching || settled) {
-            return false;
-        }
-        self.loaded = Some(now.clone());
-        true
-    }
-}
 
 pub(super) async fn keep_warm(s: Index, models: ModelGate) {
     if turned_off() {
@@ -75,12 +43,14 @@ pub(super) async fn keep_warm(s: Index, models: ModelGate) {
     {
         return;
     }
-    let mut watch = Watch::new();
+    let mut warmed = None;
     let mut ticks = tokio::time::interval(TICK);
     loop {
         ticks.tick().await;
-        if watch.should_load(&watched(&s)) {
+        let now = watched(&s);
+        if warmed.as_ref() != Some(&now) {
             warm_once(&s).await;
+            warmed = Some(now);
         }
     }
 }
@@ -113,38 +83,4 @@ pub(super) async fn warm_once(s: &Index) {
         elapsed_ms = started.elapsed().as_millis() as u64,
         "warmed the search by meaning"
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Watch;
-
-    #[test]
-    fn it_loads_at_launch_and_not_again_until_the_index_moves() {
-        let mut w = Watch::new();
-        assert!(w.should_load(&1));
-        assert!(!w.should_load(&1));
-        assert!(!w.should_load(&1));
-    }
-
-    /// A sync commits as it goes: loading at each commit would throw the last
-    /// load away, so a load waits for one tick with nothing new.
-    #[test]
-    fn it_waits_for_a_moving_index_to_settle() {
-        let mut w = Watch::new();
-        assert!(w.should_load(&1));
-        assert!(!w.should_load(&2), "moved since the last tick");
-        assert!(!w.should_load(&3), "still moving");
-        assert!(w.should_load(&3), "sat still for a tick");
-        assert!(!w.should_load(&3), "already loaded");
-    }
-
-    #[test]
-    fn it_does_not_load_again_when_the_index_returns_to_what_is_loaded() {
-        let mut w = Watch::new();
-        assert!(w.should_load(&1));
-        assert!(!w.should_load(&2));
-        assert!(!w.should_load(&1));
-        assert!(!w.should_load(&1));
-    }
 }

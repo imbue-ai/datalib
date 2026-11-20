@@ -46,7 +46,6 @@ use datalib_schema::grid_rows::{GridRow, GridRowColumn};
 use datalib_unified_grid_and_search_index::grid_columns::GridColumn;
 use datalib_unified_grid_and_search_index::group::Within;
 use datalib_unified_grid_and_search_index::hits::index_state::{DocReport, IndexStamp};
-use datalib_unified_grid_and_search_index::hits::vectors::Freshness;
 use datalib_unified_grid_and_search_index::hits::{display_snippet, GridIndex, IndexSummary};
 use datalib_unified_grid_and_search_index::query::{parse_query, ParsedQuery, Semantic};
 use datalib_unified_grid_and_search_index::repo::{DocRow, DynIndexRepo, EdgeRowOut};
@@ -839,22 +838,16 @@ async fn without_vectors(
     if let Some((_, counted)) = coverage.last.as_ref().filter(|(k, _)| *k == key) {
         return Ok(Some(counted.clone()));
     }
-    let moving = index_moving(&stamp, std::time::SystemTime::now());
     let with_vectors = match coverage
         .with_vectors
         .as_ref()
-        .filter(|(at, _)| moving || *at == stamp)
+        .filter(|(at, _)| *at == stamp)
     {
         Some((_, read)) => read.clone(),
         None => {
-            let fresh = if moving {
-                Freshness::AsHeld
-            } else {
-                Freshness::Current
-            };
             let Some(read) = s
                 .held_vectors
-                .documents(&s.root, fresh)
+                .documents(&s.root)
                 .await
                 .map_err(embedding_failed)?
             else {
@@ -1259,12 +1252,6 @@ async fn search_index_nearest(
     parsed: &ParsedQuery,
     text: String,
 ) -> Result<Vec<DocumentHit>, SearchFailure> {
-    let (index, cache) = datalib_unified_grid_and_search_index::search_index::stamps(&s.root);
-    let fresh = if index_moving(&[index, cache], std::time::SystemTime::now()) {
-        Freshness::AsHeld
-    } else {
-        Freshness::Current
-    };
     let started = std::time::Instant::now();
     let embedder = s.local_embedder.clone();
     let query = tokio::task::spawn_blocking(move || embedder.embed(&text))
@@ -1278,14 +1265,7 @@ async fn search_index_nearest(
     let scope = search_scope(s).await?;
     let hits = s
         .held_vectors
-        .nearest(
-            &s.root,
-            &query,
-            Some(scope.as_slice()),
-            among,
-            RANK_DEPTH,
-            fresh,
-        )
+        .nearest(&s.root, &query, Some(scope.as_slice()), among, RANK_DEPTH)
         .await
         .map_err(embedding_failed)?
         .ok_or(SearchFailure::NoIndex)?;
@@ -1294,7 +1274,6 @@ async fn search_index_nearest(
         narrow_ms = (narrowed - embedded).as_millis() as u64,
         score_ms = (started.elapsed() - narrowed).as_millis() as u64,
         among = among.map(|a| a.len()),
-        as_held = fresh == Freshness::AsHeld,
         "scored the search index's vectors"
     );
     Ok(hits)
@@ -1363,23 +1342,6 @@ async fn keyed(
 /// How many hits the search ranks for one free-text search: every page of it is
 /// cut from these.
 const RANK_DEPTH: usize = 1_000;
-
-/// How long the search index must sit still before a search reads what
-/// changed in it. A sync's embed step commits every few seconds, and on a
-/// large library reading the documents again at each commit took a search
-/// past its deadline; until then a search answers from what it last read,
-/// and the warm loop reads the rest once the sync is done.
-const INDEX_SETTLE: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// Whether the index changed within [`INDEX_SETTLE`] of `now`. A change
-/// stamped after `now` is a clock that moved back, and counts as recent.
-fn index_moving(stamps: &[IndexStamp], now: std::time::SystemTime) -> bool {
-    stamps.iter().any(|stamp| {
-        stamp
-            .last_change()
-            .is_some_and(|at| now.duration_since(at).map_or(true, |d| d < INDEX_SETTLE))
-    })
-}
 
 /// A ranking's hits as one entry per document, best first, each landed on a
 /// message only when a page shows it, of the documents holding a row the
@@ -2004,46 +1966,6 @@ async fn chat(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A search reads what changed in the search index only once the index has
-    /// sat still for `INDEX_SETTLE`: during a sync it answers from what it
-    /// holds rather than re-reading the index at every embed commit.
-    #[test]
-    fn an_index_written_within_the_settle_time_is_moving() {
-        let tmp = tempfile::tempdir().unwrap();
-        let index = tmp.path().join("index.sqlite");
-        assert!(
-            !index_moving(&[IndexStamp::of(&index)], std::time::SystemTime::now()),
-            "no index is not moving"
-        );
-        std::fs::write(&index, b"").unwrap();
-        let stamp = IndexStamp::of(&index);
-        let at = stamp.last_change().unwrap();
-        let second = std::time::Duration::from_secs(1);
-        assert!(index_moving(std::slice::from_ref(&stamp), at));
-        assert!(index_moving(
-            std::slice::from_ref(&stamp),
-            at + INDEX_SETTLE - second
-        ));
-        assert!(!index_moving(
-            std::slice::from_ref(&stamp),
-            at + INDEX_SETTLE
-        ));
-        assert!(
-            index_moving(std::slice::from_ref(&stamp), at - second),
-            "a clock that moved back"
-        );
-
-        let mut wal = index.clone().into_os_string();
-        wal.push("-wal");
-        std::fs::write(&wal, b"a frame").unwrap();
-        let later = std::fs::File::options().write(true).open(&wal).unwrap();
-        later.set_modified(at + INDEX_SETTLE * 2).unwrap();
-        assert!(
-            index_moving(&[IndexStamp::of(&index)], at + INDEX_SETTLE * 2 + second),
-            "a commit lands in the write-ahead log, not the index file"
-        );
-    }
 
     /// A chat whose last message falls in a date window keeps its own row
     /// as well as that day's messages; meaning must rank it by those
