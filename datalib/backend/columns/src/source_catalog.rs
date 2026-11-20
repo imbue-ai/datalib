@@ -111,7 +111,7 @@ const CATALOG: &[Entry] = &[
     ),
     e("baby_connect", None, "Baby Connect", Some("baby_connect")),
     e("beeper", None, "Beeper", Some("beeper")),
-    e("markdown", None, "Markdown notes", Some("markdown")),
+    e("markdown", None, "Markdown (Local)", Some("markdown")),
     e("pdf", None, "Local PDFs", Some("pdf")),
     e(
         "file_inventory",

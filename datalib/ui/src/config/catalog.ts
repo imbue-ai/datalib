@@ -2449,7 +2449,7 @@ export const CATALOG: CatalogEntry[] = [
   },
   {
     type: "markdown",
-    label: "Markdown notes",
+    label: "Markdown (Local)",
     blurb: "Make a folder of markdown notes searchable, such as an Obsidian vault.",
     keywords: ["markdown", "notes", "obsidian", "vault", "md", "zettelkasten", "files"],
     kind: "local",

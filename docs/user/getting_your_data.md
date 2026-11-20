@@ -1001,7 +1001,7 @@ one row; renaming or moving a PDF preserves its identity. No OCR yet: a
 scanned, image-only PDF is recorded (`needs_ocr = 1` in the source's
 `pdf_documents` table) and produces no text.
 
-## Markdown notes
+## Markdown (Local)
 
 `type = "markdown"` — a folder on disk (`fswalk.path`), such as an
 Obsidian vault. Mirrors every `.md` and `.markdown` file under it, one
