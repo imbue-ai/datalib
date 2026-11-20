@@ -16,9 +16,9 @@ parameter selects the stock engine for a new empty file — see
 stdlib `sqlite3` keeps that choice out of the fixture entirely.
 
 The table definitions are copied verbatim from a real Lightroom Classic
-catalog (`sqlite_master.sql`), trimmed to the tables the mirror tests
-actually exercise. Keeping them verbatim is the point: the shapes that
-make this ingester interesting are Lightroom's, not ours —
+catalog (`sqlite_master.sql`), trimmed to the tables the mirror tests and
+`lightroom_render` read. Keeping them verbatim is the point: the shapes
+that make this ingester interesting are Lightroom's, not ours —
 
   * `id_local INTEGER PRIMARY KEY` (a rowid alias Lightroom may renumber)
     alongside `id_global UNIQUE NOT NULL` (a stable UUID),
@@ -29,6 +29,20 @@ make this ingester interesting are Lightroom's, not ours —
     string elsewhere in the same column,
   * `NOT NULL DEFAULT` clauses in all three flavours (`''`, `0`, and the
     Lightroom epoch sentinel `-63113817600`).
+
+What the render reads, so a sync of this catalog files each photo under
+every search key a photo has (`//tests/fixtures:ingested_lightroom`):
+
+  * a keyword tree under Lightroom's hidden, nameless root keyword, so a
+    keyword answers to the keywords above it too,
+  * people: a face confirmed with a person keyword, a person keyword with
+    no face (Guinan), and a face only suggested, never confirmed, which
+    is no one,
+  * collections: one inside a set, the quick collection, a smart
+    collection (a saved search, so no member rows), and a publish
+    service's collection,
+  * a caption, a creator, a city and country, and GPS on one photo only,
+  * ratings 5, 4 and 3, and one photo unrated (NULL).
 
 Content is TNG-themed, per this repo's fixture convention.
 """
@@ -45,6 +59,8 @@ SCHEMA = [
         id_local INTEGER PRIMARY KEY,
         id_global UNIQUE NOT NULL,
         captureTime,
+        colorLabels NOT NULL DEFAULT '',
+        copyName,
         fileFormat NOT NULL DEFAULT 'unset',
         fileHeight,
         fileWidth,
@@ -62,6 +78,15 @@ SCHEMA = [
         extension NOT NULL DEFAULT '',
         folder INTEGER NOT NULL DEFAULT 0,
         originalFilename NOT NULL DEFAULT ''
+    )
+    """,
+    """
+    CREATE TABLE AgLibraryRootFolder (
+        id_local INTEGER PRIMARY KEY,
+        id_global UNIQUE NOT NULL,
+        absolutePath UNIQUE NOT NULL DEFAULT '',
+        name NOT NULL DEFAULT '',
+        relativePathFromCatalog
     )
     """,
     """
@@ -98,8 +123,10 @@ SCHEMA = [
     CREATE TABLE AgLibraryKeyword (
         id_local INTEGER PRIMARY KEY,
         id_global UNIQUE NOT NULL,
+        keywordType,
         lc_name,
-        name
+        name,
+        parent INTEGER
     )
     """,
     """
@@ -109,6 +136,105 @@ SCHEMA = [
         tag INTEGER NOT NULL DEFAULT 0
     )
     """,
+    """
+    CREATE TABLE AgLibraryFace (
+        id_local INTEGER PRIMARY KEY,
+        br_x,
+        br_y,
+        image INTEGER NOT NULL DEFAULT 0,
+        tl_x NOT NULL DEFAULT '',
+        tl_y NOT NULL DEFAULT ''
+    )
+    """,
+    """
+    CREATE TABLE AgLibraryKeywordFace (
+        id_local INTEGER PRIMARY KEY,
+        face INTEGER NOT NULL DEFAULT 0,
+        tag INTEGER NOT NULL DEFAULT 0,
+        userPick INTEGER,
+        userReject INTEGER
+    )
+    """,
+    """
+    CREATE TABLE AgLibraryCollection (
+        id_local INTEGER PRIMARY KEY,
+        creationId NOT NULL DEFAULT '',
+        name NOT NULL DEFAULT '',
+        parent INTEGER,
+        systemOnly NOT NULL DEFAULT ''
+    )
+    """,
+    """
+    CREATE TABLE AgLibraryCollectionImage (
+        id_local INTEGER PRIMARY KEY,
+        collection INTEGER NOT NULL DEFAULT 0,
+        image INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    """
+    CREATE TABLE AgLibraryPublishedCollection (
+        id_local INTEGER PRIMARY KEY,
+        creationId NOT NULL DEFAULT '',
+        name NOT NULL DEFAULT '',
+        parent INTEGER,
+        systemOnly NOT NULL DEFAULT ''
+    )
+    """,
+    """
+    CREATE TABLE AgLibraryPublishedCollectionImage (
+        id_local INTEGER PRIMARY KEY,
+        collection INTEGER NOT NULL DEFAULT 0,
+        image INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    """
+    CREATE TABLE AgLibraryIPTC (
+        id_local INTEGER PRIMARY KEY,
+        caption,
+        copyright,
+        image INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    """
+    CREATE TABLE AgHarvestedExifMetadata (
+        id_local INTEGER PRIMARY KEY,
+        image INTEGER,
+        aperture,
+        cameraModelRef INTEGER,
+        focalLength,
+        gpsLatitude,
+        gpsLongitude,
+        hasGPS INTEGER,
+        isoSpeedRating,
+        lensRef INTEGER,
+        shutterSpeed
+    )
+    """,
+    """
+    CREATE TABLE AgHarvestedIptcMetadata (
+        id_local INTEGER PRIMARY KEY,
+        image INTEGER,
+        cityRef INTEGER,
+        countryRef INTEGER,
+        creatorRef INTEGER,
+        locationRef INTEGER,
+        stateRef INTEGER
+    )
+    """,
+    # Lightroom interns each camera, lens and place name once, in a table of
+    # its own with this one shape.
+    *[
+        f"CREATE TABLE {table} (id_local INTEGER PRIMARY KEY, searchIndex, value)"
+        for table in (
+            "AgInternedExifCameraModel",
+            "AgInternedExifLens",
+            "AgInternedIptcCity",
+            "AgInternedIptcCountry",
+            "AgInternedIptcCreator",
+            "AgInternedIptcLocation",
+            "AgInternedIptcState",
+        )
+    ],
     # Primary keys that are NOT `INTEGER PRIMARY KEY`, so not rowid
     # aliases. SQLite reports these columns as nullable; dolt stores them
     # NOT NULL. Ten of a real catalog's 133 tables are shaped this way,
@@ -143,6 +269,11 @@ SCHEMA = [
     """,
 ]
 
+# (id_local, id_global, absolutePath, name, relativePathFromCatalog)
+ROOT_FOLDERS = [
+    (1, "ROOT-0001-PICTURES", "/Users/picard/Pictures/", "Pictures", "../Pictures/"),
+]
+
 FOLDERS = [
     (1, "FOLDER-0001-ENTERPRISE", None, "Enterprise/Bridge/", 1),
     (2, "FOLDER-0002-TENFORWARD", 1, "Enterprise/TenForward/", 1),
@@ -164,18 +295,114 @@ IMAGES = [
     (104, "IMAGE-0104-WORF", "2364-03-14T06:00:00-07:00", "RAW", 6000, 4000, None, 14),
 ]
 
+# (id_local, id_global, keywordType, lc_name, name, parent). Lightroom roots
+# every keyword tree at one keyword with no name.
 KEYWORDS = [
-    (201, "KW-0201-CREW", "crew", "Crew"),
-    (202, "KW-0202-BRIDGE", "bridge", "Bridge"),
-    (203, "KW-0203-ANDROID", "android", "Android"),
+    (200, "KW-0200-ROOT", None, None, None, None),
+    (201, "KW-0201-CREW", None, "crew", "Crew", 200),
+    (202, "KW-0202-BRIDGE", None, "bridge", "Bridge", 204),
+    (203, "KW-0203-ANDROID", None, "android", "Android", 206),
+    (204, "KW-0204-PLACES", None, "places", "Places", 200),
+    (206, "KW-0206-SPECIES", None, "species", "Species", 200),
+    (207, "KW-0207-PICARD", "person", "jean-luc picard", "Jean-Luc Picard", 200),
+    (208, "KW-0208-DATA", "person", "data", "Data", 200),
+    (209, "KW-0209-TROI", "person", "deanna troi", "Deanna Troi", 200),
+    (210, "KW-0210-WORF", "person", "worf", "Worf", 200),
+    (211, "KW-0211-GUINAN", "person", "guinan", "Guinan", 200),
 ]
 
+# (id_local, image, tag). A confirmed face's person keyword is applied to
+# its image too, as Lightroom does; Guinan's is applied with no face.
 KEYWORD_IMAGES = [
     (301, 101, 201),
     (302, 101, 202),
     (303, 102, 201),
     (304, 102, 203),
     (305, 103, 201),
+    (306, 101, 207),
+    (307, 102, 208),
+    (308, 103, 209),
+    (309, 104, 210),
+    (310, 103, 211),
+]
+
+# (id_local, image, tl_x, tl_y, br_x, br_y), each corner a fraction of the
+# picture.
+FACES = [
+    (401, 101, 0.40, 0.20, 0.60, 0.50),
+    (402, 102, 0.35, 0.15, 0.55, 0.45),
+    (403, 103, 0.30, 0.25, 0.50, 0.55),
+    (404, 104, 0.45, 0.10, 0.65, 0.40),
+    (405, 104, 0.10, 0.30, 0.25, 0.55),
+]
+
+# (id_local, face, tag, userPick, userReject). The last is Lightroom's
+# suggestion that Worf's shipmate is Data, never confirmed: no one.
+KEYWORD_FACES = [
+    (501, 401, 207, 1, None),
+    (502, 402, 208, 1, None),
+    (503, 403, 209, 1, None),
+    (504, 404, 210, 1, None),
+    (505, 405, 208, None, None),
+]
+
+# (id_local, creationId, name, parent, systemOnly)
+COLLECTIONS = [
+    (601, "com.adobe.ag.library.group", "Away missions", None, 0),
+    (602, "com.adobe.ag.library.collection", "Risa", 601, 0),
+    (603, "com.adobe.ag.library.collection", "quick collection", None, 1),
+    (604, "com.adobe.ag.library.smart_collection", "Five stars", None, 0),
+    (605, "com.adobe.ag.library.collection", "Crew portraits", None, 0),
+]
+
+# (id_local, collection, image). The smart collection has none.
+COLLECTION_IMAGES = [
+    (651, 602, 103),
+    (652, 603, 101),
+    (653, 605, 101),
+    (654, 605, 102),
+    (655, 605, 104),
+]
+
+PUBLISHED_COLLECTIONS = [
+    (701, "com.adobe.ag.export.file", "Hard Drive", None, 0),
+    (702, "com.adobe.ag.export.file", "Ship's newsletter", 701, 0),
+]
+
+PUBLISHED_COLLECTION_IMAGES = [
+    (751, 702, 101),
+]
+
+# (id_local, caption, copyright, image)
+IPTC = [
+    (801, "The captain in his ready room, tea in hand.", "Starfleet", 101),
+    (803, "Counselor Troi on shore leave.", None, 103),
+]
+
+# Each interned table's (id_local, value).
+INTERNED = {
+    "AgInternedExifCameraModel": [(901, "Starfleet Holoimager Mk IV")],
+    "AgInternedExifLens": [(911, "Holoimager 50mm")],
+    "AgInternedIptcCity": [(921, "Suraya Bay")],
+    "AgInternedIptcCountry": [(931, "Risa")],
+    "AgInternedIptcCreator": [(941, "Data")],
+    "AgInternedIptcLocation": [(951, "Temtibi Lagoon")],
+    "AgInternedIptcState": [],
+}
+
+# (id_local, image, aperture, cameraModelRef, focalLength, gpsLatitude,
+#  gpsLongitude, hasGPS, isoSpeedRating, lensRef, shutterSpeed). Only the
+# captain's photo was taken where there was a GPS fix: Starfleet
+# Headquarters, San Francisco.
+EXIF = [
+    (1001, 101, 4.0, 901, 50.0, 37.8080, -122.4750, 1, 400.0, 911, 6.0),
+    (1002, 102, 4.0, 901, 50.0, None, None, 0, 800.0, 911, 5.0),
+]
+
+# (id_local, image, cityRef, countryRef, creatorRef, locationRef, stateRef)
+IPTC_HARVESTED = [
+    (1101, 101, None, None, 941, None, None),
+    (1103, 103, 921, 931, None, 951, None),
 ]
 
 
@@ -216,6 +443,11 @@ def main(out_path: str) -> None:
             con.execute(stmt)
 
         con.executemany(
+            "INSERT INTO AgLibraryRootFolder "
+            "(id_local, id_global, absolutePath, name, relativePathFromCatalog) VALUES (?,?,?,?,?)",
+            ROOT_FOLDERS,
+        )
+        con.executemany(
             "INSERT INTO AgLibraryFolder "
             "(id_local, id_global, parentId, pathFromRoot, rootFolder) VALUES (?,?,?,?,?)",
             FOLDERS,
@@ -233,12 +465,62 @@ def main(out_path: str) -> None:
             IMAGES,
         )
         con.executemany(
-            "INSERT INTO AgLibraryKeyword (id_local, id_global, lc_name, name) VALUES (?,?,?,?)",
+            "INSERT INTO AgLibraryKeyword "
+            "(id_local, id_global, keywordType, lc_name, name, parent) VALUES (?,?,?,?,?,?)",
             KEYWORDS,
         )
         con.executemany(
             "INSERT INTO AgLibraryKeywordImage (id_local, image, tag) VALUES (?,?,?)",
             KEYWORD_IMAGES,
+        )
+        con.executemany(
+            "INSERT INTO AgLibraryFace (id_local, image, tl_x, tl_y, br_x, br_y) "
+            "VALUES (?,?,?,?,?,?)",
+            FACES,
+        )
+        con.executemany(
+            "INSERT INTO AgLibraryKeywordFace (id_local, face, tag, userPick, userReject) "
+            "VALUES (?,?,?,?,?)",
+            KEYWORD_FACES,
+        )
+        for table, rows in (
+            ("AgLibraryCollection", COLLECTIONS),
+            ("AgLibraryPublishedCollection", PUBLISHED_COLLECTIONS),
+        ):
+            con.executemany(
+                f"INSERT INTO {table} (id_local, creationId, name, parent, systemOnly) "
+                "VALUES (?,?,?,?,?)",
+                rows,
+            )
+        for table, rows in (
+            ("AgLibraryCollectionImage", COLLECTION_IMAGES),
+            ("AgLibraryPublishedCollectionImage", PUBLISHED_COLLECTION_IMAGES),
+        ):
+            con.executemany(
+                f"INSERT INTO {table} (id_local, collection, image) VALUES (?,?,?)",
+                rows,
+            )
+        con.executemany(
+            "INSERT INTO AgLibraryIPTC (id_local, caption, copyright, image) VALUES (?,?,?,?)",
+            IPTC,
+        )
+        for table, rows in INTERNED.items():
+            con.executemany(
+                f"INSERT INTO {table} (id_local, searchIndex, value) VALUES (?,?,?)",
+                [(i, f"/T{value.lower()}/", value) for i, value in rows],
+            )
+        con.executemany(
+            "INSERT INTO AgHarvestedExifMetadata "
+            "(id_local, image, aperture, cameraModelRef, focalLength, gpsLatitude, "
+            " gpsLongitude, hasGPS, isoSpeedRating, lensRef, shutterSpeed) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            EXIF,
+        )
+        con.executemany(
+            "INSERT INTO AgHarvestedIptcMetadata "
+            "(id_local, image, cityRef, countryRef, creatorRef, locationRef, stateRef) "
+            "VALUES (?,?,?,?,?,?,?)",
+            IPTC_HARVESTED,
         )
         for img in IMAGES:
             con.execute(
