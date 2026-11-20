@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datalib_etl::processor::PlanContext;
 use datalib_etl_markdown_config::MarkdownRenderConfig;
-use datalib_etl_render::inputs::Bucket;
+use datalib_etl_render::inputs::RenderUnit;
 use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
 
 use crate::render::{self, note};
@@ -58,18 +58,18 @@ impl SourceRender for MarkdownRender {
             None => (None, None),
         };
         ctx.progress.set_length(Some(loaded.notes.len() as u64));
-        let mut buckets = Vec::with_capacity(loaded.notes.len());
+        let mut units = Vec::with_capacity(loaded.notes.len());
         for n in &loaded.notes {
             ctx.progress.inc(1);
             ctx.emit_doc(note::render_note(ctx.name, n, root))
                 .with_context(|| format!("store the document for {}", n.id))?;
-            buckets.push(Bucket {
+            units.push(RenderUnit {
                 key: n.id.clone(),
                 inputs: render::inputs_of(n, scan_id),
             });
         }
-        let rendered = buckets.len();
-        ctx.finish(&buckets, loaded.head.as_deref())?;
+        let rendered = units.len();
+        ctx.finish(&units, loaded.head.as_deref())?;
         Ok(format!("rendered={rendered} gone={}", loaded.gone.len()))
     }
 }

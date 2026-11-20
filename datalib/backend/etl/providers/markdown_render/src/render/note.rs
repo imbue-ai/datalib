@@ -156,7 +156,7 @@ pub fn render_note(
         markdown_uuid: id.uuid.clone(),
         source_id: source_id.to_string(),
         upstream_cursor: None,
-        bucket_key: Some(note.id.clone()),
+        render_unit_key: Some(note.id.clone()),
         render_version: RENDER_VERSION,
         rows: row.into_iter().collect(),
         sections,
@@ -236,7 +236,7 @@ mod tests {
             row.source_url.as_deref(),
             Some("file:///vault/Bridge/Warp%20core.md")
         );
-        assert_eq!(md.bucket_key.as_deref(), Some("Bridge/Warp core.md"));
+        assert_eq!(md.render_unit_key.as_deref(), Some("Bridge/Warp core.md"));
     }
 
     /// An edit moves the mtime; the note's id must not move with it.

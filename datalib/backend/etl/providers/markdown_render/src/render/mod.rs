@@ -52,7 +52,7 @@ pub async fn load(raw_dir: &Path, range: RawRange<'_>) -> Result<Option<Loaded>>
 
 async fn read(db: &RawDb, range: RawRange<'_>) -> Result<Loaded> {
     let pin = db.pin().expect("open_reader returns a pinned handle");
-    // A bucket is a note's path, which is its row's key: the notes whose
+    // A render unit is a note's path, which is its row's key: the notes whose
     // rows changed, joined with the ones the driver found stale (a new
     // scan root makes every note stale, since every note read its row).
     let changed = changed_rows(db.pool(), range, pin, &[MARKDOWN_FILES]).await?;

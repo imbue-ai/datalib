@@ -34,7 +34,7 @@ keyword search reads. Its date is `modified_at`; there is no
 
 ## Incrementality
 
-A note's bucket is its path, and it reads two rows: its own
+A note's render unit is its path, and it reads two rows: its own
 `markdown_files` row and the `markdown_scan_meta` row. A run renders the
 paths whose rows the diff since the cursor names, and the ones the
 driver found stale (a new scan root makes every note stale). A path it
