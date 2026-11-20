@@ -303,3 +303,31 @@ async fn the_search_index_cuts_the_files_wal_back() {
     );
     index.close().await;
 }
+
+/// What the index holds of each source is read by the source, once per
+/// source on every pass. Asked as `?1 IS NULL OR source_id = ?1`, each
+/// source's read walked every document of every source.
+#[tokio::test]
+async fn a_sources_documents_are_read_by_its_index() {
+    let (_dir, index) = open().await;
+    // Audited: a constant statement of this crate.
+    let explain = format!(
+        "EXPLAIN QUERY PLAN {}",
+        crate::read::held_documents_sql(Some("mail"))
+    );
+    let plan: Vec<String> = sqlx::query_as::<_, (i64, i64, i64, String)>(AssertSqlSafe(explain))
+        .bind("mail")
+        .fetch_all(index.pool())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|(_, _, _, detail)| detail)
+        .collect();
+    assert!(
+        plan.iter().any(|d| d.starts_with(
+            "SEARCH search_documents USING INDEX search_documents_by_source (source_id=?)"
+        )),
+        "{plan:?}"
+    );
+    index.close().await;
+}

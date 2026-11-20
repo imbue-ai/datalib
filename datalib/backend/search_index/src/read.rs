@@ -84,6 +84,19 @@ impl Held {
     }
 }
 
+const DOCUMENTS_OF_SOURCE: &str =
+    "SELECT markdown_uuid, content_hash FROM search_documents WHERE source_id = ?";
+
+/// What [`Reader::coverage_of`] reads: one source's documents, or every
+/// one. Two statements, not `?1 IS NULL OR source_id = ?1`: that one
+/// cannot use the index, and the holdings report asks once per source.
+pub(crate) fn held_documents_sql(source_id: Option<&str>) -> &'static str {
+    match source_id {
+        Some(_) => DOCUMENTS_OF_SOURCE,
+        None => "SELECT markdown_uuid, content_hash FROM search_documents",
+    }
+}
+
 impl Reader {
     /// `None` when no step has written the index yet: no file, or a grid
     /// index's file without the index's tables. A missing cache reads as
@@ -159,13 +172,11 @@ impl Reader {
     /// `markdown_uuid → content_hash` for every document of `source_id`
     /// the keyword index holds: what its `embed` cuts into chunks.
     pub async fn documents_of(&self, source_id: &str) -> Result<BTreeMap<String, String>> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT markdown_uuid, content_hash FROM search_documents WHERE source_id = ?",
-        )
-        .bind(source_id)
-        .fetch_all(&self.index)
-        .await
-        .context("read the indexed documents")?;
+        let rows: Vec<(String, String)> = sqlx::query_as(DOCUMENTS_OF_SOURCE)
+            .bind(source_id)
+            .fetch_all(&self.index)
+            .await
+            .context("read the indexed documents")?;
         Ok(rows.into_iter().collect())
     }
 
@@ -218,14 +229,14 @@ impl Reader {
 
     /// [`Reader::coverage`] of one source's documents, or every one.
     pub async fn coverage_of(&self, model: &str, source_id: Option<&str>) -> Result<(u64, u64)> {
-        let held: Vec<(String, String)> = sqlx::query_as(
-            "SELECT markdown_uuid, content_hash FROM search_documents \
-              WHERE ?1 IS NULL OR source_id = ?1",
-        )
-        .bind(source_id)
-        .fetch_all(&self.index)
-        .await
-        .context("read the documents")?;
+        let mut query = sqlx::query_as(held_documents_sql(source_id));
+        if let Some(source_id) = source_id {
+            query = query.bind(source_id);
+        }
+        let held: Vec<(String, String)> = query
+            .fetch_all(&self.index)
+            .await
+            .context("read the documents")?;
         let documents = held.len() as u64;
         let embedded = match source_id {
             None => self.embedded(model, held, None).await?,

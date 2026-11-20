@@ -86,6 +86,19 @@ pub async fn follow_deletions_in_tx(
     })
 }
 
+/// The statement that lists the ids of `table` whose `columns` equal the
+/// values bound in order. A scope a source prunes once per file or group
+/// needs an index on its columns, or each prune walks the table.
+pub fn scope_ids_sql(table: &str, columns: &[&str]) -> String {
+    let mut select = format!("SELECT id FROM {table}");
+    for (i, col) in columns.iter().enumerate() {
+        select.push_str(if i == 0 { " WHERE " } else { " AND " });
+        select.push_str(col);
+        select.push_str(" = ?");
+    }
+    select
+}
+
 /// The ids of `table` inside `scope` that are not in `keep`.
 async fn unlisted_in_tx(
     tx: &mut Transaction<'_, Sqlite>,
@@ -93,14 +106,8 @@ async fn unlisted_in_tx(
     scope: &[(&str, &str)],
     keep: &HashSet<String>,
 ) -> Result<Vec<String>> {
-    let mut where_sql = String::new();
-    for (i, (col, _)) in scope.iter().enumerate() {
-        where_sql.push_str(if i == 0 { " WHERE " } else { " AND " });
-        where_sql.push_str(col);
-        where_sql.push_str(" = ?");
-    }
-
-    let select = format!("SELECT id FROM {table}{where_sql}");
+    let columns: Vec<&str> = scope.iter().map(|(col, _)| *col).collect();
+    let select = scope_ids_sql(table, &columns);
     // Audited: `table` and every `col` are `&'static str` at each callsite;
     // the scope values are bound below.
     let mut q = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(select));
