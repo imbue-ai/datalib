@@ -170,8 +170,10 @@ pub(crate) async fn forget_problems_in_tx(
     placeholders: &str,
     ids: &[String],
 ) -> Result<()> {
-    let sql =
-        format!("DELETE FROM problems WHERE scope_kind = ? AND scope_key IN ({placeholders})");
+    let sql = format!(
+        "DELETE FROM problems INDEXED BY problems_by_scope \
+         WHERE scope_kind = ? AND scope_key IN ({placeholders})"
+    );
     // Audited: the IN-list is a `?,?,?` run sized from `ids`; every key is
     // bound.
     let mut q =
@@ -220,7 +222,8 @@ pub async fn delete_owned_in_tx(
              (SELECT id FROM {table} WHERE {owner_column} IN ({placeholders}))"
         );
         let problems = format!(
-            "DELETE FROM problems WHERE scope_kind = '{entity}' AND scope_key IN \
+            "DELETE FROM problems INDEXED BY problems_by_scope \
+             WHERE scope_kind = '{entity}' AND scope_key IN \
              (SELECT '{table}:' || id FROM {table} WHERE {owner_column} IN ({placeholders}))",
             entity = datalib_problems::ScopeKind::Entity.as_str(),
         );

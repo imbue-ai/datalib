@@ -16,21 +16,6 @@ files = ["*/runs/runs.sqlite"]
 why = "The table stays small: retention keeps at most `max_runs` runs (100 by default) and none older than `max_age_days` (datalib_runs::Retention); 76 rows on a large library. #1949 reads it by an index instead."
 
 [[scan]]
-statement = "DELETE FROM log WHERE run_id NOT IN (SELECT run_id FROM runs)"
-files = ["*/runs/runs.sqlite"]
-why = "Not reviewed: on main when this check began."
-
-[[scan]]
-statement = "DELETE FROM metric_samples WHERE run_id NOT IN (SELECT run_id FROM runs)"
-files = ["*/runs/runs.sqlite"]
-why = "Not reviewed: on main when this check began."
-
-[[scan]]
-statement = "DELETE FROM metrics WHERE run_id NOT IN (SELECT run_id FROM runs)"
-files = ["*/runs/runs.sqlite"]
-why = "Not reviewed: on main when this check began."
-
-[[scan]]
 statement = "DELETE FROM pdf_documents WHERE blake3 NOT IN (SELECT blake3 FROM pdf_paths)"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Not reviewed: on main when this check began."
@@ -51,33 +36,18 @@ files = ["*/render_markdown/indexed_markdown.doltlite_db"]
 why = "Once per render pass, clearing one stage's rows. A render store's problems are one row per record its render could not fully do, a few beside the documents the pass reads."
 
 [[scan]]
-statement = "DELETE FROM processes WHERE run_id IS NULL AND started_at_utc < ? AND process_id NOT IN (SELECT process_id FROM log)"
+statement = "DELETE FROM runs WHERE run_id NOT IN (SELECT run_id FROM runs ORDER BY started_at_utc DESC LIMIT ?) RETURNING run_id"
 files = ["*/runs/runs.sqlite"]
-why = "Not reviewed: on main when this check began."
+why = "The table stays small: retention keeps at most `max_runs` runs (100 by default) and none older than `max_age_days`; this is retention itself, once per run. It returns the runs it removes, so the tables filed under them delete through their `run_id` index."
 
 [[scan]]
-statement = "DELETE FROM processes WHERE run_id NOT IN (SELECT run_id FROM runs)"
+statement = "DELETE FROM runs WHERE started_at_utc < ? AND run_id != ? RETURNING run_id"
 files = ["*/runs/runs.sqlite"]
-why = "Not reviewed: on main when this check began."
-
-[[scan]]
-statement = "DELETE FROM runs WHERE run_id NOT IN (SELECT run_id FROM runs ORDER BY started_at_utc DESC LIMIT ?)"
-files = ["*/runs/runs.sqlite"]
-why = "Not reviewed: on main when this check began."
-
-[[scan]]
-statement = "DELETE FROM runs WHERE started_at_utc < ? AND run_id != ?"
-files = ["*/runs/runs.sqlite"]
-why = "Not reviewed: on main when this check began."
+why = "The table stays small: retention keeps at most `max_runs` runs (100 by default) and none older than `max_age_days`; this is retention itself, once per run. It returns the runs it removes, so the tables filed under them delete through their `run_id` index."
 
 [[scan]]
 statement = "DELETE FROM search_sources WHERE source_id NOT IN (SELECT value FROM json_each(?))"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
-why = "Not reviewed: on main when this check began."
-
-[[scan]]
-statement = "DELETE FROM step_runs WHERE run_id NOT IN (SELECT run_id FROM runs)"
-files = ["*/runs/runs.sqlite"]
 why = "Not reviewed: on main when this check began."
 
 [[scan]]
@@ -245,11 +215,6 @@ why = "Reads every row by design: the statement has no WHERE."
 statement = "SELECT DISTINCT renderer_version FROM markdowns WHERE renderer_version IS NOT NULL AND kind <> ? AND markdown_uuid NOT IN ( SELECT scope_key FROM problems WHERE scope_kind = ? AND stage = ? AND reason IN (?…))"
 files = ["*/render_markdown/indexed_markdown.doltlite_db"]
 why = "Twice per render pass: which versions every document carries, so it reads every row of markdowns, which holds no text. The problems it leaves out are read once, as a set."
-
-[[scan]]
-statement = "SELECT DISTINCT scope_key FROM problems WHERE stage = ? AND scope_kind = ? ORDER BY scope_key"
-files = ["*/ingest/entities.doltlite_db"]
-why = "Once per render pass: every record the download could not fetch. The raw store's problems are one row per such record, few beside the records themselves."
 
 [[scan]]
 statement = "SELECT DISTINCT thread_id FROM emails WHERE thread_id IS NOT NULL ORDER BY thread_id LIMIT ?1"
@@ -1008,26 +973,6 @@ files = ["*/disk_stats.sqlite"]
 why = "The disk-usage retention sweep: it reads the old measurements once per sweep, and runs during the sync only when a sweep falls due."
 
 [[scan]]
-statement = "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?"
-files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
-
-[[scan]]
-statement = "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ? AND stage = ?"
-files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
-
-[[scan]]
-statement = "DELETE FROM problems WHERE scope_kind = ? AND stage = ? AND scope_key IN (SELECT value FROM json_each(?))"
-files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
-
-[[scan]]
-statement = "DELETE FROM problems WHERE scope_kind = ? AND stage = ? AND scope_key LIKE 'garmin_daily:%' AND substr(scope_key, instr(scope_key, '#') + 1) NOT BETWEEN ? AND ?"
-files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
-
-[[scan]]
 statement = "DELETE FROM problems WHERE source_id = ?"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
@@ -1036,26 +981,6 @@ why = "Not reviewed, and suspect: a lookup by a value no index answers, so each 
 statement = "SELECT * FROM problems"
 files = ["*/render_time_series/time_series.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
-
-[[scan]]
-statement = "SELECT * FROM problems WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1"
-files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
-
-[[scan]]
-statement = "SELECT * FROM problems WHERE scope_kind = ? AND scope_key = ?"
-files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
-
-[[scan]]
-statement = "SELECT * FROM problems WHERE scope_kind = ? AND scope_key = ? AND stage = ?"
-files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
-
-[[scan]]
-statement = "SELECT * FROM problems WHERE scope_kind = ? AND scope_key IN (?…)"
-files = ["*/ingest/entities.doltlite_db"]
-why = "Not reviewed, and suspect: a lookup by a value no index answers, so each call walks the table."
 
 [[scan]]
 statement = "SELECT * FROM problems WHERE source_id = ''"

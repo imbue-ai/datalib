@@ -315,7 +315,8 @@ async fn delete_ids_in(
         // Audited: `placeholders` is a `?,?,?` run sized from the
         // chunk; every key is bound.
         let mut q = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "DELETE FROM problems WHERE scope_kind = ? AND scope_key IN ({placeholders})"
+            "DELETE FROM problems INDEXED BY problems_by_scope \
+             WHERE scope_kind = ? AND scope_key IN ({placeholders})"
         )))
         .bind(datalib_problems::ScopeKind::Entity.as_str());
         for id in chunk {
