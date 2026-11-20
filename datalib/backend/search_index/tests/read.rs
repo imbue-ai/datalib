@@ -282,6 +282,43 @@ async fn a_reload_reads_only_the_documents_that_changed() {
     f.reader.close().await;
 }
 
+/// A conversation that grows by a message is drawn again, and only its new
+/// chunk's vector is read: the first chunk's is the one held before, though
+/// the cache now says otherwise.
+#[tokio::test]
+async fn a_grown_conversation_reads_only_its_new_chunk() {
+    let model = datalib_search_index::model_key();
+    let mut chat = doc("chat", "chat", &[]);
+    chat.sections = vec![message("m1", "warp core")];
+    let mut grown = chat.clone();
+    grown.content_hash = "a later rendering".into();
+    grown.sections.push(message("m2", "coolant leak"));
+    let first = chat.prompted(&four_bytes_a_token).unwrap()[0].hash.clone();
+    let both = grown.prompted(&four_bytes_a_token).unwrap();
+    assert_eq!(both.len(), 2, "a message starts a chunk of its own");
+    assert_eq!(both[0].hash, first, "the first chunk did not move");
+    let f = fixture(
+        std::slice::from_ref(&chat),
+        &[(first.clone(), vec![3.0, 4.0])],
+    )
+    .await;
+    let before = f.reader.held(&model).await.unwrap();
+    f.sync(
+        &[grown],
+        &[
+            (first, vec![4.0, 3.0]),
+            (both[1].hash.clone(), vec![0.0, 2.0]),
+        ],
+    )
+    .await;
+    let after = f.reader.held_after(&model, Some(&before)).await.unwrap();
+    let d = &after.docs["chat"];
+    assert_eq!(d.chunks.len(), 2);
+    assert_eq!(d.vector(0), [0.6, 0.8], "kept from the earlier version");
+    assert_eq!(d.vector(1), [0.0, 1.0], "read: it is new");
+    f.reader.close().await;
+}
+
 /// What a reload holds is what reading everything again holds: a document
 /// gone, one drawn again into a new chunk, one added, one not embedded
 /// yet, and one whose chunk was waiting for a vector that has now come.
