@@ -88,10 +88,16 @@ async fn a_store_in_the_old_journal_mode_turns_to_wal_and_keeps_its_lines() {
     drop(after);
 
     assert_eq!(journal_bytes(&path), [2, 2], "the store is in WAL mode");
-    let msgs: Vec<String> = datalib_runs::process_log_after(td.path(), 0, 100)
+    let query = datalib_runs::LogQuery {
+        q: "",
+        cursor: datalib_runs::LogCursor::After(0),
+        limit: 100,
+    };
+    let msgs: Vec<String> = datalib_runs::log_query(td.path(), &query)
         .await
+        .unwrap()
         .into_iter()
-        .map(|l| l.msg)
+        .map(|l| l.msg.clone())
         .collect();
     for msg in ["from the old build", "from this build"] {
         assert!(

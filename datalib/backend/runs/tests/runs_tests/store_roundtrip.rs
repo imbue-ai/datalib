@@ -3,9 +3,9 @@
 //! hold.
 
 use datalib_runs::{
-    log_after, log_query, log_values, process_log_after, processes, runs, snapshot, versions,
-    LogCursor, LogQuery, LogRow, MetricRow, Process, ProcessLogWriter, ProcessRow, Retention,
-    RunKind, RunStart, RunWriter, StepRunRow, StorePart,
+    log_after, log_query, log_values, processes, runs, snapshot, versions, LogCursor, LogQuery,
+    LogRow, MetricRow, Process, ProcessLogWriter, ProcessRow, Retention, RunKind, RunStart,
+    RunWriter, StepRunRow, StorePart,
 };
 
 const T0: &str = "2026-08-31T10:00:00+01:00";
@@ -897,8 +897,17 @@ async fn a_flushed_line_is_readable_at_once() {
             ..Default::default()
         });
         server.flush().await;
-        let all = process_log_after(td.path(), 0, 100).await;
-        assert_eq!(all.last().map(|l| l.msg.as_str()), Some(msg), "{all:#?}");
+        let all = log_query(
+            td.path(),
+            &LogQuery {
+                q: "",
+                cursor: LogCursor::After(0),
+                limit: 100,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(all.last().map(|l| l.msg.as_str()), Some(msg));
     }
     let w = start(td.path(), "run-1");
     w.metric(metric("a", "rows", 3));
