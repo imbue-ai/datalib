@@ -226,25 +226,18 @@ pub fn fts5_phrase(text: &str) -> String {
 /// The rows whose text holds `term`'s words in order, or with `-`, does
 /// not: a row a message is when its message holds them, a document's own
 /// row (whose uuid is its document's) when any piece of it does. A row
-/// the search index does not hold holds no words. Quoted, the words are
-/// matched as written; bare (`+word`, `-word`), any form of them.
+/// the search index does not hold holds no words.
 fn text_clause<C>(pk: &str, term: &FilterTerm<C>) -> (String, Vec<String>) {
     let not = if term.negate { "NOT " } else { "" };
-    let fts = if term.quoted {
-        "search_fts"
-    } else {
-        "search_stems"
-    };
     let phrase = fts5_phrase(&term.value);
     (
-        // Audited: `fts` is one of two literals.
         format!(
-            "{pk} {not}IN (SELECT s.uuid FROM {fts} f \
+            "{pk} {not}IN (SELECT s.uuid FROM search_fts f \
              JOIN search_sections s ON s.section_id = f.rowid \
-             WHERE {fts} MATCH ? AND s.uuid IS NOT NULL \
-             UNION SELECT d.markdown_uuid FROM {fts} f \
+             WHERE search_fts MATCH ? AND s.uuid IS NOT NULL \
+             UNION SELECT d.markdown_uuid FROM search_fts f \
              JOIN search_sections s ON s.section_id = f.rowid \
-             JOIN search_documents d ON d.doc_id = s.doc_id WHERE {fts} MATCH ?)"
+             JOIN search_documents d ON d.doc_id = s.doc_id WHERE search_fts MATCH ?)"
         ),
         vec![phrase.clone(), phrase],
     )
