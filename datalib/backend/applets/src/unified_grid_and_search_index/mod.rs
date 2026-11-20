@@ -2599,12 +2599,11 @@ mod tests {
         assert_eq!(uuids(&kept), [email], "{:?}", kept.query_echo);
     }
 
-    /// A bare word, `+` and `-` ones too, matches any form of it; a quoted
-    /// one only as written. Each of these failed with one tokenizer for
-    /// both: without stems the bare forms found nothing, with them the
-    /// quote matched "drills".
+    /// A word matches as written, `+` and `-` ones too, case and accents
+    /// folded; another form of it is meaning's to find. With porter stems
+    /// `drill` found "drills" and `late -drill` dropped the log.
     #[tokio::test]
-    async fn a_bare_word_matches_its_other_forms_and_a_quoted_one_only_itself() {
+    async fn a_word_matches_as_written() {
         let tmp = tempfile::tempdir().unwrap();
         let log = "00000000-0000-4000-8000-00000000e0e0";
         let docs = [own_document(holodeck_row(
@@ -2622,14 +2621,15 @@ mod tests {
         .await;
         let s = index_over(tmp.path()).await;
         for (q, found) in [
-            ("drill", true),
-            ("run", true),
-            ("+drill", true),
-            ("late -drill", false),
-            ("late", true),
+            ("drills", true),
+            ("DRILLS", true),
+            ("drill", false),
+            ("run", false),
+            ("+drills", true),
+            ("late -drills", false),
+            ("late -drill", true),
             ("\"drills were\"", true),
             ("\"drill\"", false),
-            ("\"run\"", false),
         ] {
             let r = search(&s, &format!("{q} semantic:off"), None, 10, None).await;
             let want: &[&str] = if found { &[log] } else { &[] };

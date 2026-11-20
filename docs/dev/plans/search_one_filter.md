@@ -1,6 +1,6 @@
 # Search: one filter, two rankers
 
-**Status: steps 1 and 2 built (2026-11-19); step 3 proposed.** Answers
+**Status: steps 1 and 2 built (2026-11-19); step 3 measured and held off (2026-11-20).** Answers
 [#1887](https://github.com/imbue-ai/datalib/issues/1887). Four tests
 reproduce what step 1 fixes; they are listed under "What goes wrong
 today". [`docs/user/searching.md`](../../user/searching.md) says what
@@ -221,14 +221,23 @@ shape costs a rebuild, not a migration (AGENTS.md).
   measure it with `scripts/search_eval.py` before and after. Only the
   keyword tables are rebuilt; no chunk is embedded again.
 
-  **Measured, then reversed in part.** Without stems, 454 queries on a
-  real library with `semantic:off` went from 54% to 52% found in the
-  top 10, and lost 15 targets. With meaning on, 7 of those came back;
-  most of the other 8 were long descriptions of a passage in one long
-  page. So bare words (`+word` and `-word` too) match on a second
-  table, `search_stems` (`porter unicode61 remove_diacritics 2`), and a
-  quoted phrase on `search_fts`, words as written. The cost is the
-  second table.
+  **Tried both ways.** Without stems, 454 queries on a real library with
+  `semantic:off` went from 54% to 52% found in the top 10; with meaning
+  on, about half the lost targets came back, most of the rest being long
+  descriptions of a passage in one long page. #1906 then put stems back
+  for bare words, in a second table beside the one quoted phrases read,
+  and a day later they went again, for these reasons:
+  - Porter only strips regular English endings. "ran" does not find
+    "run", nor "went" "go", "mice" "mouse" or "children" "child"; nor
+    does any German or Italian form find another ("Häuser" and "Haus",
+    "parlato" and "parlare", "libri" and "libro").
+  - It merges words that differ: "universe" finds "university",
+    "organization" "organ", "news" "new".
+  - Meaning already finds all of these, irregular forms, synonyms and
+    other languages included.
+  - It cost a second keyword table (about 280 MB) and long searches: with
+    stems a search of eight words or more took a median 1.7 to 2.5 s on
+    the words alone, against 0.7 s without.
 - **A uuid stored one way.** #1886 matches a uuid however it is typed by
   asking each key for four spellings (dashed or not, lowercase or
   capitals, `IN (SELECT value FROM json_each(?))`), and the pasted-id
@@ -264,9 +273,9 @@ a real library before deciding.
   Gmail, Slack, SQLite FTS5 and Postgres's `plainto_tsquery` (Lucene's
   default is any). They are not a filter: meaning still finds a document
   holding none of them. Unchanged from today.
-- **A bare word matches its other forms (porter stems), and a quoted
-  phrase is exact**: step 2. First built as no stemming at all, leaving
-  word forms to meaning; that lost recall with meaning off.
+- **Meaning, not stemming, covers word forms**, and a quoted phrase is
+  exact: step 2. Decided again on 2026-11-20, after trying stems back
+  (above).
 - **No prefix matching.** The search runs on Enter.
 
 ## What changes in `searching.md`
