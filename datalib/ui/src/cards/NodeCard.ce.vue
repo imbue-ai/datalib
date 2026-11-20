@@ -375,6 +375,7 @@ onBeforeUnmount(() => {
   overflow-y: auto;
 }
 .nc-row {
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -396,14 +397,16 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--datalib-accent) 10%, var(--datalib-bg));
   border-left-color: var(--datalib-accent);
 }
+/* Short of room, the date moves to a line of its own. */
 .nc-line {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 2px 8px;
   align-items: baseline;
 }
 .nc-title {
   display: flex;
-  flex: 1 1 auto;
+  flex: 1 1 9em;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -419,6 +422,7 @@ onBeforeUnmount(() => {
 .nc-when {
   flex: 0 1 20ch;
   min-width: 12ch;
+  margin-left: auto;
   text-align: right;
 }
 .nc-meta {
