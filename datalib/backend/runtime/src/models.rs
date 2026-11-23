@@ -1,14 +1,5 @@
-//! The embedding model search runs, pinned; and where qmd, which search
-//! used before its own index, kept its index in a data root, so
-//! `unified_grid_and_search_index` can delete what an older build left there.
+//! The embedding model search runs, pinned.
 
-use std::path::{Path, PathBuf};
-
-/// Where qmd kept its index, its config and its link to the models:
-/// `<root>/unified_grid_and_search_index/qmd_aggregator/qmd`.
-pub fn qmd_state_dir(root: &Path) -> PathBuf {
-    crate::layout::qmd_dir(root).join("qmd")
-}
 
 /// One GGUF model, pinned to a HuggingFace repo *revision* and the sha256
 /// of the blob at that revision — the same table

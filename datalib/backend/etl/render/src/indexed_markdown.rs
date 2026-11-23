@@ -447,10 +447,6 @@ impl IndexedMarkdownStore {
             datalib_etl::doltlite_raw::StoreKind::Render,
         ))
         .with_context(|| format!("open indexed markdown store {}", path.display()))?;
-        for ddl in crate::grid_index::RETIRED_TABLES {
-            blocking(sqlx::query(*ddl).execute(&pool))
-                .with_context(|| format!("{}: {ddl}", path.display()))?;
-        }
         Ok(Self {
             write_lock: WriteLock::new(pool.clone()),
             pool,
@@ -485,11 +481,11 @@ impl IndexedMarkdownStore {
         else {
             return Ok(None);
         };
-        if let Err(e) = blocking(datalib_store_meta::read_requiring(
-            reader.pool(),
-            &path,
-            &shape(),
-        )) {
+        let checked = blocking(datalib_store_meta::read(reader.pool())).and_then(|meta| {
+            let step = datalib_store_meta::step_of(&path);
+            datalib_store_meta::require(&path, step.as_deref(), meta.as_ref(), &shape())
+        });
+        if let Err(e) = checked {
             blocking(reader.close());
             return Err(e);
         }
@@ -1935,30 +1931,6 @@ mod tests {
                 )),
             "{plan:?}"
         );
-        st.close();
-    }
-
-    /// A render store an older build wrote loses the table it kept each
-    /// row's supplied terms in, stale rows and all, when it is next opened
-    /// (#1202).
-    #[test]
-    fn the_retired_search_terms_table_is_dropped_on_open() {
-        let td = tempfile::tempdir().unwrap();
-        let st = store(td.path());
-        blocking(sqlx::query("CREATE TABLE supplied_search_terms (uuid TEXT)").execute(&st.pool))
-            .unwrap();
-        st.commit("an older build's table").unwrap();
-        st.close();
-
-        let st = store(td.path());
-        let left: i64 = blocking(
-            sqlx::query_scalar(
-                "SELECT count(*) FROM sqlite_master WHERE name = 'supplied_search_terms'",
-            )
-            .fetch_one(&st.pool),
-        )
-        .unwrap();
-        assert_eq!(left, 0);
         st.close();
     }
 

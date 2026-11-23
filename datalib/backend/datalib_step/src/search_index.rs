@@ -21,7 +21,7 @@ use datalib_runtime::layout;
 use datalib_schema::markdowns::MarkdownRow;
 #[cfg(test)]
 use datalib_search_index::text::{self, Piece, INDEX_TEXT_VERSION};
-use datalib_search_index::{ChunkedDoc, FiledChunk, Index, IndexDoc, InferenceCache, Reader};
+use datalib_search_index::{ChunkedDoc, FiledChunk, Index, IndexDoc, InferenceCache};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::modal::{self, Reply, Route, SignIn};
@@ -122,7 +122,6 @@ pub(crate) async fn update_keywords(
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
-    retire_separate_file(root)?;
     let render_root = datalib_etl::layout::render_markdown_root(root, group);
     // A source in the config whose render has not run yet has no file;
     // it is read as a store with nothing in it, like the grid pass does.
@@ -315,11 +314,7 @@ async fn embed_with<E: EmbedPrompt>(
 ) -> Result<Done> {
     // Read-only: an embed writes only the cache, and a writer of the
     // index's file (a keyword pass, the grid's load) must not hold it up.
-    let Some(reader) = Reader::open(
-        &layout::grid_index_db(root),
-        &layout::inference_cache_db(root),
-    )
-    .await?
+    let Some(reader) = datalib_unified_grid_and_search_index::search_index::open(root).await?
     else {
         return Ok(Done::default());
     };
@@ -801,7 +796,6 @@ async fn embed_batch<E: EmbedPrompt>(
 /// search, then keeps only the vectors a filed chunk names. Answers how
 /// many vectors went. Touches nothing that does not exist yet.
 pub(crate) async fn sweep(root: &Path, searched: &[String]) -> Result<u64> {
-    retire_separate_file(root)?;
     let cache_path = layout::inference_cache_db(root);
     if !cache_path.exists() {
         return Ok(0);
@@ -816,18 +810,6 @@ pub(crate) async fn sweep(root: &Path, searched: &[String]) -> Result<u64> {
     gone
 }
 
-/// Before the keyword passes: the chunks a build before this one filed in
-/// the keyword index move into the cache, before the index's next open
-/// empties them, so nothing is cut again and the sweep keeps the vectors
-/// they name. Answers how many documents came over.
-pub(crate) async fn carry_chunks(root: &Path) -> Result<usize> {
-    datalib_search_index::carry_chunks_from_the_index(
-        &layout::grid_index_db(root),
-        &layout::inference_cache_db(root),
-    )
-    .await
-}
-
 /// The `unified_grid_and_search_index` step's half after its keyword passes: every document of a
 /// source it does not search goes, whether the source left the config or
 /// was put in `not_searched`. Returns how many went.
@@ -836,24 +818,6 @@ pub(crate) async fn keep_searched(root: &Path, searched: &[String]) -> Result<us
     let out = index.keep_sources(searched).await;
     index.close().await;
     out
-}
-
-/// Deletes the file the search index was before its tables moved into the
-/// grid index's: what it held is made again in the grid index's file.
-fn retire_separate_file(root: &Path) -> Result<()> {
-    let old = layout::retired_search_index_db(root);
-    for suffix in ["", "-wal", "-shm"] {
-        let path = PathBuf::from(format!("{}{suffix}", old.display()));
-        match std::fs::remove_file(&path) {
-            Ok(()) => tracing::info!(
-                path = %path.display(),
-                "removed the search index's old file; its tables are in the grid index's now"
-            ),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e).with_context(|| format!("remove {}", path.display())),
-        }
-    }
-    Ok(())
 }
 
 /// Where the pinned embedding model is, once provisioned.
@@ -953,7 +917,15 @@ mod tests {
         update_of(root, GROUP).await
     }
 
+    /// The keyword pass, in the grid index's file as the step opens it
+    /// first.
     async fn update_of(root: &Path, group: &str) -> Done {
+        let grid = datalib_etl_render::grid_index::open_index(&layout::grid_index_db(root))
+            .await
+            .unwrap();
+        datalib_etl_render::grid_index::close_index(grid)
+            .await
+            .unwrap();
         update_keywords(root, group, &Progress::noop(), &StopFlag::new())
             .await
             .unwrap()
@@ -1266,94 +1238,6 @@ mod tests {
         assert!(indexed_of(root, "a-new-source").await.is_empty());
     }
 
-    /// A root a build before this one indexed, its chunks filed in the
-    /// keyword index and their vectors cached: the index step moves the
-    /// chunks beside the vectors before the index is emptied for its new
-    /// shape, so the sweep keeps every vector and the documents are still
-    /// embedded, with nothing cut or embedded again.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn an_older_builds_chunks_and_vectors_survive_the_upgrade() {
-        let td = tempfile::tempdir().unwrap();
-        let root = td.path();
-        one_doc(root, GROUP, "d-tea", "Tea, Earl Grey");
-        update(root).await;
-        let doc = draw_batch(root, GROUP, vec!["d-tea".into()])
-            .await
-            .unwrap()
-            .remove(0);
-        let cut = doc.prompted(&four_bytes_a_token).unwrap();
-        // What an older build left: its chunks in the keyword index's file,
-        // which was in another shape, and their vectors in the cache.
-        let opts = sqlx::sqlite::SqliteConnectOptions::new().filename(layout::grid_index_db(root));
-        let grid = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(opts)
-            .await
-            .unwrap();
-        sqlx::query(
-            "CREATE TABLE search_chunks (doc_id INTEGER NOT NULL, seq INTEGER NOT NULL, \
-             start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, \
-             first_section INTEGER NOT NULL, last_section INTEGER NOT NULL, \
-             hash TEXT NOT NULL, PRIMARY KEY (doc_id, seq)) WITHOUT ROWID",
-        )
-        .execute(&grid)
-        .await
-        .unwrap();
-        for (seq, p) in cut.iter().enumerate() {
-            sqlx::query(
-                "INSERT INTO search_chunks SELECT doc_id, ?, ?, ?, ?, ?, ? \
-                   FROM search_documents WHERE markdown_uuid = 'd-tea'",
-            )
-            .bind(seq as i64)
-            .bind(p.chunk.start as i64)
-            .bind(p.chunk.end as i64)
-            .bind(p.chunk.first_section as i64)
-            .bind(p.chunk.last_section as i64)
-            .bind(&p.hash)
-            .execute(&grid)
-            .await
-            .unwrap();
-        }
-        sqlx::query(
-            "UPDATE _datalib_meta SET value = 'an older shape' \
-              WHERE key = 'search_index_schema_hash'",
-        )
-        .execute(&grid)
-        .await
-        .unwrap();
-        grid.close().await;
-        let cache = InferenceCache::open(&layout::inference_cache_db(root))
-            .await
-            .unwrap();
-        let vectors: Vec<(String, Vec<f32>)> = cut
-            .iter()
-            .map(|p| (p.hash.clone(), vec![0.6, 0.8]))
-            .collect();
-        cache
-            .put(&datalib_search_index::model_key(), &vectors)
-            .await
-            .unwrap();
-        cache.close().await;
-
-        index_step(root, &[GROUP]).await.unwrap();
-        assert_eq!(cached(root).await.len(), cut.len(), "the sweep kept them");
-        assert_eq!(unembedded(root, GROUP).await, 0);
-        let done = embed_with(
-            root,
-            GROUP,
-            never_cut,
-            never_opened,
-            None,
-            &Progress::noop(),
-            &StopFlag::new(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(done, Done::default());
-    }
-
     /// An embed is one source's: it cuts and embeds that source's
     /// documents and no other's, and with nothing owed it opens neither
     /// the tokenizer nor the model.
@@ -1451,27 +1335,6 @@ mod tests {
             }
         );
         assert_eq!(indexed(root).await.keys().collect::<Vec<_>>(), ["d-tea"]);
-    }
-
-    /// A root upgraded from a build that kept the search index in a file
-    /// of its own: the keyword pass deletes that file and writes the index
-    /// into the grid index's.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn the_search_indexs_old_file_goes_and_its_tables_are_in_the_grid_index() {
-        let td = tempfile::tempdir().unwrap();
-        let root = td.path();
-        let old = layout::retired_search_index_db(root);
-        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
-        std::fs::write(&old, b"an older build's index").unwrap();
-        std::fs::write(format!("{}-wal", old.display()), b"its log").unwrap();
-        let tea = rendered_doc("d-tea", thread("Tea"));
-        commit(root, &[tea], &[]);
-
-        update(root).await;
-        assert!(!old.exists());
-        assert!(!std::path::Path::new(&format!("{}-wal", old.display())).exists());
-        assert_eq!(indexed(root).await.len(), 1);
-        assert!(layout::grid_index_db(root).exists());
     }
 
     /// A render store an older build wrote has neither a document's hash

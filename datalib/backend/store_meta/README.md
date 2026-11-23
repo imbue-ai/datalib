@@ -24,9 +24,10 @@ fallbacks, no workarounds: one way to do it" is the rule this serves.
 | `store_kind` | which of Datalib's stores it is (`StoreKind`) |
 
 The last five make a store's **shape** (`Shape`: its tables, its
-indexes and its two ladder positions). A file shared by two owners,
-such as the grid index's file with the search index in it, keeps the
-second owner's tables' hash under a key of its own (`part_key`).
+indexes and its two ladder positions). A file has one shape: the
+keyword index's tables are part of the grid index's, and the inference
+cache's chunk tables are part of the cache's `index_hash`, so a change
+to them drops the chunks, which are cut again, and keeps the vectors.
 
 Indexes are recorded apart from tables so that adding one costs
 creating it rather than rebuilding the store. The prepare pass creates
@@ -36,16 +37,14 @@ indexes, a statement can name the index it relies on (`INDEXED BY`).
 
 ## The check
 
-`require(store, meta, want)` compares the shape a store records with
-the one this build writes, and refuses anything else as an
+`require(store, step, meta, want)` compares the shape a store records
+with the one this build writes, and refuses anything else as an
 `OtherShape`. That covers a store in an older shape, one in a newer
 shape, and one that records no shape at all. The refusal names the
-store, both shapes and the step to run: `<group>/<function>`, the
-folder the store sits in, unless the caller names another
-(`require_run`). `other_shape(e)` finds a refusal anywhere in an error's
-chain, for a caller that reports it rather than failing on it.
-`require_part` is the same check for a part of a file. `read_requiring`
-reads a store's meta and checks it in one call.
+store and the step to run; `step_of(store)` names the `<group>/<function>`
+folder a store sits in, which is its step for most stores.
+`other_shape(e)` finds a refusal anywhere in an error's chain, for a
+caller that reports it rather than failing on it.
 
 Each kind of store has one function that says the shape it is written
 in, and one reader-open that checks it:
@@ -55,7 +54,8 @@ in, and one reader-open that checks it:
 | raw store | a new store made in scratch (`datalib_step::prepare::raw_shape`) | the render step, before any provider reads (`render::require_raw_shape`) |
 | render store | `indexed_markdown::shape` | `IndexedMarkdownStore::open_for_reading` |
 | grid index | `grid_index::shape` | `DoltRepo::pinned`, inside each read; `grid_index::open_for_reading` |
-| search index, inference cache | `search_index::store::shape`, `search_index::cache::shapes` | `search_index::Reader::open` |
+| search index (in the grid index's file) | `grid_index::shape` | `search_index::open` in the grid's crate |
+| inference cache | `search_index::cache::shape` | `search_index::Reader::open` |
 | time-series store, its index | `datalib_etl_time_series::store::shape` | `datalib_etl_time_series::store::open_reader` |
 | occurrences | `occurrences::store::shape` | (read only by its own step) |
 | contacts | `doltlite_raw::curated_shape` | `ContactsReader::open` |

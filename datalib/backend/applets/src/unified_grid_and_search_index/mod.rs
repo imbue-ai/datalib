@@ -1464,11 +1464,7 @@ async fn index_state(
     let every = |report: DocReport| -> std::collections::HashMap<String, DocReport> {
         uuids.iter().map(|u| (u.clone(), report.clone())).collect()
     };
-    let opened = datalib_search_index::Reader::open(
-        &datalib_runtime::layout::grid_index_db(&s.root),
-        &datalib_runtime::layout::inference_cache_db(&s.root),
-    )
-    .await;
+    let opened = datalib_unified_grid_and_search_index::search_index::open(&s.root).await;
     let reader = match opened {
         Ok(Some(reader)) => reader,
         Ok(None) => {

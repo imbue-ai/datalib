@@ -24,7 +24,7 @@ pub mod ladder;
 pub mod shape;
 pub use guard::{inspect_root, refuse_if_newer, NewerBuild};
 pub use ladder::{Ladder, Migration};
-pub use shape::{other_shape, require, require_part, require_run, OtherShape, Shape};
+pub use shape::{other_shape, require, step_of, OtherShape, Shape};
 
 pub const TABLE: &str = "_datalib_meta";
 
@@ -57,16 +57,10 @@ pub enum StoreKind {
     TimeSeriesIndex,
     /// The grid index (`unified_grid_and_search_index/unified_grid_and_search_index`).
     GridIndex,
-    /// Every source's keyword index and embeddings, keyed by document,
-    /// holding no text (`unified_grid_and_search_index/search_index`). Plain SQLite.
-    SearchIndex,
     /// Each chunk's vector under the model that made it and the hash of
-    /// its prompt (`unified_grid_and_search_index/search_index`). Plain SQLite.
+    /// its prompt, and where each embedded document's chunks fall
+    /// (`unified_grid_and_search_index/search_index`). Plain SQLite.
     InferenceCache,
-    /// Where each embedded document's chunks fall and their prompts'
-    /// hashes, which each source's `embed` cuts: a part of the inference
-    /// cache's file.
-    SearchChunks,
     Feedback,
     /// `system/disk_stats.sqlite`: bytes under each tree of the root, and
     /// the free space on its disk, over time. Plain SQLite.
@@ -278,34 +272,6 @@ pub async fn read_in(conn: &mut sqlx::SqliteConnection) -> Result<Option<Meta>> 
     }))
 }
 
-/// What a store this build reads says about itself, once [`require`]
-/// has let it through: the one way a reader opens a store's rows. A store
-/// that records another shape, or none, is refused as [`OtherShape`].
-pub async fn read_requiring(
-    pool: &SqlitePool,
-    store: &std::path::Path,
-    want: &Shape,
-) -> Result<Meta> {
-    let mut conn = pool
-        .acquire()
-        .await
-        .context("acquire to read _datalib_meta")?;
-    read_requiring_in(&mut conn, store, want).await
-}
-
-/// [`read_requiring`] on one connection, inside its transaction.
-pub async fn read_requiring_in(
-    conn: &mut sqlx::SqliteConnection,
-    store: &std::path::Path,
-    want: &Shape,
-) -> Result<Meta> {
-    let meta = read_in(conn)
-        .await
-        .with_context(|| format!("read {}'s _datalib_meta", store.display()))?;
-    require(store, meta.as_ref(), want)?;
-    Ok(meta.expect("require lets no store without a shape through"))
-}
-
 async fn table_exists(conn: &mut sqlx::SqliteConnection) -> Result<bool> {
     let n: i64 =
         sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?")
@@ -314,87 +280,6 @@ async fn table_exists(conn: &mut sqlx::SqliteConnection) -> Result<bool> {
             .await
             .context("probe _datalib_meta")?;
     Ok(n > 0)
-}
-
-/// The shape a store records, read inside a caller's transaction: an owner
-/// that rebuilds a store in another shape checks again under its write
-/// lock, so two openers do not both rebuild it. `None` when nothing is
-/// recorded, and creates the table if it is missing.
-pub async fn schema_hash_in(conn: &mut sqlx::SqliteConnection) -> Result<Option<String>> {
-    sqlx::query(DDL)
-        .execute(&mut *conn)
-        .await
-        .context("create _datalib_meta")?;
-    sqlx::query_scalar("SELECT value FROM _datalib_meta WHERE key = ?")
-        .bind(Key::SchemaHash.as_str())
-        .fetch_optional(conn)
-        .await
-        .context("read _datalib_meta.schema_hash")
-}
-
-/// A store that shares another's file keeps its shape in that file's
-/// `_datalib_meta` under a key of its own, so each owner empties only its
-/// own tables when its shape moves: the search index in the grid index's
-/// file. Read inside the caller's transaction, as [`schema_hash_in`].
-pub async fn part_schema_hash_in(
-    conn: &mut sqlx::SqliteConnection,
-    part: StoreKind,
-) -> Result<Option<String>> {
-    sqlx::query(DDL)
-        .execute(&mut *conn)
-        .await
-        .context("create _datalib_meta")?;
-    sqlx::query_scalar("SELECT value FROM _datalib_meta WHERE key = ?")
-        .bind(part_key(part))
-        .fetch_optional(conn)
-        .await
-        .with_context(|| format!("read _datalib_meta.{}", part_key(part)))
-}
-
-/// Records `part`'s shape, inside the caller's transaction.
-pub async fn write_part_schema_hash(
-    conn: &mut sqlx::SqliteConnection,
-    part: StoreKind,
-    schema_hash: &str,
-) -> Result<()> {
-    let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-    sqlx::query(
-        "INSERT INTO _datalib_meta (key, value, written_at_utc, tz_offset) VALUES (?, ?, ?, ?) \
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, \
-         written_at_utc = excluded.written_at_utc, tz_offset = excluded.tz_offset \
-         WHERE value <> excluded.value",
-    )
-    .bind(part_key(part))
-    .bind(schema_hash)
-    .bind(&now)
-    .bind(&tz_offset)
-    .execute(conn)
-    .await
-    .with_context(|| format!("write _datalib_meta.{}", part_key(part)))?;
-    Ok(())
-}
-
-/// The tables' hash a part of a file records, read without writing:
-/// `None` when the file records none for it.
-pub async fn read_part(pool: &SqlitePool, part: StoreKind) -> Result<Option<String>> {
-    let mut conn = pool
-        .acquire()
-        .await
-        .context("acquire to read _datalib_meta")?;
-    if !table_exists(&mut conn).await? {
-        return Ok(None);
-    }
-    sqlx::query_scalar("SELECT value FROM _datalib_meta WHERE key = ?")
-        .bind(part_key(part))
-        .fetch_optional(&mut *conn)
-        .await
-        .with_context(|| format!("read _datalib_meta.{}", part_key(part)))
-}
-
-/// The `_datalib_meta` key a part's shape is kept under, for a reader
-/// that may not write the table [`part_schema_hash_in`] creates.
-pub fn part_key(part: StoreKind) -> String {
-    format!("{}_{}", part.as_str(), Key::SchemaHash.as_str())
 }
 
 /// key → (value, written_at_utc).
@@ -469,38 +354,6 @@ mod tests {
         assert_ne!(a, reordered);
         assert_ne!(a, widened);
         assert_eq!(a.len(), 64);
-    }
-
-    /// A part sharing a file records its shape under its own key and
-    /// leaves the owner's shape and kind alone.
-    #[tokio::test]
-    async fn a_part_keeps_its_shape_apart_from_the_owners() {
-        let td = tempfile::tempdir().unwrap();
-        let p = pool(&td.path().join("s.db")).await;
-        let owner = schema_hash(["CREATE TABLE grid (x INT)"]);
-        write(&p, StoreKind::GridIndex, &Shape::of_tables(owner.clone()))
-            .await
-            .unwrap();
-        let mut conn = p.acquire().await.unwrap();
-        let part = StoreKind::SearchIndex;
-        assert_eq!(part_schema_hash_in(&mut conn, part).await.unwrap(), None);
-        write_part_schema_hash(&mut conn, part, "one")
-            .await
-            .unwrap();
-        write_part_schema_hash(&mut conn, part, "two")
-            .await
-            .unwrap();
-        assert_eq!(
-            part_schema_hash_in(&mut conn, part)
-                .await
-                .unwrap()
-                .as_deref(),
-            Some("two")
-        );
-        drop(conn);
-        let meta = read(&p).await.unwrap().unwrap();
-        assert_eq!(meta.schema_hash, owner);
-        assert_eq!(meta.store_kind, Some(StoreKind::GridIndex));
     }
 
     /// A store with no table reads as `None`, not as an error: every
@@ -585,41 +438,26 @@ mod tests {
         }
     }
 
-    /// A store that keeps indexes apart records their hash, reads it back
-    /// in its shape, and loses the row when its owner keeps none apart.
+    /// A store that keeps indexes apart records their hash and reads it
+    /// back in its shape, and loses the row when its owner keeps none
+    /// apart.
     #[tokio::test]
     async fn the_index_hash_is_part_of_the_shape_read_back() {
         let td = tempfile::tempdir().unwrap();
-        let path = td.path().join("s.db");
-        let p = pool(&path).await;
+        let p = pool(&td.path().join("s.db")).await;
         let with = Shape {
             tables: "t".into(),
             indexes: Some("i".into()),
             versions: Versions::default(),
         };
         write(&p, StoreKind::Render, &with).await.unwrap();
-        assert_eq!(
-            read_requiring(&p, &path, &with).await.unwrap().shape(),
-            with
-        );
-        let without = Shape::of_tables("t".into());
-        let refused = read_requiring(&p, &path, &without).await.unwrap_err();
-        assert!(other_shape(&refused).is_some(), "{refused:#}");
+        assert_eq!(read(&p).await.unwrap().unwrap().shape(), with);
+        let without = Shape {
+            indexes: None,
+            ..with
+        };
         assert!(write(&p, StoreKind::Render, &without).await.unwrap());
         assert_eq!(read(&p).await.unwrap().unwrap().index_hash, None);
-    }
-
-    /// A store with no `_datalib_meta` is refused by a reader, never read
-    /// as "older".
-    #[tokio::test]
-    async fn a_reader_refuses_a_store_that_records_nothing() {
-        let td = tempfile::tempdir().unwrap();
-        let path = td.path().join("s.db");
-        let p = pool(&path).await;
-        let e = read_requiring(&p, &path, &Shape::of_tables("t".into()))
-            .await
-            .unwrap_err();
-        assert!(other_shape(&e).is_some(), "{e:#}");
     }
 
     /// A kind or a hash written by a newer build reads as `None` /

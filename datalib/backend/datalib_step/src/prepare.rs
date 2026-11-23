@@ -21,111 +21,119 @@ use crate::source::StepEnv;
 
 pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<Vec<OutputClaim>> {
     let tree = data_root.join(&env.step);
-    match env.function {
-        Function::Ingest => prepare_raw_store(env, &tree, emitter).await,
-        // A derived store is a function of another; one in another shape is
-        // rebuilt by running the step, never migrated in place. Only its
-        // indexes moving is made good here, by its owner's open.
+    if env.function == Function::Ingest {
+        return prepare_raw_store(env, &tree, emitter).await;
+    }
+    // A derived store is a function of another; one in another shape is
+    // rebuilt by running the step, never migrated in place. Only its
+    // indexes moving is made good here, by its owner's open.
+    let Some((store, want)) = derived_store(env, data_root, &tree) else {
+        tracing::debug!(step = %env.step, "prepare: nothing of ours to bring up to date");
+        return Ok(Vec::new());
+    };
+    let standing = bring_to_shape(env, emitter, &store, &want).await?;
+    if standing == Standing::IndexesOnly {
+        reopen(env.function, &tree, &store).await?;
+    }
+    let readable = matches!(standing, Standing::Current | Standing::IndexesOnly);
+    if env.function == Function::UnifiedGridAndSearchIndex
+        && readable
+        && drawn_by_another_version(env, data_root).await?
+    {
+        tracing::info!(
+            step = %env.step,
+            "prepare: a source was drawn into the search index by another version; it needs a rerun"
+        );
+        emitter.needs_rerun();
+    }
+    Ok(Vec::new())
+}
+
+/// The store a derived step writes, and the shape this build writes it in.
+fn derived_store(
+    env: &StepEnv,
+    data_root: &Path,
+    tree: &Path,
+) -> Option<(std::path::PathBuf, datalib_store_meta::Shape)> {
+    use datalib_etl::doltlite_raw::StoreKind;
+    use datalib_etl_render::{grid_index, indexed_markdown};
+    use datalib_etl_time_series::store as time_series;
+    let time_series = |kind| (crate::published::time_series_store(env, data_root), time_series::shape(kind));
+    Some(match env.function {
+        Function::RenderMarkdown => (indexed_markdown::path_for(tree), indexed_markdown::shape()),
+        Function::UnifiedGridAndSearchIndex => {
+            (datalib_core::layout::grid_index_db(data_root), grid_index::shape())
+        }
+        Function::RenderTimeSeries => time_series(StoreKind::TimeSeries),
+        Function::TimeSeriesIndex => time_series(StoreKind::TimeSeriesIndex),
+        Function::RenderOccurrences => (
+            datalib_etl::layout::render_occurrences_db(data_root, &env.group),
+            datalib_etl_calendar_render::occurrences::store::shape(),
+        ),
+        Function::Ingest | Function::Embed | Function::EmbeddingMap => return None,
+    })
+}
+
+/// Open `store` as its owner and close it: the open makes whatever of
+/// this build's shape it lacks.
+async fn reopen(function: Function, tree: &Path, store: &Path) -> Result<()> {
+    use datalib_etl::doltlite_raw::StoreKind;
+    match function {
         Function::RenderMarkdown => {
-            let store = datalib_etl_render::indexed_markdown::path_for(&tree);
-            let want = datalib_etl_render::indexed_markdown::shape();
-            if bring_to_shape(env, emitter, &store, &want).await? == Standing::IndexesOnly {
-                let tree = tree.clone();
-                tokio::task::spawn_blocking(move || {
-                    datalib_etl_render::indexed_markdown::IndexedMarkdownStore::open(&tree)
-                        .map(|s| s.close())
-                })
-                .await
-                .context("render store open panicked")??;
-            }
-            Ok(Vec::new())
+            let tree = tree.to_path_buf();
+            tokio::task::spawn_blocking(move || {
+                datalib_etl_render::indexed_markdown::IndexedMarkdownStore::open(&tree)
+                    .map(|s| s.close())
+            })
+            .await
+            .context("render store open panicked")?
         }
         Function::UnifiedGridAndSearchIndex => {
-            let store = datalib_core::layout::grid_index_db(data_root);
-            let retired = datalib_core::layout::index_step_dir(data_root)
-                .join(datalib_core::layout::RETIRED_GRID_DB);
-            if retired.exists() {
-                tracing::info!(
-                    step = %env.step,
-                    "prepare: the grid index is still the doltlite store; it needs a rerun"
-                );
-                emitter.needs_rerun();
-                return Ok(Vec::new());
-            }
-            let want = datalib_etl_render::grid_index::shape();
-            if bring_to_shape(env, emitter, &store, &want).await? == Standing::IndexesOnly {
-                let pool = datalib_etl_render::grid_index::open_index(&store).await?;
-                datalib_etl_render::grid_index::close_index(pool).await?;
-            }
-            if search_index_is_stale(env, data_root).await? {
-                tracing::info!(
-                    step = %env.step,
-                    "prepare: the search index is in another shape or was drawn by another \
-                     version; it needs a rerun"
-                );
-                emitter.needs_rerun();
-            }
-            Ok(Vec::new())
+            let pool = datalib_etl_render::grid_index::open_index(store).await?;
+            datalib_etl_render::grid_index::close_index(pool).await
         }
         Function::RenderTimeSeries | Function::TimeSeriesIndex => {
-            let store = crate::published::time_series_store(env, data_root);
-            let kind = if env.function == Function::TimeSeriesIndex {
-                datalib_etl::doltlite_raw::StoreKind::TimeSeriesIndex
+            let kind = if function == Function::TimeSeriesIndex {
+                StoreKind::TimeSeriesIndex
             } else {
-                datalib_etl::doltlite_raw::StoreKind::TimeSeries
+                StoreKind::TimeSeries
             };
-            let want = datalib_etl_time_series::store::shape(kind);
-            if bring_to_shape(env, emitter, &store, &want).await? == Standing::IndexesOnly {
-                datalib_etl_time_series::store::open(&store, kind)
-                    .await?
-                    .close()
-                    .await;
-            }
-            Ok(Vec::new())
+            datalib_etl_time_series::store::open(store, kind).await?.close().await;
+            Ok(())
         }
         Function::RenderOccurrences => {
-            let store = datalib_etl::layout::render_occurrences_db(data_root, &env.group);
-            let want = datalib_etl_calendar_render::occurrences::store::shape();
-            if bring_to_shape(env, emitter, &store, &want).await? == Standing::IndexesOnly {
-                datalib_etl_calendar_render::occurrences::store::open(&store)
-                    .await?
-                    .close()
-                    .await;
-            }
-            Ok(Vec::new())
+            datalib_etl_calendar_render::occurrences::store::open(store)
+                .await?
+                .close()
+                .await;
+            Ok(())
         }
-        Function::Embed | Function::EmbeddingMap => {
-            tracing::debug!(step = %env.step, "prepare: nothing of ours to bring up to date");
-            Ok(Vec::new())
-        }
+        Function::Ingest | Function::Embed | Function::EmbeddingMap => Ok(()),
     }
 }
 
-/// Whether the search index's keyword tables are in another shape, or a
-/// source the step reads was drawn by another version of the index text:
-/// a build that draws or chunks otherwise asks for the keyword pass,
-/// whose renders did not move.
-async fn search_index_is_stale(env: &StepEnv, data_root: &Path) -> Result<bool> {
+/// Whether a source the step reads was drawn into the search index by
+/// another version of the index text: a build that draws or chunks
+/// otherwise asks for the keyword pass, whose renders did not move.
+async fn drawn_by_another_version(env: &StepEnv, data_root: &Path) -> Result<bool> {
     let index = datalib_core::layout::grid_index_db(data_root);
     let cache = datalib_core::layout::inference_cache_db(data_root);
     let reader = match datalib_search_index::Reader::open(&index, &cache).await {
         Ok(Some(reader)) => reader,
         Ok(None) => return Ok(false),
+        // A cache in another shape: its writer, this step, empties it.
         Err(e) if datalib_store_meta::other_shape(&e).is_some() => return Ok(true),
         Err(e) => return Err(e),
     };
-    let stale = stale_in(&reader, env).await;
-    reader.close().await;
-    stale
-}
-
-async fn stale_in(reader: &datalib_search_index::Reader, env: &StepEnv) -> Result<bool> {
+    let mut drawn = Ok(false);
     for source in crate::index_steps::groups_from_inputs(&env.inputs) {
-        if reader.drawn_by_another_version(&source).await? {
-            return Ok(true);
+        drawn = reader.drawn_by_another_version(&source).await;
+        if !matches!(drawn, Ok(false)) {
+            break;
         }
     }
-    Ok(false)
+    reader.close().await;
+    drawn
 }
 
 /// What `store`'s `_datalib_meta` says, or a refusal when a newer line of
@@ -164,7 +172,12 @@ async fn prepare_raw_store(
             tracing::debug!(step = %env.step, "prepare: this build has opened the raw store");
             return Ok(Vec::new());
         }
-        if in_this_builds_shape(meta, &raw_shape(source_type).await?) {
+        // A store an older release wrote in this shape is still opened
+        // once: a provider's open may also fill in what that release left
+        // out (contacts' photos).
+        if meta.shape() == raw_shape(source_type).await?
+            && meta.datalib_version == datalib_runtime::build_id::DATALIB_VERSION
+        {
             tracing::debug!(step = %env.step, "prepare: the raw store is in this build's shape");
             return Ok(Vec::new());
         }
@@ -221,15 +234,6 @@ pub(crate) async fn raw_shape(source_type: &str) -> Result<datalib_store_meta::S
         .expect("unpoisoned")
         .insert(source_type.to_string(), shape.clone());
     Ok(shape)
-}
-
-/// Whether a store whose meta says `stored` needs nothing from this build:
-/// this build's shape, written by this release. A store an older release
-/// wrote in the same shape is still opened once, since a provider's open
-/// may also fill in what that release left out (contacts' photos).
-fn in_this_builds_shape(stored: &Meta, this_build: &datalib_store_meta::Shape) -> bool {
-    stored.shape() == *this_build
-        && stored.datalib_version == datalib_runtime::build_id::DATALIB_VERSION
 }
 
 /// The source's own migration, then its older problems named.
@@ -1129,8 +1133,8 @@ mod tests {
     /// A new version of the index's drawing or chunking moves nothing the
     /// `unified_grid_and_search_index` step's keyword pass reads, so the prepare verb asks for it:
     /// when a source it reads was drawn by another version, and not before
-    /// there is an index or once it is this build's; and when the index's
-    /// tables are in another shape, which its next writer empties.
+
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_search_index_drawn_by_another_version_asks_for_the_keyword_pass() {
         let root = tempfile::tempdir().unwrap();
@@ -1179,24 +1183,6 @@ mod tests {
         assert!(ask().await, "drawn by an older version");
         put(format!("h{}", datalib_search_index::text::key_suffix())).await;
         assert!(!ask().await, "this build's version");
-        let path = datalib_core::layout::grid_index_db(root.path());
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(&path))
-            .await
-            .unwrap();
-        let moved = sqlx::query("UPDATE _datalib_meta SET value = 'an older shape' WHERE key = ?")
-            .bind(datalib_store_meta::part_key(
-                datalib_store_meta::StoreKind::SearchIndex,
-            ))
-            .execute(&pool)
-            .await
-            .unwrap();
-        pool.close().await;
-        assert_eq!(moved.rows_affected(), 1, "the index records its shape");
-        assert!(ask().await, "tables in an older shape");
     }
 
     /// A source that has never downloaded gets no store from a prepare:

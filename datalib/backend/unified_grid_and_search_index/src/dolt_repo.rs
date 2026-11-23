@@ -533,8 +533,7 @@ impl DoltRepo {
         // Every table and index this build reads is there, or the read is
         // refused here, naming what to run: nothing below reads around a
         // table an older build left out.
-        let want = datalib_etl_render::grid_index::shape();
-        datalib_store_meta::read_requiring_in(&mut tx, &self.db_path, &want)
+        datalib_etl_render::grid_index::require_shape(&mut tx, &self.db_path)
             .await
             .map_err(RepoError::from_anyhow)?;
         Ok(Some(At {

@@ -45,30 +45,22 @@ const BATCH: usize = 10_000;
 /// the vectors in key order reads the file in order.
 pub const PAGE_SIZE: i64 = 16_384;
 
-/// The cache's own tables and index, then the chunks filed beside them.
-fn parts() -> [crate::file::Part<'static>; 2] {
-    [
-        crate::file::Part {
-            ddl: &DDL,
-            indexes: &[KEYS],
-            owns: crate::file::Owns::File(StoreKind::InferenceCache),
-        },
-        crate::file::Part {
-            ddl: &crate::chunked::DDL,
-            indexes: &[],
-            owns: crate::file::Owns::Part(StoreKind::SearchChunks),
-        },
-    ]
+/// The cache's shape. Its tables are the vectors alone: a change to them
+/// empties the cache, and every source's `embed` embeds again. What can be
+/// made again without them, the keys' index and the chunks filed beside
+/// the vectors, is its `indexes`: a change to those drops the chunk tables
+/// alone, and each `embed` cuts its documents again and finds its vectors
+/// by their prompts' hashes.
+pub fn shape() -> datalib_store_meta::Shape {
+    datalib_store_meta::Shape {
+        tables: datalib_store_meta::schema_hash(DDL),
+        indexes: Some(datalib_store_meta::schema_hash(remade())),
+        versions: datalib_store_meta::Versions::default(),
+    }
 }
 
-/// What a reader of the cache requires: the file's shape, and the filed
-/// chunks' part of it.
-pub(crate) fn shapes() -> (datalib_store_meta::Shape, String) {
-    let [file, chunks] = parts();
-    (
-        crate::file::shape_of(&file),
-        crate::file::shape_of(&chunks).tables,
-    )
+fn remade() -> impl Iterator<Item = &'static str> {
+    crate::chunked::DDL.iter().copied().chain([KEYS])
 }
 
 pub struct InferenceCache {
@@ -77,12 +69,21 @@ pub struct InferenceCache {
 
 impl InferenceCache {
     pub async fn open(path: &Path) -> Result<InferenceCache> {
-        let pool = crate::file::open(path, &parts(), std::time::Duration::from_secs(60))
+        let pool = crate::file::open(path, &[], std::time::Duration::from_secs(60))
             .await
             .with_context(|| format!("open the inference cache at {}", path.display()))?;
-        if let Err(e) = to_page_size(&pool).await {
+        let ddl: Vec<&str> = DDL.iter().copied().chain(remade()).collect();
+        let shape = shape();
+        let kept = crate::file::keep_in_shape(
+            &pool,
+            StoreKind::InferenceCache,
+            &shape,
+            &ddl,
+            crate::chunked::TABLES,
+        );
+        if let Err(e) = kept.await {
             pool.close().await;
-            return Err(e).with_context(|| format!("rewrite {} in larger pages", path.display()));
+            return Err(e).with_context(|| format!("set up {}", path.display()));
         }
         Ok(InferenceCache { pool })
     }
@@ -143,64 +144,6 @@ impl InferenceCache {
         }
         Ok(out)
     }
-}
-
-/// Rewrites the cache in [`PAGE_SIZE`] pages, once: a new file and one
-/// an earlier build wrote are both in SQLite's default. The page size
-/// moves only by a `VACUUM` outside WAL mode, and leaving WAL waits for
-/// every reader to close; the opener is the cache's one writer. If a
-/// reader stays, this is left for the next open, and says so.
-async fn to_page_size(pool: &SqlitePool) -> Result<()> {
-    let mut conn = pool.acquire().await?;
-    let have: i64 = sqlx::query_scalar("PRAGMA page_size")
-        .fetch_one(&mut *conn)
-        .await?;
-    if have >= PAGE_SIZE {
-        return Ok(());
-    }
-    let started = std::time::Instant::now();
-    let mode: String = sqlx::query_scalar("PRAGMA journal_mode = DELETE")
-        .fetch_one(&mut *conn)
-        .await?;
-    if !mode.eq_ignore_ascii_case("delete") {
-        tracing::warn!(
-            page_size = have,
-            journal_mode = %mode,
-            "a reader held the inference cache; its pages are rewritten at the next open"
-        );
-        return Ok(());
-    }
-    // `VACUUM` copies the file through a temporary database, which goes
-    // to disk: this connection keeps its temporaries in memory otherwise.
-    let rewrite = async {
-        // Audited: `PAGE_SIZE` is a number.
-        let page_size = format!("PRAGMA page_size = {PAGE_SIZE}");
-        sqlx::query(sqlx::AssertSqlSafe(page_size))
-            .execute(&mut *conn)
-            .await?;
-        for sql in ["PRAGMA temp_store = FILE", "VACUUM"] {
-            sqlx::query(sql).execute(&mut *conn).await?;
-        }
-        anyhow::Ok(())
-    }
-    .await;
-    for sql in ["PRAGMA temp_store = MEMORY", "PRAGMA journal_mode = WAL"] {
-        sqlx::query(sql).execute(&mut *conn).await?;
-    }
-    rewrite?;
-    let now: i64 = sqlx::query_scalar("PRAGMA page_size")
-        .fetch_one(&mut *conn)
-        .await?;
-    if now != PAGE_SIZE {
-        bail!("the inference cache is in {now}-byte pages after rewriting it in {PAGE_SIZE}");
-    }
-    tracing::info!(
-        from = have,
-        to = now,
-        elapsed_ms = started.elapsed().as_millis() as u64,
-        "rewrote the inference cache in larger pages"
-    );
-    Ok(())
 }
 
 fn to_blob(vector: &[f32]) -> Vec<u8> {
@@ -336,51 +279,6 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(indexed.as_deref(), Some("vectors_keys"));
-    }
-
-    async fn pragma(cache: &InferenceCache, name: &str) -> String {
-        // `name` is one of the pragmas below.
-        let sql = sqlx::AssertSqlSafe(format!("SELECT CAST({name} AS TEXT) FROM pragma_{name}"));
-        sqlx::query_scalar(sql)
-            .fetch_one(&cache.pool)
-            .await
-            .unwrap()
-    }
-
-    /// A cache an earlier build wrote in SQLite's default 4 KB pages, where
-    /// every 3 KB vector spilled onto a page of its own, is rewritten in
-    /// 16 KB pages when opened, keeping every vector, and stays in WAL.
-    #[tokio::test]
-    async fn a_cache_in_small_pages_is_rewritten_in_large_ones() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("cache.sqlite");
-        let cache = InferenceCache::open(&path).await.unwrap();
-        assert_eq!(pragma(&cache, "page_size").await, PAGE_SIZE.to_string());
-        let vector: Vec<f32> = (0..768).map(|i| i as f32).collect();
-        cache
-            .put("gemma", &[(h("a"), vector.clone())])
-            .await
-            .unwrap();
-        for sql in [
-            "PRAGMA journal_mode = DELETE",
-            "PRAGMA page_size = 4096",
-            "VACUUM",
-            "PRAGMA journal_mode = WAL",
-        ] {
-            sqlx::query(sql).execute(&cache.pool).await.unwrap();
-        }
-        assert_eq!(
-            pragma(&cache, "page_size").await,
-            "4096",
-            "set up as before"
-        );
-        cache.close().await;
-
-        let cache = InferenceCache::open(&path).await.unwrap();
-        assert_eq!(pragma(&cache, "page_size").await, PAGE_SIZE.to_string());
-        assert_eq!(pragma(&cache, "journal_mode").await, "wal");
-        let got = cache.get("gemma", &[h("a")]).await.unwrap();
-        assert_eq!(got, HashMap::from([(h("a"), vector)]));
     }
 
     /// The vectors' shape is the one every library's cache records: a

@@ -154,13 +154,6 @@ pub async fn run(
 
     datalib_etl_render::grid_index::close_index(pool).await?;
 
-    let carried = crate::search_index::carry_chunks(data_root).await?;
-    if carried > 0 {
-        tracing::info!(
-            documents = carried,
-            "the chunks the keyword index filed moved into the inference cache"
-        );
-    }
     let searched = params.searched(&sources);
     for source in &searched {
         if stop.requested() {
@@ -209,7 +202,6 @@ pub async fn run(
             );
         }
         progress.set_message(&holdings_summary(&held));
-        retire_aggregator_tree(data_root)?;
     }
 
     // The version, whether or not this pass changed anything: a pass that
@@ -250,21 +242,6 @@ fn holdings_summary(held: &[datalib_search_index::Holding]) -> String {
         "{documents} documents in {} searched sources; {left} not embedded",
         held.len()
     )
-}
-
-/// What the retired `qmd_aggregator` step kept under its tree: qmd's index,
-/// its config and its link to the models. Nothing reads any of it; the
-/// models the link names stay where they are.
-fn retire_aggregator_tree(root: &Path) -> Result<()> {
-    let dir = datalib_core::layout::qmd_dir(root);
-    match std::fs::remove_dir_all(&dir) {
-        Ok(()) => {
-            tracing::info!(path = %dir.display(), "removed the retired aggregator's tree");
-            Ok(())
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e).with_context(|| format!("remove {}", dir.display())),
-    }
 }
 
 /// What the step has published: the grid's generation, which the builder
@@ -317,25 +294,6 @@ mod tests {
             holdings_summary(&[h("mail", 12, 0), h("notes", 3, 7)]),
             "15 documents in 2 searched sources; 7 not embedded"
         );
-    }
-
-    /// The retired aggregator's tree goes, qmd's index and its link to the
-    /// shared models with it; the models the link pointed at stay.
-    #[test]
-    fn the_aggregators_tree_goes_and_the_models_it_linked_stay() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        let models = tmp.path().join("models");
-        std::fs::create_dir_all(&models).unwrap();
-        std::fs::write(models.join("m.gguf"), b"weights").unwrap();
-        let qmd = datalib_runtime::models::qmd_state_dir(root);
-        std::fs::create_dir_all(&qmd).unwrap();
-        std::fs::write(qmd.join("index.sqlite"), b"x").unwrap();
-        std::os::unix::fs::symlink(&models, qmd.join("models")).unwrap();
-        retire_aggregator_tree(root).unwrap();
-        assert!(!datalib_core::layout::qmd_dir(root).exists());
-        assert!(models.join("m.gguf").exists());
-        retire_aggregator_tree(root).unwrap();
     }
 
     /// The step marks the whole `unified_grid_and_search_index/` tree as derived cache, and

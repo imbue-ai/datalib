@@ -500,12 +500,6 @@ pub(crate) const SEARCHABLE_DOCUMENTS_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS grid_rows_by_markdown_source ON grid_rows (markdown_uuid, source_id)",
 ];
 
-/// Tables an older build made in every store that holds documents.
-/// `supplied_search_terms` kept each row's supplied terms apart from the
-/// row, owned by document; a row that moved left them behind (#1202).
-/// They are `grid_rows.supplied_terms` now.
-pub(crate) const RETIRED_TABLES: &[&str] = &["DROP TABLE IF EXISTS supplied_search_terms"];
-
 /// The grid index's tables, and the terms' with their indexes.
 fn index_ddl() -> impl Iterator<Item = &'static str> {
     GRID_ROWS_DDL
@@ -522,6 +516,7 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
         .chain(SOURCE_CURSORS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(std::iter::once(datalib_etl::pin::GENERATION_DDL))
         .chain(TERMS_DDL.iter().copied())
+        .chain(datalib_search_index::KEYWORD_DDL)
 }
 
 /// Create whatever of the index is missing: on a new file, all of it;
@@ -691,6 +686,22 @@ fn index_name(ddl: &str) -> Option<&str> {
         .next()
 }
 
+/// The step that writes the grid index, and that a refusal names.
+pub fn step() -> String {
+    format!(
+        "{}/{}",
+        datalib_core::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
+        datalib_core::layout::INDEX_STEP_DIR
+    )
+}
+
+/// Refuses the grid index on `conn` unless it records this build's
+/// [`shape`], inside whatever read the caller holds on `conn`.
+pub async fn require_shape(conn: &mut sqlx::SqliteConnection, db_path: &Path) -> Result<()> {
+    let meta = datalib_store_meta::read_in(conn).await?;
+    datalib_store_meta::require(db_path, Some(&step()), meta.as_ref(), &shape())
+}
+
 /// The grid index read-only, once its first pass has made it and only in
 /// this build's [`shape`]: the one way to open it for reading outside the
 /// search applet's repo, which checks the same shape inside each read.
@@ -707,7 +718,7 @@ pub async fn open_for_reading(db_path: &Path) -> Result<Option<SqlitePool>> {
         if datalib_etl::pin::generation(&pool).await?.is_none() {
             return anyhow::Ok(false);
         }
-        datalib_store_meta::read_requiring(&pool, db_path, &shape()).await?;
+        require_shape(&mut *pool.acquire().await?, db_path).await?;
         anyhow::Ok(true)
     }
     .await;
@@ -728,11 +739,9 @@ pub async fn open_for_reading(db_path: &Path) -> Result<Option<SqlitePool>> {
 /// An index written in another shape loses its tables and is made new:
 /// every row in it is a function of a render store, so a rebuild costs
 /// one local read of them, where altering it in place would leave a new
-/// column empty in the rows the cursors never revisit. The search index's
-/// tables share the file and are its own to keep or empty
-/// (`datalib_search_index`), so they stay.
+/// column empty in the rows the cursors never revisit. The keyword
+/// index's tables are part of this shape, and go with the rest.
 pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
-    retire_old_files(db_path)?;
     if let Some(dir) = db_path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -750,14 +759,14 @@ pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
     }
 }
 
-/// Drops the grid's own tables when they were written in another shape,
-/// under the write lock: the search index's tables share the file, and
-/// stay.
+/// Drops every table when the file was written in another shape, under
+/// the write lock, so two openers do not both drop it.
 async fn empty_if_another_shape(pool: &SqlitePool) -> Result<()> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    let have = datalib_store_meta::schema_hash_in(&mut tx)
+    let have = datalib_store_meta::read_in(&mut tx)
         .await
-        .context("read the grid index's shape")?;
+        .context("read the grid index's shape")?
+        .map(|m| m.schema_hash);
     // A file that records no shape is in none: an index from before
     // `_datalib_meta`, or a new file with nothing to drop.
     if have.as_deref() != Some(shape().tables.as_str()) {
@@ -774,22 +783,16 @@ async fn empty_if_another_shape(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-/// Every table in the file but `_datalib_meta` and the search index's,
-/// virtual tables first so their shadow tables go with them. Includes any
-/// an older shape had that this one does not.
+/// Every table in the file but `_datalib_meta`, virtual tables first so
+/// their shadow tables go with them. Includes any an older shape had that
+/// this one does not.
 async fn drop_own_tables(conn: &mut sqlx::SqliteConnection) -> Result<()> {
-    let theirs = format!(
-        "{}%",
-        datalib_search_index::TABLE_PREFIX.replace('_', "\\_")
-    );
     for virtual_only in [true, false] {
         let names: Vec<String> = sqlx::query_scalar(
             "SELECT name FROM sqlite_master WHERE type = 'table' \
                AND name NOT LIKE 'sqlite_%' AND name <> '_datalib_meta' \
-               AND name NOT LIKE ? ESCAPE '\\' \
                AND (NOT ? OR sql LIKE 'CREATE VIRTUAL TABLE%')",
         )
-        .bind(&theirs)
         .bind(virtual_only)
         .fetch_all(&mut *conn)
         .await
@@ -847,39 +850,6 @@ async fn set_up(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await
     .context("start the grid index's generation")?;
-    Ok(())
-}
-
-/// Delete what an older build kept beside the index: the doltlite store it
-/// used to be, and the search terms file the index now holds. Both are
-/// derived, and the doltlite store was the bulk of an upgraded root's disk.
-fn retire_old_files(db_path: &Path) -> Result<()> {
-    let Some(dir) = db_path.parent() else {
-        return Ok(());
-    };
-    let (store, terms) = (
-        datalib_core::layout::RETIRED_GRID_DB,
-        datalib_core::layout::RETIRED_TERMS_DB,
-    );
-    for name in [
-        store.to_string(),
-        format!("{store}.lock"),
-        format!(".{store}-lock"),
-        terms.to_string(),
-        format!("{terms}-wal"),
-        format!("{terms}-shm"),
-    ] {
-        let path = dir.join(&name);
-        let Ok(meta) = fs::metadata(&path) else {
-            continue;
-        };
-        fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
-        tracing::info!(
-            path = %path.display(),
-            bytes = meta.len(),
-            "removed a file an older build kept beside the grid index"
-        );
-    }
     Ok(())
 }
 
@@ -3002,11 +2972,11 @@ mod shape_tests {
         }
     }
 
-    /// The search index shares the file: a change of the grid's shape
-    /// makes the grid's tables new and leaves the search index's rows,
-    /// which cost a re-index of every source to make again.
+    /// The keyword index's tables are part of the grid index's shape: a
+    /// change of it makes them new with the grid's, and every source's
+    /// keyword pass indexes it again.
     #[tokio::test]
-    async fn a_change_of_the_grids_shape_keeps_the_search_index() {
+    async fn a_change_of_the_grids_shape_takes_the_keyword_index_with_it() {
         let dir = tempdir().unwrap();
         let db = dir.path().join("db.sqlite");
         let pool = holding_one_document(&db).await;
@@ -3023,7 +2993,7 @@ mod shape_tests {
         assert_eq!(documents(&pool).await, 0);
         crate::grid_index::close_index(pool).await.unwrap();
         let search = datalib_search_index::Index::open(&db).await.unwrap();
-        assert_eq!(search.indexed("claude_web").await.unwrap().len(), 1);
+        assert!(search.indexed("claude_web").await.unwrap().is_empty());
         search.close().await;
     }
 

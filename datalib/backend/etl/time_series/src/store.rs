@@ -42,15 +42,6 @@ pub async fn open(db_path: &Path, kind: StoreKind) -> Result<SqlitePool> {
     )
     .await
     .with_context(|| format!("open the time-series store at {}", db_path.display()))?;
-    // The table points were kept in, one row each, before they were
-    // chunks; a rebuild drops only the tables the shape still has.
-    sqlx::query("DROP TABLE IF EXISTS time_series_points")
-        .execute(&pool)
-        .await
-        .context("drop the retired time_series_points")?;
-    doltlite_raw::commit_run(&pool, "schema: time series")
-        .await
-        .context("commit the time-series schema")?;
     Ok(pool)
 }
 
@@ -73,7 +64,11 @@ pub async fn open_reader(
     let Some(reader) = doltlite_raw::open_reader(db_path, commit).await? else {
         return Ok(None);
     };
-    if let Err(e) = datalib_store_meta::read_requiring(reader.pool(), db_path, &shape(kind)).await {
+    let checked = datalib_store_meta::read(reader.pool()).await.and_then(|meta| {
+        let step = datalib_store_meta::step_of(db_path);
+        datalib_store_meta::require(db_path, step.as_deref(), meta.as_ref(), &shape(kind))
+    });
+    if let Err(e) = checked {
         reader.close().await;
         return Err(e);
     }

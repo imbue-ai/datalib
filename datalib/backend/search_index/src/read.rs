@@ -126,66 +126,45 @@ pub(crate) fn held_documents_sql(source_id: Option<&str>) -> &'static str {
     }
 }
 
-/// The step that writes the keyword index: the grid index's.
-fn index_step() -> String {
-    format!(
-        "{}/{}",
-        datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
-        datalib_runtime::layout::INDEX_STEP_DIR
-    )
-}
-
 /// What every source's `embed` writes, so any one brings it up to date.
 const CACHE_STEP: &str = "<source>/embed";
 
-/// The cache, and the chunks filed in it, in this build's shape.
-async fn require_cache(pool: &SqlitePool, path: &Path) -> Result<()> {
-    let (file, chunks) = crate::cache::shapes();
-    let meta = datalib_store_meta::read(pool).await?;
-    datalib_store_meta::require_run(path, Some(CACHE_STEP), meta.as_ref(), &file)?;
-    let filed =
-        datalib_store_meta::read_part(pool, datalib_store_meta::StoreKind::SearchChunks).await?;
-    datalib_store_meta::require_part(path, Some(CACHE_STEP), filed.as_deref(), &chunks)
-}
-
 impl Reader {
-    /// `None` when no step has written the index yet: no file, or a grid
-    /// index's file that records no search index. A missing cache reads as
-    /// one holding no vectors. An index or a cache in another shape than
-    /// this build's is refused, naming the step that brings it there.
+    /// `None` until a keyword pass has started the index: no file, or no
+    /// generation in it. Its tables are part of the grid index's shape,
+    /// which the caller checks (`search_index::open` in the grid's crate).
+    /// A missing cache reads as one holding no vectors; one in another
+    /// shape than this build's is refused, naming what brings it there.
     pub async fn open(index: &Path, cache: &Path) -> Result<Option<Reader>> {
         if !index.exists() {
             return Ok(None);
         }
         let index_pool = connect(index).await?;
-        let written = async {
-            let Some(have) = datalib_store_meta::read_part(
-                &index_pool,
-                datalib_store_meta::StoreKind::SearchIndex,
-            )
-            .await?
-            else {
-                return anyhow::Ok(false);
-            };
-            datalib_store_meta::require_part(
-                index,
-                Some(&index_step()),
-                Some(&have),
-                &crate::store::shape(),
-            )?;
-            anyhow::Ok(true)
-        }
-        .await;
-        match written {
-            Ok(true) => {}
+        let started: Result<Option<i64>, sqlx::Error> =
+            sqlx::query_scalar("SELECT generation FROM search_state WHERE id = 1")
+                .fetch_optional(&index_pool)
+                .await;
+        match started {
+            Ok(Some(_)) => {}
             other => {
                 index_pool.close().await;
-                return other.map(|_| None);
+                return other
+                    .map(|_| None)
+                    .context("read the search index's generation");
             }
         }
         let cache = if cache.exists() {
             let pool = connect(cache).await?;
-            if let Err(e) = require_cache(&pool, cache).await {
+            let meta = datalib_store_meta::read(&pool).await;
+            let checked = meta.and_then(|meta| {
+                datalib_store_meta::require(
+                    cache,
+                    Some(CACHE_STEP),
+                    meta.as_ref(),
+                    &crate::cache::shape(),
+                )
+            });
+            if let Err(e) = checked {
                 pool.close().await;
                 index_pool.close().await;
                 return Err(e);
@@ -1005,13 +984,12 @@ mod tests {
             .unwrap()
     }
 
-    /// A reader opens the keyword index and the cache only in this
-    /// build's shape: before either is written there is nothing to read,
-    /// and one in another shape is refused, naming what to run, where it
-    /// was read around (a missing table read as none, a missing index
-    /// left to the planner).
+    /// A reader opens the cache only in this build's shape: before the
+    /// index is started there is nothing to read, and a cache in another
+    /// shape is refused, naming what to run, where it was read around (a
+    /// missing table read as none, a missing index left to the planner).
     #[tokio::test]
-    async fn a_reader_refuses_an_index_or_a_cache_in_another_shape() {
+    async fn a_reader_refuses_a_cache_in_another_shape() {
         let dir = tempfile::tempdir().unwrap();
         let (index, cache) = (
             dir.path().join("db.sqlite"),
@@ -1048,16 +1026,6 @@ mod tests {
             Reader::open(&index, &cache).await.is_ok(),
             "its writer makes the index"
         );
-
-        set(
-            &index,
-            &datalib_store_meta::part_key(datalib_store_meta::StoreKind::SearchIndex),
-            "older",
-        )
-        .await;
-        let e = Reader::open(&index, &cache).await.err().expect("refused");
-        let refused = datalib_store_meta::other_shape(&e).expect("for its shape");
-        assert_eq!(refused.step, Some(index_step()));
     }
 
     /// A document's place is the direction its chunks share, at unit

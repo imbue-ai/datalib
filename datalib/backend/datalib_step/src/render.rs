@@ -275,7 +275,6 @@ pub fn render_source(
     let declared = declared_render_versions(processors);
     let declared_params = declared_render_params(processors);
     let declared_params_text = declared_params.to_string();
-    crate::old_markdown::clear(&rendered_root);
     let store = IndexedMarkdownStore::open(&rendered_root)
         .map(|s| s.with_now(&now))
         .with_context(|| format!("open render store for {}", name))?;
@@ -1236,7 +1235,8 @@ pub(crate) async fn require_raw_shape(raw_db: &Path, source_type: &str) -> Resul
         return Ok(());
     }
     let want = crate::prepare::raw_shape(source_type).await?;
-    datalib_store_meta::require(raw_db, meta.as_ref(), &want)
+    let step = datalib_store_meta::step_of(raw_db);
+    datalib_store_meta::require(raw_db, step.as_deref(), meta.as_ref(), &want)
 }
 
 /// The entity scopes of the raw store's fetch problems at `commit` (HEAD

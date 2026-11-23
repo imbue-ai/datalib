@@ -30,7 +30,7 @@ impl ContactsReader {
         // The applet that writes it brings it to this build's shape when
         // it opens it; until then it is refused, not read around.
         let want = doltlite_raw::curated_shape(crate::schema::DDL, crate::LADDER);
-        if let Err(e) = datalib_store_meta::require_run(
+        if let Err(e) = datalib_store_meta::require(
             &path,
             None,
             datalib_store_meta::read(reader.pool()).await?.as_ref(),

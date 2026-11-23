@@ -33,7 +33,6 @@ rust_library(
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/search_index:datalib_search_index",
-        "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         "//datalib/backend/uuid_text:datalib_uuid_text",
         "@datalib_crates//:anyhow",
