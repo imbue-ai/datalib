@@ -65,9 +65,14 @@ pub(crate) async fn keep_in_shape(
     remade: &[&str],
 ) -> Result<()> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    let have = datalib_store_meta::read_in(&mut tx).await?.map(|m| m.shape());
+    let have = datalib_store_meta::read_in(&mut tx)
+        .await?
+        .map(|m| m.shape());
     if have.as_ref().map(|h| &h.tables) != Some(&shape.tables) {
-        tracing::info!(store = kind.as_str(), "written in another shape; emptying it");
+        tracing::info!(
+            store = kind.as_str(),
+            "written in another shape; emptying it"
+        );
         drop_tables(&mut tx).await?;
     } else if have.as_ref().map(|h| &h.indexes) != Some(&shape.indexes) {
         for table in remade {

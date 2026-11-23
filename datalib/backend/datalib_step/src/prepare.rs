@@ -58,12 +58,18 @@ fn derived_store(
     use datalib_etl::doltlite_raw::StoreKind;
     use datalib_etl_render::{grid_index, indexed_markdown};
     use datalib_etl_time_series::store as time_series;
-    let time_series = |kind| (crate::published::time_series_store(env, data_root), time_series::shape(kind));
+    let time_series = |kind| {
+        (
+            crate::published::time_series_store(env, data_root),
+            time_series::shape(kind),
+        )
+    };
     Some(match env.function {
         Function::RenderMarkdown => (indexed_markdown::path_for(tree), indexed_markdown::shape()),
-        Function::UnifiedGridAndSearchIndex => {
-            (datalib_core::layout::grid_index_db(data_root), grid_index::shape())
-        }
+        Function::UnifiedGridAndSearchIndex => (
+            datalib_core::layout::grid_index_db(data_root),
+            grid_index::shape(),
+        ),
         Function::RenderTimeSeries => time_series(StoreKind::TimeSeries),
         Function::TimeSeriesIndex => time_series(StoreKind::TimeSeriesIndex),
         Function::RenderOccurrences => (
@@ -98,7 +104,10 @@ async fn reopen(function: Function, tree: &Path, store: &Path) -> Result<()> {
             } else {
                 StoreKind::TimeSeries
             };
-            datalib_etl_time_series::store::open(store, kind).await?.close().await;
+            datalib_etl_time_series::store::open(store, kind)
+                .await?
+                .close()
+                .await;
             Ok(())
         }
         Function::RenderOccurrences => {
@@ -1133,7 +1142,6 @@ mod tests {
     /// A new version of the index's drawing or chunking moves nothing the
     /// `unified_grid_and_search_index` step's keyword pass reads, so the prepare verb asks for it:
     /// when a source it reads was drawn by another version, and not before
-
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_search_index_drawn_by_another_version_asks_for_the_keyword_pass() {

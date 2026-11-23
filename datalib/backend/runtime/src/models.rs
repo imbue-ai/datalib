@@ -1,6 +1,5 @@
 //! The embedding model search runs, pinned.
 
-
 /// One GGUF model, pinned to a HuggingFace repo *revision* and the sha256
 /// of the blob at that revision — the same table
 /// `third-party/embedding_models/BUILD.bazel` fetches the build's copies from

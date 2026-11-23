@@ -88,7 +88,7 @@ impl Index {
     pub async fn open(path: &Path) -> Result<Index> {
         let pool = crate::file::open(path, &DDL, WAIT_FOR_THE_GRID)
             .await
-        .with_context(|| format!("open the search index in {}", path.display()))?;
+            .with_context(|| format!("open the search index in {}", path.display()))?;
         let started = sqlx::query(
             "INSERT INTO search_state (id, generation) VALUES (1, 0) ON CONFLICT (id) DO NOTHING",
         )

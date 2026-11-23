@@ -64,10 +64,12 @@ pub async fn open_reader(
     let Some(reader) = doltlite_raw::open_reader(db_path, commit).await? else {
         return Ok(None);
     };
-    let checked = datalib_store_meta::read(reader.pool()).await.and_then(|meta| {
-        let step = datalib_store_meta::step_of(db_path);
-        datalib_store_meta::require(db_path, step.as_deref(), meta.as_ref(), &shape(kind))
-    });
+    let checked = datalib_store_meta::read(reader.pool())
+        .await
+        .and_then(|meta| {
+            let step = datalib_store_meta::step_of(db_path);
+            datalib_store_meta::require(db_path, step.as_deref(), meta.as_ref(), &shape(kind))
+        });
     if let Err(e) = checked {
         reader.close().await;
         return Err(e);
