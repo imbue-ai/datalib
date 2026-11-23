@@ -80,6 +80,22 @@ const DDL: [&str; 4] = [
     )",
 ];
 
+/// `requests` and `wipes` keep every row they were ever given; the loop
+/// reads only the open ones, and these find them without the rest.
+const INDEXES: [&str; 2] = [
+    "CREATE INDEX IF NOT EXISTS requests_open ON requests (closed_at_utc, opened_at_utc, id)",
+    "CREATE INDEX IF NOT EXISTS wipes_open ON wipes (closed_at_utc, opened_at_utc, id)",
+];
+
+const OPEN_REQUESTS: &str =
+    "SELECT id, roots, opened_by, stop_requested_by, closed_at_utc, outcome, failed_step \
+     FROM requests INDEXED BY requests_open \
+     WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id";
+
+const OPEN_WIPES: &str = "SELECT id, kind, targets, opened_by, closed_at_utc, error \
+     FROM wipes INDEXED BY wipes_open \
+     WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id";
+
 /// Long enough to outlast another process's write transaction, which is
 /// a single row here.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -227,7 +243,12 @@ impl Store {
         };
         store.refuse_if_newer(&path).await?;
         store.rename_retired().await?;
-        let ddl = || DDL.into_iter().chain(super::record::DDL);
+        let ddl = || {
+            DDL.into_iter()
+                .chain(super::record::DDL)
+                .chain(INDEXES)
+                .chain(super::record::INDEXES)
+        };
         for stmt in ddl() {
             sqlx::query(stmt).execute(&store.pool).await?;
         }
@@ -412,12 +433,7 @@ impl Store {
     }
 
     pub async fn open_requests(&self) -> Result<Vec<RequestRow>> {
-        let rows = sqlx::query(
-            "SELECT id, roots, opened_by, stop_requested_by, closed_at_utc, outcome, failed_step \
-             FROM requests WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = sqlx::query(OPEN_REQUESTS).fetch_all(&self.pool).await?;
         rows.iter().map(request_of).collect()
     }
 
@@ -427,12 +443,7 @@ impl Store {
     /// a step turned back on, and the loop ran a stopped sync's step again.
     pub async fn mailbox(&self) -> Result<(Vec<RequestRow>, BTreeMap<String, String>)> {
         let mut tx = self.pool.begin().await?;
-        let rows = sqlx::query(
-            "SELECT id, roots, opened_by, stop_requested_by, closed_at_utc, outcome, failed_step \
-             FROM requests WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id",
-        )
-        .fetch_all(&mut *tx)
-        .await?;
+        let rows = sqlx::query(OPEN_REQUESTS).fetch_all(&mut *tx).await?;
         let turned_off = sqlx::query("SELECT step, turned_off_by FROM turned_off")
             .fetch_all(&mut *tx)
             .await?;
@@ -638,12 +649,7 @@ impl Store {
     }
 
     pub async fn open_wipes(&self) -> Result<Vec<WipeRow>> {
-        let rows = sqlx::query(
-            "SELECT id, kind, targets, opened_by, closed_at_utc, error \
-             FROM wipes WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = sqlx::query(OPEN_WIPES).fetch_all(&self.pool).await?;
         rows.iter().map(wipe_of).collect()
     }
 
@@ -855,6 +861,58 @@ mod tests {
         }
         store.load_record().await.unwrap();
         assert_eq!(store.turned_off().await.unwrap().len(), 1);
+        store.close().await;
+    }
+
+    /// `requests`, `wipes` and `invocations` keep every row they were
+    /// given, and the loop reads only the open ones. A store from before
+    /// their indexes gets them at its next open, and each read seeks the
+    /// open rows: before, each one read the whole table.
+    #[tokio::test]
+    async fn the_open_rows_are_read_by_an_index_an_old_store_gains() {
+        use crate::supervisor::record::{CLOSE_ABANDONED_INVOCATIONS, RUNNING_INVOCATIONS};
+        const NAMES: [&str; 3] = ["requests_open", "wipes_open", "invocations_open"];
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::open(root.path()).await.unwrap();
+        for name in NAMES {
+            // Safe: `name` is one of the three literals above.
+            let drop = sqlx::AssertSqlSafe(format!("DROP INDEX {name}"));
+            sqlx::query(drop).execute(store.pool()).await.unwrap();
+        }
+        store.close().await;
+
+        let store = Store::open(root.path()).await.unwrap();
+        for (sql, seek) in [
+            (OPEN_REQUESTS, "USING INDEX requests_open (closed_at_utc=?)"),
+            (OPEN_WIPES, "USING INDEX wipes_open (closed_at_utc=?)"),
+            (
+                RUNNING_INVOCATIONS,
+                "USING INDEX invocations_open (outcome=?)",
+            ),
+            (
+                CLOSE_ABANDONED_INVOCATIONS,
+                "USING INDEX invocations_open (outcome=?)",
+            ),
+        ] {
+            // Safe: each `sql` is one of this module's constants.
+            let explain = sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}"));
+            let plan: Vec<String> = sqlx::query(explain)
+                .fetch_all(store.pool())
+                .await
+                .unwrap()
+                .iter()
+                .map(|r| r.get("detail"))
+                .collect();
+            assert!(
+                plan.iter()
+                    .any(|d| d.starts_with("SEARCH") && d.ends_with(seek)),
+                "{sql}: {plan:?}"
+            );
+            assert!(
+                !plan.iter().any(|d| d.contains("TEMP B-TREE")),
+                "{sql}: {plan:?}"
+            );
+        }
         store.close().await;
     }
 
