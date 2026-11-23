@@ -768,11 +768,6 @@ files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, roots, opened_by, stop_requested_by, closed_at_utc, outcome, failed_step FROM requests WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id"
-files = ["*/supervisor.sqlite"]
-why = "Suspect: each closed request reads every request ever made: nothing prunes `requests`, and `closed_at_utc` has no index."
-
-[[scan]]
 statement = "SELECT id, team_id, json(payload) AS payload FROM users WHERE payload IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this lookup table whole on every pass to name what it draws: one row per workspace member, few beside the documents."
@@ -950,7 +945,7 @@ why = "The disk-usage retention sweep: it reads the old measurements once per sw
 [[scan]]
 statement = "DELETE FROM problems WHERE source_id = ?"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
-why = "Suspect: the grid index runs this once per source per pass, and its `problems` holds every source's rows with no index on `source_id`."
+why = "The table stays small: the grid index keeps only its own problems here, at most one per source (a render store it could not read). Copies an older build made are cleared by the first pass that reads each source. Once per source per pass."
 
 [[scan]]
 statement = "SELECT * FROM problems"
@@ -1218,11 +1213,6 @@ files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, kind, targets, opened_by, closed_at_utc, error FROM wipes WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id"
-files = ["*/supervisor.sqlite"]
-why = "Suspect: nothing prunes `wipes`, and `closed_at_utc` has no index; wipes are rare, so this grows slowly."
-
-[[scan]]
 statement = "SELECT id, last_edited_time FROM pages WHERE in_trash = 1 AND payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the download reads what it holds of every page in Notion's trash to work out what it owes (`datalib_etl_web::owed`)."
@@ -1320,7 +1310,7 @@ why = "The table stays small: one row per sync scope, a handful per source."
 [[scan]]
 statement = "SELECT severity, COUNT(*) FROM problems WHERE scope_kind = ? AND scope_key = ? GROUP BY severity"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
-why = "Suspect: the grid index's `problems` holds every source's rows and has no `problems_by_scope`; this runs once per source per pass."
+why = "The table stays small: the grid index keeps only its own problems here, at most one per source (a render store it could not read). Copies an older build made are cleared by the first pass that reads each source. Once per source per pass."
 
 [[scan]]
 statement = "SELECT step, turned_off_by FROM turned_off"
@@ -1346,11 +1336,6 @@ why = "Only when a step or source is renamed or turned on; the table holds one r
 statement = "UPDATE OR IGNORE turned_off SET step = ? || substr(step, ?) WHERE substr(step, 1, ?) = ?"
 files = ["*/supervisor.sqlite"]
 why = "Only when a step or source is renamed or turned on; the table holds one row per step."
-
-[[scan]]
-statement = "UPDATE invocations SET finished_at_utc = ?, outcome = ?, error = ? WHERE outcome IS NULL"
-files = ["*/supervisor.sqlite"]
-why = "Suspect: each step's invocation closes by reading every invocation ever recorded: nothing prunes `invocations`, and `outcome` has no index."
 
 [[scan]]
 statement = "UPDATE steps SET reads = replace(reads, ?…) WHERE instr(reads, ?) > 0"
