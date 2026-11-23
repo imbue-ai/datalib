@@ -17,11 +17,13 @@ from pathlib import Path
 CATALOG = re.compile(
     r"^(sqlite_master|sqlite_schema|sqlite_temp_master|pragma_\w+)$", re.IGNORECASE
 )
-TABLE = re.compile(r"\b(?:FROM|JOIN)\s+\"?([A-Za-z_][\w.]*)\"?", re.IGNORECASE)
+TABLE = re.compile(
+    r"""\b(?:FROM|JOIN)\s+((?:["']?\w+["']?\.)?["']?[A-Za-z_]\w*["']?)""", re.IGNORECASE
+)
 
 
 def reads_only_the_catalog(statement: str) -> bool:
-    tables = TABLE.findall(statement)
+    tables = [re.sub(r"[\"']", "", t) for t in TABLE.findall(statement)]
     return bool(tables) and all(CATALOG.match(t.split(".")[-1]) for t in tables)
 
 
