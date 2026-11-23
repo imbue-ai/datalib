@@ -13,7 +13,8 @@ use sqlx::{Row, SqlitePool};
 
 use crate::redact::Redactor;
 use crate::{
-    is_terminal, runs_path, LiveState, Retention, INDEXES, PROCESSES_BY_RUN, SCHEMA_VERSION,
+    is_terminal, runs_path, LiveState, Retention, INDEXES, PROCESSES_BY_RUN, RUNS_BY_START,
+    SCHEMA_VERSION,
 };
 use app_schema::runs::{
     LogRow, MetricRow, MetricSampleRow, Process, ProcessRow, RunRow, RunStart, StepRunRow,
@@ -372,6 +373,7 @@ const UPGRADES: &[(i32, &[&str])] = &[
         ],
     ),
     (12, &[PROCESSES_BY_RUN]),
+    (13, &[RUNS_BY_START]),
 ];
 
 /// `true` when the file carries this build's schema, climbing the
@@ -727,15 +729,27 @@ pub async fn metric_history(data_root: &Path, name: &str, since_utc: &str) -> Ve
 }
 
 async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapshot, sqlx::Error> {
-    let Some(run) = sqlx::query(
-        "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason FROM runs \
-         WHERE ? IS NULL OR run_id = ? ORDER BY started_at_utc DESC LIMIT 1",
-    )
-    .bind(run_id)
-    .bind(run_id)
-    .fetch_optional(pool)
-    .await?
-    else {
+    let run = match run_id {
+        Some(run_id) => {
+            sqlx::query(
+                "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason \
+                 FROM runs WHERE run_id = ?",
+            )
+            .bind(run_id)
+            .fetch_optional(pool)
+            .await?
+        }
+        None => {
+            sqlx::query(
+                "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason \
+                 FROM runs INDEXED BY runs_by_start \
+                 ORDER BY started_at_utc DESC, run_id DESC LIMIT 1",
+            )
+            .fetch_optional(pool)
+            .await?
+        }
+    };
+    let Some(run) = run else {
         return Ok(Snapshot::default());
     };
     let run_id: String = run.get("run_id");
@@ -1655,21 +1669,36 @@ async fn begin_run(
     .await?;
     let cutoff = age_cutoff(retention, &run.started_at_utc);
     let mut gone: Vec<String> = sqlx::query_scalar(
-        "DELETE FROM runs WHERE started_at_utc < ? AND run_id != ? RETURNING run_id",
+        "DELETE FROM runs INDEXED BY runs_by_start \
+         WHERE started_at_utc < ? AND run_id != ? RETURNING run_id",
     )
     .bind(&cutoff)
     .bind(&run.run_id)
     .fetch_all(&mut **tx)
     .await?;
-    gone.extend(
-        sqlx::query_scalar::<_, String>(
-            "DELETE FROM runs WHERE run_id NOT IN \
-             (SELECT run_id FROM runs ORDER BY started_at_utc DESC LIMIT ?) RETURNING run_id",
+    // The run being begun and the newest `max_runs - 1` others stay. It is
+    // counted apart because a pinned clock can stamp it like older runs.
+    let others = i64::from(retention.max_runs.max(1)) - 1;
+    let over_count = if others == 0 {
+        sqlx::query_scalar("DELETE FROM runs WHERE run_id != ? RETURNING run_id")
+            .bind(&run.run_id)
+            .fetch_all(&mut **tx)
+            .await?
+    } else {
+        sqlx::query_scalar(
+            "DELETE FROM runs INDEXED BY runs_by_start \
+             WHERE run_id != ?1 AND (started_at_utc, run_id) < \
+               (SELECT started_at_utc, run_id FROM runs INDEXED BY runs_by_start \
+                WHERE run_id != ?1 \
+                ORDER BY started_at_utc DESC, run_id DESC LIMIT 1 OFFSET ?2) \
+             RETURNING run_id",
         )
-        .bind(retention.max_runs.max(1) as i64)
+        .bind(&run.run_id)
+        .bind(others - 1)
         .fetch_all(&mut **tx)
-        .await?,
-    );
+        .await?
+    };
+    gone.extend(over_count);
     if !gone.is_empty() {
         delete_rows_of_runs(tx, &gone).await?;
     }

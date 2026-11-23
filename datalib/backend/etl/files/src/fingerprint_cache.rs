@@ -265,12 +265,14 @@ impl FingerprintCache {
     pub async fn load_under(&self, root: &Path) -> Result<CachedTree> {
         let root_s = canonical_root(root).display().to_string();
         let prefix = format!("{}/", root_s.trim_end_matches('/'));
+        let end = datalib_etl::key_range::prefix_end(&prefix).context("a path ends in '/'")?;
         let rows = sqlx::query(
             "SELECT abs_path, kind, blake3, mtime_ns, size, ctime_ns, stamp_kind, inode, dev \
-             FROM fingerprints WHERE abs_path = ? OR abs_path GLOB ?",
+             FROM fingerprints WHERE abs_path = ? OR (abs_path >= ? AND abs_path < ?)",
         )
         .bind(&root_s)
-        .bind(format!("{}*", glob_escape(&prefix)))
+        .bind(&prefix)
+        .bind(&end)
         .fetch_all(&self.pool)
         .await
         .context("load fingerprints")?;
@@ -413,25 +415,6 @@ impl FingerprintCache {
             .context("count fingerprints")?;
         Ok(n)
     }
-}
-
-/// Escape a literal for use inside a `GLOB` pattern.
-///
-/// `GLOB` is not `LIKE`: it takes `*`, `?` and `[...]`, and has no
-/// escape character — a bracket class is the only way to quote one.
-fn glob_escape(literal: &str) -> String {
-    let mut out = String::with_capacity(literal.len());
-    for ch in literal.chars() {
-        match ch {
-            '*' | '?' | '[' => {
-                out.push('[');
-                out.push(ch);
-                out.push(']');
-            }
-            _ => out.push(ch),
-        }
-    }
-    out
 }
 
 pub fn canonical_root(root: &Path) -> PathBuf {
@@ -789,7 +772,7 @@ mod tests {
         assert_eq!(cache.forget(&[]).await.unwrap(), 0);
     }
 
-    /// A path containing GLOB metacharacters must not become a pattern.
+    /// A path containing GLOB metacharacters is read as written.
     #[tokio::test]
     async fn glob_metacharacters_in_a_root_are_literal() {
         let tmp = tempfile::tempdir().unwrap();
@@ -845,14 +828,6 @@ mod tests {
         // A deleted root simply finds nothing; it must not panic.
         let p = Path::new("/definitely/not/here/at/all");
         assert_eq!(canonical_root(p), p.to_path_buf());
-    }
-
-    #[test]
-    fn glob_escaping_quotes_every_metacharacter() {
-        assert_eq!(glob_escape("plain/path/"), "plain/path/");
-        assert_eq!(glob_escape("a*b"), "a[*]b");
-        assert_eq!(glob_escape("a?b"), "a[?]b");
-        assert_eq!(glob_escape("a[b"), "a[[]b");
     }
 
     fn env<'a>(pairs: &'a [(&str, &str)]) -> impl Fn(&str) -> Option<OsString> + 'a {

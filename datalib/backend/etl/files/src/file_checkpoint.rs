@@ -328,14 +328,18 @@ pub async fn clear_scope_prefix(pool: &SqlitePool, prefix: &str) -> Result<()> {
 }
 
 async fn forget_problems_under(pool: &SqlitePool, key_prefix: &str) -> Result<()> {
-    // `INSTR(x, ?) = 1` rather than `LIKE`: `_` in a path is a wildcard to
-    // LIKE.
-    sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1")
-        .bind(datalib_problems::ScopeKind::Entity.as_str())
-        .bind(key_prefix)
-        .execute(pool)
-        .await
-        .with_context(|| format!("clear the file problems under {key_prefix}"))?;
+    let end = datalib_etl::key_range::prefix_end(key_prefix)
+        .with_context(|| format!("no key follows the prefix {key_prefix:?}"))?;
+    sqlx::query(
+        "DELETE FROM problems INDEXED BY problems_by_scope \
+         WHERE scope_kind = ? AND scope_key >= ? AND scope_key < ?",
+    )
+    .bind(datalib_problems::ScopeKind::Entity.as_str())
+    .bind(key_prefix)
+    .bind(&end)
+    .execute(pool)
+    .await
+    .with_context(|| format!("clear the file problems under {key_prefix}"))?;
     Ok(())
 }
 
