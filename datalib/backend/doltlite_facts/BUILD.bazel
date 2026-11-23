@@ -20,6 +20,7 @@ rust_test(
         "WAL_FIXTURE_DIR": "datalib/backend/doltlite_facts/wal_fixture",
     },
     deps = [
+        "@datalib_crates//:libc",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",

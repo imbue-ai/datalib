@@ -7,7 +7,8 @@ one writer per file, readers pinned — rest on.
 **The facts are tests** (in a checkout):
 `//datalib/backend/doltlite_facts:doltlite_facts_test` checks every
 single-process fact below, one test each, in a module named for its
-section here; `//datalib/backend/etl:doltlite_two_process_test` checks
+section here, and the one about a reader's open, with the pinned CLI
+as the second process; `//datalib/backend/etl:doltlite_two_process_test` checks
 the ones about a writer and a reader in two processes;
 `//datalib/backend/doltlite_facts:python_package_test` and
 `:python_reader_test` the ones in
@@ -507,11 +508,9 @@ doltlite repo, at the pinned tag.
 - **Doltlite's own lock is a sidecar file, `.<name>-lock`** (for
   `entities.doltlite_db`, `.entities.doltlite_db-lock`), taken through
   SQLite's file-locking layer for the length of each write transaction.
-  The store file itself is never locked, and a connection that has not
-  written holds nothing. The fork-inherited `flock` of doltlite 0.11.x,
-  where a forked child's copy of the lock made the parent's writes fail,
-  is gone: its reproducer saw 0 `SQLITE_BUSY` on 0.50.13 against
-  ~200,000 on 0.11.5.
+  The fork-inherited `flock` of doltlite 0.11.x, where a forked child's
+  copy of the lock made the parent's writes fail, is gone: its
+  reproducer saw 0 `SQLITE_BUSY` on 0.50.13 against ~200,000 on 0.11.5.
 - **One write at a time per file.** A connection that tries to write
   while another holds a write transaction waits in the busy handler
   (sqlx sets a 5 s busy timeout by default) and then fails with
@@ -522,6 +521,20 @@ doltlite repo, at the pinned tag.
   A commit that loses a race for its branch's HEAD
   fails with `cannot commit: database is busy or branch HEAD changed.
   Please retry your transaction.`
+- **A commit waits out every open in progress, read-only ones
+  included.** An open holds SQLite's SHARED lock on the store file until
+  it has loaded the store: it reads the chunk index saved at the last
+  checkpoint and replays everything written since. A commit publishes
+  under EXCLUSIVE on that file, so it waits for every such open to
+  finish and fails with `database is locked` once its busy timeout runs
+  out. A small store opens in milliseconds; a large one does not. A
+  6.8 GB raw store took 7 to 19 s to open, longer than sqlx's 5 s
+  default, and a migration of it failed with `database is locked` while
+  the server re-read the store's problems for each Manage refresh. Once
+  open, a connection takes the lock again only to catch up with a file
+  that has grown since.
+  `locks::a_commit_waits_out_a_read_only_open_and_fails_past_its_timeout`
+  holds it, with a reader in a second process frozen mid-open.
 - **Doltlite does not refuse a second writer**; it only takes turns.
   Refusing one is our job, done by the per-file lock in `doltlite_raw`
   (`etl/README.md` § "One writer per file, by construction").
@@ -551,7 +564,11 @@ doltlite repo, at the pinned tag.
   database` — including `dolt_checkout` and `dolt_connect_branch`, so it
   cannot switch branches in SQL (0.50.12 and later). It opens a branch
   or a commit by path instead.
-- **It never blocks a writer.** `dolt_status` included, since doltlite
+- **Once open, no statement it issues fails a writer.** Its open holds
+  up the writer's commit for as long as the open takes, and so does
+  catching up with a file that has grown
+  ([Locks and writers](#locks-and-writers)). No statement:
+  `dolt_status` included, since doltlite
   0.50.10 (before that, a read-only `dolt_status` failed the writer's
   commit and lost its rows: dolthub/doltlite#2832, our #400).
   `a_reader_asking_dolt_status_never_makes_the_writers_commit_fail`
