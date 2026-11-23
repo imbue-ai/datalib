@@ -197,11 +197,16 @@ impl HeldVectors {
                     None => None,
                     Some(a) => match a.get(&d.markdown_uuid)? {
                         Kept::Whole => None,
-                        Kept::Sections(s) => Some(s),
+                        Kept::Sections { messages, own_text } => Some((messages, *own_text)),
                     },
                 };
                 let best = (0..d.chunks.len())
-                    .filter(|&c| kept.is_none_or(|k| d.covered(c).any(|u| k.contains(u))))
+                    .filter(|&c| {
+                        kept.is_none_or(|(messages, own_text)| {
+                            (own_text && d.covers_own_text(c))
+                                || d.covered(c).any(|u| messages.contains(u))
+                        })
+                    })
                     .map(|c| {
                         (
                             datalib_search_index::half::dot(d.vector(c), query) / norm,

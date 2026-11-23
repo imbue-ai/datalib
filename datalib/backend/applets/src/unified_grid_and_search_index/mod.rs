@@ -1275,26 +1275,29 @@ async fn search_index_nearest(
 /// What the structured terms keep of each document they reach: the
 /// messages they keep, or all of it when they keep only the document's own
 /// row. A long chat whose last message falls in a date window keeps its
-/// row too, and that must not bring back its other days.
+/// row too, and that must not bring back its other days; its own row
+/// keeps only the text that is no message's, such as a page's body.
 fn kept_of(
     rows: Vec<(String, String, bool)>,
 ) -> std::collections::HashMap<String, datalib_unified_grid_and_search_index::hits::vectors::Kept> {
     use datalib_unified_grid_and_search_index::hits::vectors::Kept;
-    let mut sections: std::collections::HashMap<String, std::collections::HashSet<String>> =
+    let mut sections: std::collections::HashMap<String, (std::collections::HashSet<String>, bool)> =
         std::collections::HashMap::new();
     for (uuid, document, is_document) in rows {
-        let kept = sections.entry(document).or_default();
-        if !is_document {
-            kept.insert(uuid);
+        let (messages, own_row) = sections.entry(document).or_default();
+        if is_document {
+            *own_row = true;
+        } else {
+            messages.insert(uuid);
         }
     }
     sections
         .into_iter()
-        .map(|(document, kept)| {
-            let kept = if kept.is_empty() {
+        .map(|(document, (messages, own_text))| {
+            let kept = if messages.is_empty() {
                 Kept::Whole
             } else {
-                Kept::Sections(kept)
+                Kept::Sections { messages, own_text }
             };
             (document, kept)
         })
@@ -1962,7 +1965,9 @@ mod tests {
 
     /// A chat whose last message falls in a date window keeps its own row
     /// as well as that day's messages; meaning must rank it by those
-    /// messages, not by every day of it.
+    /// messages, not by every day of it. Its own row still keeps the text
+    /// that is no message's: a page's body was dropped from every search
+    /// with a filter, because the filter kept some of its comments too.
     #[test]
     fn a_kept_document_row_counts_whole_only_without_kept_messages() {
         use datalib_unified_grid_and_search_index::hits::vectors::Kept;
@@ -1972,11 +1977,22 @@ mod tests {
         let kept = kept_of(vec![
             row("bridge-log", "bridge-log", true),
             row("stardate-2", "bridge-log", false),
+            row("stardate-3", "away-team", false),
             row("ten-forward", "ten-forward", true),
         ]);
         assert_eq!(
             kept["bridge-log"],
-            Kept::Sections(["stardate-2".to_string()].into())
+            Kept::Sections {
+                messages: ["stardate-2".to_string()].into(),
+                own_text: true,
+            }
+        );
+        assert_eq!(
+            kept["away-team"],
+            Kept::Sections {
+                messages: ["stardate-3".to_string()].into(),
+                own_text: false,
+            }
         );
         assert_eq!(kept["ten-forward"], Kept::Whole);
     }

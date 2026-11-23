@@ -723,5 +723,43 @@ fn only_document(document: &str) -> KeptRows<'_> {
     KeptRows {
         whole: vec![document],
         messages: Vec::new(),
+        own_text: Vec::new(),
     }
+}
+
+/// A filter that keeps a page's own row and one of its rows keeps the
+/// page's own text, which is no row's: before, every search with a filter
+/// lost the words of a Drive document's body once it kept one of its
+/// comments.
+#[tokio::test]
+async fn a_kept_page_row_keeps_the_text_that_is_no_rows() {
+    let f = fixture(&[page("page")], &[]).await;
+    let keep = |own_text: Vec<&'static str>| KeptRows {
+        whole: Vec::new(),
+        messages: vec!["bedroom"],
+        own_text,
+    };
+    for (kept, found) in [
+        (keep(vec!["page"]), vec!["page"]),
+        (keep(Vec::new()), vec![]),
+    ] {
+        let heading = f
+            .reader
+            .words(&all_of(&["quality"]), None, Some(&kept), 10)
+            .await
+            .unwrap();
+        assert_eq!(ids(&heading), found, "words, own text {:?}", kept.own_text);
+        let across = f
+            .reader
+            .page_words(&page_terms(&["bedroom", "quality"]), None, Some(&kept), 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            ids(&across),
+            found,
+            "page words, own text {:?}",
+            kept.own_text
+        );
+    }
+    f.reader.close().await;
 }

@@ -67,14 +67,22 @@ impl HeldDoc {
 
     /// The message uuids chunk `chunk` covers.
     pub fn covered(&self, chunk: usize) -> impl Iterator<Item = &str> {
+        self.sections_of(chunk).iter().filter_map(Option::as_deref)
+    }
+
+    /// Whether `chunk` holds text that is no message's, such as a page's
+    /// body.
+    pub fn covers_own_text(&self, chunk: usize) -> bool {
+        self.sections_of(chunk).iter().any(Option::is_none)
+    }
+
+    fn sections_of(&self, chunk: usize) -> &[Option<String>] {
         let c = &self.chunks[chunk];
         let from = usize::try_from(c.first_section).unwrap_or(0);
         let to = usize::try_from(c.last_section + 1).unwrap_or(0);
         self.sections
             .get(from..to.min(self.sections.len()))
             .unwrap_or_default()
-            .iter()
-            .filter_map(Option::as_deref)
     }
 }
 
@@ -733,16 +741,20 @@ pub struct MessageHit {
     pub uuid: Option<String>,
 }
 
-/// What a search's filters keep: the documents they keep whole, and the
-/// messages they keep of the rest, by uuid.
+/// What a search's filters keep: the documents they keep whole, the
+/// messages they keep of the rest, by uuid, and the documents of those
+/// whose text that is no message's (a page's body) they keep, because
+/// they keep the document's own row too.
 pub struct KeptRows<'a> {
     pub whole: Vec<&'a str>,
     pub messages: Vec<&'a str>,
+    pub own_text: Vec<&'a str>,
 }
 
 /// [`KeptRows`] as each words statement binds it: whether there is a
-/// filter, then the messages and the documents it keeps, each a JSON array.
-type Bound = (bool, String, String);
+/// filter, then the messages, the documents kept whole and those whose
+/// own text is kept, each a JSON array.
+type Bound = (bool, String, String, String);
 
 fn bound(kept: Option<&KeptRows<'_>>) -> Result<Bound> {
     Ok(match kept {
@@ -750,15 +762,18 @@ fn bound(kept: Option<&KeptRows<'_>>) -> Result<Bound> {
             true,
             serde_json::to_string(&k.messages)?,
             serde_json::to_string(&k.whole)?,
+            serde_json::to_string(&k.own_text)?,
         ),
-        None => (false, "[]".to_string(), "[]".to_string()),
+        None => (false, "[]".into(), "[]".into(), "[]".into()),
     })
 }
 
 /// The condition on a `hit` row that keeps it, taking a [`Bound`]: no
-/// filter, its message kept, or its document kept whole.
+/// filter, its message kept, its document kept whole, or text that is no
+/// message's in a document whose own text is kept.
 const KEEPS: &str = "(NOT ? OR hit.uuid IN (SELECT value FROM json_each(?)) \
-     OR hit.markdown_uuid IN (SELECT value FROM json_each(?)))";
+     OR hit.markdown_uuid IN (SELECT value FROM json_each(?)) \
+     OR (hit.uuid IS NULL AND hit.markdown_uuid IN (SELECT value FROM json_each(?))))";
 
 impl Reader {
     /// The documents whose best message `kept` keeps holds `query`, an FTS5
@@ -773,7 +788,7 @@ impl Reader {
         kept: Option<&KeptRows<'_>>,
         limit: usize,
     ) -> Result<Vec<MessageHit>> {
-        let (filtered, messages, whole) = bound(kept)?;
+        let (filtered, messages, whole, own_text) = bound(kept)?;
         // Audited: `KEEPS` is a literal.
         let sql = format!(
             "WITH m AS MATERIALIZED ( \
@@ -794,6 +809,7 @@ impl Reader {
             .bind(filtered)
             .bind(messages)
             .bind(whole)
+            .bind(own_text)
             .bind(i64::try_from(limit)?)
             .fetch_all(&self.index)
             .await
@@ -889,7 +905,7 @@ impl Reader {
         &self,
         term: &str,
         sources: Option<&[String]>,
-        (filtered, messages, whole): &Bound,
+        (filtered, messages, whole, own_text): &Bound,
         within: Option<&[i64]>,
     ) -> Result<Vec<(i64, String, i64, Option<String>, f64)>> {
         // Audited: `KEEPS` is a literal.
@@ -915,6 +931,7 @@ impl Reader {
             .bind(filtered)
             .bind(messages)
             .bind(whole)
+            .bind(own_text)
             .fetch_all(&self.index)
             .await
             .with_context(|| format!("match {term:?} in the search index's pages"))
