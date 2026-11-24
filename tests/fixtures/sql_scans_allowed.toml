@@ -18,6 +18,16 @@ files = ["*/runs/runs.sqlite"]
 why = "Reads one row: it walks `runs_by_start` from its newest end and stops at LIMIT 1. SQLite marks any walk that starts at one end of an index as a full scan, which is what this check reads."
 
 [[scan]]
+statement = "DELETE FROM contact_record_handles WHERE NOT EXISTS (SELECT 1 FROM document_contacts d INDEXED BY document_contacts_by_record WHERE d.record_id = contact_record_handles.record_id)"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "Once per pass that changed anything: records no document carries any more, in tables of one row per distinct record, or per handle of one."
+
+[[scan]]
+statement = "DELETE FROM contact_records WHERE NOT EXISTS (SELECT 1 FROM document_contacts d INDEXED BY document_contacts_by_record WHERE d.record_id = contact_records.record_id)"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "Once per pass that changed anything: records no document carries any more, in tables of one row per distinct record, or per handle of one."
+
+[[scan]]
 statement = "DELETE FROM pdf_documents WHERE blake3 NOT IN (SELECT blake3 FROM pdf_paths)"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, after the scan: rows for PDFs no path names any more, in tables of one row per PDF."
@@ -318,9 +328,9 @@ files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT h.handle, c.contact_json FROM source_contact_handles h JOIN source_contacts c ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key"
+statement = "SELECT h.handle, r.contact_json FROM contact_record_handles h JOIN contact_records r ON r.record_id = h.record_id"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
-why = "Reads every row by design: the statement has no WHERE."
+why = "Reads every row by design: the statement has no WHERE. One row per handle of each distinct record, a few thousand in a large library."
 
 [[scan]]
 statement = "SELECT i.chat_id, COUNT(*) FROM chat_items i WHERE NOT EXISTS (SELECT 1 FROM chats c WHERE c.id = i.chat_id) GROUP BY i.chat_id ORDER BY i.chat_id"

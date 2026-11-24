@@ -7,5 +7,6 @@ mod fixture_db_snapshot;
 mod fixture_terms_snapshot;
 mod fixture_tree_snapshot;
 mod fixture_vectors;
+mod people;
 mod search_index;
 mod searchable_documents;
