@@ -534,7 +534,10 @@ doltlite repo, at the pinned tag.
   open, a connection takes the lock again only to catch up with a file
   that has grown since.
   `locks::a_commit_waits_out_a_read_only_open_and_fails_past_its_timeout`
-  holds it, with a reader in a second process frozen mid-open.
+  holds it, with a reader in a second process frozen mid-open. Doltlite
+  has fixed this upstream (dolthub/doltlite#5257, after 0.51.15): a
+  read-only open takes the lock only to note where the log ends, and
+  replays without it. When the pin moves past it, this fact changes.
 - **Doltlite does not refuse a second writer**; it only takes turns.
   Refusing one is our job, done by the per-file lock in `doltlite_raw`
   (`etl/README.md` § "One writer per file, by construction").

@@ -436,7 +436,11 @@ mod locks {
                 let _ = child.wait();
             }
         }
-        panic!("no read-only open was caught holding the read lock in {FREEZE_TRIES} tries");
+        panic!(
+            "no read-only open was caught holding the read lock in {FREEZE_TRIES} tries; \
+             since dolthub/doltlite#5257 an open releases it before it replays, so restate \
+             this fact (docs/dev/doltlite.md § Locks and writers)"
+        );
     }
 }
 
