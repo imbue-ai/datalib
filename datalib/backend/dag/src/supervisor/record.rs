@@ -191,6 +191,19 @@ pub(super) const DDL: [&str; 5] = [
     )",
 ];
 
+/// `invocations` keeps every process the loop ever started; this finds
+/// the few still running without the rest.
+pub(super) const INDEXES: [&str; 1] =
+    ["CREATE INDEX IF NOT EXISTS invocations_open ON invocations (outcome, started_at_utc, id)"];
+
+pub(super) const CLOSE_ABANDONED_INVOCATIONS: &str =
+    "UPDATE invocations INDEXED BY invocations_open \
+     SET finished_at_utc = ?, outcome = ?, error = ? WHERE outcome IS NULL";
+
+pub(super) const RUNNING_INVOCATIONS: &str =
+    "SELECT id, step, run_id, started_at_utc FROM invocations INDEXED BY invocations_open \
+     WHERE outcome IS NULL ORDER BY started_at_utc, id";
+
 /// Columns added to a table after it first shipped: (table, column,
 /// declaration).
 pub(super) const ADDED_COLUMNS: [(&str, &str, &str); 7] = [
@@ -497,16 +510,13 @@ impl Store {
     /// For the process taking the lock. How many it closed.
     pub async fn close_abandoned_invocations(&self, why: &str) -> Result<u64> {
         let (now, _) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-        let closed = sqlx::query(
-            "UPDATE invocations SET finished_at_utc = ?, outcome = ?, error = ? \
-             WHERE outcome IS NULL",
-        )
-        .bind(now)
-        .bind(crate::run_state::RunState::Stopped.as_str())
-        .bind(why)
-        .execute(self.pool())
-        .await?
-        .rows_affected();
+        let closed = sqlx::query(CLOSE_ABANDONED_INVOCATIONS)
+            .bind(now)
+            .bind(crate::run_state::RunState::Stopped.as_str())
+            .bind(why)
+            .execute(self.pool())
+            .await?
+            .rows_affected();
         self.announce("abandoned invocations closed");
         Ok(closed)
     }
@@ -547,22 +557,19 @@ impl Store {
 
     /// The processes the loop started and has not seen end.
     pub async fn running_invocations(&self) -> Result<Vec<InvocationRow>> {
-        sqlx::query(
-            "SELECT id, step, run_id, started_at_utc FROM invocations \
-             WHERE outcome IS NULL ORDER BY started_at_utc, id",
-        )
-        .fetch_all(self.pool())
-        .await?
-        .iter()
-        .map(|r| {
-            Ok(InvocationRow {
-                id: r.try_get("id")?,
-                step: r.try_get("step")?,
-                run_id: r.try_get("run_id")?,
-                started_at_utc: r.try_get("started_at_utc")?,
+        sqlx::query(RUNNING_INVOCATIONS)
+            .fetch_all(self.pool())
+            .await?
+            .iter()
+            .map(|r| {
+                Ok(InvocationRow {
+                    id: r.try_get("id")?,
+                    step: r.try_get("step")?,
+                    run_id: r.try_get("run_id")?,
+                    started_at_utc: r.try_get("started_at_utc")?,
+                })
             })
-        })
-        .collect()
+            .collect()
     }
 }
 
