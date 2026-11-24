@@ -360,7 +360,9 @@ Before any of that, the http server moves each tree a config rewrite
 renamed to its new path, with the record's rows for its steps
 (`http/src/config_upgrade.rs`): the index under an earlier group name,
 the index step's `grid_index/` tree, and a folder an older config
-spelled with capitals.
+spelled with capitals. They run before the server's watcher or loop
+opens the record, so on a new root, where there is nothing to carry,
+they find no record and touch none.
 [`config_model.md`](../../../docs/dev/config_model.md#the-retired-shapes)
 has each rewrite and its move. In the repo,
 `datalib/backend/datalib_step/raw_shapes/` holds the raw shape every

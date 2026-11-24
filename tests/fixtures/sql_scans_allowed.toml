@@ -1321,23 +1321,3 @@ why = "Reads every row by design: the statement has no WHERE."
 statement = "SELECT uri AS ref_id, blake3 FROM media_blobs WHERE blake3 IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the download loads every hash it holds at its start, so asking whether it already has a file's bytes is a lookup in memory, not a statement per file."
-
-[[scan]]
-statement = "UPDATE OR IGNORE sinks SET path = ? || substr(path, ?) WHERE substr(path, 1, ?) = ?"
-files = ["*/supervisor.sqlite"]
-why = "Only when a step or source is renamed or turned on; the table holds one row per step."
-
-[[scan]]
-statement = "UPDATE OR IGNORE steps SET step = ? || substr(step, ?) WHERE substr(step, 1, ?) = ?"
-files = ["*/supervisor.sqlite"]
-why = "Only when a step or source is renamed or turned on; the table holds one row per step."
-
-[[scan]]
-statement = "UPDATE OR IGNORE turned_off SET step = ? || substr(step, ?) WHERE substr(step, 1, ?) = ?"
-files = ["*/supervisor.sqlite"]
-why = "Only when a step or source is renamed or turned on; the table holds one row per step."
-
-[[scan]]
-statement = "UPDATE steps SET reads = replace(reads, ?…) WHERE instr(reads, ?) > 0"
-files = ["*/supervisor.sqlite"]
-why = "Only when a step is renamed; the table holds one row per step."
