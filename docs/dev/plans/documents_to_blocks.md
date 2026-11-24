@@ -499,11 +499,22 @@ for the keys' SQL):
 The source is held with every chunk, so `source:` and `-source:` never
 touch SQL.
 
-**4. Each ranking ranks blocks.** Words score blocks. Meaning scores
-chunks, and a chunk speaks for the kept blocks it covers, which share
-its rank. Each ranking keeps at most a few blocks of any one document
-before it cuts at the depth, so one long chat cannot fill it; the eval
-picks how many.
+**4. Each ranking ranks blocks, on evidence from their neighbours.** A
+hit is one block, but what finds it may be said around it: a reply that
+says "thank you" is found by the words of the message it answers. So a
+block is scored by its own text and, at a discount, by its neighbours
+within what is read together. Meaning does this already, since a chunk
+spans neighbouring messages and speaks for the kept blocks it covers,
+which share its rank. Words do not yet: today a reply that says none
+of the words is not found. Under this rule a block's words score also
+counts, at a discount, the words of the blocks next to it. How wide the
+window is and how big the discount is are the eval's to pick; its `ctx`
+targets, replies that say little on their own, measure it (on one real
+library, 50% found in the top 10 with meaning, none by words alone).
+
+Each ranking keeps at most a few blocks of any one document before it
+cuts at the depth, so one long chat cannot fill it; the eval picks how
+many.
 
 **5. Fusion is per block.** Reciprocal rank fuses the two rankings'
 blocks, so a block both find comes first. Today words finding one
@@ -742,7 +753,9 @@ against the eval before the next.
        joined to the grid, meaning's two ways, the count per source.
        `Kept`, `Keyed` and the per-search walk of the grid go.
      - **Blocks rank and fuse; one display mode draws them** (rules 4
-       to 6): each ranking ranks blocks, a few per document at most;
+       to 6): each ranking ranks blocks, words counting a block's
+       neighbours at a discount as meaning's chunks already do, a few
+       blocks per document at most;
        fusion is per block, and nothing lands. The view's one display
        mode folds the blocks into what each is read together in, and
        the UI asks for it in place of sending `is:document`. The eval
@@ -858,12 +871,28 @@ against the eval before the next.
 - **What a folded row shows** when its document spans years: its other
   hits' times, the document's first and last time, the number of hits
   folded under it.
+- **Why a row matched.** A row could say what found it: the words it
+  holds, a key it passed, or "by meaning", and for a neighbour's words,
+  which message said them. A miss is easier to trust, and a query easier
+  to fix, when a person can see why the rows above it won.
+- **Ranking by more than the text.** A person searching their own data
+  is mostly recalling something they saw, and they remember who, when
+  and where better than the words. Today nothing but the text ranks a
+  block: no recency, no weight for blocks the person wrote or was sent,
+  none for the source. How such a prior joins reciprocal rank fusion,
+  and whether it helps, is the eval's to say, scored separately for
+  queries that name a time or a person and those that do not.
 - **How deep each source's tree goes.** A Notion page is one row today,
   with none for its blocks: a big block. Making blocks items lets a hit
   land on a paragraph and a page be windowed for embedding, at the cost
   of many more rows; Drive's paragraphs are the same question. Notion
   is the place to start: its renderer walks a page block by block and
-  holds every block's id as it draws. Which kinds are
+  holds every block's id as it draws. Ranking blocks makes this more than
+  a question of where a hit lands: a 40-page file as one big block has
+  many chunks, so many chances at a high score by meaning, against a
+  one-line message's one. Until big blocks are split, the eval reports
+  its scores by the size of the target's block, so that bias shows.
+  Which kinds are
   read together and which are places is each source's to declare, and
   this plan's tables are a first guess to check source by source.
 - **Where a label lives.** Gmail labels a message, and a thread
