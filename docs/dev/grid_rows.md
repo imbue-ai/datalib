@@ -93,7 +93,15 @@ connection (`DoltRepo::pinned`), so it sees one state of the index.
 `grid_rows` carries one index for the newest-first order and one per
 key the search bar filters on, each `(key, touched_at_utc, is_document,
 uuid)`; a filter on a key without one reads and sorts the whole table
-([query plans](doltlite.md#query-plans-and-indexes)). They are declared
+([query plans](doltlite.md#query-plans-and-indexes)). A key whose one
+value many rows share (`kind`, `channel`, `subject`, `account`,
+`project`, `change`) has `source_id` after those, so the key beside
+`source:` is answered from its index alone; a key whose value names one
+thing (`id`, `datalib_document_id`, `notion_page`) has few rows to read.
+Beside either, `build_where` tells the planner a source is a share of
+the library (`likelihood`), or it would walk the source's index and read
+each row; `beside_a_key_a_source_is_tested_never_walked` checks every
+key. They are declared
 on the struct (`#[portable_table(index = …)]`) and created only in the
 grid index, not in the render stores that also hold a `grid_rows`.
 `every_filter_key_is_served_by_an_index` fails when a key has none.

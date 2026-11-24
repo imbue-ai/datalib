@@ -2,11 +2,11 @@
 //! WHERE-builder and the [`ChatMeta`] row shape the impl returns. All SQL goes through `sqlx` against
 //! [`crate::dolt_repo::DoltRepo`].
 
-use crate::group::like_pattern;
+use crate::group::{like_pattern, Within};
 use crate::query::{Field, FilterTerm, ParsedQuery};
 use crate::terms_keys::{self, Cells, TermsKey, TermsValue};
 use datalib_query::table::{Column, FreeText, SearchTable};
-use datalib_schema::grid_rows::GridRowColumn;
+use datalib_schema::grid_rows::{GridRow, GridRowColumn};
 use datalib_schema::providers::Provider;
 use datalib_schema::search_terms::{SearchTermKind, FROM_THE_DOCUMENT};
 
@@ -48,6 +48,57 @@ pub const ANY_VALUE: &str = "*";
 /// the table matches free text with `LIKE`; a ranked table's free text is
 /// the search index's.
 pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
+    build_where_beside(q, &[])
+}
+
+/// What one source is guessed to be of the library: less than the half a
+/// flag keeps, so a source's documents are read by source, and more than
+/// SQLite's ten rows for a key.
+const SOURCE_SHARE: &str = "0.1";
+
+/// `column = ?`, as a planner with no statistics should weigh it. It would
+/// rate one source as narrow as one channel, and read every row of the
+/// source to find none in the channel. Alone, or beside what has no index
+/// of its own, a source is left to its index.
+pub(crate) fn column_equals<C: Column>(column: C, beside_a_key: bool) -> String {
+    let col = column.as_str();
+    if beside_a_key && is_source(column) {
+        format!("likelihood({col} = ?, {SOURCE_SHARE})")
+    } else {
+        format!("{col} = ?")
+    }
+}
+
+/// Whether `q`, or the group it is read within, holds a column other than
+/// the source to one value.
+pub(crate) fn holds_a_key<C: Column>(q: &ParsedQuery<C>, within: &[Within<C>]) -> bool {
+    let typed = q.terms.iter().any(|t| match t.field {
+        Field::Column(key) => !t.negate && t.value != ANY_VALUE && !is_source(key.column),
+        Field::Before
+        | Field::After
+        | Field::Is(_)
+        | Field::Terms(_)
+        | Field::Text
+        | Field::Names => false,
+    });
+    typed
+        || within
+            .iter()
+            .any(|w| w.value.is_some() && !is_source(w.column))
+}
+
+fn is_source<C: Column>(column: C) -> bool {
+    <C::Table as SearchTable>::TABLE == <GridRow as SearchTable>::TABLE
+        && column.as_str() == GridRowColumn::SourceId.as_str()
+}
+
+/// [`build_where`] for a query read `within` a group, whose own clauses
+/// follow these.
+pub(crate) fn build_where_beside<C: Column>(
+    q: &ParsedQuery<C>,
+    within: &[Within<C>],
+) -> (String, Vec<String>) {
+    let beside_a_key = holds_a_key(q, within);
     let mut clauses: Vec<String> = Vec::new();
     let mut params: Vec<String> = Vec::new();
 
@@ -126,7 +177,7 @@ pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
             // exclude unset values. Explicitly keep nulls.
             clauses.push(format!("({col} IS NULL OR {col} != ?)"));
         } else {
-            clauses.push(format!("{col} = ?"));
+            clauses.push(column_equals(key.column, beside_a_key));
         }
         params.push(value);
     }
@@ -591,6 +642,60 @@ mod tests {
         let (sql, params) = build_where(&parse_query("rating:>5"));
         assert!(sql.contains("FROM vals WHERE 0)"), "{sql}");
         assert!(params.is_empty());
+    }
+
+    /// A source beside another key is weighed as a share of the library,
+    /// the group it was opened from included; alone, beside a filter with
+    /// no index of its own, or on another table, it is not.
+    #[test]
+    fn a_source_beside_a_key_is_weighed() {
+        use crate::group::where_within;
+        use crate::problems::ProblemsQuery;
+
+        let weighed = "likelihood(source_id = ?, 0.1)";
+        for q in [
+            "source:slack channel:ops",
+            "channel:ops source:slack is:document",
+            "source:slack source:mail kind:Email",
+            "source:slack id:1701d000-abcd-4e00-a000-0000000000ef",
+        ] {
+            let (sql, _) = build_where(&parse_query(q));
+            assert!(sql.contains(weighed), "{q}: {sql}");
+        }
+        for q in [
+            "source:slack is:document after:2025-01-01",
+            "source:slack from:riker",
+            "source:slack -channel:ops",
+            "source:slack channel:*",
+            "source:slack -source:mail",
+        ] {
+            let (sql, _) = build_where(&parse_query(q));
+            assert!(sql.contains("source_id = ?"), "{q}: {sql}");
+            assert!(!sql.contains("likelihood(source_id"), "{q}: {sql}");
+        }
+        let held = |column, value: Option<&str>| Within {
+            column,
+            value: value.map(String::from),
+        };
+        let source = held(GridRowColumn::SourceId, Some("slack"));
+        let channel = held(GridRowColumn::Channel, Some("ops"));
+        for (q, within) in [
+            ("source:slack", vec![channel.clone()]),
+            ("channel:ops", vec![source.clone()]),
+            ("", vec![source.clone(), channel]),
+        ] {
+            let (sql, params) = where_within(&parse_query(q), &within);
+            assert!(sql.contains(weighed), "{q:?}: {sql}");
+            assert_eq!(params.len(), 2, "{q:?}");
+        }
+        let (sql, _) = where_within(
+            &parse_query("is:document"),
+            &[source, held(GridRowColumn::Channel, None)],
+        );
+        assert!(!sql.contains(weighed), "{sql}");
+
+        let (sql, _) = build_where(&ProblemsQuery::parse("source:slack stage:parse"));
+        assert_eq!(sql, " WHERE source_id = ? AND stage = ?");
     }
 
     #[test]

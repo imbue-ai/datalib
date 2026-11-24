@@ -6,7 +6,7 @@
 use datalib_query::table::{Column, SearchTable};
 use datalib_schema::grid_rows::GridRowColumn;
 
-use crate::db::build_where;
+use crate::db::{build_where_beside, column_equals, holds_a_key};
 use crate::query::ParsedQuery;
 use crate::search::SearchRow;
 
@@ -54,13 +54,14 @@ pub const MAX_GROUPS: usize = 10_000;
 /// The query's own filter, narrowed to one group: `WHERE …` or empty, and
 /// the values bound to its `?`s in order.
 pub fn where_within<C: Column>(q: &ParsedQuery<C>, within: &[Within<C>]) -> (String, Vec<String>) {
-    let (where_sql, mut params) = build_where(q);
+    let (where_sql, mut params) = build_where_beside(q, within);
+    let beside_a_key = holds_a_key(q, within);
     let mut clauses: Vec<String> = Vec::new();
     for w in within {
         let column = w.column.as_str();
         match &w.value {
             Some(v) => {
-                clauses.push(format!("{column} = ?"));
+                clauses.push(column_equals(w.column, beside_a_key));
                 params.push(v.clone());
             }
             None => clauses.push(format!("{column} IS NULL")),

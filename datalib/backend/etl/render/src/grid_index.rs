@@ -561,11 +561,41 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
 /// here: every render store has a `grid_rows` too, and only the index the
 /// grid reads wants to pay for the search indexes on every write.
 pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
+    drop_changed_indexes(pool).await?;
     for ddl in index_ddl().chain(indexes()) {
         sqlx::query(ddl)
             .execute(pool)
             .await
             .with_context(|| format!("create: {ddl}"))?;
+    }
+    Ok(())
+}
+
+/// Drop each index an earlier build made over other columns, which
+/// `IF NOT EXISTS` would leave as it was under the name this build reads by.
+async fn drop_changed_indexes(pool: &SqlitePool) -> Result<()> {
+    let held: HashMap<String, String> =
+        sqlx::query_as("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql NOTNULL")
+            .fetch_all(pool)
+            .await
+            .context("list the index's indexes")?
+            .into_iter()
+            .collect();
+    for ddl in indexes() {
+        let name = index_name(ddl).with_context(|| format!("no index name in {ddl}"))?;
+        // SQLite keeps the statement as written, less `IF NOT EXISTS`.
+        let made = ddl.replacen("IF NOT EXISTS ", "", 1);
+        if held.get(name).is_some_and(|sql| *sql != made) {
+            tracing::info!(
+                index = name,
+                "this index has other columns now; making it again"
+            );
+            // Audited: `name` is parsed out of our own static index DDL.
+            sqlx::query(sqlx::AssertSqlSafe(format!("DROP INDEX {name}")))
+                .execute(pool)
+                .await
+                .with_context(|| format!("drop {name}"))?;
+        }
     }
     Ok(())
 }
@@ -3221,6 +3251,30 @@ mod shape_tests {
         .await
         .unwrap();
         assert_eq!(made, 1);
+
+        // An index an older build made over fewer columns.
+        let columns_of = |pool: SqlitePool| async move {
+            let sql: String = sqlx::query_scalar(
+                "SELECT sql FROM sqlite_master WHERE name = 'grid_rows_by_kind'",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            sql
+        };
+        let want = columns_of(pool.clone()).await;
+        sqlx::query("DROP INDEX grid_rows_by_kind")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE INDEX grid_rows_by_kind ON grid_rows(kind)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        crate::grid_index::close_index(pool).await.unwrap();
+        let pool = open_index(&db).await.unwrap();
+        assert_eq!(documents(&pool).await, 1, "kept");
+        assert_eq!(columns_of(pool.clone()).await, want);
 
         sqlx::query("DROP TABLE _datalib_meta")
             .execute(&pool)
