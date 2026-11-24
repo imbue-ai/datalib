@@ -1601,7 +1601,7 @@ async fn apply_source(
                 "nodes settled"
             );
         }
-        took.node_rows_ms = laps.lap();
+        took.nodes_ms = laps.lap();
         if remade {
             let started = Instant::now();
             create_search_indexes(conn).await?;
@@ -1664,7 +1664,7 @@ async fn apply_source(
                     read_ms = took.read_ms,
                     remove_ms = took.remove_ms,
                     load_ms = took.load_ms,
-                    node_rows_ms = took.node_rows_ms,
+                    nodes_ms = took.nodes_ms,
                     terms_ms = took.terms_ms,
                     seal_ms = took.seal_ms,
                     "sealed the index"
@@ -1692,7 +1692,7 @@ struct SealTimes {
     read_ms: u64,
     remove_ms: u64,
     load_ms: u64,
-    node_rows_ms: u64,
+    nodes_ms: u64,
     terms_ms: u64,
     seal_ms: u64,
 }
