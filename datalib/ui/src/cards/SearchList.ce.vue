@@ -3,7 +3,7 @@
 // were typed marked, and the picked one read in place beside the list.
 // One of the Search card's two views (GridCard.ce.vue hosts it and owns
 // the query); the other is the table.
-import { nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef, watch } from "vue";
 import type { SearchResponse, SearchRow } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import type { CardCtx, CardRender, Teardown } from "./types";
@@ -15,7 +15,7 @@ import { compileCardSource } from "./cardSource";
 import { ensureFrontend } from "./frontendRegistry";
 import { photoCardSource, thumbnailUrl } from "./photos";
 import { parsePhoto } from "@/uri";
-import { markWords } from "./search";
+import { freeText, markWords, titleWithin } from "./search";
 import { datesInText } from "./dates";
 import { people, peopleTitle } from "./contacts";
 import { handleFromUri } from "./chipLinks";
@@ -42,6 +42,14 @@ const props = defineProps<{
   active: boolean;
   // The order the host asks for; null for the search's own.
   sort: string | null;
+  // The name of the place the search is held to, which a result's own name
+  // may only repeat.
+  within?: string | null;
+  // The document that place is, when it is one: what is read until another
+  // is picked, and all there is where nothing else is directly there.
+  lead?: string | null;
+  // What to say when nothing is found and no words were typed.
+  nothing?: string;
 }>();
 const emit = defineEmits<{
   // What the answer said beyond its rows, for the host's line above them.
@@ -130,7 +138,8 @@ async function run(keepPick = false) {
     answered = key;
     if (!again) rowsEl.value?.scrollTo({ top: 0 });
     if (!keepPick || !results.value.some((r) => r.uuid === picked.value?.uuid)) {
-      picked.value = results.value[0] ?? null;
+      picked.value = firstPick();
+      if (!picked.value && props.lead && !teardown) void showPreview(null);
     }
     report(q, "rows", { rows: page.rows.length, total: page.total });
     // The observer speaks only when the end comes or goes; a first page
@@ -145,6 +154,25 @@ async function run(keepPick = false) {
     if (inflight === ctrl) loading.value = false;
   }
 }
+
+const wordless = (q: string | null) => q !== null && freeText(q) === "";
+const leads = () => !!props.lead && wordless(shownQuery.value);
+
+/// The result read first: the place's own document while nothing has been
+/// typed, else the first.
+function firstPick(): SearchRow | null {
+  if (!leads()) return results.value[0] ?? null;
+  return results.value.find((r) => r.is_document && r.markdown_uuid === props.lead) ?? null;
+}
+
+/// The place's own document is all there is, or may yet be.
+const alone = computed(() => {
+  if (!props.lead) return false;
+  if (shownQuery.value === null) return true;
+  const [only, ...more] = results.value;
+  const own = only === undefined || only.markdown_uuid === props.lead;
+  return leads() && own && more.length === 0 && nextOffset.value === null;
+});
 
 // The page on its way, so a second ask while it is out waits for it.
 let moreOut: Promise<void> | null = null;
@@ -212,7 +240,10 @@ function docSource(row: SearchRow): string | null {
   return `documentView(${args.map((a) => JSON.stringify(a)).join(", ")})`;
 }
 
-async function previewRender(row: SearchRow): Promise<[CardRender, string] | null> {
+async function previewRender(row: SearchRow | null): Promise<[CardRender, string] | null> {
+  if (!row) {
+    return props.lead ? [documentPreview(props.lead, null, []), "documentView"] : null;
+  }
   const photo = row.image ? parsePhoto(row.image) : null;
   if (photo) {
     await ensureFrontend();
@@ -235,7 +266,6 @@ async function showPreview(row: SearchRow | null) {
   if (!previewEl.value) return;
   previewRoot ??= previewEl.value.attachShadow({ mode: "open" });
   previewRoot.replaceChildren();
-  if (!row) return;
   const card = await previewRender(row).catch(() => null);
   if (!card || pick !== previewing || !previewRoot) return;
   const [render, cardType] = card;
@@ -314,8 +344,16 @@ function pickAt(i: number) {
   });
 }
 
-function title(row: SearchRow): string {
-  return row.conversation_name || row.channel || row.kind || "Untitled";
+function titled(row: SearchRow) {
+  return titleWithin(
+    {
+      name: row.conversation_name || row.channel,
+      author: row.author,
+      snippet: row.snippet,
+      kind: row.kind,
+    },
+    props.within ?? null,
+  );
 }
 
 // A contact's row is titled by its chip: the photo and the name your
@@ -327,6 +365,7 @@ const stopPeople = people.subscribe(() => peopleAnswered.value++);
 /// conversation named after its people by them; empty for a row titled
 /// by its name.
 function titlePeople(row: SearchRow): { handle: string; shownAs: string }[] {
+  if (titled(row).repeats) return [];
   const contact = row.contact_ref ? handleFromUri(row.contact_ref.id) : null;
   if (contact) return [{ handle: contact, shownAs: row.contact_ref!.label }];
   return (row.subject_ref ?? []).flatMap((p) => {
@@ -408,7 +447,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="listEl" class="sc">
-    <p class="sc-count" aria-live="polite" data-testid="search-list-count">
+    <p v-show="!alone" class="sc-count" aria-live="polite" data-testid="search-list-count">
       {{ loading ? "Searching…" : `${total.toLocaleString()} results` }}
     </p>
     <p v-if="notice" class="sc-notice">{{ notice }}</p>
@@ -416,6 +455,7 @@ onBeforeUnmount(() => {
     <div class="sc-main" :data-shown-query="shownQuery">
       <span ref="beforeList" class="sc-edge" tabindex="-1" />
       <ul
+        v-show="!alone"
         ref="rowsEl"
         class="sc-list"
         aria-label="Results"
@@ -446,12 +486,12 @@ onBeforeUnmount(() => {
                   class="sc-title"
                   :data-answered="peopleAnswered"
                 />
-                <strong v-else class="sc-title">{{ title(r) }}</strong>
+                <strong v-else class="sc-title">{{ titled(r).title }}</strong>
                 <span class="sc-when">{{ when(r.touched_at) }}</span>
               </span>
               <span class="sc-snippet"
                 ><template
-                  v-for="(p, i) in markWords(datesInText(r.snippet), shownQuery ?? '')"
+                  v-for="(p, i) in markWords(datesInText(titled(r).snippet), shownQuery ?? '')"
                   :key="i"
                   ><mark v-if="p.hit">{{ p.text }}</mark
                   ><template v-else>{{ p.text }}</template></template
@@ -471,12 +511,12 @@ onBeforeUnmount(() => {
           <template v-if="nextOffset != null && loadingMore">Loading more…</template>
         </li>
         <li v-if="!loading && results.length === 0 && !notice" class="sc-empty">
-          Nothing matches. Try fewer words.
+          {{ nothing && wordless(shownQuery) ? nothing : "Nothing matches. Try fewer words." }}
         </li>
       </ul>
       <span ref="afterList" class="sc-edge" tabindex="-1" />
       <section class="sc-preview" aria-label="Preview">
-        <p v-if="!picked" class="sc-empty">Pick a result to read it here.</p>
+        <p v-if="!picked && !lead" class="sc-empty">Pick a result to read it here.</p>
         <div ref="previewEl" class="sc-preview-body" />
       </section>
     </div>
@@ -568,13 +608,15 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 2px;
 }
+/* Short of room, the date moves to a line of its own. */
 .sc-line {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 2px 8px;
   align-items: baseline;
 }
 .sc-title {
-  flex: 1 1 auto;
+  flex: 1 1 9em;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

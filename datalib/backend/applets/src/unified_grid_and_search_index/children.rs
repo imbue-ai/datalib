@@ -76,6 +76,25 @@ pub async fn handler(
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct SourcesWithPlaces {
+    sources: Vec<String>,
+}
+
+/// `GET /sources_with_places`: which sources a library's tree opens onto
+/// places, in one read.
+pub async fn sources_with_places_handler(
+    State(s): State<Index>,
+) -> Result<Json<SourcesWithPlaces>, Refusal> {
+    match s.repo.sources_with_places().await {
+        Ok(sources) => Ok(Json(SourcesWithPlaces { sources })),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )),
+    }
+}
+
 /// What `p` asks for, with `now` standing for `at=now`.
 fn ask_of(p: &Params, now: &str) -> Result<(Ask, usize), String> {
     let limit = p.limit.unwrap_or(DEFAULT_LIMIT);

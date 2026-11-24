@@ -1,9 +1,9 @@
 // The Library card's decisions, apart from what draws them: what a level
-// of the tree holds, how it is ordered, what a node opens, and how a node
-// card lists a container's children (cards/LibraryCard.ce.vue,
-// cards/NodeCard.ce.vue).
+// of the tree holds, how it is ordered, what a node opens and what its card
+// searches (cards/LibraryCard.ce.vue, cards/libs/nodeView.ts).
 import type { Child, ManageRow } from "@/api";
-import { documentSource, nodeSource, type NodeViewOpts } from "./cardSources";
+import { filterToken } from "@/grid/query";
+import { nodeSource, type NodeViewOpts } from "./cardSources";
 import { uriFromEntity } from "./chipLinks";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -126,57 +126,17 @@ export function childLabel(c: Child): string {
   return c.name?.trim() || c.preview?.trim().split("\n")[0] || c.kind;
 }
 
-/// A child's line in a node card, and the text under it. It is named by
-/// its name, else who wrote it (a message reads as its author over its
-/// text), else the start of its text. A name that only repeats the node
-/// it is listed in (a channel's threads, each named for the channel)
-/// says nothing, and the next one leads instead. The text under it is its
-/// preview, less a first line the title already says.
-export function rowParts(
-  c: Child,
-  listedIn: string | null = null,
-): { title: string; snippet: string | null } {
-  const name = c.name?.trim() || null;
-  const named = name && name !== listedIn?.trim() ? name : null;
-  const preview = c.preview?.trim() || null;
-  const [first, ...rest] = preview ? preview.split("\n") : [];
-  const title = named || c.author?.trim() || first?.trim() || name || c.kind;
-  const snippet = preview && first?.trim() === title ? rest.join("\n").trim() || null : preview;
-  return { title, snippet };
-}
-
-/// What a row of a node card is titled by, as a chip where it names
-/// something: a container by its node, a message by its author, a
-/// document by itself; anything else by its words.
-export type RowTitle =
-  | { kind: "node"; id: string; name: string; nodeKind: string; doc: string | null }
-  | { kind: "person"; handle: string; shown: string }
-  | { kind: "document"; page: string; title: string }
-  | { kind: "text"; text: string };
-
-export function rowTitle(c: Child, listedIn: string | null = null): RowTitle {
-  const { title } = rowParts(c, listedIn);
-  if (c.container && UUID.test(c.uuid)) {
-    return { kind: "node", id: c.uuid, name: title, nodeKind: c.kind, doc: c.markdown_uuid };
-  }
-  if (c.author_handle && title === c.author?.trim()) {
-    return { kind: "person", handle: c.author_handle, shown: title };
-  }
-  if (c.markdown_uuid && c.markdown_uuid === c.uuid && UUID.test(c.uuid)) {
-    return { kind: "document", page: c.uuid, title };
-  }
-  return { kind: "text", text: title };
-}
-
-/// Whether a list's rows say their kind: only where it holds more than
-/// one kind, since a channel's threads would each say "Slack Thread".
-export function kindsDiffer(children: Child[]): boolean {
-  return new Set(children.map((c) => c.kind)).size > 1;
-}
-
 /// The card a node of the tree opens.
 export function nodeCardSource(node: TreeNode): string {
   return nodeSource(nodeOpts(node));
+}
+
+/// What a node's card holds its search to: what is directly in a place, or
+/// the whole of a source.
+export function scopeOf(node: string): string {
+  return node.startsWith("source:")
+    ? filterToken("source", node.slice("source:".length), false)
+    : filterToken("at", node, false);
 }
 
 /// What a node card shows for a node of the tree.
@@ -204,28 +164,4 @@ export function nodeCardProps(opts: Partial<NodeViewOpts> | undefined): {
     );
   }
   return { node: opts.node, name: typeof opts.name === "string" ? opts.name : null, doc };
-}
-
-/// The card a child of a node card opens: a container's own children, or
-/// the document a row is in, at the row when it is one of its messages.
-export function childCardSource(c: Child): string | null {
-  if (c.container) {
-    const doc = c.markdown_uuid ? { doc: c.markdown_uuid } : {};
-    return nodeSource({ node: c.uuid, name: childLabel(c), ...doc });
-  }
-  return previewArgs(c) && documentSource(...(previewArgs(c) as [string, string | null]));
-}
-
-/// The document a child is read in, and the section to show: a row's
-/// document at the row, unless the row is that document's own.
-export function previewArgs(c: Child): [string, string | null] | null {
-  if (!c.markdown_uuid) return null;
-  return [c.markdown_uuid, c.uuid === c.markdown_uuid ? null : c.uuid];
-}
-
-/// Whether a list of children reads best beside a preview: some of them
-/// are in documents. A level of containers alone (an account's labels) is
-/// a list and nothing more.
-export function wantsPreview(children: Child[]): boolean {
-  return children.some((c) => c.markdown_uuid !== null);
 }

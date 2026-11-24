@@ -167,7 +167,7 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
   // Not in the gallery: it needs the node to show, which the Library opens.
   nodeView: {
     title: "Library node",
-    description: "What one place in your library holds, read beside a preview.",
+    description: "What is directly in one place of your library, read beside a preview.",
     icon: "book",
   },
   sourceView: {

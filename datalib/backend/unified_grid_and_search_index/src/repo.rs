@@ -64,6 +64,9 @@ pub trait IndexRepo: Send + Sync {
         limit: usize,
     ) -> Result<crate::children::ChildrenPage, crate::children::ChildrenFailure>;
 
+    /// The sources that hold places at their top, by id.
+    async fn sources_with_places(&self) -> Result<Vec<String>, RepoError>;
+
     /// Every row `query`'s structured terms match, in the group `within`
     /// names (all of them, for an empty path), as uuids in `sort`'s order,
     /// or newest first with none. Its free text is the search index's; nothing here
