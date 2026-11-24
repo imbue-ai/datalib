@@ -113,6 +113,23 @@ pub async fn build_state(
             .map_err(|e| anyhow::anyhow!("open the app stores under {}: {e}", root.display()))?,
     );
 
+    // Before the loop, so its first read is of the current shape, and
+    // before the watcher, whose first act opens the loop's record: the
+    // moves carry the record's rows only from a record that was there
+    // before this server started.
+    let data_root = (*root).clone();
+    let bin_override = binary_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::config_upgrade::upgrade(&data_root);
+        if let Ok(checked) = supervisor::load_config(&data_root) {
+            crate::library_bin::bring_forward(&data_root, &checked, bin_override.as_deref());
+        }
+    })
+    .await?;
+    crate::config_upgrade::move_index_dir(&root).await;
+    crate::config_upgrade::move_index_step_dir(&root).await;
+    crate::config_upgrade::move_case_folders(&root).await;
+
     // Everything the UI shows that changes. One watcher per
     // process, replacing the timers every UI surface used to keep — see
     // `crate::watch`. Started before the loop so a sync that begins
@@ -128,20 +145,6 @@ pub async fn build_state(
             }
         });
     }
-
-    // Before the loop, so its first read is of the current shape.
-    let data_root = (*root).clone();
-    let bin_override = binary_dir.clone();
-    tokio::task::spawn_blocking(move || {
-        crate::config_upgrade::upgrade(&data_root);
-        if let Ok(checked) = supervisor::load_config(&data_root) {
-            crate::library_bin::bring_forward(&data_root, &checked, bin_override.as_deref());
-        }
-    })
-    .await?;
-    crate::config_upgrade::move_index_dir(&root).await;
-    crate::config_upgrade::move_index_step_dir(&root).await;
-    crate::config_upgrade::move_case_folders(&root).await;
     crate::config_upgrade::watch((*root).clone(), root_tx.subscribe());
 
     let sync = supervisor::SyncControl::new(root.clone());
