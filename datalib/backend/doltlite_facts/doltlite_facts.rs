@@ -3,7 +3,8 @@
 //! that moves a fact fails here by name: fix the fact in doltlite.md, then
 //! the test, then whatever in the tree leaned on it. Facts about a writer
 //! and a reader in two processes live in
-//! `//datalib/backend/etl:doltlite_two_process_test` instead.
+//! `//datalib/backend/etl:doltlite_two_process_test` instead, but for
+//! the one about a reader's open, whose reader is the pinned CLI.
 //!
 //! Every store is a fresh tempdir file, and every connection is a single
 //! sqlx connection, so the library under test is the one the pipeline
@@ -309,6 +310,136 @@ mod locks {
             sidecar_lock(&s.path).exists(),
             "no {}",
             sidecar_lock(&s.path).display()
+        );
+    }
+
+    /// A read-only open holds a SHARED lock on the store file until it has
+    /// loaded the store, and a writer's `COMMIT` needs that file to itself,
+    /// so it waits out the open and fails once its busy timeout runs out.
+    /// On a store whose open takes longer than the timeout (seconds, on a
+    /// multi-GB one), a reader that merely opens fails the writer: a 4.5 GB
+    /// raw store's migration was lost that way. The reader here is frozen
+    /// mid-open, which stands in for a slow one.
+    #[tokio::test]
+    async fn a_commit_waits_out_a_read_only_open_and_fails_past_its_timeout() {
+        let s = Store::new();
+        let mut c = s.rw().await;
+        ok(&mut c, "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)").await;
+        ok(
+            &mut c,
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000) \
+             INSERT INTO t SELECT i, printf('row %d', i) FROM n",
+        )
+        .await;
+        commit(&mut c, "rows").await;
+        c.close().await.unwrap();
+
+        let probe = std::fs::File::open(&s.path).expect("open the store to probe its locks");
+        let name = s.path.display().to_string();
+        let mut writer = connect(&name, false, Duration::from_millis(200)).await;
+        ok(&mut writer, "BEGIN").await;
+        ok(&mut writer, "INSERT INTO t VALUES (0, 'new')").await;
+
+        let reader = reader_frozen_holding_the_read_lock(&s, &probe);
+        err_contains(exec(&mut writer, "COMMIT").await, "database is locked");
+
+        reader.thaw();
+        ok(&mut writer, "COMMIT").await;
+        assert_eq!(int(&mut writer, "SELECT COUNT(*) FROM t").await, 20001);
+        writer.close().await.unwrap();
+        drop(probe);
+    }
+
+    /// SQLite's unix VFS takes SHARED as a read lock on this byte range.
+    const SHARED_FIRST: i64 = 0x4000_0000 + 2;
+    const SHARED_SIZE: i64 = 510;
+
+    /// The pid of another process holding a lock on `probe`'s SHARED
+    /// range. The caller keeps `probe` open until every connection of its
+    /// own on the file is closed: closing any descriptor on a file drops
+    /// every POSIX lock this process holds on it.
+    fn shared_lock_holder(probe: &std::fs::File) -> Option<i32> {
+        use std::os::fd::AsRawFd;
+        // SAFETY: an all-zero `flock` is a valid value of a plain C struct.
+        let mut lock: libc::flock = unsafe { std::mem::zeroed() };
+        lock.l_type = libc::F_WRLCK as _;
+        lock.l_whence = libc::SEEK_SET as _;
+        lock.l_start = SHARED_FIRST as _;
+        lock.l_len = SHARED_SIZE as _;
+        // SAFETY: `lock` lives across the call and the descriptor is open.
+        let rc = unsafe { libc::fcntl(probe.as_raw_fd(), libc::F_GETLK, &mut lock) };
+        assert_eq!(rc, 0, "F_GETLK: {}", std::io::Error::last_os_error());
+        (lock.l_type != libc::F_UNLCK as _).then_some(lock.l_pid)
+    }
+
+    /// A `doltlite` process opening the store read-only, stopped while it
+    /// holds the SHARED lock. Dropped without [`Frozen::thaw`], it is
+    /// killed, so a failed test leaves no stopped process behind.
+    struct Frozen(Option<std::process::Child>);
+
+    impl Frozen {
+        fn thaw(mut self) {
+            let mut child = self.0.take().expect("not thawed yet");
+            signal(&child, libc::SIGCONT);
+            let status = child.wait().expect("wait for the reader");
+            assert!(status.success(), "the reader failed: {status}");
+        }
+    }
+
+    impl Drop for Frozen {
+        fn drop(&mut self) {
+            if let Some(mut child) = self.0.take() {
+                let _ = child.kill();
+                signal(&child, libc::SIGCONT);
+                let _ = child.wait();
+            }
+        }
+    }
+
+    fn signal(child: &std::process::Child, sig: libc::c_int) {
+        // SAFETY: `child` is our own child and has not been reaped.
+        unsafe { libc::kill(child.id() as libc::pid_t, sig) };
+    }
+
+    /// Opens of this small store last milliseconds, so a try can miss the
+    /// window; each try ends when its reader exits.
+    const FREEZE_TRIES: usize = 200;
+
+    fn reader_frozen_holding_the_read_lock(s: &Store, probe: &std::fs::File) -> Frozen {
+        for _ in 0..FREEZE_TRIES {
+            let child = Command::new(cli())
+                .args(["-readonly", &s.at("main"), "SELECT COUNT(*) FROM t"])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("start a doltlite reader");
+            let pid = child.id() as i32;
+            let mut reader = Frozen(Some(child));
+            loop {
+                if shared_lock_holder(probe) == Some(pid) {
+                    let child = reader.0.as_ref().unwrap();
+                    signal(child, libc::SIGSTOP);
+                    let mut status = 0;
+                    // SAFETY: waits for our own child to report the stop.
+                    unsafe { libc::waitpid(pid, &mut status, libc::WUNTRACED) };
+                    if libc::WIFSTOPPED(status) && shared_lock_holder(probe) == Some(pid) {
+                        return reader;
+                    }
+                    break;
+                }
+                if reader.0.as_mut().unwrap().try_wait().unwrap().is_some() {
+                    break;
+                }
+            }
+            if let Some(mut child) = reader.0.take() {
+                signal(&child, libc::SIGCONT);
+                let _ = child.wait();
+            }
+        }
+        panic!(
+            "no read-only open was caught holding the read lock in {FREEZE_TRIES} tries; \
+             since dolthub/doltlite#5257 an open releases it before it replays, so restate \
+             this fact (docs/dev/doltlite.md § Locks and writers)"
         );
     }
 }
