@@ -150,6 +150,56 @@ async fn a_chunk_covering_no_kept_message_does_not_rank_its_document() {
     }
 }
 
+/// A page's body, which is no row's, and a comment on it, each its own
+/// chunk. A filter that keeps the page's own row and the comment ranks
+/// the page by its body; one that keeps only the comment does not. Before,
+/// a filter that kept a comment dropped every chunk of the page's body.
+#[tokio::test]
+async fn a_chunk_of_text_that_is_no_rows_is_its_documents_row() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let page = IndexDoc {
+        source_id: "drive".into(),
+        markdown_uuid: "page".into(),
+        content_hash: "h-page".into(),
+        title: "page".into(),
+        head: None,
+        sections: [(None, "the warp core design"), (Some("c1"), "a comment")]
+            .into_iter()
+            .map(|(uuid, text): (Option<&str>, &str)| IndexSection {
+                uuid: uuid.map(str::to_string),
+                text: format!("{text}\n"),
+                lead: uuid.map(|u| format!("**{u}** wrote")),
+            })
+            .collect(),
+    };
+    let chunks = page.prompted(&four_bytes_a_token).unwrap();
+    assert_eq!(chunks.len(), 2, "the comment starts a chunk of its own");
+    let cache = index_and_cut(root, std::slice::from_ref(&page)).await;
+    let vectors = vec![
+        (chunks[0].hash.clone(), vec![1.0, 0.0, 0.0]),
+        (chunks[1].hash.clone(), vec![0.0, 1.0, 0.0]),
+    ];
+    cache.put(&model_key(), &vectors).await.unwrap();
+    cache.close().await;
+
+    let held = HeldVectors::default();
+    let query = [1.0, 0.0, 0.0];
+    for (rows, want) in [(vec!["c1", "page"], 1.0), (vec!["c1"], 0.0)] {
+        let kept = HashMap::from([(
+            "page".to_string(),
+            Kept::Sections(rows.iter().map(|r| r.to_string()).collect()),
+        )]);
+        let hits = held
+            .nearest(root, &query, None, Some(&kept), 10)
+            .await
+            .unwrap()
+            .unwrap();
+        let score = hits[0].1.score;
+        assert!((score - want).abs() < 1e-3, "keeping {rows:?}: {score}");
+    }
+}
+
 /// A document of two messages, each its own chunk: a search whose other
 /// terms keep only the second ranks the document by that chunk, and lands
 /// on it, rather than by its nearest chunk overall, which those terms drop.

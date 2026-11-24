@@ -67,14 +67,24 @@ impl HeldDoc {
 
     /// The message uuids chunk `chunk` covers.
     pub fn covered(&self, chunk: usize) -> impl Iterator<Item = &str> {
+        self.sections_of(chunk).iter().filter_map(Option::as_deref)
+    }
+
+    /// The row each section of `chunk` is: its message's, or for text
+    /// that is no message's (a page's body), the document's own row.
+    pub fn covered_rows(&self, chunk: usize) -> impl Iterator<Item = &str> {
+        self.sections_of(chunk)
+            .iter()
+            .map(|uuid| uuid.as_deref().unwrap_or(&self.markdown_uuid))
+    }
+
+    fn sections_of(&self, chunk: usize) -> &[Option<String>] {
         let c = &self.chunks[chunk];
         let from = usize::try_from(c.first_section).unwrap_or(0);
         let to = usize::try_from(c.last_section + 1).unwrap_or(0);
         self.sections
             .get(from..to.min(self.sections.len()))
             .unwrap_or_default()
-            .iter()
-            .filter_map(Option::as_deref)
     }
 }
 
@@ -739,7 +749,8 @@ pub struct MessageHit {
 }
 
 /// What a search's filters keep: the documents they keep whole, and the
-/// messages they keep of the rest, by uuid.
+/// rows they keep of the rest, by uuid. A piece that is no message's (a
+/// page's body) is its document's own row.
 pub struct KeptRows<'a> {
     pub whole: Vec<&'a str>,
     pub messages: Vec<&'a str>,
@@ -761,8 +772,9 @@ fn bound(kept: Option<&KeptRows<'_>>) -> Result<Bound> {
 }
 
 /// The condition on a `hit` row that keeps it, taking a [`Bound`]: no
-/// filter, its message kept, or its document kept whole.
-const KEEPS: &str = "(NOT ? OR hit.uuid IN (SELECT value FROM json_each(?)) \
+/// filter, its row kept, or its document kept whole.
+const KEEPS: &str =
+    "(NOT ? OR COALESCE(hit.uuid, hit.markdown_uuid) IN (SELECT value FROM json_each(?)) \
      OR hit.markdown_uuid IN (SELECT value FROM json_each(?)))";
 
 impl Reader {

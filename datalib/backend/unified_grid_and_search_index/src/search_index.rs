@@ -205,7 +205,7 @@ impl HeldVectors {
                     },
                 };
                 let best = (0..d.chunks.len())
-                    .filter(|&c| kept.is_none_or(|k| d.covered(c).any(|u| k.contains(u))))
+                    .filter(|&c| kept.is_none_or(|k| d.covered_rows(c).any(|u| k.contains(u))))
                     .map(|c| {
                         (
                             datalib_search_index::half::dot(d.vector(c), query) / norm,
