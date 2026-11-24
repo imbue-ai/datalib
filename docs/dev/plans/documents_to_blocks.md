@@ -200,8 +200,8 @@ two rows with one uuid each.
 discovered from depth. A container can be:
 
 - **read together**: a Slack thread, an email thread, a WhatsApp chat,
-  a Notion page, a Drive file, a session. This is what a search shows
-  each hit in and folds its hits by, what the viewer opens, and what
+  a Notion page, a Drive file, a session. This is what today's display
+  mode folds a search's blocks into, what the viewer opens, and what
   embedding cuts its windows from. Nested ones stay separate: a Notion subpage is read on
   its own, not as part of its parent.
 - **a place**: a Slack channel, a mailbox, a Notion workspace, a Drive
@@ -296,13 +296,12 @@ linked to its item when it is read
 pair must reach the stored item, and the item's parents must be
 reachable from it.
 
-**A search finds blocks, and shows each in its document.** The result
-is always a block, drawn with what it is read together in: the
-document's title, the block's snippet, the viewer opened at it
-(§"How search works"). Nothing about how results are grouped is fixed
-at render, so there is no month to choose and no setting to change;
-grouping the rows by a place or a column is the grid's own choice when
-it draws them.
+**A search finds blocks; a display mode draws them.** A search answers
+with blocks. How they are drawn (each folded into what it is read
+together in, today's one mode) is a view setting, not part of the query
+(§"How search works", rule 6). Nothing about how results are drawn is
+fixed at render, so there is no month to choose and no setting to
+change.
 
 **What gets embedded is its own choice.** One message embedded alone
 has lost its context; that is why chunks span messages today. So
@@ -512,21 +511,33 @@ message of a thread and meaning finding another add up for the thread;
 per block they do not. If the eval misses that, a block whose document
 holds other hits gets a small lift, and nothing else changes.
 
-**6. A result is a block, shown in its document.** A hit is a block, so
-nothing lands. Each row of the answer shows the document's title, the
-block's author and time, and a snippet quoted from the block's body;
-opening it opens the viewer on the document at that block, with the
-rest of the document around it. A document appears once, at its best
-block, and its other hits fold under that row in rank order ("4 more in
-this thread"), since the viewer shows them together anyway. Inside a big
-block (a Drive file) the snippet is found by the words, as it is today.
+**6. A search answers with blocks; a display mode draws them.** A hit
+is a block, so nothing lands. The answer is the ranked list of blocks
+and nothing else: with words, best first; with keys alone, the blocks
+the keys keep in the order asked. A data node a key asks for by its own
+facts (`is:channel`) is in the list as itself.
 
-A search with keys and no words lists the blocks its keys keep, in the
-order asked, folded the same way: each
-document once, at its first kept block. A data node a key asks for by
-its own facts (`is:channel`) is listed as itself. Grouping the rows by
-a column, as the grid does today (by source, by channel, by place), is
-the grid's own choice over these rows, not a different search.
+How the list is drawn is a **display mode**, a view setting beside sort
+and grouping, never a key in the query. A mode names which ancestor each
+block folds into, a pure function over the list using the column each
+block already carries (§"The model"), so ranking, keys and caching
+never know which mode is on. There is one mode for now:
+
+- **By what is read together.** Each block folds into its nearest
+  read-together data node: a thread, a chat, a page. A row is that node,
+  at its first block in the list, showing the node's title, that
+  block's author and time, and a snippet quoted from that block's body;
+  its other blocks in the list fold under it in order ("4 more in this
+  thread"). Opening the row opens the viewer on the node at that block,
+  with the rest of it around it. Inside a big block (a Drive file) the
+  snippet is found by the words, as it is today.
+
+Other modes are the same function with another ancestor: none (a row
+per block), the nearest place (a row per channel or mailbox), a day.
+None is built until someone needs it. Paging counts the rows a mode
+draws, so the server folds before it pages. Grouping the rows by a
+column (by source, by channel), as the grid does today, stays the
+grid's own choice over the rows it draws.
 
 **7. Every step costs what its answer costs.** A step is bounded by the
 rows it returns or by one index range, never by the size of the
@@ -542,7 +553,7 @@ the search's other keys, which is what made it a walk of the grid.
 `Kept` and `KeptRows` with their three lists; `Keyed` and its cache;
 `land` and the file re-read behind it; `documents_with_pages` on every
 search; `documents_of_hits`'s second look at the grid; `is:document`,
-which only the UI sends, and the document rows it picked. What stays:
+which only the UI sends, becoming the one display mode. What stays:
 `page_words`, while a page's text is several blocks (rule 1 makes
 Drive's one); the three ways words match; fusion, per block rather than
 per document.
@@ -572,7 +583,7 @@ Every place that assumes a document, from the read side of the tree:
 
 | Where | Today | After |
 |---|---|---|
-| `grid_rows.is_document`, `is:document` (grid default, Browse, dashboard, eval) | one row per document, or per message, picked by a key the UI adds | gone: a search lists blocks, each document once at its best block with its other hits folded under it (§"How search works", rule 6). Only the UI sends `is:document`, so it stops, and the key needs no alias |
+| `grid_rows.is_document`, `is:document` (grid default, Browse, dashboard, eval) | one row per document, or per message, picked by a key the UI adds | gone from the query: a search answers with blocks, and the view's display mode folds them into what each is read together in (§"How search works", rule 6). Only the UI sends `is:document`, so the UI asks for the mode instead and the key needs no alias |
 | Search index (`search_documents`, `search_sections`, `search_chunks`) | keyed by document; sections are byte spans of the file | keyed by item; chunks name the items they cover and the group they were cut from |
 | Ranking (`documents_of_hits`, `fuse`, `land`) | ranks documents, then lands each on a message by re-reading the file | ranks blocks and fuses them per block; a hit is a block, so there is nothing to land |
 | `Keyed` / `Kept::Sections` | what the filters keep, per document, as lists of uuids | gone: keys are the `WHERE` of the words statement, and meaning checks its candidates in SQL (§"How search works", rule 3) |
@@ -730,12 +741,13 @@ against the eval before the next.
        3 and 7): container facts copied onto blocks, the words statement
        joined to the grid, meaning's two ways, the count per source.
        `Kept`, `Keyed` and the per-search walk of the grid go.
-     - **Blocks rank, fuse and fold** (rules 4 to 6): each ranking
-       ranks blocks, a few per document at most; fusion is per block;
-       a row is a block shown in its document, with its document's
-       other hits folded under it, and nothing lands. The UI stops
-       sending `is:document`. The eval scores a target per block and
-       per document, and compares the answer with today's.
+     - **Blocks rank and fuse; one display mode draws them** (rules 4
+       to 6): each ranking ranks blocks, a few per document at most;
+       fusion is per block, and nothing lands. The view's one display
+       mode folds the blocks into what each is read together in, and
+       the UI asks for it in place of sending `is:document`. The eval
+       scores a target per block and per document, and compares the
+       answer with today's.
 5. **The viewer reads items, and the `.md` files go.** Only two things
    read the files' bytes: the viewer's `/chat/{markdown_uuid}` and search
    landing (`hits/mapping.rs`), which quotes a hit and picks its row from
@@ -831,9 +843,9 @@ against the eval before the next.
   each month's document. Whether a Slack channel's messages are read
   together depends on how the channel is used: a thready channel's
   threads are, and a flat channel's run of messages may not be. Steps
-  4 (what a hit folds into), 6 (no time buckets) and 7 (embedding
-  windows) all lean on the answer. Until it is settled, hits fold by
-  document.
+  4 (what the display mode folds into), 6 (no time buckets) and 7
+  (embedding windows) all lean on the answer. Until it is settled, the
+  display mode folds by document.
 - **How wide an embedding window is.** How many items or bytes of a
   thread, and does it overlap the next? The eval decides.
   [`multimodal_retrieval.md`](multimodal_retrieval.md) §5.1 argues for
@@ -887,8 +899,7 @@ against the eval before the next.
 - **Reactions.** An item of their own (they have an author and a time)
   or an attribute of the item they react to?
 - **Time-of-day bucketing** for display ("this conversation on 3 May")
-  is a grouping too, and could be offered as one of the grid's groupings
-  without being stored.
+  is a display mode that folds into a day, and needs nothing stored.
 
 ## Found on the way
 
