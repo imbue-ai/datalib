@@ -129,8 +129,8 @@ no](searching.md#when-the-search-says-no)).
 Everything in the index sits in a container: a message in its thread, a
 thread in its channel, a channel in its workspace, an email thread in
 its account and under each of its labels. `GET /children/{uuid}` lists
-what one holds, oldest first: the rows it holds, the containers it
-holds, and whatever is filed under it, each once.
+what one holds, oldest first: the rows it holds, containers among them,
+and whatever is filed under it, each once.
 `GET /children/source:<id>` lists what a source holds at its top, the
 rows and containers that sit in no container: an email account, a
 Slack workspace, a ChatGPT conversation.
@@ -154,7 +154,7 @@ Slack workspace, a ChatGPT conversation.
   `at` is the commit the page was read at.
 - Each child has its `uuid`, its `sort_key`, whether it is a
   `container` with children of its own, its `kind` and `name`, and,
-  where it has a row, its `author` and the `author_handle` that names
+  where its row has them, its `author` and the `author_handle` that names
   them (`email:…`, `slack:…`), its `created_at`, `preview`, the
   `markdown_uuid` of its document and the `link` that opens it.
 - `limit=` is 1 to 1000, 50 by default. A malformed request is a 400,

@@ -381,7 +381,7 @@ from the cell alone, and a new search shows the new title.
 
 **Every node of a source's tree is a chip by its name**, named by its
 `datalib:node/<uuid>` (`ui/src/cards/nodeChip.ts`): a channel, a label,
-a folder, a page, a thread, any `data_nodes` row
+a folder, a page, a thread, any `nodes` row
 ([`grid_rows.md`](grid_rows.md) § "where a row sits"). Like a
 document's, it has **no resolver**: whoever draws it read the node's
 name and kind from the index, and those change only when its source

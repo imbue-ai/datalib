@@ -24,7 +24,7 @@ of this landed; file references are to that tree.
 |---|---|
 | **block** | content: one thing a person or program wrote, with one author, one time and a body (a message, an email, a comment, an event, a tool call, a page's own text). What search ranks and a hit lands on. A `grid_rows` row; the text below and the search index's code call it an **item**. A page source's whole page (a Notion page, a calendar event, a contact) is one **big block** for now, which its renderer may later split into the blocks it is made of. |
 | **layout** | what is drawn around blocks and says nothing of its own: front matter, the title, a `<details>` opener. The code calls a block and a stretch of layout alike a section (`Section`, the render store's `sections`). |
-| **data node** | a node of the tree that holds blocks and other data nodes: a chat, a thread, a channel, a label, a page, a session. It often has a name and other metadata (its kind, its upstream id), and most of what it says is in the blocks it holds. A `data_nodes` row. Many data nodes are **places**: ones a person browses or filters by, such as a channel, a mailbox or a workspace. |
+| **data node** | a node of the tree that holds blocks and other data nodes: a chat, a thread, a channel, a label, a page, a session. It often has a name and other metadata (its kind, its upstream id), and most of what it says is in the blocks it holds. A `nodes` row. Many data nodes are **places**: ones a person browses or filters by, such as a channel, a mailbox or a workspace. |
 | **document** | a group of blocks that are often read together: a thread, a chat, a page. Render used to write each as a markdown file; since step 5 it is rows of its source's render store. |
 
 The text below also calls a container **read together**. When that holds
@@ -174,7 +174,7 @@ differently, and no fixed set of levels fits them all:
 | Claude Code | project › session › sub-agent session › message |
 
 So every item, and every **data node** (a container that holds items;
-"node" below, never a DAG step, and a row of the `data_nodes` table),
+"node" below, never a DAG step, and a row of the `nodes` table),
 names **one parent and how it sorts among its siblings**, and that is
 all the tree stores. A container has a uuid a person can open. What
 some containers say is an item inside them (a Notion page's own text,

@@ -304,7 +304,7 @@ fn children_page_through_a_channel() {
         "/sql",
         &serde_json::json!({
             "store": "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite",
-            "sql": "SELECT DISTINCT uuid FROM data_nodes WHERE kind = 'Slack Channel' AND name = '#bridge'",
+            "sql": "SELECT uuid FROM nodes WHERE kind = 'Slack Channel' AND name = '#bridge'",
         })
         .to_string(),
     );
@@ -468,7 +468,7 @@ fn a_drive_opens_onto_its_folders() {
         assert_eq!(status, 200, "{body}");
         body["rows"].as_array().unwrap().clone()
     };
-    let tops: Vec<(String, String)> = sql("SELECT DISTINCT kind, name FROM data_nodes \
+    let tops: Vec<(String, String)> = sql("SELECT kind, name FROM nodes \
          WHERE source_id = 'google-drive' AND is_place AND parent_uuid IS NULL ORDER BY name")
     .iter()
     .map(|r| (r[0].as_str().unwrap().into(), r[1].as_str().unwrap().into()))
@@ -484,7 +484,7 @@ fn a_drive_opens_onto_its_folders() {
     );
     let place = |kind: &str, name: &str| {
         sql(&format!(
-            "SELECT DISTINCT uuid FROM data_nodes WHERE source_id = 'google-drive' \
+            "SELECT uuid FROM nodes WHERE source_id = 'google-drive' \
              AND kind = '{kind}' AND name = '{}'",
             name.replace('\'', "''")
         ))[0][0]

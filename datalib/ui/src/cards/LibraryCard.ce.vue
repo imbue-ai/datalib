@@ -59,6 +59,8 @@ const paneEl = useTemplateRef<HTMLDivElement>("paneEl");
 const shown = ref<NodeViewOpts | null>(null);
 const paneTitle = ref("");
 const failed = ref<string | null>(null);
+// Until the tree has its first level: `<vs-tree>` draws nothing meanwhile.
+const loading = ref(true);
 let tree: VsTree | null = null;
 
 /// A level of places, every page of it: a level is a few dozen places, a
@@ -90,9 +92,16 @@ async function sourcesWithPlaces(ids: string[]): Promise<Set<string>> {
 const dataSource = {
   async getChildren(node: VsTreeNode | null): Promise<VsTreeNode[]> {
     if (node !== null) return placesUnder(node.id);
-    const rows = (await api.fetchManageRows()).rows;
-    const held = await sourcesWithPlaces(sourceNodes(rows).map((n) => n.id));
-    return sourceNodes(rows, (id) => held.has(id));
+    try {
+      const rows = (await api.fetchManageRows()).rows;
+      const held = await sourcesWithPlaces(sourceNodes(rows).map((n) => n.id));
+      return sourceNodes(rows, (id) => held.has(id));
+    } catch (e) {
+      failed.value = `The library could not be read: ${(e as Error).message}`;
+      return [];
+    } finally {
+      loading.value = false;
+    }
   },
 };
 
@@ -259,6 +268,7 @@ onMounted(async () => {
     await import("vs-tree");
   } catch (e) {
     failed.value = `The tree could not load: ${(e as Error).message}`;
+    loading.value = false;
     return;
   }
   const el = document.createElement("vs-tree") as VsTree;
@@ -307,6 +317,7 @@ const TREE_CHIP_CSS = `.label { display: flex; min-width: 0; } .label > .chip { 
   <div class="lib">
     <div class="lib-tree">
       <p v-if="failed" class="lib-note lib-failed">{{ failed }}</p>
+      <p v-else-if="loading" class="lib-note" data-testid="library-loading">Loading…</p>
       <div ref="treeHost" class="lib-tree-host" data-testid="library-tree" />
     </div>
     <section class="lib-pane" :class="{ 'is-empty': !shown }">
