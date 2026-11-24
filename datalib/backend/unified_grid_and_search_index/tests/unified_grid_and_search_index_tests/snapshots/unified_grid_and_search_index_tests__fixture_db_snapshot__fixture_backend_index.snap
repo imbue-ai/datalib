@@ -179,7 +179,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "contacts",
       "render_unit_key": "00000000-0000-8140-88d9-42badf1b195b",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "drone.4.of.12@unimatrix01.borg"
@@ -203,7 +203,7 @@ expression: snapshot
       "modified_at": "2371-01-02T00:00:00+00:00",
       "provider": "contacts",
       "render_unit_key": "00000000-0000-8195-8ee2-d14cb601f004",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "searchable": true,
       "source_id": "tng_contacts-diff",
       "title": "Worf"
@@ -227,7 +227,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "contacts",
       "render_unit_key": "00000000-0000-819d-aad9-cb628fc3bec0",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "searchable": true,
       "source_id": "tng_contacts-diff",
       "title": "Kalita"
@@ -275,7 +275,7 @@ expression: snapshot
       "modified_at": "2371-01-09T00:00:00+00:00",
       "provider": "contacts",
       "render_unit_key": "00000000-0000-81e2-8596-1ee8f9640d13",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Jean-Luc Picard"
@@ -335,7 +335,7 @@ expression: snapshot
       "modified_at": "2371-01-09T00:00:00+00:00",
       "provider": "contacts",
       "render_unit_key": "00000000-0000-825c-a3c4-1fb84e9bfce6",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "searchable": true,
       "source_id": "tng_contacts-diff",
       "title": "Jean-Luc Picard"
@@ -371,7 +371,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "contacts",
       "render_unit_key": "00000000-0000-829a-bb9d-4c1b203d3251",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Senior Staff"
@@ -455,7 +455,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "contacts",
       "render_unit_key": "00000000-0000-8429-b938-7d1e51384182",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "searchable": true,
       "source_id": "tng_contacts-diff",
       "title": "Ro Laren"
@@ -623,7 +623,7 @@ expression: snapshot
       "modified_at": "2371-01-02T00:00:00+00:00",
       "provider": "contacts",
       "render_unit_key": "00000000-0000-85d8-ac4b-9c4472cee5ea",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Worf"
@@ -743,7 +743,7 @@ expression: snapshot
       "modified_at": "2370-02-11T00:00:00+00:00",
       "provider": "contacts",
       "render_unit_key": "00000000-0000-86be-a0a0-341fa48bbc80",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "searchable": true,
       "source_id": "tng_contacts-diff",
       "title": "Data"
@@ -1355,7 +1355,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "contacts",
       "render_unit_key": "00000000-0000-8acb-9e72-ef58e1a96813",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Seven of Nine"
@@ -1367,7 +1367,7 @@ expression: snapshot
       "modified_at": "2370-08-22T00:00:00+00:00",
       "provider": "contacts",
       "render_unit_key": "00000000-0000-8b00-b38c-a2a290dad572",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "William T. Riker"
@@ -1607,7 +1607,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "contacts",
       "render_unit_key": "00000000-0000-8c51-a4b4-dde335468f6c",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Hugh"
@@ -1787,7 +1787,7 @@ expression: snapshot
       "modified_at": "2370-09-04T00:00:00+00:00",
       "provider": "contacts",
       "render_unit_key": "00000000-0000-8d78-9232-e6b0deeebfb7",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Geordi La Forge"
@@ -2003,7 +2003,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "contacts",
       "render_unit_key": "00000000-0000-8f5b-ab9b-f6b9fbf217b5",
-      "renderer_version": "rust-v1.18",
+      "renderer_version": "rust-v1.19",
       "searchable": true,
       "source_id": "tng_contacts",
       "title": "Locutus of Borg"
@@ -20632,14 +20632,14 @@ expression: snapshot
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:fbd062622989c2c4f303228a34f53db2e25a1c6fa59fd05f3ec18dd2180ada33",
-      "rows": 202,
+      "members_sha": "sha256:b22a28af9be7146f4a0b9b7b14ab5fd3da455b1019da38ff274ce1dbc9c9c171",
+      "rows": 205,
       "source": ""
     }
   ],
   "summary": {
     "documents_count": 180,
     "grid_rows_count": 615,
-    "storage_rows_count": 262
+    "storage_rows_count": 265
   }
 }
