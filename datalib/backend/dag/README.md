@@ -851,6 +851,11 @@ header says rollback-journal:
 | `run_steps` | step the newest run has reached | what it is doing in that run |
 | `invocations` | process the loop started | when, in which run, and how it ended (`outcome` is NULL while it runs) |
 
+The store's shape moves by the rungs of
+`supervisor/store.rs`'s `LADDER`, which an open climbs before it runs the
+DDL; a store a newer build climbed further is refused, so two builds
+sharing a root run the newer one.
+
 A run must record a state for *every* step in scope (including ones that
 were skipped or blocked and never "ran"), a `finished_at_utc` that tells
 a completed run from a crashed one, and per-step timings. The loop holds

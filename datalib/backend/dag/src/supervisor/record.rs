@@ -127,27 +127,10 @@ pub fn changes<'a>(prev: &'a Record, next: &'a Record) -> Vec<Change<'a>> {
     out
 }
 
-pub(super) const DDL: [&str; 5] = [
-    // One per busy period of the loop; the newest is the run in flight,
-    // or the one that finished last.
-    "CREATE TABLE IF NOT EXISTS runs (
-        run_id TEXT PRIMARY KEY,
-        started_at_utc TEXT NOT NULL,
-        finished_at_utc TEXT,
-        tz_offset TEXT
-    )",
-    // What each step is doing in the newest run; a step the run has not
-    // reached has no row.
-    "CREATE TABLE IF NOT EXISTS run_steps (
-        run_id TEXT NOT NULL,
-        step TEXT NOT NULL,
-        state TEXT NOT NULL,
-        PRIMARY KEY (run_id, step)
-    )",
-    // What a step read at its last success (`reads`, input path to
-    // version), under which definition, and what happened the last time a
-    // run reached it.
-    "CREATE TABLE IF NOT EXISTS steps (
+/// What a step read at its last success (`reads`, input path to
+/// version), under which definition, and what happened the last time a
+/// run reached it.
+pub(super) const STEPS: &str = "CREATE TABLE IF NOT EXISTS steps (
         step TEXT PRIMARY KEY,
         succeeded INTEGER NOT NULL,
         fingerprint TEXT NOT NULL,
@@ -167,7 +150,26 @@ pub(super) const DDL: [&str; 5] = [
         turned_off_by TEXT,
         requests TEXT,
         needs_rerun INTEGER NOT NULL DEFAULT 0
+    )";
+
+pub(super) const DDL: [&str; 5] = [
+    // One per busy period of the loop; the newest is the run in flight,
+    // or the one that finished last.
+    "CREATE TABLE IF NOT EXISTS runs (
+        run_id TEXT PRIMARY KEY,
+        started_at_utc TEXT NOT NULL,
+        finished_at_utc TEXT,
+        tz_offset TEXT
     )",
+    // What each step is doing in the newest run; a step the run has not
+    // reached has no row.
+    "CREATE TABLE IF NOT EXISTS run_steps (
+        run_id TEXT NOT NULL,
+        step TEXT NOT NULL,
+        state TEXT NOT NULL,
+        PRIMARY KEY (run_id, step)
+    )",
+    STEPS,
     // The version each tree was last published at, by its path (a
     // step's tree is its id).
     "CREATE TABLE IF NOT EXISTS sinks (
@@ -203,18 +205,6 @@ pub(super) const CLOSE_ABANDONED_INVOCATIONS: &str =
 pub(super) const RUNNING_INVOCATIONS: &str =
     "SELECT id, step, run_id, started_at_utc FROM invocations INDEXED BY invocations_open \
      WHERE outcome IS NULL ORDER BY started_at_utc, id";
-
-/// Columns added to a table after it first shipped: (table, column,
-/// declaration).
-pub(super) const ADDED_COLUMNS: [(&str, &str, &str); 7] = [
-    ("steps", "state", "TEXT"),
-    ("steps", "state_detail", "TEXT"),
-    ("steps", "turned_off_by", "TEXT"),
-    ("steps", "requests", "TEXT"),
-    ("steps", "needs_rerun", "INTEGER NOT NULL DEFAULT 0"),
-    ("steps", "last_failure_kind", "TEXT"),
-    ("steps", "waiting_for", "TEXT"),
-];
 
 /// A process the loop started, as its row names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
