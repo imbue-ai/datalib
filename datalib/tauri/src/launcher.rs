@@ -773,8 +773,8 @@ mod tests {
         assert!(is_data_root(&tmp.path().join("with_toml")));
     }
 
-    /// A root whose config was deleted still holds feedback and job
-    /// stores under `system/`, so it is not an empty folder.
+    /// A root whose config was deleted still holds the app's stores
+    /// under `system/`, so it is not an empty folder.
     #[test]
     fn a_config_less_root_with_stores_still_counts() {
         let tmp = tempfile::tempdir().unwrap();

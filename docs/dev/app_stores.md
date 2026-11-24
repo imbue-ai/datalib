@@ -53,7 +53,6 @@
                                                   only by the `unified_grid_and_search_index`
                                                   applet, read by `datalib-http`, which
                                                   leaves them out of the Manage counts
-<data_root>/system/feedback.doltlite_db           filed feedback
 <data_root>/system/disk_stats.sqlite              bytes on disk, and free space on
                                                   the disk, over time (plain SQLite;
                                                   any sqlite3 opens it)
@@ -140,7 +139,7 @@ One writer per file ([`etl/README.md`](../../datalib/backend/etl/README.md)
 § "Connection pools" has the rule and why). The `ingest` step owns its group's
 two stores; `render_markdown` owns its render store; `unified_grid_and_search_index` owns
 the grid index's tables and the search index's `search_*` tables in the
-same file; `datalib-http` owns feedback, disk stats and remote media;
+same file; `datalib-http` owns disk stats and remote media;
 the applet only reads, each request inside one read transaction on a
 read-only connection (`DoltRepo::pinned` in
 `unified_grid_and_search_index/src/dolt_repo.rs`). The grid index is plain
@@ -168,25 +167,11 @@ Who writes which line of it, how to add one, and how to read it is
 
 ## The three stores `datalib-http` owns
 
-Feedback and remote media are doltlite; disk stats is plain SQLite.
+Remote media is doltlite; disk stats is plain SQLite.
 `datalib-http` opens each through `sqlx::sqlite::SqlitePool` and wraps
 them in `AppStore` (`datalib/backend/core/src/app_store.rs`), the
 implementation of the `AppRepo` trait in `repo.rs`. The same pool serves
 reads and writes.
-
-**Feedback.** Every UUID-bearing UI surface has a "Feedback…" path; the
-producer-side types and DOM breadcrumb walker are in
-`datalib/ui/src/feedback/context.ts`, the row + discriminated payload is
-`FeedbackRow` in `datalib/backend/app_schema/src/feedback.rs`. Each
-`POST /api/feedback` inserts a row **and** runs
-`SELECT dolt_commit('-Am', 'feedback: <uuid>')` on the same pooled
-connection, so the commit covers exactly the row just written. What
-makes that true is the **file**, not the connection: `-Am` commits
-whatever else is dirty on the branch in that file, from any process
-([`doltlite.md`](doltlite.md#branches-head-and-the-working-set)), which
-is why feedback has a file of its own with one writer. The row's `git_hash` is the build's
-commit as `datalib_runtime::build_id::git_hash` finds it at run time
-([`logging.md`](logging.md) § "Every line has an author").
 
 **Disk stats** is plain SQLite, because nothing ever committed it: it
 is a timeseries — `datalib-http` walks the root every five seconds
@@ -236,7 +221,7 @@ cap, redirects re-judged per hop, private and loopback targets
 refused), its bytes kept at `system/remote_media/<sha256>` and a
 `remote_media` row saying so; every later request is answered from
 there, so the host hears of it once. Both tables are committed per
-write like feedback, are served as typed tables at
+write, are served as typed tables at
 `/api/remote_media/allow` and `/api/remote_media/fetched`, and an allow
 row is deleted through `DELETE /api/remote_media/allow/{uuid}` — the
 document banner offers that for the rows in effect.

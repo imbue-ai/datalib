@@ -1,5 +1,5 @@
-//! [`AppRepo`] — the seam to the stores this server owns: filed
-//! feedback, disk usage and remote media.
+//! [`AppRepo`] — the seam to the stores this server owns: disk usage
+//! and remote media.
 
 use std::sync::Arc;
 
@@ -7,7 +7,6 @@ use async_trait::async_trait;
 
 use app_schema::disk_free::DiskFreeRow;
 use app_schema::disk_usage::DiskUsageRow;
-use app_schema::feedback::FeedbackRow;
 use app_schema::remote_media::allow::RemoteMediaAllowRow;
 use app_schema::remote_media::media::RemoteMediaRow;
 use app_schema::remote_media::AllowScope;
@@ -38,13 +37,6 @@ impl RepoError {
 /// Writes and reads of the application stores.
 #[async_trait]
 pub trait AppRepo: Send + Sync {
-    /// Append a feedback row. The default impl returns
-    /// [`RepoError::ReadOnly`]; only [`crate::dolt_repo::AppStore`]
-    /// overrides it.
-    async fn insert_feedback(&self, _row: FeedbackRow) -> Result<(), RepoError> {
-        Err(RepoError::ReadOnly)
-    }
-
     // --- The disk-usage timeseries ------------------------------------
 
     /// Append disk-usage samples. The caller has already applied the

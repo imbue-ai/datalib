@@ -136,9 +136,6 @@ pub(crate) fn held_documents_sql(source_id: Option<&str>) -> &'static str {
     }
 }
 
-/// What every source's `embed` writes, so any one brings it up to date.
-const CACHE_STEP: &str = "<source>/embed";
-
 impl Reader {
     /// `None` until a keyword pass has started the index: no file, or no
     /// generation in it. Its tables are part of the grid index's shape,
@@ -165,16 +162,7 @@ impl Reader {
         }
         let cache = if cache.exists() {
             let pool = connect(cache).await?;
-            let meta = datalib_store_meta::read(&pool).await;
-            let checked = meta.and_then(|meta| {
-                datalib_store_meta::require(
-                    cache,
-                    Some(CACHE_STEP),
-                    meta.as_ref(),
-                    &crate::cache::shape(),
-                )
-            });
-            if let Err(e) = checked {
+            if let Err(e) = crate::cache::require(cache, &pool).await {
                 pool.close().await;
                 index_pool.close().await;
                 return Err(e);
@@ -1028,7 +1016,7 @@ mod tests {
         set(&cache, "index_hash", "fewer").await;
         let e = Reader::open(&index, &cache).await.err().expect("refused");
         let refused = datalib_store_meta::other_shape(&e).expect("for its shape");
-        assert_eq!(refused.step.as_deref(), Some(CACHE_STEP));
+        assert_eq!(refused.step.as_deref(), Some(crate::cache::CACHE_STEP));
         crate::cache::InferenceCache::open(&cache)
             .await
             .unwrap()

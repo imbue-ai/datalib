@@ -80,7 +80,7 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     # Sets CARGO_PKG_VERSION under rules_rust (which does NOT read
-    # Cargo.toml) — /api/health and the feedback cards report it, and
+    # Cargo.toml) — /api/health reports it, and
     # since the Tauri shell ships this bazel-built binary, it's also the
     # desktop app's version. Must match [package].version in
     # datalib/backend/Cargo.toml; the

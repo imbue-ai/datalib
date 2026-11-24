@@ -69,6 +69,22 @@ export function answers(root, el) {
 }
 
 /**
+ * The uuid of the message around `el`: the closest `id="m-{uuid}"` that
+ * answers to its id, so a copy of another message's wrapper inside a
+ * message is walked past.
+ * @param {Element | null | undefined} el
+ * @returns {string | null}
+ */
+export function messageAncestor(el) {
+  let cur = el ?? null;
+  while (cur) {
+    if (cur.id.startsWith("m-") && answers(cur.ownerDocument, cur)) return cur.id.slice(2);
+    cur = cur.parentElement;
+  }
+  return null;
+}
+
+/**
  * Open every `<details>` enclosing `el`. A tool step lives inside a
  * collapsed `.tool-group`, so "scroll to it" has nothing to scroll to
  * until the group is open. Walks the whole chain: groups nest.

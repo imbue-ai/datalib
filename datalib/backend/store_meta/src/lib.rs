@@ -61,7 +61,6 @@ pub enum StoreKind {
     /// its prompt, and where each embedded document's chunks fall
     /// (`unified_grid_and_search_index/search_index`). Plain SQLite.
     InferenceCache,
-    Feedback,
     /// `system/disk_stats.sqlite`: bytes under each tree of the root, and
     /// the free space on its disk, over time. Plain SQLite.
     DiskStats,

@@ -30,6 +30,9 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
     // A derived store is a function of another; one in another shape is
     // rebuilt by running the step, never migrated in place. Only its
     // indexes moving is made good here, by its owner's open.
+    if env.function == Function::UnifiedGridAndSearchIndex {
+        rewrite_inference_cache(env, data_root, emitter).await?;
+    }
     let Some((store, want)) = derived_store(env, data_root, &tree) else {
         tracing::debug!(step = %env.step, "prepare: nothing of ours to bring up to date");
         return Ok(Vec::new());
@@ -50,6 +53,22 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
         emitter.needs_rerun();
     }
     Ok(Vec::new())
+}
+
+/// The one thing of the inference cache's shape prepare moves itself: its
+/// page size, which no reader reads around. Every `embed` writes the
+/// cache, but only this step is asked once, so it is this one's.
+async fn rewrite_inference_cache(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<()> {
+    use datalib_search_index::cache;
+    let path = datalib_core::layout::inference_cache_db(data_root);
+    if !path.exists() || !cache::in_other_pages(&path).await? {
+        return Ok(());
+    }
+    meta_of(&path).await?;
+    const REWRITING: &str = "rewriting the stored embeddings so search loads them faster";
+    tracing::info!(step = %env.step, "prepare: {REWRITING}");
+    emitter.progress().set_message(REWRITING);
+    cache::rewrite_pages(&path).await
 }
 
 /// The map is one JSON file, every byte of it a layout of the search
@@ -1205,6 +1224,50 @@ mod tests {
         std::fs::write(map_file::path(root.path()), by_path.to_string()).unwrap();
         assert!(ask().await, "an earlier build's map");
         assert_eq!(map_file::read(root.path()).unwrap(), None, "deleted");
+    }
+
+    /// A cache in the 4 KB pages an earlier build wrote is rewritten at
+    /// launch, with nothing to rerun and every vector kept.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_inference_cache_in_small_pages_is_rewritten() {
+        use datalib_search_index::{cache, InferenceCache};
+        let root = tempfile::tempdir().unwrap();
+        let env = env_of(
+            "unified_grid_and_search_index/unified_grid_and_search_index",
+            Function::UnifiedGridAndSearchIndex,
+        );
+        let path = datalib_core::layout::inference_cache_db(root.path());
+        let ask = || async {
+            let emitter = Emitter::new(env.step.clone());
+            run(&env, root.path(), &emitter).await.unwrap();
+            assert!(!emitter.asked_for_a_rerun());
+        };
+        ask().await;
+        assert!(!path.exists(), "none is made");
+
+        let made = InferenceCache::open(&path).await.unwrap();
+        made.put("gemma", &[("a".to_string(), vec![0.5; 768])])
+            .await
+            .unwrap();
+        made.close().await;
+        let pool = plain_pool(&path).await;
+        for sql in [
+            "PRAGMA journal_mode = DELETE",
+            "PRAGMA page_size = 4096",
+            "VACUUM",
+            "PRAGMA journal_mode = WAL",
+        ] {
+            sqlx::query(sql).execute(&pool).await.unwrap();
+        }
+        pool.close().await;
+        assert!(cache::in_other_pages(&path).await.unwrap(), "set up");
+
+        ask().await;
+        assert!(!cache::in_other_pages(&path).await.unwrap());
+        let kept = InferenceCache::open(&path).await.unwrap();
+        let missing = kept.missing("gemma", &["a".to_string()]).await.unwrap();
+        kept.close().await;
+        assert!(missing.is_empty());
     }
 
     /// A new version of the index's drawing or chunking moves nothing the

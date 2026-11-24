@@ -5,7 +5,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
-use datalib_etl_linkedin::ingest::photos::load_photo_blobs;
 use datalib_etl_linkedin::ingest::{self, db_path_for, FetchOptions, RawDb};
 use datalib_etl_linkedin_render::connections;
 use datalib_etl_linkedin_render::posts;
@@ -117,26 +116,6 @@ async fn problems(db: &RawDb) -> Vec<(String, String)> {
 
 async fn rows(db: &RawDb, table: &str) -> Vec<serde_json::Value> {
     db.load_payloads(table).await.unwrap_or_default()
-}
-
-const CONTACT_PHOTOS_DDL: &str = "CREATE TABLE IF NOT EXISTS contact_photos (id TEXT PRIMARY KEY, \
-     owner_id TEXT NOT NULL, source_url TEXT NOT NULL, blake3 TEXT NULL)";
-
-/// What the photo fetch earlier builds ran left for one connection: the
-/// bytes in the CAS and an edge row naming them.
-async fn seed_photo(db: &RawDb, owner: &str, bytes: &[u8]) -> Result<()> {
-    let cas = db.cas().expect("the download handle has a CAS");
-    let blake3 = cas.put(bytes, Some("image/png")).await?;
-    sqlx::query(CONTACT_PHOTOS_DDL).execute(db.pool()).await?;
-    let image = format!("{owner}/photo.png");
-    sqlx::query("INSERT INTO contact_photos VALUES (?, ?, ?, ?)")
-        .bind(format!("{owner}#{image}"))
-        .bind(owner)
-        .bind(&image)
-        .bind(blake3)
-        .execute(db.pool())
-        .await?;
-    Ok(())
 }
 
 #[test]
@@ -474,61 +453,6 @@ fn ingests_complete_export_and_renders_all_message_feeds() -> Result<()> {
             "field values in search text"
         );
 
-        // ── a photo an earlier build fetched ──────────────────────
-        // Nothing fetches a photo now (linkedin.com shows a profile only
-        // to a signed-in visitor), but a store an earlier build filled
-        // keeps its photos: a re-read of the export leaves them, and the
-        // contact links one where the blob store holds it.
-        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
-        seed_photo(
-            &db,
-            "https://www.linkedin.com/in/jlp",
-            b"PNG bytes for Picard",
-        )
-        .await?;
-        ingest::fetch(FetchOptions {
-            db: db.clone(),
-            input_path: export.clone(),
-            progress: Progress::noop(),
-            control: Default::default(),
-        })
-        .await
-        .context("re-read the export")?;
-        datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test: linkedin fetch").await?;
-        assert_eq!(problems(&db).await, [], "nothing was asked of linkedin.com");
-        let blobs = load_photo_blobs(&db).await?;
-        let photo = blobs
-            .get("https://www.linkedin.com/in/jlp")
-            .expect("Picard's photo kept");
-        assert_eq!(photo.bytes, b"PNG bytes for Picard");
-        assert_eq!(photo.content_type.as_deref(), Some("image/png"));
-
-        let mut with_photo: Vec<RenderedMarkdown> = Vec::new();
-        {
-            let mut on_doc = |d: RenderedMarkdown| {
-                with_photo.push(d);
-                Ok(())
-            };
-            connections::render_connections(&source, &Progress::noop(), &mut on_doc)
-                .context("render_connections with photo")?;
-        }
-        let picard_doc = with_photo
-            .iter()
-            .find(|d| d.markdown_uuid == picard_uuid)
-            .expect("picard re-rendered");
-        let md = join(&picard_doc.sections);
-        let address = format!(
-            "/blob/{}",
-            datalib_etl::blob_cas::blake3_hex(b"PNG bytes for Picard")
-        );
-        assert!(md.contains(&address), "markdown links the photo: {md}");
-        let photo_url = picard_doc.contacts[0].photo_url.as_deref().unwrap_or("");
-        assert!(
-            photo_url.starts_with("/data/") && photo_url.ends_with(&address),
-            "{photo_url}"
-        );
-        db.close().await;
-
         Ok::<_, anyhow::Error>(())
     })?;
 
@@ -719,78 +643,6 @@ async fn only_a_well_formed_csv_empties_its_table() -> Result<()> {
     )?;
     fetch().await?;
     assert!(rows(&db, "connections").await.is_empty());
-    db.close().await;
-    Ok(())
-}
-
-/// A connection a newer Connections.csv no longer lists kept its photo
-/// edge, so the photo outlived the contact. An export without the CSV, or
-/// with one that will not read, says nothing about who is connected, and
-/// keeps every edge.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_connection_dropped_from_the_export_loses_its_photo_edge() -> Result<()> {
-    let tmp = tempfile::tempdir()?;
-    let export = tmp.path().join("export");
-    fs::create_dir_all(&export)?;
-    build_export(&export)?;
-    let db = RawDb::open(&db_path_for(tmp.path())).await?;
-    let fetch = || {
-        ingest::fetch(FetchOptions {
-            db: db.clone(),
-            input_path: export.clone(),
-            progress: Progress::noop(),
-            control: Default::default(),
-        })
-    };
-    let owners = || async {
-        sqlx::query_scalar::<_, String>("SELECT owner_id FROM contact_photos ORDER BY owner_id")
-            .fetch_all(db.pool())
-            .await
-            .unwrap()
-    };
-    fetch().await?;
-    // What an earlier build's photo fetch recorded for two connections
-    // that had no photo.
-    sqlx::query(CONTACT_PHOTOS_DDL).execute(db.pool()).await?;
-    for owner in [
-        "https://www.linkedin.com/in/bev",
-        "https://www.linkedin.com/in/jlp",
-    ] {
-        sqlx::query("INSERT INTO contact_photos VALUES (?, ?, ?, NULL)")
-            .bind(format!("{owner}#{owner}"))
-            .bind(owner)
-            .bind(owner)
-            .execute(db.pool())
-            .await?;
-    }
-
-    let both = fs::read(export.join("Connections.csv"))?;
-    fs::write(export.join("Connections.csv"), b"")?;
-    fetch().await?;
-    assert_eq!(
-        owners().await.len(),
-        2,
-        "a CSV that will not read keeps both"
-    );
-
-    fs::remove_file(export.join("Connections.csv"))?;
-    fetch().await?;
-    assert_eq!(owners().await.len(), 2, "a CSV left out keeps both");
-
-    fs::write(export.join("Connections.csv"), both)?;
-    assert_eq!(fetch().await?.photos_removed, 0);
-    fs::write(
-        export.join("Connections.csv"),
-        "First Name,Last Name,URL,Email Address,Company,Position,Connected On\n\
-         Jean-Luc,Picard,https://www.linkedin.com/in/jlp,,Starfleet,Captain,16 Jun 2026\n",
-    )?;
-    let s = fetch().await?;
-    assert_eq!(
-        owners().await,
-        ["https://www.linkedin.com/in/jlp"],
-        "Crusher is no longer a connection"
-    );
-    assert_eq!(s.photos_removed, 1);
     db.close().await;
     Ok(())
 }

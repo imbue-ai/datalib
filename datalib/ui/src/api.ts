@@ -11,7 +11,6 @@ import type {
   RunKind,
   WipeKind,
 } from "./generated/enums";
-import type { FeedbackContext } from "./feedback/context";
 import { ApiError, errorDetail, FailureError } from "./apiError";
 import { pushToast } from "./toasts";
 
@@ -1950,44 +1949,6 @@ export async function putUiState(
     keepalive: opts.keepalive,
   });
   if (!r.ok) throw new Error(`PUT /api/ui/state/${name} → ${r.status}`);
-}
-
-export type FeedbackRequest = {
-  sentiment: "up" | "down" | null;
-  comment: string;
-  context: FeedbackContext;
-};
-
-export type FeedbackResponse = {
-  feedback_uuid: string;
-  created_at_utc: string;
-  git_hash: string;
-};
-
-// POST /api/feedback. Server stamps the UUID, timestamp, app_version, and
-// git_hash; we ship sentiment + comment + the producer-built context.
-export async function submitFeedback(
-  req: FeedbackRequest,
-  signal?: AbortSignal,
-): Promise<FeedbackResponse> {
-  const r = await fetch("/api/feedback", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(req),
-    signal,
-  });
-  if (!r.ok) {
-    // Surface server message when present; fall back to status code so the
-    // modal's error line says something more useful than "Failed to fetch".
-    let detail = "";
-    try {
-      detail = await r.text();
-    } catch {
-      // ignore — body may not be readable on aborted responses
-    }
-    throw new Error(detail ? `${r.status}: ${detail}` : `POST /api/feedback → ${r.status}`);
-  }
-  return (await r.json()) as FeedbackResponse;
 }
 
 // Credentials and connection testing, for the Add-a-source wizard.

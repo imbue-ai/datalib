@@ -90,7 +90,7 @@ pub async fn run(
         // trees, so cache-aware backups (`restic --exclude-caches` etc.)
         // may skip all of it. Tagging the parent also means the tag is
         // right before the search step has ever run. Nothing precious lives
-        // here — feedback and the loop's record are under `system/`, which is
+        // here — the app's stores and the loop's record are under `system/`, which is
         // never tagged.
         datalib_core::layout::mark_derived_cache(
             &datalib_core::layout::unified_grid_and_search_index_dir(data_root),
@@ -334,7 +334,7 @@ mod tests {
                 .exists(),
             "the per-index tag was replaced by the one on the parent"
         );
-        // `system/` is operational history — feedback, the loop's record — and is
+        // `system/` is operational history — remote media, the loop's record — and is
         // not rebuildable from raw, so it must never be swept up by
         // `--exclude-caches`.
         assert!(

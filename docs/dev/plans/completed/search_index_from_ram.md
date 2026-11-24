@@ -1,24 +1,38 @@
 # Our own search index, fed from memory
 
-**Status: built (2026-11-18). All of "Order of work"
-is built (`//datalib/backend/search_index`, `//datalib/backend/embedder`):
+**Status: built (2026-11-18), kept as the record of what was decided
+and why.** All of "Order of work" is built
+(`//datalib/backend/search_index`, `//datalib/backend/embedder`):
 search reads only the search index, nothing runs qmd, and qmd's code,
 its runtime, the release's share of it and `third-party/qmd` are
 deleted (#1797), as are the names in the code (#1805). The
-`qmd_aggregator` step is gone, its work done by `grid_index` (#1818);
-the `qmd_embed` lock is `embedder`, and `qmd_keyword` is gone (#1845).
-The last name, `grid_rows.qmd_path`, is gone too: a row is filed under
-its `source_id` when it is written, and its document's file is
-`markdowns.md_path` until
-[`documents_to_blocks.md`](documents_to_blocks.md) step 5 stops
-writing the files.** Numbers were
-measured on 2026-11-11 on `~/datalib/stay_alive_1` (sizes and counts only).
-The wider retrieval redesign in [`multimodal_retrieval.md`](multimodal_retrieval.md)
-overlaps with this one; this plan is the narrow first cut of it: keep the
-model, keep the rendered files, stop qmd from storing the text again, and
-move the indexing itself into Rust.
-Rendering documents on demand, which would let a source stop writing its
-files, is the step after this one ("Later", at the end).
+`qmd_aggregator` step is gone, its work done by the index step (#1818),
+now `unified_grid_and_search_index`; the `qmd_embed` lock is `embedder`,
+and `qmd_keyword` is gone (#1845).
+
+The tree has moved on since, so check a claim below against the code
+before repeating it. In particular:
+
+- **A message is a chunk of its own** (#1786), not packed with its
+  neighbours up to the budget, and the budget is counted in the
+  model's tokens (#1817), not bytes. `search_index/src/chunk.rs` says
+  why.
+- **No `.md` file is read or written.** The index draws its text from
+  each source's render store (#1782), and render writes no files
+  (#1879): [`documents_to_blocks.md`](../documents_to_blocks.md)
+  steps 3 and 5.
+- **Vectors are held in half precision** (#1935), and an embed can run
+  on a GPU, here or on Modal
+  ([`embed_on_modal.md`](../embed_on_modal.md)).
+- **Both items under "Later" happened another way.** Render keeps
+  every document in its store instead of rendering on demand, and a
+  Lightroom photo is a searched page of labelled lines
+  (`lightroom_render/src/photo.rs`).
+
+Numbers were measured on 2026-11-11 on `~/datalib/stay_alive_1` (sizes
+and counts only). How search uses the index is
+[`documents_to_blocks.md`](../documents_to_blocks.md) §"How search
+works"; the embedder's facts are in its `README.md`.
 
 ## The problem
 
@@ -334,7 +348,7 @@ its vectors name the old text.
 SQLite's `vec1` extension (an IVF index with product quantization,
 cosine or L2, version 0.7), compiled out unless the build sets
 `DOLTLITE_VEC1=1`; ours does not. What it does is in
-[`doltlite.md`](../doltlite.md) § "Vector search: vec1", each fact a
+[`doltlite.md`](../../doltlite.md) § "Vector search: vec1", each fact a
 test in `vec1_facts_test` against a test-only shell built with it. For
 this plan: a filter on a column of the vec1 table itself (a `source_id`
 carried there) is applied before the nearest are chosen, but a filter

@@ -876,6 +876,21 @@ Creating and dropping a table in one open still appends chunks, though
 ### Disk space and `dolt_gc`
 
 - **Doltlite does not compress chunks** (dolthub/doltlite#655, open).
+- **A store's file can be up to 1 MiB larger than what it holds, and
+  shrink while it gains rows.** After two small commits in a row (each
+  under 64 KB) that grow the file, doltlite writes zeros out to 1 MiB
+  past the commit's start, so the commits after it overwrite blocks
+  instead of growing the file. A writer's close gives the zeros back:
+  four small commits read 1,050,662 bytes open and 8,671 closed, and a
+  later writer's close gives back what an earlier one left (0.51.13).
+  The close skips it, silently, when another process holds the file's
+  lock or the handle has reloaded the file since its last commit
+  (`csTrimZeroTail` in the amalgamation; read there, not measured). So
+  a size is not a count of what a store holds: two PDFs' render store
+  was 377 KB after a bare `datalib-pipeline sync` and 1.05 MB after the
+  same sync in the app on CI, and the next sync there, which added a
+  document, left it at 422 KB. To ask whether a store gained something,
+  count its rows.
 - **A deleted row stays reachable from the commits before it**, so a
   `DELETE` and a commit reclaim nothing, even after `dolt_gc()`.
   Rewriting history does: `dolt_reset('--soft', <base>)` then

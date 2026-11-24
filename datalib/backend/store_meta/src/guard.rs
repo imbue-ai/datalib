@@ -188,11 +188,11 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         let files = [
-            "system/feedback.doltlite_db",
+            "system/remote_media.doltlite_db",
             "system/runs/runs.sqlite",
             "system/disk_stats.sqlite",
             "system/disk_stats.sqlite-journal",
-            "system/feedback.doltlite_db.lock",
+            "system/remote_media.doltlite_db.lock",
             "system/api-token",
             "slack/ingest/entities.doltlite_db",
             "slack/ingest/blobs.sqlite",
@@ -218,7 +218,7 @@ mod tests {
                 "slack/ingest/entities.doltlite_db",
                 "slack/render_markdown/indexed_markdown.doltlite_db",
                 "system/disk_stats.sqlite",
-                "system/feedback.doltlite_db",
+                "system/remote_media.doltlite_db",
                 "system/runs/runs.sqlite",
                 "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite",
             ]
