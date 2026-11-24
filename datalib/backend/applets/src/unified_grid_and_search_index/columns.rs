@@ -114,6 +114,7 @@ pub(crate) fn handle_mark(kind: HandleKind) -> &'static str {
         HandleKind::Email => "email",
         HandleKind::Tel => "sms",
         HandleKind::Slack => "slack",
+        HandleKind::Discord => "discord",
         HandleKind::SignalAci => "signal",
         HandleKind::Facebook => "facebook",
         HandleKind::Linkedin => "linkedin",

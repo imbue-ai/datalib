@@ -331,8 +331,8 @@ the summary reports only the final batch — silently, since a smaller
 number looks like a smaller run. `deltas_span_a_mid_run_commit` in
 `download_run.rs` is the guard.
 
-**Only 12 of the 32 source types use `DownloadRun`** (baby_connect,
-calendar, chatgpt, claude's `api` method, email's JMAP and Gmail paths,
+**Only 13 of the 33 source types use `DownloadRun`** (baby_connect,
+calendar, chatgpt, claude's `api` method, discord, email's JMAP and Gmail paths,
 github and gitlab through `forge-ingest-common`, google_drive, linear,
 notion, slack, todoist). The
 others write no `sync_runs` row and no deltas — their history is still
@@ -397,6 +397,7 @@ therefore what it can see:
 | `google_takeout` Maps reviews and saved places, YouTube, Gemini | each re-read file, which is the feed's whole table | records the file no longer lists, and a Gemini activity's attachment edges. A missing file deletes nothing, and so does one in a layout the reader does not know (no list, or entries none of which it could read): that fails the feed as a `phase:` problem. A Gemini log really emptied upstream cannot prune: no empty layout has been seen to tell it from one the reader does not know |
 | `email` (mbox), `sms_backup_restore`, `google_takeout` Voice | a read of every file: every run for mbox, and for the others whenever one was removed or rewritten | records no file holds any more, in the transaction that writes what was read. Nothing is deleted when the walk or any file's read failed (an mbox with no message, an SMS backup with no XML element or cut off before its root closes, a Voice thread with no message, a call with no time, a `Bills.html` with no table each count as a failed read), or when Takeout's `Voice/` is missing. After a clean read of the mbox folder, everything under an account other than the configured one is deleted |
 | `slack` | the trailing `refresh_window_days` re-walk, and each `conversations.replies` thread | top-level messages inside the walked range, each with its thread's replies; replies on a re-fetched thread |
+| `discord` | the trailing `refresh_window_days` re-read of each conversation that holds a message that new | messages inside the stretch read that it did not return, with their files' edges. A conversation that leaves its listing keeps what it holds |
 | `github` / `gitlab` | every PR's / MR's whole child list, per fetch | deleted comments, reviews, discussions |
 | `claude` (`api`) | `/chat_conversations`, one org at a time | that org's conversations |
 | `chatgpt` | `/conversations`, when the walk reached `total` | conversations |
@@ -615,6 +616,7 @@ user list, claude's orgs and project docs).
 | Source | Listed | Held at | Range in `coverage` |
 |---|---|---|---|
 | slack | channels, threads (by `latest_reply`), file edges, the authors of stored messages | `messages`, `threads`, `slack_attachments`, `users` sidecars | each channel's history; each conversation's searched reply time |
+| discord | channels, threads and direct messages, each with its newest message; file edges | `discord_attachments` sidecar | each conversation's message ids; each channel's thread listing, by newest message |
 | github, gitlab | `listed_change_requests`, from each scope's search | the PR / MR sidecar, at `updated_at` | each scope's `updated_at` |
 | email (JMAP, Gmail) | `listed_messages`, from the delta or an enumeration; under a label filter, also the rest of each kept thread, from `thread_members` | `emails` sidecar, then the `.eml` edge | — |
 | notion | search results are the `pages` rows; in roots mode, `listed_pages` (written by the walk down from the roots on a first sync, by the search after), and the pages `tree` puts under a root | `pages` (roots mode), `page_markdown`, `page_comments`, attachment edges | the page's `last_edited_time`, as the search or the walk lists it |
@@ -708,6 +710,7 @@ leaves an on-disk superset, and nothing deletes it.
 | Provider | Widening a knob |
 |---|---|
 | slack | An earlier `since` is a gap below the spans held; `media` turned on makes every stored file edge without bytes owed |
+| discord | An earlier `since` is a gap below the spans held; a server or channel newly named has no spans; `media` turned on makes every stored file edge without bytes owed |
 | github, gitlab | A wider `refresh_window_days` is a gap below each scope's `coverage` |
 | email (JMAP, Gmail) | An admitted mailbox or label with no `listed_whole` row is enumerated until an enumeration of it finishes, and so, on Gmail, is one whose last walk began after the `since` now set; a raised `blob_size_limit_bytes` makes a held message with no `.eml` owed; `whole_threads` turned on lists the rest of every kept thread |
 | garmin | An earlier `since` leaves days with no row and dates with no `coverage`, and the next run fetches exactly those |

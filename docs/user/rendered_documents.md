@@ -184,7 +184,8 @@ and `+00:00` means the time really was on UTC's clock. (RFC 3339 spelled
 the first `-00:00`; read that the same way.) A message's time is written
 with `Z` when its source records only an instant: a Slack message (an
 author's profile names where they are now, not where they were when
-they wrote it), a phone backup's milliseconds (SMS, iMessage, Signal), a
+they wrote it), a Discord message (its id holds the instant), a phone
+backup's milliseconds (SMS, iMessage, Signal), a
 service stamping its own UTC (a Drive, Todoist, Notion, GitHub or
 GitLab comment). Show such a
 time on your reader's own clock rather than as UTC; Datalib's viewer

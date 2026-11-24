@@ -12,6 +12,7 @@ const KINDS = new Set([
   "email",
   "tel",
   "slack",
+  "discord",
   "signal_aci",
   "facebook",
   "linkedin",

@@ -737,6 +737,7 @@ fn build_reactions(
             // empty user component.
             let id = ids::reaction(source_id, &m.team_id, &m.channel_id, &m.ts, name, "");
             out.push(NormalizedReaction {
+                count: 1,
                 reaction_uuid: id.uuid.clone(),
                 reactor_handle: None,
                 // A count, not a person.
@@ -750,6 +751,7 @@ fn build_reactions(
             for u in users {
                 let id = ids::reaction(source_id, &m.team_id, &m.channel_id, &m.ts, name, u);
                 out.push(NormalizedReaction {
+                    count: 1,
                     reaction_uuid: id.uuid.clone(),
                     reactor_handle: Handle::slack(&m.team_id, u),
                     reactor_kind: AuthorKind::Named,

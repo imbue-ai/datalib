@@ -130,6 +130,13 @@ pub async fn run(
             let report = datalib_etl_slack::probe::probe(&config, ask, progress).await?;
             Ok(serde_json::to_value(report)?)
         }
+        SourceType::Discord => {
+            let config: datalib_etl_discord_config::DiscordConfig =
+                serde_json::from_value(params.clone())
+                    .context("parse the params as a discord download config")?;
+            let report = datalib_etl_discord::probe::probe(&config, ask, progress).await?;
+            Ok(serde_json::to_value(report)?)
+        }
         SourceType::Garmin => {
             let config: datalib_etl_garmin_config::GarminConfig =
                 serde_json::from_value(params.clone())
@@ -168,7 +175,7 @@ pub async fn run(
         other => anyhow::bail!(
             "no probe for source type `{other}`. Probing means asking a live service what an \
              account can reach; only `calendar`, `contacts`, `email`, `claude`, `chatgpt`, \
-             `garmin`, `github`, `linear`, `notion`, `slack` and `todoist` implement it so far."
+             `discord`, `garmin`, `github`, `linear`, `notion`, `slack` and `todoist` implement it so far."
         ),
     }
 }
