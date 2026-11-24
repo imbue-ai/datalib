@@ -304,18 +304,29 @@ Four producers, each needing less of a provider than the one before:
   written nothing. A provider's own source contact for the same handle
   replaces the baseline and keeps its count (`document_contacts`).
 
-Every `RenderedMarkdown` carries its `contacts`, and the render store
-and the index hold them in two tables: `source_contacts`
-(`markdown_uuid`, `contact_key`, `source_id`, `name`, `seen_items`,
-`last_seen_at`, and the whole record as `contact_json`) and
-`source_contact_handles` (`markdown_uuid`, `contact_key`, `handle`;
-the index's copy is indexed by handle). `unified_grid_and_search_index` loads them the way
-it loads `grid_rows`.
+Every `RenderedMarkdown` carries its `contacts`. The render store holds
+them in two tables: `source_contacts` (`markdown_uuid`, `contact_key`,
+`source_id`, `name`, `seen_items`, `last_seen_at`, and the whole record
+as `contact_json`) and `source_contact_handles` (`markdown_uuid`,
+`contact_key`, `handle`).
+
+**The index holds each distinct record once**
+(`etl/render/src/grid_index/contact_records.rs`). A person is in as many
+documents as they wrote or were named in, and their record is the same
+in all of them but for `seen`, how much they wrote in that document. So
+the index keeps the record without `seen` in `contact_records`
+(`record_id`, `source_id`, `contact_key`, `name`, `contact_json`), its
+handles in `contact_record_handles` (`record_id`, `handle`), and a row
+per document in `document_contacts` (`markdown_uuid`, `record_id`,
+`seen_items`, `last_seen_at`; `seen_items` is null where the source
+counts nothing). In a library of 309,481 rows there were 2,081 distinct
+records. A re-render replaces its document's `document_contacts` rows,
+and a record no document carries goes at the end of the pass.
 
 **`POST /people` on the `unified_grid_and_search_index` applet** takes `{"handles":
 […]}` and answers `{"people": {<handle>: [NormalizedContact, …]}}`: for
 each handle, every source contact holding it, one per source and key
-(the rows from each document summed), ranked by
+(what was written in each document summed), ranked by
 `unified_grid_and_search_index/src/people.rs`: a source about people first, then the
 chat where the person wrote the most. A handle no source mentions is
 absent. This works with no contacts app at all.
@@ -675,7 +686,7 @@ The keys read the search terms, which hold each row's people by handle
 ([`grid_rows.md`](grid_rows.md) §"`supplied_terms`"). A name also
 reaches every handle a source ever showed under it, through the search
 terms' `names` table, filled from the rows' authors and from
-`source_contacts`. A chip's "Everything with <name>" writes
+`contact_records`. A chip's "Everything with <name>" writes
 `with:contact:<id>` when the handle is linked to one of your contacts,
 else `with:<handle>` (`chipActions.ts::everythingWith`). Typing `@` at
 the start of a word offers people and writes the pick as `with:`.

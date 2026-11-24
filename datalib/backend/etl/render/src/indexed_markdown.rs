@@ -640,9 +640,13 @@ impl IndexedMarkdownStore {
                 let mut guard = self.write_lock.acquire().await?;
                 let conn = guard.conn();
                 let set = serde_json::to_string(markdown_uuids)?;
-                crate::grid_index::delete_document_rows(conn, markdown_uuids)
-                    .await
-                    .context("remove documents from the store")?;
+                crate::grid_index::delete_document_rows(
+                    conn,
+                    crate::grid_index::Store::Render,
+                    markdown_uuids,
+                )
+                .await
+                .context("remove documents from the store")?;
                 for sql in [REMOVED_SECTIONS, REMOVED_DRAWN, REMOVED_FOLDS] {
                     sqlx::query(sql)
                         .bind(&set)
@@ -1898,6 +1902,7 @@ mod tests {
             DOCUMENT_FOLDS,
         ];
         statements.extend(crate::grid_index::DELETE_DOCUMENTS);
+        statements.extend(crate::grid_index::Store::Render.delete_contacts());
         blocking(crate::grid_index::assert_searched_by_index(
             &st.pool,
             &statements,
