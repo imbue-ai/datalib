@@ -241,6 +241,7 @@ mod tests {
             writer.flush().await;
             datalib_runs::processes(td.path(), None, Some("applet"), 10)
                 .await
+                .unwrap()
                 .into_iter()
                 .next()
         };

@@ -253,7 +253,7 @@ async fn the_prepare_run_lists_every_step_it_will_ask_from_the_start() {
         })
         .collect();
     loop {
-        let snap = datalib_runs::snapshot(&root).await;
+        let snap = datalib_runs::snapshot(&root).await.unwrap();
         let mut got: Vec<(String, &str)> = snap
             .steps
             .iter()

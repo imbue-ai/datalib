@@ -569,10 +569,12 @@ async fn a_failed_pass_that_runs_again_is_an_error_and_a_count() {
     let root = h.root.path().to_path_buf();
     let run = datalib_runs::snapshot(&root)
         .await
+        .unwrap()
         .run_id
         .expect("the run is in the store");
     let errors: Vec<String> = datalib_runs::log_after(&root, &run, Some("c"), 0, 100)
         .await
+        .unwrap()
         .into_iter()
         .filter(|l| l.level == "error")
         .map(|l| l.msg.clone())
@@ -586,6 +588,7 @@ async fn a_failed_pass_that_runs_again_is_an_error_and_a_count() {
     let failed: Vec<(String, i64)> =
         datalib_runs::latest_metric(&root, datalib_metrics::FAILED_PASSES)
             .await
+            .unwrap()
             .into_iter()
             .map(|m| (m.step, m.value))
             .collect();

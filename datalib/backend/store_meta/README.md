@@ -60,6 +60,7 @@ in, and one reader-open that checks it:
 | occurrences | `occurrences::store::shape` | (read only by its own step) |
 | contacts | `doltlite_raw::curated_shape` | `ContactsReader::open` |
 | a step's `problems.sqlite` | `StepFile::shape` | `datalib_step_problems` reads `shared_schema_version` |
+| run store (`system/runs/runs.sqlite`) | `datalib_runs::store::shape` | `datalib_runs::store::open_reader` |
 
 Once a store passes the check, every table and column this build reads
 is in it. A "no such table" or "no such column" after that means the
