@@ -2,9 +2,7 @@
 //! remote media (the allow-list and the download CAS's index), one
 //! doltlite file each, and the disk timeseries, one plain SQLite file.
 
-use crate::app_store_migrate::{
-    carry_legacy_usage, DISK_STATS_LADDER, FEEDBACK_LADDER, REMOTE_MEDIA_LADDER,
-};
+use crate::app_store_migrate::{DISK_STATS_LADDER, FEEDBACK_LADDER, REMOTE_MEDIA_LADDER};
 use crate::repo::{AppRepo, RepoError};
 use crate::store::{open_plain_pool, open_pool};
 use app_schema::disk_free::DiskFreeRow;
@@ -123,18 +121,6 @@ impl AppStore {
         store.init_feedback_table().await?;
         store.init_disk_stats_tables().await?;
         store.init_remote_media_tables().await?;
-        // A root from before `disk_stats` keeps its timeseries in the
-        // doltlite `usage` store. Losing it costs a sparkline's history,
-        // not the app, so a copy that fails is logged and tried again on
-        // the next open rather than refusing to start.
-        match carry_legacy_usage(root, &store.disk_stats_pool).await {
-            Ok(0) => {}
-            Ok(n) => tracing::info!(rows = n, "disk stats: carried over the old usage store"),
-            Err(e) => tracing::error!(
-                "disk stats: could not carry over the old usage store, left in place for \
-                 the next open: {e}"
-            ),
-        }
         // Which build wrote each store, beside its tables. Feedback and
         // remote media are committed per row with `-Am`, so a changed
         // meta row is sealed here rather than left to ride into the next
@@ -858,26 +844,6 @@ mod tests {
             .await
             .unwrap();
             feedback.close().await;
-
-            let usage = open_pool(&crate::layout::legacy_usage_db(td.path()))
-                .await
-                .unwrap();
-            sqlx::query(
-                "CREATE TABLE disk_usage (path VARCHAR(512) NOT NULL, \
-                 measured_at VARCHAR(40) NOT NULL, bytes BIGINT NOT NULL, \
-                 PRIMARY KEY (path, measured_at))",
-            )
-            .execute(&usage)
-            .await
-            .unwrap();
-            sqlx::query(
-                "INSERT INTO disk_usage (path, measured_at, bytes) \
-                 VALUES ('.', '2026-09-10T10:00:00+02:00', 100)",
-            )
-            .execute(&usage)
-            .await
-            .unwrap();
-            usage.close().await;
         }
 
         let store = AppStore::open(td.path()).await.expect("open migrates");
@@ -892,12 +858,6 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(n, 1);
-
-        // The old usage store's row climbed the stamp rung on its way
-        // into disk stats.
-        let usage = store.recent_disk_usage(10).await.unwrap();
-        assert_eq!(usage.len(), 1);
-        assert_eq!(usage[0].measured_at_utc, "2026-09-10T08:00:00.000000+00:00");
 
         // The rung is recorded: feedback is at its ladder's top, and its
         // rung is its own commit. Disk stats was born past the rung.
@@ -922,7 +882,11 @@ mod tests {
         // Opening again is a no-op: nothing to rename, nothing rewritten.
         drop(store);
         let again = AppStore::open(td.path()).await.unwrap();
-        assert_eq!(again.recent_disk_usage(10).await.unwrap().len(), 1);
+        let n: i64 = sqlx::query_scalar("SELECT count(*) FROM feedback")
+            .fetch_one(again.feedback_pool())
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
     }
 
     /// Each of the stores says which build wrote it, with its own
@@ -999,90 +963,6 @@ mod tests {
             Err(e) => e.to_string(),
         };
         assert!(err.contains("was written by Datalib 99.0.0"), "{err}");
-    }
-
-    /// A root from before `disk_stats` keeps both series in the doltlite
-    /// `usage` store. Opening it copies every row into the plain-SQLite
-    /// file and removes the old one with what the engine kept beside it;
-    /// opening again adds nothing.
-    #[tokio::test]
-    async fn the_old_usage_store_is_carried_into_disk_stats_and_removed() {
-        let td = tempfile::tempdir().unwrap();
-        let legacy = crate::layout::legacy_usage_db(td.path());
-        {
-            let usage = open_pool(&legacy).await.unwrap();
-            for (_, ddl) in DISK_STATS_DDL {
-                sqlx::query(*ddl).execute(&usage).await.unwrap();
-            }
-            for (path, at, bytes) in [
-                (".", "2026-10-01T10:00:00.000000Z", 100),
-                (".", "2026-10-01T10:00:05.000000Z", 120),
-                ("slack/ingest", "2026-10-01T10:00:05.000000Z", 80),
-            ] {
-                sqlx::query(
-                    "INSERT INTO disk_usage (path, measured_at_utc, tz_offset, bytes) \
-                     VALUES (?, ?, '-07:00', ?)",
-                )
-                .bind(path)
-                .bind(at)
-                .bind(bytes)
-                .execute(&usage)
-                .await
-                .unwrap();
-            }
-            sqlx::query(
-                "INSERT INTO disk_free (measured_at_utc, tz_offset, available_bytes, total_bytes) \
-                 VALUES ('2026-10-01T10:00:00.000000Z', '-07:00', 40, 100)",
-            )
-            .execute(&usage)
-            .await
-            .unwrap();
-            usage.close().await;
-        }
-        let magic = std::fs::read(&legacy).unwrap();
-        assert!(
-            magic.starts_with(b"CTLD"),
-            "a real doltlite store: {:?}",
-            &magic[..8]
-        );
-        std::fs::write(legacy.with_extension("doltlite_db.lock"), b"").unwrap();
-
-        let store = AppStore::open(td.path()).await.unwrap();
-        assert_eq!(store.recent_disk_usage(10).await.unwrap().len(), 3);
-        assert_eq!(
-            store.recent_disk_free(10).await.unwrap()[0].available_bytes,
-            40
-        );
-        let left: Vec<String> = std::fs::read_dir(crate::layout::system_dir(td.path()))
-            .unwrap()
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.starts_with("usage"))
-            .collect();
-        assert!(
-            left.is_empty(),
-            "the old store and its sidecars stay: {left:?}"
-        );
-        // What a stock `sqlite3` opens, not doltlite's own format.
-        let head = std::fs::read(crate::layout::disk_stats_db(td.path())).unwrap();
-        assert!(head.starts_with(b"SQLite format 3\0"), "{:?}", &head[..16]);
-
-        drop(store);
-        let again = AppStore::open(td.path()).await.unwrap();
-        assert_eq!(again.recent_disk_usage(10).await.unwrap().len(), 3);
-    }
-
-    /// An old store the copy cannot read costs its history, never the
-    /// app: the stores open, and the file is left for a later open.
-    #[tokio::test]
-    async fn an_unreadable_old_usage_store_is_left_and_the_app_opens() {
-        let td = tempfile::tempdir().unwrap();
-        let legacy = crate::layout::legacy_usage_db(td.path());
-        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
-        std::fs::write(&legacy, b"not a database at all, not even close").unwrap();
-        let store = AppStore::open(td.path()).await.expect("opens all the same");
-        assert!(store.recent_disk_usage(10).await.unwrap().is_empty());
-        assert!(legacy.is_file(), "left for the next open to try again");
     }
 
     /// Re-recording the same (series, instant) overwrites rather than

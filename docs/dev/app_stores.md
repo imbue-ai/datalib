@@ -213,12 +213,6 @@ unmoved tree still weighs, and a later range opens with it. Plain
 SQLite reuses the freed pages, so the file stops growing once the
 window is full.
 
-A root from before this store kept both tables in the
-doltlite `system/usage.doltlite_db`; the first open by a newer build
-copies its rows across and removes it, or, if it cannot read it, logs
-that at ERROR and tries again next time
-(`core/src/app_store_migrate.rs`).
-
 **Remote media.** A rendered document's images on remote
 hosts are held back by the UI until a person lets them load, because
 loading one tells its host who opened the document and when. A

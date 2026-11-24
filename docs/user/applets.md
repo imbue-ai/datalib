@@ -225,9 +225,9 @@ The request:
   (`datalib_curated/datalib_contacts/contacts.doltlite_db`), or one of
   `system/runs/runs.sqlite` (the log and every run's metrics),
   `system/supervisor.sqlite` (sync requests and each step's state),
-  `system/feedback.doltlite_db`, `system/remote_media.doltlite_db`,
-  `system/disk_stats.sqlite` and `system/usage.doltlite_db`. Nothing
-  else under `system/` is a store here. `GET /sql/stores` lists them,
+  `system/feedback.doltlite_db`, `system/remote_media.doltlite_db` and
+  `system/disk_stats.sqlite`. Nothing else under `system/` is a store
+  here. `GET /sql/stores` lists them,
   with each one's `kind` and `bytes`, the search index's vectors
   (`unified_grid_and_search_index/search_index/inference_cache.sqlite`) among them.
   Any other store deeper than `<group>/<step>/<file>` reads by name but
