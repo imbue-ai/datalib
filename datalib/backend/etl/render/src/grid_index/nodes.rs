@@ -185,7 +185,7 @@ pub(super) async fn settle(
             let Some(row) = node_row(node) else {
                 tracing::warn!(
                     node = %node.node.uuid,
-                    provider = ?node.provider,
+                    provider = node.provider.as_deref().unwrap_or("none"),
                     "a node whose newest carrier has no document row, or names a provider \
                      this build does not know; its own row is left as it was"
                 );

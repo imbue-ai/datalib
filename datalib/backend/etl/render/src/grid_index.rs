@@ -1567,7 +1567,14 @@ async fn apply_source(
             let settled = nodes::settle(conn, write_lock)
                 .await
                 .with_context(|| format!("settle {stanza}'s nodes"))?;
-            tracing::debug!(source = %stanza, ?settled, "nodes settled");
+            tracing::debug!(
+                source = %stanza,
+                touched = settled.touched,
+                changed = settled.changed,
+                rows_kept = settled.rows_kept,
+                rows_dropped = settled.rows_dropped,
+                "nodes settled"
+            );
         }
         if remade {
             let started = Instant::now();
