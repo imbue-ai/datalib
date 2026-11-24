@@ -460,7 +460,7 @@ failure this is, which decides whether it retries:
 | `permission` | the OS would not let you read a path your settings name (macOS privacy) | fail fast; the app's Manage row offers "Choose folder again" |
 | `data` | bad input; retrying won't help | fail fast (the default when absent) |
 | `cancelled` | you were interrupted | fail fast; exit code 130 by convention |
-| `incomplete` | you gave up with work still owed, after committing what you got | fail fast: your own retries are what ran out, and the next run resumes |
+| `incomplete` | you gave up with work still owed, or part of the work failed, after committing what you got | fail fast: your own retries are what ran out, and the next run resumes |
 | `incompatible` | your answer to `--prepare`: what you wrote is in a shape you cannot use | the step is turned off until a later start's `--prepare` does not refuse (§ "Prepare") |
 
 `outputs` on a failure reports what you *did* commit. The scheduler

@@ -20,9 +20,10 @@ pub fn classify(e: &anyhow::Error) -> FailureKind {
     }) {
         return FailureKind::Incompatible;
     }
-    if e.chain()
-        .any(|c| c.is::<datalib_etl::run_problems::GaveUp>())
-    {
+    if e.chain().any(|c| {
+        c.is::<datalib_etl::run_problems::GaveUp>()
+            || c.is::<datalib_etl::run_problems::Unfinished>()
+    }) {
         return FailureKind::Incomplete;
     }
     let io_kind = e

@@ -1136,6 +1136,7 @@ pub async fn build_grid_index_for(
         if stopped_before(stop, &stanza) {
             break;
         }
+        let reading = Instant::now();
         let read = match read_source(
             &stanza,
             &rendered_root,
@@ -1161,10 +1162,12 @@ pub async fn build_grid_index_for(
         if stopped_before(stop, &stanza) {
             break;
         }
+        let read_ms = millis(reading.elapsed());
         let applied = apply_source(
             &write_lock,
             &stanza,
             read,
+            read_ms,
             (!building).then_some(held),
             &now,
             &progress,
@@ -1290,15 +1293,29 @@ async fn retire_source(
 /// The people the terms name, read from every source at once: once a
 /// pass that changed anything, in a seal of its own.
 async fn refresh_people(write_lock: &WriteLock) -> Result<()> {
+    let mut laps = Laps::start();
     write_lock.begin_transaction().await?;
     let res = async {
         let mut guard = write_lock.acquire().await?;
-        crate::search_terms::write_people(guard.conn()).await?;
-        bump_generation(guard.conn()).await
+        let people = crate::search_terms::write_people(guard.conn()).await?;
+        bump_generation(guard.conn()).await?;
+        Ok::<_, anyhow::Error>(people)
     }
     .await;
     match res {
-        Ok(_) => write_lock.commit_transaction().await,
+        Ok(people) => {
+            let write_ms = laps.lap();
+            write_lock.commit_transaction().await?;
+            tracing::debug!(
+                authors_ms = people.authors_ms,
+                contacts_ms = people.contacts_ms,
+                names = people.names,
+                write_ms,
+                commit_ms = laps.lap(),
+                "wrote the names people are known by"
+            );
+            Ok(())
+        }
         Err(e) => {
             let _ = write_lock.rollback_transaction().await;
             Err(e).context("write the names the terms know people by")
@@ -1488,6 +1505,7 @@ async fn apply_source(
     write_lock: &WriteLock,
     stanza: &str,
     read: SourceRead,
+    read_ms: u64,
     held: Option<usize>,
     now: &datalib_time::StoredStamp,
     progress: &impl Fn(&str),
@@ -1495,6 +1513,11 @@ async fn apply_source(
     summary: &mut GridIndexSummary,
 ) -> Result<bool> {
     let before = SealCounts::of(summary);
+    let mut laps = Laps::start();
+    let mut took = SealTimes {
+        read_ms,
+        ..SealTimes::default()
+    };
     write_lock
         .begin_transaction()
         .await
@@ -1525,6 +1548,7 @@ async fn apply_source(
         let removed_remade = remove_documents(write_lock, stanza, &removed, held, progress)
             .await
             .with_context(|| format!("delete the documents {stanza} dropped"))?;
+        took.remove_ms = laps.lap();
         summary.markdowns_removed += removed.len();
         // Too few documents to change a sixteenth of the index, whatever
         // they hold, are not worth measuring.
@@ -1543,6 +1567,7 @@ async fn apply_source(
         else {
             return Ok(None);
         };
+        took.load_ms = laps.lap();
         let remade = remade || removed_remade;
         summary.search_indexes_remade += usize::from(remade);
         summary.markdowns_loaded += markdowns;
@@ -1555,6 +1580,7 @@ async fn apply_source(
                 .with_context(|| format!("write {stanza}'s node rows"))?;
             tracing::debug!(source = %stanza, kept, dropped, "node rows in line");
         }
+        took.node_rows_ms = laps.lap();
         if remade {
             let started = Instant::now();
             create_search_indexes(conn).await?;
@@ -1566,6 +1592,7 @@ async fn apply_source(
         }
         summary.terms_written +=
             crate::search_terms::write_rows(conn, &write_lock.take_changed()).await?;
+        took.terms_ms = laps.lap();
         let problems_moved = clear_source_problems(conn, stanza)
             .await
             .with_context(|| format!("clear {stanza}'s problems from the index"))?;
@@ -1605,10 +1632,22 @@ async fn apply_source(
                 .commit_transaction()
                 .await
                 .with_context(|| format!("commit the index transaction for {stanza}"))?;
+            took.seal_ms = laps.lap();
             if let Some(generation) = generation {
                 summary.seals += 1;
                 let counts = SealCounts::of(summary).since(&before).message(stanza);
-                tracing::debug!(source = %stanza, generation, %counts, "sealed the index");
+                tracing::debug!(
+                    source = %stanza,
+                    generation,
+                    %counts,
+                    read_ms = took.read_ms,
+                    remove_ms = took.remove_ms,
+                    load_ms = took.load_ms,
+                    node_rows_ms = took.node_rows_ms,
+                    terms_ms = took.terms_ms,
+                    seal_ms = took.seal_ms,
+                    "sealed the index"
+                );
             }
             Ok(true)
         }
@@ -1622,6 +1661,39 @@ async fn apply_source(
             Err(e)
         }
     }
+}
+
+/// How long each part of one source's pass took, so the seal's log line
+/// says where a long source spent it. `seal_ms` runs from the terms to the
+/// commit: the problems, the cursor, the generation and the commit itself.
+#[derive(Default)]
+struct SealTimes {
+    read_ms: u64,
+    remove_ms: u64,
+    load_ms: u64,
+    node_rows_ms: u64,
+    terms_ms: u64,
+    seal_ms: u64,
+}
+
+/// Milliseconds since the last lap.
+struct Laps(Instant);
+
+impl Laps {
+    fn start() -> Self {
+        Self(Instant::now())
+    }
+
+    fn lap(&mut self) -> u64 {
+        let now = Instant::now();
+        let ms = millis(now - self.0);
+        self.0 = now;
+        ms
+    }
+}
+
+fn millis(d: std::time::Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// The summary's counters at one moment, so a seal can say what its own
@@ -2098,8 +2170,8 @@ async fn upsert_markdown(
 }
 
 /// In a render store, one source's account of a person, and each handle
-/// it ties to them, under the document that carried it. Two accounts of one person in one
-/// document are one row: the later wins.
+/// it ties to them, under the document that carried it. Two accounts of
+/// one person in one document are one row: the later wins.
 async fn insert_source_contact(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     markdown_uuid: &str,

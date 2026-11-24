@@ -152,12 +152,12 @@ fn preview(body: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    fn curl_exit(exit: i32) -> HttpError {
+    fn curl_exit(exit: i32, stderr: &str) -> HttpError {
         HttpError::curl_exit(
             HttpService::Garmin,
             "https://connectapi.garmin.com/hrv-service/hrv/2369-04-14",
             exit,
-            "Error: No credentials found for garmin.",
+            stderr,
         )
     }
 
@@ -166,13 +166,19 @@ mod tests {
     /// metric as failed before giving up.
     #[test]
     fn a_request_latchkey_will_not_send_is_an_auth_failure() {
-        let e = transport_error(curl_exit(1), "/hrv-service/hrv/2369-04-14");
+        let e = transport_error(
+            curl_exit(1, "Error: No credentials found for garmin."),
+            "/hrv-service/hrv/2369-04-14",
+        );
         assert!(matches!(e, GarminError::Auth(..)), "{e}");
     }
 
     #[test]
     fn a_network_failure_is_not_an_auth_failure() {
-        let e = transport_error(curl_exit(7), "/hrv-service/hrv/2369-04-14");
+        let e = transport_error(
+            curl_exit(7, "curl: (7) Failed to connect"),
+            "/hrv-service/hrv/2369-04-14",
+        );
         assert!(matches!(e, GarminError::Transport(_)), "{e}");
         let e = anyhow::Error::new(e);
         assert_eq!(Upstream::in_chain(&e), Some(Upstream::Unavailable), "{e:#}");
