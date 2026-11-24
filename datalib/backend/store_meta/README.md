@@ -29,6 +29,14 @@ keyword index's tables are part of the grid index's, and the inference
 cache's chunk tables are part of the cache's `index_hash`, so a change
 to them drops the chunks, which are cut again, and keeps the vectors.
 
+The inference cache's shape has one part `_datalib_meta` does not hold:
+its page size, which the file's own header records
+(`search_index::cache::PAGE_SIZE`). Its readers refuse any other size as
+an `OtherShape`, and prepare rewrites the file in it, keeping every row.
+Refusing is what lets prepare rewrite it: SQLite changes a page size only
+when no other connection has the file open, and the search applet opens
+the cache as soon as the app starts.
+
 Indexes are recorded apart from tables so that adding one costs
 creating it rather than rebuilding the store. The prepare pass creates
 it, by opening the store as its owner, when a store's tables are this

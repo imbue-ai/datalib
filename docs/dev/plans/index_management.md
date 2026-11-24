@@ -40,7 +40,8 @@ Everything search reads is in two files under
 - **The inference cache**, `search_index/inference_cache.sqlite`: 5 GB
   on disk, holding 932,351 distinct vectors of 768 dimensions in 32-bit
   floats (2.9 GB of vector bytes) for 1.03M chunks, in 4 KB pages: the
-  rewrite to 16 KB pages is put off while the app holds it open (#1969).
+  rewrite to 16 KB pages was put off while the app held it open (#1969)
+  and then removed (#1970), before it had run on this library.
   The search applet holds a vector for every chunk in memory, in half
   precision, about 1.5 GB.
 
@@ -145,11 +146,9 @@ to be decided on numbers.
    every statement the tests run; run over the eval too, it names the
    index each statement uses. An index no statement uses goes, unless a key a person types
    needs it, in which case the key's statement says so in a test.
-4. **The inference cache shrinks.** Its pages are rewritten to 16 KB
-   when no reader holds it (#1969 put that off while the app is open; a
-   sync with the app open never gets to it), and whether vectors are
-   kept in half precision on disk too, as they are in memory, is
-   measured against the eval.
+4. **The inference cache shrinks.** Prepare rewrites its pages to 16 KB
+   at the next launch. Whether vectors are kept in half precision on
+   disk too, as they are in memory, is measured against the eval.
 5. **The split, decided on numbers.** With 1 to 4 done, measure a
    search scoped to a small source against a search of everything, cold
    and warm, on the largest library to hand. If a scoped search still
