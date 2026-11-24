@@ -113,10 +113,10 @@ pub async fn build_state(
             .map_err(|e| anyhow::anyhow!("open the app stores under {}: {e}", root.display()))?,
     );
 
-    // Before the watcher and the loop, so their first read is of the
-    // current shape. The watcher opens the loop's record, creating it on a
-    // new root, and the moves carry rows over only in a record that was
-    // already there.
+    // Before the loop, so its first read is of the current shape, and
+    // before the watcher, whose first act opens the loop's record: the
+    // moves carry the record's rows only from a record that was there
+    // before this server started.
     let data_root = (*root).clone();
     let bin_override = binary_dir.clone();
     tokio::task::spawn_blocking(move || {
