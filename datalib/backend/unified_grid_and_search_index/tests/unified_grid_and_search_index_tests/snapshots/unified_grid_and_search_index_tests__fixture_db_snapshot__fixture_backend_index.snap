@@ -35,7 +35,7 @@ expression: snapshot
       "modified_at": "2369-04-10T09:06:30Z",
       "provider": "linkedin",
       "render_unit_key": "00000000-0000-8027-9f1f-73b03617467e",
-      "renderer_version": "rust-v1.17",
+      "renderer_version": "rust-v1.18",
       "searchable": true,
       "source_id": "linkedin",
       "title": "Jean-Luc Picard, William Riker"
@@ -515,7 +515,7 @@ expression: snapshot
       "modified_at": "2369-04-12T08:20:30Z",
       "provider": "linkedin",
       "render_unit_key": "00000000-0000-84c5-a0e7-167d60e47f98",
-      "renderer_version": "rust-v1.17",
+      "renderer_version": "rust-v1.18",
       "searchable": true,
       "source_id": "linkedin",
       "title": "Comment: Captain, I must respectfully disagree: the odds are 1 in 4.7 trillion, not \"ast…"
@@ -983,7 +983,7 @@ expression: snapshot
       "modified_at": "2369-04-11T15:02:00Z",
       "provider": "linkedin",
       "render_unit_key": "00000000-0000-8878-b482-b77c75689e79",
-      "renderer_version": "rust-v1.17",
+      "renderer_version": "rust-v1.18",
       "searchable": true,
       "source_id": "linkedin",
       "title": "Post: Thrilled to share: the Enterprise has completed its survey of the Mintaka syste…"
@@ -1103,7 +1103,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "linkedin",
       "render_unit_key": "00000000-0000-8980-b4a1-ea8e394399fe",
-      "renderer_version": "rust-v1.17",
+      "renderer_version": "rust-v1.18",
       "searchable": true,
       "source_id": "linkedin",
       "title": "LinkedIn skills"
@@ -1475,7 +1475,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "linkedin",
       "render_unit_key": "00000000-0000-8bbb-8c8b-8ae1dedef5e2",
-      "renderer_version": "rust-v1.17",
+      "renderer_version": "rust-v1.18",
       "searchable": true,
       "source_id": "linkedin",
       "title": "Jean-Luc Picard"
@@ -1763,7 +1763,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "linkedin",
       "render_unit_key": "00000000-0000-8d5b-95c0-1e95e75b6e77",
-      "renderer_version": "rust-v1.17",
+      "renderer_version": "rust-v1.18",
       "searchable": true,
       "source_id": "linkedin",
       "title": "William Riker"
@@ -1967,7 +1967,7 @@ expression: snapshot
       "modified_at": null,
       "provider": "linkedin",
       "render_unit_key": "00000000-0000-8f36-a408-50d26aa9b0db",
-      "renderer_version": "rust-v1.17",
+      "renderer_version": "rust-v1.18",
       "searchable": true,
       "source_id": "linkedin",
       "title": "Data Soong"
@@ -20620,26 +20620,26 @@ expression: snapshot
   "storage_rows": [
     {
       "kind": "Source Size",
-      "members_sha": "sha256:ffb2d2a39f738d35217d91ef63f6bc14072eadc4a3dcd8047a418887ebc5fcbc",
+      "members_sha": "sha256:96cbc5b71d92b3b6a862b4cdf57c1373a02642d6bc23a553851123acb047fd8c",
       "rows": 23,
       "source": ""
     },
     {
       "kind": "Store",
-      "members_sha": "sha256:4bb29fd9562d0dbb7bec75f59c80f4d0f7dd99a2a137cea1de670f5021b81c8f",
-      "rows": 38,
+      "members_sha": "sha256:c371ec58f9007d0703d789f80af29f336f077d578f70f95039fceda65287acb3",
+      "rows": 37,
       "source": ""
     },
     {
       "kind": "Table",
-      "members_sha": "sha256:4edc9e16e4434595e7a6be966219be76cbf3340f86a09d3fdc50c228e3cb45f0",
-      "rows": 203,
+      "members_sha": "sha256:fbd062622989c2c4f303228a34f53db2e25a1c6fa59fd05f3ec18dd2180ada33",
+      "rows": 202,
       "source": ""
     }
   ],
   "summary": {
     "documents_count": 180,
     "grid_rows_count": 615,
-    "storage_rows_count": 264
+    "storage_rows_count": 262
   }
 }

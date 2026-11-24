@@ -62,9 +62,6 @@ impl RawDb {
     /// the downloader's batch in flight. See
     /// `datalib_etl::doltlite_raw::open_reader`.
     ///
-    /// No DDL, so a store the current downloader has not touched keeps
-    /// whatever columns it has; probe with `column_exists` and fall back
-    /// where that matters.
     /// **`None` means the store cannot be read**, not that it holds no
     /// contacts — no commit to pin, or a build without the dolt
     /// extensions. The caller sweeps every document this pass did not

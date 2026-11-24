@@ -52,7 +52,9 @@ use datalib_schema::providers::Provider;
 /// v15: the tables no feed reads are counted on record.
 /// v16: the profile's skills render, one page with a row per skill.
 /// v17: the tables no feed reads are a note, not a warning.
-pub const RENDER_VERSION: u32 = 17;
+/// v18: a connection has no photo: the ones earlier builds fetched are
+///      no longer read.
+pub const RENDER_VERSION: u32 = 18;
 
 fn profile() -> RenderProfile {
     RenderProfile {

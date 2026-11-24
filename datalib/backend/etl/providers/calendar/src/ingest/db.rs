@@ -570,17 +570,6 @@ impl RawDb {
     pub async fn load_calendly_events(
         &self,
     ) -> Result<(Vec<LoadedCalendlyEvent>, Vec<UnreadableRow>)> {
-        // A commit written before Calendly came in has neither table.
-        let tables: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM sqlite_master WHERE type = 'table' \
-             AND name IN ('calendly_events', 'calendly_invitees')",
-        )
-        .fetch_one(self.pool())
-        .await
-        .context("look for the calendly tables")?;
-        if tables < 2 {
-            return Ok((Vec::new(), Vec::new()));
-        }
         let rows = sqlx::query(
             "SELECT e.id, e.calendar_id, json(e.payload) AS payload,
                     json(i.payload) AS invitees
