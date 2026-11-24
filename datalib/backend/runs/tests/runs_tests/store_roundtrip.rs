@@ -787,9 +787,11 @@ async fn a_store_from_version_10_is_upgraded_in_place() {
     }
     let path = datalib_runs::runs_path(td.path());
     let pool = datalib_runs::open_or_create(&path).await.unwrap();
-    // Version 10's shape is this one without what 11 through 14 added.
+    // Version 10's shape is this one without what 11 through 15 added.
     sqlx::raw_sql(
-        "DROP INDEX runs_by_start; \
+        "DROP INDEX metric_samples_by_name; \
+         DROP INDEX metrics_by_name; \
+         DROP INDEX runs_by_start; \
          DROP INDEX processes_by_run; \
          ALTER TABLE processes DROP COLUMN peak_rss_bytes; \
          ALTER TABLE processes DROP COLUMN applet; \
@@ -845,13 +847,16 @@ async fn a_store_from_version_10_is_upgraded_in_place() {
     let pool = datalib_runs::open_or_create(&path).await.unwrap();
     let index: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM sqlite_master WHERE type = 'index' \
-         AND name IN ('processes_by_run', 'runs_by_start')",
+         AND name IN ('processes_by_run', 'runs_by_start', 'metrics_by_name', 'metric_samples_by_name')",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
     pool.close().await;
-    assert_eq!(index, 2, "the climb adds the indexes retention names");
+    assert_eq!(
+        index, 4,
+        "the climb adds the indexes retention and the metric reads name"
+    );
 }
 
 /// Guards the migration that read like a sync: a run says what it is for
