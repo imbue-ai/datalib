@@ -662,8 +662,8 @@ step decides, and answers in its outcome line:
   so what reads the output is stale.
 * **needs a rerun** — what it wrote is in a shape it cannot reach in
   place: add `"needs_rerun": true` to the outcome. The runner holds the
-  step due until it next succeeds, and the app offers to run it; a sync
-  that does not reach it leaves it alone.
+  step due until it next succeeds, and opens one request for every such
+  step once the launch's prepare pass is over.
 * **refused** — what it wrote is in a shape this program cannot use,
   such as a newer build's: exit non-zero with `"failure":"incompatible"`
   and say why on stderr. The runner turns the step off, as turned off
@@ -682,8 +682,10 @@ name reads as a download; it then opens its raw store with the
 provider's migration ladder and closes it: every rung, the additive DDL
 and an old blob store's conversion run, and each is sealed to `main`. A
 render step and the grid index answer `needs_rerun` when their store's
-`_datalib_meta.schema_hash` differs; a derived store is rebuilt, never
-migrated. The grid index also answers `needs_rerun` when the search
+tables or ladders differ from this build's (`_datalib_meta`); a derived
+store is rebuilt, never migrated. When only its indexes differ
+(`index_hash`), the step opens the store as its owner, which makes
+them, and answers nothing. The grid index also answers `needs_rerun` when the search
 index's keyword tables are in another shape or a source's documents
 were drawn by another version, which its keyword pass reads again;
 `embed` and `embedding_map` have nothing to answer. Any of them refuses

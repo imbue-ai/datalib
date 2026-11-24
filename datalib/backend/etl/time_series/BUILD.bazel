@@ -9,6 +9,7 @@ rust_library(
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
+        "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/runtime:datalib_runtime",

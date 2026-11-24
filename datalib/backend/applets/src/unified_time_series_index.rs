@@ -20,7 +20,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use datalib_etl::doltlite_raw::{self, Reader};
+use datalib_etl::doltlite_raw::{Reader, StoreKind};
 use datalib_etl_time_series::read::{self, Answer};
 use datalib_etl_time_series::store;
 use datalib_time_series_schema::{TimeSeriesRow, TimeSeriesSourceRow, Unit};
@@ -94,7 +94,7 @@ async fn open(root: &std::path::Path) -> Result<Option<Reader>> {
     if !db.exists() {
         return Ok(None);
     }
-    doltlite_raw::open_reader(&db, None).await
+    datalib_etl_time_series::store::open_reader(&db, None, StoreKind::TimeSeriesIndex).await
 }
 
 /// One time series as the routes answer it: its row, without the key
@@ -309,10 +309,14 @@ async fn read_source(
 ) -> Result<Vec<Answer>> {
     let record = record.context("the index has no record of where this source's store is")?;
     let db = root.join(&record.store);
-    let reader = doltlite_raw::open_reader(&db, Some(&record.commit_hash))
-        .await
-        .with_context(|| format!("open {} at {}", record.store, record.commit_hash))?
-        .with_context(|| format!("{} holds nothing at {}", record.store, record.commit_hash))?;
+    let reader = datalib_etl_time_series::store::open_reader(
+        &db,
+        Some(&record.commit_hash),
+        StoreKind::TimeSeries,
+    )
+    .await
+    .with_context(|| format!("open {} at {}", record.store, record.commit_hash))?
+    .with_context(|| format!("{} holds nothing at {}", record.store, record.commit_hash))?;
     let mut out = Vec::with_capacity(rows.len());
     let mut failed = None;
     for row in rows {
@@ -340,7 +344,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{header, Request};
-    use datalib_etl::doltlite_raw::StoreKind;
+    use datalib_etl::doltlite_raw::{self, StoreKind};
     use datalib_etl_time_series::index;
     use datalib_time_series_schema::{Points, TimeKind, TimeSeries, ValueType};
     use tower::ServiceExt;

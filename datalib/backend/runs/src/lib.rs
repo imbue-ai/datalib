@@ -106,7 +106,7 @@ impl Default for Retention {
 /// Bumped whenever the tables change shape. A store at an older version
 /// climbs the rungs in `store.rs`'s `UPGRADES` in place; one at a version
 /// with no rung, newer ones included, is emptied and remade.
-pub const SCHEMA_VERSION: i32 = 13;
+pub const SCHEMA_VERSION: i32 = 14;
 
 /// The indexes, beside the tables' own DDL. `log.seq` is the rowid, so
 /// a reader tailing "everything after N" needs no timestamp arithmetic;
@@ -116,8 +116,13 @@ pub const INDEXES: &[&str] = &[
     // For retention's "no line names this process".
     "CREATE INDEX IF NOT EXISTS log_by_process ON log (process_id)",
     PROCESSES_BY_RUN,
+    RUNS_BY_START,
 ];
 
 /// For retention, which removes a run's processes with the run.
 pub const PROCESSES_BY_RUN: &str =
     "CREATE INDEX IF NOT EXISTS processes_by_run ON processes (run_id)";
+
+/// For the newest run, and for retention, which keeps the newest.
+pub const RUNS_BY_START: &str =
+    "CREATE INDEX IF NOT EXISTS runs_by_start ON runs (started_at_utc, run_id)";

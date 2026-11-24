@@ -24,6 +24,7 @@ pub mod events;
 pub mod expansion;
 pub mod ids;
 pub mod indicatif_progress;
+pub mod key_range;
 pub mod layout;
 pub mod pin;
 pub mod processor;

@@ -616,11 +616,12 @@ every `open` would cost bytes whether or not anything was ingested.
 
 ## `_datalib_meta`: which build wrote this store
 
-`open` writes seven rows into `_datalib_meta` before the schema commit:
+`open` writes its rows into `_datalib_meta` before the schema commit:
 `datalib_version`, `git_hash`, `doltlite_version`, `schema_hash`
 (`recorded_shape`: blake3 over `_datalib_meta`'s DDL and the DDL the
-store was opened with, leaving out the lookup indexes, which change no
-row: those `open_derived_indexed` was handed, and on a raw store
+store was opened with), `index_hash` (blake3 over the lookup indexes,
+which change no row, so adding one costs making it rather than a
+rebuild: those `open_derived_indexed` was handed, and on a raw store
 `SHARED_LOOKUP_INDEXES`), `schema_version` (the
 migration ladder position, `0` until there is a ladder),
 `shared_schema_version` (the shared ladder's, above) and
@@ -628,12 +629,16 @@ migration ladder position, `0` until there is a ladder),
 unchanged store costs no commit, and a schema commit that did move
 one is titled `schema: apply DDL (Datalib <version>)`. The table is in
 `SHARED_TABLES`, so it is neither mirrored nor diffed nor counted.
-`datalib_store_meta::read` is how anyone asks; `None` means the store
-predates the table. A reader of a derived store asks it once per pass
-rather than probing for each table: `unified_grid_and_search_index` compares a render
-store's `schema_hash` with `indexed_markdown::schema_hash`, the same
-value the scheduler fingerprints, and leaves a store in any other shape
-as the index had it, with a warning. `docs/dev/plans/completed/schema_migrations.md`
+`datalib_store_meta::read` is how anyone asks. **Every reader checks the
+whole recorded shape before it reads a row, and refuses a store in any
+other shape, or in none** (`datalib_store_meta::require`;
+`datalib/backend/store_meta/README.md` lists each store's shape and the
+reader-open that checks it). Nothing probes for a table or a column:
+`unified_grid_and_search_index` opens a render store through
+`IndexedMarkdownStore::open_for_reading`, which refuses one in another
+shape, and leaves that source as the index had it, with a warning
+naming the step to run; a render refuses a raw store the launch's
+prepare pass could not migrate. `docs/dev/plans/completed/schema_migrations.md`
 is the record of the program this was the first step of.
 
 ## Writes: one UPSERT shape, everywhere

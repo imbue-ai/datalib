@@ -76,6 +76,8 @@ export type PassView = {
   blurb: string;
   rows: PassViewRow[];
   running: boolean;
+  /// What the pill offers to do about it: run these steps.
+  action?: { label: string; steps: string[] };
 };
 
 function finished(rows: SourceRow[]): number {
@@ -102,14 +104,15 @@ export function upgradeView(upgrade: Upgrade, dismissed: boolean): PassView | nu
       label: `Updating data · ${finished(all)} of ${all.length}`,
       heading: "Updating your data for this version",
       blurb:
-        "Each source is bringing what it stored up to date. Search and reading work as usual; " +
-        "syncing waits until this is done. Nothing is downloaded while it runs.",
+        "Each source is bringing what it stored up to date. Syncing waits until this is done, " +
+        "and a source's documents show once it is. Nothing is downloaded while it runs.",
       rows: all.map(said),
       running: true,
     };
   }
   const failed = all.filter((r) => r.state === "failed");
-  if (failed.length === 0 || dismissed) return null;
+  if (dismissed) return null;
+  if (failed.length === 0) return rerunView(upgrade);
   const ok = all.length - failed.length;
   return {
     tone: "failed",
@@ -121,6 +124,75 @@ export function upgradeView(upgrade: Upgrade, dismissed: boolean): PassView | nu
       "the Sources card has the log.",
     rows: failed.map(said),
     running: false,
+  };
+}
+
+/// The steps the pass found in a shape this version does not read, until
+/// they run again: what this version shows nothing of meanwhile, and the
+/// offer to run them.
+function rerunView(upgrade: Upgrade): PassView | null {
+  const behind = rerenderSources(upgrade);
+  if (behind.length === 0) return null;
+  return {
+    tone: "updating",
+    label: `${sources(behind.length)} to re-run`,
+    heading: "Some of your data is waiting to be re-run",
+    blurb:
+      "This version reads only data in the shape it writes. Until these are re-run, their " +
+      "documents and search results are not shown. Re-running reads what is already " +
+      "downloaded; nothing is downloaded.",
+    rows: behind.map((s) => ({
+      ...s,
+      state: "waiting",
+      error: null,
+      freed: null,
+      said: "Needs re-running",
+    })),
+    running: false,
+    action: { label: "Re-run now", steps: upgrade.rerender },
+  };
+}
+
+/// Whether the library waits on the upgrade: while the launch's pass runs,
+/// and while any step it found in a shape this version does not read has
+/// not run again. Nothing reads such a store meanwhile.
+export function upgrading(upgrade: Upgrade): boolean {
+  return upgrade.migrating || upgrade.rerender.length > 0;
+}
+
+/// What the upgrade screen says while [`upgrading`]: each source and how
+/// it stands, first in the pass, then in its re-run.
+export function upgradingView(upgrade: Upgrade): PassView {
+  if (upgrade.migrating) {
+    const all = sourceRows(upgrade.steps);
+    return {
+      tone: "updating",
+      label: `Updating data · ${finished(all)} of ${all.length}`,
+      heading: "Updating your library for this version",
+      blurb:
+        "Each source is bringing what it stored up to date. Nothing is downloaded. " +
+        "The library opens when every source is done.",
+      rows: all.map((r) => ({ ...r, said: UPGRADE_SAID[r.state] })),
+      running: true,
+    };
+  }
+  const behind = rerenderSources(upgrade);
+  return {
+    tone: "updating",
+    label: `Re-running ${sources(behind.length)}`,
+    heading: "Updating your library for this version",
+    blurb:
+      "This version keeps these sources' data in a new shape and reads only that shape, " +
+      "so each is being re-run from what is already downloaded. Nothing is downloaded. " +
+      "The library opens when they are done.",
+    rows: behind.map((s) => ({
+      ...s,
+      state: "running",
+      error: null,
+      freed: null,
+      said: "Re-running…",
+    })),
+    running: true,
   };
 }
 
