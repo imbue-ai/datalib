@@ -1,16 +1,30 @@
 # Design: multimodal retrieval layer for Datalib
 
-**Status:** Draft / proposal. Nothing here is built.
-**Scope:** Replace the `qmd_index` step for high-volume sources with a
-purpose-built retrieval layer supporting arbitrary metadata prefiltering,
-pluggable vector spaces, and a bounded bytes-at-rest budget.
+**Status: draft (2026-09-01), mostly overtaken; checked against the
+tree on 2026-11-24.** It proposed replacing qmd with a retrieval layer
+of our own. That happened by another road, which
+[`completed/search_index_from_ram.md`](completed/search_index_from_ram.md)
+and [`documents_to_blocks.md`](documents_to_blocks.md) record, and
+most of this draft's decisions were made there, some the other way:
 
-**Revision note (2026-09-01).** Every claim about *this* tree in the
-previous draft has been checked against the code and against a real data
-root; several were wrong and are corrected inline. Claims about `qmd` and
-`sqlite-vec` are still largely from their documentation — those are
-marked. Per [`AGENTS.md`](../../../AGENTS.md), treat an unmarked "we now do
-X" as verified and a marked one as not.
+- **Overtaken:** leaving qmd (§2); filters applied before ranking
+  (§3.3, #1892); vectors kept under a hash of exactly what was embedded
+  (§3.5, the inference cache); one copy of the text, in the render
+  store, and no markdown files (§4.4, §4.5, #1879); the keyword index
+  in the grid index's file and the vectors in a cache file of their
+  own, rather than §6.1's one sidecar database (#1746).
+- **Decided the other way:** §5.1 embeds whole threads; the eval chose
+  a chunk per message (#1786).
+- **Not built, and still ideas:** more than one vector space, such as
+  images embedded by an image model (§3.1, §5.3); reranking (§3.6);
+  query expansion and routing (§3.7). §5.2 keeps an email's quoted
+  replies out of what is embedded; the email render folds them for the
+  reader, and whether the index still reads them was not checked.
+
+Its measurements of a real data root (§4.1 to §4.3) are what other plans
+cite it for. Every claim below describes the tree and qmd as of
+2026-09-01; per [`AGENTS.md`](../../../AGENTS.md), check one against the
+code before repeating it.
 
 ---
 

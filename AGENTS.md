@@ -280,7 +280,7 @@ datalib/
                    `search_*` tables of the grid index's file, and the
                    inference cache: each document's chunks keyed by their
                    prompt's hash, and the vectors, holding no text
-                   (docs/dev/plans/search_index_from_ram.md).
+                   (docs/dev/plans/completed/search_index_from_ram.md).
     embedder/      text to vectors in process: llama.cpp
                    (third-party/llama_cpp) behind a small C shim, on
                    Metal on a mac, CUDA as a module on gnu Linux. Tested

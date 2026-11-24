@@ -158,7 +158,7 @@ pub struct RenderProfile {
 }
 
 /// How a provider's documents are laid out for reading
-/// (docs/dev/plans/document_viewer_from_blocks.md, step 7).
+/// (docs/dev/plans/completed/document_viewer_from_blocks.md, step 7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Layout {
     /// Each message in a box of its own, header and all: an email thread,

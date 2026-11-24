@@ -5,7 +5,7 @@
 //! A page is a run of the document's top-level nodes, a fold whole, so a
 //! page never ends inside one. Pure: the store reads the outline and then
 //! the pieces a window names
-//! (`docs/dev/plans/document_viewer_from_blocks.md` §"Step 6").
+//! (`docs/dev/plans/completed/document_viewer_from_blocks.md` §"Step 6").
 
 use datalib_schema::folds::FoldRow;
 
