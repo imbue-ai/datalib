@@ -20,6 +20,7 @@ rust_library(
         "@datalib_crates//:chrono",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
     ],
 )
@@ -31,7 +32,6 @@ rust_test(
     edition = "2021",
     deps = [
         "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
     ],
 )
 

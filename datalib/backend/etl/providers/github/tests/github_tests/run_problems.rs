@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use datalib_etl::progress::{Progress, ProgressSink};
-use datalib_etl::run_problems::noting_give_up;
+use datalib_etl::run_problems::{noting_run_end, RunEnd};
 use datalib_etl::stop::StopFlag;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_forge_ingest_common::Bounds;
@@ -304,7 +304,7 @@ async fn a_search_that_gives_up_ends_the_step_incomplete() {
     let pb = tape(&d.path().join("one"), &[1]);
     unavailable(&pb, &search_url(DEFAULT_SCOPES[0], &Bounds::default()));
 
-    let (ran, gave_up) = noting_give_up(datalib_etl_web::retry::scope(
+    let (ran, RunEnd { gave_up, .. }) = noting_run_end(datalib_etl_web::retry::scope(
         give_up_at_once(),
         run(&out, &pb, |o| o),
     ))
@@ -333,7 +333,7 @@ async fn a_search_over_githubs_secondary_limit_is_a_wait_not_a_refusal() {
     limited.status = 403;
     write_fixture(&pb, &HttpRequest::get(HttpService::Github, &url), &limited).unwrap();
 
-    let (ran, gave_up) = noting_give_up(datalib_etl_web::retry::scope(
+    let (ran, RunEnd { gave_up, .. }) = noting_run_end(datalib_etl_web::retry::scope(
         give_up_at_once(),
         run(&out, &pb, |o| o),
     ))

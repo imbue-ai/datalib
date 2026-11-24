@@ -248,10 +248,12 @@ impl RunProblem {
         )
     }
 
-    /// A listing the service cuts off however it is asked, so a stretch of
-    /// it is out of reach. A warning: every request was answered, and
-    /// nothing failed that a later attempt could mend, but what it would
-    /// not list is not in the mirror.
+    /// A listing that was answered and still is not the whole: the service
+    /// cuts it off however it is asked, the config limits it, or it names
+    /// something it does not identify. A warning, where a listing that
+    /// failed is an error and ends the step `incomplete`: nothing failed
+    /// that a later attempt could mend, but what it would not list is not
+    /// in the mirror.
     pub fn listing_cut_off(name: &str, detail: impl Into<String>) -> Self {
         use datalib_problems::{Reason, Severity};
         Self::new(

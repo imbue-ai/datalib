@@ -447,6 +447,16 @@ impl CurlFailure {
     }
 }
 
+/// The curl exits that asking again cannot change: what was asked for
+/// (3 URL, 4 not built in, 43 bad call, 47 redirects, 48
+/// option), this machine (2 init, 23 write, 26 read, 27 memory, 77 CA
+/// file), a certificate it will not trust (58, 60, 83, 90), and an answer
+/// that did come (22 an error status, 61 its encoding, 63 past the limit,
+/// 67 the login refused). Any other exit is a connection that failed.
+const SAME_EVERY_TIME: [i32; 18] = [
+    2, 3, 4, 22, 23, 26, 27, 43, 47, 48, 58, 60, 61, 63, 67, 77, 83, 90,
+];
+
 impl HttpError {
     /// `latchkey curl` (or plain `curl`) exiting non-zero with `stderr`.
     pub fn curl_exit(service: HttpService, url: &str, exit: i32, stderr: &str) -> Self {
@@ -459,19 +469,19 @@ impl HttpError {
         }
     }
 
-    /// What this failure says about the service. A timeout and the curl
-    /// exits for a connection that never completed (6 could not resolve
-    /// the host, 7 could not connect, 28 timeout, 35 TLS, 52 empty reply,
-    /// 55 send, 56 receive) are the service not answering, which is also
-    /// what the retry loop retries. 6 is a typo'd host as well as a
-    /// network that is not up yet, as after a laptop wakes; the guard's
-    /// budget is what ends the first.
+    /// What this failure says about the service. A timeout, and curl
+    /// failing in any way but [`SAME_EVERY_TIME`], are the service not
+    /// answering, which is also what the retry loop retries. Exit 6 is a
+    /// typo'd host as well as a network that is not up yet, as after a
+    /// laptop wakes; the guard's budget is what ends the first.
     pub fn upstream(&self) -> Option<Upstream> {
         match self {
             HttpError::Timeout { .. } => Some(Upstream::Unavailable),
-            HttpError::Curl { exit, .. } if matches!(*exit, 6 | 7 | 28 | 35 | 52 | 55 | 56) => {
-                Some(Upstream::Unavailable)
-            }
+            HttpError::Curl {
+                exit,
+                failure: CurlFailure::Curl,
+                ..
+            } if !SAME_EVERY_TIME.contains(exit) => Some(Upstream::Unavailable),
             HttpError::Curl {
                 failure: CurlFailure::NotPermitted,
                 ..
@@ -684,7 +694,7 @@ pub async fn latchkey_curl(req: &HttpRequest) -> Result<HttpResponse, HttpError>
 /// Like [`latchkey_curl`], but the caller supplies a response classifier so
 /// a provider can mark responses the status code alone can't (e.g. Slack's
 /// HTTP-200 `ratelimited` body) as retryable. Transport-level transients
-/// (curl exit 7/28/35/56, timeouts) are always retried regardless of the
+/// (a connection that failed, timeouts) are always retried regardless of the
 /// classifier, since there is no response to classify.
 pub async fn latchkey_curl_classified<F>(
     req: &HttpRequest,
@@ -1291,6 +1301,29 @@ mod tests {
             "curl: (7) Failed to connect",
         );
         assert_eq!(unreachable.upstream(), Some(Upstream::Unavailable));
+    }
+
+    /// Google Calendar's one listing died on curl exit 16 (HTTP/2 framing)
+    /// over a phone link and was never asked again: only a short list of
+    /// exits was retried, and every other one was final.
+    #[test]
+    fn a_connection_that_died_is_retried_whatever_exit_curl_gave_it() {
+        let upstream = |exit: i32| {
+            HttpError::curl_exit(
+                HttpService::GoogleCalendar,
+                "https://www.googleapis.com/calendar/v3/users/me/calendarList",
+                exit,
+                &format!("curl: ({exit}) said so"),
+            )
+            .upstream()
+        };
+        for exit in [5, 6, 7, 16, 18, 28, 35, 52, 55, 56, 92, 95] {
+            assert_eq!(upstream(exit), Some(Upstream::Unavailable), "exit {exit}");
+        }
+        // The same every time it is asked, so waiting cannot mend it.
+        for exit in [3, 23, 26, 27, 47, 60, 63, 77] {
+            assert_eq!(upstream(exit), None, "exit {exit}");
+        }
     }
 
     /// latchkey's own message is what a failed request says, after the
