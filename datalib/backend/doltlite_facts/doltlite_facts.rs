@@ -1935,6 +1935,50 @@ mod gc {
         );
     }
 
+    const MIB: u64 = 1024 * 1024;
+
+    /// Small commits, each in a transaction of its own: what a writer that
+    /// creates a store's schema and bookkeeping does.
+    async fn small_commits(w: &mut SqliteConnection, n: usize) {
+        ok(w, "CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)").await;
+        for i in 0..n {
+            ok(w, &format!("INSERT INTO t VALUES ({i}, 'row {i}')")).await;
+            commit(w, &format!("small {i}")).await;
+        }
+    }
+
+    /// A store that reads far larger than it holds: the Size column and a
+    /// test that compared two sizes of one store both met it.
+    #[tokio::test]
+    async fn small_commits_zero_fill_a_mebibyte_that_a_close_gives_back() {
+        let s = Store::new();
+        let mut w = s.rw().await;
+        small_commits(&mut w, 4).await;
+        let open = s.size();
+        assert!(open > MIB, "four small commits left {open} bytes");
+        w.close().await.expect("close");
+        let closed = s.size();
+        assert!(
+            closed < open - MIB / 2,
+            "the close kept the zeros: {open} bytes, then {closed}"
+        );
+
+        let mut w = s.rw().await;
+        ok(&mut w, "INSERT INTO t VALUES (100, 'one more')").await;
+        commit(&mut w, "one more").await;
+        assert!(
+            s.size() > MIB,
+            "a reopened store's next small commit did not zero-fill: {} bytes",
+            s.size()
+        );
+        w.close().await.expect("close");
+        assert!(
+            s.size() < MIB / 2,
+            "the second close kept {} bytes",
+            s.size()
+        );
+    }
+
     #[tokio::test]
     async fn gc_may_run_before_the_commit() {
         let s = Store::new();
