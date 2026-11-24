@@ -133,7 +133,8 @@ database per source, at
     `NormalizedContact`, `contact_schema/`), and the handles that reach
     them. chat-common adds one per author handle with no provider code;
     contact-common adds a card's own. Like edges they belong to the
-    document, and the index answers "who is this handle" from them
+    document, and the index, which keeps each distinct record once
+    ([`contacts.md`](contacts.md)), answers "who is this handle" from them
     (`unified_grid_and_search_index`'s `POST /people`).
   - `problems` — what render could not do getting there (§4).
   - `render_inputs` and `render_cursor` — what each render unit was rendered

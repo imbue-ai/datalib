@@ -5,8 +5,8 @@
 //! the most. The contacts app's own answer ranks above all of these, and
 //! is joined in by the UI, never here.
 //!
-//! A chat's record of a person is one row per document, and its name is
-//! decided across all of them by how much was written under each, so one
+//! A chat describes a person once per document, and its name is decided
+//! across all of them by how much was written under each, so one
 //! message, forged or not, cannot rename the person everywhere.
 
 use std::collections::BTreeMap;
@@ -14,10 +14,15 @@ use std::collections::BTreeMap;
 use datalib_contact_schema::{NormalizedContact, Seen};
 use datalib_handle::Handle;
 
-/// One `source_contacts` row reached through one of its handles.
+/// One of the index's contact records reached through one of its handles,
+/// its `seen` summed over the documents that carry it.
 pub struct HandleRow {
     pub handle: String,
     pub contact: NormalizedContact,
+    /// What its first name is credited with: what was written in each
+    /// document that carries it, and at least one for a document that
+    /// only names them.
+    pub credit: u64,
 }
 
 struct Merged {
@@ -26,14 +31,15 @@ struct Merged {
     weight: BTreeMap<String, u64>,
 }
 
-/// Rows for the same handle, source and person — one per document that
-/// mentioned them — become one source contact; then each handle's are
-/// ranked.
+/// Records for the same handle, source and person — a chat's differ by
+/// the names it showed — become one source contact; then each handle's
+/// are ranked.
 pub fn merge_and_rank(rows: Vec<HandleRow>) -> BTreeMap<String, Vec<NormalizedContact>> {
     let mut merged: BTreeMap<(String, String, String), Merged> = BTreeMap::new();
     for HandleRow {
         handle,
         mut contact,
+        credit,
     } in rows
     {
         contact.names = own_names(&handle, &contact);
@@ -46,7 +52,7 @@ pub fn merge_and_rank(rows: Vec<HandleRow>) -> BTreeMap<String, Vec<NormalizedCo
             },
             weight: BTreeMap::new(),
         });
-        add(entry, contact);
+        add(entry, contact, credit);
     }
     let mut out: BTreeMap<String, Vec<NormalizedContact>> = BTreeMap::new();
     for (
@@ -74,14 +80,12 @@ pub fn merge_and_rank(rows: Vec<HandleRow>) -> BTreeMap<String, Vec<NormalizedCo
     out
 }
 
-/// One document's account of the person. Its names come most used first
-/// (chat-common's `baseline_contacts`), so its first is credited with
-/// everything the person wrote there, and at least one, for a document
-/// they are only named in; the rest are kept, credited nothing.
-fn add(into: &mut Merged, other: NormalizedContact) {
-    let items = other.seen.as_ref().map_or(0, |s| s.items);
+/// One record of the person. Its names come most used first (chat-common's
+/// `baseline_contacts`), so its first takes the credit; the rest are kept,
+/// credited nothing.
+fn add(into: &mut Merged, other: NormalizedContact, credit: u64) {
     for (i, name) in other.names.into_iter().enumerate() {
-        let credit = if i == 0 { items.max(1) } else { 0 };
+        let credit = if i == 0 { credit } else { 0 };
         *into.weight.entry(name).or_insert(0) += credit;
     }
     into.contact.seen = match (into.contact.seen.take(), other.seen) {
@@ -140,6 +144,7 @@ mod tests {
     fn row(handle: &str, c: NormalizedContact) -> HandleRow {
         HandleRow {
             handle: handle.to_string(),
+            credit: c.seen.as_ref().map_or(0, |s| s.items).max(1),
             contact: c,
         }
     }

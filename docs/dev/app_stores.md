@@ -17,7 +17,9 @@
 <data_root>/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite   grid_rows / markdowns / edges / problems /
                                                   nodes and filings (the tree the rows sit in;
                                                   data_nodes is what each document says of it) /
-                                                  source_contacts (who each handle is, per source);
+                                                  contact_records, their handles and document_contacts
+                                                  (who each handle is, per source, and how much
+                                                  they wrote in each document);
                                                   the search terms: every id, handle, title,
                                                   label and name each row answers to, each
                                                   row named by its `grid_rows` rowid, indexed
