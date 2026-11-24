@@ -32,7 +32,9 @@ Keeping them in one doltlite file costs us three ways:
   and a commit needs the file to itself (`docs/dev/doltlite.md` §"Locks
   and writers"; dolthub/doltlite#5218). During an upgrade a 4.5 GB raw
   store's schema migration failed with `database is locked` while the
-  Manage screen kept reopening it.
+  Manage screen kept reopening it. Doltlite has since fixed this
+  (dolthub/doltlite#5257, not yet in a release): an open will hold the
+  lock only while it notes where the log ends. The other two costs stay.
 - **A problem counts as new data.** `moves_version`
   (`etl/src/doltlite_raw.rs:385`) treats a change to `problems` as a
   change to the store's content, so a new fetch failure wakes render
@@ -232,5 +234,5 @@ again:
   fails every record, but the back-to-back failure budget already keeps
   that to one `phase:` row.
 - **The render's own reads of its raw store** still open a large store
-  beside the download that writes it, and can block its seal the same
-  way. That is doltlite's to fix (dolthub/doltlite#5218).
+  beside the download that writes it, and block its seal the same way
+  until the doltlite pin moves past dolthub/doltlite#5257.
