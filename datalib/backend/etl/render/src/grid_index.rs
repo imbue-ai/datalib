@@ -769,14 +769,27 @@ async fn empty_if_another_shape(pool: &SqlitePool) -> Result<()> {
         .map(|m| m.schema_hash);
     // A file that records no shape is in none: an index from before
     // `_datalib_meta`, or a new file with nothing to drop.
-    if have.as_deref() != Some(shape().tables.as_str()) {
-        tracing::info!("the grid index was written in another shape; building it again");
+    let another_shape = have.as_deref() != Some(shape().tables.as_str());
+    if another_shape {
+        let pages: i64 = sqlx::query_scalar("PRAGMA page_count")
+            .fetch_one(&mut *tx)
+            .await?;
+        tracing::info!(
+            pages,
+            "the grid index was written in another shape; emptying it to build it again"
+        );
         drop_own_tables(&mut tx).await?;
     }
     tx.commit().await?;
-    // Hands the dropped pages back to the disk where the file was made
-    // with incremental auto-vacuum; a no-op where it was not.
-    sqlx::query("PRAGMA incremental_vacuum")
+    // Hands the freed pages back to the disk. With every table dropped,
+    // `VACUUM` has almost nothing to copy; `incremental_vacuum` walks the
+    // free list a page at a time, minutes on a large index (#1966).
+    let give_back = if another_shape {
+        "VACUUM"
+    } else {
+        "PRAGMA incremental_vacuum"
+    };
+    sqlx::query(give_back)
         .execute(pool)
         .await
         .context("give the grid index's dropped pages back")?;
@@ -2955,6 +2968,17 @@ mod shape_tests {
 
         let pool = open_index(&db).await.unwrap();
         assert_eq!(documents(&pool).await, 0);
+        let pragma = |p: &'static str| sqlx::query_scalar::<_, i64>(p).fetch_one(&pool);
+        assert_eq!(
+            pragma("PRAGMA freelist_count").await.unwrap(),
+            0,
+            "pages given back"
+        );
+        assert_eq!(
+            pragma("PRAGMA auto_vacuum").await.unwrap(),
+            2,
+            "still incremental, which every later open relies on"
+        );
     }
 
     fn search_doc(uuid: &str) -> datalib_search_index::IndexDoc {
