@@ -519,13 +519,16 @@ which changes how pieces are numbered:
   match, or a word whose list is far longer than the others' left to
   the rest to narrow, rather than a full-library statement for each.
 
-The tables the search index keeps beside the full-text one
-(`search_sections`, `search_documents`) may be keyed on `(source,
-document, block)`, `WITHOUT ROWID`, so a source's rows and a document's
-blocks share pages: a search on a library whose index does not fit in
-memory waits on page reads (measured on one 16 GB laptop with a 5.5 GB
-grid index: most of a search's time was in `pread`). Whether that pays
-is measured first.
+A search on a library whose files do not fit in memory waits on page
+reads: on one 16 GB laptop, with a 5.5 GB grid index and a 5 GB
+inference cache, a search's SQL spent most of its time in `pread`. The
+keyword index is not what fills that file. Of its 5.5 GB, `grid_rows`
+is 1.3 GB and its twenty-odd indexes another 1.8 GB, while the
+full-text index and the tables beside it (`search_sections`,
+`search_documents`) are 0.5 GB. So what stays in memory is decided by
+the grid and its indexes, which is a question of which indexes the grid
+keeps and how a library's index is managed, not of the keyword index's
+layout.
 
 Not taken: packing a piece's source, document and block into the
 full-text row number, which FTS5 could then seek by range. It would make
