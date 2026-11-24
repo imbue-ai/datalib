@@ -499,6 +499,43 @@ for the keys' SQL):
 The source is held with every chunk, so `source:` and `-source:` never
 touch SQL.
 
+**A words statement scores only what it keeps.** Today it cannot be
+narrowed to the sources asked for. It scores every match in the library
+(`WITH m AS MATERIALIZED (SELECT rowid, -bm25(…) FROM search_fts WHERE
+search_fts MATCH ?)`), and only then joins each match to
+`search_sections` and `search_documents` to learn its source and
+document and drop the rest. The page pass runs one such statement per
+word of the query, and a common word matches much of the library: on
+the search eval it was 0.4 s a statement, and the sentence-length
+queries spent about 5 s each on words alone. Two changes, neither of
+which changes how pieces are numbered:
+
+- **Filter before scoring.** The source and the keys join in the same
+  statement as the match, not after a materialized list of every match,
+  so `bm25` runs only on the matches kept. The full-text engine still
+  reads each word's whole list; what goes is scoring and holding the
+  rest.
+- **The page pass asks once, not once per word.** All the words in one
+  match, or a word whose list is far longer than the others' left to
+  the rest to narrow, rather than a full-library statement for each.
+
+A search on a library whose files do not fit in memory waits on page
+reads: on one 16 GB laptop, with a 5.5 GB grid index and a 5 GB
+inference cache, a search's SQL spent most of its time in `pread`. The
+keyword index is not what fills that file. Of its 5.5 GB, `grid_rows`
+is 1.3 GB and its twenty-odd indexes another 1.8 GB, while the
+full-text index and the tables beside it (`search_sections`,
+`search_documents`) are 0.5 GB. So what stays in memory is decided by
+the grid and its indexes, which is a question of which indexes the grid
+keeps and how a library's index is managed, not of the keyword index's
+layout.
+
+Not taken: packing a piece's source, document and block into the
+full-text row number, which FTS5 could then seek by range. It would make
+a scoped search skip the rest of the library, but it fixes a bit layout
+up front, how many bits each level gets, that has to hold for every
+library.
+
 **4. Each ranking ranks blocks, on evidence from their neighbours.** A
 hit is one block, but what finds it may be said around it: a reply that
 says "thank you" is found by the words of the message it answers. So a
@@ -750,8 +787,9 @@ against the eval before the next.
        document's row, and Drive and GitHub naming their text.
      - **Keys keep blocks, and meet the rankings in the index** (rules 2,
        3 and 7): container facts copied onto blocks, the words statement
-       joined to the grid, meaning's two ways, the count per source.
-       `Kept`, `Keyed` and the per-search walk of the grid go.
+       joined to the grid and scoring only what it keeps, the page pass
+       asking once, meaning's two ways, the count per source. `Kept`, `Keyed` and the
+       per-search walk of the grid go.
      - **Blocks rank and fuse; one display mode draws them** (rules 4
        to 6): each ranking ranks blocks, words counting a block's
        neighbours at a discount as meaning's chunks already do, a few
