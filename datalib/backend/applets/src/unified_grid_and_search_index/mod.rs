@@ -1464,11 +1464,7 @@ async fn index_state(
     let every = |report: DocReport| -> std::collections::HashMap<String, DocReport> {
         uuids.iter().map(|u| (u.clone(), report.clone())).collect()
     };
-    let opened = datalib_search_index::Reader::open(
-        &datalib_runtime::layout::grid_index_db(&s.root),
-        &datalib_runtime::layout::inference_cache_db(&s.root),
-    )
-    .await;
+    let opened = datalib_unified_grid_and_search_index::search_index::open(&s.root).await;
     let reader = match opened {
         Ok(Some(reader)) => reader,
         Ok(None) => {
@@ -1588,8 +1584,7 @@ pub async fn with_people(
 /// Each `me` value given the owner's handles: `me:self`, the stand-in
 /// sources write for them, every handle a source says is its account's
 /// own, and every handle of the contacts the person marked as themself,
-/// read from the contacts store now. Refused when the index predates the
-/// accounts' handles.
+/// read from the contacts store now. Refused before there is an index.
 async fn with_me(
     root: &std::path::Path,
     q: &str,
@@ -1602,7 +1597,8 @@ async fn with_me(
         .await
         .map_err(|e| format!("read the account's handles: {e:#}"))?
         .ok_or_else(|| {
-            "`me` reads the account's handles, which the next sync of the index writes".to_string()
+            "`me` reads the account's handles, which the grid index holds once it is built"
+                .to_string()
         })?;
     let marked = marked_as_me(root)
         .await
@@ -2865,11 +2861,11 @@ mod tests {
         assert!(found("from:me").await.is_empty());
     }
 
-    /// An index written before it held the account's handles refuses
-    /// `me` by name, where it would otherwise fail on a missing table or
-    /// quietly find only the stand-in "Me".
+    /// An index an older build wrote is refused, naming the step that
+    /// brings it up to date, where it would otherwise fail on a missing
+    /// table or quietly find only the stand-in "Me".
     #[tokio::test]
-    async fn me_on_an_index_without_the_accounts_handles_says_so() {
+    async fn me_on_an_index_in_another_shape_says_what_to_run() {
         let tmp = tempfile::tempdir().unwrap();
         mail(tmp.path()).await;
         let path = datalib_runtime::layout::grid_index_db(tmp.path());
@@ -2879,7 +2875,7 @@ mod tests {
             .connect()
             .await
             .unwrap();
-        sqlx::query("DROP TABLE account_handles")
+        sqlx::query("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
             .execute(&mut conn)
             .await
             .unwrap();
@@ -2887,15 +2883,12 @@ mod tests {
         let s = index_over(tmp.path()).await;
         let r = search(&s, "from:me", None, 10, None).await;
         assert!(r.rows.is_empty());
+        let step = "unified_grid_and_search_index/unified_grid_and_search_index";
         assert!(
-            r.refused.iter().any(|why| why.contains("`me`")),
+            r.refused.iter().any(|why| why.contains(step)),
             "{:?}",
             r.refused
         );
-        assert!(search(&s, "from:ann", None, 10, None)
-            .await
-            .refused
-            .is_empty());
     }
 
     /// Each person key reads the search terms in its role: a handle by its

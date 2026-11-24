@@ -20,12 +20,16 @@ use crate::hits::SearchHit;
 /// A ranked document and its hit.
 pub type DocumentHit = (String, SearchHit);
 
-async fn open(root: &Path) -> Result<Option<Reader>> {
-    Reader::open(
-        &layout::grid_index_db(root),
-        &layout::inference_cache_db(root),
-    )
-    .await
+/// The search index, once the grid index that holds its tables is in this
+/// build's shape (`grid_index::open_for_reading`): the one way anything
+/// outside the index step reads it.
+pub async fn open(root: &Path) -> Result<Option<Reader>> {
+    let index = layout::grid_index_db(root);
+    let Some(grid) = datalib_etl_render::grid_index::open_for_reading(&index).await? else {
+        return Ok(None);
+    };
+    grid.close().await;
+    Reader::open(&index, &layout::inference_cache_db(root)).await
 }
 
 /// The documents `words` find, of `sources`, within the rows `kept` keeps,

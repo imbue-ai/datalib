@@ -348,9 +348,7 @@ pub async fn own_problem_counts(
 }
 
 /// Drop every row the index holds for `source_id`: its own row about a
-/// render store it could not read, now read, and the copies an older
-/// build made of the source's problems, which a reader now finds in the
-/// steps' own stores. Whether anything went.
+/// render store it could not read, now read. Whether anything went.
 pub(crate) async fn clear_source_problems(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     source_id: &str,
@@ -362,17 +360,6 @@ pub(crate) async fn clear_source_problems(
         .context("clear the source's problems")?
         .rows_affected();
     Ok(gone > 0)
-}
-
-/// A render store that lacks a table or column this build reads, though
-/// its `_datalib_meta` names this shape: treated as one in another shape.
-/// The render step rebuilds it the next time it runs.
-fn written_in_another_shape(e: &anyhow::Error) -> bool {
-    e.chain().any(|c| {
-        c.downcast_ref::<sqlx::Error>()
-            .and_then(datalib_etl::pin::missing_schema)
-            .is_some()
-    })
 }
 
 /// What a source whose render store could not be read is filed under.
@@ -395,7 +382,7 @@ fn unreadable_store_problem(
     )
 }
 
-const OLDER_SHAPE: &str = "its render store is in an older shape; sync this source to re-render it";
+const OTHER_SHAPE: &str = "its render store is in another shape; sync this source to re-render it";
 
 async fn record_unreadable_store(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
@@ -438,14 +425,49 @@ async fn record_unreadable_store(
     Ok(())
 }
 
-pub fn schema_hash() -> String {
-    datalib_store_meta::schema_hash(
-        index_ddl()
-            .chain(read_indexes())
-            .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
-            // What the terms and the node rows derive, which no DDL shows.
-            .chain([TERMS_SHAPE, node_rows::NODE_ROWS_SHAPE]),
-    )
+/// The grid index's shape: what its writer records and every reader
+/// requires before it reads a row. Its indexes are kept apart from its
+/// tables, so adding one costs creating it rather than a rebuild.
+pub fn shape() -> datalib_store_meta::Shape {
+    datalib_store_meta::Shape {
+        indexes: Some(datalib_store_meta::schema_hash(indexes())),
+        ..shape_without_indexes()
+    }
+}
+
+/// [`shape`] while a build into an empty index has its search indexes
+/// dropped: the tables are there, the indexes are not, and a reader that
+/// requires [`shape`] waits for them.
+fn shape_without_indexes() -> datalib_store_meta::Shape {
+    datalib_store_meta::Shape {
+        tables: datalib_store_meta::schema_hash(
+            index_ddl()
+                // What the terms and the node rows derive, which no DDL shows.
+                .chain([TERMS_SHAPE, node_rows::NODE_ROWS_SHAPE]),
+        ),
+        indexes: None,
+        versions: datalib_store_meta::Versions {
+            schema: 0,
+            // Its `problems` is built in this shape, so it starts at the
+            // shared ladder's top.
+            shared: datalib_store_meta::ladder::top(datalib_etl::doltlite_raw::SHARED_LADDER),
+        },
+    }
+}
+
+/// Every index of the grid index's own tables.
+fn indexes() -> impl Iterator<Item = &'static str> {
+    read_indexes()
+        .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
+        .chain([AUTHORS_INDEX, node_rows::BY_SOURCE_INDEX])
+        .chain(SEARCHABLE_DOCUMENTS_INDEXES.iter().copied())
+}
+
+async fn record_shape(pool: &SqlitePool, shape: &datalib_store_meta::Shape) -> Result<()> {
+    datalib_store_meta::write(pool, StoreKind::GridIndex, shape)
+        .await
+        .context("write _datalib_meta for the grid index")?;
+    Ok(())
 }
 
 /// What replacing one document looks its old rows up by, in every store
@@ -463,9 +485,8 @@ pub(crate) const DOCUMENT_LOOKUP_INDEXES: &[&str] = &[
 
 /// What [`crate::search_terms::write_people`] reads the grid's authors
 /// from, so a pass reads two short columns rather than every row's text
-/// (#1803). Only the index's: never dropped for a remake, since the query
-/// names it, and out of [`schema_hash`], since it changes no row and
-/// adding it must not rebuild the index.
+/// (#1803). Only the index's, and never dropped for a remake, since the
+/// query names it.
 pub(crate) const AUTHORS_INDEX: &str =
     "CREATE INDEX IF NOT EXISTS grid_rows_by_author ON grid_rows (author_handle, author)";
 
@@ -473,19 +494,11 @@ pub(crate) const AUTHORS_INDEX: &str =
 /// its count of those search by meaning cannot reach
 /// (`DoltRepo::documents_with_pages`, which names `markdowns_searchable`).
 /// Without them it read every grid row and its document's whole
-/// `markdowns` row, seconds on a large library, on every search. Out of
-/// [`schema_hash`], as `AUTHORS_INDEX` is; an index made before them gets
-/// them at the next start (`lacks_an_index`).
+/// `markdowns` row, seconds on a large library, on every search.
 pub(crate) const SEARCHABLE_DOCUMENTS_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS markdowns_searchable ON markdowns (searchable, markdown_uuid)",
     "CREATE INDEX IF NOT EXISTS grid_rows_by_markdown_source ON grid_rows (markdown_uuid, source_id)",
 ];
-
-/// Tables an older build made in every store that holds documents.
-/// `supplied_search_terms` kept each row's supplied terms apart from the
-/// row, owned by document; a row that moved left them behind (#1202).
-/// They are `grid_rows.supplied_terms` now.
-pub(crate) const RETIRED_TABLES: &[&str] = &["DROP TABLE IF EXISTS supplied_search_terms"];
 
 /// The grid index's tables, and the terms' with their indexes.
 fn index_ddl() -> impl Iterator<Item = &'static str> {
@@ -503,6 +516,7 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
         .chain(SOURCE_CURSORS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(std::iter::once(datalib_etl::pin::GENERATION_DDL))
         .chain(TERMS_DDL.iter().copied())
+        .chain(datalib_search_index::KEYWORD_DDL)
 }
 
 /// Create whatever of the index is missing: on a new file, all of it;
@@ -510,54 +524,13 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
 /// here: every render store has a `grid_rows` too, and only the index the
 /// grid reads wants to pay for the search indexes on every write.
 pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
-    for ddl in index_ddl().chain(all_indexes()) {
+    for ddl in index_ddl().chain(indexes()) {
         sqlx::query(ddl)
             .execute(pool)
             .await
             .with_context(|| format!("create: {ddl}"))?;
     }
     Ok(())
-}
-
-fn all_indexes() -> impl Iterator<Item = &'static str> {
-    read_indexes()
-        .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
-        .chain([AUTHORS_INDEX, node_rows::BY_SOURCE_INDEX])
-        .chain(SEARCHABLE_DOCUMENTS_INDEXES.iter().copied())
-}
-
-/// Whether the grid index at `db_path` lacks an index this build makes:
-/// one an older build did not, which only a run of the step adds. A reader
-/// may name any of them, so a start asks for that run (`datalib-step
-/// --prepare`). `false` for a file not built yet.
-pub async fn lacks_an_index(db_path: &Path) -> Result<bool> {
-    if !db_path.exists() {
-        return Ok(false);
-    }
-    let opts = sqlx::sqlite::SqliteConnectOptions::new()
-        .filename(datalib_core::plain_sqlite::uri(db_path))
-        .read_only(true)
-        .create_if_missing(false)
-        .busy_timeout(Duration::from_secs(5));
-    let pool = sqlx::sqlite::SqlitePoolOptions::new()
-        .max_connections(1)
-        .idle_timeout(None)
-        .max_lifetime(None)
-        .connect_with(opts)
-        .await
-        .with_context(|| format!("open {} to list its indexes", db_path.display()))?;
-    let made: Result<Vec<String>, sqlx::Error> =
-        sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'index'")
-            .fetch_all(&pool)
-            .await;
-    pool.close().await;
-    let made: HashSet<String> = made
-        .context("list the grid index's indexes")?
-        .into_iter()
-        .collect();
-    Ok(all_indexes()
-        .filter_map(index_name)
-        .any(|name| !made.contains(name)))
 }
 
 /// The search bar's indexes, and those that list a container's children.
@@ -713,6 +686,51 @@ fn index_name(ddl: &str) -> Option<&str> {
         .next()
 }
 
+/// The step that writes the grid index, and that a refusal names.
+pub fn step() -> String {
+    format!(
+        "{}/{}",
+        datalib_core::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR,
+        datalib_core::layout::INDEX_STEP_DIR
+    )
+}
+
+/// Refuses the grid index on `conn` unless it records this build's
+/// [`shape`], inside whatever read the caller holds on `conn`.
+pub async fn require_shape(conn: &mut sqlx::SqliteConnection, db_path: &Path) -> Result<()> {
+    let meta = datalib_store_meta::read_in(conn).await?;
+    datalib_store_meta::require(db_path, Some(&step()), meta.as_ref(), &shape())
+}
+
+/// The grid index read-only, once its first pass has made it and only in
+/// this build's [`shape`]: the one way to open it for reading outside the
+/// search applet's repo, which checks the same shape inside each read.
+/// `None` before the first pass; a store in another shape is refused,
+/// saying what to run.
+pub async fn open_for_reading(db_path: &Path) -> Result<Option<SqlitePool>> {
+    if !db_path.exists() {
+        return Ok(None);
+    }
+    let pool = datalib_etl::pin::open_reader(db_path)
+        .await
+        .with_context(|| format!("open the grid index {}", db_path.display()))?;
+    let checked = async {
+        if datalib_etl::pin::generation(&pool).await?.is_none() {
+            return anyhow::Ok(false);
+        }
+        require_shape(&mut *pool.acquire().await?, db_path).await?;
+        anyhow::Ok(true)
+    }
+    .await;
+    match checked {
+        Ok(true) => Ok(Some(pool)),
+        other => {
+            pool.close().await;
+            other.map(|_| None)
+        }
+    }
+}
+
 /// The `unified_grid_and_search_index` step's handle on the index: the one way to open it
 /// for writing. One connection, never recycled, as every pool here
 /// (`etl/README.md` § "Connection pools"). A reader that looks before the
@@ -721,11 +739,9 @@ fn index_name(ddl: &str) -> Option<&str> {
 /// An index written in another shape loses its tables and is made new:
 /// every row in it is a function of a render store, so a rebuild costs
 /// one local read of them, where altering it in place would leave a new
-/// column empty in the rows the cursors never revisit. The search index's
-/// tables share the file and are its own to keep or empty
-/// (`datalib_search_index`), so they stay.
+/// column empty in the rows the cursors never revisit. The keyword
+/// index's tables are part of this shape, and go with the rest.
 pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
-    retire_old_files(db_path)?;
     if let Some(dir) = db_path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -743,15 +759,17 @@ pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
     }
 }
 
-/// Drops the grid's own tables when they were written in another shape,
-/// under the write lock: the search index's tables share the file, and
-/// stay.
+/// Drops every table when the file was written in another shape, under
+/// the write lock, so two openers do not both drop it.
 async fn empty_if_another_shape(pool: &SqlitePool) -> Result<()> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    let have = datalib_store_meta::schema_hash_in(&mut tx)
+    let have = datalib_store_meta::read_in(&mut tx)
         .await
-        .context("read the grid index's shape")?;
-    if have.is_some_and(|h| h != schema_hash()) {
+        .context("read the grid index's shape")?
+        .map(|m| m.schema_hash);
+    // A file that records no shape is in none: an index from before
+    // `_datalib_meta`, or a new file with nothing to drop.
+    if have.as_deref() != Some(shape().tables.as_str()) {
         tracing::info!("the grid index was written in another shape; building it again");
         drop_own_tables(&mut tx).await?;
     }
@@ -765,22 +783,16 @@ async fn empty_if_another_shape(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-/// Every table in the file but `_datalib_meta` and the search index's,
-/// virtual tables first so their shadow tables go with them. Includes any
-/// an older shape had that this one does not.
+/// Every table in the file but `_datalib_meta`, virtual tables first so
+/// their shadow tables go with them. Includes any an older shape had that
+/// this one does not.
 async fn drop_own_tables(conn: &mut sqlx::SqliteConnection) -> Result<()> {
-    let theirs = format!(
-        "{}%",
-        datalib_search_index::TABLE_PREFIX.replace('_', "\\_")
-    );
     for virtual_only in [true, false] {
         let names: Vec<String> = sqlx::query_scalar(
             "SELECT name FROM sqlite_master WHERE type = 'table' \
                AND name NOT LIKE 'sqlite_%' AND name <> '_datalib_meta' \
-               AND name NOT LIKE ? ESCAPE '\\' \
                AND (NOT ? OR sql LIKE 'CREATE VIRTUAL TABLE%')",
         )
-        .bind(&theirs)
         .bind(virtual_only)
         .fetch_all(&mut *conn)
         .await
@@ -830,15 +842,7 @@ async fn connect(db_path: &Path) -> Result<SqlitePool> {
 
 async fn set_up(pool: &SqlitePool) -> Result<()> {
     init_schema(pool).await?;
-    // Its `problems` is built in this shape, so it starts at the shared
-    // ladder's top.
-    let versions = datalib_store_meta::Versions {
-        schema: 0,
-        shared: datalib_store_meta::ladder::top(datalib_etl::doltlite_raw::SHARED_LADDER),
-    };
-    datalib_store_meta::write(pool, StoreKind::GridIndex, &schema_hash(), versions)
-        .await
-        .context("write _datalib_meta for the grid index")?;
+    record_shape(pool, &shape()).await?;
     sqlx::query(
         "INSERT INTO store_generation (id, file_id, generation) \
          VALUES (1, lower(hex(randomblob(8))), 0) ON CONFLICT (id) DO NOTHING",
@@ -846,39 +850,6 @@ async fn set_up(pool: &SqlitePool) -> Result<()> {
     .execute(pool)
     .await
     .context("start the grid index's generation")?;
-    Ok(())
-}
-
-/// Delete what an older build kept beside the index: the doltlite store it
-/// used to be, and the search terms file the index now holds. Both are
-/// derived, and the doltlite store was the bulk of an upgraded root's disk.
-fn retire_old_files(db_path: &Path) -> Result<()> {
-    let Some(dir) = db_path.parent() else {
-        return Ok(());
-    };
-    let (store, terms) = (
-        datalib_core::layout::RETIRED_GRID_DB,
-        datalib_core::layout::RETIRED_TERMS_DB,
-    );
-    for name in [
-        store.to_string(),
-        format!("{store}.lock"),
-        format!(".{store}-lock"),
-        terms.to_string(),
-        format!("{terms}-wal"),
-        format!("{terms}-shm"),
-    ] {
-        let path = dir.join(&name);
-        let Ok(meta) = fs::metadata(&path) else {
-            continue;
-        };
-        fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
-        tracing::info!(
-            path = %path.display(),
-            bytes = meta.len(),
-            "removed a file an older build kept beside the grid index"
-        );
-    }
     Ok(())
 }
 
@@ -1124,6 +1095,7 @@ pub async fn build_grid_index_for(
     // `init_schema` makes them.
     let building = indexed.is_empty();
     if building {
+        record_shape(pool, &shape_without_indexes()).await?;
         drop_search_indexes(&mut *pool.acquire().await?).await?;
     }
     let held: usize = indexed.values().map(HashSet::len).sum();
@@ -1230,6 +1202,7 @@ pub async fn build_grid_index_for(
     if building && !stop.requested() {
         let started = Instant::now();
         create_search_indexes(&mut *pool.acquire().await?).await?;
+        record_shape(pool, &shape()).await?;
         tracing::info!(
             took_ms = started.elapsed().as_millis() as u64,
             "built the search indexes over the new index"
@@ -1381,32 +1354,27 @@ fn read_source(
     // would discard the renderer's in-flight rows and schema-commit into
     // it — writing to a file we do not own. Pinned at open: the diff below
     // and the rows behind it name one commit.
-    let Some(store) =
-        crate::indexed_markdown::IndexedMarkdownStore::open_for_reading(rendered_root, None)
-            .with_context(|| format!("open render store for {stanza}"))?
-    else {
-        tracing::warn!(
-            source = %stanza,
-            "this render store names no commit, so there is nothing \
-             committed to index; skipping it this pass"
-        );
-        return Ok(None);
+    let opened =
+        crate::indexed_markdown::IndexedMarkdownStore::open_for_reading(rendered_root, None);
+    let store = match opened {
+        Ok(Some(store)) => store,
+        Ok(None) => {
+            tracing::warn!(
+                source = %stanza,
+                "this render store names no commit, so there is nothing \
+                 committed to index; skipping it this pass"
+            );
+            return Ok(None);
+        }
+        Err(e) if datalib_store_meta::other_shape(&e).is_some() => {
+            tracing::debug!(source = %stanza, error = %format!("{e:#}"), "left as the index had it");
+            return Ok(Some(SourceRead::Unreadable));
+        }
+        Err(e) => return Err(e.context(format!("open render store for {stanza}"))),
     };
     let read = read_open_store(&store, stanza, cursor, indexed, pass);
     store.close();
-    match read {
-        Err(e) if written_in_another_shape(&e) => {
-            tracing::warn!(
-                source = %stanza,
-                error = %format!("{e:#}"),
-                "this render store lacks a table or column this build reads; \
-                 indexing the other sources and leaving this one as it was \
-                 until it re-renders"
-            );
-            Ok(Some(SourceRead::Unreadable))
-        }
-        read => read.map(Some),
-    }
+    read.map(Some)
 }
 
 fn read_open_store(
@@ -1416,16 +1384,6 @@ fn read_open_store(
     indexed: Option<&HashSet<String>>,
     pass: &mut PassCounts,
 ) -> Result<SourceRead> {
-    if !store
-        .in_this_shape()
-        .with_context(|| format!("read the shape of {stanza}'s render store"))?
-    {
-        tracing::debug!(
-            source = %stanza,
-            "this render store is in a shape this build does not read"
-        );
-        return Ok(SourceRead::Unreadable);
-    }
     let pin = store.pin().expect("a reader is pinned at open").clone();
     let from = match cursor {
         Some(c) => store
@@ -1538,7 +1496,7 @@ async fn apply_source(
     let res = async {
         let (docs, removed, head) = match read {
             SourceRead::Unreadable => {
-                let row = unreadable_store_problem(stanza, OLDER_SHAPE, Severity::Warning);
+                let row = unreadable_store_problem(stanza, OTHER_SHAPE, Severity::Warning);
                 let mut guard = write_lock.acquire().await?;
                 record_unreadable_store(guard.conn(), row, now).await?;
                 summary.sources_unreadable.push(stanza.to_string());
@@ -2409,7 +2367,7 @@ mod open_index_tests {
     #[test]
     fn an_unreadable_store_is_news_once() {
         use datalib_schema::problems::Severity;
-        let row = || unreadable_store_problem("s", OLDER_SHAPE, Severity::Warning);
+        let row = || unreadable_store_problem("s", OTHER_SHAPE, Severity::Warning);
         let first = row().stamped(None, "2026-11-04T10:00:00Z", None);
         assert!(first.is_news(None));
         let again = row().stamped(Some(&first), "2026-11-04T10:05:00Z", None);
@@ -2435,37 +2393,6 @@ mod open_index_tests {
         statements.extend(DELETE_DOCUMENTS);
         assert_searched_by_index(&pool, &statements).await;
         pool.close().await;
-    }
-
-    /// An index an older build made has none of the indexes added since,
-    /// which only a run of the step adds and which the search applet names:
-    /// a start must see that and ask for the run.
-    #[tokio::test]
-    async fn an_index_made_before_an_index_was_added_lacks_it() {
-        let td = tempfile::tempdir().unwrap();
-        let db = td.path().join("db.sqlite");
-        assert!(
-            !lacks_an_index(&db).await.unwrap(),
-            "no file, nothing to add"
-        );
-        let pool = open_index(&db).await.expect("open_index");
-        pool.close().await;
-        assert!(
-            !lacks_an_index(&db).await.unwrap(),
-            "a new index has them all"
-        );
-
-        let pool = open_index(&db).await.expect("open_index");
-        sqlx::query("DROP INDEX markdowns_searchable")
-            .execute(&pool)
-            .await
-            .expect("drop it, as an older build never made it");
-        pool.close().await;
-        assert!(lacks_an_index(&db).await.unwrap());
-
-        let pool = open_index(&db).await.expect("a run of the step");
-        pool.close().await;
-        assert!(!lacks_an_index(&db).await.unwrap(), "the run made it again");
     }
 
     /// A source's nodes are read by the source, not by walking every
@@ -3045,11 +2972,11 @@ mod shape_tests {
         }
     }
 
-    /// The search index shares the file: a change of the grid's shape
-    /// makes the grid's tables new and leaves the search index's rows,
-    /// which cost a re-index of every source to make again.
+    /// The keyword index's tables are part of the grid index's shape: a
+    /// change of it makes them new with the grid's, and every source's
+    /// keyword pass indexes it again.
     #[tokio::test]
-    async fn a_change_of_the_grids_shape_keeps_the_search_index() {
+    async fn a_change_of_the_grids_shape_takes_the_keyword_index_with_it() {
         let dir = tempdir().unwrap();
         let db = dir.path().join("db.sqlite");
         let pool = holding_one_document(&db).await;
@@ -3066,7 +2993,7 @@ mod shape_tests {
         assert_eq!(documents(&pool).await, 0);
         crate::grid_index::close_index(pool).await.unwrap();
         let search = datalib_search_index::Index::open(&db).await.unwrap();
-        assert_eq!(search.indexed("claude_web").await.unwrap().len(), 1);
+        assert!(search.indexed("claude_web").await.unwrap().is_empty());
         search.close().await;
     }
 
@@ -3124,6 +3051,46 @@ mod shape_tests {
 
         let pool = open_index(&db).await.unwrap();
         assert_eq!(documents(&pool).await, 1);
+    }
+
+    /// An index whose tables are this build's and whose indexes are not is
+    /// kept and given them, not rebuilt: adding an index costs making it.
+    /// One that records no shape at all is in none, and made new.
+    #[tokio::test]
+    async fn only_moved_indexes_are_made_and_no_recorded_shape_is_made_new() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("db.sqlite");
+        let pool = holding_one_document(&db).await;
+        sqlx::query("DROP INDEX grid_rows_by_author")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE _datalib_meta SET value = 'fewer' WHERE key = 'index_hash'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        crate::grid_index::close_index(pool).await.unwrap();
+
+        let pool = open_index(&db).await.unwrap();
+        assert_eq!(documents(&pool).await, 1, "kept");
+        let meta = datalib_store_meta::read(&pool).await.unwrap().unwrap();
+        assert_eq!(meta.shape(), crate::grid_index::shape());
+        let made: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM sqlite_master WHERE name = 'grid_rows_by_author'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(made, 1);
+
+        sqlx::query("DROP TABLE _datalib_meta")
+            .execute(&pool)
+            .await
+            .unwrap();
+        crate::grid_index::close_index(pool).await.unwrap();
+        let pool = open_index(&db).await.unwrap();
+        assert_eq!(documents(&pool).await, 0, "made new");
+        crate::grid_index::close_index(pool).await.unwrap();
     }
 }
 
@@ -3404,12 +3371,21 @@ mod source_cursor_tests {
 
     /// Put a source's store back in the shape a build before
     /// `grid_rows.preview` wrote: the column is `text` there.
+    /// What an older build leaves: a column under another name, and the
+    /// shape it records saying so.
     async fn into_older_shape(root: &Path, source: &str) {
         alter_store(
             root,
             source,
             "ALTER TABLE grid_rows RENAME COLUMN preview TO text",
             "an older build's shape",
+        )
+        .await;
+        alter_store(
+            root,
+            source,
+            "UPDATE _datalib_meta SET value = 'an-older-shape' WHERE key = 'schema_hash'",
+            "the shape it records",
         )
         .await;
     }
@@ -3712,11 +3688,12 @@ mod source_cursor_tests {
         assert_eq!(node_rows().await, []);
     }
 
-    /// A store from a build before #962 lacked `source_contacts`, failed
-    /// the diff, and kept every other source out of the grid. The next
-    /// table added to the render DDL is the same store again, so this
-    /// drops each table in turn: whichever it is, the pass indexes the
-    /// other source and keeps this one's rows as they were.
+    /// A store that records this build's shape and lacks a table is
+    /// damaged, not older: a read of the table fails loudly, naming it,
+    /// and costs only its own source. A store from a build before #962 lacked
+    /// `source_contacts` and kept every other source out of the grid, so
+    /// this drops each table in turn: whichever it is, the pass indexes
+    /// the other source and keeps this one's rows as they were.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_store_missing_any_one_table_costs_only_its_own_source() {
         for (table, _) in crate::indexed_markdown::store_tables() {
@@ -3742,8 +3719,12 @@ mod source_cursor_tests {
             let s = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
                 .await
                 .unwrap_or_else(|e| panic!("without {table}: {e:#}"));
+            // A table the pass does not read is not missed here; one it
+            // does fails, saying which.
             assert!(
-                s.sources_failed.is_empty(),
+                s.sources_failed
+                    .iter()
+                    .all(|(source, why)| source == "damaged" && why.contains("no such table")),
                 "without {table}: {:?}",
                 s.sources_failed
             );

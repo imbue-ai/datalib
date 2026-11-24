@@ -953,7 +953,8 @@ pub struct ConfigResponse {
     /// copy-pasteable snippets.
     pub latchkey_cli: String,
     /// The launch's upgrade: the steps being asked to migrate, and the ones
-    /// that answered they need to run again, which the page offers to run.
+    /// that answered they need to run again, which the loop runs and the
+    /// page waits on.
     pub upgrade: UpgradeView,
     /// The newest "Free up disk space" since this server started, while
     /// it runs and after: how each step it asks stands.
@@ -966,8 +967,8 @@ pub struct UpgradeView {
     #[serde(flatten)]
     pub pass: supervisor::Upgrade,
     /// The steps that answered the pass with `needs_rerun` and have not run
-    /// since (`round::rerun_offer`). Empty while the pass runs: the offer
-    /// comes after it.
+    /// since (`round::rerun_offer`). Empty while the pass runs: the loop
+    /// runs them after it.
     pub rerender: Vec<String>,
 }
 

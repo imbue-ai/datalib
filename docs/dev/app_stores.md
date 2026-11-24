@@ -35,8 +35,6 @@
                                                   chunk's vector under its model and
                                                   prompt hash (plain SQLite); a file of its
                                                   own so a reset of the grid index keeps it
-<data_root>/unified_grid_and_search_index/qmd_aggregator/           left by an older build, where qmd kept
-                                                  its index; the index step deletes it
 <data_root>/unified_grid_and_search_index/embedding_map/embedding_map.json
                                                   every embedded document's place on
                                                   the map card; replaced whole by

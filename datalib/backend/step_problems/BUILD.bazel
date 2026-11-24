@@ -13,6 +13,7 @@ rust_library(
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/sqlite_open:datalib_sqlite_open",
+        "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/table:datalib_table",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",

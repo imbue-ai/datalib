@@ -284,7 +284,8 @@ pub fn index_ddl() -> Vec<&'static str> {
         .collect()
 }
 
-/// The lookups by id, kept out of the DDL so they change no store's shape.
+/// The lookups by id, recorded apart from the tables (the store's
+/// `index_hash`), so adding one costs creating it rather than a rebuild.
 pub fn indexes() -> Vec<&'static str> {
     series::INDEXES.iter().map(|(_, sql)| *sql).collect()
 }

@@ -4,9 +4,8 @@
 
 use std::sync::Arc;
 
-use datalib_schema::data_nodes::{CHILDREN_INDEXES, DDL as DATA_NODES_DDL};
-use datalib_schema::filings::DDL as FILINGS_DDL;
-use datalib_schema::grid_rows::{GridRow, DDL as GRID_DDL};
+use datalib_schema::data_nodes::CHILDREN_INDEXES;
+use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
 use datalib_unified_grid_and_search_index::children::{
     child_key_sql, children_sql, Anchor, Ask, Child, ChildrenError, ChildrenFailure, ChildrenPage,
@@ -16,19 +15,6 @@ use datalib_unified_grid_and_search_index::dolt_repo::DoltRepo;
 use datalib_unified_grid_and_search_index::repo::IndexRepo;
 
 use crate::dolt_backend_integration::{commit, insert_rows, unique_db_path, writer};
-
-/// The tables the tree lives in, with the indexes the grid index makes
-/// for listing children.
-pub(crate) async fn create_tree(writer: &sqlx::SqlitePool) {
-    let tables = GRID_DDL
-        .iter()
-        .chain(DATA_NODES_DDL.iter())
-        .chain(FILINGS_DDL.iter())
-        .map(|(_t, ddl)| *ddl);
-    for ddl in tables.chain(CHILDREN_INDEXES.iter().copied()) {
-        sqlx::query(ddl).execute(writer).await.expect("create");
-    }
-}
 
 fn stamp(minute: u32) -> String {
     format!("2364-02-11T09:{minute:02}:00+00:00")
@@ -101,7 +87,6 @@ async fn seeded() -> (DoltRepo, sqlx::SqlitePool) {
     let db_path = unique_db_path();
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let w = writer(&root).await;
-    create_tree(&w).await;
     let threads = [("t1", 1), ("t2", 2), ("t3", 3)];
     let mut rows = Vec::new();
     for (t, minute) in threads {

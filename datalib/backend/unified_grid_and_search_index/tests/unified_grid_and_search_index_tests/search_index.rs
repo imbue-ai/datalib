@@ -46,9 +46,15 @@ async fn write(root: &Path, docs: &[(IndexDoc, [f32; 3])]) {
     cache.close().await;
 }
 
-/// `docs` in the keyword index and cut into chunks in the cache, which
-/// is handed back open.
+/// `docs` in the keyword index, in the grid index's file as its step
+/// makes it, and cut into chunks in the cache, which is handed back open.
 async fn index_and_cut(root: &Path, docs: &[IndexDoc]) -> InferenceCache {
+    let grid = datalib_etl_render::grid_index::open_index(&layout::grid_index_db(root))
+        .await
+        .unwrap();
+    datalib_etl_render::grid_index::close_index(grid)
+        .await
+        .unwrap();
     let index = Index::open(&layout::grid_index_db(root)).await.unwrap();
     index.put(docs).await.unwrap();
     index.close().await;
@@ -279,7 +285,7 @@ async fn a_write_that_changes_no_document_reads_none_again() {
         )
         .await
         .unwrap();
-    sqlx::query("CREATE TABLE grid_rows (uuid TEXT)")
+    sqlx::query("UPDATE store_generation SET generation = generation + 1")
         .execute(&grid)
         .await
         .unwrap();

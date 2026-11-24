@@ -128,11 +128,7 @@ struct DocumentVectors {
 }
 
 async fn document_vectors(root: &Path) -> Result<DocumentVectors> {
-    let Some(reader) = datalib_search_index::read::Reader::open(
-        &datalib_runtime::layout::grid_index_db(root),
-        &datalib_runtime::layout::inference_cache_db(root),
-    )
-    .await?
+    let Some(reader) = datalib_unified_grid_and_search_index::search_index::open(root).await?
     else {
         return Ok(DocumentVectors::default());
     };
