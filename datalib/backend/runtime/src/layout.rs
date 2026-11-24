@@ -67,9 +67,6 @@ pub const FEEDBACK_DB: &str = "feedback.doltlite_db";
 /// committed it, so doltlite's history bought it nothing, and a stock
 /// `sqlite3` reads it.
 pub const DISK_STATS_DB: &str = "disk_stats.sqlite";
-/// Where [`DISK_STATS_DB`]'s rows lived before it, as doltlite. The next
-/// open copies them over and removes it (`datalib_core::app_store`).
-pub const LEGACY_USAGE_DB: &str = "usage.doltlite_db";
 pub const REMOTE_MEDIA_DB: &str = "remote_media.doltlite_db";
 /// The download CAS: one file per fetched URL, named by its sha256.
 pub const REMOTE_MEDIA_DIR: &str = "remote_media";
@@ -169,10 +166,6 @@ pub fn feedback_db(data_root: &Path) -> PathBuf {
 
 pub fn disk_stats_db(data_root: &Path) -> PathBuf {
     system_dir(data_root).join(DISK_STATS_DB)
-}
-
-pub fn legacy_usage_db(data_root: &Path) -> PathBuf {
-    system_dir(data_root).join(LEGACY_USAGE_DB)
 }
 
 pub fn remote_media_db(data_root: &Path) -> PathBuf {
