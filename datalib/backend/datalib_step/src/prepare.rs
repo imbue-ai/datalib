@@ -24,6 +24,9 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
     if env.function == Function::Ingest {
         return prepare_raw_store(env, &tree, emitter).await;
     }
+    if env.function == Function::EmbeddingMap {
+        return prepare_embedding_map(env, data_root, emitter);
+    }
     // A derived store is a function of another; one in another shape is
     // rebuilt by running the step, never migrated in place. Only its
     // indexes moving is made good here, by its owner's open.
@@ -44,6 +47,27 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
             step = %env.step,
             "prepare: a source was drawn into the search index by another version; it needs a rerun"
         );
+        emitter.needs_rerun();
+    }
+    Ok(Vec::new())
+}
+
+/// The map is one JSON file, every byte of it a layout of the search
+/// index's vectors. One this build cannot read is deleted, and the step's
+/// rerun lays the map out afresh.
+fn prepare_embedding_map(
+    env: &StepEnv,
+    data_root: &Path,
+    emitter: &Emitter,
+) -> Result<Vec<OutputClaim>> {
+    use datalib_unified_grid_and_search_index::embedding_map as map_file;
+    if let Err(e) = map_file::read(data_root) {
+        tracing::info!(
+            step = %env.step,
+            error = format!("{e:#}"),
+            "prepare: this build does not read the embedding map; it is laid out afresh"
+        );
+        map_file::remove(data_root)?;
         emitter.needs_rerun();
     }
     Ok(Vec::new())
@@ -1137,6 +1161,50 @@ mod tests {
 
         written_by_an_older_build(&db).await;
         assert!(ask().await, "an older build's shape");
+    }
+
+    /// A map an earlier build wrote, naming each point by its file's path,
+    /// is deleted and asks for a rerun, which lays it out afresh; a map
+    /// this build wrote is kept and asks for nothing.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_embedding_map_this_build_does_not_read_is_laid_out_afresh() {
+        use datalib_unified_grid_and_search_index::embedding_map as map_file;
+        let root = tempfile::tempdir().unwrap();
+        let env = env_of(
+            "unified_grid_and_search_index/embedding_map",
+            Function::EmbeddingMap,
+        );
+        let ask = || async {
+            let emitter = Emitter::new(env.step.clone());
+            run(&env, root.path(), &emitter).await.unwrap();
+            emitter.asked_for_a_rerun()
+        };
+        assert!(!ask().await, "no map yet");
+
+        let current = map_file::EmbeddingMap {
+            made_at: "2026-11-20T10:00:00-08:00".into(),
+            dim: 768,
+            epochs: 200,
+            seed: map_file::SeedCounts::default(),
+            unembedded: 0,
+            points: vec![map_file::MapPoint {
+                document: "c-1a".into(),
+                x: 1.0,
+                y: 2.0,
+            }],
+        };
+        map_file::write(root.path(), &current).unwrap();
+        assert!(!ask().await, "this build's map");
+        assert_eq!(map_file::read(root.path()).unwrap(), Some(current));
+
+        let by_path = serde_json::json!({
+            "made_at": "2026-09-25T10:00:00-07:00", "dim": 768, "epochs": 200,
+            "seed": {"kept": 0, "near_neighbours": 0, "fresh": 1}, "unembedded": 0,
+            "points": [{"path": "slack/render_markdown/1a/c-1a.md", "x": 1.0, "y": 2.0}],
+        });
+        std::fs::write(map_file::path(root.path()), by_path.to_string()).unwrap();
+        assert!(ask().await, "an earlier build's map");
+        assert_eq!(map_file::read(root.path()).unwrap(), None, "deleted");
     }
 
     /// A new version of the index's drawing or chunking moves nothing the

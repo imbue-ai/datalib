@@ -1470,7 +1470,10 @@ pub struct RecordTimings {
 
 /// An open run in the record while nothing is running is a run that died,
 /// so `live` is [`supervisor::SyncControl::running`].
-pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) -> DagRecord {
+pub async fn dag_record(
+    root: &std::path::Path,
+    sync: &supervisor::SyncControl,
+) -> anyhow::Result<DagRecord> {
     let started = std::time::Instant::now();
     let loaded = match sync.mailbox().await {
         Ok(store) => store.load_record().await,
@@ -1494,12 +1497,12 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         .unwrap_or_default();
 
     let loop_record = started.elapsed();
-    let progress = live_progress(root, run.as_ref().map(|r| r.run_id.as_str())).await;
+    let progress = live_progress(root, run.as_ref().map(|r| r.run_id.as_str())).await?;
     let run_progress = started.elapsed() - loop_record;
 
     let problems = manage::counts_by_step(
-        &datalib_runs::latest_metric(root, datalib_problems::METRIC).await,
-        &datalib_runs::latest_metric(root, datalib_metrics::FAILED_PASSES).await,
+        &datalib_runs::latest_metric(root, datalib_problems::METRIC).await?,
+        &datalib_runs::latest_metric(root, datalib_metrics::FAILED_PASSES).await?,
     );
     // Read-only, from the index and the mutes store (problem_mutes/README.md).
     let problem_rows = datalib_problem_mutes::counts(root)
@@ -1512,24 +1515,24 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         .bump_micros(-(manage::ITEMS_WINDOW.as_micros() as i64))
         .to_utc_and_offset();
     let items = manage::items_by_step(
-        &datalib_runs::latest_metric(root, datalib_metrics::ITEMS).await,
-        &datalib_runs::latest_metric(root, datalib_metrics::DOCUMENTS).await,
-        &datalib_runs::metric_history(root, datalib_metrics::ITEMS, &since).await,
+        &datalib_runs::latest_metric(root, datalib_metrics::ITEMS).await?,
+        &datalib_runs::latest_metric(root, datalib_metrics::DOCUMENTS).await?,
+        &datalib_runs::metric_history(root, datalib_metrics::ITEMS, &since).await?,
     );
     let spend = manage::spend_by_step(
-        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_COST).await,
-        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_SANDBOXES).await,
-        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_SANDBOX_SECONDS).await,
+        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_COST).await?,
+        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_SANDBOXES).await?,
+        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_SANDBOX_SECONDS).await?,
     );
     let owed =
-        manage::owed_by_step(&datalib_runs::latest_metric(root, datalib_metrics::OWED).await);
+        manage::owed_by_step(&datalib_runs::latest_metric(root, datalib_metrics::OWED).await?);
     let took = RecordTimings {
         loop_record,
         run_progress,
         run_metrics: started.elapsed() - loop_record - run_progress,
     };
 
-    DagRecord {
+    Ok(DagRecord {
         run,
         states,
         steps: state.steps,
@@ -1540,7 +1543,7 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         spend,
         owed,
         took,
-    }
+    })
 }
 
 /// What each step has reported in `run`, the loop's run in flight or the
@@ -1552,19 +1555,19 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
 async fn live_progress(
     root: &std::path::Path,
     run: Option<&str>,
-) -> std::collections::HashMap<String, DagStepProgress> {
-    let store = datalib_runs::snapshot(root).await;
-    match (run, store.run_id.as_deref()) {
+) -> anyhow::Result<std::collections::HashMap<String, DagStepProgress>> {
+    let store = datalib_runs::snapshot(root).await?;
+    Ok(match (run, store.run_id.as_deref()) {
         (Some(run), Some(store_run)) if run == store_run => progress_by_step(&store, &now_utc()),
         _ => Default::default(),
-    }
+    })
 }
 
 /// `GET /api/dag` — the step DAG derived from the data root's config,
 /// exactly as the runner would build it (same load → to_specs →
 /// Graph::build chain), so the visualization can never drift from
 /// execution. Steps come back in topological order.
-async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
+async fn get_dag(State(s): State<AppState>) -> Result<Json<DagResponse>, Refusal> {
     use datalib_dag::config;
 
     let DagRecord {
@@ -1578,7 +1581,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
         spend: _,
         owed: _,
         took: _,
-    } = dag_record(&s.root, &s.sync).await;
+    } = dag_record(&s.root, &s.sync).await.map_err(unread)?;
 
     let build = || -> anyhow::Result<Vec<DagStepInfo>> {
         let (cfg, _root) = config::load(&s.config_path())?;
@@ -1613,7 +1616,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
             })
             .collect())
     };
-    match build() {
+    Ok(match build() {
         Ok(steps) => Json(DagResponse {
             ok: true,
             error: None,
@@ -1626,7 +1629,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
             steps: Vec::new(),
             run: None,
         }),
-    }
+    })
 }
 
 /// Surface the DAG config's source steps to the UI as `{id}` entries —
@@ -1784,6 +1787,22 @@ struct PurgeRequest {
 }
 
 type Refusal = (StatusCode, String);
+
+/// A read of the run store that failed, as the route's answer: a store
+/// in another shape names what brings it up to date.
+fn unread(e: anyhow::Error) -> Refusal {
+    tracing::error!("read the run store: {e:#}");
+    (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"))
+}
+
+/// The same, where a query the log's vocabulary cannot read is the
+/// caller's to fix.
+fn unread_query(e: anyhow::Error) -> Refusal {
+    match e.downcast_ref::<datalib_runs::QueryError>() {
+        Some(q) => (StatusCode::BAD_REQUEST, q.to_string()),
+        None => unread(e),
+    }
+}
 
 fn internal(e: anyhow::Error) -> Refusal {
     tracing::error!("intent: {e:#}");
@@ -2039,9 +2058,12 @@ struct RunsParams {
 async fn runs_list(
     State(s): State<AppState>,
     Query(p): Query<RunsParams>,
-) -> Json<Vec<datalib_runs::RunRow>> {
+) -> Result<Json<Vec<datalib_runs::RunRow>>, Refusal> {
     let limit = p.limit.unwrap_or(50).clamp(1, 1000);
-    Json(datalib_runs::runs(&s.root, p.step.as_deref(), limit).await)
+    datalib_runs::runs(&s.root, p.step.as_deref(), limit)
+        .await
+        .map(Json)
+        .map_err(unread)
 }
 
 /// One log line in full, for the inspector: the line, and the process
@@ -2057,11 +2079,14 @@ pub struct LogLineResponse {
 async fn log_line(
     State(s): State<AppState>,
     Path(seq): Path<i64>,
-) -> Result<Json<LogLineResponse>, StatusCode> {
+) -> Result<Json<LogLineResponse>, Refusal> {
     let line = datalib_runs::log_line(&s.root, seq)
         .await
-        .ok_or(StatusCode::NOT_FOUND)?;
-    let process = datalib_runs::process(&s.root, &line.process_id).await;
+        .map_err(unread)?
+        .ok_or((StatusCode::NOT_FOUND, format!("no log line {seq}")))?;
+    let process = datalib_runs::process(&s.root, &line.process_id)
+        .await
+        .map_err(unread)?;
     Ok(Json(LogLineResponse { line, process }))
 }
 
@@ -2084,9 +2109,12 @@ struct ProcessesParams {
 async fn processes_list(
     State(s): State<AppState>,
     Query(p): Query<ProcessesParams>,
-) -> Json<Vec<datalib_runs::ProcessRow>> {
+) -> Result<Json<Vec<datalib_runs::ProcessRow>>, Refusal> {
     let limit = p.limit.unwrap_or(200).clamp(1, 5000);
-    Json(datalib_runs::processes(&s.root, p.run.as_deref(), p.process.as_deref(), limit).await)
+    datalib_runs::processes(&s.root, p.run.as_deref(), p.process.as_deref(), limit)
+        .await
+        .map(Json)
+        .map_err(unread)
 }
 
 /// One step in one run: its row, and what it reported.
@@ -2105,13 +2133,18 @@ pub struct RunStepsResponse {
 
 /// `GET /api/runs/{run}/steps` — every step's state and numbers for one
 /// run, past or in flight. `run: null` for a run the store does not have.
-async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<RunStepsResponse> {
-    let snap = datalib_runs::snapshot_of(&s.root, Some(&run)).await;
+async fn run_steps(
+    State(s): State<AppState>,
+    Path(run): Path<String>,
+) -> Result<Json<RunStepsResponse>, Refusal> {
+    let snap = datalib_runs::snapshot_of(&s.root, Some(&run))
+        .await
+        .map_err(unread)?;
     let Some(run_id) = snap.run_id.clone() else {
-        return Json(RunStepsResponse {
+        return Ok(Json(RunStepsResponse {
             run: None,
             steps: Vec::new(),
-        });
+        }));
     };
     let mut progress = progress_by_step(&snap, &now_utc());
     let steps = snap
@@ -2130,7 +2163,7 @@ async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<R
             }),
         })
         .collect();
-    Json(RunStepsResponse {
+    Ok(Json(RunStepsResponse {
         run: Some(datalib_runs::RunRow {
             run_id,
             started_at_utc: snap.started_at_utc.unwrap_or_default(),
@@ -2140,7 +2173,7 @@ async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<R
             reason: snap.reason,
         }),
         steps,
-    })
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -2162,18 +2195,18 @@ async fn run_log(
     State(s): State<AppState>,
     Path(run): Path<String>,
     Query(p): Query<RunLogParams>,
-) -> Json<Vec<datalib_runs::LogLine>> {
+) -> Result<Json<Vec<datalib_runs::LogLine>>, Refusal> {
     let limit = p.limit.unwrap_or(2000).clamp(1, 20_000);
-    Json(
-        datalib_runs::log_after(
-            &s.root,
-            &run,
-            p.step.as_deref(),
-            p.after_seq.unwrap_or(0),
-            limit,
-        )
-        .await,
+    datalib_runs::log_after(
+        &s.root,
+        &run,
+        p.step.as_deref(),
+        p.after_seq.unwrap_or(0),
+        limit,
     )
+    .await
+    .map(Json)
+    .map_err(unread)
 }
 
 /// A parameter this does not take is refused, not ignored: the run, the
@@ -2227,7 +2260,7 @@ async fn log_lines(
     datalib_runs::log_query(&s.root, &q)
         .await
         .map(Json)
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
+        .map_err(unread_query)
 }
 
 /// The keys the run log's search bar offers as a person types.
@@ -2252,7 +2285,7 @@ async fn log_values(
 ) -> Result<Json<Vec<datalib_columns::ValueSuggestion>>, (StatusCode, String)> {
     let values = datalib_runs::log_values(&s.root, &p.q, &p.key, &p.typed)
         .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        .map_err(unread_query)?;
     Ok(Json(
         values
             .into_iter()
@@ -2487,7 +2520,7 @@ mod tests {
             w.metric(metric(QUEUED, 60, ago(30)));
             w.metric(metric(DEQUEUED, 140, ago(30)));
         }
-        let snap = datalib_runs::snapshot(root.path()).await;
+        let snap = datalib_runs::snapshot(root.path()).await.unwrap();
         let by = progress_by_step(&snap, &now_utc());
         let drain = by["s"]
             .queue_drain

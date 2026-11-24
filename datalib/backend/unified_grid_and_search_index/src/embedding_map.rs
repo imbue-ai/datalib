@@ -52,20 +52,10 @@ pub struct SeedCounts {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MapPoint {
-    /// The document's `markdown_uuid`. A map an earlier build wrote named
-    /// it by its file's path instead ([`MapPoint::markdown_uuid`]).
-    #[serde(alias = "path")]
+    /// The document's `markdown_uuid`.
     pub document: String,
     pub x: f32,
     pub y: f32,
-}
-
-impl MapPoint {
-    /// The document this point is, whether named by id or, in a map an
-    /// earlier build wrote, by the path of its file.
-    pub fn markdown_uuid(&self) -> &str {
-        datalib_schema::grid_rows::markdown_uuid_of_path(&self.document).unwrap_or(&self.document)
-    }
 }
 
 impl EmbeddingMap {
@@ -73,7 +63,7 @@ impl EmbeddingMap {
     pub fn positions(&self) -> HashMap<String, [f32; 2]> {
         self.points
             .iter()
-            .map(|p| (p.markdown_uuid().to_string(), [p.x, p.y]))
+            .map(|p| (p.document.clone(), [p.x, p.y]))
             .collect()
     }
 }
@@ -157,24 +147,6 @@ mod tests {
         remove(td.path()).unwrap();
         assert_eq!(read(td.path()).unwrap(), None);
         remove(td.path()).unwrap();
-    }
-
-    /// A map an earlier build wrote named each point by its file's path;
-    /// it still reads, and its points keep their places under their ids.
-    #[test]
-    fn a_map_that_names_points_by_path_keeps_their_places() {
-        let td = tempfile::tempdir().unwrap();
-        let path = path(td.path());
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let old = serde_json::json!({
-            "made_at": "2026-09-25T10:00:00-07:00", "dim": 768, "epochs": 200,
-            "seed": {"kept": 0, "near_neighbours": 0, "fresh": 1}, "unembedded": 0,
-            "points": [{"path": "slack/render_markdown/1a/c-1a.md", "x": 1.0, "y": 2.0}],
-        });
-        std::fs::write(&path, old.to_string()).unwrap();
-        let map = read(td.path()).unwrap().unwrap();
-        assert_eq!(map.points[0].markdown_uuid(), "c-1a");
-        assert_eq!(map.positions()["c-1a"], [1.0, 2.0]);
     }
 
     /// A reader must never see a partial file: the write goes through a

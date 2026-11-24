@@ -153,7 +153,7 @@ fn markdowns(rows: Vec<SearchRow>) -> HashSet<String> {
     rows.into_iter().filter_map(|r| r.markdown_uuid).collect()
 }
 
-/// Each map point as its document row, by the id its path names; a point
+/// Each map point as its document row, by its document's id; a point
 /// whose document the grid does not have is counted, not drawn.
 pub fn join(
     points: &[embedding_map::MapPoint],
@@ -167,7 +167,7 @@ pub fn join(
     let mut unplaced = 0;
     let mut out = Vec::with_capacity(points.len());
     for p in points {
-        let Some(doc) = by_id.remove(p.markdown_uuid()) else {
+        let Some(doc) = by_id.remove(&p.document) else {
             unplaced += 1;
             continue;
         };
@@ -223,28 +223,22 @@ mod tests {
         }
     }
 
-    fn point(path: &str, x: f32) -> MapPoint {
+    fn point(document: &str, x: f32) -> MapPoint {
         MapPoint {
-            document: path.into(),
+            document: document.into(),
             x,
             y: -x,
         }
     }
 
-    /// A point is the document its path names; one with no document is
+    /// A point is the document it names; one with no document is
     /// counted, not drawn with a made-up identity.
     #[test]
-    fn points_join_the_documents_their_paths_name() {
-        let at = |id: &str| {
-            format!(
-                "work/render_markdown/{}",
-                datalib_schema::grid_rows::doc_file_rel(id)
-            )
-        };
+    fn points_join_the_documents_they_name() {
         let points = [
-            point(&at("A-0a"), 1.0),
-            point(&at("Gone-0b"), 2.0),
-            point(&at("B-0c"), 3.0),
+            point("A-0a", 1.0),
+            point("Gone-0b", 2.0),
+            point("B-0c", 3.0),
         ];
         let docs = vec![doc("A-0a"), doc("B-0c"), doc("Z-0d")];
         let (out, unplaced) = join(&points, docs, &columns::Sources::default());

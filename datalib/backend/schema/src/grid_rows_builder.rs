@@ -129,30 +129,6 @@ pub fn filed_under(provider: &str, source_id: &str) -> String {
     }
 }
 
-/// Where a document's markdown is filed under its source's
-/// `render_markdown/`: named by its id, in a folder named by the id's last
-/// two characters. Those come from the id's hash; its first ones are a
-/// stamp, or zeros, and would put most documents in one folder. A search
-/// hit's path is then its document's id ([`markdown_uuid_of_path`]).
-pub fn doc_file_rel(markdown_uuid: &str) -> String {
-    let shard = markdown_uuid
-        .char_indices()
-        .rev()
-        .nth(1)
-        .map_or(markdown_uuid, |(i, _)| &markdown_uuid[i..]);
-    format!("{shard}/{markdown_uuid}.md")
-}
-
-/// The document a path names, when it is filed as [`doc_file_rel`] files
-/// it: the file's stem, in a folder named for the stem's last two
-/// characters. Any prefix (`<source>/render_markdown/`) is ignored.
-pub fn markdown_uuid_of_path(path: &str) -> Option<&str> {
-    let (dir, file) = path.rsplit_once('/')?;
-    let uuid = file.strip_suffix(".md")?;
-    let shard = dir.rsplit('/').next()?;
-    (!uuid.is_empty() && doc_file_rel(uuid) == format!("{shard}/{file}")).then_some(uuid)
-}
-
 impl GridRow {
     /// Start building a [`GridRow`]. Set only the columns you need — the
     /// ~17 optional ones default to `None` — then call
@@ -480,26 +456,6 @@ impl GridRowBuilder {
 #[cfg(test)]
 mod builder_tests {
     use super::*;
-
-    /// A hit's path is its document's id, read back from where the id
-    /// filed it; a path filed any other way names no document.
-    #[test]
-    fn a_document_is_filed_by_its_id_and_read_back_from_its_path() {
-        let id = "00000000-0000-8017-80ad-0000bead00fa";
-        assert_eq!(doc_file_rel(id), format!("fa/{id}.md"));
-        let path = format!("slack/render_markdown/fa/{id}.md");
-        assert_eq!(markdown_uuid_of_path(&path), Some(id));
-        assert_eq!(markdown_uuid_of_path(&doc_file_rel(id)), Some(id));
-        for other in [
-            format!("slack/render_markdown/{id}/all.md"),
-            format!("slack/render_markdown/ab/{id}.md"),
-            format!("{id}.md"),
-            "slack/render_markdown/fa/.md".to_string(),
-            "garmin/render_markdown/days.md".to_string(),
-        ] {
-            assert_eq!(markdown_uuid_of_path(&other), None, "{other}");
-        }
-    }
 
     fn ok_builder() -> GridRowBuilder {
         GridRow::builder()

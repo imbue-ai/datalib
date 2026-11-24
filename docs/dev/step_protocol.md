@@ -687,9 +687,10 @@ store is rebuilt, never migrated. When only its indexes differ
 (`index_hash`), the step opens the store as its owner, which makes
 them, and answers nothing. The grid index also answers `needs_rerun` when the search
 index's keyword tables are in another shape or a source's documents
-were drawn by another version, which its keyword pass reads again;
-`embed` and `embedding_map` have nothing to answer. Any of them refuses
-a store a newer build wrote.
+were drawn by another version, which its keyword pass reads again.
+`embedding_map` deletes a map this build does not read and answers
+`needs_rerun`, which lays it out afresh; `embed` has nothing to answer.
+Any of them refuses a store a newer build wrote.
 
 ## Compact and collect
 

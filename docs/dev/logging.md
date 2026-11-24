@@ -43,6 +43,13 @@ it. On a busy disk, WAL cut a Manage answer's reads from a p95 of about
 SQLite folds them into the main file, so copy the store with
 `sqlite3 … ".backup …"` or `VACUUM INTO`, never with `cp` alone.
 
+**A reader reads the store in this build's shape, or fails.** Every
+reader opens it through `open_reader`, which answers nothing for a root
+whose store no process has made yet and refuses one whose
+`_datalib_meta` records another shape; the next writer's open climbs
+it or empties it. A reader's SQL error is the route's error, never an
+empty answer.
+
 SQLite's file locking is not dependable on a network or file-syncing
 filesystem. **A data root belongs on local disk**, not on an NFS or SMB
 mount or inside a Dropbox folder.
