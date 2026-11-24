@@ -204,6 +204,47 @@ async fn a_contacts_row_gets_its_handles() {
     assert_eq!(rows[0].contact_handles, [RIKER, "tel:+12025550101"]);
 }
 
+/// What answering for Riker does when `n` documents carry them: the rows
+/// its statements answered with, and the steps they took.
+async fn cost_of_a_person_in(n: usize) -> (u64, u64) {
+    let root = Arc::new(unique_db_path().parent().unwrap().to_path_buf());
+    let recording = datalib_sql_work::record_under(&root);
+    let pool = writer(&root).await;
+    let lock = WriteLock::for_index(pool.clone());
+    for i in 0..n {
+        let seen = Some((i as u64, Some("2369-01-01")));
+        let riker = record("riker@enterprise.org", &["Will Riker"], seen);
+        apply_one(&lock, &document(&format!("t-{i}"), vec![riker]))
+            .await
+            .expect("apply a document");
+    }
+    seal(&lock).await.expect("seal");
+    let repo = DoltRepo::open(root).await.expect("open the repo");
+    recording.take();
+    assert_eq!(people(&repo, &[RIKER]).await[RIKER].len(), 1);
+    let ran = recording.take();
+    assert!(
+        ran.iter().any(|r| r.sql == PEOPLE_SQL),
+        "the read was not recorded; this checks nothing: {ran:#?}"
+    );
+    (
+        ran.iter().map(|r| r.work.rows).sum(),
+        ran.iter().map(|r| r.work.vm_steps).sum(),
+    )
+}
+
+/// Guards the read that fetched and parsed a copy of a person's record
+/// for every document that carries it: 31,303 copies of 22 records for
+/// one handle. The documents are only summed, which is a few steps each.
+#[tokio::test]
+async fn a_person_in_many_documents_is_not_read_once_per_document() {
+    let (few, few_steps) = cost_of_a_person_in(10).await;
+    let (many, many_steps) = cost_of_a_person_in(500).await;
+    assert_eq!(few, many, "rows answered for 10 and 500 documents");
+    let each = (many_steps - few_steps) / 490;
+    assert!(each < 30, "{each} steps for each document more");
+}
+
 /// Who a handle is reads that handle's records and the index of what was
 /// written under each, and no table whole.
 #[tokio::test]
