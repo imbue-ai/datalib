@@ -11,7 +11,6 @@ export type SearchCard = {
   /** The query as last run. */
   settled: Ref<string>;
   run(q: string): void;
-  openFeedback(ev: MouseEvent): void;
 };
 
 export type CardEntry = { card: SearchCard; shown: boolean; usedAt: number };

@@ -58,10 +58,6 @@ pub const ENTITIES_DB: &str = "entities.doltlite_db";
 /// `cas_objects` table keyed by blake3 hash, in a plain SQLite file.
 pub const BLOBS_DB: &str = "blobs.sqlite";
 
-/// Filed feedback, relative to `system/`. Its own file because it has a
-/// different writer from every other store and, unlike the indexes, it
-/// cannot be regenerated.
-pub const FEEDBACK_DB: &str = "feedback.doltlite_db";
 /// The disk timeseries — bytes under each tree of the root, and the free
 /// space on its disk — relative to `system/`. Plain SQLite: nothing ever
 /// committed it, so doltlite's history bought it nothing, and a stock
@@ -158,10 +154,6 @@ pub fn inference_cache_db(data_root: &Path) -> PathBuf {
     unified_grid_and_search_index_dir(data_root)
         .join(SEARCH_INDEX_DIR)
         .join("inference_cache.sqlite")
-}
-
-pub fn feedback_db(data_root: &Path) -> PathBuf {
-    system_dir(data_root).join(FEEDBACK_DB)
 }
 
 pub fn disk_stats_db(data_root: &Path) -> PathBuf {

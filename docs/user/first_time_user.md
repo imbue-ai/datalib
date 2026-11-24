@@ -658,7 +658,6 @@ faster.
     ├── supervisor.sqlite           # syncs asked for, and which steps are up to date
     ├── api-token                   # the running server's bearer token
     ├── lock, runner-lock           # held by the running server
-    ├── feedback.doltlite_db        # feedback you filed (nothing regenerates it)
     ├── remote_media.doltlite_db    # remote media you let a document load
     ├── runs/runs.sqlite            # every run's step states, logs and metrics
     ├── disk_stats.sqlite           # bytes on disk, and free space, over time
@@ -677,8 +676,8 @@ faster.
 >
 > What's left in the backup is what you want to keep: every
 > `<group>/ingest/` store (the captured data), `config.toml`,
-> `datalib_curated/`, and `system/` (scheduler state, filed feedback,
-> sync history). One
+> `datalib_curated/`, and `system/` (scheduler state, remote media you
+> allowed, sync history). One
 > exception: `system/frontend/` carries a `CACHEDIR.TAG` too, so the
 > components you or an agent wrote in `system/frontend/user/` are
 > skipped — back that folder up separately if you have any.

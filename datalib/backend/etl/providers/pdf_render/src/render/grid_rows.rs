@@ -356,7 +356,7 @@ mod tests {
     #[test]
     fn ids_are_content_derived_so_a_move_preserves_identity() {
         // Same bytes at a different path must yield the same uuid, or
-        // feedback and search history detach on every `mv`.
+        // links and search history detach on every `mv`.
         let at = "2024-01-15T10:30:00-08:00";
         let a = document("pdf", "deadbeef", Some(at));
         let b = document("pdf", "deadbeef", Some(at));

@@ -15,7 +15,6 @@ mod dactal_csp;
 mod dag_run_state;
 mod data_blobs;
 mod disk_cache;
-mod feedback_endpoint;
 mod feedback_loop;
 mod lib_endpoint;
 mod manage_rows;

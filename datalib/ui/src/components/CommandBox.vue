@@ -139,7 +139,6 @@ const newTabKey = onMac ? "⌘Enter" : "Ctrl+Enter";
     :data-on-search-card="activeSearch !== null"
     @submit.prevent="submit"
     @keydown.esc="panelOpen = false"
-    @contextmenu="activeSearch?.openFeedback($event)"
   >
     <svg class="command-icon" viewBox="0 0 24 24" aria-hidden="true">
       <path

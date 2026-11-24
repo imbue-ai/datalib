@@ -372,7 +372,7 @@ from the cell alone, and a new search shows the new title.
   href is the document's name, which Datalib reads; no app registers
   the scheme, so outside Datalib it is a name, not a link that opens
   anything. The rest of the title
-  bar's menu (`documentMenu.ts`: open at the source, feedback) needs the
+  bar's menu (`documentMenu.ts`: open at the source, copy as Markdown) needs the
   document itself, which a chip does not hold.
 - **drag**: it drags as a link, with no search
   (`chipDragQuery`).

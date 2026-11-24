@@ -385,7 +385,7 @@ How the UI draws the pieces (`ui/src/cards/renderDocument.ts`):
 - **Only the box answers to a message's id.** What answers to an id is
   the outermost element naming it (`sectionEl` in `chatSections.js`),
   and every lookup by id goes through it: a selection, an edge, a
-  problem's jump, the 🔗 button, the feedback menu. A copy of another
+  problem's jump, the 🔗 button, the right-click menu. A copy of another
   message's wrapper inside a message sits in that message's box, so it
   is left as written and never found first. A keyed piece in no box
   answers by its own wrapper, where it draws one.
@@ -448,7 +448,7 @@ Backpointers and outlinks are first-class in the projection schema.
   as out.
 
 The `uuid` recipe is [`entity_ids.md`](entity_ids.md) and it is not
-optional: anything durably keyed on a row — feedback today,
+optional: anything durably keyed on a row — a link handed out today,
 annotations and labels later — rests on it staying stable across a
 re-render. A content-hash identity would orphan every such reference
 on the first edit.

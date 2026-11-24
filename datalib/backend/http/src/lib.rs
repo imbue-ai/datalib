@@ -11,7 +11,6 @@
 //! earlier shape is rewritten out of band by `datalib-migrate-config`.
 
 use crate::starter::STARTER_CONFIG;
-use app_schema::feedback::FeedbackRow;
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -21,7 +20,7 @@ use axum::{
     routing::{any, get, post},
     Router,
 };
-use datalib_core::repo::{DynAppRepo, RepoError};
+use datalib_core::repo::DynAppRepo;
 use datalib_dag::supervisor::store::RequestRow;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -73,8 +72,8 @@ pub struct AppState {
     /// Data root on disk, and so the config path. The SQL store is
     /// reached through [`AppState::repo`].
     pub root: Arc<PathBuf>,
-    /// The stores this process owns and writes: filed feedback, disk
-    /// usage and remote media.
+    /// The stores this process owns and writes: disk usage and remote
+    /// media.
     pub app: DynAppRepo,
     /// The supervisor loop this server runs: whether a sync is running,
     /// and the store intent is written to.
@@ -169,32 +168,6 @@ pub struct Health {
     pub protected_library: bool,
 }
 
-/// Client-supplied portion of a feedback submission. The server stamps the
-/// rest (UUID, timestamp, app_version, git_hash) at insert time. `context` is
-/// whatever shape `feedback/context.ts` produced, round-tripped as JSON.
-#[derive(Debug, Deserialize)]
-pub struct FeedbackRequest {
-    /// Optional thumb up/down — `null` when the user submitted just a
-    /// comment without choosing a direction.
-    pub sentiment: Option<String>,
-    /// Required free-form comment. The UI disables Submit until non-empty;
-    /// the server enforces the same constraint defensively.
-    pub comment: String,
-    /// Decoded `FeedbackContext`. Re-serialized into the row's
-    /// `context_json` column verbatim.
-    pub context: serde_json::Value,
-}
-
-/// What the client gets back after a successful POST. Mostly a confirmation
-/// that the row landed; the UUID is useful for showing a "filed as X" toast
-/// and for cross-referencing in `dolt log`.
-#[derive(Debug, Serialize)]
-pub struct FeedbackResponse {
-    pub feedback_uuid: String,
-    pub created_at_utc: String,
-    pub git_hash: String,
-}
-
 fn protected_library() -> bool {
     std::env::var_os(datalib_env::DATALIB_PROTECTED_LIBRARY).is_some()
 }
@@ -234,7 +207,6 @@ fn routes(state: AppState) -> Router {
     let echoes = state.echoes.clone();
     Router::new()
         .route("/api/health", get(health))
-        .route("/api/feedback", post(submit_feedback))
         .route("/api/config", get(get_config).put(put_config))
         .route("/api/config/check", post(check_config))
         .route("/api/config/scaffold", get(config_scaffold))
@@ -399,52 +371,6 @@ async fn health(State(s): State<AppState>) -> Json<Health> {
         token_file: s.api_token.token_file().display().to_string(),
         protected_library: protected_library(),
     })
-}
-
-async fn submit_feedback(
-    State(s): State<AppState>,
-    Json(req): Json<FeedbackRequest>,
-) -> Result<Json<FeedbackResponse>, StatusCode> {
-    // The UI also disables Submit until non-empty, but enforce it here so
-    // a hand-crafted POST can't slip an all-whitespace row past the audit
-    // trail.
-    if req.comment.trim().is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    let context_json = serde_json::to_string(&req.context).map_err(|_| StatusCode::BAD_REQUEST)?;
-    // Server-stamped fields. We mint these here rather than trusting the
-    // client so each row carries a server-vouched provenance and so
-    // `feedback_uuid` collisions are impossible from the wire.
-    let feedback_uuid = uuid::Uuid::new_v4().to_string();
-    let (created_at_utc, tz_offset) =
-        datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-    let app_version = env!("CARGO_PKG_VERSION").to_string();
-    let git_hash = datalib_runs::git_hash().unwrap_or_else(|| "unknown".into());
-    let row = FeedbackRow {
-        feedback_uuid: feedback_uuid.clone(),
-        created_at_utc: created_at_utc.clone(),
-        tz_offset: Some(tz_offset),
-        sentiment: req.sentiment,
-        comment: req.comment,
-        app_version,
-        git_hash: git_hash.clone(),
-        context_json,
-        // Resolution metadata is filled in by hand later, never at submit time.
-        fixed_in_git_hash: None,
-        notes: None,
-    };
-    match s.app.insert_feedback(row).await {
-        Ok(()) => Ok(Json(FeedbackResponse {
-            feedback_uuid,
-            created_at_utc,
-            git_hash,
-        })),
-        Err(RepoError::ReadOnly) => Err(StatusCode::SERVICE_UNAVAILABLE),
-        Err(e) => {
-            tracing::error!("feedback insert failed: {e}");
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
 }
 
 // Applets
