@@ -215,9 +215,7 @@ commit sees that commit's text. Search draws a document's text from the
 store (`IndexedMarkdownStore::index_docs`); the document view and
 `datalib-step markdown` spell it (`IndexedMarkdownStore::document`). A
 hit lands on the item the search index names, by its id, and its quote
-reads only what that item says (`IndexedMarkdownStore::item_texts`). Files an earlier build wrote beside
-the store are deleted the next time the source renders
-(`datalib_step/src/old_markdown.rs`).
+reads only what that item says (`IndexedMarkdownStore::item_texts`).
 
 The *contract* holds as before: render emits a human artifact and a
 separate machine-readable projection, and the index reads the

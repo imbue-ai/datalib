@@ -237,23 +237,6 @@ pub fn count_rows(rows: &[ProblemRow], muted: &HashSet<String>) -> HashMap<Count
     out
 }
 
-/// [`count_rows`] over every row of `index`'s `problems`.
-pub async fn count_in_index(
-    index: &SqlitePool,
-    muted: &[String],
-) -> Result<HashMap<Counter, Counted>> {
-    let rows = match sqlx::query("SELECT * FROM problems").fetch_all(index).await {
-        Ok(rows) => rows,
-        Err(e) if datalib_pin::is_missing_table(&e, "problems") => return Ok(HashMap::new()),
-        Err(e) => return Err(e).context("read the problems in the index"),
-    };
-    let rows: Vec<ProblemRow> = rows
-        .iter()
-        .map(ProblemRow::from_row)
-        .collect::<Result<_>>()?;
-    Ok(count_rows(&rows, &muted.iter().cloned().collect()))
-}
-
 /// [`count_rows`] over every step's problems, each read where its step
 /// keeps it (`datalib_step_problems::of_steps`), less the muted.
 pub async fn counts(data_root: &Path) -> Result<Option<HashMap<Counter, Counted>>> {
@@ -461,15 +444,9 @@ mod tests {
     /// Each row is counted against the step that found it, a muted one
     /// apart, an info row nowhere, and a mute of a row the index no
     /// longer holds counts nothing.
-    #[tokio::test]
-    async fn rows_are_counted_by_whose_they_are_and_whether_muted() {
-        let dir = tempfile::tempdir().unwrap();
-        let pool = plain(&dir.path().join("index.sqlite")).await;
-        assert!(count_in_index(&pool, &[]).await.unwrap().is_empty());
-        sqlx::query(datalib_problems::DDL[0].1)
-            .execute(&pool)
-            .await
-            .unwrap();
+    #[test]
+    fn rows_are_counted_by_whose_they_are_and_whether_muted() {
+        assert!(count_rows(&[], &HashSet::new()).is_empty());
         let row = |source: &str, stage, scope, severity, sample: &str| {
             ProblemRow::new(
                 source,
@@ -509,28 +486,8 @@ mod tests {
             Severity::Warning,
             "d",
         );
-        for row in [&fetch, &parse, &info, &unreadable] {
-            sqlx::query(
-                "INSERT INTO problems (problem_uuid, source_id, stage, severity, outcome, \
-                 reason, scope_kind, scope_key, sample, first_seen_at_utc, changed_at_utc) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', '')",
-            )
-            .bind(&row.problem_uuid)
-            .bind(&row.source_id)
-            .bind(row.stage.as_str())
-            .bind(row.severity.as_str())
-            .bind(row.outcome.as_str())
-            .bind(row.reason.as_str())
-            .bind(row.scope_kind.as_str())
-            .bind(&row.scope_key)
-            .bind(&row.sample)
-            .execute(&pool)
-            .await
-            .unwrap();
-        }
-        let counted = count_in_index(&pool, &[parse.problem_uuid.clone(), "fixed-since".into()])
-            .await
-            .unwrap();
+        let muted = HashSet::from([parse.problem_uuid.clone(), "fixed-since".to_string()]);
+        let counted = count_rows(&[fetch, parse, info, unreadable], &muted);
         let t = |errors, warnings| Tally { errors, warnings };
         assert_eq!(
             counted[&counter_of("enterprise", CountedBy::Download)],
@@ -554,7 +511,6 @@ mod tests {
             }
         );
         assert_eq!(counted.len(), 3, "{counted:?}");
-        pool.close().await;
     }
 
     /// A root with no store has no mutes, and making none is the reader's

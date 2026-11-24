@@ -70,26 +70,11 @@ fn photo(uuid: &str, id_local: i64, original: &str) -> NormalizedPhoto {
     }
 }
 
-/// A grid index holding only what the applet reads: the photos, and the
+/// The grid index, as its step makes it, holding the photos and the
 /// order of their rows.
 async fn index(root: &Path, photos: &[NormalizedPhoto]) {
     let db = datalib_runtime::layout::grid_index_db(root);
-    std::fs::create_dir_all(db.parent().unwrap()).unwrap();
-    let opts = sqlx::sqlite::SqliteConnectOptions::new()
-        .filename(&db)
-        .create_if_missing(true);
-    let pool = sqlx::sqlite::SqlitePoolOptions::new()
-        .max_connections(1)
-        .idle_timeout(None)
-        .max_lifetime(None)
-        .connect_with(opts)
-        .await
-        .unwrap();
-    for (_, ddl) in datalib_schema::source_photos::DDL {
-        sqlx::query(*ddl).execute(&pool).await.unwrap();
-    }
-    sqlx::query("CREATE TABLE grid_rows (uuid TEXT PRIMARY KEY, touched_at_utc TEXT)")
-        .execute(&pool)
+    let pool = datalib_etl_render::grid_index::open_index(&db)
         .await
         .unwrap();
     for (i, p) in photos.iter().enumerate() {
@@ -101,14 +86,20 @@ async fn index(root: &Path, photos: &[NormalizedPhoto]) {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO grid_rows VALUES (?, ?)")
-            .bind(&p.uuid)
-            .bind(format!("2007-01-0{}T00:00:00+00:00", i + 1))
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO grid_rows (uuid, provider, kind, source_label, conversation_uuid, \
+     sort_key, entire_chat, preview, content_hash, is_document, touched_at_utc) \
+     VALUES (?1, 'lightroom', 'Photo', 'Lightroom', ?1, ?1, '', '', '', 0, ?2)",
+        )
+        .bind(&p.uuid)
+        .bind(format!("2007-01-0{}T00:00:00+00:00", i + 1))
+        .execute(&pool)
+        .await
+        .unwrap();
     }
-    pool.close().await;
+    datalib_etl_render::grid_index::close_index(pool)
+        .await
+        .unwrap();
 }
 
 fn start(root: &Path) -> (Child, u16) {

@@ -8,8 +8,8 @@ use datalib_query::Token;
 use sqlx::Row;
 use strum::VariantArray;
 
-use crate::runs_path;
-use crate::store::{log_line_from, open_existing, LogLine, LOG_LINE_COLUMNS};
+use crate::store::{log_line_from, open_reader, LogLine, LOG_LINE_COLUMNS};
+use anyhow::Context;
 
 /// Which lines of the log a read wants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +35,8 @@ pub struct LogQuery<'a> {
 /// A query the vocabulary cannot answer. Worded for the search bar.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryError(pub String);
+
+impl std::error::Error for QueryError {}
 
 impl std::fmt::Display for QueryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -203,15 +205,11 @@ fn escape_like(s: &str) -> String {
 }
 
 /// Log lines matching `q`, at most `limit` of them at the cursor, oldest
-/// first. Empty when the store does not exist yet; an error only for a
+/// first. Empty when the store does not exist yet; a [`QueryError`] for a
 /// query the vocabulary cannot read.
-pub async fn log_query(data_root: &Path, q: &LogQuery<'_>) -> Result<Vec<LogLine>, QueryError> {
+pub async fn log_query(data_root: &Path, q: &LogQuery<'_>) -> anyhow::Result<Vec<LogLine>> {
     let compiled = compile(q)?;
-    let path = runs_path(data_root);
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let Ok(pool) = open_existing(&path).await else {
+    let Some(pool) = open_reader(data_root).await? else {
         return Ok(Vec::new());
     };
     // Newest and Before read back from their end of the log, and turn
@@ -239,12 +237,9 @@ pub async fn log_query(data_root: &Path, q: &LogQuery<'_>) -> Result<Vec<LogLine
             Bound::Int(n) => query.bind(*n),
         };
     }
-    let rows = query
-        .bind(q.limit)
-        .fetch_all(&pool)
-        .await
-        .unwrap_or_default();
+    let rows = query.bind(q.limit).fetch_all(&pool).await;
     pool.close().await;
+    let rows = rows?;
     let mut lines: Vec<LogLine> = rows.iter().map(log_line_from).collect();
     if newest_first {
         lines.reverse();
@@ -264,7 +259,7 @@ pub async fn log_values(
     q: &str,
     key: &str,
     typed: &str,
-) -> Result<Vec<(String, Option<u64>)>, QueryError> {
+) -> anyhow::Result<Vec<(String, Option<u64>)>> {
     if key == MIN_LEVEL_KEY {
         let typed = typed.to_lowercase();
         return Ok(LogLevel::VARIANTS
@@ -294,11 +289,7 @@ pub async fn log_values(
         "%{}%",
         escape_like(&typed.to_lowercase())
     )));
-    let path = runs_path(data_root);
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let Ok(pool) = open_existing(&path).await else {
+    let Some(pool) = open_reader(data_root).await? else {
         return Ok(Vec::new());
     };
     let sql = format!(
@@ -317,7 +308,7 @@ pub async fn log_values(
     }
     let rows = query.bind(MAX_VALUES).fetch_all(&pool).await;
     pool.close().await;
-    let rows = rows.map_err(|e| QueryError(format!("suggest values: {e}")))?;
+    let rows = rows.context("suggest values")?;
     Ok(rows
         .iter()
         .map(|r| (r.get::<String, _>(0), Some(r.get::<i64, _>(1) as u64)))

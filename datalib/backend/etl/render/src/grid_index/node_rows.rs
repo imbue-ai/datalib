@@ -39,9 +39,7 @@ pub(super) struct CarriedNode {
 
 /// What [`CARRIED_WITHOUT_A_ROW`] reads one source's nodes by, and names.
 /// Without it SQLite started from every document row in the index, so
-/// each source cost a read of the whole index on every pass. Out of
-/// `grid_index::schema_hash`, as `AUTHORS_INDEX` is: it changes no row,
-/// and adding it must not rebuild the index.
+/// each source cost a read of the whole index on every pass.
 pub(super) const BY_SOURCE_INDEX: &str =
     "CREATE INDEX IF NOT EXISTS data_nodes_by_source ON data_nodes (source_id)";
 

@@ -83,10 +83,10 @@ pub async fn open(db_path: &Path) -> Result<SqlitePool> {
     Ok(pool)
 }
 
-/// The shape `open` records in `_datalib_meta`: what a launch's migrate
+/// The shape `open` records in `_datalib_meta`: what a launch's prepare
 /// pass compares to decide whether the store must be rebuilt.
-pub fn schema_hash() -> String {
-    doltlite_raw::recorded_shape(ddl())
+pub fn shape() -> datalib_store_meta::Shape {
+    doltlite_raw::derived_shape(&ddl(), INDEXES)
 }
 
 /// The tables, and the events that could not be listed as problem rows

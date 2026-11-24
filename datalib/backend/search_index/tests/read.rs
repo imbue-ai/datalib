@@ -616,10 +616,11 @@ async fn no_index_reads_as_none() {
     assert!(reader.is_none());
 }
 
-/// The grid index's file is there before any keyword pass has run: the
-/// reader takes it as no index yet, not as an error.
+/// The grid index's file holds the keyword index's tables before any
+/// keyword pass has run: the reader takes it as no index yet, not as an
+/// error, until a pass starts the index's generation.
 #[tokio::test]
-async fn a_grid_index_without_the_search_tables_is_no_index_yet() {
+async fn a_grid_index_no_keyword_pass_has_run_on_is_no_index_yet() {
     let dir = tempfile::tempdir().unwrap();
     let grid = dir.path().join("db.sqlite");
     let opts = sqlx::sqlite::SqliteConnectOptions::new()
@@ -632,15 +633,18 @@ async fn a_grid_index_without_the_search_tables_is_no_index_yet() {
         .connect_with(opts)
         .await
         .unwrap();
-    sqlx::query("CREATE TABLE grid_rows (uuid TEXT)")
-        .execute(&pool)
-        .await
-        .unwrap();
+    for ddl in datalib_search_index::KEYWORD_DDL {
+        sqlx::query(ddl).execute(&pool).await.unwrap();
+    }
     pool.close().await;
-    let reader = Reader::open(&grid, &dir.path().join("cache.sqlite"))
+    let cache = dir.path().join("cache.sqlite");
+    assert!(Reader::open(&grid, &cache).await.unwrap().is_none());
+    datalib_search_index::Index::open(&grid)
         .await
-        .unwrap();
-    assert!(reader.is_none());
+        .unwrap()
+        .close()
+        .await;
+    assert!(Reader::open(&grid, &cache).await.unwrap().is_some());
 }
 
 fn page_term(word: &str) -> String {

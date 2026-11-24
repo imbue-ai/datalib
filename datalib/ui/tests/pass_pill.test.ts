@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { FreeSpace, PassRow, PassState, Upgrade } from "@/api";
-import { freeSpaceView, keepsItsName, rerenderSources, sourceRows, upgradeView } from "@/pass";
+import {
+  freeSpaceView,
+  keepsItsName,
+  rerenderSources,
+  sourceRows,
+  upgradeView,
+  upgrading,
+  upgradingView,
+} from "@/pass";
 
 const step = (
   step: string,
@@ -43,6 +51,36 @@ describe("upgradeView", () => {
     expect(view).toMatchObject({ tone: "failed", label: "1 source could not be updated" });
     expect(view?.rows.map((r) => r.group)).toEqual(["holodeck-slack"]);
     expect(upgradeView(upgrade, true)).toBeNull();
+  });
+
+  /// Once the gate is lifted, a step the launch found in another shape
+  /// and that has not run again keeps the offer to run it.
+  it("offers to re-run what the launch found in another shape", () => {
+    const steps = [
+      "slack/render_markdown",
+      "unified_grid_and_search_index/unified_grid_and_search_index",
+    ];
+    const view = upgradeView(
+      { migrating: false, settled: true, steps: [], rerender: steps },
+      false,
+    );
+    expect(view?.action).toEqual({ label: "Re-run now", steps });
+    expect(view?.rows.map((r) => r.group)).toEqual(["slack", "unified_grid_and_search_index"]);
+  });
+
+  /// A source that could not be updated is the louder news.
+  it("reports a failed update before a re-run", () => {
+    const view = upgradeView(
+      {
+        migrating: false,
+        settled: true,
+        steps: [step("mail/ingest", "failed", "refused")],
+        rerender: ["slack/render_markdown"],
+      },
+      false,
+    );
+    expect(view?.tone).toBe("failed");
+    expect(view?.action).toBeUndefined();
   });
 
   it("is gone once a pass is over with nothing failed, or when there was none", () => {
@@ -173,5 +211,38 @@ describe("the sources of a pass", () => {
     ]);
     expect(keepsItsName("unified_grid_and_search_index")).toBe(true);
     expect(keepsItsName("enterprise-mail")).toBe(false);
+  });
+});
+
+describe("upgrading", () => {
+  /// The library waits while the pass runs and while anything it found in
+  /// another shape has not run again, and not a moment longer.
+  it("waits on the pass, then on the re-runs", () => {
+    const base: Upgrade = { migrating: false, settled: true, steps: [], rerender: [] };
+    expect(upgrading({ ...base, migrating: true, settled: false })).toBe(true);
+    expect(upgrading({ ...base, rerender: ["a/render_markdown"] })).toBe(true);
+    expect(upgrading(base)).toBe(false);
+    expect(upgrading({ ...base, steps: [step("a/ingest", "failed", "x")] })).toBe(false);
+  });
+
+  it("says how each source stands, in the pass and then in its re-run", () => {
+    const passing = upgradingView({
+      migrating: true,
+      settled: false,
+      steps: [step("a/ingest", "done"), step("b/ingest", "running")],
+      rerender: [],
+    });
+    expect(passing.rows.map((r) => r.said)).toEqual(["Done", "Updating…"]);
+    const rerunning = upgradingView({
+      migrating: false,
+      settled: true,
+      steps: [],
+      rerender: ["a/render_markdown", "a/render_time_series", "b/render_markdown"],
+    });
+    expect(rerunning.rows.map((r) => [r.group, r.said])).toEqual([
+      ["a", "Re-running…"],
+      ["b", "Re-running…"],
+    ]);
+    expect(rerunning.blurb).toContain("Nothing is downloaded");
   });
 });

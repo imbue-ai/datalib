@@ -52,6 +52,17 @@ class Check(unittest.TestCase):
         [error] = check([row(SCAN)], {"scan": [{"statement": SCAN, "why": " "}]})
         self.assertIn("no reason", error)
 
+    def test_a_read_of_the_catalog_alone_needs_no_entry(self):
+        """Doltlite's own read names its schema in quotes; the rule missed it."""
+        for statement in [
+            "SELECT name FROM sqlite_master WHERE type = 'table'",
+            'SELECT name, sql FROM "main".sqlite_master WHERE rootpage>0',
+            "SELECT name FROM 'main'.'sqlite_schema'",
+        ]:
+            self.assertEqual(check([row(statement)], {"scan": []}), [], statement)
+        [error] = check([row('SELECT x FROM "main".t')], {"scan": []})
+        self.assertIn("walks a whole table", error)
+
     def test_two_entries_for_one_statement_fail(self):
         """The run store's newest-run read was listed twice, with two
         reasons, and nothing noticed."""

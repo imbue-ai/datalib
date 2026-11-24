@@ -147,13 +147,8 @@ fn not_found(why: impl Into<String>) -> ApiError {
 
 /// The grid index, read-only, or `None` before the first `unified_grid_and_search_index`.
 async fn open_index(root: &Path) -> Result<Option<SqlitePool>> {
-    let db = datalib_runtime::layout::grid_index_db(root);
-    if !db.exists() {
-        return Ok(None);
-    }
-    Ok(Some(datalib_pin::open_reader(&db).await.with_context(
-        || format!("open the grid index {}", db.display()),
-    )?))
+    datalib_etl_render::grid_index::open_for_reading(&datalib_runtime::layout::grid_index_db(root))
+        .await
 }
 
 async fn find(root: &Path, uuid: &str) -> Result<Option<NormalizedPhoto>> {
@@ -166,11 +161,7 @@ async fn find(root: &Path, uuid: &str) -> Result<Option<NormalizedPhoto>> {
             .fetch_optional(&pool)
             .await;
     pool.close().await;
-    let json = match json {
-        Ok(json) => json,
-        Err(e) if datalib_pin::is_missing_table(&e, "source_photos") => None,
-        Err(e) => return Err(e).context("read source_photos"),
-    };
+    let json = json.context("read source_photos")?;
     json.map(|j| serde_json::from_str(&j).context("a stored photo"))
         .transpose()
 }
@@ -213,11 +204,7 @@ async fn list(
     .fetch_all(&pool)
     .await;
     pool.close().await;
-    let rows = match rows {
-        Ok(rows) => rows,
-        Err(e) if datalib_pin::is_missing_table(&e, "source_photos") => Vec::new(),
-        Err(e) => return Err(ours(anyhow::Error::new(e).context("list source_photos"))),
-    };
+    let rows = rows.context("list source_photos").map_err(ours)?;
     let more = rows.len() as i64 > PAGE;
     let photos: Vec<NormalizedPhoto> = rows
         .iter()
@@ -614,41 +601,32 @@ mod tests {
         }
     }
 
-    /// A grid index holding only what `list` reads, with one more photo
-    /// in it each call.
+    /// The grid index, as its step makes it, with one more photo in it
+    /// each call.
     async fn index_photo(root: &Path, uuid: &str, photo_json: &str, touched: &str) {
         let db = datalib_runtime::layout::grid_index_db(root);
-        std::fs::create_dir_all(db.parent().unwrap()).unwrap();
-        let opts = datalib_sqlite_open::file(&db).create_if_missing(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(opts)
+        let pool = datalib_etl_render::grid_index::open_index(&db)
             .await
             .unwrap();
-        for (_, ddl) in datalib_schema::source_photos::DDL {
-            sqlx::query(*ddl).execute(&pool).await.unwrap();
-        }
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS grid_rows (uuid TEXT PRIMARY KEY, touched_at_utc TEXT)",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
         sqlx::query("INSERT INTO source_photos VALUES (?1, ?1, 'lr', ?2)")
             .bind(uuid)
             .bind(photo_json)
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO grid_rows VALUES (?, ?)")
-            .bind(uuid)
-            .bind(touched)
-            .execute(&pool)
+        sqlx::query(
+            "INSERT INTO grid_rows (uuid, provider, kind, source_label, conversation_uuid, \
+     sort_key, entire_chat, preview, content_hash, is_document, touched_at_utc) \
+     VALUES (?1, 'lightroom', 'Photo', 'Lightroom', ?1, ?1, '', '', '', 0, ?2)",
+        )
+        .bind(uuid)
+        .bind(touched)
+        .execute(&pool)
+        .await
+        .unwrap();
+        datalib_etl_render::grid_index::close_index(pool)
             .await
             .unwrap();
-        pool.close().await;
     }
 
     async fn list_all(root: &Path) -> Result<serde_json::Value, ApiError> {

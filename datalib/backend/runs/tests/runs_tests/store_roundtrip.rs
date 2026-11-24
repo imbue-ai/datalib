@@ -59,7 +59,7 @@ async fn what_is_published_is_readable() {
         w.log(line("slack/raw", "info", "hello"));
     }
 
-    let snap = snapshot(td.path()).await;
+    let snap = snapshot(td.path()).await.unwrap();
     assert_eq!(snap.run_id.as_deref(), Some("run-1"));
     assert!(
         snap.finished_at_utc.is_some(),
@@ -84,7 +84,7 @@ async fn what_is_published_is_readable() {
     assert_eq!(snap.metrics.len(), 1);
     assert_eq!(snap.metrics[0].value, 3);
 
-    let log = log_after(td.path(), "run-1", None, 0, 100).await;
+    let log = log_after(td.path(), "run-1", None, 0, 100).await.unwrap();
     assert_eq!(log.len(), 1);
     assert_eq!(log[0].msg, "hello");
     assert!(log[0].seq > 0, "the store assigns the sequence number");
@@ -104,13 +104,15 @@ async fn ticks_coalesce_but_log_lines_do_not() {
             w.log(line("slack/raw", "info", &format!("line {i}")));
         }
     }
-    let snap = snapshot(td.path()).await;
+    let snap = snapshot(td.path()).await.unwrap();
     assert_eq!(snap.steps.len(), 1);
     assert_eq!(snap.steps[0].msg.as_deref(), Some("tick 499"));
     assert_eq!(snap.metrics.len(), 1);
     assert_eq!(snap.metrics[0].value, 499);
 
-    let log = log_after(td.path(), "run-1", Some("slack/raw"), 0, 1000).await;
+    let log = log_after(td.path(), "run-1", Some("slack/raw"), 0, 1000)
+        .await
+        .unwrap();
     assert_eq!(log.len(), 500);
     assert_eq!(log[0].msg, "line 0");
     assert_eq!(log[499].msg, "line 499");
@@ -143,7 +145,9 @@ async fn latest_metric_is_the_newest_report_per_step_and_label() {
         w.metric(labelled("slack/render_markdown", "severity=error", 0));
         w.metric(labelled("slack/render_markdown", "severity=warning", 2));
     }
-    let latest = datalib_runs::latest_metric(td.path(), "problems").await;
+    let latest = datalib_runs::latest_metric(td.path(), "problems")
+        .await
+        .unwrap();
     let find = |step: &str, labels: &str| {
         latest
             .iter()
@@ -166,6 +170,7 @@ async fn latest_metric_is_the_newest_report_per_step_and_label() {
     assert_eq!(find("mail/render_markdown", "severity=warning"), None);
     assert!(datalib_runs::latest_metric(td.path(), "nothing")
         .await
+        .unwrap()
         .is_empty());
 }
 
@@ -190,7 +195,9 @@ async fn metric_history_is_the_window_and_the_value_it_opened_at() {
         w.metric(at(stamp, "mail/render_markdown", value * 100));
     }
     let history =
-        datalib_runs::metric_history(td.path(), "items", "2026-09-01T12:00:00.000000+00:00").await;
+        datalib_runs::metric_history(td.path(), "items", "2026-09-01T12:00:00.000000+00:00")
+            .await
+            .unwrap();
     let of = |step: &str| {
         history
             .iter()
@@ -203,6 +210,7 @@ async fn metric_history_is_the_window_and_the_value_it_opened_at() {
     assert!(
         datalib_runs::metric_history(td.path(), "nothing", "2026-09-01")
             .await
+            .unwrap()
             .is_empty()
     );
 }
@@ -218,9 +226,11 @@ async fn log_after_resumes_from_a_sequence_number() {
             w.log(line("a", "info", &format!("line {i}")));
         }
     }
-    let first = log_after(td.path(), "run-1", None, 0, 4).await;
+    let first = log_after(td.path(), "run-1", None, 0, 4).await.unwrap();
     assert_eq!(first.len(), 4);
-    let rest = log_after(td.path(), "run-1", None, first[3].seq, 100).await;
+    let rest = log_after(td.path(), "run-1", None, first[3].seq, 100)
+        .await
+        .unwrap();
     assert_eq!(rest.len(), 6);
     assert_eq!(rest[0].msg, "line 4");
 }
@@ -386,7 +396,7 @@ async fn a_finished_step_is_not_resurrected_by_a_late_tick() {
         w.step(at("slack/raw", "succeeded", "done"));
         w.step(at("slack/raw", "running", "a straggler"));
     }
-    let snap = snapshot(td.path()).await;
+    let snap = snapshot(td.path()).await.unwrap();
     assert_eq!(snap.steps[0].state, "succeeded");
     assert_eq!(snap.steps[0].msg.as_deref(), Some("done"));
 }
@@ -415,12 +425,14 @@ async fn runs_accumulate_and_the_snapshot_is_the_newest() {
         let w = RunWriter::start(td.path(), id, id, None, keep).unwrap();
         w.step(at("slack/raw", "running", "new"));
     }
-    let snap = snapshot(td.path()).await;
+    let snap = snapshot(td.path()).await.unwrap();
     assert_eq!(snap.run_id.as_deref(), Some("2026-01-02T00:00:00+00:00"));
     assert_eq!(snap.steps.len(), 1);
     assert_eq!(snap.steps[0].step, "slack/raw");
 
-    let old = log_after(td.path(), "2026-01-01T00:00:00+00:00", None, 0, 10).await;
+    let old = log_after(td.path(), "2026-01-01T00:00:00+00:00", None, 0, 10)
+        .await
+        .unwrap();
     assert_eq!(old.len(), 1, "the earlier run's log is still there");
 }
 
@@ -449,20 +461,26 @@ async fn runs_can_be_listed_by_step_and_read_by_id() {
         let w = RunWriter::start(td.path(), id, id, None, keep).unwrap();
         w.step(at("b", "succeeded", "ok"));
     }
-    let all = runs(td.path(), None, 10).await;
+    let all = runs(td.path(), None, 10).await.unwrap();
     assert_eq!(
         all.iter().map(|r| r.run_id.as_str()).collect::<Vec<_>>(),
         ["2026-01-02T00:00:00+00:00", "2026-01-01T00:00:00+00:00"],
         "newest first"
     );
-    let with_a = runs(td.path(), Some("a"), 10).await;
+    let with_a = runs(td.path(), Some("a"), 10).await.unwrap();
     assert_eq!(with_a.len(), 1);
     assert_eq!(with_a[0].run_id, "2026-01-01T00:00:00+00:00");
 
-    let first = snapshot_of(td.path(), Some("2026-01-01T00:00:00+00:00")).await;
+    let first = snapshot_of(td.path(), Some("2026-01-01T00:00:00+00:00"))
+        .await
+        .unwrap();
     assert_eq!(first.steps[0].step, "a");
     assert_eq!(first.errors.get("a"), Some(&2), "warn + error, not info");
-    assert!(snapshot_of(td.path(), Some("nope")).await.run_id.is_none());
+    assert!(snapshot_of(td.path(), Some("nope"))
+        .await
+        .unwrap()
+        .run_id
+        .is_none());
 }
 
 /// Retention by count: the newest `max_runs` survive, including the run
@@ -485,26 +503,30 @@ async fn retention_keeps_the_newest_runs_and_sweeps_their_rows() {
     assert!(
         log_after(td.path(), "2026-01-01T00:00:00+00:00", None, 0, 10)
             .await
+            .unwrap()
             .is_empty()
     );
     assert!(
         log_after(td.path(), "2026-01-02T00:00:00+00:00", None, 0, 10)
             .await
+            .unwrap()
             .is_empty()
     );
     assert_eq!(
         log_after(td.path(), "2026-01-03T00:00:00+00:00", None, 0, 10)
             .await
+            .unwrap()
             .len(),
         1
     );
     assert_eq!(
         log_after(td.path(), "2026-01-04T00:00:00+00:00", None, 0, 10)
             .await
+            .unwrap()
             .len(),
         1
     );
-    let snap = snapshot(td.path()).await;
+    let snap = snapshot(td.path()).await.unwrap();
     assert_eq!(snap.run_id.as_deref(), Some("2026-01-04T00:00:00+00:00"));
     let pool = datalib_runs::open_or_create(&datalib_runs::runs_path(td.path()))
         .await
@@ -526,6 +548,33 @@ async fn retention_keeps_the_newest_runs_and_sweeps_their_rows() {
     pool.close().await;
 }
 
+/// Under a pinned clock every run is stamped alike. Retention still keeps
+/// exactly `max_runs`, the run being begun among them.
+#[tokio::test]
+async fn retention_keeps_the_run_being_begun_when_runs_share_a_stamp() {
+    let td = tempfile::tempdir().unwrap();
+    let keep_two = Retention {
+        max_runs: 2,
+        max_age_days: 3650,
+        ..Retention::default()
+    };
+    let stamp = "2026-01-01T00:00:00+00:00";
+    for id in ["run-c", "run-b", "run-a"] {
+        let w = RunWriter::start(td.path(), id, stamp, None, keep_two).unwrap();
+        w.log(line("a", "info", id));
+    }
+    assert_eq!(
+        log_after(td.path(), "run-a", None, 0, 10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let kept = runs(td.path(), None, 10).await.unwrap();
+    assert_eq!(kept.len(), 2, "{kept:?}");
+    assert!(kept.iter().any(|r| r.run_id == "run-a"), "{kept:?}");
+}
+
 /// Retention by age: a run older than the window goes even when the
 /// count would have kept it.
 #[tokio::test]
@@ -545,8 +594,14 @@ async fn retention_drops_runs_older_than_the_window() {
     {
         let _w = RunWriter::start(td.path(), "new", &now, None, a_day).unwrap();
     }
-    assert!(log_after(td.path(), "old", None, 0, 10).await.is_empty());
-    assert_eq!(snapshot(td.path()).await.run_id.as_deref(), Some("new"));
+    assert!(log_after(td.path(), "old", None, 0, 10)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        snapshot(td.path()).await.unwrap().run_id.as_deref(),
+        Some("new")
+    );
 }
 
 /// Age is measured from the run being begun, not the wall clock. A
@@ -573,11 +628,17 @@ async fn retention_ages_runs_against_the_newest_run_not_the_wall_clock() {
         let _w = RunWriter::start(td.path(), "second", &five_minutes_on, None, a_month).unwrap();
     }
     assert_eq!(
-        log_after(td.path(), "first", None, 0, 10).await.len(),
+        log_after(td.path(), "first", None, 0, 10)
+            .await
+            .unwrap()
+            .len(),
         1,
         "run 1 is five minutes older than run 2, not a year older than today"
     );
-    assert_eq!(snapshot(td.path()).await.run_id.as_deref(), Some("second"));
+    assert_eq!(
+        snapshot(td.path()).await.unwrap().run_id.as_deref(),
+        Some("second")
+    );
 }
 
 /// A run begun under a pinned `--now` ends on that clock. The demo's
@@ -589,7 +650,7 @@ async fn a_run_under_a_pinned_clock_ends_after_it_began() {
     let pinned = "2369-04-15T00:00:00+00:00";
     drop(RunWriter::start(td.path(), "pinned", pinned, None, Retention::default()).unwrap());
 
-    let run = runs(td.path(), None, 10).await.remove(0);
+    let run = runs(td.path(), None, 10).await.unwrap().remove(0);
     let finished = run
         .finished_at_utc
         .expect("a dropped writer closes the run");
@@ -600,6 +661,7 @@ async fn a_run_under_a_pinned_clock_ends_after_it_began() {
     );
     let runner = processes(td.path(), Some("pinned"), None, 10)
         .await
+        .unwrap()
         .remove(0);
     assert_eq!(runner.finished_at_utc.as_deref(), Some(finished.as_str()));
 }
@@ -609,8 +671,11 @@ async fn a_run_under_a_pinned_clock_ends_after_it_began() {
 #[tokio::test]
 async fn a_root_with_no_store_reads_empty() {
     let td = tempfile::tempdir().unwrap();
-    assert!(snapshot(td.path()).await.steps.is_empty());
-    assert!(log_after(td.path(), "x", None, 0, 10).await.is_empty());
+    assert!(snapshot(td.path()).await.unwrap().steps.is_empty());
+    assert!(log_after(td.path(), "x", None, 0, 10)
+        .await
+        .unwrap()
+        .is_empty());
 }
 
 /// A file that will not open is replaced rather than fatal: nothing in it
@@ -626,7 +691,13 @@ async fn a_corrupt_store_is_replaced() {
         let w = start(td.path(), "run-1");
         w.log(line("a", "info", "after the reset"));
     }
-    assert_eq!(log_after(td.path(), "run-1", None, 0, 10).await.len(), 1);
+    assert_eq!(
+        log_after(td.path(), "run-1", None, 0, 10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 /// A store that will not open is `None` from `start`, where the caller
@@ -668,8 +739,17 @@ async fn a_store_from_another_schema_version_is_replaced() {
         let w = start(td.path(), "run-2");
         w.log(line("a", "info", "after"));
     }
-    assert!(log_after(td.path(), "run-1", None, 0, 10).await.is_empty());
-    assert_eq!(log_after(td.path(), "run-2", None, 0, 10).await.len(), 1);
+    assert!(log_after(td.path(), "run-1", None, 0, 10)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        log_after(td.path(), "run-2", None, 0, 10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 
     let dir = path.parent().unwrap();
     let kept: Vec<_> = std::fs::read_dir(dir)
@@ -707,9 +787,10 @@ async fn a_store_from_version_10_is_upgraded_in_place() {
     }
     let path = datalib_runs::runs_path(td.path());
     let pool = datalib_runs::open_or_create(&path).await.unwrap();
-    // Version 10's shape is this one without what 11, 12 and 13 added.
+    // Version 10's shape is this one without what 11 through 14 added.
     sqlx::raw_sql(
-        "DROP INDEX processes_by_run; \
+        "DROP INDEX runs_by_start; \
+         DROP INDEX processes_by_run; \
          ALTER TABLE processes DROP COLUMN peak_rss_bytes; \
          ALTER TABLE processes DROP COLUMN applet; \
          ALTER TABLE runs DROP COLUMN kind; \
@@ -734,8 +815,17 @@ async fn a_store_from_version_10_is_upgraded_in_place() {
     server.flush().await;
     drop(server);
 
-    assert_eq!(log_after(td.path(), "run-1", None, 0, 10).await.len(), 1);
-    let applet = datalib_runs::process(td.path(), "applet-1").await.unwrap();
+    assert_eq!(
+        log_after(td.path(), "run-1", None, 0, 10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let applet = datalib_runs::process(td.path(), "applet-1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
         (applet.applet.as_deref(), applet.peak_rss_bytes),
         (Some("search"), Some(4096))
@@ -754,13 +844,14 @@ async fn a_store_from_version_10_is_upgraded_in_place() {
     assert_eq!(set_aside, 0, "nothing was set aside");
     let pool = datalib_runs::open_or_create(&path).await.unwrap();
     let index: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'processes_by_run'",
+        "SELECT count(*) FROM sqlite_master WHERE type = 'index' \
+         AND name IN ('processes_by_run', 'runs_by_start')",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
     pool.close().await;
-    assert_eq!(index, 1, "the climb adds the index retention names");
+    assert_eq!(index, 2, "the climb adds the indexes retention names");
 }
 
 /// Guards the migration that read like a sync: a run says what it is for
@@ -798,7 +889,7 @@ async fn a_run_says_why_it_started_and_an_older_one_says_nothing() {
         .expect("the upgraded store opens");
     }
 
-    let runs = datalib_runs::runs(td.path(), None, 10).await;
+    let runs = datalib_runs::runs(td.path(), None, 10).await.unwrap();
     assert_eq!(runs.len(), 2, "{runs:#?}");
     assert_eq!(runs[0].kind.as_deref(), Some("migrate"));
     assert_eq!(
@@ -836,7 +927,10 @@ async fn a_process_keeps_its_peak_when_its_last_row_names_none() {
     });
     server.flush().await;
 
-    let stored = datalib_runs::process(td.path(), "applet-1").await.unwrap();
+    let stored = datalib_runs::process(td.path(), "applet-1")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(stored.peak_rss_bytes, Some(4096));
     assert_eq!(stored.signal, Some(9));
 }
@@ -873,8 +967,10 @@ async fn a_series_keeps_its_first_and_last_values_and_the_snapshot_its_last_log_
             ..line("a", "info", "second")
         });
     }
-    let snap = snapshot(td.path()).await;
-    let samples = datalib_runs::step_samples(td.path(), "run-1", "a").await;
+    let snap = snapshot(td.path()).await.unwrap();
+    let samples = datalib_runs::step_samples(td.path(), "run-1", "a")
+        .await
+        .unwrap();
     let values: Vec<(String, i64)> = samples.iter().map(|s| (s.name.clone(), s.value)).collect();
     assert_eq!(
         values,
@@ -899,7 +995,7 @@ async fn a_reader_sees_progress_while_the_writer_is_running() {
     for i in 0..40 {
         w.metric(metric("slack/raw", "done_total", i));
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-        for m in snapshot(td.path()).await.metrics {
+        for m in snapshot(td.path()).await.unwrap().metrics {
             seen.insert(m.value);
         }
     }
@@ -940,7 +1036,7 @@ async fn a_flushed_line_is_readable_at_once() {
     let w = start(td.path(), "run-1");
     w.metric(metric("a", "rows", 3));
     w.flush().await;
-    let snap = snapshot(td.path()).await;
+    let snap = snapshot(td.path()).await.unwrap();
     assert_eq!(
         snap.metrics.iter().map(|m| m.value).collect::<Vec<_>>(),
         [3]
@@ -1039,6 +1135,7 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     assert_ne!(ids[0], ids[1]);
     let runner = processes(td.path(), None, None, 10)
         .await
+        .unwrap()
         .into_iter()
         .find(|p| p.process_id == ids[1])
         .unwrap();
@@ -1237,7 +1334,7 @@ async fn process_lines_past_the_cap_go_oldest_first() {
 async fn each_part_of_the_store_counts_its_own_writes() {
     let td = tempfile::tempdir().unwrap();
     assert!(
-        versions(td.path()).await.is_empty(),
+        versions(td.path()).await.unwrap().is_empty(),
         "no store, no versions"
     );
 
@@ -1253,7 +1350,7 @@ async fn each_part_of_the_store_counts_its_own_writes() {
         });
         w.metric(metric("a", "rows", 1));
     }
-    let after_run = versions(td.path()).await;
+    let after_run = versions(td.path()).await.unwrap();
     for part in [
         StorePart::Runs,
         StorePart::StepRuns,
@@ -1277,7 +1374,7 @@ async fn each_part_of_the_store_counts_its_own_writes() {
             ..Default::default()
         });
     }
-    let after_server = versions(td.path()).await;
+    let after_server = versions(td.path()).await.unwrap();
     assert!(after_server
         .get(&StorePart::ProcessLog)
         .is_some_and(|v| *v > 0));
@@ -1314,11 +1411,11 @@ async fn a_progress_tick_moves_the_steps_and_not_the_processes() {
     w.process(attempt(1));
     w.step(at("a", "running", "loaded 0/10"));
     w.flush().await;
-    let before = versions(td.path()).await;
+    let before = versions(td.path()).await.unwrap();
 
     w.step(at("a", "running", "loaded 5/10"));
     w.flush().await;
-    let ticked = versions(td.path()).await;
+    let ticked = versions(td.path()).await.unwrap();
     assert!(ticked[&StorePart::StepRuns] > before[&StorePart::StepRuns]);
     assert_eq!(
         ticked.get(&StorePart::Processes),
@@ -1328,7 +1425,7 @@ async fn a_progress_tick_moves_the_steps_and_not_the_processes() {
 
     w.process(attempt(2));
     w.flush().await;
-    let retried = versions(td.path()).await;
+    let retried = versions(td.path()).await.unwrap();
     assert!(
         retried[&StorePart::Processes] > ticked[&StorePart::Processes],
         "a new attempt did not move the processes: {retried:?}"
