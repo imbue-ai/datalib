@@ -44,7 +44,7 @@ const BATCH: usize = 10_000;
 /// page of its own, wherever it was written, and reading every vector was
 /// a random read each. At 16 KB the row stays in its leaf, and reading
 /// the vectors in key order reads the file in order: over 932k vectors,
-/// 105 s against about 8 s. The file's header records it, so it is part of
+/// 105 s against under 10 s. The file's header records it, so it is part of
 /// the shape a reader asks for ([`require`]) though not of [`shape`], and
 /// moving it keeps every row.
 pub const PAGE_SIZE: i64 = 16_384;
