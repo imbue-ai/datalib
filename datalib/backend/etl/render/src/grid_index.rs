@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
@@ -34,8 +34,6 @@ use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL, INDEXES as GRID_R
 use datalib_schema::markdowns::DDL as MARKDOWNS_TABLE_DDL;
 use datalib_schema::problems::{ProblemRow, Severity, DDL as PROBLEMS_DDL};
 use datalib_schema::search_terms::{TERMS_DDL, TERMS_SHAPE};
-use datalib_schema::source_contact_handles::DDL as SOURCE_CONTACT_HANDLES_DDL;
-use datalib_schema::source_contacts::DDL as SOURCE_CONTACTS_DDL;
 use datalib_schema::source_cursors::{SourceCursorRow, DDL as SOURCE_CURSORS_DDL};
 use datalib_schema::source_photos::DDL as SOURCE_PHOTOS_DDL;
 use serde::Serialize;
@@ -45,6 +43,7 @@ use tokio::sync::Mutex;
 
 use crate::section::Section;
 
+pub(crate) mod contact_records;
 mod node_rows;
 
 /// Serializes concurrent writers against one doltlite index pool, and
@@ -69,6 +68,7 @@ pub struct WriteLock {
     /// this run minted one row uuid" from "a row moved here from a
     /// document an earlier run wrote" — see `put_grid_row`.
     written: std::sync::Mutex<std::collections::HashSet<String>>,
+    store: Store,
     /// In the grid index, the grid rows written or deleted since the
     /// search terms last followed them; `None` in a render store, which
     /// holds no terms.
@@ -77,6 +77,16 @@ pub struct WriteLock {
     /// search index's steps), and a batch that read before its first write
     /// would fail rather than wait if one of them committed meanwhile.
     begin: &'static str,
+}
+
+/// Which of the two stores a document is written to. They hold its people
+/// differently: a render store keeps each one's whole record under the
+/// document, so a diff of it names the document; the grid index keeps a
+/// record once (`contact_records`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Store {
+    Render,
+    Index,
 }
 
 struct WriteLockInner {
@@ -118,6 +128,7 @@ impl WriteLock {
             total_hold_ns: AtomicU64::new(0),
             acquisitions: AtomicU64::new(0),
             written: std::sync::Mutex::new(std::collections::HashSet::new()),
+            store: Store::Render,
             changed: None,
             begin: "BEGIN",
         }
@@ -127,6 +138,7 @@ impl WriteLock {
     /// the search terms to follow.
     pub fn for_index(pool: SqlitePool) -> Self {
         Self {
+            store: Store::Index,
             changed: Some(std::sync::Mutex::new(Vec::new())),
             begin: "BEGIN IMMEDIATE",
             ..Self::new(pool)
@@ -158,10 +170,6 @@ impl WriteLock {
 
     fn written_this_run(&self, markdown_uuid: &str) -> bool {
         self.written.lock().unwrap().contains(markdown_uuid)
-    }
-
-    pub fn new_arc(pool: SqlitePool) -> Arc<Self> {
-        Arc::new(Self::new(pool))
     }
 
     pub async fn begin_transaction(&self) -> Result<()> {
@@ -458,7 +466,13 @@ fn shape_without_indexes() -> datalib_store_meta::Shape {
 /// Every index of the grid index's own tables.
 fn indexes() -> impl Iterator<Item = &'static str> {
     read_indexes()
-        .chain(DOCUMENT_LOOKUP_INDEXES.iter().copied())
+        .chain(
+            DOCUMENT_LOOKUP_INDEXES
+                .iter()
+                .copied()
+                .filter(|ddl| *ddl != HANDLES_BY_HANDLE),
+        )
+        .chain(contact_records::INDEXES.iter().copied())
         .chain([AUTHORS_INDEX, node_rows::BY_SOURCE_INDEX])
         .chain(SEARCHABLE_DOCUMENTS_INDEXES.iter().copied())
 }
@@ -470,6 +484,11 @@ async fn record_shape(pool: &SqlitePool, shape: &datalib_store_meta::Shape) -> R
     Ok(())
 }
 
+/// Only a render store's: nothing reads its handles by handle, but the
+/// index is part of the shape every render store records.
+const HANDLES_BY_HANDLE: &str =
+    "CREATE INDEX IF NOT EXISTS source_contact_handles_by_handle ON source_contact_handles (handle)";
+
 /// What replacing one document looks its old rows up by, in every store
 /// that holds documents. Without them each document's `DELETE` scans the
 /// whole table, and a full render is quadratic in the store's size.
@@ -477,8 +496,7 @@ async fn record_shape(pool: &SqlitePool, shape: &datalib_store_meta::Shape) -> R
 pub(crate) const DOCUMENT_LOOKUP_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS grid_rows_by_markdown ON grid_rows (markdown_uuid)",
     "CREATE INDEX IF NOT EXISTS edges_by_src_markdown ON edges (src_markdown_uuid)",
-    // A chip asks who a handle is.
-    "CREATE INDEX IF NOT EXISTS source_contact_handles_by_handle ON source_contact_handles (handle)",
+    HANDLES_BY_HANDLE,
     // The photos applet asks for one photo by its id.
     "CREATE INDEX IF NOT EXISTS source_photos_by_photo ON source_photos (photo_uuid)",
 ];
@@ -509,8 +527,7 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
         .chain(EDGES_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(DATA_NODES_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(FILINGS_DDL.iter().map(|(_table, ddl)| *ddl))
-        .chain(SOURCE_CONTACTS_DDL.iter().map(|(_table, ddl)| *ddl))
-        .chain(SOURCE_CONTACT_HANDLES_DDL.iter().map(|(_table, ddl)| *ddl))
+        .chain(contact_records::DDL.iter().copied())
         .chain(SOURCE_PHOTOS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(PROBLEMS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(SOURCE_CURSORS_DDL.iter().map(|(_table, ddl)| *ddl))
@@ -1806,7 +1823,7 @@ async fn write_source_cursor(
 /// conversation used to stay in the grid forever.
 pub async fn delete_markdowns(write_lock: &WriteLock, markdown_uuids: &[String]) -> Result<()> {
     let mut guard = write_lock.acquire().await?;
-    let gone = delete_document_rows(guard.conn(), markdown_uuids).await?;
+    let gone = delete_document_rows(guard.conn(), write_lock.store, markdown_uuids).await?;
     write_lock.note_changed(gone);
     Ok(())
 }
@@ -1821,11 +1838,36 @@ pub(crate) const DELETE_DOCUMENTS: &[&str] = &[
     "DELETE FROM edges WHERE src_markdown_uuid IN (SELECT value FROM json_each(?))",
     "DELETE FROM data_nodes WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
     "DELETE FROM filings WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
-    "DELETE FROM source_contacts WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
-    "DELETE FROM source_contact_handles WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
     "DELETE FROM source_photos WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
     "DELETE FROM markdowns WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
 ];
+
+impl Store {
+    /// What removes the people a set of documents carries, as
+    /// [`DELETE_DOCUMENTS`] removes the rest.
+    pub(crate) fn delete_contacts(self) -> &'static [&'static str] {
+        match self {
+            Store::Render => &[
+                "DELETE FROM source_contacts WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
+                "DELETE FROM source_contact_handles \
+                 WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
+            ],
+            Store::Index => &[
+                "DELETE FROM document_contacts WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
+            ],
+        }
+    }
+
+    fn delete_one_documents_contacts(self) -> &'static [&'static str] {
+        match self {
+            Store::Render => &[
+                "DELETE FROM source_contacts WHERE markdown_uuid = ?",
+                "DELETE FROM source_contact_handles WHERE markdown_uuid = ?",
+            ],
+            Store::Index => &["DELETE FROM document_contacts WHERE markdown_uuid = ?"],
+        }
+    }
+}
 
 /// The rows the documents own: their grid rows, their outgoing edges and
 /// their `markdowns` rows. Not their `problems`, which say why a document
@@ -1833,6 +1875,7 @@ pub(crate) const DELETE_DOCUMENTS: &[&str] = &[
 /// grid rows it deleted.
 pub(crate) async fn delete_document_rows(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
+    store: Store,
     markdown_uuids: &[String],
 ) -> Result<Vec<String>> {
     if markdown_uuids.is_empty() {
@@ -1844,8 +1887,8 @@ pub(crate) async fn delete_document_rows(
         .fetch_all(&mut **conn)
         .await
         .with_context(|| format!("delete {} document(s)' rows", markdown_uuids.len()))?;
-    for &sql in DELETE_DOCUMENTS {
-        sqlx::query(sql)
+    for sql in DELETE_DOCUMENTS.iter().chain(store.delete_contacts()) {
+        sqlx::query(*sql)
             .bind(&set)
             .execute(&mut **conn)
             .await
@@ -1867,7 +1910,12 @@ async fn apply_markdown(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result
     // rest, or a stale `render_unit_key` and title would outlive the render
     // that replaced them. The problems recording why stay.
     if md.rows.is_empty() {
-        let gone = delete_document_rows(conn, std::slice::from_ref(&md.markdown_uuid)).await?;
+        let gone = delete_document_rows(
+            conn,
+            write_lock.store,
+            std::slice::from_ref(&md.markdown_uuid),
+        )
+        .await?;
         write_lock.note_changed(gone);
         tracing::info!(
             document = %md.markdown_uuid,
@@ -1938,18 +1986,18 @@ async fn apply_markdown(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result
     for filing in &md.filings {
         insert_filing(conn, &md.markdown_uuid, filing).await?;
     }
-    for sql in [
-        "DELETE FROM source_contacts WHERE markdown_uuid = ?",
-        "DELETE FROM source_contact_handles WHERE markdown_uuid = ?",
-    ] {
-        sqlx::query(sql)
+    for sql in write_lock.store.delete_one_documents_contacts() {
+        sqlx::query(*sql)
             .bind(&md.markdown_uuid)
             .execute(&mut **conn)
             .await
             .context("delete prior source contacts")?;
     }
     for contact in &md.contacts {
-        insert_source_contact(conn, &md.markdown_uuid, contact).await?;
+        match write_lock.store {
+            Store::Render => insert_source_contact(conn, &md.markdown_uuid, contact).await?,
+            Store::Index => contact_records::insert(conn, &md.markdown_uuid, contact).await?,
+        }
     }
     sqlx::query("DELETE FROM source_photos WHERE markdown_uuid = ?")
         .bind(&md.markdown_uuid)
@@ -2049,8 +2097,8 @@ async fn upsert_markdown(
     Ok(())
 }
 
-/// One source's account of a person, and each handle it ties to them,
-/// under the document that carried it. Two accounts of one person in one
+/// In a render store, one source's account of a person, and each handle
+/// it ties to them, under the document that carried it. Two accounts of one person in one
 /// document are one row: the later wins.
 async fn insert_source_contact(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
@@ -2380,6 +2428,7 @@ mod open_index_tests {
             .expect("open_index");
         let mut statements = vec![DELETE_DOCUMENT_GRID_ROWS];
         statements.extend(DELETE_DOCUMENTS);
+        statements.extend(Store::Index.delete_contacts());
         assert_searched_by_index(&pool, &statements).await;
         pool.close().await;
     }
@@ -2543,7 +2592,7 @@ mod insert_round_trip_tests {
 
         let row = fully_populated_row();
         let mut conn = pool.acquire().await.expect("acquire");
-        let lock = WriteLock::new(pool.clone());
+        let lock = WriteLock::for_index(pool.clone());
         put_grid_row(&mut conn, &lock, &row)
             .await
             .expect("put_grid_row");
@@ -2732,7 +2781,7 @@ mod write_lock_tests {
         let pool = open_pool(&db, 8).await;
         super::init_schema(&pool).await.expect("init_schema");
 
-        let write_lock = WriteLock::new_arc(pool.clone());
+        let write_lock = StdArc::new(WriteLock::for_index(pool.clone()));
 
         apply_in_parallel(&write_lock, N_TASKS, PER_TASK).await;
 
@@ -2774,7 +2823,7 @@ mod write_lock_tests {
         let pool = open_pool(&db, 8).await;
         super::init_schema(&pool).await.expect("init_schema");
 
-        let write_lock = WriteLock::new_arc(pool.clone());
+        let write_lock = StdArc::new(WriteLock::for_index(pool.clone()));
 
         // Every apply_one below reuses the held conn and accumulates into the
         // open transaction.
@@ -2825,7 +2874,7 @@ mod write_lock_tests {
         let pool = open_pool(&dir.path().join("rb.doltlite_db"), 2).await;
         super::init_schema(&pool).await.expect("init_schema");
 
-        let lock = WriteLock::new(pool.clone());
+        let lock = WriteLock::for_index(pool.clone());
 
         lock.begin_transaction().await.unwrap();
         for idx in 0..5 {
@@ -2850,7 +2899,7 @@ mod write_lock_tests {
         let dir = tempdir().unwrap();
         let pool = open_pool(&dir.path().join("empty.doltlite_db"), 2).await;
         super::init_schema(&pool).await.expect("init_schema");
-        let lock = WriteLock::new(pool.clone());
+        let lock = WriteLock::for_index(pool.clone());
 
         let mut md = mk_md(0, 0);
         md.render_unit_key = Some("mr!17".into());
@@ -4395,7 +4444,7 @@ mod source_cursor_tests {
         let mut child = md.rows[0].clone();
         child.is_document = false;
         md.rows.push(child);
-        let lock = crate::grid_index::WriteLock::new(pool.clone());
+        let lock = crate::grid_index::WriteLock::for_index(pool.clone());
         let err = crate::grid_index::apply_one(&lock, &md).await.unwrap_err();
         assert!(
             format!("{err:#}").contains("two of its rows have the uuid md-1"),
@@ -4498,6 +4547,7 @@ mod work_tests {
     use std::collections::BTreeMap;
     use std::path::Path;
 
+    use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact, Seen};
     use datalib_etl::stop::StopFlag;
     use datalib_schema::data_nodes::{DataNodeRow, Lineage};
     use tempfile::tempdir;
@@ -4521,7 +4571,8 @@ mod work_tests {
 
     /// A document filed under its source's workspace and a channel, which
     /// need node rows of their own, and is itself a chat, which has its
-    /// row.
+    /// row; and the one person who wrote it, as in every document of its
+    /// source.
     fn carrying(source: &str, uuid: &str, text: &str) -> RenderedMarkdown {
         let mut d = doc(source, uuid, text);
         let workspace = DataNodeRow::new(uuid, format!("{source}-ws"), source, "Workspace")
@@ -4535,6 +4586,14 @@ mod work_tests {
         let at = at.below(&channel);
         let chat = DataNodeRow::new(uuid, uuid, source, "Chat").read_together();
         d.data_nodes = vec![workspace, channel, chat.under(&at)];
+        let mut author =
+            NormalizedContact::new(source, format!("{source}-picard"), ContactKind::Person);
+        author.handles = vec![ContactHandle::email(None, "picard@enterprise.org")];
+        author.seen = Some(Seen {
+            items: uuid.len() as u64,
+            last_at: Some(format!("2364-02-11 {uuid}")),
+        });
+        d.contacts = vec![author];
         d
     }
 

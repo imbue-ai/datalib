@@ -27,6 +27,7 @@ use crate::repo::{
 };
 use crate::search::SearchRow;
 use crate::sort::{default_order, order_by, Sort};
+use datalib_contact_schema::{NormalizedContact, Seen};
 use datalib_core::repo::RepoError;
 use datalib_pin::open_reader;
 use datalib_query::table::{Column, SearchTable};
@@ -109,6 +110,35 @@ async fn rows_in(at: &mut At, uuids: &[String]) -> Result<Vec<SearchRow>, RepoEr
     Ok(uuids.iter().filter_map(|u| by_uuid.remove(u)).collect())
 }
 
+/// Each record of a person holding one of the handles in the JSON array
+/// `?1`, with what they wrote over every document that carries it.
+pub const PEOPLE_SQL: &str = "\
+    WITH seen AS MATERIALIZED ( \
+      SELECT record_id, SUM(seen_items) AS items, MAX(last_seen_at) AS last_at, \
+             SUM(MAX(COALESCE(seen_items, 0), 1)) AS credit \
+        FROM document_contacts INDEXED BY document_contacts_by_record \
+       WHERE record_id IN ( \
+         SELECT record_id FROM contact_record_handles \
+           INDEXED BY contact_record_handles_by_handle \
+          WHERE handle IN (SELECT value FROM json_each(?1))) \
+       GROUP BY record_id) \
+    SELECT h.handle, r.contact_json, s.items, s.last_at, s.credit \
+      FROM contact_record_handles h INDEXED BY contact_record_handles_by_handle \
+      JOIN seen s ON s.record_id = h.record_id \
+      JOIN contact_records r ON r.record_id = h.record_id \
+     WHERE h.handle IN (SELECT value FROM json_each(?1)) \
+     ORDER BY h.handle, h.record_id";
+
+#[derive(sqlx::FromRow)]
+struct PersonRecord {
+    handle: String,
+    contact_json: String,
+    /// Null when no document counts what they wrote.
+    items: Option<i64>,
+    last_at: Option<String>,
+    credit: i64,
+}
+
 /// Each row in a conversation named by its people gets them, read from
 /// its document's `subject` terms, with the name this conversation knows
 /// each handle by and how much they wrote, the most active first.
@@ -132,12 +162,13 @@ async fn add_subject_people<'r>(
     let found: Vec<(String, String, Option<String>, Option<i64>)> = match sqlx::query_as(
         // A document's own row has the document's uuid; its supplied
         // terms are `[kind, value]` pairs.
-        "SELECT g.uuid, json_extract(t.value, '$[1]') AS person, MAX(c.name), MAX(c.seen_items) \
+        "SELECT g.uuid, json_extract(t.value, '$[1]') AS person, MAX(r.name), \
+                MAX(CASE WHEN h.record_id IS NOT NULL THEN d.seen_items END) \
            FROM grid_rows g, json_each(g.supplied_terms) t \
-           LEFT JOIN source_contact_handles h \
-             ON h.markdown_uuid = g.uuid AND h.handle = json_extract(t.value, '$[1]') \
-           LEFT JOIN source_contacts c \
-             ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key \
+           LEFT JOIN document_contacts d ON d.markdown_uuid = g.uuid \
+           LEFT JOIN contact_record_handles h \
+             ON h.record_id = d.record_id AND h.handle = json_extract(t.value, '$[1]') \
+           LEFT JOIN contact_records r ON r.record_id = h.record_id \
           WHERE g.uuid IN (SELECT value FROM json_each(?2)) \
             AND json_extract(t.value, '$[0]') = ?1 \
           GROUP BY g.uuid, person",
@@ -191,9 +222,10 @@ async fn add_contact_handles<'r>(
     let wanted = serde_json::to_string(&docs)
         .map_err(|e| RepoError::Internal(format!("encode documents: {e}")))?;
     let handles: Vec<(String, String)> = match sqlx::query_as(
-        "SELECT markdown_uuid, handle FROM source_contact_handles \
-          WHERE markdown_uuid IN (SELECT value FROM json_each(?)) \
-          ORDER BY markdown_uuid, handle",
+        "SELECT d.markdown_uuid, h.handle FROM document_contacts d \
+           JOIN contact_record_handles h ON h.record_id = d.record_id \
+          WHERE d.markdown_uuid IN (SELECT value FROM json_each(?)) \
+          ORDER BY d.markdown_uuid, h.handle",
     )
     .bind(wanted)
     .fetch_all(&mut *at.tx)
@@ -1566,23 +1598,29 @@ impl IndexRepo for DoltRepo {
         };
         let wanted = serde_json::to_string(handles)
             .map_err(|e| RepoError::Internal(format!("encode handles: {e}")))?;
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT h.handle, c.contact_json \
-               FROM source_contact_handles h \
-               JOIN source_contacts c \
-                 ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key \
-              WHERE h.handle IN (SELECT value FROM json_each(?))",
-        )
-        .bind(wanted)
-        .fetch_all(&mut *at.tx)
-        .await
-        .map_err(|e| RepoError::Internal(format!("read people by handle: {e}")))?;
+        let rows: Vec<PersonRecord> = sqlx::query_as(PEOPLE_SQL)
+            .bind(wanted)
+            .fetch_all(&mut *at.tx)
+            .await
+            .map_err(|e| RepoError::Internal(format!("read people by handle: {e}")))?;
         rows.into_iter()
-            .map(|(handle, json)| {
-                let contact = serde_json::from_str(&json).map_err(|e| {
-                    RepoError::Internal(format!("a source contact for {handle} will not read: {e}"))
-                })?;
-                Ok(crate::people::HandleRow { handle, contact })
+            .map(|row| {
+                let mut contact: NormalizedContact = serde_json::from_str(&row.contact_json)
+                    .map_err(|e| {
+                        RepoError::Internal(format!(
+                            "a source contact for {} will not read: {e}",
+                            row.handle
+                        ))
+                    })?;
+                contact.seen = row.items.map(|items| Seen {
+                    items: items.max(0) as u64,
+                    last_at: row.last_at,
+                });
+                Ok(crate::people::HandleRow {
+                    handle: row.handle,
+                    contact,
+                    credit: row.credit.max(0) as u64,
+                })
             })
             .collect()
     }

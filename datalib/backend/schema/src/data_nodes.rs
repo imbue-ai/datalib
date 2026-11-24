@@ -1,6 +1,6 @@
 // The containers rows live in — a chat, a thread, a channel, a label, a
 // page — and what each is filed under. A container is carried by every
-// document that names it, the way a person is (`source_contacts`): a
+// document that names it, the way a person is (`document_contacts`): a
 // re-render replaces its own rows, and a channel named by many threads
 // has a row under each, one container when read
 // (docs/dev/plans/documents_to_blocks.md).
