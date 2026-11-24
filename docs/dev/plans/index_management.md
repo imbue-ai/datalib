@@ -172,3 +172,43 @@ to be decided on numbers.
   memory, 1.5 GB here. A scoped search could score only its sources'
   vectors, but they are all held regardless. Hold per source, loaded
   on first use?
+
+## Comments
+
+**2026-11-24, from building the Library's place lists (#2002).** Measured
+in SQL on a clone of the library above, with `grid_rows_by_parent` and
+`nodes_places` from #1998 and the index #2002 adds, `grid_rows_by_place`
+(140 MB, the usual `(key, touched_at_utc, is_document, uuid)` shape).
+
+- **The grid's index shape: an answer for one key.** Listing a channel's
+  34,027 documents newest first takes 29 ms cold and 11 ms warm when the
+  index holds the order, so no row of the table is read. The same rows
+  found through the index and then read from `grid_rows` by `rowid` take
+  1.9 s, 0.25 s of it CPU and the rest reading pages, each time it was
+  asked. An index on the key alone would be the second kind. So for a key
+  that lists many rows the stamp, the flag and the uuid are most of what
+  the index is for. A key whose values match few rows could go without.
+- **An index that serves a key can lose to one that does not.** The plan
+  test holds each key alone to its index. `source:slack channel:x`, with
+  no row in that channel, takes 1.5 s: with no statistics SQLite counts
+  any equality as narrowing as hard, takes `grid_rows_by_source_id` on the
+  tie, and reads the source's 82k rows from the table, where
+  `grid_rows_by_channel` answers in under 1 ms. An `OR` of two keys does
+  it too, since SQLite's `OR` of two indexes always reads the table. So
+  step 3 should record the rows a statement walked, not only which index
+  it named, and ask of pairs of keys. A hint on `source_id` alone moves
+  `source:x is:document` from 7 ms to 181 ms, so it is not the fix.
+- **An index to ask step 3 about.** `grid_rows_by_parent` (138 MB) serves
+  only `GET /children/{id}` without `places=true`. The Library's pane was
+  what read that; since #2002 the app's own pages list places alone, off
+  `nodes_places` (8 MB). What is left is the public route.
+- **Per-source files would suit a place.** A place is in one source, so
+  `at:<node>` names the one file to read, with no `UNION ALL`. Only a
+  search that names neither asks every file.
+- **`under:` may need no table of its own.** Before it was put off
+  (`documents_to_blocks.md` step 8), walking `nodes_places` down from a
+  node and reading `grid_rows_by_place` for every place found took 5 ms
+  for a mail account, 36 ms for 32k Notion pages and 70 ms for a Slack
+  workspace of 135,496 threads. The ancestors table would be a few
+  million rows. What the walk does not give is the result in time order,
+  which a page of it then sorts.
