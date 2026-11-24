@@ -156,9 +156,10 @@ listing cut off before its last page kept no token and starts again.
 - **An invalid or expired sync token** is a `410` whose error reason is
   `fullSyncRequired`.
 - **Every event had an `id`**, across about 7,500 on the first pages of
-  7 calendars. One without could be any stored event, so a whole
-  listing that meets one deletes nothing and says so on the calendar's
-  `listing:` row.
+  7 calendars. One without cannot be stored, and could be any stored
+  event, so a listing that meets one deletes nothing it did not name,
+  leaves the sync token where it was, says so on the calendar's
+  `listing:` row and ends the run `incomplete`; the next asks again.
 - A whole sync of the 7 calendars stored 10,332 events in 10 requests
   (two calendars ran past one 2,500-event page); the next, incremental,
   changed nothing in 8.

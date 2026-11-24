@@ -540,7 +540,7 @@ impl Ctx<'_> {
             let room = m.saturating_sub(s.listed);
             if listed.len() > room {
                 listed.truncate(room);
-                self.found.listing(
+                self.found.listing_cut_off(
                     "roots",
                     format!(
                         "the roots reach more than max_pages ({m}) pages, so the rest were \
