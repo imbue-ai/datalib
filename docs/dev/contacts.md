@@ -336,10 +336,9 @@ page is about and for each of a chat's source contacts. A stored photo
 of another type is still shown on its contact's page, at the same
 address, and gets no URL.
 
-Where the bytes come from: LinkedIn's connection photos (fetched by
-earlier builds; linkedin.com no longer shows them) and Beeper's cached
-avatars are in the source's blob store already (an avatar counts only
-when the store holds it as an image). A vCard carries its photo inside
+Where the bytes come from: Beeper's cached avatars are in the source's
+blob store already (an avatar counts only when the store holds it as an
+image). A vCard carries its photo inside
 the card: the contacts download decodes each inline `PHOTO` into the
 source's blob store before the card is stored, and the source's
 `--prepare` does the same for every card a store already holds. Render

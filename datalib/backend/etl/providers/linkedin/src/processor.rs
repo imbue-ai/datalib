@@ -50,8 +50,8 @@ impl DataProcessor for LinkedinIngest {
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         let entity_db = ingest::db_path_for(&self.raw_path);
         let db = ingest::RawDb::open(&entity_db).await?;
-        let (pool, cas_pool) = (db.pool().clone(), db.cas().map(|cas| cas.pool().clone()));
-        ctx.run_store(pool, cas_pool, |_| async {
+        let pool = db.pool().clone();
+        ctx.run_store(pool, None, |_| async {
             let s = ingest::fetch(ingest::FetchOptions {
                 db,
                 input_path: self.input_path.clone(),
