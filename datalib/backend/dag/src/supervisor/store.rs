@@ -29,7 +29,14 @@ const LADDER: &[datalib_store_meta::Migration] = &[datalib_store_meta::Migration
     name: "steps in one shape; launch_passes goes",
     apply: |conn| {
         Box::pin(async move {
-            datalib_store_meta::ladder::run_statements(conn, &STEPS_IN_ONE_SHAPE).await
+            sqlx::query("ALTER TABLE steps RENAME TO steps_v5")
+                .execute(&mut *conn)
+                .await?;
+            sqlx::query(super::record::STEPS)
+                .execute(&mut *conn)
+                .await?;
+            sqlx::raw_sql(STEPS_FROM_V5).execute(&mut *conn).await?;
+            Ok(())
         })
     },
 }];
@@ -38,43 +45,19 @@ const LADDER: &[datalib_store_meta::Migration] = &[datalib_store_meta::Migration
 /// written by a newer build, whose columns this one would not fill.
 const SCHEMA_VERSION: u32 = LADDER[LADDER.len() - 1].version;
 
-/// `steps` remade in this build's shape, keeping the columns every
-/// release since 0.38 had. What it drops a release may not have had, and
-/// the loop writes again: `needs_rerun` at the launch's prepare pass,
+/// Each step's record, from the columns every release since 0.38 had.
+/// What it leaves behind a release may not have had, and the loop
+/// writes again: `needs_rerun` at the launch's prepare pass,
 /// `waiting_for` on its next tick, `last_failure_kind` at the step's next
-/// run.
-const STEPS_IN_ONE_SHAPE: [datalib_store_meta::ladder::Statement; 5] = {
-    use datalib_store_meta::ladder::Statement;
-    [
-        Statement {
-            what: "set the old steps aside",
-            sql: "ALTER TABLE steps RENAME TO steps_v5",
-        },
-        Statement {
-            what: "make steps",
-            sql: super::record::STEPS,
-        },
-        Statement {
-            what: "copy each step's record",
-            sql: "INSERT INTO steps (step, succeeded, fingerprint, reads, last_run_id, \
-                  last_started_at_utc, last_finished_at_utc, last_status, last_attempts, \
-                  last_error, last_success_at_utc, tz_offset, state, state_detail, \
-                  turned_off_by, requests) \
-                  SELECT step, succeeded, fingerprint, reads, last_run_id, \
-                  last_started_at_utc, last_finished_at_utc, last_status, last_attempts, \
-                  last_error, last_success_at_utc, tz_offset, state, state_detail, \
-                  turned_off_by, requests FROM steps_v5",
-        },
-        Statement {
-            what: "drop the old steps",
-            sql: "DROP TABLE steps_v5",
-        },
-        Statement {
-            what: "drop launch_passes, which nothing reads",
-            sql: "DROP TABLE IF EXISTS launch_passes",
-        },
-    ]
-};
+/// run. `launch_passes` goes with it: nothing reads it.
+const STEPS_FROM_V5: &str = "INSERT INTO steps (step, succeeded, fingerprint, reads, \
+     last_run_id, last_started_at_utc, last_finished_at_utc, last_status, last_attempts, \
+     last_error, last_success_at_utc, tz_offset, state, state_detail, turned_off_by, requests) \
+     SELECT step, succeeded, fingerprint, reads, last_run_id, last_started_at_utc, \
+     last_finished_at_utc, last_status, last_attempts, last_error, last_success_at_utc, \
+     tz_offset, state, state_detail, turned_off_by, requests FROM steps_v5; \
+     DROP TABLE steps_v5; \
+     DROP TABLE IF EXISTS launch_passes";
 
 const DDL: [&str; 4] = [
     "CREATE TABLE IF NOT EXISTS requests (
