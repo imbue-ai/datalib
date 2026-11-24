@@ -499,6 +499,57 @@ for the keys' SQL):
 The source is held with every chunk, so `source:` and `-source:` never
 touch SQL.
 
+**A searched piece's number says where it is: source, document,
+block.** Today a words statement cannot be narrowed to the sources
+asked for. It scores every match in the library (`WITH m AS
+MATERIALIZED (SELECT rowid, -bm25(…) FROM search_fts WHERE search_fts
+MATCH ?)`), and only then joins each match to `search_sections` and
+`search_documents` to learn its source and document and drop the rest.
+The full-text index keeps, for each word, one list of every piece
+holding it, so a common word costs the same however narrow the search.
+On the search eval, that page pass alone was 0.4 s a statement, one
+statement per word of the query.
+
+The full-text table's row number is one 64-bit integer, and FTS5 skips
+through a word's list when the query bounds the row number (`AND rowid
+BETWEEN ? AND ?`). So the index numbers each piece by where it sits,
+packed into that integer: the source in the high bits, the document
+(what is read together) in the middle, the block in the low bits, read
+order within its document. Then:
+
+- `source:x`, and `under:` a source, is one row-number range: the scan
+  reads only that source's matches and scores only those. A scoped
+  search costs less than a search of everything, which matters once the
+  UI makes "search in what I am looking at" the easy way to search
+  (§"Browsing the tree").
+- Narrowing to some documents, as the page pass narrows to the pages
+  its first word found, is a range per document rather than a bound
+  list of ids.
+- A hit's source and document are read off its number, so the hot
+  statement needs no join to learn them, and folding a hit into its
+  document or capping a ranking's blocks per document (rules 4 and 6)
+  is arithmetic.
+- A block's neighbours in reading order are the numbers next to it,
+  which is the window rule 4's neighbour evidence reads.
+- The plain tables the search index keeps beside it (`search_sections`,
+  `search_documents`) are keyed on the same tuple, `WITHOUT ROWID`, so a
+  source's rows and a document's blocks sit on neighbouring pages. A
+  search on a library whose index does not fit in memory waits on page
+  reads (measured on one 16 GB laptop: a 5.5 GB grid index and a 5 GB
+  inference cache, with searches spending most of their time in
+  `pread`), and fewer scattered pages means fewer reads.
+
+The numbers are the index's own: small integers mapped from the
+source's id and the document's and block's uuids, in three tables the
+index step keeps, and they may change on any re-index, since the index
+is derived and a vector is filed under its chunk's text, not a number.
+They do not reach a scope deeper than a document's parent (a channel, a
+folder): that stays a join to the grid, over far fewer rows. A key on a
+block's own facts (an author, a date) still reads the grid's indexes.
+Before any of this is built, one measurement decides it: how long a
+common word's list is in a real index, and how much a row-number range
+cuts a `MATCH` on it.
+
 **4. Each ranking ranks blocks, on evidence from their neighbours.** A
 hit is one block, but what finds it may be said around it: a reply that
 says "thank you" is found by the words of the message it answers. So a
@@ -749,9 +800,11 @@ against the eval before the next.
        contract test, the index filing a piece with no row under its
        document's row, and Drive and GitHub naming their text.
      - **Keys keep blocks, and meet the rankings in the index** (rules 2,
-       3 and 7): container facts copied onto blocks, the words statement
-       joined to the grid, meaning's two ways, the count per source.
-       `Kept`, `Keyed` and the per-search walk of the grid go.
+       3 and 7): container facts copied onto blocks, each searched piece
+       numbered by its source, document and block so a source is a
+       row-number range, the words statement joined to the grid,
+       meaning's two ways, the count per source. `Kept`, `Keyed` and the
+       per-search walk of the grid go.
      - **Blocks rank and fuse; one display mode draws them** (rules 4
        to 6): each ranking ranks blocks, words counting a block's
        neighbours at a discount as meaning's chunks already do, a few
@@ -871,6 +924,12 @@ against the eval before the next.
 - **What a folded row shows** when its document spans years: its other
   hits' times, the document's first and last time, the number of hits
   folded under it.
+- **How a piece's number is packed.** How many bits the source, the
+  document and the block each get (a ten-year chat may hold more than a
+  million blocks; a library may hold a billion documents), and whether
+  a block that arrives late takes the next free number in its document,
+  so its neighbours are found by its sort key rather than by number, or
+  numbers leave gaps for it. A re-index can always renumber.
 - **Why a row matched.** A row could say what found it: the words it
   holds, a key it passed, or "by meaning", and for a neighbour's words,
   which message said them. A miss is easier to trust, and a query easier
