@@ -9,14 +9,10 @@ use std::collections::HashSet;
 pub enum Kept {
     /// The document's own row: every chunk.
     Whole,
-    /// Only these messages, by section id, and the text that is no
-    /// message's (a page's body) when `own_text`, which is so when the
-    /// document's own row is kept too: a chunk that covers none of them
-    /// was written by someone, or at a time, the search leaves out.
-    Sections {
-        messages: HashSet<String>,
-        own_text: bool,
-    },
+    /// Only these rows, by uuid: a chunk that covers none of them was
+    /// written by someone, or at a time, the search leaves out. Text that
+    /// is no message's (a page's body) is the document's own row.
+    Sections(HashSet<String>),
 }
 
 /// `(v·q, v·v)`, in one pass. On x86_64 the same loop is compiled a

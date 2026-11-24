@@ -1272,32 +1272,31 @@ async fn search_index_nearest(
     Ok(hits)
 }
 
-/// What the structured terms keep of each document they reach: the
-/// messages they keep, or all of it when they keep only the document's own
-/// row. A long chat whose last message falls in a date window keeps its
-/// row too, and that must not bring back its other days; its own row
-/// keeps only the text that is no message's, such as a page's body.
+/// What the structured terms keep of each document they reach: the rows
+/// they keep, or all of it when they keep only the document's own row. A
+/// long chat whose last message falls in a date window keeps its row too,
+/// and that must not bring back its other days; the row itself stays
+/// kept, since a page's own text is named by it, or by no row at all.
 fn kept_of(
     rows: Vec<(String, String, bool)>,
 ) -> std::collections::HashMap<String, datalib_unified_grid_and_search_index::hits::vectors::Kept> {
     use datalib_unified_grid_and_search_index::hits::vectors::Kept;
-    let mut sections: std::collections::HashMap<String, (std::collections::HashSet<String>, bool)> =
+    let mut sections: std::collections::HashMap<String, std::collections::HashSet<String>> =
         std::collections::HashMap::new();
+    let mut with_messages: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (uuid, document, is_document) in rows {
-        let (messages, own_row) = sections.entry(document).or_default();
-        if is_document {
-            *own_row = true;
-        } else {
-            messages.insert(uuid);
+        if !is_document {
+            with_messages.insert(document.clone());
         }
+        sections.entry(document).or_default().insert(uuid);
     }
     sections
         .into_iter()
-        .map(|(document, (messages, own_text))| {
-            let kept = if messages.is_empty() {
-                Kept::Whole
+        .map(|(document, kept)| {
+            let kept = if with_messages.contains(&document) {
+                Kept::Sections(kept)
             } else {
-                Kept::Sections { messages, own_text }
+                Kept::Whole
             };
             (document, kept)
         })
@@ -1961,9 +1960,9 @@ mod tests {
 
     /// A chat whose last message falls in a date window keeps its own row
     /// as well as that day's messages; meaning must rank it by those
-    /// messages, not by every day of it. Its own row still keeps the text
-    /// that is no message's: a page's body was dropped from every search
-    /// with a filter, because the filter kept some of its comments too.
+    /// messages, not by every day of it. The row itself stays kept: a
+    /// page's own text is named by it, and was dropped from every search
+    /// with a filter that also kept one of the page's comments.
     #[test]
     fn a_kept_document_row_counts_whole_only_without_kept_messages() {
         use datalib_unified_grid_and_search_index::hits::vectors::Kept;
@@ -1978,17 +1977,11 @@ mod tests {
         ]);
         assert_eq!(
             kept["bridge-log"],
-            Kept::Sections {
-                messages: ["stardate-2".to_string()].into(),
-                own_text: true,
-            }
+            Kept::Sections(["stardate-2".to_string(), "bridge-log".to_string()].into())
         );
         assert_eq!(
             kept["away-team"],
-            Kept::Sections {
-                messages: ["stardate-3".to_string()].into(),
-                own_text: false,
-            }
+            Kept::Sections(["stardate-3".to_string()].into())
         );
         assert_eq!(kept["ten-forward"], Kept::Whole);
     }

@@ -721,38 +721,28 @@ async fn the_kept_rows_and_the_sources_narrow_the_pages() {
     f.reader.close().await;
 }
 
-/// What a search keeps when its filters keep `document` whole and
-/// nothing else.
-fn only_document(document: &str) -> KeptRows<'_> {
-    KeptRows {
-        whole: vec![document],
-        messages: Vec::new(),
-        own_text: Vec::new(),
-    }
-}
-
-/// A filter that keeps a page's own row and one of its rows keeps the
-/// page's own text, which is no row's: before, every search with a filter
-/// lost the words of a Drive document's body once it kept one of its
-/// comments.
+/// A page's heading is no row's, so it is the page's own row: a filter
+/// that keeps that row and one of the page's rows finds the page by its
+/// heading's words, and one that keeps only the other row does not.
+/// Before, any filter that kept one of a page's rows lost the words of
+/// every piece that was no row's, such as a Drive file's whole text.
 #[tokio::test]
-async fn a_kept_page_row_keeps_the_text_that_is_no_rows() {
+async fn a_piece_that_is_no_rows_is_its_documents_row() {
     let f = fixture(&[page("page")], &[]).await;
-    let keep = |own_text: Vec<&'static str>| KeptRows {
+    let keep = |rows: Vec<&'static str>| KeptRows {
         whole: Vec::new(),
-        messages: vec!["bedroom"],
-        own_text,
+        messages: rows,
     };
     for (kept, found) in [
-        (keep(vec!["page"]), vec!["page"]),
-        (keep(Vec::new()), vec![]),
+        (keep(vec!["bedroom", "page"]), vec!["page"]),
+        (keep(vec!["bedroom"]), vec![]),
     ] {
         let heading = f
             .reader
             .words(&all_of(&["quality"]), None, Some(&kept), 10)
             .await
             .unwrap();
-        assert_eq!(ids(&heading), found, "words, own text {:?}", kept.own_text);
+        assert_eq!(ids(&heading), found, "words, keeping {:?}", kept.messages);
         let across = f
             .reader
             .page_words(&page_terms(&["bedroom", "quality"]), None, Some(&kept), 10)
@@ -761,9 +751,18 @@ async fn a_kept_page_row_keeps_the_text_that_is_no_rows() {
         assert_eq!(
             ids(&across),
             found,
-            "page words, own text {:?}",
-            kept.own_text
+            "page words, keeping {:?}",
+            kept.messages
         );
     }
     f.reader.close().await;
+}
+
+/// What a search keeps when its filters keep `document` whole and
+/// nothing else.
+fn only_document(document: &str) -> KeptRows<'_> {
+    KeptRows {
+        whole: vec![document],
+        messages: Vec::new(),
+    }
 }

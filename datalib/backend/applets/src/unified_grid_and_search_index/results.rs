@@ -127,16 +127,12 @@ impl Keyed {
         let mut out = datalib_search_index::KeptRows {
             whole: Vec::new(),
             messages: Vec::new(),
-            own_text: Vec::new(),
         };
         for (document, kept) in &self.kept {
             match kept {
                 Kept::Whole => out.whole.push(document),
-                Kept::Sections { messages, own_text } => {
-                    out.messages.extend(messages.iter().map(String::as_str));
-                    if *own_text {
-                        out.own_text.push(document);
-                    }
+                Kept::Sections(messages) => {
+                    out.messages.extend(messages.iter().map(String::as_str))
                 }
             }
         }

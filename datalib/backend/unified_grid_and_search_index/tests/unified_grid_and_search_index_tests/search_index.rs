@@ -137,10 +137,7 @@ async fn a_chunk_covering_no_kept_message_does_not_rank_its_document() {
     let keep = |m: &str| {
         HashMap::from([(
             "thread".to_string(),
-            Kept::Sections {
-                messages: HashSet::from([m.to_string()]),
-                own_text: true,
-            },
+            Kept::Sections(HashSet::from([m.to_string()])),
         )])
     };
     for (kept, found) in [(keep("m2"), 1), (keep("someone-else"), 0)] {
@@ -153,12 +150,12 @@ async fn a_chunk_covering_no_kept_message_does_not_rank_its_document() {
     }
 }
 
-/// A page's body and a comment on it, each its own chunk. A filter that
-/// keeps the page's own row and the comment ranks the page by its body
-/// too; one that keeps only the comment does not. Before, a filter that
-/// kept a comment dropped every chunk of the page's own text.
+/// A page's body, which is no row's, and a comment on it, each its own
+/// chunk. A filter that keeps the page's own row and the comment ranks
+/// the page by its body; one that keeps only the comment does not. Before,
+/// a filter that kept a comment dropped every chunk of the page's body.
 #[tokio::test]
-async fn a_kept_page_row_ranks_by_the_text_that_is_no_messages() {
+async fn a_chunk_of_text_that_is_no_rows_is_its_documents_row() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     let page = IndexDoc {
@@ -188,13 +185,10 @@ async fn a_kept_page_row_ranks_by_the_text_that_is_no_messages() {
 
     let held = HeldVectors::default();
     let query = [1.0, 0.0, 0.0];
-    for own_text in [true, false] {
+    for (rows, want) in [(vec!["c1", "page"], 1.0), (vec!["c1"], 0.0)] {
         let kept = HashMap::from([(
             "page".to_string(),
-            Kept::Sections {
-                messages: HashSet::from(["c1".to_string()]),
-                own_text,
-            },
+            Kept::Sections(rows.iter().map(|r| r.to_string()).collect()),
         )]);
         let hits = held
             .nearest(root, &query, None, Some(&kept), 10)
@@ -202,8 +196,7 @@ async fn a_kept_page_row_ranks_by_the_text_that_is_no_messages() {
             .unwrap()
             .unwrap();
         let score = hits[0].1.score;
-        let want = if own_text { 1.0 } else { 0.0 };
-        assert!((score - want).abs() < 1e-3, "own text {own_text}: {score}");
+        assert!((score - want).abs() < 1e-3, "keeping {rows:?}: {score}");
     }
 }
 
@@ -265,10 +258,7 @@ async fn a_filtered_meaning_search_ranks_by_the_kept_messages() {
 
     let second = top(Some(HashMap::from([(
         "thread".to_string(),
-        Kept::Sections {
-            messages: HashSet::from(["m2".to_string()]),
-            own_text: true,
-        },
+        Kept::Sections(HashSet::from(["m2".to_string()])),
     )])))
     .await;
     assert_eq!(second.place, item("m2"));
