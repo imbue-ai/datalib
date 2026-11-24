@@ -80,7 +80,7 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         let listed: Vec<String> = rows.iter().map(|c| c.id.clone()).collect();
         summary.events_deleted += db.delete_calendars_not_in("google", &listed).await?;
     } else {
-        found.listing(
+        found.listing_cut_off(
             "calendars",
             format!(
                 "the account's list named {unidentified} calendar(s) with no id, which could be \
@@ -112,7 +112,7 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         };
         match sync_calendar(&cal_opts, &cal.id, &mut summary).await {
             Ok(None) => {}
-            Ok(Some(held_back)) => found.listing(&listing, held_back),
+            Ok(Some(held_back)) => found.listing_cut_off(&listing, held_back),
             Err(e) => {
                 summary.errors += 1;
                 found.listing(&listing, format!("{e:#}"));

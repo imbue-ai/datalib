@@ -160,7 +160,7 @@ async fn sync(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     };
     match listing.run(&mut summary).await {
         Ok(None) => {}
-        Ok(Some(held_back)) => found.listing("meetings", held_back),
+        Ok(Some(held_back)) => found.listing_cut_off("meetings", held_back),
         Err(e) => {
             summary.errors += 1;
             found.listing("meetings", format!("{e:#}"));

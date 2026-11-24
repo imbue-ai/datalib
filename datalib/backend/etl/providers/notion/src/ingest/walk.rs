@@ -144,7 +144,7 @@ impl Ctx<'_> {
             return Ok(Walked::Short);
         }
         if let Some(first) = capped.first() {
-            self.found.listing(
+            self.found.listing_cut_off(
                 "roots",
                 format!(
                     "{} databases under the roots listed {QUERY_CAP} rows or more, Notion's cap \

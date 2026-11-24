@@ -12,7 +12,7 @@
 //! sees them. Only the sweep of listing and phase rows waits for the end,
 //! because only then is it known that every one of them ran.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -64,6 +64,9 @@ where
     if let Some(sealer) = sealer {
         sealer.carry(None);
     }
+    if result.is_ok() {
+        problems.note_unfinished();
+    }
     let ran = if result.is_ok() {
         Ran::ToItsEnd
     } else {
@@ -73,19 +76,28 @@ where
     result
 }
 
-tokio::task_local! {
-    static GIVE_UP: Arc<Mutex<Option<String>>>;
+/// What the downloads in one step did not finish, for the step to end on.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunEnd {
+    /// What the first download that stopped asking said.
+    pub gave_up: Option<String>,
+    /// The listings and phases that failed while the rest went on, each
+    /// with its failure.
+    pub unfinished: Option<String>,
 }
 
-/// Run `fut`, and say what the first download inside it that gave up
-/// said. It is a scope rather than an error because the store is
-/// committed only on `Ok`: what a run that gave up did get must still
-/// be published.
-pub async fn noting_give_up<F: Future>(fut: F) -> (F::Output, Option<String>) {
-    let note = Arc::new(Mutex::new(None));
-    let out = GIVE_UP.scope(note.clone(), fut).await;
-    let said = note.lock().unwrap().take();
-    (out, said)
+tokio::task_local! {
+    static RUN_END: Arc<Mutex<RunEnd>>;
+}
+
+/// Run `fut`, and say what the downloads inside it did not finish. It is
+/// a scope rather than an error because the store is committed only on
+/// `Ok`: what an unfinished run did get must still be published.
+pub async fn noting_run_end<F: Future>(fut: F) -> (F::Output, RunEnd) {
+    let note = Arc::new(Mutex::new(RunEnd::default()));
+    let out = RUN_END.scope(note.clone(), fut).await;
+    let end = std::mem::take(&mut *note.lock().unwrap());
+    (out, end)
 }
 
 /// The error a step ends with when a download gave up with work left.
@@ -99,6 +111,19 @@ impl std::fmt::Display for GaveUp {
 }
 
 impl std::error::Error for GaveUp {}
+
+/// The error a step ends with when a listing or a phase of its download
+/// failed and the rest went on.
+#[derive(Debug)]
+pub struct Unfinished(pub String);
+
+impl std::fmt::Display for Unfinished {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "part of the download failed: {}", self.0)
+    }
+}
+
+impl std::error::Error for Unfinished {}
 
 /// Whether the body has returned `Ok`: the one thing a write in the
 /// middle of a run cannot know, and what the sweep of listing and phase
@@ -166,6 +191,14 @@ impl RunProblems {
         self.push(RunProblem::listing(name, detail));
     }
 
+    /// A listing that was answered and still is not the whole: cut off
+    /// however it is asked, or naming something it does not identify.
+    /// Asking again gets the same, so it does not keep a run from being
+    /// done.
+    pub fn listing_cut_off(&self, name: &str, detail: impl Into<String>) {
+        self.push(RunProblem::listing_cut_off(name, detail));
+    }
+
     /// A whole phase that failed before it did its work.
     pub fn phase(&self, name: &str, detail: impl Into<String>) {
         self.push(RunProblem::phase(name, detail));
@@ -209,13 +242,32 @@ impl RunProblems {
 
     /// The run gave up with work still owed. It is cut short, and the
     /// step running it ends `incomplete` once the store is committed
-    /// ([`noting_give_up`]). A run that covers less on purpose, such as
+    /// ([`noting_run_end`]). A run that covers less on purpose, such as
     /// one page, is only [`Self::cut_short`].
     pub fn gave_up(&self, said: impl Into<String>) {
         self.cut_short();
         let said = said.into();
-        let _ = GIVE_UP.try_with(|g| {
-            g.lock().unwrap().get_or_insert(said);
+        let _ = RUN_END.try_with(|end| {
+            end.lock().unwrap().gave_up.get_or_insert(said);
+        });
+    }
+
+    /// Tell the step which listings and phases failed, so a provider that
+    /// records one and goes on need not also remember to say so. An error
+    /// is a request that failed; what was answered, refused or left out on
+    /// purpose is a warning or less, and asking again would not change it.
+    fn note_unfinished(&self) {
+        if self.stop.requested() {
+            return;
+        }
+        let failed = unfinished(&self.lock().run);
+        let Some(failed) = failed else { return };
+        let _ = RUN_END.try_with(|end| {
+            let mut end = end.lock().unwrap();
+            end.unfinished = Some(match end.unfinished.take() {
+                Some(before) => format!("{before}; {failed}"),
+                None => failed,
+            });
         });
     }
 
@@ -387,6 +439,17 @@ impl RunProblems {
         // holds a whole set.
         self.state.lock().unwrap_or_else(|p| p.into_inner())
     }
+}
+
+/// The listings and phases among `run` that failed, as one line.
+fn unfinished(run: &[RunProblem]) -> Option<String> {
+    let mut seen = BTreeSet::new();
+    let failed: Vec<String> = run
+        .iter()
+        .filter(|p| p.severity == datalib_problems::Severity::Error && seen.insert(p.key()))
+        .map(|p| format!("{}: {}", p.name, p.detail))
+        .collect();
+    (!failed.is_empty()).then(|| failed.join("; "))
 }
 
 /// Run one record's work so that a panic in it, a third-party parser's
@@ -749,6 +812,51 @@ mod tests {
         );
         assert_eq!(catching_panics(|| Ok(2)).unwrap(), 2);
         assert!(catching_panics(|| Err::<(), _>(anyhow::anyhow!("not a PDF"))).is_err());
+    }
+
+    /// A Google calendar whose one listing got no answer once ended
+    /// `succeeded`: the row was written and the step driver never heard.
+    #[tokio::test]
+    async fn a_listing_or_phase_that_failed_is_told_to_the_step() {
+        let d = tempfile::tempdir().unwrap();
+        let pool = store(&d).await;
+        let ((), ended) = noting_run_end(run(&pool, |p| {
+            p.listing("calendar Bridge duty", "curl exit 16");
+            p.phase("weight", "HTTP 500");
+        }))
+        .await;
+        assert_eq!(ended.gave_up, None, "the source went on asking");
+        assert_eq!(
+            ended.unfinished.as_deref(),
+            Some("calendar Bridge duty: curl exit 16; weight: HTTP 500")
+        );
+        pool.close().await;
+    }
+
+    /// Only what a later run could mend keeps a download from being done:
+    /// every request behind these was answered, or was never made.
+    #[tokio::test]
+    async fn what_was_answered_or_left_out_does_not_make_a_run_unfinished() {
+        let d = tempfile::tempdir().unwrap();
+        let pool = store(&d).await;
+        let ((), ended) = noting_run_end(run(&pool, |p| {
+            p.push(RunProblem::forbidden("org Section 31", "HTTP 403"));
+            p.push(RunProblem::not_asked("counts", "unknown_method"));
+            p.push(RunProblem::listing_cut_off("search", "1000 results"));
+            p.record_failed("messages", "1a0b", "HTTP 404");
+            p.config([DownloadProblem::not_found("calendars", "x", "no such")]);
+        }))
+        .await;
+        assert_eq!(ended.unfinished, None);
+
+        let stop = StopFlag::new();
+        let ((), ended) = noting_run_end(run_with(&pool, &stop, |p| {
+            p.listing("devices", "HTTP 502");
+            stop.request();
+        }))
+        .await;
+        assert_eq!(ended.unfinished, None, "a stopped run says it was stopped");
+        pool.close().await;
     }
 
     /// A panic inside one Takeout feed once ended the whole step.

@@ -69,15 +69,14 @@ pub async fn run(
         }
         Ok::<_, anyhow::Error>(())
     };
-    let (ran, gave_up) =
-        datalib_etl::run_problems::noting_give_up(datalib_obs::diagnostics::scope(
-            diagnostics.clone(),
-            datalib_etl_web::retry::scope(
-                guard.clone(),
-                datalib_etl::download_metrics::scope(metrics.clone(), body),
-            ),
-        ))
-        .await;
+    let (ran, end) = datalib_etl::run_problems::noting_run_end(datalib_obs::diagnostics::scope(
+        diagnostics.clone(),
+        datalib_etl_web::retry::scope(
+            guard.clone(),
+            datalib_etl::download_metrics::scope(metrics.clone(), body),
+        ),
+    ))
+    .await;
     // A source that stopped answering ends the run however the processor
     // took its last refused request, even when that was its last request.
     let stopped_answering = guard.gave_up().map(str::to_string);
@@ -85,7 +84,12 @@ pub async fn run(
         (Err(e), Some(_)) => tracing::info!("after giving up: {e:#}"),
         (ran, _) => ran?,
     }
-    let gave_up = gave_up.or(stopped_answering);
+    let gave_up = end.gave_up.or(stopped_answering);
+    // A local file that will not parse fails the same way every run until
+    // someone changes it: its error row says so, and nothing is owed.
+    let unfinished = end
+        .unfinished
+        .filter(|_| planned.reach == Some(datalib_source_common::Reach::Origin));
 
     // What the download could not fetch, counted the way every render
     // step counts its own: the Manage row's errors and warnings. Whole
@@ -114,6 +118,9 @@ pub async fn run(
     // the rest is not, and the outcome still reports the version.
     if let Some(said) = gave_up {
         return Err(datalib_etl::run_problems::GaveUp(said).into());
+    }
+    if let Some(said) = unfinished {
+        return Err(datalib_etl::run_problems::Unfinished(said).into());
     }
 
     // Never fail the step here: the download itself has completed and

@@ -976,7 +976,7 @@ impl Walk<'_> {
             let Some(first_page) = path(0) else {
                 // Not counted in `errors`: it is the account's shape, the
                 // same every run.
-                self.found.listing(
+                self.found.listing_cut_off(
                     kind.name,
                     "socialProfile carries no profileId, which the gear listing is keyed on",
                 );
