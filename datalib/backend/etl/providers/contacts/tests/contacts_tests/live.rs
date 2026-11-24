@@ -69,8 +69,15 @@ async fn contacts_labels_and_photos_land_and_a_second_run_owes_nothing() {
          NOT IN (SELECT resource_name FROM google_contact_groups)",
     )
     .await;
-    assert_eq!(unnamed, 0, "a membership of a label the listing did not name");
-    let missing = count(&store, "SELECT count(*) FROM google_photos WHERE blake3 IS NULL").await;
+    assert_eq!(
+        unnamed, 0,
+        "a membership of a label the listing did not name"
+    );
+    let missing = count(
+        &store,
+        "SELECT count(*) FROM google_photos WHERE blake3 IS NULL",
+    )
+    .await;
     assert_eq!(missing, 0, "a listed photo that was not fetched");
 
     let second = run(&store).await;
