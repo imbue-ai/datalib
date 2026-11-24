@@ -370,7 +370,10 @@ page plus whatever has arrived since. Two counts taken either side of a
 reload therefore compared how long each had been open, and failed as
 538 < 569 once the log outgrew a page (#835). Before comparing a reading
 from before an action with one from after it, check that both measure
-the same thing.
+the same thing. A store's size on disk is not what it holds: a doltlite
+store can carry up to 1 MiB of zeros that a later sync gives back, so
+"a document more" is a row count, not a bigger file
+([`doltlite.md`](doltlite.md) § "Disk space and `dolt_gc`").
 
 **Unroute a response rewrite before the page closes.** A `page.route`
 handler that calls `route.fetch()` to edit the real answer is waiting on

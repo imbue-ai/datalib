@@ -78,18 +78,35 @@ async function bytesOf(page: Page, id: string): Promise<number | null> {
   return Number(m![1]) * scale;
 }
 
-/// A store's size in bytes, measured now, for asking whether it grew. The
-/// column rounds: from 1 MB it moves in steps of 100 kB, and one more
-/// short PDF's markdown is a few kB.
-async function exactBytesOf(request: APIRequestContext, id: string): Promise<number | null> {
-  const res = await request.post(`${BASE}/api/manage/rows/refresh`);
-  expect(res.ok(), `refreshing the rows answered ${res.status()}`).toBe(true);
+/// How many items the render step counted in its store when it last
+/// sealed it: the number the Items cell shows. Not the Size column: a
+/// doltlite store can keep up to 1 MiB of zeros past its end until a
+/// later sync's close gives them back, so its file can shrink while it
+/// gains a document (docs/dev/doltlite.md § Disk space and `dolt_gc`).
+async function itemsOf(request: APIRequestContext, id: string): Promise<number | null> {
+  const res = await request.get(`${BASE}/api/manage/rows`);
+  expect(res.ok(), `reading the rows answered ${res.status()}`).toBe(true);
   const { rows } = (await res.json()) as {
-    rows: { key: string; disk: { value: number | null } }[];
+    rows: { key: string; items: { value: number | null } }[];
   };
   const found = rows.find((r) => r.key === id);
   expect(found, `no row ${id} in /api/manage/rows`).toBeDefined();
-  return found!.disk.value;
+  return found!.items.value;
+}
+
+/// How many PDFs the raw store holds at its newest commit, read from the
+/// store's own history.
+async function pdfsHeld(request: APIRequestContext): Promise<number> {
+  const res = await request.get(`${BASE}/api/pipeline/history?tree=pdfs/ingest&limit=1`);
+  expect(res.ok(), `reading pdfs/ingest's history answered ${res.status()}`).toBe(true);
+  const { stores } = (await res.json()) as {
+    stores: { commits: { tables: { table: string; rows: number }[] }[] }[];
+  };
+  const held = stores
+    .flatMap((s) => s.commits[0]?.tables ?? [])
+    .find((t) => t.table === "pdf_documents");
+  expect(held, "pdfs/ingest's newest commit should have a pdf_documents table").toBeDefined();
+  return held!.rows;
 }
 
 /// Every row the Explore grid is holding, read through the grid api the
@@ -266,8 +283,15 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     expect(await bytesOf(page, "pdfs/render_markdown"), "so should the markdown").toBeGreaterThan(
       0,
     );
-    const rawBytes = await exactBytesOf(request, "pdfs/ingest");
-    const renderedBytes = await exactBytesOf(request, "pdfs/render_markdown");
+    expect(await pdfsHeld(request), "the raw store should hold the two PDFs").toBe(2);
+    await expect
+      .poll(async () => (await itemsOf(request, "pdfs/render_markdown")) ?? 0, {
+        timeout: 10_000,
+        intervals: [250],
+        message: "the render step should have counted what it holds",
+      })
+      .toBeGreaterThan(0);
+    const renderedItems = await itemsOf(request, "pdfs/render_markdown");
 
     // ── 10-11. the documents, in the grid ────────────────────────────
     await openExplore(page);
@@ -311,18 +335,15 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
       /^(Succeeded|Up to date)$/,
     );
 
-    // A document more on disk.
+    // A document more in each store, counted from what each one sealed.
+    expect(await pdfsHeld(request), "the raw store should have gained the new PDF").toBe(3);
     await expect
-      .poll(async () => (await exactBytesOf(request, "pdfs/render_markdown")) ?? 0, {
+      .poll(async () => (await itemsOf(request, "pdfs/render_markdown")) ?? 0, {
         timeout: 10_000,
         intervals: [250],
-        message: `the rendered markdown never grew past ${renderedBytes}`,
+        message: `the render step never counted more than ${renderedItems} items`,
       })
-      .toBeGreaterThan(renderedBytes!);
-    expect(
-      (await exactBytesOf(request, "pdfs/ingest"))!,
-      "the raw store should have gained a document, not just per-run churn",
-    ).toBeGreaterThan(rawBytes! + 4_000);
+      .toBeGreaterThan(renderedItems!);
 
     // ── 15. and it is searchable ─────────────────────────────────────
     await openExplore(page);
