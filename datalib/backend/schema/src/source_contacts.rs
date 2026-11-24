@@ -1,8 +1,9 @@
 // People as sources describe them (`NormalizedContact`, in
 // `datalib_contact_schema`), carried by the document that saw them, the
 // way a document carries its edges: a re-render replaces its own rows,
-// and a person mentioned in many documents has a row in each, summed
-// when read. Both tables live in every render store and in the index.
+// and a person mentioned in many documents has a row in each. Both tables
+// are a render store's; the grid index keeps each record once
+// (`etl/render/src/grid_index/contact_records.rs`).
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};

@@ -144,9 +144,9 @@ const AUTHORS: &str = "SELECT DISTINCT author_handle, author \
 
 /// Each handle with every name it was seen under: the author a grid row
 /// shows beside its handle, and every name a source's record of a person
-/// (`source_contacts`) gives for each handle it ties to them; and the
+/// (`contact_records`) gives for each handle it ties to them; and the
 /// handles of each source's own account. Written whole: it is a few
-/// thousand rows.
+/// thousand rows, read from a few thousand.
 pub(crate) async fn write_people(conn: &mut SqliteConnection) -> Result<PeopleWritten> {
     let started = std::time::Instant::now();
     let authors: Vec<(String, String)> = sqlx::query_as(AUTHORS)
@@ -154,10 +154,10 @@ pub(crate) async fn write_people(conn: &mut SqliteConnection) -> Result<PeopleWr
         .await
         .context("read the grid's authors")?;
     let authors_ms = millis_since(started);
+    crate::grid_index::contact_records::sweep(conn).await?;
     let contacts: Vec<(String, String)> = sqlx::query_as(
-        "SELECT h.handle, c.contact_json FROM source_contact_handles h \
-         JOIN source_contacts c \
-         ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key",
+        "SELECT h.handle, r.contact_json FROM contact_record_handles h \
+         JOIN contact_records r ON r.record_id = h.record_id",
     )
     .fetch_all(&mut *conn)
     .await

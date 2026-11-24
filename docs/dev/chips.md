@@ -215,7 +215,7 @@ A grid draws a chip from an `identity` typed cell,
   `grid_rows.author_handle`), and so is its Contact column on a
   contact's own row (`contact_ref`, built by
   `columns.rs::contact_identity` from `grid_rows.contact`, `email` and
-  `phone`, else any handle `source_contact_handles` holds for the
+  `phone`, else any handle `contact_record_handles` holds for the
   contact). An identity cell whose `id` is no handle is drawn as plain
   text: a group of contacts, a contact with no handle at all.
   One whose `id` is a `datalib:contact/` URI is drawn as that contact's
