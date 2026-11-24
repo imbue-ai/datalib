@@ -162,13 +162,12 @@ async fn add_subject_people<'r>(
     let found: Vec<(String, String, Option<String>, Option<i64>)> = match sqlx::query_as(
         // A document's own row has the document's uuid; its supplied
         // terms are `[kind, value]` pairs.
-        "SELECT g.uuid, json_extract(t.value, '$[1]') AS person, MAX(r.name), \
-                MAX(CASE WHEN h.record_id IS NOT NULL THEN d.seen_items END) \
+        "SELECT g.uuid, json_extract(t.value, '$[1]') AS person, MAX(r.name), MAX(d.seen_items) \
            FROM grid_rows g, json_each(g.supplied_terms) t \
-           LEFT JOIN document_contacts d ON d.markdown_uuid = g.uuid \
-           LEFT JOIN contact_record_handles h \
-             ON h.record_id = d.record_id AND h.handle = json_extract(t.value, '$[1]') \
-           LEFT JOIN contact_records r ON r.record_id = h.record_id \
+           LEFT JOIN contact_record_handles h ON h.handle = json_extract(t.value, '$[1]') \
+           LEFT JOIN document_contacts d \
+             ON d.markdown_uuid = g.uuid AND d.record_id = h.record_id \
+           LEFT JOIN contact_records r ON r.record_id = d.record_id \
           WHERE g.uuid IN (SELECT value FROM json_each(?2)) \
             AND json_extract(t.value, '$[0]') = ?1 \
           GROUP BY g.uuid, person",

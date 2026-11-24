@@ -71,7 +71,6 @@ pub struct WriteLock {
     /// this run minted one row uuid" from "a row moved here from a
     /// document an earlier run wrote" — see `put_grid_row`.
     written: std::sync::Mutex<std::collections::HashSet<String>>,
-    store: Store,
     /// What this run changed that the grid index derives from; `None` in a
     /// render store, which derives nothing.
     changed: Option<std::sync::Mutex<Changed>>,
@@ -140,7 +139,6 @@ impl WriteLock {
             total_hold_ns: AtomicU64::new(0),
             acquisitions: AtomicU64::new(0),
             written: std::sync::Mutex::new(std::collections::HashSet::new()),
-            store: Store::Render,
             changed: None,
             begin: "BEGIN",
         }
@@ -150,7 +148,6 @@ impl WriteLock {
     /// nodes and the search terms to follow.
     pub fn for_index(pool: SqlitePool) -> Self {
         Self {
-            store: Store::Index,
             changed: Some(Default::default()),
             begin: "BEGIN IMMEDIATE",
             ..Self::new(pool)
@@ -205,6 +202,13 @@ impl WriteLock {
 
     fn written_this_run(&self, markdown_uuid: &str) -> bool {
         self.written.lock().unwrap().contains(markdown_uuid)
+    }
+
+    fn store(&self) -> Store {
+        match self.changed {
+            Some(_) => Store::Index,
+            None => Store::Render,
+        }
     }
 
     pub async fn begin_transaction(&self) -> Result<()> {
@@ -520,8 +524,9 @@ async fn record_shape(pool: &SqlitePool, shape: &datalib_store_meta::Shape) -> R
     Ok(())
 }
 
-/// Only a render store's: nothing reads its handles by handle, but the
-/// index is part of the shape every render store records.
+/// Only a render store's, and nothing reads it: it keeps its place among
+/// the indexes below because a render store's recorded shape is a hash of
+/// them in order.
 const HANDLES_BY_HANDLE: &str =
     "CREATE INDEX IF NOT EXISTS source_contact_handles_by_handle ON source_contact_handles (handle)";
 
@@ -1933,7 +1938,7 @@ async fn write_source_cursor(
 /// conversation used to stay in the grid forever.
 pub async fn delete_markdowns(write_lock: &WriteLock, markdown_uuids: &[String]) -> Result<()> {
     let mut guard = write_lock.acquire().await?;
-    let removed = delete_document_rows(guard.conn(), write_lock.store, markdown_uuids).await?;
+    let removed = delete_document_rows(guard.conn(), write_lock.store(), markdown_uuids).await?;
     removed.note(write_lock);
     Ok(())
 }
@@ -1966,16 +1971,6 @@ impl Store {
             Store::Index => &[
                 "DELETE FROM document_contacts WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
             ],
-        }
-    }
-
-    fn delete_one_documents_contacts(self) -> &'static [&'static str] {
-        match self {
-            Store::Render => &[
-                "DELETE FROM source_contacts WHERE markdown_uuid = ?",
-                "DELETE FROM source_contact_handles WHERE markdown_uuid = ?",
-            ],
-            Store::Index => &["DELETE FROM document_contacts WHERE markdown_uuid = ?"],
         }
     }
 }
@@ -2045,7 +2040,7 @@ async fn apply_markdown(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result
     if md.rows.is_empty() {
         let removed = delete_document_rows(
             conn,
-            write_lock.store,
+            write_lock.store(),
             std::slice::from_ref(&md.markdown_uuid),
         )
         .await?;
@@ -2122,15 +2117,16 @@ async fn apply_markdown(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result
     for filing in &md.filings {
         insert_filing(conn, &md.markdown_uuid, filing).await?;
     }
-    for sql in write_lock.store.delete_one_documents_contacts() {
-        sqlx::query(*sql)
-            .bind(&md.markdown_uuid)
+    let this_document = serde_json::to_string(&[&md.markdown_uuid])?;
+    for &sql in write_lock.store().delete_contacts() {
+        sqlx::query(sql)
+            .bind(&this_document)
             .execute(&mut **conn)
             .await
             .context("delete prior source contacts")?;
     }
     for contact in &md.contacts {
-        match write_lock.store {
+        match write_lock.store() {
             Store::Render => insert_source_contact(conn, &md.markdown_uuid, contact).await?,
             Store::Index => contact_records::insert(conn, &md.markdown_uuid, contact).await?,
         }

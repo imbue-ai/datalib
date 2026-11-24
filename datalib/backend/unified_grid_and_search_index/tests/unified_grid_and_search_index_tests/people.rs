@@ -205,7 +205,7 @@ async fn a_contacts_row_gets_its_handles() {
 }
 
 /// What answering for Riker does when `n` documents carry them: the rows
-/// its statements answered with, and the steps they took.
+/// the statements that read contacts answered with, and the steps they took.
 async fn cost_of_a_person_in(n: usize) -> (u64, u64) {
     let root = Arc::new(unique_db_path().parent().unwrap().to_path_buf());
     let recording = datalib_sql_work::record_under(&root);
@@ -222,7 +222,10 @@ async fn cost_of_a_person_in(n: usize) -> (u64, u64) {
     let repo = DoltRepo::open(root).await.expect("open the repo");
     recording.take();
     assert_eq!(people(&repo, &[RIKER]).await[RIKER].len(), 1);
-    let ran = recording.take();
+    // Not what opening the index runs, which may land on either side of
+    // the take above.
+    let mut ran = recording.take();
+    ran.retain(|r| r.sql.contains("contact"));
     assert!(
         ran.iter().any(|r| r.sql == PEOPLE_SQL),
         "the read was not recorded; this checks nothing: {ran:#?}"

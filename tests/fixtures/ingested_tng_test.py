@@ -1297,7 +1297,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._query(
                 self._index_db,
-                "SELECT DISTINCT c.source_id || '|' || c.name "
+                "SELECT c.source_id || '|' || c.name "
                 "FROM contact_record_handles h JOIN contact_records c "
                 "ON c.record_id = h.record_id "
                 "WHERE h.handle = 'email:picard@enterprise.starfleet' ORDER BY 1;",
@@ -1323,7 +1323,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._query(
                 self._index_db,
-                "SELECT DISTINCT c.source_id || '|' || h.handle "
+                "SELECT c.source_id || '|' || h.handle "
                 "FROM contact_record_handles h JOIN contact_records c "
                 "ON c.record_id = h.record_id "
                 "WHERE json_extract(c.contact_json, '$.account') = 1 ORDER BY 1;",
@@ -1379,7 +1379,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._query(
                 self._index_db,
-                "SELECT DISTINCT c.source_id || '|' || c.name || '|' "
+                "SELECT c.source_id || '|' || c.name || '|' "
                 "|| json_extract(j.value, '$.value') "
                 "FROM contact_record_handles h JOIN contact_records c "
                 "ON c.record_id = h.record_id, "
@@ -1425,7 +1425,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._query(
                 self._index_db,
-                "SELECT DISTINCT c.contact_key || '|' || "
+                "SELECT c.contact_key || '|' || "
                 "(coalesce(json_extract(c.contact_json, '$.photo_url'), '') LIKE "
                 "'/data/beeper/ingest/blob/%') "
                 "FROM contact_records c WHERE c.source_id = 'beeper' "
@@ -1446,11 +1446,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "SELECT h.handle || '|' || json_extract(c.contact_json, '$.names') "
                 "FROM contact_record_handles h JOIN contact_records c "
                 "ON c.record_id = h.record_id "
-                "JOIN document_contacts d ON d.record_id = c.record_id "
-                "JOIN markdowns m ON m.markdown_uuid = d.markdown_uuid "
-                "WHERE m.source_id = 'whatsapp' AND h.handle IN "
+                "WHERE c.source_id = 'whatsapp' AND h.handle IN "
                 "('tel:+17015550101', 'tel:+17015550102', 'tel:+17015550103') "
-                "GROUP BY 1 ORDER BY 1;",
+                "ORDER BY 1;",
             ),
             [
                 'tel:+17015550101|["William Riker","Will Riker (Starfleet)","Number One"]',
@@ -1467,14 +1465,12 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._query(
                 self._index_db,
-                "SELECT DISTINCT h.handle || '|' "
+                "SELECT h.handle || '|' "
                 "|| coalesce(json_extract(c.contact_json, '$.org'), '') || '|' "
                 "|| coalesce(json_extract(c.contact_json, '$.title'), '') "
                 "FROM contact_record_handles h JOIN contact_records c "
                 "ON c.record_id = h.record_id "
-                "JOIN document_contacts d ON d.record_id = c.record_id "
-                "JOIN markdowns m ON m.markdown_uuid = d.markdown_uuid "
-                "WHERE m.source_id = 'whatsapp' AND h.handle = 'tel:+17015550102';",
+                "WHERE c.source_id = 'whatsapp' AND h.handle = 'tel:+17015550102';",
             ),
             ["tel:+17015550102|Starfleet|Second Officer"],
             "Data's company and title, from the address book alone",
@@ -1536,7 +1532,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._query(
                 self._index_db,
-                "SELECT DISTINCT c.name || '|' || d.seen_items "
+                "SELECT c.name || '|' || d.seen_items "
                 "FROM contact_record_handles h JOIN contact_records c "
                 "ON c.record_id = h.record_id "
                 "JOIN document_contacts d ON d.record_id = c.record_id "
@@ -1555,9 +1551,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 self._index_db,
                 "SELECT c.name || '|' || coalesce(json_extract(c.contact_json, '$.photo_url'), "
                 "'none') "
-                "FROM contact_records c JOIN document_contacts d ON d.record_id = c.record_id "
-                "JOIN markdowns m ON m.markdown_uuid = d.markdown_uuid "
-                "WHERE m.source_id = 'tng_contacts' "
+                "FROM contact_records c WHERE c.source_id = 'tng_contacts' "
                 "AND c.name IN ('William T. Riker', 'Jean-Luc Picard', 'Hugh') ORDER BY 1;",
             )
         )
@@ -1586,10 +1580,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "    FROM json_each(c.contact_json, '$.handles') j) "
                 "FROM contact_record_handles h JOIN contact_records c "
                 "ON c.record_id = h.record_id "
-                "JOIN document_contacts d ON d.record_id = c.record_id "
-                "JOIN markdowns m ON m.markdown_uuid = d.markdown_uuid "
-                "WHERE m.source_id = 'signal' AND c.name IN ('Will Riker', 'Q', 'Guinan') "
-                "GROUP BY 1 ORDER BY 1;",
+                "WHERE c.source_id = 'signal' AND c.name IN ('Will Riker', 'Q', 'Guinan') "
+                "ORDER BY 1;",
             ),
             [
                 (
@@ -1654,9 +1646,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "SELECT DISTINCT h.handle || '|' || c.name "
                 "FROM contact_record_handles h JOIN contact_records c "
                 "ON c.record_id = h.record_id "
-                "JOIN document_contacts d ON d.record_id = c.record_id "
-                "JOIN markdowns m ON m.markdown_uuid = d.markdown_uuid "
-                "WHERE m.source_id = 'facebook' AND (h.handle LIKE 'facebook:deleted/%' "
+                "WHERE c.source_id = 'facebook' AND (h.handle LIKE 'facebook:deleted/%' "
                 "OR h.handle = 'facebook:name/William Riker') ORDER BY 1;",
             ),
             [
@@ -1676,9 +1666,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "SELECT DISTINCT h.handle || '|' || c.name "
                 "FROM contact_record_handles h JOIN contact_records c "
                 "ON c.record_id = h.record_id "
-                "JOIN document_contacts d ON d.record_id = c.record_id "
-                "JOIN markdowns m ON m.markdown_uuid = d.markdown_uuid "
-                "WHERE m.source_id = 'linkedin' AND h.handle LIKE 'linkedin:%' ORDER BY 1;",
+                "WHERE c.source_id = 'linkedin' AND h.handle LIKE 'linkedin:%' ORDER BY 1;",
             ),
             [
                 "linkedin:datasoong|Data Soong",
@@ -1709,12 +1697,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._query(
                 self._index_db,
-                "SELECT DISTINCT h.handle || '|' || c.name "
+                "SELECT h.handle || '|' || c.name "
                 "FROM contact_record_handles h JOIN contact_records c "
                 "ON c.record_id = h.record_id "
-                "JOIN document_contacts d ON d.record_id = c.record_id "
-                "JOIN markdowns m ON m.markdown_uuid = d.markdown_uuid "
-                "WHERE m.source_id = 'google-drive' ORDER BY 1;",
+                "WHERE c.source_id = 'google-drive' ORDER BY 1;",
             ),
             [
                 "email:picard@enterprise.starfleet|Jean-Luc Picard",
