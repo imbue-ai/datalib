@@ -1,17 +1,27 @@
 # The document viewer, drawn from blocks
 
-*Proposal (2026-11-19). Steps 1 to 4 landed (#1889, #1891, #1902,
-#1909), with search quoting a hit from its one message (#1896); step 6
-landed ahead of step 5 (#1916), and step 5 landed for chat-common's
-messages (#1925, §"What was built"). Step 7's chat layout is #1934;
-its other layouts, the header actions and label chips are built on the
-branch after it. It picks up where
-[`documents_to_blocks.md`](documents_to_blocks.md) step 5 stopped
-("paging through what is read together comes after"), and chooses a
-layout by kind through the registry
-[`dispatch_on_kind.md`](dispatch_on_kind.md) proposes. What a person
-sees today was checked in the TNG demo (`//datalib:dev_tng`) at
-`0ff971d20`; claims about the code were read in the same tree.*
+**Status: built (2026-11-20), kept as the record of what was decided
+and why.** Steps 1 to 4 landed (#1889, #1891, #1902, #1909), with
+search quoting a hit from its one message (#1896); step 6 landed ahead
+of step 5 (#1916), and step 5 landed for chat-common's messages
+(#1925, §"What was built"). Step 7 is #1934 (the chat layout) and #1946
+(header actions, labels as chips, pages drawn flat); no registry was
+needed. Three things were left, each said where it belongs:
+
+- **`drawings` still holds layout, and the whole drawing of GitHub's,
+  GitLab's, Notion's, Drive's and Todoist's messages**: step 5's
+  §"What was built" says why they wait.
+- **Where a document opens when nothing names a message** (step 6) is
+  [#1988](https://github.com/imbue-ai/datalib/issues/1988).
+- **The scrubber** at the end of step 6 was a possibility, never
+  planned.
+
+It picked up where
+[`documents_to_blocks.md`](../documents_to_blocks.md) step 5 stopped
+("paging through what is read together comes after"). What a person
+saw was checked in the TNG demo (`//datalib:dev_tng`) at `0ff971d20`;
+claims about the code were read in the same tree, and the sections
+below describe it as it was before each step.
 
 Since #1879 nothing writes a `.md` file: each block's body is a row of
 its source's render store. The viewer still asks for a document as one

@@ -1,12 +1,22 @@
 # Moving from documents to blocks: search finds blocks, shown in their documents
 
-**Status: proposal (2026-11-17). Steps 1, 2, 3a, 3b and 3c have
-landed (#1765, #1770, #1775, #1782, #1818), and step 6 landed with
-step 1 (#1765): a chat is one document. 5a–5d have landed (#1868,
-#1872, #1876) and 5e is in review. 4a is under way; nothing else has
-started, step 10 (bodies in their own format) included. §"How search
-works" was added on 2026-11-24 and is unreviewed.** Facts about the tree were checked against
-the code on 2026-11-16; file references are to that tree.
+**Status: proposal (2026-11-17), checked against the tree on
+2026-11-24.** Landed:
+
+- steps 1, 2, 3a, 3b and 3c (#1765, #1770, #1775, #1782, #1818);
+- step 5, all of it (#1868, #1872, #1876, #1879): render writes no
+  `.md` files, and the viewer pages through a document
+  ([`completed/document_viewer_from_blocks.md`](completed/document_viewer_from_blocks.md));
+- step 6 with step 1 (#1765): a chat is one document;
+- the first part of 4a (#1863): every data node is a grid row;
+- part of step 8 (#1913): a Library card browses each source's places.
+
+Step 7 was answered another way: a message is a chunk of its own
+(#1786), so no window is cut. Still open: the rest of 4a (a path on each
+data node, `is:<kind>`), all of 4b, the rest of 8, 9 and 10. §"How
+search works" was added on 2026-11-24 and is unreviewed. Facts in the
+sections below were checked against the code on 2026-11-16, before most
+of this landed; file references are to that tree.
 
 ## Words
 
@@ -15,7 +25,7 @@ the code on 2026-11-16; file references are to that tree.
 | **block** | content: one thing a person or program wrote, with one author, one time and a body (a message, an email, a comment, an event, a tool call, a page's own text). What search ranks and a hit lands on. A `grid_rows` row; the text below and the search index's code call it an **item**. A page source's whole page (a Notion page, a calendar event, a contact) is one **big block** for now, which its renderer may later split into the blocks it is made of. |
 | **layout** | what is drawn around blocks and says nothing of its own: front matter, the title, a `<details>` opener. The code calls a block and a stretch of layout alike a section (`Section`, the render store's `sections`). |
 | **data node** | a node of the tree that holds blocks and other data nodes: a chat, a thread, a channel, a label, a page, a session. It often has a name and other metadata (its kind, its upstream id), and most of what it says is in the blocks it holds. A `data_nodes` row. Many data nodes are **places**: ones a person browses or filters by, such as a channel, a mailbox or a workspace. |
-| **document** | a group of blocks that are often read together: a thread, a chat, a page. Today it is also the markdown file render writes for it, which step 5 stops writing. |
+| **document** | a group of blocks that are often read together: a thread, a chat, a page. Render used to write each as a markdown file; since step 5 it is rows of its source's render store. |
 
 The text below also calls a container **read together**. When that holds
 is not settled; see §"Open questions".
@@ -25,7 +35,7 @@ is not settled; see §"Open questions".
 Every record Datalib renders goes into a markdown file, and the file
 is the unit everything else is built on. qmd forced that: it could
 only index files. Now that search reads its own index
-([`search_index_from_ram.md`](search_index_from_ram.md)), the file is
+([`search_index_from_ram.md`](completed/search_index_from_ram.md)), the file is
 a choice, and it is costing us in three ways.
 
 - **A chat is cut into months** (fixed with step 1, #1765: a chat is one
@@ -799,16 +809,25 @@ against the eval before the next.
      changes, so with it, at no extra re-render: `drawn_pieces` and
      `SpelledPiece` are renamed `drawings` and `SpelledSection`, and
      Notion hands a page's text as a big block named by the page's row,
-     its front matter as layout. Paging through what is read together, a
-     page at a time, comes after.
+     its front matter as layout. Landed in #1879. Paging through a
+     document a page at a time followed in #1916
+     ([`completed/document_viewer_from_blocks.md`](completed/document_viewer_from_blocks.md)
+     §"Step 6").
 6. **No time buckets.** Landed with step 1 (#1765): a bucketed source
    renders one container per chat, and the `period` setting is gone.
-7. **Embedding context.** Chunks are cut from windows of what is read
-   together, and the eval picks the window.
-8. **Browsing the tree.** The ancestors table in `unified_grid_and_search_index`, with
+7. **Embedding context.** Answered another way (#1786): the eval found
+   that a chunk holding many messages scored lower against a query
+   about one of them than that message's own chunk did, so every
+   message is a chunk of its own and no window is cut
+   (`search_index/src/chunk.rs`). Context from a block's neighbours is
+   rule 4 of §"How search works".
+8. **Browsing the tree.** Built so far (#1913): a Library card that
+   draws each source's places as a tree, read a level at a time when
+   opened, with what a place holds listed beside it. Not built: the
+   ancestors table in `unified_grid_and_search_index`, with
    each row's sort key copied in so everything under a node is one
-   index range around an anchor; `under:` and `at:` as search keys; and
-   the tree card. Whether a large subtree pages off that index or by
+   index range around an anchor; and `under:` and `at:` as search keys.
+   Whether a large subtree pages off that index or by
    the grid's list-then-slice (measured at 74k rows, not at today's
    941k) is measured then. `keyword:` and
    collections inside sets become `under:` their node, with the old keys
@@ -852,17 +871,14 @@ against the eval before the next.
 ## Open questions
 
 - **What is read together.** Today each kind of container says so once,
-  at render: a thread, a chat, a page, and in a chat cut into months,
-  each month's document. Whether a Slack channel's messages are read
-  together depends on how the channel is used: a thready channel's
-  threads are, and a flat channel's run of messages may not be. Steps
-  4 (what the display mode folds into), 6 (no time buckets) and 7
-  (embedding windows) all lean on the answer. Until it is settled, the
-  display mode folds by document.
-- **How wide an embedding window is.** How many items or bytes of a
-  thread, and does it overlap the next? The eval decides.
-  [`multimodal_retrieval.md`](multimodal_retrieval.md) §5.1 argues for
-  embedding whole threads; that is one input, not settled.
+  at render: a thread, a chat, a page. Whether a Slack channel's
+  messages are read together depends on how the channel is used: a
+  thready channel's threads are, and a flat channel's run of messages
+  may not be. Step 4 (what the display mode folds into) and rule 4's
+  neighbours lean on the answer. Until it is settled, the display mode
+  folds by document.
+- **How wide an embedding window is.** Answered (#1786): one message,
+  no window (step 7).
 - **How blocks rank against their documents.** §"How search works"
   fuses per block (rule 5). How many blocks of one document a ranking
   keeps before its cut, and whether a block whose document holds other
@@ -925,21 +941,8 @@ against the eval before the next.
   If it is large, a render-version bump can write the new text on a
   fresh branch and move `main` to it, then drop the old branch's
   history, so two full copies never stay.
-- **Reactions.** An item of their own (they have an author and a time)
-  or an attribute of the item they react to?
+- **Reactions.** Answered (#1925): an attribute of the message they
+  react to (`sections.reactions`), each still keeping its own grid row
+  and anchor.
 - **Time-of-day bucketing** for display ("this conversation on 3 May")
   is a display mode that folds into a day, and needs nothing stored.
-
-## Found on the way
-
-Three docs disagree with the code; each gets fixed by the step that
-touches it, or sooner:
-
-- `docs/dev/grid_rows.md` §"`conversation_uuid`…" says a document row's
-  `conversation_uuid` is its own uuid; for a bucketed chat it is the
-  chat's.
-- `docs/dev/data_architecture_parse_and_render.md` §`render_inputs`
-  calls Slack a periodizing renderer; Slack renders one document per
-  thread.
-- `datalib/backend/embedding_map/README.md` says the map reads qmd's
-  vectors; it reads the search index's.

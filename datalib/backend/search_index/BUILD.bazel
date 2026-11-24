@@ -3,7 +3,7 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 # The search index that replaces qmd's storage: keyword postings in the
 # grid index's file, and each document's chunks and their embeddings in
 # the inference cache, holding no text
-# (docs/dev/plans/search_index_from_ram.md).
+# (docs/dev/plans/completed/search_index_from_ram.md).
 rust_library(
     name = "datalib_search_index",
     srcs = glob(["src/**/*.rs"]),
