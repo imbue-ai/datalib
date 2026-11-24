@@ -172,3 +172,51 @@ to be decided on numbers.
   memory, 1.5 GB here. A scoped search could score only its sources'
   vectors, but they are all held regardless. Hold per source, loaded
   on first use?
+
+## Comments
+
+**2026-11-24, from fixing `source:` beside another key.** Measured in SQL
+on a clone of the library above. `source:x channel:y` was one case of
+two keys sharing no index: whichever one SQLite starts from, it reads
+each of that key's rows from the table to test the other. Times are the
+first run, then the best of three; the second column was asked once.
+
+| search, rows it finds | source first or key first, as it was | row-id sets | `source_id` in the key's index |
+|---|---|---|---|
+| a channel with no row, in a 585k-row source: 0 | 43 s | 1.6 s / 17 ms | 1 ms / under 1 ms |
+| one kind in that source: 319,813 | 22 s | 0.76 s / 0.32 s | 0.36 s / 55 ms |
+| that kind in an 83k-row source: 40,834 | 23 s | 0.19 s / 0.13 s | 17 ms / 17 ms |
+| one account in the 585k-row source: 584,885 | 33 s | 1.2 s / 0.70 s | 0.74 s / 0.13 s |
+| that account in a 2k-row source: 2,019 | 25 s | not measured | 42 ms / 42 ms |
+
+- **What was done: the third.** Six keys whose one value many rows share
+  (`kind`, `channel`, `subject`, `account`, `project`, `change`) end in
+  `source_id`: about 22 MB each, 130 MB in all, 2.4% of the file. `id`,
+  `datalib_document_id` and `notion_page` name one thing and stayed as
+  they were.
+- **A hint on the source alone is not a fix.** It starts from the key,
+  which is worse wherever the key is wider than the source: one account
+  covers 737k rows in seven sources. The hint is still there, for the
+  statements no index covers (a grouping reads the rows it counts), but
+  only beside a key, so `source:x is:document` keeps its plan.
+- **Row-id sets cost no bytes, and answer any pair.** The source's index
+  is walked and each entry tested against
+  `rowid IN (SELECT rowid FROM grid_rows WHERE channel = ?)`; the table
+  is never read. It costs what the bigger key's index holds, so it does
+  not meet goal 1 where one key is narrow. Two keys with no source among
+  them (`account:a kind:k`) still read the table, and this would fix
+  them.
+- **A filter no index serves still reads every row of its source**:
+  `source:x -channel:y`, `source:x email:z`. A negated key can be a
+  row-id set (`rowid NOT IN (…)`) too.
+- **The grid's index shape** (the open question above): an index on the
+  key alone would give back every number in the second column. Not reading the
+  table is what the covering columns buy.
+- **Two to ask step 3 about.** `grid_rows_by_markdown (markdown_uuid)`,
+  59 MB, is a prefix of `grid_rows_by_markdown_source (markdown_uuid,
+  source_id)`, 83 MB, and both are in the grid index.
+  `grid_rows_by_diff_status` is 89 MB here for a column that is null in
+  every row; `grid_rows_by_channel` as much for 33k rows that have one. A
+  partial index (`WHERE channel IS NOT NULL`) still serves `channel = ?`,
+  but not the "none" group of a grid grouped by channel, which reads the
+  nulls through it.
