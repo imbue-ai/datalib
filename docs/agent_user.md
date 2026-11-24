@@ -54,7 +54,6 @@ its vectors to the one cache in
     ├── supervisor.sqlite           # sync requests, steps turned off, and the loop's record (plain SQLite)
     ├── runs/runs.sqlite            # every run's step states, log lines and metrics (plain SQLite)
     ├── api-token                   # this process's bearer token
-    ├── feedback.doltlite_db        # filed feedback (nothing regenerates it)
     ├── remote_media.doltlite_db    # remote media a person let a document load
     └── disk_stats.sqlite           # bytes on disk and free space, over time (plain SQLite)
 ```

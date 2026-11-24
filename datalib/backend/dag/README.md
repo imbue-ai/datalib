@@ -599,7 +599,7 @@ naming no step) looks exactly like one it did.
   always, with the app up; the app's resets are rows the loop carries out
   (§"Resets and purges").
 - **One server per data root** (`system/lock`), which `datalib-http`
-  takes for its own reasons (the API token, the feedback, usage and
+  takes for its own reasons (the API token, the disk-stats and
   remote-media stores).
 
 They must be *different* files: a server that starts while a

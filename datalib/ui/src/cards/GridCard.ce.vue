@@ -84,8 +84,6 @@ import { ensureFrontend, frontendManifest } from "./frontendRegistry";
 import { useApi } from "@/cards/cardApi";
 import { slugify } from "@/config/sourceSteps";
 import { copyToClipboard } from "@/clipboard";
-import FeedbackModal from "@/components/FeedbackModal.vue";
-import { buildContext, type FeedbackContext } from "@/feedback/context";
 import { filePathFromUrl, isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 import { isWebUrl, openExternal } from "@/externalLinks";
 import { changed, oneAtATime, subscribeLive } from "@/live";
@@ -734,11 +732,6 @@ function resolveTargetRows(anchor: Row | null | undefined): Row[] {
   return [anchor];
 }
 
-// Feedback modal state
-const feedbackOpen = ref(false);
-const feedbackContext = ref<FeedbackContext | null>(null);
-const feedbackSurfaceLabel = ref("");
-
 // Filter context for a right-clicked cell: the term its value makes in
 // the search bar. Null for a column the search has no key for (Score,
 // Contents) or a row with no value in it.
@@ -753,23 +746,6 @@ type FilterCtx = {
   // Written quoted, for a key that matches a bare value in part.
   whole?: boolean;
 };
-
-function openFeedbackForSearchBar(ev: MouseEvent) {
-  ev.preventDefault();
-  const anchor = ev.target instanceof Element ? ev.target : null;
-  // The search bar is the entire filter set: treat it as a single chip
-  // keyed "query" with the literal query text. We don't try to parse
-  // individual tokens — the comment + breadcrumb is enough to find what
-  // was being looked at.
-  feedbackContext.value = buildContext({
-    surface: "filter_chip",
-    anchor,
-    targetUuids: [],
-    payload: { key: "query", value: query.value },
-  });
-  feedbackSurfaceLabel.value = "Search bar";
-  feedbackOpen.value = true;
-}
 
 function appendFilterToQuery(token: string) {
   query.value = withToken(query.value, token);
@@ -1750,10 +1726,6 @@ function dividerAfter(shown: (m: MenuScope) => boolean): MenuCommandItem {
 /// at, and the filters its cell offers.
 type MenuScope = {
   anchor: Row | null;
-  /// The cell under the click: its column, its painted text (closer to
-  /// what the user saw — an author's name, not their uuid — than the
-  /// row's field), and its element, for the feedback breadcrumb.
-  cell: { column: string; cellValue: string; el: HTMLElement | null } | null;
   /// The cell under the click as its row's copy has it; null when empty.
   copy: { header: string; text: string } | null;
   targets: Row[];
@@ -1778,7 +1750,6 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
     args.row != null && args.cell != null
       ? (args.grid.getCellNode(args.row, args.cell) ?? null)
       : null;
-  const cell = colId ? { column: colId, cellValue: el?.textContent?.trim() ?? "", el } : null;
   const copied = anchor && column ? copyCell(column, anchor) : "";
   const copy = copied ? { header: String(column!.name ?? colId), text: copied } : null;
   const targets = resolveTargetRows(anchor);
@@ -1817,7 +1788,6 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
   const chip = pressed ? { chip: pressed, entries: chipMenuOf(pressed, false) } : null;
   return {
     anchor,
-    cell,
     copy,
     targets,
     chip,
@@ -1854,32 +1824,6 @@ async function setMuted(m: MenuScope, mute: boolean) {
     return;
   }
   refreshRows();
-}
-
-function openFeedback(surface: "grid_cell" | "grid_row", m: MenuScope) {
-  const rowUuids = m.targets.map(rowKey);
-  const anchor = m.cell?.el ?? null;
-  if (surface === "grid_cell" && m.cell) {
-    feedbackContext.value = buildContext({
-      surface,
-      anchor,
-      targetUuids: rowUuids,
-      payload: { column: m.cell.column, row_uuids: rowUuids, cell_value: m.cell.cellValue || null },
-    });
-    feedbackSurfaceLabel.value = `Grid cell · ${m.cell.column}${
-      m.targets.length > 1 ? ` · ${m.targets.length} rows` : ""
-    }`;
-  } else {
-    feedbackContext.value = buildContext({
-      surface: "grid_row",
-      anchor,
-      targetUuids: rowUuids,
-      payload: { row_uuids: rowUuids },
-    });
-    feedbackSurfaceLabel.value =
-      m.targets.length === 1 ? "Grid row" : `Grid rows · ${m.targets.length}`;
-  }
-  feedbackOpen.value = true;
 }
 
 // The right-click menu, ahead of the grid's own entries (the grouping
@@ -2019,16 +1963,6 @@ const menuItems: (MenuCommandItem | "divider")[] = [
         if (failed.length > 0) void navigator.clipboard.writeText(failed.join("\n"));
       })();
     },
-  ),
-  entry(
-    "feedback-cell",
-    (m) => (m.targets.length && m.cell ? "Feedback on this cell…" : null),
-    (m) => openFeedback("grid_cell", m),
-  ),
-  entry(
-    "feedback-row",
-    (m) => (m.targets.length ? `Feedback on row${plural(m)}…` : null),
-    (m) => openFeedback("grid_row", m),
   ),
   "divider",
 ];
@@ -2565,7 +2499,6 @@ if (inToolbar) {
     run: (q) => {
       query.value = q;
     },
-    openFeedback: openFeedbackForSearchBar,
   });
   let onScreen: IntersectionObserver | null = null;
   onMounted(() => {
@@ -2603,7 +2536,6 @@ onBeforeUnmount(() => {
           testid="grid-search-input"
           :open-card="(source: string) => props.ctx.host.openCards(source)"
           autofocus
-          @contextmenu="openFeedbackForSearchBar"
         />
         <button
           v-if="query.length > 0"
@@ -2743,13 +2675,6 @@ onBeforeUnmount(() => {
         no matches.
       </p>
     </div>
-
-    <FeedbackModal
-      :open="feedbackOpen"
-      :surface-label="feedbackSurfaceLabel"
-      :context="feedbackContext"
-      @close="feedbackOpen = false"
-    />
   </div>
 </template>
 

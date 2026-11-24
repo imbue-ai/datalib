@@ -477,7 +477,7 @@ clicks through from — a log, a commit history, a table. It sits in the
 layout beside what opened it and is kept with the layout. A modal
 dialog is for a question that has to be answered before anything else
 happens: a confirm, a short form that is submitted or cancelled (the
-source wizard, feedback).
+source wizard).
 
 ## Prebuilt views
 

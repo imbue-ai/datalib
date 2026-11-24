@@ -346,7 +346,7 @@ datalib/
                    `<root>/system/api-token`, send
                    `Authorization: Bearer <token>`.
     schema/        `grid_rows`/`edges`/`markdowns` row structs;
-    app_schema/    feedback, disk usage, remote media, runs; both derive
+    app_schema/    disk usage, remote media, runs; both derive
                    DDL via `#[derive(PortableTable)]`.
   ui/          Vue frontend; every grid is SlickGrid, kept behind a few
                files so it can be swapped (docs/dev/cards.md § The grid).
@@ -469,7 +469,7 @@ never parses it back. Structured fields come from
 `grid_rows`. Per-section anchors come from the
 `<div id="m-{uuid}" data-section-uuid="{uuid}" class="msg …">` wrappers
 the renderer emits — those two attributes are load-bearing
-(`ui/src/feedback/context.ts::messageAncestor`). Where each message
+(`ui/src/cards/chatSections.js::messageAncestor`). Where each message
 begins comes from the projection too: a renderer hands its document over
 as `RenderedMarkdown::sections`, and the render store keeps their
 layout

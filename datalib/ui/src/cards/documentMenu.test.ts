@@ -18,7 +18,7 @@ const CHAT: DocumentAbout = {
 const CARD: Host = { preview: false, revealLabel: null };
 
 describe("documentMenu", () => {
-  it("names the app it opens in, then the source, then the copies and feedback", () => {
+  it("names the app it opens in, then the source, then the copies", () => {
     expect(documentMenu(CHAT, CARD)).toEqual([
       { id: "open-url", label: "Open in ChatGPT" },
       { id: "open-source", label: "Open the chatgpt-api source" },
@@ -26,7 +26,6 @@ describe("documentMenu", () => {
       { id: "copy-name", label: "Copy “Risa Survey Briefing”" },
       { id: "copy-both", label: "Copy title and link" },
       { id: "copy-markdown", label: "Copy as Markdown" },
-      { id: "feedback", label: "Feedback on this document…", separator: true },
     ]);
   });
 

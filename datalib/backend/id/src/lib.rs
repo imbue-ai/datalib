@@ -20,8 +20,8 @@ use uuid::Uuid;
 
 /// Root namespace for every datalib-minted id. Frozen forever —
 /// changing these bytes re-keys every row in every data root that has
-/// ever existed, and orphans every `feedback.target_uuids` entry
-/// pointing into the old keyspace.
+/// ever existed, and orphans every link handed out into the old
+/// keyspace.
 pub const DATALIB_ID_NS: Uuid = Uuid::from_bytes([
     0x64, 0x61, 0x74, 0x61, 0x6c, 0x69, 0x62, 0x2d, 0x69, 0x64, 0x2d, 0x6e, 0x73, 0x2d, 0x76, 0x31,
 ]);
@@ -33,8 +33,7 @@ pub const DATALIB_ID_NS: Uuid = Uuid::from_bytes([
 /// **These values are frozen.** Each one is hashed into every id that
 /// provider has ever minted, so changing one re-keys every
 /// `grid_rows.uuid`, `markdown_uuid` and `data-section-uuid` it
-/// produced, and orphans every `feedback.target_uuids` pointing at
-/// them. The only supported way to change one is to bump that
+/// produced, and orphans every link handed out naming them. The only supported way to change one is to bump that
 /// provider's `RENDER_VERSION` in the same commit, which makes the
 /// next run discard its rendered tree and re-render from the raw
 /// store — see `datalib_step::render`.

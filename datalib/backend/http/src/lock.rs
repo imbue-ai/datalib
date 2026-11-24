@@ -25,7 +25,7 @@ impl std::fmt::Display for LockError {
                     f,
                     "another datalib-http already owns this data root{}.\n\
                      Only one server may write a root's system/ directory: they would \
-                     overwrite each other's job and feedback stores and each other's API \
+                     overwrite each other's stores and each other's API \
                      token. Stop the other one, or point this server at a different root.\n\
                      (lock: {})",
                     match holder {

@@ -1293,7 +1293,7 @@ mod tests {
     fn the_stores_beside_the_runner_record_are_not_the_runner_record() {
         let root = Path::new("/data");
         for quiet in [
-            "system/feedback.doltlite_db",
+            "system/remote_media.doltlite_db",
             "system/disk_stats.sqlite",
             "system/disk_stats.sqlite-journal",
             "system/api-token",

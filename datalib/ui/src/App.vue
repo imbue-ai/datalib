@@ -134,7 +134,7 @@ onUnmounted(() => stop?.());
 </script>
 
 <template>
-  <main class="datalib-shell" data-feedback-root>
+  <main class="datalib-shell">
     <!-- The toolbar: the app and library names, and the search box. The
          first-run screen keeps the names, which are the way back to the
          other libraries; there is nothing yet to sync or search. -->

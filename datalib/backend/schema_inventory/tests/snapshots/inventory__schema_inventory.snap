@@ -2056,17 +2056,6 @@ disk_usage
     measured_at_utc
     tz_offset
     bytes
-feedback
-    feedback_uuid
-    created_at_utc
-    tz_offset
-    sentiment
-    comment
-    app_version
-    git_hash
-    context_json
-    fixed_in_git_hash
-    notes
 
 == datalib_curated/contacts ==
 contacts

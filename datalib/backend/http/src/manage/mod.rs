@@ -845,8 +845,8 @@ impl Snapshot<'_> {
                 match dir_disk {
                     None => "Nothing on disk yet.".to_string(),
                     Some(t) => format!(
-                        "{} in {dir}/ \u{2014} the run log {}, and the loop's record, the usage \
-                         samples and the feedback filed here.",
+                        "{} in {dir}/ \u{2014} the run log {}, and the loop's record and the usage \
+                         samples here.",
                         human_bytes(t.bytes),
                         human_bytes(log_disk.map_or(0, |l| l.bytes)),
                     ),
