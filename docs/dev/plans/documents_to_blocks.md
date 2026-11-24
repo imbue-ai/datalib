@@ -1,4 +1,4 @@
-# Moving from documents to blocks: grouping chosen when a search runs
+# Moving from documents to blocks: search finds blocks, shown in their documents
 
 **Status: proposal (2026-11-17). Steps 1, 2, 3a, 3b and 3c have
 landed (#1765, #1770, #1775, #1782, #1818), and step 6 landed with
@@ -40,9 +40,10 @@ a choice, and it is costing us in three ways.
 - **A search has to say what it wants rows to be.** The grid holds two
   kinds of row in one table: one row per document, which has no single
   sender and no single time, and one row per message, which does.
-  `is:document` picks between them. The grid opens with it on, Browse
-  adds it, and a person who leaves it off sees every message instead.
-  Free text is ranked per document and then landed on one message.
+  `is:document` picks between them. Nobody types it: the grid opens
+  with it on and Browse adds it, and without it the grid shows every
+  message instead. Free text is ranked per document and then landed on
+  one message.
 - **Parent links are mostly thrown away.** Each source knows what a
   message belongs to and what it replies to, but `grid_rows` has no
   column for either. Slack's thread survives only as which file a
@@ -199,9 +200,9 @@ two rows with one uuid each.
 discovered from depth. A container can be:
 
 - **read together**: a Slack thread, an email thread, a WhatsApp chat,
-  a Notion page, a Drive file, a session. This is what a search groups
-  by when it groups, what the viewer opens, and what embedding cuts its
-  windows from. Nested ones stay separate: a Notion subpage is read on
+  a Notion page, a Drive file, a session. This is what a search shows
+  each hit in and folds its hits by, what the viewer opens, and what
+  embedding cuts its windows from. Nested ones stay separate: a Notion subpage is read on
   its own, not as part of its parent.
 - **a place**: a Slack channel, a mailbox, a Notion workspace, a Drive
   folder, a Claude Code project. What a person browses or filters by,
@@ -295,12 +296,13 @@ linked to its item when it is read
 pair must reach the stored item, and the item's parents must be
 reachable from it.
 
-**A group is chosen when a search runs, not when render runs.** A
-search finds items. How its results are shown is a separate choice:
-one row per item, per thing read together, or per place. A group's row is
-derived from its items: who took part, its first and last time, how
-many matched. Nothing about a group is fixed at render, so there is no
-month to choose and no setting to change.
+**A search finds blocks, and shows each in its document.** The result
+is always a block, drawn with what it is read together in: the
+document's title, the block's snippet, the viewer opened at it
+(§"How search works"). Nothing about how results are grouped is fixed
+at render, so there is no month to choose and no setting to change;
+grouping the rows by a place or a column is the grid's own choice when
+it draws them.
 
 **What gets embedded is its own choice.** One message embedded alone
 has lost its context; that is why chunks span messages today. So
@@ -498,25 +500,33 @@ for the keys' SQL):
 The source is held with every chunk, so `source:` and `-source:` never
 touch SQL.
 
-**4. Each ranking ranks blocks, rolls them up, then cuts.** Words score
-blocks, and meaning scores chunks, a chunk speaking for the blocks it
-covers. Each ranking then rolls its blocks up to the grouping asked for
-(§"The model": a document, a place, or none), keeping each group's best
-block as its hit, and cuts at the depth. Rolling up before the cut is
-what keeps one long chat from filling the depth.
+**4. Each ranking ranks blocks.** Words score blocks. Meaning scores
+chunks, and a chunk speaks for the kept blocks it covers, which share
+its rank. Each ranking keeps at most a few blocks of any one document
+before it cuts at the depth, so one long chat cannot fill it; the eval
+picks how many.
 
-**5. Fusion happens at the grouping.** Reciprocal rank fuses the
-groups, as it fuses documents today, so words finding one message of a
-thread and meaning finding another still agree on the thread. A group
-shows the hit of the first ranking that found it: words before meaning,
-the more precise first. With `group:none`, a block is its own group: a
-block's rank in meaning is its best chunk's, and blocks one chunk
-covers tie.
+**5. Fusion is per block.** Reciprocal rank fuses the two rankings'
+blocks, so a block both find comes first. Today words finding one
+message of a thread and meaning finding another add up for the thread;
+per block they do not. If the eval misses that, a block whose document
+holds other hits gets a small lift, and nothing else changes.
 
-**6. A hit is a block, so nothing lands.** The row shown is the group's
-row, opened at the hit block, and the snippet is quoted from that
-block's body. Inside a big block (a Drive file) the quote is found by
-the words, as it is today.
+**6. A result is a block, shown in its document.** A hit is a block, so
+nothing lands. Each row of the answer shows the document's title, the
+block's author and time, and a snippet quoted from the block's body;
+opening it opens the viewer on the document at that block, with the
+rest of the document around it. A document appears once, at its best
+block, and its other hits fold under that row in rank order ("4 more in
+this thread"), since the viewer shows them together anyway. Inside a big
+block (a Drive file) the snippet is found by the words, as it is today.
+
+A search with keys and no words lists the blocks its keys keep, in the
+order asked, folded the same way: each
+document once, at its first kept block. A data node a key asks for by
+its own facts (`is:channel`) is listed as itself. Grouping the rows by
+a column, as the grid does today (by source, by channel, by place), is
+the grid's own choice over these rows, not a different search.
 
 **7. Every step costs what its answer costs.** A step is bounded by the
 rows it returns or by one index range, never by the size of the
@@ -531,10 +541,11 @@ the search's other keys, which is what made it a walk of the grid.
 
 `Kept` and `KeptRows` with their three lists; `Keyed` and its cache;
 `land` and the file re-read behind it; `documents_with_pages` on every
-search; `documents_of_hits`'s second look at the grid. What stays:
+search; `documents_of_hits`'s second look at the grid; `is:document`,
+which only the UI sends, and the document rows it picked. What stays:
 `page_words`, while a page's text is several blocks (rule 1 makes
-Drive's one); the three ways words match; fusion, at the grouping
-rather than always per document.
+Drive's one); the three ways words match; fusion, per block rather than
+per document.
 
 ## The same thing in two sources
 
@@ -561,24 +572,24 @@ Every place that assumes a document, from the read side of the tree:
 
 | Where | Today | After |
 |---|---|---|
-| `grid_rows.is_document`, `is:document` (grid default, Browse, dashboard, eval) | one row per document, or per message | `group:read` (what is read together), `group:place`, `group:none`; `is:document` kept as an alias for `group:read`, since people type it |
+| `grid_rows.is_document`, `is:document` (grid default, Browse, dashboard, eval) | one row per document, or per message, picked by a key the UI adds | gone: a search lists blocks, each document once at its best block with its other hits folded under it (§"How search works", rule 6). Only the UI sends `is:document`, so it stops, and the key needs no alias |
 | Search index (`search_documents`, `search_sections`, `search_chunks`) | keyed by document; sections are byte spans of the file | keyed by item; chunks name the items they cover and the group they were cut from |
-| Ranking (`documents_of_hits`, `fuse`, `land`) | ranks documents, then lands each on a message by re-reading the file | ranks items, then groups them; a hit is an item, so there is nothing to land |
+| Ranking (`documents_of_hits`, `fuse`, `land`) | ranks documents, then lands each on a message by re-reading the file | ranks blocks and fuses them per block; a hit is a block, so there is nothing to land |
 | `Keyed` / `Kept::Sections` | what the filters keep, per document, as lists of uuids | gone: keys are the `WHERE` of the words statement, and meaning checks its candidates in SQL (§"How search works", rule 3) |
 | `WithoutVectors` | documents without vectors among those the keys keep, read from the grid on every search | per source, from the search index and the held vectors, once per index commit (rule 7) |
 | Viewer (`/chat/{markdown_uuid}`, `DocCard`) | the whole file, cut into sections by byte length | the items of what is read together, a page at a time, opened at one |
 | The route's name, `/chat/{markdown_uuid}` | serves any document (a page, a PDF, an event), named for the first sources, which were chats | `/data_node/{uuid}`, named for what it opens; `/chat` kept as an alias, since agents use it (`agent_user.md`) |
 | Links (`datalib:doc/<page>#<section>`), copied 🆔 | a document and a message in it | an item, with what holds it looked up |
-| Embedding map | one point per document (the mean of its chunks) | one point per group at the grouping chosen |
-| Problems banner | rows scoped to a document | problems name an item; a group shows its items' problems ([`problems_as_step_events.md`](problems_as_step_events.md)) |
+| Embedding map | one point per document (the mean of its chunks) | unchanged: one point per document, lit by the blocks a search finds in it |
+| Problems banner | rows scoped to a document | problems name an item; a document shows its items' problems ([`problems_as_step_events.md`](problems_as_step_events.md)) |
 | Feedback anchors (`data-section-uuid`) | a message inside a document | unchanged: already per item |
-| Eval targets (`uuid`, `markdown_uuid`) | a hit anywhere in the document counts | a target keeps its `uuid` (an item, which does not move); its `markdown_uuid` is replaced by the uuid of what holds it, read together, by a script run against the root. The set stays private; "found" is scored per item and per group |
+| Eval targets (`uuid`, `markdown_uuid`) | a hit anywhere in the document counts | a target keeps its `uuid` (an item, which does not move); its `markdown_uuid` is replaced by the uuid of what holds it, read together, by a script run against the root. The set stays private; "found" is scored per block and per document |
 | Agents and Minds workspaces reading files (`docs/agent_user.md` §"Markdown", `rendered_documents.md`) | read `<group>/render_markdown/*.md` directly | read through the applet: `/chat/{uuid}` already returns a page's text, and a route listing a container's items takes over from the files; the docs say so in the step that stops writing them |
 | `docs/user/searching.md`, `rendered_documents.md`, `agent_user.md` | describe documents | rewritten with the step that changes each |
 
 There are few enough users that links people have saved need no forward
-path. A query a person types does, which is why `is:document` stays as
-an alias.
+path. A query a person types does; `is:document` is not one, since only
+the UI sends it.
 
 ## Forward path for existing data
 
@@ -689,7 +700,7 @@ against the eval before the next.
      taken its group's name: its function is
      `unified_grid_and_search_index`, where it was `grid_index`
      (`index_step_name.rs`).
-4. **Grouping when a search runs.** In two parts:
+4. **Search finds blocks.** In two parts:
    - **4a. Every data node is a row.** Nearly every container already is
      a document's row under its own uuid: in one real library, 60,395
      of 63,976 data nodes, every thread, chat, event and session. The
@@ -710,7 +721,7 @@ against the eval before the next.
        word for every place: `folder` is what a Drive, Lightroom or
        Messenger folder is called, and `place:` is already where a thing
        is on the map.
-   - **4b. Ranking blocks, grouping when asked**, as §"How search
+   - **4b. Ranking blocks, shown in their documents**, as §"How search
      works" lays out, in three parts, each checked against the eval:
      - **Every searched piece names a block** (rule 1): the render
        contract test, the index filing a piece with no row under its
@@ -719,13 +730,12 @@ against the eval before the next.
        3 and 7): container facts copied onto blocks, the words statement
        joined to the grid, meaning's two ways, the count per source.
        `Kept`, `Keyed` and the per-search walk of the grid go.
-     - **Rankings roll up, then fuse** (rules 4 to 6): search ranks
-       blocks and rolls them up to the grouping asked for:
-       `group:document` (today's answer, ranked as today, which
-       `is:document` stays an alias for), `group:place` (each hit's
-       `place_uuid`), or `group:none`, a row per block and nothing to
-       land. The eval scores a target per block and per document, and
-       compares the grouped answer with today's.
+     - **Blocks rank, fuse and fold** (rules 4 to 6): each ranking
+       ranks blocks, a few per document at most; fusion is per block;
+       a row is a block shown in its document, with its document's
+       other hits folded under it, and nothing lands. The UI stops
+       sending `is:document`. The eval scores a target per block and
+       per document, and compares the answer with today's.
 5. **The viewer reads items, and the `.md` files go.** Only two things
    read the files' bytes: the viewer's `/chat/{markdown_uuid}` and search
    landing (`hits/mapping.rs`), which quotes a hit and picks its row from
@@ -821,21 +831,21 @@ against the eval before the next.
   each month's document. Whether a Slack channel's messages are read
   together depends on how the channel is used: a thready channel's
   threads are, and a flat channel's run of messages may not be. Steps
-  4 (grouping), 6 (no time buckets) and 7 (embedding windows) all lean
-  on the answer. Until it is settled, a search can group by document or
-  by place.
+  4 (what a hit folds into), 6 (no time buckets) and 7 (embedding
+  windows) all lean on the answer. Until it is settled, hits fold by
+  document.
 - **How wide an embedding window is.** How many items or bytes of a
   thread, and does it overlap the next? The eval decides.
   [`multimodal_retrieval.md`](multimodal_retrieval.md) §5.1 argues for
   embedding whole threads; that is one input, not settled.
-- **How a group ranks.** §"How search works" fuses groups by
-  reciprocal rank, each at its best block (rules 4 and 5), which is
-  today's answer generalized. Whether a group's second-best block
-  should break ties, and how many blocks of one group `group:none`
-  shows before others, is the eval's to say; a long chat must not win
+- **How blocks rank against their documents.** §"How search works"
+  fuses per block (rule 5). How many blocks of one document a ranking
+  keeps before its cut, and whether a block whose document holds other
+  hits should be lifted, is the eval's to say; a long chat must not win
   by being long.
-- **What a group row shows** in the grid when it spans years: first and
-  last time, the last few participants, the number of items matched.
+- **What a folded row shows** when its document spans years: its other
+  hits' times, the document's first and last time, the number of hits
+  folded under it.
 - **How deep each source's tree goes.** A Notion page is one row today,
   with none for its blocks: a big block. Making blocks items lets a hit
   land on a paragraph and a page be windowed for embedding, at the cost
@@ -877,8 +887,8 @@ against the eval before the next.
 - **Reactions.** An item of their own (they have an author and a time)
   or an attribute of the item they react to?
 - **Time-of-day bucketing** for display ("this conversation on 3 May")
-  is a grouping too, and could be offered as `group:day` without
-  being stored.
+  is a grouping too, and could be offered as one of the grid's groupings
+  without being stored.
 
 ## Found on the way
 
