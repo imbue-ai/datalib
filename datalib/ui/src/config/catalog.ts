@@ -1685,6 +1685,32 @@ export const CATALOG: CatalogEntry[] = [
   // table, and a form for each, so no catch-all.
   {
     type: "contacts",
+    variantKey: "google",
+    method: "google",
+    label: "Google Contacts",
+    blurb: "Copy a Google account's contacts, labels and photos through Google's API.",
+    keywords: ["google", "contacts", "gmail", "people", "address book", "labels"],
+    kind: "api",
+    icon: "google_contacts",
+    defaultName: "google_contacts",
+    nameHint: "Personal contacts",
+    wizard: true,
+    credentialService: "google-people",
+    canProbe: true,
+    fields: [
+      {
+        kind: "text",
+        latchkey: true,
+        target: "latchkey_settings.account",
+        label: "Google account",
+        help:
+          "Which stored Google login to copy. Leave it empty if only one is stored " +
+          "for google-people.",
+      },
+    ],
+  },
+  {
+    type: "contacts",
     variantKey: "fastmail",
     method: "fastmail",
     label: "Fastmail Contacts",

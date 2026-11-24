@@ -10,6 +10,16 @@ use serde::{Deserialize, Serialize};
 pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
     datalib_source_common::ConfigExample {
         kind: datalib_source_common::ExampleKind::Minimal,
+        method: "google",
+        toml: include_str!("../examples/minimal_google.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Complete,
+        method: "google",
+        toml: include_str!("../examples/complete_google.toml"),
+    },
+    datalib_source_common::ConfigExample {
+        kind: datalib_source_common::ExampleKind::Minimal,
         method: "fastmail",
         toml: include_str!("../examples/minimal_fastmail.toml"),
     },
@@ -45,8 +55,9 @@ pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
 pub const FASTMAIL_CARDDAV_URL: &str = "https://carddav.fastmail.com/dav/";
 
 /// The contacts-owned slice of a `contacts` source. Exactly one of the
-/// three method tables is set: `fastmail` and `carddav` mirror a live
-/// CardDAV server, `vcf` ingests `.vcf` exports under a directory on disk.
+/// four method tables is set: `google` mirrors a Google account's contacts
+/// through Google's API, `fastmail` and `carddav` a live CardDAV server,
+/// and `vcf` ingests `.vcf` exports under a directory on disk.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ContactsConfig {
@@ -57,6 +68,10 @@ pub struct ContactsConfig {
     /// Which stored latchkey account this source signs in as.
     #[serde(default)]
     pub latchkey_settings: LatchkeySettings,
+    /// Google Contacts, through Google's People API (latchkey's
+    /// `google-people` service).
+    #[serde(default)]
+    pub google: Option<GoogleContacts>,
     /// Fastmail, over CardDAV at Fastmail's own address (latchkey's
     /// `fastmail-dav` service, which holds an app password).
     #[serde(default)]
@@ -72,6 +87,8 @@ pub struct ContactsConfig {
 /// Which download path a source selected.
 #[derive(Debug, Clone)]
 pub enum ContactsMethod<'a> {
+    /// The signed-in Google account's contacts, labels and photos.
+    Google,
     /// CardDAV, with the server it starts discovery from. An empty
     /// `addressbooks` mirrors every address book.
     Carddav {
@@ -85,6 +102,9 @@ impl ContactsConfig {
     /// The one method this source holds, or why there is not exactly one.
     pub fn method(&self) -> anyhow::Result<ContactsMethod<'_>> {
         let mut held: Vec<(&str, ContactsMethod<'_>)> = Vec::new();
+        if self.google.is_some() {
+            held.push(("google", ContactsMethod::Google));
+        }
         if let Some(s) = &self.fastmail {
             held.push((
                 "fastmail",
@@ -109,8 +129,8 @@ impl ContactsConfig {
         match held.len() {
             1 => Ok(held.pop().expect("len checked").1),
             0 => anyhow::bail!(
-                "a contacts source names none of `fastmail`, `carddav` (a server) or `vcf` \
-                 (a directory of .vcf files)"
+                "a contacts source names none of `google`, `fastmail`, `carddav` (a server) \
+                 or `vcf` (a directory of .vcf files)"
             ),
             _ => anyhow::bail!(
                 "a contacts source sets more than one of {} — pick one. To mirror the same \
@@ -135,6 +155,12 @@ impl ContactsConfig {
         Ok(())
     }
 }
+
+/// The `google` table. It has no settings: every contact on the account is
+/// mirrored, with its labels and photo.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GoogleContacts {}
 
 /// Which of an account's address books to mirror.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
@@ -168,6 +194,7 @@ pub type ContactsRenderConfig = datalib_source_common::BareRenderConfig;
 
 impl datalib_source_common::IngestMethods for ContactsConfig {
     const METHODS: &'static [datalib_source_common::IngestMethod] = &[
+        datalib_source_common::IngestMethod::origin("google"),
         datalib_source_common::IngestMethod::origin("fastmail"),
         datalib_source_common::IngestMethod::origin("carddav"),
         datalib_source_common::IngestMethod::local("vcf"),
@@ -204,6 +231,15 @@ mod tests {
             panic!("carddav");
         };
         assert!(addressbooks.is_empty());
+    }
+
+    #[test]
+    fn google_takes_an_empty_table() {
+        let cfg = parse(serde_json::json!({"google": {}}));
+        cfg.validate().unwrap();
+        assert!(matches!(cfg.method().unwrap(), ContactsMethod::Google));
+        let odd = serde_json::json!({"google": {"addressbooks": ["Crew"]}});
+        assert!(serde_json::from_value::<ContactsConfig>(odd).is_err());
     }
 
     #[test]

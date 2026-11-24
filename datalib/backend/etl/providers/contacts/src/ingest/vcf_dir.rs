@@ -14,7 +14,7 @@ use datalib_etl_files::file_checkpoint;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
 
 use super::api::{split_vcards, vcard_fn, vcard_n_family_given, vcard_rev, vcard_uid};
-use super::db::{addressbook_pk, RawDb};
+use super::db::{addressbook_pk, AccountRow, RawDb};
 use super::schema_raw::{synthesized_name_uid_nth, ContactRow};
 
 pub struct FetchOptions {
@@ -67,8 +67,12 @@ async fn read_folder(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
         .clone()
         .unwrap_or_else(|| "local".to_string());
     let server_url = format!("file://{}", opts.input_path.display());
-    db.upsert_account(&account_id, &server_url, None, None)
-        .await?;
+    db.upsert_account(&AccountRow {
+        id: account_id.clone(),
+        server_url: Some(server_url),
+        ..Default::default()
+    })
+    .await?;
 
     // One listing answers both questions at once: which `.vcf` files are
     // there, and which may have changed since this source last finished

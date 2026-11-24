@@ -381,8 +381,9 @@ mirror.
 
 `type = "contacts"` — any CardDAV server, such as iCloud or Nextcloud,
 through latchkey (`carddav`), **or** local `.vcf` files (`vcf`).
-Mirrors your address book. Fastmail has a section of its own:
-[Fastmail Contacts](#fastmail-contacts). This source is a copy of what
+Mirrors your address book. Fastmail and Google have sections of their own:
+[Fastmail Contacts](#fastmail-contacts),
+[Google Contacts](#google-contacts). This source is a copy of what
 the address book says; saying that several handles are one person is
 [the contacts app](contacts_app.md), which needs no source.
 
@@ -718,12 +719,12 @@ latchkey auth browser-prepare google-gmail
 
 Or make one yourself and give it to every Google service at once: in
 the Google Cloud console, a project with the Gmail, Google Calendar,
-Google Drive, Google Docs, Google Sheets and Google Slides APIs turned
+Google People, Google Drive, Google Docs, Google Sheets and Google Slides APIs turned
 on, and in it an OAuth client of type **Desktop app**. Then, with its
 id and secret:
 
 ```sh
-for s in google-gmail google-calendar google-drive google-docs google-sheets google-slides; do
+for s in google-gmail google-calendar google-people google-drive google-docs google-sheets google-slides; do
   latchkey auth prepare "$s" '{"clientId":"<id>","clientSecret":"<secret>"}'
 done
 ```
@@ -763,6 +764,33 @@ Request a Takeout with **Chat** ticked — see
 [Google Takeout](#google-takeout), which is the source this is one
 feed of. The Add source form ticks it; in a hand-written config, set
 `google_chat = true` beside `export.path`.
+
+## Google Contacts
+
+`type = "contacts"` — your Google contacts through Google's People API
+and latchkey (`google`). Mirrors every contact with its labels and
+photo. Rendered the way [Contacts (CardDAV)](#contacts-carddav) says: a
+label is a page listing who is in it, and a contact names its labels.
+
+Built into latchkey; one command opens a browser, you sign in and
+approve every scope it asks for:
+
+```sh
+latchkey auth browser google-people
+```
+
+The first time, latchkey needs an OAuth client to sign in with:
+[your own Google OAuth client](#your-own-google-oauth-client). The
+login it makes can change contacts as well as read them; Datalib only
+ever reads.
+
+The `google` table needs nothing else. After the first sync, each run
+asks Google only for what changed since the last, and fetches only the
+photos that are new. Two lists Google keeps apart are not mirrored:
+**Other contacts** (the addresses Google saved because you wrote to
+them) and your organization's directory, since the login latchkey makes
+has no permission to read either. A contact of a colleague that you
+never saved is in the second.
 
 ## Google Drive
 

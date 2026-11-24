@@ -19,7 +19,7 @@ pub(crate) const PRIMARY: &str = "picard@enterprise.test";
 pub(crate) const AWAY: &str = "c_awayteam@group.calendar.google.com";
 
 pub(crate) fn fixture(root: &Path, url: &str, resp: HttpResponse) {
-    let req = HttpRequest::get(google::HTTP_SERVICE, url).header("Accept", "application/json");
+    let req = HttpRequest::get(google::API.service, url).header("Accept", "application/json");
     write_fixture(root, &req, &resp).expect("write fixture");
 }
 

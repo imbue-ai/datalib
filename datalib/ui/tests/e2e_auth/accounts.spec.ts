@@ -139,6 +139,7 @@ test("each browser-login service names accounts the way the wizard is told", asy
     "google-docs",
     "google-sheets",
     "google-slides",
+    "google-people",
     "github",
     "fastmail",
     "garmin",

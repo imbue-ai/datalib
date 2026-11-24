@@ -48,7 +48,8 @@ the light and dark backgrounds.
 - **A brand's own calendar or contacts** is the generic glyph below in
   the brand's colours: `fastmail_calendar.svg` and
   `fastmail_contacts.svg` take Fastmail's blue and yellow from
-  `fastmail.svg`, so they sit beside Fastmail but read as what they hold.
+  `fastmail.svg`, so they sit beside Fastmail but read as what they hold,
+  and `google_contacts.svg` takes Google's four.
 - **Generic glyphs** (`apple_photos`, `baby_connect`, `calendar`, `contacts`, `file_inventory`,
   `markdown`, `media`, `pdf`, `perseus`, `search`, `system`) are
   [Material Design Icons](https://pictogrammers.com/library/mdi/)

@@ -67,7 +67,7 @@ pub enum SourceType {
     /// machine. Its own type for the reason `claude_code` is: a Codex
     /// thread and a ChatGPT chat never overlap.
     Codex,
-    /// Contacts over CardDAV, or from `.vcf` files. Served by the
+    /// Contacts from Google, over CardDAV, or from `.vcf` files. Served by the
     /// `contacts` provider crate (its config crate is still `contacts_config`).
     Contacts,
     Email,

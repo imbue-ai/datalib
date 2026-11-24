@@ -1,13 +1,14 @@
 //! "Check connection" for a contacts source — do these credentials
 //! reach the account? — and the address books `addressbooks` can name.
-//! Finding the account is the address-book listing, so a check runs it
-//! too and keeps only the account. No card is fetched.
+//! On CardDAV, finding the account is the address-book listing, so a
+//! check runs it too and keeps only the account; on Google it is the
+//! signed-in user, whose contacts are one list. No card is fetched.
 
 use anyhow::{anyhow, bail, Result};
 use datalib_etl_contacts_config::{ContactsConfig, ContactsMethod};
 use datalib_probe::{ProbeAccount, ProbeAsk, ProbeItem, ProbeItemKind, ProbeList, ProbeReport};
 
-use crate::ingest::{self, FetchSummary};
+use crate::ingest::{self, google, FetchSummary};
 
 pub async fn probe(config: &ContactsConfig, ask: ProbeAsk) -> Result<ProbeReport> {
     let mut report = reach(config).await?;
@@ -24,9 +25,17 @@ pub async fn probe(config: &ContactsConfig, ask: ProbeAsk) -> Result<ProbeReport
 
 async fn reach(config: &ContactsConfig) -> Result<ProbeReport> {
     config.validate()?;
+    let mut summary = FetchSummary::default();
     match config.method()? {
+        ContactsMethod::Google => {
+            let me = google::me(&config.latchkey_settings, &mut summary).await?;
+            let login = me.email.or(Some(me.resource_name));
+            let book = Some(google::ADDRESSBOOK_NAME.to_string());
+            let mut r = report("google", login, std::iter::once(book));
+            r.account.display_name = me.name;
+            Ok(r)
+        }
         ContactsMethod::Carddav { server_url, .. } => {
-            let mut summary = FetchSummary::default();
             let reached =
                 ingest::reach(server_url, &mut summary, &config.latchkey_settings).await?;
             let method = if config.fastmail.is_some() {

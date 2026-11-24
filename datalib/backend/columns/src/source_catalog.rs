@@ -78,6 +78,12 @@ const CATALOG: &[Entry] = &[
     e("calendar", None, "Calendar", Some("calendar")),
     e(
         "contacts",
+        Some("google"),
+        "Google Contacts",
+        Some("google_contacts"),
+    ),
+    e(
+        "contacts",
         Some("fastmail"),
         "Fastmail Contacts",
         Some("fastmail_contacts"),
@@ -229,6 +235,10 @@ mod tests {
         assert_eq!(
             source_type("chatgpt", &json!({"export": {"path": "x"}})).label,
             "ChatGPT (export)"
+        );
+        assert_eq!(
+            source_type("contacts", &json!({"google": {}})).label,
+            "Google Contacts"
         );
         assert_eq!(
             source_type("contacts", &json!({"fastmail": {}})).label,

@@ -5,6 +5,7 @@
 pub mod coverage;
 pub mod dav;
 pub mod download_params;
+pub mod google;
 pub mod http;
 pub mod interrupt;
 pub mod latchkey;

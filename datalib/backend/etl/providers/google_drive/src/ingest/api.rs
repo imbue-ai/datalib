@@ -12,9 +12,10 @@ use serde_json::Value;
 
 use datalib_etl::upstream::Upstream;
 use datalib_etl_google_drive_config::{ExportFormat, FileKind};
+use datalib_etl_web::google::{is_googleusercontent, retryability};
 use datalib_etl_web::http::{
-    default_retryability, latchkey_curl_classified, percent_encode, HttpError, HttpRequest,
-    HttpResponse, HttpService, LatchkeySettings, Retryability, ShownUrl,
+    latchkey_curl_classified, percent_encode, HttpError, HttpRequest, HttpResponse, HttpService,
+    LatchkeySettings, ShownUrl,
 };
 
 pub const HTTP_SERVICE: HttpService = HttpService::GoogleDrive;
@@ -321,7 +322,7 @@ pub async fn get_revision_export(url: &str, lk: &LatchkeySettings) -> Result<Vec
             let to = resp
                 .header("location")
                 .ok_or_else(|| anyhow!("GET {shown}: {} with no Location", resp.status))?;
-            if !is_signed_download(to) {
+            if !is_googleusercontent(to) {
                 bail!(
                     "GET {shown}: redirected to {}, not an https googleusercontent.com link",
                     ShownUrl::new(HTTP_SERVICE, to)
@@ -331,17 +332,6 @@ pub async fn get_revision_export(url: &str, lk: &LatchkeySettings) -> Result<Vec
         }
         _ => Err(status_error(url, &resp).into()),
     }
-}
-
-/// Where Drive sends a revision's export: an https link on
-/// `googleusercontent.com`, which goes out plain.
-fn is_signed_download(location: &str) -> bool {
-    let Ok(url) = url::Url::parse(location) else {
-        return false;
-    };
-    let host = url.host_str().unwrap_or("");
-    url.scheme() == "https"
-        && (host == "googleusercontent.com" || host.ends_with(".googleusercontent.com"))
 }
 
 /// The link a revision's `exportLinks` gives for `format`. A revision
@@ -369,18 +359,6 @@ async fn get_ok(req: HttpRequest) -> Result<HttpResponse> {
         return Ok(resp);
     }
     Err(status_error(&req.url, &resp).into())
-}
-
-/// Google answers a per-user rate limit with a 403 whose body says so;
-/// that one is worth waiting out. Every other 403 is about access.
-fn retryability(resp: &HttpResponse) -> Retryability {
-    let body = resp.body_str();
-    if resp.status == 403
-        && (body.contains("rateLimitExceeded") || body.contains("userRateLimitExceeded"))
-    {
-        return Retryability::Retry { retry_after: None };
-    }
-    default_retryability(resp)
 }
 
 /// latchkey exits 1 when it will not send the request at all: no
@@ -485,27 +463,6 @@ pub fn page_items(v: &Value, key: &str) -> Result<(Vec<Value>, Option<String>)> 
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
-
-    /// The redirect's `Location` went to plain curl as it came; only an
-    /// https link on Google's download host is followed now.
-    #[test]
-    fn a_revision_export_follows_only_a_google_download() {
-        assert!(is_signed_download(
-            "https://doc-0c-docstext.googleusercontent.com/export/a?b=c"
-        ));
-        for to in [
-            "http://doc-0c-docstext.googleusercontent.com/export/a",
-            "https://evil.example/export/a",
-            "https://googleusercontent.com.evil.example/a",
-            "https://evilgoogleusercontent.com/a",
-            "https://doc.googleusercontent.com@evil.example/a",
-            "file:///etc/passwd",
-            "-K/etc/passwd",
-            "/export/a",
-        ] {
-            assert!(!is_signed_download(to), "{to}");
-        }
-    }
 
     fn resp(status: u16, body: &str) -> HttpResponse {
         HttpResponse {

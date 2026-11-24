@@ -114,10 +114,11 @@ The sources we rely on ourselves, and the ones we keep working first.
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#fastmail-contacts"><img src="datalib/ui/src/assets/fastmail_contacts.svg" width="40" height="40" alt=""><br><b>Fastmail Contacts</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#gmail"><img src="datalib/ui/src/assets/gmail.svg" width="40" height="40" alt=""><br><b>Gmail</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#google-calendar"><img src="datalib/ui/src/assets/google_calendar.svg" width="40" height="40" alt=""><br><b>Google Calendar</b></a></td>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#google-contacts"><img src="datalib/ui/src/assets/google_contacts.svg" width="40" height="40" alt=""><br><b>Google Contacts</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#google-drive"><img src="datalib/ui/src/assets/google_drive.svg" width="40" height="40" alt=""><br><b>Google Drive</b></a></td>
-    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#linear"><img src="datalib/ui/src/assets/linear.svg" width="40" height="40" alt=""><br><b>Linear</b></a></td>
   </tr>
   <tr>
+    <td align="center" width="16%"><a href="docs/user/getting_your_data.md#linear"><img src="datalib/ui/src/assets/linear.svg" width="40" height="40" alt=""><br><b>Linear</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#notion"><img src="datalib/ui/src/assets/notion.svg" width="40" height="40" alt=""><br><b>Notion</b></a></td>
     <td align="center" width="16%"><a href="docs/user/getting_your_data.md#slack"><img src="datalib/ui/src/assets/slack.svg" width="40" height="40" alt=""><br><b>Slack</b></a></td>
   </tr>
