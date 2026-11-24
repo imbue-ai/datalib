@@ -736,21 +736,18 @@ pub async fn open_for_reading(db_path: &Path) -> Result<Option<SqlitePool>> {
 /// (`etl/README.md` § "Connection pools"). A reader that looks before the
 /// generation row is made reads the index as not built yet.
 ///
-/// An index written in another shape loses its tables and is made new:
-/// every row in it is a function of a render store, so a rebuild costs
-/// one local read of them, where altering it in place would leave a new
-/// column empty in the rows the cursors never revisit. The keyword
-/// index's tables are part of this shape, and go with the rest.
+/// An index written in another shape is deleted and made new: every row
+/// in it is a function of a render store, so a rebuild costs one local
+/// read of them, where altering it in place would leave a new column
+/// empty in the rows the cursors never revisit. The keyword index's
+/// tables are part of this shape, and go with the rest.
 pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
     if let Some(dir) = db_path.parent() {
         std::fs::create_dir_all(dir)?;
     }
+    remove_if_another_shape(db_path).await?;
     let pool = connect(db_path).await?;
-    let ready = match empty_if_another_shape(&pool).await {
-        Ok(()) => set_up(&pool).await,
-        Err(e) => Err(e),
-    };
-    match ready {
+    match set_up(&pool).await {
         Ok(()) => Ok(pool),
         Err(e) => {
             pool.close().await;
@@ -759,51 +756,43 @@ pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
     }
 }
 
-/// Drops every table when the file was written in another shape, under
-/// the write lock, so two openers do not both drop it.
-async fn empty_if_another_shape(pool: &SqlitePool) -> Result<()> {
-    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    let have = datalib_store_meta::read_in(&mut tx)
+/// Deletes the file, its write-ahead log and its shared-memory file when
+/// the file was written in another shape. Every table in it goes either
+/// way, and dropping them one by one, then handing their pages back to the
+/// disk, took eleven minutes on a 5.8 GB index. One process writes the
+/// index at a time (the step, or its `--prepare` before the loop starts);
+/// a reader with the old file open reads it until it opens the new one.
+async fn remove_if_another_shape(db_path: &Path) -> Result<()> {
+    if !db_path.exists() {
+        return Ok(());
+    }
+    let pool = datalib_etl::pin::open_reader(db_path)
         .await
+        .with_context(|| format!("open the grid index {}", db_path.display()))?;
+    let have = datalib_store_meta::read(&pool).await;
+    pool.close().await;
+    let have = have
         .context("read the grid index's shape")?
         .map(|m| m.schema_hash);
     // A file that records no shape is in none: an index from before
-    // `_datalib_meta`, or a new file with nothing to drop.
-    if have.as_deref() != Some(shape().tables.as_str()) {
-        tracing::info!("the grid index was written in another shape; building it again");
-        drop_own_tables(&mut tx).await?;
+    // `_datalib_meta`, or a new file with nothing in it.
+    if have.as_deref() == Some(shape().tables.as_str()) {
+        return Ok(());
     }
-    tx.commit().await?;
-    // Hands the dropped pages back to the disk where the file was made
-    // with incremental auto-vacuum; a no-op where it was not.
-    sqlx::query("PRAGMA incremental_vacuum")
-        .execute(pool)
-        .await
-        .context("give the grid index's dropped pages back")?;
-    Ok(())
-}
-
-/// Every table in the file but `_datalib_meta`, virtual tables first so
-/// their shadow tables go with them. Includes any an older shape had that
-/// this one does not.
-async fn drop_own_tables(conn: &mut sqlx::SqliteConnection) -> Result<()> {
-    for virtual_only in [true, false] {
-        let names: Vec<String> = sqlx::query_scalar(
-            "SELECT name FROM sqlite_master WHERE type = 'table' \
-               AND name NOT LIKE 'sqlite_%' AND name <> '_datalib_meta' \
-               AND (NOT ? OR sql LIKE 'CREATE VIRTUAL TABLE%')",
-        )
-        .bind(virtual_only)
-        .fetch_all(&mut *conn)
-        .await
-        .context("list the grid index's tables")?;
-        for name in names {
-            // A name read from this file's own schema, quoted as an identifier.
-            let sql = format!("DROP TABLE IF EXISTS \"{}\"", name.replace('"', "\"\""));
-            sqlx::query(sqlx::AssertSqlSafe(sql))
-                .execute(&mut *conn)
-                .await
-                .with_context(|| format!("drop the grid index's {name}"))?;
+    tracing::info!(
+        file = %db_path.display(),
+        "the grid index was written in another shape; deleting it to build it again"
+    );
+    // The log first: a log left beside a new file would be replayed into it.
+    for suffix in ["-wal", "-shm", ""] {
+        let mut path = db_path.as_os_str().to_owned();
+        path.push(suffix);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(e).with_context(|| format!("delete {}", Path::new(&path).display()))
+            }
         }
     }
     Ok(())
@@ -2955,6 +2944,42 @@ mod shape_tests {
 
         let pool = open_index(&db).await.unwrap();
         assert_eq!(documents(&pool).await, 0);
+    }
+
+    fn inode(path: &Path) -> u64 {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(path).unwrap().ino()
+    }
+
+    /// An index in another shape is replaced by a new file rather than
+    /// emptied: dropping a 5.8 GB index's tables and vacuuming the space
+    /// took eleven minutes, and deleting the file takes none. One in this
+    /// shape keeps its file.
+    #[tokio::test]
+    async fn an_index_in_another_shape_is_a_new_file() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("db.sqlite");
+        let pool = holding_one_document(&db).await;
+        crate::grid_index::close_index(pool).await.unwrap();
+        let kept = inode(&db);
+        let pool = open_index(&db).await.unwrap();
+        assert_eq!(inode(&db), kept, "an index in this shape was replaced");
+
+        sqlx::query("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        crate::grid_index::close_index(pool).await.unwrap();
+        let old = std::fs::File::open(&db).unwrap();
+        let pool = open_index(&db).await.unwrap();
+        assert_ne!(
+            inode(&db),
+            kept,
+            "an index in another shape was emptied in place"
+        );
+        assert_eq!(documents(&pool).await, 0);
+        drop(old);
+        crate::grid_index::close_index(pool).await.unwrap();
     }
 
     fn search_doc(uuid: &str) -> datalib_search_index::IndexDoc {
