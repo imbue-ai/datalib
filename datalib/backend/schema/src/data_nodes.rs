@@ -1,6 +1,6 @@
 // What each document says of the containers its rows live in: a chat, a
 // thread, a channel, a label, a page. A container is carried by every
-// document that names it, the way a person is (`source_contacts`): a
+// document that names it, the way a person is (`document_contacts`): a
 // re-render replaces its own rows, and a channel named by many threads
 // has a row under each. The index step settles them into one row per
 // container, `nodes`, which is what a reader reads.

@@ -1,5 +1,5 @@
-// The handles each `source_contacts` row ties to its person — the lookup
-// a chip makes. See `source_contacts.rs`.
+// The handles each `source_contacts` row ties to its person. See
+// `source_contacts.rs`.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};

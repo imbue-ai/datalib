@@ -223,8 +223,8 @@ pub trait IndexRepo: Send + Sync {
     }
 
     /// Every source's account of whoever holds each of `handles`, one
-    /// row per document that mentioned them; `people::merge_and_rank`
-    /// makes them one account per source.
+    /// row per distinct record of them; `people::merge_and_rank` makes
+    /// them one account per source.
     async fn people_for_handles(
         &self,
         _handles: &[String],

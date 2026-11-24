@@ -269,7 +269,7 @@ group, and `email` and `phone` are the card's first address and number
 as the source wrote them, a number with or without its country code.
 The grid's Contact column, and the Subject cell on such a row, is the
 contact's chip, drawn from the three, else from the contact's handles
-in `source_contact_handles` ([`chips.md`](chips.md) §"In a grid"). A
+in `contact_record_handles` ([`chips.md`](chips.md) §"In a grid"). A
 card is its own subject, so `conversation_name` is the contact's name
 too, and `channel` holds the address book or list it is filed in.
 `author` stays null: nobody wrote a contact.
@@ -467,8 +467,7 @@ render gives a row a location and nothing else. `place:<cell>` and
 **A photo's document has no text.** Its render store keeps its rows and
 no markdown: the `photos` applet draws the photo from the
 `NormalizedPhoto` its document carries in `source_photos`
-(`datalib_photo_schema`), which the index copies the way it copies
-`source_contacts`. `/chat/<uuid>` answers such a document with its
+(`datalib_photo_schema`), which the index copies whole. `/chat/<uuid>` answers such a document with its
 `image` and no text, and the document card hands it to the applet's
 card. The search index holds nothing for it, which is why a photo's
 caption is a `caption:` term.
