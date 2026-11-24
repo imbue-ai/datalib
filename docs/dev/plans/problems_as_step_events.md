@@ -8,7 +8,10 @@
 and step 7, the per-provider recipes for a record's upstream values.
 How problems are kept now: `datalib/backend/etl/README.md` §"Problems
 stay in the step that found them". It leans on `documents_to_blocks.md`,
-which gives every row a place in a tree of data nodes.*
+which gives every row a place in a tree of data nodes. Where the server
+reads a step's problems is revised by
+[`problems_published_at_the_seal.md`](problems_published_at_the_seal.md)
+(proposed 2026-11-24).*
 
 ## The problem
 
