@@ -27,11 +27,14 @@ use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::doltlite_raw::StoreKind;
 use datalib_etl::stop::StopFlag;
 use datalib_photo_schema::NormalizedPhoto;
-use datalib_schema::data_nodes::{self, DataNodeRow, CHILDREN_INDEXES, DDL as DATA_NODES_DDL};
+use datalib_schema::data_nodes::{
+    DataNodeRow, BY_UUID_INDEX as DATA_NODES_BY_UUID_INDEX, DDL as DATA_NODES_DDL,
+};
 use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::filings::{FilingRow, DDL as FILINGS_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL, INDEXES as GRID_ROWS_INDEXES};
 use datalib_schema::markdowns::DDL as MARKDOWNS_TABLE_DDL;
+use datalib_schema::nodes::{CHILDREN_INDEXES, DDL as NODES_DDL};
 use datalib_schema::problems::{ProblemRow, Severity, DDL as PROBLEMS_DDL};
 use datalib_schema::search_terms::{TERMS_DDL, TERMS_SHAPE};
 use datalib_schema::source_cursors::{SourceCursorRow, DDL as SOURCE_CURSORS_DDL};
@@ -44,7 +47,7 @@ use tokio::sync::Mutex;
 use crate::section::Section;
 
 pub(crate) mod contact_records;
-mod node_rows;
+mod nodes;
 
 /// Serializes concurrent writers against one doltlite index pool, and
 /// optionally batches every write into one transaction.
@@ -69,10 +72,9 @@ pub struct WriteLock {
     /// document an earlier run wrote" — see `put_grid_row`.
     written: std::sync::Mutex<std::collections::HashSet<String>>,
     store: Store,
-    /// In the grid index, the grid rows written or deleted since the
-    /// search terms last followed them; `None` in a render store, which
-    /// holds no terms.
-    changed: Option<std::sync::Mutex<Vec<String>>>,
+    /// What this run changed that the grid index derives from; `None` in a
+    /// render store, which derives nothing.
+    changed: Option<std::sync::Mutex<Changed>>,
     /// How a batch starts. The grid index's file has other writers (the
     /// search index's steps), and a batch that read before its first write
     /// would fail rather than wait if one of them committed meanwhile.
@@ -87,6 +89,16 @@ pub struct WriteLock {
 pub(crate) enum Store {
     Render,
     Index,
+}
+
+#[derive(Debug, Default)]
+struct Changed {
+    /// The grid rows written or deleted since the search terms last
+    /// followed them.
+    rows: Vec<String>,
+    /// The nodes whose accounts changed, or whose grid row left its
+    /// document, since `nodes` last followed them.
+    nodes: std::collections::BTreeSet<String>,
 }
 
 struct WriteLockInner {
@@ -134,31 +146,54 @@ impl WriteLock {
         }
     }
 
-    /// The grid index's lock, which keeps the rows its writes change for
-    /// the search terms to follow.
+    /// The grid index's lock, which keeps what its writes change for the
+    /// nodes and the search terms to follow.
     pub fn for_index(pool: SqlitePool) -> Self {
         Self {
             store: Store::Index,
-            changed: Some(std::sync::Mutex::new(Vec::new())),
+            changed: Some(Default::default()),
             begin: "BEGIN IMMEDIATE",
             ..Self::new(pool)
         }
     }
 
-    fn note_changed(&self, uuids: impl IntoIterator<Item = String>) {
+    fn note_changed(&self, rows: impl IntoIterator<Item = String>) {
         if let Some(changed) = &self.changed {
-            changed.lock().unwrap().extend(uuids);
+            changed.lock().unwrap().rows.extend(rows);
         }
     }
 
+    fn touch_nodes(&self, uuids: impl IntoIterator<Item = String>) {
+        if let Some(changed) = &self.changed {
+            changed.lock().unwrap().nodes.extend(uuids);
+        }
+    }
+
+    /// Grid rows that are gone from their document, or from the index: a
+    /// row may have been the one that told of its node.
+    fn note_gone(&self, rows: Vec<String>) {
+        self.touch_nodes(rows.iter().cloned());
+        self.note_changed(rows);
+    }
+
     fn changed_rows(&self) -> usize {
-        self.changed.as_ref().map_or(0, |c| c.lock().unwrap().len())
+        self.changed
+            .as_ref()
+            .map_or(0, |c| c.lock().unwrap().rows.len())
     }
 
     fn take_changed(&self) -> Vec<String> {
         self.changed
             .as_ref()
-            .map_or_else(Vec::new, |c| std::mem::take(&mut *c.lock().unwrap()))
+            .map_or_else(Vec::new, |c| std::mem::take(&mut c.lock().unwrap().rows))
+    }
+
+    fn take_touched_nodes(&self) -> Vec<String> {
+        self.changed.as_ref().map_or_else(Vec::new, |c| {
+            std::mem::take(&mut c.lock().unwrap().nodes)
+                .into_iter()
+                .collect()
+        })
     }
 
     fn note_written(&self, markdown_uuid: &str) {
@@ -211,6 +246,7 @@ impl WriteLock {
     pub async fn rollback_transaction(&self) -> Result<()> {
         // What the rolled-back writes changed was never written.
         self.take_changed();
+        self.take_touched_nodes();
         let mut inner = self.inner.lock().await;
         let Some(mut conn) = inner.tx_conn.take() else {
             return Ok(());
@@ -450,8 +486,8 @@ fn shape_without_indexes() -> datalib_store_meta::Shape {
     datalib_store_meta::Shape {
         tables: datalib_store_meta::schema_hash(
             index_ddl()
-                // What the terms and the node rows derive, which no DDL shows.
-                .chain([TERMS_SHAPE, node_rows::NODE_ROWS_SHAPE]),
+                // What the terms and the nodes derive, which no DDL shows.
+                .chain([TERMS_SHAPE, nodes::NODES_SHAPE]),
         ),
         indexes: None,
         versions: datalib_store_meta::Versions {
@@ -473,7 +509,7 @@ fn indexes() -> impl Iterator<Item = &'static str> {
                 .filter(|ddl| *ddl != HANDLES_BY_HANDLE),
         )
         .chain(contact_records::INDEXES.iter().copied())
-        .chain([AUTHORS_INDEX, node_rows::BY_SOURCE_INDEX])
+        .chain([AUTHORS_INDEX, DATA_NODES_BY_UUID_INDEX])
         .chain(SEARCHABLE_DOCUMENTS_INDEXES.iter().copied())
 }
 
@@ -526,6 +562,7 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
         .chain(std::iter::once(MARKDOWNS_DDL))
         .chain(EDGES_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(DATA_NODES_DDL.iter().map(|(_table, ddl)| *ddl))
+        .chain(NODES_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(FILINGS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(contact_records::DDL.iter().copied())
         .chain(SOURCE_PHOTOS_DDL.iter().map(|(_table, ddl)| *ddl))
@@ -558,20 +595,14 @@ fn read_indexes() -> impl Iterator<Item = &'static str> {
         .chain(CHILDREN_INDEXES.iter().copied())
 }
 
-/// The read indexes a load's own writes do not look anything up by. The
-/// sweep in `node_rows::bring_in_line` runs before a build's indexes are
-/// made again, and reads `data_nodes` by uuid once per node row.
-fn remade_indexes() -> impl Iterator<Item = &'static str> {
-    read_indexes().filter(|ddl| *ddl != data_nodes::BY_UUID_INDEX)
-}
-
-/// The remade indexes are left out of a build into an empty index
+/// The read indexes, which no write looks anything up by, are left out of
+/// a build into an empty index
 /// and made once at its end, and remade around a source's rewrite of a
 /// large share of the index. Kept up row by row, each changed row costs
 /// a page in every one of them, more pages than SQLite's cache holds;
 /// built at the end they are sorted and contiguous.
 async fn drop_search_indexes(conn: &mut sqlx::SqliteConnection) -> Result<()> {
-    for ddl in remade_indexes() {
+    for ddl in read_indexes() {
         let name = index_name(ddl).with_context(|| format!("no index name in {ddl}"))?;
         // Audited: `name` is parsed out of our own static index DDL.
         sqlx::query(sqlx::AssertSqlSafe(format!("DROP INDEX IF EXISTS {name}")))
@@ -583,7 +614,7 @@ async fn drop_search_indexes(conn: &mut sqlx::SqliteConnection) -> Result<()> {
 }
 
 async fn create_search_indexes(conn: &mut sqlx::SqliteConnection) -> Result<()> {
-    for ddl in remade_indexes() {
+    for ddl in read_indexes() {
         sqlx::query(ddl)
             .execute(&mut *conn)
             .await
@@ -1253,9 +1284,9 @@ async fn retire_source(
         let remade = remove_documents(write_lock, source, &documents, Some(held), progress).await?;
         let mut guard = write_lock.acquire().await?;
         let conn = guard.conn();
-        node_rows::bring_in_line(conn, write_lock, source)
+        nodes::settle(conn, write_lock)
             .await
-            .with_context(|| format!("drop {source}'s node rows"))?;
+            .with_context(|| format!("drop {source}'s nodes"))?;
         if remade {
             create_search_indexes(conn).await?;
         }
@@ -1575,12 +1606,19 @@ async fn apply_source(
         let mut guard = write_lock.acquire().await?;
         let conn = guard.conn();
         if !docs.is_empty() || !removed.is_empty() {
-            let (kept, dropped) = node_rows::bring_in_line(conn, write_lock, stanza)
+            let settled = nodes::settle(conn, write_lock)
                 .await
-                .with_context(|| format!("write {stanza}'s node rows"))?;
-            tracing::debug!(source = %stanza, kept, dropped, "node rows in line");
+                .with_context(|| format!("settle {stanza}'s nodes"))?;
+            tracing::debug!(
+                source = %stanza,
+                touched = settled.touched,
+                changed = settled.changed,
+                rows_kept = settled.rows_kept,
+                rows_dropped = settled.rows_dropped,
+                "nodes settled"
+            );
         }
-        took.node_rows_ms = laps.lap();
+        took.nodes_ms = laps.lap();
         if remade {
             let started = Instant::now();
             create_search_indexes(conn).await?;
@@ -1643,7 +1681,7 @@ async fn apply_source(
                     read_ms = took.read_ms,
                     remove_ms = took.remove_ms,
                     load_ms = took.load_ms,
-                    node_rows_ms = took.node_rows_ms,
+                    nodes_ms = took.nodes_ms,
                     terms_ms = took.terms_ms,
                     seal_ms = took.seal_ms,
                     "sealed the index"
@@ -1671,7 +1709,7 @@ struct SealTimes {
     read_ms: u64,
     remove_ms: u64,
     load_ms: u64,
-    node_rows_ms: u64,
+    nodes_ms: u64,
     terms_ms: u64,
     seal_ms: u64,
 }
@@ -1895,8 +1933,8 @@ async fn write_source_cursor(
 /// conversation used to stay in the grid forever.
 pub async fn delete_markdowns(write_lock: &WriteLock, markdown_uuids: &[String]) -> Result<()> {
     let mut guard = write_lock.acquire().await?;
-    let gone = delete_document_rows(guard.conn(), write_lock.store, markdown_uuids).await?;
-    write_lock.note_changed(gone);
+    let removed = delete_document_rows(guard.conn(), write_lock.store, markdown_uuids).await?;
+    removed.note(write_lock);
     Ok(())
 }
 
@@ -1906,9 +1944,10 @@ pub async fn delete_markdowns(write_lock: &WriteLock, markdown_uuids: &[String])
 /// thousands of them.
 pub(crate) const DELETE_DOCUMENT_GRID_ROWS: &str =
     "DELETE FROM grid_rows WHERE markdown_uuid IN (SELECT value FROM json_each(?)) RETURNING uuid";
+const DELETE_DOCUMENT_NODES: &str =
+    "DELETE FROM data_nodes WHERE markdown_uuid IN (SELECT value FROM json_each(?)) RETURNING uuid";
 pub(crate) const DELETE_DOCUMENTS: &[&str] = &[
     "DELETE FROM edges WHERE src_markdown_uuid IN (SELECT value FROM json_each(?))",
-    "DELETE FROM data_nodes WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
     "DELETE FROM filings WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
     "DELETE FROM source_photos WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
     "DELETE FROM markdowns WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
@@ -1941,32 +1980,54 @@ impl Store {
     }
 }
 
+/// What removing documents took with it, which the grid index derives
+/// from.
+#[derive(Debug, Default)]
+pub(crate) struct Removed {
+    rows: Vec<String>,
+    /// The nodes the documents carried, each as often as it was.
+    nodes: Vec<String>,
+}
+
+impl Removed {
+    fn note(self, write_lock: &WriteLock) {
+        write_lock.touch_nodes(self.nodes);
+        write_lock.note_gone(self.rows);
+    }
+}
+
 /// The rows the documents own: their grid rows, their outgoing edges and
 /// their `markdowns` rows. Not their `problems`, which say why a document
-/// is the way it is and outlive one that ends with nothing. Returns the
-/// grid rows it deleted.
+/// is the way it is and outlive one that ends with nothing.
 pub(crate) async fn delete_document_rows(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     store: Store,
     markdown_uuids: &[String],
-) -> Result<Vec<String>> {
+) -> Result<Removed> {
     if markdown_uuids.is_empty() {
-        return Ok(Vec::new());
+        return Ok(Removed::default());
     }
     let set = serde_json::to_string(markdown_uuids)?;
-    let gone = sqlx::query_scalar(DELETE_DOCUMENT_GRID_ROWS)
-        .bind(&set)
-        .fetch_all(&mut **conn)
-        .await
-        .with_context(|| format!("delete {} document(s)' rows", markdown_uuids.len()))?;
-    for sql in DELETE_DOCUMENTS.iter().chain(store.delete_contacts()) {
-        sqlx::query(*sql)
+    let mut returned = [Vec::new(), Vec::new()];
+    for (sql, into) in [DELETE_DOCUMENT_GRID_ROWS, DELETE_DOCUMENT_NODES]
+        .into_iter()
+        .zip(&mut returned)
+    {
+        *into = sqlx::query_scalar(sql)
+            .bind(&set)
+            .fetch_all(&mut **conn)
+            .await
+            .with_context(|| format!("delete {} document(s): {sql}", markdown_uuids.len()))?;
+    }
+    for &sql in DELETE_DOCUMENTS.iter().chain(store.delete_contacts()) {
+        sqlx::query(sql)
             .bind(&set)
             .execute(&mut **conn)
             .await
             .with_context(|| format!("delete {} document(s): {sql}", markdown_uuids.len()))?;
     }
-    Ok(gone)
+    let [rows, nodes] = returned;
+    Ok(Removed { rows, nodes })
 }
 
 async fn apply_markdown(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<usize> {
@@ -1982,13 +2043,13 @@ async fn apply_markdown(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result
     // rest, or a stale `render_unit_key` and title would outlive the render
     // that replaced them. The problems recording why stay.
     if md.rows.is_empty() {
-        let gone = delete_document_rows(
+        let removed = delete_document_rows(
             conn,
             write_lock.store,
             std::slice::from_ref(&md.markdown_uuid),
         )
         .await?;
-        write_lock.note_changed(gone);
+        removed.note(write_lock);
         tracing::info!(
             document = %md.markdown_uuid,
             "this document has no rows left; dropped it",
@@ -2018,7 +2079,7 @@ async fn apply_markdown(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result
     .fetch_all(&mut **conn)
     .await
     .context("delete the rows this document no longer has")?;
-    write_lock.note_changed(gone);
+    write_lock.note_gone(gone);
 
     for row in &md.rows {
         let row = GridRow {
@@ -2042,19 +2103,22 @@ async fn apply_markdown(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result
     for edge in &md.edges {
         insert_edge(conn, edge).await?;
     }
-    for sql in [
-        "DELETE FROM data_nodes WHERE markdown_uuid = ?",
-        "DELETE FROM filings WHERE markdown_uuid = ?",
-    ] {
-        sqlx::query(sql)
+    let carried =
+        sqlx::query_scalar("DELETE FROM data_nodes WHERE markdown_uuid = ? RETURNING uuid")
             .bind(&md.markdown_uuid)
-            .execute(&mut **conn)
+            .fetch_all(&mut **conn)
             .await
             .context("delete prior containers")?;
-    }
+    write_lock.touch_nodes(carried);
     for node in &md.data_nodes {
         insert_node(conn, &md.markdown_uuid, node).await?;
     }
+    write_lock.touch_nodes(md.data_nodes.iter().map(|n| n.uuid.clone()));
+    sqlx::query("DELETE FROM filings WHERE markdown_uuid = ?")
+        .bind(&md.markdown_uuid)
+        .execute(&mut **conn)
+        .await
+        .context("delete prior filings")?;
     for filing in &md.filings {
         insert_filing(conn, &md.markdown_uuid, filing).await?;
     }
@@ -2436,7 +2500,7 @@ async fn put_grid_row(
     .execute(&mut **conn)
     .await
     .with_context(|| format!("insert moved grid_row {}", row.uuid))?;
-    write_lock.note_changed([row.uuid.clone()]);
+    write_lock.note_gone(vec![row.uuid.clone()]);
     Ok(())
 }
 
@@ -2498,46 +2562,19 @@ mod open_index_tests {
         let pool = open_index(&td.path().join("db.sqlite"))
             .await
             .expect("open_index");
-        let mut statements = vec![DELETE_DOCUMENT_GRID_ROWS];
+        let mut statements = vec![DELETE_DOCUMENT_GRID_ROWS, DELETE_DOCUMENT_NODES];
         statements.extend(DELETE_DOCUMENTS);
         statements.extend(Store::Index.delete_contacts());
         assert_searched_by_index(&pool, &statements).await;
         pool.close().await;
     }
 
-    /// A source's nodes are read by the source, not by walking every
-    /// document row in the index: a pass spent 11–20 s on each source of
-    /// a 1.2M-row index, one or two changed documents or not.
+    /// Every statement that settles nodes reads each by its uuid, also
+    /// while a build has the read indexes dropped, which is when it runs.
+    /// Read by anything wider it was seconds on each source of a large
+    /// index (#1926), or quadratic in a first build.
     #[tokio::test]
-    async fn a_sources_nodes_are_read_by_the_source() {
-        let td = tempfile::tempdir().unwrap();
-        let pool = open_index(&td.path().join("db.sqlite"))
-            .await
-            .expect("open_index");
-        // Audited: a constant statement of this crate.
-        let explain = format!("EXPLAIN QUERY PLAN {}", node_rows::CARRIED_WITHOUT_A_ROW);
-        let plan: Vec<String> = sqlx::query(sqlx::AssertSqlSafe(explain))
-            .bind("src")
-            .fetch_all(&pool)
-            .await
-            .expect("explain")
-            .iter()
-            .map(|r| r.get::<String, _>("detail"))
-            .collect();
-        assert!(
-            plan.iter()
-                .any(|d| d.starts_with("SEARCH n USING INDEX data_nodes_by_source (source_id=?)")),
-            "{plan:?}"
-        );
-        pool.close().await;
-    }
-
-    /// A build drops the read indexes until its end, and a source's node
-    /// rows are brought in line before then. Without `data_nodes_by_uuid`
-    /// the orphan sweep read every node for each node row, quadratic in a
-    /// first build (369k steps on the live bake's 6k-row grid).
-    #[tokio::test]
-    async fn the_node_row_writes_keep_their_indexes_through_a_build() {
+    async fn the_nodes_are_settled_by_their_uuids_through_a_build() {
         let td = tempfile::tempdir().unwrap();
         let pool = open_index(&td.path().join("db.sqlite"))
             .await
@@ -2549,7 +2586,12 @@ mod open_index_tests {
         drop(conn);
         assert_searched_by_index(
             &pool,
-            &[node_rows::ORPHANED, node_rows::CARRIED_WITHOUT_A_ROW],
+            &[
+                nodes::SETTLE.as_str(),
+                nodes::UNCARRIED,
+                nodes::ORPHANED,
+                nodes::WITHOUT_A_ROW,
+            ],
         )
         .await;
         pool.close().await;
@@ -3834,6 +3876,173 @@ mod source_cursor_tests {
         assert_eq!(node_rows().await, []);
     }
 
+    /// What an index says of every node and of the rows written for them.
+    async fn nodes_and_their_rows(pool: &SqlitePool) -> Vec<String> {
+        let nodes: Vec<datalib_schema::nodes::NodeRow> =
+            sqlx::query_as("SELECT * FROM nodes ORDER BY uuid")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        type Row = (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+            Option<String>,
+        );
+        let rows: Vec<Row> = sqlx::query_as(
+            "SELECT uuid, kind, conversation_name, parent_uuid, sort_key, markdown_uuid \
+             FROM grid_rows ORDER BY uuid",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        nodes
+            .iter()
+            .map(|n| format!("{n:?}"))
+            .chain(rows.iter().map(|r| format!("{r:?}")))
+            .collect()
+    }
+
+    /// Only the nodes a pass touched are settled, so after each change the
+    /// index holds what one built from nothing holds: a node is told of by
+    /// the document that holds its row, else by its newest, whichever
+    /// comes, changes or goes, and a page whose document goes while its
+    /// subpages still name it becomes a row of its own.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn touched_nodes_settle_as_a_build_from_nothing_would() {
+        use datalib_schema::data_nodes::{DataNodeRow, Lineage};
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let pool = index_pool(root).await;
+        let sources = ["s".to_string()];
+        // A page under a book, as `told` by the document `by`.
+        let page = |by: &str, uuid: &str, name: &str, at: &Lineage, key: &str| {
+            DataNodeRow::new(by, uuid, "s", "Page")
+                .named(Some(name.to_string()))
+                .place()
+                .sort_key(key.to_string())
+                .under(at)
+        };
+        let book = |by: &str, name: &str| {
+            DataNodeRow::new(by, "book", "s", "Book")
+                .named(Some(name.to_string()))
+                .place()
+        };
+        // The page "a" tells of itself; its subpages "b" and "c" name it
+        // too, each otherwise.
+        let a = |text: &str| {
+            let mut d = doc("s", "a", text);
+            let book = book("a", "Book");
+            let at = Lineage::top().below(&book);
+            d.data_nodes = vec![book, page("a", "a", "Title", &at, "1")];
+            d
+        };
+        let sub = |uuid: &str, book_name: &str| {
+            let mut d = doc("s", uuid, "body");
+            let book = book(uuid, book_name);
+            let at = Lineage::top().below(&book);
+            let above = page(uuid, "a", &format!("Title by {uuid}"), &at, "2");
+            let at = at.below(&above);
+            d.data_nodes = vec![book, above, page(uuid, uuid, uuid, &at, "")];
+            d
+        };
+        let build = || async {
+            build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+                .await
+                .unwrap();
+        };
+        let name_of = |uuid: &'static str| {
+            let pool = pool.clone();
+            async move {
+                sqlx::query_scalar::<_, String>("SELECT name FROM nodes WHERE uuid = ?")
+                    .bind(uuid)
+                    .fetch_optional(&pool)
+                    .await
+                    .unwrap()
+            }
+        };
+        let afresh = || async {
+            let fresh = tempdir().unwrap();
+            let db = fresh.path().join("db.sqlite");
+            let pool = crate::grid_index::open_index(&db).await.unwrap();
+            build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+                .await
+                .unwrap();
+            let held = nodes_and_their_rows(&pool).await;
+            crate::grid_index::close_index(pool).await.unwrap();
+            held
+        };
+
+        render(root, "s", &[sub("b", "Book")]);
+        build().await;
+        assert_eq!(nodes_and_their_rows(&pool).await, afresh().await);
+        assert_eq!(name_of("a").await.as_deref(), Some("Title by b"));
+
+        // Its own document arrives, and then a newer document names it.
+        render(root, "s", &[a("text")]);
+        build().await;
+        assert_eq!(nodes_and_their_rows(&pool).await, afresh().await);
+        assert_eq!(name_of("a").await.as_deref(), Some("Title"));
+        render(root, "s", &[sub("c", "Book, renamed")]);
+        build().await;
+        assert_eq!(nodes_and_their_rows(&pool).await, afresh().await);
+        assert_eq!(name_of("a").await.as_deref(), Some("Title"));
+        assert_eq!(name_of("book").await.as_deref(), Some("Book, renamed"));
+
+        // Its document still tells of it but no longer holds its row, then
+        // holds it again.
+        let mut rowless = a("text");
+        rowless.rows[0].uuid = "a-moved".to_string();
+        render(root, "s", &[rowless]);
+        build().await;
+        assert_eq!(nodes_and_their_rows(&pool).await, afresh().await);
+        assert_eq!(name_of("a").await.as_deref(), Some("Title by c"));
+        render(root, "s", &[a("text")]);
+        build().await;
+        assert_eq!(nodes_and_their_rows(&pool).await, afresh().await);
+        assert_eq!(name_of("a").await.as_deref(), Some("Title"));
+
+        // A page whose own document says nothing of it: its row is all the
+        // document holds of it, and when that goes it gets one here.
+        let mut under_quiet = doc("s", "d", "body");
+        under_quiet.data_nodes = vec![page("d", "quiet", "Quiet", &Lineage::top(), "3")];
+        render(root, "s", &[doc("s", "quiet", "text"), under_quiet]);
+        build().await;
+        assert_eq!(nodes_and_their_rows(&pool).await, afresh().await);
+        unrender(root, "s", "quiet");
+        build().await;
+        assert_eq!(nodes_and_their_rows(&pool).await, afresh().await);
+
+        // A document that stays stops naming what it sat in, then names it
+        // again.
+        render(root, "s", &[doc("s", "c", "body")]);
+        build().await;
+        assert_eq!(nodes_and_their_rows(&pool).await, afresh().await);
+        assert_eq!(name_of("book").await.as_deref(), Some("Book"));
+        render(root, "s", &[sub("c", "Book, renamed")]);
+        build().await;
+        assert_eq!(nodes_and_their_rows(&pool).await, afresh().await);
+
+        // Its own document goes, then its newest, then its last.
+        for (gone, a_is, book_is) in [
+            ("a", Some("Title by c"), Some("Book, renamed")),
+            ("c", Some("Title by b"), Some("Book")),
+            ("b", None, None),
+        ] {
+            unrender(root, "s", gone);
+            build().await;
+            assert_eq!(
+                nodes_and_their_rows(&pool).await,
+                afresh().await,
+                "without {gone}"
+            );
+            assert_eq!(name_of("a").await.as_deref(), a_is, "without {gone}");
+            assert_eq!(name_of("book").await.as_deref(), book_is, "without {gone}");
+        }
+    }
+
     /// A store that records this build's shape and lacks a table is
     /// damaged, not older: a read of the table fails loudly, naming it,
     /// and costs only its own source. A store from a build before #962 lacked
@@ -4750,8 +4959,8 @@ mod work_tests {
         assert!(
             alone
                 .keys()
-                .any(|(sql, _)| sql == super::node_rows::CARRIED_WITHOUT_A_ROW),
-            "the pass reads no source's nodes; this test checks nothing: {:#?}",
+                .any(|(sql, _)| sql == super::nodes::SETTLE.as_str()),
+            "the pass settles no nodes; this test checks nothing: {:#?}",
             alone.keys()
         );
         let mut grew = Vec::new();

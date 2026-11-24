@@ -18,6 +18,32 @@ async function openLibrary(page: Page) {
   await expect(treeRow(page, "slack")).toBeVisible();
 }
 
+// `<vs-tree>` draws nothing until it has its first level, so a slow answer
+// once left the card blank with nothing to say why.
+test("the tree says it is loading until its sources answer, and why when they cannot", async ({
+  page,
+}) => {
+  let release = () => {};
+  const released = new Promise<void>((resolve) => (release = resolve));
+  const children = "**/applet/unified_grid_and_search_index/children/**";
+  await page.route(children, async (route) => {
+    await released;
+    await route.continue();
+  });
+  await page.goto("/" + encodeURIComponent("libraryTreeView()"));
+  const loading = page.locator("[data-testid=library-loading]");
+  await expect(loading).toBeVisible();
+  release();
+  await expect(treeRow(page, "slack")).toBeVisible();
+  await expect(loading).toHaveCount(0);
+
+  await page.unroute(children);
+  await page.route(children, (route) => route.fulfill({ status: 500, body: "no" }));
+  await page.reload();
+  await expect(page.locator(".lib-failed")).toContainText("The library could not be read");
+  await expect(loading).toHaveCount(0);
+});
+
 test("a channel opened in the tree is listed beside it, a thread read in place", async ({
   page,
 }) => {

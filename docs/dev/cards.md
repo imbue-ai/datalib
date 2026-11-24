@@ -786,7 +786,8 @@ besides components:
   (`docs/user/applets.md` § "A container's children"); a thread or a
   message is no place, so it is not in the tree. A source that holds no
   places has no arrow: one place asked of each source as the tree opens
-  says which. Every row is a chip (`docs/dev/chips.md`): a source its
+  says which, and "Loading…" stands in for the tree until every source
+  has answered. Every row is a chip (`docs/dev/chips.md`): a source its
   group's, any other node its node's, drawn into the tree's own shadow
   root through its `renderLabel` and `extraCss`. Picking a node shows it
   beside the tree as a `nodeView`, drawn in a shadow root of its own as

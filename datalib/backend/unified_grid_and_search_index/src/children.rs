@@ -1,9 +1,9 @@
 //! A container's children, a page at a time around an anchor
 //! (docs/dev/plans/documents_to_blocks.md, "A list starts at an anchor
-//! and grows both ways"). Its children are the rows it holds, the
-//! containers it holds that have no row, and whatever is filed under it.
-//! The SQL here reads each of those three in `(sort_key, uuid)` order past
-//! a key; [`window`] merges what they read into one page and its cursors.
+//! and grows both ways"). Its children are the rows it holds, every
+//! container among them, and whatever is filed under it. The SQL here reads
+//! each of those in `(sort_key, uuid)` order past a key; [`window`] merges
+//! what they read into one page and its cursors.
 
 use std::collections::{HashMap, HashSet};
 
@@ -33,8 +33,8 @@ impl Key {
 pub enum Via {
     /// A `grid_rows` row whose parent is the container.
     Row,
-    /// A `data_nodes` container whose parent is the container, with no
-    /// row of its own.
+    /// A `nodes` container whose parent is the container: how a listing
+    /// of places finds what a listing of rows finds as rows.
     Node,
     /// Anything `filings` files under the container.
     Filed,
@@ -117,8 +117,9 @@ impl Scope {
         }
     }
 
-    /// The ways this scope finds children, best first. A source's top has
-    /// nothing filed under it, and a place is always a container.
+    /// The ways this scope finds children, best first. Every container is a
+    /// row, so only a listing of places, which asks for containers alone,
+    /// reads them apart. A source's top has nothing filed under it.
     pub fn vias(&self) -> Vec<Via> {
         Via::ALL
             .into_iter()
@@ -267,19 +268,16 @@ pub fn window(split: &Split, before: Vec<Vec<Found>>, after: Vec<Vec<Found>>) ->
 /// One side's children in `order`, at most `want` of them, and whether
 /// there are more past them. A child found two ways has one key (a filing
 /// takes its row's or its container's), so the first `want` of the merged
-/// lists are the first `want` children. A container its documents carry
-/// at different keys is listed once, at its first; the list it came in
-/// then reads short, so a full list says there may be more.
+/// lists are the first `want` children.
 fn side(
     lists: Vec<Vec<Found>>,
     want: usize,
     order: impl Fn(&Key, &Key) -> std::cmp::Ordering,
 ) -> (Vec<Found>, bool) {
-    let any_full = lists.iter().any(|l| l.len() > want);
     let mut rows: Vec<Found> = lists.into_iter().flatten().collect();
     rows.sort_by(|a, b| order(&a.key, &b.key).then(a.via.cmp(&b.via)));
     dedupe(&mut rows);
-    let more = rows.len() > want || any_full;
+    let more = rows.len() > want;
     rows.truncate(want);
     (rows, more)
 }
@@ -383,11 +381,10 @@ pub enum Side {
 
 /// The children found `via` on `side` of a split, as `(sort_key, uuid)`
 /// rows in that side's order. Binds the parent as `?1`, the split's key as
-/// `?2, ?3` and the limit as `?4`. Rows and containers are read off the
+/// `?2, ?3` and the limit as `?4`. Rows and places are read off their
 /// `(parent, sort_key, uuid)` indexes in order; what is filed takes its key
-/// from its row or container, so it is sorted after it is found.
-/// The read of `scope`'s children found `via`, past `?2`/`?3` on `side`,
-/// `?4` of them; `None` where the scope finds none that way.
+/// from its row or container, so it is sorted after it is found. `None`
+/// where the scope finds none `via`.
 pub fn children_sql(scope: &Scope, via: Via, side: Side, at_is_after: bool) -> Option<String> {
     let (op, dir) = match (side, at_is_after) {
         (Side::Before, true) => ("<", "DESC"),
@@ -396,9 +393,8 @@ pub fn children_sql(scope: &Scope, via: Via, side: Side, at_is_after: bool) -> O
         (Side::After, false) => (">", "ASC"),
     };
     let from = from(scope, via)?;
-    // A container is carried by every document that names it, and so is
-    // a filing; a row is one row.
-    let distinct = if via == Via::Row { "" } else { "DISTINCT " };
+    // A filing is carried by every document that names it.
+    let distinct = if via == Via::Filed { "DISTINCT " } else { "" };
     Some(format!(
         "SELECT {distinct}sort_key, uuid FROM {from} AND (sort_key, uuid) {op} (?2, ?3) \
          ORDER BY sort_key {dir}, uuid {dir} LIMIT ?4"
@@ -412,37 +408,30 @@ fn from(scope: &Scope, via: Via) -> Option<&'static str> {
     Some(match (via, scope.only, top) {
         (Via::Row, Only::All, false) => "grid_rows WHERE parent_uuid = ?1",
         (Via::Row, Only::All, true) => "grid_rows WHERE parent_uuid IS NULL AND source_id = ?1",
-        (Via::Node, Only::All, false) => {
-            "data_nodes n WHERE parent_uuid = ?1 \
-             AND NOT EXISTS (SELECT 1 FROM grid_rows g WHERE g.uuid = n.uuid)"
+        (Via::Node, Only::Places, false) => {
+            "nodes INDEXED BY nodes_places WHERE parent_uuid = ?1 AND is_place = 1"
         }
-        (Via::Node, Only::All, true) => {
-            "data_nodes n WHERE parent_uuid IS NULL AND source_id = ?1 \
-             AND NOT EXISTS (SELECT 1 FROM grid_rows g WHERE g.uuid = n.uuid)"
-        }
-        (Via::Node, Only::Places, false) => "data_nodes n WHERE parent_uuid = ?1 AND is_place = 1",
         (Via::Node, Only::Places, true) => {
-            "data_nodes n WHERE parent_uuid IS NULL AND source_id = ?1 AND is_place = 1"
+            "nodes INDEXED BY nodes_places \
+             WHERE parent_uuid IS NULL AND source_id = ?1 AND is_place = 1"
         }
         (Via::Filed, Only::All, false) => FILED,
         (Via::Filed, Only::Places, false) => FILED_PLACES,
-        (Via::Row, Only::Places, _) | (Via::Filed, _, true) => return None,
+        (Via::Row, Only::Places, _) | (Via::Node, Only::All, _) | (Via::Filed, _, true) => {
+            return None
+        }
     })
 }
 
-/// What is filed under `?1`, each with the sort key of its row, or else
-/// of its container.
+/// What is filed under `?1`, each with the sort key of its row.
 const FILED: &str = "(SELECT f.node_uuid AS uuid, \
-     COALESCE((SELECT g.sort_key FROM grid_rows g WHERE g.uuid = f.node_uuid), \
-              (SELECT MIN(n.sort_key) FROM data_nodes n WHERE n.uuid = f.node_uuid), '') \
-       AS sort_key \
+     COALESCE((SELECT g.sort_key FROM grid_rows g WHERE g.uuid = f.node_uuid), '') AS sort_key \
      FROM filings f WHERE f.under_uuid = ?1) WHERE 1";
 
 /// The places filed under `?1`, each with its container's sort key.
-const FILED_PLACES: &str = "(SELECT f.node_uuid AS uuid, \
-     (SELECT MIN(n.sort_key) FROM data_nodes n WHERE n.uuid = f.node_uuid) AS sort_key \
-     FROM filings f WHERE f.under_uuid = ?1 \
-       AND EXISTS (SELECT 1 FROM data_nodes n WHERE n.uuid = f.node_uuid AND n.is_place = 1)) \
+const FILED_PLACES: &str = "(SELECT f.node_uuid AS uuid, n.sort_key \
+     FROM filings f INDEXED BY filings_by_under CROSS JOIN nodes n ON n.uuid = f.node_uuid \
+     WHERE f.under_uuid = ?1 AND n.is_place = 1) \
      WHERE 1";
 
 /// The sort key of `?2` among `scope`'s children, `?1` its parent, found
@@ -468,11 +457,12 @@ pub fn child_key_sql(scope: &Scope) -> String {
 
 /// Which of the places in the JSON array `?1` have places below them,
 /// held or filed.
-pub const PLACES_BELOW_SQL: &str = "SELECT DISTINCT parent_uuid FROM data_nodes \
-     WHERE is_place = 1 AND parent_uuid IN (SELECT value FROM json_each(?1)) \
-     UNION SELECT DISTINCT f.under_uuid FROM filings f \
-     WHERE f.under_uuid IN (SELECT value FROM json_each(?1)) \
-       AND EXISTS (SELECT 1 FROM data_nodes n WHERE n.uuid = f.node_uuid AND n.is_place = 1)";
+pub const PLACES_BELOW_SQL: &str = "SELECT value FROM json_each(?1) \
+     WHERE EXISTS (SELECT 1 FROM nodes n INDEXED BY nodes_places \
+                   WHERE n.parent_uuid = json_each.value AND n.is_place = 1) \
+        OR EXISTS (SELECT 1 FROM filings f INDEXED BY filings_by_under \
+                   CROSS JOIN nodes n ON n.uuid = f.node_uuid \
+                   WHERE f.under_uuid = json_each.value AND n.is_place = 1)";
 
 /// What a page's rows say of them, for the uuids in the JSON array `?1`.
 pub const ROW_FACTS_SQL: &str =
@@ -480,9 +470,9 @@ pub const ROW_FACTS_SQL: &str =
      FROM grid_rows WHERE uuid IN (SELECT value FROM json_each(?1))";
 
 /// What a page's containers say of them, for the uuids in the JSON array
-/// `?1`: one container is carried by every document that names it.
-pub const NODE_FACTS_SQL: &str = "SELECT uuid, MAX(kind), MAX(name) \
-     FROM data_nodes WHERE uuid IN (SELECT value FROM json_each(?1)) GROUP BY uuid";
+/// `?1`.
+pub const NODE_FACTS_SQL: &str = "SELECT uuid, kind, name \
+     FROM nodes WHERE uuid IN (SELECT value FROM json_each(?1))";
 
 #[cfg(test)]
 mod tests {
@@ -555,34 +545,6 @@ mod tests {
         );
         assert_eq!(uuids(&cut), ["early", "a"]);
         assert_eq!(cut.after, Some(Key::new("1", "a")));
-    }
-
-    /// A container its documents carry at two keys is listed once, at the
-    /// first; its list came back full, so the page says more may follow
-    /// though it holds fewer than asked.
-    #[test]
-    fn a_container_carried_at_two_keys_is_listed_once_and_more_may_follow() {
-        let cut = window(
-            &after(1),
-            vec![vec![], vec![], vec![]],
-            vec![
-                vec![],
-                vec![found("1", "chan", Via::Node), found("2", "chan", Via::Node)],
-                vec![],
-            ],
-        );
-        assert_eq!(uuids(&cut), ["chan"]);
-        assert_eq!(cut.after, Some(Key::new("1", "chan")));
-        let cut = window(
-            &after(2),
-            vec![vec![], vec![], vec![]],
-            vec![
-                vec![],
-                vec![found("1", "chan", Via::Node), found("2", "chan", Via::Node)],
-                vec![],
-            ],
-        );
-        assert_eq!(cut.after, None);
     }
 
     /// Around an item: the side before it nearest first, read back into

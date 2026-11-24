@@ -29,7 +29,7 @@ struct Placed {
     diff_status: Option<String>,
 }
 
-/// A container's roles, from the `data_nodes` its documents carry.
+/// A container's roles.
 #[derive(Clone, Copy, Default)]
 struct Roles {
     read_together: bool,
@@ -62,12 +62,11 @@ impl Tree {
         .fetch_all(&pool)
         .await
         .expect("read where the rows sit");
-        let roles: Vec<(String, bool, bool)> = sqlx::query_as(
-            "SELECT uuid, MAX(read_together), MAX(is_place) FROM data_nodes GROUP BY uuid",
-        )
-        .fetch_all(&pool)
-        .await
-        .expect("read the containers");
+        let roles: Vec<(String, bool, bool)> =
+            sqlx::query_as("SELECT uuid, read_together, is_place FROM nodes")
+                .fetch_all(&pool)
+                .await
+                .expect("read the containers");
         let filings: Vec<(String, String)> = sqlx::query_as(
             "SELECT node_uuid, under_uuid FROM filings ORDER BY node_uuid, under_uuid",
         )

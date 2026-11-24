@@ -2,10 +2,16 @@
 //! paged both ways: a workspace's channels, a channel's threads, a
 //! thread's messages and a label's filed threads.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use datalib_schema::data_nodes::CHILDREN_INDEXES;
+use datalib_etl::stop::StopFlag;
+use datalib_etl_render::grid_index::{build_grid_index_for, close_index, RenderedMarkdown};
+use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
+use datalib_schema::data_nodes::{DataNodeRow, Lineage};
+use datalib_schema::filings::FilingRow;
 use datalib_schema::grid_rows::GridRow;
+use datalib_schema::nodes::CHILDREN_INDEXES;
 use datalib_schema::providers::Provider;
 use datalib_unified_grid_and_search_index::children::{
     child_key_sql, children_sql, Anchor, Ask, Child, ChildrenError, ChildrenFailure, ChildrenPage,
@@ -14,7 +20,9 @@ use datalib_unified_grid_and_search_index::children::{
 use datalib_unified_grid_and_search_index::dolt_repo::DoltRepo;
 use datalib_unified_grid_and_search_index::repo::IndexRepo;
 
-use crate::dolt_backend_integration::{commit, insert_rows, unique_db_path, writer};
+use crate::dolt_backend_integration::{unique_db_path, writer};
+
+const SOURCE: &str = "slack";
 
 fn stamp(minute: u32) -> String {
     format!("2364-02-11T09:{minute:02}:00+00:00")
@@ -25,14 +33,16 @@ fn key_at(minute: u32) -> String {
     format!("2364-02-11T09:{minute:02}:00.000000Z")
 }
 
-fn row(uuid: &str, parent: &str, markdown: &str, minute: u32, document: bool) -> GridRow {
+fn row(uuid: &str, parent: &str, markdown: &str, created_at: &str) -> GridRow {
+    let document = uuid == markdown;
     GridRow::builder()
         .uuid(uuid)
         .provider(Provider::Slack)
         .kind(if document { "Slack Thread" } else { "Message" })
         .source_label("Slack")
         .is_document(document)
-        .created_at(Some(stamp(minute)))
+        .item_count(document.then_some(1))
+        .created_at(Some(created_at.to_string()))
         .author(Some("Geordi La Forge".to_string()))
         .conversation_uuid(markdown)
         .entire_chat(format!("/chat/{markdown}"))
@@ -43,72 +53,122 @@ fn row(uuid: &str, parent: &str, markdown: &str, minute: u32, document: bool) ->
         .expect("a valid row")
 }
 
-async fn node(
-    w: &sqlx::SqlitePool,
-    carried_by: &str,
-    uuid: &str,
-    kind: &str,
-    parent: Option<&str>,
-    sort_key: &str,
-) {
-    sqlx::query(
-        "INSERT INTO data_nodes \
-         (markdown_uuid, uuid, source_id, kind, name, parent_uuid, sort_key, read_together, is_place) \
-         VALUES (?, ?, 'slack', ?, ?, ?, ?, 0, 0)",
-    )
-    .bind(carried_by)
-    .bind(uuid)
-    .bind(kind)
-    .bind(format!("#{uuid}"))
-    .bind(parent)
-    .bind(sort_key)
-    .execute(w)
-    .await
-    .expect("insert a data node");
-}
-
-async fn file(w: &sqlx::SqlitePool, carried_by: &str, node: &str, under: &str) {
-    sqlx::query("INSERT INTO filings (markdown_uuid, node_uuid, under_uuid) VALUES (?, ?, ?)")
-        .bind(carried_by)
-        .bind(node)
-        .bind(under)
-        .execute(w)
-        .await
-        .expect("insert a filing");
-}
-
-/// A workspace `ws` with two channels, `bridge` and `ops`, each a
-/// container with no row; `bridge` holds threads `t1`..`t3`, each a
-/// container with its own document row, and every thread's document
-/// carries the channel and workspace again. `t1` holds messages `m1`..`m5`
-/// a minute apart from minute 10. A label `lbl` has `t2`, `t3` and `m5`
-/// filed under it.
-async fn seeded() -> (DoltRepo, sqlx::SqlitePool) {
-    let db_path = unique_db_path();
-    let root = Arc::new(db_path.parent().unwrap().to_path_buf());
-    let w = writer(&root).await;
-    let threads = [("t1", 1), ("t2", 2), ("t3", 3)];
-    let mut rows = Vec::new();
-    for (t, minute) in threads {
-        rows.push(row(t, "bridge", t, minute, true));
-        node(&w, t, t, "Slack thread", Some("bridge"), &key_at(minute)).await;
-        node(&w, t, "bridge", "Slack channel", Some("ws"), "").await;
-        node(&w, t, "ws", "Slack workspace", None, "").await;
+/// Thread `t` at `minute`, carrying the channel it is in and the workspace
+/// above, as Slack's renderer does.
+fn thread(t: &str, minute: u32) -> RenderedMarkdown {
+    let workspace = DataNodeRow::new(t, "ws", SOURCE, "Slack workspace")
+        .named(Some("#ws".to_string()))
+        .place();
+    let in_workspace = Lineage::top().below(&workspace);
+    let channel = DataNodeRow::new(t, "bridge", SOURCE, "Slack channel")
+        .named(Some("#bridge".to_string()))
+        .place()
+        .under(&in_workspace);
+    let in_channel = in_workspace.below(&channel);
+    let thread = DataNodeRow::new(t, t, SOURCE, "Slack thread")
+        .named(Some(format!("#{t}")))
+        .read_together()
+        .under(&in_channel);
+    RenderedMarkdown {
+        searchable: true,
+        content_hash: None,
+        markdown_uuid: t.to_string(),
+        source_id: SOURCE.to_string(),
+        upstream_cursor: None,
+        render_unit_key: None,
+        render_version: 1,
+        rows: vec![row(t, "bridge", t, &stamp(minute))],
+        sections: Vec::new(),
+        front: Default::default(),
+        edges: Vec::new(),
+        contacts: Vec::new(),
+        data_nodes: vec![workspace, channel, thread],
+        filings: Vec::new(),
+        photos: Vec::new(),
+        problems: Vec::new(),
     }
-    node(&w, "t1", "ops", "Slack channel", Some("ws"), "").await;
-    node(&w, "t2", "lbl", "Label", Some("acct"), "").await;
-    file(&w, "t2", "t2", "lbl").await;
-    file(&w, "t3", "t3", "lbl").await;
-    // A row filed with no container of its own, as a photo is under a
-    // keyword.
-    file(&w, "t1", "m5", "lbl").await;
+}
+
+/// A workspace `ws` with two channels, `bridge` and `ops`, each a place no
+/// document holds a row for; `bridge` holds threads `t1`..`t3`, each a
+/// document, and every thread's document carries the channel and workspace
+/// again. `t1` holds messages `m1`..`m5` a minute apart from minute 10. A
+/// label `lbl`, in an account no document carries, has `t2`, `t3` and the
+/// message `m5` filed under it, and is itself filed under the workspace,
+/// where `t2` is too.
+fn documents() -> Vec<RenderedMarkdown> {
+    let (mut t1, mut t2, mut t3) = (thread("t1", 1), thread("t2", 2), thread("t3", 3));
     for i in 1..=5 {
-        rows.push(row(&format!("m{i}"), "t1", "t1", 9 + i, false));
+        let m = format!("m{i}");
+        t1.rows.push(row(&m, "t1", "t1", &stamp(9 + i)));
     }
-    insert_rows(&w, &rows).await;
-    commit(&w, "seed").await;
-    let repo = DoltRepo::open(root).await.expect("open the repo");
-    (repo, w)
+    t1.data_nodes.push(
+        DataNodeRow::new("t1", "ops", SOURCE, "Slack channel")
+            .named(Some("#ops".to_string()))
+            .place()
+            .under(&Lineage::top().below(&t1.data_nodes[0])),
+    );
+    t1.filings.push(FilingRow::new("t1", "m5", "lbl"));
+    let account = DataNodeRow::new("t2", "acct", SOURCE, "Account").place();
+    t2.data_nodes.push(
+        DataNodeRow::new("t2", "lbl", SOURCE, "Label")
+            .named(Some("#lbl".to_string()))
+            .place()
+            .under(&Lineage::top().below(&account)),
+    );
+    for (node, under) in [("t2", "lbl"), ("lbl", "ws"), ("t2", "ws")] {
+        t2.filings.push(FilingRow::new("t2", node, under));
+    }
+    t3.filings.push(FilingRow::new("t3", "t3", "lbl"));
+    vec![t1, t2, t3]
+}
+
+/// A library holding `documents()`, rendered and indexed as a sync does.
+struct Library {
+    root: Arc<PathBuf>,
+    repo: DoltRepo,
+}
+
+async fn seeded() -> Library {
+    let root = Arc::new(unique_db_path().parent().unwrap().to_path_buf());
+    sync(&root, documents(), vec![]).await;
+    let repo = DoltRepo::open(root.clone()).await.expect("open the repo");
+    Library { root, repo }
+}
+
+impl Library {
+    async fn sync(&self, docs: Vec<RenderedMarkdown>, gone: Vec<&str>) {
+        sync(&self.root, docs, gone).await;
+    }
+}
+
+/// Render `docs`, drop the documents `gone`, and index what moved.
+async fn sync(root: &Path, docs: Vec<RenderedMarkdown>, gone: Vec<&str>) {
+    let rendered = datalib_etl::layout::render_markdown_root(root, SOURCE);
+    let gone: Vec<String> = gone.into_iter().map(String::from).collect();
+    tokio::task::spawn_blocking(move || {
+        let store = IndexedMarkdownStore::open(&rendered).expect("open the render store");
+        for d in &docs {
+            store.put_document(d).expect("render a document");
+        }
+        store.remove_documents(&gone).expect("drop documents");
+        store.commit("test render").expect("commit");
+        store.close();
+    })
+    .await
+    .expect("render");
+    let pool = writer(root).await;
+    build_grid_index_for(
+        &pool,
+        root,
+        &[SOURCE.to_string()],
+        |_| {},
+        None,
+        &StopFlag::new(),
+    )
+    .await
+    .expect("index");
+    close_index(pool).await.expect("close the index");
 }
 
 async fn page(repo: &DoltRepo, parent: &str, ask: Ask, limit: usize) -> ChildrenPage {
@@ -132,9 +192,9 @@ fn item(uuid: &str) -> Ask {
 
 /// Around an item: `limit` before it, the item, and `limit` after it,
 /// with a cursor at each end that has more past it.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn the_window_around_an_item_holds_it_and_its_neighbours() {
-    let (repo, _w) = seeded().await;
+    let Library { repo, .. } = seeded().await;
     let p = page(&repo, "t1", item("m3"), 1).await;
     assert_eq!(uuids(&p), ["m2", "m3", "m4"]);
     assert_eq!(p.before, Some(Key::new(key_at(11), "m2")));
@@ -147,9 +207,9 @@ async fn the_window_around_an_item_holds_it_and_its_neighbours() {
 
 /// A moment anchors at the first child at or after it; a moment past
 /// every child ("now") opens at the newest end.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn the_window_around_a_moment_and_around_now() {
-    let (repo, _w) = seeded().await;
+    let Library { repo, .. } = seeded().await;
     let between = "2364-02-11T09:12:30.000000Z".to_string();
     let p = page(&repo, "t1", Ask::Around(Anchor::Moment(between)), 1).await;
     assert_eq!(uuids(&p), ["m3", "m4"]);
@@ -164,9 +224,9 @@ async fn the_window_around_a_moment_and_around_now() {
 
 /// Paging on from either cursor reaches each end, every child once, in
 /// order.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn paging_both_ways_reaches_each_end_once() {
-    let (repo, _w) = seeded().await;
+    let Library { repo, .. } = seeded().await;
     let mut seen = Vec::new();
     let mut p = page(&repo, "t1", Ask::Around(Anchor::Start), 2).await;
     loop {
@@ -191,17 +251,19 @@ async fn paging_both_ways_reaches_each_end_once() {
 /// A channel carried by every thread's document is one child of its
 /// workspace; a thread that is a container with a row is listed once, as
 /// its container's kind with its row's author.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_container_carried_many_times_or_with_a_row_is_one_child() {
-    let (repo, _w) = seeded().await;
+    let Library { repo, .. } = seeded().await;
     let p = page(&repo, "ws", Ask::Around(Anchor::Start), 10).await;
-    assert_eq!(uuids(&p), ["bridge", "ops"]);
-    assert!(p
-        .children
+    assert_eq!(uuids(&p), ["bridge", "lbl", "ops", "t2"]);
+    assert!([0, 2]
         .iter()
-        .all(|c| c.container && c.kind == "Slack channel"));
+        .all(|i| p.children[*i].container && p.children[*i].kind == "Slack channel"));
     assert_eq!(p.children[0].name.as_deref(), Some("#bridge"));
-    assert_eq!(p.children[0].markdown_uuid, None, "a channel has no row");
+    assert_eq!(
+        p.children[0].markdown_uuid, None,
+        "no document holds a channel"
+    );
 
     let p = page(&repo, "bridge", Ask::Around(Anchor::Start), 10).await;
     assert_eq!(uuids(&p), ["t1", "t2", "t3"]);
@@ -214,9 +276,9 @@ async fn a_container_carried_many_times_or_with_a_row_is_one_child() {
 }
 
 /// What is filed under a label is its children, in its rows' order.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn what_is_filed_under_a_label_is_its_children() {
-    let (repo, _w) = seeded().await;
+    let Library { repo, .. } = seeded().await;
     let p = page(&repo, "lbl", Ask::Around(Anchor::Start), 10).await;
     assert_eq!(uuids(&p), ["t2", "t3", "m5"]);
     assert_eq!(p.children[2].sort_key, key_at(14));
@@ -229,34 +291,84 @@ async fn what_is_filed_under_a_label_is_its_children() {
 /// last row, lands in its place: the next page past the cursor neither
 /// repeats nor skips a row, and a window around it shows it between its
 /// neighbours.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_late_message_lands_where_it_belongs() {
-    let (repo, w) = seeded().await;
-    let first = page(&repo, "t1", Ask::Around(Anchor::Start), 2).await;
+    let library = seeded().await;
+    let repo = &library.repo;
+    let first = page(repo, "t1", Ask::Around(Anchor::Start), 2).await;
     assert_eq!(uuids(&first), ["m1", "m2"]);
     let cursor = first.after.clone().expect("more after m2");
 
     // One older than the cursor, one between the cursor and the next row.
-    let mut early = row("m1b", "t1", "t1", 10, false);
-    early.created_at = Some("2364-02-11T09:10:30+00:00".to_string());
-    early.sort_key = "2364-02-11T09:10:30.000000Z".to_string();
-    let mut between = row("m2b", "t1", "t1", 11, false);
-    between.created_at = Some("2364-02-11T09:11:30+00:00".to_string());
-    between.sort_key = "2364-02-11T09:11:30.000000Z".to_string();
-    insert_rows(&w, &[early, between]).await;
-    commit(&w, "late messages").await;
+    let mut t1 = documents().remove(0);
+    for (m, at) in [
+        ("m1b", "2364-02-11T09:10:30+00:00"),
+        ("m2b", "2364-02-11T09:11:30+00:00"),
+    ] {
+        t1.rows.push(row(m, "t1", "t1", at));
+    }
+    library.sync(vec![t1], vec![]).await;
 
-    let next = page(&repo, "t1", Ask::After(cursor), 2).await;
+    let next = page(repo, "t1", Ask::After(cursor), 2).await;
     assert_eq!(uuids(&next), ["m2b", "m3"]);
-    let around = page(&repo, "t1", item("m1b"), 1).await;
+    let around = page(repo, "t1", item("m1b"), 1).await;
     assert_eq!(uuids(&around), ["m1", "m1b", "m2"]);
+}
+
+/// Documents that place a channel differently leave it one child, where
+/// its newest says, wherever it is listed from; when that document goes,
+/// where the next newest says. A listing of places once held it in both
+/// its places, and on two pages of one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_container_its_documents_place_differently_is_in_one_place() {
+    let library = seeded().await;
+    let repo = &library.repo;
+    let places = |parent: &'static str| {
+        let scope = Scope::places(parent);
+        async move {
+            let mut listed: Vec<String> = Vec::new();
+            let mut ask = Ask::Around(Anchor::Start);
+            loop {
+                let p = scoped(repo, &scope, ask, 1).await;
+                listed.extend(p.children.iter().map(|c| c.uuid.clone()));
+                let Some(after) = p.after else { break listed };
+                ask = Ask::After(after);
+            }
+        }
+    };
+    assert_eq!(places("ws").await, ["bridge", "lbl", "ops"]);
+
+    let mut t4 = thread("t4", 4);
+    t4.data_nodes[1] = DataNodeRow::new("t4", "bridge", SOURCE, "Slack channel")
+        .named(Some("#main-bridge".to_string()))
+        .place()
+        .sort_key("9".to_string())
+        .under(&Lineage::top().below(&t4.data_nodes[0]));
+    library.sync(vec![t4], vec![]).await;
+    assert_eq!(
+        places("ws").await,
+        ["lbl", "ops", "bridge"],
+        "once, at its newest document's key"
+    );
+    let p = page(repo, "ws", item("bridge"), 1).await;
+    assert_eq!(p.children[1].name.as_deref(), Some("#main-bridge"));
+
+    let mut t5 = thread("t5", 5);
+    t5.data_nodes[1] = DataNodeRow::new("t5", "bridge", SOURCE, "Slack channel").place();
+    library.sync(vec![t5], vec![]).await;
+    assert_eq!(places("ws").await, ["lbl", "ops"], "moved out of ws");
+    assert_eq!(places("source:slack").await, ["bridge", "ws"]);
+
+    library.sync(vec![], vec!["t5", "t4"]).await;
+    assert_eq!(places("ws").await, ["bridge", "lbl", "ops"]);
+    assert_eq!(places("source:slack").await, ["ws"]);
 }
 
 /// An anchor that is not among the container's children is refused by
 /// name, even when it is a child of something else.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn an_anchor_elsewhere_in_the_tree_is_refused() {
-    let (repo, _w) = seeded().await;
+    let Library { repo, .. } = seeded().await;
     match repo.children(&Scope::all("bridge"), &item("m3"), 5).await {
         Err(ChildrenFailure::Refused(ChildrenError::NotAChild { parent, child })) => {
             assert_eq!((parent.as_str(), child.as_str()), ("bridge", "m3"));
@@ -265,27 +377,12 @@ async fn an_anchor_elsewhere_in_the_tree_is_refused() {
     }
 }
 
-/// `seeded()` with the workspace, both channels and the label marked as
-/// places, the label also filed under the workspace, and a thread filed
-/// there that is not a place.
-async fn seeded_places() -> (DoltRepo, sqlx::SqlitePool) {
-    let (repo, w) = seeded().await;
-    sqlx::query("UPDATE data_nodes SET is_place = 1 WHERE uuid IN ('ws', 'bridge', 'ops', 'lbl')")
-        .execute(&w)
-        .await
-        .expect("mark the places");
-    file(&w, "t2", "lbl", "ws").await;
-    file(&w, "t2", "t2", "ws").await;
-    commit(&w, "places").await;
-    (repo, w)
-}
-
 /// What a source holds that names no parent is its top: the workspace,
 /// once though every document carries it. A label whose account no
 /// document carries is under that account, not at the top.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_sources_top_is_what_names_no_parent() {
-    let (repo, _w) = seeded().await;
+    let Library { repo, .. } = seeded().await;
     let p = scoped(
         &repo,
         &Scope::all("source:slack"),
@@ -316,9 +413,9 @@ async fn a_sources_top_is_what_names_no_parent() {
 /// Listing places leaves out rows and the containers that are not places,
 /// takes in places filed under the parent, and says which have places
 /// below them.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_listing_of_places_holds_only_places() {
-    let (repo, _w) = seeded_places().await;
+    let Library { repo, .. } = seeded().await;
     let p = scoped(&repo, &Scope::places("ws"), Ask::Around(Anchor::Start), 10).await;
     assert_eq!(
         uuids(&p),
@@ -376,14 +473,15 @@ async fn plan(w: &sqlx::SqlitePool, sql: &str, binds: usize) -> Vec<String> {
         .collect()
 }
 
-/// A page of rows or containers is one range of its `(parent, sort_key,
-/// uuid)` index read in order, either way, with no sort, for a container
-/// and for a source's top, all of them or only the places; what is filed is
-/// found by its label's index and sorted after (its key is on another
-/// table). And every index made for children is one some read plans with.
-#[tokio::test]
+/// A page of rows or places is one range of its `(parent, sort_key, uuid)`
+/// index read in order, either way, with no sort, for a container and for a
+/// source's top; what is filed is found by its label's index and sorted
+/// after (its key is on another table). And every index made for children
+/// is one some read plans with.
+#[tokio::test(flavor = "multi_thread")]
 async fn every_children_read_is_served_by_its_index() {
-    let (_repo, w) = seeded().await;
+    let library = seeded().await;
+    let w = writer(&library.root).await;
     let mut used = std::collections::BTreeSet::new();
     let mut unserved = Vec::new();
     let scopes = [
@@ -398,16 +496,15 @@ async fn every_children_read_is_served_by_its_index() {
                 for at_is_after in [true, false] {
                     let sql = children_sql(scope, via, side, at_is_after).expect("a read");
                     let plan = plan(&w, &sql, 4).await;
-                    // The narrower reads check a column the index does not
-                    // hold, so they read the table beside it, in the
-                    // index's order still.
                     let wanted = match (via, scope == &Scope::all("ws")) {
                         (Via::Row, true) => {
                             "SEARCH grid_rows USING COVERING INDEX grid_rows_by_parent "
                         }
-                        (Via::Node, true) => "SEARCH n USING COVERING INDEX data_nodes_by_parent ",
+                        // A source's top checks a column the index does not
+                        // hold, so it reads the table beside it, in the
+                        // index's order still.
                         (Via::Row, false) => "SEARCH grid_rows USING INDEX grid_rows_by_parent ",
-                        (Via::Node, false) => "SEARCH n USING INDEX data_nodes_by_parent ",
+                        (Via::Node, _) => "SEARCH nodes USING COVERING INDEX nodes_places ",
                         (Via::Filed, _) => "SEARCH f USING COVERING INDEX filings_by_under ",
                     };
                     let searched = plan.iter().any(|d| d.starts_with(wanted));
@@ -424,7 +521,14 @@ async fn every_children_read_is_served_by_its_index() {
         used.extend(index_names(&plan(&w, &child_key_sql(scope), 2).await));
     }
     for (sql, binds) in [(NODE_FACTS_SQL, 1), (PLACES_BELOW_SQL, 1)] {
-        used.extend(index_names(&plan(&w, sql, binds).await));
+        let plan = plan(&w, sql, binds).await;
+        if plan
+            .iter()
+            .any(|d| d.starts_with("SCAN") && !d.starts_with("SCAN json_each"))
+        {
+            unserved.push(format!("{sql}: {plan:?}"));
+        }
+        used.extend(index_names(&plan));
     }
     assert!(unserved.is_empty(), "{}", unserved.join("\n"));
     let unused: Vec<&str> = CHILDREN_INDEXES

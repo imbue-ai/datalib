@@ -295,9 +295,15 @@ workspace and its channel) is its tree, below.
 ### `parent_uuid`, `sort_key`, `read_uuid`, `place_uuid`: where a row sits
 
 Every row sits in a tree of **containers**: the chat, thread, channel,
-page, calendar or label it lives in, each a row of the `data_nodes` table
-that the document carries the way it carries its contacts (a channel
-named by many threads has a row under each, one container when read).
+page, calendar or label it lives in, each one row of the grid index's
+`nodes` table, by its uuid. `nodes` is settled from what the documents
+say: each carries a `data_nodes` row for every container it sits in, the
+way it carries its contacts, so a channel has one there under every
+thread. The document that holds a container's own grid row tells of it,
+else the newest that names it does. Every reader reads `nodes`;
+`data_nodes` is there for when the document that told of one goes, and
+the next one tells.
+
 `parent_uuid` is the container that holds the row. `sort_key` is how
 it sorts among that container's children: its `created_at` in UTC
 unless the source orders children without times, as a page orders its
@@ -311,7 +317,7 @@ one. The applet's `GET /children/{uuid}` lists a container's children
 in that order, a page each way around an anchor
 ([the route](../user/applets.md#a-containers-children)), off indexes
 on `(parent_uuid, sort_key, uuid)` that only the grid index has
-(`data_nodes::CHILDREN_INDEXES`). A container is **read together** (what a
+(`nodes::CHILDREN_INDEXES`). A container is **read together** (what a
 search groups by and the viewer opens: a thread, a chat, a page) or a
 **place** (what a person browses: a channel, a mailbox, a calendar), or
 both; `read_uuid` and `place_uuid` are the nearest container above the
@@ -323,11 +329,10 @@ under each of its labels: those are `filings` rows.
 thread or a chat is the document that holds its messages, under the
 same uuid. The rest (a Slack channel or workspace, an email label or
 account, a project, a calendar, an address book) are written by the
-`unified_grid_and_search_index` step from the `data_nodes` its
-documents carry, one row
-per container, as the newest carrier describes it: its `kind`, its name
-as `conversation_name`, its place in the tree and its upstream id, and
-no author, time or text (`etl/render/src/grid_index/node_rows.rs`).
+`unified_grid_and_search_index` step from `nodes`, one row per
+container: its `kind`, its name as `conversation_name`, its place in the
+tree and its upstream id, and no author, time or text
+(`etl/render/src/grid_index/nodes.rs`).
 Such a row has no `markdown_uuid`, because no document owns it: it is
 kept while any document carries its container and deleted with the
 last. So a container's uuid opens a row like any other.

@@ -1,28 +1,18 @@
-// The containers rows live in — a chat, a thread, a channel, a label, a
-// page — and what each is filed under. A container is carried by every
+// What each document says of the containers its rows live in: a chat, a
+// thread, a channel, a label, a page. A container is carried by every
 // document that names it, the way a person is (`document_contacts`): a
 // re-render replaces its own rows, and a channel named by many threads
-// has a row under each, one container when read
-// (docs/dev/plans/documents_to_blocks.md).
+// has a row under each. The index step settles them into one row per
+// container, `nodes`, which is what a reader reads.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
 
-/// What listing a container's children reads, made in the grid index
-/// alone: nothing asks a render store for children. A page of children is
-/// one range of a `(parent, sort_key, uuid)` index, read in order; a page's
-/// containers are looked up by uuid.
-pub const CHILDREN_INDEXES: &[&str] = &[
-    "CREATE INDEX IF NOT EXISTS grid_rows_by_parent ON grid_rows (parent_uuid, sort_key, uuid)",
-    "CREATE INDEX IF NOT EXISTS data_nodes_by_parent ON data_nodes (parent_uuid, sort_key, uuid)",
-    BY_UUID_INDEX,
-    "CREATE INDEX IF NOT EXISTS filings_by_under ON filings (under_uuid, node_uuid)",
-];
-
-/// A container by its uuid: a page's containers are read by it, and the
-/// grid index's sweep of node rows no document carries looks each up by it.
+/// A node's accounts by its uuid, the newest found with one seek however
+/// many documents name it. In the grid index alone, which settles them
+/// into `nodes`.
 pub const BY_UUID_INDEX: &str =
-    "CREATE INDEX IF NOT EXISTS data_nodes_by_uuid ON data_nodes (uuid)";
+    "CREATE INDEX IF NOT EXISTS data_nodes_by_uuid ON data_nodes (uuid, markdown_uuid)";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, PortableTable, sqlx::FromRow)]
 #[portable_table(table = "data_nodes", primary_key = "markdown_uuid, uuid")]

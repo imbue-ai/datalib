@@ -15,7 +15,8 @@
                                                   days, one row each, replaced whole by each
                                                   run (`calendar_render/src/occurrences/`)
 <data_root>/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite   grid_rows / markdowns / edges / problems /
-                                                  data_nodes and filings (the tree the rows sit in) /
+                                                  nodes and filings (the tree the rows sit in;
+                                                  data_nodes is what each document says of it) /
                                                   contact_records, their handles and document_contacts
                                                   (who each handle is, per source, and how much
                                                   they wrote in each document);

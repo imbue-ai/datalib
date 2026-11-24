@@ -13,8 +13,8 @@ use sqlx::{Row, SqlitePool};
 
 use crate::redact::Redactor;
 use crate::{
-    is_terminal, runs_path, LiveState, Retention, INDEXES, PROCESSES_BY_RUN, RUNS_BY_START,
-    SCHEMA_VERSION,
+    is_terminal, runs_path, LiveState, Retention, INDEXES, METRICS_BY_NAME, METRIC_SAMPLES_BY_NAME,
+    PROCESSES_BY_RUN, RUNS_BY_START, SCHEMA_VERSION,
 };
 use app_schema::runs::{
     LogRow, MetricRow, MetricSampleRow, Process, ProcessRow, RunRow, RunStart, StepRunRow,
@@ -397,6 +397,7 @@ const UPGRADES: &[(i32, &[&str])] = &[
     ),
     (12, &[PROCESSES_BY_RUN]),
     (13, &[RUNS_BY_START]),
+    (14, &[METRICS_BY_NAME, METRIC_SAMPLES_BY_NAME]),
 ];
 
 /// `true` when the file carries this build's schema, climbing the
@@ -614,7 +615,7 @@ pub async fn metric_by_run(data_root: &Path, name: &str) -> anyhow::Result<Vec<M
     };
     let rows = sqlx::query(
         "SELECT m.run_id, m.step, m.name, m.labels, m.value, m.updated_at_utc, m.tz_offset \
-         FROM metrics m JOIN runs r ON r.run_id = m.run_id \
+         FROM metrics m INDEXED BY metrics_by_name JOIN runs r ON r.run_id = m.run_id \
          WHERE m.name = ?1 \
          ORDER BY m.step, m.labels, r.started_at_utc, r.rowid",
     )
@@ -652,13 +653,20 @@ async fn newest_per_series(data_root: &Path, name: Option<&str>) -> anyhow::Resu
     // started in the same instant — a test, or two ticks of a wall
     // clock at second resolution — fall back to the order the store
     // recorded them in.
-    let rows = sqlx::query(
-        "SELECT m.run_id, m.step, m.name, m.labels, m.value, m.updated_at_utc, m.tz_offset \
-         FROM metrics m JOIN runs r ON r.run_id = m.run_id \
-         WHERE ?1 IS NULL OR m.name = ?1 \
-         ORDER BY m.step, m.name, m.labels, r.started_at_utc DESC, r.rowid DESC",
-    )
-    .bind(name)
+    let rows = match name {
+        Some(name) => sqlx::query(
+            "SELECT m.run_id, m.step, m.name, m.labels, m.value, m.updated_at_utc, m.tz_offset \
+             FROM metrics m INDEXED BY metrics_by_name JOIN runs r ON r.run_id = m.run_id \
+             WHERE m.name = ?1 \
+             ORDER BY m.step, m.name, m.labels, r.started_at_utc DESC, r.rowid DESC",
+        )
+        .bind(name),
+        None => sqlx::query(
+            "SELECT m.run_id, m.step, m.name, m.labels, m.value, m.updated_at_utc, m.tz_offset \
+             FROM metrics m JOIN runs r ON r.run_id = m.run_id \
+             ORDER BY m.step, m.name, m.labels, r.started_at_utc DESC, r.rowid DESC",
+        ),
+    }
     .fetch_all(&pool)
     .await;
     pool.close().await;
@@ -703,11 +711,13 @@ pub async fn metric_history(
     let rows = sqlx::query(
         "SELECT run_id, step, labels, ts_utc, tz_offset, value FROM ( \
            SELECT *, ROW_NUMBER() OVER (PARTITION BY step, labels ORDER BY ts_utc DESC) AS rn \
-           FROM metric_samples WHERE name = ?1 AND ts_utc <= ?2) \
+           FROM metric_samples INDEXED BY metric_samples_by_name \
+           WHERE name = ?1 AND ts_utc <= ?2) \
          WHERE rn = 1 \
          UNION ALL \
          SELECT run_id, step, labels, ts_utc, tz_offset, value \
-           FROM metric_samples WHERE name = ?1 AND ts_utc > ?2 \
+           FROM metric_samples INDEXED BY metric_samples_by_name \
+           WHERE name = ?1 AND ts_utc > ?2 \
          ORDER BY step, labels, ts_utc",
     )
     .bind(name)
@@ -823,10 +833,12 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
     let queue_history = sqlx::query(
         "SELECT step, name, labels, ts_utc, tz_offset, value FROM ( \
            SELECT *, ROW_NUMBER() OVER (PARTITION BY step, name, labels ORDER BY ts_utc DESC) AS rn \
-           FROM metric_samples WHERE run_id = ?1 AND name IN (?3, ?4, ?5) AND ts_utc <= ?2) \
+           FROM metric_samples INDEXED BY metric_samples_by_name \
+           WHERE run_id = ?1 AND name IN (?3, ?4, ?5) AND ts_utc <= ?2) \
          WHERE rn = 1 \
          UNION ALL \
-         SELECT step, name, labels, ts_utc, tz_offset, value FROM metric_samples \
+         SELECT step, name, labels, ts_utc, tz_offset, value \
+           FROM metric_samples INDEXED BY metric_samples_by_name \
            WHERE run_id = ?1 AND name IN (?3, ?4, ?5) AND ts_utc > ?2 \
          ORDER BY step, name, labels, ts_utc",
     )
