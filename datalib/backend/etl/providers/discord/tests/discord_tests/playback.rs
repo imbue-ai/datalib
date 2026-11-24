@@ -210,8 +210,8 @@ async fn an_earlier_since_fetches_what_it_now_covers() {
     // Where the first run stopped, which the second goes on under.
     let edge = snowflake::floor_at(snowflake::unix_ms(at(150)));
     world.value["befores"] = json!({
-        (BRIDGE): [(edge + 1).to_string()],
-        (RIKER_DM): [(edge + 1).to_string()],
+        (BRIDGE): [edge.to_string()],
+        (RIKER_DM): [edge.to_string()],
     });
     let tape = world.tape(d.path(), "before");
     let from = |since: Option<String>| DiscordSync { since, ..sync() };

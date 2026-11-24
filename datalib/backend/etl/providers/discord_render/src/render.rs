@@ -5,19 +5,20 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
 use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact, Photo};
+use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
-use datalib_etl_chat_common::render::{ChatRenderer, RenderProfile, RenderUnits};
+use datalib_etl_chat_common::render::{ChatRenderer, RenderProfile};
 use datalib_etl_chat_common::types::{
     AuthorKind, ItemKind, NamedPerson, NormalizedAttachment, NormalizedChat, NormalizedChatItem,
     NormalizedDoc, NormalizedReaction, UpstreamRef,
 };
-use datalib_etl_chat_common::TextFormat;
+use datalib_etl_chat_common::{render_paged, Page, PageEnd, PagedChats, TextFormat};
 use datalib_etl_discord::ingest::db::files_of;
 use datalib_etl_discord::ingest::schema_raw::{is_webhook, CHANNELS, GUILDS, ROLES, USERS};
 use datalib_etl_render::grid_index::RenderedMarkdown;
+use datalib_etl_render::html::{escape_md_inline, md_quote};
 use datalib_etl_render::message::chip_link;
-use datalib_etl_render::pages::{batches, PageSize};
-use datalib_etl_render::processor::Unparsed;
+use datalib_etl_render::pages::{PageSize, RenderUnitPages};
 use datalib_handle::Handle;
 use datalib_schema::data_nodes::DataNodeRow;
 use datalib_schema::problems::{Problem, Reason, Severity};
@@ -26,7 +27,7 @@ use serde_json::Value;
 
 use crate::embeds;
 use crate::ids;
-use crate::markdown::{mentioned, quote, to_commonmark, Labels};
+use crate::markdown::{mentioned, to_commonmark, Labels};
 use crate::store::{Channel, Conversation, Message, Shared, Store};
 
 /// Bump when the rendered output changes in a way that must invalidate
@@ -39,12 +40,6 @@ const CONVERSATIONS_PER_PAGE: usize = 20;
 
 /// How much of the message a reply answers is quoted above it.
 const REPLY_QUOTE_MAX: usize = 120;
-
-pub struct PageEnd {
-    pub looked_at: Vec<String>,
-    pub render_units: RenderUnits,
-    pub unparsed: Vec<Unparsed>,
-}
 
 pub fn profile() -> RenderProfile {
     RenderProfile {
@@ -85,33 +80,44 @@ pub fn render_store(
         progress,
         on_doc_complete,
     );
-    let mut pages = store.pages(size.render_units.min(CONVERSATIONS_PER_PAGE));
-    while let Some(page) = store.next_page(&mut pages)? {
-        let weights: Vec<u64> = page
-            .conversations
-            .iter()
-            .map(Conversation::attachment_bytes)
-            .collect();
-        for range in batches(&weights, size.bytes) {
-            let batch: Vec<&Conversation> = page.conversations[range].iter().collect();
-            for c in store.load_blobs(&batch)? {
-                let chat = build_chat(&store.shared, &c, source_id);
-                renderer
-                    .render_chat(&chat, &c.blobs)
-                    .context("discord chat-common render")?;
+    let pages = store.pages(size.render_units.min(CONVERSATIONS_PER_PAGE));
+    let chats = Chats { store, source_id };
+    render_paged(&chats, pages, size.bytes, &mut renderer, on_page).context("discord render")
+}
+
+struct Chats<'a> {
+    store: &'a Store,
+    source_id: &'a str,
+}
+
+impl PagedChats for Chats<'_> {
+    type Conversation = Conversation;
+
+    fn next_page(&self, pages: &mut RenderUnitPages) -> Result<Option<Page<Conversation>>> {
+        let page = self.store.next_page(pages)?;
+        Ok(page.map(|mut page| {
+            for id in &mut page.looked_at {
+                *id = ids::conversation(self.source_id, id).uuid;
             }
-        }
-        on_page(PageEnd {
-            looked_at: page
-                .looked_at
-                .iter()
-                .map(|id| ids::conversation(source_id, id).uuid)
-                .collect(),
-            render_units: renderer.take_render_units(),
-            unparsed: page.unparsed,
-        })?;
+            page
+        }))
     }
-    Ok(())
+
+    fn attachment_bytes(&self, c: &Conversation) -> u64 {
+        c.attachment_bytes()
+    }
+
+    fn load_blobs(&self, batch: &[&Conversation]) -> Result<Vec<Conversation>> {
+        self.store.load_blobs(batch)
+    }
+
+    fn chat(&self, c: &Conversation) -> NormalizedChat {
+        build_chat(&self.store.shared, c, self.source_id)
+    }
+
+    fn blobs<'c>(&self, c: &'c Conversation) -> &'c BlobBundle {
+        &c.blobs
+    }
 }
 
 fn text<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
@@ -364,7 +370,7 @@ impl Building<'_> {
         let (author, _, handle) = self.author(&replied.raw);
         let who = match handle {
             Some(h) => chip_link(&author, &h),
-            None => datalib_etl_render::html::escape_md_inline(&author),
+            None => escape_md_inline(&author),
         };
         let content = text(&replied.raw, "content").unwrap_or("");
         let first = content.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
@@ -374,7 +380,7 @@ impl Building<'_> {
         }
         let said = to_commonmark(&said, self.labels);
         let said = said.lines().next().unwrap_or("").trim().to_string();
-        Some(quote(format!("↪ {who} {said}").trim_end()))
+        Some(md_quote(format!("↪ {who} {said}").trim_end()))
     }
 
     /// One reaction for the account's own, and one for everyone else's
@@ -534,7 +540,6 @@ fn system_note(kind: i64, raw: &Value, b: &Building<'_>) -> System {
 mod tests {
     use super::*;
     use crate::store::User;
-    use datalib_etl::blob_cas::BlobBundle;
     use datalib_etl_render::inputs::Inputs;
     use serde_json::json;
 

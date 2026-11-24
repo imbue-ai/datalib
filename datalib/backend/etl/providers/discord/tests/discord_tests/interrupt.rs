@@ -22,6 +22,9 @@ use crate::world::{self, World};
 struct Discord {
     playback: PathBuf,
     now: IsoOffsetTimestamp,
+    /// A window that takes in every message re-reads whatever a cut lost,
+    /// and so hides a claim written too early; `0` hides nothing.
+    refresh_window_days: i64,
     earlier: Option<PathBuf>,
 }
 
@@ -54,7 +57,7 @@ impl Rig for Discord {
 
     async fn download(&self, db: &RawDb, stop: StopFlag) -> Result<()> {
         let sync = DiscordSync {
-            refresh_window_days: Some(60),
+            refresh_window_days: Some(self.refresh_window_days),
             ..sync()
         };
         let download = ingest::fetch(ingest::FetchOptions {
@@ -96,6 +99,7 @@ async fn a_first_sync_cut_off_at_any_request_resumes_to_the_same_store() {
     let rig = Discord {
         playback: World::before().tape(d.path(), "before"),
         now: world::now(),
+        refresh_window_days: 0,
         earlier: None,
     };
     all_cuts(&rig, d.path()).await;
@@ -107,6 +111,7 @@ async fn a_later_sync_cut_off_at_any_request_resumes_to_the_same_store() {
     let first = Discord {
         playback: World::before().tape(d.path(), "before"),
         now: world::now(),
+        refresh_window_days: 0,
         earlier: None,
     };
     let earlier = d.path().join("earlier");
@@ -115,10 +120,14 @@ async fn a_later_sync_cut_off_at_any_request_resumes_to_the_same_store() {
     first.download(&db, StopFlag::new()).await.unwrap();
     first.seal(db).await.unwrap();
 
-    let rig = Discord {
-        playback: World::after().tape(d.path(), "after"),
-        now: later(),
-        earlier: Some(earlier),
-    };
-    all_cuts(&rig, d.path()).await;
+    for refresh_window_days in [0, 60] {
+        let rig = Discord {
+            playback: World::after().tape(d.path(), "after"),
+            now: later(),
+            refresh_window_days,
+            earlier: Some(earlier.clone()),
+        };
+        let scratch = d.path().join(format!("window-{refresh_window_days}"));
+        all_cuts(&rig, &scratch).await;
+    }
 }

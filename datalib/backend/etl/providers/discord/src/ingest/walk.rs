@@ -110,9 +110,8 @@ impl Walk {
         match self.before {
             Some(b) => Some(b),
             None if s.open_top => None,
-            // A gap's top is a message already held, or one nothing has
-            // said is there; one above it includes it either way.
-            None => Some(s.hi.saturating_add(1)),
+            // A gap's top is the end of a stretch already read.
+            None => Some(s.hi),
         }
     }
 
@@ -252,8 +251,8 @@ mod tests {
     #[test]
     fn a_gap_below_held_messages_starts_at_its_top() {
         let mut w = Walk::new("c", owed(10, 90, &[span(50, 90)], None));
-        assert_eq!(w.next_before(), Some(51));
-        let s = w.page(&[50, 30, 5]).unwrap();
+        assert_eq!(w.next_before(), Some(50));
+        let s = w.page(&[30, 5]).unwrap();
         assert_eq!((s.span, s.floor), (span(10, 50), 10));
         assert_eq!(w.next_key(), None);
     }

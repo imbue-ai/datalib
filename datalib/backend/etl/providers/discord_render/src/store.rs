@@ -3,19 +3,19 @@
 //! attachment bytes a batch at a time.
 
 use std::collections::{BTreeMap, HashSet};
-use std::future::Future;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
 use datalib_etl::doltlite_raw::Reader;
+use datalib_etl_chat_common::Page;
 use datalib_etl_discord::ingest::db::{db_path_for, files_of, id_of};
 use datalib_etl_discord::ingest::schema_raw::{
     is_thread, split_message_key, DiscordAttachmentRow, ACCOUNT, ATTACHMENTS, CHANNELS, GUILDS,
     MESSAGES, ROLES, USERS,
 };
 use datalib_etl_render::inputs::{Inputs, RawRange};
-use datalib_etl_render::pages::{KeyColumn, RenderUnitPages};
+use datalib_etl_render::pages::{block_on, KeyColumn, RenderUnitPages};
 use datalib_etl_render::processor::Unparsed;
 use serde_json::Value;
 use sqlx::SqlitePool;
@@ -93,13 +93,6 @@ impl Conversation {
     }
 }
 
-pub struct Page {
-    pub conversations: Vec<Conversation>,
-    /// On a narrowed run, the stale conversations this page looked at.
-    pub looked_at: Vec<String>,
-    pub unparsed: Vec<Unparsed>,
-}
-
 pub struct Store {
     reader: Reader,
     cas: Option<blob_cas::BlobCas>,
@@ -109,10 +102,6 @@ pub struct Store {
     pub new_head: Option<String>,
     pub conversations: usize,
     pub unparsed: Vec<Unparsed>,
-}
-
-fn block_on<F: Future>(f: F) -> F::Output {
-    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
 }
 
 /// The store under `path`, open at the driver's commit. `None` when there
@@ -289,7 +278,9 @@ impl Store {
         }
     }
 
-    pub fn next_page(&self, pages: &mut RenderUnitPages) -> Result<Option<Page>> {
+    /// The next page's conversations, and, on a narrowed run, every one it
+    /// looked at, by channel id.
+    pub fn next_page(&self, pages: &mut RenderUnitPages) -> Result<Option<Page<Conversation>>> {
         block_on(async {
             let pool = self.reader.pool();
             let Some(keys) = pages.next(pool).await? else {

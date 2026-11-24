@@ -38,5 +38,6 @@ pub mod scope_state;
 pub mod sniff;
 pub mod stop;
 pub mod store_handle;
+pub mod sweep;
 pub mod upstream;
 pub mod xml;

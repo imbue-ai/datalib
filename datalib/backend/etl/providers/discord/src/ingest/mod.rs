@@ -24,11 +24,9 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use anyhow::Result;
-use datalib_etl::download_problems::RunProblem;
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::raw_store::{Batch, Sealer};
 use datalib_etl::run_problems::{self, RunProblems};
-use datalib_etl::upstream::Upstream;
 use datalib_etl_discord_config::{
     DiscordSync, DEFAULT_LIST_EVERY_HOURS, DEFAULT_REFRESH_EVERY_MINUTES,
     DEFAULT_REFRESH_WINDOW_DAYS,
@@ -36,6 +34,8 @@ use datalib_etl_discord_config::{
 use datalib_etl_web::coverage::{self, Span};
 use datalib_etl_web::http::{HttpRequest, LatchkeySettings};
 use datalib_etl_web::owed;
+use datalib_etl_web::owed_files::HeldFiles;
+use datalib_etl_web::run_ended::{self, RunEnded};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::Value;
@@ -110,12 +110,6 @@ impl FetchSummary {
     }
 }
 
-/// The run ends here: a refused credential or a retry guard that gave
-/// up would fail every request left.
-#[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-pub struct RunEnded(pub DiscordError);
-
 /// A conversation to walk: its id, and its newest message as listed.
 struct Conversation {
     id: String,
@@ -140,7 +134,7 @@ struct Ctx<'a> {
     floor: u64,
     requests: AtomicU64,
     downloaded: AtomicUsize,
-    held_files: Mutex<HashMap<String, String>>,
+    held_files: HeldFiles,
     /// Every read and write of the store goes through this until the run
     /// ends: it holds the store's one connection between seals.
     writes: Batch<'a>,
@@ -162,7 +156,7 @@ impl Ctx<'_> {
         match api::send(req, &self.opts.latchkey).await {
             Ok(answer) => Ok(Some(answer)),
             Err(_) if self.stopped() => Ok(None),
-            Err(e) if e.ends_the_run() => Err(RunEnded(e).into()),
+            Err(e) if e.ends_the_run() => Err(RunEnded::new(&e, e.upstream()).into()),
             Err(e) if e.is_settled() => {
                 self.found.listing_cut_off(name, e.to_string());
                 Ok(None)
@@ -176,7 +170,9 @@ impl Ctx<'_> {
 
     /// Whether the listing `key` is due again.
     async fn due(&mut self, key: &str, every: chrono::Duration) -> Result<bool> {
-        let age = db::sweep_age(self.writes.tx().await?, key, &self.opts.now).await?;
+        let age = db::SWEEPS
+            .age(&mut **self.writes.tx().await?, key, &self.opts.now)
+            .await?;
         Ok(age.is_none_or(|age| age >= every))
     }
 
@@ -309,7 +305,7 @@ impl Ctx<'_> {
             let tx = self.writes.tx().await?;
             db::write_roles(tx, guild_id, &roles, &now).await?;
             db::write_member(tx, &[(guild_id, &member)], &now).await?;
-            db::record_sweep(tx, &key, &run_now).await?;
+            db::SWEEPS.record(&mut **tx, &key, &run_now).await?;
             self.writes.wrote(roles.len() as u64 + 1).await?;
         }
         let tx = self.writes.tx().await?;
@@ -331,7 +327,9 @@ impl Ctx<'_> {
             }
             if self.threads_of(parent).await? {
                 let run_now = self.opts.now.clone();
-                db::record_sweep(self.writes.tx().await?, &key, &run_now).await?;
+                db::SWEEPS
+                    .record(&mut **self.writes.tx().await?, &key, &run_now)
+                    .await?;
             }
         }
         Ok(())
@@ -512,7 +510,9 @@ impl Ctx<'_> {
         }
         coverage::cover(tx, &history_scope(&channel), settled.span).await?;
         if settled.reread_done {
-            db::record_sweep(tx, &refresh_key(&channel), &run_now).await?;
+            db::SWEEPS
+                .record(&mut **tx, &refresh_key(&channel), &run_now)
+                .await?;
         }
         s.messages += kept.len();
         self.opts.progress.inc(kept.len() as u64);
@@ -632,53 +632,13 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         writes: Batch::new(db.pool(), opts.sealer.as_ref()),
     };
     let mut s = FetchSummary::default();
-    let result = phases(&mut ctx, &mut s).await;
+    let result = run_phases(&mut ctx, &mut s).await;
+    let result = run_ended::settle(result, "Discord", s.conversations > 0, &found);
     s.requests = ctx.requests.load(Ordering::Relaxed);
     s.files = ctx.downloaded.load(Ordering::Relaxed);
-    // What failed may have struck between two writes that belong
-    // together, so it is rolled back; the batch frees the store's one
-    // connection either way before the run's record is written.
-    let Ctx { writes, .. } = ctx;
-    let result = match result {
-        Ok(()) => writes.finish().await,
-        Err(e) => {
-            drop(writes);
-            Err(e)
-        }
-    };
+    let result = ctx.writes.settle(result).await;
     run.finish(found.ended_early(), &result, &s).await;
     result.map(|()| s)
-}
-
-async fn phases(ctx: &mut Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
-    let ended = match run_phases(ctx, s).await {
-        Ok(()) => return Ok(()),
-        Err(e) => match e.downcast::<RunEnded>() {
-            Ok(ended) => ended,
-            Err(e) => return Err(e),
-        },
-    };
-    if s.conversations == 0 {
-        return Err(Upstream::error(
-            ended.0.upstream(),
-            format!("Discord refused the run before anything came: {}", ended.0),
-        ));
-    }
-    let name = match &ended.0 {
-        DiscordError::Unauthorized(_) => "credential",
-        _ => "gave_up",
-    };
-    let problem = RunProblem::phase(
-        name,
-        format!(
-            "Discord stopped answering part-way through, so the run stopped; what it fetched \
-             before is kept, and the next run carries on from there: {}",
-            ended.0
-        ),
-    );
-    ctx.found.gave_up(problem.detail.clone());
-    ctx.found.push(problem);
-    Ok(())
 }
 
 async fn run_phases(ctx: &mut Ctx<'_>, s: &mut FetchSummary) -> Result<()> {

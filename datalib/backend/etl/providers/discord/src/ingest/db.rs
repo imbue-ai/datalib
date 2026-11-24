@@ -8,6 +8,7 @@ use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::{bulk_upsert_first_seen_in_tx, bulk_upsert_in_tx, BulkUpsertable};
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
 use datalib_etl::key_range::prefix_end;
+use datalib_etl::sweep::Sweeps;
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
@@ -415,30 +416,4 @@ pub async fn held_files(tx: &mut Tx<'_>) -> Result<HashMap<String, String>> {
     Ok(rows.into_iter().collect())
 }
 
-fn sweep_scope(key: &str) -> String {
-    format!("discord:sweep:{key}")
-}
-
-/// How long before `now` the listing `key` names was last read whole.
-pub async fn sweep_age(
-    tx: &mut Tx<'_>,
-    key: &str,
-    now: &IsoOffsetTimestamp,
-) -> Result<Option<chrono::Duration>> {
-    let at: Option<String> =
-        sqlx::query_scalar("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
-            .bind(sweep_scope(key))
-            .fetch_optional(&mut **tx)
-            .await
-            .context("read a sweep marker")?;
-    let Some(at) = at else { return Ok(None) };
-    let at = datalib_time::parse_strict(&at)
-        .with_context(|| format!("parse the sweep marker {at:?}"))?;
-    Ok(Some(chrono::Duration::milliseconds(
-        now.to_unix_millis() - at.to_unix_millis(),
-    )))
-}
-
-pub async fn record_sweep(tx: &mut Tx<'_>, key: &str, now: &IsoOffsetTimestamp) -> Result<()> {
-    dr::upsert_scope_state(&mut **tx, &sweep_scope(key), &now.to_rfc3339()).await
-}
+pub const SWEEPS: Sweeps = Sweeps::new("discord");

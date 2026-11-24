@@ -610,7 +610,7 @@ The one position kept is upstream's own **delta token** (JMAP `state`,
 Gmail `historyId`, RFC 6578 `sync-token`, Google's `syncToken`,
 Todoist's `sync_token`),
 written in the transaction that stores the page it covers, and a
-**sweep marker** that only schedules when to list again (Slack's
+**sweep marker** (`datalib_etl::sweep`) that only schedules when to list again (Slack's
 user list, claude's orgs and project docs).
 
 | Source | Listed | Held at | Range in `coverage` |

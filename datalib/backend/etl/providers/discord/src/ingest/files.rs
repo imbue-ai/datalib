@@ -9,15 +9,16 @@ use std::sync::Mutex;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use datalib_etl::blob_cas::CasInsert;
 use datalib_etl_web::http::{latchkey_curl, HttpError, LatchkeySettings};
 use datalib_etl_web::owed::{BatchError, Fetched, Fetcher, Listed, Outcome};
+use datalib_etl_web::owed_files::{self, File, Got, HeldFiles};
 use datalib_problems::Reason;
 use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
 
 use super::api::{self, DiscordError};
 use super::db::{files_of, id_of, OwedFile, RawDb};
+use super::schema_raw::DiscordAttachmentRow;
 
 pub struct FileFetcher<'a> {
     pub db: &'a RawDb,
@@ -28,27 +29,11 @@ pub struct FileFetcher<'a> {
     /// What each owed edge points at, read before the requests go out:
     /// the store's one connection is the writer's.
     pub owed: BTreeMap<String, OwedFile>,
-    /// `attachment id → blake3` of every file held. A file's bytes never
-    /// change, so one held under one message is not fetched for another.
-    pub held: &'a Mutex<HashMap<String, String>>,
+    pub held: &'a HeldFiles,
     /// `attachment id → link`, from messages read again.
     pub fresh: Mutex<HashMap<String, String>>,
     pub requests: &'a AtomicU64,
     pub downloaded: &'a AtomicUsize,
-}
-
-/// What one owed edge came to.
-pub struct File {
-    attachment_id: String,
-    got: Got,
-}
-
-enum Got {
-    Held(String),
-    Fetched {
-        bytes: Vec<u8>,
-        content_type: Option<String>,
-    },
 }
 
 fn text<'v>(v: &'v Value, key: &str) -> Option<&'v str> {
@@ -74,63 +59,14 @@ impl Fetcher<File> for FileFetcher<'_> {
         tx: &mut Transaction<'static, Sqlite>,
         batch: &[Fetched<File>],
     ) -> Result<()> {
-        let files: Vec<&File> = batch
-            .iter()
-            .filter_map(|f| match &f.outcome {
-                Outcome::Got(file) | Outcome::Unusable(file, ..) => Some(file),
-                _ => None,
-            })
-            .collect();
-        let inserts: Vec<CasInsert<'_, &str>> = files
-            .iter()
-            .filter_map(|file| match &file.got {
-                Got::Fetched {
-                    bytes,
-                    content_type,
-                } => Some(CasInsert {
-                    id: file.attachment_id.as_str(),
-                    bytes,
-                    content_type: content_type.as_deref(),
-                }),
-                Got::Held(_) => None,
-            })
-            .collect();
-        self.downloaded.fetch_add(inserts.len(), Ordering::Relaxed);
-        let stored = self.db.cas().put_many(inserts).await?;
-        for f in batch {
-            match &f.outcome {
-                Outcome::Got(file) | Outcome::Unusable(file, ..) => {
-                    let blake3 = match &file.got {
-                        Got::Held(held) => held.clone(),
-                        Got::Fetched { .. } => stored[file.attachment_id.as_str()].clone(),
-                    };
-                    sqlx::query("UPDATE discord_attachments SET blake3 = ? WHERE id = ?")
-                        .bind(&blake3)
-                        .bind(&f.listed.key)
-                        .execute(&mut **tx)
-                        .await?;
-                    self.held
-                        .lock()
-                        .unwrap()
-                        .insert(file.attachment_id.clone(), blake3);
-                }
-                Outcome::Gone => {
-                    sqlx::query("DELETE FROM discord_attachments WHERE id = ?")
-                        .bind(&f.listed.key)
-                        .execute(&mut **tx)
-                        .await?;
-                }
-                Outcome::Failed(_) | Outcome::Skipped(..) => {}
-            }
-        }
+        let landed =
+            owed_files::store::<DiscordAttachmentRow>(self.db.cas(), tx, batch, self.held).await?;
+        self.downloaded.fetch_add(landed, Ordering::Relaxed);
         Ok(())
     }
 
     fn weight(&self, content: &File) -> usize {
-        match &content.got {
-            Got::Fetched { bytes, .. } => bytes.len(),
-            Got::Held(_) => 0,
-        }
+        content.weight()
     }
 }
 
@@ -145,20 +81,15 @@ impl FileFetcher<'_> {
             return Ok(Outcome::Gone);
         };
         let file = |got| File {
-            attachment_id: attachment_id.to_string(),
+            ref_id: attachment_id.to_string(),
             got,
         };
         if let Some(held) = self.held.lock().unwrap().get(attachment_id).cloned() {
             return Ok(Outcome::Got(file(Got::Held(held))));
         }
         let size = owed.file.get("size").and_then(Value::as_u64);
-        if let (Some(limit), Some(size)) = (self.size_limit, size) {
-            if size > limit {
-                return Ok(Outcome::Skipped(
-                    Reason::OverSizeLimit,
-                    format!("size {size} > limit {limit}"),
-                ));
-            }
+        if let Some(skipped) = owed_files::over_limit(size, self.size_limit) {
+            return Ok(skipped);
         }
         let url = match self.working_link(owed, attachment_id).await? {
             Ok(url) => url,

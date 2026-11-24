@@ -4,9 +4,9 @@
 
 use serde_json::Value;
 
-use datalib_etl_render::html::{escape_md_inline, md_link_dest};
+use datalib_etl_render::html::{escape_md_inline, md_link_dest, md_quote, safe_url};
 
-use crate::markdown::{quote, to_commonmark, Labels};
+use crate::markdown::{to_commonmark, Labels};
 
 /// A link preview's description longer than this is left out: the page it
 /// describes is a click away.
@@ -24,10 +24,6 @@ fn text<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
 
 fn list<'a>(v: &'a Value, key: &str) -> impl Iterator<Item = &'a Value> {
     v.get(key).and_then(Value::as_array).into_iter().flatten()
-}
-
-fn web(url: Option<&str>) -> Option<&str> {
-    url.filter(|u| u.starts_with("https://") || u.starts_with("http://"))
 }
 
 /// Each part as a block of markdown, in order.
@@ -78,13 +74,13 @@ fn forward(message: &Value, labels: Labels<'_>) -> String {
     let mut parts = vec!["Forwarded:".to_string()];
     parts.extend(text(message, "content").map(|t| to_commonmark(t, labels)));
     parts.extend(draw(message, labels));
-    quote(&parts.join("\n\n"))
+    md_quote(&parts.join("\n\n"))
 }
 
 /// One embed, set off as a quote. `None` for one that says no more than
 /// the link in the message's text does.
 fn embed(e: &Value, content: &str, labels: Labels<'_>) -> Option<String> {
-    let url = web(text(e, "url"));
+    let url = text(e, "url").and_then(safe_url);
     let rich = text(e, "type") == Some("rich");
     let mut head: Vec<String> = Vec::new();
     head.extend(
@@ -129,7 +125,7 @@ fn embed(e: &Value, content: &str, labels: Labels<'_>) -> Option<String> {
             .and_then(|f| text(f, "text"))
             .map(escape_md_inline),
     );
-    (!parts.is_empty()).then(|| quote(&parts.join("\n\n")))
+    (!parts.is_empty()).then(|| md_quote(&parts.join("\n\n")))
 }
 
 fn poll_of(poll: &Value) -> String {
@@ -210,7 +206,7 @@ mod tests {
     fn a_forward_is_quoted_whole() {
         let got = drawn(json!({"content": "", "message_snapshots": [{"message": {
             "content": "Tea. Earl Grey.\nHot.", "embeds": [], "attachments": []}}]}));
-        assert_eq!(got, ["> Forwarded:\n>\n> Tea. Earl Grey.\n> Hot."]);
+        assert_eq!(got, ["> Forwarded:\n>\n> Tea. Earl Grey.  \n> Hot."]);
     }
 
     #[test]

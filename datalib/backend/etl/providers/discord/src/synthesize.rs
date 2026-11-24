@@ -163,8 +163,8 @@ pub fn write_world(
 }
 
 /// Every page of a conversation a walk can ask for: the newest, what is
-/// older than each page's oldest message, and, from any one message of a
-/// short conversation, what is older than it, with it and without.
+/// older than each page's oldest message, and what is older than any one
+/// message of a short conversation.
 fn pages(channel: &str, messages: &[&Value], extra: &[u64]) -> Vec<(HttpRequest, Value)> {
     let mut by_id: Vec<(u64, &Value)> = messages
         .iter()
@@ -200,7 +200,7 @@ fn pages(channel: &str, messages: &[&Value], extra: &[u64]) -> Vec<(HttpRequest,
         }
     }
     if by_id.len() <= size {
-        befores.extend(by_id.iter().flat_map(|(id, _)| [Some(*id), Some(*id + 1)]));
+        befores.extend(by_id.iter().map(|(id, _)| Some(*id)));
     }
     let mut out: Vec<(HttpRequest, Value)> = befores
         .into_iter()

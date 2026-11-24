@@ -538,17 +538,7 @@ async fn download(api: &dyn Api, opts: FetchOptions, found: RunProblems) -> Resu
     };
     let mut s = FetchSummary::default();
     let result = phases(&mut ctx, &mut s).await;
-    // What failed may have struck between two writes that belong
-    // together, so it is rolled back; the batch frees the store's one
-    // connection either way before the run's record is written.
-    let Ctx { writes, .. } = ctx;
-    let result = match result {
-        Ok(()) => writes.finish().await,
-        Err(e) => {
-            drop(writes);
-            Err(e)
-        }
-    };
+    let result = ctx.writes.settle(result).await;
     s.requests = api.requests();
     run.finish(found.ended_early(), &result, &s).await;
     result.map(|()| s)

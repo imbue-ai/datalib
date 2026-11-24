@@ -300,14 +300,6 @@ pub fn mentioned(text: &str) -> Vec<Handle> {
     out
 }
 
-/// `md` as a block quote.
-pub fn quote(md: &str) -> String {
-    md.lines()
-        .map(|line| format!("> {line}").trim_end().to_string())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

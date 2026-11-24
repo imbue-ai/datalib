@@ -18,7 +18,6 @@ pub mod schema_raw;
 pub mod windows;
 
 use anyhow::Result;
-use datalib_etl::download_problems::RunProblem;
 use datalib_etl::download_run::DownloadRun;
 use datalib_etl::raw_store::{Batch, Sealer};
 use datalib_etl::run_problems::{self, RunProblems};
@@ -27,6 +26,7 @@ use datalib_etl_todoist_config::TodoistSync;
 use datalib_etl_web::coverage::{self, Span};
 use datalib_etl_web::http::LatchkeySettings;
 use datalib_etl_web::owed;
+use datalib_etl_web::run_ended::{self, RunEnded};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -100,12 +100,6 @@ impl FetchSummary {
     }
 }
 
-/// The run ends here: a refused credential or a retry guard that gave
-/// up would fail every request left.
-#[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-pub struct RunEnded(pub TodoistError);
-
 struct Ctx<'a> {
     opts: &'a FetchOptions,
     found: &'a RunProblems,
@@ -150,7 +144,7 @@ impl Ctx<'_> {
             let answer = match self.ask(api::sync_request(&token)).await {
                 Ok(answer) => answer,
                 Err(_) if self.stopped() => return Ok(()),
-                Err(e) if e.ends_the_run() => return Err(RunEnded(e).into()),
+                Err(e) if e.ends_the_run() => return Err(RunEnded::new(&e, e.upstream()).into()),
                 Err(e) => {
                     return Err(Upstream::error(
                         e.upstream(),
@@ -241,7 +235,7 @@ impl Ctx<'_> {
             let page = match self.ask(req).await {
                 Ok(page) => page,
                 Err(_) if self.stopped() => return Ok(false),
-                Err(e) if e.ends_the_run() => return Err(RunEnded(e).into()),
+                Err(e) if e.ends_the_run() => return Err(RunEnded::new(&e, e.upstream()).into()),
                 Err(e) => {
                     self.found.listing(
                         COMPLETED_ITEMS.table,
@@ -356,52 +350,12 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         writes: Batch::new(db.pool(), opts.sealer.as_ref()),
     };
     let mut s = FetchSummary::default();
-    let result = phases(&mut ctx, &mut s).await;
+    let result = run_phases(&mut ctx, &mut s).await;
+    let result = run_ended::settle(result, "Todoist", s.syncs > 0, &found);
     s.requests = ctx.requests;
-    // What failed may have struck between two writes that belong
-    // together, so it is rolled back; the batch frees the store's one
-    // connection either way before the run's record is written.
-    let Ctx { writes, .. } = ctx;
-    let result = match result {
-        Ok(()) => writes.finish().await,
-        Err(e) => {
-            drop(writes);
-            Err(e)
-        }
-    };
+    let result = ctx.writes.settle(result).await;
     run.finish(found.ended_early(), &result, &s).await;
     result.map(|()| s)
-}
-
-async fn phases(ctx: &mut Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
-    let ended = match run_phases(ctx, s).await {
-        Ok(()) => return Ok(()),
-        Err(e) => match e.downcast::<RunEnded>() {
-            Ok(ended) => ended,
-            Err(e) => return Err(e),
-        },
-    };
-    if s.syncs == 0 {
-        return Err(Upstream::error(
-            ended.0.upstream(),
-            format!("Todoist refused the run before anything came: {}", ended.0),
-        ));
-    }
-    let name = match &ended.0 {
-        TodoistError::Unauthorized(_) => "credential",
-        _ => "gave_up",
-    };
-    let problem = RunProblem::phase(
-        name,
-        format!(
-            "Todoist stopped answering part-way through, so the run stopped; what it fetched \
-             before is kept, and the next run carries on from there: {}",
-            ended.0
-        ),
-    );
-    ctx.found.gave_up(problem.detail.clone());
-    ctx.found.push(problem);
-    Ok(())
 }
 
 async fn run_phases(ctx: &mut Ctx<'_>, s: &mut FetchSummary) -> Result<()> {

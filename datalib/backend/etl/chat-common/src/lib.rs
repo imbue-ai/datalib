@@ -7,6 +7,7 @@ pub mod branches;
 pub mod changed;
 pub mod findings;
 pub mod normalize;
+pub mod paged;
 pub mod people;
 pub mod render;
 pub mod samples;
@@ -16,6 +17,7 @@ pub mod unread;
 pub use account::account_label;
 pub use blobs::{render_batched, render_batched_at, render_changed_batched, BlobsAt, ChatBlobs};
 pub use changed::{changed_chats, ChangedChats, RenderOutcome, RenderTarget};
+pub use paged::{render_paged, Page, PageEnd, PagedChats};
 pub use render::{render_all, Layout, RenderProfile, RenderSummary, TextFormat, LAYOUT_VERSION};
 // Re-exported so a provider can name its `created_at` precision without
 // taking a dependency on `datalib-time` just for the enum.
