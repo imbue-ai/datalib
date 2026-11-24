@@ -28,7 +28,7 @@ use super::{put_grid_row, WriteLock};
 pub(super) const NODES_SHAPE: &str = "2";
 
 /// How many nodes one statement settles, its uuids bound as one array.
-const AT_ONCE: usize = 10_000;
+const AT_ONCE: usize = 4_000;
 
 /// Writes each node of the JSON array `?` as one account of it tells it:
 /// the document that holds the node's own grid row, which knows it best,
