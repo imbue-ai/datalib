@@ -33,14 +33,15 @@ fn account(playback: &Path) {
 }
 
 fn events(playback: &Path, calendar: &str, id: &str) {
+    let event = json!({"id": id, "status": "confirmed", "summary": "Staff meeting"});
+    reply(playback, calendar, None, json!([event]), "t1");
+}
+
+fn reply(playback: &Path, calendar: &str, token: Option<&str>, items: Value, next: &str) {
     fixture(
         playback,
-        &events_url(calendar, None, None),
-        json_response(&json!({
-            "kind": "calendar#events",
-            "nextSyncToken": "t1",
-            "items": [{"id": id, "status": "confirmed", "summary": "Staff meeting"}],
-        })),
+        &events_url(calendar, token, None),
+        json_response(&json!({"kind": "calendar#events", "nextSyncToken": next, "items": items})),
     );
 }
 
@@ -98,15 +99,50 @@ fn a_listing_that_got_no_answer_ends_the_ingest_incomplete_with_the_rest_committ
 
     // The next run gets its answer, and is done.
     events(&playback, BRIDGE, "bridge1");
-    fixture(
-        &playback,
-        &events_url(AWAY, Some("t1"), None),
-        json_response(&json!({"kind": "calendar#events", "nextSyncToken": "t2", "items": []})),
-    );
+    reply(&playback, AWAY, Some("t1"), json!([]), "t2");
     let out = ingest(&root, &playback);
     assert!(
         out.status.success(),
         "{}",
         String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// An event with no id cannot be stored, so a sync that met one, among
+/// the changes since the last, is not done.
+#[test]
+fn an_event_with_no_id_ends_the_ingest_incomplete() {
+    let d = tempfile::tempdir().unwrap();
+    let (root, playback) = (d.path().join("root"), d.path().join("playback"));
+    account(&playback);
+    events(&playback, AWAY, "away1");
+    events(&playback, BRIDGE, "bridge1");
+    let out = ingest(&root, &playback);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+
+    reply(&playback, AWAY, Some("t1"), json!([]), "t1");
+    let poker = json!({"status": "confirmed", "summary": "Officers' poker night"});
+    reply(&playback, BRIDGE, Some("t1"), json!([poker]), "t2");
+    let out = ingest(&root, &playback);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "an event was not stored:\n{stderr}");
+    let said = outcome(&out);
+    assert_eq!(said["failure"], "incomplete", "{said}\n{stderr}");
+    assert!(stderr.contains("calendar Bridge duty"), "{stderr}");
+
+    // Asked again for the same changes, it comes with its id.
+    let poker = json!({"id": "poker1", "status": "confirmed", "summary": "Officers' poker night"});
+    reply(&playback, BRIDGE, Some("t1"), json!([poker]), "t2");
+    let out = ingest(&root, &playback);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stderr}");
+    let db = root.join(STEP).join("entities.doltlite_db");
+    assert_eq!(
+        doltlite(
+            &db,
+            "SELECT event_id FROM dolt_at_google_events('HEAD') ORDER BY event_id"
+        ),
+        ["away1", "bridge1", "poker1"]
     );
 }

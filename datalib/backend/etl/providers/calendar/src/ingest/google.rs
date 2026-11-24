@@ -80,7 +80,7 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         let listed: Vec<String> = rows.iter().map(|c| c.id.clone()).collect();
         summary.events_deleted += db.delete_calendars_not_in("google", &listed).await?;
     } else {
-        found.listing_cut_off(
+        found.listing(
             "calendars",
             format!(
                 "the account's list named {unidentified} calendar(s) with no id, which could be \
@@ -112,7 +112,7 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         };
         match sync_calendar(&cal_opts, &cal.id, &mut summary).await {
             Ok(None) => {}
-            Ok(Some(held_back)) => found.listing_cut_off(&listing, held_back),
+            Ok(Some(held_back)) => found.listing(&listing, held_back),
             Err(e) => {
                 summary.errors += 1;
                 found.listing(&listing, format!("{e:#}"));
@@ -188,10 +188,10 @@ struct CalendarOptions<'a> {
 
 /// One calendar: the changes since its sync token, or everything when
 /// it has none. A full listing is the calendar as it is, so what it
-/// does not name is dropped — unless it listed an event it could not
-/// identify, which could be any stored one; then nothing is, and the
-/// returned reason says why. Each page is one transaction; the token
-/// moves with the prune, in the last.
+/// does not name is dropped. Each page is one transaction; the token
+/// moves with the prune, in the last. A listing that held an event it
+/// could not identify, which could be any stored one, drops nothing and
+/// leaves the token, and the returned reason says why.
 async fn sync_calendar(
     o: &CalendarOptions<'_>,
     calendar_id: &str,
@@ -242,13 +242,7 @@ async fn sync_calendar(
         let last = page.is_none();
         let mut tx = db.pool().begin().await.context("begin a page")?;
         let wrote_rows = apply(&mut tx, calendar_id, &items, &known, &mut seen, summary).await?;
-        let held_back = (full && seen.unidentified > 0).then(|| {
-            format!(
-                "the listing named {} event(s) with no id, which could be any stored event, \
-                 so nothing it did not name was deleted",
-                seen.unidentified
-            )
-        });
+        let held_back = seen.held_back();
         if last {
             if full && held_back.is_none() {
                 let gone: Vec<String> = known
@@ -259,7 +253,10 @@ async fn sync_calendar(
                 summary.events_deleted += gone.len();
                 RawDb::delete_google_events(&mut tx, calendar_id, &gone).await?;
             }
-            let next_sync = str_of(&v, "nextSyncToken").filter(|_| window.is_none());
+            let next_sync = match held_back {
+                Some(_) => token.clone(),
+                None => str_of(&v, "nextSyncToken").filter(|_| window.is_none()),
+            };
             RawDb::set_sync_token(&mut tx, calendar_id, next_sync.as_deref()).await?;
         }
         tx.commit().await.context("commit a page")?;
@@ -387,6 +384,18 @@ struct Seen {
     cancelled: HashSet<String>,
     /// Events listed without an id, which no stored row can be matched to.
     unidentified: usize,
+}
+
+impl Seen {
+    fn held_back(&self) -> Option<String> {
+        (self.unidentified > 0).then(|| {
+            format!(
+                "the listing named {} event(s) with no id, which were not stored and could be any \
+                 stored event, so nothing it did not name was deleted; the next run asks again",
+                self.unidentified
+            )
+        })
+    }
 }
 
 async fn get_json(url: &str, lk: &LatchkeySettings) -> Result<Value> {
