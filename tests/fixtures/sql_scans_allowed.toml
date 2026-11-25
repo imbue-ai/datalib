@@ -13,6 +13,16 @@
 # read a whole table each pass.
 
 [[scan]]
+statement = "SELECT g.id, g.addressbook_id, g.resource_name, json(g.payload) AS payload, json(b.volatile_payload) AS volatile FROM google_contact_groups g LEFT JOIN google_contact_groups_bookkeeping b ON b.id = g.id ORDER BY g.id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "SELECT p.id, p.addressbook_id, p.resource_name, json(p.payload) AS payload, json(b.volatile_payload) AS volatile, ph.id AS photo_id, ph.blake3 AS photo_blake3 FROM google_people p LEFT JOIN google_people_bookkeeping b ON b.id = p.id LEFT JOIN google_photos ph ON ph.person_id = p.id ORDER BY p.id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
 statement = "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason FROM runs INDEXED BY runs_by_start ORDER BY started_at_utc DESC, run_id DESC LIMIT 1"
 files = ["*/runs/runs.sqlite"]
 why = "Reads one row: it walks `runs_by_start` from its newest end and stops at LIMIT 1. SQLite marks any walk that starts at one end of an index as a full scan, which is what this check reads."

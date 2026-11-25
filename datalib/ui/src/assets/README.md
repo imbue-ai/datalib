@@ -43,6 +43,9 @@ the light and dark backgrounds.
   - `garmin.svg`: the Simple Icons mark is Garmin's black wordmark,
     unreadable at 18px. This is the delta from it on its own, in Garmin
     blue.
+  - `google_contacts.svg`: on neither set. This is the product icon Google
+    serves (`productlogos/contacts_2022/v2/192px.svg` on fonts.gstatic.com),
+    cropped to a square around the mark.
   - `yolink.png`: YoLink publishes no vector mark. This is the circle
     logo shop.yosmart.com serves as its favicon.
 - **A brand's own calendar or contacts** is the generic glyph below in

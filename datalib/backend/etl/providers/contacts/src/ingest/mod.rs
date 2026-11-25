@@ -1,9 +1,11 @@
 //! CardDAV downloader entry point: discovery, then each address book
 //! kept in step through `datalib_etl_web::dav::sync`, which lists, stores
-//! and prunes; this crate says how a card becomes a row.
+//! and prunes; this crate says how a card becomes a row. The other two
+//! ways in are [`google`] and [`vcf_dir`].
 
 pub mod api;
 pub mod db;
+pub mod google;
 pub mod photo;
 pub mod schema_raw;
 pub mod vcf_dir;
@@ -24,7 +26,7 @@ use tracing::info;
 
 use api::ContactProps;
 use datalib_etl_web::dav::absolutize;
-use db::{addressbook_pk, ContactRow};
+use db::{addressbook_pk, AccountRow, ContactRow};
 
 /// Options for one `fetch` run. Mirrors the FetchOptions shape every
 /// other provider crate exposes.
@@ -62,6 +64,8 @@ pub struct FetchSummary {
     pub contacts_new: usize,
     pub contacts_updated: usize,
     pub contacts_deleted: usize,
+    /// Photos fetched, by a method that fetches them apart from the cards.
+    pub photos: usize,
     pub errors: usize,
     pub requests: usize,
 }
@@ -87,12 +91,13 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         books,
     } = reach(&opts.server_url, &mut summary, &opts.latchkey).await?;
     let server_url = opts.server_url.trim_end_matches('/').to_string();
-    db.upsert_account(
-        &account_id,
-        &server_url,
-        Some(principal_url.as_str()),
-        Some(home_set_url.as_str()),
-    )
+    db.upsert_account(&AccountRow {
+        id: account_id.clone(),
+        server_url: Some(server_url),
+        principal_href: Some(principal_url),
+        addressbook_home_set: Some(home_set_url),
+        login: None,
+    })
     .await?;
     for book in &books {
         db.upsert_addressbook(

@@ -45,7 +45,7 @@ pub enum Provider {
     ClaudeCode,
     /// Codex CLI sessions — the terminal and IDE rollouts.
     Codex,
-    /// CardDAV address books.
+    /// Address books: Google, CardDAV (Fastmail, iCloud, …) or `.vcf` files.
     Contacts,
     /// Not an upstream provider: datalib describing a source's own
     /// mirror. The per-source storage report is tagged this way rather

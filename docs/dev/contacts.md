@@ -157,18 +157,21 @@ lost, but nothing links to it either.
 That is not a rare case. WhatsApp and Signal always store the
 international form, but an address-book card is often typed by hand
 without one, and a phone's SMS backup keeps whatever the phone was
-given.
+given. Google sends its own full reading of some numbers
+(`canonicalForm`), and one typed without its country code takes its
+handle from that where there is one.
 
-**What such a number may be is matched, never decided.** Nothing sets a
-country, for a library or a source. The number's digits, less what is
-dialled before a number and is no part of it (`home_digits`: any leading
-zero, the 1 before ten digits), are compared with every full number a
-source knows, and match one that is those digits with its country code
-in front (`Handle::dialled_at_home`, which knows how long each country
-code is and nothing else about it). Where that finds one number, adding
-the person to contacts takes it; where it finds two, in two countries,
-both are offered and neither is ticked. It stays a match: it makes no
-handle, names no chip and is in no stored record. Three places use it:
+**What any other such number may be is matched, never decided.** Nothing
+sets a country, for a library or a source. The number's digits, less
+what is dialled before a number and is no part of it (`home_digits`: any
+leading zero, the 1 before ten digits), are compared with every full
+number a source knows, and match one that is those digits with its
+country code in front (`Handle::dialled_at_home`, which knows how long
+each country code is and nothing else about it). Where that finds one
+number, adding the person to contacts takes it; where it finds two, in
+two countries, both are offered and neither is ticked. It stays a match:
+it makes no handle, names no chip and is in no stored record. Three
+places use it:
 
 - **`POST /people`** answers the cards that write a number asked about
   this way (`same_digits`), and the full numbers each such number may be
@@ -384,7 +387,9 @@ image). A vCard carries its photo inside
 the card: the contacts download decodes each inline `PHOTO` into the
 source's blob store before the card is stored, and the source's
 `--prepare` does the same for every card a store already holds. Render
-hashes the card's decoded photo and links it. A photo the blob store
+hashes the card's decoded photo and links it. A Google contact's photo
+is a link, which the download fetches into the blob store
+(`contacts/INGEST.md`). A photo the blob store
 lacks leaves the contact with no photo and a `blob_missing` problem on
 its page.
 
