@@ -23,6 +23,11 @@ files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Once per pass that changed anything: records no document carries any more, in tables of one row per distinct record, or per handle of one."
 
 [[scan]]
+statement = "DELETE FROM contact_record_numbers WHERE NOT EXISTS (SELECT 1 FROM document_contacts d INDEXED BY document_contacts_by_record WHERE d.record_id = contact_record_numbers.record_id)"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "Once per pass that changed anything: records no document carries any more, in a table of one row per number a record writes with no country code."
+
+[[scan]]
 statement = "DELETE FROM contact_records WHERE NOT EXISTS (SELECT 1 FROM document_contacts d INDEXED BY document_contacts_by_record WHERE d.record_id = contact_records.record_id)"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Once per pass that changed anything: records no document carries any more, in tables of one row per distinct record, or per handle of one."

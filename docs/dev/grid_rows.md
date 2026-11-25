@@ -264,7 +264,7 @@ group, and `email` and `phone` are the card's first address and number
 as the source wrote them, a number with or without its country code.
 The grid's Contact column, and the Subject cell on such a row, is the
 contact's chip, drawn from the three, else from the contact's handles
-in `contact_record_handles` ([`chips.md`](chips.md) §"In a grid"). A
+in `contact_record_handles`, else by its own page ([`chips.md`](chips.md) §"In a grid"). A
 card is its own subject, so `conversation_name` is the contact's name
 too, and `channel` holds the address book or list it is filed in.
 `author` stays null: nobody wrote a contact.

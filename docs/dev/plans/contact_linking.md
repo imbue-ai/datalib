@@ -36,9 +36,9 @@ hold here. One more:
 
 A new kind is not a rules change; the reference lists the places
 one touches (§"Changing the rules"). Phone numbers written without a
-country code have no handle today; giving them one needs a default
-region, a setting of the applet that the render reads through the
-step's params.
+country code have no handle, and no setting gives them one: they are
+matched by their digits (the reference, §"A number without its country
+code").
 
 ## Which rows name a handle: the search terms
 

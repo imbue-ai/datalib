@@ -51,7 +51,10 @@ The URI for each kind of handle, and the trust rule a viewer keeps, are
 in [the document contract](../user/rendered_documents.md#a-person). The
 backend writes a handle's URI with `Handle::to_uri`; one of your
 contacts is `datalib:contact/<id>` (`datalib_contacts::contact_uri`,
-read by `contactFromUri` in `chipLinks.js`); a group is
+read by `contactFromUri` in `chipLinks.js`), and whoever a contact's
+page is about is `datalib:contact_page/<page>`
+(`datalib_contact_schema::contact_page_uri`, `contactPageFromUri`); a
+group is
 `datalib:group/<id>` and a step `datalib:step/<step id>`
 (`datalib_columns::Entity::uri`); a document is `datalib:doc/<uuid>`
 (`datalib_uri::Name::doc`, `ui/src/uri.ts::writeDoc`), and a node of a
@@ -85,12 +88,13 @@ each store's step in a column.
 1. **Marking.** The viewer's markdown-it plugin (`chipLinks.js`, run by
    `renderDocument.ts` and by the render preview) gives an explicit
    link whose href names a handle `class="chip" data-handle="<handle>"`,
-   and one naming a group or step `class="chip" data-entity="<uri>"`.
+   one naming a group or step `class="chip" data-entity="<uri>"`, and
+   one naming a contact's page `class="chip" data-contact-page="<page>"`.
    A link `linkify` made from a bare address in running text is left
    alone, so a signature's address stays an address. The plugin signs
    each mark with a value fresh for that render, and the sanitizer
-   (`sanitize.ts`) takes `class="chip"`, `data-handle`, `data-entity`
-   and `data-contact` off anything not signed, so a body's own HTML
+   (`sanitize.ts`) takes `class="chip"` and each of those attributes
+   off anything not signed, so a body's own HTML
    cannot claim to be a chip. It admits the `slack:` and `datalib:`
    schemes beside the web, mail and phone. A handle holding a bidi
    control or an invisible character is not one: two handles that look
@@ -216,7 +220,10 @@ A grid draws a chip from an `identity` typed cell,
   `columns.rs::contact_identity` from `grid_rows.contact`, `email` and
   `phone`, else any handle `contact_record_handles` holds for the
   contact). An identity cell whose `id` is no handle is drawn as plain
-  text: a group of contacts, a contact with no handle at all.
+  text: a group of contacts.
+  One whose `id` is a `datalib:contact_page/` URI, a person whose card
+  has no handle, is drawn as that page's chip ([below](#a-contacts-page))
+  when the grid is given `chips.page`.
   One whose `id` is a `datalib:contact/` URI is drawn as that contact's
   chip when the grid is given `chips.contact` (the contacts app's table,
   for a contact with no handle).
@@ -347,6 +354,18 @@ double-click opens it as text to edit, the one place a double-click
 does not open what the chip names. The right-click menu is the field's
 (Edit as text, Exclude) followed by `entityMenu`'s or `chipMenu`'s
 (`ui/src/search/chipMenu.ts`).
+
+## A contact's page
+
+A card may hold no handle: only a number with no country code, or no way
+to reach the person at all. Its person is then named by the card's own
+page, in the page's heading, the grid's Contact and Subject cells and
+the search list's title. `contactPages.ts` resolves the page
+(`POST /people`'s `pages`) and draws the chip grey, under the card's
+name, or as your contact's where its number is the only one a source
+knows with the same digits and is on that contact. In a document it
+never shows the link's own text ([Trust](#trust)). Its double-click
+opens the person's page, and its menu copies the name and adds them.
 
 ## A document
 
@@ -533,8 +552,7 @@ search grid narrows its own query for "Everything with" and replaces it
 for a group chip's own Browse; everywhere else both open a search
 beside the card. The row's Browse opens its browse card, with the
 source's columns, from every surface. A contact chip (`data-contact`)
-has no card of its own yet, so it offers copy and "Everything with"
-only.
+opens that contact's page.
 
 **A click on a chip is safe**: it changes nothing and opens nothing, so a
 person can click anywhere in a document or a grid without looking first.

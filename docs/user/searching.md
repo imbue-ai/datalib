@@ -96,8 +96,8 @@ it on and sync it to bring it back; what it has already embedded is kept.
 
 ### Ids as free text
 
-An id, an address or a number typed as free text (`picard@enterprise.org`,
-`+12025550101`, a row's uuid) is a filter: every row that names it, in any
+An id, an address or a number with its country code typed as free text
+(`picard@enterprise.org`, `+12025550101`, a row's uuid) is a filter: every row that names it, in any
 role, newest first. A source's own id for a record counts too, where it is
 a uuid, dashed or not, and so does a link that ends in one: paste a Notion
 page's link to find the page, or a link a 🔗 in the document viewer
@@ -225,7 +225,12 @@ The value can be:
 
 - **An address or number** (`riker@enterprise.org`, `+12025550101`), or
   any handle as Datalib writes it (`email:…`, `tel:…`,
-  `slack:T…/U…`, `github:jlpicard`): that person exactly.
+  `slack:T…/U…`, `github:jlpicard`): that person exactly. A number is
+  one number however it is written: `from:+12025550101`,
+  `from:"+1 (202) 555-0101"` and `from:"(202) 555-0101"` find the same
+  rows, whichever way each source wrote it. Without its country code it
+  finds every number that ends in those digits, and either way `with:`
+  finds an address-book card that has the number with no country code.
 - **A quoted name** (`from:"Will Riker"`): any name holding those
   words in that order, each whole (`from:"Riker"` finds "Will Riker
   <riker@…>", `from:"Rik"` does not), and every handle a source showed

@@ -1169,7 +1169,7 @@ code.hljs {
    `--datalib-chip-*`). A chip link not yet drawn (the render preview, or
    before the answer lands) is the grey; `:where` keeps that rule from
    outranking the blue. */
-:where(a.chip[data-handle]),
+:where(a.chip[data-handle], a.chip[data-contact-page]),
 .handle-unresolved,
 .handle-resolved {
   border-radius: 999px;
