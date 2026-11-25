@@ -13,18 +13,22 @@ him?" What they meet:
 
 - **His address-book card is not a contact.** Its page offers *New
   contact "Jean-Luc Picard"*. The demo indexes nine address-book
-  entries, and *Your contacts* starts empty.
+  entries, and *Your contacts* starts empty. (starting empty is by design -- we don't want to auto-populate your contacts)
 - **A contact starts with one handle.** Making one from his card links
   the address clicked and none of the others on it. *Everything with*
   that contact finds 2 rows; his other address finds 22, his number 14.
+    If you make a contact from a contact card, we should probably add all the listed handles there (ideally with phone numbers normalized.)
 - **A click on a person does not open the person.** It does nothing in
   some places and opens *Unlink* and *No longer works* in others,
   the contacts list included. Opening takes a double-click or a menu.
+    This is by design.  Clicks are meant to be "safe" and not take UI action.
 - **The card speaks the data model**: "1 source holds its handles",
   "Linked, not a field: … Add as a field", "Link its 2 other handles
   to …", "Copy to …".
 - **The list is at** Sources → Applets → `datalib_contacts`.
+    This should probably be made top-level as "Contacts" in a pinned-by-default section.
 - **Review shows eleven controls** over an empty table.
+    Don't understand what this comment means.
 
 Seven ideas are on screen (handle, contact, source's record, link,
 field, label, draft) where the person has one.
@@ -48,17 +52,25 @@ An agent made the rest, and nobody has reviewed any of it.
 **There are people, and each has addresses.** An address is anything a
 source knows someone by: an email, a number, a Slack account. The
 screens use those two words, and "source". `handle` and `link` stay in the code.
+  "handle" in the UI is OK (a phone number is not an address)
+  Link is confusing though.
 
 - **Everyone the library knows is a person**, with nothing to create
   first. Today's *contact* becomes what you have said about a person:
   a name, a note, and which addresses are theirs.
+     Not sure I like distinguishing contact from person, and again, don't want to auto-populate.
+  
 - **Addresses one source's record ties together are one person**, with
   nobody confirming it: a card's two emails and a number, a Slack user
   and the email on their profile. This reverses "no source links
   anything by itself" (`contact_linking.md`).
+        again, don't want to auto-populate.
+  
 - **A person's word wins.** "Not the same person" on an address splits
   it off for good; "Same person as…" joins two. Both are today's links
   and `not_linked` rows.
+          Yes to recording this judgement.
+  
 - **Nothing re-renders.** This still sits over the view.
 
 ### Does the rule work?
@@ -86,15 +98,22 @@ people you have contacts for; it asks.
    person, their addresses, sources, how many items, the last one.
    People only an automated sender made are hidden by default, which is
    what `real` is for.
-2. **A person.** Name, photo and addresses at the top, each with its
+     sort options should be: recency, frequency, alphabetical
+   
+3. **A person.** Name, photo and addresses at the top, each with its
    source's mark; *Everything with them*; then one line per source, which
    opens to what that source says. A pencil edits the name and the note. An
    address's menu has *Not the same person* and *Copy*.
-3. **A chip.** A click opens the person, everywhere. There is no "+" and no
+4. **A chip.** A click opens the person, everywhere. There is no "+" and no
    popover. The right-click menu stays.
-4. **An address book's own page** is that source's record, and its chip
+      Again, don't want to have clicks be "unsafe" and make UI actions.
+      Double-click should open the person, and perhaps if they don't exist yet, create them (like the + button did)
+   
+6. **An address book's own page** is that source's record, and its chip
    opens the person. It offers nothing to create.
-5. **Review** is a banner on People, there only when an agent's
+        This sounds kind of right.
+   
+8. **Review** is a banner on People, there only when an agent's
    proposal waits: "12 suggestions", each a card with *Yes* and *No*.
 
 ## What goes, what stays
@@ -121,6 +140,8 @@ empty in the library measured; other roots are not known.
   where the handles are already read whole (`write_people`), into one
   table of address and person. A person's id there is not stored
   anywhere else; one you have said something about keeps its contact id.
+     One problem with this is that multiple people can share the same address (my parents share an email).
+  
 - **How much, and when last, come from the grid's rows**, so a person's
   count is what a search for them finds. Today each document's record
   of a person carries its own count, `seen`, which is why one person had
