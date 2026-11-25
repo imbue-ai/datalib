@@ -31,6 +31,12 @@ surrogate autoincrement integers, no ROWID-as-PK tricks.
 - Cross-table references (`blocks.parent_id`, `messages.conversation_id`)
   only mean something if they point at upstream ids.
 
+A table read mostly by its parent may lead its key with the parent's
+id, `(parent_id, id)`, with a unique index on `id` alone: `id` stays the
+upstream id and `ON CONFLICT(id)` still lands on it, and one parent's
+rows sit together in the file (`cluster_by`,
+[`macros/README.md`](macros/README.md#wirepayloadrow)).
+
 Ordering within a parent is a separate concern from identity: carry an
 explicit integer column for it. Never borrow the PK, and never
 `ORDER BY rowid`: on a table keyed by text, doltlite's rowid is a hash
@@ -78,7 +84,9 @@ Every store a step owns holds a `problems` table (`datalib_problems`,
 in every raw store's `SHARED_DDL`): one row per thing the step could
 not fully do to one record, with a severity, a deterministic id and a
 sweep key. The owner sweeps it — per document in a render store, per
-entity in a raw store — and nothing copies it. A reader finds a step's
+entity in a raw store — and nothing copies it. Raw and render stores
+index it as `problems_by_scope` (`scope_kind, scope_key`), and a lookup
+for one record's rows names that index. A reader finds a step's
 problems in the stores directly in its folder, each read as its `main`
 commit has it, which is what the step last sealed
 (`datalib_step_problems::of_step`); a step with no store of its own
@@ -608,23 +616,29 @@ every `open` would cost bytes whether or not anything was ingested.
 
 ## `_datalib_meta`: which build wrote this store
 
-`open` writes seven rows into `_datalib_meta` before the schema commit:
+`open` writes its rows into `_datalib_meta` before the schema commit:
 `datalib_version`, `git_hash`, `doltlite_version`, `schema_hash`
 (`recorded_shape`: blake3 over `_datalib_meta`'s DDL and the DDL the
-store was opened with, leaving out the lookup indexes
-`open_derived_indexed` was handed, which change no row), `schema_version` (the
+store was opened with), `index_hash` (blake3 over the lookup indexes,
+which change no row, so adding one costs making it rather than a
+rebuild: those `open_derived_indexed` was handed, and on a raw store
+`SHARED_LOOKUP_INDEXES`), `schema_version` (the
 migration ladder position, `0` until there is a ladder),
 `shared_schema_version` (the shared ladder's, above) and
 `store_kind`. Only a row whose value moved is rewritten, so an
 unchanged store costs no commit, and a schema commit that did move
 one is titled `schema: apply DDL (Datalib <version>)`. The table is in
 `SHARED_TABLES`, so it is neither mirrored nor diffed nor counted.
-`datalib_store_meta::read` is how anyone asks; `None` means the store
-predates the table. A reader of a derived store asks it once per pass
-rather than probing for each table: `unified_grid_and_search_index` compares a render
-store's `schema_hash` with `indexed_markdown::schema_hash`, the same
-value the scheduler fingerprints, and leaves a store in any other shape
-as the index had it, with a warning. `docs/dev/plans/completed/schema_migrations.md`
+`datalib_store_meta::read` is how anyone asks. **Every reader checks the
+whole recorded shape before it reads a row, and refuses a store in any
+other shape, or in none** (`datalib_store_meta::require`;
+`datalib/backend/store_meta/README.md` lists each store's shape and the
+reader-open that checks it). Nothing probes for a table or a column:
+`unified_grid_and_search_index` opens a render store through
+`IndexedMarkdownStore::open_for_reading`, which refuses one in another
+shape, and leaves that source as the index had it, with a warning
+naming the step to run; a render refuses a raw store the launch's
+prepare pass could not migrate. `docs/dev/plans/completed/schema_migrations.md`
 is the record of the program this was the first step of.
 
 ## Writes: one UPSERT shape, everywhere
@@ -710,13 +724,14 @@ under any plan. A real store is not:
   per email: over an hour, unfinished, on 276k emails. Written as a set,
   `e.id IN (SELECT email_id FROM email_keywords WHERE keyword = '$seen')`,
   the same statement takes a few seconds.
-- **A source's data nodes.** The grid index asks, once per source on
+- **A source's data nodes.** The grid index asked, once per source on
   every pass, for that source's nodes that have no row. `data_nodes` had
   no index on `source_id`, so the planner started from every document
   row in the index (`grid_rows_by_is_document`, an index on a column
   with two values) and filtered to the source last: 11–20 s per source
   on a 1.2M-row index, whether one document had changed or none. The
   plan held no `SCAN`, so a test that refuses one would have passed it.
+  It now asks only for the nodes the pass touched, by uuid.
 - **The vector sweep.** Deleting the vectors no chunk names read the
   whole `vectors` table, every page of it holding a 3 KB vector: 150 s
   cold on a 2.7 GB cache, though the narrow `vectors_keys` index beside
@@ -742,7 +757,8 @@ So:
   is walked whole, without an error, so the plan test below still
   applies. A named index has to exist wherever the statement runs: make
   it on every open, outside the store's shape hash when it changes no
-  row (`grid_index::AUTHORS_INDEX`, `node_rows::BY_SOURCE_INDEX`).
+  row (`grid_index::AUTHORS_INDEX`, `data_nodes::BY_UUID_INDEX`,
+  `datalib_problems::BY_SCOPE_INDEX`).
 - **Don't reach for `ANALYZE`.** Its statistics are a guess drawn from
   whatever rows a store held when it ran, so two libraries can plan one
   statement two ways, and a plan can change as the rows do. Which index
@@ -751,9 +767,8 @@ So:
   statement over the table's real DDL and assert the index it must
   start from, not only what it must not do: a plan with no `SCAN` can
   still walk most of the table through an unselective index. Templates:
-  `grid_index::open_index_tests::a_sources_nodes_are_read_by_the_source`
-  and `search_index`'s `the_sweep_reads_the_keys_not_the_vectors` name
-  the index they expect; in `providers/email/src/ingest/schema_raw.rs`,
+  `search_index`'s `the_sweep_reads_the_keys_not_the_vectors` names the
+  index it expects; in `providers/email/src/ingest/schema_raw.rs`,
   `the_email_id_lookups_are_searched_by_index` refuses a `SCAN` of the
   table, and `the_read_mark_rungs_never_search_a_table_per_email`
   refuses a table searched under a `CORRELATED` subquery. Keep the

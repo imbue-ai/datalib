@@ -15,7 +15,8 @@ use std::path::Path;
 ///      wrote it, and its first paragraph is read as markdown.
 /// v11: a document sits in the folder of its first path, and is filed
 ///      under the folder of each other (grid_rows.rs, `folders`).
-pub const RENDER_VERSION: u32 = 11;
+/// v12: a page's box is a part of the page (`PAGE_PART`), drawn flat.
+pub const RENDER_VERSION: u32 = 12;
 
 /// One page of converted text.
 pub struct Page {

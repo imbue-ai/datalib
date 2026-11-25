@@ -43,6 +43,7 @@ import {
   type ChipHost,
 } from "./chipActions";
 import { decorateChatDays, decorateDates, rewriteDatesForCopy } from "./dates";
+import { decorateLabels } from "./labelChip";
 import { timeView } from "@/config/timeView";
 import { decorateEntities, entities } from "./entities";
 import HandlePopover from "./HandlePopover.ce.vue";
@@ -520,6 +521,7 @@ function paint() {
   void decorateEntities(el);
   decorateDates(el);
   decorateChatDays(el);
+  decorateLabels(el);
   decorateEdgeSources();
   if (kind === "grew" && anchor) {
     // A page drawn above pushed what the reader was looking at down; put

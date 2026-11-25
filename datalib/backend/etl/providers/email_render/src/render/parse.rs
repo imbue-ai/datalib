@@ -2,7 +2,6 @@
 //! of threads at a time.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
 
@@ -11,7 +10,7 @@ use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
 use datalib_etl::doltlite_raw::Reader;
 use datalib_etl::read_marks::{self, ReadMark};
 use datalib_etl_render::inputs::{Inputs, RawRange};
-use datalib_etl_render::pages::{KeyColumn, RenderUnitPages};
+use datalib_etl_render::pages::{block_on, KeyColumn, RenderUnitPages};
 use datalib_etl_render::processor::Unparsed;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
@@ -266,10 +265,6 @@ impl EmailStore {
             }
         })
     }
-}
-
-fn block_on<F: Future>(f: F) -> F::Output {
-    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
 }
 
 /// One rendered-markdown render unit: every email in a single JMAP Thread

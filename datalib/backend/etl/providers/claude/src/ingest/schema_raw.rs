@@ -119,19 +119,18 @@ pub struct CoworkSessionRow {
     pub last_event_at: Option<String>,
 }
 
-/// `cowork_events` — one row per event of a Cowork task's log, keyed by
-/// its `event_id`, written with its session: the log is read whole each
-/// time the session is owed, and an event it no longer has goes.
+/// `cowork_events` — one row per event of a Cowork task's log, its id
+/// the `event_id`, written with its session: the log is read whole each
+/// time the session is owed, and an event it no longer has goes. Keyed
+/// `(session_id, id)`, so one session's log is one range of the store
+/// and a render reads only the logs it draws; `id` stays unique.
 #[derive(Debug, Clone, WirePayloadRow)]
-#[wire_payload_row(table = "cowork_events")]
+#[wire_payload_row(table = "cowork_events", cluster_by = "session_id")]
 pub struct CoworkEventRow {
     pub id_and_payload: WirePayload,
-    pub session_id: Option<String>,
+    pub session_id: String,
     pub sequence_num: Option<i64>,
 }
-
-pub const COWORK_EVENTS_SESSION_INDEX_DDL: &str =
-    "CREATE INDEX IF NOT EXISTS cowork_events_session ON cowork_events(session_id)";
 
 /// `claude_attachments` — N:M edge between one conversation's
 /// attachment slot and a `cas_objects` blob, written with the
@@ -149,11 +148,70 @@ pub struct ConversationAttachmentRow {
 
 /// The raw store's migration ladder (etl/README.md §"The migration
 /// ladder").
-pub const LADDER: &[Migration] = &[Migration {
-    version: 1,
-    name: "what each table holds is its sidecar's held_version",
-    apply: |conn| Box::pin(held_into_the_sidecar(conn)),
-}];
+pub const LADDER: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "what each table holds is its sidecar's held_version",
+        apply: |conn| Box::pin(held_into_the_sidecar(conn)),
+    },
+    Migration {
+        version: 2,
+        name: "cowork events are keyed by their session",
+        apply: |conn| Box::pin(cowork_events_by_session(conn)),
+    },
+];
+
+/// Rung 2. The events go into a table keyed `(session_id, id)` as
+/// [`CoworkEventRow`] declares it, then take the old one's name; the
+/// sidecar, keyed by `id`, stays as it is. Every event was written with
+/// its session, so `session_id` is never NULL; one that were would fail
+/// the copy rather than be dropped. A store from before Cowork has no
+/// table to copy, and the open that follows creates it keyed this way.
+async fn cowork_events_by_session(conn: &mut sqlx::SqliteConnection) -> anyhow::Result<()> {
+    let has_events: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cowork_events')",
+    )
+    .fetch_one(&mut *conn)
+    .await?;
+    if !has_events {
+        return Ok(());
+    }
+    dr::run_statements(&mut *conn, &COWORK_EVENTS_BY_SESSION).await
+}
+
+const COWORK_EVENTS_BY_SESSION: [dr::Statement; 6] = [
+    dr::Statement {
+        what: "a cowork_events table keyed by session",
+        sql: "CREATE TABLE cowork_events_by_session (
+    id             TEXT NOT NULL,
+    payload        TEXT NULL,
+    session_id     TEXT NOT NULL,
+    sequence_num   INTEGER NULL,
+    PRIMARY KEY (session_id, id)
+)",
+    },
+    dr::Statement {
+        what: "copying every event into it",
+        sql: "INSERT INTO cowork_events_by_session (id, payload, session_id, sequence_num)
+     SELECT id, payload, session_id, sequence_num FROM cowork_events ORDER BY session_id, id",
+    },
+    dr::Statement {
+        what: "dropping the old session index",
+        sql: "DROP INDEX IF EXISTS cowork_events_session",
+    },
+    dr::Statement {
+        what: "dropping the old cowork_events table",
+        sql: "DROP TABLE cowork_events",
+    },
+    dr::Statement {
+        what: "naming the new table cowork_events",
+        sql: "ALTER TABLE cowork_events_by_session RENAME TO cowork_events",
+    },
+    dr::Statement {
+        what: "indexing the events by id",
+        sql: "CREATE UNIQUE INDEX IF NOT EXISTS cowork_events_by_id ON cowork_events (id)",
+    },
+];
 
 /// Rung 1. A conversation and a project were held by their row's
 /// `updated_at` matching the listing's, a project's docs listing by a
@@ -250,8 +308,8 @@ pub fn full_ddl() -> Vec<String> {
         CONVERSATIONS_UPDATED_INDEX_DDL.to_string(),
         CoworkSessionRow::ddl(),
         CoworkEventRow::ddl(),
-        COWORK_EVENTS_SESSION_INDEX_DDL.to_string(),
     ];
+    out.extend(CoworkEventRow::index_ddls());
     out.extend(ConversationAttachmentRow::all_ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));

@@ -83,6 +83,9 @@ pub struct NormalizedReaction {
     pub reactor_display: String,
     /// Whether `reactor_display` names the reactor or stands in for them.
     pub reactor_kind: AuthorKind,
+    /// How many reacted: one, or the source's count where it names nobody
+    /// and `reactor_display` says so ("3 people").
+    pub count: u32,
     /// The emoji or short string (`🫡`, `🔥`, …).
     pub emoji: String,
     /// Unix milliseconds when the reaction was sent, or `None` when
@@ -197,8 +200,8 @@ pub struct NormalizedChatItem {
     pub attachments: Vec<NormalizedAttachment>,
     pub reactions: Vec<NormalizedReaction>,
     /// Where the item is filed upstream — an email's mailboxes and
-    /// labels, a Google Chat message's star. Drawn as one `🏷 a · b` line
-    /// above the body; not part of the item's grid text, which is what it
+    /// labels, a Google Chat message's star. Drawn in the header after the
+    /// time, one label chip each; not part of the item's grid text, which is what it
     /// says.
     pub labels: Vec<String>,
     /// Free-form note rendered in italics under the body. Used today

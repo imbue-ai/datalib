@@ -149,7 +149,8 @@ pub async fn unlist(tx: &mut Transaction<'_, Sqlite>, collection: &str, href: &s
 /// the transaction that removes the provider's content for it.
 pub async fn forget_collection(tx: &mut Transaction<'_, Sqlite>, collection: &str) -> Result<()> {
     for sql in [
-        "DELETE FROM problems WHERE scope_kind = ? AND scope_key IN \
+        "DELETE FROM problems INDEXED BY problems_by_scope \
+         WHERE scope_kind = ? AND scope_key IN \
          (SELECT 'dav_resources:' || id FROM dav_resources WHERE collection = ?)",
         "DELETE FROM dav_resources_bookkeeping WHERE id IN \
          (SELECT id FROM dav_resources WHERE collection = ?)",

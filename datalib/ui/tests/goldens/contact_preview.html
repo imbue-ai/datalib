@@ -564,7 +564,6 @@ code.hljs {
   box-shadow: 0 4px 6px -4px rgba(0, 0, 0, 0.35);
 }
 .chat-body .msg-nav {
-  margin-left: auto;
   display: inline-flex;
   gap: 0.15rem;
 }
@@ -742,6 +741,10 @@ code.hljs {
   margin: 0 0 0 0.5rem;
   visibility: hidden;
 }
+/* Its labels (a starred message) stay in sight. */
+.chat-body .msg--chat > p:has(> .msg-cont:first-child) .msg-labels {
+  visibility: visible;
+}
 .chat-body .msg--chat:hover > p:has(> .msg-cont:first-child),
 .chat-body .msg--chat.selected > p:has(> .msg-cont:first-child) {
   visibility: visible;
@@ -760,6 +763,74 @@ code.hljs {
   content: "";
   flex: 1;
   border-top: 1px solid var(--datalib-border, #d8d8d8);
+}
+/* A message's actions — its copy-link button, its ↗, the jumps of a
+   long one — at the header's right, shown where a pointer can hover
+   only while it is over the message, as mail and chat clients do. A
+   copy just made stays in sight to say it worked. */
+.chat-body .msg-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+@media (hover: hover) {
+  .chat-body .msg h2 > .msg-actions {
+    visibility: hidden;
+  }
+  .chat-body .msg:hover > h2 > .msg-actions,
+  .chat-body .msg.selected > h2 > .msg-actions,
+  .chat-body .msg h2 > .msg-actions:focus-within,
+  .chat-body .msg h2 > .msg-actions:has(.copied, .copy-failed) {
+    visibility: visible;
+  }
+}
+/* A section with no header has its 🔗 floated at its top; it too shows
+   only while the pointer is over the section. */
+@media (hover: hover) {
+  .chat-body .msg > button.copy-link:first-child:not(.copied, .copy-failed) {
+    visibility: hidden;
+  }
+  .chat-body .msg:hover > button.copy-link:first-child,
+  .chat-body .msg.selected > button.copy-link:first-child,
+  .chat-body .msg > button.copy-link:first-child:focus-visible {
+    visibility: visible;
+  }
+}
+/* A part of a page — a PDF's page, a device on a time-series page — is
+   the page itself, not a message on it: no card, read whole (no "Show
+   more"), a hairline where one part ends and the next begins. */
+.chat-body > .msg.msg--page {
+  border: none;
+  border-left: 3px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+}
+.chat-body > .msg.msg--page + .msg.msg--page {
+  border-top: 1px solid var(--datalib-border, #d8d8d8);
+}
+.chat-body > .msg.msg--page.selected {
+  border-left-color: var(--datalib-accent);
+}
+/* Where a message is filed upstream: one chip per label after its time
+   (`decorateLabels`). */
+.chat-body .msg-labels {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+.chat-body .msg-label {
+  padding: 0 0.5em;
+  border-radius: 999px;
+  background: var(--datalib-chip-unlinked-bg, rgba(110, 110, 115, 0.16));
+  font-size: 0.75rem;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.chat-body .msg-label.chip {
+  cursor: pointer;
 }
 /* A chat's reactions: one pill per emoji with how many reacted, naming
    them on hover, or when one of them is the selected row. */
@@ -1058,6 +1129,7 @@ code.hljs {
   margin: 0;
   padding: 0 1rem;
 }
+
 /* A chip: a link the app resolves, drawn as the person it names
    (docs/dev/chips.md). Shared by the document frame and the
    grid's cells, so both draw the same chip; each includes this file
@@ -1550,11 +1622,6 @@ time.date-from-t0 {
 }
 .ctx-item:hover {
   background: var(--datalib-accent, #eee);
-}
-.ctx-divider {
-  height: 1px;
-  background: var(--datalib-border, #ccc);
-  margin: 4px 0;
 }
 
 
@@ -2177,17 +2244,29 @@ export function answers(root, el) {
 }
 
 /**
+ * The uuid of the message around `el`: the closest `id="m-{uuid}"` that
+ * answers to its id, so a copy of another message's wrapper inside a
+ * message is walked past.
+ * @param {Element | null | undefined} el
+ * @returns {string | null}
+ */
+export function messageAncestor(el) {
+  let cur = el ?? null;
+  while (cur) {
+    if (cur.id.startsWith("m-") && answers(cur.ownerDocument, cur)) return cur.id.slice(2);
+    cur = cur.parentElement;
+  }
+  return null;
+}
+
+/**
  * Open every `<details>` enclosing `el`. A tool step lives inside a
  * collapsed `.tool-group`, so "scroll to it" has nothing to scroll to
  * until the group is open. Walks the whole chain: groups nest.
  * @param {HTMLElement} el
  */
 export function openEnclosingDetails(el) {
-  for (
-    let d = el.closest("details");
-    d;
-    d = d.parentElement?.closest("details") ?? null
-  ) {
+  for (let d = el.closest("details"); d; d = d.parentElement?.closest("details") ?? null) {
     d.open = true;
   }
 }
@@ -2206,27 +2285,27 @@ export function metaHost(el) {
 }
 
 /**
- * Add a control to the end of a header's controls, but ahead of the
- * source-link arrow — `↗` reads as "and here is the thing itself", so
- * it belongs last however many controls accumulate before it. The
- * renderer emits it inline at the end of the header, which is why this
- * inserts rather than appends.
+ * Add a control to a header's actions: the controls a reader points at
+ * the message to see, kept together at the header's end
+ * (`span.msg-actions`). The source-link arrow the renderer wrote is moved
+ * in as the last of them — `↗` reads as "and here is the thing itself",
+ * so it stays last however many controls accumulate before it.
  * @param {HTMLElement} host
- * @param {string} separator
  * @param {HTMLElement} control
  */
-function addHeaderControl(host, separator, control) {
+function addHeaderControl(host, control) {
   const doc = host.ownerDocument;
-  const link = host.querySelector(":scope > .source-link");
-  if (!link) {
-    host.append(doc.createTextNode(separator), control);
-    return;
+  let actions = host.querySelector(":scope > .msg-actions");
+  if (!actions) {
+    actions = doc.createElement("span");
+    actions.className = "msg-actions";
+    const link = host.querySelector(":scope > .source-link");
+    if (link) actions.append(link);
+    host.append(actions);
   }
-  link.before(
-    doc.createTextNode(separator),
-    control,
-    doc.createTextNode(" "),
-  );
+  const link = actions.querySelector(":scope > .source-link");
+  if (link) link.before(control);
+  else actions.append(control);
 }
 
 /**
@@ -2250,20 +2329,13 @@ export function injectCopyLinkButtons(root, { pageTitle = true } = {}) {
     return btn;
   };
 
-  for (const el of root.querySelectorAll(
-    "div[data-section-uuid], section[data-section-uuid]",
-  )) {
-    if (
-      el.querySelector(
-        ":scope > h2 .copy-link, :scope > .copy-link",
-      )
-    )
-      continue;
+  for (const el of root.querySelectorAll("div[data-section-uuid], section[data-section-uuid]")) {
+    if (el.querySelector(":scope > h2 .copy-link, :scope > .copy-link")) continue;
     const uuid = el.getAttribute("data-section-uuid") ?? "";
     if (!uuid || !answers(root, el)) continue;
     const btn = button(uuid, "Copy link to this message");
     const host = metaHost(el);
-    if (host) addHeaderControl(host, " · ", btn);
+    if (host) addHeaderControl(host, btn);
     else el.prepend(btn);
   }
 
@@ -2272,10 +2344,10 @@ export function injectCopyLinkButtons(root, { pageTitle = true } = {}) {
     // The id sits on the heading itself, or on a block whose heading is
     // a markdown `#` (a contact page's head, whose heading is a chip).
     const host = el.matches("h1") ? el : (el.querySelector("h1") ?? el);
-    if (host.querySelector(":scope > button.copy-link")) continue;
+    if (host.querySelector(":scope > .msg-actions > button.copy-link")) continue;
     const uuid = el.getAttribute("data-page-title-uuid") ?? "";
     if (!uuid) continue;
-    addHeaderControl(host, " ", button(uuid, "Copy link to this page"));
+    addHeaderControl(host, button(uuid, "Copy link to this page"));
   }
 }
 
@@ -2357,7 +2429,8 @@ export function decorateLongMessages(root, opts = {}) {
     foldRecipients(line);
   }
 
-  for (const el of root.querySelectorAll(":scope > .msg[data-section-uuid]")) {
+  // A part of a page (`msg--page`) is read whole, as the page is.
+  for (const el of root.querySelectorAll(":scope > .msg[data-section-uuid]:not(.msg--page)")) {
     if (el.dataset.longChecked) continue;
     el.dataset.longChecked = "1";
     // Measured before any clamp class lands, so this is the content's
@@ -2401,7 +2474,7 @@ export function decorateLongMessages(root, opts = {}) {
         else el.closest(".chat-preview")?.scrollTo({ top: 1e9 });
       }),
     );
-    host.append(nav);
+    addHeaderControl(host, nav);
 
     // A pinned header unavoidably covers the line of text passing under
     // it — that is what `position: sticky` does, and GitHub's file
@@ -2420,7 +2493,11 @@ export function decorateLongMessages(root, opts = {}) {
     // implicit root would be the app's window, not the frame's.
     const io = new IntersectionObserver(
       ([entry]) => host.classList.toggle("is-stuck", entry.intersectionRatio < 1),
-      { root: p.isViewport ? el.ownerDocument : p.pane, threshold: [1], rootMargin: "-1px 0px 0px 0px" },
+      {
+        root: p.isViewport ? el.ownerDocument : p.pane,
+        threshold: [1],
+        rootMargin: "-1px 0px 0px 0px",
+      },
     );
     io.observe(host);
     root.__chatStickyObservers.push(io);

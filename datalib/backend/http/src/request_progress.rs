@@ -122,7 +122,8 @@ pub async fn get(
         &s.root,
         record.current_run.as_ref().map(|r| r.run_id.as_str()),
     )
-    .await;
+    .await
+    .map_err(crate::unread)?;
     let steps = scope(&checked.graph, &request.roots)
         .into_iter()
         .map(|(step, root)| {

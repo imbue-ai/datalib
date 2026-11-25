@@ -45,16 +45,6 @@ pub const TIME_SERIES_DB: &str = "time_series.doltlite_db";
 pub const CURATED_DIR: &str = "datalib_curated";
 /// The grid index inside [`INDEX_STEP_DIR`]: plain SQLite, in WAL mode.
 pub const GRID_DB: &str = "db.sqlite";
-/// What [`GRID_DB`] was named while it was a doltlite store. The
-/// `unified_grid_and_search_index` step deletes it, and its lock files, when it opens the index.
-pub const RETIRED_GRID_DB: &str = "db.doltlite_db";
-/// The file the grid's search terms were kept in before the index held
-/// them. The `unified_grid_and_search_index` step deletes it when it opens the index.
-pub const RETIRED_TERMS_DB: &str = "search_terms.sqlite";
-/// The retired `qmd_aggregator` step's tree, relative to
-/// [`UNIFIED_GRID_AND_SEARCH_INDEX_DIR`], where qmd kept its index as
-/// `qmd/index.sqlite`. Nothing writes it now; `unified_grid_and_search_index` deletes it.
-pub const QMD_DIR: &str = "qmd_aggregator";
 /// The inference cache's directory, relative to
 /// [`UNIFIED_GRID_AND_SEARCH_INDEX_DIR`]: every source's `embed` writes it,
 /// `unified_grid_and_search_index` sweeps it. The search index's tables are in the grid
@@ -68,18 +58,11 @@ pub const ENTITIES_DB: &str = "entities.doltlite_db";
 /// `cas_objects` table keyed by blake3 hash, in a plain SQLite file.
 pub const BLOBS_DB: &str = "blobs.sqlite";
 
-/// Filed feedback, relative to `system/`. Its own file because it has a
-/// different writer from every other store and, unlike the indexes, it
-/// cannot be regenerated.
-pub const FEEDBACK_DB: &str = "feedback.doltlite_db";
 /// The disk timeseries — bytes under each tree of the root, and the free
 /// space on its disk — relative to `system/`. Plain SQLite: nothing ever
 /// committed it, so doltlite's history bought it nothing, and a stock
 /// `sqlite3` reads it.
 pub const DISK_STATS_DB: &str = "disk_stats.sqlite";
-/// Where [`DISK_STATS_DB`]'s rows lived before it, as doltlite. The next
-/// open copies them over and removes it (`datalib_core::app_store`).
-pub const LEGACY_USAGE_DB: &str = "usage.doltlite_db";
 pub const REMOTE_MEDIA_DB: &str = "remote_media.doltlite_db";
 /// The download CAS: one file per fetched URL, named by its sha256.
 pub const REMOTE_MEDIA_DIR: &str = "remote_media";
@@ -165,19 +148,6 @@ pub fn time_series_index_db(data_root: &Path) -> PathBuf {
         .join(TIME_SERIES_DB)
 }
 
-pub fn qmd_dir(data_root: &Path) -> PathBuf {
-    unified_grid_and_search_index_dir(data_root).join(QMD_DIR)
-}
-
-/// Where the search index was a file of its own, before its tables moved
-/// into the grid index's file ([`grid_index_db`]). Deleted on sight: every
-/// row in it is made again from the render stores.
-pub fn retired_search_index_db(data_root: &Path) -> PathBuf {
-    unified_grid_and_search_index_dir(data_root)
-        .join(SEARCH_INDEX_DIR)
-        .join("index.sqlite")
-}
-
 /// The inference cache: each chunk's vector, in a file of its own so it
 /// outlives the search index and the grid index it shares a file with.
 pub fn inference_cache_db(data_root: &Path) -> PathBuf {
@@ -186,16 +156,8 @@ pub fn inference_cache_db(data_root: &Path) -> PathBuf {
         .join("inference_cache.sqlite")
 }
 
-pub fn feedback_db(data_root: &Path) -> PathBuf {
-    system_dir(data_root).join(FEEDBACK_DB)
-}
-
 pub fn disk_stats_db(data_root: &Path) -> PathBuf {
     system_dir(data_root).join(DISK_STATS_DB)
-}
-
-pub fn legacy_usage_db(data_root: &Path) -> PathBuf {
-    system_dir(data_root).join(LEGACY_USAGE_DB)
 }
 
 pub fn remote_media_db(data_root: &Path) -> PathBuf {

@@ -1,0 +1,339 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_terms_snapshot.rs
+expression: source.render()
+---
+00000000-0000-80d5-a95b-fe11f630248a  Facebook Post
+  title: Two views of the bridge before alpha shift.
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  participant: facebook:name/Jean-Luc Picard
+  upstream_id: 682574ed-7629-53a8-8de6-1df00f6fe697
+0b751fcc-e1c0-8cfc-af76-63e50c166b7e  Facebook Post Message
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  upstream_id: 682574ed-7629-53a8-8de6-1df00f6fe697
+00000000-0000-83eb-9997-79540a4520c8  Facebook Post
+  title: Guinan's new menu — try the Saurian brandy.
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  participant: facebook:name/Jean-Luc Picard
+  upstream_id: c9f0ceb7-af95-55ce-8fd8-f1f778fbdb38
+0b754532-3f00-8241-8f48-e40ad1f7d630  Facebook Post Message
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  upstream_id: c9f0ceb7-af95-55ce-8fd8-f1f778fbdb38
+00000000-0000-840e-933b-7e3c0a96ee52  Facebook Conversation
+  title: Lwaxana Troi
+  name: picard@enterprise.starfleet
+  participant: facebook:name/Lwaxana Troi
+  subject: facebook:name/Lwaxana Troi
+0b75aad2-7b40-8083-8869-7d21b7e58885  Facebook Message
+  from: facebook:name/Lwaxana Troi
+  name: picard@enterprise.starfleet
+  author: Lwaxana Troi
+00000000-0000-84d8-9001-d3718b01d5e1  Facebook Conversation
+  title: Facebook user · 1000000003
+  name: picard@enterprise.starfleet
+  participant: facebook:deleted/1000000003
+  participant: facebook:name/Jean-Luc Picard
+  subject: facebook:deleted/1000000003
+0b75aaa4-b480-81fc-b675-fc28f005e361  Facebook Message
+  from: facebook:deleted/1000000003
+  name: picard@enterprise.starfleet
+  author: Facebook user
+0b75aaa5-9ee0-8907-8a57-9a44cd5ee422  Facebook Message
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+00000000-0000-84e6-9994-8925c3e28d23  Facebook Conversation
+  title: Facebook user · 1000000002
+  name: picard@enterprise.starfleet
+  participant: facebook:deleted/1000000002
+  participant: facebook:name/Jean-Luc Picard
+  subject: facebook:deleted/1000000002
+0b75aa95-7240-8d37-ad48-3efd4fdd09cd  Facebook Message
+  from: facebook:deleted/1000000002
+  name: picard@enterprise.starfleet
+  author: Facebook user
+0b75aa96-5ca0-8bfe-b8e7-f894df0be99b  Facebook Message
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+00000000-0000-8709-9b9f-6daf23a20dfe  Facebook Post
+  title: Away team to Risa. Bring the horga'hn, Number One.
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  participant: facebook:name/Jean-Luc Picard
+0b758cb8-cb00-8cdb-9093-e1e57b64491b  Facebook Post Version
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+00000000-0000-8768-85df-b763ceaebe85  Contact
+  title: Beverly Crusher
+  name: Friends
+  name: picard@enterprise.starfleet
+  about: Beverly Crusher
+  about: facebook:name/Beverly Crusher
+  upstream_id: d949e946-6aae-5f6f-a21b-5fca0ada59c8
+00000000-0000-88f7-a8ca-8020c717b96b  Facebook Post
+  title: Class of 2327: reunion at Boothby's garden. Bring your own trowel.
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  participant: facebook:name/Jean-Luc Picard
+  upstream_id: b199c475-ec61-5b89-b359-b20f5adef173
+0b753f3c-5e00-8e06-b236-c6aac8793f4d  Facebook Post Message
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  upstream_id: b199c475-ec61-5b89-b359-b20f5adef173
+00000000-0000-8a3c-a66b-d2616975dbfc  Contact
+  title: William Riker
+  name: Friends
+  name: picard@enterprise.starfleet
+  about: William Riker
+  about: facebook:name/William Riker
+  upstream_id: 630810df-4ebd-567b-a423-2010262f9c38
+00000000-0000-8a95-8e69-5d9ef0dcdf0c  Contact
+  title: Data
+  name: Friends
+  name: picard@enterprise.starfleet
+  about: Data
+  about: facebook:name/Data
+  upstream_id: 6ef7f338-8446-5f9f-835b-1b7e7dd7ab93
+00000000-0000-8b03-b202-0ecc96ba797c  Facebook Comments
+  title: Comments
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  participant: facebook:name/Jean-Luc Picard
+0b751fe8-5900-8112-b919-93e76f91f97d  Facebook Comment
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  upstream_id: 6e41f13f-0e66-50f4-969b-6889dd32e8ea
+0b752b47-b980-89c3-8b3d-65ba6f7c2be4  Facebook Comment Version
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+0b752b47-b980-8eb3-812f-5dde417cd6e2  Facebook Comment
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  upstream_id: 013d90ae-6f8b-5b7c-b098-0dafbf30bb76
+0b754237-4e80-8957-a001-e0281126f4a1  Facebook Comment
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  upstream_id: fad7bd34-fe7e-5180-bd73-3c6a2e1724a9
+0b757706-9800-8486-823f-6cdc07d0b538  Facebook Comment
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  upstream_id: 8e2a6a61-d65a-5500-9807-0a94915d94ea
+00000000-0000-8ba6-97c6-f48500bf8e47  Facebook Post
+  title: Happy birthday, Number One. The bridge is yours for the day.
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  participant: facebook:name/Jean-Luc Picard
+0b752b10-cb00-884d-9f04-a02d1c74c917  Facebook Post Message
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+00000000-0000-8c30-82a5-bc6ccada3dd3  Facebook Conversation
+  title: Deanna Troi
+  name: picard@enterprise.starfleet
+  participant: facebook:name/Deanna Troi
+  participant: facebook:name/Jean-Luc Picard
+  subject: facebook:name/Deanna Troi
+0b75aae1-bd80-88f9-9b00-f89fa636a47f  Facebook Message
+  from: facebook:name/Deanna Troi
+  name: picard@enterprise.starfleet
+  author: Deanna Troi
+0b75aae2-a7e0-8549-9308-872ca2740d0b  Facebook Message
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+00000000-0000-8c76-a058-06e137cfac2d  Facebook Post
+  title: Jean-Luc Picard added a life event from January 5, 2364: Took command of the En…
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  participant: facebook:name/Jean-Luc Picard
+  upstream_id: ad8f834b-ee95-58af-b38d-11cbbd644dee
+0b7534ef-a600-8bc7-8639-c45c24950327  Facebook Post Message
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  upstream_id: ad8f834b-ee95-58af-b38d-11cbbd644dee
+00000000-0000-8c82-8a32-5b80abc87553  Facebook Conversation
+  title: William Riker
+  name: picard@enterprise.starfleet
+  participant: facebook:name/Jean-Luc Picard
+  participant: facebook:name/William Riker
+  subject: facebook:name/William Riker
+00000000-0000-8c9b-84b8-988d78671a6e  Facebook Reaction
+  from: facebook:name/William Riker
+  name: picard@enterprise.starfleet
+  author: William Riker
+0b75aa8a-eaf0-8203-b48b-f92b859ea5ee  Facebook Reaction
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+0b75aa86-33e8-8605-8827-b1fa570515aa  Facebook Message
+  from: facebook:name/William Riker
+  name: picard@enterprise.starfleet
+  author: William Riker
+0b75aa87-1e48-8895-aafc-f518fd27d57b  Facebook Message
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+0b75aa88-04c0-89b5-a659-bd6a070a5dd7  Facebook Message
+  from: facebook:name/William Riker
+  name: picard@enterprise.starfleet
+  author: William Riker
+0b75aa88-ef20-8375-82ce-d8d6bbdfda8c  Facebook Message
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+0b75aa89-d980-8c93-a669-41b1034c43ae  Facebook Message
+  from: facebook:name/William Riker
+  name: picard@enterprise.starfleet
+  author: William Riker
+0b75aa8a-c3e0-868b-b7fa-fc8375e4ae82  Facebook Message
+  from: facebook:name/William Riker
+  name: picard@enterprise.starfleet
+  author: William Riker
+0b75aa8b-ae40-823f-8b4d-a2e6cfbc0413  Facebook Message
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+0b75aa8b-ae40-8971-84a5-a78725f9ba26  Facebook Message
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+0b75aa8c-98a0-8b1c-ab78-f14f6c215968  Facebook Message
+  from: facebook:name/William Riker
+  name: picard@enterprise.starfleet
+  author: William Riker
+0b75aa8d-8300-8a42-b652-9507008d5441  Facebook Message
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+00000000-0000-8cc5-baf1-845294bad07e  Facebook Reactions
+  title: Reactions
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  participant: facebook:name/Jean-Luc Picard
+0b752b2c-4240-8fed-b7ba-2a2e745b3546  Facebook Reaction
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+0b75770b-2be0-8c1b-84b2-0eacd016df5e  Facebook Reaction
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+00000000-0000-8d5b-9ccc-4069d9d92992  Facebook Album
+  title: Ten Forward Nights
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  participant: facebook:name/Jean-Luc Picard
+  upstream_id: e958c886-776c-50b3-b7a8-08610553ad2b
+0b7574a1-30c0-81cf-8ff9-c592d6aff132  Facebook Album Message
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  upstream_id: e958c886-776c-50b3-b7a8-08610553ad2b
+0b7574a1-30c0-83d2-959f-e96abe351f0f  Facebook Photo
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+0b7574a3-0580-8e3d-8a8e-02920d2e9d3c  Facebook Photo
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+00000000-0000-8dca-8614-69a1a3d92c28  Facebook Post
+  title: Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff.
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  participant: facebook:name/Jean-Luc Picard
+  upstream_id: ec2c598f-d8b0-59b7-8d0d-456d4de02cae
+0b751ce7-4e00-813b-a3e3-ef94b9216c94  Facebook Post Version
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  upstream_id: 749a45d3-4f01-522a-9b8a-5f17ff8b8be8
+0b751ce7-4e00-8aa3-96fc-fc3bb74c0111  Facebook Post Message
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  upstream_id: ec2c598f-d8b0-59b7-8d0d-456d4de02cae
+00000000-0000-8e1c-8c2e-c30f42ab6c8b  Facebook Post
+  title: Ten Forward Nights
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  participant: facebook:name/Jean-Luc Picard
+  upstream_id: 72840e2b-cefb-58e0-a56c-96c3843c6a38
+0b7574aa-5880-8869-a53f-321f7cade7cd  Facebook Post Message
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  upstream_id: 72840e2b-cefb-58e0-a56c-96c3843c6a38
+00000000-0000-8ef0-a5ad-33a9d1bb3c0b  Facebook Conversation
+  title: Ten Forward
+  name: picard@enterprise.starfleet
+  participant: facebook:name/Data
+  participant: facebook:name/Guinan
+  participant: facebook:name/Wesley Crusher
+  participant: facebook:name/Worf
+0b75aab4-1dd0-8aa6-87a4-a1a4d5876ca4  Facebook Reaction
+  from: facebook:name/Worf
+  name: picard@enterprise.starfleet
+  author: Worf
+0b75aab4-44e0-8eb0-81a2-253ab09ea3dc  Facebook Reaction
+  name: picard@enterprise.starfleet
+  author: Facebook user (one of 3 deleted accounts here)
+0b75aab3-f6c0-82ed-9976-ca875cebaeb6  Facebook Message
+  from: facebook:name/Guinan
+  name: picard@enterprise.starfleet
+  author: Guinan
+0b75aab4-e120-86ea-a906-2afc51a83d45  Facebook Message
+  from: facebook:name/Data
+  name: picard@enterprise.starfleet
+  author: Data
+0b75aab5-cb80-8738-9c8f-a4f7722e14c7  Facebook Message
+  from: facebook:name/Worf
+  name: picard@enterprise.starfleet
+  author: Worf
+0b75aab6-b5e0-8a5e-b221-b2aaaffab5bc  Facebook Message
+  name: picard@enterprise.starfleet
+  author: Facebook user (one of 3 deleted accounts here)
+0b75aab7-a040-8974-a9fa-b864d208d924  Facebook Message
+  name: picard@enterprise.starfleet
+  author: Facebook user (one of 3 deleted accounts here)
+0b75aab8-8aa0-8f88-9479-99e31bf0a1f1  Facebook Message
+  name: picard@enterprise.starfleet
+  author: Facebook user (one of 3 deleted accounts here)
+0b75aab9-7500-8649-a7c9-bcf2a91acd15  Facebook Message
+  from: facebook:name/Wesley Crusher
+  name: picard@enterprise.starfleet
+  author: Wesley Crusher
+00000000-0000-8f0b-a18a-78e2d79f491a  Facebook Conversation
+  title: Facebook user · 1000000005
+  name: picard@enterprise.starfleet
+  participant: facebook:deleted/1000000005
+  subject: facebook:deleted/1000000005
+0b75aac3-3900-8d45-bdd9-d3ed4ddb44df  Facebook Message
+  from: facebook:deleted/1000000005
+  name: picard@enterprise.starfleet
+  author: Facebook user
+00000000-0000-8f4d-b0a7-cfeb302ede83  Facebook Post
+  title: Jean-Luc Picard posted in Away Team Photographers.
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  participant: facebook:name/Jean-Luc Picard
+  upstream_id: 6cc4d668-e9e0-5b20-a9f1-7185991ee598
+0b754b28-2000-83b2-9916-69a95bb3c612  Facebook Post Message
+  from: facebook:name/Jean-Luc Picard
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+  upstream_id: 6cc4d668-e9e0-5b20-a9f1-7185991ee598

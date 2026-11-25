@@ -603,7 +603,7 @@ fn with_the_unanswered<T>(asked: Vec<Listed>, answered: Vec<Fetched<T>>) -> Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_etl::run_problems::noting_give_up;
+    use datalib_etl::run_problems::{noting_run_end, RunEnd};
     use datalib_problems::Reason;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
@@ -912,7 +912,8 @@ mod tests {
             .collect();
         let mut f = Scripted::all_got();
         f.stop = Some(stop.clone());
-        let (drained, gave_up) = noting_give_up(drain(&l, listing.clone(), &f)).await;
+        let (drained, RunEnd { gave_up, .. }) =
+            noting_run_end(drain(&l, listing.clone(), &f)).await;
         let drained = drained.unwrap();
         assert_eq!(gave_up, None, "a stop is not a give-up");
         assert_eq!(
@@ -946,7 +947,8 @@ mod tests {
         let l = a_loop(&pool, &stop, &found, 1, 2);
         let mut f = Scripted::all_got();
         f.batch_error = Some(|| BatchError::Batch(anyhow::anyhow!("HTTP 503")));
-        let (drained, gave_up) = noting_give_up(drain(&l, listing.clone(), &f)).await;
+        let (drained, RunEnd { gave_up, .. }) =
+            noting_run_end(drain(&l, listing.clone(), &f)).await;
         let drained = drained.unwrap();
         assert_eq!((drained.failed, drained.left), (2, 2));
         let gave_up = gave_up.expect("a give-up is said to the step, which ends incomplete");

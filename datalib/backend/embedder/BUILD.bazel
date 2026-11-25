@@ -3,7 +3,7 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
 # Text to vectors in process, with llama.cpp (//third-party/llama_cpp)
 # running a GGUF embedding model, for the search index
-# (docs/dev/plans/search_index_from_ram.md).
+# (docs/dev/plans/completed/search_index_from_ram.md).
 cc_library(
     name = "embedder_shim",
     srcs = ["csrc/embedder.cpp"],

@@ -1,59 +1,21 @@
-//! Opening this crate's tables in a plain SQLite file: WAL, one
-//! connection, and the tables in this build's shape. Tables in another
-//! shape are emptied, since everything in them can be made again. The
-//! inference cache is a file of its own, with the embedded chunks a part
-//! of it; the index is a part of the grid index's file. A part empties
-//! only its own tables.
+//! Opening a plain SQLite file this crate writes: WAL, one connection, its
+//! tables created. The inference cache is a file of its own, kept in this
+//! build's shape here; the keyword index's tables are in the grid index's
+//! file, whose shape the grid index's writer keeps (`grid_index::shape`).
 
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use datalib_store_meta::StoreKind;
+use datalib_store_meta::{Shape, StoreKind};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
-use sqlx::{AssertSqlSafe, SqliteConnection};
+use sqlx::AssertSqlSafe;
 
-/// Which tables of the file are ours, and where our shape is recorded.
-#[derive(Clone, Copy)]
-pub(crate) enum Owns {
-    /// Every table: the file's `_datalib_meta` is ours.
-    File(StoreKind),
-    /// The tables whose names start with [`crate::TABLE_PREFIX`]; our shape
-    /// is our own key in the file's `_datalib_meta`.
-    Part(StoreKind),
-}
-
-impl Owns {
-    fn tables_like(self) -> String {
-        match self {
-            Owns::File(_) => "%".to_string(),
-            Owns::Part(_) => format!("{}%", crate::TABLE_PREFIX.replace('_', "\\_")),
-        }
-    }
-}
-
-/// Opens `path` with each of `parts` in this build's shape, in order: a
-/// file's own tables before a part of it, so emptying the file leaves
-/// the part to make its tables again.
-pub(crate) async fn open(
-    path: &Path,
-    parts: &[(&[&'static str], Owns)],
-    wait: Duration,
-) -> Result<SqlitePool> {
+/// `path`, created when missing, with every statement of `ddl` run.
+pub(crate) async fn open(path: &Path, ddl: &[&str], wait: Duration) -> Result<SqlitePool> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     }
-    let pool = connect(path, wait).await?;
-    for (ddl, owns) in parts {
-        if let Err(e) = set_up(&pool, ddl, *owns).await {
-            pool.close().await;
-            return Err(e);
-        }
-    }
-    Ok(pool)
-}
-
-async fn connect(path: &Path, wait: Duration) -> Result<SqlitePool> {
     let opts = SqliteConnectOptions::new()
         .filename(datalib_runtime::plain_sqlite::uri(path))
         .create_if_missing(true)
@@ -61,6 +23,8 @@ async fn connect(path: &Path, wait: Duration) -> Result<SqlitePool> {
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
         .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
         .auto_vacuum(sqlx::sqlite::SqliteAutoVacuum::Incremental)
+        // Takes effect only on a new file (`cache::PAGE_SIZE`).
+        .page_size(crate::cache::PAGE_SIZE as u32)
         .pragma("temp_store", "memory")
         .pragma(
             "journal_size_limit",
@@ -70,59 +34,71 @@ async fn connect(path: &Path, wait: Duration) -> Result<SqlitePool> {
     // The pool waits as long as SQLite does: its own default (30s) would
     // give up on the connection's first statement while the grid index's
     // step still holds the file, whatever `busy_timeout` says.
-    SqlitePoolOptions::new()
+    let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .acquire_timeout(wait)
         .idle_timeout(None)
         .max_lifetime(None)
         .connect_with(opts)
         .await
-        .with_context(|| format!("open {}", path.display()))
+        .with_context(|| format!("open {}", path.display()))?;
+    for stmt in ddl {
+        // Audited: every statement is one of this crate's constants.
+        if let Err(e) = sqlx::query(AssertSqlSafe(*stmt)).execute(&pool).await {
+            pool.close().await;
+            return Err(e).with_context(|| format!("create the tables of {}", path.display()));
+        }
+    }
+    Ok(pool)
 }
 
-/// Brings our tables to this build's shape under the write lock, so two
-/// steps opening an old file together empty it once, and neither empties
-/// what the other has started writing: the second finds the new shape.
-async fn set_up(pool: &SqlitePool, ddl: &[&'static str], owns: Owns) -> Result<()> {
-    let want = datalib_store_meta::schema_hash(ddl.iter().copied());
+/// Make the file at `pool` hold `kind` in `shape`, under the write lock, so
+/// two steps opening an old file together empty it once. Tables in another
+/// shape, or a file that records none, lose every table; indexes in
+/// another shape lose the `remade` tables, which are made again from what
+/// the rest hold. `ddl` then makes whatever is missing.
+pub(crate) async fn keep_in_shape(
+    pool: &SqlitePool,
+    kind: StoreKind,
+    shape: &Shape,
+    ddl: &[&str],
+    remade: &[&str],
+) -> Result<()> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    let have = match owns {
-        Owns::File(_) => datalib_store_meta::schema_hash_in(&mut tx).await?,
-        Owns::Part(part) => datalib_store_meta::part_schema_hash_in(&mut tx, part).await?,
-    };
-    if have.as_ref().is_some_and(|h| *h != want) {
-        let (Owns::File(kind) | Owns::Part(kind)) = owns;
+    let have = datalib_store_meta::read_in(&mut tx)
+        .await?
+        .map(|m| m.shape());
+    if have.as_ref().map(|h| &h.tables) != Some(&shape.tables) {
         tracing::info!(
             store = kind.as_str(),
             "written in another shape; emptying it"
         );
-        drop_tables(&mut tx, owns).await?;
+        drop_tables(&mut tx).await?;
+    } else if have.as_ref().map(|h| &h.indexes) != Some(&shape.indexes) {
+        for table in remade {
+            // Audited: a name from this crate's constants.
+            let sql = format!("DROP TABLE IF EXISTS {table}");
+            sqlx::query(AssertSqlSafe(sql)).execute(&mut *tx).await?;
+        }
     }
     for stmt in ddl {
-        sqlx::query(*stmt).execute(&mut *tx).await?;
-    }
-    if let Owns::Part(part) = owns {
-        datalib_store_meta::write_part_schema_hash(&mut tx, part, &want).await?;
+        // Audited: every statement is one of this crate's constants.
+        sqlx::query(AssertSqlSafe(*stmt)).execute(&mut *tx).await?;
     }
     tx.commit().await?;
-    if let Owns::File(kind) = owns {
-        datalib_store_meta::write(pool, kind, &want, datalib_store_meta::Versions::default())
-            .await?;
-    }
+    datalib_store_meta::write(pool, kind, shape).await?;
     Ok(())
 }
 
-/// Every table we own but `_datalib_meta`, virtual tables first so their
-/// shadow tables go with them.
-pub(crate) async fn drop_tables(conn: &mut SqliteConnection, owns: Owns) -> Result<()> {
+/// Every table but `_datalib_meta`, virtual tables first so their shadow
+/// tables go with them.
+async fn drop_tables(conn: &mut sqlx::SqliteConnection) -> Result<()> {
     for virtual_only in [true, false] {
         let names: Vec<String> = sqlx::query_scalar(
             "SELECT name FROM sqlite_master WHERE type = 'table' \
                AND name NOT LIKE 'sqlite_%' AND name <> '_datalib_meta' \
-               AND name LIKE ? ESCAPE '\\' \
                AND (NOT ? OR sql LIKE 'CREATE VIRTUAL TABLE%')",
         )
-        .bind(owns.tables_like())
         .bind(virtual_only)
         .fetch_all(&mut *conn)
         .await?;

@@ -19,7 +19,10 @@ genrule(
     srcs = ["//tests/fixtures:make_lightroom_catalog.py"],
     outs = ["tng_catalog/TngCatalog.lrcat"],
     cmd = "python3 $(execpath //tests/fixtures:make_lightroom_catalog.py) $@",
-    visibility = ["//datalib:__subpackages__"],
+    visibility = [
+        "//datalib:__subpackages__",
+        "//tests/fixtures:__pkg__",
+    ],
 )
 
 rust_library(

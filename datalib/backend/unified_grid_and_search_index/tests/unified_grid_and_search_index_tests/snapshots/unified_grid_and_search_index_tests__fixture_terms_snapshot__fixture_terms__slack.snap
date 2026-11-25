@@ -1,0 +1,181 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_terms_snapshot.rs
+expression: source.render()
+---
+00000000-0000-8061-863d-6a106f5441b2  Slack Workspace
+  title: USS Enterprise NCC-1701-D
+00000000-0000-81e6-aaab-37bb9584a20e  Slack Channel
+  title: #ten-forward
+00000000-0000-8474-ae81-1caa997aa888  Slack DM
+  title: @Lt. Cmdr. Data
+00000000-0000-8560-a345-34ddcbee305d  Slack Channel
+  title: #engineering
+00000000-0000-882c-9e90-663d2972a8f2  Slack DM
+  title: @William T. Riker, Worf
+00000000-0000-8f60-ba32-16c7cfd5d914  Slack Channel
+  title: #bridge
+00000000-0000-8fc7-bae2-ec74d61c9bb8  Slack DM
+  title: @William T. Riker
+00000000-0000-8087-98c3-35796eae6f68  Slack Thread
+  title: #ten-forward
+  name: picard@enterprise.starfleet
+  participant: slack:T_NCC1701D/U_RIKER
+  participant: slack:T_NCC1701D/U_WORF
+0b7698fc-0660-8600-bd5c-0f3bd86e511a  Slack Reaction
+  from: slack:T_NCC1701D/U_RIKER
+  name: picard@enterprise.starfleet
+  author: William T. Riker
+0b7698fa-7fc0-89d7-af94-d89a1724367f  Slack Message
+  from: slack:T_NCC1701D/U_RIKER
+  name: picard@enterprise.starfleet
+  author: William T. Riker
+0b7698fc-0660-889a-8ed4-b5b9b5c39786  Slack Message
+  from: slack:T_NCC1701D/U_WORF
+  name: picard@enterprise.starfleet
+  author: Worf
+00000000-0000-80d6-b5a5-2617d0679dab  Slack Thread
+  title: @William T. Riker, Worf
+  name: picard@enterprise.starfleet
+  participant: slack:T_NCC1701D/U_PICARD
+  subject: slack:T_NCC1701D/U_RIKER
+  subject: slack:T_NCC1701D/U_WORF
+0b7698ff-2340-8846-8c6a-4796fd32ae08  Slack Message
+  from: slack:T_NCC1701D/U_PICARD
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+00000000-0000-8119-8c96-61dfdcca24d4  Slack Thread
+  title: #bridge
+  name: picard@enterprise.starfleet
+  participant: slack:T_NCC1701D/U_RIKER
+0b769903-a780-8b46-b987-b030e43d4ae0  Slack Message
+  from: slack:T_NCC1701D/U_RIKER
+  name: picard@enterprise.starfleet
+  author: William T. Riker
+00000000-0000-811d-904c-516d04a43f68  Slack Thread
+  title: #bridge
+  name: picard@enterprise.starfleet
+  participant: slack:T_NCC1701D/U_DATA
+0b7698fd-8d00-84ad-8dc9-0a79dbe69904  Slack Message
+  from: slack:T_NCC1701D/U_DATA
+  name: picard@enterprise.starfleet
+  author: Lt. Cmdr. Data
+00000000-0000-81d7-a9c9-0ee77752a4e6  Slack Thread
+  title: #engineering
+  name: picard@enterprise.starfleet
+  participant: slack:T_NCC1701D/U_DATA
+0b7698f8-f920-898c-8557-00e23e5954e1  Slack Message
+  from: slack:T_NCC1701D/U_DATA
+  name: picard@enterprise.starfleet
+  author: Lt. Cmdr. Data
+00000000-0000-84d6-b1f0-0b22f0528e5c  Slack Thread
+  title: #bridge
+  name: picard@enterprise.starfleet
+  participant: slack:T_NCC1701D/U_DATA
+  participant: slack:T_NCC1701D/U_PICARD
+  participant: slack:T_NCC1701D/U_RIKER
+  participant: slack:T_NCC1701D/U_WORF
+0b7698f4-6540-80af-816a-5ae59a2e6271  Slack Reaction
+  from: slack:T_NCC1701D/U_RIKER
+  name: picard@enterprise.starfleet
+  author: William T. Riker
+0b7698f4-6540-818f-992e-43c8ace221e6  Slack Reaction
+  from: slack:T_NCC1701D/U_DATA
+  name: picard@enterprise.starfleet
+  author: Lt. Cmdr. Data
+0b7698f4-6540-8406-ac79-764d7e034f3e  Slack Reaction
+  from: slack:T_NCC1701D/U_PICARD
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+0b7698f2-dea0-84c2-a732-f51e3d0eed12  Slack Message
+  from: slack:T_NCC1701D/U_PICARD
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+0b7698f4-6540-8740-8097-5bd209562812  Slack Message
+  from: slack:T_NCC1701D/U_DATA
+  name: picard@enterprise.starfleet
+  author: Lt. Cmdr. Data
+0b7698f5-ebe0-8636-907d-ec3c06dd8caf  Slack Message
+  from: slack:T_NCC1701D/U_RIKER
+  name: picard@enterprise.starfleet
+  author: William T. Riker
+0b769902-20e0-82a9-bcd1-b91ee7c07e1d  Slack Message
+  from: slack:T_NCC1701D/U_WORF
+  name: picard@enterprise.starfleet
+  author: Worf
+00000000-0000-84dc-9287-55606902e25c  Slack Thread
+  title: #engineering
+  name: picard@enterprise.starfleet
+  participant: Sensor Array
+0b7698f8-35d0-8d5d-ba67-8fae742572ae  Slack Message
+  name: picard@enterprise.starfleet
+  author: Sensor Array
+00000000-0000-8630-8d5e-f4aae259bc1c  Slack Thread
+  title: @William T. Riker
+  name: picard@enterprise.starfleet
+  participant: slack:T_NCC1701D/U_RIKER
+  subject: slack:T_NCC1701D/U_RIKER
+0b7698ff-13a0-808c-b7ce-cea9b1aeadd7  Slack Message
+  from: slack:T_NCC1701D/U_RIKER
+  name: picard@enterprise.starfleet
+  author: William T. Riker
+00000000-0000-89a0-9bd6-7e928c9b2396  Slack Thread
+  title: @Lt. Cmdr. Data
+  name: picard@enterprise.starfleet
+  participant: slack:T_NCC1701D/U_DATA
+  participant: slack:T_NCC1701D/U_PICARD
+  subject: slack:T_NCC1701D/U_DATA
+0b7698ff-1b70-8f75-a07f-0a2448f23b31  Slack Reaction
+  from: slack:T_NCC1701D/U_PICARD
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+0b7698ff-1b70-8b07-b467-aa4ec3751924  Slack Message
+  from: slack:T_NCC1701D/U_DATA
+  name: picard@enterprise.starfleet
+  author: Lt. Cmdr. Data
+00000000-0000-8ac1-a181-7b8e737cbd85  Slack Thread
+  title: @William T. Riker
+  name: picard@enterprise.starfleet
+  participant: slack:T_NCC1701D/U_PICARD
+  subject: slack:T_NCC1701D/U_RIKER
+0b7698ff-1788-803e-99f1-66c2a1e051e2  Slack Message
+  from: slack:T_NCC1701D/U_PICARD
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+00000000-0000-8b0f-9140-61eaa37493ff  Slack Thread
+  title: #bridge
+  name: picard@enterprise.starfleet
+  participant: slack:T_NCC1701D/U_PICARD
+0b7698fc-0660-82bf-8e80-6e3a63abace6  Slack Message
+  from: slack:T_NCC1701D/U_PICARD
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+00000000-0000-8bff-b36c-0096661fd9fa  Slack Thread
+  title: #bridge
+  name: picard@enterprise.starfleet
+  participant: slack:T_NCC1701D/U_PICARD
+  participant: slack:T_NCC1701D/U_WORF
+0b7698f7-7280-8566-b59f-177891072cf9  Slack Reaction
+  from: slack:T_NCC1701D/U_PICARD
+  name: picard@enterprise.starfleet
+  author: Jean-Luc Picard
+0b7698f7-7280-8ed4-adc1-7d90bde8bac5  Slack Message
+  from: slack:T_NCC1701D/U_WORF
+  name: picard@enterprise.starfleet
+  author: Worf
+00000000-0000-8d9c-9316-43944fcd9e60  Slack Thread
+  title: @William T. Riker, Worf
+  name: picard@enterprise.starfleet
+  participant: slack:T_NCC1701D/U_PICARD
+  participant: slack:T_NCC1701D/U_TROI
+  participant: slack:T_NCC1701D/U_WORF
+  subject: slack:T_NCC1701D/U_RIKER
+  subject: slack:T_NCC1701D/U_WORF
+0b7698ff-1f58-8e45-9a6b-1cb756b8a2d4  Slack Reaction
+  from: slack:T_NCC1701D/U_TROI
+  name: picard@enterprise.starfleet
+  author: U_TROI
+0b7698ff-1f58-8154-ac8f-29f1f51d27f8  Slack Message
+  from: slack:T_NCC1701D/U_WORF
+  name: picard@enterprise.starfleet
+  mention: slack:T_NCC1701D/U_PICARD
+  author: Worf

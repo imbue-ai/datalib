@@ -27,13 +27,6 @@ import ChatBody from "./ChatBody.ce.vue";
 import { absoluteRemote, type RemoteRef } from "./remoteMedia";
 import { bodyOf, renderDocument } from "./renderDocument";
 import { PAGE, holds, withPage } from "./pieceWindow";
-import FeedbackModal from "@/components/FeedbackModal.vue";
-import {
-  buildContext,
-  capturePreviewSelection,
-  messageAncestor,
-  type FeedbackContext,
-} from "@/feedback/context";
 import {
   chatSectionFromHref,
   chatUuidFromHref,
@@ -41,6 +34,7 @@ import {
   type ClickedLink,
 } from "./chatLink";
 import { asElement } from "./docFrame";
+import { messageAncestor } from "./chatSections.js";
 import { openExternal } from "@/externalLinks";
 import { isDesktopApp, revealActionLabel, revealInFileManager } from "@/desktop";
 import { pushToast } from "@/toasts";
@@ -340,39 +334,17 @@ function openRemoteTable(url: string, title: string) {
   props.ctx.host.openCards(`tableView(${JSON.stringify({ url, title })})`);
 }
 
-const feedbackOpen = ref(false);
-const feedbackContext = ref<FeedbackContext | null>(null);
-const feedbackSurfaceLabel = ref("");
-
-// Right-click context menu state. We defer building the feedback
-// context until the user actually picks "Feedback…", but the surface
-// kind ('selection' / 'message' / 'conversation') is decided up-front
-// at right-click time so the Copy and Feedback actions agree on what
-// the user was pointing at.
-type PendingTarget =
-  | {
-      kind: "selection";
-      anchor: Element | null;
-      conv: string;
-      sel: ReturnType<typeof capturePreviewSelection>;
-      selectionText: string;
-    }
-  | {
-      kind: "message";
-      anchor: Element | null;
-      conv: string;
-      msgUuid: string;
-      msgIndex: number;
-    }
-  | {
-      kind: "conversation";
-      anchor: Element | null;
-      conv: string;
-    };
+// Right-click in the body: what was pointed at, decided at the click —
+// the selection, else the message under the cursor, else the document —
+// so every action the menu offers acts on the same thing.
+type PointedAt =
+  | { kind: "selection"; text: string }
+  | { kind: "message"; uuid: string }
+  | { kind: "document"; uuid: string };
 
 const ctxMenuVisible = ref(false);
 const ctxMenuPos = ref({ x: 0, y: 0 });
-const ctxTarget = ref<PendingTarget | null>(null);
+const ctxTarget = ref<PointedAt | null>(null);
 
 /// Where a right-click happened: this window, or the document frame —
 /// whose selection it is, and how far its viewport sits from this one.
@@ -380,44 +352,14 @@ type ClickView = { win: Window; dx: number; dy: number };
 
 function onPaneContextMenu(ev: MouseEvent, view: ClickView = { win: window, dx: 0, dy: 0 }) {
   if (!chat.value) return;
-  const conv = chat.value.markdown_uuid;
-  const target = asElement(ev.target);
-
-  // Cascade: active selection > message under cursor > whole-page fallback.
-  // Whichever path we take, we then open our custom context menu instead
-  // of jumping straight into the feedback modal.
-  let pending: PendingTarget;
-  const sel = capturePreviewSelection(view.win);
-  if (sel) {
-    pending = {
-      kind: "selection",
-      anchor: target,
-      conv,
-      sel,
-      selectionText: view.win.getSelection()?.toString() ?? "",
-    };
-  } else {
-    const msgUuid = messageAncestor(target);
-    if (msgUuid) {
-      // The feedback schema's preview_message payload still has a
-      // required `message_index` (see schemas/feedback.schema.json).
-      // The renderer no longer emits `data-msg-index` — `message_uuid`
-      // is the load-bearing field now. Pass 0 until the feedback
-      // schema follow-up drops the index.
-      pending = {
-        kind: "message",
-        anchor: target,
-        conv,
-        msgUuid,
-        msgIndex: 0,
-      };
-    } else {
-      pending = { kind: "conversation", anchor: target, conv };
-    }
-  }
-
+  const selected = view.win.getSelection()?.toString() ?? "";
+  const message = messageAncestor(asElement(ev.target));
+  let pointed: PointedAt;
+  if (selected.trim()) pointed = { kind: "selection", text: selected };
+  else if (message) pointed = { kind: "message", uuid: message };
+  else pointed = { kind: "document", uuid: chat.value.markdown_uuid };
   ev.preventDefault();
-  ctxTarget.value = pending;
+  ctxTarget.value = pointed;
   ctxMenuPos.value = { x: ev.clientX + view.dx, y: ev.clientY + view.dy };
   ctxMenuVisible.value = true;
 }
@@ -432,15 +374,13 @@ const copyLabel = computed(() => {
   if (!t) return "Copy";
   if (t.kind === "selection") return "Copy selected text";
   if (t.kind === "message") return "Copy message ID";
-  return "Copy conversation ID";
+  return "Copy document ID";
 });
 
 function copyTargetText(): string {
   const t = ctxTarget.value;
   if (!t) return "";
-  if (t.kind === "selection") return t.selectionText;
-  if (t.kind === "message") return t.msgUuid;
-  return t.conv;
+  return t.kind === "selection" ? t.text : t.uuid;
 }
 
 async function onCopy() {
@@ -451,47 +391,6 @@ async function onCopy() {
   }
   await copyToClipboard(text);
   closeCtxMenu();
-}
-
-function onFeedback() {
-  const t = ctxTarget.value;
-  if (t) feedbackOn(t);
-  closeCtxMenu();
-}
-
-function feedbackOn(t: PendingTarget) {
-  if (t.kind === "selection" && t.sel) {
-    feedbackContext.value = buildContext({
-      surface: "preview_selection",
-      anchor: t.anchor,
-      targetUuids: [t.conv, t.sel.start_message_uuid, t.sel.end_message_uuid].filter(
-        (v, i, a) => a.indexOf(v) === i,
-      ),
-      payload: t.sel,
-    });
-    feedbackSurfaceLabel.value = "Selected text";
-  } else if (t.kind === "message") {
-    feedbackContext.value = buildContext({
-      surface: "preview_message",
-      anchor: t.anchor,
-      targetUuids: [t.conv, t.msgUuid],
-      payload: {
-        conversation_uuid: t.conv,
-        message_uuid: t.msgUuid,
-        message_index: t.msgIndex,
-      },
-    });
-    feedbackSurfaceLabel.value = "Chat message";
-  } else {
-    feedbackContext.value = buildContext({
-      surface: "page_header",
-      anchor: t.anchor,
-      targetUuids: [t.conv],
-      payload: { entity_kind: "conversation", entity_uuid: t.conv },
-    });
-    feedbackSurfaceLabel.value = "Conversation";
-  }
-  feedbackOpen.value = true;
 }
 
 // ── The title bar's buttons and menu (`documentMenu.ts`).
@@ -532,8 +431,6 @@ async function onDocAction(id: DocumentAction) {
       return copy(documentCopyText(doc));
     case "copy-markdown":
       return copy(await fetchChatBody(doc.markdown_uuid), "the Markdown");
-    case "feedback":
-      return feedbackOn({ kind: "conversation", anchor: cardEl.value, conv: doc.markdown_uuid });
   }
 }
 
@@ -901,12 +798,6 @@ watch(
         </div>
       </template>
     </div>
-    <FeedbackModal
-      :open="feedbackOpen"
-      :surface-label="feedbackSurfaceLabel"
-      :context="feedbackContext"
-      @close="feedbackOpen = false"
-    />
     <div
       v-if="ctxMenuVisible"
       class="ctx-overlay"
@@ -919,8 +810,6 @@ watch(
         @click.stop
       >
         <div class="ctx-item" @click="onCopy">{{ copyLabel }}</div>
-        <div class="ctx-divider" />
-        <div class="ctx-item" @click="onFeedback">Feedback…</div>
       </div>
     </div>
   </section>
@@ -1208,10 +1097,5 @@ watch(
 }
 .ctx-item:hover {
   background: var(--datalib-accent, #eee);
-}
-.ctx-divider {
-  height: 1px;
-  background: var(--datalib-border, #ccc);
-  margin: 4px 0;
 }
 </style>

@@ -196,11 +196,13 @@ fn render_smoke_produces_one_page_and_its_rows() {
         "the attachment is listed at its part's address: {md}"
     );
     assert!(
-        md.contains("🏷 Inbox\n"),
+        md.contains("<span class=\"msg-labels\"><span class=\"msg-label\">Inbox</span></span>"),
         "mailbox label chip rendered: {md}"
     );
     assert!(
-        md.contains("🏷 Starred · Inbox"),
+        md.contains(
+            "<span class=\"msg-label\">Starred</span> <span class=\"msg-label\">Inbox</span>"
+        ),
         "a flagged email's line leads with Starred: {md}"
     );
     // The outlink is built from mailboxes, never from a flag.

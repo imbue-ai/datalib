@@ -131,6 +131,18 @@ pub struct Reaction {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handle: Option<String>,
+    /// How many reacted, where the source counts them and names nobody;
+    /// one where `name` is who did.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub count: u32,
+}
+
+fn one() -> u32 {
+    1
+}
+
+fn is_one(count: &u32) -> bool {
+    *count == 1
 }
 
 /// One person an item was addressed to, as the item names them.
@@ -238,10 +250,19 @@ mod tests {
             emoji: "🖖".into(),
             name: "Spock".into(),
             handle: None,
+            count: 1,
         }];
         let json = reactions_json(&r).unwrap();
         assert_eq!(json, r#"[{"uuid":"r1","emoji":"🖖","name":"Spock"}]"#);
-        assert_eq!(parse_reactions(&json), Some(r));
+        assert_eq!(parse_reactions(&json), Some(r.clone()));
+        let crowd = vec![Reaction {
+            name: "3 people".into(),
+            count: 3,
+            ..r[0].clone()
+        }];
+        let json = reactions_json(&crowd).unwrap();
+        assert!(json.ends_with(r#""count":3}]"#), "{json}");
+        assert_eq!(parse_reactions(&json), Some(crowd));
         assert_eq!(reactions_json(&[]), None);
     }
 

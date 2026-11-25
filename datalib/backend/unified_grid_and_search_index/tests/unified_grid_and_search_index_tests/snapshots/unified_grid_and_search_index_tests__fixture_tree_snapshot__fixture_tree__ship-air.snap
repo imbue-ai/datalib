@@ -1,0 +1,7 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_tree_snapshot.rs
+expression: text
+---
+Sensor Timeseries "AirVisual monitors — ship-air"  00000000-0000-88da-b36e-289718ab00fd [read]
+  Sensor Device  00000000-0000-88c0-b6ee-3210db9c4ed5
+  Sensor Device  00000000-0000-8e1d-8ce6-ca9fcdd15aaf

@@ -38,6 +38,8 @@ pub enum HandleKind {
     Email,
     Tel,
     Slack,
+    /// A Discord account by its id (a snowflake), one across every server.
+    Discord,
     /// A Signal account's id (ACI): the one identifier a Signal backup
     /// has for a person whose number it does not know.
     SignalAci,
@@ -205,6 +207,13 @@ impl Handle {
             .then(|| Self::of(HandleKind::Slack, &format!("{team_id}/{user_id}")))
     }
 
+    /// A Discord account by its id, the digits of a snowflake.
+    pub fn discord(id: &str) -> Option<Self> {
+        let id = id.trim();
+        let well_formed = (1..=20).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_digit());
+        well_formed.then(|| Self::of(HandleKind::Discord, id))
+    }
+
     /// A Signal ACI, a UUID: 32 hex digits, with or without the dashes,
     /// in any case. Spelled the way Signal does, lowercase with dashes.
     /// A PNI is not accepted here: it names a number, not a person, and
@@ -330,6 +339,7 @@ impl Handle {
                 let (team, user) = value.split_once('/')?;
                 Self::slack(team, user)
             }
+            HandleKind::Discord => Self::discord(value),
             HandleKind::SignalAci => Self::signal_aci(value),
             HandleKind::Facebook => match value.split_once('/')? {
                 ("name", name) => Self::facebook_name(name),
@@ -393,6 +403,7 @@ impl Handle {
             // a GitHub profile's address serve: `github.com/<x>` is as
             // often an organization or one of GitHub's own pages.
             HandleKind::SignalAci
+            | HandleKind::Discord
             | HandleKind::Facebook
             | HandleKind::Google
             | HandleKind::Github
@@ -485,6 +496,7 @@ impl Handle {
             HandleKind::Email => format!("{shown} <{}>", self.value()),
             HandleKind::Tel => format!("{shown} ({})", self.value()),
             HandleKind::Slack
+            | HandleKind::Discord
             | HandleKind::SignalAci
             | HandleKind::Facebook
             | HandleKind::Linkedin
@@ -922,6 +934,10 @@ mod tests {
             (
                 Handle::slack("T01", "U02").unwrap(),
                 "slack://user?team=T01&id=U02",
+            ),
+            (
+                Handle::discord("175928847299117063").unwrap(),
+                "datalib:handle/discord/175928847299117063",
             ),
             (
                 Handle::signal_aci("0195683ad14087f9bdf6234da6d6880c").unwrap(),

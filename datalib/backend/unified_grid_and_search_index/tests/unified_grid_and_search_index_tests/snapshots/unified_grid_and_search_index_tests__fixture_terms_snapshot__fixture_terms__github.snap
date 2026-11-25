@@ -1,0 +1,38 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_terms_snapshot.rs
+expression: source.render()
+---
+00000000-0000-889d-ab8c-e960fbf429ce  GitHub repository
+  title: enterprise-d/replicator-firmware
+0b75b9f9-4400-87fe-99ef-2db45ad92cb6  GitHub PR
+  from: github:jlpicard
+  title: Recalibrate replicator templates for Earl Grey, hot
+  author: jlpicard
+0b75ba67-2100-8e00-a40a-a94d0cda3e7d  GitHub Review
+  from: github:wtriker
+  author: wtriker
+0b75ba4b-a9c0-8e4f-98c7-cd7e6a61a4d3  GitHub PR Comment
+  from: github:geordi-laforge
+  author: geordi-laforge
+0b75ba67-24e8-805b-9bd2-36cb40a41cb8  GitHub Review Comment
+  from: github:wtriker
+  author: wtriker
+0b75ba6b-b4e0-8cd3-a7f1-9a10e37b4091  GitHub Review Comment
+  from: github:jlpicard
+  author: jlpicard
+0b75bad4-fe00-82b8-ab37-5a103480b51c  GitHub PR
+  from: github:jlpicard
+  title: Add holodeck safety interlock for live phaser fire
+  author: jlpicard
+0b75bb42-db00-8e46-8fa7-79619e17107e  GitHub Review
+  from: github:data-soong
+  author: data-soong
+0b75bb27-63c0-8116-b4ff-00bdd74fe630  GitHub PR Comment
+  from: github:worf-rozhenko
+  author: worf-rozhenko
+0b75bb42-dee8-86c3-b802-bc72e8807da8  GitHub Review Comment
+  from: github:data-soong
+  author: data-soong
+0b75bb42-e2d0-8488-a5a6-2dc5b65a9b3e  GitHub Review Comment
+  from: github:data-soong
+  author: data-soong

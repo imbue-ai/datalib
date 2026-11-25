@@ -389,6 +389,7 @@ async fn a_hand_edit_reaches_the_registry_through_the_watcher() {
         tmp.path().to_path_buf(),
         state.root_tx.clone(),
         datalib_http::watch::Timing::default(),
+        state.echoes.clone(),
     );
     let mut reloaded =
         datalib_http::applets::watch_config(state.applets.clone(), state.root_tx.subscribe());

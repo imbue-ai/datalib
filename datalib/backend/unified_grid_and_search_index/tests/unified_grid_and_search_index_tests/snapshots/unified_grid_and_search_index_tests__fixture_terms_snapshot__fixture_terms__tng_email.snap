@@ -1,0 +1,104 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_terms_snapshot.rs
+expression: source.render()
+---
+00000000-0000-80b1-aa27-9cccf32b1396  Email Label
+  title: Inbox
+00000000-0000-81c5-9386-c1c23c0a66b8  Email Label
+  title: Category Promotions
+00000000-0000-8570-90c4-e54c531f3fff  Email Account
+  title: picard@enterprise.starfleet
+00000000-0000-8d99-95e5-8ec054d6181e  Email Label
+  title: Sent
+00000000-0000-80b3-8c56-6d41b85ab9c6  Email Thread
+  title: Captain's Log — Stardate 80124.1
+  name: picard@enterprise.starfleet
+  participant: email:command@starfleet.gov
+  participant: email:picard@enterprise.starfleet
+  participant: email:troi@enterprise.starfleet
+019b98c1-db00-89bf-8e74-14d9155da327  Email
+  from: email:picard@enterprise.starfleet
+  name: picard@enterprise.starfleet
+  to: email:command@starfleet.gov
+  label: Important
+  label: Sent
+  bcc: email:troi@enterprise.starfleet
+  author: Jean-Luc Picard <picard@enterprise.starfleet>
+00000000-0000-85ec-8481-370bffc3afe9  Email Thread
+  title: You've won a holosuite upgrade!
+  name: picard@enterprise.starfleet
+  participant: email:picard@enterprise.starfleet
+  participant: email:prizes@quarks.example
+019b9cd5-8e80-8562-98ed-abfb7e8a4cac  Email
+  from: email:prizes@quarks.example
+  name: picard@enterprise.starfleet
+  to: email:picard@enterprise.starfleet
+  label: Category Promotions
+  label: Inbox
+  author: Quark's Bar <prizes@quarks.example>
+00000000-0000-89ac-8ef1-ba5e79d09b76  Email Thread
+  title: Your bar tab
+  name: picard@enterprise.starfleet
+  participant: email:picard@enterprise.starfleet
+  participant: email:prizes@quarks.example
+019ba48f-1880-8caa-a85b-c2355321c4d0  Email
+  from: email:prizes@quarks.example
+  name: picard@enterprise.starfleet
+  to: email:picard@enterprise.starfleet
+  label: Inbox
+  author: Quark's Bar <prizes@quarks.example>
+00000000-0000-8a58-a8a4-0d3e51a39a59  Email Thread
+  title: Your shore leave awaits!
+  name: picard@enterprise.starfleet
+  participant: email:hello@risa.tourism
+  participant: email:picard@enterprise.starfleet
+019b9251-e800-8ca5-8cdf-3cd10603d0f3  Email
+  from: email:hello@risa.tourism
+  name: picard@enterprise.starfleet
+  to: email:picard@enterprise.starfleet
+  label: Category Promotions
+  label: Inbox
+  author: Risa Tourism Board <hello@risa.tourism>
+00000000-0000-8ce7-94d1-18948b029452  Email Thread
+  title: Mission Briefing — Sector 001
+  name: picard@enterprise.starfleet
+  participant: email:command@starfleet.gov
+  participant: email:laforge@enterprise.starfleet
+  participant: email:picard@enterprise.starfleet
+  participant: email:riker@enterprise.starfleet
+019b8d62-7a80-88c2-8062-f1b656c84835  Email
+  from: email:command@starfleet.gov
+  name: picard@enterprise.starfleet
+  to: email:picard@enterprise.starfleet
+  cc: email:riker@enterprise.starfleet
+  label: Important
+  label: Inbox
+  label: Starred
+  author: Starfleet Command <command@starfleet.gov>
+019b8db4-e040-88dc-8f8b-9e73422dcff3  Email
+  from: email:picard@enterprise.starfleet
+  name: picard@enterprise.starfleet
+  to: email:riker@enterprise.starfleet
+  label: Inbox
+  label: Sent
+  author: Jean-Luc Picard <picard@enterprise.starfleet>
+019b8dde-1320-86d3-965a-083aad10c428  Email
+  from: email:laforge@enterprise.starfleet
+  name: picard@enterprise.starfleet
+  to: email:picard@enterprise.starfleet
+  cc: email:riker@enterprise.starfleet
+  label: Inbox
+  author: Geordi La Forge <laforge@enterprise.starfleet>
+00000000-0000-8e37-8bef-9f0edb66b8be  Email Thread
+  title: Bridge status display
+  name: picard@enterprise.starfleet
+  participant: email:laforge@enterprise.starfleet
+  participant: email:lcars@enterprise.starfleet
+  participant: email:picard@enterprise.starfleet
+019b97af-3280-8f16-979e-afe19c268630  Email
+  from: email:lcars@enterprise.starfleet
+  name: picard@enterprise.starfleet
+  to: email:picard@enterprise.starfleet
+  label: Inbox
+  mention: email:laforge@enterprise.starfleet
+  author: LCARS Status <lcars@enterprise.starfleet>

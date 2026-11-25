@@ -42,6 +42,7 @@ const STAMP: Record<string, BrowseColumn> = {
 const EXTRA: Record<string, BrowseColumn[]> = {
   // Chat: who said it. Where is the subject, the conversation.
   slack: ["author_ref"],
+  discord: ["author_ref"],
   whatsapp: ["author_ref"],
   signal: ["author_ref"],
   beeper: ["author_ref", "account", "project"],

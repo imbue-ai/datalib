@@ -60,6 +60,7 @@ async fn abandoned(root: &std::path::Path, run_id: &str) {
 async fn finished_at(root: &std::path::Path, run_id: &str) -> Option<String> {
     runs(root, None, 10)
         .await
+        .unwrap()
         .into_iter()
         .find(|r| r.run_id == run_id)
         .expect("the run exists")
@@ -91,7 +92,7 @@ async fn it_closes_the_run_and_the_steps_that_never_reported() {
     );
 
     assert!(finished_at(td.path(), "r1").await.is_some());
-    let snapshot = snapshot_of(td.path(), Some("r1")).await;
+    let snapshot = snapshot_of(td.path(), Some("r1")).await.unwrap();
     let state = |step: &str| {
         snapshot
             .steps
@@ -139,7 +140,7 @@ async fn closing_a_closed_run_changes_nothing() {
         Some(stamp),
         "the second call must not move the stamp the first one set"
     );
-    let snapshot = snapshot_of(td.path(), Some("r1")).await;
+    let snapshot = snapshot_of(td.path(), Some("r1")).await.unwrap();
     let first_reason = snapshot
         .steps
         .iter()
@@ -194,7 +195,7 @@ async fn a_pinned_run_is_not_closed_before_it_began() {
     close_abandoned_run(td.path(), "r1", STOPPED, "gone")
         .await
         .expect("close");
-    let run = runs(td.path(), None, 10).await.remove(0);
+    let run = runs(td.path(), None, 10).await.unwrap().remove(0);
     assert_eq!(
         run.finished_at_utc.as_deref(),
         Some(run.started_at_utc.as_str())

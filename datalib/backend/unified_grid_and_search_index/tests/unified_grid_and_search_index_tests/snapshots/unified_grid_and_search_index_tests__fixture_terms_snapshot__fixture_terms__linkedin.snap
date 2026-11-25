@@ -1,0 +1,81 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_terms_snapshot.rs
+expression: source.render()
+---
+00000000-0000-8027-9f1f-73b03617467e  LinkedIn Chat
+  title: Jean-Luc Picard, William Riker
+  name: data@enterprise.starfleet.test
+  participant: linkedin:jlpicard
+  participant: linkedin:wriker
+  subject: linkedin:jlpicard
+  subject: linkedin:wriker
+0b75a070-6680-881c-a54a-36b690506dbf  LinkedIn Message
+  from: linkedin:jlpicard
+  name: data@enterprise.starfleet.test
+  author: Jean-Luc Picard
+0b75a074-fa60-8c0a-b870-4aceeb2d9ce6  LinkedIn Message
+  from: linkedin:wriker
+  name: data@enterprise.starfleet.test
+  author: William Riker
+0b75a076-59f0-8340-bf8a-62a6277b1b83  LinkedIn Message
+  from: linkedin:jlpicard
+  name: data@enterprise.starfleet.test
+  author: Jean-Luc Picard
+00000000-0000-84c5-a0e7-167d60e47f98  LinkedIn Post
+  title: Comment: Captain, I must respectfully disagree: the odds are 1 in 4.7 trillion, not "ast…
+  name: data@enterprise.starfleet.test
+  participant: email:data@enterprise.starfleet.test
+0b75aa93-eba0-8d7e-aecf-f814af3527d5  LinkedIn Post Message
+  name: data@enterprise.starfleet.test
+  author: LinkedIn
+0b75aa93-eba0-82a6-896c-c5d51aaaf0c1  LinkedIn Post Message
+  from: email:data@enterprise.starfleet.test
+  name: data@enterprise.starfleet.test
+  author: Me
+  upstream_id: 4a7a53ba-b02c-5fc2-86f1-d1eb357f1b4c
+0b75aa98-f4b0-8678-9884-d96821160511  LinkedIn Post Message
+  from: email:data@enterprise.starfleet.test
+  name: data@enterprise.starfleet.test
+  author: Me
+  upstream_id: bba4bae1-6bcf-5c6d-9cc9-a9e0c2481177
+00000000-0000-8878-b482-b77c75689e79  LinkedIn Post
+  title: Post: Thrilled to share: the Enterprise has completed its survey of the Mintaka syste…
+  name: data@enterprise.starfleet.test
+  participant: email:data@enterprise.starfleet.test
+0b75a6a9-6b00-8a4e-a7c0-9a4b04cc20dc  LinkedIn Post Message
+  from: email:data@enterprise.starfleet.test
+  name: data@enterprise.starfleet.test
+  author: Me
+0b75a6e2-2e40-8c19-9fdb-d46147660a2f  LinkedIn Post Message
+  from: email:data@enterprise.starfleet.test
+  name: data@enterprise.starfleet.test
+  author: Me
+  upstream_id: 75aeef26-cf4e-51b6-8ca2-f08d2235842c
+00000000-0000-8980-b4a1-ea8e394399fe  LinkedIn Skills
+  title: LinkedIn skills
+  name: data@enterprise.starfleet.test
+00000000-0000-8251-bf2a-e6c7cb665574  LinkedIn Skill
+  name: data@enterprise.starfleet.test
+00000000-0000-8a6a-8901-f5acbd5843d6  LinkedIn Skill
+  name: data@enterprise.starfleet.test
+00000000-0000-8068-a764-f47052ad2e6e  LinkedIn Skill
+  name: data@enterprise.starfleet.test
+00000000-0000-8bbb-8c8b-8ae1dedef5e2  Contact
+  title: Jean-Luc Picard
+  name: Connections
+  name: data@enterprise.starfleet.test
+  about: Jean-Luc Picard
+  about: email:jlpicard@starfleet.gov
+  about: linkedin:jlpicard
+00000000-0000-8d5b-95c0-1e95e75b6e77  Contact
+  title: William Riker
+  name: Connections
+  name: data@enterprise.starfleet.test
+  about: William Riker
+  about: linkedin:wriker
+00000000-0000-8f36-a408-50d26aa9b0db  Contact
+  title: Data Soong
+  name: Connections
+  name: data@enterprise.starfleet.test
+  about: Data Soong
+  about: linkedin:datasoong

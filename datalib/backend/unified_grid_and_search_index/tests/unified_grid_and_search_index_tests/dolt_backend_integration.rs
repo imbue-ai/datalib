@@ -1,11 +1,8 @@
 //! End-to-end integration test for the grid index's reader, `DoltRepo`.
 
 use datalib_query::table::SearchTable;
-use datalib_schema::grid_rows::{GridRow, GridRowColumn, DDL as GRID_DDL, INDEXES as GRID_INDEXES};
-use datalib_schema::markdowns::DDL as MARKDOWNS_DDL;
-use datalib_schema::problems::{
-    Outcome, Problem, ProblemRow, Reason, Scope, Stage, DDL as PROBLEMS_DDL,
-};
+use datalib_schema::grid_rows::{GridRow, GridRowColumn, INDEXES as GRID_INDEXES};
+use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 use datalib_schema::providers::Provider;
 use datalib_table::BulkUpsertable;
 use datalib_unified_grid_and_search_index::db::{
@@ -21,25 +18,14 @@ use datalib_unified_grid_and_search_index::view;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// The `unified_grid_and_search_index` step's handle on the root's index, for seeding: a
-/// plain WAL file with its generation row, as `open_index` makes it. The
-/// repo under test opens its own, read-only, once the file exists — which
-/// is exactly how the applet reads what the step wrote.
+/// The `unified_grid_and_search_index` step's handle on the root's index,
+/// for seeding, as the step opens it. The repo under test opens its own,
+/// read-only, once the file exists — which is exactly how the applet
+/// reads what the step wrote.
 pub(crate) async fn writer(root: &Path) -> sqlx::SqlitePool {
-    let pool = datalib_core::store::open_plain_pool(&datalib_core::layout::grid_index_db(root))
+    datalib_etl_render::grid_index::open_index(&datalib_core::layout::grid_index_db(root))
         .await
-        .expect("open a writer on the grid index");
-    for sql in [
-        "PRAGMA journal_mode = WAL",
-        datalib_pin::GENERATION_DDL,
-        "INSERT INTO store_generation VALUES (1, 'f', 0)",
-    ] {
-        sqlx::query(sql)
-            .execute(&pool)
-            .await
-            .expect("set up the grid index");
-    }
-    pool
+        .expect("open a writer on the grid index")
 }
 
 /// What the step does at the end of each transaction that changed what a
@@ -110,20 +96,19 @@ pub(crate) fn unique_db_path() -> PathBuf {
         .join("backend_index.sqlite")
 }
 
-/// A fresh data root has no `grid_rows`/`markdowns` yet (they appear on
-/// the first sync). The read paths must report that as "no data yet" —
-/// not as an error toast — while anything other than the exact
-/// missing-table case still surfaces as an error.
+/// A root with no index yet, and an index with nothing in it, read as
+/// empty; an index another build wrote is refused whole, naming the step
+/// that brings it up to date, rather than read around.
 #[tokio::test]
-async fn dolt_repo_databaseless_root_reads_as_empty() {
+async fn an_index_reads_as_empty_until_filled_and_is_refused_in_another_shape() {
     let db_path = unique_db_path();
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let repo = DoltRepo::open(root.clone())
         .await
         .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
+    assert!(repo.search(&parse_query(""), 100).await.unwrap().is_empty());
     let writer = writer(&root).await;
 
-    // No GRID_DDL / MARKDOWNS_DDL: this is the pre-first-sync state.
     let rows = repo.search(&parse_query(""), 100).await.unwrap();
     assert!(rows.is_empty(), "expected no rows, got {rows:?}");
     let listing = repo
@@ -151,18 +136,20 @@ async fn dolt_repo_databaseless_root_reads_as_empty() {
         .unwrap()
         .is_empty());
 
-    // Narrowness: a real failure (here, a schema mismatch — the table
-    // exists but lacks the queried columns) must still be an error, not
-    // read as "no data yet".
-    sqlx::query("CREATE TABLE grid_rows (only_column TEXT)")
+    sqlx::query("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
         .execute(&writer)
         .await
-        .expect("create decoy grid_rows");
-    commit(&writer, "schema").await;
+        .unwrap();
+    commit(&writer, "an older build").await;
     let err = repo.search(&parse_query(""), 100).await.unwrap_err();
+    let said = err.to_string();
     assert!(
-        err.to_string().contains("no such column"),
-        "expected a surfaced schema error, got {err}"
+        matches!(err, datalib_core::repo::RepoError::OtherShape(_)),
+        "{said}"
+    );
+    assert!(
+        said.contains("unified_grid_and_search_index/unified_grid_and_search_index"),
+        "the refusal names the step to run: {said}"
     );
 
     drop(repo);
@@ -176,9 +163,6 @@ async fn a_hit_finds_the_rows_of_its_document_and_no_others() {
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let repo = DoltRepo::open(root.clone()).await.unwrap();
     let writer = writer(&root).await;
-    for (_t, ddl) in GRID_DDL {
-        sqlx::query(*ddl).execute(&writer).await.unwrap();
-    }
     insert_rows(
         &writer,
         &[
@@ -206,18 +190,6 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
         .unwrap_or_else(|e| panic!("open doltlite at {}: {e}", db_path.display()));
     let writer = writer(&root).await;
 
-    for (_t, ddl) in GRID_DDL {
-        sqlx::query(*ddl)
-            .execute(&writer)
-            .await
-            .expect("create grid_rows");
-    }
-    for (_t, ddl) in MARKDOWNS_DDL {
-        sqlx::query(*ddl)
-            .execute(&writer)
-            .await
-            .expect("create markdowns");
-    }
     commit(&writer, "schema").await;
     // For Anthropic chats the rendered file is 1:1 with the
     // conversation, so markdown_uuid == conversation_uuid here.
@@ -334,7 +306,6 @@ async fn a_listing_orders_filters_and_reads_back_by_uuid() {
     let db_path = unique_db_path();
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let writer = writer(&root).await;
-    create_grid_tables(&writer).await;
     insert_rows(
         &writer,
         &[
@@ -415,7 +386,6 @@ async fn a_key_suggests_its_values_most_rows_first() {
     let db_path = unique_db_path();
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let writer = writer(&root).await;
-    create_grid_tables(&writer).await;
     let in_channel = |uuid: &str, source: &str, channel: &str| {
         let mut row = chat_row(uuid, source);
         row.channel = Some(channel.to_string());
@@ -467,15 +437,6 @@ async fn a_key_suggests_its_values_most_rows_first() {
     let _ = std::fs::remove_file(&db_path);
 }
 
-async fn create_grid_tables(writer: &sqlx::SqlitePool) {
-    for (_t, ddl) in GRID_DDL.iter().chain(MARKDOWNS_DDL.iter()) {
-        sqlx::query(*ddl)
-            .execute(writer)
-            .await
-            .expect("create table");
-    }
-}
-
 async fn insert_chat_row(writer: &sqlx::SqlitePool, uuid: &str) {
     insert_rows(writer, &[chat_row(uuid, "chats")]).await;
 }
@@ -489,7 +450,6 @@ async fn a_row_the_step_has_not_committed_is_not_served() {
     let db_path = unique_db_path();
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let writer = writer(&root).await;
-    create_grid_tables(&writer).await;
     commit(&writer, "schema").await;
     let repo = DoltRepo::open(root.clone()).await.unwrap();
 
@@ -535,32 +495,13 @@ async fn a_repo_opened_before_the_first_commit_reads_after_it() {
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let repo = DoltRepo::open(root.clone()).await.unwrap();
     let writer = writer(&root).await;
-    create_grid_tables(&writer).await;
-    // Opens the handle: the file exists, the tables are not committed.
+    // Opens the handle: the file exists, nothing is in it yet.
     assert!(repo.search(&parse_query(""), 100).await.unwrap().is_empty());
 
     insert_chat_row(&writer, "c-1").await;
     commit(&writer, "first pass").await;
     let rows = repo.search(&parse_query(""), 100).await.unwrap();
     assert_eq!(rows.len(), 1, "{rows:?}");
-
-    // And a table that arrives later — a newer build adding one — the
-    // same way.
-    sqlx::query(
-        "CREATE TABLE edges (edge_uuid TEXT PRIMARY KEY, src_markdown_uuid TEXT, \
-                 src_anchor_uuid TEXT, dst_markdown_uuid TEXT, dst_anchor_uuid TEXT, label TEXT, \
-                 kind INTEGER)",
-    )
-    .execute(&writer)
-    .await
-    .unwrap();
-    sqlx::query("INSERT INTO edges VALUES ('e-1','c-1',NULL,'c-2',NULL,'cites',0)")
-        .execute(&writer)
-        .await
-        .unwrap();
-    commit(&writer, "edges").await;
-    let edges = repo.outgoing_edges("c-1").await.unwrap();
-    assert_eq!(edges.len(), 1, "{edges:?}");
 
     drop(repo);
     let _ = std::fs::remove_file(&db_path);
@@ -578,12 +519,6 @@ async fn storage_rows_are_filed_under_datalib_not_the_measured_source() {
     let repo = DoltRepo::open(root.clone()).await.expect("open doltlite");
     let writer = writer(&root).await;
 
-    for (_t, ddl) in GRID_DDL {
-        sqlx::query(*ddl)
-            .execute(&writer)
-            .await
-            .expect("create grid_rows");
-    }
     commit(&writer, "schema").await;
     // Both rows sit under `claude-work/render_markdown/`: the chat is
     // that source's data, the measurement is datalib describing it.
@@ -651,9 +586,6 @@ async fn every_wire_field_survives_the_round_trip() {
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let repo = DoltRepo::open(root.clone()).await.unwrap();
     let writer = writer(&root).await;
-    for (_t, ddl) in GRID_DDL {
-        sqlx::query(*ddl).execute(&writer).await.unwrap();
-    }
     commit(&writer, "schema").await;
 
     let row = GridRow::builder()
@@ -767,7 +699,7 @@ async fn every_filter_key_is_served_by_an_index() {
     let writer = writer(&root).await;
     // Every index the grid index has, so a filter is planned among them
     // all: the children's indexes too.
-    crate::children::create_tree(&writer).await;
+
     for (_t, ddl) in GRID_INDEXES.iter() {
         sqlx::query(*ddl).execute(&writer).await.expect("create");
     }
@@ -899,7 +831,7 @@ async fn a_narrowing_to_documents_reads_their_index_alone() {
     let db_path = unique_db_path();
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let writer = writer(&root).await;
-    crate::children::create_tree(&writer).await;
+
     for ddl in GRID_INDEXES
         .iter()
         .map(|(_t, ddl)| *ddl)
@@ -972,13 +904,6 @@ async fn a_committed_problem_is_read_back_by_query_and_by_document() {
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let repo = DoltRepo::open(root.clone()).await.unwrap();
     let writer = writer(&root).await;
-    for (_t, ddl) in GRID_DDL
-        .iter()
-        .chain(MARKDOWNS_DDL.iter())
-        .chain(PROBLEMS_DDL.iter())
-    {
-        sqlx::query(*ddl).execute(&writer).await.unwrap();
-    }
     sqlx::query(
         "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, \
          renderer_version, title, searchable) \
@@ -1042,9 +967,6 @@ async fn an_entity_problem_is_located_at_its_items_document() {
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let repo = DoltRepo::open(root.clone()).await.unwrap();
     let writer = writer(&root).await;
-    for (_t, ddl) in GRID_DDL.iter().chain(PROBLEMS_DDL.iter()) {
-        sqlx::query(*ddl).execute(&writer).await.unwrap();
-    }
     let message = GridRow::builder()
         .uuid("msg-2")
         .provider(Provider::Slack)
@@ -1097,9 +1019,6 @@ async fn a_cell_finds_the_rows_located_in_it() {
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let repo = DoltRepo::open(root.clone()).await.unwrap();
     let writer = writer(&root).await;
-    for (_t, ddl) in GRID_DDL.iter().chain(GRID_INDEXES.iter()) {
-        sqlx::query(*ddl).execute(&writer).await.unwrap();
-    }
 
     let town = Resolution::Six;
     let (lat, lng) = (37.8199, -122.4783);

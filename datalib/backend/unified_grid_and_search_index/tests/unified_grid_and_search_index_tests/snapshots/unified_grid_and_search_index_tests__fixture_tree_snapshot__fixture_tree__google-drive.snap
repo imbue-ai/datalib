@@ -1,0 +1,21 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_tree_snapshot.rs
+expression: text
+---
+Folder "Geordi's notes"  00000000-0000-80bf-b6fa-1d8997f44142 [place]
+  Google Doc "Engineering notes"  00000000-0000-868f-8a6f-73021b82d3b0 [read]
+Folder "My Drive"  00000000-0000-853e-9284-51c842a4df55 [place]
+  Folder "Captain's logs"  00000000-0000-82bd-b860-59039b8a3969 [place]
+    Folder "Stardate 41000s"  00000000-0000-8792-b657-5359eab62263 [place]
+      Google Doc "Captain's log, stardate 41153.7"  00000000-0000-8602-beba-b894e74a00cd [read]
+        also under 00000000-0000-8314-854f-902a0d92d117 (Folder)
+        Google Doc Comment "Captain's log, stardate 41153.7"  0b75a070-6680-8cc2-9ce1-272f21bcee82 [read]
+          Google Doc Comment  0b75a079-8e40-8558-9fb7-57f19b63173a
+          Google Doc Comment  0b75a08b-ddc0-8fc5-bf17-66d295bf7908
+        Google Doc Comment "Captain's log, stardate 41153.7"  0b75a5cd-b100-843c-a987-eaee55760165 [read]
+        Google Doc Comment "Captain's log, stardate 41153.7"  0b75ab2a-fb80-8310-993b-c47a37ec481d [read]
+  Folder "Ready room"  00000000-0000-8314-854f-902a0d92d117 [place]
+Shared drive "Enterprise-D Engineering"  00000000-0000-8b11-8d55-f6e87e7b066d [place]
+  Folder "Engineering"  00000000-0000-8167-860d-903d8716e6b6 [place]
+    Folder "Warp core"  00000000-0000-8e49-a26c-54f99a0faf1e [place]
+      Google Doc "Warp core maintenance schedule"  00000000-0000-855b-b800-796e1b9e77f3 [read]

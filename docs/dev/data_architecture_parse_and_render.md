@@ -133,7 +133,8 @@ database per source, at
     `NormalizedContact`, `contact_schema/`), and the handles that reach
     them. chat-common adds one per author handle with no provider code;
     contact-common adds a card's own. Like edges they belong to the
-    document, and the index answers "who is this handle" from them
+    document, and the index, which keeps each distinct record once
+    ([`contacts.md`](contacts.md)), answers "who is this handle" from them
     (`unified_grid_and_search_index`'s `POST /people`).
   - `problems` — what render could not do getting there (§4).
   - `render_inputs` and `render_cursor` — what each render unit was rendered
@@ -215,9 +216,7 @@ commit sees that commit's text. Search draws a document's text from the
 store (`IndexedMarkdownStore::index_docs`); the document view and
 `datalib-step markdown` spell it (`IndexedMarkdownStore::document`). A
 hit lands on the item the search index names, by its id, and its quote
-reads only what that item says (`IndexedMarkdownStore::item_texts`). Files an earlier build wrote beside
-the store are deleted the next time the source renders
-(`datalib_step/src/old_markdown.rs`).
+reads only what that item says (`IndexedMarkdownStore::item_texts`).
 
 The *contract* holds as before: render emits a human artifact and a
 separate machine-readable projection, and the index reads the
@@ -359,6 +358,10 @@ document. A message is drawn in its **box**, `<div id="m-{uuid}"
 data-section-uuid="{uuid}" class="…">`, and every renderer draws it
 one way, `Section::boxed`, so the store keeps the box's class
 (`sections.class`) and knows the box from the uuid and the class alone.
+A box that is a part of a page rather than a message on it (a PDF's
+page, a device on a time-series page) also carries `msg--page`
+(`section::PAGE_PART`), and the UI draws it flat and whole: no card,
+no "Show more".
 A **fold**, a `<details>` around a run of pieces (a run of tool steps,
 another version, a Drive comment thread, Todoist's completed tasks), is
 drawn one way too, by `Section::fold_open` and `Section::fold_close`,
@@ -383,7 +386,7 @@ How the UI draws the pieces (`ui/src/cards/renderDocument.ts`):
 - **Only the box answers to a message's id.** What answers to an id is
   the outermost element naming it (`sectionEl` in `chatSections.js`),
   and every lookup by id goes through it: a selection, an edge, a
-  problem's jump, the 🔗 button, the feedback menu. A copy of another
+  problem's jump, the 🔗 button, the right-click menu. A copy of another
   message's wrapper inside a message sits in that message's box, so it
   is left as written and never found first. A keyed piece in no box
   answers by its own wrapper, where it draws one.
@@ -446,7 +449,7 @@ Backpointers and outlinks are first-class in the projection schema.
   as out.
 
 The `uuid` recipe is [`entity_ids.md`](entity_ids.md) and it is not
-optional: anything durably keyed on a row — feedback today,
+optional: anything durably keyed on a row — a link handed out today,
 annotations and labels later — rests on it staying stable across a
 re-render. A content-hash identity would orphan every such reference
 on the first edit.
@@ -573,7 +576,7 @@ one.** The seam matters. `render/parse.rs` deserializes into types that
 look like *that provider's* data, with its own vocabulary and its own
 optionality. Projecting onto a shared schema is render's job. Keeping
 the two apart is what lets a provider's oddities stay in one file
-instead of leaking into a type fourteen providers depend on — and it is
+instead of leaking into a type fifteen providers depend on — and it is
 why the unification rules below are all about render.
 
 ### Unification and fidelity, and how the tension resolves
@@ -1083,7 +1086,8 @@ with one bound JSON array each (`etl/README.md` §"Binding a set of
 values"), renders it, and declares the page's render units before reading
 the next, so nothing about a render unit outlives its page. Only the small
 tables every render unit looks up (users, channels, accounts, mailboxes)
-are read whole, up front. Email and Slack render this way, and so do
+are read whole, up front. Email renders this way, and so do Slack and
+Discord (`datalib_etl_chat_common::render_paged`) and
 Claude Code and Codex (`datalib_etl_agent_sessions_render::render_paged`),
 which size a page by how many records it holds, counted from the index
 without reading one. The other renders still read their rows whole

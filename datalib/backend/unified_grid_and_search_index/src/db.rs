@@ -75,6 +75,7 @@ pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
             Field::Terms(key) => terms_clause(key, term),
             Field::Names => names_clause(term),
             Field::Text => text_clause(pk, term),
+            Field::At => crate::at_node::clause(&term.value, term.arms, term.negate),
             Field::Before | Field::After | Field::Is(_) | Field::Column(_) => {
                 (String::new(), Vec::new())
             }
@@ -213,7 +214,12 @@ fn documents_and_sources_only(q: &ParsedQuery<GridRowColumn>) -> bool {
         && q.terms.iter().all(|t| match t.field {
             Field::Is(column) => column == GridRowColumn::IsDocument,
             Field::Column(key) => key.column == GridRowColumn::SourceId,
-            Field::Before | Field::After | Field::Terms(_) | Field::Text | Field::Names => false,
+            Field::Before
+            | Field::After
+            | Field::Terms(_)
+            | Field::Text
+            | Field::Names
+            | Field::At => false,
         })
 }
 

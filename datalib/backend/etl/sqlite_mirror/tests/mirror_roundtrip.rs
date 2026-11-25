@@ -163,11 +163,28 @@ async fn mirror_pk(pool: &SqlitePool, table: &str) -> Vec<String> {
 const CATALOG_TABLES: &[&str] = &[
     "Adobe_AdditionalMetadata",
     "Adobe_images",
+    "AgHarvestedExifMetadata",
+    "AgHarvestedIptcMetadata",
+    "AgInternedExifCameraModel",
+    "AgInternedExifLens",
+    "AgInternedIptcCity",
+    "AgInternedIptcCountry",
+    "AgInternedIptcCreator",
+    "AgInternedIptcLocation",
+    "AgInternedIptcState",
+    "AgLibraryCollection",
+    "AgLibraryCollectionImage",
+    "AgLibraryFace",
     "AgLibraryFile",
     "AgLibraryFolder",
+    "AgLibraryIPTC",
     "AgLibraryImageChangeCounter",
     "AgLibraryKeyword",
+    "AgLibraryKeywordFace",
     "AgLibraryKeywordImage",
+    "AgLibraryPublishedCollection",
+    "AgLibraryPublishedCollectionImage",
+    "AgLibraryRootFolder",
     "AgMetadataSearchIndex",
     "AgOzSpaceIds",
     "MigrationSchemaVersion",
@@ -194,7 +211,7 @@ async fn first_ingest_lands_every_table_and_row() -> Result<()> {
     }
     assert_eq!(
         stats.rows,
-        4 + 4 + 4 + 2 + 3 + 5 + 4 + 2 + 1 + 4,
+        4 + 4 + 2 + 2 + 6 + 5 + 5 + 5 + 4 + 2 + 2 + 4 + 11 + 5 + 10 + 2 + 1 + 1 + 4 + 2 + 1,
         "total rows mirrored"
     );
     pool.close().await;
@@ -209,9 +226,11 @@ async fn indexes_and_triggers_are_not_mirrored() -> Result<()> {
     // `sqlite_autoindex_*` rows are excluded because they are the storage
     // engine's, not the source catalog's: doltlite reports an implicit
     // index for every non-INTEGER primary key, as stock SQLite does.
+    // `problems_by_scope` is every raw store's own, on its `problems`.
     const NAMED_INDEXES_AND_TRIGGERS: &str = "SELECT COUNT(*) FROM sqlite_master \
            WHERE type IN ('index', 'trigger') \
-             AND name NOT GLOB 'sqlite_autoindex_*'";
+             AND name NOT GLOB 'sqlite_autoindex_*' \
+             AND name <> 'problems_by_scope'";
 
     // Prove the assertion below is not vacuous: the source really does
     // carry named indexes and a trigger for the mirror to drop.
@@ -544,8 +563,8 @@ async fn stable_key_is_used_where_available_and_declared_key_elsewhere() -> Resu
     let f = Fixture::new();
     let stats = f.ingest().await?.0;
     assert_eq!(
-        stats.tables_restably_keyed, 5,
-        "the five tables with id_global"
+        stats.tables_restably_keyed, 6,
+        "the six tables with id_global"
     );
 
     let pool = f.mirror_pool().await?;
@@ -763,7 +782,16 @@ async fn table_filters_select_what_is_mirrored() -> Result<()> {
     opts.include_tables = vec!["Ag*".to_string()];
     opts.exclude_tables = vec!["*Oz*".to_string()];
     let (stats, _) = f.ingest_with(opts).await?;
-    assert_eq!(stats.tables, 6, "the six Ag* tables that aren't Oz");
+    let ag_not_oz: Vec<&str> = CATALOG_TABLES
+        .iter()
+        .copied()
+        .filter(|t| t.starts_with("Ag") && !t.contains("Oz"))
+        .collect();
+    assert_eq!(
+        stats.tables,
+        ag_not_oz.len(),
+        "the Ag* tables that aren't Oz"
+    );
 
     let pool = f.mirror_pool().await?;
     let mut names: Vec<String> = sqlx::query(
@@ -781,17 +809,7 @@ async fn table_filters_select_what_is_mirrored() -> Result<()> {
     .filter(|n| !datalib_etl::doltlite_raw::SHARED_TABLES.contains(&n.as_str()))
     .collect();
     names.sort();
-    assert_eq!(
-        names,
-        vec![
-            "AgLibraryFile",
-            "AgLibraryFolder",
-            "AgLibraryImageChangeCounter",
-            "AgLibraryKeyword",
-            "AgLibraryKeywordImage",
-            "AgMetadataSearchIndex",
-        ]
-    );
+    assert_eq!(names, ag_not_oz);
     pool.close().await;
     Ok(())
 }

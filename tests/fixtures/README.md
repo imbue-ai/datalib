@@ -112,6 +112,7 @@ table is in `:ingested_tng`.
 | `notion` | `P/notion/tests/fixtures/notion_web/` | recorded API answers |
 | `garmin` | `P/garmin/tests/fixtures/garmin_tng/tng.json` | spec → recorded API answers |
 | `google_drive` | `P/google_drive/tests/fixtures/google_drive_tng/tng.json` | spec → recorded API answers |
+| `discord` | `P/discord/tests/fixtures/discord_tng/`, written by [`make_discord_fixtures.py`](make_discord_fixtures.py) and [`draw_discord_files.py`](draw_discord_files.py) | recorded API answers, from what the account can see; the crew are in 2024, the latest century a Discord id can name |
 | `contacts` | `P/contacts/tests/fixtures/carddav_tng/`, then `carddav_tng_v2/` | files; `v2` is the address books one sync later |
 | `email` | `P/email/tests/fixtures/mbox/star_trek.mbox` | files (a Google Takeout mbox) |
 | `google_takeout` | `P/google_takeout/tests/fixtures/Takeout/` | files |
@@ -140,7 +141,7 @@ in `:ingested_tng`:
 | `email` | `//datalib/backend/etl/providers/email:tng_apple_mail` | an Apple Mail folder, built by [`make_apple_mail_folder.py`](make_apple_mail_folder.py) |
 | `apple_messages` | `//datalib/backend/etl/providers/apple_messages:tng_chat_db` | a Messages `chat.db`, built by [`make_apple_messages_db.py`](make_apple_messages_db.py) |
 | `apple_photos` | `//datalib/backend/etl/providers/apple_photos:tng_library` | a Photos library, built by [`make_apple_photos_library.py`](make_apple_photos_library.py) |
-| `lightroom` | `//datalib/backend/etl/sqlite_mirror:tng_catalog` | a Lightroom catalog, built by [`make_lightroom_catalog.py`](make_lightroom_catalog.py) |
+| `lightroom` | `//datalib/backend/etl/sqlite_mirror:tng_catalog` | a Lightroom catalog, built by [`make_lightroom_catalog.py`](make_lightroom_catalog.py); also synced on its own as `:ingested_lightroom` (below) |
 
 One fixture is not TNG: `P/perseus/tests/fixtures/perseus_tiny/` is a
 page of Thucydides in Greek and English, for the bilingual view
@@ -155,6 +156,21 @@ checked in. Both live here, not beside their provider, because
 Python (`PYTHON_LINT_ROOTS` in `scripts/lint_repo.py`). The header of
 each one lists the cases its output exists to cover.
 
+## Sources synced on their own
+
+`:ingested_tng` is one action over every source, so a change to any one
+of them syncs them all again. A source can instead be synced by itself
+with `tng_source` ([`tng_source.bzl`](tng_source.bzl), driven by
+[`sync_one_source.py`](sync_one_source.py)): its ingest, its render and
+a grid index over it alone, through `datalib-pipeline`, written to
+`<name>/index.sqlite`. The build fails if the source leaves no row in
+it. Such a source is not in `:ingested_tng`, and the tests that check
+it name its index themselves. One source is synced this way:
+
+| target | source | fixture |
+|---|---|---|
+| `:ingested_lightroom` | `tng_lightroom` (`lightroom`) | `//datalib/backend/etl/sqlite_mirror:tng_catalog` |
+
 ## What the build makes
 
 `bazelisk build //tests/fixtures:ingested_tng` writes, under
@@ -167,7 +183,7 @@ each one lists the cases its output exists to cover.
 | `rendered_md.tar` | the markdown alone, for the UI's render preview |
 | `time_series.tar` | the time-series stores and their index |
 | `config_body.toml` | every source as a render-only group, for `materialize_tng_root` |
-| `sql_scans.jsonl` | every statement the sync ran that walked a whole table or index, for `sql_scans_test` |
+| `sql_scans.jsonl` | every statement the sync ran, and whether its plan walks a whole table or index, for `sql_scans_test` |
 
 Three more genrules build the search index over it, in steps that Bazel
 can cache apart, because embedding is the slow one:
@@ -204,7 +220,8 @@ can agree by luck.
 | `:ingested_tng` itself | refuses to build if a source synced without error but left no rows in the index ([`check_ingested.py`](check_ingested.py)); `:check_ingested_test` proves that check fails |
 | `:ingested_tng_test` | row counts and per-source coverage, over three syncs of one root: fresh, unchanged, and after a `reset` |
 | `:render_contract_test` | for every table of every source's raw store: change it, render incrementally and from scratch, and get the same result |
-| `//datalib/backend/unified_grid_and_search_index:unified_grid_and_search_index_tests` | `fixture_db_snapshot`, an insta snapshot of the index's rows |
+| `//datalib/backend/unified_grid_and_search_index:unified_grid_and_search_index_tests` | `fixture_db_snapshot`, an insta snapshot of the index's rows; `fixture_terms_snapshot`, what each row answers to (`from:`, `to:`, `with:`, `label:`, `pictured:`, …), one snapshot per source, and the handles' names; `fixture_tree_snapshot`, each source's tree of containers and rows and what each row is also filed under, after checking that every parent is a row and `read_uuid`/`place_uuid` name the nearest container above. All three over `:ingested_tng`, the last two over `:ingested_lightroom` too |
+| `//datalib/backend/applets:applet_unittests` | `search_finds_itself_tests`: every row is found by each key's value, each search term, each pasted id and its rarest word; over `:ingested_lightroom`, by each key, term and pasted id, its caption as a phrase and its own H3 cell |
 | `//datalib/backend/datalib_step:step_tests` | `index_text`, the text search draws from each fixture document, as one snapshot per source |
 | each provider's own tests | its parse and render snapshots, over its own fixture |
 | `//datalib/ui:e2e_test` | the Playwright suite, against a root from `materialize_tng_root` |

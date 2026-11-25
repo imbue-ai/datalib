@@ -80,12 +80,14 @@ pub async fn build_state(
             tracing::error!("{n}");
         }
         let (root_tx, _) = tokio::sync::broadcast::channel(64);
-        crate::watch::spawn((*root).clone(), root_tx.clone());
+        let echoes = crate::loop_guard::Echoes::default();
+        crate::watch::spawn((*root).clone(), root_tx.clone(), echoes.clone());
         return Ok(AppState {
             root: root.clone(),
             app: Arc::new(NewerRootRepo(newer_root.clone())),
             sync: supervisor::SyncControl::new(root.clone()),
             root_tx,
+            echoes,
             // No entries: nothing starts, and the unified_grid_and_search_index applet
             // never opens the index this build must not read as its own.
             applets: Arc::new(crate::applets::AppletRegistry::build(
@@ -103,7 +105,7 @@ pub async fn build_state(
 
     tracing::info!(
         "stores: {}",
-        datalib_core::layout::feedback_db(&root).display(),
+        datalib_core::layout::remote_media_db(&root).display(),
     );
     let app: DynAppRepo = Arc::new(
         AppStore::open(&root)
@@ -111,22 +113,10 @@ pub async fn build_state(
             .map_err(|e| anyhow::anyhow!("open the app stores under {}: {e}", root.display()))?,
     );
 
-    // Everything the UI shows that changes. One watcher per
-    // process, replacing the timers every UI surface used to keep — see
-    // `crate::watch`. Started before the loop so a sync that begins
-    // during startup is already being reported on.
-    let (root_tx, _) = tokio::sync::broadcast::channel(64);
-    let nudge = crate::watch::spawn((*root).clone(), root_tx.clone());
-    {
-        let (runs_store, nudge) = (datalib_runs::runs_path(&root), nudge.clone());
-        datalib_runs::after_every_write(move |store| {
-            if store == runs_store {
-                nudge.the_run_store_moved();
-            }
-        });
-    }
-
-    // Before the loop, so its first read is of the current shape.
+    // Before the loop, so its first read is of the current shape, and
+    // before the watcher, whose first act opens the loop's record: the
+    // moves carry the record's rows only from a record that was there
+    // before this server started.
     let data_root = (*root).clone();
     let bin_override = binary_dir.clone();
     tokio::task::spawn_blocking(move || {
@@ -139,6 +129,22 @@ pub async fn build_state(
     crate::config_upgrade::move_index_dir(&root).await;
     crate::config_upgrade::move_index_step_dir(&root).await;
     crate::config_upgrade::move_case_folders(&root).await;
+
+    // Everything the UI shows that changes. One watcher per
+    // process, replacing the timers every UI surface used to keep — see
+    // `crate::watch`. Started before the loop so a sync that begins
+    // during startup is already being reported on.
+    let (root_tx, _) = tokio::sync::broadcast::channel(64);
+    let echoes = crate::loop_guard::Echoes::default();
+    let nudge = crate::watch::spawn((*root).clone(), root_tx.clone(), echoes.clone());
+    {
+        let (runs_store, nudge) = (datalib_runs::runs_path(&root), nudge.clone());
+        datalib_runs::after_every_write(move |store| {
+            if store == runs_store {
+                nudge.the_run_store_moved();
+            }
+        });
+    }
     crate::config_upgrade::watch((*root).clone(), root_tx.subscribe());
 
     let sync = supervisor::SyncControl::new(root.clone());
@@ -194,6 +200,7 @@ pub async fn build_state(
         app,
         sync,
         root_tx,
+        echoes,
         applets,
         api_token,
         frame_ancestors,
@@ -222,12 +229,6 @@ impl NewerRootRepo {
 
 #[async_trait::async_trait]
 impl datalib_core::repo::AppRepo for NewerRootRepo {
-    async fn insert_feedback(
-        &self,
-        _row: app_schema::feedback::FeedbackRow,
-    ) -> Result<(), datalib_core::repo::RepoError> {
-        self.refuse()
-    }
     async fn recent_disk_usage(
         &self,
         _limit: usize,
@@ -257,7 +258,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let p = layout::feedback_db(root.path());
+        let p = layout::remote_media_db(root.path());
         assert!(p.is_file(), "expected {} to be created", p.display());
         assert_eq!(state.root.as_path(), root.path());
         assert!(state.newer_root.is_empty());
@@ -287,9 +288,9 @@ mod tests {
             .await
             .unwrap(),
         );
-        let feedback = datalib_core::layout::feedback_db(root.path());
+        let remote_media = datalib_core::layout::remote_media_db(root.path());
         {
-            let pool = datalib_core::store::open_pool(&feedback).await.unwrap();
+            let pool = datalib_core::store::open_pool(&remote_media).await.unwrap();
             sqlx::query("UPDATE _datalib_meta SET value = '99.0.0' WHERE key = 'datalib_version'")
                 .execute(&pool)
                 .await
@@ -316,7 +317,7 @@ mod tests {
             .to_string();
         assert!(err.contains("written by Datalib 99.0.0"), "{err}");
         // Not opened: still says what the newer release wrote.
-        let meta = datalib_store_meta::guard::read_at(&feedback)
+        let meta = datalib_store_meta::guard::read_at(&remote_media)
             .await
             .unwrap()
             .unwrap();
@@ -341,7 +342,7 @@ mod tests {
         assert_eq!(v["newer_root"]["stores"][0]["wrote"], "99.0.0");
         assert_eq!(
             v["newer_root"]["stores"][0]["store"],
-            "system/feedback.doltlite_db"
+            "system/remote_media.doltlite_db"
         );
         assert_eq!(
             v["newer_root"]["running"],
@@ -371,11 +372,11 @@ mod tests {
         );
     }
 
-    /// Feedback is not inside the tree the pipeline tags as rebuildable
-    /// cache: it is not regenerable and must survive a
-    /// `--exclude-caches` backup.
+    /// What remote media a person let load is not inside the tree the
+    /// pipeline tags as rebuildable cache: nothing regenerates it, and it
+    /// must survive an `--exclude-caches` backup.
     #[tokio::test]
-    async fn build_state_keeps_feedback_out_of_the_cache() {
+    async fn build_state_keeps_remote_media_out_of_the_cache() {
         use datalib_core::layout;
         let root = tempfile::tempdir().unwrap();
         let token = ApiToken::from_value("split-test-token", root.path());
@@ -389,9 +390,13 @@ mod tests {
         .await
         .unwrap();
 
-        let feedback = layout::feedback_db(root.path());
+        let remote_media = layout::remote_media_db(root.path());
         let derived = layout::unified_grid_and_search_index_dir(root.path());
-        assert!(!feedback.starts_with(&derived), "{}", feedback.display());
+        assert!(
+            !remote_media.starts_with(&derived),
+            "{}",
+            remote_media.display()
+        );
     }
 
     /// The token has to reach disk during boot — it is how an agent

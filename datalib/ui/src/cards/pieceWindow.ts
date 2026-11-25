@@ -1,6 +1,6 @@
 // The window of a document's pieces the document card holds: a page of
 // its top-level nodes, grown a page at a time at either end as the reader
-// scrolls (docs/dev/plans/document_viewer_from_blocks.md §"Step 6"). Pure:
+// scrolls (docs/dev/plans/completed/document_viewer_from_blocks.md §"Step 6"). Pure:
 // the card fetches, and the chat body draws what changed.
 import type { BodyNode, ChatResponse } from "@/api";
 import { isFold } from "./renderDocument";

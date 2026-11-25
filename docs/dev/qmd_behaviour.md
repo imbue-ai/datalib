@@ -63,7 +63,7 @@ does not carry over to `createStore()` without being re-measured.
 2. **Writing a source's `documents`/`content` rows ourselves works, and
    qmd cannot tell the difference.** `reindexCollection` (`store.ts`)
    does exactly this per file: `path` is the literal relative path (the
-   `handelize` mangling `plans/qmd_index_ui.md` describes is display-only
+   `handelize` mangling of a path is display-only
    now), `hash` is a plain SHA-256 of the UTF-8 bytes, `title` is the
    first `#`/`##` heading, and the FTS rows come from triggers on
    `documents` (`documents_ai`/`_au`/`_ad`). Measured: after an `UPDATE

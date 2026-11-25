@@ -1,0 +1,98 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_terms_snapshot.rs
+expression: source.render()
+---
+00000000-0000-8594-aca2-4aa5aabd1723  Signal Chat
+  title: Dr. Beverly Crusher
+  name: local-signal_ba_TNG
+  participant: Jean-Luc Picard
+  participant: tel:+15551234002
+  subject: tel:+15551234002
+018ec961-9780-8f10-8e88-1c035a0571ac  Signal Message
+  from: tel:+15551234002
+  name: local-signal_ba_TNG
+  author: Dr. Beverly Crusher
+018ec962-81e0-8a3d-8973-dda498fe68e0  Signal Message
+  name: local-signal_ba_TNG
+  author: Jean-Luc Picard
+00000000-0000-86c6-9b0f-a87d76d8912c  Google Chat Chat
+  title: William T. Riker
+  name: googlechat
+  participant: Jean-Luc Picard
+  participant: email:riker@enterprise.org
+018e5c27-dc60-85c1-8a9e-49fdc74294c2  Google Chat Hidden
+  name: googlechat
+  author: @googlechatbot:beeper.local
+018e5c28-0370-8149-bab6-ef333bf34f3f  Google Chat Hidden
+  name: googlechat
+  author: @googlechatbot:beeper.local
+018e5c29-6300-80ae-98a8-e082c6f248ef  Google Chat Message
+  from: email:riker@enterprise.org
+  name: googlechat
+  author: William T. Riker
+018e5c2d-f6e0-85c4-8154-5d888db98bf7  Google Chat Message
+  name: googlechat
+  author: Jean-Luc Picard
+018e5c32-8ac0-8697-8620-6e080b42992e  Google Chat File
+  from: email:riker@enterprise.org
+  name: googlechat
+  author: William T. Riker
+00000000-0000-8b2d-bd38-e68431f325dd  Signal Chat
+  title: Bridge crew
+  name: local-signal_ba_TNG
+  participant: Jean-Luc Picard
+  participant: Q
+  participant: Will Riker
+0b50e80c-2800-8174-8afa-57c01863c808  Signal Message
+  name: local-signal_ba_TNG
+  author: Jean-Luc Picard
+0b50e80d-1260-8c48-bb33-153f2b2d1863  Signal Message
+  name: local-signal_ba_TNG
+  author: Will Riker
+0b50e815-4fc0-8853-86ba-17d7b35737db  Signal Message
+  name: local-signal_ba_TNG
+  author: Q
+00000000-0000-8c53-b909-d898f9ac9d58  Signal Chat
+  title: Mr. Data
+  name: local-signal_ba_TNG
+  participant: Jean-Luc Picard
+  participant: tel:+15551234001
+  subject: tel:+15551234001
+018e4164-aa20-8e01-b6fe-7b416d774266  Signal Reaction
+  from: tel:+15551234001
+  name: local-signal_ba_TNG
+  author: Mr. Data
+018ea11c-c100-89e8-953f-22306f533a8b  Signal Reaction
+  from: tel:+15551234001
+  name: local-signal_ba_TNG
+  author: Mr. Data
+018e4156-ee80-858a-b95b-fb88e2500f50  Signal Message
+  name: local-signal_ba_TNG
+  author: Jean-Luc Picard
+018e415b-8260-8b83-b444-b46320d4d948  Signal Message
+  from: tel:+15551234001
+  name: local-signal_ba_TNG
+  author: Mr. Data
+018e4160-1640-8e42-9ba2-3d0926e6ec1a  Signal Image
+  name: local-signal_ba_TNG
+  author: Jean-Luc Picard
+018e9e92-bac0-8575-a654-7ea75f4efd30  Signal Message
+  from: tel:+15551234001
+  name: local-signal_ba_TNG
+  author: Mr. Data
+018e9e97-4ea0-8a9f-9fbe-483c8a294f33  Signal Message
+  name: local-signal_ba_TNG
+  author: Jean-Luc Picard
+00000000-0000-8db2-bb39-6c4732048194  Slack Chat
+  title: #bridge
+  name: slackgo.T1701D-U0PICARD
+  participant: slack:T1701D/U0PICARD
+  participant: slack:T1701D/U0WORF
+018e61f4-8a80-824d-8c8d-16ea42498a93  Slack Message
+  from: slack:T1701D/U0WORF
+  name: slackgo.T1701D-U0PICARD
+  author: Worf
+018e61f5-74e0-831b-923a-ef97d75bb84e  Slack Message
+  from: slack:T1701D/U0PICARD
+  name: slackgo.T1701D-U0PICARD
+  author: Jean-Luc Picard

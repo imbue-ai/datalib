@@ -1,0 +1,67 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_terms_snapshot.rs
+expression: source.render()
+---
+00000000-0000-85d9-b5a3-420c27c71680  SMS Conversation
+  title: Geordi La Forge
+  participant: tel:+12025550104
+  subject: Geordi La Forge
+0b75ba9e-0f80-8ad5-8bd8-d3e3fd659bed  SMS Message
+  from: me:self
+  to: tel:+12025550104
+  author: Me
+  upstream_id: 159a850f-302c-55ec-a8cc-9b3dacc42e20
+00000000-0000-8709-8732-c5f02579e8d6  SMS Conversation
+  title: Deanna Troi
+  subject: Deanna Troi
+0b75b781-8d40-89bb-8299-ebbc766db091  SMS Message
+  from: tel:+12025550103
+  author: Deanna Troi
+  upstream_id: 33da403f-2337-5a40-a121-88f18a8bc0ba
+00000000-0000-8a32-861f-a85bca667a83  SMS Conversation
+  title: Worf
+  participant: tel:+12025550102
+  subject: Worf
+0b75b74a-9ec0-83ec-af8b-969533e62bc5  SMS Message
+  from: tel:+12025550102
+  author: Worf
+  upstream_id: 4f6c6826-cb74-5000-a640-bd631f30b191
+0b75ba67-2100-8288-a8b2-df54cf9b6b1c  SMS Message
+  from: tel:+12025550102
+  to: me:self
+  author: Worf
+  upstream_id: d05942c2-a51d-5995-8648-a923a816ff4e
+0b75ba68-0b60-887e-b930-8855bf9650de  SMS Message
+  from: tel:+12025550102
+  to: me:self
+  author: Worf
+  upstream_id: a23455d3-762e-5517-add6-51efc738a3ac
+00000000-0000-8c57-9571-2bd28212d376  SMS Conversation
+  title: Jean-Luc Picard
+  participant: tel:+12025550100
+  participant: tel:+12025550101
+  subject: Jean-Luc Picard
+0b75b713-b040-84e2-aa8e-c1c59f7a1ca4  SMS Message
+  from: tel:+12025550101
+  author: Jean-Luc Picard
+  upstream_id: f6ef99a4-f2b3-50a1-a910-dd2d674bab7d
+0b75ba30-3280-85bd-b058-e3f81fd3f403  SMS Message
+  from: tel:+12025550101
+  to: me:self
+  author: Jean-Luc Picard
+  upstream_id: 1f44819a-4b0a-569c-9150-760169f64316
+0b75ba31-1ce0-8607-a757-33aa9851eb7b  SMS Message
+  from: me:self
+  to: tel:+12025550101
+  author: Me
+  upstream_id: a9a10430-71c7-5b12-ac17-dbf7dd77979c
+0b75ba32-0740-8993-adf7-73c1d3d06442  SMS Message
+  from: tel:+12025550101
+  to: me:self
+  author: Jean-Luc Picard
+  upstream_id: eba66e09-6a4b-523c-9c7f-ad4943fe06d7
+0b75ba32-f1a0-824c-915f-32273472fad4  SMS Message
+  from: tel:+12025550100
+  to: tel:+12025550101
+  author: Me
+  upstream_id: 131f0e62-3335-5bd3-9494-e760c07ca3de

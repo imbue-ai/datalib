@@ -205,8 +205,7 @@ pub async fn load(db: &RawDb, range: RawRange<'_>) -> Result<Listing> {
 }
 
 /// Every folder, shared drive and file's parents, read whole: one rename
-/// moves every Doc under it. A store written before the download listed
-/// them has none of the three tables.
+/// moves every Doc under it.
 async fn places(db: &RawDb) -> Result<Places> {
     let mut out = Places::default();
     for (table, sql) in [
@@ -217,14 +216,6 @@ async fn places(db: &RawDb) -> Result<Places> {
             "SELECT id, json(payload) AS payload FROM file_parents",
         ),
     ] {
-        let exists: Option<String> =
-            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-                .bind(table)
-                .fetch_optional(db.pool())
-                .await?;
-        if exists.is_none() {
-            continue;
-        }
         for row in sqlx::query(sql)
             .fetch_all(db.pool())
             .await

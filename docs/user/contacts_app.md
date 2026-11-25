@@ -72,6 +72,7 @@ why.
 | `email:riker@enterprise.org` | an address, lowercased |
 | `tel:+12025550101` | a number with its country code, `+` and digits only |
 | `slack:T01/U02` | a Slack user, by workspace and user id |
+| `discord:<id>` | a Discord account, by its user id |
 | `signal_aci:<uuid>` | a Signal account known by no number |
 | `github:<login>`, `linkedin:<slug>` | those accounts |
 
@@ -88,11 +89,12 @@ source called the person. This lists them with the most written first:
 ```sh
 datalib-doltlite -readonly <data_root>/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite "
   SELECT h.handle,
-         group_concat(DISTINCT c.name) AS names,
-         group_concat(DISTINCT c.source_id) AS sources,
-         sum(c.seen_items) AS items
-    FROM source_contact_handles h
-    JOIN source_contacts c USING (markdown_uuid, contact_key)
+         group_concat(DISTINCT r.name) AS names,
+         group_concat(DISTINCT r.source_id) AS sources,
+         sum(d.seen_items) AS items
+    FROM contact_record_handles h
+    JOIN contact_records r USING (record_id)
+    JOIN document_contacts d USING (record_id)
    WHERE h.handle NOT LIKE 'me:%' AND h.handle NOT LIKE 'ai_model:%'
    GROUP BY h.handle
    ORDER BY items DESC
@@ -101,7 +103,7 @@ datalib-doltlite -readonly <data_root>/unified_grid_and_search_index/unified_gri
 
 `me:self` is the person themself and `ai_model:` a model's answers, so
 neither is a contact to make. A sender's whole record is `contact_json`
-on `source_contacts`, and the search shows what they wrote:
+on `contact_records`, and the search shows what they wrote:
 
 ```sh
 datalib-applet search <data_root> 'with:email:riker@enterprise.org' --limit 20

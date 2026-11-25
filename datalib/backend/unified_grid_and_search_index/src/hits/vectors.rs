@@ -3,26 +3,15 @@
 
 use std::collections::HashSet;
 
-/// How current a search by meaning must be. `AsHeld` ranks against the
-/// documents and vectors an earlier search read, and is what a search asks
-/// for while a sync is writing the index: the embed step commits every few
-/// seconds, and reading every vector again at each commit took a search
-/// past its deadline on a large library. With nothing held it reads as
-/// `Current`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Freshness {
-    Current,
-    AsHeld,
-}
-
 /// What a search's structured terms keep of one document: what its
 /// chunks may rank it by.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kept {
     /// The document's own row: every chunk.
     Whole,
-    /// Only these messages, by section id: a chunk that covers none of
-    /// them was written by someone, or at a time, the search leaves out.
+    /// Only these rows, by uuid: a chunk that covers none of them was
+    /// written by someone, or at a time, the search leaves out. Text that
+    /// is no message's (a page's body) is the document's own row.
     Sections(HashSet<String>),
 }
 

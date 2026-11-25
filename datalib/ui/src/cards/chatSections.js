@@ -69,17 +69,29 @@ export function answers(root, el) {
 }
 
 /**
+ * The uuid of the message around `el`: the closest `id="m-{uuid}"` that
+ * answers to its id, so a copy of another message's wrapper inside a
+ * message is walked past.
+ * @param {Element | null | undefined} el
+ * @returns {string | null}
+ */
+export function messageAncestor(el) {
+  let cur = el ?? null;
+  while (cur) {
+    if (cur.id.startsWith("m-") && answers(cur.ownerDocument, cur)) return cur.id.slice(2);
+    cur = cur.parentElement;
+  }
+  return null;
+}
+
+/**
  * Open every `<details>` enclosing `el`. A tool step lives inside a
  * collapsed `.tool-group`, so "scroll to it" has nothing to scroll to
  * until the group is open. Walks the whole chain: groups nest.
  * @param {HTMLElement} el
  */
 export function openEnclosingDetails(el) {
-  for (
-    let d = el.closest("details");
-    d;
-    d = d.parentElement?.closest("details") ?? null
-  ) {
+  for (let d = el.closest("details"); d; d = d.parentElement?.closest("details") ?? null) {
     d.open = true;
   }
 }
@@ -98,27 +110,27 @@ export function metaHost(el) {
 }
 
 /**
- * Add a control to the end of a header's controls, but ahead of the
- * source-link arrow — `↗` reads as "and here is the thing itself", so
- * it belongs last however many controls accumulate before it. The
- * renderer emits it inline at the end of the header, which is why this
- * inserts rather than appends.
+ * Add a control to a header's actions: the controls a reader points at
+ * the message to see, kept together at the header's end
+ * (`span.msg-actions`). The source-link arrow the renderer wrote is moved
+ * in as the last of them — `↗` reads as "and here is the thing itself",
+ * so it stays last however many controls accumulate before it.
  * @param {HTMLElement} host
- * @param {string} separator
  * @param {HTMLElement} control
  */
-function addHeaderControl(host, separator, control) {
+function addHeaderControl(host, control) {
   const doc = host.ownerDocument;
-  const link = host.querySelector(":scope > .source-link");
-  if (!link) {
-    host.append(doc.createTextNode(separator), control);
-    return;
+  let actions = host.querySelector(":scope > .msg-actions");
+  if (!actions) {
+    actions = doc.createElement("span");
+    actions.className = "msg-actions";
+    const link = host.querySelector(":scope > .source-link");
+    if (link) actions.append(link);
+    host.append(actions);
   }
-  link.before(
-    doc.createTextNode(separator),
-    control,
-    doc.createTextNode(" "),
-  );
+  const link = actions.querySelector(":scope > .source-link");
+  if (link) link.before(control);
+  else actions.append(control);
 }
 
 /**
@@ -142,20 +154,13 @@ export function injectCopyLinkButtons(root, { pageTitle = true } = {}) {
     return btn;
   };
 
-  for (const el of root.querySelectorAll(
-    "div[data-section-uuid], section[data-section-uuid]",
-  )) {
-    if (
-      el.querySelector(
-        ":scope > h2 .copy-link, :scope > .copy-link",
-      )
-    )
-      continue;
+  for (const el of root.querySelectorAll("div[data-section-uuid], section[data-section-uuid]")) {
+    if (el.querySelector(":scope > h2 .copy-link, :scope > .copy-link")) continue;
     const uuid = el.getAttribute("data-section-uuid") ?? "";
     if (!uuid || !answers(root, el)) continue;
     const btn = button(uuid, "Copy link to this message");
     const host = metaHost(el);
-    if (host) addHeaderControl(host, " · ", btn);
+    if (host) addHeaderControl(host, btn);
     else el.prepend(btn);
   }
 
@@ -164,10 +169,10 @@ export function injectCopyLinkButtons(root, { pageTitle = true } = {}) {
     // The id sits on the heading itself, or on a block whose heading is
     // a markdown `#` (a contact page's head, whose heading is a chip).
     const host = el.matches("h1") ? el : (el.querySelector("h1") ?? el);
-    if (host.querySelector(":scope > button.copy-link")) continue;
+    if (host.querySelector(":scope > .msg-actions > button.copy-link")) continue;
     const uuid = el.getAttribute("data-page-title-uuid") ?? "";
     if (!uuid) continue;
-    addHeaderControl(host, " ", button(uuid, "Copy link to this page"));
+    addHeaderControl(host, button(uuid, "Copy link to this page"));
   }
 }
 
@@ -249,7 +254,8 @@ export function decorateLongMessages(root, opts = {}) {
     foldRecipients(line);
   }
 
-  for (const el of root.querySelectorAll(":scope > .msg[data-section-uuid]")) {
+  // A part of a page (`msg--page`) is read whole, as the page is.
+  for (const el of root.querySelectorAll(":scope > .msg[data-section-uuid]:not(.msg--page)")) {
     if (el.dataset.longChecked) continue;
     el.dataset.longChecked = "1";
     // Measured before any clamp class lands, so this is the content's
@@ -293,7 +299,7 @@ export function decorateLongMessages(root, opts = {}) {
         else el.closest(".chat-preview")?.scrollTo({ top: 1e9 });
       }),
     );
-    host.append(nav);
+    addHeaderControl(host, nav);
 
     // A pinned header unavoidably covers the line of text passing under
     // it — that is what `position: sticky` does, and GitHub's file
@@ -312,7 +318,11 @@ export function decorateLongMessages(root, opts = {}) {
     // implicit root would be the app's window, not the frame's.
     const io = new IntersectionObserver(
       ([entry]) => host.classList.toggle("is-stuck", entry.intersectionRatio < 1),
-      { root: p.isViewport ? el.ownerDocument : p.pane, threshold: [1], rootMargin: "-1px 0px 0px 0px" },
+      {
+        root: p.isViewport ? el.ownerDocument : p.pane,
+        threshold: [1],
+        rootMargin: "-1px 0px 0px 0px",
+      },
     );
     io.observe(host);
     root.__chatStickyObservers.push(io);

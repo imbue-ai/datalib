@@ -1,0 +1,20 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_tree_snapshot.rs
+expression: text
+---
+under 00000000-0000-87ab-a60d-1f9a44cf9350 (not a row)
+Slack Thread "#bridge"  00000000-0000-8209-b9a9-5e8e8a2f0239
+  Slack Message  0b7698f2-dea0-80a4-9df7-8e06bc0e78b6
+  Slack Reaction  0b7698f4-6540-81cc-82d8-f2e8d9ecdbf1
+  Slack Reaction  0b7698f4-6540-82e1-b8cb-ab9692be4027
+  Slack Message  0b7698f4-6540-876f-bf97-b10f5b2e219b
+  Slack Reaction  0b7698f4-6540-8e01-8a06-1d3acbd13530
+  Slack Message  0b7698f5-ebe0-8854-9dea-f0305886ccd8
+  Slack Message  0b769902-20e0-8688-8f6a-e4f4ec4bf796
+under 00000000-0000-87ab-a60d-1f9a44cf9350 (not a row)
+Slack Thread "#bridge"  00000000-0000-8827-877d-5fdc4dc4394b
+  Slack Message  0b7698f7-7280-8270-9f6a-d2006be91a93
+  Slack Reaction  0b7698f7-7280-8aef-a980-fc3c5f4bf06a
+under 00000000-0000-87ab-a60d-1f9a44cf9350 (not a row)
+Slack Thread "#bridge"  00000000-0000-8c02-a5c8-c13c049e1e6d
+  Slack Message  0b769903-a780-8ace-afc7-445f6377a51b

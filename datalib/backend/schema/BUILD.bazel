@@ -8,6 +8,7 @@ rust_library(
         "src/grid_rows_builder.rs",
         "src/edges.rs",
         "src/data_nodes.rs",
+        "src/nodes.rs",
         "src/filings.rs",
         "src/sections.rs",
         "src/drawings.rs",

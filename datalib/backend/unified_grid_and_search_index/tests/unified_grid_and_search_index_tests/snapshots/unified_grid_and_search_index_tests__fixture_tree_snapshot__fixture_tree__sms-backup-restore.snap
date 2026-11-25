@@ -1,0 +1,18 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_tree_snapshot.rs
+expression: text
+---
+SMS Conversation "Geordi La Forge"  00000000-0000-85d9-b5a3-420c27c71680 [read] [place]
+  SMS Message  0b75ba9e-0f80-8ad5-8bd8-d3e3fd659bed
+SMS Conversation "Deanna Troi"  00000000-0000-8709-8732-c5f02579e8d6 [read] [place]
+  SMS Message  0b75b781-8d40-89bb-8299-ebbc766db091
+SMS Conversation "Worf"  00000000-0000-8a32-861f-a85bca667a83 [read] [place]
+  SMS Message  0b75b74a-9ec0-83ec-af8b-969533e62bc5
+  SMS Message  0b75ba67-2100-8288-a8b2-df54cf9b6b1c
+  SMS Message  0b75ba68-0b60-887e-b930-8855bf9650de
+SMS Conversation "Jean-Luc Picard"  00000000-0000-8c57-9571-2bd28212d376 [read] [place]
+  SMS Message  0b75b713-b040-84e2-aa8e-c1c59f7a1ca4
+  SMS Message  0b75ba30-3280-85bd-b058-e3f81fd3f403
+  SMS Message  0b75ba31-1ce0-8607-a757-33aa9851eb7b
+  SMS Message  0b75ba32-0740-8993-adf7-73c1d3d06442
+  SMS Message  0b75ba32-f1a0-824c-915f-32273472fad4

@@ -291,7 +291,7 @@ pub async fn get_manage_rows(
     headers: HeaderMap,
 ) -> Result<Json<ManageResponse>, (StatusCode, String)> {
     crate::refuse_refresh("/api/manage/rows", &p)?;
-    Ok(answer(&s, &headers, false).await)
+    answer(&s, &headers, false).await
 }
 
 /// `POST /api/manage/rows/refresh`: walk the disk, then answer as the
@@ -299,17 +299,21 @@ pub async fn get_manage_rows(
 pub async fn refresh_manage_rows(
     State(s): State<AppState>,
     headers: HeaderMap,
-) -> Json<ManageResponse> {
+) -> Result<Json<ManageResponse>, crate::Refusal> {
     answer(&s, &headers, true).await
 }
 
-async fn answer(s: &AppState, headers: &HeaderMap, refresh: bool) -> Json<ManageResponse> {
+async fn answer(
+    s: &AppState,
+    headers: &HeaderMap,
+    refresh: bool,
+) -> Result<Json<ManageResponse>, crate::Refusal> {
     let started = Instant::now();
     if refresh {
         usage::sample_on_demand(&s.usage, &s.app, s.root.clone(), &s.root_tx).await;
     }
     let walk = started.elapsed();
-    let (response, took) = manage_rows(s).await;
+    let (response, took) = manage_rows(s).await?;
     let summary_started = Instant::now();
     if response.ok {
         summary::record(
@@ -339,15 +343,17 @@ async fn answer(s: &AppState, headers: &HeaderMap, refresh: bool) -> Json<Manage
             "the Manage rows were slow to assemble"
         );
     }
-    Json(response)
+    Ok(Json(response))
 }
 
 /// Every row of the Manage table as it stands: the config as written,
 /// the loop's record, the disk. What the table and a chip both read.
-async fn manage_rows(s: &AppState) -> (ManageResponse, Took) {
+async fn manage_rows(s: &AppState) -> Result<(ManageResponse, Took), crate::Refusal> {
     let config_path = s.config_path();
     let text = std::fs::read_to_string(&config_path).unwrap_or_default();
-    let record = crate::dag_record(&s.root, &s.sync).await;
+    let record = crate::dag_record(&s.root, &s.sync)
+        .await
+        .map_err(crate::unread)?;
     // After the record: a request it names was opened before the record
     // was saved, so it is there to read, open or not.
     let requests_started = Instant::now();
@@ -381,7 +387,7 @@ async fn manage_rows(s: &AppState) -> (ManageResponse, Took) {
                 rows: Vec::new(),
                 sync_paused: None,
             };
-            return (response, took);
+            return Ok((response, took));
         }
     };
     let diagnostics = datalib_dag::config::check_text(&text).diagnostics;
@@ -415,7 +421,7 @@ async fn manage_rows(s: &AppState) -> (ManageResponse, Took) {
         rows,
         sync_paused: sync_paused.map(str::to_string),
     };
-    (response, took)
+    Ok((response, took))
 }
 
 #[derive(Debug, Deserialize)]
@@ -441,8 +447,8 @@ pub struct EntityView {
 pub async fn post_entities(
     State(s): State<AppState>,
     Json(body): Json<EntitiesBody>,
-) -> Json<serde_json::Value> {
-    let rows = manage_rows(&s).await.0.rows;
+) -> Result<Json<serde_json::Value>, crate::Refusal> {
+    let rows = manage_rows(&s).await?.0.rows;
     let answers: serde_json::Map<String, serde_json::Value> = body
         .entities
         .iter()
@@ -451,7 +457,7 @@ pub async fn post_entities(
             Some((uri.clone(), serde_json::to_value(view).ok()?))
         })
         .collect();
-    Json(serde_json::json!({ "entities": answers }))
+    Ok(Json(serde_json::json!({ "entities": answers })))
 }
 
 /// A step is named under its group ("Slack · Download"), since a chip
@@ -839,8 +845,8 @@ impl Snapshot<'_> {
                 match dir_disk {
                     None => "Nothing on disk yet.".to_string(),
                     Some(t) => format!(
-                        "{} in {dir}/ \u{2014} the run log {}, and the loop's record, the usage \
-                         samples and the feedback filed here.",
+                        "{} in {dir}/ \u{2014} the run log {}, and the loop's record and the usage \
+                         samples here.",
                         human_bytes(t.bytes),
                         human_bytes(log_disk.map_or(0, |l| l.bytes)),
                     ),

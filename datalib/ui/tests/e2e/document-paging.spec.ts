@@ -1,5 +1,5 @@
 // A long document is read a page at a time
-// (docs/dev/plans/document_viewer_from_blocks.md §"Step 6"): it opens with
+// (docs/dev/plans/completed/document_viewer_from_blocks.md §"Step 6"): it opens with
 // a page and draws the next as the reader nears an end, above or below,
 // until every message is there once and in the document's order. The TNG
 // documents are short, so every page asked for here is cut to two nodes on

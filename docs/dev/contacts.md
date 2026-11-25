@@ -24,7 +24,7 @@ Three things to know before the rest:
 
 ## The same move chat-common makes
 
-Fourteen chat-like sources (email, Slack, WhatsApp, Signal, Messages,
+Fifteen chat-like sources (email, Slack, Discord, WhatsApp, Signal, Messages,
 the AI chats and more) each translate their raw rows into one neutral
 shape, `NormalizedChat`, and chat-common turns that into the document
 and its grid rows. People get the same treatment. A Slack profile, an
@@ -107,6 +107,7 @@ number. What that costs:
 | `email` | the address, lowercased | `Handle::email` (takes a `mailto:` too; the domain needs a dot) | `mailto:<address>` |
 | `tel` | E.164, `+` and digits | `Handle::tel` (a number written with its `+` and country code, any separators; `Handle::whatsapp_jid` for a `<number>@s.whatsapp.net`) | `tel:<number>` |
 | `slack` | `<team_id>/<user_id>` | `Handle::slack` | `slack://user?team=<team>&id=<user>` |
+| `discord` | an account's id, the digits of a snowflake: one across every server | `Handle::discord` | `datalib:handle/discord/<id>` |
 | `signal_aci` | a Signal account id, a lowercase dashed UUID | `Handle::signal_aci` | `datalib:handle/signal_aci/<uuid>` |
 | `facebook` | `name/<the name shown>`, its whitespace collapsed; or `deleted/<conversation id>` | `Handle::facebook_name`, `Handle::facebook_deleted` | `datalib:handle/facebook/<value>`, percent-encoded but for its `/`s |
 | `google` | `name/<the name shown>`, its whitespace collapsed | `Handle::google_name` | `datalib:handle/google/<value>`, percent-encoded but for its `/`s |
@@ -208,6 +209,7 @@ What each source has today:
 |---|---|---|
 | email | the From address | To, Cc and Bcc (the sender's copy) as recipients; an `@` or `+` mention, a `mailto:` link in the fresh part of an HTML body |
 | Slack | `slack:<team>/<user>` | a `<@U…>` mention in a body; each reaction's user; the profile's email, in the source contact |
+| Discord | `discord:<user id>`; a webhook's author has none | a `<@…>` mention in a body; the account's own reactions, since Discord names nobody else's; the profile's names and avatar, in the source contact |
 | WhatsApp | the sender's number, a linked id (`…@lid`) through `jid_map`, else the linked id itself (`whatsapp:<digits>`, labelled "WhatsApp user …" and its last four digits when nothing names it) | each reaction's sender |
 | Signal | the number, else the account id (ACI); a recipient known by PNI alone has none | a mention (a `mentionAci` body range), by number else ACI, written `@Name` in place of its `U+FFFC`; number and ACI together, in the source contact; one known by ACI alone reads as the dashed ACI. The ACI is read by its one path in the stored frame, and one that will not read is a problem on the recipient (`aci`, `CoercionFailed`), not a silent loss |
 | Messages | the number or Apple ID address | each tapback's |
@@ -302,18 +304,29 @@ Four producers, each needing less of a provider than the one before:
   written nothing. A provider's own source contact for the same handle
   replaces the baseline and keeps its count (`document_contacts`).
 
-Every `RenderedMarkdown` carries its `contacts`, and the render store
-and the index hold them in two tables: `source_contacts`
-(`markdown_uuid`, `contact_key`, `source_id`, `name`, `seen_items`,
-`last_seen_at`, and the whole record as `contact_json`) and
-`source_contact_handles` (`markdown_uuid`, `contact_key`, `handle`;
-the index's copy is indexed by handle). `unified_grid_and_search_index` loads them the way
-it loads `grid_rows`.
+Every `RenderedMarkdown` carries its `contacts`. The render store holds
+them in two tables: `source_contacts` (`markdown_uuid`, `contact_key`,
+`source_id`, `name`, `seen_items`, `last_seen_at`, and the whole record
+as `contact_json`) and `source_contact_handles` (`markdown_uuid`,
+`contact_key`, `handle`).
+
+**The index holds each distinct record once**
+(`etl/render/src/grid_index/contact_records.rs`). A person is in as many
+documents as they wrote or were named in, and their record is the same
+in all of them but for `seen`, how much they wrote in that document. So
+the index keeps the record without `seen` in `contact_records`
+(`record_id`, `source_id`, `contact_key`, `name`, `contact_json`), its
+handles in `contact_record_handles` (`record_id`, `handle`), and a row
+per document in `document_contacts` (`markdown_uuid`, `record_id`,
+`seen_items`, `last_seen_at`; `seen_items` is null where the source
+counts nothing). In a library of 309,481 rows there were 2,081 distinct
+records. A re-render replaces its document's `document_contacts` rows,
+and a record no document carries goes at the end of the pass.
 
 **`POST /people` on the `unified_grid_and_search_index` applet** takes `{"handles":
 […]}` and answers `{"people": {<handle>: [NormalizedContact, …]}}`: for
 each handle, every source contact holding it, one per source and key
-(the rows from each document summed), ranked by
+(what was written in each document summed), ranked by
 `unified_grid_and_search_index/src/people.rs`: a source about people first, then the
 chat where the person wrote the most. A handle no source mentions is
 absent. This works with no contacts app at all.
@@ -336,10 +349,9 @@ page is about and for each of a chat's source contacts. A stored photo
 of another type is still shown on its contact's page, at the same
 address, and gets no URL.
 
-Where the bytes come from: LinkedIn's connection photos (fetched by
-earlier builds; linkedin.com no longer shows them) and Beeper's cached
-avatars are in the source's blob store already (an avatar counts only
-when the store holds it as an image). A vCard carries its photo inside
+Where the bytes come from: Beeper's cached avatars are in the source's
+blob store already (an avatar counts only when the store holds it as an
+image). A vCard carries its photo inside
 the card: the contacts download decodes each inline `PHOTO` into the
 source's blob store before the card is stored, and the source's
 `--prepare` does the same for every card a store already holds. Render
@@ -672,7 +684,7 @@ The keys read the search terms, which hold each row's people by handle
 ([`grid_rows.md`](grid_rows.md) §"`supplied_terms`"). A name also
 reaches every handle a source ever showed under it, through the search
 terms' `names` table, filled from the rows' authors and from
-`source_contacts`. A chip's "Everything with <name>" writes
+`contact_records`. A chip's "Everything with <name>" writes
 `with:contact:<id>` when the handle is linked to one of your contacts,
 else `with:<handle>` (`chipActions.ts::everythingWith`). Typing `@` at
 the start of a word offers people and writes the pick as `with:`.

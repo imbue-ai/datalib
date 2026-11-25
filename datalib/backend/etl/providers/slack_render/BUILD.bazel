@@ -33,7 +33,6 @@ rust_library(
         "@datalib_crates//:regex",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
-        "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
     ],
 )
@@ -43,7 +42,4 @@ rust_test(
     size = "small",
     crate = ":datalib_etl_slack_render",
     edition = "2021",
-    deps = [
-        "@datalib_crates//:tempfile",
-    ],
 )

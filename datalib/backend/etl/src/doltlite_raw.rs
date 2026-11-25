@@ -61,6 +61,11 @@ pub struct WirePayload {
 /// is the canonical use.
 pub trait WirePayloadRow {
     fn ddl() -> String;
+
+    /// The table's own indexes, created after [`Self::ddl`].
+    fn index_ddls() -> Vec<String> {
+        Vec::new()
+    }
 }
 
 pub fn wire_payload_table_ddl(table: &str, promoted_columns: &[&str]) -> String {
@@ -75,6 +80,37 @@ pub fn wire_payload_table_ddl(table: &str, promoted_columns: &[&str]) -> String 
     payload        TEXT NULL{promoted_block}
 )"
     )
+}
+
+/// A wire-payload table whose rows sit in the order of `cluster_by`, the
+/// promoted column a reader reads them by (a transcript's records): the
+/// key is `(cluster_by, id)`, so one parent's rows are one range of the
+/// tree rather than one random page each (`etl/README.md` § "Raw stores:
+/// the primary key is the upstream id"). `id` stays unique on its own, by
+/// [`wire_payload_id_index_ddl`], so every write still upserts on it.
+pub fn wire_payload_clustered_table_ddl(
+    table: &str,
+    promoted_columns: &[&str],
+    cluster_by: &str,
+) -> String {
+    let promoted_block = if promoted_columns.is_empty() {
+        String::new()
+    } else {
+        format!(",\n    {}", promoted_columns.join(",\n    "))
+    };
+    format!(
+        "CREATE TABLE IF NOT EXISTS {table} (
+    id             TEXT NOT NULL,
+    payload        TEXT NULL{promoted_block},
+    PRIMARY KEY ({cluster_by}, id)
+)"
+    )
+}
+
+/// The unique index that keeps `id` the conflict target of a table keyed
+/// by [`wire_payload_clustered_table_ddl`].
+pub fn wire_payload_id_index_ddl(table: &str) -> String {
+    format!("CREATE UNIQUE INDEX IF NOT EXISTS {table}_by_id ON {table} (id)")
 }
 
 // Volatile-field split / overlay. See the README: some payloads carry
@@ -241,6 +277,10 @@ pub const PROBLEMS_DDL: &str = datalib_problems::DDL[0].1;
 
 pub const SHARED_DDL: &[&str] = &[SYNC_RUNS_DDL, SYNC_SCOPE_STATE_DDL, PROBLEMS_DDL];
 
+/// [`SHARED_DDL`]'s lookup indexes, created on every open of a raw store
+/// and recorded apart from its tables, as `lookup_indexes` are.
+pub const SHARED_LOOKUP_INDEXES: &[&str] = &[datalib_problems::BY_SCOPE_INDEX_DDL];
+
 /// The framework's ladder, for the tables stores share rather than own:
 /// `problems`, which every raw and render store holds. Every store this
 /// module opens climbs it, before its owner's ladder, and records where
@@ -268,6 +308,10 @@ pub const SHARED_LADDER: &[Migration] = &[Migration {
         })
     },
 }];
+
+// What a reader of a store's problems requires: the ladder's top, which is
+// its length, since its rungs are dense from 1.
+const _: () = assert!(SHARED_LADDER.len() as u32 == datalib_problems::SHAPE_VERSION);
 
 /// Shared tables no build declares any more. A store that still has one
 /// drops it on open, after its ladder (a rung may read it one last time),
@@ -750,6 +794,47 @@ pub fn recorded_shape<'a>(ddl: impl IntoIterator<Item = &'a str>) -> String {
     datalib_store_meta::schema_hash(std::iter::once(datalib_store_meta::DDL).chain(ddl))
 }
 
+/// The whole shape [`open_derived_indexed`] gives a store opened with
+/// `ddl` and `lookup_indexes`: what a reader of that store requires
+/// (`datalib_store_meta::require`).
+pub fn derived_shape(ddl: &[&str], lookup_indexes: &[&str]) -> datalib_store_meta::Shape {
+    shape_opened_with(ddl, lookup_indexes, false, &[])
+}
+
+/// The whole shape [`open_curated`] gives a store opened with `ddl` and
+/// `ladder`: what a reader of that store requires.
+pub fn curated_shape(ddl: &[&str], ladder: &[Migration]) -> datalib_store_meta::Shape {
+    shape_opened_with(ddl, &[], false, ladder)
+}
+
+/// The shape [`open_inner`] records for its arguments, and the one place
+/// it is computed.
+fn shape_opened_with(
+    extra_ddl: &[&str],
+    lookup_indexes: &[&str],
+    include_shared: bool,
+    ladder: &[Migration],
+) -> datalib_store_meta::Shape {
+    let (shared, shared_indexes): (&[&str], &[&str]) = if include_shared {
+        (SHARED_DDL, SHARED_LOOKUP_INDEXES)
+    } else {
+        (&[], &[])
+    };
+    let indexes: Vec<&str> = lookup_indexes
+        .iter()
+        .chain(shared_indexes)
+        .copied()
+        .collect();
+    datalib_store_meta::Shape {
+        tables: recorded_shape(extra_ddl.iter().chain(shared).copied()),
+        indexes: (!indexes.is_empty()).then(|| datalib_store_meta::schema_hash(indexes)),
+        versions: datalib_store_meta::Versions {
+            schema: datalib_store_meta::ladder::top(ladder),
+            shared: datalib_store_meta::ladder::top(SHARED_LADDER),
+        },
+    }
+}
+
 /// A raw store, for the process that owns it, with no migrations.
 /// [`OnSchemaBreak::Refuse`].
 pub async fn open(db_path: &Path, extra_ddl: &[&str]) -> Result<SqlitePool> {
@@ -859,10 +944,13 @@ impl std::error::Error for SchemaBreak {}
 /// than a reader onto its working set; the caller decides what that means
 /// (a consumer does nothing that pass).
 ///
-/// A schema this store has not got yet is the owner's to add on its next run,
-/// and a read naming a table or column that commit lacks fails at prepare time
-/// saying so. Probe with [`column_exists`] and fall back where that is a real
-/// possibility; slack's `load_channels` is the worked example.
+/// A store a reader is handed is in this build's shape: the launch's prepare
+/// pass migrates every raw store, and a render refuses one it could not
+/// (`datalib_store_meta::require`). A read naming a table or column that
+/// commit lacks is a damaged store and fails, saying so; nothing probes
+/// and falls back. A mirrored store, whose tables are the upstream app's
+/// and vary with its version, is the one place to ask [`table_exists`] or
+/// [`column_exists`].
 pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<Reader>> {
     let pin = match commit {
         Some(commit) => crate::pin::Pin::at(commit)?,
@@ -986,16 +1074,11 @@ async fn open_inner(
     let shared: &[&str] = if include_shared { SHARED_DDL } else { &[] };
     let bare = extra_ddl.is_empty() && shared.is_empty();
     let has_tables = !user_tables(&pool).await?.is_empty();
-    let mut tops = datalib_store_meta::Versions::default();
     // The shared ladder first: the framework's tables are below the
     // owner's, and an owner's rung may read them.
     for (which, rungs_of) in [(Ladder::Shared, SHARED_LADDER), (Ladder::Own, ladder)] {
         let stored = datalib_store_meta::ladder::stored_version(&pool, which).await?;
         let top = datalib_store_meta::ladder::top(rungs_of);
-        match which {
-            Ladder::Shared => tops.shared = top,
-            Ladder::Own => tops.schema = top,
-        }
         if bare {
             continue;
         }
@@ -1102,7 +1185,16 @@ async fn open_inner(
     }
     // Indexes last, so they see the reconciled columns — and so a
     // recreate costs no index.
-    for stmt in ddl().filter(|s| !is_create_table(s)).chain(lookup_indexes) {
+    let shared_indexes: &[&str] = if include_shared {
+        SHARED_LOOKUP_INDEXES
+    } else {
+        &[]
+    };
+    for stmt in ddl()
+        .filter(|s| !is_create_table(s))
+        .chain(lookup_indexes)
+        .chain(shared_indexes)
+    {
         sqlx::query(sqlx::AssertSqlSafe(*stmt))
             .execute(&pool)
             .await
@@ -1119,14 +1211,10 @@ async fn open_inner(
     if bare {
         return Ok(pool);
     }
-    let meta_moved = datalib_store_meta::write(
-        &pool,
-        kind,
-        &recorded_shape(extra_ddl.iter().chain(shared).copied()),
-        tops,
-    )
-    .await
-    .with_context(|| format!("write _datalib_meta for {}", db_path.display()))?;
+    let shape = shape_opened_with(extra_ddl, lookup_indexes, include_shared, ladder);
+    let meta_moved = datalib_store_meta::write(&pool, kind, &shape)
+        .await
+        .with_context(|| format!("write _datalib_meta for {}", db_path.display()))?;
     // Commit the schema before handing back the pool, so readers and the
     // run's deltas start from a commit that has every table. The message
     // names the build when the meta rows moved — a new
@@ -1220,10 +1308,9 @@ impl ColumnInfo {
     }
 }
 
-/// Whether `table` has `column`, for **read-only** consumers that never get
-/// [`open`]'s schema reconcile — the render side opens read-only, so naming a
-/// column an older store lacks would fail at prepare time and sink the step.
-/// A missing table reads as "no such column" rather than an error.
+/// Whether `table` has `column`, for a reader of a mirrored store, whose
+/// columns are the upstream app's and vary with its version. A missing
+/// table reads as "no such column" rather than an error.
 pub async fn column_exists(pool: &SqlitePool, table: &str, column: &str) -> Result<bool> {
     Ok(table_columns(pool, table)
         .await?
@@ -2117,8 +2204,7 @@ async fn read_at_path(
 }
 
 /// The raw store's whole-store problem counts by severity, read-only,
-/// for the step's report. Empty for a store that is not there yet or
-/// predates the table.
+/// for the step's report. Empty for a store that is not there yet.
 pub async fn problem_counts_at_path(
     db_path: &Path,
 ) -> Result<HashMap<datalib_problems::Severity, i64>> {
@@ -2136,11 +2222,7 @@ pub async fn problem_counts_at_path(
         .fetch_all(&pool)
         .await;
     pool.close().await;
-    let rows = match rows {
-        Ok(rows) => rows,
-        Err(e) if crate::pin::is_missing_table(&e, "problems") => return Ok(HashMap::new()),
-        Err(e) => return Err(e).context("count the raw store's problems"),
-    };
+    let rows = rows.context("count the store's problems")?;
     let mut out = HashMap::new();
     for r in rows {
         let word: String = r.try_get(0)?;
@@ -2528,23 +2610,28 @@ async fn record_fetch_problem(
         Outcome, Problem, ProblemRow, Reason, Scope, ScopeKind, Severity, Stage,
     };
     let entity_id = format!("{table}:{id}");
-    let earlier =
-        sqlx::query("SELECT * FROM problems WHERE scope_kind = ? AND scope_key = ? AND stage = ?")
-            .bind(ScopeKind::Entity.as_str())
-            .bind(&entity_id)
-            .bind(Stage::Fetch.as_str())
-            .fetch_optional(&mut **tx)
-            .await
-            .with_context(|| format!("read the fetch problem of {entity_id}"))?
-            .map(|r| ProblemRow::from_row(&r))
-            .transpose()?;
-    sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ? AND stage = ?")
-        .bind(ScopeKind::Entity.as_str())
-        .bind(&entity_id)
-        .bind(Stage::Fetch.as_str())
-        .execute(&mut **tx)
-        .await
-        .with_context(|| format!("clear the fetch problem of {entity_id}"))?;
+    let earlier = sqlx::query(
+        "SELECT * FROM problems INDEXED BY problems_by_scope \
+         WHERE scope_kind = ? AND scope_key = ? AND stage = ?",
+    )
+    .bind(ScopeKind::Entity.as_str())
+    .bind(&entity_id)
+    .bind(Stage::Fetch.as_str())
+    .fetch_optional(&mut **tx)
+    .await
+    .with_context(|| format!("read the fetch problem of {entity_id}"))?
+    .map(|r| ProblemRow::from_row(&r))
+    .transpose()?;
+    sqlx::query(
+        "DELETE FROM problems INDEXED BY problems_by_scope \
+         WHERE scope_kind = ? AND scope_key = ? AND stage = ?",
+    )
+    .bind(ScopeKind::Entity.as_str())
+    .bind(&entity_id)
+    .bind(Stage::Fetch.as_str())
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("clear the fetch problem of {entity_id}"))?;
     let Some(not_fetched) = result else {
         return Ok(());
     };
@@ -2959,7 +3046,7 @@ pub async fn scan_render_units(
     })
 }
 
-/// The primary-key columns of `table`, in `pragma_table_info` order.
+/// The primary-key columns of `table`, in the order the key names them.
 pub async fn primary_key_columns(pool: &SqlitePool, table: &str) -> Result<Vec<String>> {
     let rows = sqlx::query("SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk")
         .bind(table)
@@ -3015,7 +3102,7 @@ pub struct ChangedKey {
 /// The primary keys of every row of `table` that is not `unchanged`
 /// between `from_ref` and `to_ref`, with what happened to it, the key
 /// rendered as text the way `render_inputs.input_id` is: a composite
-/// key's columns in `pragma_table_info` order, joined by `|`. A removed
+/// key's columns in the key's order, joined by `|`. A removed
 /// row's key comes from its `from_` side, so a deletion names the row
 /// that left.
 pub async fn changed_keys(
@@ -5852,6 +5939,46 @@ mod tests {
         assert_eq!(dirty, vec![], "and the schema is committed, as on any open");
     }
 
+    /// Every per-record lookup on a raw store's `problems` names
+    /// `problems_by_scope`, so a store a build before it left must get it
+    /// at its next open, without moving its recorded shape: a new shape
+    /// would re-render every source.
+    #[tokio::test]
+    async fn a_raw_store_gets_the_problems_index_without_a_new_shape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("raw.doltlite_db");
+        let index_count = "SELECT count(*) FROM sqlite_master \
+                           WHERE type = 'index' AND name = 'problems_by_scope'";
+
+        let before = open(&path, &[WIDGETS_DDL]).await.unwrap();
+        sqlx::query("DROP INDEX problems_by_scope")
+            .execute(&before)
+            .await
+            .expect("the open created the index");
+        commit_run(&before, "a store from before the index")
+            .await
+            .unwrap();
+        let shape = datalib_store_meta::read(&before)
+            .await
+            .unwrap()
+            .unwrap()
+            .schema_hash;
+        before.close().await;
+
+        let after = open(&path, &[WIDGETS_DDL]).await.unwrap();
+        let n: i64 = sqlx::query_scalar(index_count)
+            .fetch_one(&after)
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "the next open creates the index");
+        let meta = datalib_store_meta::read(&after).await.unwrap().unwrap();
+        assert_eq!(
+            meta.schema_hash, shape,
+            "the index is not part of the shape"
+        );
+        after.close().await;
+    }
+
     /// Every store an owner opens says which build wrote it, committed
     /// with its schema — so a pinned reader sees it at HEAD, and a store
     /// from before the table existed reads as `None` rather than failing.
@@ -5893,7 +6020,8 @@ mod tests {
             .fetch_one(reader.pool())
             .await
             .unwrap();
-        assert_eq!(pinned, 7, "every meta row is at HEAD");
+        // Seven, and `index_hash` for the shared lookup indexes.
+        assert_eq!(pinned, 8, "every meta row is at HEAD");
         reader.close().await;
 
         // The shape moves: the hash moves with it, and the commit says so.

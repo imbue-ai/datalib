@@ -22,6 +22,7 @@ rust_library(
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
@@ -88,6 +89,8 @@ rust_test(
     edition = "2021",
     deps = [
         "//datalib/backend/app_schema:app_schema",
+        "//datalib/backend/sql_work:datalib_sql_work",
+        "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         ":datalib_runs",
         "@datalib_crates//:sqlx",

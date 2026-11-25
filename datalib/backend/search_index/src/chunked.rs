@@ -1,19 +1,20 @@
 //! The embedded chunks: for each document a source's `embed` has cut, the
 //! rendering it cut (its content hash), and where each chunk falls with
-//! its prompt's hash. A part of the inference cache's file, beside the
-//! vectors those hashes key, so rebuilding the keyword index cuts nothing
-//! again. Its writers are the `embed` steps, one at a time under the
+//! its prompt's hash. In the inference cache's file, beside the vectors
+//! those hashes key, so rebuilding the keyword index cuts nothing again. Its writers are the `embed` steps, one at a time under the
 //! `embedder` lock, and the `unified_grid_and_search_index` step's sweep,
 //! which never runs beside one.
 
-use std::collections::{BTreeMap, HashSet};
-use std::path::Path;
+use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{Context, Result};
 use sqlx::sqlite::SqlitePool;
 
 use crate::chunk::Chunk;
 use crate::InferenceCache;
+
+/// The tables [`DDL`] makes, which a cache whose chunk shape moved drops.
+pub(crate) const TABLES: &[&str] = &["search_chunked", "search_chunks"];
 
 pub(crate) const DDL: [&str; 3] = [
     "CREATE TABLE IF NOT EXISTS search_chunked (
@@ -257,103 +258,24 @@ pub(crate) fn filed(
     })
 }
 
-/// Copies the chunks the keyword index filed, before this build, into
-/// the cache, for every document not cut here yet, so the vectors they
-/// name survive the sweep and nothing is cut again. Reads the index's
-/// file only; the index's next open empties its old tables. Returns how
-/// many documents came over.
-pub async fn carry_chunks_from_the_index(index: &Path, cache: &Path) -> Result<usize> {
-    if !index.exists() {
-        return Ok(0);
-    }
-    let pool = crate::read::connect(index).await?;
-    let out = carry(&pool, cache).await;
-    pool.close().await;
-    out
-}
-
-async fn carry(index: &SqlitePool, cache: &Path) -> Result<usize> {
-    let old: Option<i64> = sqlx::query_scalar(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'search_chunks'",
-    )
-    .fetch_optional(index)
-    .await?;
-    if old.is_none() {
-        return Ok(0);
-    }
-    let cache = InferenceCache::open(cache).await?;
-    let out = carry_into(index, &cache).await;
-    cache.close().await;
-    out
-}
-
-async fn carry_into(index: &SqlitePool, cache: &InferenceCache) -> Result<usize> {
-    let docs: Vec<(i64, String, String, String)> = sqlx::query_as(
-        "SELECT doc_id, source_id, markdown_uuid, content_hash FROM search_documents \
-          ORDER BY doc_id",
-    )
-    .fetch_all(index)
-    .await
-    .context("read the index's documents")?;
-    let mut sources: Vec<&str> = docs.iter().map(|d| d.1.as_str()).collect();
-    sources.sort_unstable();
-    sources.dedup();
-    let mut cut: HashSet<String> = HashSet::new();
-    for source in sources {
-        cut.extend(cache.chunked(source).await?.into_keys());
-    }
-    let mut carried = 0;
-    for batch in docs.chunks(BATCH) {
-        let ids: Vec<i64> = batch.iter().map(|d| d.0).collect();
-        let rows: Vec<(i64, i64, i64, i64, i64, String)> = sqlx::query_as(
-            "SELECT doc_id, start_byte, end_byte, first_section, last_section, hash \
-               FROM search_chunks WHERE doc_id IN (SELECT value FROM json_each(?)) \
-              ORDER BY doc_id, seq",
-        )
-        .bind(serde_json::to_string(&ids)?)
-        .fetch_all(index)
-        .await
-        .context("read the index's chunks")?;
-        let mut chunks_of: BTreeMap<i64, Vec<FiledChunk>> = BTreeMap::new();
-        for (doc, start, end, first, last, hash) in rows {
-            chunks_of
-                .entry(doc)
-                .or_default()
-                .push(filed(start, end, first, last, hash)?);
-        }
-        let docs: Vec<ChunkedDoc> = batch
-            .iter()
-            .filter(|(_, _, uuid, _)| !cut.contains(uuid))
-            .map(|(id, source, uuid, hash)| ChunkedDoc {
-                source_id: source.clone(),
-                markdown_uuid: uuid.clone(),
-                content_hash: hash.clone(),
-                chunks: chunks_of.remove(id).unwrap_or_default(),
-            })
-            .collect();
-        cache.file_chunks(&docs).await?;
-        carried += docs.len();
-    }
-    Ok(carried)
+/// `markdown_uuid → content_hash` of every document cut into chunks: the
+/// rendering each was cut from.
+pub(crate) async fn read_cut(cache: &SqlitePool) -> Result<HashMap<String, String>> {
+    let rows: Vec<(String, String)> =
+        sqlx::query_as("SELECT markdown_uuid, content_hash FROM search_chunked")
+            .fetch_all(cache)
+            .await
+            .context("read the cut documents")?;
+    Ok(rows.into_iter().collect())
 }
 
 /// What a reader finds filed in the cache: `markdown_uuid → (content
 /// hash, its chunks in order)`, of `uuids` (every document when `None`).
-/// Nothing before an `embed` of this build has written the tables.
 pub(crate) async fn read_filed(
     cache: &SqlitePool,
     uuids: Option<&[String]>,
 ) -> Result<BTreeMap<String, (String, Vec<FiledChunk>)>> {
-    let tables: Option<i64> = sqlx::query_scalar(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'search_chunked'",
-    )
-    .fetch_optional(cache)
-    .await
-    .context("look for the filed chunks")?;
     let mut out: BTreeMap<String, (String, Vec<FiledChunk>)> = BTreeMap::new();
-    if tables.is_none() {
-        return Ok(out);
-    }
     type Row = (
         String,
         String,
@@ -363,10 +285,17 @@ pub(crate) async fn read_filed(
         Option<i64>,
         Option<String>,
     );
-    let sql = "SELECT d.markdown_uuid, d.content_hash, \
+    let all = "SELECT d.markdown_uuid, d.content_hash, \
                       c.start_byte, c.end_byte, c.first_section, c.last_section, c.hash \
                  FROM search_chunked d LEFT JOIN search_chunks c ON c.doc_id = d.doc_id \
-                WHERE (NOT ?1 OR d.markdown_uuid IN (SELECT value FROM json_each(?2))) \
+                ORDER BY d.doc_id, c.seq";
+    // From the asked uuids into the unique index: `NOT ? OR … IN (…)`
+    // reads every cut document whatever is asked.
+    let asked = "SELECT d.markdown_uuid, d.content_hash, \
+                      c.start_byte, c.end_byte, c.first_section, c.last_section, c.hash \
+                 FROM json_each(?) j \
+                 JOIN search_chunked d ON d.markdown_uuid = j.value \
+                 LEFT JOIN search_chunks c ON c.doc_id = d.doc_id \
                 ORDER BY d.doc_id, c.seq";
     let mut add = |rows: Vec<Row>| -> Result<()> {
         for (uuid, content_hash, start, end, first, last, hash) in rows {
@@ -380,16 +309,13 @@ pub(crate) async fn read_filed(
         Ok(())
     };
     match uuids {
-        None => add(sqlx::query_as(sql)
-            .bind(false)
-            .bind("[]")
+        None => add(sqlx::query_as(all)
             .fetch_all(cache)
             .await
             .context("read the filed chunks")?)?,
         Some(uuids) => {
             for batch in uuids.chunks(BATCH) {
-                add(sqlx::query_as(sql)
-                    .bind(true)
+                add(sqlx::query_as(asked)
                     .bind(serde_json::to_string(batch)?)
                     .fetch_all(cache)
                     .await
@@ -647,171 +573,38 @@ mod tests {
             .is_empty());
     }
 
-    /// The chunk tables are a part of the cache's file: a cache from before
-    /// them, and a change to their shape, keep every vector.
+    /// A cache whose tables an older build wrote in another shape is
+    /// emptied, vectors with chunks; one whose indexes alone moved keeps
+    /// every vector and gets them.
     #[tokio::test]
-    async fn the_chunk_tables_never_cost_the_vectors() {
+    async fn only_a_change_of_tables_empties_the_cache() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("cache.sqlite");
+        let held = |cache: InferenceCache| async move {
+            let missing = cache.missing(MODEL, &["a".into()]).await.unwrap();
+            cache.close().await;
+            missing.is_empty()
+        };
         let cache = InferenceCache::open(&path).await.unwrap();
         cache.put(MODEL, &[("a".into(), vec![1.0])]).await.unwrap();
         cache.file_chunks(&[cut(&thread("h1"))]).await.unwrap();
-        // A cache an older build wrote: no chunk tables, no part key.
         for sql in [
-            "DROP TABLE search_chunks",
-            "DROP TABLE search_chunked",
-            "DELETE FROM _datalib_meta WHERE key = 'search_chunks_schema_hash'",
+            "DROP INDEX vectors_keys",
+            "UPDATE _datalib_meta SET value = 'fewer' WHERE key = 'index_hash'",
         ] {
             sqlx::query(sql).execute(&cache.pool).await.unwrap();
         }
         cache.close().await;
+        assert!(held(InferenceCache::open(&path).await.unwrap()).await);
+
         let cache = InferenceCache::open(&path).await.unwrap();
-        assert!(cache
-            .missing(MODEL, &["a".into()])
+        sqlx::query("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
+            .execute(&cache.pool)
             .await
-            .unwrap()
-            .is_empty());
-        assert!(cache.chunked("mail").await.unwrap().is_empty());
-        cache.file_chunks(&[cut(&thread("h1"))]).await.unwrap();
-        sqlx::query(
-            "UPDATE _datalib_meta SET value = 'an older shape' \
-              WHERE key = 'search_chunks_schema_hash'",
-        )
-        .execute(&cache.pool)
-        .await
-        .unwrap();
+            .unwrap();
         cache.close().await;
         let cache = InferenceCache::open(&path).await.unwrap();
         assert!(cache.chunked("mail").await.unwrap().is_empty(), "emptied");
-        assert!(cache
-            .missing(MODEL, &["a".into()])
-            .await
-            .unwrap()
-            .is_empty());
-    }
-
-    /// The keyword index's file as a build before this one left it: its
-    /// documents and the chunks it cut of them.
-    async fn old_index(path: &Path, docs: &[ChunkedDoc]) {
-        let opts = sqlx::sqlite::SqliteConnectOptions::new()
-            .filename(path)
-            .create_if_missing(true);
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(opts)
-            .await
-            .unwrap();
-        for sql in [
-            "CREATE TABLE search_documents (doc_id INTEGER PRIMARY KEY, source_id TEXT NOT NULL, \
-             markdown_uuid TEXT NOT NULL UNIQUE, content_hash TEXT NOT NULL, \
-             conversation INTEGER NOT NULL)",
-            "CREATE TABLE search_chunks (doc_id INTEGER NOT NULL, seq INTEGER NOT NULL, \
-             start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, \
-             first_section INTEGER NOT NULL, last_section INTEGER NOT NULL, \
-             hash TEXT NOT NULL, PRIMARY KEY (doc_id, seq)) WITHOUT ROWID",
-        ] {
-            sqlx::query(sql).execute(&pool).await.unwrap();
-        }
-        for doc in docs {
-            let id: i64 = sqlx::query_scalar(
-                "INSERT INTO search_documents (source_id, markdown_uuid, content_hash, \
-                 conversation) VALUES (?, ?, ?, 1) RETURNING doc_id",
-            )
-            .bind(&doc.source_id)
-            .bind(&doc.markdown_uuid)
-            .bind(&doc.content_hash)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-            for (seq, f) in doc.chunks.iter().enumerate() {
-                sqlx::query("INSERT INTO search_chunks VALUES (?, ?, ?, ?, ?, ?, ?)")
-                    .bind(id)
-                    .bind(seq as i64)
-                    .bind(f.chunk.start as i64)
-                    .bind(f.chunk.end as i64)
-                    .bind(f.chunk.first_section as i64)
-                    .bind(f.chunk.last_section as i64)
-                    .bind(&f.hash)
-                    .execute(&pool)
-                    .await
-                    .unwrap();
-            }
-        }
-        pool.close().await;
-    }
-
-    /// The chunks an earlier build filed in the keyword index come over
-    /// as they were, once, and never over a document already cut here:
-    /// the sweep then keeps the vectors they name.
-    #[tokio::test]
-    async fn the_index_s_chunks_carry_over_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let (index, cache_path) = (
-            dir.path().join("db.sqlite"),
-            dir.path().join("cache.sqlite"),
-        );
-        let mail = cut(&thread("h1"));
-        let chat = cut(&doc("chat", "c1", "h9", &[(Some("x"), "hello there")]));
-        old_index(&index, &[mail.clone(), chat.clone()]).await;
-        let cache = InferenceCache::open(&cache_path).await.unwrap();
-        let newer = cut(&doc("chat", "c1", "h10", &[(Some("x"), "hello again")]));
-        cache
-            .file_chunks(std::slice::from_ref(&newer))
-            .await
-            .unwrap();
-        cache
-            .put(MODEL, &[(mail.chunks[0].hash.clone(), vec![1.0])])
-            .await
-            .unwrap();
-        cache.close().await;
-
-        assert_eq!(
-            carry_chunks_from_the_index(&index, &cache_path)
-                .await
-                .unwrap(),
-            1
-        );
-        assert_eq!(
-            carry_chunks_from_the_index(&index, &cache_path)
-                .await
-                .unwrap(),
-            0
-        );
-        let cache = InferenceCache::open(&cache_path).await.unwrap();
-        assert_eq!(
-            filed(&cache).await,
-            BTreeMap::from([
-                ("d1".into(), ("h1".into(), mail.chunks.clone())),
-                ("c1".into(), ("h10".into(), newer.chunks.clone())),
-            ])
-        );
-        assert_eq!(cache.sweep(MODEL).await.unwrap(), 0);
-        cache.close().await;
-    }
-
-    /// An index with no chunks of its own, as this build writes it, or no
-    /// file at all, carries nothing and makes no cache.
-    #[tokio::test]
-    async fn an_index_without_chunks_carries_nothing() {
-        let dir = tempfile::tempdir().unwrap();
-        let cache_path = dir.path().join("cache.sqlite");
-        let index = dir.path().join("db.sqlite");
-        assert_eq!(
-            carry_chunks_from_the_index(&index, &cache_path)
-                .await
-                .unwrap(),
-            0
-        );
-        let built = crate::Index::open(&index).await.unwrap();
-        built.close().await;
-        assert_eq!(
-            carry_chunks_from_the_index(&index, &cache_path)
-                .await
-                .unwrap(),
-            0
-        );
-        assert!(!cache_path.exists());
+        assert!(!held(cache).await, "its vectors with it");
     }
 }

@@ -33,15 +33,13 @@ pub enum NotAStore {
     Missing(String),
 }
 
-fn system_stores() -> [String; 6] {
+fn system_stores() -> [String; 4] {
     let system = layout::SYSTEM_DIR;
     [
         format!("{system}/{}/{}", layout::RUNS_DIR, layout::RUNS_DB),
         format!("{system}/{}", layout::SUPERVISOR_DB),
-        format!("{system}/{}", layout::FEEDBACK_DB),
         format!("{system}/{}", layout::REMOTE_MEDIA_DB),
         format!("{system}/{}", layout::DISK_STATS_DB),
-        format!("{system}/{}", layout::LEGACY_USAGE_DB),
     ]
 }
 

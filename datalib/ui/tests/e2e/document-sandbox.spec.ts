@@ -130,6 +130,9 @@ test("the app's own controls still work inside the frame", async ({ page }) => {
   // written before the document's id.
   const copy = body.locator("[data-section-uuid] button.copy-link").first();
   const message = await copy.getAttribute("data-uuid");
+  // A message's actions show while the pointer is over it.
+  await expect(copy).toBeHidden();
+  await body.locator(`div[data-section-uuid="${message}"]`).hover();
   await copy.click();
   await expect(copy).toHaveClass(/copied/);
   const copied = await page.evaluate(() => (window as unknown as { copied: string[] }).copied);

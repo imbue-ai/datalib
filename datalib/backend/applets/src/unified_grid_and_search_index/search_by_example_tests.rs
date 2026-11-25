@@ -189,6 +189,7 @@ fn worf_slack() -> NormalizedChat {
     );
     item.mentions = vec![slack_user("U0000002")];
     item.reactions = vec![NormalizedReaction {
+        count: 1,
         reaction_uuid: "q-reaction".into(),
         reactor_handle: None,
         reactor_kind: AuthorKind::Named,

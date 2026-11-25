@@ -1,0 +1,75 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_tree_snapshot.rs
+expression: text
+---
+Facebook Post "Two views of the bridge before alpha shift."  00000000-0000-80d5-a95b-fe11f630248a [read] [place]
+  Facebook Post Message  0b751fcc-e1c0-8cfc-af76-63e50c166b7e
+Facebook Post "Guinan's new menu — try the Saurian brandy."  00000000-0000-83eb-9997-79540a4520c8 [read] [place]
+  Facebook Post Message  0b754532-3f00-8241-8f48-e40ad1f7d630
+Facebook Conversation "Lwaxana Troi"  00000000-0000-840e-933b-7e3c0a96ee52 [read] [place]
+  Facebook Message  0b75aad2-7b40-8083-8869-7d21b7e58885
+Facebook Conversation "Facebook user · 1000000003"  00000000-0000-84d8-9001-d3718b01d5e1 [read] [place]
+  Facebook Message  0b75aaa4-b480-81fc-b675-fc28f005e361
+  Facebook Message  0b75aaa5-9ee0-8907-8a57-9a44cd5ee422
+Facebook Conversation "Facebook user · 1000000002"  00000000-0000-84e6-9994-8925c3e28d23 [read] [place]
+  Facebook Message  0b75aa95-7240-8d37-ad48-3efd4fdd09cd
+  Facebook Message  0b75aa96-5ca0-8bfe-b8e7-f894df0be99b
+Facebook Post "Away team to Risa. Bring the horga'hn, Number One."  00000000-0000-8709-9b9f-6daf23a20dfe [read] [place]
+  Facebook Post Version  0b758cb8-cb00-8cdb-9093-e1e57b64491b
+Contact "Beverly Crusher"  00000000-0000-8768-85df-b763ceaebe85 [read]
+Facebook Post "Class of 2327: reunion at Boothby's garden. Bring your own trowel."  00000000-0000-88f7-a8ca-8020c717b96b [read] [place]
+  Facebook Post Message  0b753f3c-5e00-8e06-b236-c6aac8793f4d
+Contact "William Riker"  00000000-0000-8a3c-a66b-d2616975dbfc [read]
+Contact "Data"  00000000-0000-8a95-8e69-5d9ef0dcdf0c [read]
+Facebook Comments "Comments"  00000000-0000-8b03-b202-0ecc96ba797c [read] [place]
+  Facebook Comment  0b751fe8-5900-8112-b919-93e76f91f97d
+  Facebook Comment Version  0b752b47-b980-89c3-8b3d-65ba6f7c2be4
+  Facebook Comment  0b752b47-b980-8eb3-812f-5dde417cd6e2
+  Facebook Comment  0b754237-4e80-8957-a001-e0281126f4a1
+  Facebook Comment  0b757706-9800-8486-823f-6cdc07d0b538
+Facebook Post "Happy birthday, Number One. The bridge is yours for the day."  00000000-0000-8ba6-97c6-f48500bf8e47 [read] [place]
+  Facebook Post Message  0b752b10-cb00-884d-9f04-a02d1c74c917
+Facebook Conversation "Deanna Troi"  00000000-0000-8c30-82a5-bc6ccada3dd3 [read] [place]
+  Facebook Message  0b75aae1-bd80-88f9-9b00-f89fa636a47f
+  Facebook Message  0b75aae2-a7e0-8549-9308-872ca2740d0b
+Facebook Post "Jean-Luc Picard added a life event from January 5, 2364: Took command of the En…"  00000000-0000-8c76-a058-06e137cfac2d [read] [place]
+  Facebook Post Message  0b7534ef-a600-8bc7-8639-c45c24950327
+Facebook Conversation "William Riker"  00000000-0000-8c82-8a32-5b80abc87553 [read] [place]
+  Facebook Reaction  00000000-0000-8c9b-84b8-988d78671a6e
+  Facebook Message  0b75aa86-33e8-8605-8827-b1fa570515aa
+  Facebook Message  0b75aa87-1e48-8895-aafc-f518fd27d57b
+  Facebook Message  0b75aa88-04c0-89b5-a659-bd6a070a5dd7
+  Facebook Message  0b75aa88-ef20-8375-82ce-d8d6bbdfda8c
+  Facebook Message  0b75aa89-d980-8c93-a669-41b1034c43ae
+  Facebook Message  0b75aa8a-c3e0-868b-b7fa-fc8375e4ae82
+  Facebook Reaction  0b75aa8a-eaf0-8203-b48b-f92b859ea5ee
+  Facebook Message  0b75aa8b-ae40-823f-8b4d-a2e6cfbc0413
+  Facebook Message  0b75aa8b-ae40-8971-84a5-a78725f9ba26
+  Facebook Message  0b75aa8c-98a0-8b1c-ab78-f14f6c215968
+  Facebook Message  0b75aa8d-8300-8a42-b652-9507008d5441
+Facebook Reactions "Reactions"  00000000-0000-8cc5-baf1-845294bad07e [read] [place]
+  Facebook Reaction  0b752b2c-4240-8fed-b7ba-2a2e745b3546
+  Facebook Reaction  0b75770b-2be0-8c1b-84b2-0eacd016df5e
+Facebook Album "Ten Forward Nights"  00000000-0000-8d5b-9ccc-4069d9d92992 [read] [place]
+  Facebook Album Message  0b7574a1-30c0-81cf-8ff9-c592d6aff132
+  Facebook Photo  0b7574a1-30c0-83d2-959f-e96abe351f0f
+  Facebook Photo  0b7574a3-0580-8e3d-8a8e-02920d2e9d3c
+Facebook Post "Tea, Earl Grey, hot. ☕ Evening in Ten Forward with the senior staff."  00000000-0000-8dca-8614-69a1a3d92c28 [read] [place]
+  Facebook Post Version  0b751ce7-4e00-813b-a3e3-ef94b9216c94
+  Facebook Post Message  0b751ce7-4e00-8aa3-96fc-fc3bb74c0111
+Facebook Post "Ten Forward Nights"  00000000-0000-8e1c-8c2e-c30f42ab6c8b [read] [place]
+  Facebook Post Message  0b7574aa-5880-8869-a53f-321f7cade7cd
+Facebook Conversation "Ten Forward"  00000000-0000-8ef0-a5ad-33a9d1bb3c0b [read] [place]
+  Facebook Message  0b75aab3-f6c0-82ed-9976-ca875cebaeb6
+  Facebook Reaction  0b75aab4-1dd0-8aa6-87a4-a1a4d5876ca4
+  Facebook Reaction  0b75aab4-44e0-8eb0-81a2-253ab09ea3dc
+  Facebook Message  0b75aab4-e120-86ea-a906-2afc51a83d45
+  Facebook Message  0b75aab5-cb80-8738-9c8f-a4f7722e14c7
+  Facebook Message  0b75aab6-b5e0-8a5e-b221-b2aaaffab5bc
+  Facebook Message  0b75aab7-a040-8974-a9fa-b864d208d924
+  Facebook Message  0b75aab8-8aa0-8f88-9479-99e31bf0a1f1
+  Facebook Message  0b75aab9-7500-8649-a7c9-bcf2a91acd15
+Facebook Conversation "Facebook user · 1000000005"  00000000-0000-8f0b-a18a-78e2d79f491a [read] [place]
+  Facebook Message  0b75aac3-3900-8d45-bdd9-d3ed4ddb44df
+Facebook Post "Jean-Luc Picard posted in Away Team Photographers."  00000000-0000-8f4d-b0a7-cfeb302ede83 [read] [place]
+  Facebook Post Message  0b754b28-2000-83b2-9916-69a95bb3c612

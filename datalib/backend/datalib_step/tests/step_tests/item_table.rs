@@ -14,23 +14,20 @@ async fn an_file_inventory_render_reports_its_files_as_items() {
     let root = d.path();
     let store = datalib_etl::raw_layout::entities_db(&root.join("tng/ingest"));
     std::fs::create_dir_all(store.parent().unwrap()).unwrap();
-    let pool = datalib_etl::doltlite_raw::open(
-        &store,
-        &["CREATE TABLE IF NOT EXISTS files (path TEXT PRIMARY KEY)"],
-    )
-    .await
-    .unwrap();
+    let db = datalib_etl_file_inventory::ingest::RawDb::open(&store)
+        .await
+        .unwrap();
     for path in ["bridge/log.txt", "bridge/map.png", "engineering/warp.dat"] {
-        sqlx::query("INSERT INTO files (path) VALUES (?)")
+        sqlx::query("INSERT INTO files (id, kind, size, blake3) VALUES (?, 'file', 1, x'00')")
             .bind(path)
-            .execute(&pool)
+            .execute(db.pool())
             .await
             .unwrap();
     }
-    datalib_etl::doltlite_raw::commit_run(&pool, "seed")
+    datalib_etl::doltlite_raw::commit_run(db.pool(), "seed")
         .await
         .unwrap();
-    pool.close().await;
+    db.close().await;
 
     let out = Command::new(std::env::var_os("DATALIB_STEP_BIN").expect("DATALIB_STEP_BIN"))
         .env("DATALIB_DAG_STEP", "tng/render_markdown")

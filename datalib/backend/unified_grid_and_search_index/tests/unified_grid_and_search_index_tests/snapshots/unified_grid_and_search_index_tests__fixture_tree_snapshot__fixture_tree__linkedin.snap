@@ -1,0 +1,22 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_tree_snapshot.rs
+expression: text
+---
+LinkedIn Chat "Jean-Luc Picard, William Riker"  00000000-0000-8027-9f1f-73b03617467e [read] [place]
+  LinkedIn Message  0b75a070-6680-881c-a54a-36b690506dbf
+  LinkedIn Message  0b75a074-fa60-8c0a-b870-4aceeb2d9ce6
+  LinkedIn Message  0b75a076-59f0-8340-bf8a-62a6277b1b83
+LinkedIn Post "Comment: Captain, I must respectfully disagree: the odds are 1 in 4.7 trillion, not \"ast…"  00000000-0000-84c5-a0e7-167d60e47f98 [read] [place]
+  LinkedIn Post Message  0b75aa93-eba0-82a6-896c-c5d51aaaf0c1
+  LinkedIn Post Message  0b75aa93-eba0-8d7e-aecf-f814af3527d5
+  LinkedIn Post Message  0b75aa98-f4b0-8678-9884-d96821160511
+LinkedIn Post "Post: Thrilled to share: the Enterprise has completed its survey of the Mintaka syste…"  00000000-0000-8878-b482-b77c75689e79 [read] [place]
+  LinkedIn Post Message  0b75a6a9-6b00-8a4e-a7c0-9a4b04cc20dc
+  LinkedIn Post Message  0b75a6e2-2e40-8c19-9fdb-d46147660a2f
+LinkedIn Skills "LinkedIn skills"  00000000-0000-8980-b4a1-ea8e394399fe [read]
+  LinkedIn Skill  00000000-0000-8068-a764-f47052ad2e6e
+  LinkedIn Skill  00000000-0000-8251-bf2a-e6c7cb665574
+  LinkedIn Skill  00000000-0000-8a6a-8901-f5acbd5843d6
+Contact "Jean-Luc Picard"  00000000-0000-8bbb-8c8b-8ae1dedef5e2 [read]
+Contact "William Riker"  00000000-0000-8d5b-95c0-1e95e75b6e77 [read]
+Contact "Data Soong"  00000000-0000-8f36-a408-50d26aa9b0db [read]

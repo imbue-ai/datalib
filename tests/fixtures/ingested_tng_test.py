@@ -347,9 +347,33 @@ TAKEOUT_SAVED_PLACE_WITHOUT_KEY = (
     "|skipped:maps_saved_places:17f4280e0ea1d5c3"
     "||date|no_identity|"
 )
+# Discord's 404 for a file, a file over the fixture's 1 MB limit, and Q's
+# message of a type no build knows.
+DISCORD_FILE_GONE = (
+    "3ebf1167-47eb-5e00-a32a-0cbec4cd3e45"
+    "|error|fetch|entity|discord_attachments"
+    ":1224633672007681701#01235186960302081702#1235186960302081701"
+    "|||fetch_failed|HTTP 404"
+)
+DISCORD_FILE_TOO_LARGE = (
+    "e2bcbf56-056b-5eea-9842-2bc44dc59d7e"
+    "|warning|fetch|entity|discord_attachments"
+    ":1224633672007681701#01235186456985601702#1235186456985601701"
+    "|||over_size_limit|size 48000000 > limit 1000000"
+)
+DISCORD_UNKNOWN_TYPE = (
+    "c729c0ca-afe2-5cbc-b707-8f13abf2c2fa"
+    "|info|parse|markdown"
+    "|00000000-0000-88dc-9673-98f058735e2a"  # the Enterprise's #bridge
+    "|018f38d6-eac0-8bbe-8261-cb05b68e8f33"
+    "|type|uncovered_type|a message of type 99, shown as its text alone"
+)
 EXPECTED_PROBLEMS = {
     "claude-api": [POISONED_PROBLEM, CLAUDE_ATTACHMENT_WITHOUT_BYTES],
     "garmin": [GARMIN_RIDE_WITH_NO_FIT],
+    "discord": sorted(
+        [DISCORD_FILE_GONE, DISCORD_FILE_TOO_LARGE, DISCORD_UNKNOWN_TYPE]
+    ),
     "facebook": sorted(
         [
             FACEBOOK_TABLES_NOT_READ,
@@ -476,6 +500,9 @@ EXPECTED_PROVIDERS = frozenset(
         "garmin",
         # Ingested through playback; each Doc and each of its comments.
         "google_drive",
+        # Ingested through playback: two servers' channels and threads,
+        # and the direct messages.
+        "discord",
     }
 )
 
@@ -1289,20 +1316,22 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "every source that rendered must also have measured itself",
         )
         # Who a handle is, as each source that mentions it says: the
-        # rows a chip reads. One address, six sources, one name — Slack's
+        # rows a chip reads. One address, seven sources, one name — Slack's
         # through its profile, which ties his Slack user to the address,
-        # Drive's through the comments the account wrote, Facebook's
+        # Drive's through the comments the account wrote, Discord's because
+        # the account is his, Facebook's
         # through the owner's profile, and the address book's, whose
         # photo is what his chips draw.
         self.assertEqual(
             self._query(
                 self._index_db,
-                "SELECT DISTINCT c.source_id || '|' || c.name "
-                "FROM source_contact_handles h JOIN source_contacts c "
-                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "SELECT c.source_id || '|' || c.name "
+                "FROM contact_record_handles h JOIN contact_records c "
+                "ON c.record_id = h.record_id "
                 "WHERE h.handle = 'email:picard@enterprise.starfleet' ORDER BY 1;",
             ),
             [
+                "discord|Jean-Luc Picard",
                 "facebook|Jean-Luc Picard",
                 "google-drive|Jean-Luc Picard",
                 "google-takeout|Jean-Luc Picard",
@@ -1311,6 +1340,26 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "tng_email|Jean-Luc Picard",
             ],
             "the people the index knows by Picard's address",
+        )
+        # Every person in the index, not the ones the checks here name. A
+        # person is one record per source unless some documents knew less
+        # of them than others: an AI chat or a texts backup whose account
+        # names nobody, a Slack document with no profile beside it. Any
+        # other name here is a field that differs by document, which is a
+        # copy of the person for each.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT source_id || '|' || contact_key || '|' || count(*) "
+                "FROM contact_records GROUP BY source_id, contact_key "
+                "HAVING count(*) > 1 ORDER BY 1;",
+            ),
+            [
+                "claude-api|me:self|2",
+                "slack|slack:T_NCC1701D/U_PICARD|2",
+                "sms-backup-restore|me:self|2",
+            ],
+            "the people the index holds more than one record of",
         )
         # Whose account each source is: the user Slack's `auth.test` names,
         # with the address on his profile; the mailbox's address; the
@@ -1323,9 +1372,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._query(
                 self._index_db,
-                "SELECT DISTINCT c.source_id || '|' || h.handle "
-                "FROM source_contact_handles h JOIN source_contacts c "
-                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "SELECT c.source_id || '|' || h.handle "
+                "FROM contact_record_handles h JOIN contact_records c "
+                "ON c.record_id = h.record_id "
                 "WHERE json_extract(c.contact_json, '$.account') = 1 ORDER BY 1;",
             ),
             [
@@ -1334,6 +1383,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "chatgpt-api|me:self",
                 "claude-api|email:jlpicard@enterprise.starfleet.test",
                 "claude-api|me:self",
+                "discord|discord:170100000000000001",
+                "discord|email:picard@enterprise.starfleet",
                 "facebook|email:picard@enterprise.starfleet",
                 "facebook|facebook:name/Jean-Luc Picard",
                 "github|github:jlpicard",
@@ -1379,10 +1430,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._query(
                 self._index_db,
-                "SELECT DISTINCT c.source_id || '|' || c.name || '|' "
+                "SELECT c.source_id || '|' || c.name || '|' "
                 "|| json_extract(j.value, '$.value') "
-                "FROM source_contact_handles h JOIN source_contacts c "
-                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key, "
+                "FROM contact_record_handles h JOIN contact_records c "
+                "ON c.record_id = h.record_id, "
                 "json_each(c.contact_json, '$.handles') j "
                 "WHERE h.handle = 'tel:+12025550101' "
                 "AND json_extract(j.value, '$.handle') = h.handle ORDER BY 1;",
@@ -1397,7 +1448,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._query(
                 self._index_db,
-                "SELECT DISTINCT c.source_id FROM source_contacts c ORDER BY 1;",
+                "SELECT DISTINCT c.source_id FROM contact_records c ORDER BY 1;",
             ),
             [
                 "beeper",
@@ -1405,6 +1456,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "claude-api",
                 "claude-code",
                 "codex",
+                "discord",
                 "facebook",
                 "github",
                 "gitlab",
@@ -1425,10 +1477,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._query(
                 self._index_db,
-                "SELECT DISTINCT c.contact_key || '|' || "
+                "SELECT c.contact_key || '|' || "
                 "(coalesce(json_extract(c.contact_json, '$.photo_url'), '') LIKE "
                 "'/data/beeper/ingest/blob/%') "
-                "FROM source_contacts c WHERE c.source_id = 'beeper' "
+                "FROM contact_records c WHERE c.source_id = 'beeper' "
                 "AND c.contact_key LIKE 'slack:%' ORDER BY 1;",
             ),
             ["slack:T1701D/U0PICARD|0", "slack:T1701D/U0WORF|1"],
@@ -1444,12 +1496,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._query(
                 self._index_db,
                 "SELECT h.handle || '|' || json_extract(c.contact_json, '$.names') "
-                "FROM source_contact_handles h JOIN source_contacts c "
-                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
-                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
-                "WHERE m.source_id = 'whatsapp' AND h.handle IN "
+                "FROM contact_record_handles h JOIN contact_records c "
+                "ON c.record_id = h.record_id "
+                "WHERE c.source_id = 'whatsapp' AND h.handle IN "
                 "('tel:+17015550101', 'tel:+17015550102', 'tel:+17015550103') "
-                "GROUP BY 1 ORDER BY 1;",
+                "ORDER BY 1;",
             ),
             [
                 'tel:+17015550101|["William Riker","Will Riker (Starfleet)","Number One"]',
@@ -1466,13 +1517,12 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._query(
                 self._index_db,
-                "SELECT DISTINCT h.handle || '|' "
+                "SELECT h.handle || '|' "
                 "|| coalesce(json_extract(c.contact_json, '$.org'), '') || '|' "
                 "|| coalesce(json_extract(c.contact_json, '$.title'), '') "
-                "FROM source_contact_handles h JOIN source_contacts c "
-                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
-                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
-                "WHERE m.source_id = 'whatsapp' AND h.handle = 'tel:+17015550102';",
+                "FROM contact_record_handles h JOIN contact_records c "
+                "ON c.record_id = h.record_id "
+                "WHERE c.source_id = 'whatsapp' AND h.handle = 'tel:+17015550102';",
             ),
             ["tel:+17015550102|Starfleet|Second Officer"],
             "Data's company and title, from the address book alone",
@@ -1482,10 +1532,11 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 self._index_db,
                 "SELECT h.handle || '|' || json_extract(c.contact_json, '$.names') || '|' "
                 "|| json_extract(c.contact_json, '$.org') || '|' "
-                "|| json_extract(c.contact_json, '$.title') || '|' || c.seen_items "
-                "FROM source_contact_handles h JOIN source_contacts c "
-                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
-                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
+                "|| json_extract(c.contact_json, '$.title') || '|' || d.seen_items "
+                "FROM contact_record_handles h JOIN contact_records c "
+                "ON c.record_id = h.record_id "
+                "JOIN document_contacts d ON d.record_id = c.record_id "
+                "JOIN markdowns m ON m.markdown_uuid = d.markdown_uuid "
                 "WHERE m.source_id = 'whatsapp' AND h.handle = 'tel:+17015550105';",
             ),
             ['tel:+17015550105|["Deanna Troi"]|Starfleet|Counselor|0'],
@@ -1533,9 +1584,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._query(
                 self._index_db,
-                "SELECT DISTINCT c.name || '|' || c.seen_items "
-                "FROM source_contact_handles h JOIN source_contacts c "
-                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
+                "SELECT c.name || '|' || d.seen_items "
+                "FROM contact_record_handles h JOIN contact_records c "
+                "ON c.record_id = h.record_id "
+                "JOIN document_contacts d ON d.record_id = c.record_id "
                 "WHERE h.handle = 'slack:T_NCC1701D/U_TROI';",
             ),
             ["U_TROI|0"],
@@ -1551,8 +1603,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 self._index_db,
                 "SELECT c.name || '|' || coalesce(json_extract(c.contact_json, '$.photo_url'), "
                 "'none') "
-                "FROM source_contacts c JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
-                "WHERE m.source_id = 'tng_contacts' "
+                "FROM contact_records c WHERE c.source_id = 'tng_contacts' "
                 "AND c.name IN ('William T. Riker', 'Jean-Luc Picard', 'Hugh') ORDER BY 1;",
             )
         )
@@ -1579,11 +1630,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "SELECT h.handle || '|' || c.name || '|' "
                 "|| (SELECT group_concat(json_extract(j.value, '$.handle'), ' ') "
                 "    FROM json_each(c.contact_json, '$.handles') j) "
-                "FROM source_contact_handles h JOIN source_contacts c "
-                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
-                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
-                "WHERE m.source_id = 'signal' AND c.name IN ('Will Riker', 'Q', 'Guinan') "
-                "GROUP BY 1 ORDER BY 1;",
+                "FROM contact_record_handles h JOIN contact_records c "
+                "ON c.record_id = h.record_id "
+                "WHERE c.source_id = 'signal' AND c.name IN ('Will Riker', 'Q', 'Guinan') "
+                "ORDER BY 1;",
             ),
             [
                 (
@@ -1646,10 +1696,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._query(
                 self._index_db,
                 "SELECT DISTINCT h.handle || '|' || c.name "
-                "FROM source_contact_handles h JOIN source_contacts c "
-                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
-                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
-                "WHERE m.source_id = 'facebook' AND (h.handle LIKE 'facebook:deleted/%' "
+                "FROM contact_record_handles h JOIN contact_records c "
+                "ON c.record_id = h.record_id "
+                "WHERE c.source_id = 'facebook' AND (h.handle LIKE 'facebook:deleted/%' "
                 "OR h.handle = 'facebook:name/William Riker') ORDER BY 1;",
             ),
             [
@@ -1667,10 +1716,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
             self._query(
                 self._index_db,
                 "SELECT DISTINCT h.handle || '|' || c.name "
-                "FROM source_contact_handles h JOIN source_contacts c "
-                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
-                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
-                "WHERE m.source_id = 'linkedin' AND h.handle LIKE 'linkedin:%' ORDER BY 1;",
+                "FROM contact_record_handles h JOIN contact_records c "
+                "ON c.record_id = h.record_id "
+                "WHERE c.source_id = 'linkedin' AND h.handle LIKE 'linkedin:%' ORDER BY 1;",
             ),
             [
                 "linkedin:datasoong|Data Soong",
@@ -1701,11 +1749,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._query(
                 self._index_db,
-                "SELECT DISTINCT h.handle || '|' || c.name "
-                "FROM source_contact_handles h JOIN source_contacts c "
-                "ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key "
-                "JOIN markdowns m ON m.markdown_uuid = c.markdown_uuid "
-                "WHERE m.source_id = 'google-drive' ORDER BY 1;",
+                "SELECT h.handle || '|' || c.name "
+                "FROM contact_record_handles h JOIN contact_records c "
+                "ON c.record_id = h.record_id "
+                "WHERE c.source_id = 'google-drive' ORDER BY 1;",
             ),
             [
                 "email:picard@enterprise.starfleet|Jean-Luc Picard",
@@ -2045,8 +2092,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # A download names only its raw record; render says which grid row
         # that record belongs to, and the reader links the two. These are
         # the rows a person opens from the problem: the claude
-        # conversation (its uuid minted from the raw key) and Riker's
-        # Takeout message (found by its upstream id).
+        # conversation (its uuid minted from the raw key), Riker's
+        # Takeout message (found by its upstream id), and the Discord
+        # message each file is on.
         self.assertEqual(
             self._linked_fetch_problems(),
             {
@@ -2055,6 +2103,12 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 ),
                 TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT.split("|")[0]: (
                     "0195683a-d140-87f9-bdf6-234da6d6880c"
+                ),
+                DISCORD_FILE_GONE.split("|")[0]: (
+                    "018f33da-ac00-8cd8-95e0-e67cf1265158"
+                ),
+                DISCORD_FILE_TOO_LARGE.split("|")[0]: (
+                    "018f33d8-d740-8ed1-8e31-2f810f5c8a20"
                 ),
             },
             "each download problem whose record has a row links to it",

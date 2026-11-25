@@ -1,0 +1,15 @@
+---
+source: datalib/backend/unified_grid_and_search_index/tests/unified_grid_and_search_index_tests/fixture_tree_snapshot.rs
+expression: text
+---
+Calendar "Engineering"  00000000-0000-816c-a310-21acba28c500 [place]
+  Recurring Event "Warp core maintenance"  00000000-0000-80a6-93ad-832002566f74 [read]
+  Recurring Event "Data's activation day"  00000000-0000-8eca-8033-c38531904ecf [read]
+  Event "Dilithium shipment arrives"  00000000-0000-8899-a213-737545dc9ea2 [read]
+Calendar "Bridge"  00000000-0000-8e27-90d0-0cd7d7bffcfe [place]
+  Recurring Event "Senior staff briefing"  00000000-0000-8488-9b56-8b957035e673 [read]
+  Recurring Event "Officers' poker night"  00000000-0000-872d-a4f4-3355175938a9 [read]
+  Changed Occurrence "Senior staff briefing — Borg incursion"  00000000-0000-87f7-ac79-138f8424fdb5 [read]
+  Event "Shore leave on Risa"  00000000-0000-8470-8240-1b4ee2c9889a [read]
+  Event "Reception for the Klingon delegation"  00000000-0000-891b-9146-098a54f0815e [read]
+  Changed Occurrence "Starfleet Academy guest lecture: first contact protocols"  00000000-0000-81a3-9b5c-946dc4b441a8 [read]

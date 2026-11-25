@@ -4,20 +4,18 @@
 //! `kind: "Source Size"`). Its body deliberately carries no byte
 //! figure: a store's size is not reproducible — it drifts
 //! between rebuilds on one machine and differs outright between
-//! machines — so nothing hashed may contain it. That is enforced at
-//! the producer (`datalib_step::introspect`), not scrubbed here, which
-//! is why this file needs no special case for those rows.
+//! machines — so no row's hash may contain it. That is enforced at
+//! the producer (`datalib_step::introspect`), not scrubbed here. The
+//! report as a whole does show the sizes, so its hash is left out.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::str::FromStr;
 
-use serde_json::json;
+use datalib_store_dump::{dump, store_as_jsonl, Keep};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
-use sqlx::Row;
 
-fn fixture_db_path() -> PathBuf {
+pub(crate) fn fixture_db_path() -> PathBuf {
     if let Ok(r) = runfiles::Runfiles::create() {
         if let Some(candidate) = r.rlocation("_main/tests/fixtures/ingested/backend_index.sqlite") {
             if candidate.exists() {
@@ -36,22 +34,6 @@ fn fixture_db_path() -> PathBuf {
             )
         });
     bazel_bin
-}
-
-async fn open_readonly(path: &std::path::Path) -> SqlitePool {
-    let real = path
-        .canonicalize()
-        .unwrap_or_else(|e| panic!("canonicalize {}: {e}", path.display()));
-    let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", real.display()))
-        .expect("parse url")
-        .read_only(true);
-    SqlitePoolOptions::new()
-        .max_connections(1)
-        .idle_timeout(None)
-        .max_lifetime(None)
-        .connect_with(opts)
-        .await
-        .unwrap_or_else(|e| panic!("open {}: {e}", real.display()))
 }
 
 /// SHA-256 of a long string, truncated to 16 hex chars, for the few long
@@ -75,179 +57,95 @@ impl<'a> std::fmt::LowerHex for BytesAsHex<'a> {
     }
 }
 
-fn stable_source_url(v: Option<String>) -> Option<String> {
-    let u = v?;
-    let Some(rest) = u.strip_prefix("file://") else {
-        return Some(u);
-    };
-    let tail = rest.rsplit('/').next().unwrap_or(rest);
-    Some(format!("file://…/{tail}"))
+/// A local file's own path is the build sandbox's.
+fn stable_source_url(url: &str) -> String {
+    match url.strip_prefix("file://") {
+        Some(rest) => format!("file://…/{}", rest.rsplit('/').next().unwrap_or(rest)),
+        None => url.to_string(),
+    }
 }
 
-/// The `grid_rows.provider` the storage reports carry, from the enum
-/// that owns the spelling rather than repeated as a literal.
-fn provider_datalib() -> &'static str {
-    datalib_schema::providers::Provider::Datalib.as_str()
+/// What a row says beside the text it stands for: a document's text is the
+/// render preview's to show, and the terms have a snapshot of their own
+/// (`fixture_terms_snapshot`). A row's text is in its `content_hash`.
+const NOT_SHOWN: &[&str] = &["preview", "front", "supplied_terms"];
+
+/// `row` as the snapshot has it. A field that is not there is null; one
+/// that is empty is written `""`.
+fn shown(row: &Map<String, Value>) -> Value {
+    let cells = row
+        .iter()
+        .filter(|(k, v)| !v.is_null() && !NOT_SHOWN.contains(&k.as_str()));
+    let cells = cells.map(|(k, v)| {
+        let v = match (k.as_str(), v.as_str()) {
+            ("source_url", Some(url)) => json!(stable_source_url(url)),
+            ("content_hash", Some(hash)) => json!(hash.get(..16).unwrap_or(hash)),
+            _ => v.clone(),
+        };
+        (k.clone(), v)
+    });
+    Value::Object(cells.collect())
 }
 
+/// The storage reports' rows, a digest for each report and kind: a
+/// measurement's own fields are pinned by `datalib_step::introspect`'s
+/// tests, and there are nearly half as many of them as of everything
+/// else. A row added, removed, re-keyed, or whose count moved changes the
+/// digest.
+fn storage_digests(storage: &[&Map<String, Value>]) -> Vec<Value> {
+    let text = |r: &Map<String, Value>, k: &str| r[k].as_str().unwrap_or_default().to_string();
+    let mut by_report: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    for r in storage {
+        by_report
+            .entry((text(r, "conversation_name"), text(r, "kind")))
+            .or_default()
+            .push(format!("{}\t{}", text(r, "uuid"), text(r, "content_hash")));
+    }
+    let digests = by_report.into_iter().map(|((report, kind), mut members)| {
+        members.sort();
+        json!({
+            "report": report,
+            "kind": kind,
+            "rows": members.len(),
+            "members_sha": digest(&members.join("\n")),
+        })
+    });
+    digests.collect()
+}
+
+/// Dumped as the live bake dumps its stores. `git diff --word-diff` shows
+/// which field of a row moved.
 #[tokio::test]
 async fn snapshot_grid_rows_and_documents() {
-    let db = fixture_db_path();
-    let pool = open_readonly(&db).await;
-
-    // ── grid_rows ────────────────────────────────────────────────
-    let rows = sqlx::query(
-        "SELECT uuid, provider, kind, source_label, created_at, author, account, \
-                project, org_uuid, org_name, channel, conversation_name, conversation_uuid, \
-                message_index, entire_chat, preview, content_hash, source_id, \
-                source_url, git_sha, upstream_id, upstream_entity_kind, upstream_account, \
-                notion_page_uuid, \
-                notion_block_uuid, markdown_uuid, byte_size, item_count \
-         FROM grid_rows ORDER BY uuid",
-    )
-    .fetch_all(&pool)
-    .await
-    .expect("read grid_rows");
-
-    let grid_rows: Vec<serde_json::Value> = rows
-        .iter()
-        .map(|r| {
-            let preview: String = r.try_get("preview").unwrap_or_default();
-            let content_hash: String = r.try_get("content_hash").unwrap_or_default();
-            let entire_chat: String = r.try_get("entire_chat").unwrap_or_default();
-            json!({
-                "uuid": r.try_get::<String, _>("uuid").expect("uuid"),
-                "provider": r.try_get::<String, _>("provider").expect("provider"),
-                "kind": r.try_get::<String, _>("kind").expect("kind"),
-                "source_label": r.try_get::<String, _>("source_label").expect("source_label"),
-                // `Option<String>`, not `String`: `created_at` is nullable, and
-                // reading it as a bare `String` rendered SQL NULL as `""` —
-                // so this golden could not tell "upstream gave us no
-                // timestamp" from "upstream gave us an empty one". That is
-                // exactly the distinction §6 turns on, and it was invisible
-                // here until a fixture finally had an undated record.
-                "created_at": r.try_get::<Option<String>, _>("created_at").ok().flatten(),
-                "author": r.try_get::<Option<String>, _>("author").ok().flatten(),
-                "account": r.try_get::<Option<String>, _>("account").ok().flatten(),
-                "project": r.try_get::<Option<String>, _>("project").ok().flatten(),
-                "org_uuid": r.try_get::<Option<String>, _>("org_uuid").ok().flatten(),
-                "org_name": r.try_get::<Option<String>, _>("org_name").ok().flatten(),
-                "channel": r.try_get::<Option<String>, _>("channel").ok().flatten(),
-                "conversation_name": r.try_get::<Option<String>, _>("conversation_name").ok().flatten(),
-                "conversation_uuid": r.try_get::<String, _>("conversation_uuid").expect("conversation_uuid"),
-                "message_index": r.try_get::<Option<i64>, _>("message_index").ok().flatten(),
-                "preview_len": preview.chars().count(),
-                "content_hash": content_hash.get(..16).unwrap_or_default(),
-                "entire_chat": entire_chat,
-                "source_id": r.try_get::<Option<String>, _>("source_id").ok().flatten(),
-                "source_url": stable_source_url(
-                    r.try_get::<Option<String>, _>("source_url").ok().flatten(),
-                ),
-                "git_sha": r.try_get::<Option<String>, _>("git_sha").ok().flatten(),
-                "upstream_id": r.try_get::<Option<String>, _>("upstream_id").ok().flatten(),
-                "upstream_entity_kind": r.try_get::<Option<String>, _>("upstream_entity_kind").ok().flatten(),
-                "upstream_account": r.try_get::<Option<String>, _>("upstream_account").ok().flatten(),
-                "notion_page_uuid": r.try_get::<Option<String>, _>("notion_page_uuid").ok().flatten(),
-                "notion_block_uuid": r.try_get::<Option<String>, _>("notion_block_uuid").ok().flatten(),
-                "markdown_uuid": r.try_get::<Option<String>, _>("markdown_uuid").ok().flatten(),
-                "byte_size": r.try_get::<Option<i64>, _>("byte_size").ok().flatten(),
-                "item_count": r.try_get::<Option<i64>, _>("item_count").ok().flatten(),
-            })
-        })
-        .collect();
-
-    // ── documents ────────────────────────────────────────────────
-    let drows = sqlx::query(
-        "SELECT markdown_uuid, source_id, provider, kind, title, \
-                created_at, modified_at, render_unit_key, renderer_version, \
-                searchable \
-         FROM markdowns ORDER BY markdown_uuid",
-    )
-    .fetch_all(&pool)
-    .await
-    .expect("read documents");
-
-    let documents: Vec<serde_json::Value> = drows
-        .iter()
-        .map(|r| {
-            json!({
-                "markdown_uuid": r.try_get::<String, _>("markdown_uuid").expect("markdown_uuid"),
-                "source_id": r.try_get::<String, _>("source_id").expect("source_id"),
-                "provider": r.try_get::<String, _>("provider").expect("provider"),
-                "kind": r.try_get::<String, _>("kind").expect("kind"),
-                "title": r.try_get::<Option<String>, _>("title").ok().flatten(),
-                "created_at": r.try_get::<Option<String>, _>("created_at").ok().flatten(),
-                "modified_at": r.try_get::<Option<String>, _>("modified_at").ok().flatten(),
-                "render_unit_key": r.try_get::<Option<String>, _>("render_unit_key").ok().flatten(),
-                "renderer_version": r.try_get::<Option<String>, _>("renderer_version").ok().flatten(),
-                "searchable": r.try_get::<bool, _>("searchable").expect("searchable"),
-            })
-        })
-        .collect();
-
-    // Storage rows are summarized rather than enumerated. They are 43%
-    // of the rows and none of this golden's purpose — it exists to
-    // catch *provider render* regressions, and a measurement row's
-    // per-field detail is pinned by `datalib_step::introspect`'s own
-    // tests. Listing them in full added 4,458 lines here, so every
-    // future churn of this file would carry them too.
-    //
-    // The digest keeps the coverage that belongs at this level: a row
-    // added, removed, re-keyed, or whose count moved all change it,
-    // because it is taken over each row's `(uuid, content_hash)` and the
-    // body carries the count.
-    let (storage, grid_rows): (Vec<_>, Vec<_>) = grid_rows
-        .into_iter()
-        .partition(|r| r["provider"] == json!(provider_datalib()));
-    let mut by_source_kind: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
-    for r in &storage {
-        // `upstream_account`, not `account`: a storage row measures a
-        // source and belongs to no upstream login, so it carries the
-        // source name here and nothing in `account`.
-        let key = (
-            r["upstream_account"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string(),
-            r["kind"].as_str().unwrap_or_default().to_string(),
-        );
-        by_source_kind.entry(key).or_default().push(format!(
-            "{}\t{}",
-            r["uuid"].as_str().unwrap_or_default(),
-            r["content_hash"].as_str().unwrap_or_default(),
-        ));
-    }
-    let storage_rows: Vec<serde_json::Value> = by_source_kind
-        .into_iter()
-        .map(|((source, kind), mut members)| {
-            members.sort();
-            json!({
-                "source": source,
-                "kind": kind,
-                "rows": members.len(),
-                "members_sha": digest(&members.join("\n")),
-            })
-        })
-        .collect();
-
-    let bundle = json!({
-        "summary": {
-            "grid_rows_count": grid_rows.len(),
-            "storage_rows_count": storage.len(),
-            "documents_count": documents.len(),
-        },
-        "grid_rows": grid_rows,
-        "storage_rows": storage_rows,
-        "documents": documents,
+    let path = fixture_db_path().canonicalize().expect("the fixture index");
+    let dump = dump(&path, |t| match t {
+        "grid_rows" | "markdowns" => Keep::Rows,
+        _ => Keep::Nothing,
+    })
+    .await;
+    let rows = |t: &str| {
+        dump[t]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_object)
+    };
+    let datalib = datalib_schema::providers::Provider::Datalib.as_str();
+    let (storage, grid_rows): (Vec<_>, Vec<_>) =
+        rows("grid_rows").partition(|r| r["provider"] == datalib);
+    let documents = rows("markdowns").map(|r| {
+        let mut document = shown(r);
+        // A storage report's own text has the stores' sizes in it, and
+        // those differ from one machine to the next.
+        if let (true, Some(cells)) = (r["provider"] == datalib, document.as_object_mut()) {
+            cells.remove("content_hash");
+        }
+        document
     });
-
-    // Pretty-printed JSON is the most diff-friendly representation —
-    // one field per line, sorted keys, no insta-yaml quoting surprises.
-    // Measured against the alternatives on this same data: JSON Lines
-    // is 340 lines to this one's 6,971 and CSV is 341, but CSV has no
-    // native null and this golden turns on null != "" (see `created_at`
-    // above), and neither shows you *which* field moved. The size
-    // problem was the storage rows, and it is fixed above.
-    let snapshot = serde_json::to_string_pretty(&bundle).expect("serialize");
-    insta::assert_snapshot!("fixture_backend_index", snapshot);
+    let snapshot = json!({
+        "grid_rows": grid_rows.into_iter().map(shown).collect::<Vec<_>>(),
+        "markdowns": documents.collect::<Vec<_>>(),
+        "storage_rows": storage_digests(&storage),
+    });
+    insta::assert_snapshot!("fixture_backend_index", store_as_jsonl(&snapshot));
 }

@@ -14,7 +14,7 @@ use datalib_schema::sections::{
 
 use crate::html::escape_md_inline;
 use crate::message::{
-    chip_link, message_stamp_text_html, source_link, timestamp_html, MessageHeader,
+    chip_link, labels_html, message_stamp_text_html, source_link, timestamp_html, MessageHeader,
 };
 
 /// What an item's piece says and shows.
@@ -90,7 +90,6 @@ impl Item {
                         self.header()
                     }),
                     recipients_line(&self.addressed),
-                    labels_line(&self.labels),
                     Some(self.body.clone()).filter(|b| !b.is_empty()),
                     if chat {
                         reaction_pills(&self.reactions)
@@ -113,7 +112,17 @@ impl Item {
             .as_deref()
             .map(|url| format!(" {}", source_link(url)))
             .unwrap_or_default();
-        format!("<span class=\"msg-cont\">{}{link}</span>", self.stamp())
+        let labels = labels_html(&self.labels())
+            .map(|l| format!(" {l}"))
+            .unwrap_or_default();
+        format!(
+            "<span class=\"msg-cont\">{}{labels}{link}</span>",
+            self.stamp()
+        )
+    }
+
+    fn labels(&self) -> Vec<&str> {
+        self.labels.iter().map(String::as_str).collect()
     }
 
     fn header(&self) -> String {
@@ -124,6 +133,7 @@ impl Item {
             handle: handle.as_ref(),
             stamp: self.at.as_deref(),
             tags: &tags,
+            labels: &self.labels(),
             source_url: self.link.as_deref(),
             ..Default::default()
         }
@@ -238,11 +248,6 @@ pub fn recipients_line(addressed: &[Addressee]) -> Option<String> {
     })
 }
 
-fn labels_line(labels: &[String]) -> Option<String> {
-    let labels: Vec<String> = labels.iter().map(|l| escape_md_inline(l)).collect();
-    (!labels.is_empty()).then(|| format!("🏷 {}", labels.join(" · ")))
-}
-
 /// One bullet per reaction, each anchored by its own uuid so its grid
 /// row's click lands on it.
 fn reactions_list(reactions: &[Reaction]) -> Option<String> {
@@ -288,7 +293,7 @@ fn reaction_pills(reactions: &[Reaction]) -> Option<String> {
             format!(
                 "<span class=\"msg-reaction\">{emoji} {n}<span class=\"msg-reactors\"> {who}</span></span>",
                 emoji = escape_md_inline(emoji),
-                n = rs.len(),
+                n = rs.iter().map(|r| r.count).sum::<u32>(),
                 who = who.join(", "),
             )
         })
@@ -344,6 +349,7 @@ mod tests {
             tags: vec!["reply".into()],
             link: Some("https://example.invalid/m/1".into()),
             reactions: vec![Reaction {
+                count: 1,
                 uuid: "r1".into(),
                 emoji: "🖖".into(),
                 name: "Spock".into(),
@@ -363,10 +369,14 @@ mod tests {
     fn a_message_is_drawn_from_its_facts() {
         let drawn = riker().draw();
         let blocks: Vec<&str> = drawn.split("\n\n").collect();
-        assert_eq!(blocks.len(), 7, "{drawn}");
+        assert_eq!(blocks.len(), 6, "{drawn}");
         assert!(blocks[0].starts_with("## [Will Riker](mailto:riker@enterprise.starfleet "));
         assert!(blocks[0].contains("<span class=\"msg-tag\">reply</span>"));
         assert!(blocks[0].contains("datetime=\"2364-04-11T09:00:00+01:00\""));
+        assert!(blocks[0].contains(
+            "</time> <span class=\"msg-labels\"><span class=\"msg-label\">Bridge &lt;crew&gt;</span> \
+             <span class=\"msg-label\">Inbox</span></span> <a class=\"source-link\""
+        ));
         assert!(blocks[0].ends_with("noreferrer\">↗</a>"));
         assert_eq!(
             blocks[1],
@@ -375,17 +385,16 @@ mod tests {
              <span class=\"msg-recipients-role\">Cc</span> \
              <span class=\"msg-recipient\">Deanna Troi</span></span>"
         );
-        assert_eq!(blocks[2], "🏷 Bridge &lt;crew&gt; · Inbox");
-        assert_eq!(blocks[3], "Engage.");
+        assert_eq!(blocks[2], "Engage.");
         assert_eq!(
-            blocks[4],
+            blocks[3],
             "- <span id=\"m-r1\" data-section-uuid=\"r1\">🖖 Spock</span>"
         );
         assert_eq!(
-            blocks[5],
+            blocks[4],
             "<span class=\"msg-replies\">3 replies · 2 not mirrored yet</span>"
         );
-        assert_eq!(blocks[6], "");
+        assert_eq!(blocks[5], "");
     }
 
     /// In a chat, a run's later message has no header but its time and
@@ -393,6 +402,7 @@ mod tests {
     #[test]
     fn a_chat_message_continues_a_run_and_counts_its_reactions() {
         let spock = |uuid: &str, emoji: &str, name: &str| Reaction {
+            count: 1,
             uuid: uuid.into(),
             emoji: emoji.into(),
             name: name.into(),
@@ -416,8 +426,12 @@ mod tests {
             "{drawn}"
         );
         assert!(blocks[0].ends_with("noreferrer\">↗</a></span>"), "{drawn}");
+        assert!(
+            blocks[0].contains("<span class=\"msg-label\">Inbox</span>"),
+            "{drawn}"
+        );
         assert_eq!(
-            blocks[4],
+            blocks[3],
             "<span class=\"msg-reaction\">👍 2<span class=\"msg-reactors\"> \
              <span id=\"m-r1\" data-section-uuid=\"r1\">Picard</span>, \
              <span id=\"m-r2\" data-section-uuid=\"r2\">Riker</span></span></span> \

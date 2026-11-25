@@ -84,10 +84,18 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        sqlx::query(datalib_etl::doltlite_raw::PROBLEMS_DDL)
-            .execute(&pool)
-            .await
-            .unwrap();
+        for ddl in [
+            crate::file_checkpoint::INGESTED_FILES_DDL,
+            datalib_etl::doltlite_raw::PROBLEMS_DDL,
+        ]
+        .into_iter()
+        .chain(
+            datalib_etl::doltlite_raw::SHARED_LOOKUP_INDEXES
+                .iter()
+                .copied(),
+        ) {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
         pool
     }
 

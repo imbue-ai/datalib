@@ -196,6 +196,20 @@ impl<'a> Batch<'a> {
         }
     }
 
+    /// [`finish`](Self::finish) when the run's work came out well. When it
+    /// did not, what is open is rolled back: the failure may have struck
+    /// between two writes that belong together. Either way the store's
+    /// one connection is free after.
+    pub async fn settle(self, result: Result<()>) -> Result<()> {
+        match result {
+            Ok(()) => self.finish().await,
+            Err(e) => {
+                drop(self);
+                Err(e)
+            }
+        }
+    }
+
     async fn hand_over(&mut self, sealer: &Sealer) -> Result<()> {
         self.commit().await?;
         sealer.wrote(std::mem::take(&mut self.unsealed)).await;

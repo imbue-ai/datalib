@@ -27,10 +27,8 @@ pub async fn run(data_root: &Path, now: &str, emitter: &Emitter) -> Result<Vec<O
     let progress = emitter.progress();
     progress.set_message("reading the embeddings");
     let vectors = document_vectors(data_root).await?;
-    // A map that will not parse is a map this build cannot start from.
-    // Saying so and starting afresh loses the old positions, which is the
-    // one thing the file is for, so the step fails and a reset is the
-    // way on.
+    // Prepare deletes a map this build does not read, so one that will
+    // not parse here was damaged since; a reset lays it out afresh.
     let prior = map_file::read(data_root)
         .context("read the previous map; reset this step to lay one out afresh")?
         .map(|m| m.positions())
@@ -128,11 +126,7 @@ struct DocumentVectors {
 }
 
 async fn document_vectors(root: &Path) -> Result<DocumentVectors> {
-    let Some(reader) = datalib_search_index::read::Reader::open(
-        &datalib_runtime::layout::grid_index_db(root),
-        &datalib_runtime::layout::inference_cache_db(root),
-    )
-    .await?
+    let Some(reader) = datalib_unified_grid_and_search_index::search_index::open(root).await?
     else {
         return Ok(DocumentVectors::default());
     };
