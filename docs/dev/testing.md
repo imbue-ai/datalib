@@ -828,6 +828,7 @@ ids are in `runs`. What to look at, and where:
 | is a migration repeating | `msg = 'migrated'` per store, across runs |
 | what is slow to read | `msg LIKE '%slow statement%took %'`, one line per attempt (`top_statement`, `total_ms`), and `msg LIKE 'slow statement%'` at `debug` for each (`db.statement`, `elapsed`); `GET /api/manage/rows` request times; the size of each `-wal` beside its file |
 | which statements walk many rows for few | `msg LIKE '%heavy statement%did%'`, one line per attempt (`top_statement`, `top_file`, `top_params`), and `target = 'datalib::sql_work'` for each (`statement`, `file`, `params`, `vm_steps`, `rows`, `fullscan_steps`). Steps count work, not time, so a cold disk does not move them. |
+| which requests read far more than they answer with | `target = 'http.request'` (debug): `rows_read` beside `bytes`. A high count is right for a cache loaded whole; the ones to look at answer with little ([`logging.md`](logging.md) has the query). |
 | what was left behind | files under each `render_markdown/` against its documents; a directory under the root that no `[[groups]]` names |
 
 ## macOS permissions in the desktop app (by hand)

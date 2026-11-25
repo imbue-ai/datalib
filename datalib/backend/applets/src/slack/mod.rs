@@ -353,42 +353,16 @@ fn handle(
     };
     let header = |name: &str| header_value(&head, name);
 
-    let (status, body) = if !gate.admits(header("host"), header(crate::gate::SECRET_HEADER)) {
-        (
-            401,
-            r#"{"error":"this port answers only to the Datalib gateway"}"#.to_string(),
-        )
-    } else {
-        match path {
-            // Level 1.
-            "/channels" => {
-                let resp = channels_response(tree, workspace);
-                warn(&resp.warnings);
-                (200, serde_json::to_string(&resp)?)
-            }
-            // Level 2: one channel's threads, each with its opening
-            // message. Level 3 is the rendered document itself, which the
-            // card opens through `documentView` — no endpoint needed.
-            "/channel" => match query_param(query, "name") {
-                Some(channel) => {
-                    let resp = channel_response(tree, &channel);
-                    warn(&resp.warnings);
-                    (200, serde_json::to_string(&resp)?)
-                }
-                None => (
-                    400,
-                    serde_json::json!({ "error": "/channel needs ?name=<channel>" }).to_string(),
-                ),
-            },
-            // A readiness probe the gateway may use once it wants something
-            // stronger than "the port accepts".
-            "/health" => (200, r#"{"ok":true}"#.to_string()),
-            _ => (
-                404,
-                serde_json::json!({ "error": format!("no route {path}") }).to_string(),
-            ),
-        }
-    };
+    let (status, body, rows_read) =
+        if !gate.admits(header("host"), header(crate::gate::SECRET_HEADER)) {
+            let refused = r#"{"error":"this port answers only to the Datalib gateway"}"#;
+            (401, refused.to_string(), None)
+        } else {
+            let (answer, rows_read) =
+                datalib_sql_work::counted_blocking(|| answer(tree, workspace, path, query));
+            let (status, body) = answer?;
+            (status, body, rows_read)
+        };
 
     let reason = match status {
         200 => "OK",
@@ -396,13 +370,48 @@ fn handle(
         401 => "Unauthorized",
         _ => "Not Found",
     };
+    let rows_read = rows_read
+        .map(|n| format!("{}: {n}\r\n", datalib_sql_work::ROWS_READ_HEADER))
+        .unwrap_or_default();
     let resp = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{rows_read}Connection: close\r\n\r\n{body}",
         body.len()
     );
     stream.write_all(resp.as_bytes())?;
     stream.flush()?;
     Ok(())
+}
+
+fn answer(tree: &Path, workspace: &str, path: &str, query: &str) -> Result<(u16, String)> {
+    Ok(match path {
+        // Level 1.
+        "/channels" => {
+            let resp = channels_response(tree, workspace);
+            warn(&resp.warnings);
+            (200, serde_json::to_string(&resp)?)
+        }
+        // Level 2: one channel's threads, each with its opening
+        // message. Level 3 is the rendered document itself, which the
+        // card opens through `documentView` — no endpoint needed.
+        "/channel" => match query_param(query, "name") {
+            Some(channel) => {
+                let resp = channel_response(tree, &channel);
+                warn(&resp.warnings);
+                (200, serde_json::to_string(&resp)?)
+            }
+            None => (
+                400,
+                serde_json::json!({ "error": "/channel needs ?name=<channel>" }).to_string(),
+            ),
+        },
+        // A readiness probe the gateway may use once it wants something
+        // stronger than "the port accepts".
+        "/health" => (200, r#"{"ok":true}"#.to_string()),
+        _ => (
+            404,
+            serde_json::json!({ "error": format!("no route {path}") }).to_string(),
+        ),
+    })
 }
 
 /// One header's value out of a raw request head, by case-insensitive
