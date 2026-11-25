@@ -4,7 +4,9 @@
 //! card), drawn as markdown. TRANSLATE.md §"Blocks and attachments" has
 //! the rules.
 
-use datalib_etl_render::html::{escape_md_inline, escape_name_inline, md_link_dest};
+use datalib_etl_render::html::{
+    escape_md_inline, escape_name_inline, md_link_dest, md_quote, safe_url,
+};
 use datalib_etl_render::message::chip_link;
 use datalib_handle::Handle;
 use datalib_html_entities::decode;
@@ -211,16 +213,6 @@ fn list_item(md: &str) -> String {
     format!("- {}", md.replace('\n', "\n  "))
 }
 
-/// Only a web or mail address becomes a link; anything else upstream
-/// names is left as text.
-fn safe_url(url: &str) -> Option<&str> {
-    let lower = url.get(..8).unwrap_or(url).to_ascii_lowercase();
-    ["https://", "http://", "mailto:"]
-        .iter()
-        .any(|scheme| lower.starts_with(scheme))
-        .then_some(url)
-}
-
 /// `[label](url)` where `label` is markdown already.
 fn link(label: &str, url: &str) -> String {
     format!("[{label}]({})", md_link_dest(url))
@@ -313,7 +305,7 @@ fn draw_attachment(a: &Value, labels: Labels<'_>, not_shown: &mut Vec<String>) -
             }
         }
     }
-    let quoted = quote(&parts.join("\n\n"));
+    let quoted = md_quote(&parts.join("\n\n"));
     let pretext = str_of(a, "pretext").map(|p| to_commonmark(p, labels));
     Some(match pretext {
         Some(p) => format!("{p}\n\n{quoted}"),
@@ -351,21 +343,6 @@ fn field(f: &Value, labels: Labels<'_>) -> Option<String> {
         (None, None) => return None,
     };
     Some(list_item(&md))
-}
-
-/// `md` as a blockquote, every line of it, so a blank line inside does
-/// not end the quote.
-fn quote(md: &str) -> String {
-    md.lines()
-        .map(|line| {
-            if line.is_empty() {
-                ">".to_string()
-            } else {
-                format!("> {line}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 #[cfg(test)]

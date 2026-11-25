@@ -1,0 +1,26 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# A store's tables as the text of a golden, one row a line. Only tests
+# link it.
+rust_library(
+    name = "datalib_store_dump",
+    testonly = True,
+    srcs = ["src/lib.rs"],
+    crate_name = "datalib_store_dump",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/sqlite_open:datalib_sqlite_open",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+    ],
+)
+
+rust_test(
+    name = "store_dump_unittests",
+    size = "small",
+    crate = ":datalib_store_dump",
+    edition = "2021",
+)

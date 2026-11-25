@@ -10,7 +10,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
+use datalib_etl_web::http::{
+    default_retryability, latchkey_curl_classified, HttpError, HttpRequest, HttpResponse,
+    HttpService, LatchkeySettings, Retryability,
+};
 
 use super::fields;
 
@@ -22,7 +25,8 @@ pub enum LinearError {
     /// The credential was refused: nothing else this run asks will work.
     #[error("unauthorized: {0}")]
     Unauthorized(String),
-    /// Linear's hourly budget is spent; it refills on the hour.
+    /// Linear refused the request for its rate limit and named no wait,
+    /// so nothing says when sending again would be admitted.
     #[error("rate limited: {0}")]
     RateLimited(String),
     /// The shared retry guard gave up on the service.
@@ -141,16 +145,89 @@ pub fn read_page(data: &Value, path: &[&str]) -> Result<Page, LinearError> {
     })
 }
 
+/// Linear refusing a request for its rate limit: a 429, or a GraphQL
+/// error coded `RATELIMITED` under any status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RateLimitRefusal {
+    /// The `Retry-After` header as sent, when there was one.
+    pub retry_after_header: Option<String>,
+    /// That header in seconds, when it was a whole number.
+    pub retry_after: Option<Duration>,
+}
+
+pub fn rate_limit_refusal(resp: &HttpResponse) -> Option<RateLimitRefusal> {
+    let refused = resp.status == 429 || (resp.status != 200 && names_ratelimited(&resp.body));
+    if !refused {
+        return None;
+    }
+    let header = resp.header("retry-after").map(|h| h.trim().to_string());
+    Some(RateLimitRefusal {
+        retry_after: header
+            .as_deref()
+            .and_then(|h| h.parse::<u64>().ok())
+            .map(Duration::from_secs),
+        retry_after_header: header,
+    })
+}
+
+fn names_ratelimited(body: &[u8]) -> bool {
+    serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|v| v.get("errors").and_then(Value::as_array).cloned())
+        .is_some_and(|errors| errors.iter().any(|e| error_code(e) == "RATELIMITED"))
+}
+
+/// A refusal is retried after exactly the wait its `Retry-After` names,
+/// however long; the shared loop would otherwise cap it at ten minutes and
+/// send again into another refusal. A refusal naming no wait in seconds is
+/// handed back, and [`LinearClient::query`] ends the run with it.
+pub fn linear_retryability(resp: &HttpResponse) -> Retryability {
+    match rate_limit_refusal(resp) {
+        Some(RateLimitRefusal {
+            retry_after: Some(wait),
+            ..
+        }) => Retryability::RetryAfterUncapped(wait),
+        Some(_) => Retryability::Accept,
+        None => default_retryability(resp),
+    }
+}
+
+fn refusal_message(refusal: &RateLimitRefusal, said: &str) -> String {
+    let header = match &refusal.retry_after_header {
+        Some(h) => format!("Retry-After: {h:?}"),
+        None => "no Retry-After".to_string(),
+    };
+    format!(
+        "Linear refused a request for its rate limit and named no wait in seconds ({header}): \
+         {said}"
+    )
+}
+
 /// What a GraphQL `errors` array means. Linear answers a spent budget
 /// and a refused credential as errors with a code, under HTTP 400 as
 /// often as under 429 or 401.
 pub fn classify_errors(errors: &[Value]) -> LinearError {
-    let code = |e: &Value| {
-        e.pointer("/extensions/code")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string()
-    };
+    let said = describe_errors(errors);
+    if errors.iter().any(|e| error_code(e) == "RATELIMITED") {
+        LinearError::RateLimited(said)
+    } else if errors
+        .iter()
+        .any(|e| matches!(error_code(e), "AUTHENTICATION_ERROR" | "FORBIDDEN"))
+    {
+        LinearError::Unauthorized(said)
+    } else {
+        LinearError::Permanent(said)
+    }
+}
+
+fn error_code(e: &Value) -> &str {
+    e.pointer("/extensions/code")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+}
+
+/// Each error's message and code, as one line.
+fn describe_errors(errors: &[Value]) -> String {
     let said: Vec<String> = errors
         .iter()
         .map(|e| {
@@ -159,20 +236,10 @@ pub fn classify_errors(errors: &[Value]) -> LinearError {
                 .or_else(|| e.get("message"))
                 .and_then(Value::as_str)
                 .unwrap_or("(no message)");
-            format!("{msg} [{}]", code(e))
+            format!("{msg} [{}]", error_code(e))
         })
         .collect();
-    let said = said.join("; ");
-    if errors.iter().any(|e| code(e) == "RATELIMITED") {
-        LinearError::RateLimited(said)
-    } else if errors
-        .iter()
-        .any(|e| matches!(code(e).as_str(), "AUTHENTICATION_ERROR" | "FORBIDDEN"))
-    {
-        LinearError::Unauthorized(said)
-    } else {
-        LinearError::Permanent(said)
-    }
+    said.join("; ")
 }
 
 pub struct LinearClient {
@@ -196,25 +263,32 @@ impl LinearClient {
             .header("Accept", "application/json")
             .latchkey(self.latchkey.clone())
             .timeout(TIMEOUT);
-        let resp = latchkey_curl(&req).await.map_err(|e: HttpError| match e {
-            HttpError::GaveUp { .. } => LinearError::GaveUp(e.to_string()),
-            e => LinearError::Transport(e),
-        })?;
+        let resp = latchkey_curl_classified(&req, linear_retryability)
+            .await
+            .map_err(|e: HttpError| match e {
+                HttpError::GaveUp { .. } => LinearError::GaveUp(e.to_string()),
+                e => LinearError::Transport(e),
+            })?;
         self.requests.fetch_add(1, Ordering::Relaxed);
         let text = resp.body_str();
         let parsed: Option<Value> = serde_json::from_str(&text).ok();
-        if let Some(errors) = parsed
+        let errors = parsed
             .as_ref()
             .and_then(|v| v.get("errors"))
-            .and_then(Value::as_array)
-            .filter(|e| !e.is_empty())
-        {
+            .and_then(Value::as_array);
+        if let Some(refusal) = rate_limit_refusal(&resp) {
+            let said = match errors.filter(|e| !e.is_empty()) {
+                Some(errors) => describe_errors(errors),
+                None => format!("HTTP {}", resp.status),
+            };
+            return Err(LinearError::RateLimited(refusal_message(&refusal, &said)));
+        }
+        if let Some(errors) = errors.filter(|e| !e.is_empty()) {
             return Err(classify_errors(errors));
         }
         match resp.status {
             200 => {}
             401 => return Err(LinearError::Unauthorized("HTTP 401".into())),
-            429 => return Err(LinearError::RateLimited("HTTP 429".into())),
             status => {
                 let preview: String = text.chars().take(300).collect();
                 return Err(LinearError::Permanent(format!(
@@ -338,5 +412,74 @@ mod tests {
             "extensions": {"code": "GRAPHQL_VALIDATION_FAILED"}})]);
         assert!(!bad.ends_the_run());
         assert!(bad.to_string().contains("Cannot query field"), "{bad}");
+    }
+
+    fn answer(status: u16, body: Value, retry_after: Option<&str>) -> HttpResponse {
+        HttpResponse {
+            status,
+            headers: retry_after
+                .map(|v| ("retry-after".to_string(), v.to_string()))
+                .into_iter()
+                .collect(),
+            body: body.to_string().into_bytes(),
+            duration_ms: 0,
+        }
+    }
+
+    fn ratelimited() -> Value {
+        json!({"errors": [{"message": "Rate limit exceeded: too many requests in the last hour.",
+            "extensions": {"code": "RATELIMITED"}}]})
+    }
+
+    /// Every 429 was retried by the shared loop after at most ten minutes,
+    /// so a refusal that asked for longer was sent again into another.
+    #[test]
+    fn a_rate_limit_refusal_is_retried_after_the_whole_wait_it_names() {
+        for (status, wait) in [(429, "2"), (400, "60"), (429, "720"), (429, "3600")] {
+            assert_eq!(
+                linear_retryability(&answer(status, ratelimited(), Some(wait))),
+                Retryability::RetryAfterUncapped(Duration::from_secs(wait.parse().unwrap())),
+                "{status} {wait}"
+            );
+        }
+        for no_wait in [
+            answer(429, ratelimited(), None),
+            answer(400, ratelimited(), None),
+            answer(429, json!({}), Some("Wed, 21 Oct 2015 07:28:00 GMT")),
+        ] {
+            assert_eq!(
+                linear_retryability(&no_wait),
+                Retryability::Accept,
+                "{no_wait:?}"
+            );
+            assert!(rate_limit_refusal(&no_wait).is_some(), "{no_wait:?}");
+        }
+        assert_eq!(
+            linear_retryability(&answer(503, json!({}), None)),
+            Retryability::Retry { retry_after: None }
+        );
+    }
+
+    /// A query past Linear's per-query maximum never fits, so waiting
+    /// cannot help: it fails that page and the run goes on.
+    #[test]
+    fn a_query_too_complex_is_neither_retried_nor_a_rate_limit() {
+        let body = json!({"errors": [{"message": "Query too complex",
+            "extensions": {"code": "INPUT_ERROR", "userPresentableMessage":
+            "The query is too complex. Complexity: 12000. Maximum allowed complexity: 10000."}}]});
+        let resp = answer(400, body.clone(), None);
+        assert_eq!(linear_retryability(&resp), Retryability::Accept);
+        assert_eq!(rate_limit_refusal(&resp), None);
+        let e = classify_errors(body["errors"].as_array().unwrap());
+        assert!(matches!(e, LinearError::Permanent(_)), "{e}");
+        assert!(!e.ends_the_run());
+    }
+
+    #[test]
+    fn a_refusal_naming_no_wait_says_what_it_sent() {
+        let refusal = rate_limit_refusal(&answer(429, ratelimited(), Some("soon"))).unwrap();
+        let said = refusal_message(&refusal, "Rate limit exceeded [RATELIMITED]");
+        assert!(said.contains(r#"Retry-After: "soon""#), "{said}");
+        assert!(said.contains("[RATELIMITED]"), "{said}");
     }
 }

@@ -37,11 +37,12 @@ use datalib_etl::upstream::Upstream;
 use datalib_etl_web::coverage::{self, Span};
 use datalib_etl_web::http::LatchkeySettings;
 use datalib_etl_web::owed::{self, BatchError, Fetched, Fetcher, Listed, Outcome};
+use datalib_etl_web::owed_files::File;
 pub use db::{
     block_on_load_all, db_path_for, Enumerated, FetchTarget, LoadedMessage, LoadedRaw,
     MessageInput, OwedFile, RawDb, Thread, UserDirectoryEntry,
 };
-use files::{File, FileFetcher, FILE_BATCH};
+use files::{FileFetcher, FILE_BATCH};
 use frontier::{Frontier, Next, Walk};
 use involving::{InvolvingSearch, InvolvingTotals, Query};
 use reply_search::{ReplySearch, ReplySearchTotals, SEARCH_LAG};

@@ -326,6 +326,7 @@ mod tests {
         let worf = Handle::tel("+15550104040").unwrap();
         let mut item = by(Some(&picard), "Jean-Luc Picard", 1);
         let react = |handle: Option<&Handle>, who: &str| NormalizedReaction {
+            count: 1,
             reaction_uuid: format!("r-{who}"),
             reactor_handle: handle.cloned(),
             reactor_kind: AuthorKind::Named,
@@ -361,6 +362,7 @@ mod tests {
         let orphans = vec![OrphanReactions {
             target_native_id: "gone".to_string(),
             reactions: vec![NormalizedReaction {
+                count: 1,
                 reaction_uuid: "r-worf".to_string(),
                 reactor_handle: Some(worf.clone()),
                 reactor_kind: AuthorKind::Named,

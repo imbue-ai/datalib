@@ -157,6 +157,14 @@ async fn hold_open_lock(path: &Path) -> Option<FileLock> {
     }
 }
 
+/// Make the store under `data_root` in this build's shape, and close it:
+/// for a process that will read it while another writes, so neither
+/// meets a file half made.
+pub async fn prepare_store(data_root: &Path) -> Result<(), sqlx::Error> {
+    open_or_recreate(&runs_path(data_root)).await?.close().await;
+    Ok(())
+}
+
 /// Open the store and make sure its schema is there, emptying a file
 /// that will not read or was written by another schema version, after
 /// keeping a copy of it. `synchronous=Off` means an OS crash can leave

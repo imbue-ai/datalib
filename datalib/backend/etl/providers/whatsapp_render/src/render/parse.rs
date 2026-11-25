@@ -379,6 +379,7 @@ async fn parse_async(
             .entry(parent.clone())
             .or_default()
             .push(NormalizedReaction {
+                count: 1,
                 reaction_uuid: id.uuid,
                 reactor_handle: reactor.as_deref().and_then(|j| names.handle(j)),
                 reactor_kind,

@@ -538,17 +538,7 @@ async fn download(api: &dyn Api, opts: FetchOptions, found: RunProblems) -> Resu
     };
     let mut s = FetchSummary::default();
     let result = phases(&mut ctx, &mut s).await;
-    // What failed may have struck between two writes that belong
-    // together, so it is rolled back; the batch frees the store's one
-    // connection either way before the run's record is written.
-    let Ctx { writes, .. } = ctx;
-    let result = match result {
-        Ok(()) => writes.finish().await,
-        Err(e) => {
-            drop(writes);
-            Err(e)
-        }
-    };
+    let result = ctx.writes.settle(result).await;
     s.requests = api.requests();
     run.finish(found.ended_early(), &result, &s).await;
     result.map(|()| s)
@@ -583,11 +573,19 @@ async fn phases(ctx: &mut Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
                 ended.0
             ),
         ),
-        _ => RunProblem::phase(
+        LinearError::RateLimited(_) => RunProblem::phase(
             "rate_limit",
             format!(
-                "Linear's hourly request budget ran out, so the run stopped; the next run \
-                 carries on from where this one got to: {}",
+                "Linear's rate limit refused a request without saying how long to wait, so \
+                 the run stopped; the next run carries on from where this one got to: {}",
+                ended.0
+            ),
+        ),
+        _ => RunProblem::phase(
+            "gave_up",
+            format!(
+                "Linear kept failing, so the run stopped; the next run carries on from where \
+                 this one got to: {}",
                 ended.0
             ),
         ),

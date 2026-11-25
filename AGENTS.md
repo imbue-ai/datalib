@@ -310,6 +310,8 @@ datalib/
     uuid_text/     a uuid read however it is written (dashed or not,
                    either case, at the end of a slug or a link) and
                    written lowercase with dashes; the one reader. No deps.
+    store_dump/    a store's tables as the text of a golden, one row a
+                   line; only tests link it.
     contact_schema/ `NormalizedContact`: a person as one source describes
                    them. Only the shape; contact-common renders it.
     photo_schema/  `NormalizedPhoto`: a photo or video as one source
@@ -414,9 +416,11 @@ last run and success, each sink's version — is in
 config entry the loader cannot use costs that entry and nothing else;
 `datalib-pipeline check <config>` says what went and why. A config the app
 cannot serve anything from comes back as `app_ready: false` and the UI
-shows `ConfigErrorView`, live in both directions. The http server runs
-the loop `datalib-pipeline serve` runs, in-process (`dag/src/supervisor/serve.rs`,
-called from `http/src/supervisor.rs`), holding `runner-lock` for its life; a sync, a stop, a step turned off is a row it writes
+shows `ConfigErrorView`, live in both directions. The http server keeps
+`datalib-pipeline serve` running as a child for its life
+(`http/src/supervisor.rs`), which holds `runner-lock` and runs the loop
+(`dag/src/supervisor/serve.rs`), and hears what no store holds from the
+child's stderr; a sync, a stop, a step turned off is a row the server writes
 there (`POST /api/requests`, `/api/steps/<id>/turn_off`); the Manage tab
 edits the config; a root with no config gets the launcher and the
 first-run screen, which writes Datalib's starter config

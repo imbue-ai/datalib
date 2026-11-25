@@ -261,8 +261,9 @@ pub struct ManageResponse {
     pub storage: RootStorage,
     pub rows: Vec<ManageRow>,
     /// Why no sync can be opened from this screen right now, when one
-    /// cannot: the launch is updating the stores for this build. Every
-    /// row's Sync says the same.
+    /// cannot: the launch is updating the stores for this build, or the
+    /// runner is missing or keeps stopping. Every row's Sync says the
+    /// same.
     pub sync_paused: Option<String>,
 }
 
@@ -394,11 +395,13 @@ async fn manage_rows(s: &AppState) -> Result<(ManageResponse, Took), crate::Refu
     let applet_errors = s.applets.frontend_view().applet_errors;
 
     let raw_stores = raw_stores(&storage.outputs);
+    let trouble = s.sync.trouble();
     let sync_paused = s
         .sync
         .upgrade()
         .migrating
-        .then_some(buttons::SYNC_PAUSED_FOR_UPGRADE);
+        .then_some(buttons::SYNC_PAUSED_FOR_UPGRADE)
+        .or(trouble.as_deref());
     let rows = Snapshot {
         written: &written,
         diagnostics: &diagnostics,
@@ -542,7 +545,7 @@ struct Snapshot<'a> {
     raw_stores: &'a HashMap<String, String>,
     applet_errors: &'a std::collections::BTreeMap<String, String>,
     /// Why every Sync is disabled, over whatever each row would offer.
-    sync_paused: Option<&'static str>,
+    sync_paused: Option<&'a str>,
 }
 
 /// A step or applet as written, in the one shape the group rules read.

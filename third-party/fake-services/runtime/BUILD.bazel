@@ -1,0 +1,22 @@
+load("@npm_fake_services//:defs.bzl", "npm_link_all_packages")
+
+# The fake-services launcher's packages, materialized from pnpm-lock.yaml:
+# every tarball is integrity-checked and no install script runs.
+npm_link_all_packages(name = "node_modules")
+
+# A package dir inside the store: an anchor a test can `rlocation` and walk
+# up from to find the store root, which it links as the launcher's
+# `node_modules`.
+alias(
+    name = "emulators_core_package_dir",
+    actual = "node_modules/@emulators/core/dir",
+    visibility = ["//visibility:public"],
+)
+
+# The ENTIRE package store: each package resolves its dependencies from
+# directories inside `node_modules/.aspect_rules_js/`.
+alias(
+    name = "fake_services_tree",
+    actual = ":node_modules",
+    visibility = ["//visibility:public"],
+)

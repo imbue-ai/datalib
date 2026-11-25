@@ -72,6 +72,7 @@ why.
 | `email:riker@enterprise.org` | an address, lowercased |
 | `tel:+12025550101` | a number with its country code, `+` and digits only |
 | `slack:T01/U02` | a Slack user, by workspace and user id |
+| `discord:<id>` | a Discord account, by its user id |
 | `signal_aci:<uuid>` | a Signal account known by no number |
 | `github:<login>`, `linkedin:<slug>` | those accounts |
 

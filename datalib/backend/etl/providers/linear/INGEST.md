@@ -117,6 +117,36 @@ Linear's budget is 2,500 requests and 3,000,000 complexity points an
 hour per user. No single query may cost more than 10,000 points. The
 largest page here (50 projects with their members) costs about 2,400.
 
+### Linear's rate limit
+
+Each budget is a leaky bucket: it holds up to the hourly limit and
+drains at the hourly rate, about 0.7 requests and 830 points a second.
+A request past either is refused with HTTP 429, a GraphQL error whose
+`extensions.code` is `RATELIMITED`, a `Retry-After` in seconds, and
+`X-RateLimit-*` headers. (A `RATELIMITED` error under another status
+is read the same way.) Since the bucket drains continuously, the wait
+is how long until there is room for this one request: about a second
+for the request budget, up to about 12 seconds for the most complex
+query allowed.
+
+What the download does with a refusal (`linear_retryability` in
+`ingest/client.rs`):
+
+- **A `Retry-After` in seconds is waited out exactly, however long**,
+  and the request is sent again. The shared retry loop caps every other
+  source's wait at ten minutes; Linear asks for its wait uncapped
+  (`Retryability::RetryAfterUncapped`), since sending before the named
+  time only meets another refusal. A stop still ends the wait at once.
+- **A refusal with no `Retry-After` in seconds** ends the run, since
+  nothing says when a retry would be admitted. What the run fetched is
+  kept, the step ends `incomplete` with a `rate_limit` problem, and the
+  next sync carries on from where this one got to (see §"Incremental
+  updates").
+
+A query past 10,000 points is not a rate limit: Linear answers HTTP 400
+with `INPUT_ERROR` ("Query too complex"), and waiting never admits it.
+It fails that one page as any other error does.
+
 ### One transaction between two seals
 
 The whole run writes through one `datalib_etl::raw_store::Batch`,
@@ -170,7 +200,7 @@ Each table's list is beside it in `ingest/schema_raw.rs`:
   derived counts (`issueCount`, `customerTicketCount`, `resourceCount`,
   `commentCount`).
 - A person's status and `lastSeen`; a project update's `isStale`, which
-  turns true with time alone; a comment's AI `threadSummary`.
+  turns true with time alone.
 
 Id lists Linear returns in no promised order (`labelIds`, and any
 `{ nodes: [{ id }] }` connection) are sorted before storing

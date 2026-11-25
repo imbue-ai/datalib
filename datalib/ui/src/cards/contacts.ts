@@ -62,6 +62,7 @@ export type HandleKind =
   | "email"
   | "tel"
   | "slack"
+  | "discord"
   | "signal_aci"
   | "facebook"
   | "linkedin"
@@ -78,6 +79,7 @@ export function handleKind(handle: string): HandleKind | null {
   return kind === "email" ||
     kind === "tel" ||
     kind === "slack" ||
+    kind === "discord" ||
     kind === "signal_aci" ||
     kind === "facebook" ||
     kind === "linkedin" ||
@@ -100,6 +102,7 @@ const KIND_ICON: Record<HandleKind, string> = {
   email: "email",
   tel: "sms",
   slack: "slack",
+  discord: "discord",
   signal_aci: "signal",
   facebook: "facebook",
   linkedin: "linkedin",

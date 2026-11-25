@@ -57,7 +57,7 @@ impl SourceRender for SlackRender {
     }
 
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
-        use crate::render::render::{render_all, render_store, PageEnd};
+        use crate::render::render::{render_all, render_store};
         use crate::render::{open, parse_raw_json_dir};
 
         let Some(store) = open(raw_path, ctx.name, ctx.raw_range())
@@ -78,24 +78,14 @@ impl SourceRender for SlackRender {
             ctx.declare_render_units(&summary.render_units)?;
             return Ok("rendered".into());
         };
-        // A thread this run looked at that has no message left builds no
-        // chat, so chat-common never sees it: declared with nothing, its
-        // documents go. The rendered ones follow and replace that. Each
-        // page is declared before the next is read.
         let mut unparsed = store.unparsed.clone();
-        let mut on_page = |page: PageEnd| -> Result<()> {
-            ctx.declare_empty(page.looked_at.iter().map(String::as_str))?;
-            ctx.declare_render_units(&page.render_units)?;
-            unparsed.extend(page.unparsed);
-            Ok(())
-        };
         let rendered = render_store(
             &store,
             ctx.name,
             ctx.page_size,
             ctx.progress,
             &mut |md| ctx.emit_doc(md),
-            &mut on_page,
+            &mut |page| page.declare(ctx, &mut unparsed),
         )
         .context("slack render");
         let narrowed = store.scan.render.is_some();

@@ -681,8 +681,13 @@ function paramEntries(
   for (const field of fieldsFor(entry, phase)) {
     if (!fieldIsActive(field, values)) continue;
     const value = values[field.target];
-    if (!isSet(field, value)) continue;
-    out.push({ target: field.target, value, field });
+    if (isSet(field, value)) {
+      out.push({ target: field.target, value, field });
+    } else if (field.kind === "text" && field.envVar) {
+      // The runner hands a step only the variables its params name
+      // (docs/dev/step_protocol.md), so the default is written out.
+      out.push({ target: field.target, value: field.envVar.default, field });
+    }
   }
   return out;
 }
@@ -987,9 +992,10 @@ const LOCK_OF_FUNCTION: Record<string, string> = {
 export const LOCK_SLOTS: Record<string, number> = { embedder: 1, index: 2 };
 
 /// `reads` and `locks` for a step, by the rules `datalib-http`'s config
-/// upgrade writes (docs/dev/config_model.md §"The retired shapes"). A `datalib-step` step other than `ingest` gets both whether
-/// or not its inputs are empty yet (a fan-in's are, until a source is
-/// added); any other step only once it has inputs.
+/// upgrade writes (docs/dev/config_model.md §"The retired shapes"). A
+/// `datalib-step` step other than `ingest` gets both whether or not its
+/// inputs are empty yet (a fan-in's are, until a source is added); any
+/// other step only once it has inputs.
 function schedulingLines(opts: {
   fn: string;
   type: string | null;

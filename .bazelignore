@@ -2,6 +2,7 @@ datalib/ui/node_modules
 tools/lint/node_modules
 third-party/latchkey/runtime/node_modules
 third-party/modal/runtime/node_modules
+third-party/fake-services/runtime/node_modules
 third-party/vscode-tree/node_modules
 datalib/ui/dist
 datalib/backend/target
