@@ -183,7 +183,7 @@ test("a tab the person renames keeps its name after a reload", async ({ page }) 
   await expect(tabs(page).nth(4)).toContainText("My reading");
 
   await expect
-    .poll(async () => (await savedTabs(page))?.[3]?.name, { timeout: 10_000 })
+    .poll(async () => (await savedTabs(page))?.[4]?.name, { timeout: 10_000 })
     .toBe("My reading");
   await page.reload();
   // The card names itself again as it mounts; the person's name stays.

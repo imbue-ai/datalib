@@ -384,12 +384,12 @@ const headPhoto = computed(() => {
           class="person-name"
           :ref="(el) => drawInto(el, props.handle, model.title, 'person', version)"
         ></h1>
-        <p class="person-about">
+        <p v-if="model.mine || canAdd" class="person-about">
           <template v-if="model.mine">
             In your contacts · known to {{ model.sections.length }}
             {{ model.sections.length === 1 ? "source" : "sources" }}
           </template>
-          <template v-else-if="canAdd">Not in your contacts</template>
+          <template v-else>Not in your contacts</template>
         </p>
         <div class="person-actions">
           <button type="button" class="person-button" @click.stop="everything">
