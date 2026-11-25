@@ -161,6 +161,8 @@ _E2E_DATA = [
     # file-backed, no network, no credentials, and read-only against the
     # tree it scans (`stamp` defaults off).
     "//datalib/backend/datalib_step:datalib_step",
+    # The runner each backend keeps as a child, found in the bin stage.
+    "//datalib/backend/dag:datalib_pipeline_bin",
     # A local PDF corpus for that same spec. `pdf` is the local-only
     # provider that has BOTH halves — download and render — so a config
     # built on it exercises a real `raw -> rendered_md` edge, which is
@@ -210,6 +212,7 @@ _E2E_ENV = {
     # run_e2e.sh spawns.
     "DATALIB_MODELS_NO_FETCH": "1",
     "DATALIB_TEST_E2E_STEP_BIN_RLOC": "$(rlocationpath //datalib/backend/datalib_step:datalib_step)",
+    "DATALIB_TEST_E2E_PIPELINE_BIN_RLOC": "$(rlocationpath //datalib/backend/dag:datalib_pipeline_bin)",
 }
 
 _E2E_DEPS = ["@bazel_tools//tools/bash/runfiles"]
