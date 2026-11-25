@@ -1332,6 +1332,25 @@ async fn process_lines_past_the_cap_go_oldest_first() {
     );
 }
 
+/// The two retention passes over the lines outside any run read every one
+/// they keep, so each open of a root with many warned of a heavy statement.
+#[tokio::test]
+async fn retention_of_the_lines_outside_a_run_is_marked_as_walking_by_design() {
+    let td = tempfile::tempdir().unwrap();
+    let recording = datalib_sql_work::record_under(td.path());
+    drop(ProcessLogWriter::start(td.path(), Process::Http, None, Retention::default()).unwrap());
+    let prunes: Vec<String> = recording
+        .take()
+        .into_iter()
+        .map(|ran| ran.sql)
+        .filter(|sql| sql.starts_with("DELETE FROM log") && sql.contains("run_id IS NULL"))
+        .collect();
+    assert_eq!(prunes.len(), 2, "{prunes:#?}");
+    for sql in prunes {
+        assert!(datalib_sql_work::judge::walks_by_design(&sql), "{sql}");
+    }
+}
+
 /// Every write counts itself under the part of the store it touched,
 /// and a run's log lines count apart from the server's — that is what
 /// lets a watcher wake the Manage screen for one and not the other.

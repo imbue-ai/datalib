@@ -373,8 +373,8 @@ pub async fn read(path: &Path) -> Result<Vec<ProblemRow>> {
 struct Held {
     rows: Vec<ProblemRow>,
     items: Vec<(String, String)>,
-    /// Its `problems` is in another shape than this build reads: its step
-    /// writes it in this shape when it runs again.
+    /// What it holds of these is in another shape than this build reads:
+    /// its step writes it in this shape when it runs again.
     other_shape: bool,
 }
 
@@ -402,6 +402,12 @@ async fn read_with(path: &Path, opts: SqliteConnectOptions) -> Result<Held> {
             held.other_shape = true;
             return anyhow::Ok(held);
         }
+        // The render store's own tables have no version of their own to read
+        // here, and this crate sits below the one that knows their shape.
+        if kind == datalib_store_meta::StoreKind::Render && !has_entity_items(&pool).await? {
+            held.other_shape = true;
+            return anyhow::Ok(held);
+        }
         held.rows = sqlx::query("SELECT * FROM problems ORDER BY scope_key, problem_uuid")
             .fetch_all(&pool)
             .await?
@@ -421,6 +427,15 @@ async fn read_with(path: &Path, opts: SqliteConnectOptions) -> Result<Held> {
     .with_context(|| format!("read the problems in {}", path.display()));
     pool.close().await;
     held
+}
+
+async fn has_entity_items(pool: &SqlitePool) -> Result<bool> {
+    let n: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'entity_items'",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(n > 0)
 }
 
 /// What a file looked like when it was read: its modification time and

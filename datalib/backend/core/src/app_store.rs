@@ -9,7 +9,7 @@ use app_schema::disk_usage::DiskUsageRow;
 use app_schema::remote_media::allow::RemoteMediaAllowRow;
 use app_schema::remote_media::media::RemoteMediaRow;
 use app_schema::remote_media::{AllowScope, DDL as REMOTE_MEDIA_DDL};
-use app_schema::DISK_STATS_DDL;
+use app_schema::{DISK_STATS_DDL, DISK_STATS_INDEXES};
 use async_trait::async_trait;
 use datalib_store_meta::StoreKind;
 use sqlx::sqlite::SqlitePool;
@@ -77,17 +77,27 @@ impl AppStore {
         // is committed per row with `-Am`, so a changed meta row is
         // sealed here rather than left to ride into the next commit; disk
         // stats is plain SQLite and its rows just land.
-        for (pool, kind, ddl) in [
-            (&store.disk_stats_pool, StoreKind::DiskStats, DISK_STATS_DDL),
+        for (pool, kind, ddl, indexes) in [
+            (
+                &store.disk_stats_pool,
+                StoreKind::DiskStats,
+                DISK_STATS_DDL,
+                DISK_STATS_INDEXES,
+            ),
             (
                 &store.remote_media_pool,
                 StoreKind::RemoteMedia,
                 REMOTE_MEDIA_DDL,
+                &[],
             ),
         ] {
-            let shape = datalib_store_meta::Shape::of_tables(datalib_store_meta::schema_hash(
-                ddl.iter().map(|(_t, d)| *d),
-            ));
+            let hash = |ddl: &[(&'static str, &'static str)]| {
+                datalib_store_meta::schema_hash(ddl.iter().map(|(_t, d)| *d))
+            };
+            let shape = datalib_store_meta::Shape {
+                indexes: (!indexes.is_empty()).then(|| hash(indexes)),
+                ..datalib_store_meta::Shape::of_tables(hash(ddl))
+            };
             let changed = datalib_store_meta::write(pool, kind, &shape)
                 .await
                 .map_err(internal)?;
@@ -124,7 +134,7 @@ impl AppStore {
         Ok(())
     }
     async fn init_disk_stats_tables(&self) -> Result<(), sqlx::Error> {
-        for (_table, ddl) in DISK_STATS_DDL {
+        for (_table, ddl) in DISK_STATS_DDL.iter().chain(DISK_STATS_INDEXES) {
             sqlx::query(*ddl).execute(&self.disk_stats_pool).await?;
         }
         Ok(())
@@ -180,7 +190,8 @@ impl AppRepo for AppStore {
         // the cutoff on: the carry-in any range after it opens with
         // (`disk_usage_between`), for a tree that has not moved since.
         let usage = sqlx::query(
-            "DELETE FROM disk_usage WHERE measured_at_utc < ? AND EXISTS ( \
+            "DELETE FROM disk_usage INDEXED BY disk_usage_by_time \
+             WHERE measured_at_utc < ? AND EXISTS ( \
                SELECT 1 FROM disk_usage AS later WHERE later.path = disk_usage.path \
                AND later.measured_at_utc > disk_usage.measured_at_utc \
                AND later.measured_at_utc <= ?)",
@@ -204,7 +215,8 @@ impl AppRepo for AppStore {
 
     async fn recent_disk_usage(&self, limit: usize) -> Result<Vec<DiskUsageRow>, RepoError> {
         let rows = sqlx::query(
-            "SELECT path, measured_at_utc, tz_offset, bytes FROM disk_usage \
+            "SELECT path, measured_at_utc, tz_offset, bytes \
+             FROM disk_usage INDEXED BY disk_usage_by_time \
              ORDER BY measured_at_utc DESC LIMIT ?",
         )
         .bind(limit as i64)
@@ -671,6 +683,42 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(again, 0, "a second pass over the same cutoff drops nothing");
+    }
+
+    /// A start of the server reads the newest samples and forgets the old
+    /// ones. Both read every sample kept (154k on one library) until there
+    /// was an index on the time.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_start_reads_no_more_samples_for_there_being_many() {
+        const CUTOFF: &str = "2026-09-01T00:00:00.000000+00:00";
+        let steps = |samples: i64| async move {
+            let td = tempfile::tempdir().unwrap();
+            let recording = datalib_sql_work::record_under(td.path());
+            let store = AppStore::open(td.path()).await.unwrap();
+            sqlx::query(
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?) \
+                 INSERT INTO disk_usage (path, measured_at_utc, bytes) \
+                 SELECT 'step-' || (i % 40), printf('2026-09-02T00:00:00.%09d+00:00', i), i FROM n",
+            )
+            .bind(samples)
+            .execute(&store.disk_stats_pool)
+            .await
+            .unwrap();
+            recording.take();
+            assert_eq!(store.forget_disk_stats_before(CUTOFF).await.unwrap(), 0);
+            assert_eq!(store.recent_disk_usage(50).await.unwrap().len(), 50);
+            let ran: Vec<_> = recording
+                .take()
+                .into_iter()
+                .filter(|r| r.sql.contains("disk_usage"))
+                .collect();
+            assert_eq!(ran.len(), 2, "{ran:#?}");
+            ran.iter().map(|r| r.work.vm_steps).collect::<Vec<_>>()
+        };
+        let (few, many) = (steps(500).await, steps(20_000).await);
+        for (few, many) in few.iter().zip(&many) {
+            assert!(*many <= 2 * few + 100, "few {few}, many {many}");
+        }
     }
 
     /// A row stored without an offset reads back as `None`, not `Some("")`:
