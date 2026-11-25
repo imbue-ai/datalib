@@ -22,6 +22,8 @@ async fn store(dir: &std::path::Path) -> sqlx::SqlitePool {
     install();
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
         .connect_with(datalib_sqlite_open::file(&dir.join("s.sqlite")).create_if_missing(true))
         .await
         .unwrap();
