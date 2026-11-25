@@ -396,8 +396,7 @@ impl Building<'_> {
                 None => (name.to_string(), name.to_string()),
             };
             let count = r.get("count").and_then(Value::as_u64).unwrap_or(1);
-            let mine = r.get("me").and_then(Value::as_bool) == Some(true)
-                || r.get("me_burst").and_then(Value::as_bool) == Some(true);
+            let mine = is_mine(r);
             let mut push = |who: &str, display: String, kind, handle, count: u64| {
                 let id = ids::reaction(self.source_id, &m.id, &key, who);
                 out.push(NormalizedReaction {
@@ -435,7 +434,8 @@ impl Building<'_> {
         out
     }
 
-    /// Each author as Discord describes them.
+    /// Each author, and the account where it reacted, as Discord describes
+    /// them.
     fn contacts(
         &self,
         messages: &[Message],
@@ -448,11 +448,19 @@ impl Building<'_> {
         let my_address = account
             .and_then(|(_, label)| label.as_deref())
             .and_then(Handle::email);
-        let mut seen: HashSet<&str> = HashSet::new();
-        messages
+        let authors = messages
             .iter()
             .filter(|m| !is_webhook(&m.raw))
-            .filter_map(|m| text(m.raw.get("author")?, "id"))
+            .filter_map(|m| text(m.raw.get("author")?, "id"));
+        // The one reactor Discord names, who may have written nothing here.
+        let reacted = messages
+            .iter()
+            .filter_map(|m| m.raw.get("reactions")?.as_array())
+            .flatten()
+            .any(is_mine);
+        let mut seen: HashSet<&str> = HashSet::new();
+        authors
+            .chain(me.filter(|_| reacted))
             .filter(|id| seen.insert(id))
             .filter_map(|id| {
                 let user = users.get(id)?;
@@ -480,6 +488,13 @@ impl Building<'_> {
             })
             .collect()
     }
+}
+
+/// Whether the account is among who reacted.
+fn is_mine(reaction: &Value) -> bool {
+    ["me", "me_burst"]
+        .iter()
+        .any(|k| reaction.get(*k).and_then(Value::as_bool) == Some(true))
 }
 
 fn attachment(file: &Value) -> NormalizedAttachment {
@@ -733,6 +748,17 @@ mod tests {
         assert_eq!(item.author_display, "Ship's computer");
         assert_eq!(item.author_handle, None);
         assert!(c.contacts.is_empty());
+    }
+
+    /// The account is the same person in a document it only reacted in.
+    #[test]
+    fn a_reaction_of_the_accounts_own_brings_its_contact() {
+        let mut m = message("1", RIKER, "Promoted!");
+        m["reactions"] = json!([{"emoji": {"id": null, "name": "🖖"}, "count": 1, "me": true}]);
+        let wrote = chat("71", vec![message("1", PICARD, "Thank you.")]);
+        let reacted = chat("71", vec![m]);
+        assert_eq!(reacted.contacts.len(), 2);
+        assert_eq!(reacted.contacts[1], wrote.contacts[0]);
     }
 
     /// The account's Discord user is tied to its address; nobody else's is.
