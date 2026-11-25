@@ -923,6 +923,11 @@ files = ["*/render_markdown/indexed_markdown.doltlite_db"]
 why = "Once per render pass: the latest measurement of each subject, one row per subject per pass."
 
 [[scan]]
+statement = "SELECT tbl,idx,stat FROM 'main'.sqlite_stat1"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "SQLite's own, as it loads what the planner is told of each of `grid_rows`' indexes: one row an index, written by `planner_ranks.rs`. When the step opens the index, and when it remakes the indexes."
+
+[[scan]]
 statement = "SELECT threadID, accountID, thread FROM threads"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."

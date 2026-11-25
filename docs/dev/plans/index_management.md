@@ -214,3 +214,72 @@ in SQL on a clone of the library above, with `grid_rows_by_parent` and
   workspace of 135,496 threads. The ancestors table would be a few
   million rows. What the walk does not give is the result in time order,
   which a page of it then sorts.
+
+**2026-11-24, from fixing `source:` beside another key.** Measured in SQL
+on a clone of the library above. `source:x channel:y` was one case of
+two keys sharing no index: whichever one SQLite starts from, it reads
+each of that key's rows from the table to test the other. Times are the
+first run, then the best of three; the second column was asked once.
+
+| search, rows it finds | source first or key first, as it was | row-id sets | `source_id` in the key's index |
+|---|---|---|---|
+| a channel with no row, in a 585k-row source: 0 | 43 s | 1.6 s / 17 ms | 1 ms / under 1 ms |
+| one kind in that source: 319,813 | 22 s | 0.76 s / 0.32 s | 0.36 s / 55 ms |
+| that kind in an 83k-row source: 40,834 | 23 s | 0.19 s / 0.13 s | 17 ms / 17 ms |
+| one account in the 585k-row source: 584,885 | 33 s | 1.2 s / 0.70 s | 0.74 s / 0.13 s |
+| that account in a 2k-row source: 2,019 | 25 s | not measured | 42 ms / 42 ms |
+
+- **What was done: the third.** Six keys whose one value many rows share
+  (`kind`, `channel`, `subject`, `account`, `project`, `change`) end in
+  `source_id`: about 22 MB each, 130 MB in all, 2.4% of the file. So do
+  the conversation's index and #2002's `grid_rows_by_place`, which
+  `at:<node>` reads. `id` and `notion_page` name one thing and stayed as
+  they were.
+- **A hint on the source alone is not a fix.** It starts from the key,
+  which is worse wherever the key is wider than the source: one account
+  covers 737k rows in seven sources. The hint is still there, for the
+  statements no index covers (a grouping reads the rows it counts), but
+  only beside a key, so `source:x is:document` keeps its plan.
+- **Row-id sets cost no bytes, and answer any pair.** The source's index
+  is walked and each entry tested against
+  `rowid IN (SELECT rowid FROM grid_rows WHERE channel = ?)`; the table
+  is never read. It costs what the bigger key's index holds, so it does
+  not meet goal 1 where one key is narrow. Two keys with no source among
+  them (`account:a kind:k`) still read the table, and this would fix
+  them.
+- **A filter no index serves still reads every row of its source**:
+  `source:x -channel:y`, `source:x email:z`. A negated key can be a
+  row-id set (`rowid NOT IN (…)`) too.
+- **The grid's index shape** (the open question above): an index on the
+  key alone would give back every number in the second column. Not reading the
+  table is what the covering columns buy.
+- **Two to ask step 3 about.** `grid_rows_by_markdown (markdown_uuid)`,
+  59 MB, is a prefix of `grid_rows_by_markdown_source (markdown_uuid,
+  source_id)`, 83 MB, and both are in the grid index.
+  `grid_rows_by_diff_status` is 89 MB here for a column that is null in
+  every row; `grid_rows_by_channel` as much for 33k rows that have one. A
+  partial index (`WHERE channel IS NOT NULL`) still serves `channel = ?`,
+  but not the "none" group of a grid grouped by channel, which reads the
+  nulls through it.
+- **An `OR` of two ways to be at a node** (`at:<node>`, #2002) reads one of
+  them from whatever else the search names: `at:<page> is:document`, for a
+  page that is a document and holds 7,048 rows, read every document in the
+  library from the table, 24 s. Written as one set of row ids it takes 19 ms,
+  then 2 ms. A label with 14,506 threads filed under it, beside its source:
+  1.3 s before, 58 ms with `source_id` in the conversation's index, 0.3 s
+  with the hint alone (first runs, the later two on a warmer cache).
+- **Two sets of row ids are a product.** The count of what a search by
+  meaning cannot reach began at the documents it can, 257,407 of them:
+  with `source:x from:y`, it tried each with each of the person's 1,028
+  rows, and was stopped at 40 s. It now finds the kept rows first, 0.1 s;
+  what it costs each kind of search is in
+  [`search.md`](../search.md) §"Measuring".
+
+**2026-11-25, declared statistics in place of hints.** Done:
+`sqlite_stat1` is written with a rank per index, the same in every
+library, and the `likelihood` on a source, the rule for when to use it, the
+one on `is:document` and the set in place of `at:`'s `OR` are gone. What
+the ranks are, why they need no measuring, and what they cannot say is in
+[`search.md`](../search.md) §"What the planner is told". So the first
+bullet's third column is how it is, and the second's hint is not; a
+person's rows beside an indexed key are tested, not started from.

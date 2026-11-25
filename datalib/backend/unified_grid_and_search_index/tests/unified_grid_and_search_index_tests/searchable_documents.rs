@@ -40,13 +40,9 @@ async fn plan(pool: &sqlx::SqlitePool, sql: &str) -> Vec<String> {
 #[tokio::test]
 async fn the_searchable_documents_are_listed_from_their_indexes() {
     let (_td, pool) = fixture_index().await;
-    let unfiltered = documents_with_pages_sql("grid_rows", "markdowns", "", " WHERE");
-    let filtered = documents_with_pages_sql(
-        "grid_rows",
-        "markdowns",
-        " WHERE source_id = 'enterprise'",
-        " AND",
-    );
+    let unfiltered = documents_with_pages_sql("grid_rows", "markdowns", "");
+    let filtered =
+        documents_with_pages_sql("grid_rows", "markdowns", " WHERE source_id = 'enterprise'");
     for sql in [&unfiltered, &filtered] {
         let plan = plan(&pool, sql).await;
         assert!(
@@ -85,13 +81,7 @@ async fn the_listing_holds_the_same_documents_as_a_look_up_per_row() {
                 .collect::<BTreeSet<_>>()
         }
     };
-    let listed = read(documents_with_pages_sql(
-        "grid_rows",
-        "markdowns",
-        "",
-        " WHERE",
-    ))
-    .await;
+    let listed = read(documents_with_pages_sql("grid_rows", "markdowns", "")).await;
     let looked_up = read(
         "SELECT DISTINCT markdown_uuid, source_id FROM grid_rows WHERE EXISTS \
          (SELECT 1 FROM markdowns WHERE markdowns.markdown_uuid = grid_rows.markdown_uuid \

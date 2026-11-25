@@ -292,18 +292,21 @@ fn search_row_select() -> String {
 /// once, from the step's `markdowns_searchable`, never looked up per grid
 /// row: a correlated look-up read each row's whole `markdowns` row, seconds
 /// on a large library. `INDEXED BY` refuses rather than fall back to that.
-/// The grid side is left to the planner, since the search's filters decide
-/// which of its indexes fits.
-pub fn documents_with_pages_sql(
-    grid_rows: &str,
-    markdowns: &str,
-    where_sql: &str,
-    joiner: &str,
-) -> String {
+/// The rows the search's filters keep come out of their own indexes as row
+/// ids, and are looked for in the one index that holds a document and its
+/// source, read once, never in the table. The `+` keeps that index from
+/// being searched a document at a time.
+pub fn documents_with_pages_sql(grid_rows: &str, markdowns: &str, where_sql: &str) -> String {
+    let kept = if where_sql.is_empty() {
+        String::new()
+    } else {
+        format!("rowid IN (SELECT rowid FROM {grid_rows}{where_sql}) AND ")
+    };
     format!(
-        "SELECT DISTINCT markdown_uuid, source_id FROM {grid_rows}{where_sql}{joiner} \
-         markdown_uuid IN (SELECT markdown_uuid FROM {markdowns} \
-                           INDEXED BY markdowns_searchable WHERE searchable = 1)"
+        "SELECT DISTINCT markdown_uuid, source_id \
+         FROM {grid_rows} INDEXED BY grid_rows_by_markdown_source WHERE {kept}\
+         +markdown_uuid IN (SELECT markdown_uuid FROM {markdowns} \
+                            INDEXED BY markdowns_searchable WHERE searchable = 1)"
     )
 }
 
@@ -1397,15 +1400,10 @@ impl IndexRepo for DoltRepo {
         };
         let q = at.read_at(q).await?;
         let (where_sql, params) = build_where(&q);
-        let joiner = if where_sql.is_empty() {
-            " WHERE"
-        } else {
-            " AND"
-        };
         // Audited: as `matching` — literal table names and `build_where`'s
         // static column names; every value is bound.
         let mut query = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(
-            documents_with_pages_sql(at.grid_rows, at.markdowns, &where_sql, joiner),
+            documents_with_pages_sql(at.grid_rows, at.markdowns, &where_sql),
         ));
         for p in &params {
             query = query.bind(p);
