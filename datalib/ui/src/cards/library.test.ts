@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { Child, ManageRow } from "@/api";
+import type { ManageRow, Place } from "@/api";
 import { parseCardSource } from "./cardCall";
 import {
-  childLabel,
+  placeLabel,
   isNodeId,
   nodeCardSource,
   nodeCardProps,
@@ -22,18 +22,15 @@ function group(id: string, label: string, type: string | null): ManageRow {
   } as ManageRow;
 }
 
-function child(over: Partial<Child> & { uuid: string }): Child {
+function place(over: Partial<Place> & { uuid: string }): Place {
   return {
     sort_key: "",
-    container: false,
-    kind: "Message",
+    kind: "Folder",
     name: null,
-    author: null,
-    author_handle: null,
-    created_at: null,
     preview: null,
     markdown_uuid: null,
     link: null,
+    places_below: false,
     ...over,
   };
 }
@@ -87,11 +84,10 @@ describe("treeChip", () => {
   it("draws a place as its node's chip, and nothing for any other id", () => {
     const id = "00000000-0000-8570-90c4-e54c531f3fff";
     const [page] = placeNodes([
-      child({
+      place({
         uuid: id,
         kind: "Notion page",
         name: "Shift Roster",
-        container: true,
         markdown_uuid: id,
       }),
     ]);
@@ -112,9 +108,9 @@ describe("placeNodes", () => {
    *  only where places lie below it. */
   it("orders by the source's key, then by name, and opens where places lie below", () => {
     const nodes = placeNodes([
-      child({ uuid: "s", kind: "Email Label", name: "Sent", container: true, places_below: false }),
-      child({ uuid: "i", kind: "Email Label", name: "Inbox", container: true, places_below: true }),
-      child({ uuid: "a", kind: "Email Label", name: "Archive", container: true }),
+      place({ uuid: "s", kind: "Email Label", name: "Sent" }),
+      place({ uuid: "i", kind: "Email Label", name: "Inbox", places_below: true }),
+      place({ uuid: "a", kind: "Email Label", name: "Archive" }),
     ]);
     expect(nodes.map((n) => [n.label, n.hasChildren])).toEqual([
       ["Archive", false],
@@ -130,14 +126,13 @@ describe("a place that is a document", () => {
    *  document and carries none. */
   it("carries its document from the tree", () => {
     const [channel, page] = placeNodes([
-      child({
+      place({
         uuid: "p",
         kind: "Notion page",
         name: "Shift Roster",
-        container: true,
         markdown_uuid: "p",
       }),
-      child({ uuid: "c", kind: "Slack Channel", name: "#bridge", container: true }),
+      place({ uuid: "c", kind: "Slack Channel", name: "#bridge" }),
     ]);
     expect(nodeOpts(page)).toEqual({ node: "p", name: "Shift Roster", doc: "p" });
     expect(nodeOpts(channel)).toEqual({ node: "c", name: "#bridge" });
@@ -160,11 +155,11 @@ describe("a place that is a document", () => {
   });
 });
 
-describe("childLabel", () => {
+describe("placeLabel", () => {
   it("is the name, else the first line of the text, else the kind", () => {
-    expect(childLabel(child({ uuid: "1", name: "#bridge" }))).toBe("#bridge");
-    expect(childLabel(child({ uuid: "2", preview: "Red alert\nAll hands" }))).toBe("Red alert");
-    expect(childLabel(child({ uuid: "3", kind: "Slack Thread" }))).toBe("Slack Thread");
+    expect(placeLabel(place({ uuid: "1", name: "#bridge" }))).toBe("#bridge");
+    expect(placeLabel(place({ uuid: "2", preview: "Red alert\nAll hands" }))).toBe("Red alert");
+    expect(placeLabel(place({ uuid: "3", kind: "Slack Thread" }))).toBe("Slack Thread");
   });
 });
 

@@ -12,8 +12,8 @@ use datalib_unified_grid_and_search_index::dolt_repo::{listing_sql, DoltRepo};
 use datalib_unified_grid_and_search_index::query::parse_query;
 use datalib_unified_grid_and_search_index::repo::IndexRepo;
 
-use crate::children::{plan, row, stamp, sync, thread_in, SOURCE};
 use crate::dolt_backend_integration::{unique_db_path, writer};
+use crate::places::{plan, row, stamp, sync, thread_in, SOURCE};
 
 const WS: &str = "00000000-0000-8000-a000-000000000001";
 const BRIDGE: &str = "00000000-0000-8000-a000-000000000002";

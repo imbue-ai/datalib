@@ -782,8 +782,8 @@ besides components:
   configured sources (`GET /api/manage/rows`; a comparison's `diff`
   group is none), and each place below them, an account, a label, a
   workspace, a channel, a folder, a page, a chat, is a level of
-  `GET /children/{parent}?places=true` read when it is opened
-  (`docs/user/applets.md` § "A container's children"); a thread or a
+  `GET /places/{parent}` read when it is opened
+  (`docs/user/applets.md` § "Places"); a thread or a
   message is no place, so it is not in the tree. A source that holds no
   places has no arrow: `GET /sources_with_places` says which hold some,
   and "Loading…" stands in for the tree until it answers. Every row is a chip (`docs/dev/chips.md`): a source its
