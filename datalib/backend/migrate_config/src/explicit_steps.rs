@@ -3,7 +3,7 @@
 //! group's type from the environment the runner set; and the runner gave
 //! `datalib-step`'s steps the locks, `reads` and verbs it knew they
 //! needed. The rewrite writes all of that into the file, as
-//! `docs/dev/plans/dag_and_step_decoupling.md` §"Existing configs" lists:
+//! `docs/dev/config_model.md` §"The retired shapes" lists:
 //! each step gets its `id`, its whole `command`, and the `reads` and
 //! `locks` the runner used to give it; the file gets a `[[programs]]`
 //! entry for `datalib-step`, the `[[locks]]` its steps hold, and an

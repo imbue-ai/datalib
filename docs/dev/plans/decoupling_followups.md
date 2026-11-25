@@ -1,8 +1,7 @@
-# What is left after the runner stops knowing datalib-step
+# What is left after the runner stopped knowing datalib-step
 
-**Status: notes, 2026-11-18, nothing built.** The step protocol redesign
-([`dag_and_step_decoupling.md`](dag_and_step_decoupling.md)) takes `datalib-step` out
-of the runner. This file lists what that redesign leaves alone on
+**Status: notes, 2026-11-18.** The step protocol redesign (#1894) took
+`datalib-step` out of the runner. This file lists what that redesign leaves alone on
 purpose, so it is not forgotten.
 
 ## The end state

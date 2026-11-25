@@ -1,7 +1,7 @@
 // The search field's CodeMirror extensions. The document is the query
 // text; a value naming a source, a group or a step is drawn over as its
 // chip, and the menu offers keys and values from the table's `…/keys`
-// and `…/values` (docs/dev/plans/search_autocomplete.md § "The field").
+// and `…/values`.
 import {
   acceptCompletion,
   autocompletion,

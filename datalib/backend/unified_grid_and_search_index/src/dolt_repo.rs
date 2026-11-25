@@ -1,7 +1,7 @@
 //! `DoltRepo` — production [`IndexRepo`](crate::repo::IndexRepo) backed
 //! by a `sqlx::SqlitePool` against the grid index on disk. Every request
-//! reads inside one read transaction: one commit, and the plain tables'
-//! indexes (`docs/dev/plans/paged_grids.md`, "Pinned and indexed").
+//! reads inside one read transaction, so it sees one state of the index
+//! (`docs/dev/grid_rows.md` § "Consumer side").
 
 use std::path::PathBuf;
 use std::sync::Arc;

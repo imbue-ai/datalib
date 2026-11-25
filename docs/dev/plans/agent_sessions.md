@@ -64,8 +64,7 @@ Two consequences: the render step must fold these rather than print
 them (chat-common's `<details>` for a run of tool steps already does
 this), and it is worth deciding up front whether a tool-result body
 over some threshold goes to the blob CAS rather than the JSONB
-payload. `docs/dev/plans/multimodal_retrieval.md` §4 already counts the
-same text stored five times; this source would make that worse.
+payload.
 
 **Transcripts are full of secrets.** A tool result can contain the
 output of `env`, a pasted API key, the contents of `.env`. The
@@ -73,7 +72,7 @@ Compliance API strips nothing either and says so. Datalib's rule is to
 store the record as the source wrote it, so nothing here changes that —
 but the render step should not put those bytes into `grid_rows.text`
 verbatim, and the source needs a sentence in its INGEST.md saying so.
-Read `docs/dev/plans/data_lib_as_a_library/data_handling_practices.md`
+Read `docs/dev/data_architecture_parse_and_render.md` §4
 before designing the row.
 
 **Identity is mostly easy.** Every one of these tools mints a UUID per
