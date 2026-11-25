@@ -137,7 +137,8 @@ has none. A page has the server's.
 `rows_read` is how many rows the request's SQL statements returned to
 the code that ran them, and `bytes` the size of the answer, so a request
 that reads 31,000 rows to send 5 KB shows it on one line; what SQLite
-walked to find those rows is the heavy-statement line's business. An
+walked to find those rows is the heavy-statement line's business. The
+checks an open of a store makes count too, some hundred rows. An
 applet's reads are in its own process: it counts them and says so in an
 `X-Datalib-Rows-Read` response header, which the gateway takes off and
 writes on its own line. `rows_read` is left out when the applet does not
