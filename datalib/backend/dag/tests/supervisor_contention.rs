@@ -198,3 +198,53 @@ async fn processes_naming_the_root_two_ways_share_the_store() {
     })
     .await;
 }
+
+/// A listener made while its process holds the store's write lock
+/// leaves the lock held. It once read the file's change counter through
+/// a descriptor it then closed, and closing any descriptor of a file
+/// drops every lock its process holds on it, SQLite's included
+/// (fcntl(2)): another process could then write while this one thought it
+/// held the lock, and this one's commit failed with a disk I/O error. A
+/// server handler makes a listener while another handler writes.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_listener_leaves_its_processs_write_lock_held() {
+    use sqlx::Connection;
+    let worker = std::env::var("STORE_WORKER").expect("STORE_WORKER");
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path();
+    let store = Store::open(root).await.unwrap();
+    let opts = sqlx::sqlite::SqliteConnectOptions::new().filename(
+        datalib_runtime::plain_sqlite::uri(&datalib_runtime::layout::supervisor_db(root)),
+    );
+    let mut writer = sqlx::SqliteConnection::connect_with(&opts).await.unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut writer)
+        .await
+        .unwrap();
+    let try_write = || async {
+        let out = tokio::process::Command::new(&worker)
+            .arg(root)
+            .arg("try-write")
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+    assert_eq!(try_write().await, "held", "the write lock was not taken");
+
+    let _listener = Listener::new(&store, "the test");
+    assert_eq!(
+        try_write().await,
+        "held",
+        "making a listener let the lock go"
+    );
+
+    sqlx::query("ROLLBACK").execute(&mut writer).await.unwrap();
+    writer.close().await.unwrap();
+    store.close().await;
+}
