@@ -117,6 +117,36 @@ Linear's budget is 2,500 requests and 3,000,000 complexity points an
 hour per user. No single query may cost more than 10,000 points. The
 largest page here (50 projects with their members) costs about 2,400.
 
+### Linear's rate limit
+
+Each budget is a leaky bucket: it holds up to the hourly limit and
+drains at the hourly rate, about 0.7 requests and 830 points a second.
+A request past either is refused with HTTP 429, a GraphQL error whose
+`extensions.code` is `RATELIMITED`, a `Retry-After` in seconds, and
+`X-RateLimit-*` headers. (A `RATELIMITED` error under another status
+is read the same way.) What the download does with a refusal
+(`linear_retryability` in `ingest/client.rs`):
+
+- **A `Retry-After` of 60 seconds or less** (`LONGEST_WAIT`) is waited
+  out, and the request is sent again. A run just over the limit is told
+  to wait a second or two, so a large first run slows down rather than
+  stops.
+- **A longer `Retry-After`, or none**, ends the run. Waiting would hold
+  the step for a good part of the hour. What the run fetched is kept,
+  the step ends `incomplete` with a `rate_limit` problem that names the
+  wait Linear asked for, and the next sync carries on from where this
+  one got to (see §"Incremental updates").
+
+A query past 10,000 points is not a rate limit: Linear answers HTTP 400
+with `INPUT_ERROR` ("Query too complex"), and waiting never admits it.
+It fails that one page as any other error does.
+
+The shared retry loop in `datalib_etl_web::http` would otherwise retry
+every 429 itself, sleeping up to ten minutes per attempt until its
+guard gave up, so Linear's requests go through
+`latchkey_curl_classified` with this classifier rather than through
+`latchkey_curl`.
+
 ### One transaction between two seals
 
 The whole run writes through one `datalib_etl::raw_store::Batch`,

@@ -2,6 +2,7 @@
 //! validates every query against Linear's own public schema.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_linear::ingest::{self, FetchOptions, FetchSummary, RawDb};
@@ -258,6 +259,49 @@ async fn a_sync_past_linears_request_limit_waits_and_completes() {
         .as_u64()
         .unwrap_or(0);
     assert!(refused >= 1, "{}", fakes.health());
+    db.close().await;
+}
+
+/// The same bucket over an hour drains one request every 720 s, so the
+/// refusal asks for a wait longer than a run sleeps through
+/// (`client::LONGEST_WAIT`). The run must end at once, saying so, and
+/// leave the rest to the next sync; it used to sleep ten minutes per
+/// attempt until the retry guard gave up.
+#[tokio::test]
+async fn a_sync_told_to_wait_long_for_linears_request_limit_ends_promptly() {
+    let launch = Launch {
+        rate_limit_by_bucket: BTreeMap::from([("linear:requests".to_string(), 5)]),
+        rate_limit_window_seconds: Some(3600),
+    };
+    let fakes = Fakes::start_with(
+        &BTreeMap::from([(LINEAR, with_real_rate_limits(seed()))]),
+        &launch,
+    )
+    .expect("the fakes serve");
+    let dir = tempfile::tempdir().unwrap();
+    let db = RawDb::open(&ingest::db_path_for(dir.path())).await.unwrap();
+
+    let summary = tokio::time::timeout(Duration::from_secs(120), run(&db, LinearSync::default()))
+        .await
+        .expect("the run ends rather than waiting out the Retry-After")
+        .expect("the download runs");
+
+    let shown = serde_json::to_string(&summary).unwrap();
+    let refused = fakes.health()["rate_limited"]["linear:requests"]
+        .as_u64()
+        .unwrap_or(0);
+    assert_eq!(refused, 1, "{}", fakes.health());
+    let problems: Vec<(String, String)> =
+        sqlx::query_as("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+    let rate_limit = problems
+        .iter()
+        .find(|(key, _)| key.ends_with("rate_limit"))
+        .unwrap_or_else(|| panic!("no rate_limit problem: {problems:?} {shown}"));
+    assert!(rate_limit.1.contains("(Retry-After)"), "{rate_limit:?}");
+    assert!(ids(&db, "issues").await.len() < 3, "{shown}");
     db.close().await;
 }
 
