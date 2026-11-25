@@ -7,12 +7,13 @@
 //!  "members": {"<guild id>": {…}},
 //!  "threads": {"<channel id>": [{…}]},
 //!  "messages": {"<channel id>": [{…}]},
-//!  "files": {"<link>": "<a file beside world.json>"},
+//!  "files": {"<link>": "<a file beside world.json>", "<link>": null},
 //!  "befores": {"<channel id>": ["<id>"]}}
 //! ```
 //!
 //! Messages may be in any order; a channel with none listed answers an
-//! empty page. `befores` names ids a walk may page from besides its
+//! empty page. A file that is null is one Discord no longer has, and
+//! answers 404. `befores` names ids a walk may page from besides its
 //! messages' own.
 
 use std::collections::BTreeMap;
@@ -51,12 +52,41 @@ impl Synthesizer for DiscordSynth {
             serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
         let mut files = BTreeMap::new();
         for (url, name) in world["files"].as_object().into_iter().flatten() {
-            let name = name.as_str().context("a file's name is a string")?;
+            let Some(name) = name.as_str() else {
+                continue;
+            };
             let bytes =
                 std::fs::read(self.dir.join(name)).with_context(|| format!("read {name}"))?;
             files.insert(url.clone(), bytes);
         }
-        write_world(&world, &files, out_root)
+        let report = write_world(&world, &files, out_root)?;
+        let gone = write_gone(&world, out_root)?;
+        Ok(SynthesizeReport {
+            fixtures_written: report.fixtures_written + gone,
+        })
+    }
+}
+
+fn write_gone(world: &Value, out: &Path) -> Result<usize> {
+    let files = world["files"].as_object().into_iter().flatten();
+    let gone: Vec<&String> = files.filter(|f| f.1.is_null()).map(|f| f.0).collect();
+    for url in &gone {
+        let resp = file_response(404, b"This content is no longer available.".to_vec());
+        write_fixture(out, &file_request(url)?, &resp)?;
+    }
+    Ok(gone.len())
+}
+
+fn file_request(url: &str) -> Result<HttpRequest> {
+    api::file_request(url, None).with_context(|| format!("{url} is not on Discord's file host"))
+}
+
+fn file_response(status: u16, body: Vec<u8>) -> HttpResponse {
+    HttpResponse {
+        status,
+        headers: BTreeMap::new(),
+        body,
+        duration_ms: 0,
     }
 }
 
@@ -145,17 +175,9 @@ pub fn write_world(
         }
     }
     for (url, bytes) in files {
-        let Some(req) = api::file_request(url, None) else {
-            anyhow::bail!("{url} is not on Discord's file host");
-        };
         count += 1;
-        let resp = HttpResponse {
-            status: 200,
-            headers: BTreeMap::new(),
-            body: bytes.clone(),
-            duration_ms: 0,
-        };
-        write_fixture(out, &req, &resp)?;
+        let resp = file_response(200, bytes.clone());
+        write_fixture(out, &file_request(url)?, &resp)?;
     }
     Ok(SynthesizeReport {
         fixtures_written: count,

@@ -1,6 +1,15 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 load("//tools:live.bzl", "live_run")
 
+# A TNG account's Discord, every answer about it and the files its
+# messages carry, written by //tests/fixtures:make_discord_fixtures.py.
+# Read by the central fixture pipeline at //tests/fixtures:ingested_tng.
+filegroup(
+    name = "tng_fixture",
+    srcs = glob(["tests/fixtures/discord_tng/**"]),
+    visibility = ["//visibility:public"],
+)
+
 rust_library(
     name = "datalib_etl_discord",
     srcs = glob(["src/**/*.rs"]),
