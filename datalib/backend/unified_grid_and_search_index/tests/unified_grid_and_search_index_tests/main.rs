@@ -9,5 +9,6 @@ mod fixture_tree_snapshot;
 mod fixture_vectors;
 mod people;
 mod places;
+mod planner_facts;
 mod search_index;
 mod searchable_documents;

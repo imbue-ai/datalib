@@ -15,6 +15,7 @@ command = "datalib-step run ingest signal"
 
 [steps.params.backup]
 path = "~/Downloads/signal-backup"
+aep_env_var = "SIGNAL_BACKUP_PASSPHRASE"  # the variable holding the passphrase
 
 [[steps]]
 id = "signal/render_markdown"

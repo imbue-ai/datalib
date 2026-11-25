@@ -144,7 +144,9 @@ rust_binary(
     edition = "2021",
     deps = [
         ":datalib_dag",
+        "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
     ],
 )
@@ -159,6 +161,7 @@ rust_test(
     deps = [
         ":datalib_dag",
         "//datalib/backend/runtime:datalib_runtime",
+        "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],

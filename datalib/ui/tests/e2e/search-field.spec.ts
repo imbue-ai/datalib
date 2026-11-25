@@ -1,6 +1,6 @@
 // The search field: typing a key offers it, taking it offers its values
 // from the table, and a source picked is drawn as its chip in the text,
-// over the query it still is (docs/dev/plans/search_autocomplete.md).
+// over the query it still is.
 
 import { test, expect, type Page } from "@playwright/test";
 import { cardOf, GRID, SEARCH_SETTLE, tabLabels, typeInto } from "./grid-helpers";

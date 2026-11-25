@@ -30,15 +30,18 @@
 //! which finds them by their current functions; then `unread_inputs.rs`:
 //! the index step stops naming the `render_time_series` and
 //! `render_occurrences` steps it does not read; then `lock_names.rs`:
-//! the `qmd_embed` lock is `embedder` and `qmd_keyword` goes; and last
+//! the `qmd_embed` lock is `embedder` and `qmd_keyword` goes; then
 //! `explicit_steps.rs`: each step writes its `id`, its whole
 //! `datalib-step run …` command, and the locks and `reads` the runner
 //! used to work out for it, and the file its `[[programs]]`, `[[locks]]`
-//! and `[env]`. Every rewrite after `convert.rs` is also one
-//! `datalib-http` makes by itself ([`UNATTENDED`]), and every one before
-//! `explicit_steps.rs` reads the shape from before it.
+//! and `[env]`; and last `backup_secrets.rs`: a WhatsApp or Signal
+//! ingest names the variable holding its backup secret. Every rewrite
+//! after `convert.rs` is also one `datalib-http` makes by itself
+//! ([`UNATTENDED`]), and every one before `explicit_steps.rs` reads the
+//! shape from before it.
 
 pub mod aggregator_drop;
+pub mod backup_secrets;
 pub mod conversation_settings;
 pub mod convert;
 pub mod explicit_steps;
@@ -117,6 +120,9 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if explicit_steps::is_retired(text)? {
         return Ok(LegacyFormat::InferredByTheRunner);
     }
+    if backup_secrets::is_retired(text)? {
+        return Ok(LegacyFormat::UnnamedBackupSecret);
+    }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
@@ -135,7 +141,8 @@ pub fn convert(text: &str) -> Result<String> {
         | LegacyFormat::GridIndexStep
         | LegacyFormat::UnreadGridInputs
         | LegacyFormat::SearchLockNames
-        | LegacyFormat::InferredByTheRunner => text.to_string(),
+        | LegacyFormat::InferredByTheRunner
+        | LegacyFormat::UnnamedBackupSecret => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = lowercase_ids::rewrite(&out)?;
@@ -158,6 +165,11 @@ pub fn convert(text: &str) -> Result<String> {
     let out = lock_names::rewrite(&out)?;
     let out = if explicit_steps::is_retired(&out)? {
         explicit_steps::rewrite(&out)?
+    } else {
+        out
+    };
+    let out = if backup_secrets::is_retired(&out)? {
+        backup_secrets::rewrite(&out)?
     } else {
         out
     };
@@ -278,6 +290,18 @@ pub fn upgrade_todoist_since(text: &str) -> Result<Option<String>> {
 /// entries than the original. The runner refuses every step of the
 /// original, so its steps cannot be compared; the tests hold the rewrite
 /// of every config this repo shipped to the runner it was written for.
+/// Name the default variable in a WhatsApp or Signal ingest that relies
+/// on it (`backup_secrets.rs`). Refused, naming the step, when its
+/// `backup` table is written inline.
+pub fn upgrade_backup_secrets(text: &str) -> Result<Option<String>> {
+    if !backup_secrets::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = backup_secrets::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
+    Ok(Some(out))
+}
+
 pub fn upgrade_explicit_steps(text: &str) -> Result<Option<String>> {
     if !explicit_steps::is_retired(text).unwrap_or(false) {
         return Ok(None);
@@ -421,7 +445,7 @@ pub struct Rewrite {
 /// Every unattended rewrite, in the order they are made. `datalib-http`
 /// runs these on its config, and a config the repo ships or documents is
 /// tested to need none of them.
-pub const UNATTENDED: [Rewrite; 15] = [
+pub const UNATTENDED: [Rewrite; 16] = [
     Rewrite {
         why: "has an id with capitals in it",
         what: "every group, step and applet id, and every function, is lower case, \
@@ -518,6 +542,13 @@ pub const UNATTENDED: [Rewrite; 15] = [
                and the locks and `reads` it holds; the runner no longer knows \
                datalib-step's steps from any other program's",
         run: upgrade_explicit_steps,
+    },
+    Rewrite {
+        why: "has a WhatsApp or Signal source whose params name no variable for its backup secret",
+        what: "a WhatsApp or Signal source names the variable holding its backup secret, \
+               `WHATSAPP_BACKUP_DECRYPTION_KEY` or `SIGNAL_BACKUP_PASSPHRASE`, since a step \
+               is handed only the variables its params name",
+        run: upgrade_backup_secrets,
     },
 ];
 

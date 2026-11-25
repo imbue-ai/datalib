@@ -638,8 +638,7 @@ reader-open that checks it). Nothing probes for a table or a column:
 `IndexedMarkdownStore::open_for_reading`, which refuses one in another
 shape, and leaves that source as the index had it, with a warning
 naming the step to run; a render refuses a raw store the launch's
-prepare pass could not migrate. `docs/dev/plans/completed/schema_migrations.md`
-is the record of the program this was the first step of.
+prepare pass could not migrate.
 
 ## Writes: one UPSERT shape, everywhere
 
@@ -709,7 +708,9 @@ checks that they do.
 ## Indexes: the planner has no statistics, so test the plan
 
 No store here runs `ANALYZE`, so SQLite's planner knows nothing about
-how many rows match a value. When a lookup could use either of two
+how many rows match a value (the grid index, which is told a rank for
+each index, is the exception: [`search.md`](/docs/dev/search.md) §"What
+the planner is told"). When a lookup could use either of two
 one-column indexes, it rates them the same, and which one it takes
 depends on the order they were created in, not on which is selective.
 Every test passes either way, because a fixture of a few rows is fast
@@ -762,7 +763,10 @@ So:
 - **Don't reach for `ANALYZE`.** Its statistics are a guess drawn from
   whatever rows a store held when it ran, so two libraries can plan one
   statement two ways, and a plan can change as the rows do. Which index
-  a statement needs is known when it is written; say so in the SQL.
+  a statement needs is known when it is written; say so in the SQL. What
+  it did to the grid's searches, measured, is in
+  [`search.md`](/docs/dev/search.md) §"Why not `ANALYZE`", and what the grid
+  index tells the planner instead is there too.
 - **Test the plan, not the time.** Run `EXPLAIN QUERY PLAN` on the
   statement over the table's real DDL and assert the index it must
   start from, not only what it must not do: a plan with no `SCAN` can

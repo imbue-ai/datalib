@@ -52,6 +52,7 @@ merge conflict waiting to happen.
 - [`docs/dev/latchkey.md`](docs/dev/latchkey.md) — how a web source signs in: the three kinds of latchkey service, who names an account, the keychain, the gateway. Read before touching a sign-in.
 - [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md) — JMAP, Gmail API, mbox.
 - [`docs/dev/grid_rows.md`](docs/dev/grid_rows.md) — the `grid_rows` union table and how to add a column.
+- [`docs/dev/search.md`](docs/dev/search.md) — how search works: what it reads, what it does, its SQL and which index answers it, how to measure it. **Start here** before adding a search key or an index, or chasing a slow search.
 - [`docs/dev/time_series.md`](docs/dev/time_series.md) — numbers over time: a source's time-series store, the chunk encoding, UCUM units, the index that points at the stores. **Start here** for anything about time series.
 - [`docs/dev/contacts.md`](docs/dev/contacts.md) — who a handle is: handles, each source's record of a person (`NormalizedContact`), the contacts app, and the chips that draw them. **Start here** for anything about a person; read before adding a handle kind.
 - [`docs/dev/edges.md`](docs/dev/edges.md), [`docs/dev/entity_ids.md`](docs/dev/entity_ids.md) — cross-document edges; the one rule for minting a uuid (read before any `*_uuid` recipe).
@@ -76,7 +77,6 @@ merge conflict waiting to happen.
 - [`docs/dev/ci.md`](docs/dev/ci.md) — CI, its caches and BuildBuddy, and reading a run.
 - [`docs/dev/release_steps.md`](docs/dev/release_steps.md) — how a release is assembled, and testing its steps from a mac.
 - [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md), [`runtime_fetch.md`](docs/dev/runtime_fetch.md), [`docker.md`](docs/dev/docker.md) — what ships beside the binaries: the Chrome-impersonating curl, the Node runtime, the container image.
-- [`docs/dev/qmd_behaviour.md`](docs/dev/qmd_behaviour.md) — measured facts about qmd; the shared model cache's path still follows it.
 - [`docs/dev/history.md`](docs/dev/history.md) — facts about the tree git cannot tell you. Add a paragraph when you learn one.
 - [`docs/dev/security_posture.md`](docs/dev/security_posture.md) — who we guard against, what stops them and what does not. **Start here** before changing a secret, a release job or a safety check, or adding anything a protected library writes outside its folder.
 
@@ -417,9 +417,11 @@ last run and success, each sink's version — is in
 config entry the loader cannot use costs that entry and nothing else;
 `datalib-pipeline check <config>` says what went and why. A config the app
 cannot serve anything from comes back as `app_ready: false` and the UI
-shows `ConfigErrorView`, live in both directions. The http server runs
-the loop `datalib-pipeline serve` runs, in-process (`dag/src/supervisor/serve.rs`,
-called from `http/src/supervisor.rs`), holding `runner-lock` for its life; a sync, a stop, a step turned off is a row it writes
+shows `ConfigErrorView`, live in both directions. The http server keeps
+`datalib-pipeline serve` running as a child for its life
+(`http/src/supervisor.rs`), which holds `runner-lock` and runs the loop
+(`dag/src/supervisor/serve.rs`), and hears what no store holds from the
+child's stderr; a sync, a stop, a step turned off is a row the server writes
 there (`POST /api/requests`, `/api/steps/<id>/turn_off`); the Manage tab
 edits the config; a root with no config gets the launcher and the
 first-run screen, which writes Datalib's starter config

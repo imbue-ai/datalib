@@ -510,7 +510,7 @@ def prepare(argv: list[str]) -> Prepared:
     ) -> str:
         """A `[[steps]]` header and its keys, as `datalib-step examples`
         writes one: the id, the command, and the `reads` and `locks` the
-        runner no longer infers (docs/dev/plans/dag_and_step_decoupling.md)."""
+        runner does not infer (docs/dev/config_model.md)."""
         text = f'[[steps]]\nid = "{group}/{function}"\ncommand = "{command}"'
         if reads:
             text += f'\nreads = "{reads}"'
@@ -765,7 +765,7 @@ def main() -> int:
         (workspace / "config_body.toml").write_text(root_text)
 
     driver = (
-        HttpDriver(fx.http_bin, workspace, fx.bindir, fx.now, fx.env)
+        HttpDriver(fx.http_bin, fx.dag_bin, workspace, fx.bindir, fx.now, fx.env)
         if fx.http_bin
         else CliDriver(fx.dag_bin, workspace, fx.bindir, fx.now, fx.env)
     )

@@ -261,5 +261,6 @@ fingerprint cache lives.
 
 PID 1 is [tini](https://github.com/krallin/tini), so `docker stop`
 delivers SIGTERM cleanly to `datalib-pipeline`, which forwards it to its
-running steps, and to `datalib-http`, which stops its applets on the
-way out.
+running steps, and to `datalib-http`, which stops its runner (a
+`datalib-pipeline serve` child, which stops its steps the same way) and
+its applets on the way out.

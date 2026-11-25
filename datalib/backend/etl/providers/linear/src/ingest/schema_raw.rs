@@ -28,8 +28,6 @@ macro_rules! progress_series {
     () => {
         [
             &["progress"] as VolatilePath<'static>,
-            &["progressHistory"],
-            &["currentProgress"],
             &["issueCountHistory"],
             &["completedIssueCountHistory"],
             &["scopeHistory"],
@@ -92,14 +90,14 @@ pub const PROJECT_STATUSES: Kind = Kind {
     volatile: &[UPDATED],
 };
 
-const CYCLE_VOLATILE: [VolatilePath<'static>; 9] = concat([UPDATED], progress_series!());
+const CYCLE_VOLATILE: [VolatilePath<'static>; 7] = concat([UPDATED], progress_series!());
 pub const CYCLES: Kind = Kind {
     table: "cycles",
     volatile: &CYCLE_VOLATILE,
 };
 
 /// A sort order moves when anyone drags a neighbour on a board.
-const PROJECT_VOLATILE: [VolatilePath<'static>; 14] = concat(
+const PROJECT_VOLATILE: [VolatilePath<'static>; 12] = concat(
     [
         UPDATED,
         &["sortOrder"],
@@ -117,13 +115,7 @@ pub const PROJECTS: Kind = Kind {
 
 pub const PROJECT_MILESTONES: Kind = Kind {
     table: "project_milestones",
-    volatile: &[
-        UPDATED,
-        &["sortOrder"],
-        &["progress"],
-        &["progressHistory"],
-        &["currentProgress"],
-    ],
+    volatile: &[UPDATED, &["sortOrder"], &["progress"]],
 };
 
 pub const INITIATIVES: Kind = Kind {
@@ -154,16 +146,14 @@ pub const ISSUE_HISTORY: Kind = Kind {
     volatile: &[UPDATED],
 };
 
-/// `threadSummary` is Linear's AI summary of the thread, rewritten as
-/// replies come.
 pub const COMMENTS: Kind = Kind {
     table: "comments",
-    volatile: &[UPDATED, &["threadSummary"]],
+    volatile: &[UPDATED],
 };
 
 pub const DOCUMENTS: Kind = Kind {
     table: "documents",
-    volatile: &[UPDATED, &["sortOrder"], &["subDocumentSortOrder"]],
+    volatile: &[UPDATED, &["sortOrder"]],
 };
 
 /// `isStale` turns true when enough time has passed since the update.

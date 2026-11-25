@@ -83,8 +83,7 @@ describe("sanitizeRenderedHtml", () => {
   });
 
   // An `.html` a sender attached is a page on our origin; framed from a
-  // message body it would run inside the app's chrome (audit 2026-10-02
-  // finding 1).
+  // message body it would run inside the app's chrome.
   // No renderer frames anything, so no iframe survives.
   it("drops every iframe", () => {
     for (const src of [

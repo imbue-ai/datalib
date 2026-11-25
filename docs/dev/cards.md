@@ -538,9 +538,8 @@ besides components:
   table keep a box beside them, which asks as it is typed in. Either box is
   the one search field (`search/SearchField.vue`, on CodeMirror 6), which the
   run log shares: it offers keys and values from the table's `…/keys` and
-  `…/values` and draws a source, group or step value as its chip
-  ([`plans/search_autocomplete.md`](plans/search_autocomplete.md)
-  § "The field"). The arrow in the toolbar's box opens the advanced panel
+  `…/values` and draws a source, group or step value as its chip.
+  The arrow in the toolbar's box opens the advanced panel
   (`components/SearchPanel.vue`): meaning on or off and its cutoff, one row
   per document, the sources the results come from with their counts
   (`/search/groups?by=source_ref`), which it leaves out once the search is

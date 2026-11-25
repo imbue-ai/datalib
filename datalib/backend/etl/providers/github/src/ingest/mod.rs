@@ -484,6 +484,7 @@ mod tests {
                 retry_after: Some(d),
             } => Some(d.as_secs()),
             Retryability::Retry { retry_after: None } => panic!("no wait named for {r:?}"),
+            Retryability::RetryAfterUncapped(_) => panic!("an uncapped wait for {r:?}"),
             Retryability::Accept => None,
         };
         for status in [403, 429] {

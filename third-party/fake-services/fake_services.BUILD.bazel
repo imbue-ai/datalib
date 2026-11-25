@@ -1,0 +1,17 @@
+# The fake-services repository at the commit MODULE.bazel pins: see
+# //third-party/fake-services/README.md.
+package(default_visibility = ["//visibility:public"])
+
+# The launcher and its service modules, run with `node launcher/launcher.mjs`
+# from a directory whose `node_modules` holds the packages
+# //third-party/fake-services/runtime links, beside Linear's schema.
+filegroup(
+    name = "launcher",
+    srcs = glob(["launcher/**/*.mjs"]),
+)
+
+exports_files([
+    "launcher/launcher.mjs",
+    "linear_schema.graphql.gz",
+    "curl_shim.sh",
+])

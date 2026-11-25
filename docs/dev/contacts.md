@@ -797,5 +797,5 @@ WhatsApp and Messages (each marks them up, in a shape not yet checked
 on real data), in Facebook (a tag is `@[<id>:2048:<Name>]` in a post,
 not yet written as a handle) and in Beeper (no handle kind for its
 users), and a handle for a Beeper (Matrix) user. The plans for them
-are `docs/dev/plans/contact_linking.md`, `contact_editing.md` and
-`search_autocomplete.md` in the repo.
+are `docs/dev/plans/contact_linking.md` and `contact_editing.md` in the
+repo.
