@@ -273,35 +273,13 @@ first run, then the best of three; the second column was asked once.
   with `source:x from:y`, it tried each with each of the person's 1,028
   rows, and was stopped at 40 s. It now finds the kept rows first, 0.1 s;
   what it costs each kind of search is in
-  [`unified_grid_and_search_index/README.md`](../../../datalib/backend/unified_grid_and_search_index/README.md)
-  §"What was measured".
+  [`search.md`](../search.md) §"Measuring".
 
-**2026-11-25, declared statistics in place of hints (proposed, not
-built).** SQLite reads its statistics from a table we may write,
-`sqlite_stat1`. Filled once with a fixed number per index, the same in
-every library, it would replace the `likelihood` on a source and the rule
-for when to use it, the one on `is:document`, and the set `at:` uses in
-place of an `OR`; every statement on the table would know it, and an empty
-store plans as a full one, so the plan tests hold it.
-
-- **The numbers are ranks, not counts.** The planner only compares them,
-  so nothing is measured and nothing differs between libraries. Of a
-  pretend million rows: a flag 100,000, a source 10,000, a kind, account,
-  project or change 1,000, a channel, place or author 100, a conversation,
-  subject or page 10, an id 1. Over 309 statements (each key alone and
-  beside `source:`, `is:document` and `after:`; listed, grouped and
-  counted), no plan was wrong, none of 100 tables with every number off by
-  up to 1.5 times gave a wrong one, and 4 of 100 did at 3 times. These
-  were plans on an empty file, in Python's SQLite 3.51; four were checked
-  in the app's 3.55.
-- **True numbers are worse.** A kind as 5% and a source as 25% sit near
-  where SQLite prefers reading a whole index to searching it: 4 plans were
-  wrong, and 86 of 100 tables off by 1.5 times had a wrong one.
-- **A wrong order costs little beside a source**, since the key's index
-  holds the source: one account, 737k rows, in a 2k-row source is 0.03 to
-  0.07 s. Between two other keys no average is right for every value.
-- **Left as they are:** `source_id` in the keys' indexes, and the `+` that
-  keeps two sets from being tried in pairs.
-- **The risk** is that every statement on the grid index sees it, the
-  index step's writes too. It is part of the file's shape, so it belongs
-  in `index_hash`.
+**2026-11-25, declared statistics in place of hints.** Done:
+`sqlite_stat1` is written with a rank per index, the same in every
+library, and the `likelihood` on a source, the rule for when to use it, the
+one on `is:document` and the set in place of `at:`'s `OR` are gone. What
+the ranks are, why they need no measuring, and what they cannot say is in
+[`search.md`](../search.md) §"What the planner is told". So the first
+bullet's third column is how it is, and the second's hint is not; a
+person's rows beside an indexed key are tested, not started from.

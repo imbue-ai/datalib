@@ -52,7 +52,7 @@ merge conflict waiting to happen.
 - [`docs/dev/latchkey.md`](docs/dev/latchkey.md) — how a web source signs in: the three kinds of latchkey service, who names an account, the keychain, the gateway. Read before touching a sign-in.
 - [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md) — JMAP, Gmail API, mbox.
 - [`docs/dev/grid_rows.md`](docs/dev/grid_rows.md) — the `grid_rows` union table and how to add a column.
-- [`datalib/backend/unified_grid_and_search_index/README.md`](datalib/backend/unified_grid_and_search_index/README.md) — how a search becomes SQL, which index answers it, what SQLite's planner does. **Start here** before adding a search key or an index, or chasing a slow search.
+- [`docs/dev/search.md`](docs/dev/search.md) — how search works: what it reads, what it does, its SQL and which index answers it, how to measure it. **Start here** before adding a search key or an index, or chasing a slow search.
 - [`docs/dev/time_series.md`](docs/dev/time_series.md) — numbers over time: a source's time-series store, the chunk encoding, UCUM units, the index that points at the stores. **Start here** for anything about time series.
 - [`docs/dev/contacts.md`](docs/dev/contacts.md) — who a handle is: handles, each source's record of a person (`NormalizedContact`), the contacts app, and the chips that draw them. **Start here** for anything about a person; read before adding a handle kind.
 - [`docs/dev/edges.md`](docs/dev/edges.md), [`docs/dev/entity_ids.md`](docs/dev/entity_ids.md) — cross-document edges; the one rule for minting a uuid (read before any `*_uuid` recipe).

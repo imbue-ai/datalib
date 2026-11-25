@@ -1,5 +1,5 @@
-//! What SQLite's planner does with a search's statements, as the README
-//! beside this crate states it: one test each, so a new SQLite that moves
+//! What SQLite's planner does with a search's statements, as
+//! docs/dev/search.md states it: one test each, so a new SQLite that moves
 //! one says which. Most on a table of their own, in a grid index's file.
 
 use sqlx::sqlite::SqlitePool;

@@ -90,8 +90,8 @@ the grouping are all built from. The grid's own column ids
 
 Every request reads inside one read transaction on a read-only
 connection (`DoltRepo::pinned`), so it sees one state of the index.
-Which index answers which key, and how SQLite is held to it, is
-[`unified_grid_and_search_index/README.md`](../../datalib/backend/unified_grid_and_search_index/README.md).
+Which index answers which key, and how SQLite is held to it, is in
+[`search.md`](search.md) §"The indexes".
 
 Free text never reaches `grid_rows`' SQL: the applet works out what the
 query's filters keep first, as `grid_rows` row ids read from the

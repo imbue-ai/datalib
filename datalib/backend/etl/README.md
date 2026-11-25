@@ -709,7 +709,9 @@ checks that they do.
 ## Indexes: the planner has no statistics, so test the plan
 
 No store here runs `ANALYZE`, so SQLite's planner knows nothing about
-how many rows match a value. When a lookup could use either of two
+how many rows match a value (the grid index, which is told a rank for
+each index, is the exception: [`search.md`](/docs/dev/search.md) §"What
+the planner is told"). When a lookup could use either of two
 one-column indexes, it rates them the same, and which one it takes
 depends on the order they were created in, not on which is selective.
 Every test passes either way, because a fixture of a few rows is fast
@@ -764,8 +766,8 @@ So:
   statement two ways, and a plan can change as the rows do. Which index
   a statement needs is known when it is written; say so in the SQL. What
   it did to the grid's searches, measured, is in
-  [`unified_grid_and_search_index/README.md`](/datalib/backend/unified_grid_and_search_index/README.md)
-  §"What was measured".
+  [`search.md`](/docs/dev/search.md) §"Why not `ANALYZE`", and what the grid
+  index tells the planner instead is there too.
 - **Test the plan, not the time.** Run `EXPLAIN QUERY PLAN` on the
   statement over the table's real DDL and assert the index it must
   start from, not only what it must not do: a plan with no `SCAN` can
