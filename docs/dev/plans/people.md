@@ -197,20 +197,27 @@ contacts, and both have it.
 
 - **Adding a handle another contact has asks**: "This is on Robert
   Picard. *Both* or *Move it here*."
-- **A message's own header** shows the name that message gave, as it
-  does today, so most of Marie's mail says Marie.
-- **Anywhere else its chip shows both names**, "Robert Picard · Marie
-  Picard", drawn as an untitled conversation's people are now. Each name
-  opens its own page.
-- **Search cannot tell them apart.** *Everything with Marie* finds
-  Robert's mail from that address too, and her page says the address is
-  shared.
+- **Its chip is still one chip.** A chip names a handle, and this one has
+  two names: "Robert Picard & Marie Picard", or "Robert Picard & 2
+  others". It is blue, led by the mark for its kind (no one photo is
+  right), and its tooltip lists everyone who has it.
+- **Double-click opens the address's own page**, with Robert and Marie on
+  it as two chips where an unfiled handle has *Add to contacts*. A handle
+  one contact has opens that contact, as ever.
+- **Its menu's *Everything with* searches the address.** Marie's own page
+  searches all her handles, so it finds Robert's mail from this one too,
+  and says the address is shared.
+- **A message's own header** shows the name that message gave, as today,
+  so most of Marie's mail says Marie. Nowhere else tries to guess which
+  of them wrote.
 - **An agent may not share one.** A suggestion for a handle that another
   contact has is skipped, as today.
 
 The store's `handles` table is keyed by handle alone; it becomes
-(handle, contact), with a rung. `POST /resolve` answers a list. This is
-also what group contacts were for ("a shared address belongs to a group
+(handle, contact), with a rung, and *No longer works* is then on one
+person's use of it. `POST /resolve` answers a list, and `Who.mine`
+becomes one, possibly empty; a chip's look, tooltip and menu read the
+list, so nothing is drawn by a second path. This is also what group contacts were for ("a shared address belongs to a group
 contact"), which were never built past the table.
 
 Neither the address book nor the library measured holds a handle that
@@ -310,11 +317,8 @@ Each step stands alone; the first two change no stored data.
 - *Unfiled* is wanted, sorted by frequency and recency.
 - No country is set anywhere for phone numbers.
 - Editing a contact by hand stays, toward publishing it back to a source.
-
-## To decide
-
-**Is an address one line?** (§"Editing a contact".) That fields and links
-are separate was decided in October, so this reverses it. Proposed: yes;
-its reason was a shared number, and a handle can now be shared. What is
-lost: an address on a contact's card, published with it, whose messages
-are not theirs.
+- An address on a contact is one line, both written there and counted as
+  theirs. (Reverses October's "fields and links are separate". Given up:
+  an address written on a contact whose messages are not theirs, such as
+  a switchboard's. If that comes up, it is one option on that line.)
+- A chip that several contacts share is one chip with their names joined.
