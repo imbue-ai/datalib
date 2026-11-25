@@ -19,19 +19,14 @@ use super::fields;
 
 pub const URL: &str = "https://api.linear.app/graphql";
 const TIMEOUT: Duration = Duration::from_secs(120);
-/// The longest `Retry-After` worth sleeping through. Linear's buckets
-/// drain at their hourly rate, so a caller just over its limit is told to
-/// wait a few seconds; a longer wait means the budget is spent for a good
-/// part of the hour, and the run ends instead so the next sync picks up.
-pub const LONGEST_WAIT: Duration = Duration::from_secs(60);
 
 #[derive(thiserror::Error, Debug)]
 pub enum LinearError {
     /// The credential was refused: nothing else this run asks will work.
     #[error("unauthorized: {0}")]
     Unauthorized(String),
-    /// Linear refused the request for its rate limit and asked for a
-    /// longer wait than [`LONGEST_WAIT`], or named none.
+    /// Linear refused the request for its rate limit and named no wait,
+    /// so nothing says when sending again would be admitted.
     #[error("rate limited: {0}")]
     RateLimited(String),
     /// The shared retry guard gave up on the service.
@@ -182,31 +177,30 @@ fn names_ratelimited(body: &[u8]) -> bool {
         .is_some_and(|errors| errors.iter().any(|e| error_code(e) == "RATELIMITED"))
 }
 
-/// The shared retry loop retries every 429 for up to ten minutes a time.
-/// Here a refusal is waited out only when its `Retry-After` is short; any
-/// other is handed back, and [`LinearClient::query`] ends the run with it.
+/// A refusal is retried after exactly the wait its `Retry-After` names,
+/// however long; the shared loop would otherwise cap it at ten minutes and
+/// send again into another refusal. A refusal naming no wait in seconds is
+/// handed back, and [`LinearClient::query`] ends the run with it.
 pub fn linear_retryability(resp: &HttpResponse) -> Retryability {
     match rate_limit_refusal(resp) {
         Some(RateLimitRefusal {
             retry_after: Some(wait),
             ..
-        }) if wait <= LONGEST_WAIT => Retryability::Retry {
-            retry_after: Some(wait),
-        },
+        }) => Retryability::RetryAfterUncapped(wait),
         Some(_) => Retryability::Accept,
         None => default_retryability(resp),
     }
 }
 
 fn refusal_message(refusal: &RateLimitRefusal, said: &str) -> String {
-    let wait = match &refusal.retry_after_header {
-        Some(h) => format!(
-            "asked for a wait of {h} s (Retry-After), longer than the {} s a run waits",
-            LONGEST_WAIT.as_secs()
-        ),
-        None => "named no wait (no Retry-After)".to_string(),
+    let header = match &refusal.retry_after_header {
+        Some(h) => format!("Retry-After: {h:?}"),
+        None => "no Retry-After".to_string(),
     };
-    format!("Linear refused a request for its rate limit and {wait}: {said}")
+    format!(
+        "Linear refused a request for its rate limit and named no wait in seconds ({header}): \
+         {said}"
+    )
 }
 
 /// What a GraphQL `errors` array means. Linear answers a spent budget
@@ -437,31 +431,28 @@ mod tests {
             "extensions": {"code": "RATELIMITED"}}]})
     }
 
-    /// Every 429 was retried by the shared loop for up to ten minutes a
-    /// time, so a spent hourly budget slept instead of ending the run.
+    /// Every 429 was retried by the shared loop after at most ten minutes,
+    /// so a refusal that asked for longer was sent again into another.
     #[test]
-    fn only_a_short_rate_limit_wait_is_slept_through() {
-        assert_eq!(
-            linear_retryability(&answer(429, ratelimited(), Some("2"))),
-            Retryability::Retry {
-                retry_after: Some(Duration::from_secs(2))
-            }
-        );
-        assert_eq!(
-            linear_retryability(&answer(400, ratelimited(), Some("60"))),
-            Retryability::Retry {
-                retry_after: Some(LONGEST_WAIT)
-            }
-        );
-        for long in [
-            answer(429, ratelimited(), Some("61")),
-            answer(429, ratelimited(), Some("720")),
+    fn a_rate_limit_refusal_is_retried_after_the_whole_wait_it_names() {
+        for (status, wait) in [(429, "2"), (400, "60"), (429, "720"), (429, "3600")] {
+            assert_eq!(
+                linear_retryability(&answer(status, ratelimited(), Some(wait))),
+                Retryability::RetryAfterUncapped(Duration::from_secs(wait.parse().unwrap())),
+                "{status} {wait}"
+            );
+        }
+        for no_wait in [
             answer(429, ratelimited(), None),
             answer(400, ratelimited(), None),
             answer(429, json!({}), Some("Wed, 21 Oct 2015 07:28:00 GMT")),
         ] {
-            assert_eq!(linear_retryability(&long), Retryability::Accept, "{long:?}");
-            assert!(rate_limit_refusal(&long).is_some(), "{long:?}");
+            assert_eq!(
+                linear_retryability(&no_wait),
+                Retryability::Accept,
+                "{no_wait:?}"
+            );
+            assert!(rate_limit_refusal(&no_wait).is_some(), "{no_wait:?}");
         }
         assert_eq!(
             linear_retryability(&answer(503, json!({}), None)),
@@ -485,10 +476,10 @@ mod tests {
     }
 
     #[test]
-    fn a_long_refusal_says_the_wait_it_was_asked_for() {
-        let refusal = rate_limit_refusal(&answer(429, ratelimited(), Some("720"))).unwrap();
+    fn a_refusal_naming_no_wait_says_what_it_sent() {
+        let refusal = rate_limit_refusal(&answer(429, ratelimited(), Some("soon"))).unwrap();
         let said = refusal_message(&refusal, "Rate limit exceeded [RATELIMITED]");
-        assert!(said.contains("720 s (Retry-After)"), "{said}");
+        assert!(said.contains(r#"Retry-After: "soon""#), "{said}");
         assert!(said.contains("[RATELIMITED]"), "{said}");
     }
 }

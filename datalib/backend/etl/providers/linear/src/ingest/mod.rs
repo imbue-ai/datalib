@@ -576,9 +576,8 @@ async fn phases(ctx: &mut Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
         LinearError::RateLimited(_) => RunProblem::phase(
             "rate_limit",
             format!(
-                "Linear's rate limit refused the run's requests for longer than is worth \
-                 waiting, so the run stopped; the next run carries on from where this one got \
-                 to: {}",
+                "Linear's rate limit refused a request without saying how long to wait, so \
+                 the run stopped; the next run carries on from where this one got to: {}",
                 ended.0
             ),
         ),

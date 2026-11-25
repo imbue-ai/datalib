@@ -607,7 +607,9 @@ impl std::error::Error for HttpError {
 /// (or a far-future `x-ratelimit-reset`) can't park a source for hours. The
 /// give-up policy ([`crate::retry::RetryGuard`]) still bounds total effort;
 /// this just keeps any *single* sleep sane. Realistic values (seconds to a
-/// few minutes) are respected exactly.
+/// few minutes) are respected exactly. A classifier that trusts the
+/// service's wait whatever its length says so with
+/// [`Retryability::RetryAfterUncapped`].
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(600);
 
 /// What the retry loop should do with one completed attempt's response.
@@ -620,6 +622,10 @@ pub enum Retryability {
     /// Rate-limited / transient — back off and retry, honoring `retry_after`
     /// (from `Retry-After` or a provider-specific reset header) when known.
     Retry { retry_after: Option<Duration> },
+    /// Retry after exactly this long, however long, uncapped by
+    /// [`MAX_RETRY_AFTER`]: the service named when the request will be
+    /// admitted, and sending earlier only meets another refusal.
+    RetryAfterUncapped(Duration),
 }
 
 /// Default response classifier: HTTP 429 and 502–504 are retryable (honoring
@@ -761,19 +767,20 @@ where
 
         // Decide whether this attempt is retryable. `None` = accept (success
         // or a definitive response/error → hand back to the caller as-is);
-        // `Some(retry_after)` = retryable failure.
-        let retry: Option<Option<Duration>> = match &outcome {
+        // `Some((retry_after, capped))` = retryable failure.
+        let retry: Option<(Option<Duration>, bool)> = match &outcome {
             Ok(resp) => match classify(resp) {
                 Retryability::Accept => None,
-                Retryability::Retry { retry_after } => Some(retry_after),
+                Retryability::Retry { retry_after } => Some((retry_after, true)),
+                Retryability::RetryAfterUncapped(wait) => Some((Some(wait), false)),
             },
             // The service did not answer: retry without a server-specified
             // delay. Everything else is terminal and returned as-is.
-            Err(e) if e.upstream() == Some(Upstream::Unavailable) => Some(None),
+            Err(e) if e.upstream() == Some(Upstream::Unavailable) => Some((None, true)),
             Err(_) => None,
         };
 
-        let Some(retry_after) = retry else {
+        let Some((retry_after, capped)) = retry else {
             // Accepted: hand it back untouched. Only an answer is
             // progress; a terminal error is not, or a source whose every
             // request fails at once would never run out of time.
@@ -801,9 +808,11 @@ where
             });
         }
 
-        let wait = retry_after
-            .map(|d| d.min(MAX_RETRY_AFTER))
-            .unwrap_or(backoff);
+        let wait = match retry_after {
+            Some(d) if capped => d.min(MAX_RETRY_AFTER),
+            Some(d) => d,
+            None => backoff,
+        };
         let next_backoff = std::cmp::min(backoff * 2, guard.max_backoff());
         // Only the retryable shapes reach here: a classified response, a
         // timeout, or one of the transient curl exits.
@@ -1714,6 +1723,98 @@ mod tests {
             "{lines:#?}"
         );
         assert!(!lines[0].1.contains("secret"), "{lines:#?}");
+    }
+
+    /// The wait the retry loop sleeps after one 429, as it logs it; the
+    /// layer that reads it stops the request then, so nothing sleeps.
+    async fn wait_after_one_429(classify: fn(&HttpResponse) -> Retryability) -> Duration {
+        use std::sync::{Arc, Mutex};
+        use tracing_subscriber::layer::{Context, SubscriberExt};
+
+        struct WaitMs(Option<u64>);
+        impl tracing::field::Visit for WaitMs {
+            fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+                if field.name() == "wait_ms" {
+                    self.0 = Some(value);
+                }
+            }
+            fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+        }
+        struct StopOnWait {
+            waited: Arc<Mutex<Option<u64>>>,
+            stop: datalib_etl::stop::StopFlag,
+        }
+        impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for StopOnWait {
+            fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+                let mut wait = WaitMs(None);
+                event.record(&mut wait);
+                if let Some(ms) = wait.0 {
+                    *self.waited.lock().unwrap() = Some(ms);
+                    self.stop.request();
+                }
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Linear, "https://api.linear.app/graphql");
+        let provider_dir = dir.path().join("linear");
+        std::fs::create_dir_all(&provider_dir).unwrap();
+        let response = HttpResponse {
+            status: 429,
+            headers: BTreeMap::new(),
+            body: Vec::new(),
+            duration_ms: 0,
+        };
+        std::fs::write(
+            provider_dir.join(fixture_key(&req)),
+            serde_json::to_vec(&response).unwrap(),
+        )
+        .unwrap();
+        let stop = datalib_etl::stop::StopFlag::default();
+        let waited = Arc::new(Mutex::new(None));
+        let _subscriber =
+            tracing::subscriber::set_default(tracing_subscriber::registry().with(StopOnWait {
+                waited: waited.clone(),
+                stop: stop.clone(),
+            }));
+        let guard = crate::retry::RetryGuard::new(
+            Duration::from_secs(3600),
+            3,
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+            stop,
+        );
+        let outcome = playback::scope(
+            dir.path(),
+            crate::retry::scope(guard, latchkey_curl_classified(&req, classify)),
+        )
+        .await;
+        assert!(
+            matches!(outcome, Err(HttpError::Interrupted { .. })),
+            "{outcome:?}"
+        );
+        let ms = waited.lock().unwrap().expect("the loop logged its wait");
+        Duration::from_millis(ms)
+    }
+
+    /// A wait a classifier names is capped at ten minutes unless it asks
+    /// for the wait uncapped, as Linear's does: a refusal that asked for an
+    /// hour was otherwise retried after ten minutes into another refusal.
+    #[tokio::test]
+    async fn only_an_uncapped_wait_is_slept_past_the_cap() {
+        let hour = Duration::from_secs(3600);
+        assert_eq!(
+            wait_after_one_429(|_| Retryability::Retry {
+                retry_after: Some(Duration::from_secs(3600))
+            })
+            .await,
+            MAX_RETRY_AFTER
+        );
+        assert_eq!(
+            wait_after_one_429(|_| Retryability::RetryAfterUncapped(Duration::from_secs(3600)))
+                .await,
+            hour
+        );
     }
 
     /// A playback fixture that always returns 429 should be retried until

@@ -124,28 +124,28 @@ drains at the hourly rate, about 0.7 requests and 830 points a second.
 A request past either is refused with HTTP 429, a GraphQL error whose
 `extensions.code` is `RATELIMITED`, a `Retry-After` in seconds, and
 `X-RateLimit-*` headers. (A `RATELIMITED` error under another status
-is read the same way.) What the download does with a refusal
-(`linear_retryability` in `ingest/client.rs`):
+is read the same way.) Since the bucket drains continuously, the wait
+is how long until there is room for this one request: about a second
+for the request budget, up to about 12 seconds for the most complex
+query allowed.
 
-- **A `Retry-After` of 60 seconds or less** (`LONGEST_WAIT`) is waited
-  out, and the request is sent again. A run just over the limit is told
-  to wait a second or two, so a large first run slows down rather than
-  stops.
-- **A longer `Retry-After`, or none**, ends the run. Waiting would hold
-  the step for a good part of the hour. What the run fetched is kept,
-  the step ends `incomplete` with a `rate_limit` problem that names the
-  wait Linear asked for, and the next sync carries on from where this
-  one got to (see §"Incremental updates").
+What the download does with a refusal (`linear_retryability` in
+`ingest/client.rs`):
+
+- **A `Retry-After` in seconds is waited out exactly, however long**,
+  and the request is sent again. The shared retry loop caps every other
+  source's wait at ten minutes; Linear asks for its wait uncapped
+  (`Retryability::RetryAfterUncapped`), since sending before the named
+  time only meets another refusal. A stop still ends the wait at once.
+- **A refusal with no `Retry-After` in seconds** ends the run, since
+  nothing says when a retry would be admitted. What the run fetched is
+  kept, the step ends `incomplete` with a `rate_limit` problem, and the
+  next sync carries on from where this one got to (see §"Incremental
+  updates").
 
 A query past 10,000 points is not a rate limit: Linear answers HTTP 400
 with `INPUT_ERROR` ("Query too complex"), and waiting never admits it.
 It fails that one page as any other error does.
-
-The shared retry loop in `datalib_etl_web::http` would otherwise retry
-every 429 itself, sleeping up to ten minutes per attempt until its
-guard gave up, so Linear's requests go through
-`latchkey_curl_classified` with this classifier rather than through
-`latchkey_curl`.
 
 ### One transaction between two seals
 
