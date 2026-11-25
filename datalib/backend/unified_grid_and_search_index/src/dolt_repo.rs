@@ -11,16 +11,13 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use crate::at_node::Arms;
-use crate::children::{
-    self, Anchor, Ask, ChildrenFailure, ChildrenPage, Key, NodeFacts, Only, RowFacts, Scope, Side,
-    Split, Via,
-};
 use crate::db::{build_where, matching_sql, vals_holding, ChatMeta, KEPT_DOCUMENTS, KEPT_ROWS};
 use crate::group::{
     group_sql, like_pattern, values_sql, where_within, GroupCount, Grouping, Within, MAX_GROUPS,
     MAX_VALUES,
 };
 use crate::hits::GridRowRef;
+use crate::places::{self, Key, Parent, Place, PlacesPage};
 use crate::problems::{Ids, ProblemsQuery};
 use crate::query::ParsedQuery;
 use crate::repo::{
@@ -669,147 +666,6 @@ impl At {
         Ok(std::borrow::Cow::Owned(q.clone().with_arms(&read)))
     }
 
-    async fn child_key(&mut self, scope: &Scope, uuid: &str) -> Result<Option<String>, RepoError> {
-        let parent = scope.parent.spelled();
-        // Audited: `child_key_sql` is built from literals alone; every
-        // value is bound.
-        match sqlx::query_scalar(sqlx::AssertSqlSafe(children::child_key_sql(scope)))
-            .bind(scope.parent.bound())
-            .bind(uuid)
-            .fetch_optional(&mut *self.tx)
-            .await
-        {
-            Ok(key) => Ok(key),
-            Err(e) => Err(RepoError::Internal(format!(
-                "find {uuid} among {parent}'s children: {e}"
-            ))),
-        }
-    }
-
-    async fn children_past(
-        &mut self,
-        scope: &Scope,
-        via: Via,
-        side: Side,
-        split: &Split,
-    ) -> Result<Vec<children::Found>, RepoError> {
-        let want = match side {
-            Side::Before => split.before,
-            Side::After => split.after,
-        };
-        let parent = scope.parent.spelled();
-        let Some(sql) = children::children_sql(scope, via, side, split.at_is_after) else {
-            return Ok(Vec::new());
-        };
-        // Audited: `children_sql` is built from literals alone; every
-        // value is bound.
-        let read: Result<Vec<(String, String)>, _> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
-            .bind(scope.parent.bound())
-            .bind(&split.at.sort_key)
-            .bind(&split.at.uuid)
-            .bind((want + 1) as i64)
-            .fetch_all(&mut *self.tx)
-            .await;
-        match read {
-            Ok(rows) => Ok(rows
-                .into_iter()
-                .map(|(sort_key, uuid)| children::Found {
-                    key: Key { sort_key, uuid },
-                    via,
-                })
-                .collect()),
-            Err(e) => Err(RepoError::Internal(format!(
-                "list {parent}'s children: {e}"
-            ))),
-        }
-    }
-
-    async fn child_facts(
-        &mut self,
-        keys: &[Key],
-    ) -> Result<
-        (
-            std::collections::HashMap<String, RowFacts>,
-            std::collections::HashMap<String, NodeFacts>,
-        ),
-        RepoError,
-    > {
-        if keys.is_empty() {
-            return Ok(Default::default());
-        }
-        let uuids: Vec<&str> = keys.iter().map(|k| k.uuid.as_str()).collect();
-        let wanted = serde_json::to_string(&uuids)
-            .map_err(|e| RepoError::Internal(format!("encode children: {e}")))?;
-        let internal = |e: sqlx::Error| RepoError::Internal(format!("describe children: {e}"));
-        type RowRead = (
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        );
-        let rows: Vec<RowRead> = sqlx::query_as(children::ROW_FACTS_SQL)
-            .bind(&wanted)
-            .fetch_all(&mut *self.tx)
-            .await
-            .map_err(internal)?;
-        let nodes: Vec<(String, String, Option<String>)> =
-            match sqlx::query_as(children::NODE_FACTS_SQL)
-                .bind(&wanted)
-                .fetch_all(&mut *self.tx)
-                .await
-            {
-                Ok(nodes) => nodes,
-                Err(e) => return Err(internal(e)),
-            };
-        let rows = rows
-            .into_iter()
-            .map(
-                |(uuid, kind, author, author_handle, created_at, preview, markdown_uuid)| {
-                    (
-                        uuid,
-                        RowFacts {
-                            kind,
-                            author,
-                            author_handle,
-                            created_at,
-                            preview,
-                            markdown_uuid,
-                        },
-                    )
-                },
-            )
-            .collect();
-        let nodes = nodes
-            .into_iter()
-            .map(|(uuid, kind, name)| (uuid, NodeFacts { kind, name }))
-            .collect();
-        Ok((rows, nodes))
-    }
-
-    /// Which of `keys` have places below them.
-    async fn places_below(
-        &mut self,
-        keys: &[Key],
-    ) -> Result<std::collections::HashSet<String>, RepoError> {
-        if keys.is_empty() {
-            return Ok(Default::default());
-        }
-        let uuids: Vec<&str> = keys.iter().map(|k| k.uuid.as_str()).collect();
-        let wanted = serde_json::to_string(&uuids)
-            .map_err(|e| RepoError::Internal(format!("encode places: {e}")))?;
-        match sqlx::query_scalar(children::PLACES_BELOW_SQL)
-            .bind(&wanted)
-            .fetch_all(&mut *self.tx)
-            .await
-        {
-            Ok(below) => Ok(below.into_iter().collect()),
-            Err(e) => Err(RepoError::Internal(format!("find places below: {e}"))),
-        }
-    }
-
     /// Runs [`ordered_sql`].
     async fn ordered_keys<C: Column>(
         &mut self,
@@ -1045,46 +901,38 @@ impl IndexRepo for DoltRepo {
         Ok(self.pinned().await?.map(|at| at.commit))
     }
 
-    async fn children(
+    async fn places(
         &self,
-        scope: &Scope,
-        ask: &Ask,
+        parent: &Parent,
+        after: &Key,
         limit: usize,
-    ) -> Result<ChildrenPage, ChildrenFailure> {
+    ) -> Result<PlacesPage, RepoError> {
         let Some(mut at) = self.pinned().await? else {
-            return Ok(ChildrenPage::default());
+            return Ok(PlacesPage::default());
         };
-        let item_key = match ask {
-            Ask::Around(Anchor::Item(uuid)) => at.child_key(scope, uuid).await?,
-            _ => None,
-        };
-        let split = children::split(&scope.parent.spelled(), ask, item_key, limit)?;
-        let vias = scope.vias();
-        let mut before = Vec::with_capacity(vias.len());
-        let mut after = Vec::with_capacity(vias.len());
-        for via in vias {
-            before.push(at.children_past(scope, via, Side::Before, &split).await?);
-            after.push(at.children_past(scope, via, Side::After, &split).await?);
+        // Audited: `level_sql` is built from literals alone; every value
+        // is bound.
+        let read: Result<Vec<Place>, _> =
+            sqlx::query_as(sqlx::AssertSqlSafe(places::level_sql(parent)))
+                .bind(parent.bound())
+                .bind(&after.sort_key)
+                .bind(&after.uuid)
+                .bind((limit + 1) as i64)
+                .fetch_all(&mut *at.tx)
+                .await;
+        match read {
+            Ok(read) => Ok(places::page(read, limit, at.commit)),
+            Err(e) => Err(RepoError::Internal(format!(
+                "list the places in {parent:?}: {e}"
+            ))),
         }
-        let cut = children::window(&split, before, after);
-        let (rows, nodes) = at.child_facts(&cut.keys).await?;
-        let below = match scope.only {
-            Only::Places => Some(at.places_below(&cut.keys).await?),
-            Only::All => None,
-        };
-        Ok(ChildrenPage {
-            children: children::describe(cut.keys, &rows, &nodes, below.as_ref()),
-            before: cut.before,
-            after: cut.after,
-            at: Some(at.commit),
-        })
     }
 
     async fn sources_with_places(&self) -> Result<Vec<String>, RepoError> {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
-        match sqlx::query_scalar(children::SOURCES_WITH_PLACES_SQL)
+        match sqlx::query_scalar(places::SOURCES_WITH_PLACES_SQL)
             .fetch_all(&mut *at.tx)
             .await
         {

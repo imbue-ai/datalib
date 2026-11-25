@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 
 // The Library card on the TNG root (cards/LibraryCard.ce.vue): the sources
-// as a tree, their places a level at a time from `/children?places=true`,
+// as a tree, their places a level at a time from `/places`,
 // each drawn as its chip, and the place picked there shown beside it as a
 // node card: the search list held to it, with its preview. What is open
 // survives a reload.

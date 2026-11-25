@@ -6,11 +6,10 @@
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
 
-/// What listing a container's children reads, made in the grid index
-/// alone: nothing asks a render store for children. A page of children is
-/// one range of a `(parent, sort_key, uuid)` index, read in order.
-pub const CHILDREN_INDEXES: &[&str] = &[
-    "CREATE INDEX IF NOT EXISTS grid_rows_by_parent ON grid_rows (parent_uuid, sort_key, uuid)",
+/// What the tree is read by, made in the grid index alone: nothing asks a
+/// render store for a place. A page of a level of places is one range of
+/// `nodes_places`, read in order.
+pub const TREE_INDEXES: &[&str] = &[
     // `source_id` last, so a source's top is read off the index too.
     "CREATE INDEX IF NOT EXISTS nodes_places ON nodes (parent_uuid, sort_key, uuid, source_id) \
      WHERE is_place = 1",

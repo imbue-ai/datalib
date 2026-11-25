@@ -1,5 +1,5 @@
 //! Golden of where every TNG row sits: each source's tree of containers
-//! and rows, in the order `GET /children` lists them, with what each
+//! and rows, in `(sort_key, uuid)` order, with what each
 //! container is (read together, a place) and what else each row is filed
 //! under. Before the snapshot, the rules `docs/dev/grid_rows.md` §"Where a
 //! row sits" states: every parent and filing is a row, no row is its own

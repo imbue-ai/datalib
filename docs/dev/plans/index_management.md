@@ -201,7 +201,9 @@ in SQL on a clone of the library above, with `grid_rows_by_parent` and
 - **An index to ask step 3 about.** `grid_rows_by_parent` (138 MB) serves
   only `GET /children/{id}` without `places=true`. The Library's pane was
   what read that; since #2002 the app's own pages list places alone, off
-  `nodes_places` (8 MB). What is left is the public route.
+  `nodes_places` (8 MB). What is left is the public route. (2026-11-25:
+  both are gone. `GET /places/{id}` lists the places, and opening the grid
+  index as its owner drops an index this build does not make.)
 - **Per-source files would suit a place.** A place is in one source, so
   `at:<node>` names the one file to read, with no `UNION ALL`. Only a
   search that names neither asks every file.

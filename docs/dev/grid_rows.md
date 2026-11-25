@@ -318,15 +318,15 @@ it sorts among that container's children: its `created_at` in UTC
 unless the source orders children without times, as a page orders its
 blocks, never a position counted by us, so a row that arrives late
 moves none of its siblings. A row with neither has `""`, which sorts
-first; the column is never null, because a page of children is read
+first; the column is never null, because a page of places is read
 past a `(sort_key, uuid)` pair and a null in that comparison would put
-the row on no page. A container that is also a row of its document (a
+the place on no page. A container that is also a row of its document (a
 thread, a chat) takes that row's sort key unless its renderer gave it
-one. The applet's `GET /children/{uuid}` lists a container's children
-in that order, a page each way around an anchor
-([the route](../user/applets.md#a-containers-children)), off indexes
-on `(parent_uuid, sort_key, uuid)` that only the grid index has
-(`nodes::CHILDREN_INDEXES`). A container is **read together** (what a
+one. The applet's `GET /places/{uuid}` lists the places in a place in
+that order ([the route](../user/applets.md#places)), off `nodes_places`,
+which only the grid index has (`nodes::TREE_INDEXES`). No index finds the
+rows whose parent a container is: a search finds them by their place or
+their conversation. A container is **read together** (what a
 search groups by and the viewer opens: a thread, a chat, a page) or a
 **place** (what a person browses: a channel, a mailbox, a calendar), or
 both; `read_uuid` and `place_uuid` are the nearest container above the

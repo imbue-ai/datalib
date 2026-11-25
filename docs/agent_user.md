@@ -507,8 +507,8 @@ Pick the surface that fits the question:
 - **HTTP API** — `datalib-http <data_root>` serves the app and, under
   `/applet/unified_grid_and_search_index/`, the search (`/search?q=…`,
   in [the query language](user/searching.md)), each document
-  (`/chat/{uuid}`), what a thread, channel or label holds
-  (`/children/{uuid}`), who a handle is (`POST /people`) and `/sql`
+  (`/chat/{uuid}`), the accounts, channels, labels and folders to look in
+  (`/places/{uuid}`), who a handle is (`POST /people`) and `/sql`
   above: [the applets](user/applets.md) lists every route and what each
   answers. Beside them, `GET /data/<group>/<function>/blob/<hash>` is an
   attachment or photo a page links, `GET /api/log?q=…` the log in the
