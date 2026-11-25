@@ -217,11 +217,10 @@ rust_test(
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/search_index:datalib_search_index",
+        "//datalib/backend/store_dump:datalib_store_dump",
         "@datalib_crates//:chrono",
         "@datalib_crates//:insta",
         "@datalib_crates//:runfiles",
-        # `Serialize`, for the one-row-a-line store dump's formatter.
-        "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:toml",
