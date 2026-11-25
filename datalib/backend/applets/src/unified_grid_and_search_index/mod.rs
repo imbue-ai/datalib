@@ -16,13 +16,13 @@ use axum::{
     Router,
 };
 mod body_pieces;
-mod children;
 pub(crate) mod columns;
 mod grouping;
 mod local_embedder;
 mod map;
 mod models;
 mod mutes;
+mod places;
 mod problems;
 mod results;
 #[cfg(test)]
@@ -218,11 +218,8 @@ pub fn serve(port: u16) -> Result<()> {
             .route("/problems/values", get(problems::values_handler))
             .route("/problems/mute", post(mutes::handler))
             .route("/chat/{markdown_uuid}", get(chat))
-            .route("/children/{uuid}", get(children::handler))
-            .route(
-                "/sources_with_places",
-                get(children::sources_with_places_handler),
-            )
+            .route("/places/{parent}", get(places::handler))
+            .route("/sources_with_places", get(places::sources_handler))
             .route("/sql", post(sql::handler))
             .route("/sql/stores", get(sql::stores_handler))
             .route(

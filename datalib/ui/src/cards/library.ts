@@ -1,7 +1,7 @@
 // The Library card's decisions, apart from what draws them: what a level
 // of the tree holds, how it is ordered, what a node opens and what its card
 // searches (cards/LibraryCard.ce.vue, cards/libs/nodeView.ts).
-import type { Child, ManageRow } from "@/api";
+import type { ManageRow, Place } from "@/api";
 import { filterToken } from "@/grid/query";
 import { nodeSource, type NodeViewOpts } from "./cardSources";
 import { uriFromEntity } from "./chipLinks";
@@ -21,7 +21,7 @@ export function isNodeId(node: unknown): node is string {
   return group === null ? UUID.test(node) : GROUP_ID.test(group);
 }
 
-/// What a source holds at its top, as `/children` names it.
+/// What a source holds at its top, as `/places` names it.
 export function sourceTop(groupId: string): string {
   return `source:${groupId}`;
 }
@@ -103,27 +103,27 @@ export const TREE_PICKS = {
   doubleClickElsewhere: "pane",
 } as const satisfies Record<string, "pane" | "card">;
 
-/// A level of places, as `/children?places=true` listed it: in the
+/// A level of places, as `/places` listed it: in the
 /// source's own order, and by name where the source gives none (a
 /// mailbox's labels, a workspace's channels).
-export function placeNodes(children: Child[]): TreeNode[] {
-  return [...children]
+export function placeNodes(places: Place[]): TreeNode[] {
+  return [...places]
     .sort(
-      (a, b) => a.sort_key.localeCompare(b.sort_key) || childLabel(a).localeCompare(childLabel(b)),
+      (a, b) => a.sort_key.localeCompare(b.sort_key) || placeLabel(a).localeCompare(placeLabel(b)),
     )
-    .map((c) => ({
-      id: c.uuid,
-      label: childLabel(c),
-      kind: c.kind,
-      hasChildren: c.places_below === true,
-      ...(c.markdown_uuid ? { doc: c.markdown_uuid } : {}),
+    .map((p) => ({
+      id: p.uuid,
+      label: placeLabel(p),
+      kind: p.kind,
+      hasChildren: p.places_below,
+      ...(p.markdown_uuid ? { doc: p.markdown_uuid } : {}),
     }));
 }
 
-/// What a child is called: its name, else the start of its text, else
+/// What a place is called: its name, else the start of its text, else
 /// its kind.
-export function childLabel(c: Child): string {
-  return c.name?.trim() || c.preview?.trim().split("\n")[0] || c.kind;
+export function placeLabel(p: Place): string {
+  return p.name?.trim() || p.preview?.trim().split("\n")[0] || p.kind;
 }
 
 /// The card a node of the tree opens.

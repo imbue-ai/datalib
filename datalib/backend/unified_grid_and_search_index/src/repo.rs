@@ -54,15 +54,14 @@ pub trait IndexRepo: Send + Sync {
     /// Every source holding a row.
     async fn source_ids(&self) -> Result<Vec<String>, RepoError>;
 
-    /// A page of `scope`'s children in `(sort_key, uuid)` order, as `ask`
-    /// asks for it, `limit` a side ([`crate::children`]). Empty for a root
-    /// with no index yet.
-    async fn children(
+    /// The first `limit` places of `parent`'s level past `after`
+    /// ([`crate::places`]). Empty for a root with no index yet.
+    async fn places(
         &self,
-        scope: &crate::children::Scope,
-        ask: &crate::children::Ask,
+        parent: &crate::places::Parent,
+        after: &crate::places::Key,
         limit: usize,
-    ) -> Result<crate::children::ChildrenPage, crate::children::ChildrenFailure>;
+    ) -> Result<crate::places::PlacesPage, RepoError>;
 
     /// The sources that hold places at their top, by id.
     async fn sources_with_places(&self) -> Result<Vec<String>, RepoError>;

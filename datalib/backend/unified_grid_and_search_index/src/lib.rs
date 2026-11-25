@@ -2,7 +2,6 @@
 //! language over them, and the repo that reads them.
 
 pub mod at_node;
-pub mod children;
 pub mod db;
 pub mod dolt_repo;
 pub mod embedding_map;
@@ -10,6 +9,7 @@ pub mod grid_columns;
 pub mod group;
 pub mod hits;
 pub mod people;
+pub mod places;
 pub mod problems;
 pub mod query;
 pub mod repo;
